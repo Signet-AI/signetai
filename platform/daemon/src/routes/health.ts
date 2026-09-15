@@ -4,7 +4,7 @@ import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { type ReadDb, type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
 import type { DbOwnerHealth } from "../db-owner-client";
-import { ownerQueryOne, withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
+import { isDbOwnerMaintenanceClosing, ownerQueryOne, withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
 import { getDbRuntimeMetrics, getEventLoopLiveness } from "../db-observability";
 import {
 	QUEUE_MAX_DEAD_RATE,
@@ -115,9 +115,11 @@ async function checkEmbedding(): Promise<{ ok: boolean; detail: EmbeddingCheck; 
 		migration =
 			ownerMigration !== undefined
 				? ownerMigration
-				: await getDbAccessor().withReadDbAsync((db) => readEmbeddingIndexMigrationProgress(db, cfg), {
-						siteToken: "routes/health.ts:115",
-					});
+				: isDbOwnerMaintenanceClosing()
+					? null
+					: await getDbAccessor().withReadDbAsync((db: ReadDb) => readEmbeddingIndexMigrationProgress(db, cfg), {
+							siteToken: "routes/health.ts:115",
+						});
 	} catch {
 		// The provider probe remains useful while the database is initializing.
 	}
@@ -229,7 +231,7 @@ export function mountHealthRoutes(app: Hono): void {
 				});
 				if (ownerHealth !== undefined) {
 					dbOwner = ownerHealth;
-				} else {
+				} else if (!isDbOwnerMaintenanceClosing()) {
 					await accessor.withReadDbAsync(
 						(db: ReadDb) => {
 							db.prepare("SELECT 1").get();
@@ -252,13 +254,15 @@ export function mountHealthRoutes(app: Hono): void {
 		return c.json({
 			status: shuttingDown
 				? "shutting_down"
-				: workspace.status === "missing" || workspace.status === "incomplete"
+				: isDbOwnerMaintenanceClosing()
 					? "degraded"
-					: databaseIntegrity.state === "corrupt" ||
-							databaseIntegrity.state === "unavailable" ||
-							databaseIntegrity.state === "degraded"
+					: workspace.status === "missing" || workspace.status === "incomplete"
 						? "degraded"
-						: "healthy",
+						: databaseIntegrity.state === "corrupt" ||
+								databaseIntegrity.state === "unavailable" ||
+								databaseIntegrity.state === "degraded"
+							? "degraded"
+							: "healthy",
 			uptime: process.uptime(),
 			pid: process.pid,
 			version: CURRENT_VERSION,
@@ -321,6 +325,8 @@ export function mountHealthRoutes(app: Hono): void {
 			if (ownerResult !== undefined) {
 				dbResult = ownerResult.result;
 				dbOwner = ownerResult.health;
+			} else if (isDbOwnerMaintenanceClosing()) {
+				reasons.push("database owner maintenance is closing");
 			} else {
 				dbResult = await accessor.withReadDbAsync(
 					(db: ReadDb) => {
