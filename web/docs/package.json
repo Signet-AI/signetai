@@ -9,7 +9,8 @@
 		"preview": "astro preview",
 		"check": "astro check",
 		"typecheck": "astro check",
-		"validate:content": "bun scripts/validate-content.ts"
+		"validate:content": "bun scripts/validate-content.ts",
+		"test:search": "bun run build && bun test --timeout=60000 scripts/search-lifecycle.test.ts"
 	},
 	"dependencies": {
 		"@astrojs/starlight": "^0.41.7",
