@@ -1298,42 +1298,42 @@
     },
     {
       "path": "hooks.ts",
-      "line": 1773,
+      "line": 1771,
       "api": "existsSync",
       "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 1775,
+      "line": 1773,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
+      "category": "hot-path"
+    },
+    {
+      "path": "hooks.ts",
+      "line": 2181,
+      "api": "existsSync",
+      "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
       "line": 2183,
-      "api": "existsSync",
-      "source": "if (req.transcriptPath && existsSync(req.transcriptPath)) {",
-      "category": "hot-path"
-    },
-    {
-      "path": "hooks.ts",
-      "line": 2185,
       "api": "readFileSync",
       "source": "rawTranscript = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2447,
+      "line": 2445,
       "api": "existsSync",
       "source": "} else if (req.transcriptPath && existsSync(req.transcriptPath)) {",
       "category": "hot-path"
     },
     {
       "path": "hooks.ts",
-      "line": 2449,
+      "line": 2447,
       "api": "readFileSync",
       "source": "const raw = readFileSync(req.transcriptPath, \"utf-8\");",
       "category": "hot-path"

@@ -1108,7 +1108,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		),
 	} as const;
 	let sessionContinuity = renderSessionContinuity(memories, sessionContinuityOptions);
-	const memoryRenderOmittedCount = sessionContinuity.omittedCount;
 
 	const exploredId: string | null = null;
 
@@ -1389,7 +1388,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		memoryCandidateCount,
 		memoryCount: sessionContinuity.included.length,
 		memoryOmittedCount: memoryCandidateCount - sessionContinuity.included.length,
-		memoryRenderOmittedCount: memoryRenderOmittedCount,
 		memoryClaimSuppressedCount,
 		memoryTruncatedCount: sessionContinuity.truncatedCount,
 		memorySectionTokens: sessionContinuity.estimatedTokens,
