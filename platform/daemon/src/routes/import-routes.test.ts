@@ -178,6 +178,25 @@ describe("import routes", () => {
 		expect(loadSourcesConfig(dir).sources).toHaveLength(1);
 	});
 
+	it("reserves a reimport source identity before source writes", async () => {
+		const content = "name,email\nAda,ada@example.com\n";
+		const first = await app().request("/api/sources/import", {
+			method: "POST",
+			body: formWithFile(new File([content], "contacts.csv", { type: "text/csv" })),
+		});
+		expect(first.status).toBe(201);
+		const reimported = await app().request("/api/sources/import", {
+			method: "POST",
+			body: formWithFile(new File([content], "contacts.csv", { type: "text/csv" }), "reimport"),
+		});
+		expect(reimported.status).toBe(201);
+		const body = (await reimported.json()) as {
+			files: Array<{ status: string; sourceId: string; duplicate: boolean }>;
+		};
+		expect(body.files[0]).toMatchObject({ status: "imported", duplicate: true, sourceId: expect.any(String) });
+		expect(loadSourcesConfig(dir).sources).toHaveLength(2);
+	});
+
 	it("retries a default-skip duplicate after a crash leaves its artifact without a completion marker across restart", async () => {
 		const content = "name,email\nAda,ada@example.com\n";
 		const fileName = "contacts.csv";
