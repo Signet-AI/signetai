@@ -17,6 +17,8 @@
 
 ---
 
+> Warning: The `nightly` channel is currently unstable. Upgrading to it for production deployments is not advised. Use the stable channel for production.
+
 Signet automatically creates memories from your transcripts, imported files, and other sources. Memories are built and maintained in the background by a process called **dreaming**, which constructs a living semantic ontology—a structured representation of your world—on top of your raw history. This turns an agent's transcripts and data into connected memory with an audit trail back to the source.
 
 The result: the agent gets the right context _before_ the next prompt starts, with a path back to the raw source when deeper context is needed.
