@@ -9,6 +9,7 @@ import {
 	getDbOwnerMaintenance,
 	registerDbOwnerMaintenance,
 	runOwnerMaintenanceWithRetry,
+	withRegisteredDbOwnerMaintenance,
 } from "./db-owner-maintenance";
 import type { DbOwnerMaintenance } from "./db-owner-maintenance";
 import { createDbOwnerClient, DbOwnerDeadlineError, DbOwnerDiedError, type DbOwnerClient } from "./db-owner-client";
@@ -461,5 +462,38 @@ describe("registered DB owner maintenance", () => {
 
 		await closeRegisteredDbOwnerMaintenance();
 		expect(() => registerDbOwnerMaintenance(second)).not.toThrow();
+	});
+
+	test("waits for a registered maintenance lease before closing the owner", async () => {
+		let release: (() => void) | undefined;
+		let signalStarted: (() => void) | undefined;
+		let closeCalls = 0;
+		const started = new Promise<void>((resolve) => {
+			signalStarted = resolve;
+		});
+		const maintenance = {
+			close: async (): Promise<void> => {
+				closeCalls += 1;
+			},
+		} as unknown as DbOwnerMaintenance;
+		registerDbOwnerMaintenance(maintenance);
+
+		const operation = withRegisteredDbOwnerMaintenance(async (current) => {
+			const gate = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			signalStarted?.();
+			await gate;
+			return current;
+		});
+		await started;
+		const closing = closeRegisteredDbOwnerMaintenance();
+		expect(getDbOwnerMaintenance()).toBeNull();
+		expect(closeCalls).toBe(0);
+
+		release?.();
+		expect(await operation).toBe(maintenance);
+		await closing;
+		expect(closeCalls).toBe(1);
 	});
 });

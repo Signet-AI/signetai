@@ -126,8 +126,8 @@ same snapshot into `databaseIntegrity.ownerState` and
 the owner is replaced or restarted. If no maintenance authority is registered,
 `dbOwner` is `null` and the integrity owner fields are also `null`; they do not
 retain values from a retired owner. Shutdown clears the registry before awaiting
-the old maintenance resource, so a replacement must be registered explicitly
-rather than overwriting a closing owner.
+the old maintenance resource and waits for active health leases, so a replacement
+must be registered explicitly rather than overwriting or using a closing owner.
 
 The process-local `eventLoop` signal separates a responsive daemon from one
 whose event loop is falling behind. Its health semantics are:

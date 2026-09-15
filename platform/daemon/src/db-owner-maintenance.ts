@@ -448,6 +448,11 @@ export interface DbOwnerMaintenance {
 	readonly close: () => Promise<void>;
 }
 
+interface RegisteredDbOwnerMaintenanceLease {
+	readonly maintenance: DbOwnerMaintenance;
+	readonly release: () => void;
+}
+
 function boundedChunkSize(chunkSize: number | undefined): number {
 	if (chunkSize === undefined) return DEFAULT_FTS_CHUNK_SIZE;
 	if (!Number.isFinite(chunkSize)) throw new RangeError("FTS chunk size must be finite");
@@ -843,6 +848,11 @@ export interface CreateDbOwnerMaintenanceOptions {
 
 let registeredMaintenance: DbOwnerMaintenance | null = null;
 let registeredMaintenanceClose: Promise<void> | null = null;
+let registeredMaintenanceLeases: {
+	count: number;
+	readonly idle: Promise<void>;
+	readonly resolveIdle: () => void;
+} | null = null;
 
 export function registerDbOwnerMaintenance(maintenance: DbOwnerMaintenance): void {
 	if (registeredMaintenanceClose !== null) throw new Error("DB owner maintenance is closing");
@@ -856,6 +866,49 @@ export function getDbOwnerMaintenance(): DbOwnerMaintenance | null {
 	return registeredMaintenance;
 }
 
+function acquireRegisteredDbOwnerMaintenance(): RegisteredDbOwnerMaintenanceLease | null {
+	const maintenance = registeredMaintenance;
+	if (maintenance === null || registeredMaintenanceClose !== null) return null;
+	let leases = registeredMaintenanceLeases;
+	if (leases === null) {
+		let resolveIdle: (() => void) | undefined;
+		const idle = new Promise<void>((resolve) => {
+			resolveIdle = resolve;
+		});
+		leases = {
+			count: 0,
+			idle,
+			resolveIdle: () => resolveIdle?.(),
+		};
+		registeredMaintenanceLeases = leases;
+	}
+	leases.count += 1;
+	let released = false;
+	return {
+		maintenance,
+		release: () => {
+			if (released) return;
+			released = true;
+			leases.count -= 1;
+			if (leases.count !== 0) return;
+			if (registeredMaintenanceLeases === leases) registeredMaintenanceLeases = null;
+			leases.resolveIdle();
+		},
+	};
+}
+
+export async function withRegisteredDbOwnerMaintenance<Result>(
+	callback: (maintenance: DbOwnerMaintenance) => Promise<Result>,
+): Promise<Result | undefined> {
+	const lease = acquireRegisteredDbOwnerMaintenance();
+	if (lease === null) return undefined;
+	try {
+		return await callback(lease.maintenance);
+	} finally {
+		lease.release();
+	}
+}
+
 /** Clear the registry before awaiting close so no caller can use a retiring owner. */
 export async function closeRegisteredDbOwnerMaintenance(): Promise<void> {
 	const inFlight = registeredMaintenanceClose;
@@ -866,7 +919,8 @@ export async function closeRegisteredDbOwnerMaintenance(): Promise<void> {
 	const maintenance = registeredMaintenance;
 	registeredMaintenance = null;
 	if (maintenance === null) return;
-	const completion = Promise.resolve().then(() => maintenance.close());
+	const leases = registeredMaintenanceLeases;
+	const completion = (leases?.idle ?? Promise.resolve()).then(() => maintenance.close());
 	registeredMaintenanceClose = completion;
 	try {
 		await completion;
