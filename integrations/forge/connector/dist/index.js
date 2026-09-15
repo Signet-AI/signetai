@@ -1,3 +1,6 @@
+import { createRequire } from "node:module";
+var __require = /* @__PURE__ */ createRequire(import.meta.url);
+
 // src/index.ts
 import {
   existsSync as existsSync2,
@@ -18,7 +21,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname as dirname2, isAbsolute, join as join3, relative, sep } from "node:path";
-import { createRequire } from "node:module";
+import { createRequire as createRequire2 } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -33,7 +36,7 @@ import { createHash } from "node:crypto";
 import { homedir as homedir2 } from "node:os";
 import { join as join2, resolve } from "node:path";
 import { createHash as createHash2 } from "node:crypto";
-import { createRequire as createRequire2 } from "node:module";
+import { createRequire as createRequire22 } from "node:module";
 import {
   closeSync as closeSync2,
   existsSync as existsSync6,
@@ -83,7 +86,7 @@ var __export = (target, all) => {
     });
 };
 var __esm = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
-var __require = /* @__PURE__ */ createRequire(import.meta.url);
+var __require2 = /* @__PURE__ */ createRequire2(import.meta.url);
 var require_identity = __commonJS2((exports) => {
   var ALIAS = Symbol.for("yaml.alias");
   var DOC = Symbol.for("yaml.document");
@@ -1621,7 +1624,7 @@ ${ctx.indent}`;
   exports.stringifyPair = stringifyPair;
 });
 var require_log = __commonJS2((exports) => {
-  var node_process = __require("process");
+  var node_process = __require2("process");
   function debug(logLevel, ...messages) {
     if (logLevel === "debug")
       console.log(...messages);
@@ -2422,7 +2425,7 @@ var require_schema2 = __commonJS2((exports) => {
   exports.schema = schema;
 });
 var require_binary = __commonJS2((exports) => {
-  var node_buffer = __require("buffer");
+  var node_buffer = __require2("buffer");
   var Scalar = require_Scalar();
   var stringifyString = require_stringifyString();
   var binary = {
@@ -4729,7 +4732,7 @@ var require_compose_doc = __commonJS2((exports) => {
   exports.composeDoc = composeDoc;
 });
 var require_composer = __commonJS2((exports) => {
-  var node_process = __require("process");
+  var node_process = __require2("process");
   var directives = require_directives();
   var Document = require_Document();
   var errors = require_errors();
@@ -5940,7 +5943,7 @@ var require_line_counter = __commonJS2((exports) => {
   exports.LineCounter = LineCounter;
 });
 var require_parser = __commonJS2((exports) => {
-  var node_process = __require("process");
+  var node_process = __require2("process");
   var cst = require_cst();
   var lexer = require_lexer();
   function includesToken(list, type) {
@@ -6932,715 +6935,6 @@ var require_dist = __commonJS2((exports) => {
   exports.visit = visit.visit;
   exports.visitAsync = visit.visitAsync;
 });
-var require_keyring_linux_x64_musl = __commonJS2((exports, module) => {
-  module.exports = __require("./keyring.linux-x64-musl-gxd42x54.node");
-});
-var require_package = __commonJS2((exports, module) => {
-  module.exports = {
-    name: "@napi-rs/keyring-linux-x64-musl",
-    version: "1.3.0",
-    cpu: [
-      "x64"
-    ],
-    main: "keyring.linux-x64-musl.node",
-    files: [
-      "keyring.linux-x64-musl.node"
-    ],
-    description: "https://github.com/hwchen/keyring-rs Node.js binding via https://napi.rs",
-    keywords: [
-      "napi-rs",
-      "NAPI",
-      "N-API",
-      "Rust",
-      "node-addon",
-      "node-addon-api"
-    ],
-    license: "MIT",
-    engines: {
-      node: ">= 10"
-    },
-    repository: "https://github.com/Brooooooklyn/keyring-node",
-    publishConfig: {
-      registry: "https://registry.npmjs.org/",
-      access: "public"
-    },
-    os: [
-      "linux"
-    ],
-    libc: [
-      "musl"
-    ]
-  };
-});
-var require_keyring_linux_x64_gnu = __commonJS2((exports, module) => {
-  module.exports = __require("./keyring.linux-x64-gnu-0wbgnj90.node");
-});
-var require_package2 = __commonJS2((exports, module) => {
-  module.exports = {
-    name: "@napi-rs/keyring-linux-x64-gnu",
-    version: "1.3.0",
-    cpu: [
-      "x64"
-    ],
-    main: "keyring.linux-x64-gnu.node",
-    files: [
-      "keyring.linux-x64-gnu.node"
-    ],
-    description: "https://github.com/hwchen/keyring-rs Node.js binding via https://napi.rs",
-    keywords: [
-      "napi-rs",
-      "NAPI",
-      "N-API",
-      "Rust",
-      "node-addon",
-      "node-addon-api"
-    ],
-    license: "MIT",
-    engines: {
-      node: ">= 10"
-    },
-    repository: "https://github.com/Brooooooklyn/keyring-node",
-    publishConfig: {
-      registry: "https://registry.npmjs.org/",
-      access: "public"
-    },
-    os: [
-      "linux"
-    ],
-    libc: [
-      "glibc"
-    ]
-  };
-});
-var require_keyring = __commonJS2((exports, module) => {
-  var __filename2 = "/home/nicholai/signet/signetai/.worktrees/hermes-984097ee/node_modules/.bun/@napi-rs+keyring@1.3.0/node_modules/@napi-rs/keyring/index.js";
-  var { createRequire: createRequire22 } = __require("node:module");
-  __require = createRequire22(__filename2);
-  var { readFileSync: readFileSync3 } = __require("node:fs");
-  var nativeBinding = null;
-  var loadErrors = [];
-  var isMusl = () => {
-    let musl = false;
-    if (process.platform === "linux") {
-      musl = isMuslFromFilesystem();
-      if (musl === null) {
-        musl = isMuslFromReport();
-      }
-      if (musl === null) {
-        musl = isMuslFromChildProcess();
-      }
-    }
-    return musl;
-  };
-  var isFileMusl = (f) => f.includes("libc.musl-") || f.includes("ld-musl-");
-  var isMuslFromFilesystem = () => {
-    try {
-      return readFileSync3("/usr/bin/ldd", "utf-8").includes("musl");
-    } catch {
-      return null;
-    }
-  };
-  var isMuslFromReport = () => {
-    let report = null;
-    if (typeof process.report?.getReport === "function") {
-      process.report.excludeNetwork = true;
-      report = process.report.getReport();
-    }
-    if (!report) {
-      return null;
-    }
-    if (report.header && report.header.glibcVersionRuntime) {
-      return false;
-    }
-    if (Array.isArray(report.sharedObjects)) {
-      if (report.sharedObjects.some(isFileMusl)) {
-        return true;
-      }
-    }
-    return false;
-  };
-  var isMuslFromChildProcess = () => {
-    try {
-      return __require("child_process").execSync("ldd --version", { encoding: "utf8" }).includes("musl");
-    } catch (e) {
-      return false;
-    }
-  };
-  function requireNative() {
-    if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
-      try {
-        nativeBinding = __require(process.env.NAPI_RS_NATIVE_LIBRARY_PATH);
-      } catch (err) {
-        loadErrors.push(err);
-      }
-    } else if (process.platform === "android") {
-      if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.android-arm64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-android-arm64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-android-arm64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.android-arm-eabi.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-android-arm-eabi");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-android-arm-eabi/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on Android ${process.arch}`));
-      }
-    } else if (process.platform === "win32") {
-      if (process.arch === "x64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.win32-x64-msvc.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-x64-msvc");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-x64-msvc/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "ia32") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.win32-ia32-msvc.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-ia32-msvc");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-ia32-msvc/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.win32-arm64-msvc.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-arm64-msvc");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-arm64-msvc/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on Windows: ${process.arch}`));
-      }
-    } else if (process.platform === "darwin") {
-      try {
-        return (() => {
-          throw new Error("Cannot require module " + "./keyring.darwin-universal.node");
-        })();
-      } catch (e) {
-        loadErrors.push(e);
-      }
-      try {
-        const binding = (() => {
-          throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-universal");
-        })();
-        const bindingPackageVersion = (() => {
-          throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-universal/package.json");
-        })().version;
-        if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-          throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-        }
-        return binding;
-      } catch (e) {
-        loadErrors.push(e);
-      }
-      if (process.arch === "x64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.darwin-x64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-x64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-x64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.darwin-arm64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-arm64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-arm64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on macOS: ${process.arch}`));
-      }
-    } else if (process.platform === "freebsd") {
-      if (process.arch === "x64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.freebsd-x64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-freebsd-x64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-freebsd-x64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.freebsd-arm64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-freebsd-arm64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-freebsd-arm64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on FreeBSD: ${process.arch}`));
-      }
-    } else if (process.platform === "linux") {
-      if (process.arch === "x64") {
-        if (isMusl()) {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-x64-musl.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = require_keyring_linux_x64_musl();
-            const bindingPackageVersion = require_package().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        } else {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-x64-gnu.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = require_keyring_linux_x64_gnu();
-            const bindingPackageVersion = require_package2().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        }
-      } else if (process.arch === "arm64") {
-        if (isMusl()) {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-arm64-musl.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm64-musl");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm64-musl/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        } else {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-arm64-gnu.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm64-gnu");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm64-gnu/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        }
-      } else if (process.arch === "arm") {
-        if (isMusl()) {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-arm-musleabihf.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm-musleabihf");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm-musleabihf/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        } else {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-arm-gnueabihf.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm-gnueabihf");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm-gnueabihf/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        }
-      } else if (process.arch === "riscv64") {
-        if (isMusl()) {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-riscv64-musl.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-riscv64-musl");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-riscv64-musl/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        } else {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-riscv64-gnu.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-riscv64-gnu");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-riscv64-gnu/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        }
-      } else if (process.arch === "ppc64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.linux-ppc64-gnu.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-linux-ppc64-gnu");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-linux-ppc64-gnu/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "s390x") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.linux-s390x-gnu.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-linux-s390x-gnu");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-linux-s390x-gnu/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on Linux: ${process.arch}`));
-      }
-    } else if (process.platform === "openharmony") {
-      if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.openharmony-arm64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-arm64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-arm64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "x64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.openharmony-x64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-x64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-x64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.openharmony-arm.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-arm");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-arm/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on OpenHarmony: ${process.arch}`));
-      }
-    } else {
-      loadErrors.push(new Error(`Unsupported OS: ${process.platform}, architecture: ${process.arch}`));
-    }
-  }
-  nativeBinding = requireNative();
-  if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
-    try {
-      nativeBinding = (() => {
-        throw new Error("Cannot require module " + "./keyring.wasi.cjs");
-      })();
-    } catch (err) {
-      if (process.env.NAPI_RS_FORCE_WASI) {
-        loadErrors.push(err);
-      }
-    }
-    if (!nativeBinding) {
-      try {
-        nativeBinding = (() => {
-          throw new Error("Cannot require module " + "@napi-rs/keyring-wasm32-wasi");
-        })();
-      } catch (err) {
-        if (process.env.NAPI_RS_FORCE_WASI) {
-          loadErrors.push(err);
-        }
-      }
-    }
-  }
-  if (!nativeBinding) {
-    if (loadErrors.length > 0) {
-      throw new Error(`Cannot find native binding. ` + `npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). ` + "Please try `npm i` again after removing both package-lock.json and node_modules directory.", { cause: loadErrors });
-    }
-    throw new Error(`Failed to load native binding`);
-  }
-  module.exports = nativeBinding;
-  module.exports.AsyncEntry = nativeBinding.AsyncEntry;
-  module.exports.Entry = nativeBinding.Entry;
-  module.exports.findCredentials = nativeBinding.findCredentials;
-  module.exports.findCredentialsAsync = nativeBinding.findCredentialsAsync;
-});
 async function A(A2 = {}) {
   var I, g = A2, C = !!globalThis.window, B = !!globalThis.WorkerGlobalScope, Q = (globalThis.process?.versions?.node && globalThis.process, import.meta.url);
   if (C || B) {
@@ -7764,7 +7058,7 @@ async function A(A2 = {}) {
         C2(), g.getRandomValue = C2;
       } catch (A4) {
         try {
-          var B2 = __require("crypto"), Q2 = function() {
+          var B2 = __require2("crypto"), Q2 = function() {
             var A5 = B2.randomBytes(4);
             return (A5[0] << 24 | A5[1] << 16 | A5[2] << 8 | A5[3]) >>> 0;
           };
@@ -17754,7 +17048,7 @@ function expandHome(p2, home = homedir2()) {
   return p2;
 }
 var SERVICE = "ai.signet.secrets";
-var require2 = createRequire2(import.meta.url);
+var require2 = createRequire22(import.meta.url);
 var modulePromise = null;
 var syncModule;
 function workspaceAccount(workspace) {
@@ -17799,7 +17093,7 @@ async function loadModule() {
     const override = process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim();
     if (override)
       return tryRequireOverride();
-    return await Promise.resolve().then(() => __toESM2(require_keyring(), 1)).catch(() => null);
+    return await import("@napi-rs/keyring").catch(() => null);
   })();
   return modulePromise;
 }
@@ -18449,7 +17743,7 @@ function resolvePackagedSignetCommand(bareCommand, scriptDirectory, scriptName, 
   if (cliEntry && existsSync(scriptPath))
     return { command: process.execPath, args: [scriptPath] };
   if (warnOnFallback) {
-    console.warn(`[signet] Warning: could not resolve ${scriptName} from argv[1]="${cliEntry}". ` + `MCP server config will use "${bareCommand}" which may fail on Windows without shell:true.`);
+    console.warn(`[signet] Warning: could not resolve ${scriptName} from argv[1]="${cliEntry}". MCP server config will use "${bareCommand}" which may fail on Windows without shell:true.`);
   }
   return { command: bareCommand, args: [] };
 }
@@ -18517,7 +17811,7 @@ import { createHash as createHash3 } from "node:crypto";
 import { homedir as homedir22 } from "node:os";
 import { join as join22, resolve as resolve4 } from "node:path";
 import { createHash as createHash22 } from "node:crypto";
-import { createRequire as createRequire22 } from "node:module";
+import { createRequire as createRequire23 } from "node:module";
 import { createRequire as createRequire32 } from "node:module";
 import { homedir as homedir52 } from "node:os";
 import { dirname as dirname42, join as join82, resolve as resolve32 } from "node:path";
@@ -18553,7 +17847,7 @@ var __export2 = (target, all) => {
     });
 };
 var __esm2 = (fn, res) => () => (fn && (res = fn(fn = 0)), res);
-var __require2 = /* @__PURE__ */ createRequire4(import.meta.url);
+var __require3 = /* @__PURE__ */ createRequire4(import.meta.url);
 var require_identity2 = __commonJS((exports) => {
   var ALIAS = Symbol.for("yaml.alias");
   var DOC = Symbol.for("yaml.document");
@@ -20091,7 +19385,7 @@ ${ctx.indent}`;
   exports.stringifyPair = stringifyPair;
 });
 var require_log2 = __commonJS((exports) => {
-  var node_process = __require2("process");
+  var node_process = __require3("process");
   function debug(logLevel, ...messages) {
     if (logLevel === "debug")
       console.log(...messages);
@@ -20892,7 +20186,7 @@ var require_schema22 = __commonJS((exports) => {
   exports.schema = schema;
 });
 var require_binary2 = __commonJS((exports) => {
-  var node_buffer = __require2("buffer");
+  var node_buffer = __require3("buffer");
   var Scalar = require_Scalar2();
   var stringifyString = require_stringifyString2();
   var binary = {
@@ -23199,7 +22493,7 @@ var require_compose_doc2 = __commonJS((exports) => {
   exports.composeDoc = composeDoc;
 });
 var require_composer2 = __commonJS((exports) => {
-  var node_process = __require2("process");
+  var node_process = __require3("process");
   var directives = require_directives2();
   var Document = require_Document2();
   var errors = require_errors2();
@@ -24410,7 +23704,7 @@ var require_line_counter2 = __commonJS((exports) => {
   exports.LineCounter = LineCounter;
 });
 var require_parser2 = __commonJS((exports) => {
-  var node_process = __require2("process");
+  var node_process = __require3("process");
   var cst = require_cst2();
   var lexer = require_lexer2();
   function includesToken(list, type) {
@@ -25402,715 +24696,6 @@ var require_dist2 = __commonJS((exports) => {
   exports.visit = visit.visit;
   exports.visitAsync = visit.visitAsync;
 });
-var require_keyring_linux_x64_musl2 = __commonJS((exports, module) => {
-  module.exports = __require2("./keyring.linux-x64-musl-gxd42x54.node");
-});
-var require_package3 = __commonJS((exports, module) => {
-  module.exports = {
-    name: "@napi-rs/keyring-linux-x64-musl",
-    version: "1.3.0",
-    cpu: [
-      "x64"
-    ],
-    main: "keyring.linux-x64-musl.node",
-    files: [
-      "keyring.linux-x64-musl.node"
-    ],
-    description: "https://github.com/hwchen/keyring-rs Node.js binding via https://napi.rs",
-    keywords: [
-      "napi-rs",
-      "NAPI",
-      "N-API",
-      "Rust",
-      "node-addon",
-      "node-addon-api"
-    ],
-    license: "MIT",
-    engines: {
-      node: ">= 10"
-    },
-    repository: "https://github.com/Brooooooklyn/keyring-node",
-    publishConfig: {
-      registry: "https://registry.npmjs.org/",
-      access: "public"
-    },
-    os: [
-      "linux"
-    ],
-    libc: [
-      "musl"
-    ]
-  };
-});
-var require_keyring_linux_x64_gnu2 = __commonJS((exports, module) => {
-  module.exports = __require2("./keyring.linux-x64-gnu-0wbgnj90.node");
-});
-var require_package22 = __commonJS((exports, module) => {
-  module.exports = {
-    name: "@napi-rs/keyring-linux-x64-gnu",
-    version: "1.3.0",
-    cpu: [
-      "x64"
-    ],
-    main: "keyring.linux-x64-gnu.node",
-    files: [
-      "keyring.linux-x64-gnu.node"
-    ],
-    description: "https://github.com/hwchen/keyring-rs Node.js binding via https://napi.rs",
-    keywords: [
-      "napi-rs",
-      "NAPI",
-      "N-API",
-      "Rust",
-      "node-addon",
-      "node-addon-api"
-    ],
-    license: "MIT",
-    engines: {
-      node: ">= 10"
-    },
-    repository: "https://github.com/Brooooooklyn/keyring-node",
-    publishConfig: {
-      registry: "https://registry.npmjs.org/",
-      access: "public"
-    },
-    os: [
-      "linux"
-    ],
-    libc: [
-      "glibc"
-    ]
-  };
-});
-var require_keyring2 = __commonJS((exports, module) => {
-  var __filename3 = "/home/nicholai/signet/signetai/.worktrees/hermes-984097ee/node_modules/.bun/@napi-rs+keyring@1.3.0/node_modules/@napi-rs/keyring/index.js";
-  var { createRequire: createRequire23 } = __require2("node:module");
-  __require2 = createRequire23(__filename3);
-  var { readFileSync: readFileSync3 } = __require2("node:fs");
-  var nativeBinding = null;
-  var loadErrors = [];
-  var isMusl = () => {
-    let musl = false;
-    if (process.platform === "linux") {
-      musl = isMuslFromFilesystem();
-      if (musl === null) {
-        musl = isMuslFromReport();
-      }
-      if (musl === null) {
-        musl = isMuslFromChildProcess();
-      }
-    }
-    return musl;
-  };
-  var isFileMusl = (f2) => f2.includes("libc.musl-") || f2.includes("ld-musl-");
-  var isMuslFromFilesystem = () => {
-    try {
-      return readFileSync3("/usr/bin/ldd", "utf-8").includes("musl");
-    } catch {
-      return null;
-    }
-  };
-  var isMuslFromReport = () => {
-    let report = null;
-    if (typeof process.report?.getReport === "function") {
-      process.report.excludeNetwork = true;
-      report = process.report.getReport();
-    }
-    if (!report) {
-      return null;
-    }
-    if (report.header && report.header.glibcVersionRuntime) {
-      return false;
-    }
-    if (Array.isArray(report.sharedObjects)) {
-      if (report.sharedObjects.some(isFileMusl)) {
-        return true;
-      }
-    }
-    return false;
-  };
-  var isMuslFromChildProcess = () => {
-    try {
-      return __require2("child_process").execSync("ldd --version", { encoding: "utf8" }).includes("musl");
-    } catch (e) {
-      return false;
-    }
-  };
-  function requireNative() {
-    if (process.env.NAPI_RS_NATIVE_LIBRARY_PATH) {
-      try {
-        nativeBinding = __require2(process.env.NAPI_RS_NATIVE_LIBRARY_PATH);
-      } catch (err) {
-        loadErrors.push(err);
-      }
-    } else if (process.platform === "android") {
-      if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.android-arm64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-android-arm64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-android-arm64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.android-arm-eabi.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-android-arm-eabi");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-android-arm-eabi/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on Android ${process.arch}`));
-      }
-    } else if (process.platform === "win32") {
-      if (process.arch === "x64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.win32-x64-msvc.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-x64-msvc");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-x64-msvc/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "ia32") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.win32-ia32-msvc.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-ia32-msvc");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-ia32-msvc/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.win32-arm64-msvc.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-arm64-msvc");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-win32-arm64-msvc/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on Windows: ${process.arch}`));
-      }
-    } else if (process.platform === "darwin") {
-      try {
-        return (() => {
-          throw new Error("Cannot require module " + "./keyring.darwin-universal.node");
-        })();
-      } catch (e) {
-        loadErrors.push(e);
-      }
-      try {
-        const binding = (() => {
-          throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-universal");
-        })();
-        const bindingPackageVersion = (() => {
-          throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-universal/package.json");
-        })().version;
-        if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-          throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-        }
-        return binding;
-      } catch (e) {
-        loadErrors.push(e);
-      }
-      if (process.arch === "x64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.darwin-x64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-x64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-x64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.darwin-arm64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-arm64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-darwin-arm64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on macOS: ${process.arch}`));
-      }
-    } else if (process.platform === "freebsd") {
-      if (process.arch === "x64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.freebsd-x64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-freebsd-x64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-freebsd-x64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.freebsd-arm64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-freebsd-arm64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-freebsd-arm64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on FreeBSD: ${process.arch}`));
-      }
-    } else if (process.platform === "linux") {
-      if (process.arch === "x64") {
-        if (isMusl()) {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-x64-musl.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = require_keyring_linux_x64_musl2();
-            const bindingPackageVersion = require_package3().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        } else {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-x64-gnu.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = require_keyring_linux_x64_gnu2();
-            const bindingPackageVersion = require_package22().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        }
-      } else if (process.arch === "arm64") {
-        if (isMusl()) {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-arm64-musl.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm64-musl");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm64-musl/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        } else {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-arm64-gnu.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm64-gnu");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm64-gnu/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        }
-      } else if (process.arch === "arm") {
-        if (isMusl()) {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-arm-musleabihf.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm-musleabihf");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm-musleabihf/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        } else {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-arm-gnueabihf.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm-gnueabihf");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-arm-gnueabihf/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        }
-      } else if (process.arch === "riscv64") {
-        if (isMusl()) {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-riscv64-musl.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-riscv64-musl");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-riscv64-musl/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        } else {
-          try {
-            return (() => {
-              throw new Error("Cannot require module " + "./keyring.linux-riscv64-gnu.node");
-            })();
-          } catch (e) {
-            loadErrors.push(e);
-          }
-          try {
-            const binding = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-riscv64-gnu");
-            })();
-            const bindingPackageVersion = (() => {
-              throw new Error("Cannot require module " + "@napi-rs/keyring-linux-riscv64-gnu/package.json");
-            })().version;
-            if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-              throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-            }
-            return binding;
-          } catch (e) {
-            loadErrors.push(e);
-          }
-        }
-      } else if (process.arch === "ppc64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.linux-ppc64-gnu.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-linux-ppc64-gnu");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-linux-ppc64-gnu/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "s390x") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.linux-s390x-gnu.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-linux-s390x-gnu");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-linux-s390x-gnu/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on Linux: ${process.arch}`));
-      }
-    } else if (process.platform === "openharmony") {
-      if (process.arch === "arm64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.openharmony-arm64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-arm64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-arm64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "x64") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.openharmony-x64.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-x64");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-x64/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else if (process.arch === "arm") {
-        try {
-          return (() => {
-            throw new Error("Cannot require module " + "./keyring.openharmony-arm.node");
-          })();
-        } catch (e) {
-          loadErrors.push(e);
-        }
-        try {
-          const binding = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-arm");
-          })();
-          const bindingPackageVersion = (() => {
-            throw new Error("Cannot require module " + "@napi-rs/keyring-openharmony-arm/package.json");
-          })().version;
-          if (bindingPackageVersion !== "1.3.0" && process.env.NAPI_RS_ENFORCE_VERSION_CHECK && process.env.NAPI_RS_ENFORCE_VERSION_CHECK !== "0") {
-            throw new Error(`Native binding package version mismatch, expected 1.3.0 but got ${bindingPackageVersion}. You can reinstall dependencies to fix this issue.`);
-          }
-          return binding;
-        } catch (e) {
-          loadErrors.push(e);
-        }
-      } else {
-        loadErrors.push(new Error(`Unsupported architecture on OpenHarmony: ${process.arch}`));
-      }
-    } else {
-      loadErrors.push(new Error(`Unsupported OS: ${process.platform}, architecture: ${process.arch}`));
-    }
-  }
-  nativeBinding = requireNative();
-  if (!nativeBinding || process.env.NAPI_RS_FORCE_WASI) {
-    try {
-      nativeBinding = (() => {
-        throw new Error("Cannot require module " + "./keyring.wasi.cjs");
-      })();
-    } catch (err) {
-      if (process.env.NAPI_RS_FORCE_WASI) {
-        loadErrors.push(err);
-      }
-    }
-    if (!nativeBinding) {
-      try {
-        nativeBinding = (() => {
-          throw new Error("Cannot require module " + "@napi-rs/keyring-wasm32-wasi");
-        })();
-      } catch (err) {
-        if (process.env.NAPI_RS_FORCE_WASI) {
-          loadErrors.push(err);
-        }
-      }
-    }
-  }
-  if (!nativeBinding) {
-    if (loadErrors.length > 0) {
-      throw new Error(`Cannot find native binding. ` + `npm has a bug related to optional dependencies (https://github.com/npm/cli/issues/4828). ` + "Please try `npm i` again after removing both package-lock.json and node_modules directory.", { cause: loadErrors });
-    }
-    throw new Error(`Failed to load native binding`);
-  }
-  module.exports = nativeBinding;
-  module.exports.AsyncEntry = nativeBinding.AsyncEntry;
-  module.exports.Entry = nativeBinding.Entry;
-  module.exports.findCredentials = nativeBinding.findCredentials;
-  module.exports.findCredentialsAsync = nativeBinding.findCredentialsAsync;
-});
 async function A3(A22 = {}) {
   var I2, g2 = A22, C2 = !!globalThis.window, B2 = !!globalThis.WorkerGlobalScope, Q2 = (globalThis.process?.versions?.node && globalThis.process, import.meta.url);
   if (C2 || B2) {
@@ -26234,7 +24819,7 @@ async function A3(A22 = {}) {
         C22(), g2.getRandomValue = C22;
       } catch (A4) {
         try {
-          var B22 = __require2("crypto"), Q22 = function() {
+          var B22 = __require3("crypto"), Q22 = function() {
             var A5 = B22.randomBytes(4);
             return (A5[0] << 24 | A5[1] << 16 | A5[2] << 8 | A5[3]) >>> 0;
           };
@@ -36224,7 +34809,7 @@ function expandHome2(p3, home2 = homedir22()) {
   return p3;
 }
 var SERVICE2 = "ai.signet.secrets";
-var require22 = createRequire22(import.meta.url);
+var require22 = createRequire23(import.meta.url);
 var modulePromise2 = null;
 var syncModule2;
 function workspaceAccount2(workspace) {
@@ -36269,7 +34854,7 @@ async function loadModule2() {
     const override = process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim();
     if (override)
       return tryRequireOverride2();
-    return await Promise.resolve().then(() => __toESM(require_keyring2(), 1)).catch(() => null);
+    return await import("@napi-rs/keyring").catch(() => null);
   })();
   return modulePromise2;
 }
