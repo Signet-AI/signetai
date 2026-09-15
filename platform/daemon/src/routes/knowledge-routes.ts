@@ -1,9 +1,10 @@
-import { MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
 import type { Hono } from "hono";
 
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id";
 import { requirePermission } from "../auth";
-import { type ReadDb, getDbAccessor } from "../db-accessor";
+import { getDbAccessor, getDbAccessorPath } from "../db-accessor";
+import { getDbOwner } from "../db-owner-runtime";
+import { expandKnowledgeGraphViaOwner } from "../knowledge-expansion";
 import { walkImpact } from "../graph-impact";
 import {
 	getAttributesForAspectFiltered,
@@ -25,10 +26,14 @@ import {
 } from "../knowledge-graph";
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
 import { getDreamingEpisodicTokenBacklog } from "../pipeline/dreaming";
-import { type ResolvedMemoryConfig, loadMemoryConfig } from "../memory-config";
+import { loadMemoryConfig } from "../memory-config";
 import { isMemoryContentContextEligible } from "../memory-content-safety";
 import { OntologyProposalError, applyOntologyOperation } from "../ontology-proposals";
-import { getTraversalStatus, resolveFocalEntities, traverseKnowledgeGraph } from "../pipeline/graph-traversal";
+import {
+	getTraversalStatus,
+	resolveFocalEntitiesViaOwner,
+	traverseKnowledgeGraphViaOwner,
+} from "../pipeline/graph-traversal";
 import { AGENTS_DIR, authConfig } from "./state";
 import { resolveScopedAgentId, resolveScopedProject } from "./utils";
 
@@ -320,7 +325,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					updated_at: string;
 				}>;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:305" },
+			{ siteToken: "routes/knowledge-routes.ts:310" },
 		);
 		return c.json({ items: rows, count: rows.length });
 	});
@@ -360,39 +365,6 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			return c.json({ error: "entity name is required" }, 400);
 		}
 
-		const agentId = scopedAgent.agentId;
-		const resolved = await resolveNamedEntity(getDbAccessor(), {
-			agentId,
-			name: entityName,
-		});
-		const focal =
-			resolved !== null
-				? {
-						entityIds: [resolved.id],
-					}
-				: await getDbAccessor().withReadDbAsync(
-						async (db) =>
-							resolveFocalEntities(db, agentId, {
-								queryTokens: entityName.split(/\s+/),
-							}),
-						{ siteToken: "routes/knowledge-routes.ts:373" },
-					);
-
-		if (focal.entityIds.length === 0) {
-			return c.json(
-				{
-					error: `Entity "${entityName}" not found`,
-					entity: null,
-					constraints: [],
-					aspects: [],
-					dependencies: [],
-					memoryCount: 0,
-					memories: [],
-				},
-				404,
-			);
-		}
-
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const traversalCfg = cfg.pipelineV2.traversal ?? {
 			maxAspectsPerEntity: 10,
@@ -404,18 +376,48 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			minConfidence: 0.5,
 			timeoutMs: 500,
 		};
+		const traversalDeadlineAt = Date.now() + traversalCfg.timeoutMs;
+		const agentId = scopedAgent.agentId;
 
-		const primaryEntityId = focal.entityIds[0];
+		try {
+			const owner = await getDbOwner(getDbAccessorPath());
+			const resolved = await resolveNamedEntity(getDbAccessor(), {
+				agentId,
+				name: entityName,
+				deadlineAt: traversalDeadlineAt,
+			});
+			const focal: Awaited<ReturnType<typeof resolveFocalEntitiesViaOwner>> =
+				resolved !== null
+					? {
+							entityIds: [resolved.id],
+							entityNames: [resolved.name],
+							pinnedEntityIds: [],
+							source: "query",
+						}
+					: await resolveFocalEntitiesViaOwner(owner, agentId, {
+							queryTokens: entityName.split(/\s+/),
+							deadlineAt: traversalDeadlineAt,
+						});
 
-		const traversal = await traverseKnowledgeGraph(
-			focal.entityIds,
-			(readFn) =>
-				getDbAccessor().withReadDbAsync(readFn, {
-					siteToken: "routes/knowledge-routes.ts:413",
-					operation: "knowledge.graph-traversal",
-				}),
-			agentId,
-			{
+			if (focal.error) {
+				return c.json({ error: "Knowledge graph expansion unavailable.", code: "knowledge_graph_unavailable" }, 503);
+			}
+			if (focal.entityIds.length === 0) {
+				return c.json(
+					{
+						error: `Entity "${entityName}" not found`,
+						entity: null,
+						constraints: [],
+						aspects: [],
+						dependencies: [],
+						memoryCount: 0,
+						memories: [],
+					},
+					404,
+				);
+			}
+
+			const traversal = await traverseKnowledgeGraphViaOwner(focal.entityIds, owner, agentId, {
 				maxAspectsPerEntity: traversalCfg.maxAspectsPerEntity,
 				maxAttributesPerAspect: traversalCfg.maxAttributesPerAspect,
 				maxDependencyHops: traversalCfg.maxDependencyHops,
@@ -424,154 +426,23 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				maxTraversalPaths: traversalCfg.maxTraversalPaths,
 				minConfidence: traversalCfg.minConfidence,
 				timeoutMs: traversalCfg.timeoutMs,
+				deadlineAt: traversalDeadlineAt,
 				aspectFilter: aspectFilter || undefined,
-			},
-		);
+			});
 
-		return await getDbAccessor().withReadDbAsync(
-			async (db) => {
-				const entityRow = db
-					.prepare(
-						`SELECT id, name, entity_type, description
-					 FROM entities WHERE id = ?`,
-					)
-					.get(primaryEntityId) as
-					| {
-							id: string;
-							name: string;
-							entity_type: string;
-							description: string | null;
-					  }
-					| undefined;
-
-				const aspectFilterClause = aspectFilter ? "AND ea.canonical_name LIKE ?" : "";
-				const aspectArgs = aspectFilter
-					? [primaryEntityId, agentId, `%${aspectFilter}%`, traversalCfg.maxAspectsPerEntity]
-					: [primaryEntityId, agentId, traversalCfg.maxAspectsPerEntity];
-
-				const aspects = db
-					.prepare(
-						`SELECT ea.id, ea.canonical_name, ea.weight
-					 FROM entity_aspects ea
-					 WHERE ea.entity_id = ? AND ea.agent_id = ?
-					 ${aspectFilterClause}
-					 ORDER BY ea.weight DESC
-					 LIMIT ?`,
-					)
-					.all(...aspectArgs) as Array<{
-					id: string;
-					canonical_name: string;
-					weight: number;
-				}>;
-
-				const aspectsWithAttributes = aspects.map((aspect) => {
-					const attrs = db
-						.prepare(
-							`SELECT content, kind, importance, confidence, memory_id
-						 FROM entity_attributes
-						 WHERE aspect_id = ? AND agent_id = ?
-						   AND status = 'active'
-						 ORDER BY importance DESC
-						 LIMIT ?`,
-						)
-						.all(aspect.id, agentId, traversalCfg.maxAttributesPerAspect) as Array<{
-						content: string;
-						kind: string;
-						importance: number;
-						confidence: number;
-						memory_id: string | null;
-					}>;
-					return {
-						name: aspect.canonical_name,
-						weight: aspect.weight,
-						attributes: attrs
-							.filter((attribute) =>
-								attribute.memory_id
-									? isMemoryContentContextEligible(db, {
-											agentId,
-											sourceKind: "memory",
-											sourceId: attribute.memory_id,
-											content: attribute.content,
-										})
-									: scanMemoryContent(attribute.content).contextEligible,
-							)
-							.map(({ memory_id: _memoryId, ...attribute }) => attribute),
-					};
-				});
-
-				const deps = db
-					.prepare(
-						`SELECT e.name as target, ed.dependency_type as type,
-					        ed.strength
-					 FROM entity_dependencies ed
-					 JOIN entities e ON e.id = ed.target_entity_id
-					 WHERE ed.source_entity_id = ?
-					   AND ed.agent_id = ?
-					   AND ed.strength >= ?
-					 ORDER BY ed.strength DESC
-					 LIMIT ?`,
-					)
-					.all(primaryEntityId, agentId, traversalCfg.minDependencyStrength, traversalCfg.maxDependencyHops) as Array<{
-					target: string;
-					type: string;
-					strength: number;
-				}>;
-
-				let tokenBudget = maxTokens;
-				const hydratedMemories: Array<{
-					id: string;
-					content: string;
-				}> = [];
-				for (const memId of traversal.memoryIds) {
-					if (tokenBudget <= 0) break;
-					const mem = db
-						.prepare(
-							`SELECT id, content, agent_id FROM memories
-						 WHERE id = ? AND is_deleted = 0`,
-						)
-						.get(memId) as { id: string; content: string; agent_id: string | null } | undefined;
-					if (
-						mem &&
-						isMemoryContentContextEligible(db, {
-							agentId: mem.agent_id?.trim() || "default",
-							sourceKind: "memory",
-							sourceId: mem.id,
-							content: mem.content,
-						})
-					) {
-						const approxTokens = Math.ceil(mem.content.length / 4);
-						if (approxTokens <= tokenBudget) {
-							hydratedMemories.push({ id: mem.id, content: mem.content });
-							tokenBudget -= approxTokens;
-						}
-					}
-				}
-
-				const entityDescription = entityRow?.description
-					? scanMemoryContent(entityRow.description).contextEligible
-						? entityRow.description
-						: MEMORY_CONTENT_WITHHELD_NOTICE
-					: null;
-				return c.json({
-					entity: entityRow
-						? {
-								id: entityRow.id,
-								name: entityRow.name,
-								type: entityRow.entity_type,
-								description: entityDescription,
-							}
-						: null,
-					constraints: traversal.constraints.filter(
-						(constraint) => scanMemoryContent(constraint.content).contextEligible,
-					),
-					aspects: aspectsWithAttributes,
-					dependencies: deps,
-					memoryCount: traversal.memoryIds.size,
-					memories: hydratedMemories,
-				});
-			},
-			{ siteToken: "routes/knowledge-routes.ts:431" },
-		);
+			return c.json(
+				await expandKnowledgeGraphViaOwner(owner, {
+					primaryEntityId: focal.entityIds[0],
+					agentId,
+					maxTokens,
+					aspectFilter,
+					traversalConfig: traversalCfg,
+					traversal,
+				}),
+			);
+		} catch {
+			return c.json({ error: "Knowledge graph expansion unavailable.", code: "knowledge_graph_unavailable" }, 503);
+		}
 	});
 
 	app.post("/api/knowledge/expand/session", async (c) => {
@@ -610,7 +481,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:606" },
+			{ siteToken: "routes/knowledge-routes.ts:477" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -708,7 +579,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: safeRows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:623" },
+			{ siteToken: "routes/knowledge-routes.ts:494" },
 		);
 	});
 
@@ -727,7 +598,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:728" },
+			{ siteToken: "routes/knowledge-routes.ts:599" },
 		);
 		return c.json(result);
 	});

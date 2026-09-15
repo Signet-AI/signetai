@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 821 sites
+- Exact ledger inventory: 818 sites
 - Synchronous `withWriteTx()` sites: 62
 - Synchronous `withReadDb()` sites: 97
-- Async-named DB sites: 162
-- Async-named ON-PARENT DB sites: 160
+- Async-named DB sites: 159
+- Async-named ON-PARENT DB sites: 157
 - Async-named OFF-PARENT DB sites: 2
 - Synchronous filesystem/process sites: 500
 - Compile-visible legacy DB sites remaining: 159
   - `withWriteTx`: 62
   - `withReadDb`: 97
 
-The 821-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 62 synchronous writes, 97 synchronous reads, and 162 async-named DB sites are the complete database-call inventory; 159 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 160 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 818-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 62 synchronous writes, 97 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 159 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 321
-- ON-PARENT callback execution: 319
+- Database accessor sites classified: 318
+- ON-PARENT callback execution: 316
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -173,7 +173,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/dreaming-worker.ts:179` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:258` (withReadDbAsync)
 - `pipeline/dreaming-worker.ts:278` (withReadDbAsync)
-- `pipeline/graph-traversal.ts:101` (withReadDbAsync)
+- `pipeline/graph-traversal.ts:103` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:346` (withReadDbAsync)
 - `db:maintenance.dead-memory-count.read` (withReadDbAsync)
@@ -219,13 +219,10 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/hooks-routes.ts:1209` (withWriteTx)
 - `routes/hooks-routes.ts:1329` (withWriteTx)
 - `routes/import-routes.ts:334` (withReadDb)
-- `routes/knowledge-routes.ts:305` (withReadDbAsync)
-- `routes/knowledge-routes.ts:373` (withReadDbAsync)
-- `routes/knowledge-routes.ts:413` (withReadDbAsync)
-- `routes/knowledge-routes.ts:431` (withReadDbAsync)
-- `routes/knowledge-routes.ts:606` (withReadDbAsync)
-- `routes/knowledge-routes.ts:623` (withReadDbAsync)
-- `routes/knowledge-routes.ts:728` (withReadDbAsync)
+- `routes/knowledge-routes.ts:310` (withReadDbAsync)
+- `routes/knowledge-routes.ts:477` (withReadDbAsync)
+- `routes/knowledge-routes.ts:494` (withReadDbAsync)
+- `routes/knowledge-routes.ts:599` (withReadDbAsync)
 - `routes/marketplace.ts:1128` (withWriteTx)
 - `routes/mcp-analytics.ts:89` (withReadDb)
 - `routes/mcp-analytics.ts:171` (withReadDb)

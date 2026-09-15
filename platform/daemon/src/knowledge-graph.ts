@@ -577,6 +577,7 @@ export async function resolveNamedEntity(
 	input: {
 		readonly agentId: string;
 		readonly name: string;
+		readonly deadlineAt?: number;
 	},
 ): Promise<ResolvedNamedEntity | null> {
 	const canonical = toCanonicalName(input.name);
@@ -640,7 +641,10 @@ export async function resolveNamedEntity(
 			],
 			result: "get",
 		},
-		{ operation: "db:knowledge.resolve-entity.read", deadlineMs: 2_000 },
+		{
+			operation: "db:knowledge.resolve-entity.read",
+			deadlineMs: input.deadlineAt === undefined ? 2_000 : Math.max(1, input.deadlineAt - Date.now()),
+		},
 	);
 	if (!rows) return null;
 	return {

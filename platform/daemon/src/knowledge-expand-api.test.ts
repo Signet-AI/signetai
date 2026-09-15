@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import type { Hono } from "hono";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -77,21 +77,20 @@ describe("knowledge expand API", () => {
 		app = daemon.app;
 	});
 
-	beforeEach(() => {
-		closeDbAccessor();
-		rmSync(join(dir, "memory", "memories.db"), { force: true });
-		rmSync(join(dir, "memory", "memories.db-shm"), { force: true });
-		rmSync(join(dir, "memory", "memories.db-wal"), { force: true });
+	beforeEach(async () => {
+		await closeDbAccessor();
+		rmSync(join(dir, "memory"), { recursive: true, force: true });
+		mkdirSync(join(dir, "memory"), { recursive: true });
 		initDbAccessor(join(dir, "memory", "memories.db"));
 		seedKnowledge();
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		if (prev === undefined) {
 			process.env.SIGNET_PATH = undefined;
 		} else {
@@ -106,10 +105,32 @@ describe("knowledge expand API", () => {
 			headers: jsonHeader(),
 			body: JSON.stringify({ entity: "Signet" }),
 		});
-		const json = (await res.json()) as { entity?: { name?: string } };
+		const json = (await res.json()) as {
+			entity?: { name?: string };
+			aspects?: Array<{ attributes?: Array<{ content?: string }> }>;
+		};
 
 		expect(res.status).toBe(200);
 		expect(json.entity?.name).toBe("Signet");
+		expect(json.aspects?.[0]?.attributes?.[0]?.content).toBe("portable memory system");
+	});
+
+	it("keeps graph traversal and hydration behind the DB owner", () => {
+		const source = readFileSync(new URL("./routes/knowledge-routes.ts", import.meta.url), "utf8");
+		const expandStart = source.indexOf('app.post("/api/knowledge/expand",');
+		const sessionStart = source.indexOf('app.post("/api/knowledge/expand/session",');
+		const expandSource = source.slice(expandStart, sessionStart);
+
+		expect(expandSource).toContain("resolveFocalEntitiesViaOwner");
+		expect(expandSource).toContain("traverseKnowledgeGraphViaOwner");
+		expect(expandSource).toContain("expandKnowledgeGraphViaOwner");
+		const exactResolutionStart = expandSource.indexOf("resolveNamedEntity");
+		const exactResolution = expandSource.slice(exactResolutionStart, exactResolutionStart + 240);
+		expect(exactResolution).toContain("deadlineAt: traversalDeadlineAt");
+
+		expect(expandSource).not.toMatch(/\bresolveFocalEntities\s*\(/);
+		expect(expandSource).not.toMatch(/\btraverseKnowledgeGraph\s*\(/);
+		expect(expandSource).not.toContain("withReadDbAsync");
 	});
 
 	it("falls back to summary text and project matching for session expansion", async () => {
