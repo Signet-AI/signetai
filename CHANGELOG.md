@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-15
+- Bug fixes: bound connector rows and clarify unverified health; handle invalid agent rosters; restore transcript agent imports.
+
 ### 2026-09-13
 - Bug fixes: scope event provenance; normalize owner transport errors; fence dispatching owner jobs; close owner metrics fences; fence expired owner jobs.
 
@@ -30,10 +33,18 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: remove dead source worker commands; share integrity child lifecycle; remove dead setup scan; share agent dir logic; isolate harness integration paths; centralize process launching.
 - Docs: trim contributor guide; document harness API boundary.
 
-### 2026-09-06
-- Bug fixes: apply existing setup provider; clean retired setup fields; enable dreaming defaults.
-
 ## Release Ledger
+
+## [0.226.2] - 2026-09-15
+
+Release summary: 3 bug fixes.
+Tag range: `v0.226.1..v0.226.2`.
+
+### Bug Fixes
+
+- bound connector rows and clarify unverified health
+- **dashboard**: handle invalid agent rosters
+- **dashboard**: restore transcript agent imports
 
 ## [0.226.1] - 2026-09-13
 
