@@ -3,7 +3,14 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createDbOwnerMaintenance, runOwnerMaintenanceWithRetry } from "./db-owner-maintenance";
+import {
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	getDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+	runOwnerMaintenanceWithRetry,
+} from "./db-owner-maintenance";
+import type { DbOwnerMaintenance } from "./db-owner-maintenance";
 import { createDbOwnerClient, DbOwnerDeadlineError, DbOwnerDiedError, type DbOwnerClient } from "./db-owner-client";
 import { isFtsIndexIncomplete, setFtsIndexIncomplete } from "./fts-index-state";
 import { completeFtsStartupRecovery } from "./fts-startup-recovery";
@@ -417,5 +424,42 @@ describe("DB owner FTS maintenance", () => {
 			actor_type: "daemon",
 			request_id: "request-test",
 		});
+	});
+});
+
+describe("registered DB owner maintenance", () => {
+	afterEach(async () => {
+		await closeRegisteredDbOwnerMaintenance();
+	});
+
+	test("clears the registry before awaiting an asynchronous close", async () => {
+		let release: (() => void) | undefined;
+		const closed = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const maintenance = {
+			close: async (): Promise<void> => await closed,
+		} as unknown as DbOwnerMaintenance;
+		registerDbOwnerMaintenance(maintenance);
+
+		const closing = closeRegisteredDbOwnerMaintenance();
+		expect(getDbOwnerMaintenance()).toBeNull();
+		expect(() => registerDbOwnerMaintenance(maintenance)).toThrow("DB owner maintenance is closing");
+
+		release?.();
+		await closing;
+		expect(getDbOwnerMaintenance()).toBeNull();
+	});
+
+	test("requires explicit close before replacing the registered maintenance", async () => {
+		const first = { close: async (): Promise<void> => {} } as unknown as DbOwnerMaintenance;
+		const second = { close: async (): Promise<void> => {} } as unknown as DbOwnerMaintenance;
+		registerDbOwnerMaintenance(first);
+		expect(() => registerDbOwnerMaintenance(second)).toThrow(
+			"DB owner maintenance is already registered; close it before replacement",
+		);
+
+		await closeRegisteredDbOwnerMaintenance();
+		expect(() => registerDbOwnerMaintenance(second)).not.toThrow();
 	});
 });

@@ -82,7 +82,6 @@ import {
 	isVectorRuntimeUsable,
 	pruneMigrationBackupsAfterIntegrity,
 	resolveSqliteRuntimeConfig,
-	registerDbOwnerHealthProvider,
 	setDatabaseIntegrityWritesBlocked,
 } from "./db-accessor";
 import { type VacuumConversionHandle, startVacuumConversionWorker } from "./db-vacuum-worker";
@@ -95,6 +94,7 @@ import {
 } from "./db-owner-client";
 import {
 	type DbOwnerMaintenance,
+	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
 	ownerQueryAll,
 	ownerQueryOne,
@@ -1784,7 +1784,6 @@ function buildTelemetryConfigSnapshot(agentsDir: string, memoryCfg: ResolvedMemo
 function initializeDbOwnerMaintenance(): DbOwnerMaintenance {
 	const maintenance = createDbOwnerMaintenance({ dbPath: MEMORY_DB, owner: dbOwnerClient ?? undefined });
 	registerDbOwnerMaintenance(maintenance);
-	registerDbOwnerHealthProvider(maintenance.health);
 	return maintenance;
 }
 
@@ -2128,10 +2127,8 @@ async function cleanup() {
 	await stopPipelineRuntime();
 
 	if (dbOwnerMaintenanceHandle !== null) {
-		await dbOwnerMaintenanceHandle.close().catch(() => {});
+		await closeRegisteredDbOwnerMaintenance().catch(() => {});
 		dbOwnerMaintenanceHandle = null;
-		registerDbOwnerMaintenance(null);
-		registerDbOwnerHealthProvider(null);
 	}
 
 	try {

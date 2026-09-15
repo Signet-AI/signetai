@@ -116,6 +116,19 @@ legacy synchronous read attempts rejected at the hard connection cap. The
 `dbRuntime.queue` snapshot reports current read/write depth, queue age, and
 active leases; `eventLoopLag` is the bounded independent event-loop sample.
 
+The `dbOwner` block is read from the registered DB-owner maintenance authority. The
+legacy accessor is not a second health source. `/health` samples the owner after
+its bounded owner probe completes (including a failed probe), then projects that
+same snapshot into `databaseIntegrity.ownerState` and
+`databaseIntegrity.ownerGeneration`.
+
+`dbOwner.generation` identifies the owner lifecycle generation and changes when
+the owner is replaced or restarted. If no maintenance authority is registered,
+`dbOwner` is `null` and the integrity owner fields are also `null`; they do not
+retain values from a retired owner. Shutdown clears the registry before awaiting
+the old maintenance resource, so a replacement must be registered explicitly
+rather than overwriting a closing owner.
+
 The process-local `eventLoop` signal separates a responsive daemon from one
 whose event loop is falling behind. Its health semantics are:
 

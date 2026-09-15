@@ -3,14 +3,14 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
+import { MAX_READ_CONNECTIONS, closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import type { DbOwnerClient, DbOwnerHealth } from "../db-owner-client";
+import { publishDatabaseIntegrityStatus, resetGlobalIntegrityLatch } from "../database-integrity";
 import {
-	MAX_READ_CONNECTIONS,
-	closeDbAccessor,
-	getDbAccessor,
-	initDbAccessor,
-	registerDbOwnerHealthProvider,
-} from "../db-accessor";
-import type { DbOwnerHealth } from "../db-owner-client";
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+} from "../db-owner-maintenance";
 import { resetDbObservability } from "../db-observability";
 import { startEventLoopMonitor, stopResourceMonitors } from "../resource-monitor";
 import { mountHealthRoutes } from "./health";
@@ -38,10 +38,44 @@ function makeApp(): Hono {
 	return app;
 }
 
-beforeEach(() => {
+function makeOwnerHealth(generation: number): DbOwnerHealth {
+	const lane = {
+		state: "ready",
+		pid: 123,
+		generation,
+		queuedJobs: 0,
+		activeJobId: null,
+		activeWorkloadClass: null,
+		foregroundQueuedJobs: 0,
+		maintenanceQueuedJobs: 0,
+		foregroundOldestAgeMs: null,
+		maintenanceOldestAgeMs: null,
+		lastError: null,
+	} as const;
+	return {
+		...lane,
+		initialization: "ready",
+		databaseReady: true,
+		lanes: { read: lane, write: lane, maintenance: lane },
+	};
+}
+
+function makeOwner(getHealth: () => DbOwnerHealth): DbOwnerClient {
+	return {
+		health: getHealth,
+		submit: () => ({
+			job: { enqueuedAt: Date.now() },
+			result: Promise.resolve({ value: 1 }),
+			cancel: () => {},
+		}),
+	} as unknown as DbOwnerClient;
+}
+
+beforeEach(async () => {
+	await closeRegisteredDbOwnerMaintenance();
 	stopResourceMonitors();
 	resetDbObservability();
-	closeDbAccessor();
+	await closeDbAccessor();
 	dir = mkdtempSync(join(tmpdir(), "signet-health-routes-"));
 	// Point the daemon's base path at the bare temp workspace and disable the
 	// embedding provider: readiness must pass here without depending on
@@ -52,10 +86,11 @@ beforeEach(() => {
 	initDbAccessor(join(dir, "memory", "memories.db"));
 });
 
-afterEach(() => {
+afterEach(async () => {
 	stopResourceMonitors();
 	resetDbObservability();
-	closeDbAccessor();
+	await closeRegisteredDbOwnerMaintenance();
+	await closeDbAccessor();
 	if (savedSignetPath === undefined) {
 		delete process.env.SIGNET_PATH;
 	} else {
@@ -88,11 +123,9 @@ describe("GET /health owner diagnostics", () => {
 		expect(readyBody.reasons).toContain("configured workspace directory is missing");
 	});
 
-	test("exposes bounded per-lane owner queue and age metrics", async () => {
+	test("exposes bounded per-lane owner queue and age metrics from the maintenance authority", async () => {
 		const lane = {
-			state: "ready",
-			pid: 123,
-			generation: 4,
+			...makeOwnerHealth(4),
 			queuedJobs: 2,
 			activeJobId: "db-owner-123-1",
 			activeWorkloadClass: "maintenance",
@@ -100,27 +133,63 @@ describe("GET /health owner diagnostics", () => {
 			maintenanceQueuedJobs: 1,
 			foregroundOldestAgeMs: 12,
 			maintenanceOldestAgeMs: 34,
-			lastError: null,
-		} as const;
+		};
 		const ownerHealth = {
 			...lane,
-			lanes: { read: lane, maintenance: lane },
+			lanes: { read: lane, write: lane, maintenance: lane },
 		} as DbOwnerHealth;
-		registerDbOwnerHealthProvider(() => ownerHealth);
+		registerDbOwnerMaintenance(
+			createDbOwnerMaintenance({
+				dbPath: join(dir, "memory", "memories.db"),
+				owner: makeOwner(() => ownerHealth),
+			}),
+		);
 
-		try {
-			const res = await makeApp().request("http://localhost/health");
-			expect(res.status).toBe(200);
-			const body = (await res.json()) as { dbOwner: DbOwnerHealth };
-			expect(body.dbOwner.queuedJobs).toBe(2);
-			expect(body.dbOwner.foregroundOldestAgeMs).toBe(12);
-			expect(body.dbOwner.maintenanceOldestAgeMs).toBe(34);
-			if (body.dbOwner.lanes === undefined) throw new Error("owner lanes missing from /health");
-			expect(body.dbOwner.lanes.read.maintenanceQueuedJobs).toBe(1);
-			expect(body.dbOwner.lanes.maintenance.foregroundQueuedJobs).toBe(1);
-		} finally {
-			registerDbOwnerHealthProvider(null);
-		}
+		const res = await makeApp().request("http://localhost/health");
+		expect(res.status).toBe(200);
+		const body = (await res.json()) as { dbOwner: DbOwnerHealth };
+		expect(body.dbOwner.queuedJobs).toBe(2);
+		expect(body.dbOwner.foregroundOldestAgeMs).toBe(12);
+		expect(body.dbOwner.maintenanceOldestAgeMs).toBe(34);
+		if (body.dbOwner.lanes === undefined) throw new Error("owner lanes missing from /health");
+		expect(body.dbOwner.lanes.read.maintenanceQueuedJobs).toBe(1);
+		expect(body.dbOwner.lanes.maintenance.foregroundQueuedJobs).toBe(1);
+	});
+
+	test("uses one owner-health snapshot for dbOwner and databaseIntegrity", async () => {
+		let healthCalls = 0;
+		const owner = makeOwner(() => {
+			healthCalls += 1;
+			return healthCalls === 1 ? makeOwnerHealth(1) : healthCalls === 2 ? makeOwnerHealth(2) : makeOwnerHealth(3);
+		});
+		resetGlobalIntegrityLatch();
+		publishDatabaseIntegrityStatus("healthy", [], owner);
+		registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
+
+		const response = await makeApp().request("http://localhost/health");
+		const body = (await response.json()) as {
+			dbOwner: DbOwnerHealth;
+			databaseIntegrity: { ownerState: string | null; ownerGeneration: number | null };
+		};
+		expect(body.dbOwner.generation).toBe(2);
+		expect(body.databaseIntegrity.ownerState).toBe(body.dbOwner.state);
+		expect(body.databaseIntegrity.ownerGeneration).toBe(body.dbOwner.generation);
+		expect(healthCalls).toBe(2);
+	});
+
+	test("clears cached owner fields when no maintenance authority is registered", async () => {
+		const owner = makeOwner(() => makeOwnerHealth(3));
+		resetGlobalIntegrityLatch();
+		publishDatabaseIntegrityStatus("healthy", [], owner);
+
+		const response = await makeApp().request("http://localhost/health");
+		const body = (await response.json()) as {
+			dbOwner: DbOwnerHealth | null;
+			databaseIntegrity: { ownerState: string | null; ownerGeneration: number | null };
+		};
+		expect(body.dbOwner).toBeNull();
+		expect(body.databaseIntegrity.ownerState).toBeNull();
+		expect(body.databaseIntegrity.ownerGeneration).toBeNull();
 	});
 });
 
@@ -144,7 +213,7 @@ describe("GET /health/live", () => {
 	test("stays 200 even when the database is unavailable", async () => {
 		// Tear down the singleton accessor so getDbAccessor() throws —
 		// liveness must not depend on any subsystem.
-		closeDbAccessor();
+		await closeDbAccessor();
 
 		const app = makeApp();
 		const res = await app.request("http://localhost/health/live");
@@ -259,7 +328,7 @@ describe("GET /health/ready", () => {
 	});
 
 	test("returns 503 with a db reason when the database is unavailable", async () => {
-		closeDbAccessor();
+		await closeDbAccessor();
 
 		const app = makeApp();
 		const res = await app.request("http://localhost/health/ready");
@@ -290,7 +359,7 @@ describe("GET /health/ready", () => {
 	});
 
 	test("failure responses use a non-2xx status and a string reasons array", async () => {
-		closeDbAccessor();
+		await closeDbAccessor();
 
 		const app = makeApp();
 		const res = await app.request("http://localhost/health/ready");

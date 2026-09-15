@@ -842,13 +842,37 @@ export interface CreateDbOwnerMaintenanceOptions {
 }
 
 let registeredMaintenance: DbOwnerMaintenance | null = null;
+let registeredMaintenanceClose: Promise<void> | null = null;
 
-export function registerDbOwnerMaintenance(maintenance: DbOwnerMaintenance | null): void {
+export function registerDbOwnerMaintenance(maintenance: DbOwnerMaintenance): void {
+	if (registeredMaintenanceClose !== null) throw new Error("DB owner maintenance is closing");
+	if (registeredMaintenance !== null) {
+		throw new Error("DB owner maintenance is already registered; close it before replacement");
+	}
 	registeredMaintenance = maintenance;
 }
 
 export function getDbOwnerMaintenance(): DbOwnerMaintenance | null {
 	return registeredMaintenance;
+}
+
+/** Clear the registry before awaiting close so no caller can use a retiring owner. */
+export async function closeRegisteredDbOwnerMaintenance(): Promise<void> {
+	const inFlight = registeredMaintenanceClose;
+	if (inFlight !== null) {
+		await inFlight;
+		return;
+	}
+	const maintenance = registeredMaintenance;
+	registeredMaintenance = null;
+	if (maintenance === null) return;
+	const completion = Promise.resolve().then(() => maintenance.close());
+	registeredMaintenanceClose = completion;
+	try {
+		await completion;
+	} finally {
+		if (registeredMaintenanceClose === completion) registeredMaintenanceClose = null;
+	}
 }
 
 export function createDbOwnerMaintenance(options: CreateDbOwnerMaintenanceOptions): DbOwnerMaintenance {
