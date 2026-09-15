@@ -212,10 +212,11 @@ export function mountHealthRoutes(app: Hono): void {
 		let dbReader: ReadPressure | null = null;
 		let dbRuntime = getDbRuntimeMetrics();
 		let dbOwner: DbOwnerHealth | null = null;
+		const ownerMaintenance = getDbOwnerMaintenance();
 		try {
 			const accessor = getDbAccessor();
 			try {
-				const owner = getDbOwnerMaintenance()?.owner;
+				const owner = ownerMaintenance?.owner;
 				if (owner) {
 					await ownerQueryOne(owner, "routes/health.ts:212", "SELECT 1", [], { deadlineMs: 500 });
 					dbOk = true;
@@ -237,10 +238,10 @@ export function mountHealthRoutes(app: Hono): void {
 			dbWriter = accessor.getWritePressure?.() ?? null;
 			dbReader = accessor.getReadPressure?.() ?? null;
 			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
-			dbOwner = accessor.getDbOwnerHealth?.() ?? null;
 		} catch {}
+		dbOwner = ownerMaintenance?.health() ?? null;
 
-		const databaseIntegrity = getDatabaseIntegrityStatus();
+		const databaseIntegrity = getDatabaseIntegrityStatus(dbOwner);
 		const eventLoop = getEventLoopLiveness();
 		return c.json({
 			status: shuttingDown
@@ -304,9 +305,9 @@ export function mountHealthRoutes(app: Hono): void {
 		let dbResult: { readonly migrationsOk: boolean; readonly queueHealth: QueueHealth } | null = null;
 		let dbReader: ReadPressure | null = null;
 		let dbRuntime = getDbRuntimeMetrics();
+		const ownerMaintenance = getDbOwnerMaintenance();
 		try {
 			const accessor = getDbAccessor();
-			const ownerMaintenance = getDbOwnerMaintenance();
 			dbResult = ownerMaintenance
 				? await ownerMaintenance.healthReady()
 				: await accessor.withReadDbAsync(
@@ -333,7 +334,7 @@ export function mountHealthRoutes(app: Hono): void {
 		}
 		const dbOk = dbResult !== null;
 		const migrationsOk = dbResult?.migrationsOk ?? false;
-		const databaseIntegrity = getDatabaseIntegrityStatus();
+		const databaseIntegrity = getDatabaseIntegrityStatus(ownerMaintenance?.health() ?? null);
 		if (databaseIntegrity.state === "corrupt" || databaseIntegrity.state === "unavailable") {
 			reasons.push(
 				databaseIntegrity.repairGuidance ??

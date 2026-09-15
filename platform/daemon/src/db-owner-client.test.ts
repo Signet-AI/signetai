@@ -28,6 +28,7 @@ import { shouldRecordDbOwnerCancellation } from "./db-owner-worker";
 import { findSqliteVecExtension } from "@signet/core";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
 import {
+	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
 	registerDbOwnerMaintenance,
 	runOwnerMaintenanceWithRetry,
@@ -87,7 +88,7 @@ describe("DB owner client", () => {
 	let directory: string | null = null;
 
 	afterEach(async () => {
-		registerDbOwnerMaintenance(null);
+		await closeRegisteredDbOwnerMaintenance();
 		await client?.close();
 		client = null;
 		if (directory !== null)

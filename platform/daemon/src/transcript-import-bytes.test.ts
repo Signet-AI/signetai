@@ -11,7 +11,11 @@ import { up as ledger } from "../../core/src/migrations/146-source-transcript-im
 import { up as controls } from "../../core/src/migrations/149-transcript-import-state-machine";
 import { up as bytesMigration } from "../../core/src/migrations/151-transcript-import-bytes";
 import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
-import { createDbOwnerMaintenance, registerDbOwnerMaintenance } from "./db-owner-maintenance";
+import {
+	closeRegisteredDbOwnerMaintenance,
+	createDbOwnerMaintenance,
+	registerDbOwnerMaintenance,
+} from "./db-owner-maintenance";
 import { dbOwnerQuery, dbOwnerTransaction, dbOwnerTranscriptBulkCommit } from "./db-owner-runtime";
 import { prepareTranscriptRetry, createJob, createOwnerTranscriptImportStore } from "./transcript-import-store";
 import { startTranscriptImportWorker } from "./transcript-import-worker";
@@ -74,7 +78,7 @@ afterEach(async () => {
 	else process.env.SIGNET_PATH = oldPath;
 	if (oldAgent === undefined) delete process.env.SIGNET_AGENT_ID;
 	else process.env.SIGNET_AGENT_ID = oldAgent;
-	registerDbOwnerMaintenance(null);
+	await closeRegisteredDbOwnerMaintenance();
 	await owner?.close();
 	for (let attempt = 0; ; attempt++) {
 		try {
@@ -98,6 +102,7 @@ test("owner persists chunks across restart, rejects cross-agent access and seals
 	expect(
 		await failure(appendTranscriptChunk({ ...scope, agentId: "b" }, first.length, last, checksum(last))),
 	).toContain("not found");
+	await closeRegisteredDbOwnerMaintenance();
 	await owner.close();
 	owner = createDbOwnerClient({ dbPath: join(root, "test.db") });
 	await owner.start();

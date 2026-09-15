@@ -14,7 +14,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
-import { DbOwnerDeadlineError, type DbOwnerClient } from "./db-owner-client";
+import { DbOwnerDeadlineError, type DbOwnerClient, type DbOwnerHealth } from "./db-owner-client";
 import { ownerQueryAll, ownerRunStatement, ownerTransaction } from "./db-owner-maintenance";
 import type { DbOwnerStatement } from "./db-owner-protocol";
 import { logger } from "./logger";
@@ -326,9 +326,14 @@ export function publishDatabaseIntegrityStatus(
 	};
 }
 
-/** Return the last startup integrity result without touching SQLite. */
-export function getDatabaseIntegrityStatus(): DatabaseIntegrityStatus {
-	return latestStatus;
+/** Return integrity status, optionally projected onto one owner-health snapshot. */
+export function getDatabaseIntegrityStatus(ownerHealth?: DbOwnerHealth | null): DatabaseIntegrityStatus {
+	if (ownerHealth === undefined) return latestStatus;
+	return {
+		...latestStatus,
+		ownerState: ownerHealth?.state ?? null,
+		ownerGeneration: ownerHealth?.generation ?? null,
+	};
 }
 
 export type TelemetryIndexRepairAudit = (
