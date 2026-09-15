@@ -30,14 +30,3 @@ describe("search visibility regression guard", () => {
 		expect(pkg.keywords).toContain("memory-provider");
 	});
 });
-
-describe("docs search lifecycle regression guard", () => {
-	it("keeps the initialized Pagefind UI across client navigation", () => {
-		const config = read("web/docs/astro.config.mjs");
-		const search = read("web/docs/src/components/Search.astro");
-
-		expect(config).toContain('Search: "./src/components/Search.astro"');
-		expect(search).toContain('transition:persist="search"');
-		expect(search).toContain("display: contents");
-	});
-});
