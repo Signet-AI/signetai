@@ -359,14 +359,16 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 	return {
 		start: async (): Promise<void> => {
 			const started = await withRegisteredDbOwnerMaintenance(async (maintenance) => {
+				if (maintenance.owner !== owner) throw registeredOwnerError();
 				await maintenance.owner.start();
 			});
 			if (started === undefined) throw registeredOwnerError();
 		},
 		initialize: async (agentsDir?: string) => {
-			const initialized = await withRegisteredDbOwnerMaintenance((maintenance) =>
-				maintenance.owner.initialize(agentsDir),
-			);
+			const initialized = await withRegisteredDbOwnerMaintenance((maintenance) => {
+				if (maintenance.owner !== owner) throw registeredOwnerError();
+				return maintenance.owner.initialize(agentsDir);
+			});
 			if (initialized === undefined) throw registeredOwnerError();
 			return initialized;
 		},
