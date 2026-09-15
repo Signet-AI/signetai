@@ -309,9 +309,12 @@ compiled artifact, so model synthesis is never performed in the hot hook path.
 `sessionContinuityMaxEntries` limits the number of rendered records,
 `sessionContinuityMaxTokens` limits the whole Session Continuity section, and
 `sessionContinuityEntryMaxTokens` limits each record preview. Their defaults are
-15, 3000, and 250 respectively. `maxInjectTokens` remains the final session-start
-budget for the complete compatibility `inject` aggregate. Lower budgets can omit
-records; omission and truncation counts are written to daemon diagnostics.
+15, 3000, and 250 respectively. `maxInjectTokens` is a hard final budget for
+the complete compatibility `inject` aggregate after all sections are assembled.
+If the budget is too small for the stable capability declaration, the aggregate
+is omitted rather than exposing a partial declaration; otherwise lower budgets
+may truncate dynamic sections or omit Session Continuity records. Omitted and
+truncated counts are written to daemon diagnostics.
 
 Memory scoring uses: `score = importance × (1 - recencyBias) + recency × recencyBias`
 
