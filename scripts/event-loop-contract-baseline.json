@@ -1466,7 +1466,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 833,
+      "line": 837,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -1474,7 +1474,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 1945,
+      "line": 1949,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3415,49 +3415,28 @@
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 305,
+      "line": 310,
       "api": "withReadDbAsync",
       "source": "const rows = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 373,
-      "api": "withReadDbAsync",
-      "source": ": await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/knowledge-routes.ts",
-      "line": 413,
-      "api": "withReadDbAsync",
-      "source": "getDbAccessor().withReadDbAsync(readFn, {",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/knowledge-routes.ts",
-      "line": 431,
-      "api": "withReadDbAsync",
-      "source": "return await getDbAccessor().withReadDbAsync(",
-      "category": "hot-path"
-    },
-    {
-      "path": "routes/knowledge-routes.ts",
-      "line": 606,
+      "line": 477,
       "api": "withReadDbAsync",
       "source": "const hasSessionSummaries = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 623,
+      "line": 494,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 728,
+      "line": 599,
       "api": "withReadDbAsync",
       "source": "const result = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
