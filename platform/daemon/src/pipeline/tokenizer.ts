@@ -11,11 +11,14 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import { get_encoding, init } from "tiktoken/init";
+import * as tokenizerWasmModule from "tiktoken/tiktoken_bg.wasm";
 
 const tokenizerWasmOverride = process.env.SIGNET_TIKTOKEN_WASM_PATH?.trim();
-const tokenizerWasmPath = tokenizerWasmOverride || createRequire(import.meta.url).resolve("tiktoken/tiktoken_bg.wasm");
+// @ts-expect-error Bun's file loader adds a default path export to the wasm module.
+const tokenizerWasmFile: string = tokenizerWasmModule.default;
+const tokenizerWasmPath = tokenizerWasmOverride || fileURLToPath(new URL(tokenizerWasmFile, import.meta.url));
 await init(async (imports) => WebAssembly.instantiate(await readFile(tokenizerWasmPath), imports));
 const tok = get_encoding("cl100k_base");
 const decoder = new TextDecoder("utf-8", { fatal: true });
