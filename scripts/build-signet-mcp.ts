@@ -6,7 +6,14 @@ import { dirname, join } from "node:path";
 const root = join(import.meta.dir, "..");
 const outfile = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
 const entry = join(root, "platform", "daemon", "src", "mcp-stdio.ts");
-const EXTERNAL = ["better-sqlite3", "@1password/sdk", "onnxruntime-node", "@huggingface/transformers"];
+// Mirrors the workspace daemon build and externalizes native dependencies.
+const EXTERNAL = [
+	"better-sqlite3",
+	"@1password/sdk",
+	"@napi-rs/keyring",
+	"onnxruntime-node",
+	"@huggingface/transformers",
+];
 const ALIAS: Record<string, string> = {
 	sharp: join(root, "platform", "daemon", "src", "shims", "sharp.ts"),
 };
@@ -18,7 +25,11 @@ const result = await Bun.build({
 	format: "esm",
 	external: EXTERNAL,
 	alias: ALIAS,
-	naming: "mcp-stdio.js",
+	loader: { ".wasm": "file" },
+	naming: {
+		entry: "mcp-stdio.js",
+		asset: "[name].[ext]",
+	},
 });
 
 if (!result.success) {
