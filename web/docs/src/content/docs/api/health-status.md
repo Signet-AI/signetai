@@ -127,7 +127,10 @@ the owner is replaced or restarted. If no maintenance authority is registered,
 `dbOwner` is `null` and the integrity owner fields are also `null`; they do not
 retain values from a retired owner. Shutdown clears the registry before awaiting
 the old maintenance resource and waits for active registry leases, so a replacement
-must be registered explicitly rather than overwriting or using a closing owner.
+must be registered explicitly rather than overwriting or using a closing owner. While
+maintenance is closing, health does not fall back to the raw accessor: `/health`
+reports a degraded database view and `/health/ready` remains not ready until a new
+owner is registered.
 
 The process-local `eventLoop` signal separates a responsive daemon from one
 whose event loop is falling behind. Its health semantics are:

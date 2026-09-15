@@ -191,6 +191,39 @@ describe("GET /health owner diagnostics", () => {
 		expect(body.databaseIntegrity.ownerState).toBeNull();
 		expect(body.databaseIntegrity.ownerGeneration).toBeNull();
 	});
+
+	test("does not fall back to the accessor while owner maintenance closes", async () => {
+		let releaseClose: (() => void) | undefined;
+		const closeGate = new Promise<void>((resolve) => {
+			releaseClose = resolve;
+		});
+		const owner = makeOwner(() => makeOwnerHealth(4));
+		const base = createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner });
+		registerDbOwnerMaintenance({
+			...base,
+			close: async (): Promise<void> => await closeGate,
+		});
+		const closing = closeRegisteredDbOwnerMaintenance();
+
+		const healthResponse = await makeApp().request("http://localhost/health");
+		const healthBody = (await healthResponse.json()) as {
+			status: string;
+			db: boolean;
+			dbOwner: DbOwnerHealth | null;
+		};
+		expect(healthBody.status).toBe("degraded");
+		expect(healthBody.db).toBe(false);
+		expect(healthBody.dbOwner).toBeNull();
+
+		const readyResponse = await makeApp().request("http://localhost/health/ready");
+		const readyBody = (await readyResponse.json()) as { status: string; reasons: string[] };
+		expect(readyResponse.status).toBe(503);
+		expect(readyBody.status).toBe("not_ready");
+		expect(readyBody.reasons).toContain("database owner maintenance is closing");
+
+		releaseClose?.();
+		await closing;
+	});
 });
 
 describe("GET /health/live", () => {
