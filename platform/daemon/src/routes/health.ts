@@ -4,7 +4,7 @@ import type { Hono } from "hono";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
 import { type ReadDb, type ReadPressure, type WritePressure, getDbAccessor } from "../db-accessor";
 import type { DbOwnerHealth } from "../db-owner-client";
-import { getDbOwnerMaintenance, ownerQueryOne } from "../db-owner-maintenance";
+import { ownerQueryOne, withRegisteredDbOwnerMaintenance } from "../db-owner-maintenance";
 import { getDbRuntimeMetrics, getEventLoopLiveness } from "../db-observability";
 import {
 	QUEUE_MAX_DEAD_RATE,
@@ -109,12 +109,15 @@ async function checkEmbedding(): Promise<{ ok: boolean; detail: EmbeddingCheck; 
 	}
 	let migration: ReturnType<typeof readEmbeddingIndexMigrationProgress> = null;
 	try {
-		const ownerMaintenance = getDbOwnerMaintenance();
-		migration = ownerMaintenance
-			? await ownerMaintenance.embeddingMigrationProgress(cfg.base_url)
-			: await getDbAccessor().withReadDbAsync((db) => readEmbeddingIndexMigrationProgress(db, cfg), {
-					siteToken: "routes/health.ts:115",
-				});
+		const ownerMigration = await withRegisteredDbOwnerMaintenance((ownerMaintenance) =>
+			ownerMaintenance.embeddingMigrationProgress(cfg.base_url),
+		);
+		migration =
+			ownerMigration !== undefined
+				? ownerMigration
+				: await getDbAccessor().withReadDbAsync((db) => readEmbeddingIndexMigrationProgress(db, cfg), {
+						siteToken: "routes/health.ts:115",
+					});
 	} catch {
 		// The provider probe remains useful while the database is initializing.
 	}
@@ -212,14 +215,20 @@ export function mountHealthRoutes(app: Hono): void {
 		let dbReader: ReadPressure | null = null;
 		let dbRuntime = getDbRuntimeMetrics();
 		let dbOwner: DbOwnerHealth | null = null;
-		const ownerMaintenance = getDbOwnerMaintenance();
 		try {
 			const accessor = getDbAccessor();
 			try {
-				const owner = ownerMaintenance?.owner;
-				if (owner) {
-					await ownerQueryOne(owner, "routes/health.ts:212", "SELECT 1", [], { deadlineMs: 500 });
-					dbOk = true;
+				const ownerHealth = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => {
+					try {
+						await ownerQueryOne(ownerMaintenance.owner, "routes/health.ts:212", "SELECT 1", [], { deadlineMs: 500 });
+						dbOk = true;
+					} catch {
+						// Keep the structured admission outcome visible below.
+					}
+					return ownerMaintenance.health();
+				});
+				if (ownerHealth !== undefined) {
+					dbOwner = ownerHealth;
 				} else {
 					await accessor.withReadDbAsync(
 						(db: ReadDb) => {
@@ -232,14 +241,11 @@ export function mountHealthRoutes(app: Hono): void {
 						{ siteToken: "routes/health.ts:223", operation: "health", timeoutMs: 500 },
 					);
 				}
-			} catch {
-				// Keep the structured admission outcome visible below.
-			}
+			} catch {}
 			dbWriter = accessor.getWritePressure?.() ?? null;
 			dbReader = accessor.getReadPressure?.() ?? null;
 			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
 		} catch {}
-		dbOwner = ownerMaintenance?.health() ?? null;
 
 		const databaseIntegrity = getDatabaseIntegrityStatus(dbOwner);
 		const eventLoop = getEventLoopLiveness();
@@ -305,21 +311,28 @@ export function mountHealthRoutes(app: Hono): void {
 		let dbResult: { readonly migrationsOk: boolean; readonly queueHealth: QueueHealth } | null = null;
 		let dbReader: ReadPressure | null = null;
 		let dbRuntime = getDbRuntimeMetrics();
-		const ownerMaintenance = getDbOwnerMaintenance();
+		let dbOwner: DbOwnerHealth | null = null;
 		try {
 			const accessor = getDbAccessor();
-			dbResult = ownerMaintenance
-				? await ownerMaintenance.healthReady()
-				: await accessor.withReadDbAsync(
-						(db: ReadDb) => {
-							db.prepare("SELECT 1").get();
-							return {
-								migrationsOk: !hasPendingMigrations(readDbAsMigrationDb(db)),
-								queueHealth: getQueueHealth(db),
-							};
-						},
-						{ siteToken: "routes/health.ts:312", operation: "health.ready" },
-					);
+			const ownerResult = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => ({
+				result: await ownerMaintenance.healthReady(),
+				health: ownerMaintenance.health(),
+			}));
+			if (ownerResult !== undefined) {
+				dbResult = ownerResult.result;
+				dbOwner = ownerResult.health;
+			} else {
+				dbResult = await accessor.withReadDbAsync(
+					(db: ReadDb) => {
+						db.prepare("SELECT 1").get();
+						return {
+							migrationsOk: !hasPendingMigrations(readDbAsMigrationDb(db)),
+							queueHealth: getQueueHealth(db),
+						};
+					},
+					{ siteToken: "routes/health.ts:312", operation: "health.ready" },
+				);
+			}
 			dbReader = accessor.getReadPressure?.() ?? null;
 			dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
 		} catch (err) {
@@ -334,7 +347,7 @@ export function mountHealthRoutes(app: Hono): void {
 		}
 		const dbOk = dbResult !== null;
 		const migrationsOk = dbResult?.migrationsOk ?? false;
-		const databaseIntegrity = getDatabaseIntegrityStatus(ownerMaintenance?.health() ?? null);
+		const databaseIntegrity = getDatabaseIntegrityStatus(dbOwner);
 		if (databaseIntegrity.state === "corrupt" || databaseIntegrity.state === "unavailable") {
 			reasons.push(
 				databaseIntegrity.repairGuidance ??
