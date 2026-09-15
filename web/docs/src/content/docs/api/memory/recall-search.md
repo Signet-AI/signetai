@@ -170,7 +170,8 @@ and content query used by automatic date parsing or an explicit `time` request.
 When session dedupe is enabled, `meta.dedupe.suppressed` counts rows omitted
 because they were already recalled in the current epoch, and
 `meta.dedupe.repeatedReturned` counts repeated rows returned only because the
-caller set `includeRecalled: true`.
+caller set `includeRecalled: true`. If `meta.dedupe.failedOpen` is `true`, the
+ledger was unavailable and the response was returned without durable dedupe.
 
 Set `aggregate: true` to opt into bounded aggregate recall. The daemon first
 runs normal hybrid recall, optionally asks the inference router for follow-up

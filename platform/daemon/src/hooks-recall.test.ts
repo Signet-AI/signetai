@@ -9,6 +9,13 @@ import {
 	createPromptSubmitAdmission,
 	preferHookRecallCause,
 } from "./routes/hooks-routes";
+import { claimRecallItemsAsync } from "./session-recall-dedupe";
+import {
+	clearSessionStartDedupe,
+	hasSessionStartDedupe,
+	markSessionStartDedupe,
+	sessionStartRecallKey,
+} from "./session-start-state";
 import { resetSessionEndTelemetry } from "./session-end-state";
 import { createTelemetryCollector, setActiveTelemetry } from "./telemetry";
 
@@ -122,6 +129,51 @@ memory:
 		expect(body.memories).toEqual(body.results);
 		expect(body.count).toBe(body.results.length);
 		expect(body.message).toBe("No matching memories found.");
+	});
+
+	it("advances the session-start recall epoch after compaction", async () => {
+		const sessionKey = `compaction-recall-${crypto.randomUUID()}`;
+		const harness = "openclaw";
+		const cwd = "/tmp/project";
+		const recallSessionKey = sessionStartRecallKey({ harness, cwd, sessionKey });
+		if (recallSessionKey === null) throw new Error("expected a durable recall key");
+		markSessionStartDedupe({ harness, cwd, sessionKey, agentId: "default" });
+		expect(hasSessionStartDedupe({ harness, cwd, sessionKey, agentId: "default" })).toBeTrue();
+
+		try {
+			const first = await claimRecallItemsAsync({
+				sessionKey: recallSessionKey,
+				agentId: "default",
+				surface: "test",
+				mode: "automatic",
+				items: [{ id: "compaction-recall-memory" }],
+			});
+			expect(first.items).toHaveLength(1);
+
+			const response = await app.request("/api/hooks/compaction-complete", {
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-signet-runtime-path": "plugin",
+				},
+				body: JSON.stringify({ harness, cwd, sessionKey, summary: "compaction summary" }),
+			});
+			expect(response.status).toBe(200);
+			expect(await response.json()).toMatchObject({ success: true, contextEpoch: 1, dedupeDegraded: false });
+			expect(hasSessionStartDedupe({ harness, cwd, sessionKey, agentId: "default" })).toBeFalse();
+
+			const second = await claimRecallItemsAsync({
+				sessionKey: recallSessionKey,
+				agentId: "default",
+				surface: "test",
+				mode: "automatic",
+				items: [{ id: "compaction-recall-memory" }],
+			});
+			expect(second.items).toHaveLength(1);
+		} finally {
+			clearSessionStartDedupe({ harness, cwd, sessionKey, agentId: "default" });
+			releaseSession?.(sessionKey);
+		}
 	});
 
 	it("labels partial FTS recall separately from provider outages", async () => {
