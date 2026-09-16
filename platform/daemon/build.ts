@@ -93,6 +93,7 @@ if (isBun) {
 				external: EXTERNAL_NODE,
 				alias: ALIAS,
 				loader: { ".wasm": "file" },
+				assetNames: "[name]",
 				format: "esm",
 				sourcemap: profileBuild ? "external" : false,
 				banner: {
