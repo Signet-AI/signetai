@@ -78,6 +78,14 @@ describe("check-publish-manifests", () => {
 		expect(daemonBuild).toContain('const isBun = typeof Bun !== "undefined" && !forceNodeBuild;');
 	});
 
+	test("keeps daemon tokenizer assets stable and native keyring external in Node builds", () => {
+		const root = join(import.meta.dir, "..");
+		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
+
+		expect(daemonBuild).toContain('asset: "[name].[ext]"');
+		expect(daemonBuild).toContain('"@napi-rs/keyring"');
+	});
+
 	test("keeps runtime split SQLite loader ESM-safe", () => {
 		const root = join(import.meta.dir, "..");
 		const dbSource = readFileSync(join(root, "platform", "daemon", "src", "db.ts"), "utf-8");
