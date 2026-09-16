@@ -1484,7 +1484,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 1962,
+      "line": 1984,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3431,21 +3431,21 @@
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 477,
+      "line": 478,
       "api": "withReadDbAsync",
       "source": "const hasSessionSummaries = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 494,
+      "line": 495,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 599,
+      "line": 600,
       "api": "withReadDbAsync",
       "source": "const result = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
