@@ -215,7 +215,7 @@ interface SQLiteDatabase {
 	pragma(pragma: string): void;
 	exec(sql: string): void;
 	prepare(sql: string): {
-		run(...args: unknown[]): void;
+		run(...args: unknown[]): { changes: number };
 		get(...args: unknown[]): Record<string, unknown> | undefined;
 		all(...args: unknown[]): Record<string, unknown>[];
 	};
@@ -294,17 +294,32 @@ export class Database {
 	// -- Memory CRUD --
 
 	addMemory(memory: Omit<Memory, "id" | "createdAt" | "updatedAt" | "version">): string {
+		return this.insertMemory(memory, false).id;
+	}
+
+	addMemoryIfAbsent(
+		memory: Omit<Memory, "id" | "createdAt" | "updatedAt" | "version"> & { idempotencyKey: string },
+	): string | null {
+		const result = this.insertMemory(memory, true);
+		return result.inserted ? result.id : null;
+	}
+
+	private insertMemory(
+		memory: Omit<Memory, "id" | "createdAt" | "updatedAt" | "version">,
+		ignoreConflicts: boolean,
+	): { id: string; inserted: boolean } {
 		const id = crypto.randomUUID();
 		const now = new Date().toISOString();
+		const conflict = ignoreConflicts ? " ON CONFLICT DO NOTHING" : "";
 
-		this.getDb()
+		const result = this.getDb()
 			.prepare(
 				`INSERT INTO memories
 				 (id, type, category, content, confidence, source_id,
 				  source_type, source_path, runtime_path, idempotency_key,
 				  tags, created_at, updated_at, updated_by, vector_clock,
 				  manual_override, memory_kind)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)${conflict}`,
 			)
 			.run(
 				id,
@@ -325,9 +340,10 @@ export class Database {
 				memory.manualOverride ? 1 : 0,
 				isDaemonDerivedMemorySourceType(memory.sourceType) ? null : "episodic",
 			);
+		if (ignoreConflicts && result.changes === 0) return { id, inserted: false };
 		this.recordMemoryContentSafety(id, memory.content, "default");
 
-		return id;
+		return { id, inserted: true };
 	}
 
 	getMemories(type?: string): Memory[] {
@@ -342,7 +358,7 @@ export class Database {
 
 	getMemoryById(id: string): Memory | null {
 		const row = this.getDb().prepare("SELECT * FROM memories WHERE id = ?").get(id);
-		if (row === undefined) return null;
+		if (row == null) return null;
 		return rowToMemory(row);
 	}
 
@@ -558,7 +574,7 @@ export class Database {
 			)
 			.get(jobType);
 
-		if (row === undefined) return null;
+		if (row == null) return null;
 
 		const id = row.id as string;
 
@@ -575,7 +591,7 @@ export class Database {
 
 		// Return the updated row
 		const updated = this.getDb().prepare("SELECT * FROM memory_jobs WHERE id = ?").get(id);
-		if (updated === undefined) return null;
+		if (updated == null) return null;
 		return rowToJob(updated);
 	}
 
@@ -599,8 +615,8 @@ export class Database {
 		// Check if we've exceeded max_attempts
 		const row = this.getDb().prepare("SELECT attempts, max_attempts FROM memory_jobs WHERE id = ?").get(id);
 
-		const attempts = row !== undefined ? (row.attempts as number) : 0;
-		const maxAttempts = row !== undefined ? (row.max_attempts as number) : 3;
+		const attempts = row != null ? (row.attempts as number) : 0;
+		const maxAttempts = row != null ? (row.max_attempts as number) : 3;
 		const nextStatus = attempts >= maxAttempts ? "dead" : "failed";
 
 		this.getDb()
