@@ -113,6 +113,8 @@ describe("check-publish-manifests", () => {
 		expect(buildScript).toContain("bun");
 		expect(buildScript).toContain("build");
 		expect(buildScript).toContain("--compile");
+		expect(buildScript).toContain("nativeBinaryNames");
+		expect(buildScript).toContain("rmSync(join(outDir, name), { force: true })");
 		expect(buildScript).toContain("bun-linux-arm64");
 		expect(buildScript).toContain('createRequire(join(root, "platform", "daemon", "package.json"))');
 		expect(buildScript).toContain("surfaces/cli/src/cli.ts");
