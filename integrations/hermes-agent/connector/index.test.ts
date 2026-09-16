@@ -1973,13 +1973,34 @@ describe("HermesAgentConnector.uninstall()", () => {
 		expect(existsSync(join(victim, "memory", "signet", "signet.install.json"))).toBe(true);
 	});
 
+	it("does not mutate ambient config or env without an owned plugin", async () => {
+		const hermesHome = join(tmpRoot, "unowned-ambient-home");
+		const configPath = join(hermesHome, "config.yaml");
+		const envPath = join(hermesHome, ".env");
+		const config = "memory:\n  provider: signet\n";
+		const env = "SIGNET_AGENT_ID=keep\n";
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(configPath, config);
+		writeFileSync(envPath, env);
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().uninstall();
+
+		expect(result.filesRemoved).toEqual([]);
+		expect(result.configsPatched).toEqual([]);
+		expect(readFileSync(configPath, "utf8")).toBe(config);
+		expect(readFileSync(envPath, "utf8")).toBe(env);
+	});
+
 	it("clears memory.provider only when it is signet", async () => {
 		const hermesHome = join(tmpRoot, ".hermes");
 		mkdirSync(hermesHome, { recursive: true });
 		writeFileSync(join(hermesHome, "config.yaml"), "memory:\n  provider: signet\n  nudge_interval: 10\n");
 		process.env.HERMES_HOME = hermesHome;
 
-		const result = await new HermesAgentConnector().uninstall();
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		const result = await connector.uninstall();
 
 		expect(result.configsPatched).toContain(join(hermesHome, "config.yaml"));
 		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toContain("memory:\n  provider: ''\n");
@@ -1991,7 +2012,9 @@ describe("HermesAgentConnector.uninstall()", () => {
 		writeFileSync(join(hermesHome, "config.yaml"), "memory.provider: signet\n");
 		process.env.HERMES_HOME = hermesHome;
 
-		const result = await new HermesAgentConnector().uninstall();
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		const result = await connector.uninstall();
 
 		expect(result.configsPatched).toContain(join(hermesHome, "config.yaml"));
 		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toBe("memory.provider: ''\n");
@@ -2093,7 +2116,9 @@ describe("HermesAgentConnector.uninstall()", () => {
 		);
 		process.env.HERMES_HOME = hermesHome;
 
-		const result = await new HermesAgentConnector().uninstall();
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		const result = await connector.uninstall();
 
 		expect(result.configsPatched).toContain(envPath);
 		const envContent = readFileSync(envPath, "utf-8");

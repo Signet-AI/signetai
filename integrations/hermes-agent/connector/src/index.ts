@@ -1414,12 +1414,10 @@ export class HermesAgentConnector extends BaseConnector {
 		const hermesHome = this.getHermesHome();
 		const userPluginTarget = getUserPluginTargetDir(hermesHome);
 		const targetRoot = hermesHome;
-		if (this.target?.profile) {
-			const safeUserPluginTarget = resolveContainedWritePath(userPluginTarget, targetRoot);
-			const marker = readInstallMarker(safeUserPluginTarget);
-			if (!pathEntryExists(safeUserPluginTarget) || marker === null || marker.targetKind !== "user") {
-				return { filesRemoved, configsPatched };
-			}
+		const safeUserPluginTarget = resolveContainedWritePath(userPluginTarget, targetRoot);
+		const marker = readInstallMarker(safeUserPluginTarget);
+		if (!pathEntryExists(safeUserPluginTarget) || marker === null || marker.targetKind !== "user") {
+			return { filesRemoved, configsPatched };
 		}
 		const userPluginRemoved = uninstallPlugin(userPluginTarget, "user", targetRoot);
 		filesRemoved.push(...userPluginRemoved);
