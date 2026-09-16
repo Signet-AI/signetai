@@ -11,11 +11,13 @@ const EXTERNAL_NODE = [
 	"better-sqlite3",
 	"bun",
 	"bun:sqlite",
+	"bun:ffi",
 	"@1password/sdk",
 	"@firecrawl/anydoc",
 	"libsodium-wrappers",
 	"onnxruntime-node",
 	"@huggingface/transformers",
+	"@napi-rs/keyring",
 ];
 
 const ALIAS: Record<string, string> = {
@@ -54,7 +56,10 @@ if (isBun) {
 		const result = await Bun.build({
 			entrypoints: [entrypoint],
 			outdir: ".",
-			naming: outfile,
+			naming: {
+				entry: outfile,
+				asset: "[name].[ext]",
+			},
 			target: "bun",
 			format: "esm",
 			external: EXTERNAL_BUN,
@@ -87,6 +92,8 @@ if (isBun) {
 				target: "node20",
 				external: EXTERNAL_NODE,
 				alias: ALIAS,
+				loader: { ".wasm": "file" },
+				assetNames: "[name]",
 				format: "esm",
 				sourcemap: profileBuild ? "external" : false,
 				banner: {

@@ -129,15 +129,14 @@ native `EventSource` with headers, so auth is pumped manually).
 | `installSkill` / `uninstallSkill` | POST/DELETE | `/api/skills/{name}` | Install/remove |
 | `getSkillAnalytics` | GET | `/api/skills/analytics` | Usage analytics |
 
-### 1.8 Plugins, Graphiq, Marketplace (MCP + reviews)
+### 1.8 Plugins, Graphiq, Marketplace reviews
 | Domain | Methods | Paths | Purpose |
 |---|---|---|---|
 | Plugins | GET/POST/PATCH | `/api/plugins`, `/api/plugins/{id}`, `…/diagnostics`, `…/audit` | Plugin enable/disable, diagnostics, audit log |
 | Graphiq | GET/POST | `/api/graphiq/{status,install,update,uninstall,index}` | Code indexer lifecycle |
-| Marketplace MCP | GET/POST/PUT/DELETE | `/api/marketplace/mcp{,/browse,/detail,/install,/register,/tools,/test,/{id}}` | MCP server marketplace |
 | Marketplace reviews | GET/POST/DELETE | `/api/marketplace/reviews{,/config,/sync,/{id}}` | Reviews + Cloudflare worker sync |
 
-### 1.9 Pipeline, harnesses, inference, MCP analytics, OS
+### 1.9 Pipeline, harnesses, and inference
 | Fn | Method | Path | Purpose |
 |---|---|---|---|
 | `getPipelineStatus` / `pausePipeline` / `resumePipeline` | GET/POST | `/api/pipeline/{status,pause,resume}` | Pipeline control |
@@ -153,8 +152,6 @@ native `EventSource` with headers, so auth is pumped manually).
 | `startOAuthLogin` | POST 🔐 (SSE) | `/api/inference/oauth/login/{provider}` | OAuth login stream (pi-ai: Claude Max/Codex/Copilot) |
 | `completeOAuthInteraction` | POST 🔐 | `/api/inference/oauth/complete` | Finish OAuth |
 | `disconnectOAuthProvider` | POST 🔐 | `/api/inference/oauth/disconnect/{provider}` | Revoke |
-| `getMcpAnalytics` / `getMcpServerAnalytics` | GET | `/api/mcp/analytics{,/{server}}` | MCP usage |
-| `installMcp` | POST | `/api/os/install` | Install MCP/OS widget |
 
 ### 1.10 Home, reflections, sessions, logs, content
 | Fn | Method | Path | Purpose |
@@ -240,14 +237,12 @@ what is *not* being rebuilt yet and where future mockup work would slot in.
 | **Repair / Audit** (re-embed, clean-orphans, retention-sweep, dedup, FTS check, DB schema/sample) | `/api/repair/*`, `/api/diagnostics/database/*` | none (Audit/Database tabs gone) |
 | **Plugins management** (enable/disable, diagnostics, audit log) | `/api/plugins/*` | none |
 | **Graphiq** (code indexer lifecycle) | `/api/graphiq/*` | none |
-| **Marketplace — MCP servers** (browse/install/register/test) | `/api/marketplace/mcp/*` | none |
 | **Marketplace — reviews** (+ Cloudflare worker sync) | `/api/marketplace/reviews/*` | none |
 | **Pipeline control** (status graph, pause/resume) | `/api/pipeline/*` | none |
 | **Logs viewer** (live SSE tail) | `/api/logs/stream` | none |
 | **Sessions / Black-box traces / hook bypass** | `/api/sessions/*`, `/api/sessions/{key}/bypass` | none |
 | **Reflections** (daily Q&A generate/answer) | `/api/reflections/*` | none (Home "Daily brief" is continuity, ≠ reflection Q&A) |
 | **Harness discovery + connector recovery** | `/api/harnesses`, `/api/harnesses/{id}/{health,repair,reinitialize}`, `/api/harnesses/regenerate` | Home Connectors section consumes registry-backed status; setup remains the management flow |
-| **OS / widget sandbox** (install, AppDock, AutoCard, AgentChat) | `/api/os/install`, `os/*` components | none |
 | **Changelog / Roadmap / Readme tabs** | `/api/changelog`, `/api/roadmap`, `/api/readme` | none |
 | **Onboarding flow** (the core #948 ask) | (Svelte had none — LoginScreen only) | not staged |
 | **Multi-tenancy** (agents/projects/workspaces switcher) | (Svelte had agent scoping only) | sidebar implies it, not staged |
@@ -300,7 +295,6 @@ These need no daemon changes — the React dashboard just needs to call them.
 |---|---|---|
 | **Home → Review suggestions** (Merge/Skip/New agent/Link) | `GET /api/memory/review-queue`, `GET /api/ontology/proposals?status=pending`, `POST /api/ontology/proposals/:id/{apply,reject}`, `POST /api/ontology/proposals/repair/merge-plan` | **Corrects §4** — this is NOT a new endpoint. The merge-queue / pending-proposals control plane is fully exposed over HTTP; Svelte just never used it. |
 | **Home → Daily brief** | `GET /api/analytics/continuity/latest`, `GET /api/home/greeting` | Pipeline generates briefs on dashboard-open. |
-| **Graph view → "Ask Signet" chat dock** | `POST /api/os/chat`, `GET /api/os/agent-events` (SSE) | os-chat routes inference through the router + MCP tool-calling. Full RAG chat is available. |
 | **Secrets → Bitwarden** | `GET /api/secrets/bitwarden/status`, `POST /api/secrets/bitwarden/{connect,provider,migrate}`, `DELETE /api/secrets/bitwarden/connect`, `GET /api/secrets/bitwarden/folders` | **Corrects §4** — Bitwarden is a real backed integration, not a "decide which." The mockup naming Bitwarden is accurate; both 1Password and Bitwarden suites ship. |
 | **Dreaming → Cortex buffer / gauge** | `GET /api/dream/status`, `POST /api/dream/{trigger,promote}` | Pipeline admin guard (`pipelineAdminGuard`) gates the mutating ones. |
 | **Settings → Inference providers** | `GET /api/inference/{catalog,status}`, `POST /api/inference/oauth/login/:id` (SSE), `POST /api/inference/oauth/{complete,disconnect/:id}` | OAuth SSE for pi-ai (Claude Max/Codex/Copilot) — see issue #966. |

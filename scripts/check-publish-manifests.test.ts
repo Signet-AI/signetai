@@ -76,6 +76,16 @@ describe("check-publish-manifests", () => {
 
 		expect(daemonBuild).toContain('const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";');
 		expect(daemonBuild).toContain('const isBun = typeof Bun !== "undefined" && !forceNodeBuild;');
+		expect(daemonBuild).toContain('"bun:ffi"');
+	});
+
+	test("keeps daemon tokenizer assets stable and native keyring external in Node builds", () => {
+		const root = join(import.meta.dir, "..");
+		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
+
+		expect(daemonBuild).toContain('asset: "[name].[ext]"');
+		expect(daemonBuild).toContain('assetNames: "[name]"');
+		expect(daemonBuild).toContain('"@napi-rs/keyring"');
 	});
 
 	test("keeps runtime split SQLite loader ESM-safe", () => {
@@ -103,6 +113,8 @@ describe("check-publish-manifests", () => {
 		expect(buildScript).toContain("bun");
 		expect(buildScript).toContain("build");
 		expect(buildScript).toContain("--compile");
+		expect(buildScript).toContain("nativeBinaryNames");
+		expect(buildScript).toContain("rmSync(join(outDir, name), { force: true })");
 		expect(buildScript).toContain("bun-linux-arm64");
 		expect(buildScript).toContain('createRequire(join(root, "platform", "daemon", "package.json"))');
 		expect(buildScript).toContain("surfaces/cli/src/cli.ts");

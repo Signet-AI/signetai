@@ -422,7 +422,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(152);
+			expect(applied.version).toBe(153);
 			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",
@@ -1911,28 +1911,14 @@ describe("migration framework", () => {
 		expect(oldRow?.content_hash).toBeNull();
 	});
 
-	test("mcp_invocations table exists with expected columns after migration 052", () => {
+	test("retired external-tool invocation ledger is absent after current migrations", () => {
 		db = createFreshDb();
 		runMigrations(db);
 
 		const tables = db
 			.query("SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_invocations'")
-			.all() as Array<{
-			name: string;
-		}>;
-		expect(tables.length).toBe(1);
-
-		const cols = db.query("PRAGMA table_info(mcp_invocations)").all() as Array<{ name: string }>;
-		const colNames = cols.map((c) => c.name);
-		expect(colNames).toContain("id");
-		expect(colNames).toContain("server_id");
-		expect(colNames).toContain("tool_name");
-		expect(colNames).toContain("agent_id");
-		expect(colNames).toContain("source");
-		expect(colNames).toContain("latency_ms");
-		expect(colNames).toContain("success");
-		expect(colNames).toContain("error_text");
-		expect(colNames).toContain("created_at");
+			.all() as Array<{ name: string }>;
+		expect(tables).toHaveLength(0);
 	});
 
 	test("skill_invocations table exists with expected columns after migration 053", () => {

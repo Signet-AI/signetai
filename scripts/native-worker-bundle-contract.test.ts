@@ -33,13 +33,24 @@ afterEach(() => {
 
 describe("native worker bundle contract", () => {
 	test("bundles DB-owner Dreaming finalization without a local CommonJS require", () => {
-		const directory = mkdtempSync(join(tmpdir(), "signet-native-worker-contract-"));
-		tempDirs.push(directory);
-		const output = join(directory, "db-owner-worker.mjs");
+		const outputDirectory = mkdtempSync(join(tmpdir(), "signet-native-worker-bundle-"));
+		tempDirs.push(outputDirectory);
+		const output = join(outputDirectory, "db-owner-worker.js");
 		const entrypoint = join(root, "platform", "daemon", "src", "db-owner-worker.ts");
 		const result = spawnSync(
 			"bun",
-			["build", "--target=bun", "--format=esm", "--outfile", output, "--external", "better-sqlite3", entrypoint],
+			[
+				"build",
+				"--target=bun",
+				"--format=esm",
+				"--outdir",
+				outputDirectory,
+				"--loader",
+				".wasm:file",
+				"--external",
+				"better-sqlite3",
+				entrypoint,
+			],
 			{ cwd: root, encoding: "utf8", windowsHide: true },
 		);
 		if (result.status !== 0) {

@@ -23,12 +23,22 @@ const workerDir = join(buildDir, "workers");
 const platformKey = process.env.SIGNET_NATIVE_PLATFORM ?? `${platform()}-${arch()}`;
 const binaryName = platformKey.startsWith("win32-") ? `signet-${platformKey}.exe` : `signet-${platformKey}`;
 const outfile = join(outDir, binaryName);
+const nativeBinaryNames = [
+	"signet",
+	"signet.exe",
+	"signet-linux-x64",
+	"signet-linux-arm64",
+	"signet-darwin-x64",
+	"signet-darwin-arm64",
+	"signet-win32-x64.exe",
+] as const;
 const daemonRequire = createRequire(join(root, "platform", "daemon", "package.json"));
 const tokenizerWasmPath = daemonRequire.resolve("tiktoken/tiktoken_bg.wasm");
 const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: unknown };
 const nativeVersion = typeof rootPackage.version === "string" ? rootPackage.version : "0.0.0";
 
 mkdirSync(outDir, { recursive: true });
+for (const name of nativeBinaryNames) rmSync(join(outDir, name), { force: true });
 rmSync(buildDir, { recursive: true, force: true });
 mkdirSync(workerDir, { recursive: true });
 
@@ -145,7 +155,11 @@ const workerEntries = [
 	// materialized Worker entrypoint executes in the parent process.
 	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
-const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
+// Native runtime assets are materialized by cli-native.ts. Keep worker bundles
+// single-file by inlining the WASM module; the inherited
+// SIGNET_TIKTOKEN_WASM_PATH supplies the filesystem path used at runtime.
+const nativeExternalArgs = ["--external", "better-sqlite3", "--external", "@napi-rs/keyring"] as const;
+const nativeWorkerExternalArgs = [...nativeExternalArgs, "--loader", ".wasm:base64"] as const;
 
 // `@napi-rs/keyring` can't be require()'d by name inside a compiled binary
 // (Bun `--compile` can't trace its loader). Embed the platform `.node` file
@@ -174,7 +188,7 @@ const nativeAddonAssets = (() => {
 
 for (const [name, entry] of workerEntries) {
 	const output = join(workerDir, `${name}.mjs`);
-	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeExternalArgs, entry]);
+	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeWorkerExternalArgs, entry]);
 	assertNoUnbundledRelativeRequires(output, name);
 }
 

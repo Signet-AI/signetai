@@ -41,7 +41,13 @@ const entry = join(root, "platform", "daemon", "src", "mcp-stdio.ts");
 // build failures if the tool surface ever starts using native deps or
 // pulls @huggingface/transformers transitively. The `bun build` CLI
 // does not expose aliases, so we use Bun.build directly.
-const EXTERNAL = ["better-sqlite3", "@1password/sdk", "onnxruntime-node", "@huggingface/transformers"];
+const EXTERNAL = [
+	"better-sqlite3",
+	"@1password/sdk",
+	"@napi-rs/keyring",
+	"onnxruntime-node",
+	"@huggingface/transformers",
+];
 const ALIAS: Record<string, string> = {
 	sharp: join(root, "platform", "daemon", "src", "shims", "sharp.ts"),
 };
@@ -53,7 +59,11 @@ const result = await Bun.build({
 	format: "esm",
 	external: EXTERNAL,
 	alias: ALIAS,
-	naming: "mcp-stdio.js",
+	loader: { ".wasm": "file" },
+	naming: {
+		entry: "mcp-stdio.js",
+		asset: "[name].[ext]",
+	},
 });
 
 if (!result.success) {

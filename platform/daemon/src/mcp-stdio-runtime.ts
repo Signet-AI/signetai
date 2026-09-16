@@ -3,7 +3,7 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { createDreamingMcpServer } from "./mcp/dreaming-tools.js";
-import { createMcpServer, refreshMarketplaceProxyTools } from "./mcp/tools.js";
+import { createMcpServer } from "./mcp/tools.js";
 import { resolveMcpDaemonUrl } from "./mcp-stdio-url.js";
 
 function isLocalDaemonUrl(url: string): boolean {
@@ -60,29 +60,15 @@ export async function runMcpStdio(): Promise<void> {
 		: await createMcpServer({
 				daemonUrl,
 				version: "0.1.0",
-				context: {
-					harness: process.env.SIGNET_HARNESS,
-					workspace: process.env.SIGNET_WORKSPACE ?? process.cwd(),
-					channel: process.env.SIGNET_CHANNEL,
-				},
 			});
 
 	const transport = new StdioServerTransport();
 	await server.connect(transport);
 
-	const refreshMsRaw = Number(process.env.SIGNET_MCP_PROXY_REFRESH_MS ?? "15000");
-	const refreshMs = Number.isFinite(refreshMsRaw) && refreshMsRaw >= 1000 ? refreshMsRaw : 15000;
-	const refreshTimer = dreamingAgentId
-		? null
-		: setInterval(() => {
-				void refreshMarketplaceProxyTools(server, { notify: true });
-			}, refreshMs);
-
 	let closing = false;
 	const shutdown = () => {
 		if (closing) return;
 		closing = true;
-		if (refreshTimer) clearInterval(refreshTimer);
 		const deadline = setTimeout(() => process.exit(0), 3000);
 		deadline.unref();
 		void server.close().finally(() => process.exit(0));

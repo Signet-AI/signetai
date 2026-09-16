@@ -9,9 +9,7 @@
 			"memory_list",
 			"memory_modify",
 			"memory_forget",
-			"session_search",
-			"mcp_server_list",
-			"mcp_server_call"
+			"session_search"
 		]
 	},
 	"uiHints": {

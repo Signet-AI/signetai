@@ -27,9 +27,7 @@ export const ROUTING_OPERATION_KINDS = [
 	"memory_extraction",
 	"session_synthesis",
 	"aggregate_recall",
-	"widget_generation",
 	"repair",
-	"os_agent",
 ] as const;
 
 export type RoutingAccountKind = (typeof ROUTING_ACCOUNT_KINDS)[number];
@@ -263,7 +261,6 @@ export interface RoutingConfig {
 		readonly interactive?: RoutingWorkloadBinding;
 		readonly memoryExtraction?: RoutingWorkloadBinding;
 		readonly aggregateRecall?: RoutingWorkloadBinding;
-		readonly widgetGeneration?: RoutingWorkloadBinding;
 		readonly repair?: RoutingWorkloadBinding;
 	};
 }
@@ -969,15 +966,11 @@ export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
 		const aggregateRecall = parseWorkloadBinding(
 			routingRaw.workloads.aggregateRecall ?? routingRaw.workloads.aggregate_recall,
 		);
-		const widgetGeneration = parseWorkloadBinding(
-			routingRaw.workloads.widgetGeneration ?? routingRaw.workloads.widget_generation,
-		);
 		const repair = parseWorkloadBinding(routingRaw.workloads.repair);
 		if (defaultBinding) workloads.default = defaultBinding;
 		if (interactive) workloads.interactive = interactive;
 		if (memoryExtraction) workloads.memoryExtraction = memoryExtraction;
 		if (aggregateRecall) workloads.aggregateRecall = aggregateRecall;
-		if (widgetGeneration) workloads.widgetGeneration = widgetGeneration;
 		if (repair) workloads.repair = repair;
 	}
 
@@ -1043,7 +1036,6 @@ function workloadBindingForOperation(
 		case "interactive":
 		case "tool_planning":
 		case "code_reasoning":
-		case "os_agent":
 			return config.workloads?.interactive ?? config.workloads?.default;
 		case "memory_extraction":
 			return config.workloads?.memoryExtraction ?? config.workloads?.default;
@@ -1051,8 +1043,6 @@ function workloadBindingForOperation(
 			return config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "aggregate_recall":
 			return config.workloads?.aggregateRecall ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
-		case "widget_generation":
-			return config.workloads?.widgetGeneration ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "repair":
 			return config.workloads?.repair ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
 	}
