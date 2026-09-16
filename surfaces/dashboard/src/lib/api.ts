@@ -310,6 +310,8 @@ export interface KnowledgeStats {
 	entityCount: number;
 	aspectCount: number;
 	attributeCount: number;
+	claimCount: number;
+	constraintCount: number;
 	dependencyCount: number;
 	coveragePercent: number;
 }

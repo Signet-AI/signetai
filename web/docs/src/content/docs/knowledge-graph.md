@@ -75,7 +75,7 @@ Stored facts and constraints under an aspect. Important fields include:
 - `aspect_id`
 - `agent_id`
 - `memory_id`
-- `kind`: `attribute` or `constraint`
+- `kind`: `attribute`, `constraint`, or `claim`
 - `content`
 - `normalized_content`
 - `group_key`
@@ -437,8 +437,12 @@ Use `--json` on either command family for automation.
 `getKnowledgeGraphForConstellation` in `platform/daemon/src/knowledge-graph.ts`
 builds the dashboard graph. It fetches active entities, aspects, attributes,
 dependencies, proposal overlays, and dreaming summaries within bounded limits.
-The dashboard then converts that payload into entity, aspect, attribute, memory,
-proposal, and relationship nodes.
+Source-document entities are included when they own active `claim` attributes
+with non-empty source provenance in `source_id`, `source_path`, or
+`source_kind`; source folders, skills, and empty source topology remain
+excluded so the bounded view does not become a filesystem browser. The
+dashboard then converts that payload into entity, source-document, aspect,
+claim, attribute, memory, proposal, and relationship nodes.
 
 When the request does not include `agent_id`, `/api/knowledge/constellation`
 uses the configured daemon agent ID (`SIGNET_AGENT_ID`, falling back to
