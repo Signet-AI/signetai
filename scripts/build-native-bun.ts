@@ -145,7 +145,11 @@ const workerEntries = [
 	// materialized Worker entrypoint executes in the parent process.
 	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
-const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
+// Native runtime assets are materialized by cli-native.ts. Keep worker bundles
+// single-file: tiktoken's WASM loader becomes an empty placeholder there and
+// the inherited SIGNET_TIKTOKEN_WASM_PATH supplies the real file.
+const nativeExternalArgs = ["--external", "better-sqlite3", "--external", "@napi-rs/keyring"] as const;
+const nativeWorkerExternalArgs = [...nativeExternalArgs, "--loader", ".wasm:base64"] as const;
 
 // `@napi-rs/keyring` can't be require()'d by name inside a compiled binary
 // (Bun `--compile` can't trace its loader). Embed the platform `.node` file
@@ -174,7 +178,7 @@ const nativeAddonAssets = (() => {
 
 for (const [name, entry] of workerEntries) {
 	const output = join(workerDir, `${name}.mjs`);
-	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeExternalArgs, entry]);
+	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeWorkerExternalArgs, entry]);
 	assertNoUnbundledRelativeRequires(output, name);
 }
 
