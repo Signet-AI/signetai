@@ -136,7 +136,16 @@ const workerEntries = [
 	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
 	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
-const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
+// Native runtime assets are materialized by cli-native.ts. Keep worker bundles
+// single-file: tiktoken's WASM loader becomes an empty placeholder there and
+// the inherited SIGNET_TIKTOKEN_WASM_PATH supplies the real file.
+const nativeExternalArgs = ["--external", "better-sqlite3", "--external", "@napi-rs/keyring"] as const;
+const nativeWorkerExternalArgs = [...nativeExternalArgs, "--loader", ".wasm:base64"] as const;
+
+// `@napi-rs/keyring` can't be require()'d by name inside a compiled binary
+// (Bun `--compile` can't trace its loader). Embed the platform `.node` file
+// as a runtime asset; cli-native.ts points SIGNET_KEYRING_NATIVE_MODULE_PATH
+// at the materialized copy before anything imports the addon.
 const coreRequire = createRequire(join(root, "platform", "core", "package.json"));
 const nativeAddonAssets = (() => {
 	const packagePlatformKey = platformKey.startsWith("linux-") ? `${platformKey}-gnu` : platformKey;
@@ -160,7 +169,7 @@ const nativeAddonAssets = (() => {
 
 for (const [name, entry] of workerEntries) {
 	const output = join(workerDir, `${name}.mjs`);
-	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeExternalArgs, entry]);
+	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeWorkerExternalArgs, entry]);
 	assertNoUnbundledRelativeRequires(output, name);
 }
 
