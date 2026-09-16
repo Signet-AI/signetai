@@ -9,8 +9,11 @@ import {
 	mkdirSync,
 	openSync,
 	readFileSync,
+	readdirSync,
 	realpathSync,
 	rmSync,
+	rmdirSync,
+	unlinkSync,
 	writeFileSync,
 	writeSync,
 } from "node:fs";
@@ -341,6 +344,114 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 	return candidate;
 }
 
+function removeDirectoryContentsNoFollow(directoryFd: number): void {
+	for (const entry of readdirSync(descriptorPath(directoryFd), { withFileTypes: true })) {
+		const childPath = join(descriptorPath(directoryFd), entry.name);
+		if (entry.isDirectory() && !entry.isSymbolicLink()) {
+			const childFd = openDirectoryNoFollow(childPath);
+			try {
+				removeDirectoryContentsNoFollow(childFd);
+			} finally {
+				closeDirectory(childFd);
+			}
+			rmdirSync(childPath);
+			continue;
+		}
+		unlinkSync(childPath);
+	}
+}
+
+function removeContainedDirectory(targetPath: string, targetRoot: string): void {
+	if (!DESCRIPTOR_WRITES_SUPPORTED) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
+	const safeTargetDir = resolveContainedWritePath(targetPath, targetRoot);
+	const rootPath = resolvePath(targetRoot);
+	const relativePath = relative(rootPath, safeTargetDir);
+	if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+		throw new Error(`Hermes target directory escapes validated root: ${targetPath}`);
+	}
+	const components = relativePath.split(sep);
+	const targetName = components.pop();
+	if (!targetName || components.some((component) => component === "" || component === "." || component === "..")) {
+		throw new Error(`Hermes target directory has an invalid relative path: ${targetPath}`);
+	}
+
+	let parentFd = openDirectoryNoFollow(rootPath);
+	try {
+		let expected = rootPath;
+		for (const component of components) {
+			const childFd = openDirectoryNoFollow(join(descriptorPath(parentFd), component));
+			try {
+				expected = join(expected, component);
+				if (realpathSync(descriptorPath(childFd)) !== expected) {
+					throw new Error(`Hermes target directory changed during secure removal: ${targetPath}`);
+				}
+			} catch (error) {
+				closeDirectory(childFd);
+				throw error;
+			}
+			closeDirectory(parentFd);
+			parentFd = childFd;
+		}
+
+		const targetEntryPath = join(descriptorPath(parentFd), targetName);
+		const targetFd = openDirectoryNoFollow(targetEntryPath);
+		try {
+			const expectedTarget = join(expected, targetName);
+			if (realpathSync(descriptorPath(targetFd)) !== expectedTarget) {
+				throw new Error(`Hermes target directory changed during secure removal: ${targetPath}`);
+			}
+			if (!readInstallMarkerFromDirectory(targetFd)) {
+				throw new Error(
+					`Refusing to uninstall unowned Hermes plugin path: ${targetPath} (missing or invalid ${INSTALL_MARKER_FILE})`,
+				);
+			}
+			removeDirectoryContentsNoFollow(targetFd);
+		} finally {
+			closeDirectory(targetFd);
+		}
+		rmdirSync(targetEntryPath);
+	} finally {
+		closeDirectory(parentFd);
+	}
+}
+
+function removeContainedFile(targetPath: string, targetRoot: string): void {
+	if (!DESCRIPTOR_WRITES_SUPPORTED) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
+	const safeTargetPath = resolveContainedWritePath(targetPath, targetRoot);
+	const rootPath = resolvePath(targetRoot);
+	const relativePath = relative(rootPath, safeTargetPath);
+	if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+		throw new Error(`Hermes target file escapes validated root: ${targetPath}`);
+	}
+	const components = relativePath.split(sep);
+	const fileName = components.pop();
+	if (!fileName || components.some((component) => component === "" || component === "." || component === "..")) {
+		throw new Error(`Hermes target file has an invalid relative path: ${targetPath}`);
+	}
+
+	let parentFd = openDirectoryNoFollow(rootPath);
+	try {
+		let expected = rootPath;
+		for (const component of components) {
+			const childFd = openDirectoryNoFollow(join(descriptorPath(parentFd), component));
+			try {
+				expected = join(expected, component);
+				if (realpathSync(descriptorPath(childFd)) !== expected) {
+					throw new Error(`Hermes target file changed during secure removal: ${targetPath}`);
+				}
+			} catch (error) {
+				closeDirectory(childFd);
+				throw error;
+			}
+			closeDirectory(parentFd);
+			parentFd = childFd;
+		}
+		unlinkSync(join(descriptorPath(parentFd), fileName));
+	} finally {
+		closeDirectory(parentFd);
+	}
+}
+
 function getRepoPluginTargetDir(hermesRepo: string): string {
 	return join(hermesRepo, "plugins", "memory", "signet");
 }
@@ -378,13 +489,16 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 /** Remove the Signet memory plugin from the Hermes plugins directory. */
 function uninstallPlugin(targetDir: string, targetRoot?: string): string[] {
 	if (!existsSync(targetDir)) return [];
-	const safeTargetDir = targetRoot ? resolveContainedWritePath(targetDir, targetRoot) : targetDir;
-	if (!readInstallMarker(safeTargetDir)) {
+	if (targetRoot) {
+		removeContainedDirectory(targetDir, targetRoot);
+		return [targetDir];
+	}
+	if (!readInstallMarker(targetDir)) {
 		throw new Error(
 			`Refusing to uninstall unowned Hermes plugin path: ${targetDir} (missing or invalid ${INSTALL_MARKER_FILE})`,
 		);
 	}
-	rmSync(safeTargetDir, { recursive: true, force: true });
+	rmSync(targetDir, { recursive: true, force: true });
 	return [targetDir];
 }
 
@@ -570,7 +684,17 @@ function removeProviderBackup(hermesHome: string, targetRoot?: string): string |
 		? resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot)
 		: getProviderBackupPath(hermesHome);
 	if (!existsSync(backupPath)) return null;
-	rmSync(backupPath, { force: true });
+	if (targetRoot) {
+		try {
+			removeContainedFile(backupPath, targetRoot);
+		} catch (error) {
+			const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+			if (code !== "ENOENT") throw error;
+			return null;
+		}
+	} else {
+		rmSync(backupPath, { force: true });
+	}
 	return backupPath;
 }
 
@@ -794,11 +918,9 @@ function writeInstallMarker(targetDir: string, targetKind: InstallMarker["target
 	return markerPath;
 }
 
-function readInstallMarker(targetDir: string): InstallMarker | null {
-	const markerPath = join(targetDir, INSTALL_MARKER_FILE);
-	if (!existsSync(markerPath)) return null;
+function parseInstallMarker(content: string): InstallMarker | null {
 	try {
-		const parsed = JSON.parse(readFileSync(markerPath, "utf-8")) as Partial<InstallMarker>;
+		const parsed = JSON.parse(content) as Partial<InstallMarker>;
 		if (
 			parsed.connector === "@signet/connector-hermes-agent" &&
 			parsed.schemaVersion === 1 &&
@@ -809,9 +931,34 @@ function readInstallMarker(targetDir: string): InstallMarker | null {
 		) {
 			return parsed as InstallMarker;
 		}
-		return null;
+	} catch {
+		// Invalid marker contents are treated as unowned.
+	}
+	return null;
+}
+
+function readInstallMarker(targetDir: string): InstallMarker | null {
+	const markerPath = join(targetDir, INSTALL_MARKER_FILE);
+	if (!existsSync(markerPath)) return null;
+	try {
+		return parseInstallMarker(readFileSync(markerPath, "utf-8"));
 	} catch {
 		return null;
+	}
+}
+
+function readInstallMarkerFromDirectory(directoryFd: number): InstallMarker | null {
+	let markerFd: number | undefined;
+	try {
+		markerFd = openSync(
+			join(descriptorPath(directoryFd), INSTALL_MARKER_FILE),
+			constants.O_RDONLY | constants.O_NOFOLLOW,
+		);
+		return parseInstallMarker(readFileSync(markerFd, "utf-8"));
+	} catch {
+		return null;
+	} finally {
+		if (markerFd !== undefined) closeDirectory(markerFd);
 	}
 }
 

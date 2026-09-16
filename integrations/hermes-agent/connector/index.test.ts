@@ -1788,6 +1788,45 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		expect(existsSync(victimBackup)).toBe(false);
 	});
 
+	it("removes only an owned targeted profile plugin", async () => {
+		const home = join(tmpRoot, "profile-uninstall-home");
+		const profile = join(home, ".hermes", "profiles", "owned");
+		mkdirSync(profile, { recursive: true });
+		writeFileSync(join(profile, "config.yaml"), "memory:\n  provider: honcho\n");
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		const connector = new HermesAgentConnector({ profile: "owned" });
+		const install = await connector.install(join(home, ".agents"));
+		const result = await connector.uninstall();
+
+		expect(install.success).toBe(true);
+		expect(result.filesRemoved).toContain(join(profile, "plugins", "signet"));
+		expect(existsSync(join(profile, "plugins", "signet"))).toBe(false);
+		expect(existsSync(join(profile, "signet.provider.backup.json"))).toBe(false);
+		expect(readFileSync(join(profile, "config.yaml"), "utf8")).toContain("provider: honcho");
+	});
+
+	it("does not follow symlinked entries while removing a targeted profile plugin", async () => {
+		const home = join(tmpRoot, "profile-uninstall-symlink-home");
+		const profile = join(home, ".hermes", "profiles", "owned");
+		const victim = join(tmpRoot, "profile-uninstall-victim");
+		mkdirSync(profile, { recursive: true });
+		mkdirSync(victim, { recursive: true });
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		const connector = new HermesAgentConnector({ profile: "owned" });
+		await connector.install(join(home, ".agents"));
+		const plugin = join(profile, "plugins", "signet");
+		symlinkSync(victim, join(plugin, "victim-link"));
+
+		await connector.uninstall();
+
+		expect(existsSync(victim)).toBe(true);
+		expect(existsSync(plugin)).toBe(false);
+	});
+
 	it("does not mutate an unowned profile during disconnect", async () => {
 		const home = join(tmpRoot, "profile-home-unowned");
 		const profile = join(home, ".hermes", "profiles", "unowned");
