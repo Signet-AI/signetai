@@ -11,10 +11,8 @@ import {
 	readFileSync,
 	readdirSync,
 	realpathSync,
-	rmSync,
 	rmdirSync,
 	unlinkSync,
-	writeFileSync,
 	writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
@@ -269,20 +267,12 @@ function writeContainedFile(targetPath: string, content: string | Uint8Array, ta
 	}
 }
 
-function ensureTargetDirectory(directory: string, targetRoot?: string): void {
-	if (targetRoot) {
-		ensureContainedDirectory(directory, targetRoot);
-		return;
-	}
-	mkdirSync(directory, { recursive: true });
+function ensureTargetDirectory(directory: string, targetRoot: string): void {
+	ensureContainedDirectory(directory, targetRoot);
 }
 
-function writeTargetFile(path: string, content: string | Uint8Array, targetRoot?: string): void {
-	if (targetRoot) {
-		writeContainedFile(path, content, targetRoot);
-		return;
-	}
-	writeFileSync(path, content);
+function writeTargetFile(path: string, content: string | Uint8Array, targetRoot: string): void {
+	writeContainedFile(path, content, targetRoot);
 }
 
 function rejectSymlinkedPathComponents(path: string, root: string, targetPath: string): void {
@@ -453,8 +443,8 @@ function getUserPluginTargetDir(hermesHome: string): string {
 function getProviderBackupPath(hermesHome: string): string {
 	return join(hermesHome, PROVIDER_BACKUP_FILE);
 }
-function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot?: string): string[] {
-	const writeDir = targetRoot ? resolveContainedWritePath(targetDir, targetRoot) : targetDir;
+function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot: string): string[] {
+	const writeDir = resolveContainedWritePath(targetDir, targetRoot);
 	const sourceDir = getPluginSourceDir();
 
 	ensureTargetDirectory(writeDir, targetRoot);
@@ -463,7 +453,7 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 
 	for (const file of PLUGIN_FILES) {
 		const src = join(sourceDir, file);
-		const dst = targetRoot ? resolveContainedWritePath(join(writeDir, file), targetRoot) : join(writeDir, file);
+		const dst = resolveContainedWritePath(join(writeDir, file), targetRoot);
 		if (existsSync(src)) {
 			writeTargetFile(dst, readFileSync(src), targetRoot);
 			written.push(dst);
@@ -473,19 +463,9 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 
 	return written;
 }
-function uninstallPlugin(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot?: string): string[] {
-	if (!existsSync(targetDir)) return [];
-	if (targetRoot) {
-		removeContainedDirectory(targetDir, targetRoot, targetKind);
-		return [targetDir];
-	}
-	const marker = readInstallMarker(targetDir);
-	if (marker === null || marker.targetKind !== targetKind) {
-		throw new Error(
-			`Refusing to uninstall unowned Hermes plugin path: ${targetDir} (missing or invalid ${INSTALL_MARKER_FILE})`,
-		);
-	}
-	rmSync(targetDir, { recursive: true, force: true });
+function uninstallPlugin(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot: string): string[] {
+	if (!pathEntryExists(targetDir)) return [];
+	removeContainedDirectory(targetDir, targetRoot, targetKind);
 	return [targetDir];
 }
 
@@ -621,13 +601,11 @@ function writeProviderBackup(
 	configPath: string,
 	providerKind: ProviderBackup["providerKind"],
 	previousProvider: string,
-	targetRoot?: string,
+	targetRoot: string,
 ): string | null {
 	if (previousProvider === "signet") return null;
-	const backupPath = targetRoot
-		? resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot)
-		: getProviderBackupPath(hermesHome);
-	if (existsSync(backupPath)) return null;
+	const backupPath = resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot);
+	if (pathEntryExists(backupPath)) return null;
 	const backup: ProviderBackup = {
 		schemaVersion: 1,
 		configPath,
@@ -662,21 +640,15 @@ function readProviderBackup(hermesHome: string, targetRoot?: string): ProviderBa
 	}
 }
 
-function removeProviderBackup(hermesHome: string, targetRoot?: string): string | null {
-	const backupPath = targetRoot
-		? resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot)
-		: getProviderBackupPath(hermesHome);
-	if (!existsSync(backupPath)) return null;
-	if (targetRoot) {
-		try {
-			removeContainedFile(backupPath, targetRoot);
-		} catch (error) {
-			const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
-			if (code !== "ENOENT") throw error;
-			return null;
-		}
-	} else {
-		rmSync(backupPath, { force: true });
+function removeProviderBackup(hermesHome: string, targetRoot: string): string | null {
+	const backupPath = resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot);
+	if (!pathEntryExists(backupPath)) return null;
+	try {
+		removeContainedFile(backupPath, targetRoot);
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+		if (code !== "ENOENT") throw error;
+		return null;
 	}
 	return backupPath;
 }
@@ -711,7 +683,7 @@ function isProviderConfigured(hermesHome: string, targetRoot?: string): boolean 
 function configureProvider(
 	hermesHome: string,
 	warnings: string[],
-	targetRoot?: string,
+	targetRoot: string,
 ): { configPath: string | null; backupPath: string | null } {
 	const configPath = resolveConfigPath(hermesHome, targetRoot);
 	let content = "";
@@ -793,14 +765,11 @@ function configureProvider(
 
 function restoreOrClearProvider(
 	hermesHome: string,
-	targetRoot?: string,
+	targetRoot: string,
 ): { configPath: string | null; backupPath: string | null } {
-	const safeConfigPath = targetRoot
-		? resolveContainedWritePath(resolveConfigPath(hermesHome), targetRoot)
-		: resolveConfigPath(hermesHome);
+	const safeConfigPath = resolveContainedWritePath(resolveConfigPath(hermesHome), targetRoot);
 	const config = readConfigYaml(hermesHome, targetRoot);
 	if (!config) return { configPath: null, backupPath: removeProviderBackup(hermesHome, targetRoot) };
-	if (targetRoot) resolveContainedWritePath(config.path, targetRoot);
 	const lines = config.content.replace(/\r\n/g, "\n").split("\n");
 	const block = findMemoryBlock(lines);
 	const dottedProvider = findDottedProvider(lines);
@@ -885,10 +854,8 @@ function computePluginSourceHash(): string {
 	return hash.digest("hex");
 }
 
-function writeInstallMarker(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot?: string): string {
-	const markerPath = targetRoot
-		? resolveContainedWritePath(join(targetDir, INSTALL_MARKER_FILE), targetRoot)
-		: join(targetDir, INSTALL_MARKER_FILE);
+function writeInstallMarker(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot: string): string {
+	const markerPath = resolveContainedWritePath(join(targetDir, INSTALL_MARKER_FILE), targetRoot);
 	const marker: InstallMarker = {
 		connector: "@signet/connector-hermes-agent",
 		schemaVersion: 1,
@@ -1206,7 +1173,7 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesHome = this.getHermesHome();
 		const hermesRepo = this.getHermesRepo();
-		const targetRoot = this.target?.profile ? hermesHome : undefined;
+		const targetRoot = hermesHome;
 		let userPluginInstalled = false;
 		let repoPluginInstalled = false;
 		try {
@@ -1219,7 +1186,7 @@ export class HermesAgentConnector extends BaseConnector {
 		}
 		if (hermesRepo) {
 			try {
-				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo");
+				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo", hermesRepo);
 				filesWritten.push(...pluginFiles);
 				repoPluginInstalled = true;
 			} catch (e) {
@@ -1240,9 +1207,7 @@ export class HermesAgentConnector extends BaseConnector {
 			};
 		}
 
-		const envPath = targetRoot
-			? resolveContainedWritePath(join(hermesHome, ".env"), targetRoot)
-			: join(hermesHome, ".env");
+		const envPath = resolveContainedWritePath(join(hermesHome, ".env"), targetRoot);
 		let configuredSignetAgentId = "default";
 		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850").replace(
 			/[\r\n]+/g,
@@ -1387,17 +1352,17 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesRepo = this.getHermesRepo();
 		if (hermesRepo) {
-			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo), "repo");
+			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo), "repo", hermesRepo);
 			filesRemoved.push(...removed);
 		}
 
 		const hermesHome = this.getHermesHome();
 		const userPluginTarget = getUserPluginTargetDir(hermesHome);
-		const targetRoot = this.target?.profile ? hermesHome : undefined;
-		if (targetRoot) {
+		const targetRoot = hermesHome;
+		if (this.target?.profile) {
 			const safeUserPluginTarget = resolveContainedWritePath(userPluginTarget, targetRoot);
 			const marker = readInstallMarker(safeUserPluginTarget);
-			if (!existsSync(safeUserPluginTarget) || marker === null || marker.targetKind !== "user") {
+			if (!pathEntryExists(safeUserPluginTarget) || marker === null || marker.targetKind !== "user") {
 				return { filesRemoved, configsPatched };
 			}
 		}
@@ -1412,9 +1377,7 @@ export class HermesAgentConnector extends BaseConnector {
 			filesRemoved.push(providerConfig.backupPath);
 		}
 
-		const envPath = targetRoot
-			? resolveContainedWritePath(join(hermesHome, ".env"), targetRoot)
-			: join(hermesHome, ".env");
+		const envPath = resolveContainedWritePath(join(hermesHome, ".env"), targetRoot);
 		if (existsSync(envPath)) {
 			try {
 				let envContent = readFileSync(envPath, "utf-8");
