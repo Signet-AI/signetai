@@ -1,8 +1,21 @@
 import { spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	constants,
+	existsSync,
+	ftruncateSync,
+	lstatSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+	writeSync,
+} from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult, resolveSignetApiKey } from "@signet/connector-base";
 import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
@@ -110,15 +123,181 @@ interface HermesProbeResult {
 	readonly error: string | null;
 }
 
-function resolveContainedWritePath(targetPath: string, targetRoot: string): string {
-	const pathEntryExists = (path: string): boolean => {
-		try {
-			lstatSync(path);
-			return true;
-		} catch {
-			return false;
+const DESCRIPTOR_ROOT =
+	process.platform === "linux" ? "/proc/self/fd" : process.platform === "darwin" ? "/dev/fd" : null;
+const DESCRIPTOR_WRITES_SUPPORTED =
+	DESCRIPTOR_ROOT !== null && typeof constants.O_DIRECTORY === "number" && typeof constants.O_NOFOLLOW === "number";
+
+function pathEntryExists(path: string): boolean {
+	try {
+		lstatSync(path);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function descriptorPath(fd: number): string {
+	if (DESCRIPTOR_ROOT === null) throw new Error("Descriptor-backed Hermes writes are unavailable on this platform");
+	return join(DESCRIPTOR_ROOT, String(fd));
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+	const rel = relative(root, candidate);
+	return !rel.startsWith("..") && !isAbsolute(rel);
+}
+
+function openDirectoryNoFollow(path: string): number {
+	if (!DESCRIPTOR_WRITES_SUPPORTED) throw new Error("Descriptor-backed Hermes writes are unavailable on this platform");
+	return openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+}
+
+function closeDirectory(fd: number): void {
+	try {
+		closeSync(fd);
+	} catch {
+		// Preserve the original filesystem error when cleanup also fails.
+	}
+}
+
+function ensureContainedDirectory(directory: string, targetRoot: string): void {
+	const safeDirectory = resolveContainedWritePath(directory, targetRoot);
+	if (!DESCRIPTOR_WRITES_SUPPORTED) {
+		mkdirSync(safeDirectory, { recursive: true });
+		return;
+	}
+
+	const absoluteDirectory = resolvePath(directory);
+	const rootPath = resolvePath(targetRoot);
+	if (!isPathWithin(rootPath, safeDirectory)) {
+		throw new Error(`Hermes target directory escapes validated root: ${directory}`);
+	}
+
+	let existing = absoluteDirectory;
+	const missing: string[] = [];
+	while (!pathEntryExists(existing)) {
+		const parent = dirname(existing);
+		if (parent === existing) throw new Error(`Hermes target directory has no existing ancestor: ${directory}`);
+		missing.unshift(existing.slice(parent.length + 1));
+		existing = parent;
+	}
+	const existingReal = realpathSync(existing);
+	if (existingReal !== existing) {
+		throw new Error(`Hermes target directory is symlinked and cannot be used for writes: ${directory}`);
+	}
+
+	let fd = openDirectoryNoFollow(existing);
+	let expected = existingReal;
+	try {
+		for (const component of missing) {
+			const childPath = join(descriptorPath(fd), component);
+			try {
+				mkdirSync(childPath);
+			} catch (error) {
+				const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+				if (code !== "EEXIST") throw error;
+			}
+			const childFd = openDirectoryNoFollow(childPath);
+			try {
+				expected = join(expected, component);
+				if (realpathSync(descriptorPath(childFd)) !== expected) {
+					throw new Error(`Hermes target directory changed during secure creation: ${directory}`);
+				}
+			} catch (error) {
+				closeDirectory(childFd);
+				throw error;
+			}
+			closeDirectory(fd);
+			fd = childFd;
 		}
-	};
+	} finally {
+		closeDirectory(fd);
+	}
+}
+
+function writeContainedFile(targetPath: string, content: string | Uint8Array, targetRoot: string): void {
+	const safePath = resolveContainedWritePath(targetPath, targetRoot);
+	if (!DESCRIPTOR_WRITES_SUPPORTED) {
+		writeFileSync(safePath, content);
+		return;
+	}
+
+	const rootPath = resolvePath(targetRoot);
+	ensureContainedDirectory(dirname(safePath), targetRoot);
+	const relativePath = relative(rootPath, safePath);
+	if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+		throw new Error(`Hermes target file escapes validated root: ${targetPath}`);
+	}
+	const components = relativePath.split(sep);
+	const fileName = components.pop();
+	if (!fileName || components.some((component) => component === "" || component === "." || component === "..")) {
+		throw new Error(`Hermes target file has an invalid relative path: ${targetPath}`);
+	}
+
+	let parentFd = openDirectoryNoFollow(rootPath);
+	try {
+		if (realpathSync(descriptorPath(parentFd)) !== rootPath) {
+			throw new Error(`Hermes target root changed during secure write: ${targetRoot}`);
+		}
+		let expected = rootPath;
+		for (const component of components) {
+			const childFd = openDirectoryNoFollow(join(descriptorPath(parentFd), component));
+			try {
+				expected = join(expected, component);
+				if (realpathSync(descriptorPath(childFd)) !== expected) {
+					throw new Error(`Hermes target directory changed during secure write: ${targetPath}`);
+				}
+			} catch (error) {
+				closeDirectory(childFd);
+				throw error;
+			}
+			closeDirectory(parentFd);
+			parentFd = childFd;
+		}
+
+		const fileFd = openSync(
+			join(descriptorPath(parentFd), fileName),
+			constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW,
+			0o666,
+		);
+		try {
+			const expectedFile = join(expected, fileName);
+			if (realpathSync(descriptorPath(fileFd)) !== expectedFile) {
+				throw new Error(`Hermes target file changed during secure write: ${targetPath}`);
+			}
+			ftruncateSync(fileFd, 0);
+			const bytes = typeof content === "string" ? Buffer.from(content) : Buffer.from(content);
+			let offset = 0;
+			while (offset < bytes.length) {
+				const written = writeSync(fileFd, bytes, offset, bytes.length - offset);
+				if (written <= 0) throw new Error(`Hermes target file write made no progress: ${targetPath}`);
+				offset += written;
+			}
+		} finally {
+			closeDirectory(fileFd);
+		}
+	} finally {
+		closeDirectory(parentFd);
+	}
+}
+
+function ensureTargetDirectory(directory: string, targetRoot?: string): void {
+	if (targetRoot) {
+		ensureContainedDirectory(directory, targetRoot);
+		return;
+	}
+	mkdirSync(directory, { recursive: true });
+}
+
+function writeTargetFile(path: string, content: string | Uint8Array, targetRoot?: string): void {
+	if (targetRoot) {
+		writeContainedFile(path, content, targetRoot);
+		return;
+	}
+	writeFileSync(path, content);
+}
+
+function resolveContainedWritePath(targetPath: string, targetRoot: string): string {
 	let rootPath = resolvePath(targetRoot);
 	while (!pathEntryExists(rootPath)) {
 		const parent = dirname(rootPath);
@@ -162,7 +341,7 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 	const writeDir = targetRoot ? resolveContainedWritePath(targetDir, targetRoot) : targetDir;
 	const sourceDir = getPluginSourceDir();
 
-	mkdirSync(writeDir, { recursive: true });
+	ensureTargetDirectory(writeDir, targetRoot);
 
 	const written: string[] = [];
 
@@ -170,7 +349,7 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 		const src = join(sourceDir, file);
 		const dst = targetRoot ? resolveContainedWritePath(join(writeDir, file), targetRoot) : join(writeDir, file);
 		if (existsSync(src)) {
-			writeFileSync(dst, readFileSync(src));
+			writeTargetFile(dst, readFileSync(src), targetRoot);
 			written.push(dst);
 		}
 	}
@@ -342,8 +521,8 @@ function writeProviderBackup(
 		previousProvider,
 		createdAt: new Date().toISOString(),
 	};
-	mkdirSync(dirname(backupPath), { recursive: true });
-	writeFileSync(backupPath, `${JSON.stringify(backup, null, 2)}\n`);
+	ensureTargetDirectory(dirname(backupPath), targetRoot);
+	writeTargetFile(backupPath, `${JSON.stringify(backup, null, 2)}\n`, targetRoot);
 	return backupPath;
 }
 
@@ -455,8 +634,8 @@ function configureProvider(
 			changed = true;
 		}
 		if (!changed) return { configPath: null, backupPath: null };
-		mkdirSync(dirname(configPath), { recursive: true });
-		writeFileSync(configPath, `${lines.join("\n").replace(/\n+$/g, "")}\n`);
+		ensureTargetDirectory(dirname(configPath), targetRoot);
+		writeTargetFile(configPath, `${lines.join("\n").replace(/\n+$/g, "")}\n`, targetRoot);
 		return { configPath, backupPath };
 	}
 	if (content && block === null) {
@@ -483,8 +662,8 @@ function configureProvider(
 		lines.push("memory:", "  provider: signet");
 	}
 
-	mkdirSync(dirname(configPath), { recursive: true });
-	writeFileSync(configPath, `${lines.join("\n").replace(/\n+$/g, "")}\n`);
+	ensureTargetDirectory(dirname(configPath), targetRoot);
+	writeTargetFile(configPath, `${lines.join("\n").replace(/\n+$/g, "")}\n`, targetRoot);
 	return { configPath, backupPath };
 }
 
@@ -527,7 +706,7 @@ function restoreOrClearProvider(
 		configChanged = true;
 	}
 	if (configChanged) {
-		writeFileSync(safeConfigPath, `${lines.join("\n").replace(/\n+$/g, "")}\n`);
+		writeTargetFile(safeConfigPath, `${lines.join("\n").replace(/\n+$/g, "")}\n`, targetRoot);
 	}
 	return {
 		configPath: configChanged ? safeConfigPath : null,
@@ -594,7 +773,7 @@ function writeInstallMarker(targetDir: string, targetKind: InstallMarker["target
 		targetKind,
 		installedAt: new Date().toISOString(),
 	};
-	writeFileSync(markerPath, `${JSON.stringify(marker, null, 2)}\n`);
+	writeTargetFile(markerPath, `${JSON.stringify(marker, null, 2)}\n`, targetRoot);
 	return markerPath;
 }
 
@@ -1025,8 +1204,8 @@ export class HermesAgentConnector extends BaseConnector {
 			}
 
 			if (changed) {
-				mkdirSync(hermesHome, { recursive: true });
-				writeFileSync(envPath, envContent);
+				ensureTargetDirectory(hermesHome, targetRoot);
+				writeTargetFile(envPath, envContent, targetRoot);
 				configsPatched.push(envPath);
 			}
 		} catch (e) {
@@ -1139,7 +1318,7 @@ export class HermesAgentConnector extends BaseConnector {
 					}
 				}
 				if (changed) {
-					writeFileSync(envPath, `${envContent.replace(/\n{3,}/g, "\n\n").trimEnd()}\n`);
+					writeTargetFile(envPath, `${envContent.replace(/\n{3,}/g, "\n\n").trimEnd()}\n`, targetRoot);
 					configsPatched.push(envPath);
 				}
 			} catch (e) {
