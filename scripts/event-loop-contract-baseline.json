@@ -3025,7 +3025,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1606,
+      "line": 1607,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3033,7 +3033,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1794,
+      "line": 1795,
       "api": "withReadDbAsync",
       "source": "const hashClusters = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3041,7 +3041,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1936,
+      "line": 1937,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3049,7 +3049,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1956,
+      "line": 1957,
       "api": "withReadDbAsync",
       "source": "const neighbors = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3057,7 +3057,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2028,
+      "line": 2029,
       "api": "withReadDbAsync",
       "source": "const total = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3065,7 +3065,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2089,
+      "line": 2090,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3073,7 +3073,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2221,
+      "line": 2222,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3081,7 +3081,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2427,
+      "line": 2428,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
