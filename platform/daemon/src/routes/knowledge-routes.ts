@@ -482,7 +482,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:477" },
+			{ siteToken: "routes/knowledge-routes.ts:478" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -580,7 +580,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: safeRows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:494" },
+			{ siteToken: "routes/knowledge-routes.ts:495" },
 		);
 	});
 
@@ -599,7 +599,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:599" },
+			{ siteToken: "routes/knowledge-routes.ts:600" },
 		);
 		return c.json(result);
 	});
