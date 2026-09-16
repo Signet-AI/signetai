@@ -1,145 +1,64 @@
 ---
 title: "HTTP API"
-description: "Signet daemon HTTP API reference."
+description: "Transport, authentication, and navigation for the Signet daemon HTTP API."
 ---
 
-The Signet [Daemon](/daemon/) exposes a REST API on `http://localhost:3850` by default.
-All requests and responses use JSON unless otherwise noted. The base URL and
-port are configurable via environment variables (see [Configuration](/configuration/)).
+The Signet daemon serves a JSON HTTP API at `http://127.0.0.1:3850` by default.
+See [Daemon](/daemon/) and [Configuration](/configuration/) for changing the
+listener. This page is the transport and authentication overview; endpoint
+contracts live in the section indexes below.
 
-> Path note: `$SIGNET_WORKSPACE` means your active Signet workspace path.
-> Default is `~/.agents`, configurable via `signet workspace set <path>`.
+## Transport
 
-## Connection
+- Use the daemon base URL and send JSON with `Content-Type: application/json`.
+- `GET /health/live` is the liveness probe; `GET /health/ready` reports readiness.
+- Errors are JSON, normally `{ "error": "message" }`; validation is `400`,
+  authentication is `401`, authorization is `403`, conflicts are `409`, rate
+  limits are `429`, and unavailable/disabled operations may return `503`.
+- Streaming inference uses `POST /api/inference/stream`; it is the only API
+  reference route documented as a streaming response.
 
-```
-Base URL: http://localhost:3850
-SIGNET_PORT  — override port (default: 3850)
-SIGNET_HOST  — daemon host for local calls (default: 127.0.0.1)
-SIGNET_BIND  — bind host override (defaults to the configured network mode:
-               127.0.0.1 for localhost mode, 0.0.0.0 for tailscale mode)
-```
+## Authentication and permissions
 
-### Request and response conventions
+Auth mode is configured in `agent.yaml`:
 
-- JSON is the default request and response format.
-- Authenticated modes use `Authorization: Bearer <token>`.
-- Most list endpoints accept `limit` and `offset` or a route-specific bounded
-  limit. Out-of-range values return `400` or are clamped where noted.
-- Errors generally use `{ "error": "human-readable message" }`; route-specific
-  errors may include structured fields such as `status`, `code`, or
-  `missingCapabilities`.
-
-## Authentication
-
-The daemon supports three [Auth](/auth/) modes, set in `agent.yaml`:
-
-- `local` — no authentication required. All requests are trusted. This is
-  the default for single-user local installs.
-- `team` — all requests require a `Bearer` token in the `Authorization`
-  header.
-- `hybrid` — requests from `localhost` are trusted without a token; requests
-  from any other origin require a `Bearer` token.
-
-Tokens use Signet's signed bearer-token format with a role and optional scope.
-Dashboard password login uses `POST /api/auth/login` to exchange the configured
-admin username/password for an admin session token. The dashboard shell,
-`/api/auth/login`, `/api/auth/methods`, `/api/auth/whoami`, and reserved
-`/api/auth/sso/*` and `/api/auth/saml/*` provider paths are reachable without an
-existing bearer token so users can sign in. Other daemon API routes remain
-protected in `team` mode.
-
-Roles and their permissions:
-
-| Role       | Permissions                                                          |
-|------------|----------------------------------------------------------------------|
-| `admin`    | all permissions                                                      |
-| `operator` | remember, recall, modify, forget, recover, documents, connectors, diagnostics, analytics |
-| `agent`    | remember, recall, modify, forget, recover, documents                 |
-| `readonly` | recall only                                                          |
-
-Token scopes (`project`, `agent`, `user`) restrict mutations to records
-matching the scope. Admin role bypasses scope checks. Unscoped tokens have
-full access within their role.
-
-Rate limits apply in `team` and `hybrid` modes:
-
-| Operation      | Limit       |
-|----------------|-------------|
-| forget         | 30 / min    |
-| modify         | 60 / min    |
-| batchForget    | 5 / min     |
-| admin actions  | 10 / min    |
-| login attempts | 5 / min     |
-| inferenceExplain | 120 / min |
-| inferenceExecute | 20 / min  |
-| inferenceGateway | 30 / min  |
-| recallLlm      | 60 / min    |
-
-Errors follow a consistent shape:
-
-```json
-{ "error": "human-readable message" }
-```
-
-Rate-limit rejections return `429`. Auth failures return `401`. Permission
-violations return `403`. Version conflicts and state violations return `409`.
-Mutations blocked by the kill switch return `503`.
-
-## Reference sections
-
-| Section | Contents |
+| Mode | Behavior |
 |---|---|
-| [Health and status API](/api/health-status/) | Health, status, and runtime feature endpoints. |
-| [Inference API](/api/inference/) | Inference routing, execution, streaming, and OpenAI-compatible gateway endpoints. |
-| [Core configuration API](/api/core-configuration/) | Auth, config, and identity endpoints. |
-| [Memory API](/api/memory/) | Memory, embedding, recall, and similarity endpoints. |
-| [Documents and sources API](/api/documents-sources/) | Document ingestion and source-backed recall endpoints. |
-| [Runtime extensions API](/api/runtime-extensions/) | Connector, agent, skill, harness, plugin, and secret endpoints. |
-| [Sessions and hooks API](/api/sessions-hooks/) | Harness hook and session lifecycle endpoints. |
-| [Operations API](/api/operations/) | Git sync, updates, diagnostics, repair, and pipeline operation endpoints. |
-| [Knowledge and ontology API](/api/knowledge-ontology/) | Knowledge navigation, ontology proposal, dreaming, and checkpoint endpoints. |
-| [Telemetry and logs API](/api/telemetry-logs/) | Analytics, telemetry, log, and MCP endpoints. |
-| [Additional route inventory](/api/route-inventory/) | Support, dashboard, repair, marketplace, and runtime routes not expanded in the main API reference. |
+| `local` | Local requests are trusted; no bearer token is required. |
+| `team` | API requests require `Authorization: Bearer <token>`. |
+| `hybrid` | Loopback is trusted; non-loopback requests require a bearer token. |
 
-## Maintenance
+Use `GET /api/auth/methods`, `POST /api/auth/login`, and `GET /api/auth/whoami`
+to discover/login/check the active auth configuration. Admin-only token and API
+key management is under `/api/auth/token` and `/api/auth/api-keys`.
 
-Route details live in `docs/api/` so the root API page stays readable. When
-adding or changing daemon routes, update the matching reference file and run
-`bun scripts/doc-drift.ts --markdown`.
+| Role | Permission boundary |
+|---|---|
+| `admin` | All registered permissions. |
+| `operator` | Operational diagnostics, analytics, connectors, documents, and memory mutations. |
+| `agent` | Agent-scoped memory and document operations. |
+| `readonly` | Read-only recall access. |
 
+Routes additionally enforce scope (`project`, `agent`, or `user`) and route
+specific permissions. Treat `401`, `403`, and `503` as authoritative outcomes;
+clients must not retry by silently switching identity or using a legacy fallback.
 
-## Agent policy
+## Reference navigation
 
-`GET /api/agents/:name` returns the agent's `read_policy`, optional `policy_group`, timestamps, and resolved `effective_scope` (`agent`, `global`, or `group`). `POST /api/agents` and `PATCH /api/agents/:name` accept `isolated`, `shared`, or `group`; `group` requires a group name and the other policies reject one. The daemon validates at the boundary and never falls back to local `agent.yaml` state. `signet agent set` uses PATCH, `signet agent show` uses GET, and `signet agent info` remains a compatibility alias.
+| Section | Scope |
+|---|---|
+| [Health and status API](/api/health-status/) | Health probes, status, features, and mode. |
+| [Inference API](/api/inference/) | Catalog, OAuth, explain/execute, streaming, and request cancellation. |
+| [Core configuration API](/api/core-configuration/) | Auth, configuration, agents, and identity. |
+| [Documents and sources API](/api/documents-sources/) | Source and document ingestion contracts. |
+| [Runtime extensions API](/api/runtime-extensions/) | Connectors, harnesses, skills, plugins, and secrets. |
+| [Sessions and hooks API](/api/sessions-hooks/) | Sessions, hooks, and cross-agent messaging. |
+| [Operations API](/api/operations/) | Pipeline, diagnostics, sync, repair, and maintenance. |
+| [Knowledge and ontology API](/api/knowledge-ontology/) | Knowledge navigation, ontology, and dreaming. |
+| [Telemetry and logs API](/api/telemetry-logs/) | Telemetry, analytics, logs, and health telemetry. |
+| [Memory API](/api/memory/) | Memory-owned endpoints; maintained separately. |
 
-## Onboarding
-
-The dashboard modal at `/#setup` uses the existing configuration, inference/OAuth,
-Sources, pipeline, and scoped memory APIs. It does not expose a second setup-plan
-executor. `GET /api/inference/catalog` includes `recommendedModels`, an optional
-provider-to-model-ID map drawn from curated defaults only when the provider's
-current catalog contains that model. Absence requires an explicit model choice.
-
-`POST /api/harnesses/:id/connect` requires admin permission and accepts
-`claude-code`, `codex`, `hermes-agent`, `opencode`, `openclaw`, `gemini`,
-`pi`, `oh-my-pi`, `kimi`, or `forge`. It installs into the daemon host's agent
-configuration using the same connector implementation as the CLI, with the
-resolved daemon workspace. No request body or arbitrary filesystem path is
-accepted. Success returns `{success: true, id}` after connector verification and
-worker exit. Unsupported IDs return 400, concurrent installation returns 409,
-and failures return 500 with an error. One installation is admitted at a time;
-it has a 30-second deadline and a two-second forced-stop grace period. Cancellation
-or failure may leave partial integration files; retry the same operation to
-reconcile them. OpenClaw preserves its configured runtime path and requires the
-existing CLI-managed plugin package for plugin mode; missing packages fail
-explicitly before configuration is written.
-
-`GET /api/harnesses` reports each harness's home-directory `exists` state plus
-`configuredHarnesses`: the harness ids recorded as connected in the workspace's
-agent.yaml, written when a connect (or `signet setup`) succeeds. `configuredHarnesses`
-is the Signet-owned connection record; `exists` alone proves only that a harness
-is installed on the machine, never that Signet was connected to it. Clients
-deciding whether onboarding is still needed must gate on `configuredHarnesses`
-(the field is absent on older daemons; treat absence as unknown and fall back
-without hiding setup affordances).
+Status labels in child pages mean **canonical** (preferred contract), **alias**
+(equivalent current route), **compatibility** (accepted translation), or
+**retired** (explicitly rejected, commonly `410`). A route absent from the
+current registration and tests is not part of this reference.
