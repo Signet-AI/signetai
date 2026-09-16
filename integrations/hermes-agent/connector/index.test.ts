@@ -390,6 +390,38 @@ describe("HermesAgentConnector.install()", () => {
 		expect(connector.isInstalled()).toBe(true);
 	});
 
+	it("rejects a symlinked ambient Hermes plugin parent", async () => {
+		const hermesHome = join(tmpRoot, "ambient-symlink-home");
+		const victim = join(tmpRoot, "ambient-symlink-victim");
+		mkdirSync(hermesHome, { recursive: true });
+		mkdirSync(victim, { recursive: true });
+		symlinkSync(victim, join(hermesHome, "plugins"));
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(false);
+		expect(result.warnings?.some((warning) => /symlinked|escapes validated root/.test(warning))).toBe(true);
+		expect(existsSync(join(victim, "signet"))).toBe(false);
+	});
+
+	it("rejects a symlinked Hermes repo plugin parent", async () => {
+		const hermesHome = join(tmpRoot, "repo-symlink-home");
+		const hermesRepo = join(tmpRoot, "repo-symlink-hermes");
+		const victim = join(tmpRoot, "repo-symlink-victim");
+		mkdirSync(join(hermesRepo, "plugins"), { recursive: true });
+		mkdirSync(victim, { recursive: true });
+		symlinkSync(victim, join(hermesRepo, "plugins", "memory"));
+		process.env.HERMES_HOME = hermesHome;
+		process.env.HERMES_REPO = hermesRepo;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(false);
+		expect(result.warnings?.some((warning) => /symlinked|escapes validated root/.test(warning))).toBe(true);
+		expect(existsSync(join(victim, "signet"))).toBe(false);
+	});
+
 	it("fails when the user plugin is the only usable target and cannot be written", async () => {
 		const hermesHome = join(tmpRoot, ".hermes");
 		mkdirSync(hermesHome, { recursive: true });
@@ -1901,6 +1933,44 @@ describe("HermesAgentConnector.uninstall()", () => {
 		expect(result.filesRemoved).toContain(repoPluginDir);
 		expect(result.filesRemoved).toContain(userPluginDir);
 		expect(connector.isInstalled()).toBe(false);
+	});
+
+	it("rejects an ambient user-plugin parent swap before removing a victim", async () => {
+		const hermesHome = join(tmpRoot, "ambient-uninstall-home");
+		const victim = join(tmpRoot, "ambient-uninstall-victim");
+		process.env.HERMES_HOME = hermesHome;
+
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		mkdirSync(join(victim, "signet"), { recursive: true });
+		cpSync(join(hermesHome, "plugins", "signet", "signet.install.json"), join(victim, "signet", "signet.install.json"));
+		rmSync(join(hermesHome, "plugins"), { recursive: true, force: true });
+		symlinkSync(victim, join(hermesHome, "plugins"));
+
+		await expect(connector.uninstall()).rejects.toThrow(/symlinked|escapes validated root/);
+		expect(existsSync(join(victim, "signet", "signet.install.json"))).toBe(true);
+	});
+
+	it("rejects a Hermes repo plugin parent swap before removing a victim", async () => {
+		const hermesHome = join(tmpRoot, "repo-uninstall-home");
+		const hermesRepo = join(tmpRoot, "repo-uninstall-hermes");
+		const victim = join(tmpRoot, "repo-uninstall-victim");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.HERMES_HOME = hermesHome;
+		process.env.HERMES_REPO = hermesRepo;
+
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		mkdirSync(join(victim, "memory", "signet"), { recursive: true });
+		cpSync(
+			join(hermesRepo, "plugins", "memory", "signet", "signet.install.json"),
+			join(victim, "memory", "signet", "signet.install.json"),
+		);
+		rmSync(join(hermesRepo, "plugins"), { recursive: true, force: true });
+		symlinkSync(victim, join(hermesRepo, "plugins"));
+
+		await expect(connector.uninstall()).rejects.toThrow(/symlinked|escapes validated root/);
+		expect(existsSync(join(victim, "memory", "signet", "signet.install.json"))).toBe(true);
 	});
 
 	it("clears memory.provider only when it is signet", async () => {
