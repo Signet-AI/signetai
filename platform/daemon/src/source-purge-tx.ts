@@ -1,5 +1,5 @@
 import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
-import { countChanges, syncVecDeleteByEmbeddingIds, tableExists } from "./db-helpers";
+import { countChanges, createVecMutationBatch, tableExists } from "./db-helpers";
 import type { WriteDb } from "./db-accessor";
 import { reconcileOntologyContradictionsInTx } from "./ontology-contradictions";
 import { purgeAttributeMemoryProjectionsInTx } from "./semantic-memory-projection";
@@ -21,29 +21,45 @@ export function purgeSourceOwnedRowsInTx(db: WriteDb, input: PurgeSourceOwnedRow
 	if (!sourceId) return 0;
 	const embeddingPrefix = `${sourceId}:`;
 	const agentWhere = input.agentId !== undefined ? "agent_id = ? AND " : "";
-	const embeddingRows = db
-		.prepare(
-			`SELECT id FROM embeddings
+	const embeddingCount = (
+		db
+			.prepare(
+				`SELECT COUNT(*) AS count FROM embeddings
 				 WHERE ${agentWhere}source_type = ?
 				   AND source_id >= ?
 				   AND source_id < ?`,
-		)
-		.all(
-			...(input.agentId !== undefined ? [input.agentId] : []),
+			)
+			.get(
+				...(input.agentId !== undefined ? [input.agentId] : []),
+				SOURCE_CHUNK_SOURCE_TYPE,
+				embeddingPrefix,
+				`${embeddingPrefix}\uffff`,
+			) as { count: number }
+	).count;
+	const vecMutations = createVecMutationBatch(db);
+	if (
+		!vecMutations.deleteBySourceIdRange(
 			SOURCE_CHUNK_SOURCE_TYPE,
 			embeddingPrefix,
 			`${embeddingPrefix}\uffff`,
-		) as Array<{ id: string }>;
-	const embeddingIds = embeddingRows.map((row) => row.id);
-	if (!syncVecDeleteByEmbeddingIds(db, embeddingIds)) {
+			input.agentId,
+		)
+	) {
 		throw new Error("failed to reconcile vec_embeddings before source purge");
 	}
-	let purged = embeddingIds.length;
+	let purged = embeddingCount;
 
-	if (embeddingIds.length > 0) {
-		const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
-		for (const id of embeddingIds) stmt.run(id);
-	}
+	db.prepare(
+		`DELETE FROM embeddings
+		 WHERE ${agentWhere}source_type = ?
+		   AND source_id >= ?
+		   AND source_id < ?`,
+	).run(
+		...(input.agentId !== undefined ? [input.agentId] : []),
+		SOURCE_CHUNK_SOURCE_TYPE,
+		embeddingPrefix,
+		`${embeddingPrefix}\uffff`,
+	);
 
 	purged += countChanges(
 		db

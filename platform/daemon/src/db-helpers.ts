@@ -56,6 +56,8 @@ function invalidateUmapCache(db: WriteDb): void {
 // Graceful: silently skips if vec_embeddings doesn't exist (no sqlite-vec).
 // ---------------------------------------------------------------------------
 
+const VEC_DELETE_BATCH_SIZE = 500;
+
 function vecTableExists(db: WriteDb): boolean {
 	try {
 		const row = db.prepare("SELECT name FROM sqlite_master WHERE name = 'vec_embeddings' AND type = 'table'").get();
@@ -85,19 +87,116 @@ export function readLiveVecDimensions(db: ReadDb): number | null {
 	return readVecEmbeddingDimensions(row?.sql);
 }
 
+export interface VecMutationBatch {
+	insert(embeddingId: string, vector: readonly number[]): void;
+	deleteByEmbeddingIds(embeddingIds: readonly string[]): boolean;
+	deleteBySourceId(sourceType: string, sourceId: string): void;
+	deleteBySourceExceptHash(sourceType: string, sourceId: string, keepContentHash: string): void;
+	deleteBySourceIdRange(sourceType: string, sourceIdStart: string, sourceIdEnd: string, agentId?: string): boolean;
+}
+
+/**
+ * Create vector mutation helpers that share one cache invalidation and schema
+ * probe across a synchronous write transaction.
+ */
+export function createVecMutationBatch(db: WriteDb): VecMutationBatch {
+	let cacheInvalidated = false;
+	let vecAvailable: boolean | undefined;
+
+	const invalidate = (): void => {
+		if (cacheInvalidated) return;
+		cacheInvalidated = true;
+		invalidateUmapCache(db);
+	};
+
+	const hasVecTable = (): boolean => {
+		if (vecAvailable === undefined) vecAvailable = vecTableExists(db);
+		return vecAvailable;
+	};
+
+	const insert = (embeddingId: string, vector: readonly number[]): void => {
+		invalidate();
+		if (!hasVecTable()) return;
+		try {
+			const f32 = new Float32Array(vector);
+			db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(embeddingId, f32);
+		} catch {
+			// sqlite-vec not loaded or schema mismatch — non-fatal
+		}
+	};
+
+	const deleteByEmbeddingIds = (embeddingIds: readonly string[]): boolean => {
+		if (embeddingIds.length === 0) return true;
+		invalidate();
+		if (!hasVecTable()) return true;
+		try {
+			for (let start = 0; start < embeddingIds.length; start += VEC_DELETE_BATCH_SIZE) {
+				const ids = embeddingIds.slice(start, start + VEC_DELETE_BATCH_SIZE);
+				const placeholders = ids.map(() => "?").join(", ");
+				db.prepare(`DELETE FROM vec_embeddings WHERE id IN (${placeholders})`).run(...ids);
+			}
+			return true;
+		} catch {
+			return false;
+		}
+	};
+
+	const deleteByEmbeddingSubquery = (whereClause: string, params: readonly string[]): boolean => {
+		invalidate();
+		if (!hasVecTable()) return true;
+		try {
+			const select = db.prepare(
+				`SELECT e.id FROM embeddings AS e
+				 WHERE ${whereClause}
+				   AND EXISTS (SELECT 1 FROM vec_embeddings AS v WHERE v.id = e.id)
+				 LIMIT ?`,
+			);
+			for (;;) {
+				const rows = select.all(...params, VEC_DELETE_BATCH_SIZE) as Array<{ id: string }>;
+				if (rows.length === 0) return true;
+				if (!deleteByEmbeddingIds(rows.map((row) => row.id))) return false;
+			}
+		} catch {
+			return false;
+		}
+	};
+
+	const deleteBySource = (sourceType: string, sourceId: string, keepContentHash?: string): void => {
+		const hashClause = keepContentHash === undefined ? "" : " AND content_hash <> ?";
+		const params = keepContentHash === undefined ? [sourceType, sourceId] : [sourceType, sourceId, keepContentHash];
+		deleteByEmbeddingSubquery(`source_type = ? AND source_id = ?${hashClause}`, params);
+	};
+
+	const deleteBySourceIdRange = (
+		sourceType: string,
+		sourceIdStart: string,
+		sourceIdEnd: string,
+		agentId?: string,
+	): boolean => {
+		const agentClause = agentId === undefined ? "" : "agent_id = ? AND ";
+		const params =
+			agentId === undefined
+				? [sourceType, sourceIdStart, sourceIdEnd]
+				: [agentId, sourceType, sourceIdStart, sourceIdEnd];
+		return deleteByEmbeddingSubquery(`${agentClause}source_type = ? AND source_id >= ? AND source_id < ?`, params);
+	};
+
+	return {
+		insert,
+		deleteByEmbeddingIds,
+		deleteBySourceId: (sourceType, sourceId) => deleteBySource(sourceType, sourceId),
+		deleteBySourceExceptHash: (sourceType, sourceId, keepContentHash) =>
+			deleteBySource(sourceType, sourceId, keepContentHash),
+		deleteBySourceIdRange,
+	};
+}
+
 /**
  * Insert or replace a vector in vec_embeddings after writing to embeddings.
  * `embeddingId` must match the embeddings.id value.
  */
 export function syncVecInsert(db: WriteDb, embeddingId: string, vector: readonly number[]): void {
-	invalidateUmapCache(db);
-	if (!vecTableExists(db)) return;
-	try {
-		const f32 = new Float32Array(vector);
-		db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(embeddingId, f32);
-	} catch {
-		// sqlite-vec not loaded or schema mismatch — non-fatal
-	}
+	createVecMutationBatch(db).insert(embeddingId, vector);
 }
 
 /**
@@ -106,18 +205,7 @@ export function syncVecInsert(db: WriteDb, embeddingId: string, vector: readonly
  * write leaves the canonical row available for retry.
  */
 export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly string[]): boolean {
-	if (embeddingIds.length === 0) return true;
-	invalidateUmapCache(db);
-	if (!vecTableExists(db)) return true;
-	try {
-		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
-		for (const id of embeddingIds) {
-			stmt.run(id);
-		}
-		return true;
-	} catch {
-		return false;
-	}
+	return createVecMutationBatch(db).deleteByEmbeddingIds(embeddingIds);
 }
 
 /**
@@ -125,20 +213,7 @@ export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly 
  * Use before deleting from embeddings by source_id.
  */
 export function syncVecDeleteBySourceId(db: WriteDb, sourceType: string, sourceId: string): void {
-	invalidateUmapCache(db);
-	if (!vecTableExists(db)) return;
-	try {
-		const rows = db
-			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ?")
-			.all(sourceType, sourceId) as Array<{ id: string }>;
-		if (rows.length === 0) return;
-		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
-		for (const row of rows) {
-			stmt.run(row.id);
-		}
-	} catch {
-		// non-fatal
-	}
+	createVecMutationBatch(db).deleteBySourceId(sourceType, sourceId);
 }
 
 /**
@@ -151,20 +226,7 @@ export function syncVecDeleteBySourceExceptHash(
 	sourceId: string,
 	keepContentHash: string,
 ): void {
-	invalidateUmapCache(db);
-	if (!vecTableExists(db)) return;
-	try {
-		const rows = db
-			.prepare("SELECT id FROM embeddings WHERE source_type = ? AND source_id = ? AND content_hash <> ?")
-			.all(sourceType, sourceId, keepContentHash) as Array<{ id: string }>;
-		if (rows.length === 0) return;
-		const stmt = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
-		for (const row of rows) {
-			stmt.run(row.id);
-		}
-	} catch {
-		// non-fatal
-	}
+	createVecMutationBatch(db).deleteBySourceExceptHash(sourceType, sourceId, keepContentHash);
 }
 
 /**

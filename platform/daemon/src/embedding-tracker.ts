@@ -9,7 +9,7 @@
 import { randomUUID } from "node:crypto";
 import type { PipelineEmbeddingTrackerConfig, PipelineRepairConfig } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
-import { syncVecDeleteBySourceExceptHash, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { createVecMutationBatch, vectorToBlob } from "./db-helpers";
 import { listStaleEmbeddingRows } from "./embedding-coverage";
 import { isActiveEmbeddingConfig } from "./embedding-index-state";
 import {
@@ -272,8 +272,9 @@ export function startEmbeddingTracker(
 					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 					applied = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
 						if (!isActiveEmbeddingConfig(db, embeddingCfg)) return false;
+						const vecMutations = createVecMutationBatch(db);
 						for (const { row, vector, contentHash } of cycle.results) {
-							syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);
+							vecMutations.deleteBySourceExceptHash("memory", row.id, contentHash);
 							const embId = randomUUID();
 							db.prepare(
 								`INSERT INTO embeddings
@@ -288,7 +289,7 @@ export function startEmbeddingTracker(
 							const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 								| { id: string }
 								| undefined;
-							if (actualRow) syncVecInsert(db, actualRow.id, vector);
+							if (actualRow) vecMutations.insert(actualRow.id, vector);
 							db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
 							processed++;
 						}

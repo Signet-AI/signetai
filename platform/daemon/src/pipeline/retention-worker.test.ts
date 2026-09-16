@@ -51,7 +51,7 @@ function failVectorDeleteOnce(db: Database): WriteDb {
 		},
 		prepare(sql: string): SqliteStatement {
 			const statement = db.prepare(sql) as unknown as SqliteStatement;
-			if (sql !== "DELETE FROM vec_embeddings WHERE id = ?") return statement;
+			if (!sql.startsWith("DELETE FROM vec_embeddings WHERE id IN (")) return statement;
 			return {
 				run(...params: unknown[]) {
 					if (!failed) {

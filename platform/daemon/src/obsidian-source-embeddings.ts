@@ -13,7 +13,7 @@ import {
 } from "@signet/core";
 import { yieldEvery } from "./async-yield";
 import { getDbAccessor } from "./db-accessor";
-import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { createVecMutationBatch, syncVecDeleteByEmbeddingIds, vectorToBlob } from "./db-helpers";
 import { computeRetryBackoffMs } from "./embedding-repair-state";
 import type { EmbeddingFetchOptions } from "./embedding-fetch";
 import type { PipelineCauseFamily } from "./pipeline-operation";
@@ -541,11 +541,12 @@ export async function indexObsidianSourceEmbeddings(
 			// Recheck after the asynchronous provider call: promotion may have
 			// committed a new active space while this chunk was encoding.
 			if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
+			const vecMutations = createVecMutationBatch(db);
 			const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
 				| { content_hash: string }
 				| undefined;
 			if (existingForId && existingForId.content_hash !== contentHash) {
-				if (!syncVecDeleteByEmbeddingIds(db, [embId])) {
+				if (!vecMutations.deleteByEmbeddingIds([embId])) {
 					throw new Error("failed to reconcile vec_embeddings before replacing source embedding");
 				}
 				db.prepare("DELETE FROM embeddings WHERE id = ?").run(embId);
@@ -582,7 +583,7 @@ export async function indexObsidianSourceEmbeddings(
 			const stored = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 				| { id: string }
 				| undefined;
-			syncVecInsert(db, stored?.id ?? embId, vector);
+			vecMutations.insert(stored?.id ?? embId, vector);
 			return true;
 		}, "obsidian-source-embeddings.ts:540");
 		if (!stored) {
@@ -622,7 +623,7 @@ export async function indexObsidianSourceEmbeddings(
 				const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 				for (const id of staleIds) stmt.run(id);
 			}
-		}, "obsidian-source-embeddings.ts:601");
+		}, "obsidian-source-embeddings.ts:602");
 
 	return {
 		chunks: chunks.length,
@@ -651,7 +652,7 @@ function existingChunkEmbedding(agentId: string, chunkId: string): { id: string;
 					"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
 				)
 				.get(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
-		"obsidian-source-embeddings.ts:647",
+		"obsidian-source-embeddings.ts:648",
 	) as { id: string; content_hash: string } | undefined;
 	return row ?? null;
 }
@@ -670,20 +671,13 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 	return getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 		const agentWhere = agentId ? " AND agent_id = ?" : "";
 		const upper = prefixUpperBound(prefix);
+		const vecMutations = createVecMutationBatch(db);
 		let changes = 0;
 		for (const sourceType of OBSIDIAN_CHUNK_SOURCE_TYPES) {
 			const args = agentId ? [sourceType, prefix, upper, agentId] : [sourceType, prefix, upper];
-			const rows = db
-				.prepare(`SELECT id FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
-				.all(...args) as Array<{ id: string }>;
 			// Derived vectors must be removed before their canonical embedding rows.
 			// Throwing rolls back the whole source purge and leaves it retryable.
-			if (
-				!syncVecDeleteByEmbeddingIds(
-					db,
-					rows.map((row) => row.id),
-				)
-			) {
+			if (!vecMutations.deleteBySourceIdRange(sourceType, prefix, upper, agentId)) {
 				throw new Error("failed to reconcile vec_embeddings before purging source embeddings");
 			}
 			const result = db
@@ -692,7 +686,7 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 			changes += result.changes;
 		}
 		return changes;
-	}, "obsidian-source-embeddings.ts:670");
+	}, "obsidian-source-embeddings.ts:671");
 }
 
 function prefixUpperBound(prefix: string): string {
