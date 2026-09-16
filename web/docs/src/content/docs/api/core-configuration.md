@@ -1,303 +1,45 @@
 ---
 title: "Core configuration API"
-description: "Auth, config, and identity endpoints."
+description: "Authentication, configuration, agents, and daemon identity endpoints."
 ---
 
-Auth, config, and identity endpoints.
+[Back to HTTP API](/api/).
 
-[Back to HTTP API overview](/api/).
+## Authentication and identity
 
-## Auth
+| Method | Route | Contract |
+|---|---|---|
+| GET | `/api/auth/methods` | Reports auth mode and providers. Password provider includes `id`, `type`, `enabled`, and username; SSO/SAML may be disabled. |
+| POST | `/api/auth/login` | Public password login. Returns `token`, `expiresAt`, `role`, and `username`; invalid credentials are `401`, malformed input `400`, unavailable login `503`, and login throttling `429` with `Retry-After`. |
+| GET | `/api/auth/whoami` | Returns `authenticated`, `trustedLocal`, `effectiveAccess`, `claims`, `mode`, and providers. |
+| POST | `/api/auth/token` | Admin-only token minting. `role` is `admin`, `operator`, `agent`, or `readonly`; accepts `scope` and optional positive `ttlSeconds`. |
+| GET/POST | `/api/auth/api-keys` | Admin-only list/create. Create accepts `name`, role, scope, permissions, connector, harness, `agentId`, `allowedProjects`, and `expiresAt`; the secret is returned at creation. |
+| DELETE | `/api/auth/api-keys/:id` | Admin-only revoke; unknown IDs return `404`. |
 
-### GET /api/auth/whoami
+Bearer credentials carry a role and optional explicit scope. Permissions include
+`remember`, `recall`, `modify`, `forget`, `recover`, `admin`, `documents`,
+`connectors`, `diagnostics`, and `analytics`. Scope can identify a project,
+agent, or user; API keys can additionally bind connector, harness, agent, or
+project allowlists. Requests outside scope are denied. Missing, ambiguous,
+expired, or unauthorized identity fails closed; it does not become `default`.
 
-Returns the identity and claims of the current request's token. This route is
-open so the dashboard can determine whether to show the login screen; if an
-`Authorization` header is present, the token is validated opportunistically. In
-`local` mode, `authenticated` is always `false` and `claims` is `null`.
-`effectiveAccess` is `true` when the current request can use the dashboard
-without another login, including trusted localhost requests in `hybrid` mode.
+SSO/SAML compatibility routes return `501` when not configured. See
+[Authentication](/auth/) for credential lifecycle and permission details.
 
-**Response**
+## Configuration and agent identity
 
-```json
-{
-  "authenticated": true,
-  "claims": {
-    "sub": "token:operator",
-    "role": "operator",
-    "scope": { "project": "my-project" },
-    "iat": 1740000000,
-    "exp": 1740086400
-  },
-  "trustedLocal": false,
-  "effectiveAccess": true,
-  "mode": "team",
-  "providers": [
-    { "id": "password", "type": "password", "enabled": true, "username": "admin" },
-    { "id": "sso", "type": "oidc", "enabled": false, "startPath": "/api/auth/sso/start" },
-    { "id": "saml", "type": "saml", "enabled": false, "startPath": "/api/auth/saml/start" }
-  ]
-}
-```
+- `GET /api/config` lists `.md` and `.yaml` files in the daemon's resolved agent
+  directory, including name, content, and byte size.
+- `POST /api/config` requires admin permission for every write. The JSON body is
+  `{ "file": "...", "content": "..." }`; filenames cannot contain `/` or `..`
+  and must end in `.md` or `.yaml`. The content limit is 1 MiB; oversized
+  requests return `413`, invalid bodies/names/types `400`.
+- `agent.yaml` and `config.yaml` are guarded: they require admin permission and
+  must pass pipeline configuration validation before writing. A failed
+  validation does not write the file.
 
-### GET /api/auth/methods
-
-Open route returning configured dashboard login providers. Password login is
-enabled when `SIGNET_ADMIN_PASSWORD`, `SIGNET_ADMIN_PASSWORD_HASH`, or
-`auth.login.password.passwordHash` is set. SSO and SAML entries are exposed as
-reserved provider paths for future implementation.
-
-### POST /api/auth/login
-
-Open route that exchanges the configured admin username and password for an
-admin session bearer token. Rate-limited to 5 attempts/minute.
-
-**Request body**
-
-```json
-{ "username": "admin", "password": "..." }
-```
-
-**Response**
-
-```json
-{
-  "token": "<token>",
-  "expiresAt": "2026-02-22T10:00:00.000Z",
-  "role": "admin",
-  "username": "admin"
-}
-```
-
-Returns `401` for invalid credentials, `429` when rate-limited, and `503` when
-password login has not been configured.
-
-### GET /api/auth/sso/start
-### GET /api/auth/sso/callback
-### GET /api/auth/saml/start
-### POST /api/auth/saml/acs
-
-Open reserved provider paths. They currently return `501` until SSO/SAML
-providers are implemented.
-
-### POST /api/auth/token
-
-Create a signed JWT. Requires `admin` permission. Rate-limited to 10
-requests/min.
-
-**Request body**
-
-```json
-{
-  "role": "agent",
-  "scope": { "project": "my-project", "agent": "claude", "user": "nicholai" },
-  "ttlSeconds": 86400
-}
-```
-
-`role` is required and must be one of `admin`, `operator`, `agent`,
-`readonly`. `scope` is optional — an empty object creates an unscoped token.
-`ttlSeconds` defaults to the value in `authConfig.defaultTokenTtlSeconds`.
-
-**Response**
-
-```json
-{
-  "token": "<jwt>",
-  "expiresAt": "2026-02-22T10:00:00.000Z"
-}
-```
-
-Returns `400` if `role` is invalid or auth secret is unavailable (local
-mode). Returns `400` if the request body is missing or malformed.
-
-### GET /api/auth/api-keys
-
-List named daemon API keys. Requires `admin` permission. The response never
-includes raw `sig_sk_...` key values; raw keys are only returned once at
-creation time.
-
-**Response**
-
-```json
-{
-  "apiKeys": [
-    {
-      "id": "key_abc123",
-      "prefix": "1b363ad385e1",
-      "name": "work laptop pi",
-      "role": "agent",
-      "scope": { "agent": "pi-work-laptop" },
-      "permissions": ["recall", "remember", "documents"],
-      "connector": "pi",
-      "harness": "pi",
-      "agentId": "pi-work-laptop",
-      "allowedProjects": [],
-      "createdAt": "2026-06-11T04:02:17.922Z",
-      "lastUsedAt": null,
-      "revokedAt": null,
-      "expiresAt": null
-    }
-  ]
-}
-```
-
-### POST /api/auth/api-keys
-
-Create a named API key for remote connectors or other daemon clients. Requires
-`admin` permission. The raw `key` is returned once in this response and is
-stored hashed at rest.
-
-**Request body**
-
-```json
-{
-  "name": "work laptop pi",
-  "connector": "pi",
-  "role": "agent",
-  "agentId": "pi-work-laptop",
-  "scope": { "agent": "pi-work-laptop" },
-  "allowedProjects": [],
-  "expiresAt": null
-}
-```
-
-`name` is required. `role` defaults to `agent` and must be one of `admin`,
-`operator`, `agent`, or `readonly` when provided. `connector`, `harness`,
-`agentId`, `allowedProjects`, `scope`, `permissions`, and `expiresAt` are
-optional. `agentId` is connector metadata; API callers should also set
-`scope: { "agent": "..." }` when scope-guarded API surfaces should be limited
-to that agent. For connector keys, `scope.agent` should usually match
-`agentId`. The Signet CLI does this automatically when you run
-`signet api-key create --agent-id <id>`. Connector keys default to the
-connector permission set: `recall`, `remember`, and `documents`.
-
-**Response**
-
-```json
-{
-  "apiKey": {
-    "id": "key_abc123",
-    "prefix": "1b363ad385e1",
-    "name": "work laptop pi",
-    "role": "agent",
-    "scope": { "agent": "pi-work-laptop" },
-    "permissions": ["recall", "remember", "documents"],
-    "connector": "pi",
-    "harness": "pi",
-    "agentId": "pi-work-laptop",
-    "allowedProjects": [],
-    "createdAt": "2026-06-11T04:02:17.922Z",
-    "lastUsedAt": null,
-    "revokedAt": null,
-    "expiresAt": null,
-    "key": "sig_sk_..."
-  }
-}
-```
-
-Returns `400` if the request body is missing or malformed, `name` is empty,
-`role` is invalid, or `expiresAt` is not a valid ISO timestamp.
-
-### DELETE /api/auth/api-keys/:id
-
-Revoke an API key by id or prefix. Requires `admin` permission. Revocation is
-idempotent for an existing key: already-revoked keys are returned with their
-original `revokedAt` timestamp.
-
-**Response**
-
-```json
-{
-  "apiKey": {
-    "id": "key_abc123",
-    "prefix": "1b363ad385e1",
-    "name": "work laptop pi",
-    "role": "agent",
-    "scope": { "agent": "pi-work-laptop" },
-    "permissions": ["recall", "remember", "documents"],
-    "connector": "pi",
-    "harness": "pi",
-    "agentId": "pi-work-laptop",
-    "allowedProjects": [],
-    "createdAt": "2026-06-11T04:02:17.922Z",
-    "lastUsedAt": null,
-    "revokedAt": "2026-06-11T05:00:00.000Z",
-    "expiresAt": null
-  }
-}
-```
-
-Returns `404` if the id or prefix does not match an API key.
-
-
-## Config
-
-### GET /api/config
-
-Returns all `.md` and `.yaml` files from the agents directory (`$SIGNET_WORKSPACE/`),
-sorted by priority: `agent.yaml`, `AGENTS.md`, `SOUL.md`, `IDENTITY.md`,
-`USER.md`, then alphabetically.
-
-**Response**
-
-```json
-{
-  "files": [
-    { "name": "agent.yaml", "content": "...", "size": 1024 },
-    { "name": "AGENTS.md", "content": "...", "size": 4096 }
-  ]
-}
-```
-
-### POST /api/config
-
-Write a config file. File name must end in `.md` or `.yaml` and must not
-contain path separators.
-
-**Request body**
-
-```json
-{
-  "file": "SOUL.md",
-  "content": "# Soul\n..."
-}
-```
-
-**Response**
-
-```json
-{
-  "success": true
-}
-```
-
-Returns `400` for invalid file names, path traversal attempts, or wrong file
-or payload types. Returns `403` when saving a guarded config file (`agent.yaml`,
-`AGENT.yaml`, `config.yaml`) without `admin` permission in team or hybrid auth
-mode.
-
-Provider selection is configured through the canonical `inference` routing
-block. Retired `memory.pipelineV2` provider/model/endpoint fields are rejected
-by the daemon loader; use the migration guidance on the [upgrading page](/upgrading/).
-
-
-## Identity
-
-### GET /api/identity
-
-Parses `IDENTITY.md` and returns the structured fields.
-
-**Response**
-
-```json
-{
-  "name": "Aria",
-  "creature": "fox",
-  "vibe": "calm and curious"
-}
-```
-
-Returns defaults (`{ "name": "Unknown", "creature": "", "vibe": "" }`) if the
-file is missing or unreadable.
+The daemon resolves configuration and identity at its boundary; clients must
+not rely on local config-file fallbacks. Agent reads expose policy and resolved
+scope. Agent writes accept `isolated`, `shared`, or `group`; `group` requires a
+non-empty group name of at most 128 characters. `signet agent set` uses PATCH,
+while `signet agent info` is only a compatibility alias for `show`.

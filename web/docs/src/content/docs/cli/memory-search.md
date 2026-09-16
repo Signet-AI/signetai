@@ -45,7 +45,7 @@ Search memories using hybrid vector + keyword search.
 
 ```bash
 signet recall "user preferences"
-signet recall "release notes" --project /home/user/myapp
+signet recall "release notes" --project /path/to/project
 signet recall "deploy process" --limit 5 --type decision
 signet recall "auth" --tags backend --who claude-code --since 2026-01-01
 signet recall "deploy checklist" --keyword-query "deploy OR rollback" --min-score 0.8
@@ -125,5 +125,23 @@ Options:
 | `--project <project>` | Filter by project |
 | `-l, --limit <n>` | Max results (default: 10, max: 20) |
 | `--json` | Print the transcript search response as JSON |
+
+### Transcript limits
+
+The transcript-search `--limit` controls only the number of search results returned;
+it does not control transcript ingestion or recovery. The legacy `POST
+/api/sources/import` multipart route accepts up to 25 files per request, 25 MiB per file,
+and 100 MiB per upload batch. The durable `POST /api/sources/imports` route creates a
+job with up to 25 file entries and accepts up to 64 GiB per resumable file upload. Its
+`PATCH` chunks are limited to 1 MiB; this is a chunk limit, not a whole-file or batch
+limit. Each transcript record may be up to 16 MiB and each message up to 4 MiB, with at
+most 50,000 messages per record. The worker commits at most 25 records per internal
+batch and caps each canonical batch at 8 MiB; those worker bounds are separate from the
+route upload limits. See the [canonical durable transcript import API](/api/documents-sources/#durable-transcript-imports)
+for the route contract and upload workflow.
+
+Automatic recovery scans examine at most 50 MiB per discovered file, 50 files per scan,
+and 50,000 discovered files per scan. These recovery-scan bounds are separate from both
+search-result pagination and durable import limits.
 
 ---

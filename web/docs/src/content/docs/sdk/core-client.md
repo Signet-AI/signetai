@@ -1,74 +1,38 @@
 ---
 title: "Core client"
-description: "Use core memory operations, token auth, and queued secret execution."
+description: "The public SignetClient HTTP surface."
 ---
 
-## Construct a client
+Construct `SignetClient` with `daemonUrl`, `token`, `actor`, `actorType`, `timeoutMs`, and `retries`. Defaults are the resolved local daemon URL, 10 seconds, and two retries for idempotent requests. Mutations are not retried.
 
-```typescript
+```ts
 import { SignetClient } from "@signet/sdk";
-
-const client = new SignetClient({
-  daemonUrl: "http://localhost:3850",
-  token: process.env.SIGNET_TOKEN,
-  actor: "my-integration",
-  actorType: "service",
-});
+const client = new SignetClient({ daemonUrl: "http://localhost:3850", token: process.env.SIGNET_API_KEY });
+const saved = await client.remember("The project uses Bun", { type: "fact", mode: "sync" });
+const result = await client.recall("package manager", { limit: 5, minScore: 0.5 });
 ```
 
-The constructor defaults to `http://localhost:3850`, a 10-second request timeout, and two retries for GET requests. Mutation requests are not retried automatically.
+`createToken({ role, scope?, ttlSeconds? })` returns `{ token, expiresAt }`.
+The daemon's role-to-permission mapping is: `admin` → `remember`, `recall`,
+`modify`, `forget`, `recover`, `admin`, `documents`, `connectors`,
+`diagnostics`, `analytics`; `operator` → the same except `admin`; `agent` →
+`remember`, `recall`, `modify`, `forget`, `recover`, `documents`; and
+`readonly` → `recall`. See [Authentication](/auth/#roles-permissions-and-one-time-credentials/)
+for scope restrictions and permission narrowing. `scope` may contain
+`project`, `agent`, and `user`; matching request targets are required for
+scoped non-admin tokens. `whoami()` returns `{ authenticated, claims }`.
 
-## Memory lifecycle
-
-```typescript
-const remembered = await client.remember("The project uses Bun", {
-  type: "fact",
-  importance: 0.8,
-  tags: "tooling,project",
-  mode: "sync",
-});
-
-const recalled = await client.recall("package manager", {
-  limit: 5,
-  type: "fact",
-  agentId: "my-agent",
-  sessionKey: "session-123",
-});
-
-await client.modifyMemory(remembered.id, { content: "The project uses Bun for scripts", reason: "Clarified scope" });
+```ts
+const issued = await client.createToken({ role: "agent", scope: { project: "demo", agent: "writer" }, ttlSeconds: 3600 });
+const identity = await client.whoami();
 ```
 
-SDK method names are camelCase. The transport maps established wire aliases where required; pass the TypeScript shape shown above rather than copying raw endpoint field names.
+## Public groups
 
-## Token creation
+- Memory: `remember`, `recall`, `getMemory`, `listMemories`, `modifyMemory`, `forgetMemory`, `batchForget`, `batchModify`, `getHistory`, `recoverMemory`.
+- Documents: `createDocument`, `getDocument`, `listDocuments`, `getDocumentChunks`, `deleteDocument`.
+- Status/timeline: `health`, `status`, `diagnostics`, `getJob`, `getPipelineStatus`, `getTimeline`, `exportTimeline`, `getFeatures`, `getGreeting`, sessions, and checkpoints.
+- Hooks: `sessionStart`, `userPromptSubmit`, `sessionEnd`, `preCompaction`, `compactionComplete`, `hookRemember`, `hookRecall`, `requestSynthesis`.
+- Connectors: `listConnectors`, `getConnector`, `createConnector`, `syncConnector`, `resyncAllConnectors`, `fullSyncConnector`, `deleteConnector`, `getConnectorHealth`.
 
-`createToken` calls the admin-protected token endpoint. The daemon accepts the roles `admin`, `operator`, `agent`, and `readonly`.
-
-```typescript
-const issued = await client.createToken({
-  role: "readonly",
-  scope: { project: "my-project", agent: "reporter" },
-  ttlSeconds: 3600,
-});
-
-const caller = await client.whoami();
-```
-
-Keep issued tokens out of source control and logs. `reader` is not a valid role value.
-
-## Secret execution is asynchronous
-
-`execWithSecrets` queues a daemon-owned job. It returns a `SecretExecJob`, not process output. Poll `getSecretExecJob(job.id)` until the job reaches a terminal status, then read its redacted result fields.
-
-```typescript
-const job = await client.execWithSecrets("node ./sync.js", {
-  API_TOKEN: "SYNC_SERVICE_TOKEN",
-});
-
-const status = await client.getSecretExecJob(job.id);
-if (status.status === "completed") {
-  console.log(status.result?.stdout, status.result?.stderr, status.result?.code);
-}
-```
-
-Secret values are not returned by `listSecrets`, and execution output is redacted by the daemon. Do not put real tokens in examples or use a queued job as if it had already completed.
+Use exported camelCase options where defined; some batch/document wire fields remain snake_case. `createConnector` uses `settings`. Secret execution returns a job; poll it before reading redacted results. Privileged methods require daemon authorization; the SDK does not elevate callers.

@@ -18,23 +18,42 @@ The daemon and client surfaces use this same resolution order. Once a workspace 
 
 Workspace status is `fresh` for an unconfigured default, `ready` when the configuration and database are present, `missing` when a configured directory is absent, and `incomplete` when an established workspace is missing required state. Legacy installations without a dedicated workspace identity marker remain supported through the persisted workspace selection and existing configuration/database files.
 
-## Daemon and client variables
+## Public CLI and client variables
 
 | Variable | Used by | Meaning |
 |---|---|---|
 | `SIGNET_PATH` | CLI, connector/desktop resolver, daemon | Highest-precedence workspace path. |
 | `SIGNET_WORKSPACE` | CLI, connector/desktop resolver, daemon | Lower-precedence workspace alias. |
-| `SIGNET_PORT` | daemon and local clients | HTTP port. Default: `3850`. |
-| `SIGNET_HOST` | daemon and local clients | Explicit daemon host override. Without it, the daemon derives its host from `agent.yaml` network configuration. |
-| `SIGNET_BIND` | daemon | Explicit listen-address override. Without it, `network.mode: localhost` binds `127.0.0.1`; `network.mode: tailscale` binds `0.0.0.0`. |
+| `SIGNET_PORT` | local clients | HTTP port. Default: `3850`. |
+| `SIGNET_HOST` | local clients | Explicit daemon host override. |
 | `SIGNET_DAEMON_URL` | CLI and connector clients | Remote daemon origin. It takes precedence over the local host/port client URL. |
 | `SIGNET_API_KEY` | CLI and connector clients | Bearer credential for protected daemon calls. |
 | `SIGNET_TOKEN` | CLI and connector clients | Backwards-compatible bearer-credential alias. |
-| `SIGNET_LOG_FILE` | daemon | Explicit log file path. |
-| `SIGNET_LOG_DIR` | daemon | Daemon log-directory override. |
 | `SIGNET_BYPASS` | harness hooks | Skip hook processing for that process. |
 
+`SIGNET_BYPASS=1` is process-wide for that harness invocation. It skips
+automatic hooks, but is not daemon-wide and does not disable explicit commands
+or tools. For one session, use `signet session bypass <session-key>`; use
+`--off` to restore hooks or `--list` to inspect state.
+
 `SIGNET_ADMIN_PASSWORD`, `SIGNET_ADMIN_PASSWORD_HASH`, and `SIGNET_ADMIN_USERNAME` configure the optional dashboard password login. They are credential inputs, not general shell configuration; use a secret manager or service-environment mechanism and do not commit them. See [Authentication](/auth/).
+
+## Daemon service variables
+
+These variables belong to the daemon/service runtime, not the public CLI client
+contract. Set them only when operating the daemon service.
+
+| Variable | Meaning |
+|---|---|
+| `SIGNET_BIND` | Explicit daemon listen-address override. |
+| `SIGNET_LOG_FILE` | Explicit daemon log file path. |
+| `SIGNET_LOG_DIR` | Daemon log-directory override. |
+
+The daemon normally binds loopback. `SIGNET_BIND` is its listen address;
+`SIGNET_HOST` only overrides the client host. Setup's `--network-mode localhost`
+maps to loopback and `--network-mode tailscale` selects the configured Tailscale
+address. `SIGNET_DAEMON_URL` is the complete remote origin and takes precedence
+over host/port construction; a public bind is not an authentication substitute.
 
 ## Hook timeout variables
 

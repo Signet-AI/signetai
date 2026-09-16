@@ -1,4 +1,28 @@
-# Integration Tests
+# Tests
+
+## Discovery and scopes
+
+A bare root `bun test` uses Bun's normal default discovery; `bunfig.toml` does not define repository test roots. The repository's root `test` script is the deliberate workspace wrapper: `bun run test` builds, runs `scripts` and `tests` through `scripts/run-hermetic-tests.ts`, runs the package roots listed in `test:workspace`, and then runs the Codex plugin package tests.
+
+Use an explicit path or directory when you need a focused scope, for example:
+
+```bash
+bun test platform/daemon/src/pipeline/worker.test.ts
+bun test ./tests/integration/pipeline-llm.test.ts
+bun test ./tests/integration
+bun test integrations
+bun test scripts
+```
+
+The workspace wrapper names maintained package roots explicitly, including `integrations/`; it also covers `scripts/` and the explicit `tests/` root through the hermetic runner. Run package, integration, and reference suites explicitly when you need them:
+
+```bash
+bun test integrations
+bun test ./tests/integration
+bun test ./references/<harness-or-fixture-suite>
+```
+
+The `tests/` and untracked `references/` directories are not included by the workspace package list; explicit paths are required for these integration, reproduction, and harness-reference suites. The integration suites may require Ollama, a real daemon, a generated database, or other external services. Their individual runbooks below document prerequisites and expected behavior. Keep the default hermetic/workspace run for routine changes, and select explicit suites when the changed boundary requires them.
 
 ## LLM Pipeline Tests
 
@@ -19,9 +43,7 @@ stage: extraction, decision, summary, and contradiction detection.
 bun test ./tests/integration/pipeline-llm.test.ts
 ```
 
-Note: these tests are NOT discovered by the default `bun test` command
-because `bunfig.toml` scopes test discovery to `platform/, surfaces/, integrations/, libs/, dist/, and web/`. Run them
-with an explicit `./` path prefix.
+Note: these tests are not included in the default workspace test script. Run them with an explicit `./` path prefix.
 
 ## Issue Reproductions
 

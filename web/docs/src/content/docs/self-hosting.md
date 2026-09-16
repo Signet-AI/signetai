@@ -1,93 +1,66 @@
 ---
-title: "Self-Hosting"
-description: "Run Signet with the first-party Docker deployment and secure the daemon boundary."
+title: "Self-hosting"
+description: "Deploy Signet with a durable workspace, private network boundary, and health checks."
 ---
 
-Use the first-party Docker deployment when you need a persistent, self-hosted Signet daemon. It includes the daemon, Caddy reverse proxy, persistent volumes, health checks, and a team-auth bootstrap.
+Self-hosting means running the Signet daemon on infrastructure you control. Keep one daemon writer per workspace and persist the workspace volume.
 
-## Docker Compose quick start
+## Docker deployment
+
+From the repository root, configure the release environment and start the service:
 
 ```bash
 cd deploy/docker
 cp .env.example .env
-docker compose up -d --build
-```
-
-The stack stores the Signet workspace in the `signet_data` volume at `/data/agents` in the container and publishes Caddy on ports 80 and 443 by default. Open the health endpoint locally:
-
-```bash
-curl -fsS http://localhost/health
-```
-
-The supplied compose configuration binds the daemon inside the stack and Caddy is the published entry point. Do not publish port 3850 directly unless you have an explicit private-network design and matching authentication.
-
-## First admin credential
-
-The container entrypoint initializes `auth.mode: team` on first run when no configuration exists. Mint an initial admin token inside the running service:
-
-```bash
-docker compose exec signet \
-  bun /app/deploy/docker/scripts/create-token.mjs --role admin --sub bootstrap
-```
-
-The token is printed once. Store it in an approved secret manager, then create narrowly scoped keys or tokens for real clients. See [Authentication](/auth/) and [Remote Harness Connectors](/remote-connectors/).
-
-## Configure the proxy
-
-Set these values in `deploy/docker/.env` before production use:
-
-```text
-SIGNET_DOMAIN=signet.example.com
-SIGNET_IMAGE_TAG=latest
-SIGNET_HTTP_PORT=80
-SIGNET_HTTPS_PORT=443
-```
-
-Caddy terminates TLS for a real public domain. Keep `auth.mode: team` for a public or shared deployment. `hybrid` is for trusted local workflows and should not be used as the only boundary behind a reverse proxy.
-
-Provider credentials are optional compose environment values. Prefer the Signet secret store and `$secret:NAME` configuration references for durable operator configuration; do not commit a populated `.env` file.
-
-## Health and operations
-
-```bash
-docker compose ps
-docker compose logs -f signet
-curl -fsS http://localhost/health
-```
-
-For deeper readiness and diagnostics, authenticate as needed and use the daemon endpoints documented in [Daemon](/daemon/) and [Diagnostics](/diagnostics/).
-
-## Backup and upgrade
-
-Back up the named workspace volume before a major version change. The Docker deployment keeps configuration, the database, and daemon state under `/data/agents`.
-
-```bash
-# Pull the configured image tag and recreate services
-docker compose pull
 docker compose up -d
 ```
 
-Follow the release-specific checks in [Upgrading](/upgrading/) and confirm readiness after restart. Do not discard the volume to work around a migration error.
+`.env` supplies Docker and provider inputs such as the public domain and Caddy's host-published ports. It does not configure Signet's authentication mode. Configure the persisted workspace and auth mode in `agent.yaml` on the `signet_data` volume (`/data/agents/agent.yaml` in the container):
 
-## Host-managed deployments
-
-A host service manager can run the daemon directly, but it must provide a stable runtime, one writer per workspace, explicit `SIGNET_PATH`, explicit bind behavior, and restart-safe health checks. The CLI lifecycle commands are:
-
-```bash
-signet daemon start
-signet daemon stop
-signet daemon restart
-signet daemon status --json
+```yaml
+auth:
+  mode: team
 ```
 
-Use a service supervisor you already operate rather than copying an outdated unit file. Verify `/health/live` and `/health/ready` after every deployment.
+The Docker entrypoint creates this file with `team` mode on a new volume. Keep `agent.yaml`, `.daemon/`, and `.secrets/` on the same persistent volume, and do not commit a populated `.env` file or any credentials.
 
-## Security checklist
+The daemon listens on internal container port `3850` and is private to the Compose network. Caddy is the only published service boundary; `SIGNET_HTTP_PORT` and `SIGNET_HTTPS_PORT` are host ports for Caddy, not daemon ports. Verify the proxy boundary and the daemon container health separately:
 
-- Bind to loopback by default. Use `network.mode: tailscale` or an explicit `SIGNET_BIND` only for a trusted network design.
-- Use `auth.mode: team` for shared, proxied, or public access.
-- Use one named API key per connector or automation client, then revoke it when the client is retired.
-- Keep the workspace volume, `.daemon/`, and `.secrets/` private and backed up.
-- Do not put raw tokens, passwords, or provider keys in source control, issue trackers, or screenshots.
+```bash
+# Published Caddy boundary
+curl -fsS "http://127.0.0.1:${SIGNET_HTTP_PORT:-80}/health/ready"
 
-Related: [Daemon](/daemon/), [Authentication](/auth/), [Remote Harness Connectors](/remote-connectors/), [Diagnostics](/diagnostics/).
+# Internal daemon container health (the daemon listens on container port 3850)
+test "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q signet)")" = healthy
+```
+
+Before allowing remote access, verify both the persisted setting and the running daemon's mode, then create credentials as described in [Authentication](/auth/):
+
+```bash
+docker compose exec signet sh -c "grep -A1 '^auth:' /data/agents/agent.yaml"
+# Auth discovery is intentionally unauthenticated and reports the running mode.
+curl -fsS "http://127.0.0.1:${SIGNET_HTTP_PORT:-80}/api/auth/methods"
+```
+
+Use `team` or `hybrid` for remote clients. Keep `local` mode on a trusted local-only deployment.
+
+## Network and TLS
+
+Bind localhost for a single-host deployment. For remote access, use a private network such as Tailscale or WireGuard, or terminate HTTPS at a reverse proxy. Keep Caddy's published ports restricted to the intended network.
+
+## Updates and recovery
+
+Apply release-specific migration guidance from [Upgrading](/upgrading/), then restart and verify both checks again:
+
+```bash
+docker compose pull
+docker compose up -d
+curl -fsS "http://127.0.0.1:${SIGNET_HTTP_PORT:-80}/health/ready"
+test "$(docker inspect --format '{{.State.Health.Status}}' "$(docker compose ps -q signet)")" = healthy
+```
+
+Keep the volume when a migration or readiness check reports an error. Use [Diagnostics](/diagnostics/) to capture evidence before repair. A service manager may supervise the daemon directly, but it must provide a stable runtime, explicit workspace and bind settings, one writer, and restart-safe health checks.
+
+## Security boundary
+
+Keep the workspace volume, runtime state, secret store, auth material, and logs private. Use one scoped API key per remote connector and revoke keys when a machine or client is retired. See [Authentication](/auth/), [Secrets](/secrets/), and [Remote Harness Connectors](/remote-connectors/).

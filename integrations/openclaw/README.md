@@ -6,12 +6,13 @@ Signet connector for [OpenClaw](https://github.com/openclaw/openclaw) (and its e
 
 Integrates Signet's memory system with OpenClaw's hook and workspace configuration.
 
-- Patches OpenClaw config to set `agents.defaults.workspace` to `~/.agents`
-- Enables the `signet-memory` internal hook entry
+- Patches OpenClaw config to set `agents.defaults.workspace` to `$SIGNET_WORKSPACE`
+- Selects the `signet-memory-openclaw` runtime plugin and disables the legacy
+  `signet-memory` internal hook entry to prevent duplicate memory paths
 - Installs hook handler files for `/remember`, `/recall`, and `/context` commands
 - Supports JSON5 configuration parsing (OpenClaw uses `.json5` / JSONC config files)
 
-Unlike other connectors, OpenClaw reads `~/.agents/AGENTS.md` directly, so no generated output file is needed.
+Unlike connectors that copy identity files, OpenClaw reads `AGENTS.md` directly from the configured `$SIGNET_WORKSPACE`; no generated copy is needed.
 
 ## Installation
 
@@ -29,9 +30,10 @@ The connector package exposes programmatic cleanup that removes hook handlers an
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-openclaw` |
+| Package | `@signet/connector-openclaw` |
 | License | Apache-2.0 |
 | Extra dependency | `json5` (for JSONC config parsing) |
+| Runtime memory package | `@signetai/signet-memory-openclaw` |
 
 ## Architecture
 

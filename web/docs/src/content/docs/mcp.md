@@ -1,787 +1,138 @@
 ---
-title: "MCP Server"
-description: "Model Context Protocol integration for native tool access."
+title: "MCP server"
+description: "Developer reference for Signet's stateless Model Context Protocol server."
 ---
 
-The Signet [Daemon](/daemon/) exposes an MCP (Model Context Protocol) server that gives
-AI [Harnesses](/harnesses/) native tool access to [Memory](/memory/) operations. Instead of relying
-on shell commands or skill invocations, harnesses call Signet tools directly
-through MCP's standardized interface.
+Signet is a local-first memory and context layer for AI agents. Its MCP server exposes the daemon's current memory, ontology, session, secret, and code operations as on-demand tools.
 
+Hooks and MCP are complementary:
 
-## Overview
+| Surface | Ownership | Use |
+|---|---|---|
+| Hooks | Harness lifecycle | Start/end, prompt, compaction, and notification delivery |
+| MCP | Agent initiated | Search, inspect, write, coordinate, and run bounded operations |
 
-MCP complements Signet's existing hook-based integration:
+## Setup and transport
 
-- **[Hooks](/hooks/)** handle lifecycle events (session start/end, prompt submission,
-  compaction). They run automatically.
-- **MCP tools** provide on-demand operations (search, store, modify, forget).
-  The agent invokes them when needed.
+Start the daemon before using either transport:
 
-Both systems can be active simultaneously — they serve different purposes and
-don't conflict.
-
-Remote MCP endpoints expose tools only. If a harness also needs automatic
-identity, session-start context, prompt-time recall, or session-end
-extraction, install that harness's Signet hooks as well. For Codex, run the
-connector with `SIGNET_DAEMON_URL` set to the remote daemon URL so the
-generated hooks and `[mcp_servers.signet]` block target the same instance:
-
-```bash
-SIGNET_DAEMON_URL=http://192.168.0.60:3850 signet setup --harness codex
+```sh
+signet daemon start
 ```
 
-`SIGNET_DAEMON_URL` must point at the daemon origin only. Signet rejects
-paths, query strings, fragments, credentials, and non-HTTP protocols so a
-remote MCP registration cannot silently fall back to localhost or bake
-unsafe shell syntax into generated lifecycle hooks.
+The daemon mounts one stateless Streamable HTTP endpoint at `/mcp` for `POST`, `GET`, and `DELETE`. `GET` is the server-notification stream and `DELETE` terminates the transport; each request creates a fresh server and transport. The `signet-mcp` executable uses the MCP stdio transport and calls the daemon over HTTP.
 
-
-## When to Use MCP vs Hooks
-
-| Scenario | Use |
-|----------|-----|
-| Session start/end lifecycle | Hooks |
-| Automatic memory extraction after each prompt | Hooks |
-| Agent wants to search memories mid-conversation | MCP (`signet_recall`, compatibility `memory_search`) |
-| Agent wants to search source-backed docs/artifacts | MCP (`signet_source_search`) |
-| Agent needs to audit a claim's versions and authorized evidence | MCP (`signet_explain_claim`) |
-| Sub-agent needs to inspect its parent session | MCP (`signet_session_search`, compatibility `session_search`) |
-| Codex agent wants to save a durable native-memory note | MCP (`signet_save_note`) |
-| Agent wants to store a specific Signet memory row | MCP (`memory_store`) |
-| Agent needs to run a command with secrets | MCP (`secret_exec`) |
-| Compaction boundary handling | Hooks |
-| Agent-initiated memory edits or deletions | MCP (`memory_modify`, `memory_forget`) |
-
-**Rule of thumb:** hooks are for automatic, lifecycle-driven events. MCP is
-for agent-initiated, on-demand operations.
-
-
-## Tool Reference
-
-All tools are defined in `platform/daemon/src/mcp/tools.ts`. Tool handlers
-call the daemon's HTTP API internally and use the shared recall/remember
-surface helpers from `@signet/core` so MCP, CLI, and harness integrations do
-not drift into separate request shapes or result formatting.
-
-### memory_search
-
-Hybrid vector + keyword search over stored memories. Returns results ranked
-by combined BM25 + vector similarity score with optional graph boost and
-reranking. Transcript search is intentionally separate; use `session_search`
-when you need session transcript evidence.
-
-**Parameters:**
-
-Primary controls:
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `query` | string | yes | Search query text |
-| `limit` | number | no | Max results to return (default 10) |
-| `project` | string | no | Optional project path filter |
-
-Common refinements:
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `type` | string | no | Filter by memory type (e.g. `"preference"`, `"fact"`) |
-| `tags` | string | no | Filter by tags (comma-separated) |
-| `who` | string | no | Filter by author |
-| `since` | string | no | Only include memories created after this date |
-| `until` | string | no | Only include memories created before this date |
-
-Context and temporal controls:
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `time` | object | no | Temporal range with optional `start`, `end`, `facets` (`captured`, `session`, `source`, `observed`, `occurred`, `valid`), and mode (`auto`, `timeline`, or `filter`) |
-| `session_key` | string | no | Session key used for per-context recall deduplication |
-| `agent_id` | string | no | Agent scope for the recall request |
-| `include_recalled` | boolean | no | Include rows already recalled in this context |
-| `scope` | `"global" \| "agent" \| "session"` | no | Constrain recall to that memory scope |
-
-Advanced controls:
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `keyword_query` | string | no | Override the keyword/FTS query used for recall |
-| `pinned` | boolean | no | Only return pinned memories |
-| `importance_min` | number | no | Minimum memory importance threshold |
-| `min_score` | number | no | Deprecated compatibility alias for `importance_min` |
-| `score_min` | number | no | Minimum recall score threshold, applied at the daemon response boundary and checked defensively by the MCP adapter |
-| `aggregate` | boolean | no | Synthesize one aggregate answer from bounded recall evidence |
-| `aggregate_budget` | `"small" \| "medium" \| "large"` | no | Aggregate recall budget; defaults to `small` |
-| `save_aggregate` | boolean | no | Save the aggregate answer as a normal memory; defaults to true when aggregate mode is enabled and requires `remember` permission |
-
-**Returns:** A formatted recall brief with primary matches, supporting
-context, and no-hit handling. The tool still reads from
-`POST /api/memory/recall` under the hood.
-
-**Example:**
-
-```json
-{
-  "query": "user prefers dark mode",
-  "project": "/home/user/myapp",
-  "limit": 5,
-  "type": "preference",
-  "score_min": 0.8,
-  "aggregate": true,
-  "aggregate_budget": "small"
-}
-```
-
-**Daemon endpoint:** `POST /api/memory/recall`
-
-### memory_store
-
-Save a new memory as immutable episodic evidence. Raw content remains
-inspectable through authorized list/get surfaces, while only clean content is
-eligible for ordinary recall/search and Dreaming. It is not written directly
-into the knowledge graph — Dreaming derives semantic state from episodic
-evidence. A `structured` payload, if supplied, is retained alongside the
-content as evidence but is not applied to the graph from this tool. Tags,
-hints, and transcripts are forwarded as request metadata.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `content` | string | yes | Memory content to save |
-| `type` | string | no | Memory type (`fact`, `preference`, `decision`, etc.) |
-| `importance` | number | no | Importance score 0–1 |
-| `tags` | string | no | Comma-separated tags for categorization |
-| `pinned` | boolean | no | Pin this memory so it bypasses decay |
-| `hints` | string[] | yes | At least one non-empty prospective recall hint or alternate phrasing |
-| `transcript` | string | no | Raw source text to preserve alongside the extracted memory |
-| `structured` | object | no | Pre-extracted entity/aspect/attribute data retained as episodic evidence alongside the content; not applied directly to the knowledge graph from this tool |
-| `reviewAfter` | string | no | ISO timestamp after which Dreaming should surface the memory for temporal review |
-
-**Returns:** The created memory object with its assigned ID.
-
-**Example:**
-
-```json
-{
-  "content": "User prefers Bun over npm for package management",
-  "importance": 0.8,
-  "tags": "preference,tooling",
-  "hints": ["package manager preference", "Bun versus npm"]
-}
-```
-
-**Daemon endpoint:** `POST /api/memory/remember`
-
-### memory_get
-
-Retrieve a single memory by its ID.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | yes | Memory ID to retrieve |
-
-**Returns:** Full memory object including content, type, importance, tags,
-created/updated timestamps, and version history.
-
-**Example:**
-
-```json
-{
-  "id": "a1b2c3d4-..."
-}
-```
-
-**Daemon endpoint:** `GET /api/memory/:id`
-
-### memory_list
-
-List memories with optional pagination and type filtering.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `limit` | number | no | Max results (default 100) |
-| `offset` | number | no | Pagination offset |
-| `type` | string | no | Filter by memory type |
-
-**Returns:** Array of memory objects.
-
-**Example:**
-
-```json
-{
-  "limit": 20,
-  "offset": 0,
-  "type": "decision"
-}
-```
-
-**Daemon endpoint:** `GET /api/memories`
-
-### memory_modify
-
-Edit an existing memory. Requires a reason for the edit (used for version
-history tracking).
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | yes | Memory ID to modify |
-| `reason` | string | yes | Why this edit is being made |
-| `content` | string | no | New content |
-| `type` | string | no | New type |
-| `importance` | number | no | New importance |
-| `tags` | string | no | New tags (comma-separated) |
-
-**Returns:** Updated memory object.
-
-**Example:**
-
-```json
-{
-  "id": "a1b2c3d4-...",
-  "content": "User prefers Bun for all JS projects",
-  "reason": "Updated to reflect broader preference"
-}
-```
-
-**Daemon endpoint:** `PATCH /api/memory/:id`
-
-### memory_forget
-
-Soft-delete a memory. The memory is not physically removed — it's marked
-as forgotten with a reason for auditability.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `id` | string | yes | Memory ID to forget |
-| `reason` | string | yes | Why this memory should be forgotten |
-
-**Returns:** Confirmation of deletion.
-
-**Example:**
-
-```json
-{
-  "id": "a1b2c3d4-...",
-  "reason": "User corrected this preference"
-}
-```
-
-**Daemon endpoint:** `DELETE /api/memory/:id`
-
-### memory_feedback
-
-Rate how relevant injected memories were to the current conversation.
-Scores update `session_memories.relevance_score` immediately, feeding the
-predictor scorer's training pipeline and the aspect feedback loop.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `session_key` | string | yes | Current session key |
-| `ratings` | object | yes | Map of memory ID to relevance score (−1 to 1) |
-
-Score interpretation: `1` = directly helpful, `0` = unused/neutral,
-`−1` = harmful or misleading.
-
-**Returns:** Object with `ok: true`, `recorded`, `accepted`, `rejected`,
-and `propagated` counts.
-
-`recorded` is the number of ratings submitted. `accepted` is the subset
-whose memory IDs were actually recorded for the given session and agent.
-`propagated` is the subset that also produced path-based graph updates.
-
-**Example:**
-
-```json
-{
-  "session_key": "abc123",
-  "ratings": {
-    "a1b2c3d4-e5f6-...": 0.9,
-    "b2c3d4e5-f6a7-...": 0.0,
-    "c3d4e5f6-a7b8-...": -0.5
-  }
-}
-```
-
-**Daemon endpoint:** `POST /api/memory/feedback`
-
-**Note:** Prefer this tool over embedding feedback as raw JSON text. Both
-are supported for backward compatibility, but the MCP tool is recorded
-immediately on the current turn.
-
-### signet_explain_claim
-
-Return an authorized, bounded explanation of one ontology claim. The tool
-joins current and historical claim versions, competing values, contradictory
-epistemic assertions, exact source spans, premise integrity, authorization
-decisions, and reverse derived-memory lineage through the daemon's canonical
-HTTP operation.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `entity` | string | yes | Entity/object name |
-| `aspect` | string | yes | Aspect/room name |
-| `group` | string | yes | Group/dresser key |
-| `claim` | string | yes | Claim/drawer key |
-| `kind` | `attribute \| constraint` | no | Restrict the claim kind |
-| `version_limit` | integer | no | 1–50, default 20 |
-| `premise_limit` | integer | no | 1–100, default 50 |
-| `reverse_limit` | integer | no | 1–100, default 50 |
-| `max_depth` | integer | no | 0–3, default 3 |
-| `session_key` | string | no | Fail closed if a premise crosses this session |
-| `agent_id` | string | no | Agent scope, default `default` |
-
-Fabricated or mismatched source references return an error instead of
-presenting a quote as evidence. Cross-agent, project, and session violations
-fail closed. Deleted or stale evidence is reported as invalidated, and the
-response's `integrity.status` must be checked before treating a claim as
-verified current truth.
-
-**Daemon endpoint:** `GET /api/ontology/claims/explain`
-
-### session_search
-
-Search active or completed session transcripts. This is the pull side of
-sub-agent context continuity: session-start injects a compact parent context
-block when Signet can infer the parent, while `session_search` lets the child
-query the parent transcript on demand.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `query` | string | yes | Transcript search query |
-| `session_key` | string | no | Specific transcript session key to search |
-| `current_session_key` | string | no | Current session key; OpenClaw lineage can resolve this to the parent |
-| `agent_id` | string | no | Agent scope (default `default`) |
-| `project` | string | no | Optional project path filter |
-| `limit` | number | no | Max hits to return (default 10, max 20) |
-
-**Returns:** Object with `query`, `hits`, and `count`. Each hit includes
-`sessionKey`, `project`, `updatedAt`, `excerpt`, and `rank`.
-
-**Example:**
-
-```json
-{
-  "query": "trunk ports",
-  "current_session_key": "agent:nicholai:subagent:abc123",
-  "agent_id": "nicholai",
-  "limit": 5
-}
-```
-
-**Daemon endpoint:** `POST /api/sessions/search`
-
-### agent_peers
-
-List currently active peer sessions for cross-agent coordination.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `agent_id` | string | no | Current agent id (default `default`) |
-| `session_key` | string | no | Current session key (used to exclude self session) |
-| `include_self` | boolean | no | Include this agent's sessions (default `false`) |
-| `project` | string | no | Optional project filter |
-| `limit` | number | no | Max sessions to return |
-
-**Returns:** Object with `sessions` array and `count`.
-
-**Daemon endpoint:** `GET /api/cross-agent/presence`
-
-### agent_message_send
-
-Send a message to another agent/session or broadcast to all active peers.
-Supports local daemon delivery and optional ACP relay.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `content` | string | yes | Message body |
-| `from_agent_id` | string | no | Sender agent id |
-| `from_session_key` | string | no | Sender session key |
-| `to_agent_id` | string | no | Target agent id |
-| `to_session_key` | string | no | Active target session key; use `to_agent_id` for durable delivery when the session is offline |
-| `broadcast` | boolean | no | Broadcast to all sessions |
-| `type` | enum | no | `assist_request`, `decision_update`, `info`, `question` |
-| `via` | enum | no | `local` (default) or `acp` |
-| `acp_base_url` | string | no | ACP server URL (required if `via=acp`) |
-| `acp_target_agent_name` | string | no | ACP target agent name (required if `via=acp`) |
-| `acp_timeout_ms` | number | no | ACP relay timeout in milliseconds (used when `via=acp`) |
-
-**Returns:** Stored message object including delivery status. The durable inbox is capped at 10,000 live rows; when full, the endpoint returns `429` rather than evicting unread messages. Expired rows are pruned before each write.
-
-**Daemon endpoint:** `POST /api/cross-agent/messages`
-
-ACP responses include `deliveryState`: `pending`, `in_flight`, `indeterminate`,
-`delivered`, or `failed`. `indeterminate` means the remote outcome is unknown
-after a transport failure, 5xx response, or crash. Signet does not resend
-automatically; use `POST /api/cross-agent/messages/:messageId/retry` or the SDK
-`retryAgentMessage` method for the bounded retry. There are three total attempts
-(initial send plus two retries); after that, retry returns `409` and the row
-remains indeterminate for manual review. Retries reuse the same idempotency key.
-
-### agent_message_inbox
-
-Read recent inbound cross-agent messages for an agent/session.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `agent_id` | string | no | Recipient agent id (default `default`) |
-| `session_key` | string | no | Recipient session key |
-| `since` | string | no | ISO timestamp lower bound |
-| `limit` | number | no | Max messages to return (MCP cap 25) |
-| `offset` | number | no | Pagination offset |
-| `unread_only` | boolean | no | Return only messages not yet acknowledged by this agent |
-| `include_sent` | boolean | no | Include messages sent by this agent |
-| `include_broadcast` | boolean | no | Include broadcast messages |
-
-**Returns:** Object with bounded `items`, `count`, `total`, `unreadCount`, `limit`, `offset`, and `hasMore`. Items include `acknowledgedAt` when read.
-
-**Daemon endpoint:** `GET /api/cross-agent/messages`
-
-### agent_message_ack
-
-Mark one visible message as processed for the receiving agent. Acknowledgement is idempotent and agent-scoped; another agent cannot acknowledge a direct message it cannot read.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `message_id` | string | yes | Stable message ID from hook injection or inbox |
-| `agent_id` | string | no | Recipient agent ID (default `default`) |
-| `session_key` | string | no | Active recipient session key |
-
-**Returns:** `messageId`, `agentId`, `acknowledgedAt`, and `alreadyAcknowledged`.
-
-**Daemon endpoint:** `POST /api/cross-agent/messages/:messageId/ack`
-
-
-### session_bypass
-
-Toggle per-session hook bypass. When enabled, all hook endpoints for the
-target session return empty no-op responses with `bypassed: true`. MCP tools
-(memory_search, memory_store, etc.) continue to work normally — only automatic
-hooks are silenced.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `session_key` | string | yes | Session key to toggle bypass for, raw or `session:<uuid>` |
-| `enabled` | boolean | yes | `true` to enable bypass, `false` to disable |
-
-**Returns:** Object with `key` and `bypassed` fields confirming the new state.
-
-**Example:**
-
-```json
-{
-  "session_key": "session-uuid",
-  "enabled": true
-}
-```
-
-**Daemon endpoint:** `POST /api/sessions/:key/bypass`
-
-### secret_list
-
-List available secret names. This value-safe tool is owned by the
-`signet.secrets` core plugin. It returns names only, raw secret values
-are never exposed to agents.
-
-**Parameters:** None.
-
-**Returns:** Object with a `secrets` array of string names.
-
-**Example:**
-
-```json
-{}
-```
-
-**Daemon endpoint:** `GET /api/secrets`
-
-### secret_exec
-
-Queue a shell command with secrets injected as environment variables. Output
-is automatically redacted, secret values never appear in results. Bare
-secret names resolve through the active Signet secrets provider: local by
-default, or Bitwarden first when Bitwarden is active. Use `local://NAME` to
-force the local encrypted store, `bw://...` to reference a Bitwarden item
-explicitly, or `op://...` for 1Password compatibility references.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `command` | string | yes | Shell command to queue |
-| `secrets` | object | yes | Map of env var name to secret reference (Signet name, `bw://...`, or `op://...`) |
-| `timeoutSeconds` | number | no | Max subprocess runtime for the queued job; defaults to 300 seconds, max 1800 |
-
-**Returns:** A queued secret exec job object with `id`, `status`, and `timeoutMs`. Poll with `secret_exec_status` for redacted `stdout`, `stderr`, and `code` after completion. Secret values in output are replaced with `[REDACTED]`.
-
-**Example:**
-
-```json
-{
-  "command": "node ./sync.js",
-  "secrets": {
-    "SYNC_SERVICE_TOKEN": "SYNC_SERVICE_TOKEN"
-  }
-}
-```
-
-**Daemon endpoint:** `POST /api/secrets/exec` (always queued; 5 minute default job timeout)
-
-### secret_exec_status
-
-Poll a queued `secret_exec` job and retrieve redacted output when it finishes.
-
-**Parameters:**
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `jobId` | string | yes | Job id returned by `secret_exec` |
-
-**Returns:** The secret exec job status. Completed jobs include redacted `stdout`, `stderr`, `code`, and `timedOut` when applicable.
-
-**Daemon endpoint:** `GET /api/secrets/exec/:jobId`
-
-### Optional GraphIQ Code Tools
-
-The MCP server registers generic GraphIQ code retrieval tools as stable tool
-names. Each call is runtime-gated by the optional `signet.graphiq` plugin state
-and the active indexed project. Run `signet index <path>` to index a project
-and make it active. Re-running the command for another path moves the active
-GraphIQ context to that project.
-
-GraphIQ stores its index at `<project>/.graphiq/`. Signet stores only plugin
-state and the active project pointer, so GraphIQ code indexes remain outside
-the main Signet memory architecture.
-
-| Tool | Purpose |
-|------|---------|
-| `signet_code_search` | Search the active indexed project for symbols and implementation context |
-| `signet_code_context` | Read source and structural neighborhood for a symbol |
-| `signet_code_blast` | Analyze forward/backward impact radius for a symbol |
-| `signet_code_status` | Show GraphIQ status for the active project |
-| `signet_code_doctor` | Diagnose GraphIQ artifact health |
-| `signet_code_constants` | Find shared numeric and string constants |
-| `signet_code_clear` | Delete the active GraphIQ index and leave a fresh empty database (requires `confirm: true`) |
-| `signet_code_briefing` | Get an architecture overview: subsystems, public API, hub symbols (`compact` for a short version) |
-
-`signet_code_clear` is destructive: it deletes `<project>/.graphiq/graphiq.db` and
-`manifest.json`, it is not backed up, and the active index is shared by the whole
-workspace. The tool refuses to run unless `confirm: true` is passed, and the
-index must be rebuilt afterwards with `signet index <path>`.
-
-`signet_code_search` parameters:
-
-| Name | Type | Required | Description |
-|------|------|----------|-------------|
-| `query` | string | yes | Code search query |
-| `top` | number | no | Max results to return (default 10) |
-| `file` | string | no | Optional file path filter |
-| `debug` | boolean | no | Include GraphIQ score/debug details |
-
-`signet_code_context` and `signet_code_blast` both take a `symbol` string. `signet_code_blast` also
-accepts optional `depth` and `direction` (`forward`, `backward`, or `both`).
-
-
-## Discovery Protocol
-
-AI harnesses discover Signet's MCP server in one of two ways:
-
-### Automatic (via `signet setup` or the harness connector)
-
-The connector for each harness registers the MCP server in the harness's
-configuration file during setup. No manual steps are needed.
-
-### Manual discovery
-
-1. The daemon must be running (`signet daemon start`)
-2. The MCP server is available at:
-   - **Streamable HTTP:** `http://localhost:3850/mcp`
-   - **stdio:** spawn the `signet-mcp` binary as a subprocess
-3. The daemon port can be overridden via `SIGNET_PORT` (default: 3850)
-4. The daemon host can be overridden via `SIGNET_HOST` (default: localhost)
-
-Clients can verify the server is reachable with the MCP `initialize`
-handshake:
-
-```bash
-echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test","version":"1.0"},"capabilities":{}},"id":1}' | signet-mcp
-```
-
-
-## Transports
-
-The MCP server supports two transports:
-
-### Streamable HTTP
-
-Embedded in the daemon's Hono server at `/mcp`. Uses the web-standard
-Streamable HTTP transport (MCP spec 2025-03-26). Runs stateless — each
-request gets a fresh server instance. Requests are admitted through a bounded
-in-flight cap of 8; excess requests receive a structured 503 response and can
-retry. JSON request bodies are limited to 512 KiB and oversized bodies receive
-413 before MCP server creation. Marketplace tool discovery is shared per
-authorization and scope context for a 30-second refresh window, so concurrent
-stateless servers do not repeat the same marketplace refresh.
-
-```
-POST http://localhost:3850/mcp     # Send MCP messages
-GET  http://localhost:3850/mcp     # SSE stream (server notifications)
-DELETE http://localhost:3850/mcp   # Session termination (no-op, stateless)
-```
-
-### stdio
-
-The `signet-mcp` binary runs as a subprocess, reading JSON-RPC from stdin
-and writing to stdout. The daemon must be running — tool handlers call the
-daemon's HTTP API internally.
-
-```bash
+```sh
 signet-mcp
 ```
 
-Environment variables:
+| Variable | Default | Meaning |
+|---|---|---|
+| `SIGNET_DAEMON_URL` | `http://localhost:3850` | Daemon origin used by the stdio bridge |
+| `SIGNET_HOST` | `localhost` | Daemon bind host |
+| `SIGNET_PORT` | `3850` | Daemon port |
 
-```
-SIGNET_DAEMON_URL   # Override daemon URL (default: http://localhost:3850)
-SIGNET_HOST         # Override daemon host (default: localhost)
-SIGNET_PORT         # Override daemon port (default: 3850)
-```
+Use `signet setup --harness <name>` or the harness connector to install the MCP registration. For a remote daemon, set `SIGNET_DAEMON_URL` to the origin only; paths, queries, fragments, credentials, and non-HTTP schemes are rejected. MCP inherits daemon authentication: local mode is unauthenticated, team mode requires a bearer token for HTTP, and hybrid mode trusts localhost while requiring a token remotely.
 
+The Streamable HTTP server is stateless. Requests are bounded to eight in flight and JSON request bodies to 512 KiB. HTTP requests inherit the daemon's authorization context; standalone stdio uses its configured daemon URL and authorization context. Tool failures are returned as MCP errors with `isError: true`.
 
-## Configuration per Harness
+## Tool groups
 
-### Claude Code
+The names below are registered by `platform/daemon/src/mcp/tools.ts`. Parameters use the exact camel/snake case shown by the schemas.
 
-The Claude Code connector registers the MCP server in the top-level
-`~/.claude.json` user configuration during setup. Hook configuration remains
-in `~/.claude/settings.json`; Claude Code does not read `mcpServers` from that
-file.
+### Memory and evidence
 
-```json
-{
-  "mcpServers": {
-    "signet": {
-      "type": "stdio",
-      "command": "signet-mcp",
-      "args": []
-    }
-  }
-}
-```
+| Tool | Required fields | Purpose |
+|---|---|---|
+| `memory_search` | `query` | Hybrid vector/keyword recall. Optional filters include `limit`, `project`, `type`, `tags`, `who`, `since`, `until`, `time`, `scope`, `agent_id`, `session_key`, `score_min`, `aggregate`, and `save_aggregate`. |
+| `signet_recall` | `query` | Explicit Signet recall surface for clients whose generic memory tool would collide. |
+| `signet_source_search` | `query` | Search source-backed artifacts, including imported documents and transcripts. |
+| `memory_store` | `content`, `hints` | Store immutable episodic evidence. `structured` data is retained as evidence; it is not applied directly to ontology. |
+| `signet_save_note` | note fields | Save an explicit Codex native-memory note; it does not edit generated `MEMORY.md`. |
+| `memory_get` | `id` | Read one memory and its history. |
+| `memory_list` | none | List memories with optional `limit`, `offset`, and `type`. |
+| `memory_modify` | `id`, `reason` | Edit a memory with an auditable reason. |
+| `memory_forget` | `id`, `reason` | Soft-delete a memory; the audit history remains. |
+| `memory_feedback` | `session_key`, `ratings` | Record relevance scores from `-1` to `1` for the current session. |
 
-### OpenCode
+`memory_store` writes evidence first. Dreaming is the semantic writer that derives ontology state from eligible evidence. `memory_search` is not transcript search; use `session_search` or `signet_session_search` for transcript evidence.
 
-The OpenCode connector registers the MCP server in
-`~/.config/opencode/opencode.json` during `signet install`:
+The recall `time` object accepts `start`, `end`, `facets` (`captured`, `session`, `source`, `observed`, `occurred`, `valid`), and `mode` (`auto`, `timeline`, `filter`). `min_score` is a deprecated compatibility alias for `importance_min`.
 
-```json
-{
-  "mcp": {
-    "signet": {
-      "type": "local",
-      "command": ["signet-mcp"],
-      "enabled": true
-    }
-  }
-}
-```
+### Ontology and evidence explanation
 
-This coexists with the plugin (`plugins/signet.mjs`) — the plugin handles
-lifecycle hooks, MCP handles on-demand tool calls.
+| Tool | Required fields | Purpose |
+|---|---|---|
+| `knowledge_expand` | `entity_name` | Expand an entity's connected ontology context. |
+| `knowledge_tree` | optional `entity` | Traverse entities, aspects, groups, and claims. |
+| `knowledge_list_entities` | none | List known entities. |
+| `knowledge_get_entity` | entity identifier | Read one entity. |
+| `knowledge_list_aspects` | entity | List an entity's aspects. |
+| `knowledge_list_groups` | entity, aspect | List groups in an aspect. |
+| `knowledge_list_claims` | entity, aspect, group | List claims in a group. |
+| `knowledge_list_attributes` | entity, aspect, group, claim | List attribute history; use `status=all` for superseded rows. |
+| `signet_explain_claim` | `entity`, `aspect`, `group`, `claim` | Return bounded versions, competing values, source spans, premise integrity, authorization, and reverse lineage. |
+| `knowledge_hygiene_report` | scope fields | Report hygiene candidates without mutating the graph. |
+| `apply_ontology_ops` | operations and cited evidence | Apply ontology operations. Evidence must contain `source_ref`, `source_kind`, `source_id`, and an exact quote from scoped episodic evidence. |
+| `entity_list` | none | Compatibility entity listing. |
+| `entity_get` | entity | Compatibility entity read. |
+| `entity_aspects` | entity | Compatibility aspect listing. |
+| `entity_groups` | entity, aspect | Compatibility group listing. |
+| `entity_claims` | entity, aspect, group | Compatibility claim listing. |
+| `entity_attributes` | entity, aspect, group, claim | Compatibility attribute listing. |
+| `knowledge_expand_session` | session context | Expand ontology context from session-linked evidence. |
+| `lcm_expand` | memory/entity context | Expand a record with optional transcript context. |
 
-### Kimi Code
+`signet_explain_claim` fails closed for fabricated, stale, deleted, cross-agent, or cross-session source references. Check the response integrity status before treating a claim as current truth.
 
-The Kimi connector registers the Signet MCP server in the selected Kimi home,
-normally `~/.kimi/mcp.json` (or the legacy `~/.kimi-code/mcp.json`):
+### Sessions and coordination
 
-```json
-{
-  "mcpServers": {
-    "signet": {
-      "command": "signet-mcp",
-      "args": []
-    }
-  }
-}
-```
+| Tool | Required fields | Purpose |
+|---|---|---|
+| `session_search` | `query` | Search active or completed transcripts. `current_session_key` can resolve sub-agent lineage. |
+| `signet_session_search` | `query` | Namespaced transcript search for harnesses that already own `session_search`. |
+| `agent_peers` | none | List active peer sessions; filter with `agent_id`, `session_key`, `project`, and `limit`. |
+| `agent_message_send` | `content` | Send local or ACP-routed coordination messages. Use `to_session_key`, `to_agent_id`, or `broadcast`. |
+| `agent_message_retry` | `message_id` | Retry an indeterminate ACP delivery within the bounded retry limit. |
+| `agent_message_inbox` | none | Read bounded inbound messages with `agent_id`, `session_key`, `since`, `unread_only`, and pagination fields. |
+| `agent_message_ack` | `message_id` | Acknowledge a visible message for the receiving agent. |
 
-Install it with `signet setup --harness kimi` or
-`signet connector install kimi`. Kimi lifecycle hooks remain in
-`config.toml`; see [Kimi Code](/harnesses/kimi/) for the hook events and home
-directory environment overrides.
+Message delivery is durable and agent-scoped. An ACP result may be `pending`, `in_flight`, `indeterminate`, `delivered`, or `failed`; Signet does not resend automatically.
 
-### OpenClaw
+### Secrets and operations
 
-OpenClaw uses the `@signetai/adapter-openclaw` runtime plugin, which already
-provides the same tool surface. MCP registration will be added when OpenClaw
-supports native `mcpServers` configuration.
+| Tool | Required fields | Purpose |
+|---|---|---|
+| `secret_list` | none | List secret names only; values are never returned. |
+| `secret_exec` | `command`, `secrets` | Queue a command with referenced secrets in its environment. Output is redacted. Optional `timeoutSeconds` is bounded to 1,800 seconds. |
+| `secret_exec_status` | `jobId` | Poll a queued command for redacted `stdout`, `stderr`, `code`, and timeout state. |
 
+Secret references may be Signet names, `local://NAME`, `bw://...`, or `op://...`. Do not put raw secret values in MCP arguments.
 
-## Manual Setup
+### Hook control and optional code tools
 
-If you don't use `signet install`, you can configure MCP manually:
+| Tool | Required fields | Purpose |
+|---|---|---|
+| `session_bypass` | `session_key`, `enabled` | Toggle automatic hook processing for one session. MCP tools continue to work. |
+| `signet_code_search` | `query` | Search the active GraphIQ project. |
+| `signet_code_context` | `symbol` | Read source and structural context for a symbol. |
+| `signet_code_blast` | `symbol` | Analyze impact; optional `depth` and `direction`. |
+| `signet_code_status` | none | Show active GraphIQ status. |
+| `signet_code_doctor` | none | Diagnose GraphIQ artifacts. |
+| `signet_code_constants` | query fields | Find shared constants. |
+| `signet_code_clear` | `confirm: true` | Destructively remove the active GraphIQ index. Rebuild with `signet index <path>`. |
+| `signet_code_briefing` | optional `compact` | Summarize the active project's architecture. |
 
-1. Ensure the daemon is running: `signet daemon start`
-2. Add the MCP server to your harness config (see examples above)
-3. Verify connectivity: `echo '{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2025-03-26","clientInfo":{"name":"test","version":"1.0"},"capabilities":{}},"id":1}' | signet-mcp`
+`signet_code_dead_code` is also registered by the GraphIQ plugin. The plugin's compatibility aliases are `code_search`, `code_context`, `code_blast`, `code_status`, `code_doctor`, `code_constants`, `code_dead_code`, `code_clear`, and `code_briefing`.
 
+Code tools are available only when the optional GraphIQ plugin is enabled and a project has been indexed. The active index is shared by the workspace.
 
-## Authentication
+### External MCP tool servers
 
-MCP connections inherit the daemon's auth model:
+When marketplace proxying is enabled, the server also registers these tools for installed external MCP/Tool Servers: `mcp_server_list`, `mcp_server_search`, `mcp_server_enable`, `mcp_server_disable`, `mcp_server_scope_get`, `mcp_server_scope_set`, `mcp_server_policy_get`, `mcp_server_policy_set`, and `mcp_server_call`. Search may promote a bounded set of routed tools into the tool list; promoted names are generated from the server and tool identifiers and are not a stable built-in API. These tools call the daemon's `/api/marketplace/mcp/*` routes and are subject to their scope and exposure policy.
 
-- **local** (default): No authentication required.
-- **team**: Streamable HTTP requests require a Bearer token. The stdio
-  bridge runs locally and connects to the daemon with the same auth context.
-- **hybrid**: Localhost requests (including MCP) are trusted; remote
-  requests require a token.
+## Compatibility boundaries
 
+`memory_search`, `session_search`, and the `entity_*` tools remain compatibility names. Prefer the `signet_*` names where a harness has a colliding native tool. Compatibility names translate into the same daemon operations; they do not own separate storage or semantics. `knowledge_expand_session` and `lcm_expand` are current registered tools, not extraction or marketplace aliases.
 
-## Internals
-
-The MCP tool handlers use a shared `daemonFetch` helper that sends HTTP
-requests to the daemon API with these headers:
-
-- `x-signet-runtime-path: plugin` — identifies this as a plugin-path request
-- `x-signet-actor: mcp-server` — identifies the calling actor
-- `x-signet-actor-type: harness` — actor type classification
-
-The default request timeout is 10 seconds. `secret_exec` returns quickly because it only queues daemon-owned work; poll with `secret_exec_status` to retrieve redacted output after completion.
-
-Errors are returned as MCP error results with `isError: true` and a
-human-readable message.
-
-
-## Roadmap
-
-Phase 2 tool candidates (not yet implemented):
-
-- `secret_get` — retrieve a secret value
-- `skill_list` — list installed skills
-- `diagnostics` — health score summary
-- `config_read` — read agent config
-- `document_ingest` — ingest a document
+MCP does not run lifecycle work. It does not replace session-start context, prompt-submit behavior, compaction handling, transcript capture, or notification delivery. Use the HTTP hook routes documented in [Hooks](/hooks/).

@@ -29,7 +29,7 @@ headless cron and systemd sessions without bypassing locked or corrupt keyrings.
 
 ```bash
 signet secret put OPENAI_API_KEY
-signet secret put GITHUB_TOKEN ghp_...   # value inline
+printf '%s\n' "$GITHUB_TOKEN" | signet secret put GITHUB_TOKEN   # avoid shell-history exposure
 signet secret list
 signet secret delete GITHUB_TOKEN
 signet secret has OPENAI_API_KEY
@@ -40,6 +40,16 @@ signet secret onepassword status
 signet secret onepassword vaults
 signet secret onepassword import --vault Engineering --prefix OP
 signet secret onepassword disconnect
+
+# Bitwarden (daemon-backed)
+bw login
+bw unlock --raw | signet secret bitwarden connect --session-stdin --activate
+signet secret bitwarden status
+signet secret bitwarden folders
+signet secret bitwarden use local
+signet secret bitwarden migrate              # dry run
+signet secret bitwarden migrate --write --delete-local
+signet secret bitwarden disconnect
 ```
 
 Subcommands:
@@ -57,6 +67,12 @@ Subcommands:
 | `signet secret onepassword vaults` | List accessible 1Password vaults |
 | `signet secret onepassword import` | Import password-like fields from 1Password into Signet secrets |
 | `signet secret onepassword disconnect` | Remove stored 1Password service account token |
+| `signet secret bitwarden connect` | Save a `bw unlock --raw` session (`--activate`, `--folder`, `--session-stdin`) |
+| `signet secret bitwarden status` | Show connection and active-provider status |
+| `signet secret bitwarden use <local|bitwarden>` | Select the active provider |
+| `signet secret bitwarden folders` | List accessible folders |
+| `signet secret bitwarden migrate` | Dry-run migration; add `--write` to apply |
+| `signet secret bitwarden disconnect` | Remove the session and return to local secrets |
 
 A `GITHUB_TOKEN` secret is used by `signet git` to authenticate pushes to
 a remote repository.
@@ -137,8 +153,9 @@ signet api-key list
 signet api-key revoke <id-or-prefix>
 ```
 
-The raw `sig_sk_...` key is printed once. Store it on the remote machine as
-`SIGNET_API_KEY`. `--agent-id` creates an auth-enforced agent scope: a key
+The raw key is printed once. Store it on the remote machine through its secret
+manager or environment provisioning as `SIGNET_API_KEY`; do not paste it into
+shell commands or checked-in files. `--agent-id` creates an auth-enforced agent scope: a key
 created with `--agent-id <agent-name>` defaults requests to that agent and rejects requests
 for other agents.
 
@@ -152,20 +169,20 @@ machine setup, see [Remote Harness Connectors](/remote-connectors/).
 
 ```bash
 signet connector install pi
-signet connector install pi --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id pi-work-laptop
-signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connector install pi --url https://signet.example.com --api-key "$SIGNET_API_KEY" --agent-id pi-work-laptop
+signet connect codex --url https://signet.example.com --api-key "$SIGNET_API_KEY"
 # For a Codex client scoped to one agent:
 signet api-key create --name "codex tailnet" --connector codex --agent-id <agent-name>
-signet connect codex --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connect codex --url https://signet.example.com --api-key "$SIGNET_API_KEY"
 ```
 
 Connector installers are also published as individual npm packages for machines
 where you only want to configure one harness:
 
 ```bash
-npx -y @signetai/connector-pi install --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id pi-work-laptop
-npx -y @signetai/connector-opencode install --url https://signet-home.tailnet:3850 --api-key sig_sk_... --agent-id opencode-work-laptop
-npx -y @signetai/connector-codex install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signetai/connector-pi install --url https://signet.example.com --api-key "$SIGNET_API_KEY" --agent-id pi-work-laptop
+npx -y @signetai/connector-opencode install --url https://signet.example.com --api-key "$SIGNET_API_KEY" --agent-id opencode-work-laptop
+npx -y @signetai/connector-codex install --url https://signet.example.com --api-key "$SIGNET_API_KEY"
 ```
 
 For Codex, `@signetai/codex-plugin` is the native-plugin-oriented installer name.
@@ -173,7 +190,7 @@ It writes the same generated Codex plugin marketplace bundle and compatibility
 hook/MCP config as `signet connect codex`:
 
 ```bash
-npx -y @signetai/codex-plugin install --url https://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signetai/codex-plugin install --url https://signet.example.com --api-key "$SIGNET_API_KEY"
 # Use a key created with --agent-id <agent-name> to scope this Codex install to that agent.
 ```
 
@@ -211,8 +228,9 @@ API/migration endpoint:
 |----------|-------------|
 | `POST /api/synthesis/trigger` | Trigger Dreaming's manifest-gated MEMORY.md publication |
 
-Most subcommands require `-H, --harness <harness>` identifying the calling
-platform (e.g. `claude-code`, `opencode`, `openclaw`). If the daemon is
+Most hook subcommands require `--harness <harness>` identifying the calling
+platform (e.g. `claude-code`, `opencode`, `openclaw`). If the daemon is not
+running, hooks exit cleanly with code 0 so the harness is not blocked.
 
 When hook payloads are provided over stdin, the CLI now prefers canonical
 `session_key` / `sessionKey` fields before legacy `session_id` aliases.
@@ -222,6 +240,6 @@ provided, while still carrying legacy `userPrompt` compatibility fields.
 `transcriptPath` and inline `transcript` content for lossless capture.
 `signet hook compaction-complete` also forwards stdin `cwd` as the fallback
 `project` scope when transcript persistence has not landed yet.
-not running, hooks exit cleanly with code 0 so the harness is not blocked.
+
 
 ---

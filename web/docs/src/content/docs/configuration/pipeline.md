@@ -1,18 +1,11 @@
 ---
 title: "Pipeline configuration"
-description: "Operator controls for the daemon's memory, document, maintenance, continuity, and telemetry work."
+description: "Configure document processing, maintenance, continuity, and telemetry."
 ---
 
-Pipeline settings live under `memory.pipelineV2` in `agent.yaml`. Inference target choice belongs in [Inference and routing](/configuration/inference-routing/). Do not add the retired `memory.synthesis` block: the current loader rejects it.
+Pipeline settings live under `memory.pipelineV2` in `agent.yaml`. Inference target selection belongs to [Inference and routing](/configuration/inference-routing/). The retired `memory.synthesis` block is rejected.
 
-Restart the daemon after a pipeline configuration change. Long-running workers are started with a configuration snapshot, so editing YAML alone is not a reliable apply operation.
-
-```bash
-signet daemon restart
-signet daemon status --json
-```
-
-## Safe operational baseline
+## Baseline
 
 ```yaml
 memory:
@@ -35,36 +28,16 @@ memory:
       retentionDays: 7
 ```
 
-Omit settings you do not need. The daemon supplies bounded defaults and clamps accepted numeric values while loading configuration.
+Omit settings you do not need; bounded defaults apply.
 
 ## Controls
 
-`telemetryEnabled` defaults to `true`. Set it to `false` to opt out persistently; `SIGNET_TELEMETRY_OPTOUT=1` disables telemetry for the process without changing YAML. See [Analytics](/analytics/) for the local audit path and privacy boundary.
+`telemetryEnabled` defaults to `true`. `SIGNET_TELEMETRY_OPTOUT=1` opts out for one process without changing YAML. `autonomous.enabled` controls maintenance, `frozen` pauses autonomous writes, and `maintenanceMode` is `observe` or `execute`. The `repair` object sets cooldowns and hourly budgets for bounded re-embed, requeue, and deduplication work.
 
-`autonomous.enabled` controls autonomous maintenance. `autonomous.frozen` pauses autonomous writes without deleting configuration. `autonomous.maintenanceMode` is `observe` or `execute`. Use `observe` while evaluating a new deployment; use the repair endpoints only with an authenticated operator or admin principal where applicable.
+`documents` sets worker timing and content limits. `continuity` sets checkpoint cadence and retention. `embeddingTracker`, `guardrails`, and `subagents` provide additional bounded controls; use their current schema defaults rather than copying legacy blocks.
 
-The `repair` object bounds maintenance work with cooldowns and hourly budgets. Its current keys include re-embed, requeue, and deduplication cooldown and budget settings. Keep those limits conservative when a remote provider is involved.
-
-## Documents and continuity
-
-`documents` controls the daemon document worker: poll interval, chunk target, overlap, and maximum accepted content bytes. These are processing limits, not a replacement for upload policy. See [Sources](/sources/) for ingest behavior.
-
-`continuity` controls checkpoint cadence, retention, and recovery-budget limits. It is independent of ordinary recall. Tune it only when you have a concrete recovery or storage requirement.
-
-`embeddingTracker` controls the bounded background pass that detects missing or stale embeddings. `guardrails` bounds stored and injected text. `subagents` controls parent-context inheritance for supported harness flows. Leave defaults in place unless a measured issue requires a change.
-
-## Concurrency and provider behavior
-
-`worker.maxLlmConcurrency` sets a shared cap for active LLM work. `SIGNET_MAX_LLM_CONCURRENCY` overrides it for the process when it is a positive integer. Do not set this from a guess: provider quota, local GPU memory, and latency are deployment-specific.
-
-For canonical model selection, create or edit a routing target and bind the workload. See [Inference and routing](/configuration/inference-routing/). A legacy provider/model field in an old workspace is not a safe substitute for a workload binding.
-
-## Verify
+Apply changes with the canonical restart and readiness check in [Configuration](/configuration/). Inspect the running pipeline with:
 
 ```bash
-signet daemon status --json
 curl -fsS http://127.0.0.1:3850/api/pipeline/status
-curl -fsS http://127.0.0.1:3850/health/ready
 ```
-
-Use [Diagnostics](/diagnostics/) when a queue, embedding, or maintenance problem persists. Do not infer worker health from a successful configuration write.

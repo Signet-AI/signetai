@@ -3,7 +3,7 @@ title: "Daemon"
 description: "Operate the Signet daemon: lifecycle, network binding, health, logs, and runtime boundaries."
 ---
 
-The Signet daemon owns the HTTP API, dashboard, workspace database, background workers, diagnostics, telemetry, and harness-facing services. Its default local address is `http://127.0.0.1:3850`.
+The Signet daemon owns the HTTP API, dashboard, background lifecycle, diagnostics, telemetry, and harness-facing services. A separate database-owner process is the only process with direct SQLite access. Its default local address is `http://127.0.0.1:3850`.
 
 ## Lifecycle
 

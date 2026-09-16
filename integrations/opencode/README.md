@@ -7,7 +7,7 @@ Signet connector for [OpenCode](https://github.com/anomalyco/opencode).
 Integrates Signet's memory system with OpenCode via its plugin system.
 
 - Bundles and writes `signet.mjs` plugin to `~/.config/opencode/plugins/`
-- Generates `AGENTS.md` from identity files in your agent workspace
+- Uses the configured Signet workspace for identity and skills
 - Registers the plugin in OpenCode's configuration (`opencode.json` / `opencode.jsonc` / `config.json`)
 - Symlinks the skills directory for tool access
 - Migrates away from the legacy `memory.mjs` approach on install/uninstall
@@ -19,7 +19,7 @@ Integrates Signet's memory system with OpenCode via its plugin system.
 
 ```bash
 signet setup --harness opencode
-signet connect opencode --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connect opencode --url http://signet.example.com:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 Interactive setup can also detect OpenCode and offer to configure it. On a
@@ -28,8 +28,8 @@ standalone npm installer:
 
 ```bash
 npx -y @signetai/connector-opencode install \
-  --url http://signet-home.tailnet:3850 \
-  --api-key sig_sk_... \
+  --url http://signet.example.com:3850 \
+  --api-key "$SIGNET_API_KEY" \
   --agent-id personal
 ```
 
@@ -61,4 +61,4 @@ The connector package exposes programmatic cleanup that removes the plugin file 
 ~/.agents/                             <-- optional for remote-only installs
 ```
 
-The connector extends `BaseConnector` from `@signet/connector-base` and ships a self-contained plugin bundle that OpenCode auto-discovers from its plugins directory.
+The connector extends `BaseConnector` from `@signetai/connector-base` and ships a self-contained plugin bundle that OpenCode auto-discovers from its plugins directory.

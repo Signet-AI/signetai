@@ -1,43 +1,42 @@
 ---
 title: "Documents"
-description: "Ingest documents into linked, searchable memory chunks."
+description: "Ingest text, URLs, and files into linked searchable chunks."
 ---
 
-The documents API accepts text, URLs, and file references for background ingestion. A document is stored first, then processed into linked `document_chunk` memories that participate in search. For source-backed file uploads through the Dashboard, see [Sources](/sources/); for exact HTTP shapes, see [Documents and sources API](/api/documents-sources/).
+Signet is a local-first memory and context layer for AI agents.
+
+## Choose the right kind of context
+
+- **Native memory** — save a small durable item Signet owns. See [Memory](/memory/).
+- **Documents** — ingest content into linked `document_chunk` memories for search.
+- **Connected sources** — read from a source that keeps its own canonical files or service data. See [Sources](/sources/).
+- **Durable transcript imports** — preserve exported sessions through the durable Sources job. See [Sources: agent transcript imports](/sources/#agent-transcript-imports).
 
 ## Submit a document
 
-`POST /api/documents` accepts `text`, `url`, and `file` source types. Text requests include `content`; URL requests include `url` and are fetched by the worker.
+Use the document ingestion flow for `text`, `url`, or `file` source types. Text includes `content`; URL submissions include `url` and are fetched by the worker. A new submission is recorded as `queued`; processing continues in the background.
 
-A successful new request returns `201 Created` after the document and its queued job have been recorded:
+URL and file submissions deduplicate by source URL within the same agent and project scope while the existing document is not `failed` or `deleted`. A duplicate returns the existing document's real status and does not invent a generic `processing` state.
 
-```json
-{
-  "id": "<document-id>",
-  "status": "queued",
-  "jobId": "<memory-job-id>"
-}
-```
+For endpoint fields and response schemas, use [Documents and sources API](/api/documents-sources/).
 
-The worker owns later processing. Poll `GET /api/documents/:id` for the document record, or use the job ID with `GET /api/memory/jobs/:id` when you need job-level state.
+### Poll and inspect
 
-URL and file submissions deduplicate by source URL within the same agent and project scope while the existing document is not `failed` or `deleted`. A deduplicated request returns `200` with the existing document ID, its real current status, and `deduplicated: true`; it does not pretend the document is in a generic `processing` state.
+Treat `201`/`queued` as acknowledgement, not completion. Poll `GET /api/documents/:id` until `status` is `done` or `failed`. On `done`, call `GET /api/documents/:id/chunks` to inspect count, ordered `chunk_index`, content, and provenance. On `failed`, use the error to correct the input or worker configuration, then resubmit.
 
-## Lifecycle
-
-A document moves through these states:
+## Follow the document lifecycle
 
 ```text
 queued → extracting → chunking → embedding → indexing → done
 ```
 
-`extracting` is used while the worker fetches a URL. The worker can end the document in `failed`; deletion marks it `deleted`. There is no document status named `processing`.
+The worker reports `queued`, `extracting`, `chunking`, `embedding`, `indexing`, `done`, `failed`, and `deleted`. Deletion marks the document `deleted` and stops further writes after the current bounded step.
 
-Each completed chunk is a memory with `type: "document_chunk"`, connected through `document_memories` with a sequential `chunk_index`. `GET /api/documents/:id/chunks` returns active linked chunks in chunk-index order.
+Completed chunks use `type: "document_chunk"` and link to the document with a sequential `chunk_index`. Identical chunk content may be shared by documents in the same agent/project scope.
 
-## Chunking
+## Control chunking
 
-The worker splits content by characters with overlap. Whitespace-only chunks are skipped. The defaults are:
+The worker splits content by characters with overlap and skips whitespace-only chunks.
 
 | Setting | Default | Accepted range |
 |---|---:|---:|
@@ -46,21 +45,7 @@ The worker splits content by characters with overlap. Whitespace-only chunks are
 | Worker interval | 10,000 ms | 1,000–300,000 ms |
 | Maximum content | 10 MiB | 1 KiB–100 MiB |
 
-Identical chunk content can be shared by more than one document in the same scope. The relationship is represented by multiple document-to-memory links, not by duplicating a memory record.
-
-## Delete a document
-
-`DELETE /api/documents/:id?reason=<reason>` marks the document `deleted`, completes any still-pending document-ingest job, and returns:
-
-```json
-{ "deleted": true, "memoriesRemoved": 3 }
-```
-
-`memoriesRemoved` is the number of linked memories that this deletion actually soft-deleted. It is not the document’s chunk count. A linked memory is preserved when another non-deleted document still references it, so deleting one document never destroys a shared chunk that another active document needs.
-
-## Configuration
-
-Document settings belong under `memory.pipelineV2.documents` in `agent.yaml`:
+Configure these under `memory.pipelineV2.documents` in `agent.yaml`:
 
 ```yaml
 memory:
@@ -72,12 +57,12 @@ memory:
       maxContentBytes: 10485760
 ```
 
-The daemon validates and clamps these values when it loads configuration. The legacy flat document keys, if used, are still inside `memory.pipelineV2`; there is no supported top-level `pipeline` document configuration.
+The daemon validates and clamps values on configuration load. Document settings use the `memory.pipelineV2.documents` namespace; flat document keys remain accepted within that namespace. Changes affect future ingestion. Delete and resubmit a document to apply new chunking to existing content.
 
-Changing chunk settings affects future ingestion only. To apply new chunking to an existing document, delete it and submit it again.
+## Delete a document
 
-## Worker behavior
+Document deletion is daemon-backed. It marks the document `deleted` and completes any still-pending document-ingest job. The response is `{ deleted, memoriesRemoved }`; it soft-deletes only linked memories no longer referenced by another non-deleted document. Shared chunks remain through other live documents, so `memoriesRemoved` is the number actually removed, not necessarily the document's chunk count.
 
-The document worker polls `memory_jobs` for `document_ingest` work. It claims a job, updates document lifecycle state as it processes the content, writes chunks and their embeddings, then marks the document complete. Network embedding calls happen outside write transactions, while each memory write remains a short transaction.
+For connected sources and imported transcript sources, use [Sources](/sources/) and its source-specific lifecycle rules.
 
-For endpoint permissions, request fields, list pagination, source types, and response fields, use the [Documents and sources API](/api/documents-sources/).
+For worker behavior and exact request permissions, see [Documents and sources API](/api/documents-sources/) and [Pipeline](/pipeline/).

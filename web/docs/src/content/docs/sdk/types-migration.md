@@ -1,34 +1,28 @@
 ---
 title: "Helpers, types, and migration"
-description: "Use public helpers, types, error contracts, and current SDK version guidance."
+description: "Polling, transport errors, typed exports, and migration mappings."
 ---
 
-## Helpers and errors
+`waitForJob` and `waitForDocument` poll until terminal state (defaults: 30s timeout, 500ms interval). `createAndIngestDocument` composes creation and both waits. `recallOrThrow`, `getMemoryOrThrow`, `getDocumentOrThrow`, and `batchModifyWithProgress` are convenience helpers; progress is `{ done, total }`.
 
-`SignetClient` includes helpers such as `waitForJob`, `recallOrThrow`, `getMemoryOrThrow`, `getDocumentOrThrow`, `createAndIngestDocument`, and `batchModifyWithProgress`.
+`execWithSecrets(command, secrets, options?)` uses positional arguments and
+returns a job. Poll `getSecretExecJob(job.id)` until its status is `completed`
+or `failed`. `waitForJob` treats `completed`, `done`, `failed`, and `dead` as
+terminal; `pending`, `leased`, and `retry_scheduled` are non-terminal.
 
-```typescript
-import { SignetApiError, SignetClient, SignetNetworkError } from "@signet/sdk";
+Scoped examples: `listKnowledgeEntities({ agentId: "writer", type: "person" })`, `listAgentPresence({ agentId: "writer", project: "demo" })`, and `sendAgentMessage({ toAgentId: "reviewer", type: "question", content: "Please review this." })`. These calls require explicit authorization.
 
-const client = new SignetClient();
-try {
-  const result = await client.recallOrThrow("deployment preferences", { limit: 5, minScore: 0.5 });
-  console.log(result.results);
-} catch (error) {
-  if (error instanceof SignetApiError) console.error(error.status, error.body);
-  else if (error instanceof SignetNetworkError) console.error("Daemon unavailable");
-  else throw error;
-}
-```
+`SignetTransport` is exported as a type-only name; it sends JSON, applies auth/actor headers, and retries only idempotent `GET`, `HEAD`, and `OPTIONS`. Failures are `SignetApiError`, `SignetNetworkError`, or `SignetTimeoutError`.
 
-Import public response and record types directly from `@signet/sdk` when a function signature needs them. Use the generated declaration files shipped with the installed SDK as the authoritative type reference for the installed version.
+| Retired/compatibility name | Current mapping |
+|---|---|
+| `SignetSDK`, `Signet` | `SignetClient` |
+| `rememberHook`, `recallHook` | `hookRemember`, `hookRecall` |
+| `checkConnectorHealth` | `getConnectorHealth` |
+| connector `config` | connector `settings` |
+| predictor methods | Removed runtime feature; remove calls |
 
-## Version guidance
-
-The published SDK is currently on the 0.x release line. There is no released 1.0 SDK and no blanket 0.x-to-1.0 compatibility promise. Pin and upgrade against a version that exists in the registry, then use TypeScript to identify signature changes:
-
-```bash
-bun add @signet/sdk@latest
-```
-
-For migration, replace retired method names with the current client surface documented in this section. In particular, predictor APIs were removed in v0.112 and are deprecated methods that throw instead of working runtime endpoints.
+The root export provides `SignetClient`, errors, public response/input types,
+and `SignetTransport` as a type. Use declarations built from the workspace as
+the complete typed surface; do not substitute `@signet/core` types. The SDK is
+pre-1.0 and workspace-only, so review source changes before upgrading.

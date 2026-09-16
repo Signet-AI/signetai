@@ -3,39 +3,18 @@ title: "OpenClaw"
 description: "Connect Signet to OpenClaw."
 ---
 
-## OpenClaw
+## Install
 
-OpenClaw is the flagship harness for the lossless working-memory model.
-The plugin path gives the closest match to the full LCM runtime, while the
-legacy hook path remains compatibility-only. `signet sync` auto-migrates
-legacy-only Signet installs to the plugin path, and `signet doctor` warns
-when a config is still stuck on legacy-only mode.
-
-### Files managed by Signet
-
-| Location | Description |
-|----------|-------------|
-| `$SIGNET_WORKSPACE/AGENTS.md` | Source of truth (OpenClaw reads workspace directly) |
-| `$SIGNET_WORKSPACE/hooks/agent-memory/` | Hook handler directory |
-| `~/.openclaw/openclaw.json` | Workspace configuration |
-
-### Workspace configuration
-
-Signet sets OpenClaw-family configs to your active Signet workspace.
-Change it with:
+OpenClaw uses the Signet runtime memory plugin and a setup connector. Install
+Signet, start the daemon, then run:
 
 ```bash
-signet workspace set ~/.openclaw/workspace
+signet setup --harness openclaw
 ```
 
-Common compatible workspace targets include:
-
-- `~/.openclaw/workspace`
-- `~/.clawdbot/workspace`
-- `~/clawd`
-- `~/.moltbot/workspace`
-
-OpenClaw config value:
+The connector discovers OpenClaw-family configuration files, selects the Signet
+runtime plugin, and disables the legacy internal `signet-memory` hook to avoid
+duplicate memory paths. Confirm the configured workspace in OpenClaw's config:
 
 ```json
 {
@@ -47,109 +26,42 @@ OpenClaw config value:
 }
 ```
 
-OpenClaw checks these config locations (in order):
-- `~/.openclaw/openclaw.json`
-- `~/.clawdbot/clawdbot.json`
-- `~/.moltbot/moltbot.json`
+OpenClaw reads `AGENTS.md` from that workspace directly. The setup connector leaves the workspace identity files in place for the runtime to read.
 
-### @signetai/adapter-openclaw
+## Runtime plugin
 
-The adapter package provides a full lifecycle integration:
+The runtime package is:
 
-```javascript
-import createPlugin from '@signetai/adapter-openclaw';
-
-const signet = createPlugin({
-  enabled: true,
-  daemonUrl: 'http://localhost:3850'  // default
-});
+```text
+@signetai/signet-memory-openclaw
 ```
 
-**Session start** — inject memories into system prompt:
-```javascript
-const result = await signet.onSessionStart({
-  harness: 'openclaw',
-  sessionKey: session.id
-});
-// result.inject → prepend to system prompt
-```
+Install it in an OpenClaw plugin environment when you are not using the
+Signet setup flow. The plugin connects to the local daemon at
+`http://localhost:3850` by default and supports session start, prompt
+context, compaction, session end, `/remember`, and `/recall` operations.
 
-**Pre-compaction** — get summary guidelines:
-```javascript
-const guide = await signet.onPreCompaction({
-  harness: 'openclaw',
-  messageCount: messages.length
-});
-// guide.summaryPrompt → use as compaction instruction
-```
+The setup package and runtime package are different:
 
-**Compaction complete** — save the generated summary:
-```javascript
-await signet.onCompactionComplete({
-  harness: 'openclaw',
-  summary: generatedSummary,
-  sessionKey: session.id
-});
-```
+- `@signet/connector-openclaw` installs configuration and hook files.
+- `@signetai/signet-memory-openclaw` runs inside OpenClaw.
 
-When OpenClaw only exposes compaction metadata to the plugin hook, the
-runtime may read the latest compaction summary back from `sessionFile`
-before calling the daemon so the temporal DAG still receives the real
-artifact.
+## Verify
 
-**Manual memory operations:**
-```javascript
-await signet.remember('nicholai prefers bun', { who: 'openclaw' });
-const results = await signet.recall('coding preferences');
-```
+1. Run `signet status` and confirm the daemon is healthy.
+2. Start a new OpenClaw session in the configured workspace.
+3. Use `/remember` to save a test preference, then `/recall` to retrieve it.
+4. Check the session output or daemon logs if no context appears.
 
-### MEMORY.md synthesis
+## Troubleshooting
 
-The daemon synthesis worker is the primary runtime path for keeping
-`MEMORY.md` current. OpenClaw may still drive synthesis on a schedule by:
+- **The hook does not run:** rerun `signet setup --harness openclaw`, then
+  restart OpenClaw.
+- **The wrong workspace is used:** inspect OpenClaw's active config and set
+  its `agents.defaults.workspace` to the value of `$SIGNET_WORKSPACE`.
+- **The plugin cannot reach Signet:** start the daemon and verify
+  `http://localhost:3850/health` returns successfully.
+- **An older installation is present:** run `signet doctor`; legacy hook-only installs remain available as compatibility mode. Rerun setup to enable the full plugin lifecycle.
 
-1. Calls `GET /api/hooks/synthesis/config` to check if synthesis should run
-2. Calls `POST /api/hooks/synthesis` to get the synthesis prompt
-3. Runs the prompt through the configured model
-4. Does not post generated content to the retired completion hook; Dreaming owns manifest-gated publication
-
-The supported path writes through Dreaming's merge-safe manifest head, so the rendered
-`MEMORY.md` stays shared across harnesses instead of becoming
-OpenClaw-specific.
-
-### Hooks directory
-
-During setup, Signet creates `$SIGNET_WORKSPACE/hooks/agent-memory/` with:
-
-- `HOOK.md` — hook documentation
-- `handler.js` — event handler (for older hook-based integration)
-- `package.json` — package metadata
-
-### Package Distinction: adapter vs connector
-
-Signet provides two separate packages for OpenClaw integration:
-
-#### @signetai/connector-openclaw
-
-**Purpose:** Setup and installation
-
-This is a setup-time package that:
-
-- Patches OpenClaw config files (openclaw.json, clawdbot.json, moltbot.json)
-- Sets `agents.defaults.workspace` to your active Signet workspace
-- Enables the `signet-memory` internal hook entry
-- Installs hook handler files under `$SIGNET_WORKSPACE/hooks/agent-memory/`
-
-Installed during `signet setup` when OpenClaw is selected.
-
-#### @signetai/adapter-openclaw
-
-**Purpose:** Runtime plugin
-
-This is a runtime plugin that OpenClaw loads to:
-
-- Call the Signet daemon API for /remember, /recall operations
-- Handle lifecycle hooks (session start, compaction, etc.)
-- Inject memories into the system prompt
-
-Has a peer dependency on `openclaw` — only usable within the OpenClaw process.
+OpenClaw, Clawdbot, and Moltbot use related configuration conventions, but
+check the configuration file selected by the runtime you actually launch.

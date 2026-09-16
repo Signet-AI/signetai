@@ -40,7 +40,7 @@ Where they differ is lifecycle fidelity:
 
 | Harness | session-start | prompt-submit | pre-compaction | post-compaction | session-end | Notes |
 |---------|---------------|---------------|----------------|-----------------|-------------|-------|
-| OpenCode plugin | yes | yes | yes | yes | yes | Reference full-fidelity path |
+| OpenCode plugin | yes | yes | **experimental** | **experimental** | yes | Runtime transform hooks are experimental in OpenCode |
 | OpenClaw plugin | yes | yes | yes | yes | yes | Flagship path; post-compaction may read summary back from `sessionFile` when the hook only exposes metadata |
 | Oh My Pi extension (v1) | yes | yes | yes | yes | yes | Lifecycle events only; no Signet memory tools or AGENTS.md sync yet |
 | Hermes Agent plugin | yes | yes | yes | yes | yes | Full fidelity via `MemoryProvider` ABC; includes checkpoint-extract and delegation hooks |

@@ -8,7 +8,7 @@ Integrates Signet's memory system with Gemini CLI's settings and extension model
 
 - Patches Gemini CLI settings to register the Signet MCP server
 - Symlinks the agent skills directory into the Gemini workspace
-- Generates `AGENTS.md` identity files from your agent workspace
+- Uses the configured Signet workspace for identity and skills
 - Validates workspace path boundaries to prevent misconfiguration
 
 ## Installation
@@ -27,7 +27,7 @@ The connector package exposes programmatic cleanup that removes settings patches
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-gemini` |
+| Package | `@signet/connector-gemini` |
 | License | Apache-2.0 |
 
 ## Architecture

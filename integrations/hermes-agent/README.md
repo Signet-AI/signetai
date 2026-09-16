@@ -30,7 +30,7 @@ The connector package exposes programmatic cleanup that restores the previous me
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-hermes-agent` |
+| Package | `@signet/connector-hermes-agent` |
 | License | Apache-2.0 |
 
 ## Architecture
