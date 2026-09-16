@@ -48,10 +48,13 @@ function provenanceLabel(
 	sourceKind: string | null,
 	sourceId: string | null,
 	sourcePath: string | null,
+	sourceRoot: string | null,
 	memoryId: string | null,
 ): string | null {
 	const path = sourcePath?.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+	const root = sourceRoot?.split(/[\\/]/).filter(Boolean).pop();
 	const kind = sourceKind ? humanize(sourceKind.replace(/^source_/, "")) : null;
+	if (kind && path && root) return shorten(`${kind} · ${root}/${path}`, 52);
 	if (kind && path) return shorten(`${kind} · ${path}`, 52);
 	if (path) return shorten(path, 52);
 	if (kind) return shorten(kind, 52);
@@ -111,12 +114,19 @@ export function GraphView() {
 			sourceKind: string | null;
 			sourceId: string | null;
 			sourcePath: string | null;
+			sourceRoot: string | null;
 			memoryId: string | null;
 			cluster: string;
 		}): string | null => {
-			const source = provenanceLabel(params.sourceKind, params.sourceId, params.sourcePath, params.memoryId);
+			const source = provenanceLabel(
+				params.sourceKind,
+				params.sourceId,
+				params.sourcePath,
+				params.sourceRoot,
+				params.memoryId,
+			);
 			if (!source) return null;
-			const sourceKey = `${params.sourceKind ?? ""}:${params.sourceId ?? ""}:${params.sourcePath ?? ""}:${params.memoryId ?? ""}`;
+			const sourceKey = `${params.sourceKind ?? ""}:${params.sourceId ?? ""}:${params.sourcePath ?? ""}:${params.sourceRoot ?? ""}:${params.memoryId ?? ""}`;
 			const existing = originNodeIds.get(sourceKey);
 			if (existing) return existing;
 			const id = `origin:${sourceKey}`;
@@ -165,7 +175,13 @@ export function GraphView() {
 					groups.set(groupKey, group);
 					const kind = attr.kind === "claim" ? "claim" : attr.kind === "constraint" ? "constraint" : "attribute";
 					const attrLabel = shorten(attr.content || humanize(attr.claimKey ?? attr.kind), 68);
-					const source = provenanceLabel(attr.sourceKind, attr.sourceId, attr.sourcePath, attr.memoryId);
+					const source = provenanceLabel(
+						attr.sourceKind,
+						attr.sourceId,
+						attr.sourcePath,
+						attr.sourceRoot,
+						attr.memoryId,
+					);
 					const attributeNode: SceneNode = {
 						id: attr.id,
 						label: attrLabel,
@@ -197,6 +213,7 @@ export function GraphView() {
 						sourceKind: attr.sourceKind,
 						sourceId: attr.sourceId,
 						sourcePath: attr.sourcePath,
+						sourceRoot: attr.sourceRoot,
 						memoryId: attr.memoryId,
 						cluster: entity.id,
 					});
@@ -221,7 +238,13 @@ export function GraphView() {
 		}
 		for (const assertion of graphQuery.data?.assertions ?? []) {
 			if (!nodeIds.has(assertion.subjectEntityId)) continue;
-			const source = provenanceLabel(assertion.sourceKind, assertion.sourceId, assertion.sourcePath, null);
+			const source = provenanceLabel(
+				assertion.sourceKind,
+				assertion.sourceId,
+				assertion.sourcePath,
+				assertion.sourceRoot,
+				null,
+			);
 			const assertionId = `assertion:${assertion.id}`;
 			addNode({
 				id: assertionId,
@@ -244,6 +267,7 @@ export function GraphView() {
 				sourceKind: assertion.sourceKind,
 				sourceId: assertion.sourceId,
 				sourcePath: assertion.sourcePath,
+				sourceRoot: assertion.sourceRoot,
 				memoryId: null,
 				cluster: assertion.subjectEntityId,
 			});
@@ -300,6 +324,7 @@ export function GraphView() {
 					mix(attr.sourceKind ?? "");
 					mix(attr.sourceId ?? "");
 					mix(attr.sourcePath ?? "");
+					mix(attr.sourceRoot ?? "");
 				}
 			}
 		}
@@ -314,6 +339,7 @@ export function GraphView() {
 			mix(assertion.sourceKind ?? "");
 			mix(assertion.sourceId ?? "");
 			mix(assertion.sourcePath ?? "");
+			mix(assertion.sourceRoot ?? "");
 		}
 		for (const dependency of graphQuery.data?.dependencies ?? []) {
 			mix(dependency.sourceEntityId);
