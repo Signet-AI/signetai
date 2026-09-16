@@ -142,7 +142,8 @@ function extractRoutesFromSource(): RouteEntry[] {
 	// Matches the common local route-factory shape where the factory itself
 	// registers a template route and is invoked with concrete string literals.
 	// This intentionally does not evaluate arbitrary runtime-composed values.
-	const recoveryFactoryPattern = /const\s+(registerRecoveryRoute)\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?app\.post\(\s*`([^`]*)`/g;
+	const recoveryFactoryPattern =
+		/const\s+(registerRecoveryRoute)\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?app\.post\(\s*`([^`]*)`/g;
 	const factoryCallPattern = (factory: string): RegExp =>
 		new RegExp(`${escapeRegex(factory)}\\(\\s*["']([^"']+)["']\\s*\\)`, "g");
 
@@ -158,7 +159,8 @@ function extractRoutesFromSource(): RouteEntry[] {
 			const path = match[2];
 			if (path === undefined) continue;
 			// Skip wildcard middleware paths and static root
-			if (path === "*" || path === "/*" || path === "/**" || path === "/" || path === "/api/harnesses/:id/${action}") continue;
+			if (path === "*" || path === "/*" || path === "/**" || path === "/" || path === "/api/harnesses/:id/${action}")
+				continue;
 			routes.push({ method, path, source: file });
 		}
 
@@ -186,7 +188,7 @@ function extractRoutesFromSource(): RouteEntry[] {
 			if (method === undefined || template === undefined || variable === undefined) continue;
 			const values = loopValues.get(variable);
 			if (values === undefined) continue;
-			const placeholder = "${" + variable + "}";
+			const placeholder = `\${${variable}}`;
 			for (const value of values) {
 				routes.push({ method: method.toUpperCase(), path: template.replace(placeholder, value), source: file });
 			}
@@ -206,7 +208,6 @@ function extractRoutesFromSource(): RouteEntry[] {
 			}
 		}
 	}
-
 
 	// Deduplicate by method+path — the same route can appear in both daemon.ts
 	// and a routes file (re-export/remount), which would produce duplicate
