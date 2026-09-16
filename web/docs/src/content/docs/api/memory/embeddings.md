@@ -1,146 +1,39 @@
 ---
 title: "Memory embeddings"
-description: "Inspect embedding status, health, vectors, and projection data."
+description: "Inspect embedding records, provider status, health, and projections."
 ---
+
+Embedding inspection routes require `recall` permission and resolved-agent
+scope. Vector data is derived state; memory/source rows remain authoritative.
 
 ### GET /api/embeddings
 
-Export all stored embeddings with their parent memory metadata.
-Requires `recall` permission.
-
-**Query parameters**
-
-| Parameter | Type    | Default | Range        | Description              |
-|-----------|---------|---------|--------------|--------------------------|
-| `limit`   | integer | 600     | 50–5000      | Page size                |
-| `offset`  | integer | 0       | 0–100000     | Page offset              |
-| `vectors` | boolean | false   | —            | Include raw float arrays |
-
-**Response**
-
-```json
-{
-  "embeddings": [
-    {
-      "id": "uuid",
-      "content": "...",
-      "text": "...",
-      "who": "claude-code",
-      "importance": 0.8,
-      "type": "preference",
-      "tags": ["preference"],
-      "sourceType": "memory",
-      "sourceId": "uuid",
-      "createdAt": "2026-02-21T10:00:00.000Z",
-      "vector": [0.1, 0.2, ...]
-    }
-  ],
-  "count": 50,
-  "total": 1200,
-  "limit": 600,
-  "offset": 0,
-  "hasMore": true
-}
-```
-
-`vector` is only present when `vectors=true` is set.
+Lists stored embedding records with parent metadata. Query supports `limit`,
+`offset`, and `vectors`; vectors are omitted unless explicitly requested. The
+response envelope contains `embeddings`, `count`, `total`, `limit`, `offset`,
+and `hasMore`. Records identify their source type and source ID, model/profile
+metadata, dimensions, and timestamps when available.
 
 ### GET /api/embeddings/status
 
-Check the configured embedding provider's availability and any active embedding
-index migration. Results are cached for 30 seconds. Requires `recall`
-permission.
-
-**Response**
-
-```json
-{
-  "provider": "ollama",
-  "model": "nomic-embed-text",
-  "available": true,
-  "dimensions": 768,
-  "base_url": "http://localhost:11434",
-  "checkedAt": "2026-02-21T10:00:00.000Z",
-  "index": {
-    "state": "building",
-    "coverage": {
-      "active": 45004,
-      "staged": 45003,
-      "missing": 1,
-      "wrongDimensions": 0,
-      "quarantined": 1,
-      "ready": true
-    }
-  }
-}
-```
-
-`index.coverage.quarantined` counts active rows that the target provider
-rejected as permanently unrepresentable, such as an input exceeding its
-context limit. These rows retain their source id and content hash in the
-durable migration-failure table, are excluded from future polls for that
-target profile, and do not block promotion. The status response therefore
-reports staging coverage separately from active-index coverage.
-
-On failure, `available` is `false` and `error` contains a description.
-If a native inference call times out, Signet disables that native worker for
-the rest of the daemon session and reports it unavailable here. Signet probes
-local llama.cpp and Ollama fallbacks once; when neither is ready, later
-embedding requests degrade without repeating those probes.
+Reports configured provider availability and embedding-index coverage. The
+response includes provider/model configuration, `available`, dimensions,
+`checkedAt`, and `index` state/coverage. Provider failures include `error` and
+are not reported as ready.
 
 ### GET /api/embeddings/health
 
-Returns embedding health metrics including coverage and staleness.
-
-**Response** — embedding health object with coverage percentage, stale
-count, and provider status.
+Returns provider and embedding-index health metrics, including coverage and
+staleness fields exposed by the handler.
 
 ### GET /api/embeddings/projection
 
-Returns a server-computed UMAP projection of all stored embeddings.
-Results are cached in the `umap_cache` table; cache is invalidated when
-the embedding count changes. Requires `recall` permission.
+Returns a cached server-computed projection. Query `dimensions` selects the
+registered 2D or 3D output. A ready response contains `status`, `dimensions`,
+`count`, `total`, `nodes`, `edges`, and cache metadata. While computation is
+pending, the route returns `202` with `status: "computing"` and no fabricated
+coordinates.
 
-**Query parameters**
-
-| Parameter    | Type    | Default | Description                    |
-|--------------|---------|---------|--------------------------------|
-| `dimensions` | integer | 2       | Output dimensions: `2` or `3`  |
-
-If the projection is still computing, the endpoint returns `202 Accepted`
-with `status: "computing"`. Poll again when ready.
-
-**Response (computed)**
-
-```json
-{
-  "status": "cached",
-  "dimensions": 2,
-  "count": 847,
-  "total": 847,
-  "nodes": [
-    {
-      "id": "uuid",
-      "x": 42.1,
-      "y": -18.7,
-      "content": "User prefers vim keybindings",
-      "who": "claude-code",
-      "importance": 0.8,
-      "type": "preference",
-      "tags": ["preference"],
-      "pinned": false,
-      "sourceType": "memory",
-      "sourceId": "uuid",
-      "createdAt": "2026-02-21T10:00:00.000Z"
-    }
-  ],
-  "edges": [[0, 3], [0, 7]],
-  "cachedAt": "2026-02-21T10:05:00.000Z"
-}
-```
-
-**Response (computing)**
-
-```json
-{ "status": "computing", "dimensions": 2, "count": 0, "total": 847 }
-```
+Embedding and source-index jobs may remain pending when the provider is
+unavailable. The status/health routes expose that degraded state; callers must
+not infer that missing vectors are zero vectors.
