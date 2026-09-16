@@ -136,7 +136,7 @@ function extractRoutesFromSource(): RouteEntry[] {
 	// Matches routes registered directly on `app`. Sub-router patterns like
 	// `const router = new Hono(); router.get(...)` are not detected. Keep all
 	// daemon routes registered on the top-level `app` variable.
-	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*["'`]([^"'`]+)["'`]/g;
+	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*["']([^"']+)["']/g;
 	const templateRoutePattern = /app\.(get|post|put|patch|delete|all)\(\s*`([^`]*\$\{(\w+)\}[^`]*)`/g;
 	const constArrayPattern = /for\s*\(\s*const\s+(\w+)\s+of\s+\[([^\]]+)\]\s+as\s+const\s*\)/g;
 	// Matches the common local route-factory shape where the factory itself
@@ -159,7 +159,13 @@ function extractRoutesFromSource(): RouteEntry[] {
 			const path = match[2];
 			if (path === undefined) continue;
 			// Skip wildcard middleware paths and static root
-			if (path === "*" || path === "/*" || path === "/**" || path === "/" || path === "/api/harnesses/:id/${action}")
+			if (
+				path === "*" ||
+				path === "/*" ||
+				path === "/**" ||
+				path === "/" ||
+				path === "/api/harnesses/:id/" + ["$", "{action}"].join("")
+			)
 				continue;
 			routes.push({ method, path, source: file });
 		}
@@ -204,7 +210,7 @@ function extractRoutesFromSource(): RouteEntry[] {
 			while ((call = calls.exec(content)) !== null) {
 				const action = call[1];
 				if (action === undefined) continue;
-				routes.push({ method: "POST", path: template.replace("${action}", action), source: file });
+				routes.push({ method: "POST", path: template.replace("$" + "{action}", action), source: file });
 			}
 		}
 	}
@@ -327,7 +333,6 @@ function checkMigrationDrift(architectureMd: string): MigrationDrift {
 		.sort();
 
 	const actualMax = migFiles.length > 0 ? migFiles[migFiles.length - 1] : "";
-	const maxNum = actualMax.match(/^(\d{3})/)?.[1] ?? "000";
 
 	const references: { location: string; text: string }[] = [];
 	const sectionHeader = "## Database Schema";

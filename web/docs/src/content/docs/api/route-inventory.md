@@ -338,8 +338,13 @@ Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`.
 | GET | `/api/sources/imports` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/sources/imports` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/sources/imports/:jobId` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
-| POST | `/api/sources/imports/:jobId/${control}` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/sources/imports/:jobId/${suffix}` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports/:jobId/start` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports/:jobId/pause` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports/:jobId/resume` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports/:jobId/retry` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports/:jobId/cancel` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/imports/:jobId/rejections` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/imports/:jobId/reconciliation` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
 | PATCH | `/api/sources/imports/:jobId/files/:fileId` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
 | PUT | `/api/sources/imports/:jobId/files/:fileId` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/sources/imports/:jobId/files/:fileId/content` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
