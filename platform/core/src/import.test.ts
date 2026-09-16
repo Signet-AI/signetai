@@ -32,6 +32,14 @@ describe("memory import chunking", () => {
 		expect(chunks.every((chunk) => chunk.tokenCount <= 512)).toBe(true);
 	});
 
+	it("preserves document boundary whitespace", () => {
+		const source = "  lead\n\nbody  \n\n";
+		const chunks = chunkContent(source, { maxTokens: 2 });
+
+		expect(chunks.map((chunk) => chunk.text).join("")).toBe(source);
+		expect(chunks.every((chunk) => chunk.tokenCount <= 2)).toBe(true);
+	});
+
 	it("keeps headerless hierarchical chunks within the requested limit", () => {
 		const chunks = chunkMarkdownHierarchically("x".repeat(100), { maxTokens: 10 });
 
@@ -80,9 +88,10 @@ describe("memory log import", () => {
 		root = mkdtempSync(join(tmpdir(), "signet-import-scope-"));
 		mkdirSync(join(root, "memory"));
 		const content = "Scoped memory content.";
+		const fileContent = `${content}\n`;
 		const file = "2026-01-01.md";
 		const dbPath = join(root, "memory", "memories.db");
-		writeFileSync(join(root, "memory", file), `${content}\n`);
+		writeFileSync(join(root, "memory", file), fileContent);
 		db = new Database(dbPath);
 		await db.init();
 
@@ -90,7 +99,7 @@ describe("memory log import", () => {
 		db.close();
 		db = null;
 
-		const key = `signet-import:${file}:0:${createHash("sha256").update(content).digest("hex")}`;
+		const key = `signet-import:${file}:0:${createHash("sha256").update(fileContent).digest("hex")}`;
 		const raw = new SqliteDatabase(dbPath);
 		try {
 			raw.prepare("UPDATE memories SET agent_id = ? WHERE idempotency_key = ?").run("agent-a", key);

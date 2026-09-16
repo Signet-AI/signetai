@@ -113,12 +113,11 @@ function importChunkKey(file: string, chunkIndex: number, text: string): string 
 export function chunkContent(content: string, options: ChunkOptions): ChunkResult[] {
 	validateMaxTokens(options.maxTokens);
 	const { maxTokens } = options;
-	const normalizedContent = content.trim();
-	if (!normalizedContent) return [];
+	if (!content.trim()) return [];
 	const results: ChunkResult[] = [];
 
 	// Keep paragraph separators attached to the preceding paragraph.
-	const paragraphs = normalizedContent.match(/[\s\S]+?(?:\n\n+|$)/g) ?? [];
+	const paragraphs = content.match(/[\s\S]+?(?:\n\n+|$)/g) ?? [];
 	let currentChunk: string[] = [];
 
 	const flush = (): void => {
