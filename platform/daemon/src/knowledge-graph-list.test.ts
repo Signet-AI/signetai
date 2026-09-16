@@ -553,6 +553,30 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			sourcePath: "references/ai-stack/kimi-k3.md",
 			sourceRoot: "/vault",
 		});
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO epistemic_assertions
+				 (id, agent_id, subject_entity_id, claim_attribute_id, predicate, content, normalized_content,
+				  speaker, asserted_at, confidence, evidence, source_kind, source_id, source_path, source_root)
+				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			).run(
+				"assertion-source-claim",
+				"default",
+				"e-source",
+				"attr-source-claim",
+				"observed",
+				"The note observes frontier intelligence.",
+				"the note observes frontier intelligence",
+				"Obsidian note",
+				"2026-05-16T13:00:00Z",
+				0.91,
+				JSON.stringify([{ kind: "source", id: "obsidian-source" }]),
+				"source_obsidian_markdown",
+				"obsidian-source",
+				"references/ai-stack/kimi-k3.md",
+				"/vault",
+			);
+		});
 		seedEntity("e-source-kind", "Source-kind-only note", { entityType: "source_document", mentions: 0 });
 		seedAspect("asp-source-kind", "e-source-kind", "overview");
 		seedAttribute("attr-source-kind-claim", "asp-source-kind", {
@@ -591,6 +615,17 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			sourceKind: "source_obsidian_markdown",
 			sourcePath: null,
 		});
+		expect(graph.assertions).toMatchObject([
+			{
+				id: "assertion-source-claim",
+				subjectEntityId: "e-source",
+				claimAttributeId: "attr-source-claim",
+				predicate: "observed",
+				confidence: 0.91,
+				sourcePath: "references/ai-stack/kimi-k3.md",
+				evidenceCount: 1,
+			},
+		]);
 	});
 
 	test("orders equal-strength dependencies deterministically at the cap", async () => {

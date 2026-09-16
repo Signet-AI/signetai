@@ -1702,6 +1702,7 @@ export interface ConstellationAttribute {
 	readonly content: string;
 	readonly kind: "attribute" | "constraint" | "claim";
 	readonly importance: number;
+	readonly confidence: number;
 	readonly memoryId: string | null;
 	readonly status: AttributeStatus;
 	readonly version: number;
@@ -1710,9 +1711,27 @@ export interface ConstellationAttribute {
 	readonly groupKey: string | null;
 	readonly claimKey: string | null;
 	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
+	readonly sourceRoot: string | null;
 	readonly proposalId: string | null;
 	readonly proposalEvidenceCount: number;
+}
+
+export interface ConstellationAssertion {
+	readonly id: string;
+	readonly subjectEntityId: string;
+	readonly claimAttributeId: string | null;
+	readonly predicate: string;
+	readonly content: string;
+	readonly confidence: number;
+	readonly speaker: string | null;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
+	readonly sourcePath: string | null;
+	readonly sourceRoot: string | null;
+	readonly evidenceCount: number;
+	readonly assertedAt: string;
 }
 
 export interface ConstellationAspect {
@@ -1786,6 +1805,7 @@ export interface ConstellationProposalSummary {
 export interface ConstellationGraph {
 	readonly entities: readonly ConstellationEntity[];
 	readonly dependencies: readonly ConstellationDependency[];
+	readonly assertions: readonly ConstellationAssertion[];
 	readonly proposals: readonly ConstellationProposal[];
 	readonly metadata: {
 		readonly dreaming: ConstellationDreamingSummary;
@@ -1798,6 +1818,7 @@ export interface ConstellationGraphOptions {
 	readonly maxAspectsPerEntity?: number;
 	readonly maxAttributesPerAspect?: number;
 	readonly dependencyLimit?: number;
+	readonly assertionLimit?: number;
 }
 
 function boundedInteger(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -1958,6 +1979,7 @@ export async function getKnowledgeGraphForConstellation(
 	const maxAspectsPerEntity = boundedInteger(options.maxAspectsPerEntity, 6, 1, 25);
 	const maxAttributesPerAspect = boundedInteger(options.maxAttributesPerAspect, 4, 1, 250);
 	const dependencyLimit = boundedInteger(options.dependencyLimit, 500, 1, 2000);
+	const assertionLimit = boundedInteger(options.assertionLimit, 250, 1, 1000);
 
 	return await accessor.withReadDbAsync(
 		async (db) => {
@@ -2032,6 +2054,7 @@ export async function getKnowledgeGraphForConstellation(
 				return {
 					entities: [],
 					dependencies: [],
+					assertions: [],
 					proposals: [],
 					metadata: {
 						dreaming: getConstellationDreamingSummary(db, agentId),
@@ -2111,14 +2134,14 @@ export async function getKnowledgeGraphForConstellation(
 				const aspectIdPlaceholders = placeholders(aspectIds.length);
 				const attrRows = db
 					.prepare(
-						`SELECT id, aspect_id, content, kind, importance, memory_id, status,
+						`SELECT id, aspect_id, content, kind, importance, confidence, memory_id, status,
 					        version, version_root_id, previous_attribute_id,
-					        group_key, claim_key, source_kind, source_path,
+					        group_key, claim_key, source_kind, source_id, source_path, source_root,
 					        proposal_id, proposal_evidence, claim_priority
 					 FROM (
-					   SELECT id, aspect_id, content, kind, importance, memory_id, status,
+					   SELECT id, aspect_id, content, kind, importance, confidence, memory_id, status,
 					          version, version_root_id, previous_attribute_id,
-					          group_key, claim_key, source_kind, source_path,
+					          group_key, claim_key, source_kind, source_id, source_path, source_root,
 					          proposal_id, proposal_evidence,
 					          CASE WHEN kind = 'claim' THEN 0 ELSE 1 END AS claim_priority,
 					          ROW_NUMBER() OVER (
@@ -2145,6 +2168,7 @@ export async function getKnowledgeGraphForConstellation(
 						content: row.content as string,
 						kind: row.kind as "attribute" | "constraint" | "claim",
 						importance: Number(row.importance ?? 0.5),
+						confidence: Number(row.confidence ?? 0),
 						memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
 						status: row.status as AttributeStatus,
 						version: typeof row.version === "number" ? row.version : 1,
@@ -2153,7 +2177,9 @@ export async function getKnowledgeGraphForConstellation(
 						groupKey: typeof row.group_key === "string" ? row.group_key : null,
 						claimKey: typeof row.claim_key === "string" ? row.claim_key : null,
 						sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+						sourceId: typeof row.source_id === "string" ? row.source_id : null,
 						sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+						sourceRoot: typeof row.source_root === "string" ? row.source_root : null,
 						proposalId: typeof row.proposal_id === "string" ? row.proposal_id : null,
 						proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
 					});
@@ -2215,6 +2241,41 @@ export async function getKnowledgeGraphForConstellation(
 				proposalEvidenceCount: parseJsonArray(row.proposal_evidence).length,
 			}));
 
+			let assertionRows: Array<Record<string, unknown>> = [];
+			try {
+				assertionRows = db
+					.prepare(
+						`SELECT a.id, a.subject_entity_id, a.claim_attribute_id, a.predicate,
+						        a.content, a.confidence, a.speaker, a.evidence,
+						        a.source_kind, a.source_id, a.source_path, a.source_root,
+						        a.asserted_at
+					 FROM epistemic_assertions a
+					 WHERE a.agent_id IN (${agentPlaceholders})
+					   AND a.subject_entity_id IN (${entityIdPlaceholders})
+					   AND a.status = 'active'
+					 ORDER BY a.confidence DESC, a.asserted_at DESC, a.id ASC
+					 LIMIT ?`,
+					)
+					.all(...visibleAgentIds, ...entityIds, assertionLimit) as Array<Record<string, unknown>>;
+			} catch (error) {
+				if (!(error instanceof Error) || !error.message.includes("no such table: epistemic_assertions")) throw error;
+			}
+			const assertions: ConstellationAssertion[] = assertionRows.map((row) => ({
+				id: row.id as string,
+				subjectEntityId: row.subject_entity_id as string,
+				claimAttributeId: typeof row.claim_attribute_id === "string" ? row.claim_attribute_id : null,
+				predicate: row.predicate as string,
+				content: row.content as string,
+				confidence: Number(row.confidence ?? 0),
+				speaker: typeof row.speaker === "string" ? row.speaker : null,
+				sourceKind: typeof row.source_kind === "string" ? row.source_kind : null,
+				sourceId: typeof row.source_id === "string" ? row.source_id : null,
+				sourcePath: typeof row.source_path === "string" ? row.source_path : null,
+				sourceRoot: typeof row.source_root === "string" ? row.source_root : null,
+				evidenceCount: parseJsonArray(row.evidence).length,
+				assertedAt: row.asserted_at as string,
+			}));
+
 			const proposalRows = db
 				.prepare(
 					`SELECT id, operation, payload, confidence, rationale, evidence,
@@ -2247,6 +2308,7 @@ export async function getKnowledgeGraphForConstellation(
 			return {
 				entities,
 				dependencies,
+				assertions,
 				proposals,
 				metadata: {
 					dreaming: getConstellationDreamingSummary(db, agentId),

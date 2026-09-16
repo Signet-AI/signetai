@@ -374,6 +374,7 @@ function demoConstellation(): KnowledgeConstellation {
 		const aspectCount = 2 + Math.floor(rng() * 2); // 2-3
 		for (let a = 0; a < aspectCount; a++) {
 			aspectN += 1;
+			const aspectName = ASPECT_NAMES[Math.floor(rng() * ASPECT_NAMES.length)];
 			const attributes = [];
 			const attrCount = 1 + Math.floor(rng() * 2); // 1-2
 			for (let b = 0; b < attrCount; b++) {
@@ -381,15 +382,23 @@ function demoConstellation(): KnowledgeConstellation {
 				const kind = ATTR_KINDS[Math.floor(rng() * ATTR_KINDS.length)];
 				attributes.push({
 					id: `demo-attr-${attrN}`,
-					content: `${name} ${kind === "constraint" ? "constrains" : kind === "rule" ? "governs" : "informs"} ${ASPECT_NAMES[Math.floor(rng() * ASPECT_NAMES.length)]} handling in the demo workspace`,
+					content: `${name} ${kind === "constraint" ? "constrains" : kind === "rule" ? "governs" : "informs"} ${aspectName} handling in the demo workspace`,
 					kind,
 					importance: Math.round((0.55 + rng() * 0.4) * 100) / 100,
+					confidence: Math.round((0.62 + rng() * 0.36) * 100) / 100,
 					version: 1,
+					memoryId: kind === "learning" ? `demo-memory-${(attrN % 8) + 1}` : null,
+					groupKey: kind === "claim" ? "ontology" : kind === "constraint" ? "guardrails" : "context",
+					claimKey: kind === "claim" ? `${aspectName}_position` : null,
+					sourceKind: kind === "claim" ? "obsidian" : null,
+					sourceId: kind === "claim" ? "demo-obsidian" : null,
+					sourcePath: kind === "claim" ? `references/demo/${name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md` : null,
+					sourceRoot: kind === "claim" ? "vault://main" : null,
 				});
 			}
 			aspects.push({
 				id: `demo-aspect-${aspectN}`,
-				name: ASPECT_NAMES[Math.floor(rng() * ASPECT_NAMES.length)],
+				name: aspectName,
 				weight: Math.round((0.6 + rng() * 0.4) * 100) / 100,
 				attributes,
 			});
@@ -416,10 +425,31 @@ function demoConstellation(): KnowledgeConstellation {
 			strength: Math.round((0.5 + rng() * 0.5) * 100) / 100,
 		});
 	}
+	const claimRefs = entities.flatMap((entity) =>
+		entity.aspects.flatMap((aspect) =>
+			aspect.attributes.filter((attribute) => attribute.kind === "claim").map((attribute) => ({ entity, attribute })),
+		),
+	);
+	const assertions = claimRefs.slice(0, 3).map(({ entity, attribute }, index) => ({
+		id: `demo-assertion-${index + 1}`,
+		subjectEntityId: entity.id,
+		claimAttributeId: attribute.id,
+		predicate: index === 0 ? "claims" : index === 1 ? "observed" : "believes",
+		content: `${entity.name} is represented by a source-backed ${attribute.claimKey ?? "ontology"} claim`,
+		confidence: 0.78 + index * 0.07,
+		speaker: index === 0 ? "Obsidian note" : "dreaming",
+		sourceKind: "obsidian",
+		sourceId: "demo-obsidian",
+		sourcePath: `references/demo/${entity.name.toLowerCase().replace(/[^a-z0-9]+/g, "-")}.md`,
+		sourceRoot: "vault://main",
+		evidenceCount: index + 1,
+		assertedAt: "2026-08-07T08:00:00.000Z",
+	}));
 
 	return {
 		entities,
 		dependencies,
+		assertions,
 		proposals: [{ id: "demo-proposal-1" }],
 		metadata: { proposals: { pending: 1 } },
 	};
