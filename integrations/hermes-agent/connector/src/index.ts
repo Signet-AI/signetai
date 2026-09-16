@@ -1,6 +1,6 @@
 import { spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -111,8 +111,16 @@ interface HermesProbeResult {
 }
 
 function resolveContainedWritePath(targetPath: string, targetRoot: string): string {
+	const pathEntryExists = (path: string): boolean => {
+		try {
+			lstatSync(path);
+			return true;
+		} catch {
+			return false;
+		}
+	};
 	let rootPath = targetRoot;
-	while (!existsSync(rootPath)) {
+	while (!pathEntryExists(rootPath)) {
 		const parent = dirname(rootPath);
 		if (parent === rootPath) throw new Error(`Hermes target root does not exist: ${targetRoot}`);
 		rootPath = parent;
@@ -123,7 +131,7 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 	const root = realpathSync(rootPath);
 	let existing = targetPath;
 	const missing: string[] = [];
-	while (!existsSync(existing)) {
+	while (!pathEntryExists(existing)) {
 		const parent = dirname(existing);
 		if (parent === existing) throw new Error(`Hermes target path does not have an existing ancestor: ${targetPath}`);
 		missing.unshift(existing.slice(parent.length + 1));
@@ -166,7 +174,7 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 			written.push(dst);
 		}
 	}
-	written.push(writeInstallMarker(writeDir, targetKind));
+	written.push(writeInstallMarker(writeDir, targetKind, targetRoot));
 
 	return written;
 }
@@ -320,9 +328,12 @@ function writeProviderBackup(
 	configPath: string,
 	providerKind: ProviderBackup["providerKind"],
 	previousProvider: string,
+	targetRoot?: string,
 ): string | null {
 	if (previousProvider === "signet") return null;
-	const backupPath = getProviderBackupPath(hermesHome);
+	const backupPath = targetRoot
+		? resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot)
+		: getProviderBackupPath(hermesHome);
 	if (existsSync(backupPath)) return null;
 	const backup: ProviderBackup = {
 		schemaVersion: 1,
@@ -336,8 +347,10 @@ function writeProviderBackup(
 	return backupPath;
 }
 
-function readProviderBackup(hermesHome: string): ProviderBackup | null {
-	const backupPath = getProviderBackupPath(hermesHome);
+function readProviderBackup(hermesHome: string, targetRoot?: string): ProviderBackup | null {
+	const backupPath = targetRoot
+		? resolveContainedWritePath(getProviderBackupPath(hermesHome), targetRoot)
+		: getProviderBackupPath(hermesHome);
 	if (!existsSync(backupPath)) return null;
 	try {
 		const parsed = JSON.parse(readFileSync(backupPath, "utf-8")) as Partial<ProviderBackup>;
@@ -373,8 +386,8 @@ function trimTrailingSlashes(value: string): string {
 	return value.slice(0, end);
 }
 
-function isProviderConfigured(hermesHome: string): boolean {
-	const config = readConfigYaml(hermesHome);
+function isProviderConfigured(hermesHome: string, targetRoot?: string): boolean {
+	const config = readConfigYaml(hermesHome, targetRoot);
 	if (!config) return false;
 	const lines = config.content.split(/\r?\n/);
 	const dottedProvider = findDottedProvider(lines);
@@ -422,6 +435,7 @@ function configureProvider(
 				configPath,
 				"dotted",
 				parseDottedProviderLine(lines[dottedProvider] ?? "") ?? "",
+				targetRoot,
 			);
 			setDottedProviderLine(lines, dottedProvider, "signet");
 			changed = true;
@@ -433,6 +447,7 @@ function configureProvider(
 					configPath,
 					"nested",
 					parseProviderLine(lines[block.provider] ?? "") ?? "",
+					targetRoot,
 				);
 				backupPath = nestedBackupPath ?? backupPath;
 			}
@@ -458,6 +473,7 @@ function configureProvider(
 			configPath,
 			"nested",
 			parseProviderLine(lines[block.provider] ?? "") ?? "",
+			targetRoot,
 		);
 		lines[block.provider] = `${(lines[block.provider] ?? "").match(/^\s*/)?.[0] ?? "  "}provider: signet`;
 	} else if (block !== null && typeof block === "object") {
@@ -479,13 +495,13 @@ function restoreOrClearProvider(
 	const safeConfigPath = targetRoot
 		? resolveContainedWritePath(resolveConfigPath(hermesHome), targetRoot)
 		: resolveConfigPath(hermesHome);
-	const config = readConfigYaml(hermesHome);
+	const config = readConfigYaml(hermesHome, targetRoot);
 	if (!config) return { configPath: null, backupPath: removeProviderBackup(hermesHome, targetRoot) };
 	if (targetRoot) resolveContainedWritePath(config.path, targetRoot);
 	const lines = config.content.replace(/\r\n/g, "\n").split("\n");
 	const block = findMemoryBlock(lines);
 	const dottedProvider = findDottedProvider(lines);
-	const backup = readProviderBackup(hermesHome);
+	const backup = readProviderBackup(hermesHome, targetRoot);
 	let configChanged = false;
 	if (dottedProvider !== null && dottedProviderLineIsSignet(lines[dottedProvider] ?? "")) {
 		setDottedProviderLine(lines, dottedProvider, backup?.providerKind === "dotted" ? backup.previousProvider : "''");
@@ -566,8 +582,10 @@ function computePluginSourceHash(): string {
 	return hash.digest("hex");
 }
 
-function writeInstallMarker(targetDir: string, targetKind: InstallMarker["targetKind"]): string {
-	const markerPath = join(targetDir, INSTALL_MARKER_FILE);
+function writeInstallMarker(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot?: string): string {
+	const markerPath = targetRoot
+		? resolveContainedWritePath(join(targetDir, INSTALL_MARKER_FILE), targetRoot)
+		: join(targetDir, INSTALL_MARKER_FILE);
 	const marker: InstallMarker = {
 		connector: "@signet/connector-hermes-agent",
 		schemaVersion: 1,
@@ -606,8 +624,16 @@ function pluginMarkerIsFresh(targetDir: string): boolean {
 	return marker !== null && marker.sourceHash === computePluginSourceHash();
 }
 
-function pluginLooksCurrent(targetDir: string): boolean {
-	return pluginHasStaticToolSchemas(join(targetDir, "__init__.py")) && pluginMarkerIsFresh(targetDir);
+function pluginLooksCurrent(targetDir: string, targetRoot?: string): boolean {
+	let safeTargetDir = targetDir;
+	if (targetRoot) {
+		try {
+			safeTargetDir = resolveContainedWritePath(targetDir, targetRoot);
+		} catch {
+			return false;
+		}
+	}
+	return pluginHasStaticToolSchemas(join(safeTargetDir, "__init__.py")) && pluginMarkerIsFresh(safeTargetDir);
 }
 
 function probeHermesProvider(hermesRepo: string): HermesProbeResult {
@@ -842,9 +868,9 @@ export class HermesAgentConnector extends BaseConnector {
 			if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(this.target.profile)) {
 				throw new Error("Invalid Hermes profile name; use 1-64 letters, numbers, '.', '_' or '-'.");
 			}
-			const userHome = process.env.HOME?.trim() || homedir();
-			const profileHome = join(userHome, ".hermes", "profiles", this.target.profile);
-			return resolveContainedWritePath(profileHome, join(userHome, ".hermes", "profiles"));
+			const hermesHome = resolveHermesHomePath();
+			const profileHome = join(hermesHome, "profiles", this.target.profile);
+			return resolveContainedWritePath(profileHome, join(hermesHome, "profiles"));
 		}
 		return resolveHermesHomePath();
 	}
@@ -855,7 +881,8 @@ export class HermesAgentConnector extends BaseConnector {
 	}
 
 	getConfigPath(): string {
-		return resolveConfigPath(this.getHermesHome());
+		const hermesHome = this.getHermesHome();
+		return resolveConfigPath(hermesHome, this.target?.profile ? hermesHome : undefined);
 	}
 
 	async install(basePath: string, options: HermesConnectorOptions = {}): Promise<InstallResult> {
@@ -870,16 +897,13 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesHome = this.getHermesHome();
 		const hermesRepo = this.getHermesRepo();
+		const targetRoot = this.target?.profile ? hermesHome : undefined;
 		let userPluginInstalled = false;
 		let repoPluginInstalled = false;
 
 		// 1. Install the Python plugin into the current user-plugin location.
 		try {
-			const pluginFiles = installPlugin(
-				getUserPluginTargetDir(hermesHome),
-				"user",
-				options.profile ? hermesHome : undefined,
-			);
+			const pluginFiles = installPlugin(getUserPluginTargetDir(hermesHome), "user", targetRoot);
 			filesWritten.push(...pluginFiles);
 			userPluginInstalled = true;
 		} catch (e) {
@@ -913,8 +937,8 @@ export class HermesAgentConnector extends BaseConnector {
 			};
 		}
 
-		const envPath = options.profile
-			? resolveContainedWritePath(join(hermesHome, ".env"), hermesHome)
+		const envPath = targetRoot
+			? resolveContainedWritePath(join(hermesHome, ".env"), targetRoot)
 			: join(hermesHome, ".env");
 		let configuredSignetAgentId = "default";
 		const configuredDaemonUrl = (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850").replace(
@@ -1021,14 +1045,14 @@ export class HermesAgentConnector extends BaseConnector {
 		}
 
 		// 3. Activate Signet as the external Hermes memory provider.
-		const providerConfig = configureProvider(hermesHome, warnings, options.profile ? hermesHome : undefined);
+		const providerConfig = configureProvider(hermesHome, warnings, targetRoot);
 		if (providerConfig.configPath) {
 			configsPatched.push(providerConfig.configPath);
 		}
 		if (providerConfig.backupPath) {
 			filesWritten.push(providerConfig.backupPath);
 		}
-		if (!isProviderConfigured(hermesHome)) {
+		if (!isProviderConfigured(hermesHome, targetRoot)) {
 			return {
 				success: false,
 				message:
@@ -1075,13 +1099,17 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesHome = this.getHermesHome();
 		const userPluginTarget = getUserPluginTargetDir(hermesHome);
-		if (this.target?.profile && (!existsSync(userPluginTarget) || readInstallMarker(userPluginTarget) === null)) {
-			return { filesRemoved, configsPatched };
+		const targetRoot = this.target?.profile ? hermesHome : undefined;
+		if (targetRoot) {
+			const safeUserPluginTarget = resolveContainedWritePath(userPluginTarget, targetRoot);
+			if (!existsSync(safeUserPluginTarget) || readInstallMarker(safeUserPluginTarget) === null) {
+				return { filesRemoved, configsPatched };
+			}
 		}
-		const userPluginRemoved = uninstallPlugin(userPluginTarget, this.target?.profile ? hermesHome : undefined);
+		const userPluginRemoved = uninstallPlugin(userPluginTarget, targetRoot);
 		filesRemoved.push(...userPluginRemoved);
 
-		const providerConfig = restoreOrClearProvider(hermesHome, this.target?.profile ? hermesHome : undefined);
+		const providerConfig = restoreOrClearProvider(hermesHome, targetRoot);
 		if (providerConfig.configPath) {
 			configsPatched.push(providerConfig.configPath);
 		}
@@ -1089,8 +1117,8 @@ export class HermesAgentConnector extends BaseConnector {
 			filesRemoved.push(providerConfig.backupPath);
 		}
 
-		const envPath = this.target?.profile
-			? resolveContainedWritePath(join(hermesHome, ".env"), hermesHome)
+		const envPath = targetRoot
+			? resolveContainedWritePath(join(hermesHome, ".env"), targetRoot)
 			: join(hermesHome, ".env");
 		if (existsSync(envPath)) {
 			try {
@@ -1126,9 +1154,10 @@ export class HermesAgentConnector extends BaseConnector {
 	isInstalled(): boolean {
 		const hermesHome = this.getHermesHome();
 		const hermesRepo = this.getHermesRepo();
-		if (!isProviderConfigured(hermesHome)) return false;
+		const targetRoot = this.target?.profile ? hermesHome : undefined;
+		if (!isProviderConfigured(hermesHome, targetRoot)) return false;
 		if (hermesRepo) return pluginLooksCurrent(getRepoPluginTargetDir(hermesRepo));
-		return pluginLooksCurrent(getUserPluginTargetDir(hermesHome));
+		return pluginLooksCurrent(getUserPluginTargetDir(hermesHome), targetRoot);
 	}
 
 	async diagnose(): Promise<HermesDoctorReport> {
@@ -1137,6 +1166,7 @@ export class HermesAgentConnector extends BaseConnector {
 		return diagnoseHermesIntegration({
 			hermesHome,
 			hermesRepo,
+			targetRoot: this.target?.profile ? hermesHome : undefined,
 			daemonUrl: (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850").replace(/[\r\n]+/g, ""),
 		});
 	}
@@ -1145,12 +1175,14 @@ export class HermesAgentConnector extends BaseConnector {
 export async function diagnoseHermesIntegration(opts?: {
 	readonly hermesHome?: string;
 	readonly hermesRepo?: string | null;
+	readonly targetRoot?: string;
 	readonly daemonUrl?: string;
 }): Promise<HermesDoctorReport> {
 	const hermesHome = opts?.hermesHome ?? resolveHermesHomePath();
 	const hermesRepo = opts && "hermesRepo" in opts ? (opts.hermesRepo ?? null) : resolveHermesRepoPath();
+	const targetRoot = opts?.targetRoot;
 	const daemonUrl = opts?.daemonUrl ?? (process.env.SIGNET_DAEMON_URL?.trim() || "http://127.0.0.1:3850");
-	const configPath = resolveConfigPath(hermesHome);
+	const configPath = resolveConfigPath(hermesHome, targetRoot);
 	const userPluginDir = getUserPluginTargetDir(hermesHome);
 	const repoPluginDir = hermesRepo ? getRepoPluginTargetDir(hermesRepo) : null;
 	const checks: HermesDiagnosticCheck[] = [];
@@ -1162,7 +1194,7 @@ export async function diagnoseHermesIntegration(opts?: {
 	} catch (error) {
 		pluginSourceError = error instanceof Error ? error.message : String(error);
 	}
-	const userPluginCurrent = pluginSourceDir !== null && pluginLooksCurrent(userPluginDir);
+	const userPluginCurrent = pluginSourceDir !== null && pluginLooksCurrent(userPluginDir, targetRoot);
 	const repoPluginCurrent = pluginSourceDir !== null && repoPluginDir ? pluginLooksCurrent(repoPluginDir) : false;
 	const probe = hermesRepo
 		? probeHermesProvider(hermesRepo)
@@ -1188,11 +1220,11 @@ export async function diagnoseHermesIntegration(opts?: {
 	checks.push({
 		id: "provider-config",
 		label: "Hermes memory provider",
-		ok: isProviderConfigured(hermesHome),
+		ok: isProviderConfigured(hermesHome, targetRoot),
 		detail: existsSync(configPath)
-			? `${configPath} ${isProviderConfigured(hermesHome) ? "sets" : "does not set"} memory.provider=signet`
+			? `${configPath} ${isProviderConfigured(hermesHome, targetRoot) ? "sets" : "does not set"} memory.provider=signet`
 			: `${configPath} does not exist`,
-		fix: isProviderConfigured(hermesHome) ? undefined : "Run `signet setup --harness hermes-agent`.",
+		fix: isProviderConfigured(hermesHome, targetRoot) ? undefined : "Run `signet setup --harness hermes-agent`.",
 	});
 	checks.push({
 		id: "user-plugin",
