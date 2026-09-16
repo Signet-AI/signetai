@@ -1,6 +1,6 @@
 {
 	"name": "@signet/connector-forge",
-	"version": "0.226.5",
+	"version": "0.226.6",
 	"description": "Signet connector for ForgeCode - installs MCP, identity, and skills integration",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -24,8 +24,8 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@signet/connector-base": "0.226.5",
-		"@signet/core": "0.226.5"
+		"@signet/connector-base": "0.226.6",
+		"@signet/core": "0.226.6"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",

@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-16
+- Bug fixes: await workload diagnostics routes; persist search across navigation.
+
 ### 2026-09-15
 - Bug fixes: harden owner-routed graph recall; refresh event-loop baseline; address review feedback; avoid budget scan allocation; enforce session-start budget; fence health during owner close; fence retired owner operations; reject retired owner close; fence stale owner proxies; lease all owner operations; drain db owner health leases; unify db owner health authority; bound connector rows and clarify unverified health; handle invalid agent rosters; restore transcript agent imports.
 - Refactoring: remove stale render metric; bound session continuity context; remove owner route fallbacks.
@@ -29,13 +32,17 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-09-08
 - Bug fixes: route OpenCode Pi calls; reuse shared recall accessor; enumerate macOS transcript directories by fd; use descriptor-relative macOS transcript paths; close migration schema probes; retry transcript upload finalization; make transcript uploads resilient at scale; support resumable transcript imports on Windows; retain Windows rollback backup until next install; isolate deferred Windows cleanup process; finish Windows native update replacement; simplify portable purge; bounded deletes portable to SQLite without DELETE LIMIT.
 
-### 2026-09-07
-- Features: make Windows a first-class install target; ship cross-platform desktop support.
-- Bug fixes: build core before website deploy; remove private Pi dependency; await token worker teardown; isolate source worker runtime; align DB audit call sites; preserve concurrent resources; reject missing macOS Python; harden cross-platform installs; keep bundled Pi dependency local; remove bundled pi runtime dep; protect managed AppImage updates; tighten packaged runtime and tests; expand Windows support and unify native shell; address PR #1858 review findings; survive all DB owner availability rejections, not just deadlines; hide the setup link once a harness connection exists; survive DB owner deadline exhaustion and build the embedding worker; stage connector assets so harness install works in the app; widen mac header inset clear of the traffic lights; edge-to-edge shell and mac traffic-light clearance; restore macOS traffic lights and correct the dock icon size; make the packaged daemon bootable and install on macOS; unblock dreaming startup; drop delegation memory writes; fence integrity deadline workers; preserve legacy tilde paths; support Windows home fallback; skip install without git; preserve external embedding selection; allow undeclared tool capability.
-- Refactoring: remove dead source worker commands; share integrity child lifecycle; remove dead setup scan; share agent dir logic; isolate harness integration paths; centralize process launching.
-- Docs: trim contributor guide; document harness API boundary.
-
 ## Release Ledger
+
+## [0.226.6] - 2026-09-16
+
+Release summary: 2 bug fixes.
+Tag range: `v0.226.5..v0.226.6`.
+
+### Bug Fixes
+
+- **daemon**: await workload diagnostics routes
+- **docs**: persist search across navigation
 
 ## [0.226.5] - 2026-09-15
 
