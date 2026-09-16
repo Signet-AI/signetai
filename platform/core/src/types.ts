@@ -786,7 +786,7 @@ export const ENTITY_TYPES = [
 ] as const;
 export type EntityType = (typeof ENTITY_TYPES)[number];
 
-export const ATTRIBUTE_KINDS = ["attribute", "constraint"] as const;
+export const ATTRIBUTE_KINDS = ["attribute", "constraint", "claim"] as const;
 export type AttributeKind = (typeof ATTRIBUTE_KINDS)[number];
 
 export const ATTRIBUTE_STATUSES = ["active", "superseded", "deleted"] as const;

@@ -274,7 +274,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				entityId: c.req.param("id"),
 				aspectId: c.req.param("aspectId"),
 				agentId,
-				kind: kind === "attribute" || kind === "constraint" ? kind : undefined,
+				kind: kind === "attribute" || kind === "constraint" || kind === "claim" ? kind : undefined,
 				status: status === "active" || status === "superseded" || status === "deleted" ? status : undefined,
 				limit,
 				offset,
