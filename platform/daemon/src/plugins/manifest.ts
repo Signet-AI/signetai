@@ -1,11 +1,16 @@
 import type { PluginManifestV1, PluginSurfaceBaseV1, PluginSurfaceSummaryV1 } from "./types.js";
 
 const PLUGIN_ID_RE = /^[a-z][a-z0-9-]*(\.[a-z][a-z0-9-]*)+$/;
-const SEMVER_RE = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+const SEMVER_RE =
+	/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const CAPABILITY_RE = /^[a-z][a-z0-9-]*(?::[a-z][a-z0-9-]*)+$/;
 
 export interface PluginValidationOptions {
 	readonly corePluginIds?: readonly string[];
+}
+
+function isSemVer(value: string): boolean {
+	return value === value.trim() && SEMVER_RE.test(value);
 }
 
 export function validatePluginManifest(
@@ -16,7 +21,7 @@ export function validatePluginManifest(
 	const corePluginIds = new Set(opts.corePluginIds ?? []);
 
 	if (!PLUGIN_ID_RE.test(manifest.id)) errors.push("id must be dot-delimited lowercase plugin id");
-	if (!SEMVER_RE.test(manifest.version)) errors.push("version must be SemVer");
+	if (!isSemVer(manifest.version)) errors.push("version must be SemVer");
 	if (!manifest.name.trim()) errors.push("name is required");
 	if (!manifest.publisher.trim()) errors.push("publisher is required");
 	if (!manifest.description.trim()) errors.push("description is required");
@@ -75,10 +80,10 @@ export function validatePluginManifest(
 				errors.push(`prompt contribution '${contribution.id}' mode must match surface metadata`);
 			}
 		}
-		if (contribution.maxTokens < 1) {
+		if (!Number.isFinite(contribution.maxTokens) || contribution.maxTokens < 1) {
 			errors.push(`prompt contribution '${contribution.id}' maxTokens must be positive`);
 		}
-		if (contribution.priority < 0) {
+		if (!Number.isFinite(contribution.priority) || contribution.priority < 0) {
 			errors.push(`prompt contribution '${contribution.id}' priority must be non-negative`);
 		}
 		if (!contribution.content.trim()) {
