@@ -490,7 +490,9 @@ Remove embedding rows that reference memories which no longer exist. The
 operation is scoped to the resolved `agentId` and runs through a durable,
 keyset-paginated owner checkpoint. Repeat the request until `status` is
 `complete`; a client disconnect or owner restart resumes from the same
-checkpoint. Global reconciliation is not accepted by this endpoint.
+checkpoint. It only removes derived vector rows whose canonical embedding is
+owned by the same scope; vector rows with no canonical owner are retained.
+Global reconciliation is not accepted by this endpoint.
 Rate-limited. Requires `admin` permission.
 
 **Request body** (optional)
@@ -524,22 +526,28 @@ ceilings but cannot raise them.
   "skipped": 0,
   "failed": 0,
   "remaining": 0,
-  "message": "cleaned orphaned embeddings; processed 12, 0 remaining; checkpoint vector-repair-..."
+  "remainingStatus": "none",
+  "message": "cleaned orphaned embeddings; processed 12, no work remaining; checkpoint vector-repair-..."
 }
 ```
 
 ### POST /api/repair/resync-vec
 
 Reconcile the derived `vec_embeddings` index with canonical `embeddings` for
-one resolved agent. Orphan derived rows are removed before missing canonical
-vectors are inserted. Each owner transaction is a bounded page and advances
-the durable checkpoint atomically with its mutations and semantic repair
-audit. Repeat the request while `status` is `running`.
+one resolved agent by inserting canonical vectors that are missing from the
+index. A scoped request does not remove derived rows that have no canonical
+embedding: those rows have no provable agent owner and are retained rather
+than risking cross-agent deletion. Each owner transaction is a bounded page
+and advances the durable checkpoint atomically with its mutations and semantic
+repair audit. Repeat the request while `status` is `running`.
 
 The same hard server ceilings apply: 50 rows, 256 KiB of vector payload, a
 2-second owner deadline, and 100 estimated work units per job. Malformed or
-oversized canonical vectors are reported as `skipped`; retryable owner write
-failures retain the cursor and are reported as `failed`.
+oversized canonical vectors beyond the hard 256 KiB ceiling are quarantined
+when the quarantine table is available and reported as `skipped`; a valid
+vector that does not fit the caller's lower per-batch byte budget is deferred
+without quarantine. Retryable owner write failures retain the cursor and are
+reported as `failed`.
 
 **Request body** (optional)
 
@@ -555,9 +563,13 @@ failures retain the cursor and are reported as `failed`.
 **Response**
 
 The response includes `processed`, `skipped`, `failed`, `remaining`,
-`checkpointId`, `phase`, and `status` in addition to the usual repair action
-fields. `agentId` is always the resolved scope; `allAgents` and `scope: "all"`
-are rejected rather than broadening the operation.
+`remainingStatus`, `checkpointId`, `phase`, and `status` in addition to the usual repair action
+fields. `remaining` is a bounded presence marker: `0` means no matching work
+remains and `1` means the owner found some work; it is not an exact count.
+`status: "running"` is a successful bounded-progress response at HTTP 200 and
+must be resumed with the same resolved scope. `agentId` is always the resolved
+scope; `allAgents` and `scope: "all"` are rejected rather than broadening the
+operation.
 
 ### GET /api/repair/dedup-stats
 

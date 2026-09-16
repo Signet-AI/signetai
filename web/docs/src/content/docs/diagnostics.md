@@ -45,6 +45,11 @@ POST /api/repair/resync-vec
 POST /api/repair/clean-orphans
 ```
 
+Vector repair is scoped to one resolved agent. `resync-vec` fills canonical
+embeddings missing from the derived index and retains derived rows with no
+provable owner. Its `remaining` field is a bounded 0/1 presence marker; resume
+while `status` is `running`.
+
 The daemon's full-database integrity scan runs in a single-flight worker after
 HTTP readiness, with a 30-second wall-clock budget and periodic progress logs.
 It transactionally rebuilds disposable telemetry indexes when only

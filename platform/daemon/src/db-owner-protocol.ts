@@ -353,6 +353,7 @@ export interface DbOwnerVectorRepairResult {
 	readonly failed: number;
 	readonly affected: number;
 	readonly remaining: number;
+	readonly remainingStatus: "none" | "some";
 	readonly batchRows: number;
 	readonly batchBytes: number;
 	readonly batchProcessed: number;

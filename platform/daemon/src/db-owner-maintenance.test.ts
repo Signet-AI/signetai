@@ -727,11 +727,14 @@ describe("DB owner vector repair", () => {
 		await measuringPromise;
 
 		expect(result.remaining).toBe(0);
-		expect(result.affected).toBe(251);
+		expect(result.affected).toBe(250);
 		expect(batches).toBeGreaterThan(3);
 		expect(Math.max(...latencies)).toBeLessThan(500);
 		const finalDb = new Database(database.path, { readonly: true });
-		expect(finalDb.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get()).toEqual({ n: 250 });
+		expect(finalDb.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get()).toEqual({ n: 251 });
+		expect(finalDb.prepare("SELECT id FROM vec_embeddings WHERE id = 'owner-vector-orphan'").get()).toEqual({
+			id: "owner-vector-orphan",
+		});
 		const audits = finalDb
 			.prepare("SELECT metadata FROM memory_history WHERE metadata LIKE '%operationId%'")
 			.all() as Array<{ metadata: string }>;

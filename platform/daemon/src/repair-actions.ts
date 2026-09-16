@@ -1478,7 +1478,8 @@ export async function reembedModelMigration(
 /**
  * Remove embeddings whose source memory is deleted or missing, unless the
  * vector is still covering an active memory with the same content hash.
- * Syncs vec_embeddings to match.
+ * Remove the corresponding derived vector only when the canonical embedding
+ * is owned by the requested scope; unknown-owner vector rows are untouched.
  */
 export async function cleanOrphanedEmbeddings(
 	accessor: DbAccessor,
@@ -1508,6 +1509,7 @@ export async function cleanOrphanedEmbeddings(
 			skipped: 0,
 			failed: 0,
 			remaining: 0,
+			remainingStatus: "none",
 			batches: 0,
 		};
 	}
@@ -1520,7 +1522,7 @@ export async function cleanOrphanedEmbeddings(
 	if (!result.success && result.failed > 0 && options?.throwOnFailure !== false) {
 		throw new Error("failed to reconcile vec_embeddings before orphan cleanup");
 	}
-	if (result.success) limiter.record(action);
+	if (result.success && result.status === "complete") limiter.record(action);
 	logger.info("pipeline", "repair: cleaned orphaned embeddings", {
 		affected: result.affected,
 		processed: result.processed,
@@ -1538,8 +1540,9 @@ export async function cleanOrphanedEmbeddings(
 // ---------------------------------------------------------------------------
 
 /**
- * Reconcile vec_embeddings with embeddings by deleting orphan vec rows
- * and inserting rows missing from the vec index.
+ * Reconcile the agent-scoped embeddings whose vectors are missing from
+ * vec_embeddings. Unknown-owner vector rows are retained because this
+ * operation cannot safely attribute them to an agent.
  */
 export async function resyncVectorIndex(
 	accessor: DbAccessor,
@@ -1561,13 +1564,14 @@ export async function resyncVectorIndex(
 			operation: "resync",
 			agentId: normalizeRepairAgentId(agentId),
 			checkpointId: "not-created",
-			phase: "orphan-vectors",
+			phase: "missing-vectors",
 			status: "failed",
 			cursor: null,
 			processed: 0,
 			skipped: 0,
 			failed: 0,
 			remaining: 0,
+			remainingStatus: "none",
 			batches: 0,
 		};
 	}
@@ -1576,7 +1580,7 @@ export async function resyncVectorIndex(
 		agentId: normalizeRepairAgentId(agentId),
 		...options,
 	});
-	if (result.success) limiter.record(action);
+	if (result.success && result.status === "complete") limiter.record(action);
 	logger.info("pipeline", "repair: resynced vec index", {
 		affected: result.affected,
 		processed: result.processed,

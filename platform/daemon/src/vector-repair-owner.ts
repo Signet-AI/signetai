@@ -35,6 +35,7 @@ interface CheckpointRow {
 interface CandidateRow {
 	readonly id: string;
 	readonly vector_bytes?: number;
+	readonly dimensions?: number;
 }
 
 interface BatchCounters {
@@ -59,7 +60,7 @@ export interface VectorRepairOwnerOptions {
 }
 
 const INITIAL_PHASE: Record<DbOwnerVectorRepairOperation, DbOwnerVectorRepairPhase> = {
-	resync: "orphan-vectors",
+	resync: "missing-vectors",
 	"clean-orphans": "orphan-embeddings",
 };
 
@@ -103,12 +104,16 @@ function tableExists(db: VectorRepairDb, name: string): boolean {
 	return db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null;
 }
 
+function vectorLookupTable(db: VectorRepairDb): "vec_embeddings" | "vec_embeddings_rowids" {
+	return tableExists(db, "vec_embeddings_rowids") ? "vec_embeddings_rowids" : "vec_embeddings";
+}
+
 function vectorTableDimensions(db: VectorRepairDb): number | null {
 	const row = db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'vec_embeddings'").get() as
 		| { sql?: unknown }
 		| undefined;
 	if (typeof row?.sql !== "string") return null;
-	const match = row.sql.match(/embedding\s+FLOAT\[(\d+)\]/i);
+	const match = row.sql.match(/\bembedding\s+FLOAT\s*\[\s*(\d+)\s*\]/i);
 	if (match === null) return null;
 	const dimensions = Number.parseInt(match[1] ?? "", 10);
 	return Number.isInteger(dimensions) && dimensions > 0 ? dimensions : null;
@@ -126,6 +131,21 @@ function blobForInsert(value: unknown): Buffer | null {
 	return null;
 }
 
+function containsNonFiniteFloat32(value: Uint8Array): boolean {
+	if (value.byteLength === 0 || value.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) return false;
+	const copy = new Uint8Array(value.byteLength);
+	copy.set(value);
+	return new Float32Array(copy.buffer).some((number) => !Number.isFinite(number));
+}
+
+function quarantineVector(db: VectorRepairDb, id: string, dimensions: number, reason: string): void {
+	if (!tableExists(db, "vec_embeddings_quarantine")) return;
+	db.prepare(
+		`INSERT OR REPLACE INTO vec_embeddings_quarantine (rowid, dimensions, reason, quarantinedAt)
+		 VALUES (?, ?, ?, ?)`,
+	).run(id, Math.max(0, Math.floor(dimensions)), reason, nowIso());
+}
+
 function cursorPredicate(
 	alias: string,
 	cursor: string | null,
@@ -134,15 +154,23 @@ function cursorPredicate(
 }
 
 function missingVectorWhere(
+	db: VectorRepairDb,
 	agentId: string,
 	cursor: string | null,
 ): { readonly sql: string; readonly params: readonly unknown[] } {
 	const keyset = cursorPredicate("e", cursor);
+	const vectorTable = vectorLookupTable(db);
+	const quarantineJoin = tableExists(db, "vec_embeddings_quarantine")
+		? "\n			LEFT JOIN vec_embeddings_quarantine q ON q.rowid = e.id"
+		: "";
+	const quarantinePredicate = quarantineJoin.length > 0 ? "\n			  AND q.rowid IS NULL" : "";
 	return {
 		sql: `
 			FROM embeddings e
-			LEFT JOIN vec_embeddings v ON v.id = e.id
+			LEFT JOIN ${vectorTable} v ON v.id = e.id
+			${quarantineJoin}
 			WHERE v.id IS NULL
+			${quarantinePredicate}
 			  AND COALESCE(NULLIF(e.agent_id, ''), 'default') = ?
 			${keyset.sql}`,
 		params: [agentId, ...keyset.params],
@@ -172,19 +200,7 @@ function orphanEmbeddingWhere(
 	};
 }
 
-function orphanVectorWhere(cursor: string | null): { readonly sql: string; readonly params: readonly unknown[] } {
-	const keyset = cursorPredicate("v", cursor);
-	return {
-		sql: `
-			FROM vec_embeddings v
-			LEFT JOIN embeddings e ON e.id = v.id
-			WHERE e.id IS NULL
-			${keyset.sql}`,
-		params: keyset.params,
-	};
-}
-
-function countRemaining(
+function hasRemaining(
 	db: VectorRepairDb,
 	operation: DbOwnerVectorRepairOperation,
 	phase: DbOwnerVectorRepairPhase,
@@ -192,30 +208,14 @@ function countRemaining(
 	cursor: string | null,
 ): number {
 	if (phase === "complete") return 0;
-	if (operation === "resync" && phase === "orphan-vectors") {
-		const query = orphanVectorWhere(cursor);
-		const row = db.prepare(`SELECT COUNT(*) AS n ${query.sql}`).get(...query.params) as { n?: unknown } | undefined;
-		return Math.max(0, Math.floor(numberValue(row?.n)));
-	}
-	if (operation === "resync" && phase === "missing-vectors") {
-		const query = missingVectorWhere(agentId, cursor);
-		const row = db.prepare(`SELECT COUNT(*) AS n ${query.sql}`).get(...query.params) as { n?: unknown } | undefined;
-		return Math.max(0, Math.floor(numberValue(row?.n)));
-	}
-	const query = orphanEmbeddingWhere(agentId, cursor);
-	const row = db.prepare(`SELECT COUNT(*) AS n ${query.sql}`).get(...query.params) as { n?: unknown } | undefined;
-	return Math.max(0, Math.floor(numberValue(row?.n)));
+	if (operation === "resync" && phase === "orphan-vectors") return 0;
+	const query =
+		operation === "resync" ? missingVectorWhere(db, agentId, cursor) : orphanEmbeddingWhere(agentId, cursor);
+	return db.prepare(`SELECT 1 ${query.sql} LIMIT 1`).get(...query.params) != null ? 1 : 0;
 }
 
 function hasCandidate(db: VectorRepairDb, operation: DbOwnerVectorRepairOperation, agentId: string): boolean {
-	if (operation === "resync") {
-		const orphan = orphanVectorWhere(null);
-		if (db.prepare(`SELECT 1 ${orphan.sql} LIMIT 1`).get(...orphan.params) != null) return true;
-		const missing = missingVectorWhere(agentId, null);
-		return db.prepare(`SELECT 1 ${missing.sql} LIMIT 1`).get(...missing.params) != null;
-	}
-	const orphan = orphanEmbeddingWhere(agentId, null);
-	return db.prepare(`SELECT 1 ${orphan.sql} LIMIT 1`).get(...orphan.params) != null;
+	return hasRemaining(db, operation, INITIAL_PHASE[operation], agentId, null) > 0;
 }
 
 function readCheckpoint(
@@ -287,6 +287,7 @@ function checkpointResult(
 		failed: row.failed,
 		affected: row.affected,
 		remaining: row.remaining,
+		remainingStatus: row.remaining === 0 ? "none" : "some",
 		batchRows: counters.batchRows,
 		batchBytes: counters.batchBytes,
 		batchProcessed: counters.batchProcessed,
@@ -306,6 +307,7 @@ function writeAudit(
 	counters: BatchCounters,
 	remaining: number,
 ): void {
+	const agentId = normalizeAgentId(input.agentId);
 	db.prepare(
 		`INSERT INTO memory_history
 			(id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at, actor_type, session_id, request_id)
@@ -318,7 +320,7 @@ function writeAudit(
 			repairAction: input.audit.action,
 			operationId: operationIdValue,
 			phase,
-			checkpointId: readCheckpoint(db, input.operation, input.agentId)?.checkpoint_id ?? input.checkpointId,
+			checkpointId: readCheckpoint(db, input.operation, agentId)?.checkpoint_id ?? input.checkpointId,
 			processed: counters.batchProcessed,
 			skipped: counters.batchSkipped,
 			failed: counters.batchFailed,
@@ -378,76 +380,15 @@ function guard(options: VectorRepairOwnerOptions): void {
 	if (options.shouldAbort?.() === true) throw new VectorRepairAbortError();
 }
 
-function listOrphanVectors(db: VectorRepairDb, cursor: string | null, limit: number): readonly CandidateRow[] {
-	const query = orphanVectorWhere(cursor);
-	return db.prepare(`SELECT v.id ${query.sql} ORDER BY v.id LIMIT ?`).all(...query.params, limit) as CandidateRow[];
-}
-
-function processOrphanVectors(
-	db: VectorRepairDb,
-	row: CheckpointRow,
-	input: DbOwnerVectorRepairInput,
-	limit: number,
-	options: VectorRepairOwnerOptions,
-): { readonly row: CheckpointRow; readonly counters: BatchCounters } {
-	const counters = emptyCounters();
-	const candidates = listOrphanVectors(db, row.cursor, limit);
-	let cursor = row.cursor;
-	const remove = db.prepare("DELETE FROM vec_embeddings WHERE id = ?");
-	for (const candidate of candidates) {
-		guard(options);
-		const id = typeof candidate.id === "string" ? candidate.id : null;
-		if (id === null) continue;
-		const changed = changes(remove.run(id));
-		cursor = id;
-		counters.batchRows += 1;
-		counters.batchProcessed += 1;
-		counters.batchAffected += changed;
-	}
-
-	if (candidates.length === 0) {
-		const nextPhase: DbOwnerVectorRepairPhase = "missing-vectors";
-		const remaining = countRemaining(db, input.operation, nextPhase, row.agent_id, null);
-		const next = updateCheckpoint(db, row, {
-			phase: nextPhase,
-			cursor: null,
-			processed: row.processed,
-			skipped: row.skipped,
-			failed: row.failed,
-			affected: row.affected,
-			remaining,
-			status: "running",
-			lastError: null,
-		});
-		writeAudit(db, input, next.phase, operationId(input.operation, next.phase), counters, remaining);
-		return { row: next, counters };
-	}
-
-	const remaining = countRemaining(db, input.operation, row.phase, row.agent_id, cursor);
-	const next = updateCheckpoint(db, row, {
-		phase: row.phase,
-		cursor,
-		processed: row.processed + counters.batchProcessed,
-		skipped: row.skipped,
-		failed: row.failed,
-		affected: row.affected + counters.batchAffected,
-		remaining,
-		status: "running",
-		lastError: null,
-	});
-	writeAudit(db, input, next.phase, operationId(input.operation, next.phase), counters, remaining);
-	return { row: next, counters };
-}
-
 function listMissingVectors(
 	db: VectorRepairDb,
 	agentId: string,
 	cursor: string | null,
 	limit: number,
 ): readonly CandidateRow[] {
-	const query = missingVectorWhere(agentId, cursor);
+	const query = missingVectorWhere(db, agentId, cursor);
 	return db
-		.prepare(`SELECT e.id, length(e.vector) AS vector_bytes ${query.sql} ORDER BY e.id LIMIT ?`)
+		.prepare(`SELECT e.id, length(e.vector) AS vector_bytes, e.dimensions ${query.sql} ORDER BY e.id LIMIT ?`)
 		.all(...query.params, limit) as CandidateRow[];
 }
 
@@ -470,14 +411,24 @@ function processMissingVectors(
 		guard(options);
 		if (typeof candidate.id !== "string") continue;
 		const declaredBytes = Math.floor(numberValue(candidate.vector_bytes, -1));
-		if (declaredBytes <= 0 || declaredBytes > maxBytes || (dimensions !== null && declaredBytes !== dimensions * 4)) {
+		const declaredDimensions = Math.floor(numberValue(candidate.dimensions, -1));
+		const expectedDimensions = dimensions ?? declaredDimensions;
+		if (
+			declaredDimensions <= 0 ||
+			expectedDimensions <= 0 ||
+			declaredDimensions !== expectedDimensions ||
+			declaredBytes <= 0 ||
+			declaredBytes > VECTOR_REPAIR_MAX_BYTES_PER_BATCH ||
+			declaredBytes !== expectedDimensions * Float32Array.BYTES_PER_ELEMENT
+		) {
 			cursor = candidate.id;
+			quarantineVector(db, candidate.id, expectedDimensions, "embedding blob has invalid dimensions or byte length");
 			counters.batchRows += 1;
 			counters.batchProcessed += 1;
 			counters.batchSkipped += 1;
 			continue;
 		}
-		if (counters.batchBytes > 0 && counters.batchBytes + declaredBytes > maxBytes) break;
+		if (declaredBytes > maxBytes || (counters.batchBytes > 0 && counters.batchBytes + declaredBytes > maxBytes)) break;
 
 		const source = db
 			.prepare("SELECT vector FROM embeddings WHERE id = ? AND COALESCE(NULLIF(agent_id, ''), 'default') = ?")
@@ -487,6 +438,15 @@ function processMissingVectors(
 		const blob = blobForInsert(raw);
 		if (actualBytes === null || blob === null || actualBytes !== declaredBytes || actualBytes % 4 !== 0) {
 			cursor = candidate.id;
+			quarantineVector(db, candidate.id, expectedDimensions, "embedding blob is not a valid binary vector");
+			counters.batchRows += 1;
+			counters.batchProcessed += 1;
+			counters.batchSkipped += 1;
+			continue;
+		}
+		if (containsNonFiniteFloat32(blob)) {
+			cursor = candidate.id;
+			quarantineVector(db, candidate.id, expectedDimensions, "embedding vector contains a non-finite value");
 			counters.batchRows += 1;
 			counters.batchProcessed += 1;
 			counters.batchSkipped += 1;
@@ -509,7 +469,7 @@ function processMissingVectors(
 	}
 
 	if (counters.batchFailed > 0) {
-		const remaining = countRemaining(db, input.operation, row.phase, row.agent_id, cursor);
+		const remaining = hasRemaining(db, input.operation, row.phase, row.agent_id, cursor);
 		const next = updateCheckpoint(db, row, {
 			phase: row.phase,
 			cursor,
@@ -529,9 +489,9 @@ function processMissingVectors(
 		candidates.length === 0 ||
 		(cursor !== null &&
 			counters.batchRows > 0 &&
-			countRemaining(db, input.operation, row.phase, row.agent_id, cursor) === 0)
+			hasRemaining(db, input.operation, row.phase, row.agent_id, cursor) === 0)
 	) {
-		const remaining = countRemaining(db, input.operation, row.phase, row.agent_id, cursor);
+		const remaining = hasRemaining(db, input.operation, row.phase, row.agent_id, cursor);
 		if (remaining === 0) {
 			const next = updateCheckpoint(db, row, {
 				phase: "complete",
@@ -549,7 +509,7 @@ function processMissingVectors(
 		}
 	}
 
-	const remaining = countRemaining(db, input.operation, row.phase, row.agent_id, cursor);
+	const remaining = hasRemaining(db, input.operation, row.phase, row.agent_id, cursor);
 	const next = updateCheckpoint(db, row, {
 		phase: row.phase,
 		cursor,
@@ -598,7 +558,7 @@ function processOrphanEmbeddings(
 		counters.batchAffected += changed;
 	}
 
-	const remaining = countRemaining(db, input.operation, row.phase, row.agent_id, cursor);
+	const remaining = hasRemaining(db, input.operation, row.phase, row.agent_id, cursor);
 	const complete = candidates.length === 0 || remaining === 0;
 	const next = updateCheckpoint(db, row, {
 		phase: complete ? "complete" : row.phase,
@@ -650,15 +610,26 @@ export function applyVectorRepairBatch(
 	}
 
 	let row = ensureCheckpoint(db, { ...input, agentId });
+	if (input.operation === "resync" && row.phase === "orphan-vectors") {
+		row = updateCheckpoint(db, row, {
+			phase: "missing-vectors",
+			cursor: null,
+			processed: row.processed,
+			skipped: row.skipped,
+			failed: row.failed,
+			affected: row.affected,
+			remaining: hasRemaining(db, input.operation, "missing-vectors", agentId, null),
+			status: "running",
+			lastError: null,
+		});
+	}
 	if (row.status === "complete" || row.phase === "complete") {
 		return checkpointResult(row, operationId(input.operation, row.phase), noWork);
 	}
 
 	const result =
 		input.operation === "resync"
-			? row.phase === "orphan-vectors"
-				? processOrphanVectors(db, row, input, limit, options)
-				: processMissingVectors(db, row, input, limit, maxBytes, options)
+			? processMissingVectors(db, row, input, limit, maxBytes, options)
 			: processOrphanEmbeddings(db, row, input, limit, options);
 	row = result.row;
 	return checkpointResult(row, operationId(input.operation, row.phase), result.counters, row.last_error ?? undefined);

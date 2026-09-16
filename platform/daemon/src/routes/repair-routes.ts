@@ -43,6 +43,7 @@ function resolveRepairContext(c: Context): RepairContext {
 
 function repairHttpStatus(result: RepairResult): 200 | 429 | 500 {
 	if (result.success) return 200;
+	if ("status" in result && result.status === "running") return 200;
 	if (
 		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs|already in progress|owner (?:admission|job).*?(?:deadline|queue)|global vector reconciliation/i.test(
 			result.message,
