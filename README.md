@@ -7,11 +7,11 @@
 <a href="https://github.com/Signet-AI/signetai/releases"><img src="https://img.shields.io/github/v/release/Signet-AI/signetai?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
 <a href="https://www.npmjs.com/package/signetai"><img src="https://img.shields.io/npm/v/signetai?style=for-the-badge" alt="npm"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=for-the-badge" alt="Apache-2.0 License"></a>
-<a href="https://docs.signetai.sh/benchmarking/#current-longmemeval-score"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% answer accuracy"></a>
+<a href="https://docs.signetai.sh/benchmarking/"><img src="https://img.shields.io/badge/LongMemEval-97.6%25-black?style=for-the-badge" alt="LongMemEval 97.6% answer accuracy"></a>
 
 **97.6% average LongMemEval answer accuracy**
 
-[Quick start](https://docs.signetai.sh/quickstart/) · [Why Signet](#why-signet) · [Benchmarks](https://docs.signetai.sh/benchmarking/) · [Docs](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7)
+[Quick start](https://docs.signetai.sh/quickstart/) · [Why Signet](https://docs.signetai.sh/what-is-signet/) · [Benchmarks](https://docs.signetai.sh/benchmarking/) · [Docs](https://docs.signetai.sh/quickstart/) · [Discord](https://discord.gg/Psdeg7sQm7)
 
 </div>
 
@@ -31,7 +31,7 @@ This is useful for:
 - **Autonomous agents**—Scheduled agents that run unattended, like a morning-brief or monitoring agent, keep continuity between runs without a human re-priming them each time.
 - **Agent builders**—Ship an agent product without building memory infrastructure from scratch. Signet is the memory layer underneath, with the audit trail doubling as a debugging and trust feature.
 
-Read more: [Why Signet](https://docs.signetai.sh/quickstart/#why-signet) · [Architecture](https://docs.signetai.sh/architecture/) · [Knowledge Graph](https://docs.signetai.sh/knowledge-graph/) · [Pipeline](https://docs.signetai.sh/pipeline/)
+Read more: [Why Signet](https://docs.signetai.sh/what-is-signet/) · [Architecture](https://docs.signetai.sh/architecture/) · [Knowledge Graph](https://docs.signetai.sh/knowledge-graph/) · [Pipeline](https://docs.signetai.sh/pipeline/)
 
 ## Quick start (about 5 minutes)
 
@@ -122,7 +122,7 @@ Supported formats for one-time import:
 - [Quickstart](https://docs.signetai.sh/quickstart/)
 - [CLI Reference](https://docs.signetai.sh/cli/)
 - [Configuration](https://docs.signetai.sh/configuration/)
-- Telemetry
+- [Telemetry](https://docs.signetai.sh/api/telemetry-logs/)
 - [Hooks](https://docs.signetai.sh/hooks/)
 - [Harnesses](https://docs.signetai.sh/harnesses/)
 - [Secrets](https://docs.signetai.sh/secrets/)
@@ -134,8 +134,8 @@ Supported formats for one-time import:
 - [Knowledge Architecture](https://docs.signetai.sh/knowledge-architecture/)
 - [Knowledge Graph](https://docs.signetai.sh/knowledge-graph/)
 - [Benchmarks](https://docs.signetai.sh/benchmarking/)
-- Roadmap
-- Repository Map
+- [Roadmap](https://docs.signetai.sh/roadmap/)
+- [Repository Map](https://github.com/Signet-AI/signetai/blob/main/docs/REPO_MAP.md)
 
 ## Benchmarks
 
@@ -143,7 +143,7 @@ Signet's latest tracked MemoryBench run averages **97.6% LongMemEval answer accu
 
 The benchmark matters because local custody should not mean weak recall. Signet is designed to retrieve the right facts across long-running, multi-session conversations while keeping memory inspectable and repairable.
 
-See [Benchmarks](https://docs.signetai.sh/benchmarking/#current-longmemeval-score) for the methodology, scoring note, and run workflow.
+See [Benchmarks](https://docs.signetai.sh/benchmarking/) for the methodology, scoring note, and run workflow.
 
 ## Development
 
