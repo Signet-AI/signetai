@@ -8,7 +8,7 @@ import {
 } from "@signet/core";
 import { normalizeAndHashContent } from "./content-normalization";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
-import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { createVecMutationBatch, syncVecDeleteBySourceId, vectorToBlob } from "./db-helpers";
 import { linkDerivedMemorySourcesInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import { logger } from "./logger";
@@ -753,14 +753,15 @@ async function embedAggregateMemory(
 			// normal tracker will enqueue this memory against the new active model.
 			if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
 			const embId = randomUUID();
-			syncVecDeleteBySourceId(db, "memory", memoryId);
+			const vecMutations = createVecMutationBatch(db);
+			vecMutations.deleteBySourceId("memory", memoryId);
 			db.prepare("DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?").run(memoryId);
 			db.prepare(`
 			INSERT INTO embeddings
 			  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 			VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
 		`).run(embId, contentHash, vectorToBlob(vec), vec.length, memoryId, content, createdAt);
-			syncVecInsert(db, embId, vec);
+			vecMutations.insert(embId, vec);
 			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
 			return true;
 		},
@@ -1088,7 +1089,7 @@ export async function aggregateRecall(
 						saved = true;
 						return loadAggregateMemory(db, id);
 					},
-					{ siteToken: "aggregate-recall.ts:1014" },
+					{ siteToken: "aggregate-recall.ts:1015" },
 				),
 		);
 		if (row && !deduped) {

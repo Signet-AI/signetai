@@ -23,9 +23,9 @@ import {
 } from "./db-owner-maintenance";
 import {
 	countChanges,
+	createVecMutationBatch,
 	readLiveVecDimensions,
 	syncVecDeleteByEmbeddingIds,
-	syncVecDeleteBySourceExceptHash,
 	syncVecInsert,
 	tableExists,
 	vectorToBlob,
@@ -913,6 +913,7 @@ async function reembedMissingMemoriesBatchForRows(
 			"SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 AND id <> ? LIMIT 1",
 		);
 		const readEmbeddingByHash = db.prepare("SELECT id, agent_id FROM embeddings WHERE content_hash = ? LIMIT 1");
+		const vecMutations = createVecMutationBatch(db);
 
 		for (const { memory, vector } of results) {
 			const current = readCurrentMemory.get(memory.id) as
@@ -966,7 +967,7 @@ async function reembedMissingMemoriesBatchForRows(
 
 			const embId = crypto.randomUUID();
 			const blob = vectorToBlob(vector);
-			syncVecDeleteBySourceExceptHash(db, "memory", memory.id, contentHash);
+			vecMutations.deleteBySourceExceptHash("memory", memory.id, contentHash);
 			db.prepare(
 				`DELETE FROM embeddings
 				 WHERE source_type = 'memory' AND source_id = ?
@@ -991,7 +992,7 @@ async function reembedMissingMemoriesBatchForRows(
 				| { id: string }
 				| undefined;
 			if (actualRow) {
-				syncVecInsert(db, actualRow.id, vector);
+				vecMutations.insert(actualRow.id, vector);
 				count++;
 			}
 		}

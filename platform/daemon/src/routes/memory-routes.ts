@@ -14,7 +14,7 @@ import { dbOwnerQuery } from "../db-owner-runtime";
 import { hybridRecallThroughDbOwner, vectorSearchThroughDbOwner } from "../db-owner-recall";
 import { normalizeAndHashContent } from "../content-normalization";
 import { type ReadDb, type WriteDb, getDbAccessor, runWriteTxAsync, prepareTypedStatement } from "../db-accessor";
-import { syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { createVecMutationBatch, vectorToBlob } from "../db-helpers";
 import { fetchEmbedding } from "../embedding-fetch";
 import { buildEmbeddingHealth } from "../embedding-health";
 import { getDatabaseIntegrityStatus } from "../database-integrity";
@@ -1842,14 +1842,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								await runWriteTxAsync(getDbAccessor(), (db) => {
 									const activeCfg = resolveActiveEmbeddingConfig(db, fullCfgBase.embedding);
 									if (!isActiveEmbeddingConfig(db, activeCfg)) return;
-									syncVecDeleteBySourceId(db, "memory", chunkId);
+									const vecMutations = createVecMutationBatch(db);
+									vecMutations.deleteBySourceId("memory", chunkId);
 									db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(chunkId);
 									db.prepare(`
 										INSERT INTO embeddings
 										  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 										VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
 									`).run(embId, embHash, blob, vec.length, chunkId, plan.normalized.storageContent, now);
-									syncVecInsert(db, embId, vec);
+									vecMutations.insert(embId, vec);
 									db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(
 										fullCfg.embedding.model,
 										chunkId,
@@ -1918,7 +1919,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1919" },
+						{ siteToken: "routes/memory-routes.ts:1920" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -2047,7 +2048,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:2044" },
+					{ siteToken: "routes/memory-routes.ts:2045" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -2117,14 +2118,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					embedded = await runWriteTxAsync(getDbAccessor(), (db) => {
 						const activeCfg = resolveActiveEmbeddingConfig(db, baseCfg.embedding);
 						if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
-						syncVecDeleteBySourceId(db, "memory", id);
+						const vecMutations = createVecMutationBatch(db);
+						vecMutations.deleteBySourceId("memory", id);
 						db.prepare(`DELETE FROM embeddings WHERE source_type = 'memory' AND source_id = ?`).run(id);
 						db.prepare(`
 							INSERT INTO embeddings
 							  (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
 							VALUES (?, ?, ?, ?, 'memory', ?, ?, ?)
 						`).run(embId, embHash, blob, vec.length, id, normalizedContent.storageContent, now);
-						syncVecInsert(db, embId, vec);
+						vecMutations.insert(embId, vec);
 						db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(cfg.embedding.model, id);
 						return true;
 					});
@@ -2291,7 +2293,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					: null;
 				return { row, safety };
 			},
-			{ siteToken: "routes/memory-routes.ts:2263" },
+			{ siteToken: "routes/memory-routes.ts:2265" },
 		);
 		const row = memoryRead.row;
 
@@ -2484,7 +2486,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				// order — creation time is.
 				return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version);
 			},
-			{ siteToken: "routes/memory-routes.ts:2442" },
+			{ siteToken: "routes/memory-routes.ts:2444" },
 		);
 
 		return c.json({
@@ -3651,7 +3653,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
         LIMIT 1
       `)
 						.get(id) as { vector: Buffer } | undefined,
-				{ siteToken: "routes/memory-routes.ts:3641" },
+				{ siteToken: "routes/memory-routes.ts:3643" },
 			);
 
 			if (!embeddingRow) {
@@ -3673,7 +3675,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3675",
+							siteToken: "routes/memory-routes.ts:3677",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3716,7 +3718,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						}),
 					);
 				},
-				{ siteToken: "routes/memory-routes.ts:3693" },
+				{ siteToken: "routes/memory-routes.ts:3695" },
 			);
 
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -3811,7 +3813,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3774" },
+				{ siteToken: "routes/memory-routes.ts:3776" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3863,7 +3865,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3859" },
+			{ siteToken: "routes/memory-routes.ts:3861" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3876,7 +3878,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3877" },
+			{ siteToken: "routes/memory-routes.ts:3879" },
 		);
 		return c.json(report);
 	});
@@ -3957,7 +3959,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3940" },
+					{ siteToken: "routes/memory-routes.ts:3942" },
 				);
 
 				return c.json({
@@ -3987,7 +3989,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3980" },
+			{ siteToken: "routes/memory-routes.ts:3982" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -4019,7 +4021,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:4021",
+						siteToken: "routes/memory-routes.ts:4023",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -4028,7 +4030,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:4024" },
+						{ siteToken: "routes/memory-routes.ts:4026" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {

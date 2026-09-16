@@ -17,7 +17,7 @@
 
 import { createHash } from "node:crypto";
 import type { DbAccessor } from "../db-accessor";
-import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "../db-helpers";
+import { createVecMutationBatch, syncVecDeleteByEmbeddingIds, vectorToBlob } from "../db-helpers";
 import type { EmbeddingFetchOptions } from "../embedding-fetch";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "../embedding-index-state";
 import type { EmbeddingRole } from "../embedding-profile";
@@ -307,18 +307,14 @@ export async function installSkillNode(
 		embeddingCreated = await accessor.withWriteTxAsync(
 			(db: import("../db-accessor").WriteDb) => {
 				if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
+				const vecMutations = createVecMutationBatch(db);
 				// Remove any old skill embeddings
 				const oldEmbs = db
 					.prepare(`SELECT id FROM embeddings WHERE source_type = 'skill' AND source_id = ?`)
 					.all(entityId) as Array<{ id: string }>;
 
 				if (oldEmbs.length > 0) {
-					if (
-						!syncVecDeleteByEmbeddingIds(
-							db,
-							oldEmbs.map((e) => e.id),
-						)
-					) {
+					if (!vecMutations.deleteByEmbeddingIds(oldEmbs.map((e) => e.id))) {
 						throw new Error("failed to reconcile vec_embeddings before replacing skill embedding");
 					}
 					db.prepare(`DELETE FROM embeddings WHERE source_type = 'skill' AND source_id = ?`).run(entityId);
@@ -339,7 +335,7 @@ export async function installSkillNode(
 				// Query back the actual row id — on conflict SQLite keeps the
 				// existing id, not the one we generated above.
 				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embHash) as { id: string };
-				syncVecInsert(db, actualRow.id, embVec);
+				vecMutations.insert(actualRow.id, embVec);
 				return true;
 			},
 			{ siteToken: "pipeline/skill-graph.ts:307", operation: "pipeline.skill-graph.install-embedding" },
@@ -377,7 +373,7 @@ export async function uninstallSkillNode(
 					).run(now, now, metaId, agentId);
 				}
 			},
-			{ siteToken: "pipeline/skill-graph.ts:372", operation: "pipeline.skill-graph.uninstall-metadata" },
+			{ siteToken: "pipeline/skill-graph.ts:368", operation: "pipeline.skill-graph.uninstall-metadata" },
 		);
 		return { removed: false, entityId: null };
 	}
@@ -416,7 +412,7 @@ export async function uninstallSkillNode(
 			}
 			db.prepare("DELETE FROM entities WHERE id = ?").run(entityId);
 		},
-		{ siteToken: "pipeline/skill-graph.ts:385", operation: "pipeline.skill-graph.uninstall" },
+		{ siteToken: "pipeline/skill-graph.ts:381", operation: "pipeline.skill-graph.uninstall" },
 	);
 
 	logger.info("pipeline", "Skill node uninstalled", {

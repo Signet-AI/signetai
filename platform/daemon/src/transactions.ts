@@ -8,7 +8,7 @@
 
 import type { MemoryContentSafetyAssessment } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
-import { syncVecDeleteBySourceExceptHash, syncVecDeleteBySourceId, syncVecInsert, vectorToBlob } from "./db-helpers";
+import { createVecMutationBatch, vectorToBlob } from "./db-helpers";
 import { markDerivedMemoriesStaleForSourceInTx } from "./derived-memory-provenance";
 import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "./embedding-index-state";
 import type { EmbeddingConfig } from "./memory-config";
@@ -516,15 +516,16 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 
 	if (contentChanged) {
 		invalidateDerivedMemoriesForMemoryInTx(db, input.memoryId, existing.agent_id ?? "default", input.changedAt);
+		const vecMutations = createVecMutationBatch(db);
 		const newHash = input.patch.contentHash ?? null;
 		if (newHash) {
-			syncVecDeleteBySourceExceptHash(db, "memory", input.memoryId, newHash);
+			vecMutations.deleteBySourceExceptHash("memory", input.memoryId, newHash);
 			db.prepare(
 				`DELETE FROM embeddings
 				 WHERE source_type = 'memory' AND source_id = ? AND content_hash <> ?`,
 			).run(input.memoryId, newHash);
 		} else {
-			syncVecDeleteBySourceId(db, "memory", input.memoryId);
+			vecMutations.deleteBySourceId("memory", input.memoryId);
 			db.prepare(
 				`DELETE FROM embeddings
 				 WHERE source_type = 'memory' AND source_id = ?`,
@@ -546,7 +547,7 @@ export function txModifyMemory(db: WriteDb, input: ModifyMemoryTxInput): ModifyM
 				   chunk_text = excluded.chunk_text,
 				   created_at = excluded.created_at`,
 			).run(embId, newHash, blob, input.embeddingVector.length, input.memoryId, input.patch.content, input.changedAt);
-			syncVecInsert(db, embId, input.embeddingVector);
+			vecMutations.insert(embId, input.embeddingVector);
 		}
 
 		// FTS sync handled by memories_au AFTER UPDATE trigger (migration 004)

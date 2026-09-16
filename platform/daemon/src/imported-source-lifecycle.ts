@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { SOURCE_CHUNK_SOURCE_TYPE } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
-import { countChanges, syncVecDeleteByEmbeddingIds } from "./db-helpers";
+import { countChanges, createVecMutationBatch } from "./db-helpers";
 import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
 
 export interface MarkImportedSourceUnsupportedInput {
@@ -69,20 +69,21 @@ export function markImportedSourceUnsupported(
 			sourceId,
 		);
 		const prefix = `${sourceId}:`;
-		const embeddingRows = db
-			.prepare(
-				`SELECT id FROM embeddings
+		const embeddingCount = (
+			db
+				.prepare(
+					`SELECT COUNT(*) AS count FROM embeddings
 				 WHERE agent_id = ? AND source_type = ? AND source_id >= ? AND source_id < ?`,
-			)
-			.all(agentId, SOURCE_CHUNK_SOURCE_TYPE, prefix, `${prefix}\uffff`) as Array<{ id: string }>;
-		const embeddingIds = embeddingRows.map((row) => row.id);
-		if (!syncVecDeleteByEmbeddingIds(db, embeddingIds)) {
+				)
+				.get(agentId, SOURCE_CHUNK_SOURCE_TYPE, prefix, `${prefix}\uffff`) as { count: number }
+		).count;
+		const vecMutations = createVecMutationBatch(db);
+		if (!vecMutations.deleteBySourceIdRange(SOURCE_CHUNK_SOURCE_TYPE, prefix, `${prefix}\uffff`, agentId)) {
 			throw new Error("failed to reconcile vec_embeddings before imported-source cleanup");
 		}
-		if (embeddingIds.length > 0) {
-			const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
-			for (const id of embeddingIds) stmt.run(id);
-		}
+		db.prepare(
+			"DELETE FROM embeddings WHERE agent_id = ? AND source_type = ? AND source_id >= ? AND source_id < ?",
+		).run(agentId, SOURCE_CHUNK_SOURCE_TYPE, prefix, `${prefix}\uffff`);
 
 		const derivedMemoryRows = db
 			.prepare(
@@ -154,7 +155,7 @@ export function markImportedSourceUnsupported(
 		});
 		return {
 			artifacts,
-			embeddings: embeddingIds.length,
+			embeddings: embeddingCount,
 			derivedMemories: derivedMemoryIds.length,
 			entities,
 			aspects,
