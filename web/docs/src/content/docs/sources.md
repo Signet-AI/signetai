@@ -1,407 +1,67 @@
 ---
 title: "Sources"
-description: "Connect read-only knowledge bases like Obsidian vaults directly into Signet recall."
+description: "Connect read-only knowledge bases and import durable evidence into Signet."
 ---
 
-Sources are external knowledge bases that Signet can read, index, and recall from without turning them into ordinary saved memories.
+Signet is a local-first memory and context layer for AI agents.
 
-Sources currently support **Web pages**, **Obsidian** vaults, **Discord** guilds, and **GitHub** repositories. Add a public Web page URL and Signet fetches it through the dedicated web provider, uses Defuddle to extract readable Markdown and page metadata, then stores the result as source-backed evidence. Point Signet at an Obsidian vault and the daemon mounts that vault as a read-only knowledge base: Markdown files become searchable artifacts, the vault structure becomes graph topology, and heading-aware chunks participate in semantic recall. Add Discord with a bot-token secret reference and Signet indexes guild topology, channels, threads, members, message windows, and Discord metadata through the same source-owned artifact lifecycle. Add GitHub repositories to index issues, pull requests, discussions, selected Markdown docs, comments, and source failure artifacts through the shared source provider pipeline.
+## Choose the right kind of context
 
-The important rule is simple: **the source stays canonical**. Signet reads from the vault. It does not edit notes, rewrite frontmatter, create files, or move anything inside the source directory.
+- **Native memory** — save a small durable fact or decision that Signet owns. See [Memory](/memory/).
+- **Documents** — ingest text, URLs, or files into linked searchable chunks. See [Documents](/documents/).
+- **Connected sources** — read from an Obsidian vault, Web page, Discord guild, or GitHub repository while the original remains canonical.
+- **Durable transcript imports** — import Signet-exported session JSONL as resumable, provenance-bearing evidence.
 
-## Why Sources exist
+## Connect a source
 
-Saved memories are durable facts that Signet owns. Sources are different: they are existing bodies of knowledge that already have their own structure and lifecycle.
+Open the [Dashboard](/dashboard/) and choose **Sources**. Select **Connect** for Obsidian, GitHub, or Discord, or **Import** for files or a public Web page.
 
-Use Sources when you want Signet to recall from:
+| Source | Required input |
+|---|---|
+| Obsidian | Absolute vault path |
+| GitHub | `owner/repo` or `owner/*` |
+| Discord | Guild ID and bot-token secret reference |
+| Web page | Public `http(s)` URL |
 
-- an Obsidian vault;
-- a local folder of Markdown knowledge;
-- documentation or research notes that should stay under their original editor/workflow;
-- future cloud, code, or document connectors.
-- a public article or documentation page that should remain linked to its original URL.
+Signet reads connected sources and does not edit them. Obsidian files, Discord data, GitHub resources, and Web content remain source-backed recall rather than native memories. Store service tokens as Signet secret references, never as raw source configuration.
 
-A source hit is marked as source-backed recall, not as a native saved memory. Obsidian recall results include a canonical `source_path` so agents and tools can inspect the original file directly.
+Connected sources refresh in place. Unchanged content is skipped, overlapping scans are coalesced, and removed files are soft-deleted from source artifacts while their source-owned chunks are purged. Renames are treated as delete plus add.
 
-## Use the Dashboard
+## Import files
 
-Open the [Dashboard](/dashboard/) and select **Sources**. The current Sources surface starts with a two-step **Add a source** dialog. Choose **Import → Files** or **Import → Web page**, or choose **Connect → Obsidian**, **GitHub**, or **Discord**. Connected-source cards show artifact, chunk, and indexed counts plus source health; they also support re-indexing, snapshot download, and removal.
+Use **Import → Files**, select files, choose duplicate handling, and select **Import & index**. Supported inputs include text, Markdown, JSON, HTML, CSV, and AnyDoc formats: `doc`, `docx`, `docm`, `odt`, `rtf`, `pdf`, `ppt`, `pptx`, `ppsx`, `odp`, `epub`, `xls`, `xlsx`, `xlsm`, and `ods`.
 
-The Dashboard dialog deliberately collects the basic fields only:
+The limits are **25 files per batch**, **25 MiB per file**, and **100 MiB per batch**. Results are reported per file. Choose one duplicate action:
 
-| Kind | Required dashboard input | Optional input |
-|---|---|---|
-| Web page | Public `http(s)` URL | None |
-| Obsidian | Absolute vault path | Display name |
-| GitHub | `owner/repo` or `owner/*` | Display name and token secret reference |
-| Discord | Guild ID and bot-token secret reference | Display name |
+- **Skip duplicate** keeps the existing import.
+- **Replace and re-index** replaces it and queues indexing again.
+- **Import as a new source** retains a second source for the same content.
 
-For an Obsidian vault, **Browse** asks the local daemon to open a folder picker. The desktop shell can use its native picker; browser/dev mode may need a pasted absolute path when no native picker is available.
+File imports create one read-only `import` source per file. Signet stores normalized content and provenance for indexing, but does not write to the original file or retain raw upload bytes.
 
-The Dashboard does not expose Discord mode selectors, channel filters, cache paths, or Gateway-tail controls. Use the CLI or the [Discord source API](/api/documents-sources/#post-api-sources-discord) for those advanced settings. Store tokens in Signet Secrets or another secret reference; do not place raw tokens in source configuration.
+## Import durable agent transcripts
 
-### Import files
+Use the durable Sources job for transcript JSONL, not the synchronous document importer. The supported format is Signet export schema `signet-export`, version `1`: one object per line with `source`, `id`, `harness`, `agent_id`, `session_key`, `project`, `timestamp`, exact `message_count`, and typed `messages`. Message roles are `user`, `assistant`, `system`, `tool`, and `unknown`.
 
-Choose **Import files**, select one or more files, choose how duplicates should be handled, then select **Import & index**. The importer accepts text, Markdown, JSON, HTML, CSV, and AnyDoc-supported document formats: `doc`, `docx`, `docm`, `odt`, `rtf`, `pdf`, `ppt`, `pptx`, `ppsx`, `odp`, `epub`, `xls`, `xlsx`, `xlsm`, and `ods`.
-
-The current bounds are 25 files per batch, 25 MiB per file, and 100 MiB per batch. Results are reported per file, so a malformed or unsupported file does not hide successful imports from the same batch. Choose **Skip duplicate** to keep the existing import, **Replace and re-index** to replace it and queue indexing again, or **Import as a new source** to retain a second source for the same content.
-
-### Agent transcript imports
-
-Transcript JSONL imports use the durable Sources job, not the synchronous document
-importer. The supported input is the Signet export schema (`signet-export`,
-version `1`): one object per line with `source`, `id`, `harness`, `agent_id`,
-`session_key`, `project`, `timestamp`, exact `message_count`, and typed
-`messages`. Roles are `user`, `assistant`, `system`, `tool`, and `unknown`.
-Whitespace, multiline content, roles, projects, timestamps, and provenance are
-retained exactly. The chosen `--agent` owns the import; an embedded `agent_id`
-does not change scope.
-
-Transcript imports and imported-source deletion support Windows, Linux, and macOS.
-The single database owner retains the raw bytes and resumes checksummed uploads.
-See the [import API](/api/documents-sources/#durable-transcript-imports) for upload
-limits, disk-space admission, and migration of older filesystem imports.
+The selected `--agent` owns the import; an embedded `agent_id` does not change scope. Whitespace, multiline content, roles, projects, timestamps, and provenance are retained exactly. The daemon retains raw bytes and resumes checksummed uploads.
 
 ```bash
-signet sources import ./claude.jsonl ./codex.jsonl --kind transcripts --schema signet --agent my-agent --json
+signet sources import ./sessions.jsonl --kind transcripts --schema signet --agent my-agent --json
 signet sources imports status <job-id> --agent my-agent --watch --json
-signet sources imports pause <job-id> --agent my-agent
-signet sources imports resume <job-id> --agent my-agent
-signet sources imports retry <job-id> --agent my-agent
-signet sources imports cancel <job-id> --agent my-agent
 ```
 
-The CLI creates the job before streaming each file and starts it after upload.
-The daemon stages an immutable fsynced JSONL file under the workspace and keeps
-only offsets, hashes, counters, outcomes, and bounded errors in SQLite. Limits
-are one active job/file, 25 records per DB batch, 8 MiB per canonical batch,
-16 MiB per record, 4 MiB per message, and 50,000 messages. Every nonblank line
-is `pending`, then exactly one of `imported`, `duplicate`, or `rejected`.
-Blank lines are counted separately. Same identity and content replays as a
-duplicate; same identity with changed content is rejected as a conflict.
+Limits are **one active job/file**, **25 records per database batch**, **8 MiB per canonical batch**, **16 MiB per record**, **4 MiB per message**, and **50,000 messages**. Each nonblank line becomes exactly one of `imported`, `duplicate`, or `rejected`; blank lines are counted separately. Replaying the same identity and content is a duplicate; changing content for the same identity is rejected as a conflict.
 
-Jobs move through `staging -> inventorying -> queued -> running`, may be
-`paused`, and finish as `completed`, `completed_with_rejections`, or
-`cancelled`. A restart recovers leases and byte checkpoints. Filesystem-first
-canonical writes are verified and replayed without duplicate session, record, or
-turn IDs. Reconciliation exposes the equation `total = imported + duplicate +
-rejected + pending`; terminal jobs have zero pending. Import completion adds one
-Dreaming attention nudge per committed source batch. Dreaming consumption is
-separate and uses its normal delivery/review path.
+Jobs move through `staging → inventorying → queued → running`, may be `paused`, and finish as `completed`, `completed_with_rejections`, or `cancelled`. Restarts recover leases and byte checkpoints. Import completion nudges Dreaming, but Dreaming consumption remains a separate delivery and review path.
 
-In a desktop-local session, **Choose from desktop** can return local paths to a loopback daemon. Remote clients must upload file bytes; a remote daemon never treats a path string as permission to read the client’s filesystem.
+This workflow is different from live hook transcripts. Hooks capture live session activity for session continuity and dedicated transcript search; they do not turn the session into a durable imported source. Use durable imports when an exported transcript must remain attributable, resumable, and purgeable as source evidence.
 
-### Import a Web page
+## Remove a source safely
 
-Choose **Import → Web page**, paste a public `http(s)` URL, and select **Add & index**. Signet follows a small bounded redirect chain, rejects loopback/private/link-local destinations, enforces a timeout, HTML content type, and response-size limit, and does not execute page JavaScript. Defuddle’s Node adapter extracts readable Markdown plus bounded title, author, description, publication date, canonical/original URL, site, language, image, and extraction diagnostics. The original HTML is not retained; the normalized Markdown and provenance are stored as a `web` source artifact. RSS feeds are intentionally out of scope for this version.
+Ordinary source removal through the Dashboard or daemon removes the source configuration and purges Signet-owned artifacts, graph rows, chunks, and embeddings. Source files and external services are untouched.
 
-> TODO: add dark-mode screenshots for the Connect a source and Import files dialogs after capture against a controlled, non-private daemon fixture. This worktree has no such fixture, so no mock or private-path imagery is published here.
+`signet sources remove <sourceId>` tries the daemon first. If the daemon is unavailable, it falls back to **config-only removal** and prints a warning: already-indexed database rows were not purged. Reconnect to the daemon and remove the source again to complete the purge.
 
-## Discord v1
+Imported transcript sources have an additional archival/provenance rule. Removing one purges imported evidence, indexes, and consumption rows, while bounded audit tombstones and routing derived knowledge through unsupported/stale review preserve the import's provenance. Do not treat imported-source removal as ordinary connector cleanup.
 
-Discord Sources v1 indexes bot-accessible guild context through Discord REST API v10 and local Discord Desktop cache artifacts:
-
-```bash
-signet secret put DISCORD_BOT_TOKEN
-signet sources add discord --guild 123456789012345678 --token-ref DISCORD_BOT_TOKEN --name "Team Discord"
-signet sources add discord --guild 123456789012345678 --token-ref DISCORD_BOT_TOKEN --channel general --since 2026-01-01
-signet sources add discord --mode desktop-cache --name "Local Discord Cache"
-signet sources add discord --mode desktop-cache --desktop-cache-path ~/.config/discord --full-cache
-signet sources list
-signet sources snapshot export discord:... --out discord-source.snapshot.json
-signet sources snapshot import discord:... discord-source.snapshot.json
-signet sources remove discord:...
-```
-
-The daemon rejects raw Discord tokens in source config. Store the bot token in Signet Secrets or an external secret reference, then pass the secret name with `--token-ref`.
-
-The Dashboard Sources tab currently exposes the basic Discord guild connection:
-guild ID, display name, and a secret reference. That path queues the default
-REST source index job. Gateway tail, Desktop cache, channel filters, and other
-advanced options are available through the CLI/API source configuration rather
-than the current Dashboard dialog. Desktop cache mode can use the platform
-default Discord Desktop data folder or a picked folder path, and Signet queues
-the shared source index job in the background.
-
-The REST sync path indexes:
-
-- multiple guilds per source;
-- guilds, categories, text channels, announcement channels, forums, media channels, active threads, and archived public/private thread catalogs;
-- guild member snapshots and thread member snapshots;
-- per-message artifacts and message windows with reply references, pins, mentions, attachment metadata, optional bounded text-like attachment contents, embed metadata, poll metadata, reactions metadata, and message lifecycle fields;
-- source checkpoints with latest/backfill cursors and authoritative vs partial status; routine REST refreshes fetch newer messages from the latest checkpoint cursor, then resume bounded historical backfill from the backfill cursor until history is complete within the configured `since` bound;
-- source failure artifacts for unavailable or partial fetches.
-
-The desktop-cache sync path indexes classifiable local Discord Desktop cache
-messages without a bot token or user-token automation:
-
-- route-bearing cached guild and DM messages;
-- local-only direct messages under the synthetic guild id `@me`;
-- cached channel metadata, selected-DM route hints, and inferred DM names;
-- message windows, per-message artifacts, mentions, attachment metadata, embed
-  metadata, poll metadata, and cache-observed checkpoints;
-- an import stats artifact with scanned/skipped counts.
-
-Desktop cache imports are cache-observed, not authoritative. Cache eviction or
-missing local files do not delete previously indexed cache artifacts; removing
-the source still purges all Signet-owned rows for that source.
-
-Gateway tail mode keeps a bot gateway connection open through the shared source
-job lifecycle. It identifies with guild, guild member, guild message, message
-reaction, and message content intents, then indexes gateway-observed message
-creates, message updates, message deletes, channel/thread upserts, member
-upserts, member removals, and per-channel tail checkpoints as Signet source
-artifacts. Removing or canceling the source closes the gateway connection.
-
-Partial Discord listings are never treated as authoritative deletes. If a channel, thread, member, or message fetch fails, Signet records a source failure artifact and preserves existing source-owned rows until a successful sync can refresh them.
-
-Discord sources stay read-only. Signet does not write to Discord, automate user tokens, or selfbot against user accounts.
-
-## Source snapshots
-
-Source snapshots export Signet source artifacts with their provenance so a
-Discord-backed source can be backed up or moved without adopting Discrawl's
-standalone SQLite archive model. Snapshots use `memory_artifacts` rows and are
-imported back through the shared artifact path, which keeps source paths,
-external IDs, FTS indexing, and purge-by-source behavior intact.
-
-Discord Desktop cache DMs are local-only. Snapshot export/import excludes
-artifacts under the synthetic `@me` guild by default; use
-`--include-local-discord` only when intentionally moving that private local
-cache data.
-
-## GitHub v1
-
-GitHub Sources v1 indexes configured repositories through the shared Sources job pipeline:
-
-```bash
-signet sources add github --repo Signet-AI/signetai --name "Signet GitHub"
-signet sources add github --repo Signet-AI/signetai --token-ref GITHUB_TOKEN --resource-type issues --resource-type discussions
-signet sources add github --repo Signet-AI/* --resource-type docs --doc-path "docs/**/*.md" --max-items 50
-signet sources list
-signet sources remove github:...
-```
-
-Without `--token-ref`, GitHub sources default to REST-fetchable resources:
-issues, pull requests, and selected Markdown docs. Discussions use the GitHub
-GraphQL API and require a token reference. Tokens must be stored in Signet
-Secrets or an external secret reference; Signet does not store raw GitHub
-tokens in source config.
-
-GitHub source config is bounded by `maxItemsPerRepo`. Repo globs, issue/PR
-fetches, discussion fetches, and wildcard docs paths all honor configured caps.
-Direct docs paths are limited to Markdown paths or Markdown globs, so GitHub v1
-does not become arbitrary source-code indexing by accident.
-
-Partial GitHub failures are written as source-owned failure artifacts and cause
-the shared source job to report failure instead of silently marking incomplete
-data as fully indexed.
-
-## Operations diagnostics
-
-The sources API and dashboard expose source health diagnostics for operational
-follow-up after sync, import, or removal. Each configured source reports
-artifact and chunk counts, latest artifact/checkpoint timestamps, Discord
-partial-failure artifacts, partial and stale checkpoints, purge residue, and
-source-provenance graph row counts. Discord sources degrade when Signet has
-recorded fetch failures, partial checkpoints, stale checkpoints, deleted
-artifact residue, or orphan chunks. If diagnostics cannot read the backing
-tables, the source health reports `unhealthy` with error context rather than
-pretending the source is healthy.
-
-On macOS, a protected source path denied with `EACCES` is reported as a
-permission issue instead of a transient filesystem failure. The source health
-response and dashboard show one actionable Full Disk Access instruction per
-denied path, including the exact path. The daemon backs off that path while
-permission is denied so a TCC denial does not create a retry storm.
-
-Source artifacts are also scanned by the memory-content-safety policy before
-native recall, source-chunk fallback, Dreaming, or other prompt-facing
-projections use them. The raw artifact and provenance remain unchanged when a
-record is `tainted` or `blocked`; inspect the record and the bounded
-`/api/diagnostics/memory-content-safety` ledger for the decision.
-
-## Obsidian v1
-
-Obsidian Sources v1 indexes Markdown files below a vault root:
-
-```bash
-signet sources add obsidian /path/to/ObsidianVault --name "Research Vault"
-signet sources add obsidian /path/to/ObsidianVault --exclude "private/**" --exclude "*.tmp"
-signet sources list
-signet sources remove obsidian:...
-```
-
-By default, Obsidian sources ignore Obsidian internals, trash, Hermes metadata, hidden dot-folders, and hidden files. Repeat `--exclude` in the CLI or use the API when a vault contains tool folders or file types that should stay outside source recall. The current Dashboard connect form does not expose additional ignore-glob fields.
-
-The dashboard also includes a Sources browser for connecting and removing knowledge bases. In the desktop app, **Browse** opens the native folder picker. In browser/dev mode, Signet tries a daemon-backed OS picker and falls back to asking you to paste the path if no picker is available.
-
-Signet intentionally skips vault metadata and local agent scratch space:
-
-- `.obsidian/`
-- `.trash/`
-- `.hermes/`
-
-## What gets indexed
-
-A connected Obsidian vault is represented at several layers.
-
-### 1. Source artifacts
-
-Each Markdown file is indexed as a read-only source artifact:
-
-- `harness = "obsidian"`
-- `source_kind = "source_obsidian_markdown"`
-- `source_path = /absolute/path/to/file.md`
-
-This gives Signet fast lexical recall and preserves exact file provenance.
-
-### 2. Source-native graph
-
-Signet mounts the vault's shape into the graph instead of flattening it into a bag of notes:
-
-| Obsidian structure | Signet graph representation |
-|--------------------|-----------------------------|
-| Vault root | source / knowledge-base root entity |
-| Folder | source folder entity and community/group |
-| Markdown file | source document entity |
-| Wiki link / backlink | source-owned dependency/relationship |
-| Heading | aspect |
-| Paragraph or durable block | attribute / claim |
-
-The physical vault hierarchy is the primary topology. Semantic enrichment attaches to that topology; it does not replace it.
-
-Source-owned graph rows carry provenance columns where available:
-
-- `source_id`
-- `source_kind`
-- `source_path`
-- `source_root`
-
-### 3. Source chunks and embeddings
-
-Markdown files are also chunked by heading/section for semantic recall. These chunks are retrieval views, not saved memories.
-
-Source chunk embeddings use:
-
-- `source_type = "source_obsidian_chunk"`
-- stable source-owned chunk IDs;
-- chunk text that includes provenance (`source_id`, `source_path`, vault-relative path, heading, and line range);
-- sqlite-vec mirroring when the vector extension is available, with a daemon-side cosine fallback when it is not.
-
-This means a recall can return either a whole source artifact or a tighter source chunk. Both remain clearly marked as Obsidian/source-backed hits.
-
-## Recall behavior
-
-When you recall against Signet, Obsidian source results can appear alongside native memories. Source hits are labeled so callers can tell them apart:
-
-```json
-{
-  "source": "source_obsidian",
-  "type": "source_obsidian_chunk",
-  "source_path": "/path/to/vault/permanent/Idea.md"
-}
-```
-
-For whole-file artifact hits, the content includes a visible header like:
-
-```text
-[Obsidian vault note: /path/to/vault/permanent/Idea.md]
-```
-
-Agents should treat `source_path` as the canonical inspection handle. If a task requires exact context, read the source file rather than guessing from the recall snippet.
-
-## Updating in place
-
-Connected knowledge bases update in place. When files change, the daemon re-reads the source and refreshes Signet-owned artifacts, graph rows, and chunks.
-
-The watcher path is deliberately conservative:
-
-- source config is refreshed dynamically so newly connected/disconnected sources are picked up;
-- scans are single-flight to avoid overlapping source-wide reindex storms;
-- overlapping sync requests are coalesced into one trailing resync;
-- content fingerprints prevent unchanged files from being reprocessed;
-- removed files are soft-deleted from source artifacts and have their source-owned chunks purged;
-- disconnected sources stop participating in future configured-source scans.
-
-The v1 safety model is deliberately conservative rather than a general-purpose queue. It serializes source-wide scans with single-flight state and collapses overlapping requests into one trailing resync. It does not expose tunable queue depth or backpressure settings yet.
-
-Renames are treated as delete + add in v1. That keeps the lifecycle safe and predictable.
-
-## Removing a source
-
-Removing a source is symmetrical with connecting it:
-
-1. remove the source config;
-2. purge Signet-owned source artifacts;
-3. purge source-owned graph rows;
-4. purge source chunk embeddings and sqlite-vec mirror rows when available;
-5. leave source files untouched.
-
-From the dashboard and daemon API, removal performs the full purge. From the CLI, `signet sources remove <sourceId>` tries the daemon first. If the daemon is unavailable, the CLI falls back to local config-only removal and prints an explicit warning that already indexed database rows were not purged.
-
-## Durable file imports
-
-The dashboard Sources page can import files without creating a connector-specific
-integration. The importer creates one read-only `import` source per file and
-keeps the normalized representation source-backed and immediately searchable.
-It does not write to the original file and does not retain the raw upload bytes.
-
-Accepted inputs are text, Markdown, JSON, HTML, CSV, and AnyDoc-backed document
-formats. JSON is preserved as structured JSON, CSV remains one table artifact,
-and office/PDF/e-book formats are converted to Markdown for indexing. Imports
-are bounded to 25 files per batch, 25 MiB per file, and 100 MiB total. Each file
-reports its own result, so unsupported or malformed files do not hide successful
-imports in the same request.
-
-Duplicate content is selected in the import dialog: skip the existing source,
-replace and re-index it, or re-import it as a separate source. The normalized
-content hash, format, original file name, and converter metadata are retained
-as provenance. The import result reports the linked source-document entity and
-the aspects and attributes created by extraction. That extraction outcome is
-stored with the import's primary source artifact, so refresh and restart retain
-the result without relabeling later Dreaming-attributed source work as import
-output. The Sources page shows an unavailable state when connected to an older
-daemon that does not provide the outcome. Semantic graph refinement remains
-asynchronous; source-backed recall is available as soon as indexing completes.
-
-## API surface
-
-The daemon exposes the Sources lifecycle under `/api/sources`:
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/sources` | List configured sources. |
-| `POST` | `/api/sources/import` | Import bounded file batches as durable source artifacts. |
-| `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
-| `POST` | `/api/sources/discord` | Add/update a Discord source and queue a shared source index job. |
-| `POST` | `/api/sources/github` | Add/update a GitHub source and queue a shared source index job. |
-| `POST` | `/api/sources/web` | Add/update a public Web page source and queue a shared source index job. |
-| `GET` | `/api/sources/:sourceId/health` | Inspect source health diagnostics used by the dashboard. |
-| `GET` | `/api/sources/:sourceId/snapshot` | Export source-owned artifacts as a Signet source snapshot. |
-| `POST` | `/api/sources/:sourceId/snapshot/import` | Import a Signet source snapshot into an existing source. |
-| `DELETE` | `/api/sources/:sourceId` | Remove a source config and purge Signet-owned source rows. |
-| `POST` | `/api/sources/pick-directory` | Development/browser fallback for choosing a local directory. |
-
-The desktop shell uses native folder selection through IPC. The daemon picker route is best-effort and may return `501` on systems without `zenity`, `kdialog`, `osascript`, or a configured `SIGNET_DIRECTORY_PICKER`.
-
-## Limitations in v1
-
-- Discord gateway tailing depends on a bot token with the required gateway
-  intents and keeps a source job open while it is connected.
-- Sources are local/operator-managed. Permissions and RBAC are intentionally out of scope for v1.
-- Signet does not write back to Obsidian or Discord.
-- Rename handling is delete + add.
-- Non-Markdown Obsidian attachments are not indexed by the Obsidian v1 source path.
-- Discord attachment binary/media extraction is disabled by default; opt-in text attachment extraction only fetches bounded text-like uploads.
-
-## Operational safety
-
-Sources are designed to be easy to remove and safe to experiment with:
-
-- source files are never deleted or modified by Signet;
-- source-owned database rows carry provenance so they can be purged by source;
-- source recall is visibly distinct from saved memory recall;
-- chunk embeddings are source-owned retrieval views and can be rebuilt from the vault at any time.
-
-If in doubt, remove the source and reconnect it. The vault remains the source of truth.
+For transcript upload details and migration notes, see the [durable transcript import reference](/api/documents-sources/#durable-transcript-imports). For provider-specific options, use the [Sources API reference](/api/documents-sources/).
