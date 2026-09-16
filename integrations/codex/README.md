@@ -39,7 +39,7 @@ older Codex installs.
 
 ```bash
 signet setup --harness codex
-signet connect codex --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
+signet connect codex --url http://signet.example.com:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 For a remote Codex install that must write to one Signet agent, create the API
@@ -47,7 +47,7 @@ key with that agent scope on the daemon machine before installing:
 
 ```bash
 signet api-key create --name "codex tailnet" --connector codex --agent-id <agent-name>
-signet connect codex --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
+signet connect codex --url http://signet.example.com:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 The `--agent-id` on `signet api-key create` is enforced by daemon auth scope;
@@ -60,7 +60,7 @@ npm installer. The same installer works when the only Codex executable is the
 one bundled by ChatGPT.app:
 
 ```bash
-npx -y @signetai/connector-codex install --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
+npx -y @signetai/connector-codex install --url http://signet.example.com:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 ## Uninstallation

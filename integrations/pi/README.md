@@ -16,7 +16,7 @@ Integrates Signet's memory system with Pi via its extension mechanism.
 
 ```bash
 signet setup --harness pi
-signet connect pi --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
+signet connect pi --url http://signet.example.com:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 Interactive setup can also detect Pi and offer to configure it. On a machine
@@ -24,7 +24,7 @@ where you only want to install the Pi integration, use the standalone npm
 installer:
 
 ```bash
-npx -y @signetai/connector-pi install --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
+npx -y @signetai/connector-pi install --url http://signet.example.com:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 ## Uninstallation

@@ -19,7 +19,7 @@ Integrates Signet's memory system with OpenCode via its plugin system.
 
 ```bash
 signet setup --harness opencode
-signet connect opencode --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
+signet connect opencode --url http://signet.example.com:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 Interactive setup can also detect OpenCode and offer to configure it. On a
@@ -28,7 +28,7 @@ standalone npm installer:
 
 ```bash
 npx -y @signetai/connector-opencode install \
-  --url http://signet-home.tailnet:3850 \
+  --url http://signet.example.com:3850 \
   --api-key "$SIGNET_API_KEY" \
   --agent-id personal
 ```
