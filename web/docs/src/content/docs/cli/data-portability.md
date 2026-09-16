@@ -53,7 +53,7 @@ multiline messages, `user`/`assistant`/`system`/`tool`/`unknown` roles, projects
 historical timestamps, and source provenance. `--agent` is the target scope;
 an embedded `agent_id` is not an authorization or routing override. Same
 identity plus same content is `duplicate`; same identity plus changed content is
-`conversation_identity_conflict`. Blank lines are ignored.
+`conversation_identity_conflict`. Blank lines are skipped: they do not create import records or increment record counters, although they still advance line-number checkpoints. Consequently, blank lines are excluded from the completed-job reconciliation total.
 
 Transcript imports and imported-source deletion support Windows, Linux, and macOS.
 The single database owner retains the raw bytes and resumes checksummed uploads.
@@ -70,8 +70,15 @@ The client verifies the local prefix against the durable checksum chain before
 continuing. Finalization makes one streaming pass over the stored file for its
 standard SHA-256 identity. Parsing starts only after evidence is sealed.
 
-Limits are one active job/file, 25 records per DB batch, 8 MiB per canonical
-batch, 16 MiB per record, 4 MiB per message, and 50,000 messages. States are
+There are two transcript-import upload routes with different contracts. The legacy
+`POST /api/sources/import` multipart route accepts up to 25 files per request, 25 MiB
+per file, and 100 MiB per upload batch. The durable `POST /api/sources/imports` route
+creates a job with up to 25 file entries; its resumable file upload accepts up to 64
+GiB per file. Its `PATCH` chunks are limited to 1 MiB, but that is a chunk limit, not a
+whole-file or batch limit. Each transcript record may be up to 16 MiB and each message
+up to 4 MiB, with at most 50,000 messages per record. The worker commits at most 25
+records per internal batch and caps each canonical batch at 8 MiB; these are processing
+bounds, not upload-request limits. States are
 `staging`, `inventorying`, `queued`, `running`, `paused`, `completed`,
 `completed_with_rejections`, and `cancelled`. Restart recovers leases and byte
 offsets. The completed-job reconciliation invariant is `total = imported + duplicate

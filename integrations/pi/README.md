@@ -16,7 +16,7 @@ Integrates Signet's memory system with Pi via its extension mechanism.
 
 ```bash
 signet setup --harness pi
-signet connect pi --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connect pi --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 Interactive setup can also detect Pi and offer to configure it. On a machine
@@ -24,7 +24,7 @@ where you only want to install the Pi integration, use the standalone npm
 installer:
 
 ```bash
-npx -y @signetai/connector-pi install --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+npx -y @signetai/connector-pi install --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 ## Uninstallation
@@ -35,7 +35,7 @@ The connector package exposes programmatic cleanup that removes the extension fi
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-pi` |
+| Package | `@signetai/connector-pi` |
 | License | Apache-2.0 |
 
 ## Compatibility
@@ -62,4 +62,4 @@ under pi-mono. See [#887](https://github.com/Signet-AI/signetai/issues/887).
 ~/.agents/                     <-- agent workspace
 ```
 
-The connector extends `BaseConnector` from `@signet/connector-base` and implements `install()` / `uninstall()` for reversible setup.
+The connector extends `BaseConnector` from `@signetai/connector-base` and implements `install()` / `uninstall()` for reversible setup.

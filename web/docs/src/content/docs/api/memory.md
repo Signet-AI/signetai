@@ -15,3 +15,5 @@ The memory API covers the complete memory lifecycle, from raw-first writes throu
   Inspect embedding records, worker health, and projections.
 
 For authentication and envelope conventions, start with the [HTTP API overview](/api/).
+For the complete route, permission, and compatibility-path inventory, see the
+[API route inventory](/api/route-inventory/).

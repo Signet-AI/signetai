@@ -27,6 +27,8 @@ Connected sources keep their original files and service data canonical. Obsidian
 
 Connected sources refresh in place. Unchanged content is skipped, overlapping scans are coalesced, and removed files become soft-deleted source artifacts while their source-owned chunks are purged. Renames are treated as delete plus add.
 
+If a source is `unhealthy` or indexing fails, inspect its health and error details, correct the provider permission, secret reference, URL, or daemon-local path, then queue **Re-index**. Verify the next health result before removing and recreating the source.
+
 ## Import files
 
 Use **Import → Files**, select files, choose duplicate handling, and select **Import & index**. Supported inputs include text, Markdown, JSON, HTML, CSV, and AnyDoc formats: `doc`, `docx`, `docm`, `odt`, `rtf`, `pdf`, `ppt`, `pptx`, `ppsx`, `odp`, `epub`, `xls`, `xlsx`, `xlsm`, and `ods`.
@@ -50,7 +52,7 @@ signet sources import ./sessions.jsonl --kind transcripts --schema signet --agen
 signet sources imports status <job-id> --agent my-agent --watch --json
 ```
 
-Limits are **one active job/file**, **25 records per database batch**, **8 MiB per canonical batch**, **16 MiB per record**, **4 MiB per message**, and **50,000 messages**. Each nonblank line becomes exactly one of `imported`, `duplicate`, or `rejected`; blank lines are counted separately. Replaying the same identity and content is a duplicate; changing content for the same identity is rejected as a conflict.
+Limits are **one active job/file**, **25 records per database batch**, **8 MiB per canonical batch**, **16 MiB per record**, **4 MiB per message**, and **50,000 messages**. Each nonblank line becomes exactly one of `imported`, `duplicate`, or `rejected`. Blank lines are skipped: they do not create import records or increment record counters, although they still advance line-number checkpoints. Consequently, blank lines are excluded from the completed-job reconciliation total. Replaying the same identity and content is a duplicate; changing content for the same identity is rejected as a conflict.
 
 Jobs move through `staging → inventorying → queued → running`, may be `paused`, and finish as `completed`, `completed_with_rejections`, or `cancelled`. Restarts recover leases and byte checkpoints. Import completion nudges Dreaming, but Dreaming consumption remains a separate delivery and review path.
 

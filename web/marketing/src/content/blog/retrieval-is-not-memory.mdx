@@ -23,7 +23,7 @@ LongMemEval and LoCoMo are the two most rigorous public benchmarks for long-term
 
 But they measure one thing: given a question about something discussed in a conversation history, can the system find the relevant information and generate a correct answer?
 
-That is retrieval plus reasoning, one part of a persistent memory system.
+That's retrieval plus reasoning. It is not memory.
 
 Memory, the kind that makes agents genuinely useful across weeks and months of interaction, includes things no retrieval benchmark tests. Does the agent know who it is? Does it maintain consistent personality and values across sessions? Does it track decisions and the reasoning behind them? Does it distinguish between a preference stated yesterday and one that was corrected this morning? Does it understand your projects as organized knowledge rather than retrieved facts? Does it get better at anticipating what you need?
 
@@ -37,7 +37,7 @@ The system replaces vector search with active agentic reasoning. Instead of comp
 
 For a benchmark, that's fine. For a production system running thousands of queries per day, serving agents that need sub-second response times, operating on user-owned hardware with local models, it's a different universe entirely.
 
-Supermemory knew this. That was the entire point. Under their own proposed MemScore standard, ASMR scores 99% | 99% | 70,000ms | 10k tokens. Its latency and token footprint show the operating cost of that configuration.
+Supermemory knew this. That was the entire point. Under their own proposed MemScore standard, ASMR scores 99% | 99% | 70,000ms | 10k tokens. Nobody ships that. They built the ceiling case to show that reaching it means nothing if you can't afford to stay there.
 
 The broader landscape tells a similar story. Mastra OM achieves 84% with observer/reflector agents and scales to 94.87% with newer models. Hindsight from Vectorize hits 91.4% with Gemini-3. MemMachine scores above 91% with aggressive token compression. Each of these systems does something interesting. None of them addresses anything beyond the retrieval problem.
 
@@ -49,7 +49,7 @@ That second number is the one worth sitting with. Hit@10 means the correct memor
 
 Here's how we got there: **zero LLM calls at retrieval time**.
 
-Signet's retrieval is algorithmic. It walks a [knowledge graph](/blog/knowledge-architecture/), runs FTS5 keyword search, computes vector similarity against pre-embedded memories, then applies three stages of post-fusion dampening to separate signal from noise. The retrieval path uses data structures, indexes, and scoring rather than per-query agent orchestration.
+Signet's retrieval is entirely algorithmic. It walks a [knowledge graph](/blog/knowledge-architecture/), runs FTS5 keyword search, computes vector similarity against pre-embedded memories, then applies three stages of post-fusion dampening to separate signal from noise. No agents reading through findings. No parallel orchestrators. No ensemble voting. Just data structures, indexes, and math.
 
 The graph walk identifies focal entities from session context, traverses their aspects and attributes, follows dependency edges to related entities. FTS5 catches terminology variations that the graph hasn't connected. Vector search surfaces semantically related content the other channels missed. Then post-fusion dampening runs three corrections: gravity dampening removes semantic ghosts (high cosine similarity but zero vocabulary overlap), hub dampening demotes well-connected entities that appear in everything, and resolution boosting elevates actionable knowledge like decisions and constraints.
 
@@ -77,7 +77,7 @@ All of this is still about retrieval. And retrieval is only one dimension of wha
 
 Consider what happens after you solve retrieval perfectly. Your agent can find any fact from any past conversation with 100% accuracy. Now ask: does it preserve your instructions and preferences across sessions? Does it remember *why* one architecture was chosen over another three weeks ago? Can it work in Claude Code, then continue in Cursor, then pick up in OpenCode with the same knowledge and understanding of your work?
 
-These are persistence and continuity concerns that sit alongside retrieval. They live in the layer that carries instructions, decisions, and workspace context between sessions.
+These are not retrieval problems. They're persistence and continuity problems. They live in a layer of the stack that most memory systems don't address because they've framed the entire challenge as "find the fact."
 
 Signet addresses them because we think they're the actual hard problem.
 
@@ -103,7 +103,7 @@ quality1% / quality2% / avg_latency_ms / tokens
 
 Quality on at least two benchmarks, to prevent overfitting to one. Average retrieval latency, wall-clock, excluding answering model inference. Tokens injected into the answering model per query.
 
-This is a meaningful improvement over single-number reporting. Under MemScore, ASMR's latency and token footprint are visible alongside its quality scores: 99% | 99% | 70,000ms | 10k.
+This is a meaningful improvement over the status quo, where providers report a single accuracy number and let the audience fill in the gaps with optimism. Under MemScore, ASMR's absurdity is immediately visible: 99% | 99% | 70,000ms | 10k. Nobody ships that.
 
 MemScore is a genuine step toward honest reporting, and the industry needs it. The spec is open source on memorybench. We'd encourage every provider to adopt it, and we'll report our own numbers in that format when we publish full-scale benchmark results.
 
@@ -133,4 +133,4 @@ The question is what the agent already knows when it walks into the room.
 
 ---
 
-*Signet is open source. The [knowledge architecture](/blog/knowledge-architecture/), the desire paths traversal system, and the [extraction pipeline](https://docs.signetai.sh/pipeline/) are all part of the shipped substrate. [Local-first](/blog/why-local-first-memory/). User-owned. Retrieval requires no API keys; continuity also depends on provenance, durable instructions, and workspace context.*
+*Signet is open source. The [knowledge architecture](/blog/knowledge-architecture/), the desire paths traversal system, and the [extraction pipeline](https://docs.signetai.sh/pipeline/) are all part of the shipped substrate. [Local-first](/blog/why-local-first-memory/). User-owned. No API keys required for retrieval. If retrieval were memory, we'd be done. We're not done.*

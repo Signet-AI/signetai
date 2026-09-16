@@ -168,7 +168,15 @@ export default defineConfig({
 								},
 								{ label: "Documents and sources", slug: "api/documents-sources" },
 								{ label: "Runtime extensions", slug: "api/runtime-extensions" },
-								{ label: "Sessions and hooks", slug: "api/sessions-hooks" },
+								{
+									label: "Sessions and hooks",
+									collapsed: true,
+									items: [
+										{ label: "Overview", slug: "api/sessions-hooks" },
+										{ label: "Hook endpoints", slug: "api/sessions-hooks/hooks" },
+										{ label: "Session endpoints", slug: "api/sessions-hooks/sessions" },
+									],
+								},
 								{ label: "Operations", slug: "api/operations" },
 								{ label: "Knowledge and ontology", slug: "api/knowledge-ontology" },
 								{ label: "Telemetry and logs", slug: "api/telemetry-logs" },
@@ -221,7 +229,15 @@ export default defineConfig({
 						},
 						{ label: "Contributing", slug: "contributing" },
 						{ label: "Your first PR", slug: "first-pr" },
-						{ label: "Benchmarks", slug: "benchmarking" },
+						{
+							label: "Benchmarks",
+							collapsed: true,
+							items: [
+								{ label: "Overview", slug: "benchmarking" },
+								{ label: "Operations", slug: "benchmarking/operations" },
+								{ label: "Progress", slug: "benchmarking/progress" },
+							],
+						},
 						{ label: "Roadmap", slug: "roadmap" },
 					],
 				},

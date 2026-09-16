@@ -62,8 +62,8 @@ Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`.
 | GET | `/api/diagnostics/memory-content-safety` | pipeline routes | operator/admin (handler guard) | canonical |
 | GET | `/api/diagnostics/openclaw` | pipeline routes | operator/admin (handler guard) | canonical |
 | POST | `/api/diagnostics/openclaw/heartbeat` | pipeline routes | operator/admin (handler guard) | canonical |
-| GET | `/api/diagnostics/queue` | queue diagnostics | operator/admin (handler guard) | canonical |
-| POST | `/api/diagnostics/queue/repair` | queue diagnostics | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/queue` | queue diagnostics | admin | canonical |
+| POST | `/api/diagnostics/queue/repair` | queue diagnostics | admin | canonical |
 | GET | `/api/diagnostics/transcripts` | pipeline routes | operator/admin (handler guard) | canonical |
 | GET | `/api/diagnostics/workloads` | pipeline routes | operator/admin (handler guard) | canonical |
 | GET | `/api/documents` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
@@ -71,16 +71,16 @@ Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`.
 | DELETE | `/api/documents/:id` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/documents/:id` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/documents/:id/chunks` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
-| POST | `/api/dream/exclusions/requeue` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| POST | `/api/dream/operations` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/dream/passes/:passId/events` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/dream/passes/:passId/tools` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/dream/passes/active` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/dream/quality` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/dream/status` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/dream/tools` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| POST | `/api/dream/tools/:capability` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
-| POST | `/api/dream/trigger` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/dream/exclusions/requeue` | pipeline routes | admin | canonical |
+| POST | `/api/dream/operations` | pipeline routes | modify | canonical |
+| GET | `/api/dream/passes/:passId/events` | pipeline routes | admin | canonical |
+| GET | `/api/dream/passes/:passId/tools` | pipeline routes | admin | canonical |
+| GET | `/api/dream/passes/active` | pipeline routes | admin | canonical |
+| GET | `/api/dream/quality` | pipeline routes | admin | canonical |
+| GET | `/api/dream/status` | pipeline routes | admin | canonical |
+| GET | `/api/dream/tools` | pipeline routes | modify | canonical |
+| POST | `/api/dream/tools/:capability` | pipeline routes | modify | canonical |
+| POST | `/api/dream/trigger` | pipeline routes | admin | canonical |
 | GET | `/api/embeddings` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/embeddings/health` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/embeddings/projection` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
@@ -100,24 +100,26 @@ Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`.
 | POST | `/api/graphiq/update` | graphiq routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/harnesses` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/harnesses/:id/connect` | harness install | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/harnesses/:id/repair` | harness install | admin; returns `200` with success JSON, `400` for unsupported agents or recovery, `409` when another action is running, `503` when unavailable, or `500` on failure | canonical |
 | GET | `/api/harnesses/:id/health` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/harnesses/:id/reinitialize` | harness install | admin; requires `{ "confirm": true }`; returns `200` with success JSON, `400` for unsupported agents/recovery or missing confirmation, `409` when another action is running, `503` when unavailable, or `500` on failure | canonical |
 | POST | `/api/harnesses/regenerate` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/home/greeting` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/hook/remember` | memory routes | global auth middleware; route-specific guard where applicable | compatibility alias |
 | POST | `/api/hooks/compaction-complete` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/notifications` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/pre-compaction` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/recall` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/remember` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/session-checkpoint-extract` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/session-end` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/session-start` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/skill-invocation` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/synthesis` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/synthesis/complete` | hooks routes | internal integration | canonical |
-| GET | `/api/hooks/synthesis/config` | hooks routes | internal integration | canonical |
-| GET | `/api/hooks/transcript-capture/:jobId` | hooks routes | internal integration | canonical |
-| POST | `/api/hooks/user-prompt-submit` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/notifications` | hooks routes | `recall` permission | canonical |
+| POST | `/api/hooks/pre-compaction` | hooks routes | `remember` permission when a transcript is supplied; see [canonical sessions and hooks reference](./sessions-hooks/) for detailed permission behavior | canonical |
+| POST | `/api/hooks/recall` | hooks routes | Permissioned recall; aggregate save additionally requires `remember`; see [canonical sessions and hooks reference](./sessions-hooks/) | canonical |
+| POST | `/api/hooks/remember` | hooks routes | Permissioned memory write; see [canonical sessions and hooks reference](./sessions-hooks/) | canonical |
+| POST | `/api/hooks/session-checkpoint-extract` | hooks routes | `remember` permission | canonical |
+| POST | `/api/hooks/session-end` | hooks routes | `remember` permission when a transcript is supplied; see [canonical sessions and hooks reference](./sessions-hooks/) | canonical |
+| POST | `/api/hooks/session-start` | hooks routes | Session context hook; detailed permission behavior is in the [canonical sessions and hooks reference](./sessions-hooks/) | canonical |
+| POST | `/api/hooks/skill-invocation` | hooks routes | `remember` permission | canonical |
+| POST | `/api/hooks/synthesis` | hooks routes | Agent-scoped compatibility boundary; see [canonical sessions and hooks reference](./sessions-hooks/) | canonical |
+| POST | `/api/hooks/synthesis/complete` | hooks routes | Retired endpoint returns structured `410` JSON; use `/api/synthesis/trigger` | retired / 410 |
+| GET | `/api/hooks/synthesis/config` | hooks routes | Legacy synthesis configuration; see [canonical sessions and hooks reference](./sessions-hooks/) | canonical |
+| GET | `/api/hooks/transcript-capture/:jobId` | hooks routes | Requires `remember` permission; returns `404` when the capture job is not found | canonical |
+| POST | `/api/hooks/user-prompt-submit` | hooks routes | Bounded concurrency; returns `503` when the prompt-admission limit is saturated | canonical |
 | GET | `/api/identity` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/inference/catalog` | inference | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/inference/execute` | inference | global auth middleware; route-specific guard where applicable | canonical |
@@ -203,7 +205,7 @@ Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`.
 | GET | `/api/ontology/entities/:id/aliases` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/ontology/entities/:id/aliases` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
 | DELETE | `/api/ontology/entities/:id/aliases/:aliasId` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
-| POST | `/api/ontology/extract` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/extract` | ontology routes | modify | canonical |
 | GET | `/api/ontology/links/:id/evidence` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/ontology/operations/apply` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/ontology/operations/batch` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
@@ -268,7 +270,7 @@ Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`.
 | POST | `/api/reflections/generate` | reflection routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/reflections/today` | reflection routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/repair/backfill-hints` | repair routes | operator/admin (handler guard) | canonical |
-| POST | `/api/repair/backfill-skipped` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/backfill-skipped` | repair routes | operator/admin (handler guard) | retired / 410 |
 | POST | `/api/repair/check-fts` | repair routes | operator/admin (handler guard) | canonical |
 | POST | `/api/repair/clean-orphans` | repair routes | operator/admin (handler guard) | canonical |
 | POST | `/api/repair/cluster-entities` | repair routes | operator/admin (handler guard) | canonical |
@@ -310,14 +312,14 @@ Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`.
 | GET | `/api/secrets/exec/:jobId` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/sessions` | session routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/sessions/:key{(?!summaries$)[^/]+}` | session routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/sessions/:key{(?!summaries$)[^/]+}/blackbox` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sessions/:key{(?!summaries$)[^/]+}/blackbox` | session routes | `recall` permission | canonical |
 | POST | `/api/sessions/:key{(?!summaries$)[^/]+}/bypass` | session routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/sessions/:key{(?!summaries$)[^/]+}/renew` | session routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/sessions/:key{(?!summaries$)[^/]+}/transcript` | session routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/sessions/blackbox` | session routes | global auth middleware; route-specific guard where applicable | canonical |
-| POST | `/api/sessions/search` | session routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/sessions/summaries` | session routes | global auth middleware; route-specific guard where applicable | canonical |
-| POST | `/api/sessions/summaries/expand` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sessions/:key{(?!summaries$)[^/]+}/transcript` | session routes | `recall` permission | canonical |
+| GET | `/api/sessions/blackbox` | session routes | `recall` permission | canonical |
+| POST | `/api/sessions/search` | session routes | `recall` permission | canonical |
+| GET | `/api/sessions/summaries` | session routes | `recall` permission | canonical |
+| POST | `/api/sessions/summaries/expand` | session routes | `recall` permission | canonical |
 | GET | `/api/skills` | skills | global auth middleware; route-specific guard where applicable | canonical |
 | DELETE | `/api/skills/:name` | skills | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/skills/:name` | skills | global auth middleware; route-specific guard where applicable | canonical |
@@ -351,12 +353,12 @@ Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`.
 | GET | `/api/status` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
 | GET | `/api/synthesis/status` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
 | POST | `/api/synthesis/trigger` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/telemetry/events` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/telemetry/export` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/telemetry/health` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/telemetry/memory-search` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/telemetry/memory-search/export` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
-| GET | `/api/telemetry/stats` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/telemetry/events` | telemetry routes | `analytics` permission | canonical |
+| GET | `/api/telemetry/export` | telemetry routes | `analytics` permission | canonical |
+| GET | `/api/telemetry/health` | telemetry routes | `analytics` permission | canonical |
+| GET | `/api/telemetry/memory-search` | telemetry routes | `analytics` permission | canonical |
+| GET | `/api/telemetry/memory-search/export` | telemetry routes | `analytics` permission | canonical |
+| GET | `/api/telemetry/stats` | telemetry routes | `analytics` permission | canonical |
 | GET | `/api/troubleshoot/commands` | repair routes | operator/admin (handler guard) | canonical |
 | POST | `/api/troubleshoot/exec` | repair routes | operator/admin (handler guard) | canonical |
 | GET | `/api/update/check` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |

@@ -7,9 +7,24 @@ Construct `SignetClient` with `daemonUrl`, `token`, `actor`, `actorType`, `timeo
 
 ```ts
 import { SignetClient } from "@signet/sdk";
-const client = new SignetClient({ daemonUrl: "http://localhost:3850", token: process.env.SIGNET_TOKEN });
+const client = new SignetClient({ daemonUrl: "http://localhost:3850", token: process.env.SIGNET_API_KEY });
 const saved = await client.remember("The project uses Bun", { type: "fact", mode: "sync" });
 const result = await client.recall("package manager", { limit: 5, minScore: 0.5 });
+```
+
+`createToken({ role, scope?, ttlSeconds? })` returns `{ token, expiresAt }`.
+The daemon's role-to-permission mapping is: `admin` → `remember`, `recall`,
+`modify`, `forget`, `recover`, `admin`, `documents`, `connectors`,
+`diagnostics`, `analytics`; `operator` → the same except `admin`; `agent` →
+`remember`, `recall`, `modify`, `forget`, `recover`, `documents`; and
+`readonly` → `recall`. See [Authentication](/auth/#roles-permissions-and-one-time-credentials/)
+for scope restrictions and permission narrowing. `scope` may contain
+`project`, `agent`, and `user`; matching request targets are required for
+scoped non-admin tokens. `whoami()` returns `{ authenticated, claims }`.
+
+```ts
+const issued = await client.createToken({ role: "agent", scope: { project: "demo", agent: "writer" }, ttlSeconds: 3600 });
+const identity = await client.whoami();
 ```
 
 ## Public groups
@@ -20,6 +35,4 @@ const result = await client.recall("package manager", { limit: 5, minScore: 0.5 
 - Hooks: `sessionStart`, `userPromptSubmit`, `sessionEnd`, `preCompaction`, `compactionComplete`, `hookRemember`, `hookRecall`, `requestSynthesis`.
 - Connectors: `listConnectors`, `getConnector`, `createConnector`, `syncConnector`, `resyncAllConnectors`, `fullSyncConnector`, `deleteConnector`, `getConnectorHealth`.
 
-Use exported camelCase TypeScript options where the SDK defines them; some batch/document wire fields remain snake_case. `createConnector` uses `settings`; current providers are `filesystem`, `github-docs`, and `gdrive`. `requestSynthesis` requests a daemon-owned run. Secret execution returns a job; poll it before reading redacted results.
-
-> **Privileged:** `createToken`, secret/provider operations, and configuration-changing methods require daemon authorization. The SDK does not elevate callers.
+Use exported camelCase options where defined; some batch/document wire fields remain snake_case. `createConnector` uses `settings`. Secret execution returns a job; poll it before reading redacted results. Privileged methods require daemon authorization; the SDK does not elevate callers.

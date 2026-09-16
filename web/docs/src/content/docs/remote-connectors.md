@@ -14,7 +14,11 @@ signet api-key create --name "work laptop codex" --connector codex --agent-id co
 signet api-key list
 ```
 
-The raw `sig_sk_...` value is shown once. Store it in the connector's secret mechanism. `SIGNET_API_KEY` is the current runtime variable; `SIGNET_TOKEN` is a backwards-compatible alias.
+The raw key is shown once. Store it in the connector's secret mechanism, not in
+checked-in configuration, shell history, or a URL. Provision it as
+`SIGNET_API_KEY` (or use `SIGNET_TOKEN`, the backwards-compatible alias) before
+running the installer. Use `$secret:NAME` only in fields that accept secret
+references; never put the raw key after `$secret:`.
 
 ## 2. Install a connector
 
@@ -23,18 +27,20 @@ Use the CLI when it is already installed:
 ```bash
 signet connector install codex \
   --url https://signet.example.com \
-  --api-key sig_sk_... \
+  --api-key "$SIGNET_API_KEY" \
   --agent-id codex-work-laptop
 ```
 
 Or use the connector package directly:
 
 ```bash
-npx -y @signetai/codex-plugin install \
+npx -y @signetai/connector-codex install \
   --url https://signet.example.com \
-  --api-key sig_sk_... \
+  --api-key "$SIGNET_API_KEY" \
   --agent-id codex-work-laptop
 ```
+
+For Codex's native-plugin-oriented installer, use `@signetai/codex-plugin` instead. The two published packages have different roles: `connector-codex` is the generic Codex connector installer, while `codex-plugin` targets the native Codex plugin marketplace layout.
 
 The current package families include `connector-claude-code`, `connector-codex`, `connector-gemini`, `connector-hermes-agent`, `connector-oh-my-pi`, `connector-openclaw`, `connector-opencode`, `connector-pi`, and the native `codex-plugin`. Installers manage the harness configuration and use `SIGNET_DAEMON_URL` and `SIGNET_API_KEY` at runtime.
 
@@ -76,6 +82,7 @@ Create a replacement key, reinstall or update the connector, and start a fresh h
 - `401`: verify the daemon URL, key variable, auth mode, and key list.
 - `403`: inspect the key's agent scope and requested agent.
 - No tools in the harness: start a fresh session and rerun the installer.
-- Health unreachable: verify bind address, private-network routing, firewall, and TLS before changing workspace state.
+- Health unreachable: verify bind address, configured port, private-network routing, firewall, and TLS before changing workspace state.
+- `503` or unhealthy source: inspect its health route, correct provider permissions, token, or path, then re-index and verify health again.
 
 See [Authentication](/auth/) for credential policy, [Self-hosting](/self-hosting/) for deployment, and [Diagnostics](/diagnostics/) for daemon evidence.

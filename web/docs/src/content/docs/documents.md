@@ -20,6 +20,10 @@ URL and file submissions deduplicate by source URL within the same agent and pro
 
 For endpoint fields and response schemas, use [Documents and sources API](/api/documents-sources/).
 
+### Poll and inspect
+
+Treat `201`/`queued` as acknowledgement, not completion. Poll `GET /api/documents/:id` until `status` is `done` or `failed`. On `done`, call `GET /api/documents/:id/chunks` to inspect count, ordered `chunk_index`, content, and provenance. On `failed`, use the error to correct the input or worker configuration, then resubmit.
+
 ## Follow the document lifecycle
 
 ```text
@@ -57,7 +61,7 @@ The daemon validates and clamps values on configuration load. Document settings 
 
 ## Delete a document
 
-Document deletion is daemon-backed. It marks the document `deleted` and completes any still-pending document-ingest job. It soft-deletes only linked memories no longer referenced by another non-deleted document. Therefore, `memoriesRemoved` is the number actually removed, not necessarily the document's chunk count.
+Document deletion is daemon-backed. It marks the document `deleted` and completes any still-pending document-ingest job. The response is `{ deleted, memoriesRemoved }`; it soft-deletes only linked memories no longer referenced by another non-deleted document. Shared chunks remain through other live documents, so `memoriesRemoved` is the number actually removed, not necessarily the document's chunk count.
 
 For connected sources and imported transcript sources, use [Sources](/sources/) and its source-specific lifecycle rules.
 

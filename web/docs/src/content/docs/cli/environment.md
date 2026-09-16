@@ -31,6 +31,11 @@ Workspace status is `fresh` for an unconfigured default, `ready` when the config
 | `SIGNET_TOKEN` | CLI and connector clients | Backwards-compatible bearer-credential alias. |
 | `SIGNET_BYPASS` | harness hooks | Skip hook processing for that process. |
 
+`SIGNET_BYPASS=1` is process-wide for that harness invocation. It skips
+automatic hooks, but is not daemon-wide and does not disable explicit commands
+or tools. For one session, use `signet session bypass <session-key>`; use
+`--off` to restore hooks or `--list` to inspect state.
+
 `SIGNET_ADMIN_PASSWORD`, `SIGNET_ADMIN_PASSWORD_HASH`, and `SIGNET_ADMIN_USERNAME` configure the optional dashboard password login. They are credential inputs, not general shell configuration; use a secret manager or service-environment mechanism and do not commit them. See [Authentication](/auth/).
 
 ## Daemon service variables
@@ -43,6 +48,12 @@ contract. Set them only when operating the daemon service.
 | `SIGNET_BIND` | Explicit daemon listen-address override. |
 | `SIGNET_LOG_FILE` | Explicit daemon log file path. |
 | `SIGNET_LOG_DIR` | Daemon log-directory override. |
+
+The daemon normally binds loopback. `SIGNET_BIND` is its listen address;
+`SIGNET_HOST` only overrides the client host. Setup's `--network-mode localhost`
+maps to loopback and `--network-mode tailscale` selects the configured Tailscale
+address. `SIGNET_DAEMON_URL` is the complete remote origin and takes precedence
+over host/port construction; a public bind is not an authentication substitute.
 
 ## Hook timeout variables
 

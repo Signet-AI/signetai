@@ -14,12 +14,16 @@ response envelope contains `embeddings`, `count`, `total`, `limit`, `offset`,
 and `hasMore`. Records identify their source type and source ID, model/profile
 metadata, dimensions, and timestamps when available.
 
+Pagination uses `limit` default `600`, bounded to `50..5000`, and `offset` default `0`, bounded to `0..100000`. Use `hasMore` to continue paging.
+
 ### GET /api/embeddings/status
 
 Reports configured provider availability and embedding-index coverage. The
 response includes provider/model configuration, `available`, dimensions,
 `checkedAt`, and `index` state/coverage. Provider failures include `error` and
 are not reported as ready.
+
+Status is cached for 30 seconds per provider configuration. `index.staging` describes a candidate profile; only the active profile is used for ordinary recall. Coverage distinguishes `active`, `staged`, `missing`, `wrongDimensions`, and `quarantined` records. Quarantined inputs remain attributable and do not block promotion of valid vectors; if every candidate is quarantined, the active index is not replaced by an empty staged index. Provider unavailability leaves work pending and is reported as degraded, not as zero-valued vectors. A native-provider timeout disables that worker for the rest of the daemon session.
 
 ### GET /api/embeddings/health
 
@@ -37,3 +41,5 @@ coordinates.
 Embedding and source-index jobs may remain pending when the provider is
 unavailable. The status/health routes expose that degraded state; callers must
 not infer that missing vectors are zero vectors.
+
+Projection data is cached derived state and is invalidated when the embedding count changes. See the [API route inventory](/api/route-inventory/) for route and authorization details.

@@ -1,22 +1,19 @@
 ---
 title: "Telemetry and logs API"
-description: "Telemetry, analytics, log, and operational health endpoints."
+description: "Bounded telemetry, exports, health, and log streams."
 ---
 
 [Back to HTTP API](/api/).
 
-| Method | Route | Status | Permission |
+Telemetry is operational data, not a second source of truth. Authentication, agent scope, permissions, validated filters, pagination, and time/export bounds apply at every route.
+
+| Method | Route | Permission | Use |
 |---|---|---|---|
-| GET | `/api/telemetry/memory-search` | canonical | analytics |
-| GET | `/api/telemetry/memory-search/export` | canonical | analytics |
-| GET | `/api/telemetry/health` | canonical | diagnostics |
-| GET | `/api/skills/analytics` | canonical | analytics |
-| GET | `/api/mcp/analytics` and `/api/mcp/analytics/:server` | canonical | analytics |
+| GET | `/api/telemetry/events` | analytics | Filtered telemetry events. |
+| GET | `/api/telemetry/memory-search`, `/api/telemetry/stats` | analytics | Bounded search measurements and aggregates. |
+| GET | `/api/telemetry/export`, `/api/telemetry/memory-search/export` | analytics | Permission-checked bounded exports. |
+| GET | `/api/telemetry/health` | diagnostics | Operational health/workload state. |
+| GET | `/api/logs` | diagnostics | Recent logs with level/category/time filters. |
+| GET | `/api/logs/stream` | diagnostics | Bounded live server-log stream. |
 
-Telemetry endpoints expose operational measurements, not a second source of
-truth. Export responses are bounded by route parameters and permissions. Health
-telemetry is distinct from `/health/live` and `/health/ready`, which remain the
-process and readiness probes.
-
-This page intentionally excludes deleted MCP marketplace, operating-system,
-widget, and event-bus route families. Those are not current HTTP API contracts.
+Invalid filters or limits are rejected rather than widened. `/health/live` and `/health/ready` remain the process and readiness probes; telemetry health is distinct. See [authentication](/auth/) and [memory telemetry](/api/memory/).

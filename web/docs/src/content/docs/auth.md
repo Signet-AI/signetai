@@ -21,7 +21,7 @@ cd deploy/docker
 docker compose exec signet bun /app/deploy/docker/scripts/create-token.mjs --role admin --sub bootstrap
 ```
 
-The command writes the raw token to standard output once. Store it in a secret manager and send it as `Authorization: Bearer <token>`. Never put a token or password in `agent.yaml`, shell history, screenshots, logs, or source control. The command reads `${SIGNET_PATH}/.daemon/auth-secret`, defaulting to `/data/agents/.daemon/auth-secret` in the container; `--secret` overrides that path for the token command only.
+The command writes the raw token to standard output once. Store it in a secret manager and send it as `Authorization: Bearer TOKEN`. The token is output once and must stay out of `agent.yaml`, shell history, screenshots, logs, and source control. The command reads `${SIGNET_PATH}/.daemon/auth-secret`, defaulting to `/data/agents/.daemon/auth-secret` in the container; `--secret` overrides that path for the token command only.
 
 Optional dashboard password login accepts `SIGNET_ADMIN_USERNAME`, `SIGNET_ADMIN_PASSWORD`, and `SIGNET_ADMIN_PASSWORD_HASH` as service-environment credential inputs. YAML configuration uses `auth.login.password.username` and `auth.login.password.passwordHash`; the supported legacy YAML fields are `auth.adminUser.username` and `auth.adminUser.passwordHash`. These variables do not provide general precedence for unrelated configuration.
 

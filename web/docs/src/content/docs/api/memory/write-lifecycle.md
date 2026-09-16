@@ -58,14 +58,32 @@ Requires `modify`. Body requires `reason` and may change `content`, `type`,
 `tags`, `importance`, and `pinned`, with optional `if_version` and
 `changed_by`. Episodic evidence content and type are immutable; create a new
 memory and optionally supersede the old one. Response reports status, versions,
-and whether content was embedded.
+and whether content was embedded. This route is limited to 60 requests per minute.
+
+| Status | HTTP | Meaning |
+|---|---:|---|
+| `updated` / `no_changes` | 200 | The patch was applied / made no change. |
+| `not_found` | 404 | The memory is absent or out of scope. |
+| `deleted` | 409 | Deleted memories cannot be modified. |
+| `version_conflict` | 409 | `if_version` did not match. |
+| `duplicate_content_hash` | 409 | The replacement content already exists. |
+| `episodic_content_immutable` | 409 | Episodic content or type cannot change. |
 
 ### DELETE /api/memory/:id
 
 Requires `forget`. Body or query requires `reason`; accepts `force` and
 `if_version`. Soft-deletes the row and records audit history. Pinned memories
 require force, and autonomous actors cannot force-delete them. Response reports
-`id`, `status`, `currentVersion`, and `newVersion`.
+`id`, `status`, `currentVersion`, and `newVersion`. This route is limited to 30 requests per minute.
+
+| Status | HTTP | Meaning |
+|---|---:|---|
+| `deleted` | 200 | The memory was soft-deleted. |
+| `not_found` | 404 | The memory is absent or out of scope. |
+| `already_deleted` | 409 | The memory was already deleted. |
+| `version_conflict` | 409 | `if_version` did not match. |
+| `pinned_requires_force` | 409 | A pinned memory needs `force: true`. |
+| `autonomous_force_denied` | 403 | An autonomous actor cannot force-delete it. |
 
 ### POST /api/memories/:id/tombstone
 
@@ -91,7 +109,17 @@ Requires `recall`. Query supports `agentId`, `minSessions` (default `3`, bounded
 
 Requires `recover`. Body requires `reason`; optional `if_version` provides an
 optimistic concurrency check. Restores a soft-deleted memory within the
-configured retention window and reports status and versions.
+30-day retention window and reports status and versions.
+
+| Status | HTTP | Meaning |
+|---|---:|---|
+| `recovered` | 200 | The deleted memory was restored. |
+| `not_found` | 404 | The memory does not exist or is outside the caller's scope. |
+| `not_deleted` | 409 | The memory is not currently deleted. |
+| `retention_expired` | 409 | The 30-day recovery window has elapsed. |
+| `version_conflict` | 409 | `if_version` did not match the current version. |
+
+The response includes `retentionDays: 30` on recovery.
 
 ### GET /api/memory/jobs/:id
 
@@ -105,3 +133,7 @@ state, and terminal/error fields when present.
 Compatibility operation routes. They require the corresponding mutation
 permission, resolve agent and scope before acting, and return structured
 operation status. Prefer the lifecycle routes above for new integrations.
+
+`POST /api/memory/forget` is limited to 5 requests per minute and 200 candidate memories. Use `mode: "preview"` first; more than 25 candidates requires the preview's `confirmToken` as `confirm_token` during execution. Execute requests require a `reason`, and batches may report per-item failures.
+
+See the [API route inventory](/api/route-inventory/) for the complete route and permission list.

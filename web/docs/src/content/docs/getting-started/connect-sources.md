@@ -25,7 +25,7 @@ Choose **Sources**, then select **Connect a source** or **Import files**.
 
 1. Choose **Connect a source**.
 2. Select the connector.
-3. Enter its configuration.
+3. Enter its configuration. The daemon must reach the provider, and connector secrets must be secret references rather than raw tokens.
 4. Choose **Connect & index**.
 5. Monitor the source card until indexing finishes.
 
@@ -43,6 +43,6 @@ The browser upload works with a remote dashboard. The desktop picker reads paths
 
 ## Read the result
 
-A source card shows indexing progress, counts, health, errors, and the latest index time. After indexing, source-backed material is available with the normal `signet recall` command.
+A source card shows indexing progress, counts, health, errors, and the latest index time. If a run fails, fix the path, URL, permissions, or secret, choose **Re-index**, and verify health again. After indexing, source-backed material is available with the normal `signet recall` command.
 
 Use **Re-index** to queue a fresh run or **Remove** to remove Signet's source configuration and derived artifacts. Removing a source does not modify the original files. For endpoint-level diagnostics, see the [HTTP API reference](/api/documents-sources/).

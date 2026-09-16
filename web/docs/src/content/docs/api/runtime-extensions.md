@@ -1,33 +1,20 @@
 ---
 title: "Runtime extensions API"
-description: "Connectors, harnesses, skills, plugins, and secrets."
+description: "Extension lifecycle, scope, capabilities, audit, and probes."
 ---
 
 [Back to HTTP API](/api/).
 
-## Connectors and harnesses
+Runtime extensions are daemon-owned. Registered identifiers—not arbitrary paths—are the install boundary.
 
-| Route family | Status | Permission |
+| Operation | Route | Contract |
 |---|---|---|
-| `/api/connectors` | canonical | connectors |
-| `/api/connectors/resync` | canonical | connectors |
-| `/api/harnesses` | canonical | connectors; connect is admin |
-| `/api/harnesses/:id/connect` | canonical | admin |
+| Install/connect | `POST /api/harnesses/:id/connect`, `POST /api/skills/install`, `POST /api/marketplace/mcp/install` | Authorized, bounded, serialized lifecycle work. |
+| Register | `POST /api/marketplace/mcp/register` | Validate and register external-server metadata/config. |
+| Update | `PATCH /api/plugins/:id`, `PATCH /api/marketplace/mcp/:id` | Explicit fields; scope and policy are revalidated. |
+| Disable/uninstall | `PATCH /api/marketplace/mcp/:id`, `DELETE /api/marketplace/mcp/:id` | Disable or remove a routed server. |
+| Inspect/resync | `GET /api/connectors`, `/api/harnesses`, `/api/skills`, `/api/plugins`, `/api/marketplace/mcp`; `POST /api/connectors/resync` | Read current state or resync connectors. |
 
-Harness connect accepts the registered harness IDs only and installs through the
-daemon workspace. It accepts no arbitrary filesystem path. Installation is
-bounded and serialized; partial failures are reported explicitly.
+Scope and capability guards fail closed. MCP scope covers harness, channel, and workspace; disabled or out-of-scope servers cannot be called. Policy is read/updated at `/api/marketplace/mcp/policy`. Partial failures are reported explicitly; acceptance does not mean downstream work completed.
 
-## Skills, plugins, and secrets
-
-| Route family | Status | Permission |
-|---|---|---|
-| `/api/skills`, `/api/skills/:name`, `/api/skills/search`, `/api/skills/install` | canonical | skills |
-| `/api/skills/browse` | canonical | skills read |
-| `/api/skills/analytics` | canonical | analytics |
-| `/api/plugins`, `/api/plugins/:id` | canonical | admin |
-| `/api/secrets` | canonical | secrets; admin for mutation |
-
-Route-specific guards and response types define the exact fields. A plugin or
-skill endpoint is an extension surface; it does not create an alternate daemon
-configuration or memory owner.
+`GET /api/mcp/analytics` and `/api/mcp/analytics/:server` expose bounded audit views. Health/capability probes are asynchronous observations with deadlines; they never install, register, or mutate an extension. Distinguish queued, running, ready, disabled, failed, and timed-out states.

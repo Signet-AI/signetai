@@ -9,7 +9,7 @@ image: /blog/introducing-signet.png
 
 Signet is the layer between AI agents and AI models.
 
-Models provide reasoning for a session. Signet supplies the durable workspace around that session, so context can persist across sessions and tools.
+Models are reasoning engines. They're powerful, but stateless — every session starts fresh, every tool switch resets everything, and the model has no memory of who you are or what you've been working on.
 
 Signet fixes that by giving agents a persistent home. [Memory](https://docs.signetai.sh/memory/) and [Secrets](https://docs.signetai.sh/secrets/) live there, independent of whichever model or harness happens to be running. Workspace instructions are part of that durable memory. The model is a guest: it reads what it needs, does its work, and writes back what it learned.
 
@@ -54,9 +54,9 @@ Signet sits between agents and models.
 
 Most AI memory systems store conversations — they save what was said and search it later. That works, but it gets noisier over time. More data doesn't mean better understanding.
 
-A tool-based memory flow asks the model to decide what to save and when to look it up. Signet records session evidence, then processes it outside the conversation into structured knowledge with provenance.
+Worse, most of them put the agent in charge. They give the LLM memory tools — "remember this," "recall that" — and trust the stateless reasoning engine to decide what's worth keeping. That's not memory. That's a filing cabinet the agent sometimes opens.
 
-Signet uses a background distillation pipeline. A distillation engine runs outside the conversation, in the background, continuously refining raw session data into structured understanding:
+Signet takes a fundamentally different approach. A distillation engine runs outside the conversation, in the background, continuously refining raw session data into structured understanding:
 
 - **Sparse facts** — raw observations, unprocessed, high volume
 - **Observational facts** — extracted and validated, but not yet connected
@@ -87,7 +87,7 @@ This is the real bet in Signet. Not that a knowledge graph is novel, or that str
 
 The model, weights, and training path are all designed to stay local-first. Signet can use broad prior structure to start useful, then get sharper for you specifically over time. The critical training signal is first-order usage evidence: what helped, what did not, and what keeps resurfacing without earning its place.
 
-This usage evidence gives Signet a path toward context selection that improves with the workspace, rather than relying on search alone.
+Nobody else has this data. Much of the market is building better search. Signet is building a system that learns what you need before you search.
 
 
 ## Skills
@@ -124,7 +124,7 @@ secret.
 
 ## Local-First, Open Standard
 
-The workspace lives on your machine: a SQLite database, markdown files, and YAML configuration. You can inspect, back up, and move these files, then connect them to supported harnesses. For the philosophy behind this choice, see [Why Local-First Memory Matters](/blog/why-local-first-memory/).
+Everything lives on your machine. SQLite database, markdown files, YAML configuration. No cloud dependency, no telemetry, no vendor lock-in. For the philosophy behind this choice, see [Why Local-First Memory Matters](/blog/why-local-first-memory/).
 
 Signet is an open specification. The format is documented, the implementation is open source, and anyone can build tools that read and write the same data. Your agent's home directory is yours — not a proprietary format locked behind an API.
 

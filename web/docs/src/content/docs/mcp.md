@@ -1,6 +1,6 @@
 ---
 title: "MCP server"
-description: "Developer reference for Signet's Model Context Protocol server."
+description: "Developer reference for Signet's stateless Model Context Protocol server."
 ---
 
 Signet is a local-first memory and context layer for AI agents. Its MCP server exposes the daemon's current memory, ontology, session, secret, and code operations as on-demand tools.

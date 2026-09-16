@@ -197,4 +197,10 @@ set pending to zero.
 
 ### GET /api/sources/imports/export/transcripts
 Streams conversation JSONL (or JSON with `json=true`) with `harness`, `since`,
-`until`, `limit`, `offset`, and `messagesOnly` filters.
+`until`, `limit`, `offset`, and `messagesOnly` filters. `limit` defaults to
+`Number.MAX_SAFE_INTEGER` and accepts values through that maximum; `offset`
+defaults to `0` and skips that many matching transcripts before emission. The
+stream response contains records only: it does not include pagination metadata
+or a `hasMore` field, so reaching the limit does not report whether more rows
+remain. See the [API route inventory](/api/route-inventory/) for the canonical
+route and authorization list.

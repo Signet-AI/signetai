@@ -22,6 +22,8 @@ bun run build
 bun test
 ```
 
+`bun run hooks:install` enables Git worktree-local configuration and points this worktree's hooks at `.githooks`. It is safe to rerun; the installer skips cleanly outside a Git checkout. `prepare` runs it automatically after `bun install`.
+
 Before submitting a change, run:
 
 ```bash
@@ -31,7 +33,7 @@ bun run format
 bun test
 ```
 
-The pre-commit hook runs staged Biome validation and the workspace typecheck. Run it directly with `bun run hooks:pre-commit`.
+The default `bun test` command runs the repository's configured workspace scope. Use an explicit path or package when you need a narrower or broader scope; see [test discovery and scopes](https://github.com/Signet-AI/signetai/blob/main/tests/README.md). The pre-commit hook runs staged Biome validation and the workspace typecheck. Run it directly with `bun run hooks:pre-commit`.
 
 ## Find your way around
 
@@ -64,4 +66,6 @@ Describe the behavior changed, the evidence used, and the checks you ran. Keep u
 
 AI tools are welcome, but contributors remain responsible for understanding and reviewing every change. Disclose AI assistance in the PR and include `Assisted-by` tags in commit messages as described in [AI_POLICY.md](https://github.com/Signet-AI/signetai/blob/main/AI_POLICY.md). Every PR receives human review.
 
-Signet's release workflow is automated; do not publish packages manually.
+## Releases
+
+The automated release workflow runs on pushes to `main` (and can be resumed manually for a validated version tag). It skips release commits and commits without code changes. A release bumps the version, generates the changelog, synchronizes package and lockfile versions, builds and smoke-tests the workspace, creates a nightly GitHub prerelease, builds native assets for supported platforms, publishes npm packages under `next`, and finalizes the release only after all required assets are present. Stable is promoted separately with the manual [Promote Release workflow](.github/workflows/promote-release.yml). Do not publish packages manually; see [release channels](https://github.com/Signet-AI/signetai/blob/main/docs/RELEASE_CHANNELS.md) for channel policy and the detailed workflow.

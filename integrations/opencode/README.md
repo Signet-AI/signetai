@@ -19,7 +19,7 @@ Integrates Signet's memory system with OpenCode via its plugin system.
 
 ```bash
 signet setup --harness opencode
-signet connect opencode --url http://signet-home.tailnet:3850 --api-key sig_sk_...
+signet connect opencode --url http://signet-home.tailnet:3850 --api-key "$SIGNET_API_KEY"
 ```
 
 Interactive setup can also detect OpenCode and offer to configure it. On a
@@ -29,7 +29,7 @@ standalone npm installer:
 ```bash
 npx -y @signetai/connector-opencode install \
   --url http://signet-home.tailnet:3850 \
-  --api-key sig_sk_... \
+  --api-key "$SIGNET_API_KEY" \
   --agent-id personal
 ```
 
@@ -48,7 +48,7 @@ The connector package exposes programmatic cleanup that removes the plugin file 
 
 | Field | Value |
 |-------|-------|
-| Package | `@signet/connector-opencode` |
+| Package | `@signetai/connector-opencode` |
 | License | Apache-2.0 |
 
 ## Architecture
@@ -61,4 +61,4 @@ The connector package exposes programmatic cleanup that removes the plugin file 
 ~/.agents/                             <-- optional for remote-only installs
 ```
 
-The connector extends `BaseConnector` from `@signet/connector-base` and ships a self-contained plugin bundle that OpenCode auto-discovers from its plugins directory.
+The connector extends `BaseConnector` from `@signetai/connector-base` and ships a self-contained plugin bundle that OpenCode auto-discovers from its plugins directory.

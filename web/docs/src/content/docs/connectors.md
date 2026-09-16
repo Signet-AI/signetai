@@ -27,7 +27,7 @@ the local API:
 ```bash
 curl -X POST http://localhost:3850/api/connectors \
   -H 'content-type: application/json' \
-  -d '{"provider":"filesystem","displayName":"My docs","settings":{"rootPath":"/home/user/docs","patterns":["**/*.md","**/*.txt"]}}'
+  -d '{"provider":"filesystem","displayName":"My docs","settings":{"rootPath":"/path/to/docs","patterns":["**/*.md","**/*.txt"]}}'
 ```
 
 The response contains the connector `id`. Keep it for sync and health calls.
