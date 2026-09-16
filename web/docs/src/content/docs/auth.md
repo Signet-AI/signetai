@@ -1,99 +1,49 @@
 ---
 title: "Authentication"
-description: "Configure daemon authentication for local, hybrid, and team deployments."
+description: "Bootstrap protected access, issue scoped keys, and revoke credentials."
 ---
 
-Authentication is optional for a single local machine. Use `team` mode for a daemon shared over a network or by multiple people. Do not expose a daemon that remains in `local` mode.
+Signet supports `local`, `team`, and `hybrid` authentication. Local mode is for a trusted local process. Use team or hybrid mode for remote clients.
 
-## Modes
+## Bootstrap a team deployment
 
-- **`local`**: no bearer credential is required. This is the default and should remain localhost-only.
-- **`team`**: every protected request requires a valid bearer credential. Use this for a shared server or CI-facing daemon.
-- **`hybrid`**: localhost requests can proceed without a credential; remote requests require one. Do not rely on hybrid mode behind an untrusted same-host reverse proxy, because the daemon uses the TCP peer address to identify localhost traffic.
-
-## Configure a team daemon
-
-Set the mode explicitly in the workspace `agent.yaml` used by the daemon:
+Set the bootstrap password through the secret-safe mechanism used by the service, then configure the daemon:
 
 ```yaml
-network:
-  mode: tailscale
-
 auth:
   mode: team
 ```
 
-`auth.mode` defaults to `local` when omitted. `network.mode: tailscale` makes the daemon bind for network access; use your network boundary, firewall, or reverse proxy deliberately.
+Start or restart the daemon, then log in through the current auth route and keep the returned admin bearer credential in a secret manager. Do not put passwords, bearer tokens, or API keys in `agent.yaml`, shell history, screenshots, or source control.
 
-Start the daemon with the password-login bootstrap supplied through a secret-safe environment mechanism:
+The normal client variable is `SIGNET_API_KEY`. `SIGNET_TOKEN` is a backwards-compatible alias; new configuration should use `SIGNET_API_KEY`.
+
+## Issue a scoped connector key
+
+Create one named key for each connector and machine:
 
 ```bash
-SIGNET_ADMIN_USERNAME=admin \
-SIGNET_ADMIN_PASSWORD='load-this-from-a-secret-manager' \
-signet daemon start
+signet api-key create --name "work laptop pi" --connector pi --agent-id pi-work-laptop
+signet api-key list
 ```
 
-The daemon creates its signing secret under `.daemon/auth-secret` for non-local modes. Do not copy, commit, or distribute that file. The password value is not written to `agent.yaml`; a persisted configuration may contain only a password hash.
+The raw `sig_sk_...` value is displayed once. Store it securely. `--agent-id` makes the key agent-scoped; requests for another agent fail authorization. Use the connector-specific permission set and minimum scope required by the client.
 
-`signet daemon` by itself prints the command group help. The command that starts the service is `signet daemon start`.
-
-## Bootstrap credentials safely
-
-In team mode, token and API-key creation are admin-protected endpoints. A new server therefore needs an initial admin authentication path before it can issue API keys:
-
-1. Set `SIGNET_ADMIN_PASSWORD` or `SIGNET_ADMIN_PASSWORD_HASH` when starting the daemon, as above.
-2. Sign in to the dashboard with that admin credential, or authenticate against `POST /api/auth/login` from a secret-aware client.
-3. Use the resulting short-lived admin bearer session to create scoped API keys or tokens.
-4. Store each issued key only in the remote consumer's secret store. The raw API key is shown once.
-
-Do not put the bootstrap password, admin bearer token, or issued key into shell history, source files, screenshots, or `agent.yaml`. `SIGNET_API_KEY` is the normal client environment variable; `SIGNET_TOKEN` remains an older alias.
-
-## Create and use API keys
-
-Once an admin bearer credential is available to the CLI as `SIGNET_API_KEY`, create a named, scoped remote-client key:
+Clients send the key as a bearer credential. Verify the identity without printing the key:
 
 ```bash
-signet api-key create \
-  --name "work-laptop-pi" \
-  --connector pi \
-  --agent-id pi-work-laptop
+curl -fsS http://127.0.0.1:3850/api/auth/whoami \
+  -H 'Authorization: Bearer '"$SIGNET_API_KEY"
+```
 
-signet api-key list
+Revoke a retired or exposed key:
+
+```bash
 signet api-key revoke <id-or-prefix>
 ```
 
-`--agent-id` restricts the credential to that agent scope. Connector keys are intended for remote connectors and receive their connector permission set. Clients send keys as bearer credentials:
+## Lifecycle and compatibility
 
-```bash
-SIGNET_DAEMON_URL=https://signet.example.test:3850 \
-SIGNET_API_KEY='store-in-a-secret-manager' \
-signet connector install pi --agent-id pi-work-laptop
-```
+Revoking a key takes effect for subsequent requests. Replacing the daemon signing secret invalidates signed tokens and dashboard sessions; restart the daemon and issue fresh credentials afterward. The SSO and SAML routes are reserved compatibility surfaces and are not configured login providers today.
 
-Verify an installed remote client without printing its key:
-
-```bash
-curl -fsS "$SIGNET_DAEMON_URL/api/auth/whoami" \
-  -H "Authorization: Bearer ***"
-```
-
-## Roles and scopes
-
-| Role | Intended access |
-|---|---|
-| `admin` | Administrative actions and all lower-level permissions. |
-| `operator` | Operational access without the admin permission. |
-| `agent` | Core memory and document operations. |
-| `readonly` | Recall only. |
-
-A scope can restrict a credential by agent, project, or user. Use the narrowest role and scope that a remote client needs. Admin credentials bypass normal scope restrictions, so keep them short-lived and tightly controlled.
-
-## Password login configuration
-
-Password login is enabled when one of these is available: `SIGNET_ADMIN_PASSWORD`, `SIGNET_ADMIN_PASSWORD_HASH`, or `auth.login.password.passwordHash` in `agent.yaml`. The default username is `admin`; set `SIGNET_ADMIN_USERNAME` or `auth.login.password.username` to change it. Persist a `pbkdf2-sha256$...` hash rather than a plaintext password.
-
-SSO and SAML endpoints are reserved but are not configured login providers today.
-
-## Rotate and recover
-
-Revoking an API key prevents further use of that key. Replacing or deleting the daemon signing secret invalidates existing signed tokens and dashboard sessions; restart the daemon afterward and issue fresh credentials. Treat this as an incident-recovery operation, not routine maintenance.
+For remote connectors, continue with [Remote Harness Connectors](/remote-connectors/). For deployment and TLS, see [Self-hosting](/self-hosting/).

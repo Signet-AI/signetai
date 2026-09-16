@@ -1,59 +1,32 @@
 ---
 title: "Files and integrations"
-description: "Managed workspace files, daemon-owned state, harness integration, and source-control boundaries."
+description: "Define workspace file ownership and connector boundaries."
 ---
 
-## Managed files
+## Managed paths
 
-Keep the workspace readable and separate authored context from daemon-owned state.
+| Path | Owner |
+|---|---|
+| `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md` | Authored operating and identity context |
+| `MEMORY.md` | Generated working-memory summary |
+| `agent.yaml` | Operator configuration |
+| `memory/memories.db` | Daemon-owned database |
+| `.daemon/` | Runtime state, logs, and telemetry audit data |
+| `.secrets/` | Encrypted secret storage |
 
-| Path                                | Use                                                                          |
-| ----------------------------------- | ---------------------------------------------------------------------------- |
-| `AGENTS.md`                         | Operating rules for an agent or project.                                     |
-| `SOUL.md`, `IDENTITY.md`, `USER.md` | Identity, tone, and user context where the active identity preset uses them. |
-| `MEMORY.md`                         | Generated working-memory summary. Do not hand-edit.                          |
-| `agent.yaml`                        | Operator configuration.                                                      |
-| `memory/memories.db`                | SQLite database owned by the daemon.                                         |
-| `.daemon/`                          | PID, logs, auth material, telemetry audit data, and other runtime state.     |
-| `.secrets/`                         | Encrypted secrets. Never commit this directory.                              |
+Keep `.daemon/`, `.secrets/`, logs, and database copies out of source control. See [Secrets](/secrets/) for credential storage.
 
-Use [Workspace and identity](/configuration/workspace-identity/) for workspace resolution and [Secrets](/secrets/) for credential storage.
+## Integrations
 
-## Harness integration
+Use `signet setup` and the connector installers to manage harness integration. Do not copy legacy hook snippets or generated plugin files between machines. A remote harness needs a scoped API key and a fresh session after installation; see [Remote Harness Connectors](/remote-connectors/).
 
-Install or refresh harness integrations with the Signet setup and connector flows. Do not copy legacy Python hook snippets or generated plugin files from old documentation: connector packages and the CLI own their managed harness configuration.
+## Backup and inspection
 
-For a remote harness, create a narrowly scoped API key, install the matching connector, and start a fresh harness session. See [Remote Harness Connectors](/remote-connectors/).
-
-For local configuration, run setup first and inspect the resulting harness configuration before changing it:
+Back up authored files and private runtime state with an encrypted system that preserves permissions. Before changing database or generated files, inspect the daemon evidence:
 
 ```bash
-signet setup
-signet daemon status --json
-```
-
-A daemon restart or fresh harness session may be necessary after a connector or identity change.
-
-## Source control and backups
-
-Treat the workspace as a mix of durable authored files and private runtime state. A conservative `.gitignore` includes:
-
-```text
-.daemon/
-.secrets/
-*.log
-```
-
-Do not commit a database copy, secret store, auth secret, or generated runtime log to a shared repository. If you need a backup, stop or quiesce the daemon and back up the workspace with its private state using your approved encrypted backup system. See [Self-Hosting](/self-hosting/) for the Docker volume path and upgrade flow.
-
-## Troubleshooting boundary
-
-Do not repair the database by editing tables, deleting a PID file, or copying a generated harness config from another machine as a first response. Check the daemon's current state, diagnostics, and logs first:
-
-```bash
-signet daemon status --json
 curl -fsS http://127.0.0.1:3850/health/ready
 curl -fsS http://127.0.0.1:3850/api/diagnostics
 ```
 
-Related: [Daemon](/daemon/), [Diagnostics](/diagnostics/), [Remote Harness Connectors](/remote-connectors/).
+The daemon owns database transitions. Do not edit tables, delete runtime markers, or copy generated integration files as a first response.

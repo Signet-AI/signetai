@@ -1,39 +1,36 @@
 ---
 title: "Diagnostics"
-description: "Inspect daemon health and run bounded repair actions with evidence."
+description: "Follow a short evidence-based path from health checks to repair."
 ---
 
-Diagnostics are the operator surface for queue, storage, index, provider, mutation, connector, and update health. Treat them as evidence, not a license to reset state.
+Use diagnostics to identify the failing boundary before changing state.
 
-## Start with status and readiness
+## Decision path
 
-```bash
-signet daemon status --json
-curl -fsS http://127.0.0.1:3850/health/live
-curl -fsS http://127.0.0.1:3850/health/ready
-curl -fsS http://127.0.0.1:3850/api/diagnostics
-```
+1. Check the process and readiness:
 
-`/health/live` answers whether the process is up. `/health/ready` includes readiness gates. `/api/diagnostics` returns the detailed report. Its `workloads` block is scoped to the requested agent and includes active inference/Pi and MCP requests, provider semaphore running and pending counts, oldest ages, and Dreaming pass and attention backlog counts and ages. The focused `/api/diagnostics/workloads` endpoint returns the same bounded workload snapshot. In authenticated deployments, diagnostics require the appropriate operator or admin permission.
+   ```bash
+   signet daemon status --json
+   curl -fsS http://127.0.0.1:3850/health/live
+   curl -fsS http://127.0.0.1:3850/health/ready
+   ```
 
-Use the report to identify the failing domain before taking action. Do not treat a low composite score as a diagnosis by itself.
+2. If the process is reachable but work is unhealthy, read the bounded report:
 
-## Useful investigations
+   ```bash
+   curl -fsS http://127.0.0.1:3850/api/diagnostics
+   curl -fsS http://127.0.0.1:3850/api/diagnostics/workloads
+   ```
 
-| Symptom                            | First evidence                                                                |
-| ---------------------------------- | ----------------------------------------------------------------------------- |
-| Daemon unreachable                 | `signet daemon status --json`, `/health/live`, bind address and service logs. |
-| Daemon up but not usable           | `/health/ready`, `/api/status`, and the exact readiness reasons.              |
-| Work backlog or repeated failures  | `/api/diagnostics`, then the queue and pipeline status.                       |
-| Search looks incomplete            | diagnostics plus the embedding/index status before changing models.           |
-| Recent deployment changed behavior | `/api/status`, update status, and daemon logs.                                |
-| Provider trouble                   | provider diagnostics, configured routing target, and provider reachability.   |
+3. Follow the report to the relevant queue, pipeline, index, provider, connector, or permission surface. Check daemon logs and the configured route before changing configuration.
 
-## Repair actions
+4. Re-run the same checks after the change. Restart only when the changed setting or deployment requires it.
 
-Repair endpoints are privileged. They are for a diagnosed condition, not first-line recovery. Back up private workspace state before a destructive or broad action.
+In authenticated deployments, diagnostics require the operator or admin permission required by the route. `/health/live` reports process liveness; `/health/ready` reports readiness gates. The diagnostics workload view is scoped to the requested agent and includes active inference/MCP work, provider semaphore counts, and Dreaming backlog ages.
 
-Current repair routes include:
+## Privileged repair
+
+Use a repair route only after identifying its precondition:
 
 ```text
 GET  /api/repair/integrity-check
@@ -43,56 +40,8 @@ POST /api/repair/check-fts
 POST /api/repair/retention-sweep
 ```
 
-The daemon's full-database integrity scan runs in a single-flight worker after
-HTTP readiness, with a 30-second wall-clock budget and periodic progress logs.
-It transactionally rebuilds disposable telemetry indexes when only
-`telemetry_events` is corrupt. A confirmed failure is reported by `/health` and
-`/health/ready`, with actionable offline repair guidance. If the audit store
-prevents committing a verified repair, the default remains fail-closed.
+Repairs are permission-protected and bounded. The integrity scan is single-flight and has a 30-second wall-clock budget. Record the result and repeat the health checks. The old transcript backfill route is legacy; current transcript delivery goes directly to Dreaming.
 
-Examples:
+Keep private workspace state and logs available for investigation. Do not reset a database, auth secret, or workspace as a diagnostic step.
 
-```bash
-# Read-only integrity evidence
-curl -fsS http://127.0.0.1:3850/api/repair/integrity-check
-
-# Requeue dead work only after identifying why it died
-curl -fsS -X POST http://127.0.0.1:3850/api/repair/requeue-dead
-
-# Release stale leases only after checking the worker is not still active
-curl -fsS -X POST http://127.0.0.1:3850/api/repair/release-leases
-```
-
-Rate limits and maintenance policy protect repairs from repeated automated retries. A rejected repair is a signal to inspect the root cause, not a reason to loop the request.
-
-The retired transcript backfill route is not a recovery path. Current transcript delivery goes directly to Dreaming; do not build automation around an older backfill endpoint.
-
-## Maintenance configuration
-
-Autonomous maintenance is configured under `memory.pipelineV2.autonomous`:
-
-```yaml
-memory:
-  pipelineV2:
-    autonomous:
-      enabled: true
-      frozen: false
-      maintenanceIntervalMs: 1800000
-      maintenanceMode: observe
-```
-
-Use `observe` when introducing a deployment or investigating an incident. Set `frozen: true` to stop autonomous writes while preserving the configuration. The `repair` subobject sets cooldowns and hourly budgets for re-embed, requeue, and deduplication work.
-
-Restart after changing these values because pipeline workers are long-running.
-
-## Escalation order
-
-1. Capture status, readiness, diagnostics, and relevant daemon logs.
-2. Correct an unavailable provider, invalid config, network bind, or permission issue.
-3. Restart only when the evidence supports it.
-4. Use one narrow repair action if its precondition is satisfied.
-5. Re-run the same health checks and record the result.
-
-Never delete the database, auth secret, or workspace to make a health check go green. Preserve evidence and restore from a verified backup when integrity is actually compromised.
-
-Related: [Daemon](/daemon/), [Analytics](/analytics/), [Self-Hosting](/self-hosting/).
+For autonomous maintenance, use `memory.pipelineV2.autonomous` and verify with the pipeline status surface. See [Pipeline configuration](/configuration/pipeline/) and [Analytics](/analytics/).
