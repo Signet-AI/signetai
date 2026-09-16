@@ -7,19 +7,26 @@ description: "Current focus and planned features."
 
 # Roadmap
 
-This roadmap describes direction, not a release contract. Current behavior belongs in the [product documentation](https://docs.signetai.sh/); an item here is not available merely because it is listed.
+This page describes direction, not a release contract. Current behavior belongs in the product and reference documentation; an item here is not shipped merely because it is named.
 
-## Current priorities
+Current priorities
+------------------
 
-- Improve daemon reliability, diagnostics, repair, retention, and lifecycle observability.
-- Refine dashboard, desktop, onboarding, and source-inspection workflows while keeping the daemon as the runtime authority.
-- Preserve one evidence-to-ontology path: raw artifacts remain distinct from derived indexes and structured knowledge, and Dreaming remains the sole automatic semantic writer.
-- Measure retrieval quality with reproducible evaluations for recall, provenance, authorization, and context selection.
+- Reliability and operability: keep the daemon, retention, diagnostics, repair, and lifecycle boundaries observable and safe.
+- Product clarity: improve the dashboard, desktop workflows, onboarding, and source inspection without turning the dashboard into a second runtime.
+- One evidence-to-ontology path: keep episodic evidence distinct from derived indexes and current structured knowledge; Dreaming remains the only automatic semantic writer.
+- Retrieval quality: continue measuring bounded recall, provenance, authorization, and context selection against reproducible evaluations.
 
-## Longer-term direction
+Longer-term directions
+----------------------
 
-- Support cross-device and team workflows while preserving local ownership and explicit access control.
-- Add source connectors and improve inspection of evidence lineage.
-- Provide stronger workflows for current knowledge, reviewable ontology maintenance, and agent continuity.
+- Better cross-device and team workflows while preserving local ownership and explicit access control.
+- More source connectors and better inspection of evidence lineage.
+- Stronger workflow support around current knowledge, reviewable ontology maintenance, and agent continuity.
 
 These directions may change. They should not be cited as evidence that an interface, source type, policy, or automation is available today.
+
+Recently established architecture
+---------------------------------
+
+The current daemon has one canonical state layer: user-owned workspace artifacts plus agent-scoped SQLite rows. Derived indexes and projections support that state but do not replace it. Dreaming owns automatic semantic writes; document ingestion, retention, maintenance, synthesis/projection, and optional hints remain separate non-semantic services.
