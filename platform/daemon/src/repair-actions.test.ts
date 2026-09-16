@@ -2568,7 +2568,7 @@ describe("resyncVectorIndex", () => {
 		db.close();
 	});
 
-	it("inserts missing vec rows and removes orphan vec rows", async () => {
+	it("inserts missing vec rows and retains unknown-owner vec rows", async () => {
 		insertMemory(db, "mem-v-1");
 		insertMemory(db, "mem-v-2");
 
@@ -2598,10 +2598,10 @@ describe("resyncVectorIndex", () => {
 		const result = await resyncVectorIndex(accessor, TEST_CFG, CTX_OPERATOR, limiter);
 
 		expect(result.success).toBe(true);
-		expect(result.affected).toBe(2);
+		expect(result.affected).toBe(1);
 
 		const ids = db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all() as Array<{ id: string }>;
-		expect(ids.map((row) => row.id)).toEqual(["emb-v-1", "emb-v-2"]);
+		expect(ids.map((row) => row.id)).toEqual(["emb-orphan", "emb-v-1", "emb-v-2"]);
 	});
 
 	it("returns a clear error when vec table is missing", async () => {

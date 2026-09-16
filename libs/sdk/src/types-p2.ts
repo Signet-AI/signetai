@@ -411,7 +411,9 @@ export interface VectorRepairResponse extends RepairActionResponse {
 	readonly processed: number;
 	readonly skipped: number;
 	readonly failed: number;
+	/** 0 means no matching work remains; 1 means the bounded probe found some work. */
 	readonly remaining: number;
+	readonly remainingStatus: "none" | "some";
 	readonly batches: number;
 }
 

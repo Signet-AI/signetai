@@ -65,6 +65,14 @@ beforeEach(() => {
 	runMigrations(db as never);
 	db.exec("DROP TABLE IF EXISTS vec_embeddings");
 	db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL)");
+	db.exec(`
+		CREATE TABLE IF NOT EXISTS vec_embeddings_quarantine (
+			rowid TEXT PRIMARY KEY,
+			dimensions INTEGER NOT NULL,
+			reason TEXT NOT NULL,
+			quarantinedAt TEXT NOT NULL
+		)
+	`);
 });
 
 afterEach(() => db.close());
@@ -93,12 +101,12 @@ describe("bounded vector repair owner", () => {
 
 		expect(batches).toBeGreaterThan(2);
 		expect(result.remaining).toBe(0);
-		expect(result.processed).toBe(6);
-		expect(result.affected).toBe(6);
-		expect(operationIds).toEqual(
-			new Set(["repair.vector-resync.orphan-vectors", "repair.vector-resync.missing-vectors"]),
-		);
-		expect(db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get()).toEqual({ n: 5 });
+		expect(result.processed).toBe(5);
+		expect(result.affected).toBe(5);
+		expect(operationIds).toEqual(new Set(["repair.vector-resync.missing-vectors"]));
+		expect(result.remainingStatus).toBe("none");
+		expect(db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get()).toEqual({ n: 6 });
+		expect(db.prepare("SELECT id FROM vec_embeddings WHERE id = 'orphan'").get()).toEqual({ id: "orphan" });
 		expect(
 			db
 				.prepare(
@@ -118,6 +126,7 @@ describe("bounded vector repair owner", () => {
 			`INSERT INTO embeddings (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at, agent_id)
 			 VALUES ('embedding-bad', 'hash-bad', ?, 0, 'memory', 'missing', 'bad', ?, 'agent-a')`,
 		).run(Buffer.from([1, 2]), now);
+		insertEmbedding("embedding-nan", "missing-nan", "agent-a", [1, Number.NaN, 3]);
 
 		const request = input("agent-a", "checkpoint-scope", 50, 12);
 		let result = runBatch(request);
@@ -125,7 +134,32 @@ describe("bounded vector repair owner", () => {
 			result = runBatch(request);
 		}
 
-		expect(result.skipped).toBe(1);
+		expect(result.skipped).toBe(2);
+		expect(result.remainingStatus).toBe("none");
 		expect(db.prepare("SELECT id FROM vec_embeddings ORDER BY id").all()).toEqual([{ id: "embedding-a" }]);
+		expect(db.prepare("SELECT rowid, reason FROM vec_embeddings_quarantine ORDER BY rowid").all()).toEqual([
+			{ rowid: "embedding-bad", reason: "embedding blob has invalid dimensions or byte length" },
+			{ rowid: "embedding-nan", reason: "embedding vector contains a non-finite value" },
+		]);
+	});
+
+	it("defers valid vectors that exceed the requested byte budget", () => {
+		insertMemory("memory-budget", "agent-a");
+		insertEmbedding("embedding-budget", "memory-budget", "agent-a", [1, 2, 3]);
+
+		const constrained = input("agent-a", "checkpoint-byte-budget", 50, 4);
+		const paused = runBatch(constrained);
+		expect(paused.status).toBe("running");
+		expect(paused.batchRows).toBe(0);
+		expect(paused.skipped).toBe(0);
+		expect(paused.remainingStatus).toBe("some");
+		expect(db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get()).toEqual({ n: 0 });
+		expect(db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings_quarantine").get()).toEqual({ n: 0 });
+
+		const completed = runBatch(input("agent-a", "checkpoint-byte-budget", 50, 12));
+		expect(completed.status).toBe("complete");
+		expect(completed.affected).toBe(1);
+		expect(completed.remainingStatus).toBe("none");
+		expect(db.prepare("SELECT id FROM vec_embeddings").all()).toEqual([{ id: "embedding-budget" }]);
 	});
 });

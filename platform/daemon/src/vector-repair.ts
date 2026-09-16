@@ -45,6 +45,7 @@ export interface VectorRepairResult extends RepairResult {
 	readonly skipped: number;
 	readonly failed: number;
 	readonly remaining: number;
+	readonly remainingStatus: DbOwnerVectorRepairResult["remainingStatus"];
 	readonly batches: number;
 }
 
@@ -137,10 +138,11 @@ function responseFromBatch(
 	error?: string,
 ): VectorRepairResult {
 	const failed = error === undefined ? batch.failed : Math.max(batch.failed, batch.batchFailed);
-	const success = error === undefined && batch.status !== "failed";
-	const message = success
-		? `${action === "resyncVectorIndex" ? "resynced vec index" : "cleaned orphaned embeddings"}; processed ${batch.processed}, ${batch.remaining} remaining; checkpoint ${batch.checkpointId}`
-		: `${action} stopped after a bounded batch: ${error ?? batch.error ?? "repair failed"}; resume checkpoint ${batch.checkpointId}`;
+	const success = error === undefined && batch.status === "complete";
+	const message =
+		error !== undefined || batch.status === "failed"
+			? `${action} stopped after a bounded batch: ${error ?? batch.error ?? "repair failed"}; resume checkpoint ${batch.checkpointId}`
+			: `${action} ${batch.status === "complete" ? "completed" : "paused after bounded work"}; processed ${batch.processed}, ${batch.remainingStatus === "some" ? "some work" : "no work"} remaining; checkpoint ${batch.checkpointId}`;
 	return {
 		action,
 		success,
@@ -156,6 +158,7 @@ function responseFromBatch(
 		skipped: batch.skipped,
 		failed,
 		remaining: batch.remaining,
+		remainingStatus: batch.remainingStatus,
 		batches,
 		details: {
 			operationId: operationId(operation),
@@ -214,7 +217,7 @@ export async function runVectorRepair(
 			},
 		};
 		try {
-			const phaseBefore = latest?.phase ?? (operation === "resync" ? "orphan-vectors" : "orphan-embeddings");
+			const phaseBefore = latest?.phase ?? (operation === "resync" ? "missing-vectors" : "orphan-embeddings");
 			const batch = await runOwnerBatch(accessor, input, options);
 			latest = batch;
 			callAffected += batch.batchAffected;
@@ -231,7 +234,7 @@ export async function runVectorRepair(
 				operation,
 				agentId,
 				checkpointId,
-				phase: operation === "resync" ? "orphan-vectors" : "orphan-embeddings",
+				phase: operation === "resync" ? "missing-vectors" : "orphan-embeddings",
 				status: "failed",
 				cursor: null,
 				processed: 0,
@@ -239,6 +242,7 @@ export async function runVectorRepair(
 				failed: 1,
 				affected: 0,
 				remaining: 0,
+				remainingStatus: "none",
 				batchRows: 0,
 				batchBytes: 0,
 				batchProcessed: 0,
@@ -257,7 +261,7 @@ export async function runVectorRepair(
 			operation,
 			agentId,
 			checkpointId,
-			phase: operation === "resync" ? "orphan-vectors" : "orphan-embeddings",
+			phase: operation === "resync" ? "missing-vectors" : "orphan-embeddings",
 			status: "running",
 			cursor: null,
 			processed: 0,
@@ -265,6 +269,7 @@ export async function runVectorRepair(
 			failed: 0,
 			affected: 0,
 			remaining: 0,
+			remainingStatus: "none",
 			batchRows: 0,
 			batchBytes: 0,
 			batchProcessed: 0,
