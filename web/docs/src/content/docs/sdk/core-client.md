@@ -16,7 +16,7 @@ const client = new SignetClient({
 });
 ```
 
-The constructor defaults to `http://localhost:3850`, a 10-second request timeout, and two retries for GET requests. Mutation requests are not retried automatically.
+The constructor defaults to `http://localhost:3850`, a 10-second request timeout, and two retries for GET requests. The `retries` option accepts values from 0 through 10. Mutation requests are not retried automatically.
 
 ## Memory lifecycle
 
