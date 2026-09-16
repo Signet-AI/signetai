@@ -127,6 +127,8 @@ const DESCRIPTOR_ROOT =
 	process.platform === "linux" ? "/proc/self/fd" : process.platform === "darwin" ? "/dev/fd" : null;
 const DESCRIPTOR_WRITES_SUPPORTED =
 	DESCRIPTOR_ROOT !== null && typeof constants.O_DIRECTORY === "number" && typeof constants.O_NOFOLLOW === "number";
+const DESCRIPTOR_WRITE_UNAVAILABLE_ERROR =
+	"Targeted Hermes profile writes require descriptor-backed no-follow filesystem support";
 
 function pathEntryExists(path: string): boolean {
 	try {
@@ -138,7 +140,7 @@ function pathEntryExists(path: string): boolean {
 }
 
 function descriptorPath(fd: number): string {
-	if (DESCRIPTOR_ROOT === null) throw new Error("Descriptor-backed Hermes writes are unavailable on this platform");
+	if (DESCRIPTOR_ROOT === null) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
 	return join(DESCRIPTOR_ROOT, String(fd));
 }
 
@@ -148,7 +150,7 @@ function isPathWithin(root: string, candidate: string): boolean {
 }
 
 function openDirectoryNoFollow(path: string): number {
-	if (!DESCRIPTOR_WRITES_SUPPORTED) throw new Error("Descriptor-backed Hermes writes are unavailable on this platform");
+	if (!DESCRIPTOR_WRITES_SUPPORTED) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
 	return openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
 }
 
@@ -163,8 +165,7 @@ function closeDirectory(fd: number): void {
 function ensureContainedDirectory(directory: string, targetRoot: string): void {
 	const safeDirectory = resolveContainedWritePath(directory, targetRoot);
 	if (!DESCRIPTOR_WRITES_SUPPORTED) {
-		mkdirSync(safeDirectory, { recursive: true });
-		return;
+		throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
 	}
 
 	const absoluteDirectory = resolvePath(directory);
@@ -218,8 +219,7 @@ function ensureContainedDirectory(directory: string, targetRoot: string): void {
 function writeContainedFile(targetPath: string, content: string | Uint8Array, targetRoot: string): void {
 	const safePath = resolveContainedWritePath(targetPath, targetRoot);
 	if (!DESCRIPTOR_WRITES_SUPPORTED) {
-		writeFileSync(safePath, content);
-		return;
+		throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
 	}
 
 	const rootPath = resolvePath(targetRoot);
@@ -297,6 +297,22 @@ function writeTargetFile(path: string, content: string | Uint8Array, targetRoot?
 	writeFileSync(path, content);
 }
 
+function rejectSymlinkedPathComponents(path: string, root: string, targetPath: string): void {
+	if (!isPathWithin(root, path)) {
+		throw new Error(`Hermes target path escapes validated root: ${targetPath}`);
+	}
+	let current = path;
+	while (true) {
+		if (lstatSync(current).isSymbolicLink()) {
+			throw new Error(`Hermes target path is symlinked and cannot be used for writes: ${targetPath}`);
+		}
+		if (current === root) return;
+		const parent = dirname(current);
+		if (parent === current) throw new Error(`Hermes target path escapes validated root: ${targetPath}`);
+		current = parent;
+	}
+}
+
 function resolveContainedWritePath(targetPath: string, targetRoot: string): string {
 	let rootPath = resolvePath(targetRoot);
 	while (!pathEntryExists(rootPath)) {
@@ -316,7 +332,8 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 		missing.unshift(existing.slice(parent.length + 1));
 		existing = parent;
 	}
-	const candidate = join(realpathSync(existing), ...missing);
+	rejectSymlinkedPathComponents(existing, rootPath, targetPath);
+	const candidate = join(existing, ...missing);
 	const rel = relative(root, candidate);
 	if (rel.startsWith("..") || isAbsolute(rel)) {
 		throw new Error(`Hermes target path escapes validated root: ${targetPath}`);

@@ -1716,7 +1716,7 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		const result = await new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"));
 
 		expect(result.success).toBe(false);
-		expect(result.warnings?.some((warning) => warning.includes("escapes validated root"))).toBe(true);
+		expect(result.warnings?.some((warning) => /symlinked|escapes validated root/.test(warning))).toBe(true);
 		expect(existsSync(join(victim, "signet"))).toBe(false);
 	});
 
@@ -1732,9 +1732,26 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		delete process.env.HERMES_HOME;
 
 		await expect(new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"))).rejects.toThrow(
-			/escapes validated root/,
+			/symlinked|escapes validated root/,
 		);
 		expect(readFileSync(victimConfig, "utf8")).toBe(original);
+	});
+
+	it("rejects a symlinked profile config even when its target stays inside", async () => {
+		const home = join(tmpRoot, "profile-internal-symlink-home");
+		const profile = join(home, ".hermes", "profiles", "escape");
+		const internalConfig = join(profile, "internal.yaml");
+		const original = "memory:\n  provider: honcho\n";
+		mkdirSync(profile, { recursive: true });
+		writeFileSync(internalConfig, original);
+		symlinkSync(internalConfig, join(profile, "config.yaml"));
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		await expect(new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"))).rejects.toThrow(
+			/symlinked/,
+		);
+		expect(readFileSync(internalConfig, "utf8")).toBe(original);
 	});
 
 	it("does not follow a symlinked profile install marker", async () => {
@@ -1766,7 +1783,7 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		delete process.env.HERMES_HOME;
 
 		await expect(new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"))).rejects.toThrow(
-			/escapes validated root|ENOENT/,
+			/symlinked|escapes validated root|ENOENT/,
 		);
 		expect(existsSync(victimBackup)).toBe(false);
 	});
