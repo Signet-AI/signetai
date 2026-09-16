@@ -506,6 +506,14 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	for (const [i, n] of NODES.entries()) {
 		if (!baseColors[i]) baseColors[i] = new THREE.Color(COLORS[n.kind]);
 	}
+	const nodePoints = Object.values(nodeLayers)
+		.map((layer) => layer?.pts)
+		.filter((p): p is THREE.Points => Boolean(p));
+	const edgeCounts = new Map<string, number>();
+	for (const edge of EDGES) {
+		edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
+		edgeCounts.set(edge.to, (edgeCounts.get(edge.to) ?? 0) + 1);
+	}
 
 	// ── CSS2D labels (semantic nodes) with leader lines ──
 	interface LabelEntry {
@@ -793,12 +801,23 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const raycaster = new THREE.Raycaster();
 	raycaster.params.Points = { threshold: 8 };
 	const mouseNDC = new THREE.Vector2(-2, -2);
+	let pointerInside = false;
+	let pointerDirty = true;
+	let lastPointerRaycast = 0;
 	const onPointerMove = (ev: PointerEvent) => {
 		const rect = renderer.domElement.getBoundingClientRect();
 		mouseNDC.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
 		mouseNDC.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+		pointerInside = true;
+		pointerDirty = true;
+	};
+	const onPointerLeave = () => {
+		pointerInside = false;
+		pointerDirty = true;
+		mouseNDC.set(-2, -2);
 	};
 	renderer.domElement.addEventListener("pointermove", onPointerMove);
+	renderer.domElement.addEventListener("pointerleave", onPointerLeave);
 
 	// ── turntable camera rig ──
 	interface CamTween {
@@ -891,6 +910,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const animate = () => {
 		if (disposed) return;
 		raf = requestAnimationFrame(animate);
+		const frameNow = performance.now();
 		if (camTween) {
 			const elapsed = performance.now() - camTween.t0;
 			const t = Math.min(1, elapsed / camTween.dur);
@@ -965,40 +985,46 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = dot > minDot ? 0.5 : 0);
 		}
 
-		// Hover raycast → targeting bracket + semantic readout (every node kind)
-		raycaster.setFromCamera(mouseNDC, camera);
-		const nodePoints = Object.values(nodeLayers)
-			.map((layer) => layer?.pts)
-			.filter((p): p is THREE.Points => Boolean(p));
-		const intersects = nodePoints.length > 0 ? raycaster.intersectObjects(nodePoints, false) : [];
-		if (intersects.length > 0) {
-			const intersection = intersects[0];
-			const layer = nodeLayers[intersection.object.userData.kind as SceneNodeKind];
-			const index = intersection.index;
-			if (!layer || index === undefined) {
+		// Hover raycast → targeting bracket + semantic readout (every node kind).
+		// The camera keeps moving while the pointer is still, so refresh at 10 Hz;
+		// pointer motion refreshes immediately without paying this cost every frame.
+		if (pointerInside && (pointerDirty || frameNow - lastPointerRaycast >= 100)) {
+			lastPointerRaycast = frameNow;
+			pointerDirty = false;
+			raycaster.setFromCamera(mouseNDC, camera);
+			const intersects = nodePoints.length > 0 ? raycaster.intersectObjects(nodePoints, false) : [];
+			if (intersects.length > 0) {
+				const intersection = intersects[0];
+				const layer = nodeLayers[intersection.object.userData.kind as SceneNodeKind];
+				const index = intersection.index;
+				if (!layer || index === undefined) {
+					targetBracket.visible = false;
+					targetReadout.style.display = "none";
+				} else {
+					const n = NODES[layer.origIndices[index]];
+					targetBracket.visible = true;
+					targetBracket.position.copy(n.pos);
+					const sp = n.pos.clone().project(camera);
+					const sx = (sp.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
+					const sy = (-sp.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
+					const edgeCount = edgeCounts.get(n.id) ?? 0;
+					targetReadout.style.display = "block";
+					targetReadout.style.left = `${sx + 20}px`;
+					targetReadout.style.top = `${sy - 30}px`;
+					targetReadout.textContent = [
+						`${KIND_LABELS[n.kind]} · ${n.label}`,
+						n.metric,
+						n.detail && n.detail !== n.label ? shorten(n.detail, 180) : null,
+						`${edgeCount} relationship${edgeCount === 1 ? "" : "s"}`,
+					]
+						.filter((line): line is string => Boolean(line))
+						.join("\n");
+				}
+			} else {
 				targetBracket.visible = false;
 				targetReadout.style.display = "none";
-			} else {
-				const n = NODES[layer.origIndices[index]];
-				targetBracket.visible = true;
-				targetBracket.position.copy(n.pos);
-				const sp = n.pos.clone().project(camera);
-				const sx = (sp.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
-				const sy = (-sp.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
-				const edgeCount = EDGES.filter((e) => e.from === n.id || e.to === n.id).length;
-				targetReadout.style.display = "block";
-				targetReadout.style.left = `${sx + 20}px`;
-				targetReadout.style.top = `${sy - 30}px`;
-				targetReadout.textContent = [
-					`${KIND_LABELS[n.kind]} · ${n.label}`,
-					n.metric,
-					n.detail && n.detail !== n.label ? shorten(n.detail, 180) : null,
-					`${edgeCount} relationship${edgeCount === 1 ? "" : "s"}`,
-				]
-					.filter((line): line is string => Boolean(line))
-					.join("\n");
 			}
-		} else {
+		} else if (!pointerInside) {
 			targetBracket.visible = false;
 			targetReadout.style.display = "none";
 		}
@@ -1035,6 +1061,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			controls.removeEventListener("start", stopAutoRotate);
 			controls.dispose();
 			renderer.domElement.removeEventListener("pointermove", onPointerMove);
+			renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
 			scene.traverse((obj) => {
 				const mesh = obj as THREE.Mesh;
 				if (mesh.geometry) mesh.geometry.dispose();
