@@ -361,7 +361,11 @@ function removeDirectoryContentsNoFollow(directoryFd: number): void {
 	}
 }
 
-function removeContainedDirectory(targetPath: string, targetRoot: string): void {
+function removeContainedDirectory(
+	targetPath: string,
+	targetRoot: string,
+	targetKind: InstallMarker["targetKind"],
+): void {
 	if (!DESCRIPTOR_WRITES_SUPPORTED) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
 	const safeTargetDir = resolveContainedWritePath(targetPath, targetRoot);
 	const rootPath = resolvePath(targetRoot);
@@ -400,7 +404,8 @@ function removeContainedDirectory(targetPath: string, targetRoot: string): void 
 			if (realpathSync(descriptorPath(targetFd)) !== expectedTarget) {
 				throw new Error(`Hermes target directory changed during secure removal: ${targetPath}`);
 			}
-			if (!readInstallMarkerFromDirectory(targetFd)) {
+			const marker = readInstallMarkerFromDirectory(targetFd);
+			if (marker === null || marker.targetKind !== targetKind) {
 				throw new Error(
 					`Refusing to uninstall unowned Hermes plugin path: ${targetPath} (missing or invalid ${INSTALL_MARKER_FILE})`,
 				);
@@ -487,13 +492,14 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 }
 
 /** Remove the Signet memory plugin from the Hermes plugins directory. */
-function uninstallPlugin(targetDir: string, targetRoot?: string): string[] {
+function uninstallPlugin(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot?: string): string[] {
 	if (!existsSync(targetDir)) return [];
 	if (targetRoot) {
-		removeContainedDirectory(targetDir, targetRoot);
+		removeContainedDirectory(targetDir, targetRoot, targetKind);
 		return [targetDir];
 	}
-	if (!readInstallMarker(targetDir)) {
+	const marker = readInstallMarker(targetDir);
+	if (marker === null || marker.targetKind !== targetKind) {
 		throw new Error(
 			`Refusing to uninstall unowned Hermes plugin path: ${targetDir} (missing or invalid ${INSTALL_MARKER_FILE})`,
 		);
@@ -1436,7 +1442,7 @@ export class HermesAgentConnector extends BaseConnector {
 
 		const hermesRepo = this.getHermesRepo();
 		if (hermesRepo) {
-			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo));
+			const removed = uninstallPlugin(getRepoPluginTargetDir(hermesRepo), "repo");
 			filesRemoved.push(...removed);
 		}
 
@@ -1445,11 +1451,12 @@ export class HermesAgentConnector extends BaseConnector {
 		const targetRoot = this.target?.profile ? hermesHome : undefined;
 		if (targetRoot) {
 			const safeUserPluginTarget = resolveContainedWritePath(userPluginTarget, targetRoot);
-			if (!existsSync(safeUserPluginTarget) || readInstallMarker(safeUserPluginTarget) === null) {
+			const marker = readInstallMarker(safeUserPluginTarget);
+			if (!existsSync(safeUserPluginTarget) || marker === null || marker.targetKind !== "user") {
 				return { filesRemoved, configsPatched };
 			}
 		}
-		const userPluginRemoved = uninstallPlugin(userPluginTarget, targetRoot);
+		const userPluginRemoved = uninstallPlugin(userPluginTarget, "user", targetRoot);
 		filesRemoved.push(...userPluginRemoved);
 
 		const providerConfig = restoreOrClearProvider(hermesHome, targetRoot);

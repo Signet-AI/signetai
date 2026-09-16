@@ -1807,6 +1807,46 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		expect(readFileSync(join(profile, "config.yaml"), "utf8")).toContain("provider: honcho");
 	});
 
+	it("does not uninstall a targeted profile with a repo-owned marker", async () => {
+		const home = join(tmpRoot, "profile-wrong-marker-home");
+		const profile = join(home, ".hermes", "profiles", "owned");
+		mkdirSync(profile, { recursive: true });
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		const connector = new HermesAgentConnector({ profile: "owned" });
+		await connector.install(join(home, ".agents"));
+		const markerPath = join(profile, "plugins", "signet", "signet.install.json");
+		const marker = JSON.parse(readFileSync(markerPath, "utf8")) as { targetKind: string };
+		marker.targetKind = "repo";
+		writeFileSync(markerPath, JSON.stringify(marker));
+
+		const result = await connector.uninstall();
+
+		expect(result.filesRemoved).toEqual([]);
+		expect(existsSync(join(profile, "plugins", "signet"))).toBe(true);
+	});
+
+	it("does not uninstall a repo plugin with a user-owned marker", async () => {
+		const home = join(tmpRoot, "repo-wrong-marker-home");
+		const hermesRepo = join(tmpRoot, "repo-wrong-marker-hermes");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.HOME = home;
+		process.env.HERMES_REPO = hermesRepo;
+		delete process.env.HERMES_HOME;
+
+		const connector = new HermesAgentConnector();
+		await connector.install(join(home, ".agents"));
+		const plugin = join(hermesRepo, "plugins", "memory", "signet");
+		const markerPath = join(plugin, "signet.install.json");
+		const marker = JSON.parse(readFileSync(markerPath, "utf8")) as { targetKind: string };
+		marker.targetKind = "user";
+		writeFileSync(markerPath, JSON.stringify(marker));
+
+		await expect(connector.uninstall()).rejects.toThrow(/unowned Hermes plugin path/);
+		expect(existsSync(plugin)).toBe(true);
+	});
+
 	it("does not follow symlinked entries while removing a targeted profile plugin", async () => {
 		const home = join(tmpRoot, "profile-uninstall-symlink-home");
 		const profile = join(home, ".hermes", "profiles", "owned");
