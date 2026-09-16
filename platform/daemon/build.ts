@@ -11,6 +11,7 @@ const EXTERNAL_NODE = [
 	"libsodium-wrappers",
 	"onnxruntime-node",
 	"@huggingface/transformers",
+	"@napi-rs/keyring",
 ];
 
 const ALIAS: Record<string, string> = {
@@ -49,7 +50,10 @@ if (isBun) {
 		const result = await Bun.build({
 			entrypoints: [entrypoint],
 			outdir: ".",
-			naming: outfile,
+			naming: {
+				entry: outfile,
+				asset: "[name].[ext]",
+			},
 			target: "bun",
 			format: "esm",
 			external: EXTERNAL_BUN,
