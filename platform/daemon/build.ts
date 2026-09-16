@@ -6,6 +6,7 @@ const EXTERNAL_NODE = [
 	"better-sqlite3",
 	"bun",
 	"bun:sqlite",
+	"bun:ffi",
 	"@1password/sdk",
 	"@firecrawl/anydoc",
 	"libsodium-wrappers",

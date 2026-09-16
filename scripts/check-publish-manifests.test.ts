@@ -76,6 +76,7 @@ describe("check-publish-manifests", () => {
 
 		expect(daemonBuild).toContain('const forceNodeBuild = process.env.FORCE_NODE_BUILD === "1";');
 		expect(daemonBuild).toContain('const isBun = typeof Bun !== "undefined" && !forceNodeBuild;');
+		expect(daemonBuild).toContain('"bun:ffi"');
 	});
 
 	test("keeps daemon tokenizer assets stable and native keyring external in Node builds", () => {
