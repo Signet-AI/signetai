@@ -329,6 +329,7 @@ function claimHasSourcePointer(row: StructuredClaimRow): boolean {
 	return (
 		(row.source_id !== null && row.source_id.trim().length > 0) ||
 		(row.source_path !== null && row.source_path.trim().length > 0) ||
+		(row.source_kind !== null && row.source_kind.trim().length > 0) ||
 		proposalEvidenceHasSourcePointer(row.proposal_evidence)
 	);
 }
@@ -462,6 +463,7 @@ export function findStructuredClaimCandidates(
 			   AND (
 			     ea.source_id IS NOT NULL OR
 			     ea.source_path IS NOT NULL OR
+			     NULLIF(TRIM(ea.source_kind), '') IS NOT NULL OR
 			     (ea.proposal_evidence IS NOT NULL AND ea.proposal_evidence != '[]')
 			   )
 			   AND (${like})
@@ -708,6 +710,7 @@ export async function findStructuredClaimCandidatesViaOwner(
 		   AND (
 		     ea.source_id IS NOT NULL OR
 		     ea.source_path IS NOT NULL OR
+		     NULLIF(TRIM(ea.source_kind), '') IS NOT NULL OR
 		     (ea.proposal_evidence IS NOT NULL AND ea.proposal_evidence != '[]')
 		   )
 		   AND (${like})

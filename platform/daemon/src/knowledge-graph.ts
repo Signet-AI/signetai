@@ -481,6 +481,7 @@ export interface KnowledgeStats {
 	readonly entityCount: number;
 	readonly aspectCount: number;
 	readonly attributeCount: number;
+	readonly claimCount: number;
 	readonly constraintCount: number;
 	readonly dependencyCount: number;
 	readonly unassignedMemoryCount: number;
@@ -1478,6 +1479,7 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 		readonly entityCount: number;
 		readonly aspectCount: number;
 		readonly attributeCount: number;
+		readonly claimCount: number;
 		readonly constraintCount: number;
 		readonly dependencyCount: number;
 		readonly assignedMemoryCount: number;
@@ -1501,6 +1503,10 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 			 AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS attributeCount,
 			(SELECT COUNT(*) FROM entity_attributes attr JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
 			 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+			 WHERE attr.agent_id = ? AND attr.kind = 'claim' AND attr.status = 'active'
+			 AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS claimCount,
+			(SELECT COUNT(*) FROM entity_attributes attr JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+			 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 			 WHERE attr.agent_id = ? AND attr.kind = 'constraint' AND attr.status = 'active'
 			 AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS constraintCount,
 			(SELECT COUNT(*) FROM entity_dependencies dep JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
@@ -1520,14 +1526,15 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS maxWeightAspectCount,
 			(SELECT COUNT(CASE WHEN weight <= 0.1 THEN 1 END) FROM entity_aspects asp JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS minWeightAspectCount`,
-		Array(11).fill(agentId),
-		{ operation: "knowledge.stats", deadlineMs: 5_000, estimatedWorkUnits: 11 },
+		Array(12).fill(agentId),
+		{ operation: "knowledge.stats", deadlineMs: 5_000, estimatedWorkUnits: 12 },
 	);
 	if (row === null) {
 		return {
 			entityCount: 0,
 			aspectCount: 0,
 			attributeCount: 0,
+			claimCount: 0,
 			constraintCount: 0,
 			dependencyCount: 0,
 			unassignedMemoryCount: 0,
@@ -1544,6 +1551,7 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 		entityCount: Number(row.entityCount ?? 0),
 		aspectCount: Number(row.aspectCount ?? 0),
 		attributeCount: Number(row.attributeCount ?? 0),
+		claimCount: Number(row.claimCount ?? 0),
 		constraintCount: Number(row.constraintCount ?? 0),
 		dependencyCount: Number(row.dependencyCount ?? 0),
 		unassignedMemoryCount: Math.max(scopedMemoryCount - assignedMemoryCount, 0),
@@ -1684,10 +1692,15 @@ export async function propagateMemoryStatus(accessor: DbAccessor, agentId: strin
 // Constellation overlay — hierarchical graph
 // ---------------------------------------------------------------------------
 
+// Source documents are graph-bearing when Dreaming has attached provenance-
+// backed claims to them. Folders, skills, and empty source topology remain
+// excluded so the bounded constellation does not become a filesystem browser.
+const SOURCE_CLAIM_ENTITY_TYPES = ["source_document", "source_document_reference"] as const;
+
 export interface ConstellationAttribute {
 	readonly id: string;
 	readonly content: string;
-	readonly kind: "attribute" | "constraint";
+	readonly kind: "attribute" | "constraint" | "claim";
 	readonly importance: number;
 	readonly memoryId: string | null;
 	readonly status: AttributeStatus;
@@ -1951,6 +1964,7 @@ export async function getKnowledgeGraphForConstellation(
 			const visibleAgentIds = getConstellationVisibleAgentIds(db, agentId);
 			const agentPlaceholders = placeholders(visibleAgentIds.length);
 			const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
+			const sourceClaimEntityTypePlaceholders = placeholders(SOURCE_CLAIM_ENTITY_TYPES.length);
 			// Keep the dashboard read path bounded. The previous implementation loaded
 			// every aspect, active attribute, and dependency for the agent, then filtered
 			// in JS. Large real workspaces can turn a simple Ontology tab visit into an
@@ -1961,9 +1975,30 @@ export async function getKnowledgeGraphForConstellation(
 				 FROM entities e
 				 WHERE e.agent_id IN (${agentPlaceholders})
 				   AND COALESCE(e.status, 'active') = 'active'
-				   AND NOT (
-						LOWER(TRIM(e.entity_type)) IN (${topologyPlaceholders})
-						OR (LOWER(TRIM(e.entity_type)) = 'source' AND e.source_root IS NOT NULL)
+				   AND (
+						NOT (
+							LOWER(TRIM(e.entity_type)) IN (${topologyPlaceholders})
+							OR (LOWER(TRIM(e.entity_type)) = 'source' AND e.source_root IS NOT NULL)
+						)
+						OR (
+							LOWER(TRIM(e.entity_type)) IN (${sourceClaimEntityTypePlaceholders})
+							AND EXISTS (
+								SELECT 1
+								FROM entity_aspects asp
+								JOIN entity_attributes attr
+								  ON attr.aspect_id = asp.id AND attr.agent_id = asp.agent_id
+								WHERE asp.entity_id = e.id
+								  AND asp.agent_id = e.agent_id
+								  AND COALESCE(asp.status, 'active') = 'active'
+								  AND attr.status = 'active'
+								  AND attr.kind = 'claim'
+								  AND (
+									attr.source_id IS NOT NULL OR
+									attr.source_path IS NOT NULL OR
+									NULLIF(TRIM(attr.source_kind), '') IS NOT NULL
+								)
+							)
+						)
 				   )
 				   -- Entity mentions are a legacy-memory projection. Dreaming writes
 				   -- semantic structure with episodic provenance directly, so a valid
@@ -1984,10 +2019,12 @@ export async function getKnowledgeGraphForConstellation(
 							  AND (dep.source_entity_id = e.id OR dep.target_entity_id = e.id)
 						)
 				   )
-				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC
+				 ORDER BY e.pinned DESC, e.mentions DESC, e.name ASC, e.id ASC
 				 LIMIT ?`,
 				)
-				.all(...visibleAgentIds, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, limit) as Array<Record<string, unknown>>;
+				.all(...visibleAgentIds, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES, ...SOURCE_CLAIM_ENTITY_TYPES, limit) as Array<
+				Record<string, unknown>
+			>;
 
 			const entityIds = entityRows.map((r) => r.id as string).filter((id) => typeof id === "string");
 
@@ -2010,14 +2047,32 @@ export async function getKnowledgeGraphForConstellation(
 					`SELECT id, entity_id, name, weight, status, proposal_id
 				 FROM (
 				   SELECT id, entity_id, name, weight, status, proposal_id,
-				          ROW_NUMBER() OVER (PARTITION BY entity_id ORDER BY weight DESC, name ASC) AS rn
+				          ROW_NUMBER() OVER (
+							  PARTITION BY entity_id
+							  ORDER BY CASE WHEN EXISTS (
+								  SELECT 1
+								  FROM entity_attributes attr
+								  WHERE attr.aspect_id = entity_aspects.id
+									AND attr.agent_id = entity_aspects.agent_id
+									AND attr.status = 'active'
+									AND attr.kind = 'claim'
+									AND (
+									attr.source_id IS NOT NULL OR
+									attr.source_path IS NOT NULL OR
+									NULLIF(TRIM(attr.source_kind), '') IS NOT NULL
+								)
+							  ) THEN 0 ELSE 1 END,
+							  weight DESC,
+							  name ASC,
+							  id ASC
+						  ) AS rn
 				   FROM entity_aspects
 				   WHERE agent_id IN (${agentPlaceholders})
 				     AND COALESCE(status, 'active') = 'active'
 				     AND entity_id IN (${entityIdPlaceholders})
 				 ) ranked_aspects
 				 WHERE rn <= ?
-				 ORDER BY entity_id ASC, weight DESC, name ASC`,
+				 ORDER BY entity_id ASC, weight DESC, name ASC, id ASC`,
 				)
 				.all(...visibleAgentIds, ...entityIds, maxAspectsPerEntity) as Array<Record<string, unknown>>;
 
@@ -2059,18 +2114,24 @@ export async function getKnowledgeGraphForConstellation(
 						`SELECT id, aspect_id, content, kind, importance, memory_id, status,
 					        version, version_root_id, previous_attribute_id,
 					        group_key, claim_key, source_kind, source_path,
-					        proposal_id, proposal_evidence
+					        proposal_id, proposal_evidence, claim_priority
 					 FROM (
 					   SELECT id, aspect_id, content, kind, importance, memory_id, status,
 					          version, version_root_id, previous_attribute_id,
 					          group_key, claim_key, source_kind, source_path,
 					          proposal_id, proposal_evidence,
-					          ROW_NUMBER() OVER (PARTITION BY aspect_id ORDER BY importance DESC, id ASC) AS rn
+					          CASE WHEN kind = 'claim' THEN 0 ELSE 1 END AS claim_priority,
+					          ROW_NUMBER() OVER (
+							  PARTITION BY aspect_id
+							  ORDER BY CASE WHEN kind = 'claim' THEN 0 ELSE 1 END,
+								       importance DESC,
+								       id ASC
+						  ) AS rn
 					   FROM entity_attributes
 					   WHERE agent_id IN (${agentPlaceholders}) AND status = 'active' AND aspect_id IN (${aspectIdPlaceholders})
 					 ) ranked_attributes
 					 WHERE rn <= ?
-					 ORDER BY aspect_id ASC, importance DESC`,
+					 ORDER BY aspect_id ASC, claim_priority ASC, importance DESC, id ASC`,
 					)
 					.all(...visibleAgentIds, ...aspectIds, maxAttributesPerAspect) as Array<Record<string, unknown>>;
 
@@ -2082,7 +2143,7 @@ export async function getKnowledgeGraphForConstellation(
 					bucket.push({
 						id: row.id as string,
 						content: row.content as string,
-						kind: row.kind as "attribute" | "constraint",
+						kind: row.kind as "attribute" | "constraint" | "claim",
 						importance: Number(row.importance ?? 0.5),
 						memoryId: typeof row.memory_id === "string" ? row.memory_id : null,
 						status: row.status as AttributeStatus,
@@ -2135,7 +2196,11 @@ export async function getKnowledgeGraphForConstellation(
 				   AND COALESCE(status, 'active') = 'active'
 				   AND source_entity_id IN (${entityIdPlaceholders})
 				   AND target_entity_id IN (${entityIdPlaceholders})
-				 ORDER BY strength DESC
+				 ORDER BY strength DESC,
+				          source_entity_id ASC,
+				          target_entity_id ASC,
+				          dependency_type ASC,
+				          id ASC
 				 LIMIT ?`,
 				)
 				.all(...visibleAgentIds, ...entityIds, ...entityIds, dependencyLimit) as Array<Record<string, unknown>>;

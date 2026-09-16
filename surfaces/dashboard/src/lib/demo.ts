@@ -118,6 +118,8 @@ const demoStats: KnowledgeStats = {
 	entityCount: 1247,
 	aspectCount: 1893,
 	attributeCount: 4201,
+	claimCount: 3857,
+	constraintCount: 214,
 	dependencyCount: 9862,
 	coveragePercent: 61.4,
 };
@@ -360,7 +362,7 @@ const ENTITY_NAMES = [
 ] as const;
 
 const ASPECT_NAMES = ["facts", "preferences", "workflow", "constraints", "rules", "learnings"] as const;
-const ATTR_KINDS = ["fact", "rule", "learning", "constraint", "semantic"] as const;
+const ATTR_KINDS = ["fact", "rule", "learning", "claim", "constraint", "semantic"] as const;
 const DEP_TYPES = ["generates", "depends_on", "references", "strengthens"] as const;
 
 function demoConstellation(): KnowledgeConstellation {

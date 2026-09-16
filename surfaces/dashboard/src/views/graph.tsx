@@ -8,6 +8,8 @@ import type { GraphSceneData, GraphSceneHandle, SceneEdge, SceneNode } from "@/l
 const LEGEND = [
 	{ color: "#22d3ee", label: "memory" },
 	{ color: "#a78bfa", label: "attribute" },
+	{ color: "#fbbf24", label: "claim" },
+	{ color: "#fb7185", label: "constraint" },
 	{ color: "#7dd3fc", label: "entity" },
 	{ color: "#38bdf8", label: "source" },
 ] as const;
@@ -69,7 +71,10 @@ export function GraphView() {
 			nodes.push({
 				id: entity.id,
 				label: entity.name,
-				kind: "entity",
+				kind:
+					entity.entityType === "source_document" || entity.entityType === "source_document_reference"
+						? "source"
+						: "entity",
 				cluster: entity.id,
 				// sqrt-scaled mention weight — gates hub labels in dense scenes.
 				weight: Math.sqrt(entity.mentions / maxMentions),
@@ -85,11 +90,11 @@ export function GraphView() {
 					metric: `${Math.round(aspect.weight * 100)}% weight`,
 				});
 				addEdge(entity.id, aspect.id);
-				for (const attr of aspect.attributes.slice(0, 3)) {
+				for (const attr of aspect.attributes) {
 					nodes.push({
 						id: attr.id,
 						label: attr.kind,
-						kind: "attribute",
+						kind: attr.kind === "claim" ? "claim" : attr.kind === "constraint" ? "constraint" : "attribute",
 						cluster: entity.id,
 						weight: attr.importance,
 						metric: `${attr.kind} · ${Math.round(attr.importance * 100)}%`,
@@ -120,8 +125,34 @@ export function GraphView() {
 	const dataSig = useMemo(() => {
 		const entities = graphQuery.data?.entities ?? [];
 		let h = entityLimit * 31 + entities.length + (sources?.length ?? 0) * 7;
+		const mix = (value: string) => {
+			for (let i = 0; i < value.length; i++) h = (h * 33 + value.charCodeAt(i)) | 0;
+		};
 		for (const e of entities) {
-			for (let i = 0; i < e.id.length; i++) h = (h * 33 + e.id.charCodeAt(i)) | 0;
+			mix(e.id);
+			mix(e.name);
+			mix(e.entityType);
+			mix(String(e.mentions));
+			for (const aspect of e.aspects) {
+				mix(aspect.id);
+				mix(String(aspect.weight));
+				for (const attr of aspect.attributes) {
+					mix(attr.id);
+					mix(attr.kind);
+					mix(String(attr.importance));
+				}
+			}
+		}
+		for (const dependency of graphQuery.data?.dependencies ?? []) {
+			mix(dependency.sourceEntityId);
+			mix(dependency.targetEntityId);
+			mix(dependency.dependencyType);
+			mix(String(dependency.strength));
+		}
+		for (const source of sources ?? []) {
+			mix(source.id);
+			mix(source.name);
+			mix(String(source.stats?.indexed ?? 0));
 		}
 		return h;
 	}, [graphQuery.data, sources, entityLimit]);
@@ -170,7 +201,13 @@ export function GraphView() {
 	// the measured scene size; dragging debounces into a new entity limit.
 	// The endpoint caps at 300 entities, so the range ends at the percentage
 	// that many entities would actually occupy — no dead travel.
-	const totalNodes = stats ? stats.entityCount + stats.aspectCount + stats.attributeCount : 0;
+	const totalNodes = stats
+		? stats.entityCount +
+			stats.aspectCount +
+			stats.attributeCount +
+			(stats.claimCount ?? 0) +
+			(stats.constraintCount ?? 0)
+		: 0;
 	const shownEntities = Math.max(1, graphQuery.data?.entities.length ?? 48);
 	const nodesPerEntity = Math.max(1, sceneData.nodes.length / shownEntities);
 	const maxPct =
@@ -239,11 +276,11 @@ export function GraphView() {
 			{/* floating HUD telemetry overlay */}
 			<div className="graph-hud">
 				<span>
-					<b>{stats?.entityCount?.toLocaleString() ?? "—"}</b> nodes
+					<b>{sceneData.nodes.length.toLocaleString()}</b> nodes
 				</span>
 				<span className="graph-hud__sep">/</span>
 				<span>
-					<b>{stats?.dependencyCount?.toLocaleString() ?? "—"}</b> edges
+					<b>{sceneData.edges.length.toLocaleString()}</b> edges
 				</span>
 				<span className="graph-hud__sep">/</span>
 				<span>

@@ -1476,7 +1476,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 837,
+      "line": 838,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -1484,7 +1484,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 1949,
+      "line": 1962,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",

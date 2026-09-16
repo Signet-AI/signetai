@@ -77,10 +77,14 @@ function seedAttribute(
 	aspectId: string,
 	opts: {
 		agentId?: string;
-		kind?: "attribute" | "constraint";
+		kind?: "attribute" | "constraint" | "claim";
 		status?: "active" | "superseded";
 		content?: string;
 		memoryId?: string | null;
+		sourceId?: string | null;
+		sourceKind?: string | null;
+		sourcePath?: string | null;
+		sourceRoot?: string | null;
 	} = {},
 ): void {
 	const agentId = opts.agentId ?? "default";
@@ -88,14 +92,34 @@ function seedAttribute(
 	const status = opts.status ?? "active";
 	const content = opts.content ?? `content-${id}`;
 	const memoryId = opts.memoryId ?? null;
+	const sourceId = opts.sourceId ?? null;
+	const sourceKind = opts.sourceKind ?? null;
+	const sourcePath = opts.sourcePath ?? null;
+	const sourceRoot = opts.sourceRoot ?? null;
 	const now = new Date().toISOString();
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO entity_attributes
 			 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
-			  confidence, importance, status, created_at, updated_at)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 0.8, 0.5, ?, ?, ?)`,
-		).run(id, aspectId, agentId, memoryId, kind, content, content.toLowerCase(), status, now, now);
+			  confidence, importance, status, created_at, updated_at,
+			  source_id, source_kind, source_path, source_root)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 0.8, 0.5, ?, ?, ?, ?, ?, ?, ?)`,
+		).run(
+			id,
+			aspectId,
+			agentId,
+			memoryId,
+			kind,
+			content,
+			content.toLowerCase(),
+			status,
+			now,
+			now,
+			sourceId,
+			sourceKind,
+			sourcePath,
+			sourceRoot,
+		);
 	});
 }
 
@@ -515,6 +539,83 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(graph.entities[0]?.aspects[0]?.attributes[0]?.content).toBe("The report supports the current plan.");
 	});
 
+	test("includes source documents that carry source-backed ontology claims", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedEntity("e-source", "Kimi K3 note", { entityType: "source_document", mentions: 0 });
+		seedAspect("asp-source", "e-source", "related");
+		seedAttribute("attr-source-claim", "asp-source", {
+			kind: "claim",
+			content: "The note describes frontier intelligence.",
+			sourceId: "obsidian-source",
+			sourceKind: "source_obsidian_markdown",
+			sourcePath: "references/ai-stack/kimi-k3.md",
+			sourceRoot: "/vault",
+		});
+		seedEntity("e-source-kind", "Source-kind-only note", { entityType: "source_document", mentions: 0 });
+		seedAspect("asp-source-kind", "e-source-kind", "overview");
+		seedAttribute("attr-source-kind-claim", "asp-source-kind", {
+			kind: "claim",
+			content: "The claim has source-kind provenance.",
+			sourceKind: "source_obsidian_markdown",
+		});
+		seedAspect("asp-source-unrelated", "e-source", "aaa");
+		seedAttribute("aaa-source-ordinary", "asp-source-unrelated", {
+			content: "An ordinary source value.",
+		});
+		seedEntity("e-empty-source", "Empty source note", { entityType: "source_document", mentions: 0 });
+		seedAspect("asp-empty-source", "e-empty-source", "empty");
+		seedAttribute("attr-empty-source", "asp-empty-source", { sourcePath: "references/ai-stack/empty.md" });
+		seedEntity("e-folder", "AI stack", { entityType: "source_folder", mentions: 0 });
+		seedAspect("asp-folder", "e-folder", "contents");
+		seedAttribute("attr-folder-claim", "asp-folder", { kind: "claim", sourcePath: "references/ai-stack/folder.md" });
+
+		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
+			limit: 10,
+			maxAspectsPerEntity: 1,
+			maxAttributesPerAspect: 1,
+		});
+
+		expect(graph.entities.map((entity) => entity.id)).toEqual(["e-source", "e-source-kind"]);
+		expect(graph.entities[0]?.aspects[0]?.id).toBe("asp-source");
+		expect(graph.entities[0]?.aspects[0]?.attributes[0]).toMatchObject({
+			id: "attr-source-claim",
+			kind: "claim",
+			sourceKind: "source_obsidian_markdown",
+			sourcePath: "references/ai-stack/kimi-k3.md",
+		});
+		expect(graph.entities[1]?.aspects[0]?.attributes[0]).toMatchObject({
+			id: "attr-source-kind-claim",
+			kind: "claim",
+			sourceKind: "source_obsidian_markdown",
+			sourcePath: null,
+		});
+	});
+
+	test("orders equal-strength dependencies deterministically at the cap", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+
+		seedEntity("e-source", "Source");
+		seedEntity("e-target", "Target");
+		seedDependency("dep-z", "e-source", "e-target", { type: "z-link", strength: 0.8 });
+		seedDependency("dep-a", "e-source", "e-target", { type: "a-link", strength: 0.8 });
+
+		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
+			limit: 10,
+			dependencyLimit: 1,
+		});
+
+		expect(graph.dependencies).toMatchObject([
+			{
+				sourceEntityId: "e-source",
+				targetEntityId: "e-target",
+				dependencyType: "a-link",
+			},
+		]);
+	});
+
 	test("constellation includes shared-agent graph rows for the current view", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
@@ -705,6 +806,7 @@ describe("getKnowledgeStats (issue #515)", () => {
 		seedAspect("asp-active", "e-active", "capability");
 		seedAspect("asp-archived", "e-active", "retired");
 		seedAttribute("attr-active", "asp-active", { memoryId: "m-active" });
+		seedAttribute("claim-active", "asp-active", { kind: "claim", sourcePath: "vault/active.md" });
 		seedAttribute("attr-archived-aspect", "asp-archived", { memoryId: "m-archived-aspect" });
 		seedDependency("dep-archived-target", "e-active", "e-archived");
 		seedMemory("m-active");
@@ -720,6 +822,7 @@ describe("getKnowledgeStats (issue #515)", () => {
 		expect(stats.entityCount).toBe(1);
 		expect(stats.aspectCount).toBe(1);
 		expect(stats.attributeCount).toBe(1);
+		expect(stats.claimCount).toBe(1);
 		expect(stats.dependencyCount).toBe(0);
 		expect(stats.unassignedMemoryCount).toBe(0);
 		expect(stats.coveragePercent).toBe(100);

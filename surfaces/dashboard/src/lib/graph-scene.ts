@@ -12,7 +12,7 @@ import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import sphereObj from "@/assets/bounding-sphere.obj?raw";
 
-export type SceneNodeKind = "entity" | "aspect" | "attribute" | "source" | "memory";
+export type SceneNodeKind = "entity" | "aspect" | "attribute" | "claim" | "constraint" | "source" | "memory";
 
 export interface SceneNode {
 	id: string;
@@ -49,6 +49,8 @@ const COLORS: Record<SceneNodeKind, string> = {
 	entity: "#ffffff",
 	aspect: "#34d399",
 	attribute: "#a78bfa",
+	claim: "#fbbf24",
+	constraint: "#fb7185",
 	memory: "#a1a1aa",
 	source: "#38bdf8",
 };
@@ -357,9 +359,19 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		source: crossTex,
 		aspect: squareTex,
 		attribute: squareTex,
+		claim: squareTex,
+		constraint: squareTex,
 		memory: squareTex,
 	};
-	const KIND_SIZE: Record<SceneNodeKind, number> = { entity: 24, source: 27, aspect: 12, attribute: 9, memory: 9 };
+	const KIND_SIZE: Record<SceneNodeKind, number> = {
+		entity: 24,
+		source: 27,
+		aspect: 12,
+		attribute: 9,
+		claim: 10,
+		constraint: 10,
+		memory: 9,
+	};
 	const baseColors: THREE.Color[] = [];
 	interface NodeLayer {
 		pts: THREE.Points;
@@ -368,7 +380,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		origIndices: number[];
 	}
 	const nodeLayers: Partial<Record<SceneNodeKind, NodeLayer>> = {};
-	for (const kind of ["entity", "source", "aspect", "attribute", "memory"] as const) {
+	for (const kind of ["entity", "source", "aspect", "attribute", "claim", "constraint", "memory"] as const) {
 		const kindNodes = NODES.map((n, i) => ({ n, i })).filter(({ n }) => n.kind === kind);
 		if (kindNodes.length === 0) continue;
 		const geo = new THREE.BufferGeometry();
