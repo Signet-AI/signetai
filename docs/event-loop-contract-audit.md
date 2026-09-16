@@ -1,11 +1,5 @@
 # Event-loop synchronous contract audit
 
-**Audience/status:** Internal developer/operator audit evidence. This report
-describes the checked inventory and its limitations at the time of generation;
-it is not a release-readiness declaration or user-facing availability claim.
-Use the owning source, baseline, tests, and runtime checks to establish current
-behavior.
-
 This report is generated from the deterministic migration ledger in `scripts/event-loop-contract-baseline.json`. Phase A enforces the type boundary structurally: production code receives an async-only `DbAccessor`, while the synchronous compatibility module lives outside the daemon production `src/` tree and is rejected by the production TypeScript project's `rootDir`. The AST import and call checks remain belt-and-suspenders diagnostics, and new synchronous DB call sites fail closed through exact ledger matching. Migrated DB sites use unique `db:domain.operation.action` IDs as their durable identity; file and line remain diagnostic metadata.
 
 ## Current inventory

@@ -13,12 +13,11 @@ There is no LTS channel yet. Stable/nightly gives Signet room to move quickly wi
 
 ### Nightly
 
-- Built automatically from `main` by `.github/workflows/release.yml` on pushes that contain code changes; release commits are skipped to prevent loops.
-- The workflow derives the next version from the highest local/remote version, defaults to a patch bump, and honors the `.bump-level` value `major`, `minor`, or `patch`.
-- It runs `scripts/changelog.ts --bump-only`, synchronizes package/workspace/Cargo/lockfile versions with `scripts/version-sync.ts`, generates the versioned changelog section, and commits/tags the result.
-- It builds and smoke-tests the workspace, builds native binaries for all supported platforms, generates the connector/daemon asset archives and `native-manifest.json`, and verifies every required asset.
-- Published npm packages use the `next` dist-tag. The GitHub release is a prerelease and remains draft until the release finalizer confirms the native and desktop assets.
-- A manually supplied `resume_from_tag` resumes an exact validated `vMAJOR.MINOR.PATCH` tag without bumping or retagging.
+- Built automatically from `main` by `.github/workflows/release.yml`.
+- Published to npm with the `next` dist-tag.
+- Created as a GitHub prerelease.
+- May include experimental defaults, unstable behavior, and day-to-day development churn.
+- Must remain opt-in; Signet should not silently move a stable user to nightly.
 
 Install explicitly:
 
@@ -35,7 +34,8 @@ On Windows x64:
 $env:SIGNET_CHANNEL = "nightly"; iwr -useb https://signetai.sh/install.ps1 | iex
 ```
 
-The npm package is a wrapper around the same compiled Signet binary published to the GitHub release for that version.
+The npm package is a wrapper around the same compiled Signet binary published
+to the GitHub release for that version.
 
 Or switch an existing install's update checks:
 
@@ -45,15 +45,24 @@ signet update channel nightly
 
 ### Stable
 
-- Promoted manually from a known-good nightly by `.github/workflows/promote-release.yml`; this workflow is the stable release trigger.
-- The exact version is promoted to npm `latest` and marked as a normal GitHub release.
-- Stable is the default for installation and update checks.
+- Published by manually running `.github/workflows/promote-release.yml` for a known-good nightly version.
+- Promoted to npm `latest`.
+- Marked as a normal GitHub release.
+- Default for install and update checks.
 
 Install:
 
 ```bash
 npm install -g signetai
+
+# Direct native installer (stable is the default)
 curl -fsSL https://signetai.sh/install.sh | bash
+```
+
+On Windows x64, the stable channel is the default:
+
+```powershell
+iwr -useb https://signetai.sh/install.ps1 | iex
 ```
 
 Or switch back from nightly:
@@ -73,19 +82,32 @@ updates:
   channel: stable
 ```
 
-Compatibility aliases are accepted when reading config or CLI input: `latest` → `stable` and `next` → `nightly`.
+Compatibility aliases are accepted when reading config or CLI input:
+
+- `latest` -> `stable`
+- `next` -> `nightly`
 
 Channel lookup rules:
 
 - `stable` checks GitHub latest stable release first, then falls back to npm `latest`.
 - `nightly` skips GitHub latest and checks npm `next` directly, so it cannot be accidentally pinned back to stable by the GitHub latest endpoint.
-- The public direct installer resolves GitHub `releases/latest` for stable and npm `next` for nightly. `SIGNET_RELEASE_TAG`, `SIGNET_VERSION`, or the existing `VERSION` alias remains an explicit version override.
+- The public direct installer resolves GitHub `releases/latest` for stable and
+  npm `next` for nightly. `SIGNET_RELEASE_TAG`, `SIGNET_VERSION`, or the
+  existing `VERSION` alias remains an explicit version override.
 
 ## Release integrity and trust
 
-Native self-updates validate the selected asset's declared size and SHA-256 digest against `native-manifest.json` from the same versioned GitHub release. The public direct installer validates the asset's SHA-256 digest against that manifest. These checks detect incomplete, corrupted, or mismatched downloads, but do not independently authenticate the manifest. Native release assets and the manifest are not currently signed.
+Native self-updates validate the selected asset's declared size and SHA-256
+digest against `native-manifest.json` from the same versioned GitHub release.
+The public direct installer validates the asset's SHA-256 digest against that
+manifest. These checks detect incomplete, corrupted, or mismatched downloads,
+but do not independently authenticate the manifest. Native release assets and
+the manifest are not currently signed.
 
-The current trust anchor is the Signet GitHub Actions release workflow, its repository release permissions, and HTTPS delivery from GitHub. Artifact signing or attestations would require a separate trust root and verification flow; they are not implied by the SHA-256 checks described here.
+The current trust anchor is the Signet GitHub Actions release workflow, its
+repository release permissions, and HTTPS delivery from GitHub. Artifact
+signing or attestations would require a separate trust root and verification
+flow; they are not implied by the SHA-256 checks described here.
 
 ## Promotion checklist
 
