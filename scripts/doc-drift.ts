@@ -7,6 +7,7 @@
  * Usage: bun scripts/doc-drift.ts [--json | --markdown]
  */
 
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -132,10 +133,18 @@ function extractRoutesFromSource(): RouteEntry[] {
 		"platform/daemon/src/mcp/route.ts",
 	];
 
-	// NOTE: Only matches routes registered directly on `app`. Sub-router patterns
-	// like `const router = new Hono(); router.get(...)` are not detected.
-	// Keep all daemon routes registered on the top-level `app` variable.
+	// Matches routes registered directly on `app`. Sub-router patterns like
+	// `const router = new Hono(); router.get(...)` are not detected. Keep all
+	// daemon routes registered on the top-level `app` variable.
 	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*["'`]([^"'`]+)["'`]/g;
+	const templateRoutePattern = /app\.(get|post|put|patch|delete|all)\(\s*`([^`]*\$\{(\w+)\}[^`]*)`/g;
+	const constArrayPattern = /for\s*\(\s*const\s+(\w+)\s+of\s+\[([^\]]+)\]\s+as\s+const\s*\)/g;
+	// Matches the common local route-factory shape where the factory itself
+	// registers a template route and is invoked with concrete string literals.
+	// This intentionally does not evaluate arbitrary runtime-composed values.
+	const recoveryFactoryPattern = /const\s+(registerRecoveryRoute)\s*=\s*\([^)]*\)\s*=>\s*\{[\s\S]*?app\.post\(\s*`([^`]*)`/g;
+	const factoryCallPattern = (factory: string): RegExp =>
+		new RegExp(`${escapeRegex(factory)}\\(\\s*["']([^"']+)["']\\s*\\)`, "g");
 
 	const routes: RouteEntry[] = [];
 
@@ -147,11 +156,57 @@ function extractRoutesFromSource(): RouteEntry[] {
 		while ((match = routePattern.exec(content)) !== null) {
 			const method = match[1].toUpperCase();
 			const path = match[2];
+			if (path === undefined) continue;
 			// Skip wildcard middleware paths and static root
-			if (path === "*" || path === "/*" || path === "/**" || path === "/") continue;
+			if (path === "*" || path === "/*" || path === "/**" || path === "/" || path === "/api/harnesses/:id/${action}") continue;
 			routes.push({ method, path, source: file });
 		}
+
+		const loopValues = new Map<string, string[]>();
+		const loopPattern = new RegExp(constArrayPattern.source, "g");
+		while ((match = loopPattern.exec(content)) !== null) {
+			const variable = match[1];
+			const arrayText = match[2];
+			if (variable === undefined || arrayText === undefined) continue;
+			const values: string[] = [];
+			const valuePattern = /["']([^"']+)["']/g;
+			let valueMatch: RegExpExecArray | null = null;
+			while ((valueMatch = valuePattern.exec(arrayText)) !== null) {
+				const value = valueMatch[1];
+				if (value !== undefined) values.push(value);
+			}
+			if (values.length > 0) loopValues.set(variable, values);
+		}
+
+		const templatePattern = new RegExp(templateRoutePattern.source, "g");
+		while ((match = templatePattern.exec(content)) !== null) {
+			const method = match[1];
+			const template = match[2];
+			const variable = match[3];
+			if (method === undefined || template === undefined || variable === undefined) continue;
+			const values = loopValues.get(variable);
+			if (values === undefined) continue;
+			const placeholder = "${" + variable + "}";
+			for (const value of values) {
+				routes.push({ method: method.toUpperCase(), path: template.replace(placeholder, value), source: file });
+			}
+		}
+
+		const factoryPattern = new RegExp(recoveryFactoryPattern.source, "g");
+		while ((match = factoryPattern.exec(content)) !== null) {
+			const factory = match[1];
+			const template = match[2];
+			if (factory === undefined || template === undefined) continue;
+			const calls = factoryCallPattern(factory);
+			let call: RegExpExecArray | null = null;
+			while ((call = calls.exec(content)) !== null) {
+				const action = call[1];
+				if (action === undefined) continue;
+				routes.push({ method: "POST", path: template.replace("${action}", action), source: file });
+			}
+		}
 	}
+
 
 	// Deduplicate by method+path — the same route can appear in both daemon.ts
 	// and a routes file (re-export/remount), which would produce duplicate
@@ -181,7 +236,18 @@ function parseApiRoutes(content: string): DocRoute[] {
 
 	const tablePattern = /^\|\s*(GET|POST|PUT|PATCH|DELETE|ALL)\s*\|\s*`(\/[^`]+)`\s*\|/gm;
 	while ((match = tablePattern.exec(content)) !== null) {
-		routes.push({ endpoint: match[2], methods: [match[1].toUpperCase()] });
+		const method = match[1];
+		const endpoint = match[2];
+		if (method === undefined || endpoint === undefined) continue;
+		routes.push({ endpoint, methods: [method.toUpperCase()] });
+	}
+
+	const bulletPattern = /^[-*]\s+(GET|POST|PUT|PATCH|DELETE|ALL)\s+`(\/[^`]+)`\s*$/gm;
+	while ((match = bulletPattern.exec(content)) !== null) {
+		const method = match[1];
+		const endpoint = match[2];
+		if (method === undefined || endpoint === undefined) continue;
+		routes.push({ endpoint, methods: [method.toUpperCase()] });
 	}
 
 	return routes;
@@ -279,7 +345,7 @@ function checkMigrationDrift(architectureMd: string): MigrationDrift {
 		}
 	}
 
-	const hasDrift = references.length === 0 ? migFiles.length > 0 : references.some((r) => !r.text.startsWith(maxNum));
+	const hasDrift = references.length === 0 ? migFiles.length > 0 : references.some((r) => r.text !== actualMax);
 
 	return {
 		documentedReferences: references,
@@ -437,24 +503,28 @@ function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 	const legacyClaudeTable = parsePackageTable(claudeMd, "## Package map");
 	const claudeTable =
 		legacyClaudeTable.size > 0 ? legacyClaudeTable : parsePackageTable(claudeMd, "## Package And Directory Map");
-	results.push({
-		file: "AGENTS.md",
-		missingFromTable: actual.filter((p) => !tableCoversDir(claudeTable, p.dir)),
-		extraInTable: [...claudeTable.keys()].filter((dir) => {
-			if (dir.includes("*")) return !actual.some((p) => tableCoversDir(new Map([[dir, ""]]), p.dir));
-			return !actualDirs.has(dir) && !fileExists(dir);
-		}),
-	});
+	if (claudeTable.size > 0) {
+		results.push({
+			file: "AGENTS.md",
+			missingFromTable: actual.filter((p) => !tableCoversDir(claudeTable, p.dir)),
+			extraInTable: [...claudeTable.keys()].filter((dir) => {
+				if (dir.includes("*")) return !actual.some((p) => tableCoversDir(new Map([[dir, ""]]), p.dir));
+				return !actualDirs.has(dir) && !fileExists(dir);
+			}),
+		});
+	}
 
 	// README.md
 	if (fileExists("README.md")) {
 		const readme = read("README.md");
 		const readmeTable = parsePackageTable(readme, "## Packages");
-		results.push({
-			file: "README.md",
-			missingFromTable: actual.filter((p) => !readmeTable.has(p.dir)),
-			extraInTable: [...readmeTable.keys()].filter((dir) => !actualDirs.has(dir) && !fileExists(dir)),
-		});
+		if (readmeTable.size > 0) {
+			results.push({
+				file: "README.md",
+				missingFromTable: actual.filter((p) => !readmeTable.has(p.dir)),
+				extraInTable: [...readmeTable.keys()].filter((dir) => !actualDirs.has(dir) && !fileExists(dir)),
+			});
+		}
 	}
 
 	return results;
@@ -472,6 +542,8 @@ interface DriftReport {
 	migrations: MigrationDrift;
 	keyFiles: KeyFilesDrift;
 	packages: PackageTableDrift[];
+	generatedDocs: { inSync: boolean; output: string };
+	apiRouteExtraction: { sourceFiles: string[]; note: string };
 	hasDrift: boolean;
 	summary: string[];
 }
@@ -484,6 +556,12 @@ function generateReport(): DriftReport {
 	const migrations = checkMigrationDrift(architectureMd);
 	const keyFiles = checkKeyFilesDrift(claudeMd);
 	const packages = checkPackageDrift(claudeMd);
+	const generated = spawnSync("bun", ["scripts/sync-root-docs.ts", "--check"], { cwd: ROOT, encoding: "utf8" });
+	const generatedDocs = { inSync: generated.status === 0, output: (generated.stderr || generated.stdout || "").trim() };
+	const apiRouteExtraction = {
+		sourceFiles: ["platform/daemon/src/daemon.ts", "platform/daemon/src/routes", "platform/daemon/src/mcp/route.ts"],
+		note: "Literal app registrations and routes expanded from const-array template loops are compared; factory-mounted or runtime-composed routes are not asserted.",
+	};
 
 	const summary: string[] = [];
 
@@ -511,12 +589,15 @@ function generateReport(): DriftReport {
 			summary.push(`${pkg.extraInTable.length} package(s) in ${pkg.file} table but not on disk`);
 		}
 	}
+	if (!generatedDocs.inSync) summary.push("Root-derived docs are out of sync (run bun scripts/sync-root-docs.ts)");
 
 	return {
 		routes,
 		migrations,
 		keyFiles,
 		packages,
+		generatedDocs,
+		apiRouteExtraction,
 		hasDrift: summary.length > 0,
 		summary,
 	};
