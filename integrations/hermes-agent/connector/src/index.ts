@@ -4,6 +4,7 @@ import {
 	closeSync,
 	constants,
 	existsSync,
+	fstatSync,
 	ftruncateSync,
 	lstatSync,
 	mkdirSync,
@@ -12,6 +13,7 @@ import {
 	readdirSync,
 	realpathSync,
 	rmdirSync,
+	statSync,
 	unlinkSync,
 	writeSync,
 } from "node:fs";
@@ -341,13 +343,28 @@ function removeDirectoryContentsNoFollow(directoryFd: number): void {
 			const childFd = openDirectoryNoFollow(childPath);
 			try {
 				removeDirectoryContentsNoFollow(childFd);
+				if (!sameFileIdentity(childFd, childPath)) {
+					throw new Error(`Hermes directory entry changed during secure removal: ${childPath}`);
+				}
+				rmdirSync(childPath);
 			} finally {
 				closeDirectory(childFd);
 			}
-			rmdirSync(childPath);
 			continue;
 		}
 		unlinkSync(childPath);
+	}
+}
+
+function sameFileIdentity(fd: number, path: string): boolean {
+	try {
+		const opened = fstatSync(fd);
+		const current = statSync(path);
+		return opened.dev === current.dev && opened.ino === current.ino;
+	} catch (error) {
+		const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+		if (code === "ENOENT") return false;
+		throw error;
 	}
 }
 
@@ -401,10 +418,13 @@ function removeContainedDirectory(
 				);
 			}
 			removeDirectoryContentsNoFollow(targetFd);
+			if (!sameFileIdentity(targetFd, targetEntryPath)) {
+				throw new Error(`Hermes target directory changed during secure removal: ${targetPath}`);
+			}
+			rmdirSync(targetEntryPath);
 		} finally {
 			closeDirectory(targetFd);
 		}
-		rmdirSync(targetEntryPath);
 	} finally {
 		closeDirectory(parentFd);
 	}
