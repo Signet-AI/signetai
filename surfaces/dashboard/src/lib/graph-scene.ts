@@ -524,17 +524,12 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		leader: THREE.Line;
 		semantic: boolean;
 		kind: SceneNodeKind;
+		priority: number;
 	}
 	const labelObjs: Record<string, LabelEntry> = {};
-	const hubLabelThreshold = (() => {
-		const weights = NODES.filter((n) => n.kind === "entity")
-			.map((n) => n.weight)
-			.sort((a, b) => b - a);
-		return weights.length > 40 ? Math.max(0.35, weights[40]) : 0.35;
-	})();
 	// Labels are intentionally budgeted. The visual grammar stays visible on
-	// every node, but only the most meaningful child per subject gets a card at
-	// rest; hover still exposes every node's full semantic payload.
+	// every node, but only a small set of meaningful anchors gets a card at rest;
+	// hover still exposes every node's full semantic payload.
 	const labelIds = new Set<string>();
 	const edgeDegree = new Map<string, number>();
 	for (const edge of EDGES) {
@@ -544,7 +539,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const originLabelIds = new Set(
 		NODES.filter((n) => n.kind === "origin")
 			.sort((a, b) => (edgeDegree.get(b.id) ?? 0) - (edgeDegree.get(a.id) ?? 0) || a.id.localeCompare(b.id))
-			.slice(0, 10)
+			.slice(0, 4)
 			.map((n) => n.id),
 	);
 	const assertionLabelIds = new Set(
@@ -553,13 +548,14 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			.slice(0, 4)
 			.map((n) => n.id),
 	);
+	const hubLabelIds = new Set(
+		NODES.filter((n) => n.kind === "entity")
+			.sort((a, b) => b.weight - a.weight || a.id.localeCompare(b.id))
+			.slice(0, 12)
+			.map((n) => n.id),
+	);
 	for (const n of NODES) {
-		if (
-			n.kind === "source" ||
-			originLabelIds.has(n.id) ||
-			assertionLabelIds.has(n.id) ||
-			(n.kind === "entity" && n.weight >= hubLabelThreshold)
-		) {
+		if (n.kind === "source" || originLabelIds.has(n.id) || assertionLabelIds.has(n.id) || hubLabelIds.has(n.id)) {
 			labelIds.add(n.id);
 		}
 	}
@@ -580,11 +576,13 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const candidates = NODES.filter((n) => !isHubKind(n.kind) && semanticRank[n.kind] > 0).sort(
 		(a, b) => semanticRank[b.kind] - semanticRank[a.kind] || b.weight - a.weight || a.id.localeCompare(b.id),
 	);
+	let statementLabelCount = 0;
 	for (const n of candidates) {
 		const count = childLabelCounts.get(n.cluster) ?? 0;
-		if (count >= 1) continue;
+		if (count >= 1 || statementLabelCount >= 12) continue;
 		labelIds.add(n.id);
 		childLabelCounts.set(n.cluster, count + 1);
+		statementLabelCount += 1;
 	}
 	for (const n of NODES) {
 		const semantic = n.kind !== "attribute" && n.kind !== "memory";
@@ -603,14 +601,15 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		meta.textContent = n.metric;
 		div.append(kind, name, meta);
 		const obj = new CSS2DObject(div);
-		obj.position.set(n.pos.x + 8, n.pos.y + 11, n.pos.z + 8);
+		const labelLift = n.kind === "assertion" ? 110 : 11;
+		obj.position.set(n.pos.x + 8, n.pos.y + labelLift, n.pos.z + 8);
 		scene.add(obj);
 		const lOffset = 10;
 		const leaderGeo = new THREE.BufferGeometry();
 		leaderGeo.setAttribute(
 			"position",
 			new THREE.Float32BufferAttribute(
-				[n.pos.x, n.pos.y, n.pos.z, n.pos.x + lOffset * 0.7, n.pos.y + lOffset, n.pos.z + lOffset * 0.7],
+				[n.pos.x, n.pos.y, n.pos.z, n.pos.x + lOffset * 0.7, n.pos.y + labelLift, n.pos.z + lOffset * 0.7],
 				3,
 			),
 		);
@@ -622,7 +621,21 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		});
 		const leader = new THREE.Line(leaderGeo, leaderMat);
 		scene.add(leader);
-		labelObjs[n.id] = { obj, div, pos: n.pos.clone(), dir: n.dir, leader, semantic, kind: n.kind };
+		const priority =
+			n.kind === "entity"
+				? 100
+				: n.kind === "source"
+					? 95
+					: n.kind === "origin"
+						? 90
+						: n.kind === "assertion"
+							? 85
+							: n.kind === "claim" || n.kind === "constraint"
+								? 80
+								: n.kind === "claimSlot"
+									? 70
+									: 60;
+		labelObjs[n.id] = { obj, div, pos: n.pos.clone(), dir: n.dir, leader, semantic, kind: n.kind, priority };
 	}
 
 	// ── relationship edges — color and dash encode the graph's grammar ──
@@ -978,11 +991,45 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		for (const e of edgeMeshes) {
 			(e.line.material as THREE.LineBasicMaterial).opacity = e.baseOpacity * (1 - 0.55 * highlightMix);
 		}
+		const labelRects: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+		const labelCandidates = Object.values(labelObjs)
+			.map((lb) => {
+				const dot = lb.dir.dot(camDir);
+				const minDot = lb.kind === "assertion" ? -0.8 : lb.semantic ? 0.35 : 0.3;
+				const projected = lb.obj.position.clone().project(camera);
+				return {
+					lb,
+					dot,
+					minDot,
+					x: (projected.x * 0.5 + 0.5) * renderer.domElement.clientWidth,
+					y: (-projected.y * 0.5 + 0.5) * renderer.domElement.clientHeight,
+				};
+			})
+			.filter(({ dot, minDot }) => dot > minDot)
+			.sort((a, b) => b.lb.priority - a.lb.priority || b.dot - a.dot);
+		for (const { lb, dot, minDot, x, y } of labelCandidates) {
+			const width = lb.div.offsetWidth || (lb.semantic ? 150 : 100);
+			const height = lb.div.offsetHeight || (lb.semantic ? 38 : 20);
+			const rect = {
+				left: x - width / 2 - 6,
+				right: x + width / 2 + 6,
+				top: y - height / 2 - 6,
+				bottom: y + height / 2 + 6,
+			};
+			const collides = labelRects.some(
+				(other) =>
+					rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top,
+			);
+			const alpha = Math.min(1, 0.35 + (dot - minDot) * 1.5);
+			lb.div.style.opacity = collides ? "0" : String(alpha);
+			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = collides ? 0 : 0.5);
+			if (!collides) labelRects.push(rect);
+		}
+		const candidateIds = new Set(labelCandidates.map(({ lb }) => lb));
 		for (const lb of Object.values(labelObjs)) {
-			const dot = lb.dir.dot(camDir);
-			const minDot = lb.kind === "assertion" ? -0.8 : lb.semantic ? 0.35 : 0.3;
-			lb.div.style.opacity = dot > minDot ? String(Math.min(1, 0.35 + (dot - minDot) * 1.5)) : "0";
-			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = dot > minDot ? 0.5 : 0);
+			if (candidateIds.has(lb)) continue;
+			lb.div.style.opacity = "0";
+			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = 0);
 		}
 
 		// Hover raycast → targeting bracket + semantic readout (every node kind).
