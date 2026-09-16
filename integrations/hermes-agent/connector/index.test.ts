@@ -12,7 +12,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HermesAgentConnector, diagnoseHermesIntegration } from "./src/index.js";
 
@@ -1675,6 +1675,18 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		expect(existsSync(join(profileHome, "plugins", "signet", "__init__.py"))).toBe(true);
 		expect(existsSync(join(profileHome, "config.yaml"))).toBe(true);
 		expect(existsSync(join(userHome, ".hermes", "profiles", "named"))).toBe(false);
+	});
+
+	it("accepts a relative HERMES_HOME for targeted profiles", async () => {
+		const userHome = join(tmpRoot, "relative-profile-user-home");
+		const hermesHome = join(tmpRoot, "relative-hermes-home");
+		process.env.HOME = userHome;
+		process.env.HERMES_HOME = relative(process.cwd(), hermesHome);
+
+		const result = await new HermesAgentConnector({ profile: "named" }).install(join(userHome, ".agents"));
+
+		expect(result.success).toBe(true);
+		expect(existsSync(join(hermesHome, "profiles", "named", "config.yaml"))).toBe(true);
 	});
 
 	it("rejects a symlinked profile home before touching the victim directory", async () => {

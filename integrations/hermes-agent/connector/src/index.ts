@@ -2,7 +2,7 @@ import { spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult, resolveSignetApiKey } from "@signet/connector-base";
 import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
@@ -119,7 +119,7 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 			return false;
 		}
 	};
-	let rootPath = targetRoot;
+	let rootPath = resolvePath(targetRoot);
 	while (!pathEntryExists(rootPath)) {
 		const parent = dirname(rootPath);
 		if (parent === rootPath) throw new Error(`Hermes target root does not exist: ${targetRoot}`);
@@ -129,7 +129,7 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 		throw new Error(`Hermes target root is symlinked and cannot be used for writes: ${targetRoot}`);
 	}
 	const root = realpathSync(rootPath);
-	let existing = targetPath;
+	let existing = resolvePath(targetPath);
 	const missing: string[] = [];
 	while (!pathEntryExists(existing)) {
 		const parent = dirname(existing);
