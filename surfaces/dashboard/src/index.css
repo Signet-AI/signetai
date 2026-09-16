@@ -802,6 +802,15 @@
 .graph-stage { position: absolute; inset: 0; background-image: radial-gradient(oklch(1 0 0 / 0.03) 1px, transparent 1px); background-size: 28px 28px; }
 :root:not(.dark) .graph-stage { background-image: radial-gradient(oklch(0 0 0 / 0.03) 1px, transparent 1px); }
 
+/* Labels carry the ontology role, not just the node's stored name. */
+.graph-node-label { display: flex; flex-direction: column; gap: 1px; max-width: 190px; padding: 3px 6px 4px; border: 1px solid color-mix(in oklch, var(--node-color) 45%, transparent); border-left: 2px solid var(--node-color); border-radius: 4px; background: color-mix(in oklch, var(--background) 88%, transparent); box-shadow: 0 3px 10px oklch(0 0 0 / 0.34), 0 0 10px color-mix(in oklch, var(--node-color) 10%, transparent); color: var(--foreground); white-space: normal; opacity: 0; transition: opacity .25s ease; pointer-events: none; }
+.graph-node-label__kind { color: var(--node-color); font-family: var(--font-mono); font-size: 7px; font-weight: 700; letter-spacing: .1em; line-height: 1; text-transform: uppercase; }
+.graph-node-label__name { overflow: hidden; color: var(--foreground); font-family: var(--font-mono); font-size: 10px; font-weight: 600; line-height: 1.2; text-overflow: ellipsis; }
+.graph-node-label__meta { overflow: hidden; color: var(--muted-foreground); font-family: var(--font-mono); font-size: 7px; line-height: 1.2; text-overflow: ellipsis; white-space: nowrap; }
+.graph-node-label--entity .graph-node-label__meta, .graph-node-label--source .graph-node-label__meta, .graph-node-label--origin .graph-node-label__meta { display: none; }
+.graph-node-label--entity, .graph-node-label--source { min-width: 92px; }
+.graph-node-label--claim, .graph-node-label--constraint, .graph-node-label--assertion, .graph-node-label--origin { min-width: 125px; }
+
 /* floating HUD telemetry overlay (CAD-style viewport anchor) */
 .graph-hud { position: absolute; top: 12px; left: 16px; z-index: 4; display: flex; align-items: center; gap: 10px;
 	font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); pointer-events: none; }
