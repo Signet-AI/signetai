@@ -25,7 +25,7 @@ Auth mode is configured in `agent.yaml`:
 | Mode | Behavior |
 |---|---|
 | `local` | Local requests are trusted; no bearer token is required. |
-| `team` | API requests require an `Authorization: Bearer <token>` header. |
+| `team` | API requests require an `Authorization: Bearer ***` header. |
 | `hybrid` | Loopback is trusted; non-loopback requests require a bearer token. |
 
 Use `GET /api/auth/methods`, `POST /api/auth/login`, and `GET /api/auth/whoami`
