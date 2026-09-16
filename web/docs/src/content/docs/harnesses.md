@@ -27,6 +27,8 @@ and troubleshooting:
 - [Pi](/harnesses/pi/)
 - [OpenClaw](/harnesses/openclaw/)
 - [Hermes Agent](/harnesses/hermes-agent/)
+- **Gemini CLI** — supported through the Gemini CLI connector; a dedicated public guide is not published yet. Run `signet setup --harness gemini`.
+- **ForgeCode** — supported through the ForgeCode connector; a dedicated public guide is not published yet. Run `signet setup --harness forge`.
 
 ## Verify an installation
 

@@ -23,9 +23,9 @@ Open the [Dashboard](/dashboard/) and choose **Sources**. Select **Connect** for
 | Discord | Guild ID and bot-token secret reference |
 | Web page | Public `http(s)` URL |
 
-Signet reads connected sources and does not edit them. Obsidian files, Discord data, GitHub resources, and Web content remain source-backed recall rather than native memories. Store service tokens as Signet secret references, never as raw source configuration.
+Connected sources keep their original files and service data canonical. Obsidian files, Discord data, GitHub resources, and Web content remain source-backed recall with provenance rather than native memory. Store service tokens as Signet secret references, never as raw source configuration.
 
-Connected sources refresh in place. Unchanged content is skipped, overlapping scans are coalesced, and removed files are soft-deleted from source artifacts while their source-owned chunks are purged. Renames are treated as delete plus add.
+Connected sources refresh in place. Unchanged content is skipped, overlapping scans are coalesced, and removed files become soft-deleted source artifacts while their source-owned chunks are purged. Renames are treated as delete plus add.
 
 ## Import files
 
@@ -37,7 +37,7 @@ The limits are **25 files per batch**, **25 MiB per file**, and **100 MiB per ba
 - **Replace and re-index** replaces it and queues indexing again.
 - **Import as a new source** retains a second source for the same content.
 
-File imports create one read-only `import` source per file. Signet stores normalized content and provenance for indexing, but does not write to the original file or retain raw upload bytes.
+File imports create one read-only `import` source per file. Signet stores normalized content and provenance for indexing; the original file remains unchanged and upload bytes are discarded after normalization.
 
 ## Import durable agent transcripts
 
@@ -54,7 +54,7 @@ Limits are **one active job/file**, **25 records per database batch**, **8 MiB p
 
 Jobs move through `staging → inventorying → queued → running`, may be `paused`, and finish as `completed`, `completed_with_rejections`, or `cancelled`. Restarts recover leases and byte checkpoints. Import completion nudges Dreaming, but Dreaming consumption remains a separate delivery and review path.
 
-This workflow is different from live hook transcripts. Hooks capture live session activity for session continuity and dedicated transcript search; they do not turn the session into a durable imported source. Use durable imports when an exported transcript must remain attributable, resumable, and purgeable as source evidence.
+This workflow is separate from live hook transcripts. Hooks capture live session activity for session continuity and dedicated transcript search; durable imports create a source record for exported transcripts that must remain attributable, resumable, and purgeable.
 
 ## Remove a source safely
 
@@ -64,4 +64,4 @@ Ordinary source removal through the Dashboard or daemon removes the source confi
 
 Imported transcript sources have an additional archival/provenance rule. Removing one purges imported evidence, indexes, and consumption rows, while bounded audit tombstones and routing derived knowledge through unsupported/stale review preserve the import's provenance. Do not treat imported-source removal as ordinary connector cleanup.
 
-For transcript upload details and migration notes, see the [durable transcript import reference](/api/documents-sources/#durable-transcript-imports). For provider-specific options, use the [Sources API reference](/api/documents-sources/).
+For transcript upload details and migration notes, see the [durable transcript import reference](/api/documents-sources/#durable-transcript-imports).

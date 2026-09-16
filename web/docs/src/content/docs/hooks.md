@@ -26,7 +26,7 @@ Signet is a local-first memory and context layer for AI agents. Hooks are daemon
 | `POST` | `/api/synthesis/trigger` | Request daemon-owned Dreaming synthesis. |
 | `GET` | `/api/synthesis/status` | Read synthesis worker status. |
 
-Cross-agent coordination has separate routes: `GET /api/cross-agent/presence`, `POST /api/cross-agent/presence`, `GET /api/cross-agent/messages`, `POST /api/cross-agent/messages`, `POST /api/cross-agent/messages/:messageId/ack`, `POST /api/cross-agent/messages/:messageId/retry`, and `GET /api/cross-agent/stream`.
+Cross-agent coordination has separate routes: `GET /api/cross-agent/presence`, `POST /api/cross-agent/presence`, `DELETE /api/cross-agent/presence/:sessionKey`, `GET /api/cross-agent/messages`, `POST /api/cross-agent/messages`, `POST /api/cross-agent/messages/:messageId/ack`, `POST /api/cross-agent/messages/:messageId/retry`, and `GET /api/cross-agent/stream`.
 
 All hook requests carry `harness`; session-aware requests should also carry `agentId` and `sessionKey`. The daemon resolves identity and scope before reading or writing evidence. Unsupported lifecycle input fails explicitly.
 
@@ -100,7 +100,7 @@ Repeated end requests are deduplicated. Unrecognized or ordinary idle calls rema
 
 `POST /api/hooks/remember` and `POST /api/hooks/recall` are compatibility adapters for clients that cannot use MCP or the canonical memory routes. They translate into the same daemon-owned evidence and recall operations; they do not create a second memory implementation.
 
-`POST /api/hooks/skill-invocation` records a skill invocation. `POST /api/hooks/session-checkpoint-extract` handles an explicit checkpoint. `GET /api/hooks/transcript-capture/:jobId` reports the status of an asynchronous capture job.
+`POST /api/hooks/skill-invocation` records a skill invocation. `POST /api/hooks/session-checkpoint-extract` handles an explicit checkpoint; it is not a generic transcript-extraction pipeline. `GET /api/hooks/transcript-capture/:jobId` reports the status of an asynchronous capture job submitted by session lifecycle processing.
 
 ## Bypass
 

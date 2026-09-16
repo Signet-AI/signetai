@@ -25,7 +25,7 @@ Auth mode is configured in `agent.yaml`:
 | Mode | Behavior |
 |---|---|
 | `local` | Local requests are trusted; no bearer token is required. |
-| `team` | API requests require `Authorization: Bearer <token>`. |
+| `team` | API requests require an `Authorization: Bearer <token>` header. |
 | `hybrid` | Loopback is trusted; non-loopback requests require a bearer token. |
 
 Use `GET /api/auth/methods`, `POST /api/auth/login`, and `GET /api/auth/whoami`
@@ -39,8 +39,7 @@ key management is under `/api/auth/token` and `/api/auth/api-keys`.
 | `agent` | Agent-scoped memory and document operations. |
 | `readonly` | Read-only recall access. |
 
-Routes additionally enforce scope (`project`, `agent`, or `user`) and route
-specific permissions. Treat `401`, `403`, and `503` as authoritative outcomes;
+Routes additionally enforce their registered scope and permissions. Treat `401`, `403`, and `503` as authoritative outcomes;
 clients must not retry by silently switching identity or using a legacy fallback.
 
 ## Reference navigation

@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { extname, join, relative, resolve, sep } from "node:path";
 
@@ -83,6 +84,23 @@ function stripCode(source: string): string {
 	return source.replace(/```[\s\S]*?```|`[^`\n]+`/g, "");
 }
 
+function checkAudienceCoverage(routes: Set<string>, errors: string[]): void {
+	const groups = {
+		"getting-started": ["/quickstart/", "/getting-started/install/", "/getting-started/setup/"],
+		users: ["/memory/", "/sources/", "/documents/", "/configuration/"],
+		developers: ["/api/", "/sdk/", "/architecture/", "/harnesses/"],
+	};
+	for (const [group, required] of Object.entries(groups)) {
+		const missing = required.filter((route) => !routes.has(route));
+		if (missing.length > 0) errors.push(`Audience group ${group} is missing routes: ${missing.join(", ")}`);
+	}
+}
+
+function checkGeneratedPages(errors: string[]): void {
+	const result = spawnSync("bun", ["scripts/sync-root-docs.ts", "--check"], { cwd: REPO, encoding: "utf8" });
+	if (result.status !== 0) errors.push(`Generated docs are out of sync: ${(result.stderr || result.stdout).trim()}`);
+}
+
 function linksToRetiredDocsOrigin(source: string): boolean {
 	for (const match of source.matchAll(/https?:\/\/[^\s)<>'"]+/g)) {
 		try {
@@ -149,10 +167,13 @@ function main(): number {
 
 	const config = readFileSync(join(ROOT, "astro.config.mjs"), "utf8");
 	const sidebarRoutes = new Set<string>();
+	const duplicateSidebarRoutes = new Set<string>();
 	const slugPattern = /slug:\s*"([^"]+)"/g;
 	let slugMatch = slugPattern.exec(config);
 	while (slugMatch !== null) {
-		sidebarRoutes.add(normalizeRoute(`/${slugMatch[1]}`));
+		const route = normalizeRoute(`/${slugMatch[1]}`);
+		if (sidebarRoutes.has(route)) duplicateSidebarRoutes.add(route);
+		sidebarRoutes.add(route);
 		slugMatch = slugPattern.exec(config);
 	}
 	for (const route of routes) {
@@ -161,6 +182,9 @@ function main(): number {
 	for (const route of sidebarRoutes) {
 		if (!routes.has(route)) errors.push(`Sidebar points to a missing public route: ${route}`);
 	}
+	for (const route of duplicateSidebarRoutes) errors.push(`Sidebar contains duplicate slug: ${route}`);
+	checkAudienceCoverage(routes, errors);
+	checkGeneratedPages(errors);
 
 	if (errors.length > 0) {
 		console.error("Docs content validation failed:");

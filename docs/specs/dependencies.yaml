@@ -1411,7 +1411,7 @@ specs:
       - "Kimi CLI is detected from current and legacy config homes and can be selected by setup"
       - "The connector preserves unrelated Kimi TOML and MCP configuration while installing idempotent lifecycle hooks"
       - "ACPX exposes Kimi as a selectable agent without adding a separate provider runtime"
-    decision: "Phase 1: connector, setup, detection, and ACPX registration only"
+    decision: null
 
   - id: native-harness-memory-bridge
     status: approved

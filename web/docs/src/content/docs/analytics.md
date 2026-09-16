@@ -7,7 +7,7 @@ Analytics reports runtime observations. It does not replace source data, workspa
 
 ## Permission and routes
 
-In authenticated deployments, the analytics routes below require the `analytics` permission. The telemetry and timeline routes use their own route authorization; check the response and deployment policy rather than assuming every operational route has the same permission.
+In authenticated deployments, each operational route applies its own authorization. Analytics routes use the `analytics` permission; telemetry and timeline routes have separate route guards.
 
 | Route | Purpose |
 |---|---|

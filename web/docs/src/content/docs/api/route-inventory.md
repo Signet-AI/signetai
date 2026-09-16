@@ -1,172 +1,388 @@
 ---
-title: "Additional route inventory"
-description: "Support, dashboard, repair, marketplace, and runtime routes not expanded in the main API reference."
+title: "Route inventory"
+description: "Indexed daemon HTTP routes for clients and operators."
 ---
 
-Support, dashboard, repair, marketplace, and runtime routes not expanded in the main API reference.
+Indexed view of routes mounted by the daemon in `platform/daemon/src/daemon.ts`. The inventory records the literal registrations and route expansions covered by the documented extraction; it is not a guarantee that factory- or runtime-composed routes are exhaustive. It excludes test-only registrations and dashboard/static fallbacks. Authentication is applied by the daemon's global middleware unless a row names a route-specific guard. `:param` segments are parameterized action families: callers substitute the segment value as documented by the owning handler.
 
 [Back to HTTP API overview](/api/).
 
-## Additional Route Inventory
+## Route Inventory
 
-The sections above document the primary public contracts. The daemon also
-exposes these support, dashboard, repair, marketplace, and runtime routes.
-This inventory is generated from route registrations so additions do not
-silently disappear from the API reference.
+| Method | Path | Owning family | Auth / permission | Classification |
+|--------|------|---------------|-------------------|----------------|
+| GET | `/api/agents` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/agents` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/agents/:name` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/agents/:name` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| PATCH | `/api/agents/:name` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/analytics/continuity` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/analytics/continuity/latest` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/analytics/errors` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/analytics/latency` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/analytics/logs` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/analytics/memory-safety` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/analytics/usage` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/auth/api-keys` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/auth/api-keys` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/auth/api-keys/:id` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/auth/login` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/auth/methods` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/auth/saml/acs` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/auth/saml/start` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/auth/sso/callback` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/auth/sso/start` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/auth/token` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/auth/whoami` | auth routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/changelog` | changelog | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/checkpoints` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/checkpoints/:sessionKey` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/config` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/config` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/connectors` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/connectors` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/connectors/:id` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/connectors/:id` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/connectors/:id/health` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/connectors/:id/sync` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/connectors/:id/sync/full` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/connectors/resync` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/cross-agent/messages` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/cross-agent/messages` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/cross-agent/messages/:messageId/ack` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/cross-agent/messages/:messageId/retry` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/cross-agent/presence` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/cross-agent/presence` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/cross-agent/presence/:sessionKey` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/cross-agent/stream` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/diagnostics` | pipeline routes | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/:domain` | pipeline routes | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/database/schema` | database diagnostics | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/database/tables/:table/sample` | database diagnostics | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/memory-content-safety` | pipeline routes | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/openclaw` | pipeline routes | operator/admin (handler guard) | canonical |
+| POST | `/api/diagnostics/openclaw/heartbeat` | pipeline routes | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/queue` | queue diagnostics | operator/admin (handler guard) | canonical |
+| POST | `/api/diagnostics/queue/repair` | queue diagnostics | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/transcripts` | pipeline routes | operator/admin (handler guard) | canonical |
+| GET | `/api/diagnostics/workloads` | pipeline routes | operator/admin (handler guard) | canonical |
+| GET | `/api/documents` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/documents` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/documents/:id` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/documents/:id` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/documents/:id/chunks` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/dream/exclusions/requeue` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/dream/operations` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/dream/passes/:passId/events` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/dream/passes/:passId/tools` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/dream/passes/active` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/dream/quality` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/dream/status` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/dream/tools` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/dream/tools/:capability` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/dream/trigger` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/embeddings` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/embeddings/health` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/embeddings/projection` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/embeddings/status` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/features` | health/capabilities | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/git/config` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/git/config` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/git/pull` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/git/push` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/git/status` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/git/sync` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/graph/impact` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/graphiq/index` | graphiq routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/graphiq/install` | graphiq routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/graphiq/status` | graphiq routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/graphiq/uninstall` | graphiq routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/graphiq/update` | graphiq routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/harnesses` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/harnesses/:id/connect` | harness install | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/harnesses/:id/health` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/harnesses/regenerate` | connectors routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/home/greeting` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/hook/remember` | memory routes | global auth middleware; route-specific guard where applicable | compatibility alias |
+| POST | `/api/hooks/compaction-complete` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/notifications` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/pre-compaction` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/recall` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/remember` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/session-checkpoint-extract` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/session-end` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/session-start` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/skill-invocation` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/synthesis` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/synthesis/complete` | hooks routes | internal integration | canonical |
+| GET | `/api/hooks/synthesis/config` | hooks routes | internal integration | canonical |
+| GET | `/api/hooks/transcript-capture/:jobId` | hooks routes | internal integration | canonical |
+| POST | `/api/hooks/user-prompt-submit` | hooks routes | internal integration | canonical |
+| GET | `/api/identity` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/inference/catalog` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/inference/execute` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/inference/explain` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/inference/history` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/inference/oauth/complete` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/inference/oauth/disconnect/:id` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/inference/oauth/login/:id` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/inference/oauth/providers` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/inference/requests/:id` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/inference/status` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/inference/stream` | inference | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/communities` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/constellation` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/entities` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/entities/:id` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/entities/:id/aspects` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/entities/:id/aspects/:aspectId/attributes` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/entities/:id/dependencies` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/knowledge/entities/:id/pin` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/knowledge/entities/:id/pin` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/entities/health` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/entities/pinned` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/knowledge/expand` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/knowledge/expand/session` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/hygiene` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/navigation/aspects` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/navigation/attributes` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/navigation/claims` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/navigation/entities` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/navigation/entity` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/navigation/groups` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/navigation/tree` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/stats` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/knowledge/traversal/status` | knowledge routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/logs` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/logs/stream` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/marketplace/reviews` | marketplace reviews | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/marketplace/reviews` | marketplace reviews | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/marketplace/reviews/:id` | marketplace reviews | global auth middleware; route-specific guard where applicable | canonical |
+| PATCH | `/api/marketplace/reviews/:id` | marketplace reviews | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/marketplace/reviews/config` | marketplace reviews | global auth middleware; route-specific guard where applicable | canonical |
+| PATCH | `/api/marketplace/reviews/config` | marketplace reviews | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/marketplace/reviews/sync` | marketplace reviews | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/mcp/analytics` | mcp analytics | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/mcp/analytics/:server` | mcp analytics | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memories` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memories/:id/supersede` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memories/:id/tombstone` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memories/curator-slices` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memories/most-used` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/memory/:id` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memory/:id` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| PATCH | `/api/memory/:id` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memory/:id/history` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memory/:id/lineage` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memory/:id/recover` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memory/codex-native-note` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memory/feedback` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memory/forget` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memory/jobs/:id` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memory/modify` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memory/recall` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memory/remember` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memory/review-queue` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/memory/save` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memory/search` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/memory/timeline` | memory routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/mode` | health/capabilities | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/assertions` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/assertions` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/assertions/:id` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/assertions/:id/archive` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/assertions/:id/link-claim` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/assertions/:id/supersede` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/claims/evidence` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/claims/explain` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/claims/version` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/claims/versions` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/consolidate` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/contradictions` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/contradictions/:id` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/entities/:id/aliases` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/entities/:id/aliases` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/ontology/entities/:id/aliases/:aliasId` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/extract` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/links/:id/evidence` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/operations/apply` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/operations/batch` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/proposals` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/proposals` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/proposals/:id` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/proposals/:id/apply` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/proposals/:id/evidence` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/proposals/:id/reject` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/proposals/batch` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/ontology/proposals/conflicts` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/proposals/repair/duplicates` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/ontology/proposals/repair/merge-plan` | ontology routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/os/agent-events` | os agent | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/os/agent-execute` | os agent | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/os/agent-sessions` | os agent | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/os/agent-state` | os agent | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/os/chat` | os chat | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/os/events` | desktop event bus | internal runtime | internal |
+| GET | `/api/os/events/stream` | desktop event bus | internal runtime | internal |
+| GET | `/api/os/events/stats` | desktop event bus | internal runtime | internal |
+| GET | `/api/os/context` | desktop event bus | internal runtime | internal |
+| POST | `/api/os/install` | desktop tray | internal runtime | internal |
+| GET | `/api/os/tray` | desktop tray | internal runtime | internal |
+| GET | `/api/os/tray/:id` | desktop tray | internal runtime | internal |
+| GET | `/api/os/tray/:id/probe` | desktop tray | internal runtime | internal |
+| PATCH | `/api/os/tray/:id` | desktop tray | internal runtime | internal |
+| POST | `/api/os/tray/:id/reprobe` | desktop tray | internal runtime | internal |
+| DELETE | `/api/os/widget/:id` | desktop widgets | internal runtime | internal |
+| GET | `/api/os/widget/:id` | desktop widgets | internal runtime | internal |
+| POST | `/api/os/widget/generate` | desktop widgets | internal runtime | internal |
+| GET | `/api/marketplace/mcp` | marketplace MCP | internal runtime | internal |
+| GET | `/api/marketplace/mcp/:id` | marketplace MCP | internal runtime | internal |
+| PATCH | `/api/marketplace/mcp/:id` | marketplace MCP | internal runtime | internal |
+| DELETE | `/api/marketplace/mcp/:id` | marketplace MCP | internal runtime | internal |
+| GET | `/api/marketplace/mcp/browse` | marketplace MCP | internal runtime | internal |
+| POST | `/api/marketplace/mcp/call` | marketplace MCP | internal runtime | internal |
+| GET | `/api/marketplace/mcp/detail` | marketplace MCP | internal runtime | internal |
+| POST | `/api/marketplace/mcp/install` | marketplace MCP | internal runtime | internal |
+| GET | `/api/marketplace/mcp/policy` | marketplace MCP | internal runtime | internal |
+| PATCH | `/api/marketplace/mcp/policy` | marketplace MCP | internal runtime | internal |
+| POST | `/api/marketplace/mcp/read-resource` | marketplace MCP | internal runtime | internal |
+| POST | `/api/marketplace/mcp/register` | marketplace MCP | internal runtime | internal |
+| GET | `/api/marketplace/mcp/search` | marketplace MCP | internal runtime | internal |
+| POST | `/api/marketplace/mcp/test` | marketplace MCP | internal runtime | internal |
+| GET | `/api/marketplace/mcp/tools` | marketplace MCP | internal runtime | internal |
+| GET | `/api/pipeline/models` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/pipeline/models/by-provider` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/pipeline/models/refresh` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/pipeline/pause` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/pipeline/resume` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/pipeline/status` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/plugins` | plugins routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/plugins/:id` | plugins routes | global auth middleware; route-specific guard where applicable | canonical |
+| PATCH | `/api/plugins/:id` | plugins routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/plugins/:id/diagnostics` | plugins routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/plugins/audit` | plugins routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/plugins/prompt-contributions` | plugins routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/readme` | changelog | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/reflections` | reflection routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/reflections/:id/answer` | reflection routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/reflections/generate` | reflection routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/reflections/today` | reflection routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/repair/backfill-hints` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/backfill-skipped` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/check-fts` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/clean-orphans` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/cluster-entities` | repair routes | operator/admin (handler guard) | canonical |
+| GET | `/api/repair/cold-stats` | repair routes | operator/admin (handler guard) | canonical |
+| GET | `/api/repair/dead-memories` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/dead-memories/forget` | repair routes | operator/admin (handler guard) | canonical |
+| GET | `/api/repair/dedup-stats` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/deduplicate` | repair routes | operator/admin (handler guard) | canonical |
+| GET | `/api/repair/embedding-gaps` | repair routes | operator/admin (handler guard) | canonical |
+| GET | `/api/repair/integrity-check` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/prune-chunk-groups` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/prune-generic-entities` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/prune-singleton-entities` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/re-embed` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/re-embed-migration` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/rebuild-indexes` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/release-leases` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/relink-entities` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/requeue-dead` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/resync-vec` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/repair/retention-sweep` | repair routes | operator/admin (handler guard) | canonical |
+| GET | `/api/roadmap` | changelog | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/secrets` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/secrets/1password/connect` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/secrets/1password/connect` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/secrets/1password/import` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/secrets/1password/status` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/secrets/1password/vaults` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/secrets/:name` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/secrets/:name` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/secrets/:name/exec` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/secrets/bitwarden/connect` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/secrets/bitwarden/connect` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/secrets/bitwarden/folders` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/secrets/bitwarden/migrate` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/secrets/bitwarden/provider` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/secrets/bitwarden/status` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/secrets/exec` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/secrets/exec/:jobId` | secrets routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sessions` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sessions/:key{(?!summaries$)[^/]+}` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sessions/:key{(?!summaries$)[^/]+}/blackbox` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sessions/:key{(?!summaries$)[^/]+}/bypass` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sessions/:key{(?!summaries$)[^/]+}/renew` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sessions/:key{(?!summaries$)[^/]+}/transcript` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sessions/blackbox` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sessions/search` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sessions/summaries` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sessions/summaries/expand` | session routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/skills` | skills | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/skills/:name` | skills | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/skills/:name` | skills | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/skills/analytics` | skill analytics | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/skills/browse` | skills | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/skills/install` | skills | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/skills/search` | skills | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| DELETE | `/api/sources/:sourceId` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/:sourceId/health` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/:sourceId/snapshot` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/:sourceId/snapshot/import` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/discord` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/github` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/import` | import routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/imports` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/imports/:jobId` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports/:jobId/${control}` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/imports/:jobId/${suffix}` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| PATCH | `/api/sources/imports/:jobId/files/:fileId` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| PUT | `/api/sources/imports/:jobId/files/:fileId` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/imports/:jobId/files/:fileId/content` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports/:jobId/files/:fileId/finalize` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/imports/:jobId/files/:fileId/reset` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/sources/imports/export/transcripts` | transcript import routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/obsidian` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/pick-directory` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/pick-files` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/sources/web` | sources routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/status` | pipeline routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/synthesis/status` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/synthesis/trigger` | hooks routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/telemetry/events` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/telemetry/export` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/telemetry/health` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/telemetry/memory-search` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/telemetry/memory-search/export` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/telemetry/stats` | telemetry routes | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/troubleshoot/commands` | repair routes | operator/admin (handler guard) | canonical |
+| POST | `/api/troubleshoot/exec` | repair routes | operator/admin (handler guard) | canonical |
+| GET | `/api/update/check` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/api/update/config` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/update/config` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| POST | `/api/update/run` | runtime/configuration | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/health` | health/capabilities | public | canonical |
+| GET | `/health/live` | health/capabilities | public | canonical |
+| GET | `/health/ready` | health/capabilities | public | canonical |
+| ALL | `/mcp` | MCP transport | global auth middleware; route-specific guard where applicable | canonical |
+| GET | `/memory/search` | memory routes | global auth middleware; route-specific guard where applicable | compatibility alias |
+| GET | `/memory/similar` | memory routes | global auth middleware; route-specific guard where applicable | compatibility alias |
+| POST | `/v1/chat/completions` | inference | global auth middleware; route-specific guard where applicable | canonical OpenAI-compatible |
+| GET | `/v1/models` | inference | global auth middleware; route-specific guard where applicable | canonical OpenAI-compatible |
 
-| Method | Path | Source |
-|--------|------|--------|
-| GET | `/api/os/tray` | platform/daemon/src/routes/app-tray.ts |
-| GET | `/api/os/tray/:id` | platform/daemon/src/routes/app-tray.ts |
-| GET | `/api/os/tray/:id/probe` | platform/daemon/src/routes/app-tray.ts |
-| POST | `/api/os/tray/:id/reprobe` | platform/daemon/src/routes/app-tray.ts |
-| PATCH | `/api/os/tray/:id` | platform/daemon/src/routes/app-tray.ts |
-| POST | `/api/os/install` | platform/daemon/src/routes/app-tray.ts |
-| GET | `/api/changelog` | platform/daemon/src/routes/changelog.ts |
-| GET | `/api/roadmap` | platform/daemon/src/routes/changelog.ts |
-| GET | `/api/readme` | platform/daemon/src/routes/changelog.ts |
-| GET | `/health/live` | platform/daemon/src/routes/health.ts |
-| GET | `/health/ready` | platform/daemon/src/routes/health.ts |
-| GET | `/api/mode` | platform/daemon/src/routes/health.ts |
-| POST | `/api/connectors/resync` | platform/daemon/src/routes/connectors-routes.ts |
-| GET | `/api/os/events` | platform/daemon/src/routes/event-bus.ts |
-| GET | `/api/os/events/stream` | platform/daemon/src/routes/event-bus.ts |
-| GET | `/api/os/context` | platform/daemon/src/routes/event-bus.ts |
-| GET | `/api/os/events/stats` | platform/daemon/src/routes/event-bus.ts |
-| GET | `/api/graphiq/status` | platform/daemon/src/routes/graphiq-routes.ts |
-| POST | `/api/graphiq/install` | platform/daemon/src/routes/graphiq-routes.ts |
-| POST | `/api/graphiq/update` | platform/daemon/src/routes/graphiq-routes.ts |
-| POST | `/api/graphiq/uninstall` | platform/daemon/src/routes/graphiq-routes.ts |
-| POST | `/api/graphiq/index` | platform/daemon/src/routes/graphiq-routes.ts |
-| POST | `/api/hooks/notifications` | platform/daemon/src/routes/hooks-routes.ts |
-| GET | `/api/cross-agent/presence` | platform/daemon/src/routes/hooks-routes.ts |
-| POST | `/api/cross-agent/presence` | platform/daemon/src/routes/hooks-routes.ts |
-| DELETE | `/api/cross-agent/presence/:sessionKey` | platform/daemon/src/routes/hooks-routes.ts |
-| GET | `/api/cross-agent/messages` | platform/daemon/src/routes/hooks-routes.ts |
-| POST | `/api/cross-agent/messages` | platform/daemon/src/routes/hooks-routes.ts |
-| POST | `/api/cross-agent/messages/:messageId/ack` | platform/daemon/src/routes/hooks-routes.ts |
-| POST | `/api/cross-agent/messages/:messageId/retry` | platform/daemon/src/routes/hooks-routes.ts |
-| GET | `/api/cross-agent/stream` | platform/daemon/src/routes/hooks-routes.ts |
-| POST | `/api/synthesis/trigger` | platform/daemon/src/routes/hooks-routes.ts |
-| GET | `/api/synthesis/status` | platform/daemon/src/routes/hooks-routes.ts |
-| GET | `/api/sources` | platform/daemon/src/routes/sources-routes.ts |
-| POST | `/api/sources/pick-directory` | platform/daemon/src/routes/sources-routes.ts |
-| POST | `/api/sources/pick-files` | platform/daemon/src/routes/sources-routes.ts (loopback-only; returns local paths for a subsequent paths-based import) |
-| POST | `/api/sources/obsidian` | platform/daemon/src/routes/sources-routes.ts |
-| POST | `/api/sources/discord` | platform/daemon/src/routes/sources-routes.ts |
-| POST | `/api/sources/import` | platform/daemon/src/routes/import-routes.ts |
-| GET | `/api/sources/:sourceId/health` | platform/daemon/src/routes/sources-routes.ts |
-| GET | `/api/sources/:sourceId/snapshot` | platform/daemon/src/routes/sources-routes.ts |
-| POST | `/api/sources/:sourceId/snapshot/import` | platform/daemon/src/routes/sources-routes.ts |
-| DELETE | `/api/sources/:sourceId` | platform/daemon/src/routes/sources-routes.ts |
-| GET | `/api/knowledge/entities` | platform/daemon/src/routes/knowledge-routes.ts |
-| POST | `/api/knowledge/entities/:id/pin` | platform/daemon/src/routes/knowledge-routes.ts |
-| DELETE | `/api/knowledge/entities/:id/pin` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/entities/pinned` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/entities/health` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/entities/:id` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/entities/:id/aspects` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/entities/:id/aspects/:aspectId/attributes` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/entities/:id/dependencies` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/stats` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/communities` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/traversal/status` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/knowledge/constellation` | platform/daemon/src/routes/knowledge-routes.ts |
-| POST | `/api/knowledge/expand` | platform/daemon/src/routes/knowledge-routes.ts |
-| POST | `/api/knowledge/expand/session` | platform/daemon/src/routes/knowledge-routes.ts |
-| POST | `/api/graph/impact` | platform/daemon/src/routes/knowledge-routes.ts |
-| GET | `/api/ontology/claims/versions` | platform/daemon/src/routes/ontology-routes.ts |
-| GET | `/api/ontology/claims/explain` | platform/daemon/src/routes/ontology-routes.ts |
-| GET | `/api/ontology/claims/version` | platform/daemon/src/routes/ontology-routes.ts |
-| POST | `/api/ontology/operations/apply` | platform/daemon/src/routes/ontology-routes.ts |
-| POST | `/api/ontology/operations/batch` | platform/daemon/src/routes/ontology-routes.ts |
-| POST | `/api/ontology/proposals/repair/merge-plan` | platform/daemon/src/routes/ontology-routes.ts |
-| GET | `/api/marketplace/reviews` | platform/daemon/src/routes/marketplace-reviews.ts |
-| POST | `/api/marketplace/reviews` | platform/daemon/src/routes/marketplace-reviews.ts |
-| PATCH | `/api/marketplace/reviews/config` | platform/daemon/src/routes/marketplace-reviews.ts |
-| PATCH | `/api/marketplace/reviews/:id` | platform/daemon/src/routes/marketplace-reviews.ts |
-| DELETE | `/api/marketplace/reviews/:id` | platform/daemon/src/routes/marketplace-reviews.ts |
-| GET | `/api/marketplace/reviews/config` | platform/daemon/src/routes/marketplace-reviews.ts |
-| POST | `/api/marketplace/reviews/sync` | platform/daemon/src/routes/marketplace-reviews.ts |
-| GET | `/api/marketplace/mcp` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/policy` | platform/daemon/src/routes/marketplace.ts |
-| PATCH | `/api/marketplace/mcp/policy` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/browse` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/detail` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/test` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/install` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/register` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/tools` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/search` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/call` | platform/daemon/src/routes/marketplace.ts |
-| POST | `/api/marketplace/mcp/read-resource` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
-| PATCH | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
-| DELETE | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
-| GET | `/api/mcp/analytics` | platform/daemon/src/routes/mcp-analytics.ts |
-| GET | `/api/mcp/analytics/:server` | platform/daemon/src/routes/mcp-analytics.ts |
-| GET | `/api/memories/most-used` | platform/daemon/src/routes/memory-routes.ts |
-| GET | `/api/memory/timeline` | platform/daemon/src/routes/memory-routes.ts |
-| GET | `/api/memory/review-queue` | platform/daemon/src/routes/memory-routes.ts |
-| GET | `/api/memory/jobs/:id` | platform/daemon/src/routes/memory-routes.ts |
-| POST | `/api/memory/feedback` | platform/daemon/src/routes/memory-routes.ts |
-| POST | `/api/os/agent-execute` | platform/daemon/src/routes/os-agent.ts |
-| POST | `/api/os/agent-state` | platform/daemon/src/routes/os-agent.ts |
-| GET | `/api/os/agent-events` | platform/daemon/src/routes/os-agent.ts |
-| GET | `/api/os/agent-sessions` | platform/daemon/src/routes/os-agent.ts |
-| POST | `/api/os/chat` | platform/daemon/src/routes/os-chat.ts |
-| GET | `/api/home/greeting` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/reflections/today` | platform/daemon/src/routes/reflection-routes.ts |
-| GET | `/api/reflections` | platform/daemon/src/routes/reflection-routes.ts |
-| POST | `/api/reflections/generate` | platform/daemon/src/routes/reflection-routes.ts |
-| POST | `/api/reflections/:id/answer` | platform/daemon/src/routes/reflection-routes.ts |
-| GET | `/api/diagnostics/database/schema` | platform/daemon/src/routes/database-diagnostics.ts |
-| GET | `/api/diagnostics/database/tables/:table/sample` | platform/daemon/src/routes/database-diagnostics.ts |
-| POST | `/api/diagnostics/openclaw/heartbeat` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/diagnostics/openclaw` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/diagnostics/transcripts` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/diagnostics/memory-content-safety` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/diagnostics/workloads` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/pipeline/models` | platform/daemon/src/routes/pipeline-routes.ts |
-| GET | `/api/pipeline/models/by-provider` | platform/daemon/src/routes/pipeline-routes.ts |
-| POST | `/api/pipeline/models/refresh` | platform/daemon/src/routes/pipeline-routes.ts |
-| POST | `/api/repair/resync-vec` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/repair/backfill-skipped` | platform/daemon/src/routes/repair-routes.ts (retired; returns HTTP 410; direct completed transcripts are consumed by Dreaming) |
-| POST | `/api/repair/prune-chunk-groups` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/repair/prune-singleton-entities` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/repair/prune-generic-entities` | platform/daemon/src/routes/repair-routes.ts |
-| GET | `/api/repair/cold-stats` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/repair/cluster-entities` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/repair/relink-entities` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/repair/backfill-hints` | platform/daemon/src/routes/repair-routes.ts |
-| GET | `/api/repair/dead-memories` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/repair/dead-memories/forget` | platform/daemon/src/routes/repair-routes.ts |
-| GET | `/api/troubleshoot/commands` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/troubleshoot/exec` | platform/daemon/src/routes/repair-routes.ts |
-| POST | `/api/sessions/:key/renew` | platform/daemon/src/routes/session-routes.ts |
-| GET | `/api/skills/browse` | platform/daemon/src/routes/skills.ts |
-| GET | `/api/telemetry/memory-search` | platform/daemon/src/routes/telemetry-routes.ts |
-| GET | `/api/telemetry/health` | platform/daemon/src/routes/telemetry-routes.ts |
-| GET | `/api/telemetry/memory-search/export` | platform/daemon/src/routes/telemetry-routes.ts |
-| POST | `/api/os/widget/generate` | platform/daemon/src/routes/widget.ts |
-| GET | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
-| DELETE | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
+## Route coverage
 
-`GET /api/marketplace/mcp` and the marketplace tools/search responses include a
-`runtime` object with `activeClients`, `activeProcesses`, `pending`, and
-`limit`. The counts cover marketplace discovery, probes, and user operations;
-the limit is the daemon-wide client/process budget.
+The index covers the mounted client and operator routes represented by the documented extraction, including internal runtime routes used by the desktop tray, event bus, widgets, and marketplace MCP clients. Factory- and runtime-composed routes may require checking their owning implementation. It omits test-only registrations, wildcard/static dashboard fallbacks, and framework wiring. Route details live with the owning reference page; this page provides the extracted method/path index and status classification.
 
+## Parameterized action families
 
-## Dashboard
+Rows containing colon-prefixed segments are parameterized action families, not literal paths. Regex-constrained segments are preserved exactly where registered so generated clients and drift checks can recognize them.
 
-### GET /
+The harness recovery action family is registered for these concrete paths:
 
-Serves the React/Vite dashboard as a generic single-page application. Static
-assets are served from the built dashboard directory or, when available, the
-packaged embedded dashboard assets. The dashboard handler passes `/api/*`,
-`/health`, and `/sse` through; remaining paths without a file extension fall
-back to `index.html` for client-side routing.
+- POST `/api/harnesses/:id/repair`
+- POST `/api/harnesses/:id/reinitialize`
 
-If the dashboard build is not found, a minimal HTML fallback page is served
-with links to key API endpoints.
+Both paths require the admin permission and accept a harness identifier in `:id`.

@@ -16,6 +16,10 @@ Conceptual north stars:
 - `web/docs/src/content/docs/knowledge-architecture.md`
 - `web/docs/src/content/docs/north-star-ontology.md`
 
+> **Audience/status:** Internal engineering navigation for developers and reviewers. This index records design workflow and dependency metadata; it is not a release catalog or proof of implementation, support, or user availability. Current behavior follows the owning source, tests, schemas, manifests, generated-file headers, and public documentation.
+
+> **Authority:** [`dependencies.yaml`](dependencies.yaml) is the machine-readable dependency source. Keep the `## Spec Registry` table synchronized with it; validate with `bun scripts/spec-deps-check.ts`.
+
 ---
 
 ## System Graph

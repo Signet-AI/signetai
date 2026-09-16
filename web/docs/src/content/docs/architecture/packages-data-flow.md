@@ -7,8 +7,8 @@ Use this page to locate the owner of a runtime concern. The repository map is th
 
 ## Ownership
 
-- `platform/core` (`@signet/core`) owns shared types, migrations, SQLite access, search, and identity primitives.
-- `platform/daemon` (`@signet/daemon`) owns the HTTP API, authorization, orchestration, background lifecycle, and durable transitions.
+- `platform/core` (`@signet/core`) owns shared types, migrations, schema contracts, search, and identity primitives.
+- `platform/daemon` (`@signet/daemon`) owns the HTTP API, authorization, orchestration, background lifecycle, and the database-owner runtime that performs durable transitions.
 - `surfaces/cli` (`@signet/cli`), `surfaces/dashboard` (`signet-dashboard`), desktop, and tray packages are clients or operator surfaces.
 - `integrations/<tool>` owns harness connectors, plugins, and adapters for external tools.
 - `libs` owns reusable developer libraries such as `@signet/sdk`; it is not a second daemon or database owner.

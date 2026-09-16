@@ -14,13 +14,13 @@ agent or user → Signet daemon → workspace
                               └─ scoped structured knowledge
 ```
 
-- **Workspace:** Your local configuration, evidence, memories, and database.
+- **Workspace:** Local configuration, evidence, memories, and database.
 - **Daemon:** The service that owns durable state and serves requests.
-- **Interfaces:** The `signet` CLI, dashboard, and harness connectors are entry points to the same workspace.
+- **Interfaces:** The `signet` CLI, dashboard, and harness connectors use the same workspace.
 - **Recall:** Hybrid keyword and vector search returns context within the caller's agent and visibility scope.
 - **Sources:** Connected or imported material is retained with provenance and indexed for retrieval.
 
-Signet records explicit memories and source evidence first. Indexes, embeddings, and structured knowledge make that evidence easier to retrieve; they remain linked to the evidence they derive from.
+Signet records explicit memories and source evidence first. Indexes, embeddings, and structured knowledge make that evidence easier to retrieve and remain linked to the evidence they derive from.
 
 ## Start here
 

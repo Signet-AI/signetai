@@ -25,7 +25,7 @@ Check the installed CLI:
 signet --help
 ```
 
-See [Install](/getting-started/install/) for prerequisites, package-manager options, platform notes, and headless setup.
+See [Install](/getting-started/install/) for package-manager options and platform notes.
 
 ## 2. Set up a workspace
 
@@ -33,7 +33,7 @@ See [Install](/getting-started/install/) for prerequisites, package-manager opti
 signet setup
 ```
 
-Follow the dashboard wizard to choose a workspace, configure an optional harness or model, and finish onboarding. Setup initializes the database and starts the configured local daemon. See [Set up Signet](/getting-started/setup/) for wizard details and [Your first session](/getting-started/first-session/) for the smallest working example.
+Follow the dashboard wizard to choose a workspace and configure optional connections. Setup initializes the database and starts the configured local daemon. See [Set up Signet](/getting-started/setup/) for wizard details.
 
 ## 3. Check status
 
@@ -41,11 +41,7 @@ Follow the dashboard wizard to choose a workspace, configure an optional harness
 signet status
 ```
 
-The status command reports the installed CLI, workspace, daemon, and memory state. To open the dashboard:
-
-```bash
-signet dashboard
-```
+The status command reports the installed CLI, workspace, daemon, and memory state.
 
 ## 4. Save a memory
 
@@ -63,8 +59,8 @@ Signet uses hybrid keyword and vector search. Embeddings are configured during s
 
 ## Next steps
 
-- [Connect sources](/getting-started/connect-sources/) to add files or read-only external knowledge.
+- [Your first session](/getting-started/first-session/) for the core memory workflow.
+- [Connect sources](/getting-started/connect-sources/) to add files or external knowledge.
 - [Memory and search commands](/cli/memory-search/) for filters and automation.
-- [Operate your installation](/getting-started/operate/) for updates, logs, and troubleshooting.
-- [Authentication](/auth/) for remote daemons and team access.
+- [Operate your installation](/getting-started/operate/) for updates and logs.
 - [CLI reference](/cli/) for the complete command surface.

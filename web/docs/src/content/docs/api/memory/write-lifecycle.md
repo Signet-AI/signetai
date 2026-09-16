@@ -69,20 +69,23 @@ require force, and autonomous actors cannot force-delete them. Response reports
 
 ### POST /api/memories/:id/tombstone
 
-Requires curator mutation authority. Tombstones a memory with `reason` and
-optional `changed_by`. The response includes `id`, `status: "tombstoned"`, and
-`idempotent`; repeated equivalent requests are idempotent.
+Requires `forget`. Tombstones a memory. The body may include `reason` and
+`changed_by`; `reason` may also be supplied as a query parameter and defaults to
+`curator tombstone`. The response includes `id`, `status: "tombstoned"`,
+versions, and `idempotent`; repeating an already-deleted request is idempotent.
 
 ### POST /api/memories/:id/supersede
 
-Requires curator mutation authority. Body requires `superseded_by` and
-`reason`, with optional `changed_by`. The response includes `id`,
-`status: "superseded"`, `superseded_by`, and `idempotent`.
+Requires `modify`. Body requires `superseded_by`; `reason` and `changed_by` are
+optional. The target must exist and share the memory's scope; self-supersession
+is rejected. The response includes `id`, `status: "superseded"`,
+`superseded_by`, versions, and `idempotent`.
 
 ### GET /api/memories/curator-slices
 
-Requires curator read authority. Query supports `agentId`, `minSessions`, and
-`limit`. Returns curator slices and the resolved `agentId`.
+Requires `recall`. Query supports `agentId`, `minSessions` (default `3`, bounded
+1–100), and `limit` (default `100`, bounded 1–500). Returns the resolved
+`agentId` and the `injectedNeverUsed`, `contradicted`, and `highUsed` slices.
 
 ### POST /api/memory/:id/recover
 

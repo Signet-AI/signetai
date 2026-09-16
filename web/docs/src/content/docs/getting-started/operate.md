@@ -24,6 +24,6 @@ signet workspace set /path/to/workspace
 signet doctor
 ```
 
-Restart after `update install` or `workspace set` so the running daemon uses the selected version or workspace. Verify with `signet daemon status --json` and `/health/ready`.
+After `update install` or `workspace set`, restart the daemon so it uses the selected version or workspace. Verify readiness and the relevant status surface.
 
 For protected network access, configure authentication and deployment before exposing the daemon. Use [Authentication](/auth/), [Self-hosting](/self-hosting/), and [Diagnostics](/diagnostics/) for the procedural paths.

@@ -1,5 +1,11 @@
 # Ontology Control Plane Progress
 
+**Audience/status:** Internal developer progress record. Checkpoints document
+work observed at particular times and retain remaining-risk history; they do
+not prove that the ontology control plane is released, supported, or available
+to users. Verify current behavior against the owning implementation, tests,
+and public contract.
+
 ## Inventory Checkpoint
 
 - Changed: added `docs/knowledge-graph-control-plane.md` with schema,

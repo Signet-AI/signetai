@@ -16,7 +16,7 @@ Signet is a local-first memory and context layer for AI agents.
 
 Native memory is owned by Signet and written by the daemon. Save a memory through the Dashboard or your client integration. A successful save is immediately available as episodic evidence. Embedding is best effort, so keyword recall still works when an embedding provider is unavailable.
 
-Recall returns a bounded, permission-checked result set. It can combine keyword, vector, structured, and graph evidence, but the details of ranking are implementation reference material rather than a requirement for using memory. See [API](/api/) for request fields and response shapes.
+Recall returns a bounded, permission-checked result set. It can combine keyword, vector, structured, and graph evidence.
 
 Native memory content and type are immutable once written as episodic evidence. Metadata can be curated through the mutation flow. Dreaming may later derive audited semantic claims and links; it does not replace the original evidence.
 
@@ -28,8 +28,6 @@ Use the Dashboard or client integration to:
 - preview a forget operation before executing a batch;
 - provide a reason for every mutation;
 - use a version check when concurrent edits matter.
-
-For exact mutation fields, see [API](/api/).
 
 Forget is a soft delete. Deleted memories disappear from recall and list results but remain as tombstones for the default **30 days**. During that window, recover them with a reason. After the window, retention archives the memory to cold storage, removes its graph links and embeddings, and hard-deletes the tombstone; recovery is no longer possible.
 
@@ -48,10 +46,8 @@ The retention worker runs every **6 hours**. Each sweep is capped at **500 rows 
 
 These are built-in worker defaults, not `agent.yaml` settings.
 
-## What native memory is not
+## Scope and lifecycle
 
-- It is not a replacement for the file or service that is the source of truth.
-- It is not a transcript archive. Raw session transcripts use the dedicated session-search path; durable transcript exports use the import workflow on [Sources](/sources/).
-- It is not a direct SQLite surface. The daemon owns writes, and direct database modification is unsupported.
+Native memory records agent-scoped evidence that Signet owns. Source files and service data remain canonical in their connected source, while source-backed results retain their provenance in recall. Session transcripts use the dedicated session-search path; exported transcripts use the durable import workflow on [Sources](/sources/).
 
-For lifecycle internals, normalization, retention ordering, and recall implementation, use the [API](/api/) and [Pipeline](/pipeline/) reference material.
+All durable memory changes pass through the daemon and its database-owner process.

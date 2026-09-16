@@ -65,6 +65,8 @@ Adds or updates a read-only Obsidian source and queues indexing. Body uses
 `path` (or `root`), optional `name`, and `excludeGlobs`. Response status is
 `202` with `{ source, created, indexed: 0, queued: true, job }`.
 
+<a id="post-api-sources-discord"></a>
+
 ### POST /api/sources/discord
 
 Adds or updates a Discord source and queues indexing. Body supports the

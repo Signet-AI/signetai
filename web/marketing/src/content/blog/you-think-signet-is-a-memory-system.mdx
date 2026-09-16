@@ -10,9 +10,9 @@ image: /blog/signet-is-not-just-memory.png
 When most people first encounter Signet, they think it is another memory API.
 
 Memory is half the product. Secrets are the other half. These are the two
-layers you should not have locked inside a harness.
+layers that work best in a shared, user-owned workspace.
 
-## The Wrong Mental Model
+## The Shared Workspace
 
 Most AI memory tools give the model commands such as store, recall, search,
 and reflect, then trust a stateless reasoning engine to decide what is worth
@@ -44,7 +44,7 @@ That separation changes what happens when you switch tools. The new harness
 does not start from an empty account, and you do not have to paste the same
 keys into another plugin. It connects to the same owned layer.
 
-## Memory Is More Than Retrieval
+## Memory Includes Retrieval and Continuity
 
 Memory includes the exact record, the semantic shortcuts derived from it, and
 the durable instructions that shape future work.
@@ -57,7 +57,7 @@ In Signet:
 - workspace instructions preserve preferences and operating context
 - repair tools let users edit, supersede, scope, or delete bad memory
 
-The model does not own this state. It receives the context needed for the
+The workspace owns this state and keeps it inspectable. It receives the context needed for the
 current task and writes new evidence back through the same pipeline.
 
 ## Secrets Should Stay Secret
@@ -75,8 +75,8 @@ The workspace lives in `~/.agents/`. Memory is stored in SQLite and readable
 files. Connectors adapt that workspace to Claude Code, OpenCode, OpenClaw,
 Codex, Hermes Agent, Pi, and other tools.
 
-You can inspect it, back it up, version it, move it, and repair it. The
-harness is replaceable because it does not own the layers that make the work
-continuous.
+You can inspect it, back it up, version it, move it, and repair it.
+
+The harness can change while the owned memory, provenance, and workspace instructions continue with the work.
 
 **Own your agent. Bring it anywhere.**

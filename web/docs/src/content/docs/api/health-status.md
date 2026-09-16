@@ -13,13 +13,16 @@ probe.
 
 ## GET /health/live
 
-**Canonical.** Minimal process liveness response. It does not prove that the
-workspace or database is ready.
+**Canonical.** Cheap process liveness response. It reports process/runtime
+fields but does not prove that the workspace, database, or other dependencies
+are ready.
 
 ## GET /health/ready
 
-**Canonical.** Reports whether the daemon can serve requests. Clients and
-orchestrators should use this endpoint for readiness gates.
+**Canonical.** Reports structured readiness. It is degraded when the workspace,
+database owner, database integrity, embedding provider, or required inference
+path is unavailable; the response includes check details and reasons. Clients
+and orchestrators should use this endpoint for readiness gates.
 
 ## GET /api/status
 
@@ -35,6 +38,7 @@ feature-detect here rather than infer support from version strings.
 **Canonical.** Returns the configured runtime/network mode. It does not grant
 access or replace authentication.
 
-Responses are JSON. Route-specific fields are intentionally summarized rather
-than duplicated here; treat the registered response types and `features` map as
-the schema authority.
+Responses are JSON. `/health/live` is the cheap process probe and returns 200
+without touching the database or other subsystems. `/health` is diagnostic and
+includes workspace, database/owner, integrity, event-loop, resource, and update
+state. Route response types remain the schema authority.

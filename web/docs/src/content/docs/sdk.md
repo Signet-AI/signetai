@@ -1,28 +1,32 @@
 ---
 title: "SDK"
-description: "Typed TypeScript client for the Signet daemon."
+description: "Typed TypeScript HTTP client for the Signet daemon."
 ---
 
-`@signet/sdk` is the typed HTTP client for the Signet daemon. It has no SQLite dependency and exports four public entry points:
+`@signet/sdk` is a typed HTTP client for a running Signet daemon. It is transport-only and does not open SQLite. `@signet/core` owns shared core contracts and recall helpers; it is not the daemon client, and the packages are not interchangeable.
 
-| Import | Surface |
-|---|---|
-| `@signet/sdk` | `SignetClient`, errors, and public types |
-| `@signet/sdk/react` | React provider and memory hooks |
-| `@signet/sdk/ai-sdk` | Vercel AI SDK adapters |
-| `@signet/sdk/openai` | OpenAI function-tool adapters |
+## Install
 
 ```bash
 bun add @signet/sdk
-# or
-npm install @signet/sdk
 ```
 
-## In this section
+## Public entry points
 
-- [SDK quickstart](/sdk/getting-started/): construct the client and make a first memory call.
-- [Core client](/sdk/core-client/): memory operations, auth, and queued secret execution.
-- [SDK integrations](/sdk/integrations/): React, AI SDK, OpenAI, lifecycle hooks, and connectors.
-- [Operations SDK](/sdk/operations/): plugins, skills, telemetry, repair, configuration, and embeddings.
-- [Knowledge and agents](/sdk/knowledge-agents/): knowledge graph and cross-agent coordination.
-- [Helpers, types, and migration](/sdk/types-migration/): supported helpers, exported types, errors, and version guidance.
+| Import | Contract |
+|---|---|
+| `@signet/sdk` | `SignetClient`, errors, transport type, and public types |
+| `@signet/sdk/react` | `SignetProvider`, `useSignet`, `useMemorySearch`, `useMemory` |
+| `@signet/sdk/ai-sdk` | Vercel AI SDK memory tools and context helper |
+| `@signet/sdk/openai` | OpenAI function-tool definitions and dispatcher |
+
+## Reference
+
+- [Getting started](/sdk/getting-started/)
+- [Core client](/sdk/core-client/)
+- [Knowledge and agents](/sdk/knowledge-agents/)
+- [Integrations](/sdk/integrations/)
+- [Operations](/sdk/operations/)
+- [Helpers, types, and migration](/sdk/types-migration/)
+
+Generated declarations shipped with each release are the complete type reference. Import client classes, errors, and SDK response/input types from `@signet/sdk`; import core-only contracts from `@signet/core`.

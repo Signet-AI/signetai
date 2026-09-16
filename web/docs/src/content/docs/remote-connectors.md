@@ -47,7 +47,7 @@ Check the daemon and authenticated identity without exposing the key:
 ```bash
 curl -fsS "$SIGNET_DAEMON_URL/health/ready"
 curl -fsS "$SIGNET_DAEMON_URL/api/auth/whoami" \
-  -H 'Authorization: Bearer '"$SIGNET_API_KEY"
+  -H "Authorization: Bearer $SIGNET_API_KEY"
 ```
 
 For a connector-specific inspection, the installed package may provide `status`; use the package's current CLI help when available. The Signet CLI install command itself installs configuration and is not a general connector health command.

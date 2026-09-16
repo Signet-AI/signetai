@@ -1,34 +1,18 @@
 ---
 title: "Helpers, types, and migration"
-description: "Use public helpers, types, error contracts, and current SDK version guidance."
+description: "Polling, transport errors, typed exports, and migration mappings."
 ---
 
-## Helpers and errors
+`waitForJob` and `waitForDocument` poll until terminal state (defaults: 30s timeout, 500ms interval). `createAndIngestDocument` composes creation and both waits. `recallOrThrow`, `getMemoryOrThrow`, `getDocumentOrThrow`, and `batchModifyWithProgress` are convenience helpers; progress is `{ done, total }`.
 
-`SignetClient` includes helpers such as `waitForJob`, `recallOrThrow`, `getMemoryOrThrow`, `getDocumentOrThrow`, `createAndIngestDocument`, and `batchModifyWithProgress`.
+`SignetTransport` is exported as a type-only name; applications normally use `SignetClient` rather than constructing transport directly. The transport sends JSON, applies configured auth/actor headers, and retries only idempotent `GET`, `HEAD`, and `OPTIONS`. Failures are `SignetApiError` (`status`, `body`), `SignetNetworkError`, or `SignetTimeoutError`.
 
-```typescript
-import { SignetApiError, SignetClient, SignetNetworkError } from "@signet/sdk";
+| Retired/compatibility name | Current mapping |
+|---|---|
+| `SignetSDK`, `Signet` | `SignetClient` (deprecated aliases) |
+| `rememberHook`, `recallHook` | `hookRemember`, `hookRecall` |
+| `checkConnectorHealth` | `getConnectorHealth` |
+| connector `config` | connector `settings` |
+| predictor methods | Removed runtime feature; remove calls |
 
-const client = new SignetClient();
-try {
-  const result = await client.recallOrThrow("deployment preferences", { limit: 5, minScore: 0.5 });
-  console.log(result.results);
-} catch (error) {
-  if (error instanceof SignetApiError) console.error(error.status, error.body);
-  else if (error instanceof SignetNetworkError) console.error("Daemon unavailable");
-  else throw error;
-}
-```
-
-Import public response and record types directly from `@signet/sdk` when a function signature needs them. Use the generated declaration files shipped with the installed SDK as the authoritative type reference for the installed version.
-
-## Version guidance
-
-The published SDK is currently on the 0.x release line. There is no released 1.0 SDK and no blanket 0.x-to-1.0 compatibility promise. Pin and upgrade against a version that exists in the registry, then use TypeScript to identify signature changes:
-
-```bash
-bun add @signet/sdk@latest
-```
-
-For migration, replace retired method names with the current client surface documented in this section. In particular, predictor APIs were removed in v0.112 and are deprecated methods that throw instead of working runtime endpoints.
+The root export provides `SignetClient`, errors, public response/input types, and `SignetTransport` as a type. Use installed declarations as the complete typed surface; do not substitute `@signet/core` types or assume package interchangeability.

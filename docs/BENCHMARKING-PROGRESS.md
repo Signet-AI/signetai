@@ -1,5 +1,10 @@
 # Benchmarking progress log
 
+**Audience/status:** Internal developer record. These entries preserve local
+tuning history and investigation context; they are not release evidence or
+publishable benchmark claims. Benchmark availability and product behavior must
+be established by the owning harness, artifacts, and public documentation.
+
 This is a development progress log, not a publishable benchmark claim. Run artifacts and reports remain ignored under `memorybench/data/runs/`; this document only records selected local tuning summaries so regressions can be understood later.
 
 ### 2026-04-18: structured evidence recall pass

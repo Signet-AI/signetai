@@ -20,7 +20,7 @@ Start the daemon before using either transport:
 signet daemon start
 ```
 
-The daemon exposes Streamable HTTP at `POST /mcp`, `GET /mcp`, and `DELETE /mcp`. The `signet-mcp` executable is a stdio bridge; it reads JSON-RPC on stdin and calls the daemon over HTTP.
+The daemon mounts one stateless Streamable HTTP endpoint at `/mcp` for `POST`, `GET`, and `DELETE`. `GET` is the server-notification stream and `DELETE` terminates the transport; each request creates a fresh server and transport. The `signet-mcp` executable uses the MCP stdio transport and calls the daemon over HTTP.
 
 ```sh
 signet-mcp
@@ -34,7 +34,7 @@ signet-mcp
 
 Use `signet setup --harness <name>` or the harness connector to install the MCP registration. For a remote daemon, set `SIGNET_DAEMON_URL` to the origin only; paths, queries, fragments, credentials, and non-HTTP schemes are rejected. MCP inherits daemon authentication: local mode is unauthenticated, team mode requires a bearer token for HTTP, and hybrid mode trusts localhost while requiring a token remotely.
 
-The Streamable HTTP server is stateless. Requests are bounded to eight in flight and request bodies to 512 KiB. The stdio bridge uses the same daemon authorization context. Tool failures are returned as MCP errors with `isError: true`.
+The Streamable HTTP server is stateless. Requests are bounded to eight in flight and JSON request bodies to 512 KiB. HTTP requests inherit the daemon's authorization context; standalone stdio uses its configured daemon URL and authorization context. Tool failures are returned as MCP errors with `isError: true`.
 
 ## Tool groups
 
@@ -123,10 +123,16 @@ Secret references may be Signet names, `local://NAME`, `bw://...`, or `op://...`
 | `signet_code_clear` | `confirm: true` | Destructively remove the active GraphIQ index. Rebuild with `signet index <path>`. |
 | `signet_code_briefing` | optional `compact` | Summarize the active project's architecture. |
 
+`signet_code_dead_code` is also registered by the GraphIQ plugin. The plugin's compatibility aliases are `code_search`, `code_context`, `code_blast`, `code_status`, `code_doctor`, `code_constants`, `code_dead_code`, `code_clear`, and `code_briefing`.
+
 Code tools are available only when the optional GraphIQ plugin is enabled and a project has been indexed. The active index is shared by the workspace.
+
+### External MCP tool servers
+
+When marketplace proxying is enabled, the server also registers these tools for installed external MCP/Tool Servers: `mcp_server_list`, `mcp_server_search`, `mcp_server_enable`, `mcp_server_disable`, `mcp_server_scope_get`, `mcp_server_scope_set`, `mcp_server_policy_get`, `mcp_server_policy_set`, and `mcp_server_call`. Search may promote a bounded set of routed tools into the tool list; promoted names are generated from the server and tool identifiers and are not a stable built-in API. These tools call the daemon's `/api/marketplace/mcp/*` routes and are subject to their scope and exposure policy.
 
 ## Compatibility boundaries
 
-`memory_search`, `session_search`, and the `entity_*` tools remain compatibility names. Prefer the `signet_*` names where a harness has a colliding native tool. Compatibility names translate into the same daemon operations; they do not own separate storage or semantics.
+`memory_search`, `session_search`, and the `entity_*` tools remain compatibility names. Prefer the `signet_*` names where a harness has a colliding native tool. Compatibility names translate into the same daemon operations; they do not own separate storage or semantics. `knowledge_expand_session` and `lcm_expand` are current registered tools, not extraction or marketplace aliases.
 
 MCP does not run lifecycle work. It does not replace session-start context, prompt-submit behavior, compaction handling, transcript capture, or notification delivery. Use the HTTP hook routes documented in [Hooks](/hooks/).

@@ -1,6 +1,6 @@
 ---
 title: "The Source and the Synthesis"
-description: "A good memory system keeps the source and the synthesis separate. Raw memory without synthesis is a warehouse with no lights. Synthesis without source is a confident story you cannot audit."
+description: "A useful memory system keeps source evidence and synthesis connected but distinct. Raw memory without synthesis is a warehouse with no lights. Synthesis without source is a confident story you cannot audit."
 date: 2026-05-11
 author: "Nicholai"
 tags: ["architecture", "memory", "positioning"]
@@ -8,13 +8,13 @@ image: /blog/the-source-and-the-synthesis.png
 draft: false
 ---
 
-A good memory system keeps the source and the synthesis separate.
+A useful memory system keeps source evidence and synthesis connected but distinct.
 
 The source is what happened. The synthesis is what the system currently thinks it means. Both are useful. They are not the same thing.
 
 This sounds obvious until an agent starts working across months of chat logs, meeting notes, code changes, research papers, project docs, and personal preferences. At that point, the distinction gets expensive fast. If the agent only has raw source, it has to reconstruct meaning every time it acts. If it only has synthesis, it can act quickly from a polished misunderstanding.
 
-That is the trap. Raw memory without synthesis is a warehouse with no lights. Synthesis without source is a confident story you cannot audit.
+The practical design is to preserve the evidence while making its current interpretation easy to use and easy to audit.
 
 Signet should preserve the substrate, generate the understanding, and query on top of both.
 
@@ -61,7 +61,7 @@ The other version collapses everything into summaries. The product says, "We und
 
 That is the dangerous part. A pile of raw source looks incomplete when it is incomplete. A clean synthesis can look complete while being wrong. It can launder uncertainty through prose.
 
-The solution is not to hate summaries. The solution is to keep them in their place.
+Summaries work best as a working layer, with clear links back to the material they summarize.
 
 
 ## Preserve, generate, query
@@ -91,7 +91,7 @@ A structured memory graph can hold facts without pretending every fact belongs i
 
 A generated wiki can sit on top of all of that. It can be beautiful. It can be readable. It can help the user think. But it does not have to carry the impossible burden of being both interface and truth.
 
-That is the shape I want from Signet. Not a magic brain. Not a pile of files. Not a database with branding. A context layer that knows what kind of knowledge it is holding.
+That is the shape I want from Signet: a context layer that preserves evidence, maintains useful synthesis, and knows what kind of knowledge it is holding.
 
 The source lets the agent stay honest. The synthesis lets the agent move.
 

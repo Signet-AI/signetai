@@ -12,9 +12,9 @@ Signet, start the daemon, then run:
 signet setup --harness openclaw
 ```
 
-The connector discovers OpenClaw-family configuration files and enables the
-Signet hook. It does not change your workspace through an undocumented CLI
-command. Confirm the configured workspace in OpenClaw's config:
+The connector discovers OpenClaw-family configuration files, selects the Signet
+runtime plugin, and disables the legacy internal `signet-memory` hook to avoid
+duplicate memory paths. Confirm the configured workspace in OpenClaw's config:
 
 ```json
 {
@@ -26,8 +26,7 @@ command. Confirm the configured workspace in OpenClaw's config:
 }
 ```
 
-OpenClaw reads `AGENTS.md` from that workspace directly. Signet does not
-create a generated `CLAUDE.md` or `AGENTS.md` copy for OpenClaw.
+OpenClaw reads `AGENTS.md` from that workspace directly. The setup connector leaves the workspace identity files in place for the runtime to read.
 
 ## Runtime plugin
 
@@ -62,9 +61,7 @@ The setup package and runtime package are different:
   its `agents.defaults.workspace` to the value of `$SIGNET_WORKSPACE`.
 - **The plugin cannot reach Signet:** start the daemon and verify
   `http://localhost:3850/health` returns successfully.
-- **An older installation is present:** run `signet doctor`; legacy hook-only
-  installs are compatibility mode and do not provide full plugin lifecycle
-  behavior.
+- **An older installation is present:** run `signet doctor`; legacy hook-only installs remain available as compatibility mode. Rerun setup to enable the full plugin lifecycle.
 
 OpenClaw, Clawdbot, and Moltbot use related configuration conventions, but
 check the configuration file selected by the runtime you actually launch.

@@ -14,7 +14,7 @@ auth:
   mode: team
 ```
 
-Start or restart the daemon, then log in through the current auth route and keep the returned admin bearer credential in a secret manager. Do not put passwords, bearer tokens, or API keys in `agent.yaml`, shell history, screenshots, or source control.
+Start the daemon, then authenticate through the configured login flow and keep the returned admin credential in a secret manager. Do not put passwords, bearer tokens, or API keys in `agent.yaml`, shell history, screenshots, or source control.
 
 The normal client variable is `SIGNET_API_KEY`. `SIGNET_TOKEN` is a backwards-compatible alias; new configuration should use `SIGNET_API_KEY`.
 
@@ -33,7 +33,7 @@ Clients send the key as a bearer credential. Verify the identity without printin
 
 ```bash
 curl -fsS http://127.0.0.1:3850/api/auth/whoami \
-  -H 'Authorization: Bearer '"$SIGNET_API_KEY"
+  -H "Authorization: Bearer $SIGNET_API_KEY"
 ```
 
 Revoke a retired or exposed key:

@@ -13,7 +13,7 @@ The good news: you don't have to. Anthropic built an official memory import tool
 
 ## Why People Are Switching
 
-This isn't a "Claude is better than ChatGPT" article. Different models excel at different things, and your choice should depend on what you actually use AI for. That said, there are real reasons people are migrating right now:
+This guide focuses on the migration workflow rather than ranking assistants. Different models excel at different things, and your choice should depend on what you actually use AI for. That said, there are real reasons people are migrating right now:
 
 - **Conversation quality** — Claude tends to produce longer, more nuanced responses and handles complex reasoning tasks differently than GPT-4o. Whether that's "better" depends on your use case, but many users find the difference noticeable enough to switch.
 - **Privacy stance** — Anthropic's approach to data handling is more conservative. Claude doesn't train on your conversations by default.
@@ -123,7 +123,7 @@ If you're a developer using AI as a coding assistant, the web-based migration co
 
 This is where the ChatGPT-to-Claude migration intersects with a deeper problem: **AI memory isn't portable.** ChatGPT memories live on OpenAI's servers. Claude memories live on Anthropic's servers. Neither gives you a local, inspectable copy. Neither lets you use the same context across multiple platforms. And both rely on the AI itself to decide what's worth remembering — the same stateless model that forgets everything between sessions is in charge of its own memory.
 
-[Signet](/) takes a different approach entirely. Your agent's [Memory](https://docs.signetai.sh/memory/) lives locally in a SQLite database on your machine. A distillation engine extracts knowledge from sessions after they end — no agent involvement, no memory tools. A predictive model injects the right context before every prompt. The same memory and preferences work across Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), OpenCode, Cursor — whatever you use. No cloud dependency, no vendor lock-in, no starting over when you switch tools.
+[Signet](/) keeps the migrated context in a workspace you control. Your agent's [Memory](https://docs.signetai.sh/memory/) lives locally in a SQLite database on your machine. A distillation engine extracts knowledge from sessions after they end — no agent involvement, no memory tools. A predictive model injects the right context before every prompt. The same memory and preferences work across Claude Code, [OpenClaw](https://github.com/openclaw/openclaw), OpenCode, Cursor — whatever you use. The workspace can be connected to multiple tools, so switching harnesses does not require rebuilding the same context.
 
 For a ChatGPT-to-Claude migration specifically, Signet means:
 
@@ -146,7 +146,7 @@ The agent isn't the platform. Memory and secrets should live below the platform.
 
 ## The Bigger Picture
 
-Migrating from ChatGPT to Claude shouldn't be this much work. The fact that it requires guides, extraction prompts, and manual cleanup is a symptom of a broken model — one where your AI assistant's understanding of you is treated as proprietary data rather than something you own.
+Migrating from ChatGPT to Claude shouldn't be this much work. The fact that it requires guides, extraction prompts, and manual cleanup is a sign that context is still held inside individual products instead of an owned workspace.
 
 We're building toward a future where this problem doesn't exist. Your memory and secrets live locally, controlled by you, portable by default. Switching between AI platforms should be as simple as switching between text editors — your context and access come with you.
 

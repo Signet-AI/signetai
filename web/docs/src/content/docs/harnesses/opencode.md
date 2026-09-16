@@ -17,7 +17,7 @@ bundled plugin and AGENTS.md sync.
 
 ### Plugin Bundle
 
-During `signet install`, the connector writes a self-contained
+During `signet setup --harness opencode`, the connector writes a self-contained
 `signet.mjs` file to `~/.config/opencode/plugins/` and registers
 `./plugins/signet.mjs` in the OpenCode config so the runtime loads it
 consistently at startup.
@@ -80,7 +80,6 @@ workspace.
 
 ### Prerequisites
 
-- OpenCode installed
-- `~/.config/opencode/` directory exists
+- OpenCode installed and available to the connector
 
 ---

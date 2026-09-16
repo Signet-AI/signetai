@@ -211,8 +211,9 @@ API/migration endpoint:
 |----------|-------------|
 | `POST /api/synthesis/trigger` | Trigger Dreaming's manifest-gated MEMORY.md publication |
 
-Most subcommands require `-H, --harness <harness>` identifying the calling
-platform (e.g. `claude-code`, `opencode`, `openclaw`). If the daemon is
+Most hook subcommands require `--harness <harness>` identifying the calling
+platform (e.g. `claude-code`, `opencode`, `openclaw`). If the daemon is not
+running, hooks exit cleanly with code 0 so the harness is not blocked.
 
 When hook payloads are provided over stdin, the CLI now prefers canonical
 `session_key` / `sessionKey` fields before legacy `session_id` aliases.
@@ -222,6 +223,6 @@ provided, while still carrying legacy `userPrompt` compatibility fields.
 `transcriptPath` and inline `transcript` content for lossless capture.
 `signet hook compaction-complete` also forwards stdin `cwd` as the fallback
 `project` scope when transcript persistence has not landed yet.
-not running, hooks exit cleanly with code 0 so the harness is not blocked.
+
 
 ---

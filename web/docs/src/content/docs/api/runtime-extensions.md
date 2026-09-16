@@ -22,10 +22,10 @@ bounded and serialized; partial failures are reported explicitly.
 
 | Route family | Status | Permission |
 |---|---|---|
-| `/api/skills`, `/api/skills/:id`, `/api/skills/search`, `/api/skills/install` | canonical | skills |
+| `/api/skills`, `/api/skills/:name`, `/api/skills/search`, `/api/skills/install` | canonical | skills |
 | `/api/skills/browse` | canonical | skills read |
 | `/api/skills/analytics` | canonical | analytics |
-| `/api/plugins`, `/api/plugins/:id` | canonical | plugins |
+| `/api/plugins`, `/api/plugins/:id` | canonical | admin |
 | `/api/secrets` | canonical | secrets; admin for mutation |
 
 Route-specific guards and response types define the exact fields. A plugin or

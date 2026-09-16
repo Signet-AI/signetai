@@ -27,9 +27,11 @@ Signet daemon.
 ## OpenClaw
 
 Signet uses the runtime package `@signetai/signet-memory-openclaw`. The setup
-connector configures OpenClaw to use the active Signet workspace and enables
-its hook integration. OpenClaw reads `AGENTS.md` from that workspace directly;
-Signet does not create a generated `CLAUDE.md` copy.
+connector configures OpenClaw to use the active Signet workspace and
+selects the runtime plugin. OpenClaw reads `AGENTS.md` from that workspace
+directly. The setup connector leaves the workspace identity files in place for
+the runtime to read; it disables the legacy internal `signet-memory` hook to
+avoid duplicate memory paths.
 
 ## Shared state
 

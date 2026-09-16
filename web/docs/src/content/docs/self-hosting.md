@@ -20,7 +20,6 @@ Confirm the service from the host:
 
 ```bash
 curl -fsS http://127.0.0.1:3850/health/ready
-signet daemon status --json
 ```
 
 Persist the workspace, `.daemon/`, and `.secrets/` data on the configured volume. Back it up with an encrypted system that preserves private permissions.

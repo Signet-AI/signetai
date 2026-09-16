@@ -2,7 +2,7 @@
 
 Signet is a local-first memory and context layer for AI agents. It keeps transcripts, notes, documents, decisions, and secrets under your control, then builds inspectable semantic context with provenance back to the source.
 
-[Use Signet](https://docs.signetai.sh/quickstart/) · [Build with Signet](https://docs.signetai.sh/sdk/) · [Documentation](https://docs.signetai.sh/) · [Discord](https://discord.gg/Psdeg7sQm7)
+[Use Signet](https://docs.signetai.sh/quickstart/) · [Build with Signet](https://docs.signetai.sh/sdk/) · [Contribute](https://docs.signetai.sh/contributing/) · [Documentation](https://docs.signetai.sh/) · [Discord](https://discord.gg/Psdeg7sQm7)
 
 ## Install
 

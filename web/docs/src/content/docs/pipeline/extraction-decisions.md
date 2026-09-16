@@ -20,11 +20,11 @@ Operations are validated before the write transaction. Content operations cite e
 
 Dreaming has combined and focused pass modes, including incremental content and hygiene work. These are pass modes, not per-fact `ADD`/`UPDATE`/`DELETE` decisions.
 
-## What is not the current path
+## Terminology and lifecycle
 
-The historical per-memory extraction worker, decision loop, structural classifiers, dependency-synthesis worker, and summary-worker session-end path are retired. Historical names may remain in migrations, fixtures, or compatibility state. They are not active executors and must not be described as current pipeline stages.
+The repository retains historical extraction, decision, structural-classification, dependency-synthesis, and summary-worker names in migrations, fixtures, and compatibility state. The active semantic path is the bounded Dreaming pass described above; these historical names identify stored or compatibility data, not current worker ownership.
 
-The `memory_extraction` workload name is retained where Dreaming uses that inference binding. It does not enable a retired extraction worker. “Pipeline V2” likewise refers only to compatibility configuration and status terminology.
+The `memory_extraction` workload name identifies the inference binding used by Dreaming. “Pipeline V2” identifies compatibility configuration and status terminology. Both names appear alongside the current Dreaming lifecycle in runtime diagnostics.
 
 ## Explicit operations
 

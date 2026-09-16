@@ -1,5 +1,10 @@
 # Repository Map
 
+**Audience/status:** Internal developer navigation. This map points to likely
+owners and locations; it is not a product contract, release inventory, or
+availability claim. For current behavior, follow the owning source, tests,
+manifests, and public documentation.
+
 Signet is organized by developer intent rather than by one generic `packages/`
 bucket.
 

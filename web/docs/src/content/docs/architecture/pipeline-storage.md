@@ -5,6 +5,10 @@ description: "Canonical evidence, Dreaming, derived state, and bounded persisten
 
 This page is an index of the current pipeline model. It keeps the ownership rules short; focused pages describe individual responsibilities.
 
+## Database Schema
+
+The schema and migrations live in `platform/core/src/migrations/` and execute through the database-owner process. The latest migration is `152-memory-artifact-sha-index.ts`.
+
 ## Current model
 
 1. The daemon records agent-scoped evidence before interpreting it.

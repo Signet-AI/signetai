@@ -9,7 +9,7 @@ description: "Session lifecycle, harness hooks, notifications, and cross-agent m
 |---|---|---|---|
 | POST | `/api/hooks/notifications` | canonical | hooks |
 | POST | `/api/hooks/session-start` | canonical | hooks |
-| POST | `/api/hooks/synthesis/complete` | compatibility; use `/api/synthesis/trigger` | hooks |
+| POST | `/api/hooks/synthesis/complete` | retired; returns `410`; use Dreaming | hooks |
 | GET/POST/DELETE | `/api/cross-agent/presence` and `:sessionKey` | canonical | cross-agent |
 | GET/POST | `/api/cross-agent/messages` | canonical | cross-agent |
 | POST | `/api/cross-agent/messages/:messageId/ack` | canonical | cross-agent |
@@ -19,7 +19,6 @@ description: "Session lifecycle, harness hooks, notifications, and cross-agent m
 | GET | `/api/synthesis/status` | canonical | synthesis read |
 | POST | `/api/sessions/:key/renew` | canonical | session |
 
-Hook payloads are validated at the route boundary. Cross-agent operations retain
-explicit agent/session scope and never broaden to a default identity. The old
-synthesis completion hook is a compatibility translation; new clients should
-call the canonical trigger route.
+Hook payloads are validated at the route boundary. Cross-agent operations carry
+agent/session scope. `/api/hooks/synthesis/complete` is retained only as an
+explicit retirement response; new clients should use `/api/synthesis/trigger`.
