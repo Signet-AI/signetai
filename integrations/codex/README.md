@@ -73,8 +73,8 @@ daemon memories are preserved.
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-codex` |
-| Native plugin installer | `@signetai/codex-plugin` |
+| Package | `@signet/connector-codex` |
+| Native plugin installer | `@signet/codex-plugin` |
 | License | Apache-2.0 |
 
 ## Architecture

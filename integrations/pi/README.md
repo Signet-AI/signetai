@@ -35,7 +35,7 @@ The connector package exposes programmatic cleanup that removes the extension fi
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-pi` |
+| Package | `@signet/connector-pi` |
 | License | Apache-2.0 |
 
 ## Compatibility

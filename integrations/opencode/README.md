@@ -7,7 +7,7 @@ Signet connector for [OpenCode](https://github.com/anomalyco/opencode).
 Integrates Signet's memory system with OpenCode via its plugin system.
 
 - Bundles and writes `signet.mjs` plugin to `~/.config/opencode/plugins/`
-- Generates `AGENTS.md` from identity files in your agent workspace
+- Uses the configured Signet workspace for identity and skills
 - Registers the plugin in OpenCode's configuration (`opencode.json` / `opencode.jsonc` / `config.json`)
 - Symlinks the skills directory for tool access
 - Migrates away from the legacy `memory.mjs` approach on install/uninstall
@@ -48,7 +48,7 @@ The connector package exposes programmatic cleanup that removes the plugin file 
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-opencode` |
+| Package | `@signet/connector-opencode` |
 | License | Apache-2.0 |
 
 ## Architecture

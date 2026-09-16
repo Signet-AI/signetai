@@ -8,7 +8,7 @@ Integrates Signet's memory system with Claude Code's lifecycle hooks so your age
 
 - Registers hook scripts in `~/.claude/settings.json` for `SessionStart`, `UserPromptSubmit`, `PreCompact`, and `SessionEnd` events
 - Registers the Signet MCP server in `~/.claude.json` for tool-based memory access
-- Generates `AGENTS.md` identity files from your agent workspace
+- Reads identity and memory context from the Signet daemon at session start
 
 ## Installation
 
@@ -26,7 +26,7 @@ The connector package exposes programmatic cleanup that removes hooks and MCP se
 
 | Field | Value |
 |-------|-------|
-| Package | `@signetai/connector-claude-code` |
+| Package | `@signet/connector-claude-code` |
 | License | Apache-2.0 |
 
 ## Architecture
