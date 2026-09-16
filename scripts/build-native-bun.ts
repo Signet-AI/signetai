@@ -146,8 +146,8 @@ const workerEntries = [
 	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
 // Native runtime assets are materialized by cli-native.ts. Keep worker bundles
-// single-file: tiktoken's WASM loader becomes an empty placeholder there and
-// the inherited SIGNET_TIKTOKEN_WASM_PATH supplies the real file.
+// single-file by inlining the WASM module; the inherited
+// SIGNET_TIKTOKEN_WASM_PATH supplies the filesystem path used at runtime.
 const nativeExternalArgs = ["--external", "better-sqlite3", "--external", "@napi-rs/keyring"] as const;
 const nativeWorkerExternalArgs = [...nativeExternalArgs, "--loader", ".wasm:base64"] as const;
 
