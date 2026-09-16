@@ -1973,6 +1973,84 @@ describe("HermesAgentConnector.uninstall()", () => {
 		expect(existsSync(join(victim, "memory", "signet", "signet.install.json"))).toBe(true);
 	});
 
+	it("does not remove a replacement directory after the target identity changes", async () => {
+		const hermesHome = join(tmpRoot, "target-replacement-home");
+		process.env.HERMES_HOME = hermesHome;
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+
+		const target = join(hermesHome, "plugins", "signet");
+		const moved = join(tmpRoot, "moved-target");
+		const replacement = join(tmpRoot, "replacement-target");
+		const sentinel = join(tmpRoot, "target-race-triggered");
+		mkdirSync(replacement);
+		const launcher = join(tmpRoot, "python-race-launcher.py");
+		const python = resolveTestPythonPath();
+		writeFileSync(
+			launcher,
+			[
+				"#!/usr/bin/env python3",
+				"import os, sys",
+				`target = ${JSON.stringify(target)}`,
+				`moved = ${JSON.stringify(moved)}`,
+				`replacement = ${JSON.stringify(replacement)}`,
+				`sentinel = ${JSON.stringify(sentinel)}`,
+				"if len(sys.argv) > 6 and sys.argv[5] == 'directory' and sys.argv[6] == 'signet' and not os.path.exists(sentinel):",
+				"    os.rename(target, moved)",
+				"    os.rename(replacement, target)",
+				"    open(sentinel, 'w').close()",
+				`os.execv(${JSON.stringify(python)}, [${JSON.stringify(python)}] + sys.argv[1:])`,
+				"",
+			].join("\n"),
+		);
+		chmodSync(launcher, 0o755);
+		process.env.PYTHON = launcher;
+
+		await expect(connector.uninstall()).rejects.toThrow(/directory entry changed/);
+		expect(existsSync(target)).toBe(true);
+		expect(existsSync(moved)).toBe(true);
+	});
+
+	it("does not remove a replacement file after the target identity changes", async () => {
+		const hermesHome = join(tmpRoot, "file-replacement-home");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, "config.yaml"), "memory:\n  provider: honcho\n");
+		process.env.HERMES_HOME = hermesHome;
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+
+		const target = join(hermesHome, "signet.provider.backup.json");
+		const moved = join(tmpRoot, "moved-backup.json");
+		const replacement = join(tmpRoot, "replacement-backup.json");
+		const sentinel = join(tmpRoot, "file-race-triggered");
+		writeFileSync(replacement, "preserve this replacement");
+		const launcher = join(tmpRoot, "python-file-race-launcher.py");
+		const python = resolveTestPythonPath();
+		writeFileSync(
+			launcher,
+			[
+				"#!/usr/bin/env python3",
+				"import os, sys",
+				`target = ${JSON.stringify(target)}`,
+				`moved = ${JSON.stringify(moved)}`,
+				`replacement = ${JSON.stringify(replacement)}`,
+				`sentinel = ${JSON.stringify(sentinel)}`,
+				"if len(sys.argv) > 6 and sys.argv[5] == 'file' and sys.argv[6] == 'signet.provider.backup.json' and not os.path.exists(sentinel):",
+				"    os.rename(target, moved)",
+				"    os.rename(replacement, target)",
+				"    open(sentinel, 'w').close()",
+				`os.execv(${JSON.stringify(python)}, [${JSON.stringify(python)}] + sys.argv[1:])`,
+				"",
+			].join("\n"),
+		);
+		chmodSync(launcher, 0o755);
+		process.env.PYTHON = launcher;
+
+		await expect(connector.uninstall()).rejects.toThrow(/directory entry changed/);
+		expect(readFileSync(target, "utf8")).toBe("preserve this replacement");
+		expect(existsSync(moved)).toBe(true);
+	});
+
 	it("does not mutate ambient config or env without an owned plugin", async () => {
 		const hermesHome = join(tmpRoot, "unowned-ambient-home");
 		const configPath = join(hermesHome, "config.yaml");
