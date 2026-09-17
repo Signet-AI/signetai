@@ -75,7 +75,7 @@ Stored facts and constraints under an aspect. Important fields include:
 - `aspect_id`
 - `agent_id`
 - `memory_id`
-- `kind`: `attribute` or `constraint`
+- `kind`: `attribute`, `constraint`, or `claim`
 - `content`
 - `normalized_content`
 - `group_key`
@@ -436,9 +436,33 @@ Use `--json` on either command family for automation.
 
 `getKnowledgeGraphForConstellation` in `platform/daemon/src/knowledge-graph.ts`
 builds the dashboard graph. It fetches active entities, aspects, attributes,
-dependencies, proposal overlays, and dreaming summaries within bounded limits.
-The dashboard then converts that payload into entity, aspect, attribute, memory,
-proposal, and relationship nodes.
+dependencies, epistemic assertions, proposal overlays, and dreaming summaries
+within bounded limits. Source-document entities are included when they own active
+`claim` attributes with non-empty source provenance in `source_id`, `source_path`,
+or `source_kind`; source folders, skills, and empty source topology remain
+excluded so the bounded view does not become a filesystem browser.
+
+The dashboard preserves the ontology instead of flattening it into unlabeled
+points. Its semantic path is:
+
+```text
+subject -> aspect -> group -> claim slot -> claim/constraint value
+                                      \-> epistemic assertion
+claim/constraint value -> evidence origin
+```
+
+Subjects, aspects, groups, claim slots, claims, constraints, assertions, and
+evidence origins have distinct node shapes and colors. Relationship edges are
+also typed: containment, organization, value description, assertion, evidence,
+and dependency use different visual treatments. Claim/value and assertion labels
+carry confidence; claim and assertion labels carry source kind/path when present.
+Every bounded node remains hover-readable with its full content, role,
+confidence, provenance, and relationship count even when its resting label is
+suppressed to prevent dense workspaces from becoming a wall of text.
+
+The payload converts into subject, source-document, aspect, group, claim-slot,
+claim, constraint, attribute, assertion, evidence-origin, memory, proposal, and
+relationship nodes in the dashboard scene.
 
 When the request does not include `agent_id`, `/api/knowledge/constellation`
 uses the configured daemon agent ID (`SIGNET_AGENT_ID`, falling back to

@@ -3,12 +3,17 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import type { GraphSceneData, GraphSceneHandle, SceneEdge, SceneNode } from "@/lib/graph-scene";
+import type { GraphSceneData, GraphSceneHandle, SceneEdge, SceneEdgeKind, SceneNode } from "@/lib/graph-scene";
 
 const LEGEND = [
-	{ color: "#22d3ee", label: "memory" },
-	{ color: "#a78bfa", label: "attribute" },
-	{ color: "#7dd3fc", label: "entity" },
+	{ color: "#ffffff", label: "subject" },
+	{ color: "#34d399", label: "aspect" },
+	{ color: "#60a5fa", label: "group" },
+	{ color: "#f59e0b", label: "claim slot" },
+	{ color: "#fbbf24", label: "claim" },
+	{ color: "#fb7185", label: "constraint" },
+	{ color: "#f472b6", label: "assertion" },
+	{ color: "#22d3ee", label: "evidence" },
 	{ color: "#38bdf8", label: "source" },
 ] as const;
 
@@ -24,6 +29,38 @@ interface EntityDetail {
 	edgeCount: number;
 	topAspects: { name: string; weight: number }[];
 	citations: { text: string; meta: string }[];
+}
+
+function shorten(value: string, maxLength: number): string {
+	const normalized = value.replace(/\s+/g, " ").trim();
+	return normalized.length > maxLength ? `${normalized.slice(0, maxLength - 1)}…` : normalized;
+}
+
+function humanize(value: string): string {
+	return value.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function percent(value: number): string {
+	return `${Math.round(Math.min(1, Math.max(0, value)) * 100)}%`;
+}
+
+function provenanceLabel(
+	sourceKind: string | null,
+	sourceId: string | null,
+	sourcePath: string | null,
+	sourceRoot: string | null,
+	memoryId: string | null,
+): string | null {
+	const path = sourcePath?.split(/[\\/]/).filter(Boolean).slice(-2).join("/");
+	const root = sourceRoot?.split(/[\\/]/).filter(Boolean).pop();
+	const kind = sourceKind ? humanize(sourceKind.replace(/^source_/, "")) : null;
+	if (kind && path && root) return shorten(`${kind} · ${root}/${path}`, 52);
+	if (kind && path) return shorten(`${kind} · ${path}`, 52);
+	if (path) return shorten(path, 52);
+	if (kind) return shorten(kind, 52);
+	if (memoryId) return `Memory · ${shorten(memoryId, 30)}`;
+	if (sourceId) return `Source · ${shorten(sourceId, 30)}`;
+	return null;
 }
 
 /**
@@ -56,59 +93,203 @@ export function GraphView() {
 	const sceneData = useMemo<GraphSceneData>(() => {
 		const nodes: SceneNode[] = [];
 		const edges: SceneEdge[] = [];
+		const nodeIds = new Set<string>();
 		const seen = new Set<string>();
-		const addEdge = (from: string, to: string) => {
-			const key = `${from}:${to}`;
+		const addNode = (node: SceneNode) => {
+			if (nodeIds.has(node.id)) return;
+			nodeIds.add(node.id);
+			nodes.push(node);
+		};
+		const addEdge = (from: string, to: string, kind: SceneEdgeKind, label?: string, strength?: number) => {
+			const key = `${kind}:${from}:${to}:${label ?? ""}`;
 			if (seen.has(key)) return;
 			seen.add(key);
-			edges.push({ from, to });
+			edges.push({ from, to, kind, label, strength });
 		};
 		const entities = graphQuery.data?.entities ?? [];
 		const maxMentions = Math.max(1, ...entities.map((e) => e.mentions));
+		const attributeNodeIds = new Map<string, string>();
+		const originNodeIds = new Map<string, string>();
+		const ensureOrigin = (params: {
+			sourceKind: string | null;
+			sourceId: string | null;
+			sourcePath: string | null;
+			sourceRoot: string | null;
+			memoryId: string | null;
+			cluster: string;
+		}): string | null => {
+			const source = provenanceLabel(
+				params.sourceKind,
+				params.sourceId,
+				params.sourcePath,
+				params.sourceRoot,
+				params.memoryId,
+			);
+			if (!source) return null;
+			const sourceKey = `${params.sourceKind ?? ""}:${params.sourceId ?? ""}:${params.sourcePath ?? ""}:${params.sourceRoot ?? ""}:${params.memoryId ?? ""}`;
+			const existing = originNodeIds.get(sourceKey);
+			if (existing) return existing;
+			const id = `origin:${sourceKey}`;
+			originNodeIds.set(sourceKey, id);
+			addNode({
+				id,
+				label: source,
+				kind: "origin",
+				cluster: params.cluster,
+				weight: 1,
+				metric: `${humanize(params.sourceKind ?? "source")} · evidence origin`,
+			});
+			return id;
+		};
 		for (const entity of entities) {
-			nodes.push({
+			const entityKind =
+				entity.entityType === "source_document" || entity.entityType === "source_document_reference"
+					? "source"
+					: "entity";
+			addNode({
 				id: entity.id,
 				label: entity.name,
-				kind: "entity",
+				kind: entityKind,
 				cluster: entity.id,
 				// sqrt-scaled mention weight — gates hub labels in dense scenes.
 				weight: Math.sqrt(entity.mentions / maxMentions),
-				metric: `${entity.mentions.toLocaleString()} mentions`,
+				metric: `${entityKind} · ${entity.entityType} · ${entity.mentions.toLocaleString()} mentions`,
 			});
 			for (const aspect of entity.aspects) {
-				nodes.push({
+				addNode({
 					id: aspect.id,
 					label: aspect.name,
 					kind: "aspect",
 					cluster: entity.id,
 					weight: aspect.weight,
-					metric: `${Math.round(aspect.weight * 100)}% weight`,
+					metric: `aspect · ${percent(aspect.weight)} weight`,
 				});
-				addEdge(entity.id, aspect.id);
-				for (const attr of aspect.attributes.slice(0, 3)) {
-					nodes.push({
+				addEdge(entity.id, aspect.id, "contains");
+				const groups = new Map<string, { id: string; count: number; weight: number }>();
+				for (const attr of aspect.attributes) {
+					const groupKey = attr.groupKey ?? "general";
+					const groupId = `group:${aspect.id}:${groupKey}`;
+					const group = groups.get(groupKey) ?? { id: groupId, count: 0, weight: 0 };
+					group.count += 1;
+					group.weight = Math.max(group.weight, attr.importance);
+					groups.set(groupKey, group);
+					const kind = attr.kind === "claim" ? "claim" : attr.kind === "constraint" ? "constraint" : "attribute";
+					const attrLabel = shorten(attr.content || humanize(attr.claimKey ?? attr.kind), 68);
+					const source = provenanceLabel(
+						attr.sourceKind,
+						attr.sourceId,
+						attr.sourcePath,
+						attr.sourceRoot,
+						attr.memoryId,
+					);
+					const attributeNode: SceneNode = {
 						id: attr.id,
-						label: attr.kind,
-						kind: "attribute",
+						label: attrLabel,
+						kind,
 						cluster: entity.id,
 						weight: attr.importance,
-						metric: `${attr.kind} · ${Math.round(attr.importance * 100)}%`,
+						confidence: attr.confidence,
+						detail: attr.content,
+						metric: `${attr.kind} · ${percent(attr.confidence)} confidence · ${source ?? "unattributed"}`,
+					};
+					addNode(attributeNode);
+					attributeNodeIds.set(attr.id, attr.id);
+					if (attr.claimKey) {
+						const claimSlotId = `claim-slot:${aspect.id}:${groupKey}:${attr.claimKey}`;
+						addNode({
+							id: claimSlotId,
+							label: humanize(attr.claimKey),
+							kind: "claimSlot",
+							cluster: entity.id,
+							weight: attr.importance,
+							metric: "claim slot · current value",
+						});
+						addEdge(groupId, claimSlotId, "organizes");
+						addEdge(claimSlotId, attr.id, "describes");
+					} else {
+						addEdge(groupId, attr.id, "describes");
+					}
+					const originId = ensureOrigin({
+						sourceKind: attr.sourceKind,
+						sourceId: attr.sourceId,
+						sourcePath: attr.sourcePath,
+						sourceRoot: attr.sourceRoot,
+						memoryId: attr.memoryId,
+						cluster: entity.id,
 					});
-					addEdge(aspect.id, attr.id);
+					if (originId) addEdge(attr.id, originId, "evidenced_by");
+				}
+				for (const [groupKey, group] of groups) {
+					addNode({
+						id: group.id,
+						label: humanize(groupKey),
+						kind: "group",
+						cluster: entity.id,
+						weight: group.weight,
+						metric: `group · ${group.count} value${group.count === 1 ? "" : "s"}`,
+					});
+					addEdge(aspect.id, group.id, "organizes");
+					for (const attr of aspect.attributes) {
+						if ((attr.groupKey ?? "general") !== groupKey || attr.claimKey) continue;
+						addEdge(group.id, attr.id, "describes");
+					}
 				}
 			}
 		}
+		for (const assertion of graphQuery.data?.assertions ?? []) {
+			if (!nodeIds.has(assertion.subjectEntityId)) continue;
+			const source = provenanceLabel(
+				assertion.sourceKind,
+				assertion.sourceId,
+				assertion.sourcePath,
+				assertion.sourceRoot,
+				null,
+			);
+			const assertionId = `assertion:${assertion.id}`;
+			addNode({
+				id: assertionId,
+				label: shorten(assertion.content, 68),
+				kind: "assertion",
+				cluster: assertion.subjectEntityId,
+				weight: assertion.confidence,
+				confidence: assertion.confidence,
+				detail: assertion.content,
+				metric: `${assertion.predicate} · ${percent(assertion.confidence)} confidence${
+					assertion.speaker ? ` · ${assertion.speaker}` : ""
+				}${assertion.evidenceCount > 0 ? ` · ${assertion.evidenceCount} evidence` : ""}${source ? ` · ${source}` : ""}`,
+			});
+			const target =
+				assertion.claimAttributeId && attributeNodeIds.has(assertion.claimAttributeId)
+					? assertion.claimAttributeId
+					: assertion.subjectEntityId;
+			addEdge(target, assertionId, "asserted_by", assertion.predicate, assertion.confidence);
+			const originId = ensureOrigin({
+				sourceKind: assertion.sourceKind,
+				sourceId: assertion.sourceId,
+				sourcePath: assertion.sourcePath,
+				sourceRoot: assertion.sourceRoot,
+				memoryId: null,
+				cluster: assertion.subjectEntityId,
+			});
+			if (originId) addEdge(assertionId, originId, "evidenced_by");
+		}
 		for (const dependency of graphQuery.data?.dependencies ?? []) {
-			addEdge(dependency.sourceEntityId, dependency.targetEntityId);
+			addEdge(
+				dependency.sourceEntityId,
+				dependency.targetEntityId,
+				"depends_on",
+				dependency.dependencyType,
+				dependency.strength,
+			);
 		}
 		for (const source of sources ?? []) {
-			nodes.push({
+			addNode({
 				id: `source:${source.id}`,
 				label: source.name,
 				kind: "source",
 				cluster: "source",
 				weight: 1,
-				metric: `${(source.stats?.indexed ?? 0).toLocaleString()} indexed`,
+				metric: `source · ${(source.stats?.indexed ?? 0).toLocaleString()} indexed`,
 			});
 		}
 		return { nodes, edges };
@@ -120,8 +301,56 @@ export function GraphView() {
 	const dataSig = useMemo(() => {
 		const entities = graphQuery.data?.entities ?? [];
 		let h = entityLimit * 31 + entities.length + (sources?.length ?? 0) * 7;
+		const mix = (value: string) => {
+			for (let i = 0; i < value.length; i++) h = (h * 33 + value.charCodeAt(i)) | 0;
+		};
 		for (const e of entities) {
-			for (let i = 0; i < e.id.length; i++) h = (h * 33 + e.id.charCodeAt(i)) | 0;
+			mix(e.id);
+			mix(e.name);
+			mix(e.entityType);
+			mix(String(e.mentions));
+			for (const aspect of e.aspects) {
+				mix(aspect.id);
+				mix(String(aspect.weight));
+				for (const attr of aspect.attributes) {
+					mix(attr.id);
+					mix(attr.content);
+					mix(attr.kind);
+					mix(String(attr.importance));
+					mix(String(attr.confidence));
+					mix(attr.memoryId ?? "");
+					mix(attr.groupKey ?? "");
+					mix(attr.claimKey ?? "");
+					mix(attr.sourceKind ?? "");
+					mix(attr.sourceId ?? "");
+					mix(attr.sourcePath ?? "");
+					mix(attr.sourceRoot ?? "");
+				}
+			}
+		}
+		for (const assertion of graphQuery.data?.assertions ?? []) {
+			mix(assertion.id);
+			mix(assertion.subjectEntityId);
+			mix(assertion.claimAttributeId ?? "");
+			mix(assertion.predicate);
+			mix(assertion.content);
+			mix(String(assertion.confidence));
+			mix(assertion.speaker ?? "");
+			mix(assertion.sourceKind ?? "");
+			mix(assertion.sourceId ?? "");
+			mix(assertion.sourcePath ?? "");
+			mix(assertion.sourceRoot ?? "");
+		}
+		for (const dependency of graphQuery.data?.dependencies ?? []) {
+			mix(dependency.sourceEntityId);
+			mix(dependency.targetEntityId);
+			mix(dependency.dependencyType);
+			mix(String(dependency.strength));
+		}
+		for (const source of sources ?? []) {
+			mix(source.id);
+			mix(source.name);
+			mix(String(source.stats?.indexed ?? 0));
 		}
 		return h;
 	}, [graphQuery.data, sources, entityLimit]);
@@ -170,7 +399,13 @@ export function GraphView() {
 	// the measured scene size; dragging debounces into a new entity limit.
 	// The endpoint caps at 300 entities, so the range ends at the percentage
 	// that many entities would actually occupy — no dead travel.
-	const totalNodes = stats ? stats.entityCount + stats.aspectCount + stats.attributeCount : 0;
+	const totalNodes = stats
+		? stats.entityCount +
+			stats.aspectCount +
+			stats.attributeCount +
+			(stats.claimCount ?? 0) +
+			(stats.constraintCount ?? 0)
+		: 0;
 	const shownEntities = Math.max(1, graphQuery.data?.entities.length ?? 48);
 	const nodesPerEntity = Math.max(1, sceneData.nodes.length / shownEntities);
 	const maxPct =
@@ -239,11 +474,11 @@ export function GraphView() {
 			{/* floating HUD telemetry overlay */}
 			<div className="graph-hud">
 				<span>
-					<b>{stats?.entityCount?.toLocaleString() ?? "—"}</b> nodes
+					<b>{sceneData.nodes.length.toLocaleString()}</b> nodes
 				</span>
 				<span className="graph-hud__sep">/</span>
 				<span>
-					<b>{stats?.dependencyCount?.toLocaleString() ?? "—"}</b> edges
+					<b>{sceneData.edges.length.toLocaleString()}</b> edges
 				</span>
 				<span className="graph-hud__sep">/</span>
 				<span>

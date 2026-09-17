@@ -12,7 +12,20 @@ import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer
 import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
 import sphereObj from "@/assets/bounding-sphere.obj?raw";
 
-export type SceneNodeKind = "entity" | "aspect" | "attribute" | "source" | "memory";
+export type SceneNodeKind =
+	| "entity"
+	| "source"
+	| "aspect"
+	| "group"
+	| "claimSlot"
+	| "attribute"
+	| "claim"
+	| "constraint"
+	| "assertion"
+	| "origin"
+	| "memory";
+
+export type SceneEdgeKind = "contains" | "organizes" | "describes" | "asserted_by" | "evidenced_by" | "depends_on";
 
 export interface SceneNode {
 	id: string;
@@ -24,11 +37,19 @@ export interface SceneNode {
 	weight: number;
 	/** Inspector/hover metric line (e.g. "41 mentions"). */
 	metric: string;
+	/** Confidence or certainty when the node represents a statement. */
+	confidence?: number;
+	/** Full content for the hover readout when label is abbreviated. */
+	detail?: string;
 }
 
 export interface SceneEdge {
 	from: string;
 	to: string;
+	kind: SceneEdgeKind;
+	/** Domain relationship text, used for dependency edges. */
+	label?: string;
+	strength?: number;
 }
 
 export interface GraphSceneData {
@@ -47,10 +68,30 @@ export interface GraphSceneHandle {
 
 const COLORS: Record<SceneNodeKind, string> = {
 	entity: "#ffffff",
-	aspect: "#34d399",
-	attribute: "#a78bfa",
-	memory: "#a1a1aa",
 	source: "#38bdf8",
+	aspect: "#34d399",
+	group: "#60a5fa",
+	claimSlot: "#f59e0b",
+	attribute: "#a78bfa",
+	claim: "#fbbf24",
+	constraint: "#fb7185",
+	assertion: "#f472b6",
+	origin: "#22d3ee",
+	memory: "#a1a1aa",
+};
+
+const KIND_LABELS: Record<SceneNodeKind, string> = {
+	entity: "subject",
+	source: "source",
+	aspect: "aspect",
+	group: "group",
+	claimSlot: "claim slot",
+	attribute: "attribute",
+	claim: "claim",
+	constraint: "constraint",
+	assertion: "assertion",
+	origin: "evidence",
+	memory: "memory",
 };
 
 const SPHERE_R = 260;
@@ -58,6 +99,10 @@ const seededRand = (s: number) => {
 	const x = Math.sin(s * 9999 + 1) * 10000;
 	return x - Math.floor(x);
 };
+
+function shorten(value: string, maxLength: number): string {
+	return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+}
 
 interface LayoutNode extends SceneNode {
 	pos: THREE.Vector3;
@@ -77,7 +122,8 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const byId = new Map<string, LayoutNode>();
 
 	// ── ForceAtlas2-style layout (one-shot, deterministic) ──
-	// Hubs (entities + sources) relax over the dependency graph: repulsion
+	// Hubs (subjects, configured sources, and evidence origins) relax over
+	// relationship edges; ontology children fan around their immediate parent.
 	// between every pair, LINEAR attraction along edges (quadratic
 	// attraction is what collapses connected clusters into a blob), and a
 	// whisper of gravity so isolates hover mid-sphere instead of piling
@@ -85,7 +131,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	// continuous sim, no per-frame cost. Aspects/attributes then fan
 	// around their OWN parent, so every entity reads as a local solar
 	// system.
-	const isHubKind = (k: SceneNodeKind) => k === "entity" || k === "source";
+	const isHubKind = (k: SceneNodeKind) => k === "entity" || k === "source" || k === "origin";
 	const kindById = new Map(data.nodes.map((n) => [n.id, n.kind]));
 	const hubs = data.nodes.filter((n) => isHubKind(n.kind));
 	const hubIndex = new Map(hubs.map((n, i) => [n.id, i]));
@@ -317,7 +363,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	sphereModel.scale.setScalar(SPHERE_R);
 	scene.add(sphereModel);
 
-	// ── node shape textures: crosshair (source), diamond (entity), square (leaf) ──
+	// ── node shape textures: shape is part of the graph's semantic grammar ──
 	const makeShapeTexture = (drawFn: (ctx: CanvasRenderingContext2D) => void) => {
 		const c = document.createElement("canvas");
 		c.width = c.height = 16;
@@ -350,16 +396,62 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const squareTex = makeShapeTexture((ctx) => {
 		ctx.fillRect(6, 6, 4, 4);
 	});
+	const hexTex = makeShapeTexture((ctx) => {
+		ctx.lineWidth = 1.5;
+		ctx.beginPath();
+		for (let i = 0; i < 6; i++) {
+			const angle = (Math.PI / 3) * i - Math.PI / 6;
+			const x = 8 + Math.cos(angle) * 6;
+			const y = 8 + Math.sin(angle) * 6;
+			if (i === 0) ctx.moveTo(x, y);
+			else ctx.lineTo(x, y);
+		}
+		ctx.closePath();
+		ctx.stroke();
+	});
+	const ringTex = makeShapeTexture((ctx) => {
+		ctx.lineWidth = 1.5;
+		ctx.beginPath();
+		ctx.arc(8, 8, 5.5, 0, Math.PI * 2);
+		ctx.stroke();
+	});
+	const triangleTex = makeShapeTexture((ctx) => {
+		ctx.lineWidth = 1.5;
+		ctx.beginPath();
+		ctx.moveTo(8, 2);
+		ctx.lineTo(14, 13);
+		ctx.lineTo(2, 13);
+		ctx.closePath();
+		ctx.stroke();
+	});
 
 	// ── nodes rendered as multiple Points layers by kind ──
 	const KIND_TEX: Record<SceneNodeKind, THREE.CanvasTexture> = {
 		entity: diamondTex,
 		source: crossTex,
 		aspect: squareTex,
+		group: hexTex,
+		claimSlot: ringTex,
 		attribute: squareTex,
+		claim: triangleTex,
+		constraint: triangleTex,
+		assertion: ringTex,
+		origin: crossTex,
 		memory: squareTex,
 	};
-	const KIND_SIZE: Record<SceneNodeKind, number> = { entity: 24, source: 27, aspect: 12, attribute: 9, memory: 9 };
+	const KIND_SIZE: Record<SceneNodeKind, number> = {
+		entity: 24,
+		source: 27,
+		aspect: 12,
+		group: 15,
+		claimSlot: 16,
+		attribute: 10,
+		claim: 15,
+		constraint: 15,
+		assertion: 16,
+		origin: 14,
+		memory: 11,
+	};
 	const baseColors: THREE.Color[] = [];
 	interface NodeLayer {
 		pts: THREE.Points;
@@ -368,7 +460,19 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		origIndices: number[];
 	}
 	const nodeLayers: Partial<Record<SceneNodeKind, NodeLayer>> = {};
-	for (const kind of ["entity", "source", "aspect", "attribute", "memory"] as const) {
+	for (const kind of [
+		"entity",
+		"source",
+		"aspect",
+		"group",
+		"claimSlot",
+		"attribute",
+		"claim",
+		"constraint",
+		"assertion",
+		"origin",
+		"memory",
+	] as const) {
 		const kindNodes = NODES.map((n, i) => ({ n, i })).filter(({ n }) => n.kind === kind);
 		if (kindNodes.length === 0) continue;
 		const geo = new THREE.BufferGeometry();
@@ -402,62 +506,153 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	for (const [i, n] of NODES.entries()) {
 		if (!baseColors[i]) baseColors[i] = new THREE.Color(COLORS[n.kind]);
 	}
+	const nodePoints = Object.values(nodeLayers)
+		.map((layer) => layer?.pts)
+		.filter((p): p is THREE.Points => Boolean(p));
+	const edgeCounts = new Map<string, number>();
+	for (const edge of EDGES) {
+		edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
+		edgeCounts.set(edge.to, (edgeCounts.get(edge.to) ?? 0) + 1);
+	}
 
-	// ── CSS2D labels (hubs + high-weight aspects) with leader lines ──
+	// ── CSS2D labels (semantic nodes) with leader lines ──
 	interface LabelEntry {
 		obj: CSS2DObject;
 		div: HTMLDivElement;
 		pos: THREE.Vector3;
 		dir: THREE.Vector3;
 		leader: THREE.Line;
+		semantic: boolean;
+		kind: SceneNodeKind;
+		priority: number;
 	}
 	const labelObjs: Record<string, LabelEntry> = {};
-	// Adaptive label budget: the 40 most prominent hubs earn labels (plus
-	// all sources and high-weight aspects) so dense scenes stay readable.
-	const hubLabelThreshold = (() => {
-		const weights = NODES.filter((n) => n.kind === "entity")
-			.map((n) => n.weight)
-			.sort((a, b) => b - a);
-		return weights.length > 40 ? Math.max(0.35, weights[40]) : 0.35;
-	})();
+	// Labels are intentionally budgeted. The visual grammar stays visible on
+	// every node, but only a small set of meaningful anchors gets a card at rest;
+	// hover still exposes every node's full semantic payload.
+	const labelIds = new Set<string>();
+	const edgeDegree = new Map<string, number>();
+	for (const edge of EDGES) {
+		edgeDegree.set(edge.from, (edgeDegree.get(edge.from) ?? 0) + 1);
+		edgeDegree.set(edge.to, (edgeDegree.get(edge.to) ?? 0) + 1);
+	}
+	const originLabelIds = new Set(
+		NODES.filter((n) => n.kind === "origin")
+			.sort((a, b) => (edgeDegree.get(b.id) ?? 0) - (edgeDegree.get(a.id) ?? 0) || a.id.localeCompare(b.id))
+			.slice(0, 4)
+			.map((n) => n.id),
+	);
+	const assertionLabelIds = new Set(
+		NODES.filter((n) => n.kind === "assertion")
+			.sort((a, b) => (edgeDegree.get(b.id) ?? 0) - (edgeDegree.get(a.id) ?? 0) || b.weight - a.weight)
+			.slice(0, 4)
+			.map((n) => n.id),
+	);
+	const hubLabelIds = new Set(
+		NODES.filter((n) => n.kind === "entity")
+			.sort((a, b) => b.weight - a.weight || a.id.localeCompare(b.id))
+			.slice(0, 12)
+			.map((n) => n.id),
+	);
 	for (const n of NODES) {
-		// Sources always earn labels; entity hubs only when prominent (sqrt
-		// mention weight), so dense scenes don't drown in text. Of the leaves
-		// only high-weight aspects.
-		const labelable = n.kind === "source" || (n.kind === "entity" && n.weight >= hubLabelThreshold);
-		if (!labelable && (n.kind !== "aspect" || n.weight < 0.75)) continue;
+		if (n.kind === "source" || originLabelIds.has(n.id) || assertionLabelIds.has(n.id) || hubLabelIds.has(n.id)) {
+			labelIds.add(n.id);
+		}
+	}
+	const semanticRank: Record<SceneNodeKind, number> = {
+		entity: 0,
+		source: 0,
+		origin: 0,
+		claim: 5,
+		constraint: 5,
+		assertion: 4,
+		claimSlot: 3,
+		group: 2,
+		aspect: 1,
+		attribute: 0,
+		memory: 0,
+	};
+	const childLabelCounts = new Map<string, number>();
+	const candidates = NODES.filter((n) => !isHubKind(n.kind) && semanticRank[n.kind] > 0).sort(
+		(a, b) => semanticRank[b.kind] - semanticRank[a.kind] || b.weight - a.weight || a.id.localeCompare(b.id),
+	);
+	let statementLabelCount = 0;
+	for (const n of candidates) {
+		const count = childLabelCounts.get(n.cluster) ?? 0;
+		if (count >= 1 || statementLabelCount >= 12) continue;
+		labelIds.add(n.id);
+		childLabelCounts.set(n.cluster, count + 1);
+		statementLabelCount += 1;
+	}
+	for (const n of NODES) {
+		const semantic = n.kind !== "attribute" && n.kind !== "memory";
+		if (!labelIds.has(n.id)) continue;
 		const div = document.createElement("div");
-		div.textContent = n.label;
-		div.style.cssText =
-			"font-family:var(--font-mono);font-size:10px;color:#f4f4f5;" +
-			"background:rgba(9,9,11,0.9);padding:1px 4px;border-radius:3px;border:1px solid oklch(1 0 0 / 0.08);" +
-			"white-space:nowrap;opacity:0;transition:opacity .4s;letter-spacing:0.02em;font-weight:500";
+		div.className = `graph-node-label graph-node-label--${n.kind}`;
+		div.style.setProperty("--node-color", COLORS[n.kind]);
+		const kind = document.createElement("span");
+		kind.className = "graph-node-label__kind";
+		kind.textContent = KIND_LABELS[n.kind];
+		const name = document.createElement("span");
+		name.className = "graph-node-label__name";
+		name.textContent = n.label;
+		const meta = document.createElement("span");
+		meta.className = "graph-node-label__meta";
+		meta.textContent = n.metric;
+		div.append(kind, name, meta);
 		const obj = new CSS2DObject(div);
-		obj.position.set(n.pos.x + 7, n.pos.y + 10, n.pos.z + 7);
+		const labelLift = n.kind === "assertion" ? 110 : 11;
+		obj.position.set(n.pos.x + 8, n.pos.y + labelLift, n.pos.z + 8);
 		scene.add(obj);
 		const lOffset = 10;
 		const leaderGeo = new THREE.BufferGeometry();
 		leaderGeo.setAttribute(
 			"position",
 			new THREE.Float32BufferAttribute(
-				[n.pos.x, n.pos.y, n.pos.z, n.pos.x + lOffset * 0.7, n.pos.y + lOffset, n.pos.z + lOffset * 0.7],
+				[n.pos.x, n.pos.y, n.pos.z, n.pos.x + lOffset * 0.7, n.pos.y + labelLift, n.pos.z + lOffset * 0.7],
 				3,
 			),
 		);
 		const leaderMat = new THREE.LineBasicMaterial({
-			color: 0x71717a,
+			color: new THREE.Color(COLORS[n.kind]),
 			transparent: true,
-			opacity: 0.5,
+			opacity: 0.65,
 			depthWrite: false,
 		});
 		const leader = new THREE.Line(leaderGeo, leaderMat);
 		scene.add(leader);
-		labelObjs[n.id] = { obj, div, pos: n.pos.clone(), dir: n.dir, leader };
+		const priority =
+			n.kind === "entity"
+				? 100
+				: n.kind === "source"
+					? 95
+					: n.kind === "origin"
+						? 90
+						: n.kind === "assertion"
+							? 85
+							: n.kind === "claim" || n.kind === "constraint"
+								? 80
+								: n.kind === "claimSlot"
+									? 70
+									: 60;
+		labelObjs[n.id] = { obj, div, pos: n.pos.clone(), dir: n.dir, leader, semantic, kind: n.kind, priority };
 	}
 
-	// ── razor-thin Bezier edges (0.1 opacity for moiré density) ──
-	const edgeMeshes: THREE.Line[] = [];
-	for (const { from, to } of EDGES) {
+	// ── relationship edges — color and dash encode the graph's grammar ──
+	const EDGE_STYLES: Record<SceneEdgeKind, { color: number; opacity: number; dashed: boolean }> = {
+		contains: { color: 0x34d399, opacity: 0.28, dashed: false },
+		organizes: { color: 0x60a5fa, opacity: 0.34, dashed: false },
+		describes: { color: 0xa78bfa, opacity: 0.32, dashed: false },
+		asserted_by: { color: 0xf472b6, opacity: 0.58, dashed: true },
+		evidenced_by: { color: 0x22d3ee, opacity: 0.58, dashed: true },
+		depends_on: { color: 0xfbbf24, opacity: 0.34, dashed: false },
+	};
+	interface EdgeMesh {
+		line: THREE.Line;
+		baseOpacity: number;
+	}
+	const edgeMeshes: EdgeMesh[] = [];
+	for (const { from, to, kind } of EDGES) {
 		const a = byId.get(from);
 		const b = byId.get(to);
 		if (!a || !b) continue;
@@ -465,10 +660,26 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		if (mid.length() > 0) mid.multiplyScalar(1.25);
 		const curve = new THREE.QuadraticBezierCurve3(a.pos, mid, b.pos);
 		const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(8));
-		const mat = new THREE.LineBasicMaterial({ color: 0x00f2ff, transparent: true, opacity: 0.13, depthWrite: false });
+		const style = EDGE_STYLES[kind];
+		const mat = style.dashed
+			? new THREE.LineDashedMaterial({
+					color: style.color,
+					transparent: true,
+					opacity: style.opacity,
+					depthWrite: false,
+					dashSize: 3,
+					gapSize: 4,
+				})
+			: new THREE.LineBasicMaterial({
+					color: style.color,
+					transparent: true,
+					opacity: style.opacity,
+					depthWrite: false,
+				});
 		const line = new THREE.Line(geo, mat);
+		if (style.dashed) line.computeLineDistances();
 		scene.add(line);
-		edgeMeshes.push(line);
+		edgeMeshes.push({ line, baseOpacity: style.opacity });
 	}
 
 	// ── ground dot grid floor ──
@@ -603,12 +814,23 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const raycaster = new THREE.Raycaster();
 	raycaster.params.Points = { threshold: 8 };
 	const mouseNDC = new THREE.Vector2(-2, -2);
+	let pointerInside = false;
+	let pointerDirty = true;
+	let lastPointerRaycast = 0;
 	const onPointerMove = (ev: PointerEvent) => {
 		const rect = renderer.domElement.getBoundingClientRect();
 		mouseNDC.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
 		mouseNDC.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+		pointerInside = true;
+		pointerDirty = true;
+	};
+	const onPointerLeave = () => {
+		pointerInside = false;
+		pointerDirty = true;
+		mouseNDC.set(-2, -2);
 	};
 	renderer.domElement.addEventListener("pointermove", onPointerMove);
+	renderer.domElement.addEventListener("pointerleave", onPointerLeave);
 
 	// ── turntable camera rig ──
 	interface CamTween {
@@ -701,10 +923,11 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	const animate = () => {
 		if (disposed) return;
 		raf = requestAnimationFrame(animate);
+		const frameNow = performance.now();
 		if (camTween) {
 			const elapsed = performance.now() - camTween.t0;
 			const t = Math.min(1, elapsed / camTween.dur);
-			const orbitEase = t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
+			const orbitEase = t < 0.5 ? 16 * t * t * t * t * t : 1 - (-2 * t + 2) ** 5 / 2;
 			const theta = camTween.fromTheta + camTween.dTheta * orbitEase;
 			const phi = camTween.fromPhi + camTween.dPhi * orbitEase;
 			let radius: number;
@@ -724,7 +947,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		// Advance the highlight blend on the camera's clock
 		if (highlightTween) {
 			const t = Math.min(1, (performance.now() - highlightTween.t0) / highlightTween.dur);
-			const e = t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
+			const e = t < 0.5 ? 16 * t * t * t * t * t : 1 - (-2 * t + 2) ** 5 / 2;
 			highlightMix = highlightTween.from + (highlightTween.to - highlightTween.from) * e;
 			if (t >= 1) highlightTween = null;
 		}
@@ -735,11 +958,11 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		const camDir = camera.position.clone().sub(controls.target).normalize();
 		for (const [kind, layer] of Object.entries(nodeLayers)) {
 			if (!layer) continue;
-			const isHub = kind === "entity" || kind === "source";
+			const isHub = kind === "entity" || kind === "source" || kind === "origin";
 			for (const [j, origIdx] of layer.origIndices.entries()) {
 				const dot = NODES[origIdx].dir.dot(camDir);
 				const base = baseColors[origIdx];
-				const depthAlpha = dot > 0 ? 1.0 : isHub ? 0.2 : 0.08;
+				const depthAlpha = dot > 0 ? 1.0 : isHub ? 0.32 : 0.2;
 				let bright = depthAlpha;
 				let sat = 1;
 				if (highlightMix > 0 && highlightSet) {
@@ -765,47 +988,90 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			}
 			layer.geo.getAttribute("color").needsUpdate = true;
 		}
-		if (highlightMix > 0) {
-			for (const e of edgeMeshes) {
-				(e.material as THREE.LineBasicMaterial).opacity = 0.13 - 0.1 * highlightMix;
-			}
+		for (const e of edgeMeshes) {
+			(e.line.material as THREE.LineBasicMaterial).opacity = e.baseOpacity * (1 - 0.55 * highlightMix);
 		}
+		const labelRects: Array<{ left: number; right: number; top: number; bottom: number }> = [];
+		const labelCandidates = Object.values(labelObjs)
+			.map((lb) => {
+				const dot = lb.dir.dot(camDir);
+				const minDot = lb.kind === "assertion" ? -0.8 : lb.semantic ? 0.35 : 0.3;
+				const projected = lb.obj.position.clone().project(camera);
+				return {
+					lb,
+					dot,
+					minDot,
+					x: (projected.x * 0.5 + 0.5) * renderer.domElement.clientWidth,
+					y: (-projected.y * 0.5 + 0.5) * renderer.domElement.clientHeight,
+				};
+			})
+			.filter(({ dot, minDot }) => dot > minDot)
+			.sort((a, b) => b.lb.priority - a.lb.priority || b.dot - a.dot);
+		for (const { lb, dot, minDot, x, y } of labelCandidates) {
+			const width = lb.div.offsetWidth || (lb.semantic ? 150 : 100);
+			const height = lb.div.offsetHeight || (lb.semantic ? 38 : 20);
+			const rect = {
+				left: x - width / 2 - 6,
+				right: x + width / 2 + 6,
+				top: y - height / 2 - 6,
+				bottom: y + height / 2 + 6,
+			};
+			const collides = labelRects.some(
+				(other) =>
+					rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top,
+			);
+			const alpha = Math.min(1, 0.35 + (dot - minDot) * 1.5);
+			lb.div.style.opacity = collides ? "0" : String(alpha);
+			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = collides ? 0 : 0.5);
+			if (!collides) labelRects.push(rect);
+		}
+		const candidateIds = new Set(labelCandidates.map(({ lb }) => lb));
 		for (const lb of Object.values(labelObjs)) {
-			const dot = lb.dir.dot(camDir);
-			lb.div.style.opacity = dot > 0.3 ? String(Math.min(1, (dot - 0.3) * 1.5)) : "0";
-			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = dot > 0.3 ? 0.4 : 0);
+			if (candidateIds.has(lb)) continue;
+			lb.div.style.opacity = "0";
+			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = 0);
 		}
 
-		// Hover raycast → targeting bracket + CAD readout (hubs only)
-		raycaster.setFromCamera(mouseNDC, camera);
-		const hubPoints = (["entity", "source"] as const)
-			.map((k) => nodeLayers[k]?.pts)
-			.filter((p): p is THREE.Points => Boolean(p));
-		const intersects = hubPoints.length > 0 ? raycaster.intersectObjects(hubPoints, false) : [];
-		if (intersects.length > 0) {
-			const intersection = intersects[0];
-			const layer = nodeLayers[intersection.object.userData.kind as SceneNodeKind];
-			const index = intersection.index;
-			if (!layer || index === undefined) {
+		// Hover raycast → targeting bracket + semantic readout (every node kind).
+		// The camera keeps moving while the pointer is still, so refresh at 10 Hz;
+		// pointer motion refreshes immediately without paying this cost every frame.
+		if (pointerInside && (pointerDirty || frameNow - lastPointerRaycast >= 100)) {
+			lastPointerRaycast = frameNow;
+			pointerDirty = false;
+			raycaster.setFromCamera(mouseNDC, camera);
+			const intersects = nodePoints.length > 0 ? raycaster.intersectObjects(nodePoints, false) : [];
+			if (intersects.length > 0) {
+				const intersection = intersects[0];
+				const layer = nodeLayers[intersection.object.userData.kind as SceneNodeKind];
+				const index = intersection.index;
+				if (!layer || index === undefined) {
+					targetBracket.visible = false;
+					targetReadout.style.display = "none";
+				} else {
+					const n = NODES[layer.origIndices[index]];
+					targetBracket.visible = true;
+					targetBracket.position.copy(n.pos);
+					const sp = n.pos.clone().project(camera);
+					const sx = (sp.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
+					const sy = (-sp.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
+					const edgeCount = edgeCounts.get(n.id) ?? 0;
+					targetReadout.style.display = "block";
+					targetReadout.style.left = `${sx + 20}px`;
+					targetReadout.style.top = `${sy - 30}px`;
+					targetReadout.textContent = [
+						`${KIND_LABELS[n.kind]} · ${n.label}`,
+						n.metric,
+						n.detail && n.detail !== n.label ? shorten(n.detail, 180) : null,
+						`${edgeCount} relationship${edgeCount === 1 ? "" : "s"}`,
+					]
+						.filter((line): line is string => Boolean(line))
+						.join("\n");
+				}
+			} else {
 				targetBracket.visible = false;
 				targetReadout.style.display = "none";
-			} else {
-				const n = NODES[layer.origIndices[index]];
-				targetBracket.visible = true;
-				targetBracket.position.copy(n.pos);
-				const sp = n.pos.clone().project(camera);
-				const sx = (sp.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
-				const sy = (-sp.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
-				const edgeCount = EDGES.filter((e) => e.from === n.id || e.to === n.id).length;
-				targetReadout.style.display = "block";
-				targetReadout.style.left = `${sx + 20}px`;
-				targetReadout.style.top = `${sy - 30}px`;
-				targetReadout.innerHTML =
-					`node: <span style="color:#38bdf8">${n.label}</span><br>` +
-					`edges: ${edgeCount} · ${n.metric}<br>` +
-					`xyz: ${n.pos.x.toFixed(1)}, ${n.pos.y.toFixed(1)}, ${n.pos.z.toFixed(1)}`;
 			}
-		} else {
+		} else if (!pointerInside) {
 			targetBracket.visible = false;
 			targetReadout.style.display = "none";
 		}
@@ -842,6 +1108,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			controls.removeEventListener("start", stopAutoRotate);
 			controls.dispose();
 			renderer.domElement.removeEventListener("pointermove", onPointerMove);
+			renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
 			scene.traverse((obj) => {
 				const mesh = obj as THREE.Mesh;
 				if (mesh.geometry) mesh.geometry.dispose();
@@ -850,7 +1117,7 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 					for (const m of mat) m.dispose();
 				} else if (mat) mat.dispose();
 			});
-			for (const t of [crossTex, diamondTex, squareTex]) t.dispose();
+			for (const t of [crossTex, diamondTex, squareTex, hexTex, ringTex, triangleTex]) t.dispose();
 			renderer.dispose();
 			container.replaceChildren();
 		},

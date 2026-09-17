@@ -310,6 +310,8 @@ export interface KnowledgeStats {
 	entityCount: number;
 	aspectCount: number;
 	attributeCount: number;
+	claimCount: number;
+	constraintCount: number;
 	dependencyCount: number;
 	coveragePercent: number;
 }
@@ -330,7 +332,15 @@ export interface KnowledgeConstellation {
 				content: string;
 				kind: string;
 				importance: number;
+				confidence: number;
 				version: number;
+				memoryId: string | null;
+				groupKey: string | null;
+				claimKey: string | null;
+				sourceKind: string | null;
+				sourceId: string | null;
+				sourcePath: string | null;
+				sourceRoot: string | null;
 			}>;
 		}>;
 	}>;
@@ -339,6 +349,21 @@ export interface KnowledgeConstellation {
 		targetEntityId: string;
 		dependencyType: string;
 		strength: number;
+	}>;
+	assertions: Array<{
+		id: string;
+		subjectEntityId: string;
+		claimAttributeId: string | null;
+		predicate: string;
+		content: string;
+		confidence: number;
+		speaker: string | null;
+		sourceKind: string | null;
+		sourceId: string | null;
+		sourcePath: string | null;
+		sourceRoot: string | null;
+		evidenceCount: number;
+		assertedAt: string;
 	}>;
 	proposals: Array<{ id: string }>;
 	metadata: { proposals: { pending: number } };
