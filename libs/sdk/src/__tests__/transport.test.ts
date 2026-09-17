@@ -128,6 +128,71 @@ describe("SignetTransport", () => {
 		}
 	});
 
+	test("configured timeout remains active with a caller abort signal", async () => {
+		const server = mockServer(async () => {
+			await new Promise((resolve) => setTimeout(resolve, 100));
+			return Response.json({ ok: true });
+		});
+		const transport = new SignetTransport({
+			baseUrl: `http://localhost:${server.port}`,
+			timeoutMs: 10,
+			retries: 0,
+		});
+
+		await expect(transport.request("GET", "/slow", { signal: new AbortController().signal })).rejects.toBeInstanceOf(
+			SignetTimeoutError,
+		);
+	});
+
+	test("rejects a negative retry count at construction", () => {
+		expect(() => new SignetTransport({ retries: -1 })).toThrow("retries");
+	});
+
+	test("rejects an excessive retry count at construction", () => {
+		expect(() => new SignetTransport({ retries: Number.MAX_SAFE_INTEGER })).toThrow("retries");
+	});
+
+	test("rejects timeout values outside the runtime timer range", () => {
+		expect(() => new SignetTransport({ timeoutMs: 2_147_483_648 })).toThrow("timeoutMs");
+	});
+
+	test("rejects retry backoff that exceeds the runtime timer range", () => {
+		expect(() => new SignetTransport({ retries: 2, retryDelayMs: 1_073_741_824 })).toThrow("retryDelayMs");
+	});
+
+	test("caller abort stops an idempotent request without retrying", async () => {
+		const originalFetch = globalThis.fetch;
+		let calls = 0;
+		const fetchStub = async (_input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			calls += 1;
+			const signal = init?.signal;
+			if (!signal) return Promise.reject(new Error("missing signal"));
+			if (signal.aborted) return Promise.reject(signal.reason ?? new DOMException("Aborted", "AbortError"));
+			return new Promise<Response>((_resolve, reject) => {
+				signal.addEventListener("abort", () => reject(signal.reason ?? new DOMException("Aborted", "AbortError")), {
+					once: true,
+				});
+			});
+		};
+		Object.defineProperty(globalThis, "fetch", { configurable: true, value: fetchStub });
+
+		const controller = new AbortController();
+		const transport = new SignetTransport({
+			baseUrl: "http://localhost:3850",
+			retries: 2,
+			retryDelayMs: 10,
+		});
+		const request = transport.request("GET", "/cancel", { signal: controller.signal });
+		controller.abort();
+
+		try {
+			await expect(request).rejects.toBeInstanceOf(SignetNetworkError);
+			expect(calls).toBe(1);
+		} finally {
+			globalThis.fetch = originalFetch;
+		}
+	});
+
 	test("GET retries on network error up to retries count", async () => {
 		// Grab a port by starting a server, then stop it immediately.
 		// This gives us a port where nothing is listening (connection refused).
