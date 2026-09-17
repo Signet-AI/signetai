@@ -91,6 +91,7 @@ describe("sync DB attribution", () => {
 		expect(classifySyncDbSiteToken("dir/file.ts:12")).toBe("source-location");
 		expect(classifySyncDbSiteToken("//dist/daemon.js:54")).toBeNull();
 		expect(classifySyncDbSiteToken("/dist//daemon.js:54")).toBeNull();
+		expect(classifySyncDbSiteToken("/UNC/server:54")).toBeNull();
 		expect(classifySyncDbSiteToken("dir//file.ts:12")).toBeNull();
 	});
 
@@ -132,6 +133,22 @@ describe("sync DB attribution", () => {
 		expect(siteToken).toBe("/C:/Program Files/Signet/daemon.js:54");
 		const token = beginSyncDbCall("withWriteTxAsync", 1_000, siteToken);
 		expect(token.siteId).toBe("withWriteTxAsync@/C:/Program Files/Signet/daemon.js:54");
+	});
+
+	test("captures raw-backslash UNC source locations before queueing", () => {
+		const stack = [
+			"Error",
+			String.raw`    at captureCallerSite (\\server\share\repo\platform\daemon\src\sync-db-attribution.ts:110:1)`,
+			String.raw`    at captureSyncDbCallSiteToken (\\server\share\repo\platform\daemon\src\sync-db-attribution.ts:262:1)`,
+			String.raw`    at runWriteTxAsync (\\server\share\repo\platform\daemon\src\db-accessor.ts:3029:1)`,
+			String.raw`    at caller (\\server\share\repo\dist\daemon.js:54:1)`,
+		].join("\n");
+
+		const siteToken = withPreparedStack(stack, () => captureSyncDbCallSiteToken());
+
+		expect(siteToken).toBe("/UNC/server/share/repo/dist/daemon.js:54");
+		const token = beginSyncDbCall("withWriteTxAsync", 1_000, siteToken);
+		expect(token.siteId).toBe("withWriteTxAsync@/UNC/server/share/repo/dist/daemon.js:54");
 	});
 
 	test("does not attribute anonymous raw-backslash internal frames", () => {
