@@ -5,7 +5,8 @@ import type {
 	DbOwnerVectorRepairPhase,
 	DbOwnerVectorRepairResult,
 } from "./db-owner-protocol";
-import { VECTOR_REPAIR_MAX_BYTES_PER_BATCH, VECTOR_REPAIR_MAX_ROWS_PER_BATCH } from "./db-owner-protocol";
+import { VECTOR_REPAIR_MAX_BYTES_PER_BATCH } from "./db-owner-protocol";
+import { boundedBatchSize, boundedVectorBytes, normalizeAgentId } from "./vector-repair-policy";
 
 interface SqliteStatement {
 	all(...params: readonly unknown[]): unknown[];
@@ -74,24 +75,6 @@ function changes(result: unknown): number {
 
 function nowIso(): string {
 	return new Date().toISOString();
-}
-
-function normalizeAgentId(agentId: string): string {
-	const normalized = agentId.trim();
-	if (normalized.length === 0) throw new Error("vector repair requires a resolved agent id");
-	return normalized;
-}
-
-function boundedBatchSize(value: number | undefined): number {
-	if (value === undefined) return VECTOR_REPAIR_MAX_ROWS_PER_BATCH;
-	if (!Number.isFinite(value) || value <= 0) throw new RangeError("vector repair batch size must be positive");
-	return Math.max(1, Math.min(VECTOR_REPAIR_MAX_ROWS_PER_BATCH, Math.floor(value)));
-}
-
-function boundedVectorBytes(value: number | undefined): number {
-	if (value === undefined) return VECTOR_REPAIR_MAX_BYTES_PER_BATCH;
-	if (!Number.isFinite(value) || value <= 0) throw new RangeError("vector repair byte budget must be positive");
-	return Math.max(1, Math.min(VECTOR_REPAIR_MAX_BYTES_PER_BATCH, Math.floor(value)));
 }
 
 function operationId(operation: DbOwnerVectorRepairOperation, phase: DbOwnerVectorRepairPhase): string {
@@ -304,10 +287,10 @@ function writeAudit(
 	input: DbOwnerVectorRepairInput,
 	phase: DbOwnerVectorRepairPhase,
 	operationIdValue: string,
+	checkpointId: string,
 	counters: BatchCounters,
 	remaining: number,
 ): void {
-	const agentId = normalizeAgentId(input.agentId);
 	db.prepare(
 		`INSERT INTO memory_history
 			(id, memory_id, event, old_content, new_content, changed_by, reason, metadata, created_at, actor_type, session_id, request_id)
@@ -320,7 +303,7 @@ function writeAudit(
 			repairAction: input.audit.action,
 			operationId: operationIdValue,
 			phase,
-			checkpointId: readCheckpoint(db, input.operation, agentId)?.checkpoint_id ?? input.checkpointId,
+			checkpointId,
 			processed: counters.batchProcessed,
 			skipped: counters.batchSkipped,
 			failed: counters.batchFailed,
@@ -481,7 +464,15 @@ function processMissingVectors(
 			status: "failed",
 			lastError,
 		});
-		writeAudit(db, input, next.phase, operationId(input.operation, next.phase), counters, remaining);
+		writeAudit(
+			db,
+			input,
+			next.phase,
+			operationId(input.operation, next.phase),
+			next.checkpoint_id,
+			counters,
+			remaining,
+		);
 		return { row: next, counters };
 	}
 
@@ -504,7 +495,7 @@ function processMissingVectors(
 				status: "complete",
 				lastError: null,
 			});
-			writeAudit(db, input, next.phase, operationId(input.operation, row.phase), counters, 0);
+			writeAudit(db, input, next.phase, operationId(input.operation, row.phase), next.checkpoint_id, counters, 0);
 			return { row: next, counters };
 		}
 	}
@@ -521,7 +512,7 @@ function processMissingVectors(
 		status: "running",
 		lastError: null,
 	});
-	writeAudit(db, input, next.phase, operationId(input.operation, next.phase), counters, remaining);
+	writeAudit(db, input, next.phase, operationId(input.operation, next.phase), next.checkpoint_id, counters, remaining);
 	return { row: next, counters };
 }
 
@@ -571,7 +562,15 @@ function processOrphanEmbeddings(
 		status: complete ? "complete" : "running",
 		lastError: null,
 	});
-	writeAudit(db, input, next.phase, operationId(input.operation, row.phase), counters, next.remaining);
+	writeAudit(
+		db,
+		input,
+		next.phase,
+		operationId(input.operation, row.phase),
+		next.checkpoint_id,
+		counters,
+		next.remaining,
+	);
 	return { row: next, counters };
 }
 
@@ -605,7 +604,7 @@ export function applyVectorRepairBatch(
 			status: "failed",
 			lastError: error,
 		});
-		writeAudit(db, input, row.phase, operationId(input.operation, row.phase), noWork, row.remaining);
+		writeAudit(db, input, row.phase, operationId(input.operation, row.phase), row.checkpoint_id, noWork, row.remaining);
 		return checkpointResult(row, operationId(input.operation, row.phase), noWork, error);
 	}
 
