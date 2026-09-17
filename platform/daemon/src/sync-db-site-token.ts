@@ -46,6 +46,11 @@ function normalizeSourcePath(path: string): string | null {
 		if (!isWindowsPathRemainder(remainder) || remainder.split("/").length < 2) return null;
 		return `/UNC/${remainder}`;
 	}
+	if (path.startsWith("/UNC/")) {
+		const remainder = path.slice("/UNC/".length);
+		if (!isWindowsPathRemainder(remainder) || remainder.split("/").length < 2) return null;
+		return `/UNC/${remainder}`;
+	}
 	if (path.includes("\\")) return null;
 	const remainder = path.startsWith("/") ? path.slice(1) : path;
 	return isSafePathRemainder(remainder) ? path : null;

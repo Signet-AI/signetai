@@ -89,6 +89,9 @@ function normalizeFileName(value: string): string {
 			normalized = value.slice("file://".length);
 		}
 	}
+	if (normalized.startsWith("\\\\")) {
+		return `/UNC/${normalized.slice(2).replaceAll("\\", "/")}`;
+	}
 	return normalized.replaceAll("\\", "/");
 }
 
