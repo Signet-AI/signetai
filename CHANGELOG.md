@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-17
+- Bug fixes: refresh event-loop ledger; harden vector repair safety; bound vector repair reconciliation.
+- Refactoring: deduplicate vector repair policy.
+
 ### 2026-09-16
 - Bug fixes: await workload diagnostics routes; persist search across navigation.
 
@@ -29,10 +33,22 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: make episodic artifact indexing self-healing; index memory_artifacts by source_sha256 for the backlog probe; require maintenance before admission; restore maintenance before admission; cancel stale cache work on stop; keep worker available at startup.
 - Refactoring: dedupe setup/cache code.
 
-### 2026-09-08
-- Bug fixes: route OpenCode Pi calls; reuse shared recall accessor; enumerate macOS transcript directories by fd; use descriptor-relative macOS transcript paths; close migration schema probes; retry transcript upload finalization; make transcript uploads resilient at scale; support resumable transcript imports on Windows; retain Windows rollback backup until next install; isolate deferred Windows cleanup process; finish Windows native update replacement; simplify portable purge; bounded deletes portable to SQLite without DELETE LIMIT.
-
 ## Release Ledger
+
+## [0.226.7] - 2026-09-17
+
+Release summary: 3 bug fixes and 1 refactor.
+Tag range: `v0.226.6..v0.226.7`.
+
+### Bug Fixes
+
+- **daemon**: refresh event-loop ledger
+- **daemon**: harden vector repair safety
+- **daemon**: bound vector repair reconciliation (#1785)
+
+### Refactoring
+
+- **daemon**: deduplicate vector repair policy
 
 ## [0.226.6] - 2026-09-16
 
