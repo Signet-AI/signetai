@@ -77,6 +77,38 @@ describe("transcript capture worker", () => {
 		expect(manifestValue(manifestPath, "summary_status")).toBe("not_requested");
 	});
 
+	it("bounds raw audit payloads before enqueue and releases them after completion", async () => {
+		const rawTranscript = "x".repeat(8 * 1024 * 1024 + 1024);
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "session-bounded-raw",
+			sessionId: "snapshot-bounded-raw",
+			project: "/repo",
+			transcript: "User: bounded raw audit payload",
+			rawTranscript,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		});
+		if (!id) throw new Error("expected bounded capture job");
+
+		const queued = getDbAccessor().withReadDb(
+			(db) =>
+				db.prepare("SELECT raw_transcript FROM transcript_capture_jobs WHERE id = ?").get(id) as {
+					raw_transcript: string;
+				},
+		);
+		expect(queued.raw_transcript.length).toBeLessThan(rawTranscript.length);
+		expect(queued.raw_transcript).toContain("audit transcript truncated");
+
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT raw_transcript FROM transcript_capture_jobs WHERE id = ?").get(id),
+			),
+		).toEqual({ raw_transcript: null });
+	});
+
 	it("keeps raw audit logs when normalized transcript has no conversation turns", async () => {
 		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
