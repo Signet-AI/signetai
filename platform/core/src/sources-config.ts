@@ -136,6 +136,8 @@ export interface AddImportedSourceInput {
 	readonly format: string;
 	readonly agentId?: string;
 	readonly duplicateMode?: ImportedSourceDuplicateMode;
+	/** Source id reserved by the daemon before source-owned writes begin. */
+	readonly sourceId?: string;
 	readonly now?: string;
 }
 
@@ -311,7 +313,8 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 		const sourceId =
 			duplicate && mode === "replace"
 				? duplicate.id
-				: `import:${contentHash.slice(0, 16)}${mode === "reimport" ? `:${randomUUID().slice(0, 8)}` : ownerSuffix}`;
+				: input.sourceId?.trim() ||
+					`import:${contentHash.slice(0, 16)}${mode === "reimport" ? `:${randomUUID().slice(0, 8)}` : ownerSuffix}`;
 		const source: SignetSourceEntry = {
 			id: sourceId,
 			generation: newSourceGeneration(),

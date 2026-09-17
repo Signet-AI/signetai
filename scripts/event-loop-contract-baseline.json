@@ -3407,10 +3407,11 @@
     },
     {
       "path": "routes/import-routes.ts",
-      "line": 334,
+      "line": 366,
       "api": "withReadDb",
       "source": "return getDbAccessor().withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "category": "hot-path",
+      "siteToken": "db:imports.has-indexed-source"
     },
     {
       "path": "routes/knowledge-routes.ts",
@@ -4250,35 +4251,35 @@
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 869,
+      "line": 1027,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 871,
+      "line": 1029,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 881,
+      "line": 1039,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 883,
+      "line": 1041,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\\n`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 884,
+      "line": 1042,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"

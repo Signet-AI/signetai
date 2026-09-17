@@ -616,9 +616,8 @@ preserving source-owned rows that were indexed successfully.
 ### DELETE /api/sources/:sourceId
 
 Remove a source config and purge Signet-owned source artifacts, graph rows,
-and source chunk embeddings. Source files are not modified.
-
-**Response**
+and source chunk embeddings. Source files are not modified. The response is
+`200` when the config and source-owned data are removed:
 
 ```json
 {
@@ -626,6 +625,32 @@ and source chunk embeddings. Source files are not modified.
   "purged": 150
 }
 ```
+
+Deletion is resumable. If an owner or provider cleanup step fails after the
+deletion tombstone is recorded, the source remains configured but is omitted
+from `GET /api/sources`, and the route returns `202` with `pending: true`:
+
+```json
+{
+  "source": { "id": "obsidian:abc123" },
+  "purged": 0,
+  "pending": true
+}
+```
+
+If a canceled source-index run is still finishing, a completed deletion returns
+`cleanupPending: true` while the finalizer completes in the background. A source
+mutation targeting that same source, including snapshot import or reconnect, is
+rejected with `409` until the active deletion phase ends; unrelated sources can
+continue to mutate. A reconnected source generation is not purged by the old
+canceled run.
+
+Retry the same `DELETE` request after the failed dependency is available, or
+restart the daemon to run deferred tombstone cleanup. If the source config has
+already been removed and only the tombstone file cannot be updated, deletion
+still returns `200` with `cleanupPending: true`; the daemon retries that marker
+after restart. A `500` is reserved for failures before the deletion tombstone
+can be recorded.
 
 ### GET /api/sources/:sourceId/health
 
