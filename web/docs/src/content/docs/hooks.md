@@ -192,13 +192,16 @@ Called when a new agent session begins. Returns memories and context formatted f
   "harnessAgentId": "optional-harness-native-subagent-id",
   "parentSessionKey": "optional-parent-session-key",
   "context": "optional context string",
-  "sessionKey": "optional-session-identifier"
+  "sessionKey": "optional-session-identifier",
+  "cwd": "optional-working-directory"
 }
 ```
 
 `harness` is required. Everything else is optional. `agentId` is the Signet
 persistence scope. Harness-native sub-agent identifiers should be sent as
-`harnessAgentId`; they are used only for parent-session inference.
+`harnessAgentId`; they are used only for parent-session inference. When a
+session has a `sessionKey`, `project` identifies its durable recall namespace;
+`cwd` is used as the fallback when `project` is omitted.
 
 When a daemon restart is detected during an already-running session, a harness
 may send `claimOnly: true` with the same `sessionKey` and a `plugin` or `legacy`
@@ -415,22 +418,30 @@ different agents do not share transcript or summary storage.
   "harness": "openclaw",
   "summary": "Session summary text...",
   "sessionKey": "optional-session-id",
-  "project": "/workspace/repo"
+  "project": "/workspace/repo",
+  "cwd": "/workspace/repo"
 }
 ```
 
-If compaction arrives before transcript persistence, `project` is the required
-fallback lineage key. When both exist, transcript lineage wins and the request
-project is only used as a fallback.
+If compaction arrives before transcript persistence, `project` or `cwd` is the
+fallback lineage key. `project` wins when both are present, and transcript
+lineage wins over either request field when it exists. The same project-or-cwd
+identity is used for the session-start recall namespace.
 
 ### Response
 
 ```json
 {
   "success": true,
-  "memoryId": 123
+  "memoryId": 123,
+  "contextEpoch": 1,
+  "dedupeDegraded": false
 }
 ```
+
+`contextEpoch` is advanced in the same durable session-start recall namespace
+used by session-start injection. `dedupeDegraded` is included as `true` when
+that ledger could not be advanced; the summary may still have been saved.
 
 ---
 

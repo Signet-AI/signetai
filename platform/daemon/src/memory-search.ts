@@ -1589,7 +1589,7 @@ export async function hybridRecall(
 				: lexicalSearchPartial
 					? { degradation: "fts_incomplete" as const }
 					: {}),
-			...(dedupeMeta.enabled ? { dedupe: dedupeMeta } : {}),
+			...(dedupeMeta.enabled || dedupeMeta.failedOpen ? { dedupe: dedupeMeta } : {}),
 		};
 		try {
 			const trackedIds = response.results.map((row) => row.id).filter((id) => !id.includes(":"));
