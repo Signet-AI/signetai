@@ -321,6 +321,7 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		);
 		db.close();
 		await database.owner.start();
+		const scans: string[] = [];
 
 		const result = await runIncrementalDatabaseIntegrityCheck({
 			owner: database.owner,
@@ -328,9 +329,13 @@ describe("incremental database integrity maintenance (#1683)", () => {
 			tablesPerRun: 64,
 			maxWorkUnits: 64,
 			runBudgetMs: 5_000,
+			onObjectScan: (object) => {
+				scans.push(`${object.type}:${object.name}`);
+			},
 		});
 		expect(result.phase).toBe("complete");
 		expect(result.checkedObjects).toBeGreaterThanOrEqual(7);
+		expect(scans.filter((object) => object === "table:telemetry_events")).toHaveLength(1);
 	});
 
 	it("resumes from the committed frontier without re-querying it after interruption", async () => {
