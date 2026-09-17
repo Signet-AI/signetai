@@ -83,6 +83,8 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		}>;
 		verification.close();
 		expect(columns.some((column) => column.name === "attempt_count")).toBe(true);
+		expect(columns.some((column) => column.name === "skipped_objects")).toBe(true);
+		expect(columns.some((column) => column.name === "schema_version")).toBe(true);
 	});
 
 	it("does not multiply the database-wide page count by the object frontier", async () => {
@@ -106,12 +108,13 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		expect(result.databaseBytesObserved).toBe(pageCount * pageSize);
 	});
 
-	it("parks the stuck-frontier-on-FTS-object class in a named degraded state", async () => {
+	it("skips FTS objects and continues checking later objects", async () => {
 		const database = makeDatabase();
 		const db = new Database(database.path);
 		db.exec(`
 			CREATE TABLE session_transcripts (content TEXT NOT NULL);
 			CREATE VIRTUAL TABLE session_transcripts_fts USING fts5(content, content='session_transcripts', content_rowid='rowid');
+			CREATE TABLE z_after (value TEXT);
 		`);
 		db.close();
 		await database.owner.start();
@@ -128,18 +131,41 @@ describe("incremental database integrity maintenance (#1683)", () => {
 			},
 		});
 
-		expect(first.phase).toBe("degraded");
-		expect(first.degradationReason).toBe("degraded:fts-unverifiable");
+		expect(first.phase).toBe("complete");
+		expect(first.degradationReason).toBeNull();
+		expect(first.skippedObjects).toBeGreaterThan(0);
 		expect(first.remainingObjects).toBe(0);
+		expect(scans).toContain("table:z_after");
 		expect(getDatabaseIntegrityStatus()).toMatchObject({
-			state: "degraded",
-			phase: "degraded",
-			integrity: "degraded:fts-unverifiable",
+			state: "healthy",
+			phase: "complete",
+			ftsVerification: "unverifiable",
 		});
+		expect(scans.filter((object) => object === "table:session_transcripts_fts")).toHaveLength(1);
+	});
 
-		const second = await runIncrementalDatabaseIntegrityCheck({
+	it("restarts the sweep when the schema changes behind the saved cursor", async () => {
+		const database = makeDatabase();
+		await database.owner.start();
+		const scans: string[] = [];
+		const first = await runIncrementalDatabaseIntegrityCheck({
 			owner: database.owner,
-			checkpointKey: "test.integrity.stuck-frontier-fts-object",
+			checkpointKey: "test.integrity.schema-change",
+			tablesPerRun: 2,
+			runBudgetMs: 5_000,
+			onObjectScan: (object) => {
+				scans.push(`${object.type}:${object.name}`);
+			},
+		});
+		expect(first.phase).toBe("running");
+
+		const db = new Database(database.path);
+		db.exec("CREATE VIRTUAL TABLE a_new_fts USING fts5(value)");
+		db.close();
+
+		const resumed = await runIncrementalDatabaseIntegrityCheck({
+			owner: database.owner,
+			checkpointKey: "test.integrity.schema-change",
 			tablesPerRun: 64,
 			maxWorkUnits: 64,
 			runBudgetMs: 5_000,
@@ -147,8 +173,9 @@ describe("incremental database integrity maintenance (#1683)", () => {
 				scans.push(`${object.type}:${object.name}`);
 			},
 		});
-		expect(second.phase).toBe("degraded");
-		expect(scans.filter((object) => object === "table:session_transcripts_fts")).toHaveLength(1);
+		expect(resumed.phase).toBe("complete");
+		expect(resumed.skippedObjects).toBeGreaterThan(0);
+		expect(scans).toContain("table:a_new_fts");
 	});
 
 	it("commits one table frontier per bounded slice and resumes", async () => {
@@ -180,7 +207,11 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		expect(second.checkedObjects).toBe(3);
 		expect(second.remainingObjects).toBe(0);
 		expect(second.failedObjects).toBe(0);
-		expect(getDatabaseIntegrityStatus()).toMatchObject({ state: "healthy", phase: "complete" });
+		expect(getDatabaseIntegrityStatus()).toMatchObject({
+			state: "healthy",
+			phase: "complete",
+			ftsVerification: "complete",
+		});
 		expect(getDatabaseIntegrityStatus().incrementalProgress?.phase).toBe("complete");
 	});
 
@@ -290,6 +321,7 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		);
 		db.close();
 		await database.owner.start();
+		const scans: string[] = [];
 
 		const result = await runIncrementalDatabaseIntegrityCheck({
 			owner: database.owner,
@@ -297,9 +329,13 @@ describe("incremental database integrity maintenance (#1683)", () => {
 			tablesPerRun: 64,
 			maxWorkUnits: 64,
 			runBudgetMs: 5_000,
+			onObjectScan: (object) => {
+				scans.push(`${object.type}:${object.name}`);
+			},
 		});
 		expect(result.phase).toBe("complete");
 		expect(result.checkedObjects).toBeGreaterThanOrEqual(7);
+		expect(scans.filter((object) => object === "table:telemetry_events")).toHaveLength(1);
 	});
 
 	it("resumes from the committed frontier without re-querying it after interruption", async () => {
@@ -357,6 +393,7 @@ describe("incremental database integrity maintenance (#1683)", () => {
 			checkpointKey: "database.quick-check",
 			phase: "complete",
 			checkedObjects: 3,
+			skippedObjects: 0,
 			failedObjects: 0,
 			remainingObjects: 0,
 			lastObject: "table:gamma",

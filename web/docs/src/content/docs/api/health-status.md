@@ -117,10 +117,16 @@ legacy synchronous read attempts rejected at the hard connection cap. The
 active leases; `eventLoopLag` is the bounded independent event-loop sample.
 
 The `dbOwner` block is read from the registered DB-owner maintenance authority. The
-legacy accessor is not a second health source. `/health` samples the owner after
+The legacy accessor is not a second health source. `/health` samples the owner after
 its bounded owner probe completes (including a failed probe), then projects that
 same snapshot into `databaseIntegrity.ownerState` and
 `databaseIntegrity.ownerGeneration`.
+
+`databaseIntegrity.ftsVerification` is `pending`, `complete`, or
+`unverifiable`. The incremental check skips FTS5 virtual tables because their
+native integrity check cannot be split into bounded work. Skipped objects do not
+make an otherwise healthy database unhealthy; their count is available in
+`databaseIntegrity.incrementalProgress.skippedObjects`.
 
 `dbOwner.generation` identifies the owner lifecycle generation and changes when
 the owner is replaced or restarted. If no maintenance authority is registered,
