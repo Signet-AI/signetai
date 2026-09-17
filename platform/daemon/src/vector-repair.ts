@@ -16,9 +16,9 @@ import {
 } from "./db-owner-protocol";
 import { runDbOwnerDomainOperation } from "./db-owner-runtime";
 import { applyVectorRepairBatch, VectorRepairAbortError } from "./vector-repair-owner";
+import { boundedBatchSize, boundedVectorBytes, normalizeAgentId } from "./vector-repair-policy";
 import type { RepairContext, RepairResult } from "./repair-actions";
 
-const DEFAULT_MAX_BATCHES_PER_CALL = 20;
 const MAX_BATCHES_PER_CALL = 20;
 const DEFAULT_RUN_BUDGET_MS = 10_000;
 const MAX_RUN_BUDGET_MS = 15_000;
@@ -49,26 +49,8 @@ export interface VectorRepairResult extends RepairResult {
 	readonly batches: number;
 }
 
-function normalizeAgentId(agentId: string): string {
-	const normalized = agentId.trim();
-	if (normalized.length === 0) throw new Error("vector repair requires a resolved agent id");
-	return normalized;
-}
-
-function boundedBatchSize(value: number | undefined): number {
-	if (value === undefined) return VECTOR_REPAIR_MAX_ROWS_PER_BATCH;
-	if (!Number.isFinite(value) || value <= 0) throw new RangeError("vector repair batch size must be positive");
-	return Math.max(1, Math.min(VECTOR_REPAIR_MAX_ROWS_PER_BATCH, Math.floor(value)));
-}
-
-function boundedVectorBytes(value: number | undefined): number {
-	if (value === undefined) return VECTOR_REPAIR_MAX_BYTES_PER_BATCH;
-	if (!Number.isFinite(value) || value <= 0) throw new RangeError("vector repair byte budget must be positive");
-	return Math.max(1, Math.min(VECTOR_REPAIR_MAX_BYTES_PER_BATCH, Math.floor(value)));
-}
-
 function boundedMaxBatches(value: number | undefined): number {
-	if (value === undefined) return DEFAULT_MAX_BATCHES_PER_CALL;
+	if (value === undefined) return MAX_BATCHES_PER_CALL;
 	if (!Number.isFinite(value) || value <= 0) throw new RangeError("vector repair maxBatches must be positive");
 	return Math.max(1, Math.min(MAX_BATCHES_PER_CALL, Math.floor(value)));
 }
