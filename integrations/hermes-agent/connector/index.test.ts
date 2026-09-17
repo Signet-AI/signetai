@@ -12,7 +12,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HermesAgentConnector, diagnoseHermesIntegration } from "./src/index.js";
 
@@ -388,6 +388,38 @@ describe("HermesAgentConnector.install()", () => {
 		expect(existsSync(join(pluginDir, "__init__.py"))).toBe(true);
 		expect(existsSync(join(pluginDir, "signet.install.json"))).toBe(true);
 		expect(connector.isInstalled()).toBe(true);
+	});
+
+	it("rejects a symlinked ambient Hermes plugin parent", async () => {
+		const hermesHome = join(tmpRoot, "ambient-symlink-home");
+		const victim = join(tmpRoot, "ambient-symlink-victim");
+		mkdirSync(hermesHome, { recursive: true });
+		mkdirSync(victim, { recursive: true });
+		symlinkSync(victim, join(hermesHome, "plugins"));
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(false);
+		expect(result.warnings?.some((warning) => /symlinked|escapes validated root/.test(warning))).toBe(true);
+		expect(existsSync(join(victim, "signet"))).toBe(false);
+	});
+
+	it("rejects a symlinked Hermes repo plugin parent", async () => {
+		const hermesHome = join(tmpRoot, "repo-symlink-home");
+		const hermesRepo = join(tmpRoot, "repo-symlink-hermes");
+		const victim = join(tmpRoot, "repo-symlink-victim");
+		mkdirSync(join(hermesRepo, "plugins"), { recursive: true });
+		mkdirSync(victim, { recursive: true });
+		symlinkSync(victim, join(hermesRepo, "plugins", "memory"));
+		process.env.HERMES_HOME = hermesHome;
+		process.env.HERMES_REPO = hermesRepo;
+
+		const result = await new HermesAgentConnector().install(tmpRoot);
+
+		expect(result.success).toBe(false);
+		expect(result.warnings?.some((warning) => /symlinked|escapes validated root/.test(warning))).toBe(true);
+		expect(existsSync(join(victim, "signet"))).toBe(false);
 	});
 
 	it("fails when the user plugin is the only usable target and cannot be written", async () => {
@@ -1662,6 +1694,33 @@ assert gets[0][0] == "/api/memory/search?q=new%20preference&limit=10&tags=hermes
 });
 
 describe("HermesAgentConnector profile ownership boundaries", () => {
+	it("resolves targeted profiles below HERMES_HOME", async () => {
+		const userHome = join(tmpRoot, "profile-user-home");
+		const hermesHome = join(tmpRoot, "custom-hermes-home");
+		process.env.HOME = userHome;
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector({ profile: "named" }).install(join(userHome, ".agents"));
+		const profileHome = join(hermesHome, "profiles", "named");
+
+		expect(result.success).toBe(true);
+		expect(existsSync(join(profileHome, "plugins", "signet", "__init__.py"))).toBe(true);
+		expect(existsSync(join(profileHome, "config.yaml"))).toBe(true);
+		expect(existsSync(join(userHome, ".hermes", "profiles", "named"))).toBe(false);
+	});
+
+	it("accepts a relative HERMES_HOME for targeted profiles", async () => {
+		const userHome = join(tmpRoot, "relative-profile-user-home");
+		const hermesHome = join(tmpRoot, "relative-hermes-home");
+		process.env.HOME = userHome;
+		process.env.HERMES_HOME = relative(process.cwd(), hermesHome);
+
+		const result = await new HermesAgentConnector({ profile: "named" }).install(join(userHome, ".agents"));
+
+		expect(result.success).toBe(true);
+		expect(existsSync(join(hermesHome, "profiles", "named", "config.yaml"))).toBe(true);
+	});
+
 	it("rejects a symlinked profile home before touching the victim directory", async () => {
 		const home = join(tmpRoot, "profile-home");
 		const victim = join(tmpRoot, "victim");
@@ -1669,11 +1728,175 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		mkdirSync(victim, { recursive: true });
 		symlinkSync(victim, join(home, ".hermes", "profiles", "escape"));
 		process.env.HOME = home;
-		process.env.HERMES_HOME = undefined;
+		delete process.env.HERMES_HOME;
 		await expect(new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"))).rejects.toThrow(
 			/(symlinked|escapes validated root)/,
 		);
 		expect(existsSync(join(victim, "plugins"))).toBe(false);
+	});
+
+	it("rejects a symlinked profile plugin directory", async () => {
+		const home = join(tmpRoot, "profile-plugin-home");
+		const profile = join(home, ".hermes", "profiles", "escape");
+		const victim = join(tmpRoot, "plugin-victim");
+		mkdirSync(profile, { recursive: true });
+		mkdirSync(victim, { recursive: true });
+		symlinkSync(victim, join(profile, "plugins"));
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		const result = await new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"));
+
+		expect(result.success).toBe(false);
+		expect(result.warnings?.some((warning) => /symlinked|escapes validated root/.test(warning))).toBe(true);
+		expect(existsSync(join(victim, "signet"))).toBe(false);
+	});
+
+	it("does not follow a symlinked profile config", async () => {
+		const home = join(tmpRoot, "profile-config-home");
+		const profile = join(home, ".hermes", "profiles", "escape");
+		const victimConfig = join(tmpRoot, "config-victim.yaml");
+		const original = "memory:\n  provider: honcho\n";
+		mkdirSync(profile, { recursive: true });
+		writeFileSync(victimConfig, original);
+		symlinkSync(victimConfig, join(profile, "config.yaml"));
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		await expect(new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"))).rejects.toThrow(
+			/symlinked|escapes validated root/,
+		);
+		expect(readFileSync(victimConfig, "utf8")).toBe(original);
+	});
+
+	it("rejects a symlinked profile config even when its target stays inside", async () => {
+		const home = join(tmpRoot, "profile-internal-symlink-home");
+		const profile = join(home, ".hermes", "profiles", "escape");
+		const internalConfig = join(profile, "internal.yaml");
+		const original = "memory:\n  provider: honcho\n";
+		mkdirSync(profile, { recursive: true });
+		writeFileSync(internalConfig, original);
+		symlinkSync(internalConfig, join(profile, "config.yaml"));
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		await expect(new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"))).rejects.toThrow(
+			/symlinked/,
+		);
+		expect(readFileSync(internalConfig, "utf8")).toBe(original);
+	});
+
+	it("does not follow a symlinked profile install marker", async () => {
+		const home = join(tmpRoot, "profile-marker-home");
+		const profile = join(home, ".hermes", "profiles", "escape");
+		const plugin = join(profile, "plugins", "signet");
+		const victimMarker = join(tmpRoot, "marker-victim.json");
+		const original = "preserve this marker\n";
+		mkdirSync(plugin, { recursive: true });
+		writeFileSync(victimMarker, original);
+		symlinkSync(victimMarker, join(plugin, "signet.install.json"));
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		const result = await new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"));
+
+		expect(result.success).toBe(false);
+		expect(readFileSync(victimMarker, "utf8")).toBe(original);
+	});
+
+	it("does not follow a dangling symlinked provider backup", async () => {
+		const home = join(tmpRoot, "profile-backup-home");
+		const profile = join(home, ".hermes", "profiles", "escape");
+		const victimBackup = join(tmpRoot, "backup-victim.json");
+		mkdirSync(profile, { recursive: true });
+		writeFileSync(join(profile, "config.yaml"), "memory:\n  provider: honcho\n");
+		symlinkSync(victimBackup, join(profile, "signet.provider.backup.json"));
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		await expect(new HermesAgentConnector({ profile: "escape" }).install(join(home, ".agents"))).rejects.toThrow(
+			/symlinked|escapes validated root|ENOENT/,
+		);
+		expect(existsSync(victimBackup)).toBe(false);
+	});
+
+	it("removes only an owned targeted profile plugin", async () => {
+		const home = join(tmpRoot, "profile-uninstall-home");
+		const profile = join(home, ".hermes", "profiles", "owned");
+		mkdirSync(profile, { recursive: true });
+		writeFileSync(join(profile, "config.yaml"), "memory:\n  provider: honcho\n");
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		const connector = new HermesAgentConnector({ profile: "owned" });
+		const install = await connector.install(join(home, ".agents"));
+		const result = await connector.uninstall();
+
+		expect(install.success).toBe(true);
+		expect(result.filesRemoved).toContain(join(profile, "plugins", "signet"));
+		expect(existsSync(join(profile, "plugins", "signet"))).toBe(false);
+		expect(existsSync(join(profile, "signet.provider.backup.json"))).toBe(false);
+		expect(readFileSync(join(profile, "config.yaml"), "utf8")).toContain("provider: honcho");
+	});
+
+	it("does not uninstall a targeted profile with a repo-owned marker", async () => {
+		const home = join(tmpRoot, "profile-wrong-marker-home");
+		const profile = join(home, ".hermes", "profiles", "owned");
+		mkdirSync(profile, { recursive: true });
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		const connector = new HermesAgentConnector({ profile: "owned" });
+		await connector.install(join(home, ".agents"));
+		const markerPath = join(profile, "plugins", "signet", "signet.install.json");
+		const marker = JSON.parse(readFileSync(markerPath, "utf8")) as { targetKind: string };
+		marker.targetKind = "repo";
+		writeFileSync(markerPath, JSON.stringify(marker));
+
+		const result = await connector.uninstall();
+
+		expect(result.filesRemoved).toEqual([]);
+		expect(existsSync(join(profile, "plugins", "signet"))).toBe(true);
+	});
+
+	it("does not uninstall a repo plugin with a user-owned marker", async () => {
+		const home = join(tmpRoot, "repo-wrong-marker-home");
+		const hermesRepo = join(tmpRoot, "repo-wrong-marker-hermes");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.HOME = home;
+		process.env.HERMES_REPO = hermesRepo;
+		delete process.env.HERMES_HOME;
+
+		const connector = new HermesAgentConnector();
+		await connector.install(join(home, ".agents"));
+		const plugin = join(hermesRepo, "plugins", "memory", "signet");
+		const markerPath = join(plugin, "signet.install.json");
+		const marker = JSON.parse(readFileSync(markerPath, "utf8")) as { targetKind: string };
+		marker.targetKind = "user";
+		writeFileSync(markerPath, JSON.stringify(marker));
+
+		await expect(connector.uninstall()).rejects.toThrow(/unowned Hermes plugin path/);
+		expect(existsSync(plugin)).toBe(true);
+	});
+
+	it("does not follow symlinked entries while removing a targeted profile plugin", async () => {
+		const home = join(tmpRoot, "profile-uninstall-symlink-home");
+		const profile = join(home, ".hermes", "profiles", "owned");
+		const victim = join(tmpRoot, "profile-uninstall-victim");
+		mkdirSync(profile, { recursive: true });
+		mkdirSync(victim, { recursive: true });
+		process.env.HOME = home;
+		delete process.env.HERMES_HOME;
+
+		const connector = new HermesAgentConnector({ profile: "owned" });
+		await connector.install(join(home, ".agents"));
+		const plugin = join(profile, "plugins", "signet");
+		symlinkSync(victim, join(plugin, "victim-link"));
+
+		await connector.uninstall();
+
+		expect(existsSync(victim)).toBe(true);
+		expect(existsSync(plugin)).toBe(false);
 	});
 
 	it("does not mutate an unowned profile during disconnect", async () => {
@@ -1685,7 +1908,7 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		writeFileSync(join(profile, "config.yaml"), config);
 		writeFileSync(join(profile, ".env"), env);
 		process.env.HOME = home;
-		process.env.HERMES_HOME = undefined;
+		delete process.env.HERMES_HOME;
 		const result = await new HermesAgentConnector({ profile: "unowned" }).uninstall();
 		expect(result.filesRemoved).toEqual([]);
 		expect(readFileSync(join(profile, "config.yaml"), "utf8")).toBe(config);
@@ -1712,13 +1935,150 @@ describe("HermesAgentConnector.uninstall()", () => {
 		expect(connector.isInstalled()).toBe(false);
 	});
 
+	it("rejects an ambient user-plugin parent swap before removing a victim", async () => {
+		const hermesHome = join(tmpRoot, "ambient-uninstall-home");
+		const victim = join(tmpRoot, "ambient-uninstall-victim");
+		process.env.HERMES_HOME = hermesHome;
+
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		mkdirSync(join(victim, "signet"), { recursive: true });
+		cpSync(join(hermesHome, "plugins", "signet", "signet.install.json"), join(victim, "signet", "signet.install.json"));
+		rmSync(join(hermesHome, "plugins"), { recursive: true, force: true });
+		symlinkSync(victim, join(hermesHome, "plugins"));
+
+		await expect(connector.uninstall()).rejects.toThrow(/symlinked|escapes validated root/);
+		expect(existsSync(join(victim, "signet", "signet.install.json"))).toBe(true);
+	});
+
+	it("rejects a Hermes repo plugin parent swap before removing a victim", async () => {
+		const hermesHome = join(tmpRoot, "repo-uninstall-home");
+		const hermesRepo = join(tmpRoot, "repo-uninstall-hermes");
+		const victim = join(tmpRoot, "repo-uninstall-victim");
+		mkdirSync(join(hermesRepo, "plugins", "memory"), { recursive: true });
+		process.env.HERMES_HOME = hermesHome;
+		process.env.HERMES_REPO = hermesRepo;
+
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		mkdirSync(join(victim, "memory", "signet"), { recursive: true });
+		cpSync(
+			join(hermesRepo, "plugins", "memory", "signet", "signet.install.json"),
+			join(victim, "memory", "signet", "signet.install.json"),
+		);
+		rmSync(join(hermesRepo, "plugins"), { recursive: true, force: true });
+		symlinkSync(victim, join(hermesRepo, "plugins"));
+
+		await expect(connector.uninstall()).rejects.toThrow(/symlinked|escapes validated root/);
+		expect(existsSync(join(victim, "memory", "signet", "signet.install.json"))).toBe(true);
+	});
+
+	it("does not remove a replacement directory after the target identity changes", async () => {
+		const hermesHome = join(tmpRoot, "target-replacement-home");
+		process.env.HERMES_HOME = hermesHome;
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+
+		const target = join(hermesHome, "plugins", "signet");
+		const moved = join(tmpRoot, "moved-target");
+		const replacement = join(tmpRoot, "replacement-target");
+		const sentinel = join(tmpRoot, "target-race-triggered");
+		mkdirSync(replacement);
+		const launcher = join(tmpRoot, "python-race-launcher.py");
+		const python = resolveTestPythonPath();
+		writeFileSync(
+			launcher,
+			[
+				"#!/usr/bin/env python3",
+				"import os, sys",
+				`target = ${JSON.stringify(target)}`,
+				`moved = ${JSON.stringify(moved)}`,
+				`replacement = ${JSON.stringify(replacement)}`,
+				`sentinel = ${JSON.stringify(sentinel)}`,
+				"if len(sys.argv) > 6 and sys.argv[5] == 'directory' and sys.argv[6] == 'signet' and not os.path.exists(sentinel):",
+				"    os.rename(target, moved)",
+				"    os.rename(replacement, target)",
+				"    open(sentinel, 'w').close()",
+				`os.execv(${JSON.stringify(python)}, [${JSON.stringify(python)}] + sys.argv[1:])`,
+				"",
+			].join("\n"),
+		);
+		chmodSync(launcher, 0o755);
+		process.env.PYTHON = launcher;
+
+		await expect(connector.uninstall()).rejects.toThrow(/directory entry changed/);
+		expect(existsSync(target)).toBe(true);
+		expect(existsSync(moved)).toBe(true);
+	});
+
+	it("does not remove a replacement file after the target identity changes", async () => {
+		const hermesHome = join(tmpRoot, "file-replacement-home");
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(join(hermesHome, "config.yaml"), "memory:\n  provider: honcho\n");
+		process.env.HERMES_HOME = hermesHome;
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+
+		const target = join(hermesHome, "signet.provider.backup.json");
+		const moved = join(tmpRoot, "moved-backup.json");
+		const replacement = join(tmpRoot, "replacement-backup.json");
+		const sentinel = join(tmpRoot, "file-race-triggered");
+		writeFileSync(replacement, "preserve this replacement");
+		const launcher = join(tmpRoot, "python-file-race-launcher.py");
+		const python = resolveTestPythonPath();
+		writeFileSync(
+			launcher,
+			[
+				"#!/usr/bin/env python3",
+				"import os, sys",
+				`target = ${JSON.stringify(target)}`,
+				`moved = ${JSON.stringify(moved)}`,
+				`replacement = ${JSON.stringify(replacement)}`,
+				`sentinel = ${JSON.stringify(sentinel)}`,
+				"if len(sys.argv) > 6 and sys.argv[5] == 'file' and sys.argv[6] == 'signet.provider.backup.json' and not os.path.exists(sentinel):",
+				"    os.rename(target, moved)",
+				"    os.rename(replacement, target)",
+				"    open(sentinel, 'w').close()",
+				`os.execv(${JSON.stringify(python)}, [${JSON.stringify(python)}] + sys.argv[1:])`,
+				"",
+			].join("\n"),
+		);
+		chmodSync(launcher, 0o755);
+		process.env.PYTHON = launcher;
+
+		await expect(connector.uninstall()).rejects.toThrow(/directory entry changed/);
+		expect(readFileSync(target, "utf8")).toBe("preserve this replacement");
+		expect(existsSync(moved)).toBe(true);
+	});
+
+	it("does not mutate ambient config or env without an owned plugin", async () => {
+		const hermesHome = join(tmpRoot, "unowned-ambient-home");
+		const configPath = join(hermesHome, "config.yaml");
+		const envPath = join(hermesHome, ".env");
+		const config = "memory:\n  provider: signet\n";
+		const env = "SIGNET_AGENT_ID=keep\n";
+		mkdirSync(hermesHome, { recursive: true });
+		writeFileSync(configPath, config);
+		writeFileSync(envPath, env);
+		process.env.HERMES_HOME = hermesHome;
+
+		const result = await new HermesAgentConnector().uninstall();
+
+		expect(result.filesRemoved).toEqual([]);
+		expect(result.configsPatched).toEqual([]);
+		expect(readFileSync(configPath, "utf8")).toBe(config);
+		expect(readFileSync(envPath, "utf8")).toBe(env);
+	});
+
 	it("clears memory.provider only when it is signet", async () => {
 		const hermesHome = join(tmpRoot, ".hermes");
 		mkdirSync(hermesHome, { recursive: true });
 		writeFileSync(join(hermesHome, "config.yaml"), "memory:\n  provider: signet\n  nudge_interval: 10\n");
 		process.env.HERMES_HOME = hermesHome;
 
-		const result = await new HermesAgentConnector().uninstall();
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		const result = await connector.uninstall();
 
 		expect(result.configsPatched).toContain(join(hermesHome, "config.yaml"));
 		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toContain("memory:\n  provider: ''\n");
@@ -1730,7 +2090,9 @@ describe("HermesAgentConnector.uninstall()", () => {
 		writeFileSync(join(hermesHome, "config.yaml"), "memory.provider: signet\n");
 		process.env.HERMES_HOME = hermesHome;
 
-		const result = await new HermesAgentConnector().uninstall();
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		const result = await connector.uninstall();
 
 		expect(result.configsPatched).toContain(join(hermesHome, "config.yaml"));
 		expect(readFileSync(join(hermesHome, "config.yaml"), "utf-8")).toBe("memory.provider: ''\n");
@@ -1832,7 +2194,9 @@ describe("HermesAgentConnector.uninstall()", () => {
 		);
 		process.env.HERMES_HOME = hermesHome;
 
-		const result = await new HermesAgentConnector().uninstall();
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+		const result = await connector.uninstall();
 
 		expect(result.configsPatched).toContain(envPath);
 		const envContent = readFileSync(envPath, "utf-8");
