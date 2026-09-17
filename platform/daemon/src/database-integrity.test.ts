@@ -107,6 +107,7 @@ function incrementalProgress(overrides: Partial<DatabaseIntegrityProgress> = {})
 		checkpointKey: "database.quick-check",
 		phase: "complete",
 		checkedObjects: 3,
+		skippedObjects: 0,
 		failedObjects: 0,
 		remainingObjects: 0,
 		lastObject: "table:gamma",
