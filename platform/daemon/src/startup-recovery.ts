@@ -64,6 +64,7 @@ const PENDING_INTEGRITY: DatabaseIntegrityStatus = {
 	repairGuidance: null,
 	ownerState: null,
 	ownerGeneration: null,
+	ftsVerification: "pending",
 	incrementalProgress: null,
 };
 

@@ -57,6 +57,11 @@ It transactionally rebuilds disposable telemetry indexes when only
 `/health/ready`, with actionable offline repair guidance. If the audit store
 prevents committing a verified repair, the default remains fail-closed.
 
+The incremental integrity check also runs in bounded slices. It continues past
+FTS5 virtual tables and reports those objects as `unverifiable` without marking
+the rest of the database unhealthy. A schema change resets its saved position
+so new objects are not skipped.
+
 Examples:
 
 ```bash

@@ -21,11 +21,13 @@ import { logger } from "./logger";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 
 export type DatabaseIntegrityState = "unknown" | "healthy" | "repaired" | "corrupt" | "unavailable" | "degraded";
+export type FtsVerificationStatus = "pending" | "unverifiable" | "complete";
 
 export interface DatabaseIntegrityProgress {
 	readonly checkpointKey: string;
 	readonly phase: "running" | "complete" | "cancelled" | "timed_out" | "unavailable" | "degraded";
 	readonly checkedObjects: number;
+	readonly skippedObjects: number;
 	readonly failedObjects: number;
 	readonly remainingObjects: number;
 	readonly lastObject: string | null;
@@ -55,6 +57,7 @@ export interface DatabaseIntegrityStatus {
 	readonly repairGuidance: string | null;
 	readonly ownerState: string | null;
 	readonly ownerGeneration: number | null;
+	readonly ftsVerification: FtsVerificationStatus;
 	readonly incrementalProgress: DatabaseIntegrityProgress | null;
 }
 
@@ -142,6 +145,7 @@ let latestStatus: DatabaseIntegrityStatus = {
 	repairGuidance: null,
 	ownerState: null,
 	ownerGeneration: null,
+	ftsVerification: "pending",
 	incrementalProgress: null,
 };
 
@@ -221,6 +225,7 @@ function statusWith(
 		repairGuidance,
 		ownerState: health?.state ?? null,
 		ownerGeneration: health?.generation ?? null,
+		ftsVerification: latestStatus.ftsVerification,
 		incrementalProgress: null,
 	};
 }
@@ -235,6 +240,8 @@ export function updateDatabaseIntegrityStatus(
 	const failed = progress.failedObjects > 0 || errors.length > 0;
 	const operationalFailure = progress.phase === "unavailable" || progress.phase === "timed_out";
 	const degraded = progress.phase === "degraded" || progress.degradationReason !== null;
+	const ftsVerification: FtsVerificationStatus =
+		progress.skippedObjects > 0 ? "unverifiable" : progress.phase === "complete" ? "complete" : "pending";
 	const state: DatabaseIntegrityState = operationalFailure
 		? "unavailable"
 		: degraded
@@ -287,6 +294,7 @@ export function updateDatabaseIntegrityStatus(
 		repairGuidance: publishedState === "corrupt" || publishedState === "unavailable" ? REPAIR_GUIDANCE : null,
 		ownerState: health?.state ?? latestStatus.ownerState,
 		ownerGeneration: health?.generation ?? latestStatus.ownerGeneration,
+		ftsVerification,
 		incrementalProgress: progress,
 	};
 }
