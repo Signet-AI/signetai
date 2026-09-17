@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { Database as SqliteDatabase } from "bun:sqlite";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -386,6 +387,47 @@ memory:
 		const state = readGraphiqState(basePath);
 		expect(state.enabled).toBe(false);
 		expect(state.activeProject).toBe(projectPath);
+	});
+
+	it("imports existing memory logs before starting the daemon", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-migrate-memory-import-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(join(basePath, "memory"), { recursive: true });
+		writeIdentityTemplates(templatesPath);
+		writeFileSync(join(basePath, "memory", "2026-01-01.md"), "A migrated memory log entry.");
+		writeFileSync(join(basePath, "agent.yaml"), "version: 1\n");
+
+		const detection = {
+			...fakeDetection(basePath),
+			hasMemoryDir: true,
+			memoryLogCount: 1,
+		};
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			getTemplatesDir: mock(() => templatesPath),
+			normalizeAgentPath: mock((p: string) => p),
+		});
+
+		await runExistingSetupWizard(basePath, detection, {}, deps, {
+			nonInteractive: true,
+			skipGit: true,
+			allowUnprotectedWorkspace: true,
+			signetSecretsEnabled: true,
+		});
+
+		const db = new SqliteDatabase(join(basePath, "memory", "memories.db"), { readonly: true });
+		try {
+			const row = db
+				.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM memories WHERE source_type = 'import'")
+				.get();
+			if (row === null) {
+				throw new Error("count query returned no row");
+			}
+			expect(row.count).toBe(1);
+		} finally {
+			db.close();
+		}
 	});
 
 	it("enables Dreaming defaults and removes retired routing during existing setup", async () => {
