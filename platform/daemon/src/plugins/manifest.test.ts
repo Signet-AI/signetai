@@ -58,4 +58,60 @@ describe("plugin manifest validation", () => {
 		expect(errors).toContain("surface 'Example route' requires undeclared capability 'secrets:exec'");
 		expect(errors).toContain("prompt contribution 'signet.secrets.credential-guidance' is missing surface metadata");
 	});
+
+	test("rejects SemVer leading zeroes and empty or leading-zero identifiers", () => {
+		for (const version of [
+			"01.2.3",
+			"1.02.3",
+			"1.2.03",
+			"1.2.3-",
+			"1.2.3+",
+			"1.2.3-alpha..1",
+			"1.2.3-alpha.01",
+			"1.2.3 ",
+			"1.2.3\n",
+		]) {
+			const errors = validatePluginManifest(
+				{ ...signetSecretsManifest, version },
+				{ corePluginIds: [SIGNET_SECRETS_PLUGIN_ID] },
+			);
+			expect(errors).toContain("version must be SemVer");
+		}
+	});
+
+	test("accepts valid SemVer prerelease and build identifiers", () => {
+		for (const version of [
+			"1.0.0-alpha",
+			"1.0.0-alpha.1",
+			"1.0.0-0.3.7",
+			"1.0.0-x.7.z.92",
+			"1.0.0+build.11.e0f985a",
+			"1.0.0-beta+exp.sha.5114f85",
+		]) {
+			const errors = validatePluginManifest(
+				{ ...signetSecretsManifest, version },
+				{ corePluginIds: [SIGNET_SECRETS_PLUGIN_ID] },
+			);
+			expect(errors).not.toContain("version must be SemVer");
+		}
+	});
+
+	test("rejects non-finite prompt contribution budgets and priorities", () => {
+		const contribution = signetSecretsManifest.promptContributions?.[0];
+		if (!contribution) throw new Error("expected a bundled prompt contribution");
+
+		for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
+			const maxTokensErrors = validatePluginManifest(
+				{ ...signetSecretsManifest, promptContributions: [{ ...contribution, maxTokens: value }] },
+				{ corePluginIds: [SIGNET_SECRETS_PLUGIN_ID] },
+			);
+			expect(maxTokensErrors).toContain(`prompt contribution '${contribution.id}' maxTokens must be positive`);
+
+			const priorityErrors = validatePluginManifest(
+				{ ...signetSecretsManifest, promptContributions: [{ ...contribution, priority: value }] },
+				{ corePluginIds: [SIGNET_SECRETS_PLUGIN_ID] },
+			);
+			expect(priorityErrors).toContain(`prompt contribution '${contribution.id}' priority must be non-negative`);
+		}
+	});
 });
