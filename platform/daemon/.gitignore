@@ -3,3 +3,6 @@
 /skills/
 
 /dist/
+
+# Bun emits this native addon next to the daemon bundle when building.
+/anydoc.*.node

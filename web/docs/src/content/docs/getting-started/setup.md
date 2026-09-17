@@ -59,10 +59,15 @@ updates maintain an existing workspace checkout but do not create one.
 
 `signet desktop build` or `signet desktop install` explicitly creates the managed
 checkout when needed for a source build. Contributors can also clone the repository
-and pass `--repo` to the desktop command. Existing checkouts, local edits, and
-branches are preserved; this change does not delete or relocate them. If a managed
-desktop checkout was removed, rerun `signet desktop install` to restore its source
-build path before the next automatic desktop update.
+and pass `--repo` to the desktop command. Generated build output does not block
+managed default-branch checkout updates. Real local source changes on that checkout
+are preserved in a named Git stash when an update is needed, remain parked after
+success, and the command prints the exact stash and restore command. If the
+checkout is already current, local changes remain in place. Explicit
+`--repo` builds use that checkout without managed source synchronization. Other
+branches and unresolved merge conflicts remain untouched and stop the managed
+update. If a managed desktop checkout was removed, rerun `signet desktop install`
+to restore its source build path before the next automatic desktop update.
 
 The source-built desktop app installs to `~/Applications/Signet.app` on macOS and
 `%LOCALAPPDATA%\Programs\Signet Desktop` on Windows. These locations remain

@@ -166,7 +166,7 @@ describe("desktop source build", () => {
 					cwd: home,
 					env: { SIGNET_PATH: workspace },
 					syncWorkspaceSourceRepo: (workspaceDir, options) => {
-						expect(options).toEqual({ cloneIfMissing: true });
+						expect(options).toEqual({ cloneIfMissing: true, localChanges: "stash" });
 						calls.push(`sync ${workspaceDir}`);
 						return {
 							status: "pulled",
@@ -209,6 +209,66 @@ describe("desktop source build", () => {
 			expect(calls).toEqual([`bun install @ ${root}`, `bun run build:desktop @ ${root}`]);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("returns the exact source stash when desktop build parks local changes", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const stashRef = "0123456789abcdef0123456789abcdef01234567";
+		try {
+			const result = buildDesktopFromSource(
+				{},
+				{
+					cwd: home,
+					env: { SIGNET_PATH: join(home, "workspace") },
+					syncWorkspaceSourceRepo: () => ({
+						status: "pulled",
+						path: root,
+						message: `pulled latest Signet source checkout; local changes were preserved in stash ${stashRef}`,
+						branch: "main",
+						defaultBranch: "main",
+						localChanges: "stashed",
+						stashRef,
+					}),
+					runner: () => ({ status: 0 }),
+				},
+			);
+
+			expect(result).toMatchObject({ repo: root, localChanges: "stashed", stashRef });
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps source stash recovery details when desktop build fails", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const stashRef = "0123456789abcdef0123456789abcdef01234567";
+		try {
+			expect(() =>
+				buildDesktopFromSource(
+					{},
+					{
+						cwd: home,
+						env: { SIGNET_PATH: join(home, "workspace") },
+						syncWorkspaceSourceRepo: () => ({
+							status: "pulled",
+							path: root,
+							message: "pulled latest Signet source checkout",
+							branch: "main",
+							defaultBranch: "main",
+							localChanges: "stashed",
+							stashRef,
+						}),
+						runner: (_cmd, args) => ({ status: args.includes("build:desktop") ? 1 : 0 }),
+					},
+				),
+			).toThrow(`Local source changes were preserved in stash ${stashRef}`);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
 		}
 	});
 });
@@ -367,7 +427,7 @@ describe("linux desktop install", () => {
 					env: { SIGNET_PATH: workspace },
 					platform: "linux",
 					syncWorkspaceSourceRepo: (workspaceDir, options) => {
-						expect(options).toEqual({ cloneIfMissing: true });
+						expect(options).toEqual({ cloneIfMissing: true, localChanges: "stash" });
 						calls.push(`sync ${workspaceDir}`);
 						return {
 							status: "pulled",

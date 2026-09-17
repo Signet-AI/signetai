@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	type WorkspaceSourceRepoSyncOptions,
 	type WorkspaceSourceRepoSyncResult,
 	resolveWorkspaceSourceRepoPath,
 	syncWorkspaceSourceRepo,
@@ -71,8 +72,12 @@ function pushRemoteChange(workDir: string, content: string, message: string): vo
 	runGit(["push", "origin", "main"], workDir);
 }
 
-function syncWorkspace(workspaceDir: string, remoteUrl: string): WorkspaceSourceRepoSyncResult {
-	return syncWorkspaceSourceRepo(workspaceDir, { remoteUrl, cloneIfMissing: true });
+function syncWorkspace(
+	workspaceDir: string,
+	remoteUrl: string,
+	options: Omit<WorkspaceSourceRepoSyncOptions, "remoteUrl" | "cloneIfMissing"> = {},
+): WorkspaceSourceRepoSyncResult {
+	return syncWorkspaceSourceRepo(workspaceDir, { remoteUrl, cloneIfMissing: true, ...options });
 }
 
 describe("syncWorkspaceSourceRepo", () => {
@@ -155,9 +160,11 @@ describe("syncWorkspaceSourceRepo", () => {
 		mkdirSync(join(repoPath, "surfaces", "desktop", "release"), { recursive: true });
 		mkdirSync(join(repoPath, "surfaces", "desktop", "resources", "daemon"), { recursive: true });
 		mkdirSync(join(repoPath, "dist", "signetai", "hermes-plugin"), { recursive: true });
+		mkdirSync(join(repoPath, "platform", "daemon"), { recursive: true });
 		writeFileSync(join(repoPath, "surfaces", "desktop", "release", "Signet-0.1.0-linux-x64.AppImage"), "app");
 		writeFileSync(join(repoPath, "surfaces", "desktop", "resources", "daemon", "daemon.js"), "daemon");
 		writeFileSync(join(repoPath, "dist", "signetai", "hermes-plugin", "plugin.py"), "plugin");
+		writeFileSync(join(repoPath, "platform", "daemon", "anydoc.win32-x64-msvc-gs7ezvas.node"), "native addon");
 		pushRemoteChange(workDir, "# signet\n\nremote build fix\n", "remote build fix");
 
 		const result = syncWorkspace(workspaceDir, remoteUrl);
@@ -167,6 +174,9 @@ describe("syncWorkspaceSourceRepo", () => {
 		expect(
 			readFileSync(join(repoPath, "surfaces", "desktop", "release", "Signet-0.1.0-linux-x64.AppImage"), "utf-8"),
 		).toBe("app");
+		expect(readFileSync(join(repoPath, "platform", "daemon", "anydoc.win32-x64-msvc-gs7ezvas.node"), "utf-8")).toBe(
+			"native addon",
+		);
 	});
 
 	it("fetches but does not pull over local workspace changes", () => {
@@ -185,6 +195,68 @@ describe("syncWorkspaceSourceRepo", () => {
 		expect(readFileSync(join(repoPath, "README.md"), "utf-8")).toBe("# local edits\n");
 	});
 
+	it("autostashes tracked and untracked changes before pulling when requested", () => {
+		const { remoteUrl, workDir } = seedRemote();
+		const workspaceDir = makeTempDir("signet-source-workspace-");
+
+		expect(syncWorkspace(workspaceDir, remoteUrl).status).toBe("cloned");
+		const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir);
+		mkdirSync(join(repoPath, "platform", "daemon"), { recursive: true });
+		writeFileSync(join(repoPath, "platform", "daemon", "anydoc.win32-x64-msvc-gs7ezvas.node"), "generated addon\n");
+		writeFileSync(join(repoPath, "README.md"), "# local edits\n");
+		writeFileSync(join(repoPath, "local-notes.txt"), "keep this\n");
+		pushRemoteChange(workDir, "# signet\n\nremote change\n", "remote change");
+
+		const result = syncWorkspace(workspaceDir, remoteUrl, { localChanges: "stash" });
+
+		expect(result.status).toBe("pulled");
+		expect(result.localChanges).toBe("stashed");
+		expect(result.stashRef).toMatch(/^[0-9a-f]{40}$/);
+		expect(result.message).toContain(`local changes were preserved in stash ${result.stashRef}`);
+		expect(readFileSync(join(repoPath, "README.md"), "utf-8")).toContain("remote change");
+		expect(existsSync(join(repoPath, "local-notes.txt"))).toBe(false);
+		expect(existsSync(join(repoPath, "platform", "daemon", "anydoc.win32-x64-msvc-gs7ezvas.node"))).toBe(true);
+		expect(runGit(["stash", "list", "--format=%H %s"], repoPath)).toContain(
+			`${result.stashRef} On main: signet-source-autostash-`,
+		);
+	});
+
+	it("does not stash local changes when the checkout is already current", () => {
+		const { remoteUrl } = seedRemote();
+		const workspaceDir = makeTempDir("signet-source-workspace-");
+
+		expect(syncWorkspace(workspaceDir, remoteUrl).status).toBe("cloned");
+		const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir);
+		writeFileSync(join(repoPath, "README.md"), "# local edits that stay put\n");
+
+		const result = syncWorkspace(workspaceDir, remoteUrl, { localChanges: "stash" });
+
+		expect(result.status).toBe("current");
+		expect(result.localChanges).toBe("left-in-place");
+		expect(result.stashRef).toBeUndefined();
+		expect(readFileSync(join(repoPath, "README.md"), "utf-8")).toBe("# local edits that stay put\n");
+		expect(runGit(["stash", "list"], repoPath)).toBe("");
+	});
+
+	it("autostashes local changes through the async sync path", async () => {
+		const { remoteUrl, workDir } = seedRemote();
+		const workspaceDir = makeTempDir("signet-source-workspace-");
+
+		expect((await syncWorkspaceSourceRepoAsync(workspaceDir, { remoteUrl, cloneIfMissing: true })).status).toBe(
+			"cloned",
+		);
+		const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir);
+		writeFileSync(join(repoPath, "README.md"), "# async local edits\n");
+		pushRemoteChange(workDir, "# signet\n\nasync remote change\n", "async remote change");
+
+		const result = await syncWorkspaceSourceRepoAsync(workspaceDir, { remoteUrl, localChanges: "stash" });
+
+		expect(result.status).toBe("pulled");
+		expect(result.localChanges).toBe("stashed");
+		expect(result.stashRef).toMatch(/^[0-9a-f]{40}$/);
+		expect(readFileSync(join(repoPath, "README.md"), "utf-8")).toContain("async remote change");
+	});
+
 	it("rejects unsafe remote URLs before invoking git clone", () => {
 		const workspaceDir = makeTempDir("signet-source-workspace-");
 
@@ -199,19 +271,12 @@ describe("syncWorkspaceSourceRepo", () => {
 
 	it("surfaces sync lock acquisition errors instead of reporting a duplicate run", () => {
 		const workspaceDir = makeTempDir("signet-source-workspace-");
-		const daemonDir = join(workspaceDir, ".daemon");
-		mkdirSync(daemonDir, { recursive: true });
-		chmodSync(daemonDir, 0o500);
+		writeFileSync(join(workspaceDir, ".daemon"), "not a directory\n");
 
-		try {
-			const result = syncWorkspaceSourceRepo(workspaceDir, { cloneIfMissing: true });
+		const result = syncWorkspaceSourceRepo(workspaceDir, { cloneIfMissing: true });
 
-			expect(result.status).toBe("error");
-			expect(result.message).toContain("failed to acquire source checkout sync lock");
-			expect(result.message).toContain("EACCES");
-		} finally {
-			chmodSync(daemonDir, 0o700);
-		}
+		expect(result.status).toBe("error");
+		expect(result.message).toContain("failed to acquire source checkout sync lock");
 	});
 
 	it("returns a typed error when the workspace path cannot host the lock directory", () => {
