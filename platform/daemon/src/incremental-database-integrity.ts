@@ -376,7 +376,8 @@ async function nextObject(
 		"integrity.objects.next",
 		`SELECT name, type, sql, name || ':' || type AS cursor FROM sqlite_schema
 		 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
-		   AND name <> ? AND (name || ':' || type) > ?
+		   AND name <> ? AND NOT (type = 'table' AND name = 'telemetry_events')
+		   AND (name || ':' || type) > ?
 		   AND type IN ('table', 'index', 'view', 'trigger')
 		 ORDER BY name, type LIMIT 1`,
 		[CHECKPOINT_TABLE, cursor],
@@ -407,7 +408,8 @@ async function remainingObjects(
 		"integrity.objects.remaining",
 		`SELECT COUNT(*) + CASE WHEN ? < ? AND EXISTS (SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'telemetry_events') THEN 1 ELSE 0 END AS value FROM sqlite_schema
 		 WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%'
-		   AND name <> ? AND (name || ':' || type) > ?
+		   AND name <> ? AND NOT (type = 'table' AND name = 'telemetry_events')
+		   AND (name || ':' || type) > ?
 		   AND type IN ('table', 'index', 'view', 'trigger')`,
 		[cursor, TELEMETRY_INTEGRITY_CURSOR, CHECKPOINT_TABLE, cursor],
 		integrityOwnerOptions(deadlineMs, onOwnerMetrics),
