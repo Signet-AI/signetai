@@ -1651,6 +1651,7 @@ describe("direct transcript regressions", () => {
 
 		const result = await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			transcriptPath,
 			sessionKey: "sess-long-retention",
 			sessionId: "sess-long-retention",
@@ -1698,6 +1699,7 @@ describe("direct transcript regressions", () => {
 
 		await handleSessionEnd({
 			harness: "claude-code",
+			reason: "session_shutdown",
 			transcriptPath: transcriptAPath,
 			sessionKey: "claude-resumed-session",
 			sessionId: "reused-claude-uuid",
@@ -1705,6 +1707,7 @@ describe("direct transcript regressions", () => {
 		});
 		await handleSessionEnd({
 			harness: "claude-code",
+			reason: "session_shutdown",
 			transcriptPath: transcriptBPath,
 			sessionKey: "claude-resumed-session",
 			sessionId: "reused-claude-uuid",
@@ -1753,12 +1756,14 @@ describe("direct transcript regressions", () => {
 
 		const first = await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			transcriptPath: transcriptAPath,
 			sessionKey: "agent:main:main",
 			cwd: "/home/user/signetai",
 		});
 		const second = await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			transcriptPath: transcriptBPath,
 			sessionKey: "agent:main:main",
 			cwd: "/home/user/signetai",
@@ -1960,6 +1965,32 @@ describe("handleSessionEnd", () => {
 		expect(result.memoriesSaved).toBe(0);
 	});
 
+	test.serial("does not enqueue a capture for a non-boundary turn hook", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "codex-turn.jsonl");
+		writeFileSync(transcriptPath, "User: per-turn persistence\nAssistant: retained in the live row\n".repeat(32));
+
+		const result = await handleSessionEnd({
+			harness: "codex",
+			transcriptPath,
+			sessionKey: "codex-turn-session",
+			sessionId: "codex-turn-session",
+			cwd: "/home/user/signetai",
+		});
+
+		expect(result.queued).toBe(false);
+		const db = openTestDb();
+		try {
+			expect(db.prepare("SELECT COUNT(*) AS count FROM transcript_capture_jobs").get()).toEqual({ count: 0 });
+			const session = db
+				.prepare("SELECT content FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
+				.get("codex-turn-session", "default") as { content: string } | undefined;
+			expect(session?.content).toContain("per-turn persistence");
+		} finally {
+			db.close();
+		}
+	});
+
 	test(
 		"handles missing ollama gracefully",
 		async () => {
@@ -1994,6 +2025,7 @@ describe("handleSessionEnd", () => {
 
 		const result = await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			transcriptPath,
 			sessionKey: "sess-ledger",
 			sessionId: "sess-ledger",
@@ -2040,6 +2072,7 @@ describe("handleSessionEnd", () => {
 			);
 		await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
 			transcript: firstTranscript,
@@ -2056,6 +2089,7 @@ describe("handleSessionEnd", () => {
 
 		await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
 			transcript: firstTranscript,
@@ -2078,6 +2112,7 @@ describe("handleSessionEnd", () => {
 		const changedTranscript = `${firstTranscript}\nAssistant: the completion marker must move only for changed content.`;
 		await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
 			transcript: changedTranscript,
@@ -2103,6 +2138,7 @@ describe("handleSessionEnd", () => {
 
 		const result = await handleSessionEnd({
 			harness: "memorybench",
+			reason: "session_shutdown",
 			transcript,
 			sessionKey: "memorybench:case-1:session-1",
 			sessionId: "memorybench:case-1:session-1",
@@ -2149,6 +2185,7 @@ describe("handleSessionEnd", () => {
 
 		const result = await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			transcriptPath,
 			sessionKey: "sess-deferred-canonical",
 			sessionId: "sess-deferred-canonical",
@@ -2231,6 +2268,7 @@ memory:
 
 		const result = await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			transcriptPath,
 			sessionKey: "sess-pipeline-disabled",
 			sessionId: "sess-pipeline-disabled",
@@ -2282,6 +2320,7 @@ memory:
 
 		const result = await handleSessionEnd({
 			harness: "test",
+			reason: "session_shutdown",
 			transcriptPath: "/nonexistent/path.txt",
 			sessionKey: "sess-live-fallback",
 			sessionId: "sess-live-fallback",
@@ -2376,6 +2415,7 @@ memory:
 
 		const result = await handleSessionEnd({
 			harness: "codex",
+			reason: "session_shutdown",
 			transcriptPath,
 			sessionKey: "sess-audit",
 			sessionId: "sess-audit",

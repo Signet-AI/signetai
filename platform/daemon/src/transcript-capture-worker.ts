@@ -5,7 +5,7 @@ import { logger } from "./logger";
 import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
 import { isNoiseSession } from "./session-noise";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
-import { writeTranscriptAudit } from "./transcript-audit";
+import { writeTranscriptAudit, capTranscriptAuditContent } from "./transcript-audit";
 import { writeCanonicalTranscriptFromSnapshot } from "./transcript-capture";
 import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
 
@@ -102,9 +102,12 @@ export async function enqueueTranscriptCaptureJob(
 	signal?: AbortSignal,
 ): Promise<string | null> {
 	if (input.transcript.trim().length === 0 && input.rawTranscript.trim().length === 0) return null;
-	const id = transcriptCaptureJobId(input);
+	const boundedRawTranscript = capTranscriptAuditContent(input.rawTranscript);
+	const boundedInput =
+		boundedRawTranscript === input.rawTranscript ? input : { ...input, rawTranscript: boundedRawTranscript };
+	const id = transcriptCaptureJobId(boundedInput);
 	const createdAt = nowIso();
-	const maxAttempts = normalizeMaxAttempts(input.maxAttempts);
+	const maxAttempts = normalizeMaxAttempts(boundedInput.maxAttempts);
 	let resolvedId = id;
 	await runWriteTxAsync(
 		dbAccessor,
@@ -120,7 +123,7 @@ export async function enqueueTranscriptCaptureJob(
 				   AND status <> 'dead'
 				 LIMIT 1`,
 				)
-				.get(input.agentId, input.sessionId, input.transcript) as { id?: unknown } | undefined;
+				.get(boundedInput.agentId, boundedInput.sessionId, boundedInput.transcript) as { id?: unknown } | undefined;
 			if (typeof existing?.id === "string") {
 				resolvedId = existing.id;
 				return;
@@ -152,16 +155,16 @@ export async function enqueueTranscriptCaptureJob(
 				END`,
 			).run(
 				id,
-				input.agentId,
-				input.harness,
-				input.sessionKey,
-				input.sessionId,
-				input.project,
-				input.transcript,
-				input.rawTranscript || null,
-				input.transcriptPath ?? null,
-				input.capturedAt,
-				input.endedAt,
+				boundedInput.agentId,
+				boundedInput.harness,
+				boundedInput.sessionKey,
+				boundedInput.sessionId,
+				boundedInput.project,
+				boundedInput.transcript,
+				boundedInput.rawTranscript || null,
+				boundedInput.transcriptPath ?? null,
+				boundedInput.capturedAt,
+				boundedInput.endedAt,
 				// Session summaries are retired. Keep the legacy column explicit so
 				// old manifests cannot enqueue a second derived delivery path.
 				"not_requested",
@@ -308,7 +311,7 @@ async function markDone(dbAccessor: DbAccessor, id: string): Promise<void> {
 	await runWriteTxAsync(dbAccessor, (db) => {
 		db.prepare(
 			`UPDATE transcript_capture_jobs
-			 SET status = 'completed', completed_at = ?, updated_at = ?, error = NULL
+			 SET status = 'completed', raw_transcript = NULL, completed_at = ?, updated_at = ?, error = NULL
 			 WHERE id = ?`,
 		).run(nowIso(), nowIso(), id);
 	});

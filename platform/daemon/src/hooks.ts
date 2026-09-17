@@ -2248,7 +2248,10 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	}
 
 	let transcriptCaptureJobId: string | null = null;
-	if (retainedTranscript.trim().length > 0 || rawTranscript.trim().length > 0) {
+	// Ordinary session-end hook calls are per-turn persistence signals. The live
+	// session_transcripts row already retains those turns; only an explicit
+	// lifecycle boundary should create a durable capture/audit snapshot.
+	if (boundaryReason !== null && (retainedTranscript.trim().length > 0 || rawTranscript.trim().length > 0)) {
 		try {
 			transcriptCaptureJobId = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 				agentId,
