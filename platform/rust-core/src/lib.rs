@@ -1069,7 +1069,11 @@ fn execute_operation(
             let existing: Option<(String,String)> = tx.query_row("SELECT id,content_hash FROM documents WHERE agent_id=? AND source_id=? AND path=?", params![agent_id,source_id,path], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
             if let Some((existing_id, existing_hash)) = existing {
                 if mode == "skip" { return Ok(json!({"id":existing_id,"status":"skipped","contentHash":existing_hash,"duplicateMode":"skip","generation":source_generation})); }
-                if mode == "replace" { tx.execute("UPDATE documents SET content=?,metadata=?,content_hash=?,updated_at=datetime('now') WHERE id=?", params![content,metadata,content_hash,existing_id])?; return Ok(json!({"id":existing_id,"status":"replaced","contentHash":content_hash,"duplicateMode":"replace","generation":source_generation})); }
+                if mode == "replace" {
+                    tx.execute("UPDATE documents SET content=?,metadata=?,content_hash=?,updated_at=datetime('now') WHERE id=?", params![content,metadata,content_hash,existing_id])?;
+                    tx.commit()?;
+                    return Ok(json!({"id":existing_id,"status":"replaced","contentHash":content_hash,"duplicateMode":"replace","generation":source_generation}));
+                }
             }
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute("INSERT INTO documents (id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at) VALUES (?,?,?,?,?,?,?, ?,datetime('now'),datetime('now'))", params![id,agent_id,source_id,path,content,metadata,content_hash,source_generation])?;

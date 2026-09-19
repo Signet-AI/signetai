@@ -578,7 +578,11 @@ async fn import_document(
                     path: req.path,
                     content: req.content,
                     metadata: {
-                        let mut m = req.metadata;
+                        let mut m = if req.metadata.is_null() {
+                            json!({})
+                        } else {
+                            req.metadata
+                        };
                         if let Value::Object(ref mut o) = m {
                             if let Some(g) = req.generation {
                                 o.insert("_generation".into(), json!(g));
