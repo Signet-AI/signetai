@@ -1,4 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
 	BaseConnector,
@@ -22,7 +23,12 @@ import {
 	resolveOhMyPiExtensionsDir,
 	writeConfiguredOhMyPiAgentDir,
 } from "./agent-dir.js";
-import { expandHome } from "@signet/core";
+function expandHome(value: string): string {
+	const home = process.env.HOME ?? homedir();
+	if (value === "~") return home;
+	if (value.startsWith("~/") || value.startsWith("~\\")) return join(home, value.slice(2));
+	return value;
+}
 import { EXTENSION_BUNDLE } from "./extension-bundle.js";
 
 export {
