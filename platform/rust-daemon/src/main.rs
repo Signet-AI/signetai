@@ -65,7 +65,8 @@ async fn authenticate_api(
         return next.run(request).await;
     }
     let path = request.uri().path();
-    let protected = path.starts_with("/api/") || path == "/memory/search";
+    let protected = (path.starts_with("/api/") && path != "/api/mode" && path != "/api/features")
+        || path == "/memory/search";
     if !protected {
         return next.run(request).await;
     }
@@ -329,10 +330,22 @@ async fn live(State(state): State<AppState>) -> impl IntoResponse {
 
 async fn ready(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let result = execute(&state, Operation::Health).await?;
+    if !result
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return Err(ApiError::unavailable(
+            "database migrations or owner are not ready",
+        ));
+    }
     Ok(Json(json!({
         "status": if result.get("ready").and_then(Value::as_bool).unwrap_or(false) { "ready" } else { "not_ready" },
         "runtime": "rust",
         "db": result.get("ready").cloned().unwrap_or(Value::Bool(false)),
+        "database": result.get("database").cloned().unwrap_or_else(|| json!("unknown")),
+        "migrations": result.get("migrations").cloned().unwrap_or_else(|| json!({"status":"unknown"})),
+        "owner": result.get("owner").cloned().unwrap_or_else(|| json!({"status":"unknown"})),
         "workspace": state.workspace,
     })))
 }
@@ -343,11 +356,19 @@ async fn health(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
         .get("ready")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    if !ready {
+        return Err(ApiError::unavailable(
+            "database migrations or owner are not ready",
+        ));
+    }
     Ok(Json(json!({
         "status": if ready { "healthy" } else { "degraded" },
         "runtime": "rust",
         "implementation": "fresh",
         "db": ready,
+        "database": result.get("database").cloned().unwrap_or_else(|| json!("unknown")),
+        "migrations": result.get("migrations").cloned().unwrap_or_else(|| json!({"status":"unknown"})),
+        "owner": result.get("owner").cloned().unwrap_or_else(|| json!({"status":"unknown"})),
         "uptime": elapsed_seconds(state.started_at),
         "pid": std::process::id(),
         "workspace": state.workspace,
@@ -356,12 +377,29 @@ async fn health(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
 
 async fn status(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let result = execute(&state, Operation::Health).await?;
+    let ready = result
+        .get("ready")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(Json(json!({
-        "status": if result.get("ready").and_then(Value::as_bool).unwrap_or(false) { "healthy" } else { "degraded" },
+        "status": if ready { "healthy" } else { "degraded" },
         "runtime": "rust",
         "implementation": "fresh",
+        "ready": ready,
+        "complete": true,
+        "degraded": !ready,
+        "database": result.get("database").cloned().unwrap_or_else(|| json!("unknown")),
+        "migrations": result.get("migrations").cloned().unwrap_or_else(|| json!({"status":"unknown"})),
+        "owner": result.get("owner").cloned().unwrap_or_else(|| json!({"status":"unknown"})),
+        "unsupported": { "embedding": "unprobed", "inference": "unsupported", "connectors": "unprobed", "providerProbes": "unprobed", "update": "unsupported", "resource": "unprobed", "eventLoop": "unprobed" },
         "workspace": state.workspace,
     })))
+}
+
+async fn mode() -> Json<Value> {
+    Json(
+        json!({ "mode": "native", "runtime": "rust", "implementation": "fresh", "supported": true, "complete": true }),
+    )
 }
 
 async fn remember(
@@ -788,6 +826,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health/ready", get(ready))
         .route("/health", get(health))
         .route("/api/status", get(status))
+        .route("/api/mode", get(mode))
         .route("/api/sources", get(sources).post(create_source))
         .route("/api/import/documents", post(import_document))
         .route("/api/sources/documents", post(import_document))

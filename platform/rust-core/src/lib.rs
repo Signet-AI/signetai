@@ -1182,7 +1182,17 @@ fn execute_operation(
         }
         Operation::Health => {
             let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
-            Ok(json!({ "ready": value == 1 }))
+            let migrations: i64 = connection.query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name IN ('memories','jobs','pipeline_state')",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(json!({
+                "ready": value == 1 && migrations == 3,
+                "database": "ready",
+                "migrations": { "status": if migrations == 3 { "complete" } else { "incomplete" }, "expected": 3, "present": migrations },
+                "owner": { "status": "ready" }
+            }))
         }
         Operation::Remember {
             agent_id,
