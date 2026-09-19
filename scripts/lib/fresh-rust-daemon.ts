@@ -4,6 +4,9 @@ import { join } from "node:path";
 /** Resolve only the current native Rust daemon; never fall back to TypeScript. */
 export function resolveFreshRustDaemon(repoRoot: string, env: NodeJS.ProcessEnv = process.env): string {
 	const explicit = env.SIGNET_RUST_DAEMON_BIN?.trim();
+	if (explicit && /\.(?:js|ts|mjs|cjs)$/i.test(explicit)) {
+		throw new Error("Native Signet daemon executable is required; JavaScript and TypeScript paths are not allowed.");
+	}
 	const candidates = explicit
 		? [explicit]
 		: [
