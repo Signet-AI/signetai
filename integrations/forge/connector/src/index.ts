@@ -26,7 +26,30 @@ import {
 	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
-import { expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
+
+function expandHome(path: string): string {
+	if (path === "~") return homedir();
+	if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
+	return path;
+}
+
+type IdentityMode = "managed" | "off" | "passthrough";
+function loadIdentityMode(basePath: string): IdentityMode {
+	const configPath = join(basePath, "agent.yaml");
+	if (!existsSync(configPath)) return "managed";
+	try {
+		const raw = readFileSync(configPath, "utf8");
+		if (/^\s*(?:enabled|mode):\s*(?:false|off)\s*$/m.test(raw) || /identity:\s*\n(?:.|\n)*?mode:\s*off/m.test(raw))
+			return "off";
+		if (/mode:\s*passthrough\b/.test(raw)) return "passthrough";
+	} catch {}
+	return "managed";
+}
+
+function hasValidIdentity(basePath: string): boolean {
+	if (loadIdentityMode(basePath) !== "managed") return true;
+	return ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"].every((file) => existsSync(join(basePath, file)));
+}
 
 const SIGNET_FORGE_MARKER = "Managed by Signet (@signet/connector-forge)";
 

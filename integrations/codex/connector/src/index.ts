@@ -1,4 +1,4 @@
-import { spawnSyncHidden as spawnSync } from "@signet/core";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	existsSync,
@@ -23,7 +23,21 @@ import {
 	resolveSignetApiKey,
 	resolveSignetCliCommand,
 } from "@signet/connector-base";
-import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
+
+function expandHome(path: string): string {
+	if (path === "~") return homedir();
+	if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
+	return path;
+}
+
+function resolveTimeout(raw: string | undefined, fallback: number): number {
+	if (!raw) return fallback;
+	const ms = Number.parseInt(raw, 10);
+	return !Number.isFinite(ms) || ms < 1_000 ? fallback : Math.min(ms, 120_000);
+}
+
+const resolveSessionStartTimeoutMs = (raw?: string) => resolveTimeout(raw, 15_000);
+const resolvePromptSubmitTimeoutMs = (raw?: string) => resolveTimeout(raw, 5_000);
 
 export type SignetMcpConfig =
 	| {
