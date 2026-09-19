@@ -565,7 +565,12 @@ fn execute_operation(
             }
             let files = normalize_import_files(&files)?;
             let id = uuid::Uuid::new_v4().to_string();
-            connection.execute("INSERT INTO transcript_import_jobs (id,agent_id,schema_id,duplicate_mode,state,files,created_at,updated_at) VALUES (?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,schema_id,duplicate_mode, "staging", serde_json::to_string(&files)?])?;
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO transcript_import_jobs (id,agent_id,schema_id,duplicate_mode,state,files,created_at,updated_at) VALUES (?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,schema_id,duplicate_mode, "staging", serde_json::to_string(&files)?])?;
+            for (ordinal, file) in files.iter().enumerate() {
+                tx.execute("INSERT INTO transcript_import_files (id,job_id,agent_id,ordinal,name,state,storage_state,upload_generation,upload_offset,upload_digest,size_bytes,content,created_at,updated_at) VALUES (?,?,?,?,?,'staging','uploading',0,0,'',0,x'',datetime('now'),datetime('now'))", params![file["id"].as_str().unwrap_or_default(),id,agent_id,ordinal as i64,file["name"].as_str().unwrap_or_default()])?;
+            }
+            tx.commit()?;
             Ok(
                 json!({"id":id,"jobId":id,"agentId":agent_id,"schemaId":schema_id,"duplicateMode":duplicate_mode,"state":"staging","files":files}),
             )
@@ -576,6 +581,22 @@ fn execute_operation(
                 .map(|v| serde_json::from_str(&v))
                 .transpose()?
                 .ok_or(CoreError::NotFound)
+        }
+        Operation::TranscriptImportFile { agent_id, job_id, file_id, generation, action, offset, length, checksum, content } => {
+            let agent_id = required_agent(&agent_id)?;
+            if content.len() > 8 * 1024 * 1024 { return Err(CoreError::InvalidInput("upload exceeds 8 MiB".into())); }
+            let tx = connection.transaction()?;
+            let row: (String,i64,Option<i64>,i64,String) = tx.query_row("SELECT storage_state,upload_generation,upload_size,upload_offset,upload_digest FROM transcript_import_files WHERE id=? AND job_id=? AND agent_id=?",params![file_id,job_id,agent_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?.ok_or(CoreError::NotFound)?;
+            if row.1 != generation { return Err(CoreError::InvalidInput("upload generation mismatch".into())); }
+            match action.as_str() {
+                "begin" => { let n=length.ok_or_else(||CoreError::InvalidInput("upload length is required".into()))?; if n<0 || n as usize>8*1024*1024 { return Err(CoreError::InvalidInput("upload length exceeds 8 MiB".into())); } tx.execute("UPDATE transcript_import_files SET upload_size=?,upload_offset=0,upload_digest='',content_hash=NULL,size_bytes=0,storage_state='uploading',content=x'',updated_at=datetime('now') WHERE id=? AND job_id=? AND agent_id=? AND upload_generation=?",params![n,file_id,job_id,agent_id,generation])?; }
+                "append" => { let expected=offset.ok_or_else(||CoreError::InvalidInput("upload offset is required".into()))?; if expected != row.3 { return Err(CoreError::InvalidInput(format!("upload offset mismatch; expected {}",row.3))); } let declared=row.2.ok_or_else(||CoreError::InvalidInput("upload length is required".into()))?; if row.3+content.len() as i64>declared { return Err(CoreError::InvalidInput("upload exceeds declared length".into())); } let mut h=Sha256::new(); h.update(&content); let digest=format!("{:x}",h.finalize()); if let Some(expected)=checksum { if expected != digest && expected != format!("sha256:{digest}") { return Err(CoreError::InvalidInput("upload checksum mismatch".into())); } } tx.execute("UPDATE transcript_import_files SET content=content||?,upload_offset=?,upload_digest=?,size_bytes=?,updated_at=datetime('now') WHERE id=? AND job_id=? AND agent_id=? AND upload_generation=?",params![content,row.3+content.len() as i64,digest,row.3+content.len() as i64,file_id,job_id,agent_id,generation])?; }
+                "finalize" => { if row.2 != Some(row.3) { return Err(CoreError::InvalidInput("upload is incomplete".into())); } if row.0 != "sealed" { let bytes:Vec<u8>=tx.query_row("SELECT content FROM transcript_import_files WHERE id=?",params![file_id],|r|r.get(0))?; let mut h=Sha256::new(); h.update(&bytes); let digest=format!("{:x}",h.finalize()); tx.execute("UPDATE transcript_import_files SET storage_state='sealed',state='ready',content_hash=?,updated_at=datetime('now') WHERE id=? AND job_id=? AND agent_id=? AND upload_generation=?",params![digest,file_id,job_id,agent_id,generation])?; } }
+                "reset" => { tx.execute("UPDATE transcript_import_files SET storage_state='uploading',upload_generation=upload_generation+1,upload_offset=0,upload_size=NULL,upload_digest='',content_hash=NULL,size_bytes=0,content=x'',updated_at=datetime('now') WHERE id=? AND job_id=? AND agent_id=? AND storage_state IN ('uploading','purged')",params![file_id,job_id,agent_id])?; }
+                "content" => { let bytes:Vec<u8>=tx.query_row("SELECT content FROM transcript_import_files WHERE id=? AND job_id=? AND agent_id=? AND storage_state='sealed'",params![file_id,job_id,agent_id],|r|r.get(0)).optional()?.ok_or(CoreError::NotFound)?; let text=String::from_utf8(bytes).map_err(|_|CoreError::InvalidInput("content is not UTF-8".into()))?; tx.commit()?; return Ok(json!({"content":text,"generation":generation})); }
+                _ => return Err(CoreError::InvalidInput("unsupported file action".into())),
+            }
+            tx.commit()?; Ok(json!({"fileId":file_id,"state":if action=="finalize" {"sealed"} else {"uploading"},"generation":generation,"offset":offset.unwrap_or(0)+content.len() as i64}))
         }
         Operation::TranscriptUpsert {
             agent_id,
@@ -2439,6 +2460,17 @@ pub enum Operation {
         agent_id: String,
         id: String,
     },
+    TranscriptImportFile {
+        agent_id: String,
+        job_id: String,
+        file_id: String,
+        generation: i64,
+        action: String,
+        offset: Option<i64>,
+        length: Option<i64>,
+        checksum: Option<String>,
+        content: Vec<u8>,
+    },
     TranscriptUpsert {
         agent_id: String,
         session_key: String,
@@ -2787,6 +2819,8 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS sessions (key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, runtime_path TEXT, project TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(key, agent_id));
          CREATE TABLE IF NOT EXISTS event_records (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, session_key TEXT, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS transcript_import_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, schema_id TEXT NOT NULL, duplicate_mode TEXT NOT NULL, state TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS transcript_import_files (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, ordinal INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, storage_state TEXT NOT NULL, upload_generation INTEGER NOT NULL DEFAULT 0, upload_offset INTEGER NOT NULL DEFAULT 0, upload_size INTEGER, upload_digest TEXT NOT NULL DEFAULT '', content_hash TEXT, size_bytes INTEGER NOT NULL DEFAULT 0, content BLOB NOT NULL DEFAULT x'', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS transcript_import_files_scope ON transcript_import_files(job_id,agent_id,ordinal);
          CREATE TABLE IF NOT EXISTS session_transcripts (session_key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, project TEXT, content TEXT NOT NULL, content_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, PRIMARY KEY(agent_id, session_key));
          CREATE INDEX IF NOT EXISTS event_records_scope ON event_records(agent_id, session_key, id);
          CREATE TABLE IF NOT EXISTS hook_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id TEXT NOT NULL, agent_id TEXT NOT NULL, session_key TEXT, hook TEXT NOT NULL, checkpoint TEXT, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, UNIQUE(agent_id, receipt_id));

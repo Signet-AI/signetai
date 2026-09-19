@@ -1,7 +1,9 @@
 use crate::{agent, execute, AgentQuery, ApiError, AppState};
 use axum::{
+    body::{to_bytes, Body},
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
+    response::Response,
     routing::{get, post},
     Json, Router,
 };
@@ -9,23 +11,17 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use signet_core_native::Operation;
 
-const MAX_ID_BYTES: usize = 256;
-const MAX_SCHEMA_BYTES: usize = 128;
-const MAX_MODE_BYTES: usize = 32;
-const MAX_FILE_NAME_BYTES: usize = 512;
-const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
-
+const MAX: usize = 8 * 1024 * 1024;
 fn bounded(value: String, max: usize, field: &str) -> Result<String, ApiError> {
-    let value = value.trim().to_owned();
-    if value.is_empty() || value.len() > max {
-        return Err(ApiError::bad_request(format!(
+    let v = value.trim().to_owned();
+    if v.is_empty() || v.len() > max {
+        Err(ApiError::bad_request(format!(
             "{field} must be 1-{max} bytes"
-        )));
+        )))
+    } else {
+        Ok(v)
     }
-    Ok(value)
 }
-
 #[derive(Deserialize)]
 struct CreateImport {
     #[serde(default = "default_schema", alias = "schemaId")]
@@ -50,78 +46,59 @@ struct Transcript {
     #[serde(alias = "idempotencyKey")]
     idempotency_key: String,
 }
-fn transcript_input(
-    r: Transcript,
-) -> Result<(String, String, Option<String>, String, String), ApiError> {
-    let session_key = bounded(
-        r.session_key.unwrap_or_default(),
-        MAX_ID_BYTES,
-        "sessionKey",
-    )?;
-    let harness = bounded(r.harness, MAX_ID_BYTES, "harness")?;
-    let project = r
-        .project
-        .map(|v| bounded(v, MAX_ID_BYTES, "project"))
-        .transpose()?;
-    if r.content.as_bytes().len() > MAX_TRANSCRIPT_BYTES {
-        return Err(ApiError::bad_request("content exceeds 8 MiB"));
-    }
-    if r.content.is_empty() {
-        return Err(ApiError::bad_request("content is required"));
-    }
-    let idempotency_key = bounded(r.idempotency_key, MAX_ID_BYTES, "idempotencyKey")?;
-    Ok((session_key, harness, project, r.content, idempotency_key))
-}
-
 async fn create(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<CreateImport>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let agent_id = agent(&headers, None, None)?;
-    let schema_id = bounded(body.schema_id, MAX_SCHEMA_BYTES, "schemaId")?;
-    let duplicate_mode = bounded(body.duplicate_mode, MAX_MODE_BYTES, "duplicateMode")?;
-    if !matches!(duplicate_mode.as_str(), "skip" | "replace" | "reimport") {
+    let schema_id = bounded(body.schema_id, 128, "schemaId")?;
+    let duplicate_mode = bounded(body.duplicate_mode, 32, "duplicateMode")?;
+    if schema_id != "signet-export"
+        || !matches!(duplicate_mode.as_str(), "skip" | "replace" | "reimport")
+    {
         return Err(ApiError::bad_request(
-            "duplicateMode must be skip, replace, or reimport",
+            "unsupported schema or duplicate mode",
         ));
     }
     if body.files.is_empty() || body.files.len() > 25 {
         return Err(ApiError::bad_request("files must contain 1-25 entries"));
     }
-    let files = Value::Array(body.files);
-    let encoded = serde_json::to_vec(&files)
-        .map_err(|_| ApiError::bad_request("files must be valid JSON"))?;
-    if encoded.len() > MAX_FILE_BYTES {
-        return Err(ApiError::bad_request("files exceed 8 MiB"));
-    }
-    if let Some(items) = files.as_array() {
-        for item in items {
-            if let Some(name) = item.get("name").and_then(Value::as_str) {
-                bounded(name.to_owned(), MAX_FILE_NAME_BYTES, "file name")?;
-            }
+    for f in &body.files {
+        if f.get("name").and_then(Value::as_str).is_none() {
+            return Err(ApiError::bad_request("each file must have a name"));
         }
     }
-    let result = execute(
-        &state,
-        Operation::TranscriptImportCreate {
-            agent_id,
-            schema_id,
-            duplicate_mode,
-            files,
-        },
-    )
-    .await?;
-    Ok((StatusCode::CREATED, Json(result)))
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            execute(
+                &state,
+                Operation::TranscriptImportCreate {
+                    agent_id,
+                    schema_id,
+                    duplicate_mode,
+                    files: Value::Array(body.files),
+                },
+            )
+            .await?,
+        ),
+    ))
 }
 async fn get_job(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let agent_id = agent(&headers, None, None)?;
     Ok(Json(
-        execute(&state, Operation::TranscriptImportGet { agent_id, id }).await?,
+        execute(
+            &state,
+            Operation::TranscriptImportGet {
+                agent_id: agent(&headers, None, None)?,
+                id,
+            },
+        )
+        .await?,
     ))
 }
 async fn list(
@@ -129,35 +106,216 @@ async fn list(
     headers: HeaderMap,
     Query(q): Query<AgentQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let agent_id = agent(&headers, Some(&q), None)?;
     Ok(Json(
-        json!({"transcripts":execute(&state,Operation::TranscriptList{agent_id,limit:100}).await?}),
+        json!({"imports":execute(&state,Operation::TranscriptList{agent_id:agent(&headers,Some(&q),None)?,limit:100}).await?}),
     ))
+}
+fn scope(
+    headers: &HeaderMap,
+    path: &Path<String>,
+) -> Result<(String, String, String, i64), ApiError> {
+    let generation = headers
+        .get("upload-generation")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("0")
+        .parse()
+        .map_err(|_| ApiError::bad_request("invalid upload generation"))?;
+    Ok((
+        agent(headers, None, None)?,
+        path.0.clone(),
+        String::new(),
+        generation,
+    ))
+}
+async fn file_action(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((job_id, file_id)): Path<(String, String)>,
+    body: Body,
+    action: &str,
+) -> Result<Json<Value>, ApiError> {
+    let generation = headers
+        .get("upload-generation")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("0")
+        .parse()
+        .map_err(|_| ApiError::bad_request("invalid upload generation"))?;
+    let bytes = to_bytes(body, MAX + 1)
+        .await
+        .map_err(|_| ApiError::bad_request("invalid body"))?;
+    if bytes.len() > MAX {
+        return Err(ApiError::bad_request("upload exceeds 8 MiB"));
+    }
+    let offset = headers
+        .get("upload-offset")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
+    let length = headers
+        .get("upload-length")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
+    Ok(Json(
+        execute(
+            &state,
+            Operation::TranscriptImportFile {
+                agent_id: agent(&headers, None, None)?,
+                job_id,
+                file_id,
+                generation,
+                action: action.into(),
+                offset,
+                length,
+                checksum: headers
+                    .get("upload-checksum")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned),
+                content: bytes.to_vec(),
+            },
+        )
+        .await?,
+    ))
+}
+async fn put(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((job_id, file_id)): Path<(String, String)>,
+    body: Body,
+) -> Result<Json<Value>, ApiError> {
+    file_action(
+        State(state),
+        headers,
+        Path((job_id, file_id)),
+        body,
+        "begin",
+    )
+    .await
+}
+async fn patch(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((job_id, file_id)): Path<(String, String)>,
+    body: Body,
+) -> Result<Json<Value>, ApiError> {
+    file_action(
+        State(state),
+        headers,
+        Path((job_id, file_id)),
+        body,
+        "append",
+    )
+    .await
+}
+async fn finalize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((job_id, file_id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    file_action(
+        State(state),
+        headers,
+        Path((job_id, file_id)),
+        Body::empty(),
+        "finalize",
+    )
+    .await
+}
+async fn reset(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((job_id, file_id)): Path<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    file_action(
+        State(state),
+        headers,
+        Path((job_id, file_id)),
+        Body::empty(),
+        "reset",
+    )
+    .await
+}
+async fn content(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((job_id, file_id)): Path<(String, String)>,
+) -> Result<Response, ApiError> {
+    let v = file_action(
+        State(state),
+        headers,
+        Path((job_id, file_id)),
+        Body::empty(),
+        "content",
+    )
+    .await?
+    .0;
+    let text = v
+        .get("content")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_owned();
+    Ok(Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "application/x-ndjson")
+        .body(text.into())
+        .unwrap())
 }
 async fn upsert(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(body): Json<Transcript>,
+    Json(r): Json<Transcript>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let agent_id = agent(&headers, None, None)?;
-    let (session_key, harness, project, content, idempotency_key) = transcript_input(body)?;
-    let result = execute(
-        &state,
-        Operation::TranscriptUpsert {
-            agent_id,
-            session_key,
-            harness,
-            project,
-            content,
-            idempotency_key,
-        },
-    )
-    .await?;
-    Ok((StatusCode::OK, Json(result)))
+    let session_key = bounded(r.session_key.unwrap_or_default(), 256, "sessionKey")?;
+    if r.content.is_empty() || r.content.len() > MAX {
+        return Err(ApiError::bad_request("invalid or oversized transcript"));
+    }
+    Ok((
+        StatusCode::OK,
+        Json(
+            execute(
+                &state,
+                Operation::TranscriptUpsert {
+                    agent_id,
+                    session_key,
+                    harness: bounded(r.harness, 256, "harness")?,
+                    project: r.project,
+                    idempotency_key: bounded(r.idempotency_key, 256, "idempotencyKey")?,
+                    content: r.content,
+                },
+            )
+            .await?,
+        ),
+    ))
 }
+async fn unsupported() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "transcript import execution requires a provider/parser worker",
+    ))
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/sources/imports", post(create).get(list))
         .route("/api/sources/imports/{id}", get(get_job))
+        .route(
+            "/api/sources/imports/{job_id}/files/{file_id}",
+            axum::routing::put(put).patch(patch),
+        )
+        .route(
+            "/api/sources/imports/{job_id}/files/{file_id}/finalize",
+            post(finalize),
+        )
+        .route(
+            "/api/sources/imports/{job_id}/files/{file_id}/reset",
+            post(reset),
+        )
+        .route(
+            "/api/sources/imports/{job_id}/files/{file_id}/content",
+            get(content),
+        )
+        .route("/api/sources/imports/{job_id}/start", post(unsupported))
+        .route("/api/sources/imports/{job_id}/pause", post(unsupported))
+        .route("/api/sources/imports/{job_id}/resume", post(unsupported))
+        .route("/api/sources/imports/{job_id}/retry", post(unsupported))
+        .route("/api/sources/imports/{job_id}/cancel", post(unsupported))
         .route("/api/transcripts", post(upsert).get(list))
 }
