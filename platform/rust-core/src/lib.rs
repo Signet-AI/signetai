@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{
     any::Any,
     fs,
@@ -41,6 +42,19 @@ pub struct NewMemory {
     pub content: String,
     pub metadata: serde_json::Value,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Source {
+    pub id: String,
+    pub agent_id: String,
+    pub kind: String,
+    pub name: String,
+    pub config: Value,
+    pub created_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocumentInput { pub source_id: String, pub path: String, pub content: String, pub metadata: Value }
 
 impl NewMemory {
     pub fn text(content: impl Into<String>) -> Self {
@@ -327,47 +341,38 @@ impl Core {
             .map_err(|_| CoreError::OwnerStopped)?
     }
 
+    pub fn create_source(&self, agent: &str, kind: &str, name: &str, config: Value) -> Result<Source, CoreError> {
+        let agent = required_agent(agent)?; let kind = required_id(kind)?; let name = required_id(name)?;
+        self.call(move |connection| { let id = uuid::Uuid::new_v4().to_string(); let config = serde_json::to_string(&config)?;
+            connection.execute("INSERT INTO sources (id, agent_id, kind, name, config, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))", params![id, agent, kind, name, config])?;
+            Ok(Source { id, agent_id: agent, kind, name, config: serde_json::from_str(&config)?, created_at: Some(String::new()) }) })
+    }
+
+    pub fn list_sources(&self, agent: &str) -> Result<Vec<Source>, CoreError> { let agent = required_agent(agent)?; self.call(move |c| { let mut s=c.prepare("SELECT id,agent_id,kind,name,config,created_at FROM sources WHERE agent_id=? ORDER BY rowid DESC")?; let rows=s.query_map(params![agent], |r| Ok(Source{id:r.get(0)?,agent_id:r.get(1)?,kind:r.get(2)?,name:r.get(3)?,config:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or(json!({})),created_at:r.get(5).ok()}))?; Ok(rows.collect::<Result<Vec<_>,_>>()?) }) }
+
+    pub fn ingest_document(&self, agent: &str, input: DocumentInput) -> Result<String, CoreError> { let agent=required_agent(agent)?; if input.content.trim().is_empty(){return Err(CoreError::InvalidInput("content must not be empty".into()));} self.call(move |c| { let exists:i64=c.query_row("SELECT count(*) FROM sources WHERE id=? AND agent_id=?",params![input.source_id,agent],|r|r.get(0))?; if exists==0{return Err(CoreError::NotFound)} let id=uuid::Uuid::new_v4().to_string(); let metadata=serde_json::to_string(&input.metadata)?; c.execute("INSERT INTO documents (id,agent_id,source_id,path,content,metadata,created_at) VALUES (?,?,?,?,?,?,datetime('now'))",params![id,agent,input.source_id,input.path,input.content,metadata])?; Ok(id) }) }
+
     pub fn submit(&self, operation: Operation) -> Result<Value, CoreError> {
-        match operation {
-            Operation::Health => Ok(serde_json::json!({ "ready": self.ready()? })),
-            Operation::Remember {
-                agent_id,
-                content,
-                metadata,
-            } => Ok(serde_json::json!({
-                "id": self.remember(&agent_id, NewMemory { content, metadata })?
-            })),
-            Operation::List {
-                agent_id,
-                include_deleted,
-            } => Ok(serde_json::to_value(
-                self.list(&agent_id, include_deleted)?,
-            )?),
-            Operation::Get { agent_id, id } => Ok(serde_json::to_value(self.get(&agent_id, &id)?)?),
-            Operation::Update {
-                agent_id,
-                id,
-                content,
-                metadata,
-            } => {
-                self.update(&agent_id, &id, UpdateMemory { content, metadata })?;
-                Ok(serde_json::json!({ "updated": true }))
+        self.call(move |connection| match operation {
+            Operation::Health => Ok(serde_json::json!({ "ready": true })),
+            Operation::Remember { agent_id, content, metadata } => {
+                let agent = required_agent(&agent_id)?;
+                if content.trim().is_empty() { return Err(CoreError::InvalidInput("content must not be empty".into())); }
+                let id = uuid::Uuid::new_v4().to_string();
+                let tx = connection.transaction()?;
+                tx.execute("INSERT INTO memories (id,agent_id,content,metadata,deleted,created_at,updated_at) VALUES (?,?,?, ?,0,datetime('now'),datetime('now'))", params![id, agent, content, serde_json::to_string(&metadata)?])?;
+                record_history(&tx, &id, &agent, "remember", None)?;
+                tx.commit()?;
+                Ok(serde_json::json!({"id": id}))
             }
-            Operation::SoftDelete { agent_id, id } => {
-                self.delete(&agent_id, &id)?;
-                Ok(serde_json::json!({ "deleted": true }))
+            Operation::List { agent_id, include_deleted } => {
+                let agent = required_agent(&agent_id)?;
+                let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at FROM memories WHERE COALESCE(agent_id,'default')=? AND (? OR deleted=0) ORDER BY rowid DESC LIMIT 10000")?;
+                let rows = stmt.query_map(params![agent, include_deleted as i64], memory_row)?;
+                Ok(serde_json::to_value(rows.collect::<Result<Vec<_>,_>>()?)?)
             }
-            Operation::Recover { agent_id, id } => {
-                self.recover(&agent_id, &id)?;
-                Ok(serde_json::json!({ "recovered": true }))
-            }
-            Operation::History { agent_id, id } => {
-                Ok(serde_json::to_value(self.history(&agent_id, &id)?)?)
-            }
-            Operation::Recall { agent_id, query } => {
-                Ok(serde_json::to_value(self.recall(&agent_id, &query)?)?)
-            }
-        }
+            other => Err(CoreError::InvalidInput(format!("operation {:?} is not yet owner-inline", std::mem::discriminant(&other)))),
+        })
     }
 }
 
@@ -434,6 +439,9 @@ pub enum Operation {
         agent_id: String,
         query: String,
     },
+    CreateSource { agent_id: String, kind: String, name: String, config: Value },
+    ListSources { agent_id: String },
+    IngestDocument { agent_id: String, source_id: String, path: String, content: String, metadata: Value },
 }
 
 fn owner_loop(
@@ -500,7 +508,8 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT);
          CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');
-         CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, kind TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}');
+         CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', created_at TEXT);
+         CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT);
          CREATE TABLE IF NOT EXISTS memory_history (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL, agent_id TEXT NOT NULL, operation TEXT NOT NULL, content TEXT, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);

@@ -427,6 +427,12 @@ async fn search(
     Ok(Json(json!({ "results": result })))
 }
 
+async fn sources(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> { let agent_id=agent(&headers,None,None)?; Ok(Json(json!({"sources": execute(&state, Operation::ListSources{agent_id}).await?}))) }
+#[derive(Debug, Deserialize)] struct SourceRequest { kind: String, name: String, #[serde(default)] config: Value }
+async fn create_source(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<SourceRequest>) -> Result<(StatusCode,Json<Value>),ApiError> { let agent_id=agent(&headers,None,None)?; Ok((StatusCode::CREATED,Json(execute(&state,Operation::CreateSource{agent_id,kind:req.kind,name:req.name,config:req.config}).await?))) }
+#[derive(Debug, Deserialize)] struct DocumentRequest { source_id: String, path: String, content: String, #[serde(default)] metadata: Value }
+async fn import_document(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<DocumentRequest>) -> Result<(StatusCode,Json<Value>),ApiError> { let agent_id=agent(&headers,None,None)?; Ok((StatusCode::CREATED,Json(execute(&state,Operation::IngestDocument{agent_id,source_id:req.source_id,path:req.path,content:req.content,metadata:req.metadata}).await?))) }
+
 async fn features() -> Json<Value> {
     Json(
         json!({ "runtime": "rust", "features": { "memory": true, "recall": true, "dreaming": false, "embeddings": false } }),
@@ -488,6 +494,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/status", get(status))
         .route("/api/pipeline/status", get(status))
         .route("/api/features", get(features))
+        .route("/api/sources", get(sources).post(create_source))
+        .route("/api/import/documents", post(import_document))
+        .route("/api/sources/documents", post(import_document))
         .route("/api/auth/whoami", get(whoami))
         .route("/api/memory/remember", post(remember))
         .route("/api/memory/save", post(remember))
