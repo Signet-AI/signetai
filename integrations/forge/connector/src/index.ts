@@ -23,7 +23,6 @@ import {
 	readTrimmedEnv,
 	resolveRemoteDaemonUrl,
 	resolveSignetApiKey,
-	resolveSignetMcpCommand,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
 
@@ -97,10 +96,9 @@ function buildMcpServer(basePath: string): ForgeMcpServer {
 			...(apiKey ? { headers: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
-	const mcp = resolveSignetMcpCommand();
 	return {
-		command: mcp.command,
-		...(mcp.args && mcp.args.length > 0 ? { args: mcp.args } : {}),
+		// Forge invokes the packaged/native MCP executable directly.
+		command: "signet-mcp",
 		env: buildSignetRuntimeEnv({ basePath }),
 	};
 }

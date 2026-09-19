@@ -49,6 +49,18 @@ afterEach(() => {
 });
 
 describe("ForgeConnector.install", () => {
+	it("keeps source and published output on the packaged/native MCP boundary", () => {
+		const source = readFileSync(join(import.meta.dir, "src/index.ts"), "utf-8");
+		const generated = readFileSync(join(import.meta.dir, "dist/index.js"), "utf-8");
+		for (const [label, contents] of [
+			["source", source],
+			["dist", generated],
+		] as const) {
+			expect(contents, label).toContain("signet-mcp");
+			expect(contents, label).not.toMatch(/mcp-stdio\.js|mcp-stdio\.ts|daemon-rs/);
+		}
+	});
+
 	it("writes ForgeCode user MCP config and managed AGENTS.md", async () => {
 		writeIdentity(tmpRoot);
 
