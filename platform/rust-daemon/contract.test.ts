@@ -228,4 +228,32 @@ describe("fresh Rust daemon", () => {
 		});
 		expect((await otherClaims.json()).items).toHaveLength(0);
 	});
+
+	it("persists source documents and rejects cross-agent ingestion", async () => {
+		const { origin } = await startDaemon();
+		const agentA = { "content-type": "application/json", "x-signet-agent": "agent-a" };
+		const create = await fetch(`${origin}/api/sources`, {
+			method: "POST",
+			headers: agentA,
+			body: JSON.stringify({ kind: "file", name: "notes", config: { path: "notes.md" } }),
+		});
+		expect(create.status).toBe(201);
+		const sourceId = ((await create.json()) as { id: string }).id;
+		const imported = await fetch(`${origin}/api/import/documents`, {
+			method: "POST",
+			headers: agentA,
+			body: JSON.stringify({ source_id: sourceId, path: "notes.md", content: "source evidence" }),
+		});
+		expect(imported.status).toBe(201);
+		const crossAgent = await fetch(`${origin}/api/import/documents`, {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-signet-agent": "agent-b" },
+			body: JSON.stringify({ source_id: sourceId, path: "notes.md", content: "must be rejected" }),
+		});
+		expect(crossAgent.status).toBe(404);
+		const ownSources = await fetch(`${origin}/api/sources`, { headers: { "x-signet-agent": "agent-a" } });
+		expect((await ownSources.json()).sources).toHaveLength(1);
+		const otherSources = await fetch(`${origin}/api/sources`, { headers: { "x-signet-agent": "agent-b" } });
+		expect((await otherSources.json()).sources).toHaveLength(0);
+	});
 });
