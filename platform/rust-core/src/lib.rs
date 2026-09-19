@@ -1083,6 +1083,20 @@ fn execute_operation(
             transaction.commit()?;
             Ok(json!({ "id": id }))
         }
+        Operation::DeleteSource { agent_id, source_id } => {
+            let tx = connection.transaction()?;
+            let changed = tx.execute("DELETE FROM documents WHERE agent_id = ? AND source_id = ?", params![agent_id, source_id])?;
+            let sources = tx.execute("DELETE FROM sources WHERE agent_id = ? AND id = ?", params![agent_id, source_id])?;
+            if sources == 0 { return Err(CoreError::NotFound); }
+            tx.commit()?;
+            Ok(json!({"deleted": true, "documentsDeleted": changed}))
+        }
+        Operation::SourceHealth { agent_id, source_id } => {
+            let exists: Option<i64> = connection.query_row("SELECT 1 FROM sources WHERE agent_id = ? AND id = ?", params![agent_id, source_id], |r| r.get(0)).optional()?;
+            if exists.is_none() { return Err(CoreError::NotFound); }
+            let documents: i64 = connection.query_row("SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ?", params![agent_id, source_id], |r| r.get(0))?;
+            Ok(json!({"status":"ready", "probe":"local-database", "documents":documents}))
+        }
         Operation::OntologyList {
             agent_id,
             workspace_id,
@@ -1553,6 +1567,8 @@ pub enum Operation {
         content: String,
         metadata: Value,
     },
+    DeleteSource { agent_id: String, source_id: String },
+    SourceHealth { agent_id: String, source_id: String },
     TranscriptImportCreate {
         agent_id: String,
         schema_id: String,

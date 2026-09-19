@@ -10,6 +10,7 @@ pub(crate) mod memory_advanced;
 pub(crate) mod ontology;
 pub(crate) mod pipeline;
 pub(crate) mod sessions;
+pub(crate) mod source_lifecycle;
 pub(crate) mod transcripts;
 
 use crate::AppState;
@@ -29,5 +30,6 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(sessions::router())
         .merge(memory_advanced::router())
         .merge(pipeline::router())
+        .merge(source_lifecycle::router())
         .merge(transcripts::router())
 }
