@@ -12,7 +12,7 @@ const nativeDir = join(import.meta.dir, "..", "platform", "native");
 const root = join(import.meta.dir, "..");
 const daemonManifest = join(root, "platform", "rust-daemon", "Cargo.toml");
 const daemonTarget = `${process.platform}-${process.arch}`;
-const dashboardSource = join(root, "surfaces", "dashboard", "dist");
+const dashboardSource = join(root, "surfaces", "dashboard", "build");
 const daemonBinary = join(
 	root,
 	"platform",

@@ -11,6 +11,7 @@ import {
 	rmSync,
 	renameSync,
 	statSync,
+	writeFileSync,
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +21,7 @@ const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "../..");
 const resources = resolve(desktopRoot, "resources");
 const nativeRuntime = resolve(repoRoot, "dist/signetai/runtime/rust-daemon");
-const dashboardBuild = resolve(repoRoot, "surfaces/dashboard/dist");
+const dashboardBuild = resolve(repoRoot, "surfaces/dashboard/build");
 const resourceLockOwnerGracePeriodMs = 60_000;
 
 function normalizeArch(value) {
