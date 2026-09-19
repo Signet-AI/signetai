@@ -15,6 +15,7 @@ struct EntityQuery {
     agent: AgentQuery,
     limit: Option<usize>,
     offset: Option<usize>,
+    workspace_id: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 struct EntityBody {
@@ -35,6 +36,14 @@ struct RelationBody {
 
 fn limit(value: Option<usize>) -> usize {
     value.unwrap_or(50).clamp(1, 200)
+}
+fn workspace(q: &EntityQuery) -> Result<String, ApiError> {
+    q.workspace_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| ApiError::bad_request("workspace_id is required"))
 }
 fn valid_metadata(v: &Value) -> Result<Value, ApiError> {
     if v.is_null() {
@@ -69,6 +78,7 @@ async fn list_entities(
             &state,
             Operation::KnowledgeEntityList {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&q)?,
                 limit: limit(q.limit),
                 offset: q.offset.unwrap_or(0),
             },
@@ -86,6 +96,7 @@ async fn create_entity(
         &state,
         Operation::KnowledgeEntityCreate {
             agent_id: agent(&headers, Some(&q.agent), None)?,
+            workspace_id: workspace(&q)?,
             name: body.name,
             entity_type: body.entity_type,
             metadata: valid_metadata(&body.metadata)?,
@@ -104,6 +115,7 @@ async fn create_relation(
         &state,
         Operation::KnowledgeRelationCreate {
             agent_id: agent(&headers, Some(&q.agent), None)?,
+            workspace_id: workspace(&q)?,
             from_id: body.from_id,
             to_id: body.to_id,
             relation: body.relation,
@@ -124,6 +136,7 @@ async fn list_relations(
             &state,
             Operation::KnowledgeRelations {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&q)?,
                 entity_id: id,
                 limit: limit(q.limit),
             },

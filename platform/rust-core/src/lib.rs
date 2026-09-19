@@ -1520,40 +1520,46 @@ fn execute_operation(
         }
         Operation::KnowledgeEntityCreate {
             agent_id,
+            workspace_id,
             name,
             entity_type,
             metadata,
         } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
             let name = bounded_text(&name, "entity name", 256)?;
             let entity_type = bounded_text(&entity_type, "entity type", 64)?;
             let metadata = bounded_json(&metadata)?;
             let id = uuid::Uuid::new_v4().to_string();
             let tx = connection.transaction()?;
-            tx.execute("INSERT INTO kg_entities(id,agent_id,name,entity_type,metadata,created_at,updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))",params![id,agent_id,name,entity_type,metadata])?;
+            tx.execute("INSERT INTO kg_entities(id,agent_id,workspace_id,name,entity_type,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,datetime('now'),datetime('now'))",params![id,agent_id,workspace_id,name,entity_type,metadata])?;
             tx.commit()?;
             Ok(json!({"id":id,"agentId":agent_id,"name":name,"type":entity_type}))
         }
         Operation::KnowledgeEntityList {
             agent_id,
+            workspace_id,
             limit,
             offset,
         } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
             let limit = limit.clamp(1, 200) as i64;
             let offset = offset.min(100_000) as i64;
-            let mut s=connection.prepare("SELECT id,name,entity_type,metadata,created_at,updated_at FROM kg_entities WHERE agent_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?")?;
-            let rows=s.query_map(params![agent_id,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(4)?,"updatedAt":r.get::<_,String>(5)?})))?;
+            let mut s=connection.prepare("SELECT id,name,entity_type,metadata,created_at,updated_at FROM kg_entities WHERE agent_id=? AND workspace_id=? AND deleted=0 ORDER BY rowid DESC LIMIT ? OFFSET ?")?;
+            let rows=s.query_map(params![agent_id,workspace_id,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(4)?,"updatedAt":r.get::<_,String>(5)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?,"limit":limit,"offset":offset}))
         }
         Operation::KnowledgeRelationCreate {
             agent_id,
+            workspace_id,
             from_id,
             to_id,
             relation,
             metadata,
         } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
             let from_id = required_id(&from_id)?;
             let to_id = required_id(&to_id)?;
             let relation = bounded_text(&relation, "relation", 128)?;
@@ -1565,28 +1571,30 @@ fn execute_operation(
             }
             let tx = connection.transaction()?;
             let count: i64 = tx.query_row(
-                "SELECT count(*) FROM kg_entities WHERE agent_id=? AND id IN (?,?)",
-                params![agent_id, from_id, to_id],
+                "SELECT count(*) FROM kg_entities WHERE agent_id=? AND workspace_id=? AND deleted=0 AND id IN (?,?)",
+                params![agent_id, workspace_id, from_id, to_id],
                 |r| r.get(0),
             )?;
             if count != 2 {
                 return Err(CoreError::NotFound);
             }
             let id = uuid::Uuid::new_v4().to_string();
-            tx.execute("INSERT INTO kg_relations(id,agent_id,from_id,to_id,relation,metadata,created_at) VALUES(?,?,?,?,?,?,datetime('now'))",params![id,agent_id,from_id,to_id,relation,metadata])?;
+            tx.execute("INSERT INTO kg_relations(id,agent_id,workspace_id,from_id,to_id,relation,metadata,created_at) VALUES(?,?,?,?,?,?,?,datetime('now'))",params![id,agent_id,workspace_id,from_id,to_id,relation,metadata])?;
             tx.commit()?;
             Ok(json!({"id":id,"fromId":from_id,"toId":to_id,"relation":relation}))
         }
         Operation::KnowledgeRelations {
             agent_id,
+            workspace_id,
             entity_id,
             limit,
         } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
             let entity_id = required_id(&entity_id)?;
             let limit = limit.clamp(1, 200) as i64;
-            let mut s=connection.prepare("SELECT id,from_id,to_id,relation,metadata,created_at FROM kg_relations WHERE agent_id=? AND (from_id=? OR to_id=?) ORDER BY rowid DESC LIMIT ?")?;
-            let rows=s.query_map(params![agent_id,entity_id,entity_id,limit],|r| Ok(json!({"id":r.get::<_,String>(0)?,"fromId":r.get::<_,String>(1)?,"toId":r.get::<_,String>(2)?,"relation":r.get::<_,String>(3)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
+            let mut s=connection.prepare("SELECT id,from_id,to_id,relation,metadata,created_at FROM kg_relations WHERE agent_id=? AND workspace_id=? AND deleted=0 AND (from_id=? OR to_id=?) ORDER BY rowid DESC LIMIT ?")?;
+            let rows=s.query_map(params![agent_id,workspace_id,entity_id,entity_id,limit],|r| Ok(json!({"id":r.get::<_,String>(0)?,"fromId":r.get::<_,String>(1)?,"toId":r.get::<_,String>(2)?,"relation":r.get::<_,String>(3)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?}))
         }
         Operation::KnowledgeAspectCreate {
@@ -2047,17 +2055,20 @@ pub enum Operation {
     },
     KnowledgeEntityCreate {
         agent_id: String,
+        workspace_id: String,
         name: String,
         entity_type: String,
         metadata: Value,
     },
     KnowledgeEntityList {
         agent_id: String,
+        workspace_id: String,
         limit: usize,
         offset: usize,
     },
     KnowledgeRelationCreate {
         agent_id: String,
+        workspace_id: String,
         from_id: String,
         to_id: String,
         relation: String,
@@ -2065,6 +2076,7 @@ pub enum Operation {
     },
     KnowledgeRelations {
         agent_id: String,
+        workspace_id: String,
         entity_id: String,
         limit: usize,
     },
