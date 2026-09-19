@@ -3,16 +3,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import {
-	Database as CoreDatabase,
 	type IdentityMode,
-	type ImportResult,
 	type SkillsResult,
 	disableGraphiqState,
-	ensureUnifiedSchema,
 	formatYaml,
-	importMemoryLogs,
 	resolvePrimaryPackageManager,
-	runMigrations,
 	unifySkills,
 } from "@signet/core";
 import { readNetworkMode } from "@signet/core";
@@ -21,7 +16,7 @@ import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import type { SetupDetection } from "../lib/setup-detection.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
-import Database from "../sqlite.js";
+
 import { installGraphiqPlugin } from "./graphiq.js";
 import {
 	applySetupInferenceRoute,
@@ -448,15 +443,8 @@ export async function runExistingSetupWizard(
 			writeFileSync(path, content);
 		}
 
-		spinner.text = "Initializing database...";
-		const dbPath = join(basePath, "memory", "memories.db");
-		const db = Database(dbPath);
-		const migrationResult = ensureUnifiedSchema(db);
-		if (migrationResult.migrated) {
-			spinner.text = `Migrated ${migrationResult.memoriesMigrated} memories from ${migrationResult.fromSchema} schema...`;
-		}
-		runMigrations(db);
-		db.close();
+		// Database schema and migrations are daemon-owned. Do not open or mutate
+		// memories.db from the CLI; the native daemon initializes it on startup.
 
 		let protection = await withSetupPrompt(spinner, () =>
 			enforceSetupProtection({
@@ -467,18 +455,10 @@ export async function runExistingSetupWizard(
 			}),
 		);
 
-		let importResult: ImportResult | null = null;
 		if (detection.hasMemoryDir && detection.memoryLogCount > 0) {
-			spinner.text = `Importing ${detection.memoryLogCount} memory logs...`;
-			let coreDb: CoreDatabase | null = null;
-			try {
-				coreDb = new CoreDatabase(dbPath);
-				importResult = importMemoryLogs(basePath, coreDb);
-			} catch (err) {
-				console.warn(`\n  ⚠ Memory import warning: ${readErr(err)}`);
-			} finally {
-				coreDb?.close();
-			}
+			console.warn(
+				`\n  ⚠ Memory log import is not supported by the native daemon yet (${detection.memoryLogCount} logs left untouched).`,
+			);
 		}
 
 		let skillsResult: SkillsResult | null = null;
@@ -557,13 +537,6 @@ export async function runExistingSetupWizard(
 			chalk.dim(`    ${graphiqInstalled ? "✓" : "○"} GraphIQ ${graphiqInstalled ? "enabled" : "not installed"}`),
 		);
 		console.log();
-
-		if (importResult && importResult.imported > 0) {
-			console.log(chalk.dim(`  Memory logs imported: ${importResult.imported} entries`));
-			if (importResult.skipped > 0) {
-				console.log(chalk.dim(`    (${importResult.skipped} skipped)`));
-			}
-		}
 
 		if (skillsResult && (skillsResult.imported > 0 || skillsResult.symlinked > 0)) {
 			console.log(

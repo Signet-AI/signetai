@@ -6,16 +6,13 @@ import {
 	addObsidianSource,
 	buildAgentMemoryConfig,
 	disableGraphiqState,
-	ensureUnifiedSchema,
 	formatYaml,
 	resolvePrimaryPackageManager,
-	runMigrations,
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
-import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import {
 	applyAggregateRecallRoute,
@@ -246,15 +243,9 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			}
 		}
 
-		spinner.text = "Initializing database...";
-		const dbPath = join(context.basePath, "memory", "memories.db");
-		const db = Database(dbPath);
-		try {
-			ensureUnifiedSchema(db);
-			runMigrations(db);
-		} finally {
-			db.close();
-		}
+		// Schema creation is daemon-owned. Starting the native daemon below is
+		// the only supported initialization boundary; the CLI must not open or
+		// mutate memories.db directly.
 
 		let protection = await withSetupPrompt(spinner, () =>
 			enforceSetupProtection({
