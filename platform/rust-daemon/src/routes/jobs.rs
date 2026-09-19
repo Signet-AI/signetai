@@ -14,6 +14,34 @@ use std::{convert::Infallible, time::Duration};
 
 const MAX_JOB_KIND_BYTES: usize = 64;
 const MAX_JOB_PAYLOAD_BYTES: usize = 1_048_576;
+const MAX_HEADER_BYTES: usize = 256;
+
+fn workspace(headers: &HeaderMap) -> Result<String, ApiError> {
+    let value = headers
+        .get("x-workspace-id")
+        .ok_or_else(|| ApiError::unauthorized("x-workspace-id is required"))?;
+    let value = value
+        .to_str()
+        .map_err(|_| ApiError::bad_request("x-workspace-id must be valid UTF-8"))?
+        .trim();
+    if value.is_empty() || value.len() > MAX_HEADER_BYTES {
+        return Err(ApiError::bad_request("x-workspace-id must be 1-256 bytes"));
+    }
+    Ok(value.to_owned())
+}
+
+fn header_text(headers: &HeaderMap, name: &str, default: &str) -> Result<String, ApiError> {
+    let value = headers
+        .get(name)
+        .map(|v| v.to_str().map(str::trim))
+        .transpose()
+        .map_err(|_| ApiError::bad_request(format!("{name} must be valid UTF-8")))?
+        .unwrap_or(default);
+    if value.is_empty() || value.len() > MAX_HEADER_BYTES {
+        return Err(ApiError::bad_request(format!("{name} must be 1-256 bytes")));
+    }
+    Ok(value.to_owned())
+}
 
 #[derive(Deserialize)]
 pub struct JobRequest {
@@ -34,6 +62,7 @@ pub async fn submit(
     Json(body): Json<JobRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = workspace(&headers)?;
     if body.kind.trim().is_empty() || body.kind.len() > MAX_JOB_KIND_BYTES {
         return Err(ApiError::bad_request("job kind must be 1-64 bytes"));
     }
@@ -49,11 +78,7 @@ pub async fn submit(
             &state,
             Operation::JobSubmit {
                 agent_id,
-                workspace_id: headers
-                    .get("x-workspace-id")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("default")
-                    .to_string(),
+                workspace_id,
                 kind: body.kind,
                 payload: body.payload,
                 deadline_at: body.deadline_at,
@@ -68,8 +93,17 @@ pub async fn get(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = workspace(&headers)?;
     Ok(Json(
-        execute(&state, Operation::JobGet { agent_id, id }).await?,
+        execute(
+            &state,
+            Operation::JobGet {
+                agent_id,
+                workspace_id,
+                id,
+            },
+        )
+        .await?,
     ))
 }
 pub async fn cancel(
@@ -78,22 +112,16 @@ pub async fn cancel(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = workspace(&headers)?;
     Ok(Json(
         execute(
             &state,
             Operation::JobCancel {
                 agent_id,
+                workspace_id,
                 id,
-                actor: headers
-                    .get("x-actor")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("api")
-                    .to_string(),
-                reason: headers
-                    .get("x-reason")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("requested")
-                    .to_string(),
+                actor: header_text(&headers, "x-actor", "api")?,
+                reason: header_text(&headers, "x-reason", "requested")?,
             },
         )
         .await?,
@@ -105,11 +133,13 @@ pub async fn list(
     Query(query): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = workspace(&headers)?;
     Ok(Json(
         execute(
             &state,
             Operation::JobList {
                 agent_id,
+                workspace_id,
                 limit: query.limit.unwrap_or(50).min(100),
             },
         )
@@ -123,10 +153,12 @@ pub async fn events(
     Query(query): Query<ListQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = workspace(&headers)?;
     let value = execute(
         &state,
         Operation::JobEvents {
             agent_id,
+            workspace_id,
             id,
             cursor: query.cursor.unwrap_or(0),
             limit: query.limit.unwrap_or(100).min(1000),

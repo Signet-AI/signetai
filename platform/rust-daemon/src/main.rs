@@ -723,6 +723,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace_path();
     std::fs::create_dir_all(workspace.join("memory"))?;
     let owner = Arc::new(WorkspaceOwner::open(&database_path(&workspace), 256)?);
+    owner.initialize()?;
     let state = AppState {
         owner,
         started_at: now_seconds(),
