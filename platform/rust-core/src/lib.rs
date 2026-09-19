@@ -1,3 +1,4 @@
+use sha2::{Digest, Sha256};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -384,6 +385,30 @@ fn execute_operation(
     operation: Operation,
 ) -> Result<Value, CoreError> {
     match operation {
+        Operation::TranscriptImportCreate { agent_id, schema_id, duplicate_mode, files } => {
+            let agent_id = required_agent(&agent_id)?;
+            if schema_id != "signet-export" || !matches!(duplicate_mode.as_str(), "skip" | "replace" | "reimport") { return Err(CoreError::InvalidInput("unsupported import schema or duplicate mode".into())); }
+            let files = files.as_array().ok_or_else(|| CoreError::InvalidInput("files must be an array".into()))?;
+            if files.is_empty() || files.len() > 25 { return Err(CoreError::InvalidInput("files must contain 1-25 entries".into())); }
+            let id = uuid::Uuid::new_v4().to_string();
+            connection.execute("INSERT INTO transcript_import_jobs (id,agent_id,schema_id,duplicate_mode,state,files,created_at,updated_at) VALUES (?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,schema_id,duplicate_mode, "staging", serde_json::to_string(files)?])?;
+            Ok(json!({"id":id,"jobId":id,"agentId":agent_id,"state":"staging","files":files}))
+        }
+        Operation::TranscriptImportGet { agent_id, id } => {
+            let value: Option<String> = connection.query_row("SELECT json_object('id',id,'agentId',agent_id,'schemaId',schema_id,'duplicateMode',duplicate_mode,'state',state,'files',json(files),'createdAt',created_at,'updatedAt',updated_at) FROM transcript_import_jobs WHERE id=? AND agent_id=?", params![id, required_agent(&agent_id)?], |r| r.get(0)).optional()?;
+            value.map(|v| serde_json::from_str(&v)).transpose()?.ok_or(CoreError::NotFound)
+        }
+        Operation::TranscriptUpsert { agent_id, session_key, harness, project, content, idempotency_key } => {
+            let agent_id = required_agent(&agent_id)?; if session_key.trim().is_empty() || harness.trim().is_empty() || content.len() > 16 * 1024 * 1024 || idempotency_key.trim().is_empty() { return Err(CoreError::InvalidInput("invalid or oversized transcript".into())); }
+            let mut hasher = Sha256::new(); hasher.update(content.as_bytes()); let hash = format!("{:x}", hasher.finalize());
+            connection.execute("INSERT INTO session_transcripts (session_key,agent_id,harness,project,content,content_hash,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(agent_id,session_key) DO UPDATE SET content=excluded.content,content_hash=excluded.content_hash,updated_at=datetime('now')", params![session_key,agent_id,harness,project,content,hash,idempotency_key])?;
+            Ok(json!({"sessionKey":session_key,"agentId":agent_id,"contentHash":hash,"state":"stored"}))
+        }
+        Operation::TranscriptList { agent_id, limit } => {
+            let mut s=connection.prepare("SELECT json_object('sessionKey',session_key,'agentId',agent_id,'harness',harness,'project',project,'content',content,'contentHash',content_hash,'createdAt',created_at,'updatedAt',updated_at,'completedAt',completed_at) FROM session_transcripts WHERE agent_id=? ORDER BY created_at DESC LIMIT ?")?;
+            let rows=s.query_map(params![required_agent(&agent_id)?, limit.clamp(1,100)], |r| r.get::<_,String>(0))?;
+            Ok(Value::Array(rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect::<Result<Vec<Value>, CoreError>>()?))
+        }
         Operation::JobSubmit {
             agent_id,
             kind,
@@ -1016,6 +1041,10 @@ pub enum Operation {
         content: String,
         metadata: Value,
     },
+    TranscriptImportCreate { agent_id: String, schema_id: String, duplicate_mode: String, files: Value },
+    TranscriptImportGet { agent_id: String, id: String },
+    TranscriptUpsert { agent_id: String, session_key: String, harness: String, project: Option<String>, content: String, idempotency_key: String },
+    TranscriptList { agent_id: String, limit: usize },
     JobSubmit {
         agent_id: String,
         kind: String,
@@ -1243,6 +1272,9 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS pipeline_state (agent_id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'idle', paused INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS sessions (key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, runtime_path TEXT, project TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(key, agent_id));
          CREATE TABLE IF NOT EXISTS event_records (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, session_key TEXT, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS transcript_import_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, schema_id TEXT NOT NULL, duplicate_mode TEXT NOT NULL, state TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS session_transcripts (session_key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, project TEXT, content TEXT NOT NULL, content_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, PRIMARY KEY(agent_id, session_key));
+         CREATE UNIQUE INDEX IF NOT EXISTS session_transcripts_idempotency ON session_transcripts(agent_id, idempotency_key);
          CREATE INDEX IF NOT EXISTS event_records_scope ON event_records(agent_id, session_key, id);
          SELECT 1;",
     )?;
