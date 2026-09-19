@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,7 +10,10 @@ type SearchBody = {
 	results: SearchResult[];
 	query: string;
 	method: string;
-	meta: { lexical: { completeness: string }; channels: { vector: { supported: boolean } } };
+	meta: {
+		lexical: { available: boolean; completeness: string };
+		channels: { vector: { supported: boolean } };
+	};
 };
 type Created = { id: string };
 
@@ -74,6 +78,26 @@ async function search(origin: string, agent: string, suffix = ""): Promise<Searc
 	expect(response.status).toBe(200);
 	return (await response.json()) as SearchBody;
 }
+function installFts(workspace: string): void {
+	const database = new Database(join(workspace, "memory", "memories.db"));
+	try {
+		database.exec("DROP TRIGGER IF EXISTS memories_ai");
+		database.exec("DROP TRIGGER IF EXISTS memories_ad");
+		database.exec("DROP TRIGGER IF EXISTS memories_au");
+		database.exec("DROP TABLE IF EXISTS memories_fts");
+		database.exec(`
+			CREATE VIRTUAL TABLE memories_fts USING fts5(
+				content,
+				content='memories',
+				content_rowid='rowid',
+				tokenize='porter unicode61'
+			);
+		`);
+		database.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
+	} finally {
+		database.close();
+	}
+}
 
 describe("native retrieval contract", () => {
 	it("proves scoped lexical retrieval, API shapes, boundaries, lifecycle exclusion, fallback truth, and restart", async () => {
@@ -117,16 +141,21 @@ describe("native retrieval contract", () => {
 			expect(legacy.results.length).toBe(1);
 			expect((await search(first.origin, "agent-a")).results.some((row) => row.id === privateId)).toBe(false);
 			expect((await search(first.origin, "agent-a")).results.some((row) => row.id === deleted)).toBe(false);
-			expect((await search(first.origin, "agent-a")).meta.lexical.completeness).toBe("partial");
+			const fallback = await search(first.origin, "agent-a");
+			expect(fallback.meta.lexical.available).toBe(false);
+			expect(fallback.meta.lexical.completeness).toBe("partial");
 			for (const bad of ["0", "101", "nope", "-1", "1.5"])
 				expect(
 					(await fetch(`${first.origin}/api/memory/search?q=tokenized&agent_id=agent-a&limit=${bad}`)).status,
 				).toBe(400);
 			await stop(first.child);
 			first = undefined;
+			installFts(workspace);
 			second = await start(workspace);
 			const persisted = await search(second.origin, "agent-a");
 			expect(persisted.results.some((row) => row.id === replacement)).toBe(true);
+			expect(persisted.meta.lexical.available).toBe(true);
+			expect(persisted.meta.lexical.completeness).toBe("complete");
 		} finally {
 			if (first) await stop(first.child);
 			if (second) await stop(second.child);
