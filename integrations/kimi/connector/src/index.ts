@@ -1,13 +1,62 @@
+/**
+ * Signet Connector for Kimi CLI / Kimi Code
+ *
+ * Integrates Signet's memory system with Kimi's lifecycle hooks.
+ *
+ * Kimi facts (from the official Kimi Code docs):
+ * - Current config home: ~/.kimi/ (env override KIMI_SHARE_DIR).
+ * - Legacy Kimi Code 0.x uses ~/.kimi-code/ (env override KIMI_CODE_HOME).
+ * - Hooks: [[hooks]] array-of-tables in the selected config.toml.
+ *   Allowed fields: event (required), matcher (optional regex),
+ *   command (required), timeout (optional). Extra fields break config load.
+ * - Hook payload arrives as JSON on STDIN (snake_case fields).
+ * - For UserPromptSubmit, hook STDOUT text is appended to the model context;
+ *   SessionStart STDOUT is also appended. SessionEnd is observation-only.
+ * - MCP servers: JSON file mcp.json in the selected Kimi home, with shape
+ *   {"mcpServers": {"signet": {"command": ..., "args": [...]}}} for stdio.
+ *
+ * Usage:
+ * ```typescript
+ * import { KimiConnector } from '@signet/connector-kimi';
+ *
+ * const connector = new KimiConnector();
+ * await connector.install('~/.agents');
+ * ```
+ */
+
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { BaseConnector, type InstallResult, type UninstallResult, atomicWriteJson } from "@signet/connector-base";
 import {
-	expandHome,
-	resolvePromptSubmitTimeoutMs,
-	resolveSessionStartTimeoutMs,
-	resolveSignetDaemonUrl,
-} from "@signet/core";
+	BaseConnector,
+	atomicWriteJson,
+	resolveRemoteDaemonUrl,
+	type InstallResult,
+	type UninstallResult,
+} from "@signet/connector-base";
+
+function expandHome(path: string): string {
+	if (path === "~") return homedir();
+	if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
+	return path;
+}
+
+function resolveTimeout(raw: string | undefined, fallback: number): number {
+	if (!raw) return fallback;
+	const ms = Number.parseInt(raw, 10);
+	return !Number.isFinite(ms) || ms < 1_000 ? fallback : Math.min(ms, 120_000);
+}
+
+const resolveSessionStartTimeoutMs = (raw?: string) => resolveTimeout(raw, 15_000);
+const resolvePromptSubmitTimeoutMs = (raw?: string) => resolveTimeout(raw, 5_000);
+
+// ---------------------------------------------------------------------------
+// Signet command resolution
+// ---------------------------------------------------------------------------
+
+/** Resolve signet command for hook invocation. Mirrors the Codex connector:
+ *  on Windows, navigate from argv[1] up two levels to find bin/signet.js so
+ *  the .cmd shim (which flashes a console window) is bypassed. */
 function resolveSignetArgs(): string[] {
 	if (process.platform !== "win32") return ["signet"];
 	const entry = process.argv[1] || "";
@@ -20,6 +69,8 @@ export interface KimiMcpStdioConfig {
 	readonly command: string;
 	readonly args: readonly string[];
 }
+
+/** Resolve signet-mcp as { command, args } for Kimi mcp.json (stdio transport). */
 function resolveSignetMcp(): KimiMcpStdioConfig {
 	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
 	const entry = process.argv[1] || "";
@@ -35,10 +86,10 @@ function readEnv(name: string): string | undefined {
 	return trimmed.length > 0 ? trimmed : undefined;
 }
 
-function resolveRemoteDaemonUrl(): string | null {
+function resolveKimiRemoteDaemonUrl(): string | null {
 	const explicit = readEnv("SIGNET_DAEMON_URL");
 	if (!explicit) return null;
-	return resolveSignetDaemonUrl();
+	return resolveRemoteDaemonUrl();
 }
 
 function readAuthTokenEnv(): string | undefined {
@@ -69,6 +120,21 @@ function withRemoteDaemonEnv(command: string, remoteDaemonUrl: string | null): s
 		command,
 	].join(" ");
 }
+
+// ---------------------------------------------------------------------------
+// config.toml [[hooks]] management
+//
+// Kimi expects hook entries as TOML array-of-tables:
+//
+//   [[hooks]]
+//   event = 'SessionStart'
+//   command = 'signet hook session-start -H kimi --kimi-json'
+//   timeout = 20
+//
+// ONLY event/matcher/command/timeout are allowed — extra fields (including
+// marker keys) break config load, so Signet-owned blocks are identified by
+// their command string and an optional preceding comment line.
+// ---------------------------------------------------------------------------
 
 const SIGNET_HOOK_COMMENT = "# Signet lifecycle hook (managed by signet)";
 
@@ -101,7 +167,7 @@ function resolveKimiPromptSubmitTimeoutSeconds(): number {
 
 export function buildKimiHookEntries(
 	signetArgs: readonly string[],
-	remoteDaemonUrl: string | null = resolveRemoteDaemonUrl(),
+	remoteDaemonUrl: string | null = resolveKimiRemoteDaemonUrl(),
 ): KimiHookEntry[] {
 	const cmd = (subcommand: string, kimiJson: boolean): string =>
 		withRemoteDaemonEnv(
@@ -128,6 +194,7 @@ export function buildKimiHookEntries(
 }
 
 function tomlQuote(s: string): string {
+	// Use TOML literal strings (single-quoted) to avoid backslash escaping
 	if (!s.includes("'")) return `'${s}'`;
 	return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n")}"`;
 }
@@ -147,6 +214,9 @@ const SIGNET_KIMI_HOOK_PATTERN = /\bhook\s+(?:session-start|user-prompt-submit|s
 function isSignetKimiHookBlock(block: readonly string[]): boolean {
 	return SIGNET_KIMI_HOOK_PATTERN.test(block.join("\n"));
 }
+
+/** Remove every Signet-owned Kimi [[hooks]] block (and its marker comment)
+ *  from config.toml content. User-owned hooks and other sections are kept. */
 export function removeSignetKimiHookBlocks(content: string): string {
 	const lines = content.split("\n");
 	const out: string[] = [];
@@ -201,6 +271,10 @@ function unpatchConfigToml(path: string): boolean {
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// MCP server registration (mcp.json)
+// ---------------------------------------------------------------------------
+
 interface KimiMcpJson {
 	mcpServers?: Record<string, unknown>;
 	[key: string]: unknown;
@@ -213,6 +287,7 @@ function readMcpJson(path: string): KimiMcpJson | null {
 		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
 		return parsed as KimiMcpJson;
 	} catch {
+		// Don't corrupt an unparseable config
 		return null;
 	}
 }
@@ -253,6 +328,10 @@ function unpatchMcpJson(path: string): boolean {
 	}
 	return true;
 }
+
+// ---------------------------------------------------------------------------
+// Connector
+// ---------------------------------------------------------------------------
 
 export class KimiConnector extends BaseConnector {
 	readonly name = "Kimi";
@@ -295,14 +374,21 @@ export class KimiConnector extends BaseConnector {
 
 		const kimiHome = this.getKimiHome();
 		mkdirSync(kimiHome, { recursive: true });
+
+		// 1. Merge [[hooks]] entries into config.toml
 		const configPath = this.getConfigPath();
 		if (patchConfigToml(configPath, buildKimiHookEntries(resolveSignetArgs()))) {
 			configsPatched.push(configPath);
 		}
+
+		// 2. Symlink skills into the selected Kimi home. Current Kimi also
+		// discovers ~/.agents/skills directly, while this keeps legacy support.
 		const skillsResult = this.symlinkSkills(expandedBasePath, kimiHome);
 		if (skillsResult.errors.length > 0) {
 			warnings.push("Failed to symlink skills directory");
 		}
+
+		// 3. Register MCP server in mcp.json
 		const mcpPath = this.getMcpJsonPath();
 		if (patchMcpJson(mcpPath, resolveSignetMcp())) {
 			configsPatched.push(mcpPath);
@@ -322,15 +408,21 @@ export class KimiConnector extends BaseConnector {
 	async uninstall(): Promise<UninstallResult> {
 		const filesRemoved: string[] = [];
 		const configsPatched: string[] = [];
+
+		// 1. Remove Signet [[hooks]] entries from config.toml
 		const configPath = this.getConfigPath();
 		if (unpatchConfigToml(configPath)) {
 			configsPatched.push(configPath);
 		}
+
+		// 2. Remove skills symlink
 		const skillsLink = join(this.getKimiHome(), "skills");
 		if (existsSync(skillsLink)) {
 			rmSync(skillsLink, { force: true });
 			filesRemoved.push(skillsLink);
 		}
+
+		// 3. Remove signet MCP server from mcp.json
 		const mcpPath = this.getMcpJsonPath();
 		if (unpatchMcpJson(mcpPath)) {
 			configsPatched.push(mcpPath);

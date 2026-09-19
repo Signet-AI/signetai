@@ -4,6 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { OpenClawConnector } from "../src/index";
 
+describe("production connector boundary", () => {
+	it("does not depend on core or daemon packages", async () => {
+		const source = await Bun.file(new URL("../src/index.ts", import.meta.url)).text();
+		const manifest = await Bun.file(new URL("../package.json", import.meta.url)).json();
+		expect(source).not.toMatch(/@signet\/(core|daemon)/);
+		expect(manifest.dependencies?.["@signet/core"]).toBeUndefined();
+		expect(manifest.dependencies?.["@signet/daemon"]).toBeUndefined();
+	});
+});
+
 let tmpRoot = "";
 const envKeys = [
 	"OPENCLAW_CONFIG_PATH",
@@ -59,14 +69,13 @@ describe("OpenClawConnector config patching", () => {
 		const handlerJs = readFileSync(handlerPath, "utf-8");
 		expect(handlerJs).toContain("async function recallMessage(data)");
 		expect(handlerJs).toContain('if (typeof data?.message === "string") return data.message;');
-		expect(handlerJs).toContain('await import("@signet/core")');
+		expect(handlerJs).not.toContain("@signet/core");
 		expect(handlerJs).toContain('return "No matching memories found.";');
-		expect(handlerJs).toContain("Keep a compact compatibility path");
+		expect(handlerJs).toContain("Found ");
 		expect(handlerJs).toContain("rows.slice(0, 8)");
 		expect(handlerJs).not.toContain("JSON.stringify(data, null, 2)");
 		expect(handlerJs).toContain("event.messages.push(await recallMessage(data));");
 		expect(handlerJs).not.toContain("Supporting context:");
-		expect(handlerJs).not.toContain('data.results.map(r => `- ${r.content}`).join("\\\\n")');
 	});
 
 	it("does not patch workspace when configureWorkspace is false", async () => {

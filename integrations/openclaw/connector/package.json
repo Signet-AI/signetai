@@ -1,6 +1,6 @@
 {
 	"name": "@signet/connector-openclaw",
-	"version": "0.226.17",
+	"version": "0.226.7",
 	"description": "Signet connector for OpenClaw - configures workspace and memory hooks",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -25,8 +25,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
-		"@signet/connector-base": "0.226.17",
-		"@signet/core": "0.226.17"
+		"@signet/connector-base": "0.226.7"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",

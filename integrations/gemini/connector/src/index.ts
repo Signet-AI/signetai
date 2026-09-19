@@ -21,9 +21,37 @@ import {
 	isSignetGeneratedFile,
 	resolveSignetWorkspacePath,
 } from "@signet/connector-base";
-import { expandHome, hasValidIdentity, loadIdentityMode } from "@signet/core";
 
 type JsonObject = Record<string, unknown>;
+
+function getHomeDir(): string {
+	return process.env.HOME?.trim() || homedir();
+}
+
+function expandHome(path: string): string {
+	if (path === "~") return getHomeDir();
+	if (path.startsWith("~/") || path.startsWith("~\\")) return join(getHomeDir(), path.slice(2));
+	return path;
+}
+
+type IdentityMode = "managed" | "off" | "passthrough";
+
+function loadIdentityMode(basePath: string): IdentityMode {
+	const configPath = join(basePath, "agent.yaml");
+	if (!existsSync(configPath)) return "managed";
+	try {
+		const raw = readFileSync(configPath, "utf8");
+		if (/^\s*(?:enabled|mode):\s*(?:false|off)\s*$/m.test(raw) || /identity:\s*\n(?:.|\n)*?mode:\s*off/m.test(raw))
+			return "off";
+		if (/mode:\s*passthrough\b/.test(raw)) return "passthrough";
+	} catch {}
+	return "managed";
+}
+
+function hasValidIdentity(basePath: string): boolean {
+	if (loadIdentityMode(basePath) !== "managed") return true;
+	return ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"].every((file) => existsSync(join(basePath, file)));
+}
 
 function readGeminiSettings(settingsPath: string): JsonObject | null {
 	if (!existsSync(settingsPath)) return null;
@@ -44,7 +72,7 @@ export class GeminiConnector extends BaseConnector {
 	}
 
 	private getGeminiHome(): string {
-		return join(homedir(), ".gemini");
+		return join(getHomeDir(), ".gemini");
 	}
 
 	getConfigPath(): string {
@@ -70,7 +98,7 @@ export class GeminiConnector extends BaseConnector {
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 		const configsPatched: string[] = [];
-		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
+		const expandedBasePath = expandHome(basePath || join(getHomeDir(), ".agents"));
 
 		const identityMode = loadIdentityMode(expandedBasePath);
 
@@ -166,7 +194,7 @@ export class GeminiConnector extends BaseConnector {
 	}
 
 	static isHarnessInstalled(): boolean {
-		return existsSync(join(homedir(), ".gemini", "settings.json"));
+		return existsSync(join(getHomeDir(), ".gemini", "settings.json"));
 	}
 
 	private removeSignetSkillSymlinks(skillsDir: string, signetWorkspace: string): void {
