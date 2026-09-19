@@ -2288,6 +2288,42 @@ fn execute_operation(
             let rows=s.query_map(params![agent_id,key,key,limit],|r| Ok(json!({"id":r.get::<_,i64>(0)?,"event":r.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(3)?})))?;
             Ok(json!({"events":rows.collect::<Result<Vec<_>,_>>()?}))
         }
+        Operation::TelemetryRecord {
+            agent_id,
+            workspace_id,
+            event,
+            payload,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let event = bounded_text(&event, "event", 128)?;
+            let payload = bounded_json(&payload)?;
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO telemetry_events(agent_id,workspace_id,event,payload,created_at) VALUES(?,?,?,?,datetime('now'))", params![agent_id,workspace_id,event,payload])?;
+            let id = tx.last_insert_rowid();
+            tx.commit()?;
+            Ok(
+                json!({"id":id,"agentId":agent_id,"workspaceId":workspace_id,"event":event,"payload":serde_json::from_str::<Value>(&payload).unwrap_or(json!({}))}),
+            )
+        }
+        Operation::TelemetryList {
+            agent_id,
+            workspace_id,
+            event,
+            since,
+            until,
+            cursor,
+            limit,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let limit = limit.clamp(1, 10_000) as i64;
+            let mut s = connection.prepare("SELECT id,agent_id,workspace_id,event,payload,created_at FROM telemetry_events WHERE agent_id=? AND workspace_id=? AND (? IS NULL OR event=?) AND (? IS NULL OR created_at>=?) AND (? IS NULL OR created_at<=?) AND (? IS NULL OR id>?) ORDER BY id ASC LIMIT ?")?;
+            let rows = s.query_map(params![agent_id,workspace_id,event,event,since,since,until,until,cursor,cursor,limit], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"agentId":r.get::<_,String>(1)?,"workspaceId":r.get::<_,String>(2)?,"event":r.get::<_,String>(3)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
+            let events = rows.collect::<Result<Vec<_>, _>>()?;
+            let next = events.last().and_then(|v| v.get("id")).cloned();
+            Ok(json!({"events":events,"nextCursor":next,"limit":limit,"complete":next.is_none()}))
+        }
         Operation::HookReceipt {
             agent_id,
             receipt_id,
@@ -2955,6 +2991,21 @@ pub enum Operation {
         key: Option<String>,
         limit: usize,
     },
+    TelemetryRecord {
+        agent_id: String,
+        workspace_id: String,
+        event: String,
+        payload: Value,
+    },
+    TelemetryList {
+        agent_id: String,
+        workspace_id: String,
+        event: Option<String>,
+        since: Option<String>,
+        until: Option<String>,
+        cursor: Option<i64>,
+        limit: usize,
+    },
     HookReceipt {
         agent_id: String,
         receipt_id: String,
@@ -3134,6 +3185,8 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS pipeline_state (agent_id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'idle', paused INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS sessions (key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, runtime_path TEXT, project TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(key, agent_id));
          CREATE TABLE IF NOT EXISTS event_records (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, session_key TEXT, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS telemetry_events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS telemetry_events_scope ON telemetry_events(agent_id,workspace_id,id);
          CREATE TABLE IF NOT EXISTS transcript_import_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', schema_id TEXT NOT NULL, duplicate_mode TEXT NOT NULL, state TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS transcript_import_files (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', ordinal INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, storage_state TEXT NOT NULL, upload_generation INTEGER NOT NULL DEFAULT 0, upload_offset INTEGER NOT NULL DEFAULT 0, upload_size INTEGER, upload_digest TEXT NOT NULL DEFAULT '', content_hash TEXT, size_bytes INTEGER NOT NULL DEFAULT 0, content BLOB NOT NULL DEFAULT x'', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS transcript_import_files_scope ON transcript_import_files(job_id,agent_id,ordinal);

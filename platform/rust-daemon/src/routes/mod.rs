@@ -15,6 +15,7 @@ pub(crate) mod secrets;
 pub(crate) mod session_hook_boundary;
 pub(crate) mod sessions;
 pub(crate) mod source_lifecycle;
+pub(crate) mod telemetry;
 pub(crate) mod transcripts;
 pub(crate) mod update;
 
@@ -40,6 +41,7 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(pipeline::router())
         .merge(queue_diagnostics::router())
         .merge(source_lifecycle::router())
+        .merge(telemetry::router())
         .merge(transcripts::router())
         .merge(update::router())
 }

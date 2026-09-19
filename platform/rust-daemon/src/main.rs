@@ -39,9 +39,9 @@ struct ErrorBody {
 }
 
 pub(crate) struct ApiError {
-    status: StatusCode,
-    code: &'static str,
-    message: String,
+    pub(crate) status: StatusCode,
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
 }
 
 fn configured_api_key() -> Option<String> {
