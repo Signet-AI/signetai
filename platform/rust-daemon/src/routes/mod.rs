@@ -9,6 +9,7 @@ pub(crate) mod mcp;
 pub(crate) mod ontology;
 pub(crate) mod pipeline;
 pub(crate) mod sessions;
+pub(crate) mod memory_advanced;
 pub(crate) mod transcripts;
 
 use crate::AppState;
@@ -26,6 +27,7 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(ontology::router())
         .merge(hooks::router())
         .merge(sessions::router())
+        .merge(memory_advanced::router())
         .merge(pipeline::router())
         .merge(transcripts::router())
 }
