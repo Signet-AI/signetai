@@ -1,3 +1,4 @@
+pub(crate) mod auth;
 pub(crate) mod hooks;
 pub(crate) mod inference;
 pub(crate) mod integrations;
@@ -15,6 +16,7 @@ use axum::Router;
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .merge(integrations::routes())
+        .merge(auth::router())
         .merge(inference::router())
         .merge(jobs::router())
         .merge(knowledge::router())
