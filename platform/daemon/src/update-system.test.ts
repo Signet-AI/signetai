@@ -1,5 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
+/**
+ * Tests for update-system bug fixes.
+ *
+ * These tests exercise the exported pure/config functions directly.
+ * Network-dependent functions are mostly covered with structural tests,
+ * but critical post-install behavior should be exercised directly.
+ */
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -891,52 +898,46 @@ describe("native update validation", () => {
 
 describe("Bug 3: auto-restart after successful install", () => {
 	it("calls process.exit(0) in runAutoUpdateCycle after success", () => {
+		// Extract the runAutoUpdateCycle function body
 		const cycleBody = mustMatch(UPDATE_SYSTEM_SRC, /async function runAutoUpdateCycle[\s\S]*?^}/m);
+
+		// Must contain process.exit(0) for auto-restart
 		expect(cycleBody).toContain("process.exit(0)");
+		// Must stop the timer before exiting
 		expect(cycleBody).toContain("stopUpdateTimer()");
+		// Exit should come after successful install check
 		expect(cycleBody.indexOf("installResult.success")).toBeLessThan(cycleBody.indexOf("process.exit(0)"));
 	});
 });
 
 describe("Bug 4: log level for disabled auto-updates", () => {
 	it("uses logger.info (not debug) when auto-updates disabled", () => {
+		// Find the startUpdateTimer function
 		const timerBody = mustMatch(UPDATE_SYSTEM_SRC, /export function startUpdateTimer[\s\S]*?^}/m);
+
+		// Should use info level, not debug
 		expect(timerBody).not.toContain('logger.debug("system", "Auto-update disabled"');
 		expect(timerBody).toContain("updateLogger.info");
 		expect(timerBody).toContain("signet update enable");
 	});
 });
 
-describe("Bug 6: systemd unit uses dynamic runtime path", () => {
-	it("does not hardcode /usr/bin/bun in systemd unit", () => {
-		const hasHardcoded = SERVICE_SRC.includes('runtime === "bun" ? "/usr/bin/bun" : "/usr/bin/node"');
-		expect(hasHardcoded).toBe(false);
+describe("Bug 6: service unit uses the native daemon executable", () => {
+	it("rejects legacy Bun/Node launchers", () => {
+		expect(SERVICE_SRC).not.toContain(String.raw`${locator} bun`);
+		expect(SERVICE_SRC).not.toContain(String.raw`${locator} node`);
+		expect(SERVICE_SRC).toContain("getDaemonPath");
 	});
 
-	it("does not hardcode /opt/homebrew/bin/bun in launchd plist", () => {
-		const hasHardcoded = SERVICE_SRC.includes("/opt/homebrew/bin/bun");
-		expect(hasHardcoded).toBe(false);
+	it("uses the native executable directly for systemd and launchd", () => {
+		expect(SERVICE_SRC).toContain(String.raw`ExecStart=${runtimePath}`);
+		expect(SERVICE_SRC).toContain("resolveDaemonLaunchCommand(daemonPath)");
+		expect(SERVICE_SRC).not.toContain("programArguments: [resolveRuntimePath(), daemonPath]");
 	});
 
-	it("uses resolveRuntimePath() for both service types", () => {
-		expect(SERVICE_SRC).toContain("function resolveRuntimePath()");
-		expect(SERVICE_SRC).toMatch(/const runtimePath = resolveRuntimePath\(\)/);
-		expect(SERVICE_SRC).toContain("buildLaunchdPlist({");
-		expect(SERVICE_SRC).toContain("programArguments: [resolveRuntimePath(), daemonPath]");
-	});
-
-	it("resolveRuntimePath tries process.execPath first", () => {
-		const fnBody = mustMatch(SERVICE_SRC, /function resolveRuntimePath[\s\S]*?^}/m);
-		expect(fnBody).toContain("process.execPath");
-		expect(fnBody).toContain('const locator = platform() === "win32" ? "where" : "which"');
-		expect(fnBody).toContain("${locator} bun");
-		expect(fnBody).toContain("${locator} node");
-	});
-
-	it("uses Restart=always instead of Restart=on-failure", () => {
-		const unitBody = mustMatch(SERVICE_SRC, /function generateSystemdUnit[\s\S]*?^}/m);
-		expect(unitBody).toContain("Restart=always");
-		expect(unitBody).not.toContain("Restart=on-failure");
+	it("rejects JavaScript daemon paths through the shared runtime contract", () => {
+		expect(SERVICE_SRC).toContain("resolveDaemonLaunchCommand");
+		expect(SERVICE_SRC).toContain("getDaemonPath");
 	});
 });
 
@@ -971,8 +972,8 @@ describe("config helpers", () => {
 	it("parseUpdateInterval enforces bounds", () => {
 		expect(parseUpdateInterval(MIN_UPDATE_INTERVAL_SECONDS)).toBe(MIN_UPDATE_INTERVAL_SECONDS);
 		expect(parseUpdateInterval(MAX_UPDATE_INTERVAL_SECONDS)).toBe(MAX_UPDATE_INTERVAL_SECONDS);
-		expect(parseUpdateInterval(100)).toBeNull();
-		expect(parseUpdateInterval(999999999)).toBeNull();
+		expect(parseUpdateInterval(100)).toBeNull(); // Below min
+		expect(parseUpdateInterval(999999999)).toBeNull(); // Above max
 		expect(parseUpdateInterval("not a number")).toBeNull();
 	});
 

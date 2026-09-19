@@ -1,4 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { generateLaunchdPlist, probeDaemonHealth } from "./service";
 
 describe("daemon service health probe (#1340)", () => {
@@ -32,14 +35,23 @@ describe("daemon service health probe (#1340)", () => {
 
 	it("copies the DB-owner startup timeout into the launchd plist", () => {
 		const previousTimeout = process.env.SIGNET_DB_OWNER_START_TIMEOUT_MS;
+		const previousDaemonPath = process.env.SIGNET_DAEMON_PATH;
+		const dir = mkdtempSync(join(tmpdir(), "signet-service-test-"));
+		const daemonPath = join(dir, "signet-daemon");
+		writeFileSync(daemonPath, "native daemon");
+		chmodSync(daemonPath, 0o755);
 		process.env.SIGNET_DB_OWNER_START_TIMEOUT_MS = "23000";
+		process.env.SIGNET_DAEMON_PATH = daemonPath;
 		try {
 			const plist = generateLaunchdPlist();
+			expect(plist).toContain(daemonPath);
 			expect(plist).toContain("<key>SIGNET_DB_OWNER_START_TIMEOUT_MS</key>");
 			expect(plist).toContain("<string>23000</string>");
 		} finally {
 			if (previousTimeout === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_START_TIMEOUT_MS");
 			else process.env.SIGNET_DB_OWNER_START_TIMEOUT_MS = previousTimeout;
+			if (previousDaemonPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_PATH");
+			else process.env.SIGNET_DAEMON_PATH = previousDaemonPath;
 		}
 	});
 });
