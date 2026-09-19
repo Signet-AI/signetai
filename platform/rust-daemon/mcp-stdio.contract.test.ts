@@ -70,6 +70,7 @@ describe("published native signet-mcp stdio contract", () => {
 			env: {
 				...process.env,
 				SIGNET_RUST_MCP_BIN: mcp,
+				SIGNET_DAEMON_URL: `http://127.0.0.1:${port}`,
 				SIGNET_PORT: String(port),
 				SIGNET_PATH: workspace,
 				SIGNET_API_KEY: token,
@@ -114,6 +115,7 @@ describe("published native signet-mcp stdio contract", () => {
 			env: {
 				...process.env,
 				SIGNET_RUST_MCP_BIN: mcp,
+				SIGNET_DAEMON_URL: `http://127.0.0.1:${port}`,
 				SIGNET_PORT: String(port),
 				SIGNET_PATH: workspace,
 				SIGNET_API_KEY: token,
