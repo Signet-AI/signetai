@@ -98,7 +98,7 @@ impl IntoResponse for ApiError {
 impl From<CoreError> for ApiError {
     fn from(error: CoreError) -> Self {
         match error {
-            CoreError::NotFound => Self::not_found("memory not found"),
+            CoreError::NotFound => Self::not_found("record not found"),
             CoreError::QueueFull { capacity } => Self::unavailable(format!(
                 "database owner queue is saturated (capacity {capacity})"
             )),

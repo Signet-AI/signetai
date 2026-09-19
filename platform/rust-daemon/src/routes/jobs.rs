@@ -12,6 +12,9 @@ use serde_json::Value;
 use signet_core_native::Operation;
 use std::{convert::Infallible, time::Duration};
 
+const MAX_JOB_KIND_BYTES: usize = 64;
+const MAX_JOB_PAYLOAD_BYTES: usize = 1_048_576;
+
 #[derive(Deserialize)]
 pub struct JobRequest {
     pub kind: String,
@@ -30,18 +33,21 @@ pub async fn submit(
     Json(body): Json<JobRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
-    Ok(Json(
-        execute(
-            &state,
-            Operation::JobSubmit {
-                agent_id,
-                kind: body.kind,
-                payload: body.payload,
-                deadline_at: body.deadline_at,
-            },
-        )
-        .await?,
-    ))
+    if body.kind.trim().is_empty() || body.kind.len() > MAX_JOB_KIND_BYTES {
+        return Err(ApiError::bad_request("job kind must be 1-64 bytes"));
+    }
+    if serde_json::to_vec(&body.payload).map_err(|_| ApiError::bad_request("invalid job payload"))?.len() > MAX_JOB_PAYLOAD_BYTES {
+        return Err(ApiError::bad_request("job payload exceeds 1 MiB"));
+    }
+    Ok(Json(execute(
+        &state,
+        Operation::JobSubmit {
+            agent_id,
+            kind: body.kind,
+            payload: body.payload,
+            deadline_at: body.deadline_at,
+        },
+    ).await?))
 }
 pub async fn get(
     State(state): State<AppState>,

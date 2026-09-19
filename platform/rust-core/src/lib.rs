@@ -386,9 +386,10 @@ fn execute_operation(
     match operation {
         Operation::JobSubmit { agent_id, kind, payload, deadline_at } => {
             let agent_id = required_agent(&agent_id)?;
-            if kind.trim().is_empty() { return Err(CoreError::InvalidInput("job kind is required".into())); }
+            if kind.trim().is_empty() || kind.len() > 64 { return Err(CoreError::InvalidInput("job kind must be 1-64 bytes".into())); }
             let id = uuid::Uuid::new_v4().to_string();
             let payload = serde_json::to_string(&payload)?;
+            if payload.len() > 1_048_576 { return Err(CoreError::InvalidInput("job payload exceeds 1 MiB".into())); }
             connection.execute("INSERT INTO jobs (id,agent_id,kind,state,payload,deadline_at,created_at,updated_at) VALUES (?,?,?,'queued',?,?,datetime('now'),datetime('now'))", params![id,agent_id,kind,payload,deadline_at])?;
             connection.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, 'queued','{}',datetime('now'))", params![id,agent_id])?;
             Ok(json!({"id":id,"state":"queued"}))
@@ -635,7 +636,13 @@ fn execute_operation(
         }
         Operation::OntologyUpsert { agent_id, workspace_id, kind, id, value } => {
             let agent_id=required_agent(&agent_id)?; let workspace_id=required_id(&workspace_id)?; let kind=required_id(&kind)?; let id=id.map(|v|required_id(&v)).transpose()?.unwrap_or_else(||uuid::Uuid::new_v4().to_string()); let text=serde_json::to_string(&value)?; let tx=connection.transaction()?;
-            tx.execute("INSERT INTO ontology_records(id,agent_id,workspace_id,kind,value,deleted,created_at,updated_at) VALUES(?,?,?,?,?,0,datetime('now'),datetime('now')) ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=datetime('now'), deleted=0 WHERE ontology_records.agent_id=excluded.agent_id AND ontology_records.workspace_id=excluded.workspace_id AND ontology_records.kind=excluded.kind",params![id,agent_id,workspace_id,kind,text])?; tx.commit()?; Ok(json!({"id":id,"value":value}))
+            let existing: Option<(String, String, String)> = tx.query_row("SELECT agent_id,workspace_id,kind FROM ontology_records WHERE id=?", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+            if let Some((existing_agent, existing_workspace, existing_kind)) = existing {
+                if existing_agent != agent_id || existing_workspace != workspace_id || existing_kind != kind {
+                    return Err(CoreError::InvalidInput("ontology record belongs to another scope".into()));
+                }
+            }
+            tx.execute("INSERT INTO ontology_records(id,agent_id,workspace_id,kind,value,deleted,created_at,updated_at) VALUES(?,?,?,?,?,0,datetime('now'),datetime('now')) ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=datetime('now'), deleted=0",params![id,agent_id,workspace_id,kind,text])?; tx.commit()?; Ok(json!({"id":id,"value":value}))
         }
         Operation::OntologyDelete { agent_id, workspace_id, kind, id } => { let tx=connection.transaction()?; let n=tx.execute("UPDATE ontology_records SET deleted=1,updated_at=datetime('now') WHERE agent_id=? AND workspace_id=? AND kind=? AND id=? AND deleted=0",params![required_agent(&agent_id)?,required_id(&workspace_id)?,required_id(&kind)?,required_id(&id)?])?; if n==0{return Err(CoreError::NotFound)} tx.commit()?; Ok(json!({"deleted":true,"id":id})) }
     }
