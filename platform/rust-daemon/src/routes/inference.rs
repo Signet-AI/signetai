@@ -97,10 +97,17 @@ async fn explain(
 }
 
 async fn stream(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Json(request): Json<ExecuteRequest>,
+    Json(_request): Json<ExecuteRequest>,
 ) -> Result<Response, ApiError> {
+    let _ = agent(&headers, None, None)?;
+    Err(ApiError::bad_request(
+        "streaming is unsupported; use execute",
+    ))
+}
+
+/*
     let identity = agent(&headers, None, request.agent_id.as_deref())?;
     if !configured() {
         return Err(ApiError::bad_request(
@@ -112,11 +119,17 @@ async fn stream(
         .model
         .or_else(|| setting("SIGNET_OPENAI_MODEL"))
         .unwrap();
+    if let Some(prompt) = request.prompt.as_ref() {
+        if prompt.len() > 64 * 1024 { return Err(ApiError::bad_request("prompt exceeds 64 KiB")); }
+    }
     let messages = request
         .messages
         .unwrap_or_else(|| json!([{"role":"user","content":request.prompt.unwrap_or_default()}]));
     if !messages.is_array() {
         return Err(ApiError::bad_request("messages must be an array"));
+    }
+    if serde_json::to_vec(&messages).map(|bytes| bytes.len()).unwrap_or(usize::MAX) > 256 * 1024 {
+        return Err(ApiError::bad_request("messages exceed 256 KiB"));
     }
     let id = Uuid::new_v4().to_string();
     append_history(
@@ -173,20 +186,31 @@ async fn stream(
         .map_err(|e| ApiError::internal(format!("stream response failed: {e}")))
 }
 
-async fn history(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let events = read_history(&state).await?;
+*/
+async fn history(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let identity = agent(&headers, None, None)?;
+    let events: Vec<_> = read_history(&state)
+        .await?
+        .into_iter()
+        .filter(|event| event.agent_id == identity)
+        .collect();
     Ok(Json(
         json!({"enabled":true,"events":events,"summary":{"total":events.len()}}),
     ))
 }
 async fn cancel(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
+    let identity = agent(&headers, None, None)?;
     let events = read_history(&state).await?;
     if !events
         .iter()
-        .any(|event| event.request_id.as_deref() == Some(id.as_str()))
+        .any(|event| event.request_id.as_deref() == Some(id.as_str()) && event.agent_id == identity)
     {
         return Err(ApiError::not_found("inference request not found"));
     }
@@ -194,7 +218,7 @@ async fn cancel(
         &state,
         HistoryEvent {
             id: Uuid::new_v4().to_string(),
-            agent_id: "durable-request-owner".into(),
+            agent_id: identity,
             operation: "cancel".into(),
             status: "cancel_requested".into(),
             request_id: Some(id.clone()),
@@ -271,11 +295,23 @@ async fn execute(
         .model
         .or_else(|| setting("SIGNET_OPENAI_MODEL"))
         .unwrap();
+    if let Some(prompt) = request.prompt.as_ref() {
+        if prompt.len() > 64 * 1024 {
+            return Err(ApiError::bad_request("prompt exceeds 64 KiB"));
+        }
+    }
     let messages = request
         .messages
         .unwrap_or_else(|| json!([{"role":"user","content":request.prompt.unwrap_or_default()}]));
     if !messages.is_array() {
         return Err(ApiError::bad_request("messages must be an array"));
+    }
+    if serde_json::to_vec(&messages)
+        .map(|bytes| bytes.len())
+        .unwrap_or(usize::MAX)
+        > 256 * 1024
+    {
+        return Err(ApiError::bad_request("messages exceed 256 KiB"));
     }
     let body = json!({"model": model, "messages": messages});
     let timeout = Duration::from_millis(
