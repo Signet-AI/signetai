@@ -1,7 +1,8 @@
-import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type ChildProcess } from "@signet/core";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { LOOPBACK_HOST } from "@signet/core";
+
+const LOOPBACK_HOST = "127.0.0.1";
 import { type WorkspaceMismatch, healthWorkspaceMismatch } from "./daemon-workspace.js";
 import { daemonEntry, daemonRoot } from "./paths.js";
 
