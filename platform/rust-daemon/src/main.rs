@@ -569,6 +569,10 @@ fn content_type(path: &FsPath) -> &'static str {
 }
 
 async fn dashboard(State(state): State<AppState>, uri: Uri) -> Response {
+    if uri.path().starts_with("/api/") || uri.path().starts_with("/health") || uri.path() == "/sse"
+    {
+        return StatusCode::NOT_FOUND.into_response();
+    }
     let Some(root) = state.dashboard else {
         return (
             StatusCode::NOT_FOUND,

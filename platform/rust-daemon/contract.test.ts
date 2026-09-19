@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -50,8 +50,14 @@ async function waitForReady(origin: string, child: NativeProcess): Promise<void>
 
 async function startDaemon(
 	agentId: string | null = environmentValue("SIGNET_AGENT_ID"),
+	withDashboard = false,
 ): Promise<{ readonly origin: string; readonly workspace: string; readonly child: NativeProcess }> {
 	const workspace = mkdtempSync(join(tmpdir(), "signet-rust-workspace-"));
+	if (withDashboard) {
+		const dashboard = join(workspace, "dashboard");
+		mkdirSync(dashboard, { recursive: true });
+		writeFileSync(join(dashboard, "index.html"), "<main>fresh rust dashboard</main>");
+	}
 	workspaces.push(workspace);
 	const port = nextPort++;
 	const child = Bun.spawn([requireBinary()], {
@@ -61,6 +67,7 @@ async function startDaemon(
 			SIGNET_PATH: workspace,
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_PORT: String(port),
+			...(withDashboard ? { SIGNET_DASHBOARD_DIR: join(workspace, "dashboard") } : {}),
 			...(agentId === null ? { SIGNET_AGENT_ID: "" } : agentId === undefined ? {} : { SIGNET_AGENT_ID: agentId }),
 		},
 		stderr: "pipe",
@@ -175,5 +182,14 @@ describe("fresh Rust daemon", () => {
 			body: JSON.stringify({ content: "must be rejected" }),
 		});
 		expect(response.status).toBe(401);
+	});
+
+	it("serves packaged dashboard assets without swallowing API 404s", async () => {
+		const { origin } = await startDaemon(null, true);
+		const page = await fetch(`${origin}/`);
+		expect(page.status).toBe(200);
+		expect(await page.text()).toContain("fresh rust dashboard");
+		const missingApi = await fetch(`${origin}/api/not-implemented`);
+		expect(missingApi.status).toBe(404);
 	});
 });
