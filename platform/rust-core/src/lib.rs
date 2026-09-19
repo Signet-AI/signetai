@@ -486,6 +486,40 @@ fn execute_memory_search(
     )
 }
 
+fn normalize_import_files(files: &Value) -> Result<Vec<Value>, CoreError> {
+    let files = files
+        .as_array()
+        .ok_or_else(|| CoreError::InvalidInput("files must be an array".into()))?;
+    if files.is_empty() || files.len() > 25 {
+        return Err(CoreError::InvalidInput(
+            "files must contain 1-25 entries".into(),
+        ));
+    }
+    files
+        .iter()
+        .map(|file| {
+            let object = file.as_object().ok_or_else(|| {
+                CoreError::InvalidInput("file descriptors must be objects".into())
+            })?;
+            let name = object
+                .get("name")
+                .and_then(Value::as_str)
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| CoreError::InvalidInput("file name is required".into()))?;
+            let mut normalized = object.clone();
+            let id = object
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.trim().is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            normalized.insert("id".into(), Value::String(id));
+            normalized.insert("name".into(), Value::String(name.to_owned()));
+            Ok(Value::Object(normalized))
+        })
+        .collect()
+}
+
 fn execute_operation(
     connection: &mut Connection,
     operation: Operation,
@@ -505,20 +539,15 @@ fn execute_operation(
                     "unsupported import schema or duplicate mode".into(),
                 ));
             }
-            let files = files
-                .as_array()
-                .ok_or_else(|| CoreError::InvalidInput("files must be an array".into()))?;
-            if files.is_empty() || files.len() > 25 {
-                return Err(CoreError::InvalidInput(
-                    "files must contain 1-25 entries".into(),
-                ));
-            }
+            let files = normalize_import_files(&files)?;
             let id = uuid::Uuid::new_v4().to_string();
-            connection.execute("INSERT INTO transcript_import_jobs (id,agent_id,schema_id,duplicate_mode,state,files,created_at,updated_at) VALUES (?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,schema_id,duplicate_mode, "staging", serde_json::to_string(files)?])?;
-            Ok(json!({"id":id,"jobId":id,"agentId":agent_id,"state":"staging","files":files}))
+            connection.execute("INSERT INTO transcript_import_jobs (id,agent_id,schema_id,duplicate_mode,state,files,created_at,updated_at) VALUES (?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,schema_id,duplicate_mode, "staging", serde_json::to_string(&files)?])?;
+            Ok(
+                json!({"id":id,"jobId":id,"agentId":agent_id,"schemaId":schema_id,"duplicateMode":duplicate_mode,"state":"staging","files":files}),
+            )
         }
         Operation::TranscriptImportGet { agent_id, id } => {
-            let value: Option<String> = connection.query_row("SELECT json_object('id',id,'agentId',agent_id,'schemaId',schema_id,'duplicateMode',duplicate_mode,'state',state,'files',json(files),'createdAt',created_at,'updatedAt',updated_at) FROM transcript_import_jobs WHERE id=? AND agent_id=?", params![id, required_agent(&agent_id)?], |r| r.get(0)).optional()?;
+            let value: Option<String> = connection.query_row("SELECT json_object('id',id,'jobId',id,'agentId',agent_id,'schemaId',schema_id,'duplicateMode',duplicate_mode,'state',state,'files',json(files),'createdAt',created_at,'updatedAt',updated_at) FROM transcript_import_jobs WHERE id=? AND agent_id=?", params![id, required_agent(&agent_id)?], |r| r.get(0)).optional()?;
             value
                 .map(|v| serde_json::from_str(&v))
                 .transpose()?
