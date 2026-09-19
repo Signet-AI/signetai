@@ -556,6 +556,10 @@ struct DocumentRequest {
     content: String,
     #[serde(default)]
     metadata: Value,
+    #[serde(default, alias = "duplicateMode")]
+    duplicate_mode: String,
+    #[serde(default)]
+    generation: Option<i64>,
 }
 async fn import_document(
     State(state): State<AppState>,
@@ -573,7 +577,16 @@ async fn import_document(
                     source_id: req.source_id,
                     path: req.path,
                     content: req.content,
-                    metadata: req.metadata,
+                    metadata: {
+                        let mut m = req.metadata;
+                        if let Value::Object(ref mut o) = m {
+                            if let Some(g) = req.generation {
+                                o.insert("_generation".into(), json!(g));
+                            }
+                            o.insert("_duplicateMode".into(), json!(req.duplicate_mode));
+                        }
+                        m
+                    },
                 },
             )
             .await?,

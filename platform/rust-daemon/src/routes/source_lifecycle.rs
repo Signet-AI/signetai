@@ -12,14 +12,19 @@ async fn delete_source(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(source_id): Path<String>,
+    payload: Option<Json<Value>>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
     Ok(Json(
         execute(
             &state,
-            Operation::DeleteSource {
+            Operation::DeleteSourceWithGeneration {
                 agent_id,
                 source_id,
+                generation: payload
+                    .as_ref()
+                    .and_then(|Json(v)| v.get("generation"))
+                    .and_then(Value::as_i64),
             },
         )
         .await?,
