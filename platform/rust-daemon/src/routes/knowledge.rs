@@ -38,12 +38,12 @@ fn limit(value: Option<usize>) -> usize {
     value.unwrap_or(50).clamp(1, 200)
 }
 fn workspace(q: &EntityQuery) -> Result<String, ApiError> {
-    q.workspace_id
+    Ok(q.workspace_id
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| ApiError::bad_request("workspace_id is required"))
+        .unwrap_or("default")
+        .to_owned())
 }
 fn valid_metadata(v: &Value) -> Result<Value, ApiError> {
     if v.is_null() {

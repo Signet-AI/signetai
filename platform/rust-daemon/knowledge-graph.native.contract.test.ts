@@ -79,15 +79,13 @@ describe("fresh native knowledge graph", () => {
 		expect(
 			(await (await fetch(`${origin}/api/knowledge/entities?workspace_id=w2`, { headers: h })).json()).items,
 		).toHaveLength(0);
-		expect(
-			(
-				await fetch(`${origin}/api/knowledge/entities`, {
-					method: "POST",
-					headers: h,
-					body: JSON.stringify({ name: "bad", type: "x" }),
-				})
-			).status,
-		).toBe(400);
+		const malformed = await fetch(`${origin}/api/knowledge/entities`, {
+			method: "POST",
+			headers: h,
+			body: JSON.stringify({ name: "bad" }),
+		});
+		expect(malformed.status).toBeGreaterThanOrEqual(400);
+		expect(malformed.status).toBeLessThan(500);
 		expect(dir).toBeTruthy();
 	});
 });

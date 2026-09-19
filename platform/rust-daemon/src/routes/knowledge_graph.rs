@@ -42,10 +42,12 @@ struct Tree {
     max_attributes: Option<usize>,
 }
 fn ws(q: &Scope) -> Result<String, ApiError> {
-    q.workspace_id
-        .clone()
-        .filter(|v| !v.trim().is_empty())
-        .ok_or_else(|| ApiError::bad_request("workspace_id is required"))
+    Ok(q.workspace_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or("default")
+        .to_owned())
 }
 pub(crate) fn router() -> Router<AppState> {
     Router::new()

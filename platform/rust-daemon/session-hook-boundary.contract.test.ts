@@ -67,13 +67,11 @@ it("proves the native session/hook/event boundary with two scoped agents", async
 	expect(
 		(await post(first.origin, "/api/boundary/sessions/end", "agent-a", { session_key: session.session_key })).status,
 	).toBe(200);
-	expect(
-		(
-			(
-				await post(first.origin, "/api/boundary/sessions/end", "agent-a", { session_key: session.session_key })
-			).json() as { idempotent?: boolean }
-		).idempotent,
-	).toBe(true);
+	const repeatEnd = await post(first.origin, "/api/boundary/sessions/end", "agent-a", {
+		session_key: session.session_key,
+	});
+	expect(repeatEnd.status).toBe(200);
+	expect(((await repeatEnd.json()) as { idempotent?: boolean }).idempotent).toBe(true);
 
 	const receipt = {
 		receipt_id: "receipt-1",
