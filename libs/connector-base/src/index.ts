@@ -1,15 +1,109 @@
+/**
+ * @signet/connector-base
+ *
+ * Base class for Signet harness connectors. Provides shared functionality
+ * that all connectors need (Signet block handling, skills symlinking),
+ * allowing concrete connectors to focus on harness-specific logic.
+ *
+ * @example
+ * ```typescript
+ * import { BaseConnector, InstallResult } from '@signet/connector-base';
+ *
+ * class MyConnector extends BaseConnector {
+ *   readonly name = "my-harness";
+ *   readonly harnessId = "myharness";
+ *
+ *   async install(basePath: string): Promise<InstallResult> {
+ *     // harness-specific setup
+ *   }
+ *
+ *   async uninstall(): Promise<void> {
+ *     // harness-specific cleanup
+ *   }
+ *
+ *   isInstalled(): boolean {
+ *     // check if already set up
+ *   }
+ *
+ *   getConfigPath(): string {
+ *     // return harness config file path
+ *   }
+ * }
+ * ```
+ */
+
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
-	type SymlinkOptions,
-	type SymlinkResult,
-	resolveSignetDaemonUrl as resolveCoreSignetDaemonUrl,
-	resolveWorkspacePath,
-	stripSignetBlock,
-	symlinkSkills,
-} from "@signet/core";
+	existsSync,
+	chmodSync,
+	lstatSync,
+	mkdirSync,
+	readFileSync,
+	readdirSync,
+	realpathSync,
+	renameSync,
+	statSync,
+	symlinkSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+export interface SymlinkOptions {
+	dryRun?: boolean;
+	force?: boolean;
+}
+export interface SymlinkResult {
+	created: string[];
+	skipped: string[];
+	errors: Array<{ path: string; error: string }>;
+}
+
+const SIGNET_BLOCK = /<!-- SIGNET:START -->[\s\S]*?<!-- SIGNET:END -->\n?/g;
+const expandHome = (value: string, home = homedir()): string =>
+	value === "~" ? home : value.startsWith("~/") || value.startsWith("~\\") ? join(home, value.slice(2)) : value;
+const stripSignetBlock = (content: string): string => content.replace(SIGNET_BLOCK, "");
+function symlinkSkills(sourceDir: string, targetDir: string, options: SymlinkOptions = {}): SymlinkResult {
+	const result: SymlinkResult = { created: [], skipped: [], errors: [] };
+	if (!existsSync(sourceDir)) return result;
+	if (!existsSync(targetDir)) mkdirSync(targetDir, { recursive: true });
+	for (const entry of readdirSync(sourceDir)) {
+		const source = join(sourceDir, entry);
+		const target = join(targetDir, entry);
+		try {
+			if (!lstatSync(source).isDirectory()) {
+				result.skipped.push(source);
+				continue;
+			}
+			if (
+				existsSync(target) ||
+				(() => {
+					try {
+						lstatSync(target);
+						return true;
+					} catch {
+						return false;
+					}
+				})()
+			) {
+				if (!options.force) {
+					result.skipped.push(target);
+					continue;
+				}
+				unlinkSync(target);
+			}
+			if (!options.dryRun) symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
+			result.created.push(target);
+		} catch (error) {
+			result.errors.push({ path: target, error: String(error) });
+		}
+	}
+	return result;
+}
+
+// ============================================================================
+// Types
+// ============================================================================
 
 export interface InstallResult {
 	success: boolean;
@@ -36,21 +130,74 @@ export interface ConnectorRecoveryCapabilities {
 	reinitialize: boolean;
 	reinitializeRequiresConfirmation: boolean;
 }
+
+// ============================================================================
+// Base Connector
+// ============================================================================
+
+/**
+ * Abstract base class for Signet harness connectors.
+ *
+ * Provides:
+ * - stripSignetBlock() - remove existing Signet blocks before re-injection
+ * - stripLegacySignetBlock() - migrate old SIGNET block out of AGENTS.md
+ * - symlinkSkills() - symlink skills directory to harness-specific location
+ *
+ * Subclasses must implement:
+ * - name - human-readable harness name
+ * - harnessId - machine identifier for the harness
+ * - install() - harness-specific setup
+ * - uninstall() - harness-specific cleanup
+ * - isInstalled() - check if integration exists
+ * - getConfigPath() - return path to harness config
+ */
 export abstract class BaseConnector {
+	/**
+	 * Human-readable name for the harness (e.g., "Claude Code")
+	 */
 	abstract readonly name: string;
+
+	/**
+	 * Machine identifier (e.g., "claude-code")
+	 */
 	abstract readonly harnessId: string;
+
+	/**
+	 * Optional bundled brand asset filename for clients that present the
+	 * connector. The dashboard resolves this against its local `/logos/`
+	 * assets; connectors without a mark use a generic icon.
+	 */
 	getIconAsset(): string | null {
 		return null;
 	}
+
+	// ==========================================================================
+	// Shared implementations (provided by base class)
+	// ==========================================================================
+
+	/**
+	 * Strip existing Signet blocks from content.
+	 *
+	 * Call this before re-injecting the block to prevent duplication
+	 * when re-running install or sync operations.
+	 */
 	protected stripSignetBlock(content: string): string {
 		return stripSignetBlock(content);
 	}
+
+	/**
+	 * Strip legacy SIGNET block markers from AGENTS.md in place.
+	 *
+	 * Returns the path when a write occurred, otherwise null.
+	 */
 	protected stripLegacySignetBlock(basePath: string): string | null {
 		const agentsPath = join(basePath, "AGENTS.md");
 		if (!existsSync(agentsPath)) return null;
 		const raw = readFileSync(agentsPath, "utf-8");
 		const cleaned = stripSignetBlock(raw);
 		if (cleaned === raw) return null;
+		// Validate the final destination before creating the temporary file. This
+		// is also what protects symlinked ancestors from escaping basePath.
 		const root = realpathSync(basePath);
 		const parent = realpathSync(dirname(agentsPath));
 		const rel = relative(root, join(parent, "AGENTS.md"));
@@ -69,11 +216,26 @@ export abstract class BaseConnector {
 		}
 		return agentsPath;
 	}
+
+	/**
+	 * Symlink skills from source to target directory.
+	 *
+	 * Each subdirectory in sourceDir becomes a symlink in targetDir.
+	 * Existing symlinks are replaced; real directories are skipped.
+	 */
 	protected symlinkSkills(sourceDir: string, targetDir: string, options?: SymlinkOptions): SymlinkResult {
 		return symlinkSkills(sourceDir, targetDir, options);
 	}
+
+	/**
+	 * Generate the auto-generated file header.
+	 *
+	 * @param sourcePath - Path to the source file being generated from
+	 * @param targetName - Name of the target harness
+	 */
 	protected generateHeader(sourcePath: string, targetName?: string): string {
 		const name = targetName || this.name;
+		// Strip CR/LF so a malformed path can't break out of comment lines
 		const safe = (p: string) => p.replace(/[\n\r]/g, "");
 		const root = dirname(sourcePath);
 		return `# Auto-generated from ${safe(sourcePath)}
@@ -84,6 +246,13 @@ export abstract class BaseConnector {
 
 `;
 	}
+
+	/**
+	 * Read and compose additional identity files (SOUL.md, IDENTITY.md,
+	 * USER.md, MEMORY.md) into a single string with section headers.
+	 *
+	 * @param basePath - Path to the Signet workspace or equivalent identity directory
+	 */
 	protected composeIdentityExtras(basePath: string): string {
 		const files = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"] as const;
 		const parts: string[] = [];
@@ -96,17 +265,58 @@ export abstract class BaseConnector {
 				if (!content) continue;
 				const header = name.replace(".md", "");
 				parts.push(`\n## ${header}\n\n${content}`);
-			} catch {}
+			} catch {
+				// Skip unreadable files
+			}
 		}
 
 		return parts.join("\n");
 	}
+
+	// ==========================================================================
+	// Abstract methods (must be implemented by subclasses)
+	// ==========================================================================
+
+	/**
+	 * Install the connector for this harness.
+	 *
+	 * Should:
+	 * - Configure hooks in the harness config
+	 * - Generate any necessary files (CLAUDE.md, AGENTS.md, etc.)
+	 * - Set up skills symlinks
+	 *
+	 * Must be idempotent - safe to run multiple times.
+	 */
 	abstract install(basePath: string): Promise<InstallResult>;
+
+	/**
+	 * Remove the connector integration.
+	 *
+	 * Should:
+	 * - Remove hooks from harness config
+	 * - Remove generated files (but not user data)
+	 * - Optionally remove skills symlinks
+	 */
 	abstract uninstall(): Promise<UninstallResult>;
+
+	/**
+	 * Check if the connector is already installed.
+	 */
 	abstract isInstalled(): boolean;
+
+	/**
+	 * Check whether the harness has a discoverable configuration, even when
+	 * Signet's integration is not installed yet.
+	 */
 	isDetected(): boolean {
 		return existsSync(this.getConfigPath());
 	}
+
+	/**
+	 * Inspect the connector's runtime health. Connectors with richer signals
+	 * may override this; the shared default only detects installation markers. It cannot verify
+	 * enabled configuration, runtime artifacts, or connectivity, so it reports an unknown state.
+	 */
 	async inspectHealth(): Promise<ConnectorHealth> {
 		try {
 			if (this.isInstalled()) {
@@ -121,6 +331,11 @@ export abstract class BaseConnector {
 			return { status: "unhealthy", message: `Health inspection failed: ${message}` };
 		}
 	}
+
+	/**
+	 * Return actions that are safe for this connector to expose in clients.
+	 * The default actions reuse the connector's idempotent install path.
+	 */
 	getRecoveryCapabilities(): ConnectorRecoveryCapabilities {
 		return {
 			repair: true,
@@ -128,24 +343,52 @@ export abstract class BaseConnector {
 			reinitializeRequiresConfirmation: true,
 		};
 	}
+
+	/** Reconcile an existing integration through the connector's install path. */
 	async repair(basePath: string): Promise<InstallResult> {
 		return this.install(basePath);
 	}
+
+	/** Re-run connector initialization through the connector's install path. */
 	async reinitialize(basePath: string): Promise<InstallResult> {
 		return this.install(basePath);
 	}
+
+	/**
+	 * Get the path to the harness's main config file.
+	 */
 	abstract getConfigPath(): string;
 }
+
+// ==========================================================================
+// Shared helpers
+// ==========================================================================
+
+/**
+ * Check whether file content was generated by Signet.
+ * Matches both connector-generated headers ("# Auto-generated from")
+ * and daemon-generated headers ("# AUTO-GENERATED from ... by Signet").
+ * Uses a strict two-line pattern to avoid matching user-owned files that
+ * happen to contain the phrase "auto-generated" somewhere in their body.
+ */
 export function isSignetGeneratedFile(raw: string): boolean {
 	const lines = raw.split("\n").slice(0, 6);
 	return lines.some((line, i) => {
 		const nextLine = lines[i + 1];
 		return (
+			// Daemon-generated: "# AUTO-GENERATED from <path> by Signet"
 			/^#\s+AUTO-GENERATED\s+from\s+.*\s+by\s+Signet/i.test(line) ||
+			// Connector-generated: "# Auto-generated from <path>" followed by "# Source: <path>" on the next line
 			(/^#\s+Auto-generated\s+from\s+/.test(line) && /^#\s+Source:\s+/.test(nextLine ?? ""))
 		);
 	});
 }
+
+// ============================================================================
+// Atomic file write — prevents TOCTOU corruption when multiple
+// connector runs race on the same config file. Writes to a temp file
+// then renames (atomic on POSIX, near-atomic on Windows).
+// ============================================================================
 
 export function atomicWriteText(path: string, content: string, mode?: number): void {
 	const tmp = join(dirname(path), `.${randomBytes(6).toString("hex")}.tmp`);
@@ -153,11 +396,15 @@ export function atomicWriteText(path: string, content: string, mode?: number): v
 	if (writeMode === undefined) {
 		try {
 			writeMode = statSync(path).mode & 0o777;
-		} catch {}
+		} catch {
+			// New files use the process umask.
+		}
 	}
 	try {
 		writeFileSync(tmp, content, { encoding: "utf-8", mode: writeMode });
+		if (writeMode !== undefined) chmodSync(tmp, writeMode);
 		renameSync(tmp, path);
+		if (writeMode !== undefined) chmodSync(path, writeMode);
 	} catch (err) {
 		try {
 			unlinkSync(tmp);
@@ -192,28 +439,50 @@ function resolvePackagedSignetCommand(
 	}
 	return { command: bareCommand, args: [] };
 }
+
+/** Resolve the signet-mcp stdio command, including the packaged Windows entry point. */
 export function resolveSignetMcpCommand(): ResolvedCommand {
 	return resolvePackagedSignetCommand("signet-mcp", "dist", "mcp-stdio.js", true);
 }
+
+/** Resolve the Signet CLI command for hook invocation. */
 export function resolveSignetCliCommand(): ResolvedCommand {
 	return resolvePackagedSignetCommand("signet", "bin", "signet.js", false);
 }
 
+// ============================================================================
+// Shared managed-extension utilities (used by connector-pi, connector-oh-my-pi)
+// ============================================================================
+
 export const MANAGED_DAEMON_URL_DEFAULT = "http://127.0.0.1:3850";
 export const MANAGED_AGENT_ID_DEFAULT = "default";
+
+/** Narrow an unknown value to a plain record (shared by connectors, #957). */
 export function isJsonObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+/** True when `candidate` is strictly inside `parent` on the filesystem (shared, #957). */
 export function isChildOf(candidate: string, parent: string): boolean {
 	const rel = relative(parent, candidate);
 	return rel !== "" && rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel);
 }
+
+/**
+ * Read a non-empty, trimmed env var (shared by connectors, #957).
+ * Newlines are stripped so multi-line values cannot smuggle into single-line
+ * config surfaces (the behavior forge/opencode standardized on).
+ */
 export function readTrimmedEnv(name: string): string | undefined {
 	const value = process.env[name];
 	if (typeof value !== "string") return undefined;
 	const trimmed = value.trim().replace(/[\r\n]+/g, "");
 	return trimmed.length > 0 ? trimmed : undefined;
 }
+
+/**
+ * @deprecated Use `readTrimmedEnv` (same semantics, canonical name).
+ */
 export function readManagedTrimmedEnv(name: string): string | undefined {
 	return readTrimmedEnv(name);
 }
@@ -227,11 +496,70 @@ function isExistingDirectory(path: string): boolean {
 }
 
 export function resolveSignetWorkspacePath(home = homedir()): string {
-	return resolveWorkspacePath({ home, strict: true, requireExistingEnvPath: true }).path;
+	// Connectors are install-time operations, so they fail loud on a malformed
+	// workspace.json
+	// (strict) and treat a stale env override as unset so it is not re-embedded
+	// into a managed extension (requireExistingEnvPath, issue #1016). A persisted
+	// workspace.json value is still trusted verbatim: it is an explicit,
+	// admin-authored override, and buildManagedExtensionEnvBootstrap re-checks
+	// existence before baking any path into an extension.
+	const configured = readManagedTrimmedEnv("SIGNET_PATH") ?? readManagedTrimmedEnv("SIGNET_WORKSPACE");
+	if (configured) {
+		const path = resolve(expandHome(configured, home));
+		if (existsSync(path)) return path;
+		console.warn(`SIGNET_PATH does not point to an existing workspace directory: ${configured}`);
+	}
+	const configPath = join(
+		readManagedTrimmedEnv("XDG_CONFIG_HOME") ?? join(home, ".config"),
+		"signet",
+		"workspace.json",
+	);
+	if (existsSync(configPath)) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse(readFileSync(configPath, "utf8"));
+		} catch {
+			throw new Error("Invalid Signet workspace config");
+		}
+		if (
+			typeof parsed !== "object" ||
+			parsed === null ||
+			typeof Reflect.get(parsed, "workspace") !== "string" ||
+			!Reflect.get(parsed, "workspace").trim()
+		) {
+			throw new Error("Invalid Signet workspace config: workspace must be a non-empty string");
+		}
+		return resolve(expandHome(Reflect.get(parsed, "workspace"), home));
+	}
+	return join(home, ".agents");
 }
 
 export function resolveSignetDaemonUrl(): string {
-	return resolveCoreSignetDaemonUrl();
+	const explicit = readManagedTrimmedEnv("SIGNET_DAEMON_URL");
+	if (explicit) return normalizeDaemonUrl(explicit, "SIGNET_DAEMON_URL");
+	const host = readManagedTrimmedEnv("SIGNET_HOST") ?? "127.0.0.1";
+	if (!/^[A-Za-z0-9][A-Za-z0-9.:-]*$/.test(host))
+		throw new Error(`SIGNET_HOST must be a hostname or IP address: ${host}`);
+	const port = readManagedTrimmedEnv("SIGNET_PORT") ?? "3850";
+	if (!/^\d+$/.test(port) || Number(port) < 1 || Number(port) > 65535)
+		throw new Error(`SIGNET_PORT must be an integer between 1 and 65535: ${port}`);
+	return normalizeDaemonUrl(`http://${host.includes(":") ? `[${host}]` : host}:${port}`, "SIGNET_HOST/SIGNET_PORT");
+}
+
+function normalizeDaemonUrl(raw: string, source: string): string {
+	let parsed: URL;
+	try {
+		parsed = new URL(raw);
+	} catch {
+		throw new Error(`${source} must be an http(s) URL: ${raw}`);
+	}
+	if (parsed.protocol !== "http:" && parsed.protocol !== "https:")
+		throw new Error(`${source} must use http or https: ${raw}`);
+	if (parsed.username || parsed.password || parsed.search || parsed.hash)
+		throw new Error(`${source} must point at the daemon origin: ${raw}`);
+	if (parsed.pathname !== "/" && parsed.pathname !== "")
+		throw new Error(`${source} must point at the daemon origin, not a path: ${raw}`);
+	return parsed.toString().replace(/\/$/, "");
 }
 
 export function resolveSignetAgentId(): string {
@@ -241,6 +569,15 @@ export function resolveSignetAgentId(): string {
 export function resolveSignetApiKey(): string | undefined {
 	return readManagedTrimmedEnv("SIGNET_API_KEY") ?? readManagedTrimmedEnv("SIGNET_TOKEN");
 }
+
+/**
+ * Build the standard Signet runtime env map for spawned processes, preserving
+ * "only set what is present" semantics: SIGNET_PATH only when a basePath is
+ * passed, SIGNET_DAEMON_URL only when explicitly configured, and the
+ * SIGNET_API_KEY ?? SIGNET_TOKEN fallback. Shared by harness connectors
+ * (forge, opencode, codex, hermes-agent) so the API-key/token precedence
+ * contract has one owner (#955).
+ */
 export function buildSignetRuntimeEnv(opts: { readonly basePath?: string } = {}): Record<string, string> {
 	const env: Record<string, string> = {};
 	if (opts.basePath) env.SIGNET_PATH = opts.basePath;
@@ -252,6 +589,13 @@ export function buildSignetRuntimeEnv(opts: { readonly basePath?: string } = {})
 	if (agentId) env.SIGNET_AGENT_ID = agentId;
 	return env;
 }
+
+/**
+ * Resolve the remote daemon URL for MCP/HTTP configs, or null when
+ * SIGNET_DAEMON_URL is not explicitly set. Unlike `resolveSignetDaemonUrl()`
+ * (which always returns a URL), this honors the "explicit remote only"
+ * contract connectors rely on (#955).
+ */
 export function resolveRemoteDaemonUrl(): string | null {
 	return readManagedTrimmedEnv("SIGNET_DAEMON_URL") ? resolveSignetDaemonUrl() : null;
 }
@@ -265,6 +609,19 @@ export function buildManagedExtensionEnvBootstrap(env: {
 	const daemonUrl = JSON.stringify(env.daemonUrl);
 	const agentId = JSON.stringify(env.agentId);
 	const apiKey = env.apiKey ? JSON.stringify(env.apiKey) : null;
+
+	// Decide whether to bake SIGNET_PATH into the extension:
+	//  - default workspace (homedir/.agents): never bake it. The managed
+	//    pi/oh-my-pi extension derives join(homedir(), ".agents") at runtime when
+	//    SIGNET_PATH is unset, and any signet subprocess it spawns falls back to
+	//    the same default via the CLI/core resolution. Omitting the setter keeps
+	//    a synced or cloned agents directory valid across machines whose home
+	//    directory differs from the install host (issue #1015).
+	//  - a path that does not exist on disk: never bake it, so a stale path from
+	//    a migrated/legacy extension is not re-embedded on the next sync (the
+	//    self-perpetuating feedback loop, issue #1016). The extension/runtime
+	//    then resolves a valid default workspace instead.
+	// Only an explicitly configured, existing workspace is baked in.
 	const isDefaultWorkspace = env.signetPath === join(homedir(), ".agents");
 	const workspaceExists = isExistingDirectory(env.signetPath);
 	if (!isDefaultWorkspace && !workspaceExists) {
@@ -302,6 +659,12 @@ ${signetPathBlock}		if (!__signetReadEnv("SIGNET_DAEMON_URL")) {
 export function managedExtensionFilePath(agentDir: string, filename: string): string {
 	return join(agentDir, "extensions", filename);
 }
+
+/**
+ * Build a managed extension file: a header naming the package/entry/marker,
+ * the Signet env bootstrap, then the embedded bundle. Shared by the pi and
+ * oh-my-pi connectors, which differ only in those constants (#957).
+ */
 export function buildManagedExtensionContent(params: {
 	readonly bundle: string;
 	readonly marker: string;
@@ -349,6 +712,10 @@ export function removeManagedExtensionFile(filePath: string, marker: string): bo
 	unlinkSync(filePath);
 	return true;
 }
+
+// ============================================================================
+// Shared npm connector installer runner
+// ============================================================================
 
 export interface ConnectorInstallerOptions {
 	readonly commandName?: string;
@@ -482,5 +849,3 @@ export function runConnectorInstaller(
 		process.exitCode = 1;
 	});
 }
-
-export type { SymlinkOptions, SymlinkResult };
