@@ -9,22 +9,15 @@
  * Handles systemd (Linux), launchd (macOS), and Windows service management
  */
 
-import { execSyncHidden as execSync, spawnHidden as spawn } from "@signet/core";
+import { execSync as nodeExecSync, spawn as nodeSpawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { resolveFreshRustDaemon } from "./fresh-rust-daemon";
 
-import {
-	LOOPBACK_HOST,
-	buildLaunchdEnvironment,
-	buildLaunchdPlist,
-	formatWorkspacePreflightError,
-	preflightWorkspace,
-	resolveDefaultBasePath,
-} from "@signet/core";
-
-const AGENTS_DIR = resolveDefaultBasePath();
+const LOOPBACK_HOST = "127.0.0.1";
+const AGENTS_DIR =
+	process.env.SIGNET_PATH?.trim() || process.env.SIGNET_WORKSPACE?.trim() || join(homedir(), ".agents");
 const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
@@ -35,6 +28,43 @@ const HEALTH_PROBE_URL = `http://${LOOPBACK_HOST}:${DAEMON_PORT}/health/live`;
 // Platform-specific paths
 const LAUNCHD_PLIST = join(homedir(), "Library", "LaunchAgents", "ai.signet.daemon.plist");
 const SYSTEMD_UNIT = join(homedir(), ".config", "systemd", "user", "signet.service");
+
+const execSync = (command: string, options?: Parameters<typeof nodeExecSync>[1]) =>
+	nodeExecSync(command, { ...options, windowsHide: true });
+const spawn = (command: string, args: string[], options: Parameters<typeof nodeSpawn>[2]) =>
+	nodeSpawn(command, args, { ...options, windowsHide: true, shell: false });
+
+function xmlEscape(value: string): string {
+	return value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&apos;");
+}
+
+function buildLaunchdEnvironment(input: { values?: Record<string, string> }): Record<string, string> {
+	return { ...input.values, HOME: homedir(), PATH: process.env.PATH ?? "" };
+}
+
+function buildLaunchdPlist(input: {
+	label: string;
+	programArguments: readonly string[];
+	environment: Readonly<Record<string, string>>;
+	workingDirectory: string;
+	standardOutPath: string;
+	standardErrorPath: string;
+}): string {
+	const args = input.programArguments.map((arg) => `\n\t\t<string>${xmlEscape(arg)}</string>`).join("");
+	const environment = Object.entries(input.environment)
+		.map(([key, value]) => `\n\t\t<key>${xmlEscape(key)}</key>\n\t\t<string>${xmlEscape(value)}</string>`)
+		.join("");
+	return `<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict>\n\t<key>Label</key><string>${xmlEscape(input.label)}</string>\n\t<key>ProgramArguments</key><array>${args}\n\t</array>\n\t<key>EnvironmentVariables</key><dict>${environment}\n\t</dict>\n\t<key>WorkingDirectory</key><string>${xmlEscape(input.workingDirectory)}</string>\n\t<key>RunAtLoad</key><true/>\n\t<key>KeepAlive</key><true/>\n\t<key>StandardOutPath</key><string>${xmlEscape(input.standardOutPath)}</string>\n\t<key>StandardErrorPath</key><string>${xmlEscape(input.standardErrorPath)}</string>\n</dict></plist>\n`;
+}
+
+function formatWorkspacePreflightError(): string {
+	return `Signet cannot start: workspace at ${AGENTS_DIR} is missing required configuration or database. Restore the workspace or run explicit setup; Signet will not recreate it.`;
+}
 
 export type ServiceHealthStatus = "healthy" | "degraded" | "unavailable";
 
@@ -248,7 +278,7 @@ async function uninstallSystemd(): Promise<void> {
 function isSystemdRunning(): boolean {
 	try {
 		const output = execSync("systemctl --user is-active signet.service 2>/dev/null", { encoding: "utf-8" });
-		return output.trim() === "active";
+		return String(output).trim() === "active";
 	} catch {
 		return false;
 	}
@@ -259,9 +289,8 @@ function isSystemdRunning(): boolean {
 // ============================================================================
 
 function assertWorkspaceStartable(): void {
-	const workspace = preflightWorkspace();
-	if (workspace.status === "missing" || workspace.status === "incomplete") {
-		throw new Error(formatWorkspacePreflightError(workspace));
+	if (!existsSync(AGENTS_DIR)) {
+		throw new Error(formatWorkspacePreflightError());
 	}
 }
 

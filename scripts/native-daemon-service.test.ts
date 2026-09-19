@@ -24,6 +24,18 @@ describe("native daemon service cutover", () => {
 		}
 	});
 
+	it("rejects non-native paths before selecting a service command", () => {
+		const previous = process.env.SIGNET_RUST_DAEMON_BIN;
+		process.env.SIGNET_RUST_DAEMON_BIN = "/tmp/daemon.ts";
+		try {
+			expect(() => generateSystemdUnit()).toThrow(/Native Signet daemon executable is required/);
+			expect(() => generateLaunchdPlist()).toThrow(/Native Signet daemon executable is required/);
+		} finally {
+			if (previous === undefined) delete process.env.SIGNET_RUST_DAEMON_BIN;
+			else process.env.SIGNET_RUST_DAEMON_BIN = previous;
+		}
+	});
+
 	it("accepts the packaged/current Rust binary path", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-native-service-"));
 		const binary = join(root, "platform", "rust-daemon", "target", "debug", "signet-daemon");
