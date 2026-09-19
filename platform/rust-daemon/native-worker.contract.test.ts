@@ -16,12 +16,22 @@ it("runs DreamTrigger jobs through durable worker failure without provider", asy
 	});
 	try {
 		const origin = `http://127.0.0.1:${port}`;
+		let ready = false;
+		let lastReadyError = "no response";
 		for (let i = 0; i < 100; i++) {
 			try {
-				if ((await fetch(`${origin}/health/ready`)).ok) break;
-			} catch {}
+				const response = await fetch(`${origin}/health/ready`);
+				if (response.ok) {
+					ready = true;
+					break;
+				}
+				lastReadyError = `HTTP ${response.status}`;
+			} catch (error) {
+				lastReadyError = String(error);
+			}
 			await Bun.sleep(25);
 		}
+		expect(ready, `daemon readiness failed for ${bin}: ${lastReadyError}`).toBe(true);
 		const headers = { "content-type": "application/json", "x-signet-agent-id": "worker-contract" };
 		const response = await fetch(`${origin}/api/dream/trigger`, {
 			method: "POST",
