@@ -254,7 +254,7 @@ export class DaemonManager {
 		});
 	}
 	/**
-	 * Spawn the bundled platform/rust-daemon native daemon directly.
+	 * Spawn the bundled Rust native daemon directly.
 	 *
 	 * FD-race fix (issue #606): createWriteStream opens the file lazily — the
 	 * underlying fd is not available until the 'open' event fires, which happens
@@ -302,7 +302,7 @@ export class DaemonManager {
 			const code: DaemonStartupErrorCode = error.code === "ENOENT" ? "bundled-runtime-enoent" : "bundled-spawn-failed";
 			const message =
 				code === "bundled-runtime-enoent"
-					? `Signet could not start the bundled platform/rust-daemon executable because it is missing or not executable. Reinstall the desktop app. (${error.message})`
+					? `Signet could not start the bundled Rust daemon because it is missing or not executable. Reinstall the desktop app. (${error.message})`
 					: `Signet could not start the bundled daemon: ${error.message}`;
 			this.#startupError = { code, message };
 			this.#child = null;

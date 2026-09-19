@@ -12,6 +12,8 @@ test("desktop runtime staging ships the native daemon and dashboard", () => {
 	expect(source).toContain("dashboardBuild");
 	expect(source).not.toContain("bun install");
 	expect(source).not.toContain("platform/daemon");
+	expect(source).not.toContain("dist/daemon.js");
+	expect(source).toContain("nativeDaemonPath");
 });
 /**
  * The hermes-agent connector copies its Python plugin from an on-disk

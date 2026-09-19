@@ -19,3 +19,13 @@ test("desktop release builds connector artifacts before bundling the daemon", ()
 	])
 		expect(connectorBuild).toContain(prerequisite);
 });
+
+test("desktop release has no displaced TypeScript daemon build path", () => {
+	const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as {
+		scripts: Record<string, string>;
+	};
+	const scripts = Object.values(manifest.scripts).join("\n");
+	expect(scripts).not.toContain("build:core");
+	expect(scripts).not.toContain("platform/daemon");
+	expect(scripts).not.toContain("dist/daemon.js");
+});

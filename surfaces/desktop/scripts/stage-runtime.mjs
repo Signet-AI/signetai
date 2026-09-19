@@ -132,6 +132,15 @@ export function removeStaging(stagedResources, remove = rmSync) {
 	}
 }
 
+export function nativeDaemonPath(platform, arch) {
+	const executable = platform === "win32" ? "signet-daemon.exe" : "signet-daemon";
+	return resolve(nativeRuntime, `${platform}-${arch}`, executable);
+}
+
+export function assertNativeDaemon(path) {
+	if (!existsSync(path)) throw new Error(`Rust daemon artifact not found: ${path}. Run build:native first.`);
+}
+
 export function replaceResources(target, staged, rename = renameSync, remove = rmSync) {
 	const lockPath = acquireResourceLock(target);
 	let failure;
@@ -191,10 +200,9 @@ export function stageRuntime() {
 	const target = targetPlatform();
 	const stagedResources = mkdtempSync(join(desktopRoot, ".resources-stage-"));
 	const executable = target === "win32" ? "signet-daemon.exe" : "signet-daemon";
-	const daemonSource = resolve(nativeRuntime, `${target}-${arch}`, executable);
+	const daemonSource = nativeDaemonPath(target, arch);
 	try {
-		if (!existsSync(daemonSource))
-			throw new Error(`Rust daemon artifact not found: ${daemonSource}. Run build:native first.`);
+		assertNativeDaemon(daemonSource);
 		if (!existsSync(resolve(dashboardBuild, "index.html")))
 			throw new Error(`Dashboard build not found: ${dashboardBuild}`);
 		const daemonOut = resolve(stagedResources, "rust-daemon", `${target}-${arch}`);
