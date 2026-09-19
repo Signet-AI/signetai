@@ -163,26 +163,52 @@ fn role_rank(role: &str) -> Option<u8> {
     }
 }
 
-fn authority_allows(authority: &Value, requested_role: &str, requested_scope: &Value, requested_permissions: &[String]) -> bool {
-    let Some(authority_role) = authority.get("role").and_then(Value::as_str).and_then(role_rank) else { return false; };
-    let Some(requested_rank) = role_rank(requested_role) else { return false; };
-    if requested_rank > authority_role { return false; }
+fn authority_allows(
+    authority: &Value,
+    requested_role: &str,
+    requested_scope: &Value,
+    requested_permissions: &[String],
+) -> bool {
+    let Some(authority_role) = authority
+        .get("role")
+        .and_then(Value::as_str)
+        .and_then(role_rank)
+    else {
+        return false;
+    };
+    let Some(requested_rank) = role_rank(requested_role) else {
+        return false;
+    };
+    if requested_rank > authority_role {
+        return false;
+    }
     let authority_scope = authority.get("scope").and_then(Value::as_object);
     let requested_scope = requested_scope.as_object();
+    let authority_is_unscoped = authority_scope.is_none_or(|scope| scope.is_empty());
     if let (Some(parent), Some(child)) = (authority_scope, requested_scope) {
-        for (key, value) in child {
-            if let Some(parent_value) = parent.get(key) {
-                if parent_value != value { return false; }
-            } else if key == "agent" || key == "workspace" {
-                return false;
+        if !authority_is_unscoped {
+            for (key, value) in child {
+                if let Some(parent_value) = parent.get(key) {
+                    if parent_value != value {
+                        return false;
+                    }
+                } else if key == "agent" || key == "workspace" {
+                    return false;
+                }
             }
         }
-    } else if requested_scope.is_some() && authority_scope.is_none() && authority_role < 3 {
+    } else if requested_scope.is_some() && !authority_is_unscoped && authority_role < 3 {
         return false;
     }
     let allowed = authority.get("permissions").and_then(Value::as_array);
     if let Some(allowed) = allowed {
-        if !requested_permissions.iter().all(|permission| allowed.iter().any(|value| value.as_str() == Some(permission))) { return false; }
+        if !requested_permissions.iter().all(|permission| {
+            allowed
+                .iter()
+                .any(|value| value.as_str() == Some(permission))
+        }) {
+            return false;
+        }
     }
     true
 }
@@ -253,11 +279,17 @@ async fn token(
     let requested_agent = req.scope.get("agent").and_then(Value::as_str);
     if let Some(authority_agent) = claims.get("agentId").and_then(Value::as_str) {
         if requested_agent.is_some_and(|agent| agent != authority_agent) {
-            return Err(ApiError::unauthorized("requested scope exceeds authenticated authority"));
+            return Err(ApiError::unauthorized(
+                "requested scope exceeds authenticated authority",
+            ));
         }
     }
     if !authority_allows(&claims, &req.role, &req.scope, &[]) {
-        return Err(ApiError::forbidden("requested token authority exceeds authenticated authority"));
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message: "requested token authority exceeds authenticated authority".to_owned(),
+        });
     }
     let secret = state
         .auth_secret
@@ -318,7 +350,9 @@ async fn create(
     };
     let requested_role = req.role.unwrap_or_else(|| "agent".into());
     if !authority_allows(&claims, &requested_role, &req.scope, &permissions) {
-        return Err(ApiError::unauthorized("requested key authority exceeds authenticated authority"));
+        return Err(ApiError::unauthorized(
+            "requested key authority exceeds authenticated authority",
+        ));
     }
     let result = execute(
         &state,
