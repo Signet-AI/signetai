@@ -22,6 +22,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::signal;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -438,12 +439,23 @@ async fn remember(
     }
     let memory_metadata = metadata(&request);
     let content = request.content;
+    let telemetry_agent = agent_id.clone();
     let result = execute(
         &state,
         Operation::Remember {
             agent_id,
             content,
             metadata: memory_metadata,
+        },
+    )
+    .await?;
+    execute(
+        &state,
+        Operation::TelemetryRecord {
+            agent_id: telemetry_agent,
+            workspace_id: "default".to_owned(),
+            event: "memory.remembered".to_owned(),
+            payload: json!({"source":"native-memory-route"}),
         },
     )
     .await?;
@@ -932,6 +944,15 @@ async fn dashboard(State(state): State<AppState>, uri: Uri) -> Response {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace_path();
     std::fs::create_dir_all(workspace.join("memory"))?;
+    let daemon_dir = workspace.join(".daemon");
+    std::fs::create_dir_all(&daemon_dir)?;
+    let auth_path = daemon_dir.join("auth-secret");
+    if !auth_path.exists() {
+        let mut secret = Vec::with_capacity(32);
+        secret.extend_from_slice(Uuid::new_v4().as_bytes());
+        secret.extend_from_slice(Uuid::new_v4().as_bytes());
+        std::fs::write(auth_path, secret)?;
+    }
     let owner = Arc::new(WorkspaceOwner::open(&database_path(&workspace), 256)?);
     owner.initialize()?;
     let worker_stop = worker::start(owner.clone());
