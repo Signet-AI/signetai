@@ -15,9 +15,10 @@ import {
 	evaluateBootWedge,
 	type BootWedgeMeasurements,
 } from "./criteria";
+import { resolveFreshRustDaemon } from "../../../scripts/lib/fresh-rust-daemon";
 
 const repoRoot = resolve(import.meta.dir, "..", "..", "..");
-const daemonScript = join(repoRoot, "platform/daemon/src/daemon.ts");
+const daemonBinary = resolveFreshRustDaemon(repoRoot);
 const CPU_COUNT = cpus().length;
 const STOP_GRACE_MS = 5_000;
 const STOP_POLL_MS = 50;
@@ -384,7 +385,7 @@ async function run(): Promise<BootWedgeReport> {
 		const port = await reservePort();
 		const daemonHome = join(workspace, "home");
 		mkdirSync(daemonHome, { recursive: true });
-		child = spawn(process.execPath, [daemonScript], {
+		child = spawn(daemonBinary, [], {
 			cwd: repoRoot,
 			detached: process.platform !== "win32",
 			env: {

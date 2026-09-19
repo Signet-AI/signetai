@@ -5,11 +5,12 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { buildProductionDb, type ProductionDbResult } from "./build-db";
 import { evaluateStability, percentile, type StabilityMeasurements } from "./criteria";
+import { resolveFreshRustDaemon } from "../../../scripts/lib/fresh-rust-daemon";
 
 const harnessDir = import.meta.dir;
 const repoRoot = resolve(harnessDir, "..", "..", "..");
-const daemonScript = join(repoRoot, "platform/daemon/src/daemon.ts");
-const probeScript = join(harnessDir, "loop-probe.ts");
+const daemonBinary = resolveFreshRustDaemon(repoRoot);
+
 const activeFetchControllers = new Set<AbortController>();
 
 function parseArgs(argv: readonly string[]): { scale: "full" | "smoke"; keep: boolean; out: string | null } {
@@ -312,7 +313,7 @@ async function main(): Promise<number> {
 		console.error(
 			`[phase-d] spawning daemon on ${origin} (probe on ${probeOrigin}, embedding provider dead on port ${deadEmbeddingPort})`,
 		);
-		daemon = spawn(process.execPath, ["--preload", probeScript, daemonScript], {
+		daemon = spawn(daemonBinary, [], {
 			cwd: repoRoot,
 			env: {
 				...process.env,

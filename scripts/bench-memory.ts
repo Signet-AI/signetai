@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { spawn } from "node:child_process";
+import { resolveFreshRustDaemon } from "./lib/fresh-rust-daemon";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import net from "node:net";
@@ -579,7 +580,7 @@ async function main(): Promise<void> {
 			await run("bun", ["run", "build"]);
 		}
 
-		daemon = spawn("bun", ["platform/daemon/src/daemon.ts"], {
+		daemon = spawn(resolveFreshRustDaemon(repoRoot, env), [], {
 			cwd: repoRoot,
 			env,
 			stdio: ["ignore", "inherit", "inherit"],

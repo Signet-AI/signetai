@@ -1,4 +1,25 @@
 #!/usr/bin/env bun
+/**
+ * Daemon concurrency load test (issue #1148).
+ *
+ * Reproduces the load profile that preceded the silent daemon deaths:
+ * automation bots (Minecraft chat bridge, camera/motion sentinel) hammering
+ * the daemon API — session-start hooks, secrets listing, session capture,
+ * recall — while the Obsidian watcher indexes in the background. The invariant
+ * under test: concurrent session-start + secrets + status traffic must NOT be
+ * able to take the daemon down, and if it does, the daemon must leave evidence
+ * (lifecycle record, log tail) instead of vanishing silently.
+ *
+ * Usage:
+ *   bun scripts/load-test-daemon.ts [--duration 20] [--concurrency 8]
+ *       [--port 3850] [--writes] [--token <bearer>]
+ *
+ * Against the live daemon (default) or a scratch one:
+ *   SIGNET_PATH=/tmp/signet-loadtest SIGNET_RUST_DAEMON_BIN=./platform/rust-daemon/target/debug/signet-daemon ./platform/rust-daemon/target/debug/signet-daemon &
+ *   bun scripts/load-test-daemon.ts --port 3850
+ *
+ * Exit code 0 = daemon stayed healthy through the run (p95 < 2s), 1 = failure.
+ */
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -13,6 +34,8 @@ interface Route {
 
 const SESSION_KEY_PREFIX = `loadtest-${process.pid}-`;
 let sessionCounter = 0;
+// session-end must reference a session that session-start actually created,
+// otherwise every end is a 400 and the real path never runs.
 const startedSessionKeys: string[] = [];
 
 function nextSessionKey(): string {
@@ -141,6 +164,8 @@ async function main(): Promise<void> {
 
 	const headers: Record<string, string> = { "content-type": "application/json" };
 	if (args.token) headers.authorization = `Bearer ${args.token}`;
+
+	// Pre-flight: the daemon must be reachable before we start piling on load.
 	const preflight = await fetch(`${baseUrl}/api/status`, { headers, signal: AbortSignal.timeout(5_000) });
 	if (!preflight.ok) {
 		console.error(`Daemon not reachable at ${baseUrl} (HTTP ${preflight.status}). Start it first.`);
@@ -152,6 +177,9 @@ async function main(): Promise<void> {
 	let daemonDownSince: number | null = null;
 	let lastHealthOk = true;
 	let finished = false;
+
+	// Watchdog: independent of the workers, probes health every 250ms and
+	// records any window where the daemon stopped answering.
 	async function watchdog(): Promise<void> {
 		while (!finished) {
 			try {
@@ -180,6 +208,8 @@ async function main(): Promise<void> {
 			await new Promise((resolve) => setTimeout(resolve, 250));
 		}
 	}
+
+	// Worker: fire one weighted request, record latency/status.
 	async function worker(): Promise<void> {
 		while (!finished) {
 			const route = weightedRoute(routes);
@@ -206,6 +236,8 @@ async function main(): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, args.durationSec * 1000));
 	finished = true;
 	await Promise.all([...workers, watchdogPromise]);
+
+	// Final health check: the daemon must be answering after the run.
 	let finalHealthy = false;
 	try {
 		const res = await fetch(`${baseUrl}/api/status`, { headers, signal: AbortSignal.timeout(5_000) });
@@ -213,6 +245,9 @@ async function main(): Promise<void> {
 	} catch {
 		finalHealthy = false;
 	}
+
+	// An unrecovered death (daemon stayed down until the end of the run) must
+	// still surface as a death event.
 	if (daemonDownSince !== null) {
 		deaths.push({
 			detectedAt: new Date(daemonDownSince).toISOString(),
@@ -220,6 +255,8 @@ async function main(): Promise<void> {
 			downForMs: Date.now() - daemonDownSince,
 		});
 	}
+
+	// Post-mortem evidence: the lifecycle record, when present.
 	let lifecycle: unknown = null;
 	try {
 		const raw = readFileSync(join(args.agentsDir, ".daemon", "lifecycle.json"), "utf-8");

@@ -4,8 +4,9 @@ import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate, termination } from "./repro-1059-eval";
+import { resolveFreshRustDaemon } from "../../../../scripts/lib/fresh-rust-daemon";
 
-const daemonScript = join(import.meta.dir, "../../../../platform/daemon/src/daemon.ts");
+const daemonBinary = resolveFreshRustDaemon(join(import.meta.dir, "../../../.."));
 const agentsDir = mkdtempSync(join(tmpdir(), "signet-1059-"));
 mkdirSync(join(agentsDir, ".daemon", "logs"), { recursive: true });
 mkdirSync(join(agentsDir, "memory"), { recursive: true });
@@ -114,7 +115,7 @@ try {
 	const origin = `http://127.0.0.1:${daemonPort}`;
 	const downstreamOrigin = `http://127.0.0.1:${downstreamPort}`;
 
-	daemon = spawn(process.execPath, [daemonScript], {
+	daemon = spawn(daemonBinary, [], {
 		cwd: import.meta.dir,
 		env: {
 			...process.env,
