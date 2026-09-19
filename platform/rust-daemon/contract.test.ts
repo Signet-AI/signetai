@@ -405,7 +405,7 @@ describe("fresh Rust daemon", () => {
 			headers: { "x-signet-agent": "agent-a", "x-workspace-id": "workspace-a" },
 		});
 		expect(listed.status).toBe(200);
-		expect((await listed.json()).length).toBe(1);
+		expect((await listed.json()).items).toHaveLength(1);
 		const cancelled = await fetch(`${origin}/api/jobs/${jobId}`, {
 			method: "DELETE",
 			headers: { "x-signet-agent": "agent-a", "x-workspace-id": "workspace-a" },

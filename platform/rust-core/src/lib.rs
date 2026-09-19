@@ -505,6 +505,8 @@ fn execute_operation(
             actor,
             reason,
         } => {
+            let actor = bounded_text(&actor, "actor", 256)?;
+            let reason = bounded_text(&reason, "reason", 256)?;
             let tx = connection.transaction()?;
             let state: Option<String> = tx
                 .query_row(
@@ -514,6 +516,13 @@ fn execute_operation(
                 )
                 .optional()?;
             let state = state.ok_or(CoreError::NotFound)?;
+            let prior_cancellation: Option<(String, String, String)> = tx
+                .query_row(
+                    "SELECT actor,reason,provenance FROM job_cancellations WHERE job_id=? AND agent_id=? ORDER BY id LIMIT 1",
+                    params![id, agent_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
             let final_state = if matches!(state.as_str(), "queued" | "running") {
                 tx.execute("UPDATE jobs SET state='cancelled', updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id=? AND state IN ('queued','running')", params![id,agent_id,workspace_id])?;
                 tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?,'cancelled',?,datetime('now'))", params![id,agent_id,serde_json::to_string(&json!({"actor":actor,"reason":reason}))?])?;
@@ -521,15 +530,21 @@ fn execute_operation(
             } else {
                 state.as_str()
             };
-            let actor = bounded_text(&actor, "actor", 256)?;
-            let reason = bounded_text(&reason, "reason", 256)?;
-            if state != "cancelled" {
+            if prior_cancellation.is_none() {
                 tx.execute("INSERT INTO job_cancellations(job_id,agent_id,actor,reason,provenance,created_at) VALUES(?,?,?,?,?,datetime('now'))", params![id,agent_id,actor,reason,"api"])?;
             }
+            let (response_actor, response_reason, response_provenance) =
+                prior_cancellation.unwrap_or_else(|| (actor.clone(), reason.clone(), "api".into()));
             tx.commit()?;
-            Ok(
-                json!({"id":id,"state":final_state,"cancellation":{"actor":actor,"reason":reason,"provenance":"api"}}),
-            )
+            Ok(json!({
+                "id":id,
+                "state":final_state,
+                "cancellation":{
+                    "actor":response_actor,
+                    "reason":response_reason,
+                    "provenance":response_provenance
+                }
+            }))
         }
         Operation::JobList {
             agent_id,
