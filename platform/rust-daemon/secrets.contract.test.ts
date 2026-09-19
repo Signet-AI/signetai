@@ -94,6 +94,89 @@ describe("fresh native local-secrets contract", () => {
 			check((await request(d, "/api/secrets")).response.status, 401);
 			const headers = { authorization: `Bearer ${d.credential}` };
 			const list = () => request(d, "/api/secrets", { headers }, d.credential, agent, workspace);
+			const restricted = await request(
+				d,
+				"/api/auth/api-keys",
+				{
+					method: "POST",
+					headers: { "x-signet-agent": agent },
+					body: JSON.stringify({
+						name: "restricted-secrets-authority",
+						role: "admin",
+						scope: { agent, workspace },
+						permissions: ["recall"],
+					}),
+				},
+				d.credential,
+				agent,
+				workspace,
+			);
+			check(restricted.response.status, 201);
+			const restrictedCredential = restricted.body.apiKey.key;
+			for (const [path, init] of [
+				["/api/secrets", {}],
+				[
+					"/api/secrets",
+					{ method: "POST", body: JSON.stringify({ name: "restricted-name", value: "restricted-value" }) },
+				],
+			] as const) {
+				const denied = await request(d, path, init, restrictedCredential, agent, workspace);
+				check(denied.response.status, 403);
+				expect(denied.text).not.toContain("restricted-name");
+				expect(denied.text).not.toContain("restricted-value");
+				assertions += 2;
+			}
+			const exact = await request(
+				d,
+				"/api/auth/api-keys",
+				{
+					method: "POST",
+					headers: { "x-signet-agent": agent },
+					body: JSON.stringify({
+						name: "exact-secrets-authority",
+						role: "admin",
+						scope: { agent, workspace },
+						permissions: ["secrets:list", "secrets:write"],
+					}),
+				},
+				d.credential,
+				agent,
+				workspace,
+			);
+			check(exact.response.status, 201);
+			const exactCredential = exact.body.apiKey.key;
+			const exactList = await request(d, "/api/secrets", {}, exactCredential, agent, workspace);
+			check(exactList.response.status, 200);
+			const exactCreated = await request(
+				d,
+				"/api/secrets",
+				{ method: "POST", body: JSON.stringify({ name: "exact-name", value: "exact-value" }) },
+				exactCredential,
+				agent,
+				workspace,
+			);
+			check(exactCreated.response.status, 201);
+			for (const [wrongAgent, wrongWorkspace] of [
+				[agent + "-other", workspace],
+				[agent, workspace + "-other"],
+			] as const) {
+				const denied = await request(d, "/api/secrets", {}, exactCredential, wrongAgent, wrongWorkspace);
+				check(denied.response.status, 403);
+				const deniedCreate = await request(
+					d,
+					"/api/secrets",
+					{ method: "POST", body: JSON.stringify({ name: "cross-scope-name", value: "cross-scope-value" }) },
+					exactCredential,
+					wrongAgent,
+					wrongWorkspace,
+				);
+				check(deniedCreate.response.status, 403);
+				for (const body of [denied.text, deniedCreate.text]) {
+					expect(body).not.toContain("exact-name");
+					expect(body).not.toContain("exact-value");
+				}
+				assertions += 4;
+			}
 			const created = await request(
 				d,
 				"/api/secrets",
