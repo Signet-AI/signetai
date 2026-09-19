@@ -1,5 +1,5 @@
 use rusqlite::Connection;
-use signet_core_native::{Core, CoreError, NewMemory, UpdateMemory};
+use signet_core_native::{Core, CoreError, NewMemory, Operation, UpdateMemory, WorkspaceOwner};
 use tempfile::tempdir;
 
 fn core() -> Core {
@@ -74,4 +74,17 @@ fn opens_a_current_style_workspace_without_destroying_existing_rows() {
         .remember("legacy-agent", NewMemory::text("new"))
         .unwrap();
     assert!(owner.get("legacy-agent", &id).unwrap().is_some());
+}
+
+#[test]
+fn workspace_submit_operations_run_on_owner_without_requeue_deadlock() {
+    let d = tempdir().unwrap();
+    let owner = WorkspaceOwner::open(&d.path().join("owner.sqlite"), 2).unwrap();
+    assert_eq!(owner.submit(Operation::Health).unwrap()["ready"], true);
+    let created = owner.submit(Operation::Remember {
+        agent_id: "agent".into(), content: "inline".into(), metadata: serde_json::json!({}),
+    }).unwrap();
+    assert!(created["id"].as_str().is_some());
+    let listed = owner.submit(Operation::List { agent_id: "agent".into(), include_deleted: false }).unwrap();
+    assert_eq!(listed.as_array().unwrap().len(), 1);
 }
