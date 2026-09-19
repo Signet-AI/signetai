@@ -643,13 +643,32 @@ struct DocumentRequest {
     duplicate_mode: String,
     #[serde(default)]
     generation: Option<i64>,
+    #[serde(default, alias = "workspaceId")]
+    workspace_id: Option<String>,
 }
+
+fn document_workspace(headers: &HeaderMap, requested: Option<&str>) -> String {
+    headers
+        .get("x-signet-workspace-id")
+        .or_else(|| headers.get("x-workspace-id"))
+        .and_then(|value| value.to_str().ok())
+        .and_then(non_empty)
+        .or_else(|| requested.and_then(non_empty))
+        .or_else(|| {
+            env::var("SIGNET_WORKSPACE_ID")
+                .ok()
+                .and_then(|value| non_empty(&value))
+        })
+        .unwrap_or_else(|| "default".to_owned())
+}
+
 async fn import_document(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(req): Json<DocumentRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = document_workspace(&headers, req.workspace_id.as_deref());
     Ok((
         StatusCode::CREATED,
         Json(
@@ -667,11 +686,7 @@ async fn import_document(
                             req.metadata
                         };
                         if let Value::Object(ref mut o) = m {
-                            let workspace = headers
-                                .get("x-signet-workspace-id")
-                                .and_then(|v| v.to_str().ok())
-                                .unwrap_or("default");
-                            o.insert("_workspaceId".into(), json!(workspace));
+                            o.insert("_workspaceId".into(), json!(workspace_id));
                             if let Some(g) = req.generation {
                                 o.insert("_generation".into(), json!(g));
                             }
@@ -692,11 +707,7 @@ async fn document_list(
     Query(query): Query<AgentQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, Some(&query), None)?;
-    let workspace_id = headers
-        .get("x-signet-workspace-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("default")
-        .to_owned();
+    let workspace_id = document_workspace(&headers, None);
     Ok(Json(
         execute(
             &state,
@@ -716,11 +727,7 @@ async fn document_get(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, Some(&query), None)?;
-    let workspace_id = headers
-        .get("x-signet-workspace-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("default")
-        .to_owned();
+    let workspace_id = document_workspace(&headers, None);
     let value = execute(
         &state,
         Operation::DocumentGet {
@@ -742,11 +749,7 @@ async fn document_chunks(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, Some(&query), None)?;
-    let workspace_id = headers
-        .get("x-signet-workspace-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("default")
-        .to_owned();
+    let workspace_id = document_workspace(&headers, None);
     Ok(Json(
         execute(
             &state,
@@ -767,11 +770,7 @@ async fn document_delete(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, Some(&query), None)?;
-    let workspace_id = headers
-        .get("x-signet-workspace-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("default")
-        .to_owned();
+    let workspace_id = document_workspace(&headers, None);
     Ok(Json(
         execute(
             &state,
