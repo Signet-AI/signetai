@@ -1,0 +1,115 @@
+use crate::{agent, execute, ApiError, AppState};
+use axum::{
+    extract::State,
+    http::HeaderMap,
+    routing::{get, post},
+    Json, Router,
+};
+use serde_json::{json, Value};
+use signet_core_native::Operation;
+
+pub(crate) async fn pipeline_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::PipelineStatus {
+                agent_id: agent(&headers, None, None)?,
+            },
+        )
+        .await?,
+    ))
+}
+pub(crate) async fn dream_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::DreamStatus {
+                agent_id: agent(&headers, None, None)?,
+            },
+        )
+        .await?,
+    ))
+}
+pub(crate) async fn active_passes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::DreamActivePasses {
+                agent_id: agent(&headers, None, None)?,
+            },
+        )
+        .await?,
+    ))
+}
+pub(crate) async fn pause(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::PipelineSetPaused {
+                agent_id: agent(&headers, None, None)?,
+                paused: true,
+            },
+        )
+        .await?,
+    ))
+}
+pub(crate) async fn resume(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::PipelineSetPaused {
+                agent_id: agent(&headers, None, None)?,
+                paused: false,
+            },
+        )
+        .await?,
+    ))
+}
+pub(crate) async fn trigger(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Option<Json<Value>>,
+) -> Result<Json<Value>, ApiError> {
+    let payload = body.map(|Json(value)| value).unwrap_or_else(|| json!({}));
+    if serde_json::to_vec(&payload)
+        .map_err(|_| ApiError::bad_request("invalid payload"))?
+        .len()
+        > 65_536
+    {
+        return Err(ApiError::bad_request("payload exceeds 64 KiB"));
+    }
+    Ok(Json(
+        execute(
+            &state,
+            Operation::DreamTrigger {
+                agent_id: agent(&headers, None, None)?,
+                payload,
+            },
+        )
+        .await?,
+    ))
+}
+pub(crate) fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/pipeline/status", get(pipeline_status))
+        .route("/api/pipeline/pause", post(pause))
+        .route("/api/pipeline/resume", post(resume))
+        .route("/api/dream/status", get(dream_status))
+        .route("/api/dream/passes/active", get(active_passes))
+        .route("/api/dream/trigger", post(trigger))
+}

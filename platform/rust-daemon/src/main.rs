@@ -686,7 +686,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health/ready", get(ready))
         .route("/health", get(health))
         .route("/api/status", get(status))
-        .route("/api/pipeline/status", get(status))
         .route("/api/sources", get(sources).post(create_source))
         .route("/api/import/documents", post(import_document))
         .route("/api/sources/documents", post(import_document))

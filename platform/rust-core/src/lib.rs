@@ -442,6 +442,76 @@ fn execute_operation(
                 .collect::<Result<Vec<Value>, _>>()?;
             Ok(json!(values))
         }
+        Operation::PipelineStatus { agent_id } => {
+            let agent_id = required_agent(&agent_id)?;
+            let row: Option<(String, i64)> = connection
+                .query_row(
+                    "SELECT state, paused FROM pipeline_state WHERE agent_id=?",
+                    params![agent_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let (state, paused) = row.unwrap_or_else(|| ("idle".into(), 0));
+            Ok(json!({"agentId":agent_id,"state":state,"paused":paused != 0}))
+        }
+        Operation::PipelineSetPaused { agent_id, paused } => {
+            let agent_id = required_agent(&agent_id)?;
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO pipeline_state(agent_id,state,paused,updated_at) VALUES(?, 'idle', ?, datetime('now')) ON CONFLICT(agent_id) DO UPDATE SET paused=excluded.paused, updated_at=datetime('now')", params![agent_id, paused as i64])?;
+            tx.commit()?;
+            Ok(json!({"agentId":agent_id,"state":"idle","paused":paused}))
+        }
+        Operation::DreamStatus { agent_id } => {
+            let status = execute_operation(
+                connection,
+                Operation::PipelineStatus {
+                    agent_id: agent_id.clone(),
+                },
+            )?;
+            Ok(
+                json!({"agentId":agent_id,"status":if status.get("paused").and_then(Value::as_bool).unwrap_or(false) {"paused"} else {"ready"},"pipeline":status}),
+            )
+        }
+        Operation::DreamActivePasses { agent_id } => {
+            let agent_id = required_agent(&agent_id)?;
+            let mut s = connection.prepare("SELECT json_object('id',id,'kind',kind,'state',state,'createdAt',created_at,'updatedAt',updated_at) FROM jobs WHERE agent_id=? AND kind LIKE 'dream.%' AND state IN ('queued','running') ORDER BY created_at LIMIT 100")?;
+            let rows = s.query_map(params![agent_id], |r| r.get::<_, String>(0))?;
+            let values = rows
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .map(|v| serde_json::from_str(&v))
+                .collect::<Result<Vec<Value>, _>>()?;
+            Ok(json!({"agentId":agent_id,"passes":values}))
+        }
+        Operation::DreamTrigger { agent_id, payload } => {
+            let agent_id = required_agent(&agent_id)?;
+            let payload = bounded_json(&payload)?;
+            let paused: i64 = connection
+                .query_row(
+                    "SELECT paused FROM pipeline_state WHERE agent_id=?",
+                    params![agent_id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            if paused != 0 {
+                return Err(CoreError::InvalidInput("pipeline is paused".into()));
+            }
+            let count: i64 = connection.query_row(
+                "SELECT count(*) FROM jobs WHERE agent_id=? AND state IN ('queued','running')",
+                params![agent_id],
+                |r| r.get(0),
+            )?;
+            if count >= 100 {
+                return Err(CoreError::QueueFull { capacity: 100 });
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO jobs(id,agent_id,kind,state,payload,created_at,updated_at) VALUES(?,?, 'dream.trigger','queued',?,datetime('now'),datetime('now'))", params![id,agent_id,payload])?;
+            tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?, 'queued','{}',datetime('now'))", params![id,agent_id])?;
+            tx.commit()?;
+            Ok(json!({"id":id,"agentId":agent_id,"kind":"dream.trigger","state":"queued"}))
+        }
         Operation::Health => {
             let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
             Ok(json!({ "ready": value == 1 }))
@@ -968,6 +1038,23 @@ pub enum Operation {
         agent_id: String,
         id: String,
     },
+    PipelineStatus {
+        agent_id: String,
+    },
+    PipelineSetPaused {
+        agent_id: String,
+        paused: bool,
+    },
+    DreamStatus {
+        agent_id: String,
+    },
+    DreamActivePasses {
+        agent_id: String,
+    },
+    DreamTrigger {
+        agent_id: String,
+        payload: Value,
+    },
     OntologyList {
         agent_id: String,
         workspace_id: String,
@@ -1153,6 +1240,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', result TEXT, error TEXT, deadline_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS jobs_agent_state ON jobs(agent_id, state, created_at);
          CREATE TABLE IF NOT EXISTS job_events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, event TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS pipeline_state (agent_id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'idle', paused INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS sessions (key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, runtime_path TEXT, project TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(key, agent_id));
          CREATE TABLE IF NOT EXISTS event_records (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, session_key TEXT, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS event_records_scope ON event_records(agent_id, session_key, id);
