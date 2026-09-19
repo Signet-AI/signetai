@@ -667,6 +667,11 @@ async fn import_document(
                             req.metadata
                         };
                         if let Value::Object(ref mut o) = m {
+                            let workspace = headers
+                                .get("x-signet-workspace-id")
+                                .and_then(|v| v.to_str().ok())
+                                .unwrap_or("default");
+                            o.insert("_workspaceId".into(), json!(workspace));
                             if let Some(g) = req.generation {
                                 o.insert("_generation".into(), json!(g));
                             }
@@ -678,6 +683,105 @@ async fn import_document(
             )
             .await?,
         ),
+    ))
+}
+
+async fn document_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, Some(&query), None)?;
+    let workspace_id = headers
+        .get("x-signet-workspace-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("default")
+        .to_owned();
+    Ok(Json(
+        execute(
+            &state,
+            Operation::DocumentList {
+                agent_id,
+                workspace_id,
+                limit: query.limit.unwrap_or(100).min(100),
+            },
+        )
+        .await?,
+    ))
+}
+async fn document_get(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentQuery>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, Some(&query), None)?;
+    let workspace_id = headers
+        .get("x-signet-workspace-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("default")
+        .to_owned();
+    let value = execute(
+        &state,
+        Operation::DocumentGet {
+            agent_id,
+            workspace_id,
+            id,
+        },
+    )
+    .await?;
+    if value.is_null() {
+        return Err(ApiError::not_found("document not found"));
+    }
+    Ok(Json(value))
+}
+async fn document_chunks(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentQuery>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, Some(&query), None)?;
+    let workspace_id = headers
+        .get("x-signet-workspace-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("default")
+        .to_owned();
+    Ok(Json(
+        execute(
+            &state,
+            Operation::DocumentChunks {
+                agent_id,
+                workspace_id,
+                id,
+                limit: query.limit.unwrap_or(100).min(100),
+            },
+        )
+        .await?,
+    ))
+}
+async fn document_delete(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AgentQuery>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, Some(&query), None)?;
+    let workspace_id = headers
+        .get("x-signet-workspace-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("default")
+        .to_owned();
+    Ok(Json(
+        execute(
+            &state,
+            Operation::DocumentDelete {
+                agent_id,
+                workspace_id,
+                id,
+            },
+        )
+        .await?,
     ))
 }
 
@@ -829,6 +933,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/api/mode", get(mode))
         .route("/api/sources", get(sources).post(create_source))
         .route("/api/import/documents", post(import_document))
+        .route("/api/documents", get(document_list).post(import_document))
+        .route("/api/documents/{id}/chunks", get(document_chunks))
+        .route(
+            "/api/documents/{id}",
+            get(document_get).delete(document_delete),
+        )
         .route("/api/sources/documents", post(import_document))
         .route("/api/auth/whoami", get(whoami))
         .route("/api/memory/remember", post(remember))
