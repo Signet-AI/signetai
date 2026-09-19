@@ -1,3 +1,5 @@
+import { join } from "node:path";
+
 export const nativePlatforms = {
 	"linux-x64": {
 		binaryName: "signet",
@@ -40,4 +42,14 @@ export function detectNativePlatform(platform = process.platform, arch = process
 	}
 
 	return platformKey;
+}
+
+export function resolveNativeBinaryPath({ packageDir, require, platform = process.platform, arch = process.arch, staged = false } = {}) {
+	const platformKey = detectNativePlatform(platform, arch);
+	const entry = nativePlatforms[platformKey];
+	if (!packageDir) throw new Error("Native binary resolution requires a package directory");
+	if (staged) return join(packageDir, "runtime", "rust-daemon", platformKey, entry.binaryName);
+	if (!require) throw new Error("Native package resolution requires a CommonJS require function");
+	const packageJsonPath = require.resolve(`${entry.packageName}/package.json`);
+	return join(packageJsonPath.replace(/[\\/]package\.json$/, ""), "bin", entry.binaryName);
 }

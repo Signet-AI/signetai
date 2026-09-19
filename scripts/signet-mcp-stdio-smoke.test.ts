@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { detectNativePlatform, resolveNativeBinaryPath } from "../dist/signetai/bin/native-platforms.js";
 
 const root = join(import.meta.dir, "..");
 const packageJson = join(root, "dist/signetai/package.json");
@@ -22,7 +23,16 @@ describe("published native signet-mcp package", () => {
 		const source = readFileSync(launcher, "utf8");
 		expect(source.startsWith("#!/usr/bin/env node")).toBe(true);
 		expect(source).toContain("SIGNET_RUST_MCP_BIN");
-		expect(source).toContain("rust-daemon");
+		expect(source).toContain("resolveNativeBinaryPath");
 		expect(source).not.toMatch(/platform\/daemon-rs|mcp-stdio\.js|require\(['"](?:bun|tsx|ts-node)/);
+	});
+
+	test("wrappers share one strict platform/package contract", () => {
+		expect(detectNativePlatform("linux", "x64")).toBe("linux-x64");
+		expect(resolveNativeBinaryPath({ packageDir: "/pkg", platform: "linux", arch: "x64", staged: true })).toBe(
+			join("/pkg", "runtime", "rust-daemon", "linux-x64", "signet"),
+		);
+		expect(() => detectNativePlatform("freebsd", "x64")).toThrow("Unsupported platform");
+		expect(() => detectNativePlatform("linux", "ia32")).toThrow("Unsupported platform");
 	});
 });

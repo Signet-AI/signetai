@@ -5,10 +5,11 @@ import { spawn } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { resolveNativeBinaryPath } from "./native-platforms.js";
+
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
-const binary = process.platform === "win32" ? "signet-mcp.exe" : "signet-mcp";
 const override = process.env.SIGNET_RUST_MCP_BIN?.trim();
-const target = override || join(packageDir, "runtime", "rust-daemon", `${process.platform}-${process.arch}`, binary);
+const target = override || resolveNativeBinaryPath({ packageDir, staged: true });
 if (!existsSync(target)) {
 	console.error(`Signet native MCP binary is missing: ${target}`);
 	process.exit(1);
