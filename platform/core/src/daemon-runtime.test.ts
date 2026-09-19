@@ -7,7 +7,9 @@ describe("daemon runtime selection", () => {
 	});
 
 	test("reads the environment when no explicit value is provided", () => {
-		expect(resolveDaemonRuntime(undefined, { SIGNET_DAEMON_RUNTIME: "bun-js" })).toBe("bun-js");
+		expect(() => resolveDaemonRuntime(undefined, { SIGNET_DAEMON_RUNTIME: "bun-js" })).toThrow(
+			"native compiled daemon",
+		);
 	});
 
 	test("explicit values take precedence over the environment", () => {
@@ -17,7 +19,7 @@ describe("daemon runtime selection", () => {
 	test("rejects unsupported values", () => {
 		expect(parseDaemonRuntime("node")).toBeNull();
 		expect(parseDaemonRuntime("BUN-JS")).toBeNull();
-		expect(() => resolveDaemonRuntime("node", {})).toThrow("Choose one of: compiled, bun-js");
-		expect(() => resolveDaemonRuntime(" ", {})).toThrow("Choose one of: compiled, bun-js");
+		expect(() => resolveDaemonRuntime("node", {})).toThrow("native compiled daemon");
+		expect(() => resolveDaemonRuntime(" ", {})).toThrow("native compiled daemon");
 	});
 });

@@ -1,19 +1,10 @@
 export const DAEMON_RUNTIME_ENV = "SIGNET_DAEMON_RUNTIME" as const;
-
-export const DAEMON_RUNTIME_VALUES = ["compiled", "bun-js"] as const;
-// bun-js is accepted only for parsing old configuration; spawning it is forbidden.
-
+export const DAEMON_RUNTIME_VALUES = ["compiled"] as const;
 export type DaemonRuntime = (typeof DAEMON_RUNTIME_VALUES)[number];
-
 export const DEFAULT_DAEMON_RUNTIME: DaemonRuntime = "compiled";
 
 export function parseDaemonRuntime(value: unknown): DaemonRuntime | null {
-	if (typeof value !== "string") return null;
-	const normalized = value;
-	for (const runtime of DAEMON_RUNTIME_VALUES) {
-		if (runtime === normalized) return runtime;
-	}
-	return null;
+	return value === "compiled" ? "compiled" : null;
 }
 
 export function resolveDaemonRuntime(
@@ -27,9 +18,8 @@ export function resolveDaemonRuntime(
 	) {
 		return DEFAULT_DAEMON_RUNTIME;
 	}
-	const parsed = parseDaemonRuntime(configured);
-	if (parsed !== null) return parsed;
+	if (configured === "compiled") return "compiled";
 	throw new Error(
-		`Unsupported daemon runtime ${JSON.stringify(configured)}. Choose one of: ${DAEMON_RUNTIME_VALUES.join(", ")}.`,
+		`Unsupported daemon runtime ${JSON.stringify(configured)}. Only the native compiled daemon is supported.`,
 	);
 }

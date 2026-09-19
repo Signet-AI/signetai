@@ -1,12 +1,11 @@
 import type { ChildProcess, DaemonRuntime } from "@signet/core";
-import { existsSync, readFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
-import { detectSchema, ensureUnifiedSchema, resolveDaemonRuntime, runMigrations } from "@signet/core";
+import { detectSchema, ensureUnifiedSchema, runMigrations } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import type { LogOptions, PathOptions, RestartOptions, StartOptions } from "../commands/shared.js";
-import { inspectDaemonJsBundle } from "../lib/runtime.js";
 import { daemonAccessLines } from "../lib/network.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
 import Database from "../sqlite.js";
@@ -204,8 +203,8 @@ export async function showLogs(options: LogOptions, deps: Deps): Promise<void> {
 export async function doStart(options: StartOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
-	const runtime = readRuntime(options.runtime);
-	const daemonPath = readDaemonJsPath(options.daemonJsPath, runtime);
+	const runtime = undefined;
+	const daemonPath = undefined;
 	let running = await deps.isDaemonRunning();
 	if ((runtime !== undefined || daemonPath !== undefined) && running) {
 		const status = await deps.getDaemonStatus();
@@ -267,8 +266,8 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 export async function doRestart(options: RestartOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
-	const runtime = readRuntime(options.runtime);
-	const daemonPath = readDaemonJsPath(options.daemonJsPath, runtime);
+	const runtime = undefined;
+	const daemonPath = undefined;
 	const spinner = ora("Restarting daemon...").start();
 	const running = await deps.isDaemonRunning();
 	const stale = running ? false : await deps.hasDaemonProcess(basePath);
@@ -320,24 +319,6 @@ export async function doPause(options: PathOptions, deps: Deps): Promise<void> {
 
 export async function doResume(options: PathOptions, deps: Deps): Promise<void> {
 	await togglePipelinePause(options, deps, false);
-}
-
-function readRuntime(value: string | undefined): DaemonRuntime | undefined {
-	return value === undefined ? undefined : resolveDaemonRuntime(value);
-}
-
-function readDaemonJsPath(value: string | undefined, runtime: DaemonRuntime | undefined): string | undefined {
-	if (value === undefined) return undefined;
-	if (resolveDaemonRuntime(runtime) !== "bun-js") {
-		throw new Error("--daemon-js-path requires --runtime bun-js or SIGNET_DAEMON_RUNTIME=bun-js.");
-	}
-	if (!value.trim()) throw new Error("--daemon-js-path must name a built daemon.js file.");
-	const path = resolve(value);
-	const bundle = inspectDaemonJsBundle(path);
-	if (!bundle.valid) {
-		throw new Error(`Bun JavaScript daemon bundle at ${path} is incomplete: missing ${bundle.missing.join(", ")}.`);
-	}
-	return path;
 }
 
 function readPath(options: PathOptions, deps: Deps): string {

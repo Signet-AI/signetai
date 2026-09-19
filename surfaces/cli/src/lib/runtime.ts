@@ -362,60 +362,15 @@ export function inspectDaemonJsBundle(daemonPath: string): DaemonJsBundleInspect
 	return { daemonPath, valid: missing.length === 0, missing };
 }
 
-function bunJsDaemonCandidates(env: NodeJS.ProcessEnv): string[] {
-	return uniquePaths(
-		[
-			env.SIGNET_DAEMON_JS_PATH,
-			env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null,
-			join(__dirname, "daemon.js"),
-			join(cliDir, "daemon.js"),
-			join(pkgDir, "..", "daemon", "dist", "daemon.js"),
-			join(pkgDir, "..", "..", "platform", "daemon", "dist", "daemon.js"),
-			join(process.cwd(), "platform", "daemon", "dist", "daemon.js"),
-		].filter((path): path is string => typeof path === "string"),
-	);
-}
-
-export function inspectBunJsDaemonBundles(env: NodeJS.ProcessEnv = process.env): DaemonJsBundleInspection[] {
-	return bunJsDaemonCandidates(env).map((path) => inspectDaemonJsBundle(path));
-}
-
-export function resolveBunJsDaemonBundle(env: NodeJS.ProcessEnv = process.env): DaemonJsBundleInspection | null {
-	const explicitPath = env.SIGNET_DAEMON_JS_PATH?.trim();
-	if (explicitPath) return inspectDaemonJsBundle(explicitPath);
-	if (env.SIGNET_DIR?.trim()) {
-		return inspectDaemonJsBundle(join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js"));
-	}
-	return inspectBunJsDaemonBundles(env).find((bundle) => bundle.valid) ?? null;
-}
-
-export function resolveBunJsDaemonPath(env: NodeJS.ProcessEnv = process.env): string | null {
-	return resolveBunJsDaemonBundle(env)?.daemonPath ?? null;
-}
-
-export function describeBunJsDaemonUnavailable(env: NodeJS.ProcessEnv = process.env): string {
-	const inspections = inspectBunJsDaemonBundles(env);
-	const existing = inspections.find((bundle) => existsSync(bundle.daemonPath));
-	if (existing) return `Bun JavaScript daemon bundle is incomplete: missing ${existing.missing.join(", ")}.`;
-	return "Bun JavaScript daemon bundle not found. Build @signet/daemon before selecting --runtime=bun-js.";
-}
-export function resolveDaemonPathForRuntime(
+/** Resolve the packaged native executable for the daemon. */
+	export function resolveDaemonPathForRuntime(
 	runtime: DaemonRuntime,
 	env: NodeJS.ProcessEnv = process.env,
 	preferredDaemonPath?: string,
 ): string | null {
-	if (runtime === "bun-js") {
-		if (preferredDaemonPath) {
-			const inspection = inspectDaemonJsBundle(preferredDaemonPath);
-			return inspection.valid ? preferredDaemonPath : null;
-		}
-		return resolveBunJsDaemonPath(env);
-	}
-	if (preferredDaemonPath) {
-		if (isJavaScriptDaemonPath(preferredDaemonPath)) return null;
-		return existsSync(preferredDaemonPath) ? preferredDaemonPath : null;
-	}
-	return resolveDaemonPaths(env).find((path) => !isJavaScriptDaemonPath(path) && existsSync(path)) ?? null;
+	if (runtime !== "compiled") return null;
+	if (preferredDaemonPath) return isNativeExecutable(preferredDaemonPath) ? preferredDaemonPath : null;
+	return resolveDaemonPaths(env).find((path) => isNativeExecutable(path)) ?? null;
 }
 
 function daemonPaths(): string[] {
@@ -1247,8 +1202,6 @@ function resolveTelemetryEnvironment(env: NodeJS.ProcessEnv): Partial<Record<Tel
 export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput): string[] {
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
 	const runtime = input.runtime ?? resolveDaemonRuntime(undefined, sourceEnvironment);
-	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
-	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
 	return [
 		"--user",
 		"--quiet",
@@ -1262,8 +1215,6 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		`--setenv=SIGNET_BIND=${input.bind}`,
 		`--setenv=SIGNET_PATH=${input.agentsDir}`,
 		`--setenv=${DAEMON_RUNTIME_ENV}=${runtime}`,
-		...(nodePath ? [`--setenv=NODE_PATH=${appendNodePath(nodePath, sourceEnvironment.NODE_PATH)}`] : []),
-		...(wasmPath ? [`--setenv=SIGNET_TIKTOKEN_WASM_PATH=${wasmPath}`] : []),
 		"--setenv=SIGNET_DAEMON_ENTRYPOINT=1",
 		`--setenv=BUN_INSPECT=${input.bunInspect ?? ""}`,
 		`--setenv=BUN_OPTIONS=${input.bunOptions ?? ""}`,
@@ -1373,20 +1324,17 @@ export function resolveDaemonRuntimeCommand(
 	runtime?: DaemonRuntime,
 ): string {
 	const selectedRuntime = runtime ?? resolveDaemonRuntime(undefined, env);
-	if (selectedRuntime === "bun-js") {
-		if (isBunExecutablePath(execPath)) return execPath;
-		const found = findExecutableOnPath("bun", pathValue);
-		if (found) return found;
-		if (process.platform === "darwin") return resolveLaunchdExecutable("bun", { environment: env, pathValue });
-		throw new Error("bun executable not found on PATH. Reinstall bun or run signet with bun-js.");
-	}
-
+	if (selectedRuntime !== "compiled") throw new Error("Only the native compiled daemon is supported.");
 	if (env.SIGNET_DIR) {
-		const nodeName = process.platform === "win32" ? "node.exe" : "node";
-		const bundledNode = join(env.SIGNET_DIR, "runtime", "node", "bin", nodeName);
+		const bundledNode = join(
+			env.SIGNET_DIR,
+			"runtime",
+			"node",
+			"bin",
+			process.platform === "win32" ? "node.exe" : "node",
+		);
 		if (existsSync(bundledNode)) return bundledNode;
 	}
-
 	if (isBunExecutablePath(execPath)) return execPath;
 	const found = findExecutableOnPath("bun", pathValue);
 	if (found) return found;
@@ -1406,32 +1354,13 @@ export function resolveDaemonLaunchCommand(
 ): string[] {
 	const selectedRuntime = runtime ?? resolveDaemonRuntime(undefined, env);
 	if (selectedRuntime !== "compiled" || isJavaScriptDaemonPath(daemonPath))
-		throw new Error("Bun/Node daemon launch is unsupported; use a native platform/rust-daemon executable.");
-	if (!isNativeExecutable(daemonPath)) throw new Error(`Selected daemon is missing or not executable: ${daemonPath}`);
+		throw new Error("Legacy JavaScript daemon launch is unsupported; use the native compiled daemon executable.");
+
 	return [daemonPath];
 }
 
-export function macOSLaunchAgentAttributionNotice(
-	daemonPath: string,
-	opts: {
-		readonly env?: NodeJS.ProcessEnv;
-		readonly execPath?: string;
-		readonly pathValue?: string;
-		readonly platform?: NodeJS.Platform;
-	} = {},
-): string | null {
-	if ((opts.platform ?? process.platform) !== "darwin" || !isJavaScriptDaemonPath(daemonPath)) {
-		return null;
-	}
-
-	const runtime = resolveDaemonRuntimeCommand(opts.env, opts.execPath, opts.pathValue);
-	const runtimeName = isBunExecutablePath(runtime)
-		? "Bun"
-		: basename(runtime).toLowerCase().startsWith("node")
-			? "Node.js"
-			: basename(runtime);
-	const signer = runtimeName === "Bun" ? "Bun's signer (for example, Jarred Sumner)" : `${runtimeName}'s signer`;
-	return `macOS may show a Login Items / Background Activity notification naming ${signer} instead of Signet. This is expected when Signet is started from a source checkout or JavaScript daemon path. The public curl, npm, and Bun installers use the compiled Signet binary instead.`;
+export function macOSLaunchAgentAttributionNotice(): string | null {
+	return null;
 }
 export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
 
@@ -1551,8 +1480,6 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 	const label = input.label ?? launchdDaemonLabel(input.agentsDir);
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
 	const runtime = input.runtime ?? resolveDaemonRuntime(undefined, sourceEnvironment);
-	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
-	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
 	const environment = buildLaunchdEnvironment({
 		environment: sourceEnvironment,
 		values: {
@@ -1562,8 +1489,6 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 			SIGNET_PATH: input.agentsDir,
 			SIGNET_DAEMON_ENTRYPOINT: "1",
 			SIGNET_DAEMON_RUNTIME: runtime,
-			...(nodePath ? { NODE_PATH: appendNodePath(nodePath, sourceEnvironment.NODE_PATH) } : {}),
-			...(wasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: wasmPath } : {}),
 			SIGNET_DAEMON_SERVICE: "launchd",
 			...resolveTelemetryEnvironment(sourceEnvironment),
 			BUN_INSPECT: input.bunInspect ?? "",
@@ -1681,13 +1606,10 @@ export async function startDaemon(
 
 	const daemonPath = resolveDaemonPathForRuntime(runtime, process.env, preferredDaemonPath);
 	if (!daemonPath) {
-		const reason =
-			runtime === "bun-js" ? describeBunJsDaemonUnavailable(process.env) : "Daemon not found. Try reinstalling signet.";
+		const reason = "Native daemon not found. Try reinstalling signet.";
 		console.error(chalk.red(reason));
 		return false;
 	}
-
-	if (runtime === "bun-js") console.log(chalk.dim(`  Daemon JavaScript bundle: ${daemonPath}`));
 
 	const net = resolveDaemonNetwork(agentsDir, process.env);
 	const inspectorForwarding = await resolveDaemonInspectorForwarding();
@@ -1711,8 +1633,6 @@ export async function startDaemon(
 		stderrTarget = stderrFd;
 	} catch {}
 
-	const tokenizerWasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(daemonPath) : null;
-	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(daemonPath) : null;
 	const daemonEnv = {
 		...process.env,
 		SIGNET_PORT: DEFAULT_PORT.toString(),

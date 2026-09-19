@@ -78,10 +78,6 @@ export function registerAppCommands(program: Command, deps: AppDeps): void {
 			"--connector-assets <path>",
 			"Path to a connector-asset tarball (signet-connectors-*.tar.gz) to extract alongside the binary",
 		)
-		.option(
-			"--daemon-js-assets <path>",
-			"Path to the production Bun daemon bundle tarball to extract alongside the binary",
-		)
 		.action(deps.installNative);
 
 	program
