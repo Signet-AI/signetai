@@ -1207,17 +1207,41 @@ fn execute_operation(
         Operation::List {
             agent_id,
             include_deleted,
+            limit,
+            cursor,
         } => {
             let agent_id = required_agent(&agent_id)?;
+            let limit = bounded_page_limit(limit)?;
+            let cursor = parse_cursor(cursor)?;
             let mut statement = connection.prepare(
-                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, rowid
                  FROM memories
-                 WHERE COALESCE(agent_id, 'default') = ? AND (? OR deleted = 0)
-                 ORDER BY rowid DESC LIMIT 10000",
+                 WHERE COALESCE(agent_id, 'default') = ? AND (? OR deleted = 0) AND (? IS NULL OR rowid < ?)
+                 ORDER BY rowid DESC LIMIT ?",
             )?;
-            let rows =
-                statement.query_map(params![agent_id, include_deleted as i64], memory_row)?;
-            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
+            let mut rows = statement.query(params![
+                agent_id,
+                include_deleted as i64,
+                cursor,
+                cursor,
+                (limit + 1) as i64
+            ])?;
+            let mut items = Vec::with_capacity(limit);
+            let mut next_cursor = None;
+            let mut last_rowid = None;
+            while let Some(row) = rows.next()? {
+                let item = memory_row(row)?;
+                let rowid: i64 = row.get(7)?;
+                if items.len() == limit {
+                    next_cursor = last_rowid.map(|value: i64| value.to_string());
+                    break;
+                }
+                items.push(item);
+                last_rowid = Some(rowid);
+            }
+            Ok(
+                json!({"items": items, "nextCursor": next_cursor, "complete": next_cursor.is_none()}),
+            )
         }
         Operation::Get { agent_id, id } => {
             let agent_id = required_agent(&agent_id)?;
@@ -1516,13 +1540,39 @@ fn execute_operation(
             agent_id,
             workspace_id,
             kind,
+            limit,
+            cursor,
         } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = required_id(&workspace_id)?;
             let kind = required_id(&kind)?;
-            let mut s = connection.prepare("SELECT id, value, created_at, updated_at FROM ontology_records WHERE agent_id=? AND workspace_id=? AND kind=? AND deleted=0 ORDER BY rowid DESC")?;
-            let rows = s.query_map(params![agent_id, workspace_id, kind], |r| Ok(json!({"id":r.get::<_,String>(0)?,"value":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(2)?,"updatedAt":r.get::<_,String>(3)?})))?;
-            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
+            let limit = bounded_page_limit(limit)?;
+            let cursor = parse_cursor(cursor)?;
+            let mut s = connection.prepare("SELECT id, value, created_at, updated_at, rowid FROM ontology_records WHERE agent_id=? AND workspace_id=? AND kind=? AND deleted=0 AND (? IS NULL OR rowid < ?) ORDER BY rowid DESC LIMIT ?")?;
+            let mut rows = s.query(params![
+                agent_id,
+                workspace_id,
+                kind,
+                cursor,
+                cursor,
+                (limit + 1) as i64
+            ])?;
+            let mut items = Vec::with_capacity(limit);
+            let mut next_cursor = None;
+            let mut last_rowid = None;
+            while let Some(r) = rows.next()? {
+                let rowid: i64 = r.get(4)?;
+                let item = json!({"id":r.get::<_,String>(0)?,"value":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(2)?,"updatedAt":r.get::<_,String>(3)?});
+                if items.len() == limit {
+                    next_cursor = last_rowid.map(|value: i64| value.to_string());
+                    break;
+                }
+                items.push(item);
+                last_rowid = Some(rowid);
+            }
+            Ok(
+                json!({"items": items, "nextCursor": next_cursor, "complete": next_cursor.is_none()}),
+            )
         }
         Operation::OntologyGet {
             agent_id,
@@ -1912,6 +1962,27 @@ pub type Value = serde_json::Value;
 pub type OperationResult = Value;
 
 const MAX_EVENT_RECORDS: usize = 500;
+const MAX_LIST_PAGE: usize = 100;
+
+fn bounded_page_limit(limit: Option<usize>) -> Result<usize, CoreError> {
+    let value = limit.unwrap_or(MAX_LIST_PAGE);
+    if value == 0 || value > MAX_LIST_PAGE {
+        return Err(CoreError::InvalidInput(format!(
+            "limit must be between 1 and {MAX_LIST_PAGE}"
+        )));
+    }
+    Ok(value)
+}
+
+fn parse_cursor(cursor: Option<String>) -> Result<Option<i64>, CoreError> {
+    cursor
+        .map(|value| {
+            value
+                .parse::<i64>()
+                .map_err(|_| CoreError::InvalidInput("cursor must be a valid integer".into()))
+        })
+        .transpose()
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionRecord {
@@ -1963,6 +2034,8 @@ pub enum Operation {
     List {
         agent_id: String,
         include_deleted: bool,
+        limit: Option<usize>,
+        cursor: Option<String>,
     },
     Get {
         agent_id: String,
@@ -2100,6 +2173,8 @@ pub enum Operation {
         agent_id: String,
         workspace_id: String,
         kind: String,
+        limit: Option<usize>,
+        cursor: Option<String>,
     },
     OntologyGet {
         agent_id: String,

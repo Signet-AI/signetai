@@ -194,6 +194,8 @@ impl From<CoreError> for ApiError {
 pub(crate) struct AgentQuery {
     #[serde(alias = "agent_id")]
     agent_id: Option<String>,
+    limit: Option<usize>,
+    cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -397,11 +399,15 @@ async fn list(
         Operation::List {
             agent_id,
             include_deleted: false,
+            limit: query.limit,
+            cursor: query.cursor,
         },
     )
     .await?;
-    let memories = result.as_array().cloned().unwrap_or_default();
-    Ok(Json(json!({ "memories": memories })))
+    let page = result.as_object().cloned().unwrap_or_default();
+    Ok(Json(
+        json!({ "memories": page.get("items").cloned().unwrap_or_else(|| json!([])), "nextCursor": page.get("nextCursor").cloned().unwrap_or(Value::Null), "complete": page.get("complete").and_then(Value::as_bool).unwrap_or(true) }),
+    ))
 }
 
 async fn get_one(

@@ -14,6 +14,8 @@ pub(crate) struct OntologyQuery {
     #[serde(flatten)]
     pub agent: AgentQuery,
     pub workspace_id: Option<String>,
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
 }
 
 fn workspace(q: &OntologyQuery) -> Result<String, ApiError> {
@@ -56,10 +58,14 @@ async fn list(
             agent_id,
             workspace_id,
             kind: validated_kind(&kind)?,
+            limit: q.limit,
+            cursor: q.cursor,
         },
     )
     .await?;
-    Ok(Json(json!({"items":result})))
+    Ok(Json(
+        json!({"items":result.get("items").cloned().unwrap_or_else(|| json!([])), "nextCursor": result.get("nextCursor").cloned().unwrap_or(Value::Null), "complete": result.get("complete").and_then(Value::as_bool).unwrap_or(true)}),
+    ))
 }
 async fn get_one(
     State(state): State<AppState>,

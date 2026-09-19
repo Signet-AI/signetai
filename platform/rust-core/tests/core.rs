@@ -116,6 +116,57 @@ fn migrates_legacy_transcripts_before_idempotency_index() {
 }
 
 #[test]
+fn paginated_lists_are_bounded_scoped_and_complete() {
+    let d = tempdir().unwrap();
+    let owner = WorkspaceOwner::open(&d.path().join("page.sqlite"), 8).unwrap();
+    for i in 0..3 {
+        owner
+            .submit(Operation::Remember {
+                agent_id: "a".into(),
+                content: format!("m{i}"),
+                metadata: serde_json::json!({}),
+            })
+            .unwrap();
+    }
+    owner
+        .submit(Operation::Remember {
+            agent_id: "b".into(),
+            content: "other".into(),
+            metadata: serde_json::json!({}),
+        })
+        .unwrap();
+    let first = owner
+        .submit(Operation::List {
+            agent_id: "a".into(),
+            include_deleted: false,
+            limit: Some(2),
+            cursor: None,
+        })
+        .unwrap();
+    assert_eq!(first["items"].as_array().unwrap().len(), 2);
+    assert_eq!(first["complete"], false);
+    let second = owner
+        .submit(Operation::List {
+            agent_id: "a".into(),
+            include_deleted: false,
+            limit: Some(2),
+            cursor: Some(first["nextCursor"].as_str().unwrap().into()),
+        })
+        .unwrap();
+    assert_eq!(second["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second["complete"], true);
+    assert!(matches!(
+        owner.submit(Operation::List {
+            agent_id: "a".into(),
+            include_deleted: false,
+            limit: Some(101),
+            cursor: None
+        }),
+        Err(CoreError::InvalidInput(_))
+    ));
+}
+
+#[test]
 fn workspace_submit_operations_run_on_owner_without_requeue_deadlock() {
     let d = tempdir().unwrap();
     let owner = WorkspaceOwner::open(&d.path().join("owner.sqlite"), 2).unwrap();
@@ -132,9 +183,11 @@ fn workspace_submit_operations_run_on_owner_without_requeue_deadlock() {
         .submit(Operation::List {
             agent_id: "agent".into(),
             include_deleted: false,
+            limit: None,
+            cursor: None,
         })
         .unwrap();
-    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed["items"].as_array().unwrap().len(), 1);
 }
 
 #[test]
