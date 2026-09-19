@@ -24,7 +24,10 @@ permissions:
 
 jobs:
   windows-platform-gate:
-    name: Transcript import Windows platform gate
+    # Compatibility/parity evidence only. These tests exercise legacy TS
+    # transcript-import code, not the native release daemon.
+    continue-on-error: true
+    name: "TypeScript parity: transcript import Windows"
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,7 +43,10 @@ jobs:
           bun test --max-concurrency=1 platform/daemon/src/transcript-import-commit.test.ts
 
   posix-migration-coverage:
-    name: Transcript import legacy migration (${{ matrix.os }})
+    # Compatibility/parity evidence only. Do not treat this legacy migration
+    # coverage as native production validation.
+    continue-on-error: true
+    name: "TypeScript parity: transcript import migration (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

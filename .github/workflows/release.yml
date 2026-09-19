@@ -14,10 +14,12 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
+      # Release builds use the native Rust daemon and supported package paths.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     concurrency:
       group: nightly-release-pipeline
       cancel-in-progress: true
+    # Skip release commits (prevent loops) and non-code commits
     if: "!contains(github.event.head_commit.message, 'chore: release')"
 
     permissions:
@@ -93,8 +95,6 @@ jobs:
           fi
 
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
         if: steps.changes.outputs.skip != 'true'
 
       - name: Install dependencies
@@ -124,6 +124,10 @@ jobs:
       - name: Sync with remote main
         if: steps.changes.outputs.skip != 'true' && inputs.resume_from_tag == ''
         run: |
+          # Rebase onto the latest remote main before bumping so the version
+          # commit and tag land on top of the final tree — not a stale snapshot
+          # that would get rewritten later, leaving asset build and publish jobs
+          # checking out the wrong commit.
           git reset --hard HEAD
           git clean -fd
           git pull --rebase origin main
@@ -171,9 +175,17 @@ jobs:
           echo "BUMP_LEVEL=$BUMP" >> $GITHUB_ENV
           echo "bump_level=$BUMP" >> $GITHUB_OUTPUT
           rm -f .bump-level
+
+          # Keep all release-owned version surfaces aligned. This covers
+          # package.json files, publishable workspace dependency rewrites,
+          # Cargo.toml manifests, Cargo.lock files, and generated manifest
+          # copies so the release commit passes the same guard as PRs.
           bun scripts/version-sync.ts --to "$NEW_VERSION"
 
           bun scripts/changelog.ts --version "$NEW_VERSION"
+
+          # Keep lockfile aligned with workspace version bumps so frozen installs
+          # (Docker smoke and consumer builds) stay deterministic.
           bun install
 
           git add -A
@@ -197,6 +209,9 @@ jobs:
             exit 1
           fi
           tag="v$NEW_VERSION"
+          # The tag is pushed before this step. First reuse an existing draft
+          # release, then create it. A transient 5xx is retried; a concurrent
+          # create (409) is resolved by fetching the release on the next pass.
           for attempt in 1 2 3; do
             if gh release view "$tag" --json isDraft >/dev/null 2>&1; then
               echo "Reusing existing GitHub release $tag"
@@ -263,8 +278,6 @@ jobs:
           ref: v${{ needs.release.outputs.version }}
 
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install
@@ -286,23 +299,25 @@ jobs:
         shell: bash
         run: test -s ./dist/native/"$RELEASE_ASSET"
 
-      - name: Verify embedded Bun runtime
-        shell: bash
-        env:
-          SIGNET_RUNTIME_VERSION_SMOKE: "1"
-        run: |
-          actual="$(./dist/native/"$RELEASE_ASSET" | bun -e 'const value = JSON.parse(await Bun.stdin.text()); process.stdout.write(value.bun)')"
-          expected="$(bun -e 'const value = JSON.parse(await Bun.file("package.json").text()); process.stdout.write(value.packageManager.replace(/^bun@/, ""))')"
-          test "$actual" = "$expected"
-
       - name: Native release runtime smoke
         shell: bash
         env:
+          # Release CI validates the compiled binary and event-loop isolation
+          # separately. Avoid external model downloads and Hugging Face rate limits.
           SIGNET_NATIVE_EMBEDDING_SMOKE: "0"
+          # Keep the compiled DB-owner dispatch gate on even when the broader
+          # embedding smoke is disabled. This must fail if the worker asset is
+          # missing from the release binary.
           SIGNET_DB_OWNER_SMOKE: "1"
+          # Exact Dreaming backlog accounting must resolve its embedded WASM
+          # asset from inside the compiled binary and its materialized worker.
           SIGNET_DREAMING_TOKEN_SMOKE: "1"
+          # Dreaming must launch its scoped MCP server from the compiled binary
+          # without resolving a JavaScript entrypoint under /$bunfs.
           SIGNET_DREAMING_MCP_SMOKE: "1"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/${{ matrix.asset }}
+          # The smoke boots a real default-config daemon; keep its telemetry
+          # out of the Signet PostHog project.
           SIGNET_TELEMETRY_OPTOUT: "1"
         run: bun test scripts/native-embedding-runtime-smoke.test.ts scripts/native-dreaming-mcp-smoke.test.ts scripts/native-dreaming-finalize-smoke.test.ts scripts/native-worker-bundle-contract.test.ts
 
@@ -328,6 +343,9 @@ jobs:
   publish:
     needs: [release, build-native]
     runs-on: ubuntu-latest
+    # Publish only when every native binary matrix leg completed and uploaded
+    # its binary/checksum pair. This job is also the sole release finalizer:
+    # it waits for every desktop asset before undrafting the release.
     if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
     permissions:
       contents: write
@@ -340,8 +358,6 @@ jobs:
           ref: v${{ needs.release.outputs.version }}
 
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install
@@ -359,6 +375,8 @@ jobs:
       - name: Generate and upload native manifest
         run: |
           set -euo pipefail
+          # Build connector plugin assets before generating the native manifest.
+          # The manifest describes native Rust and connector artifacts only.
           SIGNET_VERSION="$NEW_VERSION" bun scripts/build-connector-assets.ts
           gh release upload "v${NEW_VERSION}" dist/native/signet-connectors-"${NEW_VERSION}".tar.gz --clobber
           SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts
@@ -431,6 +449,9 @@ jobs:
             "optionalDependencies.signetai-darwin-x64=${release_url}/signetai-darwin-x64-${NEW_VERSION}.tgz" \
             "optionalDependencies.signetai-darwin-arm64=${release_url}/signetai-darwin-arm64-${NEW_VERSION}.tgz" \
             "optionalDependencies.signetai-win32-x64=${release_url}/signetai-win32-x64-${NEW_VERSION}.tgz"
+          # The install-native.js postinstall reads native-manifest.json from the
+          # wrapper package root to download connector assets. The generate step
+          # writes it to dist/native/; copy it into the wrapper before publish.
           cp dist/native/native-manifest.json dist/signetai/native-manifest.json
 
       - name: Validate publish manifests

@@ -33,7 +33,10 @@ permissions:
 
 jobs:
   boot-wedge:
-    name: Source-run boot, liveness, and CPU ceiling
+    # Compatibility evidence only. This source-run harness exercises the
+    # displaced TypeScript daemon and must not block native production gates.
+    continue-on-error: true
+    name: "TypeScript parity: source-run boot, liveness, and CPU ceiling"
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:

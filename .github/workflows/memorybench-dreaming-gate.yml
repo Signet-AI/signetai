@@ -34,7 +34,10 @@ permissions:
 
 jobs:
   dreaming-gate:
-    name: Deterministic Dreaming fixture and scope gate
+    # Compatibility/parity evidence only. It imports the displaced TypeScript
+    # daemon source and is not a native production validation gate.
+    continue-on-error: true
+    name: "TypeScript parity: deterministic Dreaming fixture and scope"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
