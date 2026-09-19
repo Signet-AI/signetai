@@ -1,13 +1,23 @@
 import { describe, expect, it } from "bun:test";
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { generateLaunchdPlist, probeDaemonHealth } from "./service";
 
 describe("daemon service health probe (#1340)", () => {
+	it("contains only native adapter launch paths", () => {
+		const source = readFileSync(join(import.meta.dir, "service.ts"), "utf8");
+
+		expect(source).not.toMatch(/from ["']\.\/daemon["']/);
+		expect(source).not.toMatch(/(?:bun:sqlite|better-sqlite3)/);
+		expect(source).not.toMatch(/(?:bun|node)(?:x|\s+(?:daemon|.*daemon))/i);
+		expect(source).not.toContain('"@signet/daemon"');
+		expect(source).not.toContain("fallback");
+	});
+
 	it("uses the liveness endpoint with a bounded request", async () => {
 		let url = "";
-		let signal: AbortSignal | undefined;
+		let signal: AbortSignal | null | undefined;
 		const result = await probeDaemonHealth(async (input, init) => {
 			url = String(input);
 			signal = init?.signal;

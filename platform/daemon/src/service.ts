@@ -48,7 +48,7 @@ interface HealthProbeResult {
 
 /**
  * Probe only daemon liveness. Service management does not need the database
- * work performed by the legacy `/health` endpoint, and the deadline prevents
+ * work performed by the full `/health` endpoint, and the deadline prevents
  * a wedged local daemon from blocking status callers indefinitely.
  */
 export async function probeDaemonHealth(
@@ -258,7 +258,7 @@ function isSystemdRunning(): boolean {
 }
 
 // ============================================================================
-// Direct Process Management (fallback)
+// Direct Native Process Management
 // ============================================================================
 
 function assertWorkspaceStartable(): void {
