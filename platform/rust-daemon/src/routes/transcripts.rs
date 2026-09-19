@@ -19,7 +19,9 @@ const MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
 fn bounded(value: String, max: usize, field: &str) -> Result<String, ApiError> {
     let value = value.trim().to_owned();
     if value.is_empty() || value.len() > max {
-        return Err(ApiError::bad_request(format!("{field} must be 1-{max} bytes")));
+        return Err(ApiError::bad_request(format!(
+            "{field} must be 1-{max} bytes"
+        )));
     }
     Ok(value)
 }
@@ -48,10 +50,19 @@ struct Transcript {
     #[serde(alias = "idempotencyKey")]
     idempotency_key: String,
 }
-fn transcript_input(r: Transcript) -> Result<(String, String, Option<String>, String, String), ApiError> {
-    let session_key = bounded(r.session_key.unwrap_or_default(), MAX_ID_BYTES, "sessionKey")?;
+fn transcript_input(
+    r: Transcript,
+) -> Result<(String, String, Option<String>, String, String), ApiError> {
+    let session_key = bounded(
+        r.session_key.unwrap_or_default(),
+        MAX_ID_BYTES,
+        "sessionKey",
+    )?;
     let harness = bounded(r.harness, MAX_ID_BYTES, "harness")?;
-    let project = r.project.map(|v| bounded(v, MAX_ID_BYTES, "project")).transpose()?;
+    let project = r
+        .project
+        .map(|v| bounded(v, MAX_ID_BYTES, "project"))
+        .transpose()?;
     if r.content.as_bytes().len() > MAX_TRANSCRIPT_BYTES {
         return Err(ApiError::bad_request("content exceeds 8 MiB"));
     }
@@ -71,7 +82,9 @@ async fn create(
     let schema_id = bounded(body.schema_id, MAX_SCHEMA_BYTES, "schemaId")?;
     let duplicate_mode = bounded(body.duplicate_mode, MAX_MODE_BYTES, "duplicateMode")?;
     if !matches!(duplicate_mode.as_str(), "skip" | "replace" | "reimport") {
-        return Err(ApiError::bad_request("duplicateMode must be skip, replace, or reimport"));
+        return Err(ApiError::bad_request(
+            "duplicateMode must be skip, replace, or reimport",
+        ));
     }
     if body.files.is_empty() || body.files.len() > 25 {
         return Err(ApiError::bad_request("files must contain 1-25 entries"));
