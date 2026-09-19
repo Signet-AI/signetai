@@ -1,77 +1,30 @@
-name: Daemon Typecheck
+name: Rust Daemon Check
+
 on:
   pull_request:
     paths:
-      - "platform/daemon/src/**"
-      - "platform/daemon/tsconfig.json"
-      - "platform/daemon/package.json"
-      - "platform/core/src/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
       - ".github/workflows/daemon-typecheck.yml"
   push:
     branches: [main]
     paths:
-      - "platform/daemon/src/**"
-      - "platform/daemon/tsconfig.json"
-      - "platform/daemon/package.json"
-      - "platform/core/src/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
 
 permissions:
   contents: read
 
 jobs:
-  typecheck:
-    name: Daemon production tsc --noEmit
+  check:
+    name: Rust daemon cargo check and contract tests
     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v4
-
+      - name: Cargo check
+        run: cargo check --manifest-path platform/rust-daemon/Cargo.toml
+      - name: Build daemon
+        run: cargo build --manifest-path platform/rust-daemon/Cargo.toml
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Install dependencies
-        shell: bash
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: bun install --frozen-lockfile
-
-      - name: Build daemon dependencies (including installer types)
-        shell: bash
-        run: |
-          bun run --filter '@signet/core' --filter '@signet/connector-base' build
-          bun run build:opencode-plugin
-          bun run build:oh-my-pi-extension
-          bun run build:pi-extension
-          bun run --filter '@signet/connector-*' build
-
-      - name: Daemon typecheck
-        id: tsc
-        shell: bash
-        run: |
-          set +e
-          cd platform/daemon
-          set +e
-          npx tsc --noEmit > /tmp/daemon-tsc-raw.txt 2>&1
-          TSC_STATUS=$?
-          grep -v "TS6059" /tmp/daemon-tsc-raw.txt > /tmp/daemon-tsc.txt || true
-          cat /tmp/daemon-tsc.txt
-          if grep -q "error TS" /tmp/daemon-tsc.txt; then
-            exit 1
-          fi
-          if [ "$TSC_STATUS" -ne 0 ] && ! grep -q "TS6059" /tmp/daemon-tsc-raw.txt; then
-            exit "$TSC_STATUS"
-          fi
-
-      - name: Summary
-        if: always()
-        shell: bash
-        run: |
-          echo "## Daemon Production Typecheck" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          OUTCOME="${{ steps.tsc.outcome }}"
-          if [ "$OUTCOME" != "success" ]; then
-            echo "❌ Daemon production typecheck failed (outcome: $OUTCOME)." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "✅ Daemon production \`tsc --noEmit\` is clean." >> "$GITHUB_STEP_SUMMARY"
-          fi
+      - name: Contract tests
+        run: bun test platform/rust-daemon/contract.test.ts

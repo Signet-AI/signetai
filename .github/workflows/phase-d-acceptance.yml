@@ -3,66 +3,31 @@ name: Phase D Stability Acceptance
 on:
   pull_request:
     paths:
-      - "platform/daemon/src/**"
-      - "platform/core/src/**"
-      - "tests/integration/acceptance/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
       - ".github/workflows/phase-d-acceptance.yml"
   push:
     branches: [main]
     paths:
-      - "platform/daemon/src/**"
-      - "platform/core/src/**"
-      - "tests/integration/acceptance/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
       - ".github/workflows/phase-d-acceptance.yml"
   schedule:
     - cron: "15 7 * * *"
   workflow_dispatch:
-    inputs:
-      scale:
-        description: "Harness scale"
-        required: false
-        default: "smoke"
-        type: choice
-        options: ["smoke", "full"]
 
 permissions:
   contents: read
 
 jobs:
   smoke:
-    name: Smoke (${{ github.event_name == 'schedule' && 'nightly → full' || 'PR/main' }})
+    name: Fresh Rust daemon acceptance
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Build fresh Rust daemon
+        run: cargo build --manifest-path platform/rust-daemon/Cargo.toml
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Build @signet/core and @signet/daemon
-        run: |
-          bun run --filter '@signet/core' --filter '@signet/connector-base' build
-          bun run build:opencode-plugin
-          bun run build:oh-my-pi-extension
-          bun run build:pi-extension
-          bun run --filter '@signet/connector-*' build
-          bun run --filter '@signet/daemon' build
-      - name: Run Phase D acceptance harness
-        run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            SCALE=full
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SCALE=${{ inputs.scale }}
-          else
-            SCALE=smoke
-          fi
-          echo "Running Phase D acceptance at scale=$SCALE"
-          bun tests/integration/acceptance/run.ts --scale "$SCALE" --out "$GITHUB_WORKSPACE/phase-d-artifacts"
-      - name: Upload acceptance artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase-d-acceptance-${{ github.run_id }}
-          path: phase-d-artifacts/
-          if-no-files-found: ignore
+      - name: Run Rust daemon contract tests
+        run: bun test platform/rust-daemon/contract.test.ts

@@ -1,11 +1,17 @@
 #!/usr/bin/env bun
+/**
+ * SDK Code Generator
+ *
+ * Parses the fresh Rust daemon route declarations and generates SDK methods.
+ * Run: bun run scripts/generate-client.ts
+ */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const DAEMON_PATH = join(__dirname, "../../../platform/daemon/src/daemon.ts");
+const DAEMON_PATH = join(__dirname, "../../../platform/rust-daemon/src");
 const OUTPUT_DIR = join(__dirname, "../src/generated");
 
 type RouteMethod = "get" | "post" | "put" | "patch" | "delete";
@@ -15,29 +21,38 @@ interface Route {
 	readonly path: string;
 	readonly line: number;
 }
+
+/**
+ * Extract all routes from daemon.ts
+ */
 function extractRoutes(daemonCode: string): readonly Route[] {
 	const routes: Route[] = [];
 	const lines = daemonCode.split("\n");
-	const routeRegex = /^\s*app\.(get|post|put|patch|delete)\s*\(\s*["']([^"']+)["']/;
+
+	// Match Axum declarations such as .route("/api/status", get(status)).
+	const routeRegex = /\.route\(\s*["']([^"']+)["']\s*,\s*([^)]*)/;
 
 	for (let i = 0; i < lines.length; i++) {
 		const match = lines[i].match(routeRegex);
 		if (!match) {
 			continue;
 		}
-		const [, method, path] = match;
-		routes.push({
-			method: method as RouteMethod,
-			path,
-			line: i + 1,
-		});
+		const [, path, handlers] = match;
+		for (const method of ["get", "post", "put", "patch", "delete"] as const) {
+			if (!new RegExp(`\\b${method}\\s*\\(`).test(handlers)) continue;
+			routes.push({
+				method,
+				path,
+				line: i + 1,
+			});
+		}
 	}
 
 	return routes;
 }
 
 function toPascalCase(segment: string): string {
-	const cleaned = segment.replace(/^:+/, "");
+	const cleaned = segment.replace(/^[:{]+|[}]+$/g, "");
 	const parts = cleaned.split(/[-_]+/g).filter((part) => part.length > 0);
 	if (parts.length === 0) {
 		return "Unknown";
@@ -50,8 +65,8 @@ function toMethodName(route: Route): string {
 	const methodPrefix = route.method;
 	const suffix = segments
 		.map((segment) => {
-			if (segment.startsWith(":")) {
-				return `By${toPascalCase(segment.slice(1))}`;
+			if (segment.startsWith(":") || segment.startsWith("{")) {
+				return `By${toPascalCase(segment)}`;
 			}
 			return toPascalCase(segment);
 		})
@@ -59,15 +74,24 @@ function toMethodName(route: Route): string {
 	const raw = `${methodPrefix}${suffix}`;
 	return raw.charAt(0).toLowerCase() + raw.slice(1);
 }
+
+/**
+ * Extract path parameters from route
+ * Example: /api/items/:id → ["id"]
+ */
 function extractParams(path: string): readonly string[] {
 	const params: string[] = [];
-	const regex = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
+	const regex = /(?::|\{)([a-zA-Z_][a-zA-Z0-9_]*)(?:\})?/g;
 	let match: RegExpExecArray | null;
 	while ((match = regex.exec(path)) !== null) {
 		params.push(match[1]);
 	}
 	return params;
 }
+
+/**
+ * Build a unique method name for each route.
+ */
 function buildMethodNames(routes: readonly Route[]): readonly string[] {
 	const used = new Map<string, number>();
 	return routes.map((route) => {
@@ -80,6 +104,10 @@ function buildMethodNames(routes: readonly Route[]): readonly string[] {
 		return `${baseName}${seen + 1}`;
 	});
 }
+
+/**
+ * Generate TypeScript method for a route.
+ */
 function generateMethod(route: Route, methodName: string): string {
 	const params = extractParams(route.path);
 
@@ -100,7 +128,7 @@ function generateMethod(route: Route, methodName: string): string {
 
 	let urlPath = route.path;
 	for (const param of params) {
-		urlPath = urlPath.replace(`:${param}`, `\${${param}}`);
+		urlPath = urlPath.replace(new RegExp(`(?::${param}|\\{${param}\\})`), () => `\${param}`);
 	}
 	const url = params.length > 0 ? `\`${urlPath}\`` : `"${urlPath}"`;
 
@@ -119,6 +147,10 @@ function generateMethod(route: Route, methodName: string): string {
 
 	return `  async ${signature} {\n    ${body}\n  }`;
 }
+
+/**
+ * Generate the full client file.
+ */
 function generateClient(routes: readonly Route[]): string {
 	const methodNames = buildMethodNames(routes);
 	const methods = routes.map((route, index) => generateMethod(route, methodNames[index])).join("\n\n");
@@ -146,13 +178,19 @@ ${methods}
 }
 `;
 }
+
+/**
+ * Main
+ */
 function main(): void {
-	console.log("Reading daemon.ts...");
+	console.log("Reading Rust daemon routes...");
 	if (!existsSync(DAEMON_PATH)) {
-		console.error(`Error: daemon.ts not found at ${DAEMON_PATH}`);
+		console.error(`Error: Rust daemon source not found at ${DAEMON_PATH}`);
 		process.exit(1);
 	}
-	const daemonCode = readFileSync(DAEMON_PATH, "utf-8");
+	const daemonCode = ["main.rs", "routes/integrations.rs", "routes/jobs.rs", "routes/ontology.rs"]
+		.map((file) => readFileSync(join(DAEMON_PATH, file), "utf-8"))
+		.join("\n");
 
 	console.log("Extracting routes...");
 	const routes = extractRoutes(daemonCode);

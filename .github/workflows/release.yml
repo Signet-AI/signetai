@@ -109,10 +109,11 @@ jobs:
         if: steps.changes.outputs.skip != 'true'
         run: bun surfaces/cli/src/cli.ts --help > /dev/null
 
-      - name: Native embedding /health isolation (source daemon)
+      - name: Fresh Rust daemon contract
         if: steps.changes.outputs.skip != 'true'
-        working-directory: platform/daemon
-        run: bun test src/native-embedding-eventloop-isolation.test.ts
+        run: |
+          cargo build --manifest-path platform/rust-daemon/Cargo.toml
+          bun test platform/rust-daemon/contract.test.ts
 
       - name: Configure Git
         if: steps.changes.outputs.skip != 'true'
