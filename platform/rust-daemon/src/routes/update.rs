@@ -14,12 +14,15 @@ use tokio::fs;
 const MAX_BODY: usize = 64 * 1024;
 const MAX_CONFIG: usize = 16 * 1024;
 const MIN_INTERVAL: u64 = 300;
-const MAX_INTERVAL: u64 = 2_592_000;
+const MAX_INTERVAL: u64 = 604_800;
+const DEFAULT_INTERVAL: u64 = 21_600;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateConfig {
+    #[serde(rename = "autoInstall", alias = "auto_install")]
     auto_install: bool,
+    #[serde(rename = "checkInterval", alias = "check_interval")]
     check_interval: u64,
     channel: String,
 }
@@ -27,16 +30,16 @@ impl Default for UpdateConfig {
     fn default() -> Self {
         Self {
             auto_install: false,
-            check_interval: 3600,
+            check_interval: DEFAULT_INTERVAL,
             channel: "stable".into(),
         }
     }
 }
 #[derive(Debug, Deserialize)]
 struct ConfigInput {
-    #[serde(alias = "auto_install")]
+    #[serde(rename = "autoInstall", alias = "auto_install")]
     auto_install: Option<Value>,
-    #[serde(alias = "check_interval")]
+    #[serde(rename = "checkInterval", alias = "check_interval")]
     check_interval: Option<Value>,
     channel: Option<String>,
 }
@@ -57,6 +60,13 @@ fn config_path(state: &AppState) -> Result<PathBuf, ApiError> {
 }
 async fn load_config(state: &AppState) -> Result<UpdateConfig, ApiError> {
     let path = config_path(state)?;
+    if let Some(dir) = path.parent() {
+        if let Ok(meta) = fs::symlink_metadata(dir).await {
+            if meta.file_type().is_symlink() || !meta.is_dir() {
+                return Err(ApiError::internal(".daemon is not a real directory"));
+            }
+        }
+    }
     match fs::symlink_metadata(&path).await {
         Ok(meta) if !meta.file_type().is_file() || meta.file_type().is_symlink() => {
             return Err(ApiError::internal("update config is not a regular file"))
@@ -71,22 +81,51 @@ async fn load_config(state: &AppState) -> Result<UpdateConfig, ApiError> {
     let bytes = fs::read(path)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    serde_json::from_slice(&bytes).map_err(|_| ApiError::internal("update config is malformed"))
+    serde_json::from_slice(&bytes).map_err(|_| ApiError::bad_request("update config is malformed"))
 }
 async fn save_config(state: &AppState, config: &UpdateConfig) -> Result<(), ApiError> {
     let path = config_path(state)?;
     let dir = path.parent().unwrap();
+    match fs::symlink_metadata(dir).await {
+        Ok(meta) if meta.file_type().is_symlink() || !meta.is_dir() => {
+            return Err(ApiError::internal(".daemon is not a real directory"))
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(dir)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+        }
+        Err(e) => return Err(ApiError::internal(e.to_string())),
+    }
     fs::create_dir_all(dir)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
     let bytes = serde_json::to_vec_pretty(config).map_err(|e| ApiError::internal(e.to_string()))?;
     if bytes.len() > MAX_CONFIG {
-        return Err(ApiError::internal("update config is too large"));
+        return Err(ApiError::bad_request("update config is too large"));
     }
-    let tmp = dir.join("update-config.json.tmp");
-    fs::write(&tmp, &bytes)
+    if let Ok(meta) = fs::symlink_metadata(&path).await {
+        if meta.file_type().is_symlink() || !meta.is_file() {
+            return Err(ApiError::internal("update config is not a regular file"));
+        }
+    }
+    let tmp = dir.join(format!("update-config.json.tmp-{}", uuid::Uuid::new_v4()));
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
         .await
-        .map_err(|e| ApiError::internal(e.to_string()))?;
+    {
+        Ok(file) => file,
+        Err(e) => return Err(ApiError::internal(e.to_string())),
+    };
+    use tokio::io::AsyncWriteExt;
+    if let Err(e) = file.write_all(&bytes).await {
+        let _ = fs::remove_file(&tmp).await;
+        return Err(ApiError::internal(e.to_string()));
+    }
+    drop(file);
     let result = fs::rename(&tmp, &path).await;
     if result.is_err() {
         let _ = fs::remove_file(&tmp).await;
@@ -140,10 +179,15 @@ async fn set_config(
         })?;
     }
     if let Some(channel) = input.channel {
-        if channel != "stable" && channel != "nightly" {
-            return Err(ApiError::bad_request("channel must be stable or nightly"));
-        }
-        config.channel = channel;
+        config.channel = match channel.trim().to_ascii_lowercase().as_str() {
+            "stable" | "latest" => "stable".into(),
+            "nightly" | "next" => "nightly".into(),
+            _ => {
+                return Err(ApiError::bad_request(
+                    "channel must be stable, latest, nightly, or next",
+                ))
+            }
+        };
     }
     save_config(&state, &config).await?;
     Ok(Json(
