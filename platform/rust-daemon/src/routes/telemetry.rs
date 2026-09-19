@@ -1,5 +1,5 @@
 use super::auth;
-use crate::{execute, workspace_id, ApiError, AppState};
+use crate::{execute, non_empty, workspace_id, ApiError, AppState};
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
@@ -79,6 +79,21 @@ fn check(authority: &Value, agent: &str, workspace: &str) -> Result<(), ApiError
     Ok(())
 }
 
+fn telemetry_workspace(headers: &HeaderMap, requested: Option<&str>) -> Result<String, ApiError> {
+    let header = headers
+        .get("x-signet-workspace-id")
+        .or_else(|| headers.get("x-workspace-id"))
+        .and_then(|value| value.to_str().ok())
+        .and_then(non_empty);
+    let requested = requested.and_then(non_empty);
+    if header.is_some() && requested.is_some() && header != requested {
+        return Err(ApiError::bad_request(
+            "workspace header and query parameter disagree",
+        ));
+    }
+    Ok(workspace_id(headers, requested.as_deref()))
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/telemetry/events", get(events))
@@ -104,7 +119,7 @@ async fn events(
                 .map(str::to_owned)
         })
         .ok_or_else(|| ApiError::bad_request("agent is required"))?;
-    let workspace = workspace_id(&headers, q.workspace.as_deref());
+    let workspace = telemetry_workspace(&headers, q.workspace.as_deref())?;
     check(&authority, &agent, &workspace)?;
     let limit = q.limit.unwrap_or(100);
     if !(1..=10_000).contains(&limit) {

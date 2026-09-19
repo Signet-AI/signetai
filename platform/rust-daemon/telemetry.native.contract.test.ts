@@ -115,6 +115,13 @@ describe("fresh Rust telemetry boundary", () => {
 				})
 			).status,
 		).toBe(400);
+		expect(
+			(
+				await fetch(`${base()}/api/telemetry/events?agent=${agent}&workspace=other-workspace`, {
+					headers: auth(authority),
+				})
+			).status,
+		).toBe(400);
 		const empty = await body(
 			await fetch(`${base()}/api/telemetry/events?agent=${agent}&workspace=${workspaceId}&cursor=${page.nextCursor}`, {
 				headers: auth(authority),
