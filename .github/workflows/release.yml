@@ -280,7 +280,7 @@ jobs:
 
       - name: Smoke native binary
         shell: bash
-        run: ./dist/native/"$RELEASE_ASSET" --help > /dev/null
+        run: env -i HOME="$HOME" PATH=/usr/bin:/bin ./dist/native/"$RELEASE_ASSET" --help > /dev/null
 
       - name: Verify native binary artifact
         shell: bash

@@ -28,3 +28,11 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - name: Contract tests
         run: bun test platform/rust-daemon/contract.test.ts
+      - name: Build packaged Rust daemon
+        run: bun run build:native-cli
+      - name: Packaged smoke without Bun or Node
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/native/signet-linux-x64
+          env -i HOME="$HOME" PATH=/usr/bin:/bin SIGNET_TELEMETRY_OPTOUT=1 dist/native/signet-linux-x64 --help >/dev/null
