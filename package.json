@@ -13,6 +13,7 @@
 	"workspaces": [
 		"memorybench",
 		"platform/*",
+		"!platform/daemon",
 		"surfaces/*",
 		"integrations/*/*",
 		"libs/*",
@@ -44,9 +45,8 @@
 		"esbuild": "0.28.1"
 	},
 	"scripts": {
-		"build": "bun run build:core && bun run build:connector-base && bun run build:opencode-plugin && bun run build:dashboard && bun run build:native && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:signetai",
+		"build": "bun run build:connector-base && bun run build:opencode-plugin && bun run build:dashboard && bun run build:native && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:signetai",
 		"build:native": "bun scripts/build-native.ts",
-		"build:core": "cd platform/core && bun run build",
 		"build:connector-base": "cd libs/connector-base && bun run build",
 		"build:connector-oh-my-pi": "cd integrations/oh-my-pi/connector && bun run build",
 		"build:opencode-plugin": "cd integrations/opencode/plugin && bun run build",

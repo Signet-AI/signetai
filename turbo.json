@@ -48,7 +48,6 @@
 		},
 		"signetai#build": {
 			"dependsOn": [
-				"@signet/core#build",
 				"@signet/connector-base#build",
 				"@signet/connector-claude-code#build",
 				"@signet/connector-codex#build",
