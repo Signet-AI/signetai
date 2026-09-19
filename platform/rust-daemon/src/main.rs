@@ -1,3 +1,5 @@
+mod routes;
+
 use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode, Uri},
@@ -19,11 +21,11 @@ use std::{
 use tokio::signal;
 
 #[derive(Clone)]
-struct AppState {
-    owner: Arc<WorkspaceOwner>,
-    started_at: u64,
-    workspace: PathBuf,
-    dashboard: Option<PathBuf>,
+pub(crate) struct AppState {
+    pub(crate) owner: Arc<WorkspaceOwner>,
+    pub(crate) started_at: u64,
+    pub(crate) workspace: PathBuf,
+    pub(crate) dashboard: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -32,14 +34,14 @@ struct ErrorBody {
     code: String,
 }
 
-struct ApiError {
+pub(crate) struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
 }
 
 impl ApiError {
-    fn bad_request(message: impl Into<String>) -> Self {
+    pub(crate) fn bad_request(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::BAD_REQUEST,
             code: "invalid_request",
@@ -47,7 +49,7 @@ impl ApiError {
         }
     }
 
-    fn unauthorized(message: impl Into<String>) -> Self {
+    pub(crate) fn unauthorized(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
             code: "missing_identity",
@@ -55,7 +57,7 @@ impl ApiError {
         }
     }
 
-    fn not_found(message: impl Into<String>) -> Self {
+    pub(crate) fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
             code: "not_found",
@@ -63,7 +65,7 @@ impl ApiError {
         }
     }
 
-    fn unavailable(message: impl Into<String>) -> Self {
+    pub(crate) fn unavailable(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: "database_unavailable",
@@ -71,7 +73,7 @@ impl ApiError {
         }
     }
 
-    fn internal(message: impl Into<String>) -> Self {
+    pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
             code: "internal_error",
@@ -140,18 +142,18 @@ struct RecallRequest {
     agent_id: Option<String>,
 }
 
-fn configured_agent() -> Option<String> {
+pub(crate) fn configured_agent() -> Option<String> {
     env::var("SIGNET_AGENT_ID")
         .ok()
         .and_then(|value| non_empty(&value))
 }
 
-fn non_empty(value: &str) -> Option<String> {
+pub(crate) fn non_empty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
 }
 
-fn agent(
+pub(crate) fn agent(
     headers: &HeaderMap,
     query: Option<&AgentQuery>,
     body: Option<&str>,
@@ -173,7 +175,7 @@ fn agent(
         })
 }
 
-fn metadata(request: &RememberRequest) -> Value {
+pub(crate) fn metadata(request: &RememberRequest) -> Value {
     let mut metadata = request.metadata.clone().unwrap_or_else(|| json!({}));
     if let Value::Object(ref mut object) = metadata {
         for (key, value) in &request.extra {
@@ -185,7 +187,7 @@ fn metadata(request: &RememberRequest) -> Value {
     metadata
 }
 
-async fn execute(state: &AppState, operation: Operation) -> Result<Value, ApiError> {
+pub(crate) async fn execute(state: &AppState, operation: Operation) -> Result<Value, ApiError> {
     let owner = state.owner.clone();
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
