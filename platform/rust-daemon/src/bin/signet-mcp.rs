@@ -7,11 +7,20 @@ const MAX_LINE: usize = 256 * 1024;
 const MAX_RESPONSE: usize = 1024 * 1024;
 
 fn bridge_url() -> String {
-    env::var("SIGNET_MCP_BRIDGE_URL").unwrap_or_else(|_| {
-        let host = env::var("SIGNET_HOST").unwrap_or_else(|_| "127.0.0.1".into());
-        let port = env::var("SIGNET_PORT").unwrap_or_else(|_| "3850".into());
-        format!("http://{host}:{port}")
-    })
+    env::var("SIGNET_DAEMON_URL")
+        .or_else(|_| env::var("SIGNET_MCP_BRIDGE_URL"))
+        .and_then(|value| {
+            if value.trim().is_empty() {
+                Err(env::VarError::NotPresent)
+            } else {
+                Ok(value)
+            }
+        })
+        .unwrap_or_else(|_| {
+            let host = env::var("SIGNET_HOST").unwrap_or_else(|_| "127.0.0.1".into());
+            let port = env::var("SIGNET_PORT").unwrap_or_else(|_| "3850".into());
+            format!("http://{host}:{port}")
+        })
 }
 
 fn error(id: Option<Value>, code: i64, message: impl Into<String>) -> Value {
@@ -22,12 +31,16 @@ fn headers() -> Result<HeaderMap, String> {
     let mut out = HeaderMap::new();
     out.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     for (env_name, header_name) in [
-        ("SIGNET_AGENT_ID", "x-signet-agent-id"),
+        ("SIGNET_DREAMING_AGENT_ID", "x-signet-agent-id"),
         ("SIGNET_WORKSPACE", "x-signet-workspace"),
         ("SIGNET_HARNESS", "x-signet-harness"),
         ("SIGNET_CHANNEL", "x-signet-channel"),
     ] {
-        if let Ok(value) = env::var(env_name) {
+        if let Ok(value) = env::var(env_name).or_else(|_| {
+            (env_name == "SIGNET_DREAMING_AGENT_ID")
+                .then(|| env::var("SIGNET_AGENT_ID"))
+                .unwrap_or(Err(env::VarError::NotPresent))
+        }) {
             if !value.trim().is_empty() {
                 out.insert(
                     HeaderName::from_static(header_name),

@@ -58,6 +58,9 @@ export function createDreamingAcpxMcpConfig(params: {
 		{ name: "SIGNET_DREAMING_PASS_ID", value: params.passId },
 		{ name: "SIGNET_DAEMON_URL", value: params.daemonUrl },
 		...(params.authorizationToken ? [{ name: "SIGNET_TOKEN", value: params.authorizationToken }] : []),
+		...(["SIGNET_WORKSPACE", "SIGNET_HARNESS", "SIGNET_CHANNEL"] as const)
+			.filter((name) => Boolean(process.env[name]?.trim()))
+			.map((name) => ({ name, value: process.env[name] as string })),
 	];
 	writeFileSync(
 		path,
