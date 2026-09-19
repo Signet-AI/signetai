@@ -1,8 +1,9 @@
 use crate::{agent, ApiError, AppState};
 use axum::{
     extract::State,
-    response::IntoResponse,
-    routing::{get, post},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+    routing::{delete, get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -23,6 +24,18 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/inference/status", get(status))
         .route("/api/inference/catalog", get(catalog))
         .route("/api/inference/execute", post(execute))
+        .route("/api/inference/explain", post(unsupported))
+        .route("/api/inference/stream", post(unsupported))
+        .route("/api/inference/history", get(unsupported))
+        .route("/api/inference/requests/:id", delete(unsupported))
+}
+
+async fn unsupported() -> Response {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"error":"unsupported inference operation","code":"unsupported"})),
+    )
+        .into_response()
 }
 
 async fn status() -> impl IntoResponse {
@@ -94,8 +107,8 @@ async fn execute(
         call_openai(&base, setting("SIGNET_OPENAI_API_KEY"), body),
     )
     .await
-    .map_err(|_| ApiError::bad_request("inference provider request timed out"))?
-    .map_err(|message| ApiError::bad_request(message))?;
+    .map_err(|_| ApiError::unavailable("inference provider request timed out"))?
+    .map_err(|message| ApiError::internal(message))?;
     Ok(Json(
         json!({"provider":"openai-compatible", "agent_id":identity, "response":response}),
     ))
@@ -103,9 +116,13 @@ async fn execute(
 
 async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Value, String> {
     let url = base.trim_end_matches('/').to_owned() + "/v1/chat/completions";
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err("provider URL must use http:// or https://".to_owned());
+    }
     let parsed = url
         .strip_prefix("http://")
-        .ok_or_else(|| "only http:// OpenAI-compatible endpoints are supported".to_owned())?;
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap();
     let (host_port, path) = parsed
         .split_once('/')
         .map(|(h, p)| (h, format!("/{p}")))
