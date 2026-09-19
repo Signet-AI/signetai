@@ -1,6 +1,7 @@
 mod routes;
 
 use axum::{
+    body::Body,
     extract::{Path, Query, State},
     http::{header, HeaderMap, Request, StatusCode, Uri},
     middleware::{self, Next},
@@ -27,6 +28,7 @@ pub(crate) struct AppState {
     pub(crate) started_at: u64,
     pub(crate) workspace: PathBuf,
     pub(crate) dashboard: Option<PathBuf>,
+    pub(crate) auth_secret: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -52,26 +54,51 @@ fn configured_api_key() -> Option<String> {
         })
 }
 
-async fn authenticate_api(request: Request<axum::body::Body>, next: Next) -> Response {
-    let Some(expected) = configured_api_key() else {
+async fn authenticate_api(
+    State(state): State<AppState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
+    let expected = configured_api_key();
+    if expected.is_none() && state.auth_secret.is_none() {
         return next.run(request).await;
-    };
+    }
     let path = request.uri().path();
     let protected = path.starts_with("/api/") || path == "/memory/search";
     if !protected {
         return next.run(request).await;
     }
-    let headers = request.headers();
-    let supplied = headers
+    let supplied = request
+        .headers()
         .get(header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
         .or_else(|| {
-            headers
+            request
+                .headers()
                 .get("x-signet-api-key")
                 .and_then(|value| value.to_str().ok())
-        });
-    if supplied == Some(expected.as_str()) {
+        })
+        .map(str::to_owned);
+    let configured = expected.as_deref() == supplied.as_deref();
+    let durable = if configured {
+        true
+    } else if let Some(token) = supplied.as_deref() {
+        routes::auth::verify_token(&state, token).is_some()
+            || match state
+                .owner
+                .submit_async(Operation::AuthKeyVerify {
+                    token: token.to_owned(),
+                })
+                .await
+            {
+                Ok(result) => result.get("authenticated").and_then(Value::as_bool) == Some(true),
+                Err(_) => false,
+            }
+    } else {
+        false
+    };
+    if durable {
         return next.run(request).await;
     }
     (
@@ -683,6 +710,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         owner,
         started_at: now_seconds(),
         dashboard: resolve_dashboard_path(),
+        auth_secret: routes::auth::load_secret(&workspace),
         workspace,
     };
     let host = env::var("SIGNET_BIND").unwrap_or_else(|_| "127.0.0.1".to_owned());
@@ -714,7 +742,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .merge(routes::router())
         .fallback(dashboard)
-        .layer(middleware::from_fn(authenticate_api))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            authenticate_api,
+        ))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(address).await?;
     axum::serve(listener, router)

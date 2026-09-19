@@ -1,7 +1,7 @@
-use sha2::{Digest, Sha256};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
     any::Any,
     fs,
@@ -385,29 +385,75 @@ fn execute_operation(
     operation: Operation,
 ) -> Result<Value, CoreError> {
     match operation {
-        Operation::TranscriptImportCreate { agent_id, schema_id, duplicate_mode, files } => {
+        Operation::TranscriptImportCreate {
+            agent_id,
+            schema_id,
+            duplicate_mode,
+            files,
+        } => {
             let agent_id = required_agent(&agent_id)?;
-            if schema_id != "signet-export" || !matches!(duplicate_mode.as_str(), "skip" | "replace" | "reimport") { return Err(CoreError::InvalidInput("unsupported import schema or duplicate mode".into())); }
-            let files = files.as_array().ok_or_else(|| CoreError::InvalidInput("files must be an array".into()))?;
-            if files.is_empty() || files.len() > 25 { return Err(CoreError::InvalidInput("files must contain 1-25 entries".into())); }
+            if schema_id != "signet-export"
+                || !matches!(duplicate_mode.as_str(), "skip" | "replace" | "reimport")
+            {
+                return Err(CoreError::InvalidInput(
+                    "unsupported import schema or duplicate mode".into(),
+                ));
+            }
+            let files = files
+                .as_array()
+                .ok_or_else(|| CoreError::InvalidInput("files must be an array".into()))?;
+            if files.is_empty() || files.len() > 25 {
+                return Err(CoreError::InvalidInput(
+                    "files must contain 1-25 entries".into(),
+                ));
+            }
             let id = uuid::Uuid::new_v4().to_string();
             connection.execute("INSERT INTO transcript_import_jobs (id,agent_id,schema_id,duplicate_mode,state,files,created_at,updated_at) VALUES (?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,schema_id,duplicate_mode, "staging", serde_json::to_string(files)?])?;
             Ok(json!({"id":id,"jobId":id,"agentId":agent_id,"state":"staging","files":files}))
         }
         Operation::TranscriptImportGet { agent_id, id } => {
             let value: Option<String> = connection.query_row("SELECT json_object('id',id,'agentId',agent_id,'schemaId',schema_id,'duplicateMode',duplicate_mode,'state',state,'files',json(files),'createdAt',created_at,'updatedAt',updated_at) FROM transcript_import_jobs WHERE id=? AND agent_id=?", params![id, required_agent(&agent_id)?], |r| r.get(0)).optional()?;
-            value.map(|v| serde_json::from_str(&v)).transpose()?.ok_or(CoreError::NotFound)
+            value
+                .map(|v| serde_json::from_str(&v))
+                .transpose()?
+                .ok_or(CoreError::NotFound)
         }
-        Operation::TranscriptUpsert { agent_id, session_key, harness, project, content, idempotency_key } => {
-            let agent_id = required_agent(&agent_id)?; if session_key.trim().is_empty() || harness.trim().is_empty() || content.len() > 16 * 1024 * 1024 || idempotency_key.trim().is_empty() { return Err(CoreError::InvalidInput("invalid or oversized transcript".into())); }
-            let mut hasher = Sha256::new(); hasher.update(content.as_bytes()); let hash = format!("{:x}", hasher.finalize());
+        Operation::TranscriptUpsert {
+            agent_id,
+            session_key,
+            harness,
+            project,
+            content,
+            idempotency_key,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            if session_key.trim().is_empty()
+                || harness.trim().is_empty()
+                || content.len() > 16 * 1024 * 1024
+                || idempotency_key.trim().is_empty()
+            {
+                return Err(CoreError::InvalidInput(
+                    "invalid or oversized transcript".into(),
+                ));
+            }
+            let mut hasher = Sha256::new();
+            hasher.update(content.as_bytes());
+            let hash = format!("{:x}", hasher.finalize());
             connection.execute("INSERT INTO session_transcripts (session_key,agent_id,harness,project,content,content_hash,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(agent_id,session_key) DO UPDATE SET content=excluded.content,content_hash=excluded.content_hash,updated_at=datetime('now')", params![session_key,agent_id,harness,project,content,hash,idempotency_key])?;
-            Ok(json!({"sessionKey":session_key,"agentId":agent_id,"contentHash":hash,"state":"stored"}))
+            Ok(
+                json!({"sessionKey":session_key,"agentId":agent_id,"contentHash":hash,"state":"stored"}),
+            )
         }
         Operation::TranscriptList { agent_id, limit } => {
             let mut s=connection.prepare("SELECT json_object('sessionKey',session_key,'agentId',agent_id,'harness',harness,'project',project,'content',content,'contentHash',content_hash,'createdAt',created_at,'updatedAt',updated_at,'completedAt',completed_at) FROM session_transcripts WHERE agent_id=? ORDER BY created_at DESC LIMIT ?")?;
-            let rows=s.query_map(params![required_agent(&agent_id)?, limit.clamp(1,100)], |r| r.get::<_,String>(0))?;
-            Ok(Value::Array(rows.map(|r| Ok(serde_json::from_str(&r?)?)).collect::<Result<Vec<Value>, CoreError>>()?))
+            let rows = s.query_map(
+                params![required_agent(&agent_id)?, limit.clamp(1, 100)],
+                |r| r.get::<_, String>(0),
+            )?;
+            Ok(Value::Array(
+                rows.map(|r| Ok(serde_json::from_str(&r?)?))
+                    .collect::<Result<Vec<Value>, CoreError>>()?,
+            ))
         }
         Operation::JobSubmit {
             agent_id,
@@ -537,45 +583,189 @@ fn execute_operation(
             tx.commit()?;
             Ok(json!({"id":id,"agentId":agent_id,"kind":"dream.trigger","state":"queued"}))
         }
-        Operation::AuthKeyCreate { agent_id, name, role, scope, expires_at } => {
+        Operation::AuthKeyCreate {
+            agent_id,
+            name,
+            role,
+            scope,
+            permissions,
+            connector,
+            harness,
+            allowed_projects,
+            expires_at,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let name = bounded_text(&name, "name", 256)?;
-            if !["admin", "operator", "agent", "readonly"].contains(&role.as_str()) { return Err(CoreError::InvalidInput("invalid role".into())); }
+            if !["admin", "operator", "agent", "readonly"].contains(&role.as_str()) {
+                return Err(CoreError::InvalidInput("invalid role".into()));
+            }
+            if let Some(expires_at) = expires_at.as_deref() {
+                let valid: bool = connection.query_row(
+                    "SELECT julianday(?) IS NOT NULL",
+                    params![expires_at],
+                    |row| row.get(0),
+                )?;
+                if !valid {
+                    return Err(CoreError::InvalidInput(
+                        "expires_at must be a valid SQLite date-time".into(),
+                    ));
+                }
+            }
+            let scope_json = bounded_json(&scope)?;
+            let permissions_json = bounded_json(&permissions)?;
+            let allowed_projects_json = bounded_json(&allowed_projects)?;
+            let connector = connector
+                .as_deref()
+                .map(|value| bounded_text(value, "connector", 128))
+                .transpose()?;
+            let harness = harness
+                .as_deref()
+                .map(|value| bounded_text(value, "harness", 128))
+                .transpose()?;
             let id = format!("key_{}", uuid::Uuid::new_v4());
             let prefix = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
             let secret = format!("sig_sk_{}_{}", prefix, uuid::Uuid::new_v4());
             let digest = format!("{:x}", sha2::Sha256::digest(secret.as_bytes()));
-            let created_at = String::new();
-            let scope_json = bounded_json(&scope)?;
             let tx = connection.transaction()?;
-            tx.execute("INSERT INTO api_keys(id,prefix,name,key_hash,role,scope_json,created_at,agent_id,expires_at) VALUES(?,?,?,?,?,?,?,?,?)", params![id,prefix,name,digest,role,scope_json,created_at,agent_id,expires_at])?;
+            let created_at: String =
+                tx.query_row("SELECT datetime('now')", [], |row| row.get(0))?;
+            tx.execute("INSERT INTO api_keys(id,prefix,name,key_hash,role,scope_json,permissions_json,connector,harness,agent_id,allowed_projects_json,created_at,expires_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", params![id,prefix,name,digest,role,scope_json,permissions_json,connector,harness,agent_id,allowed_projects_json,created_at,expires_at])?;
             tx.commit()?;
-            Ok(json!({"id":id,"prefix":prefix,"name":name,"role":role,"agentId":agent_id,"scope":scope,"createdAt":created_at,"revokedAt":null,"expiresAt":expires_at,"key":secret}))
+            Ok(
+                json!({"id":id,"prefix":prefix,"name":name,"role":role,"agentId":agent_id,"scope":scope,"permissions":permissions,"connector":connector,"harness":harness,"allowedProjects":allowed_projects,"createdAt":created_at,"lastUsedAt":null,"revokedAt":null,"expiresAt":expires_at,"key":secret}),
+            )
         }
         Operation::AuthKeyList { agent_id } => {
             let agent_id = required_agent(&agent_id)?;
-            let mut s = connection.prepare("SELECT id,prefix,name,role,scope_json,created_at,revoked_at,expires_at,agent_id FROM api_keys WHERE agent_id=? ORDER BY created_at DESC")?;
-            let rows = s.query_map(params![agent_id], |r| { let scope: String=r.get(4)?; Ok(json!({"id":r.get::<_,String>(0)?,"prefix":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"role":r.get::<_,String>(3)?,"scope":serde_json::from_str::<Value>(&scope).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?,"revokedAt":r.get::<_,Option<String>>(6)?,"expiresAt":r.get::<_,Option<String>>(7)?,"agentId":r.get::<_,String>(8)?})) })?;
+            let mut s = connection.prepare("SELECT id,prefix,name,role,scope_json,permissions_json,connector,harness,allowed_projects_json,created_at,last_used_at,revoked_at,expires_at,agent_id FROM api_keys WHERE agent_id=? ORDER BY created_at DESC")?;
+            let rows = s.query_map(params![agent_id], |r| {
+                let scope: String = r.get(4)?;
+                let permissions: String = r.get(5)?;
+                let allowed_projects: Option<String> = r.get(8)?;
+                Ok(json!({
+                    "id": r.get::<_, String>(0)?,
+                    "prefix": r.get::<_, String>(1)?,
+                    "name": r.get::<_, String>(2)?,
+                    "role": r.get::<_, String>(3)?,
+                    "scope": serde_json::from_str::<Value>(&scope).unwrap_or(json!({})),
+                    "permissions": serde_json::from_str::<Value>(&permissions).unwrap_or(json!([])),
+                    "connector": r.get::<_, Option<String>>(6)?,
+                    "harness": r.get::<_, Option<String>>(7)?,
+                    "allowedProjects": allowed_projects
+                        .as_deref()
+                        .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                        .unwrap_or(json!([])),
+                    "createdAt": r.get::<_, String>(9)?,
+                    "lastUsedAt": r.get::<_, Option<String>>(10)?,
+                    "revokedAt": r.get::<_, Option<String>>(11)?,
+                    "expiresAt": r.get::<_, Option<String>>(12)?,
+                    "agentId": r.get::<_, String>(13)?
+                }))
+            })?;
             Ok(json!(rows.collect::<Result<Vec<_>, _>>()?))
         }
         Operation::AuthKeyRevoke { agent_id, id } => {
-            let agent_id = required_agent(&agent_id)?; let id = required_id(&id)?;
-            let changed = connection.execute("UPDATE api_keys SET revoked_at=COALESCE(revoked_at,datetime('now')) WHERE id=? AND agent_id=?", params![id,agent_id])?;
-            if changed == 0 { return Err(CoreError::NotFound); }
+            let agent_id = required_agent(&agent_id)?;
+            let id = required_id(&id)?;
+            let changed = connection.execute(
+                "UPDATE api_keys SET revoked_at=COALESCE(revoked_at,datetime('now')) WHERE (id=? OR prefix=?) AND agent_id=?",
+                params![id, id, agent_id],
+            )?;
+            if changed == 0 {
+                return Err(CoreError::NotFound);
+            }
             Ok(json!({"id":id,"revoked":true}))
         }
         Operation::AuthKeyVerify { token } => {
             let parts: Vec<&str> = token.splitn(3, '_').collect();
-            if parts.len() != 3 || parts[0] != "sig" || parts[1] != "sk" { return Ok(json!({"authenticated":false,"error":"malformed api key"})); }
-            let prefix=parts[2].split('_').next().unwrap_or("");
+            if parts.len() != 3 || parts[0] != "sig" || parts[1] != "sk" {
+                return Ok(json!({"authenticated":false,"error":"malformed api key"}));
+            }
+            let prefix = parts[2].split('_').next().unwrap_or("");
             let digest = format!("{:x}", sha2::Sha256::digest(token.as_bytes()));
-            let row: Option<(String,String,Option<String>,Option<String>,String,String)> = connection.query_row("SELECT agent_id,role,revoked_at,expires_at,scope_json,id FROM api_keys WHERE prefix=? AND key_hash=?", params![prefix,digest], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
-            let Some((agent_id,role,revoked,expires,scope,id))=row else { return Ok(json!({"authenticated":false,"error":"invalid api key"})); };
-            if revoked.is_some() { return Ok(json!({"authenticated":false,"error":"api key revoked"})); }
-            let expired: bool = connection.query_row("SELECT julianday(?) <= julianday('now')", params![expires], |r| r.get(0))?;
-            if expired { return Ok(json!({"authenticated":false,"error":"api key expired"})); }
-            connection.execute("UPDATE api_keys SET last_used_at=datetime('now') WHERE id=?", params![id])?;
-            Ok(json!({"authenticated":true,"agentId":agent_id,"role":role,"scope":serde_json::from_str::<Value>(&scope).unwrap_or(json!({}))}))
+            let row: Option<(
+                String,
+                String,
+                Option<String>,
+                Option<String>,
+                String,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                String,
+            )> = connection
+                .query_row(
+                    "SELECT agent_id,role,revoked_at,expires_at,scope_json,permissions_json,connector,harness,allowed_projects_json,id FROM api_keys WHERE prefix=? AND key_hash=?",
+                    params![prefix, digest],
+                    |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                            r.get(6)?,
+                            r.get(7)?,
+                            r.get(8)?,
+                            r.get(9)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((
+                agent_id,
+                role,
+                revoked,
+                expires,
+                scope,
+                permissions,
+                connector,
+                harness,
+                allowed_projects,
+                id,
+            )) = row
+            else {
+                return Ok(json!({"authenticated":false,"error":"invalid api key"}));
+            };
+            if revoked.is_some() {
+                return Ok(json!({"authenticated":false,"error":"api key revoked"}));
+            }
+            let expired = expires
+                .as_deref()
+                .map(|expires_at| {
+                    connection.query_row(
+                        "SELECT julianday(?) <= julianday('now')",
+                        params![expires_at],
+                        |row| row.get::<_, bool>(0),
+                    )
+                })
+                .transpose()?
+                .unwrap_or(false);
+            if expired {
+                return Ok(json!({"authenticated":false,"error":"api key expired"}));
+            }
+            connection.execute(
+                "UPDATE api_keys SET last_used_at=datetime('now') WHERE id=?",
+                params![id],
+            )?;
+            Ok(json!({
+                "authenticated": true,
+                "agentId": agent_id,
+                "role": role,
+                "scope": serde_json::from_str::<Value>(&scope).unwrap_or(json!({})),
+                "permissions": permissions
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                    .unwrap_or(json!([])),
+                "connector": connector,
+                "harness": harness,
+                "allowedProjects": allowed_projects
+                    .as_deref()
+                    .and_then(|value| serde_json::from_str::<Value>(value).ok())
+                    .unwrap_or(json!([])),
+            }))
         }
         Operation::Health => {
             let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
@@ -928,7 +1118,13 @@ fn execute_operation(
             let rows=s.query_map(params![agent_id,entity_id,entity_id,limit],|r| Ok(json!({"id":r.get::<_,String>(0)?,"fromId":r.get::<_,String>(1)?,"toId":r.get::<_,String>(2)?,"relation":r.get::<_,String>(3)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?}))
         }
-        Operation::KnowledgeAspectCreate { agent_id, workspace_id, entity_id, name, weight } => {
+        Operation::KnowledgeAspectCreate {
+            agent_id,
+            workspace_id,
+            entity_id,
+            name,
+            weight,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = required_id(&workspace_id)?;
             let entity_id = required_id(&entity_id)?;
@@ -936,28 +1132,79 @@ fn execute_operation(
             let weight = weight.clamp(0.0, 1.0);
             let tx = connection.transaction()?;
             let entity_ok: i64 = tx.query_row("SELECT count(*) FROM kg_entities WHERE id=? AND agent_id=? AND workspace_id=? AND deleted=0", params![entity_id, agent_id, workspace_id], |r| r.get(0))?;
-            if entity_ok != 1 { return Err(CoreError::NotFound); }
+            if entity_ok != 1 {
+                return Err(CoreError::NotFound);
+            }
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute("INSERT INTO kg_aspects(id,agent_id,workspace_id,entity_id,name,canonical_name,weight,created_at,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,entity_id,name,name.to_lowercase(),weight])?;
             tx.commit()?;
             Ok(json!({"id":id,"entityId":entity_id,"name":name,"weight":weight}))
         }
-        Operation::KnowledgeAttributeCreate { agent_id, workspace_id, aspect_id, kind, content, claim_key, group_key, confidence, importance, memory_id } => {
-            let agent_id = required_agent(&agent_id)?; let workspace_id = required_id(&workspace_id)?;
-            let aspect_id = required_id(&aspect_id)?; let kind = bounded_text(&kind,"attribute kind",64)?; let content = bounded_text(&content,"attribute content",4096)?;
+        Operation::KnowledgeAttributeCreate {
+            agent_id,
+            workspace_id,
+            aspect_id,
+            kind,
+            content,
+            claim_key,
+            group_key,
+            confidence,
+            importance,
+            memory_id,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
+            let aspect_id = required_id(&aspect_id)?;
+            let kind = bounded_text(&kind, "attribute kind", 64)?;
+            let content = bounded_text(&content, "attribute content", 4096)?;
             let tx = connection.transaction()?;
-            let ok: i64 = tx.query_row("SELECT count(*) FROM kg_aspects WHERE id=? AND agent_id=? AND workspace_id=?",params![aspect_id,agent_id,workspace_id],|r|r.get(0))?;
-            if ok != 1 { return Err(CoreError::NotFound); }
-            if let Some(ref mid)=memory_id { let n:i64=tx.query_row("SELECT count(*) FROM memories WHERE id=? AND agent_id=? AND deleted=0",params![mid,agent_id],|r|r.get(0))?; if n!=1{return Err(CoreError::NotFound)} }
-            let id=uuid::Uuid::new_v4().to_string();
+            let ok: i64 = tx.query_row(
+                "SELECT count(*) FROM kg_aspects WHERE id=? AND agent_id=? AND workspace_id=?",
+                params![aspect_id, agent_id, workspace_id],
+                |r| r.get(0),
+            )?;
+            if ok != 1 {
+                return Err(CoreError::NotFound);
+            }
+            if let Some(ref mid) = memory_id {
+                let n: i64 = tx.query_row(
+                    "SELECT count(*) FROM memories WHERE id=? AND agent_id=? AND deleted=0",
+                    params![mid, agent_id],
+                    |r| r.get(0),
+                )?;
+                if n != 1 {
+                    return Err(CoreError::NotFound);
+                }
+            }
+            let id = uuid::Uuid::new_v4().to_string();
             tx.execute("INSERT INTO kg_attributes(id,agent_id,workspace_id,aspect_id,memory_id,kind,content,normalized_content,claim_key,group_key,confidence,importance,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'active',datetime('now'),datetime('now'))",params![id,agent_id,workspace_id,aspect_id,memory_id,kind,content,content.to_lowercase(),claim_key,group_key,confidence.clamp(0.0,1.0),importance.clamp(0.0,1.0)])?;
-            tx.commit()?; Ok(json!({"id":id,"aspectId":aspect_id,"kind":kind,"content":content,"status":"active"}))
+            tx.commit()?;
+            Ok(
+                json!({"id":id,"aspectId":aspect_id,"kind":kind,"content":content,"status":"active"}),
+            )
         }
-        Operation::KnowledgeTree { agent_id, workspace_id, entity_id, depth, max_aspects, max_attributes } => {
-            let agent_id=required_agent(&agent_id)?; let workspace_id=required_id(&workspace_id)?; let entity_id=required_id(&entity_id)?;
+        Operation::KnowledgeTree {
+            agent_id,
+            workspace_id,
+            entity_id,
+            depth,
+            max_aspects,
+            max_attributes,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
+            let entity_id = required_id(&entity_id)?;
             let mut s=connection.prepare("SELECT id,name,weight FROM kg_aspects WHERE agent_id=? AND workspace_id=? AND entity_id=? ORDER BY weight DESC LIMIT ?")?;
             let aspects=s.query_map(params![agent_id,workspace_id,entity_id,max_aspects.clamp(1,100) as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"weight":r.get::<_,f64>(2)?})))?;
-            let mut out=Vec::new(); for a in aspects { let mut v=a?; let aid=v["id"].as_str().unwrap_or_default().to_string(); let mut q=connection.prepare("SELECT id,kind,content,status FROM kg_attributes WHERE agent_id=? AND workspace_id=? AND aspect_id=? AND status='active' ORDER BY importance DESC LIMIT ?")?; let rows=q.query_map(params![agent_id,workspace_id,aid,max_attributes.clamp(1,200) as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?; v["attributes"]=json!(rows.collect::<Result<Vec<_>,_>>()?); out.push(v); }
+            let mut out = Vec::new();
+            for a in aspects {
+                let mut v = a?;
+                let aid = v["id"].as_str().unwrap_or_default().to_string();
+                let mut q=connection.prepare("SELECT id,kind,content,status FROM kg_attributes WHERE agent_id=? AND workspace_id=? AND aspect_id=? AND status='active' ORDER BY importance DESC LIMIT ?")?;
+                let rows=q.query_map(params![agent_id,workspace_id,aid,max_attributes.clamp(1,200) as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?;
+                v["attributes"] = json!(rows.collect::<Result<Vec<_>, _>>()?);
+                out.push(v);
+            }
             Ok(json!({"entityId":entity_id,"aspects":out,"depth":depth.min(3)}))
         }
         Operation::SessionStart {
@@ -1017,7 +1264,14 @@ fn execute_operation(
             let rows=s.query_map(params![agent_id,key,key,limit],|r| Ok(json!({"id":r.get::<_,i64>(0)?,"event":r.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(3)?})))?;
             Ok(json!({"events":rows.collect::<Result<Vec<_>,_>>()?}))
         }
-        Operation::HookReceipt { agent_id, receipt_id, checkpoint, hook, session_key, payload } => {
+        Operation::HookReceipt {
+            agent_id,
+            receipt_id,
+            checkpoint,
+            hook,
+            session_key,
+            payload,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let receipt_id = bounded_text(&receipt_id, "receipt id", 128)?;
             let hook = bounded_text(&hook, "hook", 128)?;
@@ -1027,13 +1281,24 @@ fn execute_operation(
             tx.commit()?;
             Ok(json!({"receiptId":receipt_id,"durable":true,"checkpoint":checkpoint}))
         }
-        Operation::HookReceipts { agent_id, session_key, after_id, limit } => {
+        Operation::HookReceipts {
+            agent_id,
+            session_key,
+            after_id,
+            limit,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let mut s = connection.prepare("SELECT id,receipt_id,session_key,hook,checkpoint,payload,created_at FROM hook_receipts WHERE agent_id=? AND id>? AND (? IS NULL OR session_key=?) ORDER BY id ASC LIMIT ?")?;
             let rows = s.query_map(params![agent_id,after_id,session_key,session_key,limit.clamp(1,MAX_EVENT_RECORDS) as i64], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"receiptId":r.get::<_,String>(1)?,"sessionKey":r.get::<_,Option<String>>(2)?,"hook":r.get::<_,String>(3)?,"checkpoint":r.get::<_,Option<String>>(4)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(5)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(6)?})))?;
             Ok(json!({"receipts":rows.collect::<Result<Vec<_>,_>>()?}))
         }
-        Operation::CrossAgentSend { agent_id, workspace_id, recipient_agent_id, kind, payload } => {
+        Operation::CrossAgentSend {
+            agent_id,
+            workspace_id,
+            recipient_agent_id,
+            kind,
+            payload,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
             let recipient_agent_id = required_agent(&recipient_agent_id)?;
@@ -1041,10 +1306,16 @@ fn execute_operation(
             let payload = bounded_json(&payload)?;
             let tx = connection.transaction()?;
             tx.execute("INSERT INTO cross_agent_messages(workspace_id,sender_agent_id,recipient_agent_id,kind,payload,created_at) VALUES(?,?,?,?,?,datetime('now'))", params![workspace_id,agent_id,recipient_agent_id,kind,payload])?;
-            let id = tx.last_insert_rowid(); tx.commit()?;
+            let id = tx.last_insert_rowid();
+            tx.commit()?;
             Ok(json!({"id":id,"workspaceId":workspace_id,"delivered":true}))
         }
-        Operation::CrossAgentList { agent_id, workspace_id, after_id, limit } => {
+        Operation::CrossAgentList {
+            agent_id,
+            workspace_id,
+            after_id,
+            limit,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
             let mut s = connection.prepare("SELECT id,sender_agent_id,recipient_agent_id,kind,payload,created_at FROM cross_agent_messages WHERE workspace_id=? AND recipient_agent_id=? AND id>? ORDER BY id ASC LIMIT ?")?;
@@ -1101,11 +1372,22 @@ pub enum Operation {
         name: String,
         role: String,
         scope: Value,
+        permissions: Value,
+        connector: Option<String>,
+        harness: Option<String>,
+        allowed_projects: Value,
         expires_at: Option<String>,
     },
-    AuthKeyList { agent_id: String },
-    AuthKeyRevoke { agent_id: String, id: String },
-    AuthKeyVerify { token: String },
+    AuthKeyList {
+        agent_id: String,
+    },
+    AuthKeyRevoke {
+        agent_id: String,
+        id: String,
+    },
+    AuthKeyVerify {
+        token: String,
+    },
     Remember {
         agent_id: String,
         content: String,
@@ -1157,10 +1439,28 @@ pub enum Operation {
         content: String,
         metadata: Value,
     },
-    TranscriptImportCreate { agent_id: String, schema_id: String, duplicate_mode: String, files: Value },
-    TranscriptImportGet { agent_id: String, id: String },
-    TranscriptUpsert { agent_id: String, session_key: String, harness: String, project: Option<String>, content: String, idempotency_key: String },
-    TranscriptList { agent_id: String, limit: usize },
+    TranscriptImportCreate {
+        agent_id: String,
+        schema_id: String,
+        duplicate_mode: String,
+        files: Value,
+    },
+    TranscriptImportGet {
+        agent_id: String,
+        id: String,
+    },
+    TranscriptUpsert {
+        agent_id: String,
+        session_key: String,
+        harness: String,
+        project: Option<String>,
+        content: String,
+        idempotency_key: String,
+    },
+    TranscriptList {
+        agent_id: String,
+        limit: usize,
+    },
     JobSubmit {
         agent_id: String,
         kind: String,
@@ -1247,9 +1547,33 @@ pub enum Operation {
         entity_id: String,
         limit: usize,
     },
-    KnowledgeAspectCreate { agent_id: String, workspace_id: String, entity_id: String, name: String, weight: f64 },
-    KnowledgeAttributeCreate { agent_id: String, workspace_id: String, aspect_id: String, kind: String, content: String, claim_key: Option<String>, group_key: Option<String>, confidence: f64, importance: f64, memory_id: Option<String> },
-    KnowledgeTree { agent_id: String, workspace_id: String, entity_id: String, depth: usize, max_aspects: usize, max_attributes: usize },
+    KnowledgeAspectCreate {
+        agent_id: String,
+        workspace_id: String,
+        entity_id: String,
+        name: String,
+        weight: f64,
+    },
+    KnowledgeAttributeCreate {
+        agent_id: String,
+        workspace_id: String,
+        aspect_id: String,
+        kind: String,
+        content: String,
+        claim_key: Option<String>,
+        group_key: Option<String>,
+        confidence: f64,
+        importance: f64,
+        memory_id: Option<String>,
+    },
+    KnowledgeTree {
+        agent_id: String,
+        workspace_id: String,
+        entity_id: String,
+        depth: usize,
+        max_aspects: usize,
+        max_attributes: usize,
+    },
     SessionStart {
         agent_id: String,
         key: String,
@@ -1428,15 +1752,35 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE INDEX IF NOT EXISTS hook_receipts_scope ON hook_receipts(agent_id, session_key, id);
          CREATE TABLE IF NOT EXISTS cross_agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, sender_agent_id TEXT NOT NULL, recipient_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS cross_agent_messages_scope ON cross_agent_messages(workspace_id, recipient_agent_id, id);
-         CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL, scope_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT, agent_id TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'agent', scope_json TEXT NOT NULL DEFAULT '{}', permissions_json TEXT NOT NULL DEFAULT '[]', connector TEXT, harness TEXT, agent_id TEXT, allowed_projects_json TEXT, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT);
          CREATE INDEX IF NOT EXISTS api_keys_scope ON api_keys(agent_id, revoked_at, expires_at);
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
-    ensure_column(&transaction, "kg_entities", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
-    ensure_column(&transaction, "kg_entities", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(&transaction, "kg_relations", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
-    ensure_column(&transaction, "kg_relations", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        &transaction,
+        "kg_entities",
+        "workspace_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "kg_entities",
+        "deleted",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &transaction,
+        "kg_relations",
+        "workspace_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "kg_relations",
+        "deleted",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     transaction.execute("CREATE TABLE IF NOT EXISTS kg_aspects (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, entity_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT NOT NULL, weight REAL NOT NULL DEFAULT 0.5, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,entity_id,canonical_name))", [])?;
     transaction.execute("CREATE TABLE IF NOT EXISTS kg_attributes (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, aspect_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT NOT NULL, claim_key TEXT, group_key TEXT, confidence REAL NOT NULL DEFAULT 0, importance REAL NOT NULL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'active', superseded_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)", [])?;
     transaction.execute("CREATE INDEX IF NOT EXISTS kg_aspects_scope ON kg_aspects(agent_id,workspace_id,entity_id)", [])?;
@@ -1444,8 +1788,21 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     transaction.execute("UPDATE kg_entities SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
     transaction.execute("UPDATE kg_relations SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
     transaction.execute("UPDATE kg_entities SET deleted=0 WHERE deleted IS NULL", [])?;
-    transaction.execute("UPDATE kg_relations SET deleted=0 WHERE deleted IS NULL", [])?;
+    transaction.execute(
+        "UPDATE kg_relations SET deleted=0 WHERE deleted IS NULL",
+        [],
+    )?;
     ensure_column(&transaction, "schema_migrations", "checksum", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "api_keys",
+        "permissions_json",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(&transaction, "api_keys", "connector", "TEXT")?;
+    ensure_column(&transaction, "api_keys", "harness", "TEXT")?;
+    ensure_column(&transaction, "api_keys", "agent_id", "TEXT")?;
+    ensure_column(&transaction, "api_keys", "allowed_projects_json", "TEXT")?;
     ensure_column(
         &transaction,
         "sources",

@@ -51,12 +51,17 @@ async function waitForReady(origin: string, child: NativeProcess): Promise<void>
 async function startDaemon(
 	agentId: string | null = environmentValue("SIGNET_AGENT_ID"),
 	withDashboard = false,
+	withAuthSecret = false,
 ): Promise<{ readonly origin: string; readonly workspace: string; readonly child: NativeProcess }> {
 	const workspace = mkdtempSync(join(tmpdir(), "signet-rust-workspace-"));
 	if (withDashboard) {
 		const dashboard = join(workspace, "dashboard");
 		mkdirSync(dashboard, { recursive: true });
 		writeFileSync(join(dashboard, "index.html"), "<main>fresh rust dashboard</main>");
+	}
+	if (withAuthSecret) {
+		mkdirSync(join(workspace, ".daemon"), { recursive: true });
+		writeFileSync(join(workspace, ".daemon", "auth-secret"), "12345678901234567890123456789012");
 	}
 	workspaces.push(workspace);
 	const port = nextPort++;
@@ -77,6 +82,29 @@ async function startDaemon(
 	const origin = `http://127.0.0.1:${port}`;
 	await waitForReady(origin, child);
 	return { origin, workspace, child };
+}
+
+async function startDaemonInWorkspace(
+	workspace: string,
+	agentId: string | null = environmentValue("SIGNET_AGENT_ID"),
+): Promise<{ readonly origin: string; readonly child: NativeProcess }> {
+	const port = nextPort++;
+	const child = Bun.spawn([requireBinary()], {
+		cwd: root,
+		env: {
+			...process.env,
+			SIGNET_PATH: workspace,
+			SIGNET_BIND: "127.0.0.1",
+			SIGNET_PORT: String(port),
+			...(agentId === null ? { SIGNET_AGENT_ID: "" } : agentId === undefined ? {} : { SIGNET_AGENT_ID: agentId }),
+		},
+		stderr: "pipe",
+		stdout: "ignore",
+	}) as unknown as NativeProcess;
+	children.push(child);
+	const origin = `http://127.0.0.1:${port}`;
+	await waitForReady(origin, child);
+	return { origin, child };
 }
 
 afterEach(async () => {
@@ -220,6 +248,126 @@ describe("fresh Rust daemon", () => {
 			);
 		} finally {
 			Reflect.deleteProperty(process.env, "SIGNET_TOKEN");
+		}
+	});
+
+	it("issues and verifies HMAC tokens from the durable workspace secret", async () => {
+		process.env.SIGNET_API_KEY = "bootstrap-token-key";
+		try {
+			const { origin } = await startDaemon(null, false, true);
+			const response = await fetch(`${origin}/api/auth/token`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"x-signet-api-key": "bootstrap-token-key",
+				},
+				body: JSON.stringify({ role: "operator", scope: { agent: "token-agent" }, ttlSeconds: 60 }),
+			});
+			expect(response.status).toBe(200);
+			const token = (await response.json()) as { token: string; expiresAt: string };
+			expect(token.token.split(".")).toHaveLength(2);
+			expect(token.expiresAt).toContain("T");
+			expect(
+				(
+					await fetch(`${origin}/api/status`, {
+						headers: { Authorization: `Bearer ${token.token}` },
+					})
+				).status,
+			).toBe(200);
+		} finally {
+			Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+		}
+	});
+
+	it("persists, scopes, expires, and revokes API keys across native restart", async () => {
+		process.env.SIGNET_API_KEY = "bootstrap-api-key";
+		try {
+			const first = await startDaemon(null);
+			const bootstrap = {
+				"content-type": "application/json",
+				"x-signet-api-key": "bootstrap-api-key",
+				"x-signet-agent": "auth-agent-a",
+			};
+			const malformed = await fetch(`${first.origin}/api/auth/api-keys`, {
+				method: "POST",
+				headers: { ...bootstrap, "content-type": "application/json" },
+				body: "not-json",
+			});
+			expect(malformed.status).toBe(400);
+
+			const created = await fetch(`${first.origin}/api/auth/api-keys`, {
+				method: "POST",
+				headers: bootstrap,
+				body: JSON.stringify({ name: "durable-key", role: "agent", scope: {} }),
+			});
+			expect(created.status).toBe(201);
+			const createdBody = (await created.json()) as {
+				apiKey: { id: string; key: string };
+			};
+			expect(createdBody.apiKey.key).toStartWith("sig_sk_");
+
+			const listed = await fetch(`${first.origin}/api/auth/api-keys`, {
+				headers: bootstrap,
+			});
+			expect(listed.status).toBe(200);
+			expect((await listed.json()).apiKeys).toHaveLength(1);
+		const otherAgent = await fetch(`${first.origin}/api/auth/api-keys`, {
+				headers: { ...bootstrap, "x-signet-agent": "auth-agent-b" },
+		});
+		expect(otherAgent.status).toBe(200);
+		expect((await otherAgent.json()).apiKeys).toHaveLength(0);
+
+			const expired = await fetch(`${first.origin}/api/auth/api-keys`, {
+				method: "POST",
+				headers: bootstrap,
+				body: JSON.stringify({
+					name: "expired-key",
+					role: "readonly",
+					scope: {},
+					expires_at: "2000-01-01T00:00:00Z",
+				}),
+			});
+			expect(expired.status).toBe(201);
+		const expiredBody = (await expired.json()) as { apiKey: { key: string } };
+		expect(
+			(
+				await fetch(`${first.origin}/api/status`, {
+					headers: { "x-signet-api-key": expiredBody.apiKey.key },
+				})
+			).status,
+		).toBe(401);
+
+			first.child.kill("SIGTERM");
+			await first.child.exited;
+			children.splice(children.indexOf(first.child), 1);
+			const second = await startDaemonInWorkspace(first.workspace, null);
+			const afterRestart = await fetch(`${second.origin}/api/auth/api-keys`, {
+				headers: bootstrap,
+			});
+			expect(afterRestart.status).toBe(200);
+			expect((await afterRestart.json()).apiKeys).toHaveLength(2);
+			expect(
+				(
+					await fetch(`${second.origin}/api/status`, {
+						headers: { "x-signet-api-key": createdBody.apiKey.key },
+					})
+				).status,
+			).toBe(200);
+
+			const revoked = await fetch(`${second.origin}/api/auth/api-keys/${createdBody.apiKey.id}`, {
+				method: "DELETE",
+				headers: bootstrap,
+			});
+			expect(revoked.status).toBe(200);
+			expect(
+				(
+					await fetch(`${second.origin}/api/status`, {
+						headers: { "x-signet-api-key": createdBody.apiKey.key },
+					})
+				).status,
+			).toBe(401);
+		} finally {
+			Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
 		}
 	});
 

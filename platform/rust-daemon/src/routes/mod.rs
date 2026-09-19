@@ -4,11 +4,12 @@ pub(crate) mod inference;
 pub(crate) mod integrations;
 pub(crate) mod jobs;
 pub(crate) mod knowledge;
+pub(crate) mod knowledge_graph;
 pub(crate) mod mcp;
 pub(crate) mod ontology;
 pub(crate) mod pipeline;
-pub(crate) mod transcripts;
 pub(crate) mod sessions;
+pub(crate) mod transcripts;
 
 use crate::AppState;
 use axum::Router;
@@ -20,6 +21,7 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(inference::router())
         .merge(jobs::router())
         .merge(knowledge::router())
+        .merge(knowledge_graph::router())
         .merge(mcp::router())
         .merge(ontology::router())
         .merge(hooks::router())
