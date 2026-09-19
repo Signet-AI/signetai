@@ -63,6 +63,9 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 	expect(typeof created.id).toBe("string");
 	const sourceId = created.id;
 	expect((await json(await fetch(`${daemon.origin}/api/sources`, { headers: h }))).sources).toHaveLength(1);
+	expect(
+		(await json(await fetch(`${daemon.origin}/api/sources`, { headers: { "x-signet-agent": "agent-b" } }))).sources,
+	).toHaveLength(0);
 	const ingest = async (content: string, duplicateMode = "skip") =>
 		json(
 			await fetch(`${daemon.origin}/api/import/documents`, {
@@ -74,6 +77,12 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 	const first = await ingest("one");
 	expect(first.status).toBe("stored");
 	expect(first.contentHash).toBe("7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed");
+	const crossAgent = await fetch(`${daemon.origin}/api/import/documents`, {
+		method: "POST",
+		headers: { "x-signet-agent": "agent-b", "content-type": "application/json" },
+		body: JSON.stringify({ source_id: sourceId, path: "b.md", content: "hidden" }),
+	});
+	expect(crossAgent.status).toBe(404);
 	const skipped = await ingest("two");
 	expect(skipped.status).toBe("skipped");
 	expect(skipped.contentHash).toBe(first.contentHash);
@@ -88,7 +97,20 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 		body: JSON.stringify({ source_id: sourceId, path: "", content: "x" }),
 	});
 	expect(invalid.status).toBe(400);
-	expect((await fetch(`${daemon.origin}/api/sources/${sourceId}/health`, { headers: h })).status).toBe(200);
+	const invalidMode = await fetch(`${daemon.origin}/api/import/documents`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ source_id: sourceId, path: "bad.md", content: "x", duplicateMode: "unknown" }),
+	});
+	expect(invalidMode.status).toBe(400);
+	const healthResponse = await fetch(`${daemon.origin}/api/sources/${sourceId}/health`, { headers: h });
+	expect(healthResponse.status).toBe(200);
+	expect(await json(healthResponse)).toMatchObject({
+		status: "ready",
+		database: "ready",
+		source: "present",
+		externalProvider: "not_checked",
+	});
 	expect(
 		(await fetch(`${daemon.origin}/api/sources/${sourceId}/health`, { headers: { "x-signet-agent": "agent-b" } }))
 			.status,
@@ -116,7 +138,13 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 			})
 		).status,
 	).toBe(200);
-	expect((await ingest("late")).status).toBeUndefined();
+	const late = await fetch(`${daemon.origin}/api/import/documents`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ source_id: sourceId, path: "late.md", content: "late" }),
+	});
+	expect(late.status).toBe(404);
+	expect(await json(late)).toMatchObject({ code: "not_found" });
 	const health = await json(await fetch(`${daemon.origin}/health`));
 	expect(health).toMatchObject({ runtime: "rust", implementation: "fresh" });
 });

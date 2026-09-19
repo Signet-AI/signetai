@@ -1052,57 +1052,155 @@ fn execute_operation(
             let rows = statement.query_map(params![agent_id], source_row)?;
             Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
         }
-        Operation::IngestDocument { agent_id, source_id, path, content, metadata } => {
+        Operation::IngestDocument {
+            agent_id,
+            source_id,
+            path,
+            content,
+            metadata,
+        } => {
             let generation = metadata.get("_generation").and_then(Value::as_i64);
-            let duplicate_mode = metadata.get("_duplicateMode").and_then(Value::as_str).unwrap_or("skip").to_owned();
+            let duplicate_mode = metadata
+                .get("_duplicateMode")
+                .and_then(Value::as_str)
+                .unwrap_or("skip")
+                .to_owned();
             let agent_id = bounded_text(&agent_id, "agent id", 256)?;
             let source_id = bounded_text(&source_id, "source id", 256)?;
             let path = bounded_text(&path, "path", 4096)?;
-            if content.trim().is_empty() || content.len() > 16 * 1024 * 1024 { return Err(CoreError::InvalidInput("content must be 1-16777216 bytes".into())); }
-            let mode = if duplicate_mode.trim().is_empty() { "skip" } else { duplicate_mode.as_str() };
-            if !matches!(mode, "skip" | "replace" | "reimport") { return Err(CoreError::InvalidInput("duplicateMode must be skip, replace, or reimport".into())); }
-            let mut hash = Sha256::new(); hash.update(content.as_bytes()); let content_hash = format!("{:x}", hash.finalize());
+            if content.trim().is_empty() || content.len() > 16 * 1024 * 1024 {
+                return Err(CoreError::InvalidInput(
+                    "content must be 1-16777216 bytes".into(),
+                ));
+            }
+            let mode = if duplicate_mode.trim().is_empty() {
+                "skip"
+            } else {
+                duplicate_mode.as_str()
+            };
+            if !matches!(mode, "skip" | "replace" | "reimport") {
+                return Err(CoreError::InvalidInput(
+                    "duplicateMode must be skip, replace, or reimport".into(),
+                ));
+            }
+            let mut hash = Sha256::new();
+            hash.update(content.as_bytes());
+            let content_hash = format!("{:x}", hash.finalize());
             let metadata = bounded_json(&metadata)?;
             let tx = connection.transaction()?;
-            let source_generation: i64 = tx.query_row("SELECT generation FROM sources WHERE id=? AND agent_id=?", params![source_id, agent_id], |r| r.get(0)).optional()?.ok_or(CoreError::NotFound)?;
-            if generation.is_some_and(|g| g != source_generation) { return Err(CoreError::NotFound); }
+            let source_generation: i64 = tx
+                .query_row(
+                    "SELECT generation FROM sources WHERE id=? AND agent_id=?",
+                    params![source_id, agent_id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)?;
+            if generation.is_some_and(|g| g != source_generation) {
+                return Err(CoreError::NotFound);
+            }
             let existing: Option<(String,String)> = tx.query_row("SELECT id,content_hash FROM documents WHERE agent_id=? AND source_id=? AND path=?", params![agent_id,source_id,path], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
             if let Some((existing_id, existing_hash)) = existing {
-                if mode == "skip" { return Ok(json!({"id":existing_id,"status":"skipped","contentHash":existing_hash,"duplicateMode":"skip","generation":source_generation})); }
+                if mode == "skip" {
+                    return Ok(
+                        json!({"id":existing_id,"status":"skipped","contentHash":existing_hash,"duplicateMode":"skip","generation":source_generation}),
+                    );
+                }
                 if mode == "replace" {
                     tx.execute("UPDATE documents SET content=?,metadata=?,content_hash=?,updated_at=datetime('now') WHERE id=?", params![content,metadata,content_hash,existing_id])?;
                     tx.commit()?;
-                    return Ok(json!({"id":existing_id,"status":"replaced","contentHash":content_hash,"duplicateMode":"replace","generation":source_generation}));
+                    return Ok(
+                        json!({"id":existing_id,"status":"replaced","contentHash":content_hash,"duplicateMode":"replace","generation":source_generation}),
+                    );
                 }
             }
             let id = uuid::Uuid::new_v4().to_string();
             tx.execute("INSERT INTO documents (id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at) VALUES (?,?,?,?,?,?,?, ?,datetime('now'),datetime('now'))", params![id,agent_id,source_id,path,content,metadata,content_hash,source_generation])?;
-            tx.commit()?; Ok(json!({"id":id,"status":if mode=="reimport" {"reimported"} else {"stored"},"contentHash":content_hash,"duplicateMode":mode,"generation":source_generation}))
+            tx.commit()?;
+            Ok(
+                json!({"id":id,"status":if mode=="reimport" {"reimported"} else {"stored"},"contentHash":content_hash,"duplicateMode":mode,"generation":source_generation}),
+            )
         }
-        Operation::DeleteSource { agent_id, source_id } => {
+        Operation::DeleteSource {
+            agent_id,
+            source_id,
+        } => {
             let generation: Option<i64> = None;
             let tx = connection.transaction()?;
-            let current: Option<i64> = tx.query_row("SELECT generation FROM sources WHERE agent_id=? AND id=?", params![agent_id,source_id], |r| r.get(0)).optional()?;
-            let current = current.ok_or(CoreError::NotFound)?; if generation.is_some_and(|g| g != current) { return Err(CoreError::NotFound); }
-            let changed = tx.execute("DELETE FROM documents WHERE agent_id=? AND source_id=?", params![agent_id,source_id])?;
+            let current: Option<i64> = tx
+                .query_row(
+                    "SELECT generation FROM sources WHERE agent_id=? AND id=?",
+                    params![agent_id, source_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let current = current.ok_or(CoreError::NotFound)?;
+            if generation.is_some_and(|g| g != current) {
+                return Err(CoreError::NotFound);
+            }
+            let changed = tx.execute(
+                "DELETE FROM documents WHERE agent_id=? AND source_id=?",
+                params![agent_id, source_id],
+            )?;
             tx.execute("INSERT INTO source_tombstones(agent_id,source_id,generation,deleted_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(agent_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,source_id,current+1])?;
-            tx.execute("DELETE FROM sources WHERE agent_id=? AND id=?", params![agent_id,source_id])?; tx.commit()?;
+            tx.execute(
+                "DELETE FROM sources WHERE agent_id=? AND id=?",
+                params![agent_id, source_id],
+            )?;
+            tx.commit()?;
             Ok(json!({"deleted":true,"documentsDeleted":changed,"generation":current+1}))
         }
-        Operation::DeleteSourceWithGeneration { agent_id, source_id, generation } => {
+        Operation::DeleteSourceWithGeneration {
+            agent_id,
+            source_id,
+            generation,
+        } => {
             let tx = connection.transaction()?;
-            let current: Option<i64> = tx.query_row("SELECT generation FROM sources WHERE agent_id=? AND id=?", params![agent_id,source_id], |r| r.get(0)).optional()?;
-            let current = current.ok_or(CoreError::NotFound)?; if generation.is_some_and(|g| g != current) { return Err(CoreError::NotFound); }
-            let changed = tx.execute("DELETE FROM documents WHERE agent_id=? AND source_id=?", params![agent_id,source_id])?;
+            let current: Option<i64> = tx
+                .query_row(
+                    "SELECT generation FROM sources WHERE agent_id=? AND id=?",
+                    params![agent_id, source_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let current = current.ok_or(CoreError::NotFound)?;
+            if generation.is_some_and(|g| g != current) {
+                return Err(CoreError::NotFound);
+            }
+            let changed = tx.execute(
+                "DELETE FROM documents WHERE agent_id=? AND source_id=?",
+                params![agent_id, source_id],
+            )?;
             tx.execute("INSERT INTO source_tombstones(agent_id,source_id,generation,deleted_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(agent_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,source_id,current+1])?;
-            tx.execute("DELETE FROM sources WHERE agent_id=? AND id=?", params![agent_id,source_id])?; tx.commit()?;
+            tx.execute(
+                "DELETE FROM sources WHERE agent_id=? AND id=?",
+                params![agent_id, source_id],
+            )?;
+            tx.commit()?;
             Ok(json!({"deleted":true,"documentsDeleted":changed,"generation":current+1}))
         }
-        Operation::SourceHealth { agent_id, source_id } => {
-            let exists: Option<i64> = connection.query_row("SELECT 1 FROM sources WHERE agent_id = ? AND id = ?", params![agent_id, source_id], |r| r.get(0)).optional()?;
-            if exists.is_none() { return Err(CoreError::NotFound); }
-            let documents: i64 = connection.query_row("SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ?", params![agent_id, source_id], |r| r.get(0))?;
-            Ok(json!({"status":"ready", "database":"ready", "source":"present", "documents":documents, "externalProvider":"not_checked"}))
+        Operation::SourceHealth {
+            agent_id,
+            source_id,
+        } => {
+            let exists: Option<i64> = connection
+                .query_row(
+                    "SELECT 1 FROM sources WHERE agent_id = ? AND id = ?",
+                    params![agent_id, source_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            if exists.is_none() {
+                return Err(CoreError::NotFound);
+            }
+            let documents: i64 = connection.query_row(
+                "SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ?",
+                params![agent_id, source_id],
+                |r| r.get(0),
+            )?;
+            Ok(
+                json!({"status":"ready", "database":"ready", "source":"present", "documents":documents, "externalProvider":"not_checked"}),
+            )
         }
         Operation::OntologyList {
             agent_id,
@@ -1574,9 +1672,19 @@ pub enum Operation {
         content: String,
         metadata: Value,
     },
-    DeleteSource { agent_id: String, source_id: String },
-    DeleteSourceWithGeneration { agent_id: String, source_id: String, generation: Option<i64> },
-    SourceHealth { agent_id: String, source_id: String },
+    DeleteSource {
+        agent_id: String,
+        source_id: String,
+    },
+    DeleteSourceWithGeneration {
+        agent_id: String,
+        source_id: String,
+        generation: Option<i64>,
+    },
+    SourceHealth {
+        agent_id: String,
+        source_id: String,
+    },
     TranscriptImportCreate {
         agent_id: String,
         schema_id: String,
@@ -1961,11 +2069,29 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "metadata",
         "TEXT NOT NULL DEFAULT '{}'",
     )?;
-    ensure_column(&transaction, "sources", "generation", "INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(&transaction, "documents", "content_hash", "TEXT NOT NULL DEFAULT ''")?;
-    ensure_column(&transaction, "documents", "generation", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        &transaction,
+        "sources",
+        "generation",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &transaction,
+        "documents",
+        "content_hash",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &transaction,
+        "documents",
+        "generation",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(&transaction, "documents", "updated_at", "TEXT")?;
-    transaction.execute("CREATE INDEX IF NOT EXISTS documents_source_path ON documents(agent_id,source_id,path)", [])?;
+    transaction.execute(
+        "CREATE INDEX IF NOT EXISTS documents_source_path ON documents(agent_id,source_id,path)",
+        [],
+    )?;
     ensure_column(&transaction, "sources", "created_at", "TEXT")?;
     ensure_column(
         &transaction,
