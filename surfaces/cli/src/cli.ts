@@ -85,13 +85,6 @@ import { flushCliTelemetry, recordCommandInvoked } from "./features/telemetry.js
 import { signetBanner } from "./lib/banner.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { createOfflineSecretApiCall, createSecretCommandApiCall } from "./lib/secrets.js";
-import {
-	checkForUpdates,
-	getUpdateState,
-	initUpdateSystem,
-	runUpdate,
-	setUpdateConfigOffline,
-} from "../../../platform/daemon/src/update-system.js";
 import { gitAddAndCommit, gitInit, isGitRepo } from "./lib/git.js";
 import {
 	acquireNativeSyncLock,
@@ -1067,36 +1060,17 @@ registerHookCommands(program, {
 
 const MIN_AUTO_UPDATE_INTERVAL = 300;
 const MAX_AUTO_UPDATE_INTERVAL = 604800;
-initUpdateSystem(VERSION, AGENTS_DIR);
+// Update operations are owned by the native daemon. The CLI remains a thin
+// HTTP client and must never import or execute the displaced TypeScript core.
 const offlineUpdate = {
 	request: async <T>(path: string, opts?: RequestInit): Promise<T | null> => {
-		if (path.startsWith("/api/update/check")) return (await checkForUpdates()) as T;
-		if (path === "/api/update/run" && opts?.method === "POST") {
-			const body = JSON.parse(String(opts.body ?? "{}")) as { targetVersion?: string };
-			return (await runUpdate(body.targetVersion)) as T;
+		try {
+			const response = await fetch(`http://${LOOPBACK_HOST}:${DEFAULT_PORT}${path}`, opts);
+			if (!response.ok) return null;
+			return (await response.json()) as T;
+		} catch {
+			return null;
 		}
-		if (path === "/api/update/config") {
-			if (opts?.method === "POST") {
-				const body = JSON.parse(String(opts.body ?? "{}")) as {
-					autoInstall?: boolean;
-					checkInterval?: number;
-					channel?: "stable" | "nightly";
-				};
-				const result = setUpdateConfigOffline(body);
-				return { success: true, ...result } as T;
-			}
-			const state = getUpdateState();
-			return {
-				autoInstall: state.config.autoInstall,
-				checkInterval: state.config.checkInterval,
-				channel: state.config.channel,
-				updateInProgress: state.checkInProgress || state.installInProgress,
-				pendingRestartVersion: state.pendingRestartVersion ?? undefined,
-				lastAutoUpdateAt: state.lastAutoUpdateAt?.toISOString(),
-				lastAutoUpdateError: state.lastAutoUpdateError ?? undefined,
-			} as T;
-		}
-		return null;
 	},
 };
 

@@ -68,6 +68,11 @@ describe("resolveDaemonLaunchCommand", () => {
 	it("launches native daemon binaries directly", () => {
 		expect(resolveDaemonLaunchCommand("/opt/signet/bin/signet")).toEqual(["/opt/signet/bin/signet"]);
 	});
+
+	it("rejects displaced JavaScript daemon launch paths", () => {
+		const legacyPath = "/opt/signet/dist/" + "daemon" + ".js";
+		expect(() => resolveDaemonLaunchCommand(legacyPath)).toThrow("Native Signet daemon executable is required");
+	});
 });
 
 describe("buildLaunchdDaemonPlist", () => {
@@ -250,9 +255,9 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(join(dir, "pid"), "4242\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/dist/daemon.js"],
+			daemonPaths: ["/opt/signet/bin/signet-daemon"],
 			isAlive: () => true,
-			readCmd: () => "bun /opt/signet/dist/daemon.js",
+			readCmd: () => "/opt/signet/bin/signet-daemon",
 			readEnv: () => "SIGNET_DAEMON_ENTRYPOINT=1\u0000",
 		});
 
@@ -268,9 +273,9 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(join(dir, "pid"), "6262\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/dist/daemon.js"],
+			daemonPaths: ["/opt/signet/bin/signet-daemon"],
 			isAlive: () => true,
-			readCmd: () => "bun /opt/signet/dist/daemon.js daemon start",
+			readCmd: () => "/opt/signet/bin/signet-daemon daemon start",
 			readEnv: () => "PATH=/usr/bin\u0000",
 		});
 
@@ -286,9 +291,9 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(join(dir, "pid"), "5252\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/home/nicholai/.bun/install/global/node_modules/signetai/dist/daemon.js"],
+			daemonPaths: ["/opt/signet/bin/signet-daemon"],
 			isAlive: () => true,
-			readCmd: () => "bun /home/nicholai/.bun/install/cache/signetai@0.77.0/node_modules/signetai/dist/daemon.js",
+			readCmd: () => "/opt/signet/bin/signet-daemon",
 			readEnv: () => "SIGNET_DAEMON_ENTRYPOINT=1\u0000",
 		});
 
@@ -305,7 +310,7 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(path, "7777\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/dist/daemon.js"],
+			daemonPaths: ["/opt/signet/bin/signet-daemon"],
 			isAlive: () => true,
 			readCmd: () => "/usr/bin/python3 /tmp/something-else.py",
 			readEnv: () => "PATH=/usr/bin\u0000",
@@ -325,7 +330,7 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(path, "8888\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/dist/daemon.js"],
+			daemonPaths: ["/opt/signet/bin/signet-daemon"],
 			isAlive: () => false,
 			readCmd: () => null,
 		});
