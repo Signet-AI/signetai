@@ -118,7 +118,7 @@ grouped form is the preferred surface.
 
 ```bash
 signet daemon start
-signet daemon start --runtime bun-js
+signet daemon start --runtime compiled
 signet daemon start --runtime compiled
 signet daemon stop
 signet daemon restart
@@ -135,7 +135,7 @@ signet logs
 ### `signet daemon start`
 
 Start the Signet daemon if not already running. The compiled runtime is the
-default. Use `--runtime bun-js` to launch the production Bun JavaScript bundle
+default. Use `--runtime compiled` to launch the production native compiled daemon
 for profiling; changing the requested runtime stops a running daemon before
 starting the selected mode. `SIGNET_DAEMON_RUNTIME` provides the same selection
 for service-manager launches.
@@ -159,11 +159,11 @@ Top-level alias: `signet stop`
 ### `signet daemon restart`
 
 Stop and start the daemon. Useful after installing an update or changing
-`--runtime` between `compiled` and `bun-js`.
+`--runtime` between `compiled` and `compiled`.
 
 Top-level alias: `signet restart`
 
-Use `--daemon-js-path <path>` with `bun-js` to select a local build. Available on
+Use `--daemon-path <path>` with `compiled` to select a local build. Available on
 start/restart and their aliases; see [Profile the daemon](/cli/profiling/) for
 build instructions and an example.
 

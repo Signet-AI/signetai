@@ -275,7 +275,7 @@ jobs:
         run: bun run build:dashboard
 
       - name: Build native Signet binary
-        run: bun run build:native-bun
+        run: bun run build:native-cli
 
       - name: Smoke native binary
         shell: bash

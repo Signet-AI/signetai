@@ -94,7 +94,7 @@ describe("Docker build pipeline regression guard", () => {
 	it("runs the Docker daemon entrypoint through the native Signet binary", () => {
 		const entrypoint = readFileSync(join(rootDir, "deploy/docker/entrypoint.sh"), "utf8");
 
-		expect(dockerfile).toContain("RUN bun run build:native-bun");
+		expect(dockerfile).toContain("RUN bun run build:native-cli");
 		expect(dockerfile).toContain("COPY --from=build /app/dist/native/signet ./bin/signet");
 		expect(dockerfile).toContain("ENV SIGNET_DAEMON_ENTRYPOINT=1");
 		expect(dockerfile).toContain("COPY --from=build /app/dist/signetai/templates ./dist/signetai/templates");
@@ -118,7 +118,7 @@ describe("Docker build pipeline regression guard", () => {
 			"build:deps",
 			"build:dashboard",
 			"build:signetai",
-			"build:native-bun",
+			"build:native-cli",
 		]);
 	});
 

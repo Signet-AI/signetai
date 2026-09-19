@@ -139,7 +139,7 @@ describe("compiled native first use", () => {
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 			smokeHome = mkdtempSync(join(tmpdir(), "signet-native-first-use-"));
 			const workspace = join(smokeHome, ".agents");

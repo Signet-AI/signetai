@@ -161,11 +161,10 @@ fi
 
 chmod +x "$binary_path"
 
-# Companion runtime assets. Newer releases ship connector and Bun JavaScript
-# daemon tarballs in the release manifest; older ones have no entries and
-# silently skip them. The tarballs are passed to `signet install` so the
-# native command can extract them to the install location and point
-# `SIGNET_DIR` at them.
+# Companion connector assets. Newer releases may ship a connector tarball in
+# the release manifest; older ones have no entry and silently skip it. The
+# tarball is passed to `signet install` so the native command can extract it
+# to the install location and point `SIGNET_DIR` at it.
 manifest_component_value() {
 	component="$1"
 	field="$2"
@@ -203,9 +202,8 @@ if [ -n "$connector_url" ] && [ -n "$connector_sha" ]; then
 	fi
 fi
 
-# `signet install` accepts connector and Bun daemon asset flags so it can
-# verify and extract the tarballs next to the binary at its final install
-# location.
+# `signet install` accepts the connector asset flag so it can verify and
+# extract the tarball next to the binary at its final install location.
 if [ -n "$connector_path" ]; then
 	"$binary_path" install --force --connector-assets "$connector_path" "$@"
 else

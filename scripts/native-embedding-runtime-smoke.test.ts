@@ -277,7 +277,7 @@ describe("compiled native embedding runtime", () => {
 		() => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 			const result = spawnSync(binary, [], {
 				env: {
@@ -308,7 +308,7 @@ describe("compiled native embedding runtime", () => {
 		() => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 			const result = spawnSync(binary, [], {
 				env: {
@@ -331,7 +331,7 @@ describe("compiled native embedding runtime", () => {
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 			const directory = tempDir();
 			const dbPath = join(directory, "memory.db");
@@ -393,7 +393,7 @@ describe("compiled native embedding runtime", () => {
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 			const directory = tempDir();
 			const dbPath = join(directory, "memory.db");
@@ -433,7 +433,7 @@ describe("compiled native embedding runtime", () => {
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 
 			const home = tempDir();
@@ -512,7 +512,7 @@ describe("compiled native embedding runtime", () => {
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 			const workspace = tempDir();
 			initializeWorkspace(binary, workspace);
@@ -588,7 +588,7 @@ describe("compiled native embedding runtime", () => {
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 			const workspace = tempDir();
 			initializeWorkspace(binary, workspace);
@@ -646,7 +646,7 @@ describe("compiled native OAuth sign-in", () => {
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
 			}
 			const home = tempDir();
 			const workspace = join(home, ".agents");

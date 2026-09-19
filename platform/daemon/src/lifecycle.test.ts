@@ -40,9 +40,9 @@ describe("daemon lifecycle record (#1148)", () => {
 				pid: 4242,
 				version: "0.222.0",
 				startedAt: "2026-09-09T00:00:00.000Z",
-				runtime: "bun-js",
+				runtime: "compiled",
 			});
-			expect(readDaemonLifecycle(root)?.runtime).toBe("bun-js");
+			expect(readDaemonLifecycle(root)?.runtime).toBe("compiled");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

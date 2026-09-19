@@ -53,16 +53,16 @@ An exposed interface is not an authentication setting. Use `auth.mode: team` for
 
 ## Daemon runtime selection
 
-The compiled daemon is the default. Select the production Bun JavaScript bundle
+The compiled daemon is the default. Select the production native compiled daemon
 for profiling with the CLI or environment:
 
 ```bash
-signet daemon restart --runtime bun-js
+signet daemon restart --runtime compiled
 SIGNET_DAEMON_RUNTIME=compiled signet daemon restart
 ```
 
-The only supported runtime values are `compiled` and `bun-js`. An invalid value
-fails before the daemon acquires its workspace lock. `bun-js` requires the
+The only supported runtime values are `compiled` and `compiled`. An invalid value
+fails before the daemon acquires its workspace lock. `compiled` requires the
 staged production bundle, all worker bundles, dashboard and skills assets, and
 its external runtime dependencies; it never falls back to TypeScript source or
 the compiled executable. The selected runtime is returned by `/health`,

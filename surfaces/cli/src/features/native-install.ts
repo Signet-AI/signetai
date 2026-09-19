@@ -215,7 +215,7 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 	const source = process.execPath;
 	if (isRuntimeExecutable(source)) {
 		throw new Error(
-			"`signet install` must be run from the compiled Signet binary. Build it with `bun run build:native-bun` or use a release binary.",
+			"`signet install` must be run from the compiled Signet binary. Build it with `bun run build:native-cli` or use a release binary.",
 		);
 	}
 

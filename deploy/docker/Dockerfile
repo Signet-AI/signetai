@@ -49,7 +49,7 @@ RUN bun run build:connector-pi
 RUN bun run build:deps
 RUN bun run build:dashboard
 RUN bun run build:signetai
-RUN bun run build:native-bun
+RUN bun run build:native-cli
 
 FROM oven/bun:1.4.0 AS runtime
 WORKDIR /app

@@ -30,7 +30,7 @@ describe("check-publish-manifests", () => {
 	test("does not ship the retired threaded extraction worker", () => {
 		const root = join(import.meta.dir, "..");
 		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
-		const nativeBuild = readFileSync(join(root, "scripts", "build-native-bun.ts"), "utf-8");
+		const nativeBuild = readFileSync(join(root, "scripts", "build-native-cli.ts"), "utf-8");
 
 		expect(daemonBuild).not.toContain('entrypoint: "./src/pipeline/extraction-thread.ts"');
 		expect(daemonBuild).not.toContain('outfile: "./dist/extraction-thread.js"');
@@ -51,7 +51,7 @@ describe("check-publish-manifests", () => {
 		}
 
 		expect(missingSources).toEqual([]);
-		expect(dockerfile).toContain("RUN bun run build:native-bun");
+		expect(dockerfile).toContain("RUN bun run build:native-cli");
 		expect(dockerfile).toContain('pkg="sqlite-vec-${TARGETOS}-${arch}"');
 		expect(dockerfile).toContain("ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so");
 		expect(dockerfile).toContain("COPY --from=build /app/dist/native/signet ./bin/signet");
@@ -94,12 +94,12 @@ describe("check-publish-manifests", () => {
 	test("builds native Signet binaries in the release matrix", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
-		const buildScript = readFileSync(join(root, "scripts", "build-native-bun.ts"), "utf-8");
+		const buildScript = readFileSync(join(root, "scripts", "build-native-cli.ts"), "utf-8");
 		const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")) as {
 			scripts?: Record<string, string>;
 		};
 
-		expect(rootPackage.scripts?.["build:native-bun"]).toBe("bun scripts/build-native-bun.ts");
+		expect(rootPackage.scripts?.["build:native-cli"]).toBe("bun scripts/build-native-cli.ts");
 		expect(buildScript).toContain("bun");
 		expect(buildScript).toContain("build");
 		expect(buildScript).toContain("--compile");
@@ -132,9 +132,9 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("platform: win32-x64");
 		expect(workflow).toContain("asset: signet-win32-x64.exe");
 		expect(workflow.indexOf("run: bun run build:dashboard")).toBeLessThan(
-			workflow.indexOf("run: bun run build:native-bun"),
+			workflow.indexOf("run: bun run build:native-cli"),
 		);
-		expect(workflow).toContain("bun run build:native-bun");
+		expect(workflow).toContain("bun run build:native-cli");
 		expect(workflow).toContain('./dist/native/"$RELEASE_ASSET" --help');
 		expect(workflow).not.toContain("if: matrix.platform != 'linux-arm64'");
 	});
