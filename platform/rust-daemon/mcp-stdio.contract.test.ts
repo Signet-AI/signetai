@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 
 const root = resolve(import.meta.dir, "../..");
 const daemon = process.env.SIGNET_RUST_DAEMON_BIN ?? join(import.meta.dir, "target/debug/signet-daemon");
@@ -35,17 +36,14 @@ beforeAll(async () => {
 	if (!existsSync(daemon) || !existsSync(mcp) || !existsSync(launcher)) {
 		throw new Error(`stdio contract requires native binaries and published launcher: ${daemon}, ${mcp}, ${launcher}`);
 	}
-	workspace = await mkdtemp("/tmp/signet-mcp-stdio-");
-	const probe = Bun.spawn(
-		[
-			"sh",
-			"-c",
-			"python3 - <<'PY'\nimport socket\ns=socket.socket(); s.bind(('127.0.0.1',0)); print(s.getsockname()[1]); s.close()\nPY",
-		],
-		{ stdout: "pipe" },
-	);
-	port = Number((await new Response(probe.stdout).text()).trim());
-	await probe.exited;
+	workspace = await mkdtemp(join(tmpdir(), "signet-mcp-stdio-"));
+	const probe = Bun.serve({
+		hostname: "127.0.0.1",
+		port: 0,
+		fetch: () => new Response("probe"),
+	});
+	port = probe.port;
+	probe.stop();
 	daemonProc = Bun.spawn([daemon], {
 		env: {
 			...process.env,
