@@ -2364,7 +2364,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS kg_attributes (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, aspect_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT NOT NULL, claim_key TEXT, group_key TEXT, confidence REAL NOT NULL DEFAULT 0, importance REAL NOT NULL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'active', superseded_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS kg_entities_scope ON kg_entities(agent_id, name);
          CREATE INDEX IF NOT EXISTS kg_relations_scope ON kg_relations(agent_id, from_id, to_id);
-         CREATE INDEX IF NOT EXISTS ontology_scope_idx ON ontology_records(agent_id, workspace_id, kind, deleted);
+
          CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', result TEXT, error TEXT, deadline_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS jobs_agent_state ON jobs(agent_id, state, created_at);
          CREATE TABLE IF NOT EXISTS job_cancellations (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL, provenance TEXT NOT NULL, created_at TEXT NOT NULL);
@@ -2374,12 +2374,11 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS event_records (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, session_key TEXT, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS transcript_import_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, schema_id TEXT NOT NULL, duplicate_mode TEXT NOT NULL, state TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS session_transcripts (session_key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, project TEXT, content TEXT NOT NULL, content_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, PRIMARY KEY(agent_id, session_key));
-         CREATE UNIQUE INDEX IF NOT EXISTS session_transcripts_idempotency ON session_transcripts(agent_id, idempotency_key);
          CREATE INDEX IF NOT EXISTS event_records_scope ON event_records(agent_id, session_key, id);
          CREATE TABLE IF NOT EXISTS hook_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id TEXT NOT NULL, agent_id TEXT NOT NULL, session_key TEXT, hook TEXT NOT NULL, checkpoint TEXT, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, UNIQUE(agent_id, receipt_id));
          CREATE INDEX IF NOT EXISTS hook_receipts_scope ON hook_receipts(agent_id, session_key, id);
          CREATE TABLE IF NOT EXISTS cross_agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, sender_agent_id TEXT NOT NULL, recipient_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
-         CREATE INDEX IF NOT EXISTS cross_agent_messages_scope ON cross_agent_messages(workspace_id, recipient_agent_id, id);
+
          CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'agent', scope_json TEXT NOT NULL DEFAULT '{}', permissions_json TEXT NOT NULL DEFAULT '[]', connector TEXT, harness TEXT, agent_id TEXT, allowed_projects_json TEXT, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT);
          CREATE INDEX IF NOT EXISTS api_keys_scope ON api_keys(agent_id, revoked_at, expires_at);
          SELECT 1;",
@@ -2415,6 +2414,61 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "deleted",
         "INTEGER NOT NULL DEFAULT 0",
     )?;
+    ensure_column(
+        &transaction,
+        "ontology_records",
+        "workspace_id",
+        "TEXT DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "kg_aspects",
+        "workspace_id",
+        "TEXT DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "kg_attributes",
+        "workspace_id",
+        "TEXT DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "cross_agent_messages",
+        "workspace_id",
+        "TEXT DEFAULT 'default'",
+    )?;
+    transaction.execute("UPDATE ontology_records SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    transaction.execute("UPDATE kg_aspects SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    transaction.execute("UPDATE kg_attributes SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    transaction.execute("UPDATE cross_agent_messages SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    transaction.execute("CREATE INDEX IF NOT EXISTS ontology_scope_idx ON ontology_records(agent_id, workspace_id, kind, deleted)", [])?;
+    transaction.execute("CREATE INDEX IF NOT EXISTS cross_agent_messages_scope ON cross_agent_messages(workspace_id, recipient_agent_id, id)", [])?;
+    ensure_column(
+        &transaction,
+        "session_transcripts",
+        "idempotency_key",
+        "TEXT",
+    )?;
+    transaction.execute(
+        "UPDATE session_transcripts
+         SET idempotency_key = CASE
+           WHEN idempotency_key IS NOT NULL AND trim(idempotency_key) <> ''
+                AND NOT EXISTS (SELECT 1 FROM session_transcripts prior
+                                WHERE prior.agent_id=session_transcripts.agent_id
+                                  AND prior.idempotency_key=session_transcripts.idempotency_key
+                                  AND prior.rowid < session_transcripts.rowid)
+             THEN trim(idempotency_key)
+           ELSE printf('legacy:%lld', rowid)
+         END
+         WHERE idempotency_key IS NULL OR trim(idempotency_key) = ''
+            OR EXISTS (SELECT 1 FROM session_transcripts prior
+                       WHERE prior.agent_id=session_transcripts.agent_id
+                         AND prior.idempotency_key=session_transcripts.idempotency_key
+                         AND prior.rowid < session_transcripts.rowid)",
+        [],
+    )?;
+    transaction.execute("CREATE UNIQUE INDEX IF NOT EXISTS session_transcripts_idempotency ON session_transcripts(agent_id, idempotency_key)", [])?;
     transaction.execute("CREATE TABLE IF NOT EXISTS kg_aspects (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, entity_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT NOT NULL, weight REAL NOT NULL DEFAULT 0.5, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,entity_id,canonical_name))", [])?;
     transaction.execute("CREATE TABLE IF NOT EXISTS kg_attributes (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, aspect_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT NOT NULL, claim_key TEXT, group_key TEXT, confidence REAL NOT NULL DEFAULT 0, importance REAL NOT NULL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'active', superseded_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)", [])?;
     transaction.execute("CREATE INDEX IF NOT EXISTS kg_aspects_scope ON kg_aspects(agent_id,workspace_id,entity_id)", [])?;

@@ -77,6 +77,45 @@ fn opens_a_current_style_workspace_without_destroying_existing_rows() {
 }
 
 #[test]
+fn migrates_legacy_transcripts_before_idempotency_index() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-transcripts.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection.execute_batch(
+        "CREATE TABLE session_transcripts (session_key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, project TEXT, content TEXT NOT NULL, content_hash TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT);
+         INSERT INTO session_transcripts(session_key,agent_id,harness,project,content,content_hash,created_at,updated_at) VALUES ('one','a','test',NULL,'one','h1','2026-01-01','2026-01-01'),('two','a','test',NULL,'two','h2','2026-01-02','2026-01-02');
+         CREATE TABLE ontology_records (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         INSERT INTO ontology_records VALUES ('o1','a','kind','{}',0,'2026-01-01','2026-01-01');",
+    ).unwrap();
+    drop(connection);
+    let owner = Core::open(&p, 4).unwrap();
+    let connection = Connection::open(&p).unwrap();
+    let keys: Vec<String> = {
+        let mut query = connection
+            .prepare("SELECT idempotency_key FROM session_transcripts ORDER BY rowid")
+            .unwrap();
+        query
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(keys, vec!["legacy:1", "legacy:2"]);
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT workspace_id FROM ontology_records WHERE id='o1'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "default"
+    );
+    owner.initialize().unwrap();
+    owner.initialize().unwrap();
+}
+
+#[test]
 fn workspace_submit_operations_run_on_owner_without_requeue_deadlock() {
     let d = tempdir().unwrap();
     let owner = WorkspaceOwner::open(&d.path().join("owner.sqlite"), 2).unwrap();
