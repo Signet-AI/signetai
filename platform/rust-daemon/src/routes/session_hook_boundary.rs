@@ -1,6 +1,12 @@
-//! Fresh session/hook/event boundary. Register with `routes::router()` as documented in README.
+//! Fresh session/hook/event boundary.
 use crate::{agent, execute, ApiError, AppState};
-use axum::{extract::{Query, State}, http::HeaderMap, response::sse::{Event, Sse}, routing::{get, post}, Json, Router};
+use axum::{
+    extract::{DefaultBodyLimit, Query, State},
+    http::HeaderMap,
+    response::sse::{Event, KeepAlive, Sse},
+    routing::{get, post},
+    Json, Router,
+};
 use futures_util::stream::{self, Stream};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -8,17 +14,288 @@ use signet_core_native::Operation;
 use std::{convert::Infallible, time::Duration};
 
 const MAX_BODY_BYTES: usize = 256 * 1024;
-#[derive(Deserialize)] pub struct SessionReq { #[serde(alias="sessionKey", alias="session_id")] pub session_key: String, pub harness: Option<String>, pub runtime_path: Option<String>, pub project: Option<String> }
-#[derive(Deserialize)] pub struct EndReq { #[serde(alias="sessionKey", alias="session_id")] pub session_key: String }
-#[derive(Deserialize)] pub struct ReceiptReq { pub receipt_id: String, pub checkpoint: Option<String>, pub hook: String, pub session_key: Option<String>, #[serde(default)] pub payload: Value }
-#[derive(Deserialize)] pub struct MessageReq { pub workspace_id: String, pub recipient_agent_id: String, pub kind: String, #[serde(default)] pub payload: Value }
-#[derive(Deserialize)] pub struct Poll { pub after_id: Option<i64>, pub limit: Option<usize>, pub workspace_id: Option<String>, pub session_key: Option<String> }
-fn bounded(s: &str, max: usize, name: &str) -> Result<String, ApiError> { let v=s.trim(); if v.is_empty() || v.len()>max { return Err(ApiError::bad_request(format!("{name} is empty or too large"))); } Ok(v.to_owned()) }
-fn limit(v: Option<usize>) -> usize { v.unwrap_or(100).clamp(1, 500) }
-pub async fn start(State(s): State<AppState>, h: HeaderMap, Json(b): Json<SessionReq>) -> Result<Json<Value>,ApiError> { let a=agent(&h,None,None)?; let k=bounded(&b.session_key,512,"session_key")?; let harness=bounded(b.harness.as_deref().unwrap_or("unknown"),128,"harness")?; Ok(Json(execute(&s,Operation::SessionStart{agent_id:a,key:k,harness,runtime_path:b.runtime_path,project:b.project}).await?)) }
-pub async fn end(State(s): State<AppState>, h: HeaderMap, Json(b): Json<EndReq>) -> Result<Json<Value>,ApiError> { let a=agent(&h,None,None)?; let k=bounded(&b.session_key,512,"session_key")?; Ok(Json(execute(&s,Operation::SessionEnd{agent_id:a,key:k}).await?)) }
-pub async fn receipt(State(s): State<AppState>, h: HeaderMap, Json(b): Json<ReceiptReq>) -> Result<Json<Value>,ApiError> { let a=agent(&h,None,None)?; if serde_json::to_vec(&b.payload).map_err(|_|ApiError::bad_request("invalid payload"))?.len()>MAX_BODY_BYTES { return Err(ApiError::bad_request("payload too large")); } Ok(Json(execute(&s,Operation::HookReceipt{agent_id:a,receipt_id:bounded(&b.receipt_id,128,"receipt_id")?,checkpoint:b.checkpoint,hook:bounded(&b.hook,128,"hook")?,session_key:b.session_key,payload:b.payload}).await?)) }
-pub async fn messages(State(s): State<AppState>, h: HeaderMap, Json(b): Json<MessageReq>) -> Result<Json<Value>,ApiError> { let a=agent(&h,None,None)?; Ok(Json(execute(&s,Operation::CrossAgentSend{agent_id:a,workspace_id:bounded(&b.workspace_id,256,"workspace_id")?,recipient_agent_id:bounded(&b.recipient_agent_id,256,"recipient_agent_id")?,kind:bounded(&b.kind,128,"kind")?,payload:b.payload}).await?)) }
-pub async fn poll(State(s): State<AppState>, h: HeaderMap, Query(q): Query<Poll>) -> Result<Json<Value>,ApiError> { let a=agent(&h,None,None)?; let r=if let Some(w)=q.workspace_id { execute(&s,Operation::CrossAgentList{agent_id:a,workspace_id:bounded(&w,256,"workspace_id")?,after_id:q.after_id.unwrap_or(0),limit:limit(q.limit)}).await? } else { execute(&s,Operation::HookReceipts{agent_id:a,session_key:q.session_key,after_id:q.after_id.unwrap_or(0),limit:limit(q.limit)}).await? }; Ok(Json(json!({"mode":"snapshot","nextAfterId":r.get("messages").or_else(||r.get("receipts")).and_then(|v|v.as_array()).and_then(|a|a.last()).and_then(|v|v.get("id")).and_then(|v|v.as_i64()).unwrap_or(q.after_id.unwrap_or(0)),"data":r}))) }
-pub async fn live(State(s): State<AppState>, h: HeaderMap, Query(q): Query<Poll>) -> Result<Sse<impl Stream<Item=Result<Event,Infallible>>>,ApiError> { let snapshot=poll(State(s),h,q).await?.0; let event=Event::default().event("snapshot").json_data(snapshot).map_err(|_|ApiError::internal("sse encoding failed"))?; Ok(Sse::new(stream::once(async move { Ok(event) })).keep_alive(axum::response::sse::KeepAlive::new().interval(Duration::from_secs(15)))) }
-pub fn router() -> Router<AppState> { Router::new().route("/api/boundary/sessions/start",post(start)).route("/api/boundary/sessions/end",post(end)).route("/api/boundary/hooks/receipt",post(receipt)).route("/api/boundary/messages",post(messages)).route("/api/boundary/poll",get(poll)).route("/api/boundary/events",get(live)) }
+const MAX_PAYLOAD_BYTES: usize = 128 * 1024;
+const MAX_ID_BYTES: usize = 256;
+const MAX_HOOK_BYTES: usize = 128;
+const MAX_LIMIT: usize = 100;
+
+#[derive(Deserialize)]
+pub struct SessionReq {
+    #[serde(alias = "sessionKey", alias = "session_id")]
+    pub session_key: String,
+    pub harness: Option<String>,
+    pub runtime_path: Option<String>,
+    pub project: Option<String>,
+}
+#[derive(Deserialize)]
+pub struct EndReq {
+    #[serde(alias = "sessionKey", alias = "session_id")]
+    pub session_key: String,
+}
+#[derive(Deserialize)]
+pub struct ReceiptReq {
+    pub receipt_id: String,
+    pub checkpoint: Option<String>,
+    pub hook: String,
+    pub session_key: Option<String>,
+    #[serde(default)]
+    pub payload: Value,
+}
+#[derive(Deserialize)]
+pub struct MessageReq {
+    pub workspace_id: String,
+    pub recipient_agent_id: String,
+    pub kind: String,
+    #[serde(default)]
+    pub payload: Value,
+}
+#[derive(Deserialize)]
+pub struct Poll {
+    pub after_id: Option<i64>,
+    pub limit: Option<usize>,
+    pub workspace_id: Option<String>,
+    pub session_key: Option<String>,
+}
+
+fn bounded(value: &str, max: usize, name: &str) -> Result<String, ApiError> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > max {
+        return Err(ApiError::bad_request(format!(
+            "{name} must be 1-{max} bytes"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+fn bounded_optional(
+    value: Option<String>,
+    max: usize,
+    name: &str,
+) -> Result<Option<String>, ApiError> {
+    value.map(|value| bounded(&value, max, name)).transpose()
+}
+
+fn bounded_payload(payload: &Value) -> Result<(), ApiError> {
+    let size = serde_json::to_vec(payload)
+        .map_err(|_| ApiError::bad_request("payload must be valid JSON"))?
+        .len();
+    if size > MAX_PAYLOAD_BYTES {
+        return Err(ApiError::bad_request("payload too large"));
+    }
+    Ok(())
+}
+
+fn limit(value: Option<usize>) -> Result<usize, ApiError> {
+    match value.unwrap_or(100) {
+        1..=MAX_LIMIT => Ok(value.unwrap_or(100)),
+        _ => Err(ApiError::bad_request(
+            "limit must be an integer from 1 to 100",
+        )),
+    }
+}
+
+fn after_id(value: Option<i64>) -> Result<i64, ApiError> {
+    match value.unwrap_or(0) {
+        value if value >= 0 => Ok(value),
+        _ => Err(ApiError::bad_request("after_id must be non-negative")),
+    }
+}
+
+fn workspace_header(headers: &HeaderMap, workspace: &str) -> Result<(), ApiError> {
+    if let Some(value) = headers.get("x-workspace-id") {
+        let supplied = value
+            .to_str()
+            .map_err(|_| ApiError::bad_request("invalid workspace identity"))?;
+        if supplied.trim() != workspace {
+            return Err(ApiError::not_found("workspace is outside the caller scope"));
+        }
+    }
+    Ok(())
+}
+
+pub async fn start(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SessionReq>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    let key = bounded(&body.session_key, 512, "session_key")?;
+    let harness = bounded(body.harness.as_deref().unwrap_or("unknown"), 128, "harness")?;
+    let runtime_path = bounded_optional(body.runtime_path, MAX_ID_BYTES, "runtime_path")?;
+    let project = bounded_optional(body.project, MAX_ID_BYTES, "project")?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::SessionStart {
+                agent_id,
+                key,
+                harness,
+                runtime_path,
+                project,
+            },
+        )
+        .await?,
+    ))
+}
+
+pub async fn end(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<EndReq>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    let key = bounded(&body.session_key, 512, "session_key")?;
+    // Make end idempotent at the HTTP boundary; the core operation remains strict.
+    let sessions = execute(
+        &state,
+        Operation::SessionList {
+            agent_id: agent_id.clone(),
+            limit: MAX_LIMIT,
+        },
+    )
+    .await?;
+    if let Some(session) = sessions["sessions"]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["key"] == key))
+    {
+        if session["status"] == "ended" {
+            return Ok(Json(
+                json!({"key": key, "status": "ended", "idempotent": true}),
+            ));
+        }
+    }
+    Ok(Json(
+        execute(&state, Operation::SessionEnd { agent_id, key }).await?,
+    ))
+}
+
+pub async fn receipt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ReceiptReq>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    bounded_payload(&body.payload)?;
+    let receipt_id = bounded(&body.receipt_id, MAX_ID_BYTES, "receipt_id")?;
+    let hook = bounded(&body.hook, MAX_HOOK_BYTES, "hook")?;
+    let session_key = bounded_optional(body.session_key, 512, "session_key")?;
+    let checkpoint = bounded_optional(body.checkpoint, MAX_ID_BYTES, "checkpoint")?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::HookReceipt {
+                agent_id,
+                receipt_id,
+                checkpoint,
+                hook,
+                session_key,
+                payload: body.payload,
+            },
+        )
+        .await?,
+    ))
+}
+
+pub async fn messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<MessageReq>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    let workspace_id = bounded(&body.workspace_id, MAX_ID_BYTES, "workspace_id")?;
+    workspace_header(&headers, &workspace_id)?;
+    bounded_payload(&body.payload)?;
+    let recipient_agent_id = bounded(&body.recipient_agent_id, MAX_ID_BYTES, "recipient_agent_id")?;
+    let kind = bounded(&body.kind, MAX_HOOK_BYTES, "kind")?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::CrossAgentSend {
+                agent_id,
+                workspace_id,
+                recipient_agent_id,
+                kind,
+                payload: body.payload,
+            },
+        )
+        .await?,
+    ))
+}
+
+pub async fn poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<Poll>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    let after_id = after_id(query.after_id)?;
+    let page_limit = limit(query.limit)?;
+    let (data, cursor) = if let Some(workspace) = query.workspace_id {
+        let workspace = bounded(&workspace, MAX_ID_BYTES, "workspace_id")?;
+        workspace_header(&headers, &workspace)?;
+        let data = execute(
+            &state,
+            Operation::CrossAgentList {
+                agent_id,
+                workspace_id: workspace,
+                after_id,
+                limit: page_limit,
+            },
+        )
+        .await?;
+        let cursor = data["messages"]
+            .as_array()
+            .and_then(|items| items.last())
+            .and_then(|item| item["id"].as_i64())
+            .unwrap_or(after_id)
+            .max(after_id);
+        (data, cursor)
+    } else {
+        let session_key = bounded_optional(query.session_key, 512, "session_key")?;
+        let data = execute(
+            &state,
+            Operation::HookReceipts {
+                agent_id,
+                session_key,
+                after_id,
+                limit: page_limit,
+            },
+        )
+        .await?;
+        let cursor = data["receipts"]
+            .as_array()
+            .and_then(|items| items.last())
+            .and_then(|item| item["id"].as_i64())
+            .unwrap_or(after_id)
+            .max(after_id);
+        (data, cursor)
+    };
+    Ok(Json(
+        json!({"mode":"snapshot", "complete":true, "streaming":false, "cursor":cursor, "nextAfterId":cursor, "data":data}),
+    ))
+}
+
+pub async fn live(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<Poll>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let snapshot = poll(State(state), headers, Query(query)).await?.0;
+    let event = Event::default()
+        .event("snapshot")
+        .json_data(snapshot)
+        .map_err(|_| ApiError::internal("sse encoding failed"))?;
+    Ok(Sse::new(stream::once(async move { Ok(event) }))
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+}
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/boundary/sessions/start", post(start))
+        .route("/api/boundary/sessions/end", post(end))
+        .route("/api/boundary/hooks/receipt", post(receipt))
+        .route("/api/boundary/messages", post(messages))
+        .route("/api/boundary/poll", get(poll))
+        .route("/api/boundary/events", get(live))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+}
