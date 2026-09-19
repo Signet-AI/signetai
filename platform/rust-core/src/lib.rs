@@ -537,6 +537,46 @@ fn execute_operation(
             tx.commit()?;
             Ok(json!({"id":id,"agentId":agent_id,"kind":"dream.trigger","state":"queued"}))
         }
+        Operation::AuthKeyCreate { agent_id, name, role, scope, expires_at } => {
+            let agent_id = required_agent(&agent_id)?;
+            let name = bounded_text(&name, "name", 256)?;
+            if !["admin", "operator", "agent", "readonly"].contains(&role.as_str()) { return Err(CoreError::InvalidInput("invalid role".into())); }
+            let id = format!("key_{}", uuid::Uuid::new_v4());
+            let prefix = uuid::Uuid::new_v4().simple().to_string()[..12].to_owned();
+            let secret = format!("sig_sk_{}_{}", prefix, uuid::Uuid::new_v4());
+            let digest = format!("{:x}", sha2::Sha256::digest(secret.as_bytes()));
+            let created_at = String::new();
+            let scope_json = bounded_json(&scope)?;
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO api_keys(id,prefix,name,key_hash,role,scope_json,created_at,agent_id,expires_at) VALUES(?,?,?,?,?,?,?,?,?)", params![id,prefix,name,digest,role,scope_json,created_at,agent_id,expires_at])?;
+            tx.commit()?;
+            Ok(json!({"id":id,"prefix":prefix,"name":name,"role":role,"agentId":agent_id,"scope":scope,"createdAt":created_at,"revokedAt":null,"expiresAt":expires_at,"key":secret}))
+        }
+        Operation::AuthKeyList { agent_id } => {
+            let agent_id = required_agent(&agent_id)?;
+            let mut s = connection.prepare("SELECT id,prefix,name,role,scope_json,created_at,revoked_at,expires_at,agent_id FROM api_keys WHERE agent_id=? ORDER BY created_at DESC")?;
+            let rows = s.query_map(params![agent_id], |r| { let scope: String=r.get(4)?; Ok(json!({"id":r.get::<_,String>(0)?,"prefix":r.get::<_,String>(1)?,"name":r.get::<_,String>(2)?,"role":r.get::<_,String>(3)?,"scope":serde_json::from_str::<Value>(&scope).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?,"revokedAt":r.get::<_,Option<String>>(6)?,"expiresAt":r.get::<_,Option<String>>(7)?,"agentId":r.get::<_,String>(8)?})) })?;
+            Ok(json!(rows.collect::<Result<Vec<_>, _>>()?))
+        }
+        Operation::AuthKeyRevoke { agent_id, id } => {
+            let agent_id = required_agent(&agent_id)?; let id = required_id(&id)?;
+            let changed = connection.execute("UPDATE api_keys SET revoked_at=COALESCE(revoked_at,datetime('now')) WHERE id=? AND agent_id=?", params![id,agent_id])?;
+            if changed == 0 { return Err(CoreError::NotFound); }
+            Ok(json!({"id":id,"revoked":true}))
+        }
+        Operation::AuthKeyVerify { token } => {
+            let parts: Vec<&str> = token.splitn(3, '_').collect();
+            if parts.len() != 3 || parts[0] != "sig" || parts[1] != "sk" { return Ok(json!({"authenticated":false,"error":"malformed api key"})); }
+            let prefix=parts[2].split('_').next().unwrap_or("");
+            let digest = format!("{:x}", sha2::Sha256::digest(token.as_bytes()));
+            let row: Option<(String,String,Option<String>,Option<String>,String,String)> = connection.query_row("SELECT agent_id,role,revoked_at,expires_at,scope_json,id FROM api_keys WHERE prefix=? AND key_hash=?", params![prefix,digest], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?;
+            let Some((agent_id,role,revoked,expires,scope,id))=row else { return Ok(json!({"authenticated":false,"error":"invalid api key"})); };
+            if revoked.is_some() { return Ok(json!({"authenticated":false,"error":"api key revoked"})); }
+            let expired: bool = connection.query_row("SELECT julianday(?) <= julianday('now')", params![expires], |r| r.get(0))?;
+            if expired { return Ok(json!({"authenticated":false,"error":"api key expired"})); }
+            connection.execute("UPDATE api_keys SET last_used_at=datetime('now') WHERE id=?", params![id])?;
+            Ok(json!({"authenticated":true,"agentId":agent_id,"role":role,"scope":serde_json::from_str::<Value>(&scope).unwrap_or(json!({}))}))
+        }
         Operation::Health => {
             let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
             Ok(json!({ "ready": value == 1 }))
@@ -1056,6 +1096,16 @@ pub struct SessionRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     Health,
+    AuthKeyCreate {
+        agent_id: String,
+        name: String,
+        role: String,
+        scope: Value,
+        expires_at: Option<String>,
+    },
+    AuthKeyList { agent_id: String },
+    AuthKeyRevoke { agent_id: String, id: String },
+    AuthKeyVerify { token: String },
     Remember {
         agent_id: String,
         content: String,
@@ -1378,6 +1428,8 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE INDEX IF NOT EXISTS hook_receipts_scope ON hook_receipts(agent_id, session_key, id);
          CREATE TABLE IF NOT EXISTS cross_agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, sender_agent_id TEXT NOT NULL, recipient_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS cross_agent_messages_scope ON cross_agent_messages(workspace_id, recipient_agent_id, id);
+         CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL, scope_json TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT, agent_id TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS api_keys_scope ON api_keys(agent_id, revoked_at, expires_at);
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
