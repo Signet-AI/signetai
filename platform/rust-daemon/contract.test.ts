@@ -305,4 +305,42 @@ describe("fresh Rust daemon", () => {
 		});
 		expect(rejected.status).toBe(400);
 	});
+
+	it("serves scoped knowledge entities and relations with bounded 4xx validation", async () => {
+		const { origin } = await startDaemon();
+		const headers = { "content-type": "application/json", "x-signet-agent": "graph-a" };
+		const alice = await fetch(`${origin}/api/knowledge/entities`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ name: "Alice", type: "person", metadata: { source: "contract" } }),
+		});
+		const bob = await fetch(`${origin}/api/knowledge/entities`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ name: "Bob", type: "person" }),
+		});
+		expect(alice.status).toBe(201);
+		expect(bob.status).toBe(201);
+		const aliceId = ((await alice.json()) as { id: string }).id;
+		const bobId = ((await bob.json()) as { id: string }).id;
+		const relation = await fetch(`${origin}/api/knowledge/relations`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ from_id: aliceId, to_id: bobId, relation: "knows" }),
+		});
+		expect(relation.status).toBe(201);
+		expect(
+			(await (await fetch(`${origin}/api/knowledge/entities/${aliceId}/relations`, { headers })).json()).items,
+		).toHaveLength(1);
+		expect(
+			(await (await fetch(`${origin}/api/knowledge/entities`, { headers: { "x-signet-agent": "graph-b" } })).json())
+				.items,
+		).toHaveLength(0);
+		const invalid = await fetch(`${origin}/api/knowledge/entities`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ name: "", type: "person" }),
+		});
+		expect(invalid.status).toBe(400);
+	});
 });

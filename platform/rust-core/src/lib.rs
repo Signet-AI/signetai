@@ -384,36 +384,62 @@ fn execute_operation(
     operation: Operation,
 ) -> Result<Value, CoreError> {
     match operation {
-        Operation::JobSubmit { agent_id, kind, payload, deadline_at } => {
+        Operation::JobSubmit {
+            agent_id,
+            kind,
+            payload,
+            deadline_at,
+        } => {
             let agent_id = required_agent(&agent_id)?;
-            if kind.trim().is_empty() || kind.len() > 64 { return Err(CoreError::InvalidInput("job kind must be 1-64 bytes".into())); }
+            if kind.trim().is_empty() || kind.len() > 64 {
+                return Err(CoreError::InvalidInput(
+                    "job kind must be 1-64 bytes".into(),
+                ));
+            }
             let id = uuid::Uuid::new_v4().to_string();
             let payload = serde_json::to_string(&payload)?;
-            if payload.len() > 1_048_576 { return Err(CoreError::InvalidInput("job payload exceeds 1 MiB".into())); }
+            if payload.len() > 1_048_576 {
+                return Err(CoreError::InvalidInput("job payload exceeds 1 MiB".into()));
+            }
             connection.execute("INSERT INTO jobs (id,agent_id,kind,state,payload,deadline_at,created_at,updated_at) VALUES (?,?,?,'queued',?,?,datetime('now'),datetime('now'))", params![id,agent_id,kind,payload,deadline_at])?;
             connection.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, 'queued','{}',datetime('now'))", params![id,agent_id])?;
             Ok(json!({"id":id,"state":"queued"}))
         }
         Operation::JobGet { agent_id, id } => {
             let value: Option<String> = connection.query_row("SELECT json_object('id',id,'agent_id',agent_id,'kind',kind,'state',state,'payload',json(payload),'result',CASE WHEN result IS NULL THEN NULL ELSE json(result) END,'error',error,'deadline_at',deadline_at,'created_at',created_at,'updated_at',updated_at) FROM jobs WHERE id=? AND agent_id=?", params![id,agent_id], |r| r.get(0)).optional()?;
-            value.map(|v| serde_json::from_str(&v)).transpose()?.ok_or(CoreError::NotFound)
+            value
+                .map(|v| serde_json::from_str(&v))
+                .transpose()?
+                .ok_or(CoreError::NotFound)
         }
         Operation::JobCancel { agent_id, id } => {
             let changed = connection.execute("UPDATE jobs SET state=CASE WHEN state IN ('queued','running') THEN 'cancelled' ELSE state END, updated_at=datetime('now') WHERE id=? AND agent_id=? AND state IN ('queued','running')", params![id,agent_id])?;
-            if changed == 0 { return Err(CoreError::NotFound); }
+            if changed == 0 {
+                return Err(CoreError::NotFound);
+            }
             connection.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, 'cancelled','{}',datetime('now'))", params![id,agent_id])?;
             Ok(json!({"id":id,"state":"cancelled"}))
         }
         Operation::JobList { agent_id, limit } => {
             let mut s=connection.prepare("SELECT json_object('id',id,'kind',kind,'state',state,'error',error,'created_at',created_at,'updated_at',updated_at) FROM jobs WHERE agent_id=? ORDER BY created_at DESC LIMIT ?")?;
-            let rows=s.query_map(params![agent_id, limit.clamp(1,100) as i64], |r| r.get::<_,String>(0))?;
-            let values=rows.collect::<Result<Vec<_>,_>>()?.into_iter().map(|v| serde_json::from_str(&v)).collect::<Result<Vec<Value>,_>>()?;
+            let rows = s.query_map(params![agent_id, limit.clamp(1, 100) as i64], |r| {
+                r.get::<_, String>(0)
+            })?;
+            let values = rows
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .map(|v| serde_json::from_str(&v))
+                .collect::<Result<Vec<Value>, _>>()?;
             Ok(json!(values))
         }
         Operation::JobEvents { agent_id, id } => {
             let mut s=connection.prepare("SELECT json_object('event',event,'data',json(data),'created_at',created_at) FROM job_events WHERE job_id=? AND agent_id=? ORDER BY id")?;
-            let rows=s.query_map(params![id,agent_id], |r| r.get::<_,String>(0))?;
-            let values=rows.collect::<Result<Vec<_>,_>>()?.into_iter().map(|v| serde_json::from_str(&v)).collect::<Result<Vec<Value>,_>>()?;
+            let rows = s.query_map(params![id, agent_id], |r| r.get::<_, String>(0))?;
+            let values = rows
+                .collect::<Result<Vec<_>, _>>()?
+                .into_iter()
+                .map(|v| serde_json::from_str(&v))
+                .collect::<Result<Vec<Value>, _>>()?;
             Ok(json!(values))
         }
         Operation::Health => {
@@ -624,27 +650,149 @@ fn execute_operation(
             transaction.commit()?;
             Ok(json!({ "id": id }))
         }
-        Operation::OntologyList { agent_id, workspace_id, kind } => {
-            let agent_id = required_agent(&agent_id)?; let workspace_id = required_id(&workspace_id)?; let kind = required_id(&kind)?;
+        Operation::OntologyList {
+            agent_id,
+            workspace_id,
+            kind,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
+            let kind = required_id(&kind)?;
             let mut s = connection.prepare("SELECT id, value, created_at, updated_at FROM ontology_records WHERE agent_id=? AND workspace_id=? AND kind=? AND deleted=0 ORDER BY rowid DESC")?;
             let rows = s.query_map(params![agent_id, workspace_id, kind], |r| Ok(json!({"id":r.get::<_,String>(0)?,"value":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(2)?,"updatedAt":r.get::<_,String>(3)?})))?;
-            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>,_>>()?)?)
+            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
         }
-        Operation::OntologyGet { agent_id, workspace_id, kind, id } => {
+        Operation::OntologyGet {
+            agent_id,
+            workspace_id,
+            kind,
+            id,
+        } => {
             let row = connection.query_row("SELECT id,value,created_at,updated_at FROM ontology_records WHERE agent_id=? AND workspace_id=? AND kind=? AND id=? AND deleted=0", params![required_agent(&agent_id)?,required_id(&workspace_id)?,required_id(&kind)?,required_id(&id)?], |r| Ok(json!({"id":r.get::<_,String>(0)?,"value":serde_json::from_str::<Value>(&r.get::<_,String>(1)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(2)?,"updatedAt":r.get::<_,String>(3)?}))).optional()?;
             Ok(row.unwrap_or(Value::Null))
         }
-        Operation::OntologyUpsert { agent_id, workspace_id, kind, id, value } => {
-            let agent_id=required_agent(&agent_id)?; let workspace_id=required_id(&workspace_id)?; let kind=required_id(&kind)?; let id=id.map(|v|required_id(&v)).transpose()?.unwrap_or_else(||uuid::Uuid::new_v4().to_string()); let text=serde_json::to_string(&value)?; let tx=connection.transaction()?;
-            let existing: Option<(String, String, String)> = tx.query_row("SELECT agent_id,workspace_id,kind FROM ontology_records WHERE id=?", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).optional()?;
+        Operation::OntologyUpsert {
+            agent_id,
+            workspace_id,
+            kind,
+            id,
+            value,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
+            let kind = required_id(&kind)?;
+            let id = id
+                .map(|v| required_id(&v))
+                .transpose()?
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let text = serde_json::to_string(&value)?;
+            let tx = connection.transaction()?;
+            let existing: Option<(String, String, String)> = tx
+                .query_row(
+                    "SELECT agent_id,workspace_id,kind FROM ontology_records WHERE id=?",
+                    params![id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .optional()?;
             if let Some((existing_agent, existing_workspace, existing_kind)) = existing {
-                if existing_agent != agent_id || existing_workspace != workspace_id || existing_kind != kind {
-                    return Err(CoreError::InvalidInput("ontology record belongs to another scope".into()));
+                if existing_agent != agent_id
+                    || existing_workspace != workspace_id
+                    || existing_kind != kind
+                {
+                    return Err(CoreError::InvalidInput(
+                        "ontology record belongs to another scope".into(),
+                    ));
                 }
             }
-            tx.execute("INSERT INTO ontology_records(id,agent_id,workspace_id,kind,value,deleted,created_at,updated_at) VALUES(?,?,?,?,?,0,datetime('now'),datetime('now')) ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=datetime('now'), deleted=0",params![id,agent_id,workspace_id,kind,text])?; tx.commit()?; Ok(json!({"id":id,"value":value}))
+            tx.execute("INSERT INTO ontology_records(id,agent_id,workspace_id,kind,value,deleted,created_at,updated_at) VALUES(?,?,?,?,?,0,datetime('now'),datetime('now')) ON CONFLICT(id) DO UPDATE SET value=excluded.value, updated_at=datetime('now'), deleted=0",params![id,agent_id,workspace_id,kind,text])?;
+            tx.commit()?;
+            Ok(json!({"id":id,"value":value}))
         }
-        Operation::OntologyDelete { agent_id, workspace_id, kind, id } => { let tx=connection.transaction()?; let n=tx.execute("UPDATE ontology_records SET deleted=1,updated_at=datetime('now') WHERE agent_id=? AND workspace_id=? AND kind=? AND id=? AND deleted=0",params![required_agent(&agent_id)?,required_id(&workspace_id)?,required_id(&kind)?,required_id(&id)?])?; if n==0{return Err(CoreError::NotFound)} tx.commit()?; Ok(json!({"deleted":true,"id":id})) }
+        Operation::OntologyDelete {
+            agent_id,
+            workspace_id,
+            kind,
+            id,
+        } => {
+            let tx = connection.transaction()?;
+            let n=tx.execute("UPDATE ontology_records SET deleted=1,updated_at=datetime('now') WHERE agent_id=? AND workspace_id=? AND kind=? AND id=? AND deleted=0",params![required_agent(&agent_id)?,required_id(&workspace_id)?,required_id(&kind)?,required_id(&id)?])?;
+            if n == 0 {
+                return Err(CoreError::NotFound);
+            }
+            tx.commit()?;
+            Ok(json!({"deleted":true,"id":id}))
+        }
+        Operation::KnowledgeEntityCreate {
+            agent_id,
+            name,
+            entity_type,
+            metadata,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let name = bounded_text(&name, "entity name", 256)?;
+            let entity_type = bounded_text(&entity_type, "entity type", 64)?;
+            let metadata = bounded_json(&metadata)?;
+            let id = uuid::Uuid::new_v4().to_string();
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO kg_entities(id,agent_id,name,entity_type,metadata,created_at,updated_at) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))",params![id,agent_id,name,entity_type,metadata])?;
+            tx.commit()?;
+            Ok(json!({"id":id,"agentId":agent_id,"name":name,"type":entity_type}))
+        }
+        Operation::KnowledgeEntityList {
+            agent_id,
+            limit,
+            offset,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let limit = limit.clamp(1, 200) as i64;
+            let offset = offset.min(100_000) as i64;
+            let mut s=connection.prepare("SELECT id,name,entity_type,metadata,created_at,updated_at FROM kg_entities WHERE agent_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?")?;
+            let rows=s.query_map(params![agent_id,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(4)?,"updatedAt":r.get::<_,String>(5)?})))?;
+            Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?,"limit":limit,"offset":offset}))
+        }
+        Operation::KnowledgeRelationCreate {
+            agent_id,
+            from_id,
+            to_id,
+            relation,
+            metadata,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let from_id = required_id(&from_id)?;
+            let to_id = required_id(&to_id)?;
+            let relation = bounded_text(&relation, "relation", 128)?;
+            let metadata = bounded_json(&metadata)?;
+            if from_id == to_id {
+                return Err(CoreError::InvalidInput(
+                    "relation endpoints must differ".into(),
+                ));
+            }
+            let tx = connection.transaction()?;
+            let count: i64 = tx.query_row(
+                "SELECT count(*) FROM kg_entities WHERE agent_id=? AND id IN (?,?)",
+                params![agent_id, from_id, to_id],
+                |r| r.get(0),
+            )?;
+            if count != 2 {
+                return Err(CoreError::NotFound);
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.execute("INSERT INTO kg_relations(id,agent_id,from_id,to_id,relation,metadata,created_at) VALUES(?,?,?,?,?,?,datetime('now'))",params![id,agent_id,from_id,to_id,relation,metadata])?;
+            tx.commit()?;
+            Ok(json!({"id":id,"fromId":from_id,"toId":to_id,"relation":relation}))
+        }
+        Operation::KnowledgeRelations {
+            agent_id,
+            entity_id,
+            limit,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let entity_id = required_id(&entity_id)?;
+            let limit = limit.clamp(1, 200) as i64;
+            let mut s=connection.prepare("SELECT id,from_id,to_id,relation,metadata,created_at FROM kg_relations WHERE agent_id=? AND (from_id=? OR to_id=?) ORDER BY rowid DESC LIMIT ?")?;
+            let rows=s.query_map(params![agent_id,entity_id,entity_id,limit],|r| Ok(json!({"id":r.get::<_,String>(0)?,"fromId":r.get::<_,String>(1)?,"toId":r.get::<_,String>(2)?,"relation":r.get::<_,String>(3)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
+            Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?}))
+        }
     }
 }
 
@@ -727,15 +875,75 @@ pub enum Operation {
         content: String,
         metadata: Value,
     },
-    JobSubmit { agent_id: String, kind: String, payload: Value, deadline_at: Option<String> },
-    JobGet { agent_id: String, id: String },
-    JobCancel { agent_id: String, id: String },
-    JobList { agent_id: String, limit: usize },
-    JobEvents { agent_id: String, id: String },
-    OntologyList { agent_id: String, workspace_id: String, kind: String },
-    OntologyGet { agent_id: String, workspace_id: String, kind: String, id: String },
-    OntologyUpsert { agent_id: String, workspace_id: String, kind: String, id: Option<String>, value: Value },
-    OntologyDelete { agent_id: String, workspace_id: String, kind: String, id: String },
+    JobSubmit {
+        agent_id: String,
+        kind: String,
+        payload: Value,
+        deadline_at: Option<String>,
+    },
+    JobGet {
+        agent_id: String,
+        id: String,
+    },
+    JobCancel {
+        agent_id: String,
+        id: String,
+    },
+    JobList {
+        agent_id: String,
+        limit: usize,
+    },
+    JobEvents {
+        agent_id: String,
+        id: String,
+    },
+    OntologyList {
+        agent_id: String,
+        workspace_id: String,
+        kind: String,
+    },
+    OntologyGet {
+        agent_id: String,
+        workspace_id: String,
+        kind: String,
+        id: String,
+    },
+    OntologyUpsert {
+        agent_id: String,
+        workspace_id: String,
+        kind: String,
+        id: Option<String>,
+        value: Value,
+    },
+    OntologyDelete {
+        agent_id: String,
+        workspace_id: String,
+        kind: String,
+        id: String,
+    },
+    KnowledgeEntityCreate {
+        agent_id: String,
+        name: String,
+        entity_type: String,
+        metadata: Value,
+    },
+    KnowledgeEntityList {
+        agent_id: String,
+        limit: usize,
+        offset: usize,
+    },
+    KnowledgeRelationCreate {
+        agent_id: String,
+        from_id: String,
+        to_id: String,
+        relation: String,
+        metadata: Value,
+    },
+    KnowledgeRelations {
+        agent_id: String,
+        entity_id: String,
+        limit: usize,
+    },
 }
 
 fn owner_loop(
@@ -782,6 +990,24 @@ fn required_id(id: &str) -> Result<String, CoreError> {
     Ok(id.to_owned())
 }
 
+fn bounded_text(value: &str, label: &str, max: usize) -> Result<String, CoreError> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > max {
+        return Err(CoreError::InvalidInput(format!(
+            "{label} must be 1-{max} bytes"
+        )));
+    }
+    Ok(value.to_owned())
+}
+
+fn bounded_json(value: &Value) -> Result<String, CoreError> {
+    let text = serde_json::to_string(value)?;
+    if text.len() > 65_536 {
+        return Err(CoreError::InvalidInput("metadata exceeds 64 KiB".into()));
+    }
+    Ok(text)
+}
+
 fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
     let metadata = row.get::<_, String>(3).unwrap_or_else(|_| "{}".into());
     Ok(Memory {
@@ -822,6 +1048,10 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS memory_history (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL, agent_id TEXT NOT NULL, operation TEXT NOT NULL, content TEXT, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS ontology_records (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS kg_entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, name TEXT NOT NULL, entity_type TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS kg_relations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, from_id TEXT NOT NULL, to_id TEXT NOT NULL, relation TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS kg_entities_scope ON kg_entities(agent_id, name);
+         CREATE INDEX IF NOT EXISTS kg_relations_scope ON kg_relations(agent_id, from_id, to_id);
          CREATE INDEX IF NOT EXISTS ontology_scope_idx ON ontology_records(agent_id, workspace_id, kind, deleted);
          CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', result TEXT, error TEXT, deadline_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS jobs_agent_state ON jobs(agent_id, state, created_at);
