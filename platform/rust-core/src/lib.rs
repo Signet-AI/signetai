@@ -893,23 +893,29 @@ fn execute_operation(
                     json!({"id":memory_id,"content":content})
                 }
                 "timeline" | "lineage" | "review" => {
-                    let memory_id =
-                        id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
-                    let exists: i64 = tx.query_row(
-                        "SELECT count(*) FROM memories WHERE id=? AND agent_id=?",
-                        params![memory_id, agent_id],
-                        |r| r.get(0),
-                    )?;
-                    if exists == 0 {
-                        return Err(CoreError::NotFound);
+                    if let Some(memory_id) = id {
+                        let exists: i64 = tx.query_row(
+                            "SELECT count(*) FROM memories WHERE id=? AND agent_id=?",
+                            params![memory_id, agent_id],
+                            |r| r.get(0),
+                        )?;
+                        if exists == 0 {
+                            return Err(CoreError::NotFound);
+                        }
+                        let mut stmt = tx.prepare("SELECT operation,content,created_at FROM memory_history WHERE memory_id=? AND agent_id=? ORDER BY id")?;
+                        let rows = stmt.query_map(params![memory_id, agent_id], |r| Ok(json!({"operation":r.get::<_,String>(0)?,"content":r.get::<_,Option<String>>(1)?,"createdAt":r.get::<_,String>(2)?})))?;
+                        json!({"id":memory_id,"items":rows.collect::<Result<Vec<_>,_>>()?})
+                    } else if action == "timeline" {
+                        let mut stmt = tx.prepare("SELECT memory_id,operation,content,created_at FROM memory_history WHERE agent_id=? ORDER BY id DESC LIMIT 1000")?;
+                        let rows = stmt.query_map(params![agent_id], |r| Ok(json!({"memoryId":r.get::<_,String>(0)?,"operation":r.get::<_,String>(1)?,"content":r.get::<_,Option<String>>(2)?,"createdAt":r.get::<_,String>(3)?})))?;
+                        json!({"items":rows.collect::<Result<Vec<_>,_>>()?})
+                    } else {
+                        return Err(CoreError::InvalidInput("memory id is required".into()));
                     }
-                    let mut stmt = tx.prepare("SELECT operation,content,created_at FROM memory_history WHERE memory_id=? AND agent_id=? ORDER BY id")?;
-                    let rows = stmt.query_map(params![memory_id, agent_id], |r| Ok(json!({"operation":r.get::<_,String>(0)?,"content":r.get::<_,Option<String>>(1)?,"createdAt":r.get::<_,String>(2)?})))?;
-                    json!({"id":memory_id,"items":rows.collect::<Result<Vec<_>,_>>()?})
                 }
                 "review-queue" => {
-                    let mut stmt = tx.prepare("SELECT id,content,updated_at FROM memories WHERE agent_id=? AND deleted=0 ORDER BY updated_at DESC LIMIT 100")?;
-                    let rows = stmt.query_map(params![agent_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"content":r.get::<_,String>(1)?,"updatedAt":r.get::<_,Option<String>>(2)?})))?;
+                    let mut stmt = tx.prepare("SELECT h.id,h.memory_id,h.operation,h.content,h.created_at FROM memory_history h WHERE h.agent_id=? AND h.operation IN ('DEDUP','REVIEW_NEEDED','BLOCKED_DESTRUCTIVE') ORDER BY h.id DESC LIMIT 100")?;
+                    let rows = stmt.query_map(params![agent_id], |r| Ok(json!({"eventId":r.get::<_,i64>(0)?,"memoryId":r.get::<_,String>(1)?,"event":r.get::<_,String>(2)?,"content":r.get::<_,Option<String>>(3)?,"createdAt":r.get::<_,String>(4)?})))?;
                     json!({"items":rows.collect::<Result<Vec<_>,_>>()?})
                 }
                 "supersede" => {

@@ -56,6 +56,9 @@ describe("fresh Rust advanced memory routes", () => {
 			const second = await make(a, "second");
 			expect(second.status).toBe(200);
 			const secondId = (await second.json()).id as string;
+			const third = await make(a, "third");
+			expect(third.status).toBe(200);
+			const thirdId = (await third.json()).id as string;
 			expect(
 				(
 					await fetch(`${base}/api/memory/feedback`, {
@@ -84,6 +87,16 @@ describe("fresh Rust advanced memory routes", () => {
 			expect(superseded.supersededBy).toBe(secondId);
 			expect(superseded.supersededAt).toBeString();
 			expect(superseded.supersededReason).toBe("newer");
+			const forget = await fetch(`${base}/api/memory/forget`, {
+				method: "POST",
+				headers: a,
+				body: JSON.stringify({ memoryId: thirdId, reason: "cleanup" }),
+			});
+			expect(forget.status).toBe(200);
+			expect((await forget.json()).status).toBe("tombstoned");
+			const timeline = await fetch(`${base}/api/memory/timeline`, { headers: a });
+			expect(timeline.status).toBe(200);
+			expect(Array.isArray((await timeline.json()).items)).toBe(true);
 			const lineage = await fetch(`${base}/api/memory/${firstId}/lineage`, { headers: a });
 			expect(lineage.status).toBe(200);
 			expect((await lineage.json()).items.length).toBeGreaterThanOrEqual(3);
