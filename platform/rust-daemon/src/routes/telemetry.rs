@@ -21,6 +21,11 @@ struct QueryParams {
     workspace: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct HealthParams {
+    workspace: Option<String>,
+}
+
 async fn authority(state: &AppState, headers: &HeaderMap) -> Result<Value, ApiError> {
     let token = headers
         .get("authorization")
@@ -157,13 +162,14 @@ async fn events(
 async fn health(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(q): Query<HealthParams>,
 ) -> Result<Json<Value>, ApiError> {
     let authority = authority(&state, &headers).await?;
     let agent = authority
         .get("agentId")
         .and_then(Value::as_str)
         .unwrap_or("default");
-    let workspace = telemetry_workspace(&headers, None)?;
+    let workspace = telemetry_workspace(&headers, q.workspace.as_deref())?;
     check(&authority, agent, &workspace)?;
     let db = execute(&state, signet_core_native::Operation::Health).await?;
     Ok(Json(

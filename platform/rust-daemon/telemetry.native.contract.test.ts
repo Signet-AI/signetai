@@ -151,6 +151,21 @@ describe("fresh Rust telemetry boundary", () => {
 				})
 			).status,
 		).toBe(400);
+		expect(
+			(
+				await fetch(`${base()}/api/telemetry/health?workspace=other-workspace`, {
+					headers: auth(authority),
+				})
+			).status,
+		).toBe(400);
+		const compatibilityOnly = await fetch(`${base()}/api/telemetry/health?workspace=${workspaceId}`, {
+			headers: {
+				Authorization: auth(authority).Authorization,
+				"x-signet-agent-id": agent,
+				"x-workspace-id": workspaceId,
+			},
+		});
+		expect(compatibilityOnly.status).toBe(200);
 		expect((await fetch(`${base()}/api/telemetry/export`, { headers: auth(authority) })).status).toBe(501);
 	});
 	test("preserves events across restart and cleans up the listener", async () => {
