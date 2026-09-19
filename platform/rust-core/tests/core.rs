@@ -5,6 +5,7 @@ use tempfile::tempdir;
 fn core() -> Core {
     let d = tempdir().unwrap();
     let p = d.path().join("db.sqlite");
+    let _workspace = Box::leak(Box::new(d));
     Core::open(&p, 2).unwrap()
 }
 

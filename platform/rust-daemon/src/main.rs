@@ -186,10 +186,14 @@ fn metadata(request: &RememberRequest) -> Value {
 
 async fn execute(state: &AppState, operation: Operation) -> Result<Value, ApiError> {
     let owner = state.owner.clone();
-    tokio::task::spawn_blocking(move || owner.submit(operation))
-        .await
-        .map_err(|error| ApiError::unavailable(format!("database owner task failed: {error}")))?
-        .map_err(ApiError::from)
+    tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || owner.submit(operation)),
+    )
+    .await
+    .map_err(|_| ApiError::unavailable("database operation deadline exceeded"))?
+    .map_err(|error| ApiError::unavailable(format!("database owner task failed: {error}")))?
+    .map_err(ApiError::from)
 }
 
 async fn live(State(state): State<AppState>) -> impl IntoResponse {
