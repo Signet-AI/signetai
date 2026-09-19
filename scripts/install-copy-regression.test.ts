@@ -110,11 +110,11 @@ describe("install copy", () => {
 		expect(manifest.dependencies).toBeUndefined();
 		expect(manifest.optionalDependencies).toBeUndefined();
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
-		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
-		expect(manifest.files).toContain("dist/mcp-stdio.js");
+		// signet-mcp resolves and launches the packaged native MCP binary.
+		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
+		expect(manifest.files).toContain("bin/signet-mcp.js");
 		expect(manifest.files).toContain("native-manifest.json");
 		expect(manifest.files).toContain("runtime");
-		expect(manifest.files).not.toContain("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
 		expect(launcher).toContain("require.resolve");
@@ -130,6 +130,11 @@ describe("install copy", () => {
 		expect(installer).toContain("linkSync");
 		expect(installer).toContain("require.resolve");
 		expect(installer).toContain("Skipping Signet native binary linking in workspace install");
+		// Connector-asset install reads the manifest shipped with the
+		// wrapper to discover the tarball URL and SHA-256. This is the
+		// peer of the launch.js `SIGNET_DIR` wiring: the postinstall
+		// extracts the connector plugin payload that the native binary
+		// expects to find at `$SIGNET_DIR/runtime/connectors/...`.
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("CONNECTOR_COMPONENT");
 		expect(installer).not.toContain("DAEMON_JS_COMPONENT");
@@ -143,24 +148,39 @@ describe("install copy", () => {
 
 	test("keeps the postinstall telemetry ping anonymous and opt-out", () => {
 		const installer = read("dist/signetai/scripts/install-native.js");
+
+		// Phase-1 install counter (issue #1026) plus bounded provenance metadata
+		// (issue #1274). No identifier, paths, or owner data enter the payload,
+		// and the request is never a hard failure path.
 		expect(installer).toContain("us.i.posthog.com");
 		expect(installer).toContain("/batch/");
 		expect(installer).toContain('event: "install.ping"');
 		expect(installer).toContain("randomUUID");
 		expect(installer).toContain("phc_");
+
+		// Homebrew-style opt-out: one env var disables the ping entirely.
 		expect(installer).toContain("SIGNET_TELEMETRY_OPTOUT");
 		expect(installer).toContain("SIGNET_TELEMETRY_ENV");
 		expect(installer).toContain("telemetryReportedVersion(nativePackageVersion())");
 		expect(installer).toContain("SIGNET_TELEMETRY_DEPLOYMENT_ROLE");
 		expect(installer).toContain('installChannel: "package-manager"');
+
+		// The ping must never block or fail the install: it is fire-and-forget
+		// with a bounded timeout, and errors are swallowed.
 		expect(installer).toContain("AbortSignal.timeout");
 		expect(installer).toContain(".catch(() => {})");
+
+		// Workspace installs (dev) must not ping.
 		expect(installer).toContain("isWorkspacePackage()");
 		expect(installer).toContain("SIGNET_SKIP_NATIVE_POSTINSTALL");
 	});
 
 	test("curl installer downloads and verifies the connector-asset tarball", () => {
 		const installer = read("web/marketing/public/install.sh");
+
+		// The curl installer reads both companion components from the
+		// manifest, downloads each tarball, verifies its SHA-256, and
+		// passes the verified paths to the native installer.
 		expect(installer).toContain("manifest_component_value()");
 		expect(installer).toContain("manifest_component_value connectors url");
 		expect(installer).not.toContain("manifest_component_value legacyDaemonAssets url");
@@ -173,8 +193,11 @@ describe("install copy", () => {
 		const buildScript = read("scripts/build-connector-assets.ts");
 		expect(buildScript).toContain(`signet-connectors-\${version}.tar.gz`);
 		expect(buildScript).toContain("runtime/connectors");
+		// The build script walks every `integrations/*/connector/` and
+		// ships any non-source/asset dir under the runtime tree.
 		expect(buildScript).toContain("integrations");
 		expect(buildScript).toContain("hermes-plugin");
+		// Skips build/test output dirs.
 		expect(buildScript).toContain('"dist"');
 		expect(buildScript).toContain('"node_modules"');
 		expect(buildScript).toContain('"src"');

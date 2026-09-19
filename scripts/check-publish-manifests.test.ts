@@ -369,16 +369,13 @@ describe("check-publish-manifests", () => {
 		expect(installer).not.toContain("releases/download/bundle-latest");
 	});
 
-	test("wires the signet-mcp stdio bundle into the signetai build", () => {
+	test("wires the native signet-mcp resolver into the signetai build", () => {
 		const root = join(import.meta.dir, "..");
 		const wrapper = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
 			scripts?: Record<string, string>;
 		};
-		const buildScript = readFileSync(join(root, "scripts", "build-signet-mcp.ts"), "utf-8");
-
 		expect(wrapper.scripts?.prebuild).toContain("scripts/build-signet-mcp.ts");
-		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"platform"\s*,\s*"daemon"\s*,\s*"src"\s*,\s*"mcp-stdio\.ts"\s*\)/);
-		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"dist"\s*,\s*"signetai"\s*,\s*"dist"\s*,\s*"mcp-stdio\.js"\s*\)/);
+		expect(readFileSync(join(root, "dist", "signetai", "bin", "signet-mcp.js"), "utf-8")).toContain('join(packageDir, "runtime", "rust-daemon"');
 	});
 
 	test("keeps the signetai package as a thin publishable native wrapper", () => {
@@ -403,9 +400,9 @@ describe("check-publish-manifests", () => {
 		expect(manifest.files).not.toContain("native/**");
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
-		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
-		expect(manifest.files).toContain("dist/mcp-stdio.js");
-		expect(manifest.files).not.toContain("bin/signet-mcp.js");
+		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
+		expect(manifest.files).toContain("bin/signet-mcp.js");
+		expect(manifest.files).not.toContain("dist/mcp-stdio.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
 		expect(launcher).toContain("require.resolve");
