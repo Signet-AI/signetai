@@ -129,6 +129,14 @@ describe("fresh Rust telemetry boundary", () => {
 			},
 		});
 		expect(conflictingHeaders.status).toBe(400);
+		const compatibilityEvents = await fetch(`${base()}/api/telemetry/events?agent=${agent}&workspace=${workspaceId}`, {
+			headers: {
+				Authorization: auth(authority).Authorization,
+				"x-signet-agent-id": agent,
+				"x-workspace-id": workspaceId,
+			},
+		});
+		expect(compatibilityEvents.status).toBe(200);
 		const empty = await body(
 			await fetch(`${base()}/api/telemetry/events?agent=${agent}&workspace=${workspaceId}&cursor=${page.nextCursor}`, {
 				headers: auth(authority),
