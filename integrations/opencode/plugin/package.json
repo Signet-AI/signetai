@@ -16,9 +16,7 @@
 		"typecheck": "tsc --noEmit",
 		"dev": "bun --watch src/index.ts"
 	},
-	"dependencies": {
-		"@signet/core": "workspace:*"
-	},
+	"dependencies": {},
 	"peerDependencies": {
 		"@opencode-ai/plugin": ">=0.1.0"
 	},
