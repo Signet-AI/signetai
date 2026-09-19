@@ -21,6 +21,14 @@ const daemonBinary = join(
 	"release",
 	process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon",
 );
+const mcpBinary = join(
+	root,
+	"platform",
+	"rust-daemon",
+	"target",
+	"release",
+	process.platform === "win32" ? "signet-mcp.exe" : "signet-mcp",
+);
 const stagedDaemon = join(
 	root,
 	"dist",
@@ -29,6 +37,15 @@ const stagedDaemon = join(
 	"rust-daemon",
 	daemonTarget,
 	process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon",
+);
+const stagedMcp = join(
+	root,
+	"dist",
+	"signetai",
+	"runtime",
+	"rust-daemon",
+	daemonTarget,
+	process.platform === "win32" ? "signet-mcp.exe" : "signet-mcp",
 );
 const stagedDashboard = join(root, "dist", "signetai", "runtime", "rust-daemon", "dashboard");
 
@@ -58,12 +75,16 @@ try {
 	rmSync(join(stagedDaemon, ".."), { recursive: true, force: true });
 	mkdirSync(join(stagedDaemon, ".."), { recursive: true });
 	cpSync(daemonBinary, stagedDaemon);
+	cpSync(mcpBinary, stagedMcp);
 	if (!existsSync(join(dashboardSource, "index.html"))) {
 		throw new Error(`dashboard build is missing: ${join(dashboardSource, "index.html")}`);
 	}
 	rmSync(stagedDashboard, { recursive: true, force: true });
 	cpSync(dashboardSource, stagedDashboard, { recursive: true });
-	if (process.platform !== "win32") chmodSync(stagedDaemon, 0o755);
+	if (process.platform !== "win32") {
+		chmodSync(stagedDaemon, 0o755);
+		chmodSync(stagedMcp, 0o755);
+	}
 	console.log(`[signet] staged Rust daemon: ${stagedDaemon}`);
 } catch {
 	console.error("[signet] native build failed (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");

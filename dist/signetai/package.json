@@ -5,13 +5,13 @@
   "type": "module",
   "bin": {
     "signet": "bin/signet.js",
-    "signet-mcp": "dist/mcp-stdio.js"
+    "signet-mcp": "bin/signet-mcp.js"
   },
   "files": [
     "bin/launch.js",
     "bin/native-platforms.js",
     "bin/signet.js",
-    "dist/mcp-stdio.js",
+    "bin/signet-mcp.js",
     "runtime",
     "native-manifest.json",
     "scripts",
