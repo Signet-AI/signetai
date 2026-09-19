@@ -6,10 +6,10 @@ pub(crate) mod jobs;
 pub(crate) mod knowledge;
 pub(crate) mod knowledge_graph;
 pub(crate) mod mcp;
+pub(crate) mod memory_advanced;
 pub(crate) mod ontology;
 pub(crate) mod pipeline;
 pub(crate) mod sessions;
-pub(crate) mod memory_advanced;
 pub(crate) mod transcripts;
 
 use crate::AppState;

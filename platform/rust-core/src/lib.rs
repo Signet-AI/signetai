@@ -767,58 +767,110 @@ fn execute_operation(
                     .unwrap_or(json!([])),
             }))
         }
-        Operation::MemoryAdvanced { agent_id, action, id, payload } => {
+        Operation::MemoryAdvanced {
+            agent_id,
+            action,
+            id,
+            payload,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let tx = connection.transaction()?;
             let result = match action.as_str() {
                 "feedback" => {
-                    let memory_id = id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
-                    let rating = payload.get("rating").and_then(Value::as_str).unwrap_or("neutral");
-                    if !matches!(rating, "positive" | "negative" | "neutral") { return Err(CoreError::InvalidInput("rating must be positive, negative, or neutral".into())); }
+                    let memory_id =
+                        id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
+                    let rating = payload
+                        .get("rating")
+                        .and_then(Value::as_str)
+                        .unwrap_or("neutral");
+                    if !matches!(rating, "positive" | "negative" | "neutral") {
+                        return Err(CoreError::InvalidInput(
+                            "rating must be positive, negative, or neutral".into(),
+                        ));
+                    }
                     tx.execute("CREATE TABLE IF NOT EXISTS memory_feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL, agent_id TEXT NOT NULL, rating TEXT NOT NULL, note TEXT, created_at TEXT NOT NULL)", [])?;
-                    let exists: i64 = tx.query_row("SELECT count(*) FROM memories WHERE id=? AND agent_id=?", params![memory_id, agent_id], |r| r.get(0))?;
-                    if exists == 0 { return Err(CoreError::NotFound); }
+                    let exists: i64 = tx.query_row(
+                        "SELECT count(*) FROM memories WHERE id=? AND agent_id=?",
+                        params![memory_id, agent_id],
+                        |r| r.get(0),
+                    )?;
+                    if exists == 0 {
+                        return Err(CoreError::NotFound);
+                    }
                     tx.execute("INSERT INTO memory_feedback(memory_id,agent_id,rating,note,created_at) VALUES(?,?,?,?,datetime('now'))", params![memory_id, agent_id, rating, payload.get("note").and_then(Value::as_str)])?;
                     json!({"recorded":1,"memoryId":memory_id,"rating":rating})
-                },
+                }
                 "forget" | "tombstone" => {
-                    let memory_id = id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
+                    let memory_id =
+                        id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
                     let changed = tx.execute("UPDATE memories SET deleted=1, updated_at=datetime('now') WHERE id=? AND agent_id=? AND deleted=0", params![memory_id, agent_id])?;
-                    if changed == 0 { return Err(CoreError::NotFound); }
-                    record_history(&tx, &memory_id, &agent_id, "tombstone", payload.get("reason").and_then(Value::as_str))?;
+                    if changed == 0 {
+                        return Err(CoreError::NotFound);
+                    }
+                    record_history(
+                        &tx,
+                        &memory_id,
+                        &agent_id,
+                        "tombstone",
+                        payload.get("reason").and_then(Value::as_str),
+                    )?;
                     json!({"id":memory_id,"status":"tombstoned"})
-                },
+                }
                 "modify" => {
-                    let memory_id = id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
-                    let content = payload.get("content").and_then(Value::as_str).ok_or_else(|| CoreError::InvalidInput("content is required".into()))?;
-                    if content.trim().is_empty() { return Err(CoreError::InvalidInput("content must not be empty".into())); }
+                    let memory_id =
+                        id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
+                    let content = payload
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| CoreError::InvalidInput("content is required".into()))?;
+                    if content.trim().is_empty() {
+                        return Err(CoreError::InvalidInput("content must not be empty".into()));
+                    }
                     let changed = tx.execute("UPDATE memories SET content=?, updated_at=datetime('now') WHERE id=? AND agent_id=? AND deleted=0", params![content, memory_id, agent_id])?;
-                    if changed == 0 { return Err(CoreError::NotFound); }
+                    if changed == 0 {
+                        return Err(CoreError::NotFound);
+                    }
                     record_history(&tx, &memory_id, &agent_id, "modify", Some(content))?;
                     json!({"id":memory_id,"content":content})
-                },
+                }
                 "timeline" | "lineage" | "review" => {
-                    let memory_id = id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
+                    let memory_id =
+                        id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
                     let mut stmt = tx.prepare("SELECT operation,content,created_at FROM memory_history WHERE memory_id=? AND agent_id=? ORDER BY id")?;
                     let rows = stmt.query_map(params![memory_id, agent_id], |r| Ok(json!({"operation":r.get::<_,String>(0)?,"content":r.get::<_,Option<String>>(1)?,"createdAt":r.get::<_,String>(2)?})))?;
                     json!({"id":memory_id,"items":rows.collect::<Result<Vec<_>,_>>()?})
-                },
+                }
                 "supersede" => {
-                    let old_id = id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
-                    let new_id = payload.get("supersededBy").and_then(Value::as_str).ok_or_else(|| CoreError::InvalidInput("supersededBy is required".into()))?;
+                    let old_id =
+                        id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
+                    let new_id = payload
+                        .get("supersededBy")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| {
+                            CoreError::InvalidInput("supersededBy is required".into())
+                        })?;
                     let changed = tx.execute("UPDATE memories SET deleted=1, updated_at=datetime('now') WHERE id=? AND agent_id=? AND deleted=0", params![old_id, agent_id])?;
-                    if changed == 0 { return Err(CoreError::NotFound); }
+                    if changed == 0 {
+                        return Err(CoreError::NotFound);
+                    }
                     record_history(&tx, &old_id, &agent_id, "supersede", Some(new_id))?;
                     json!({"id":old_id,"status":"superseded","supersededBy":new_id})
-                },
+                }
                 "native-note" => {
-                    let content = payload.get("content").and_then(Value::as_str).ok_or_else(|| CoreError::InvalidInput("content is required".into()))?;
+                    let content = payload
+                        .get("content")
+                        .and_then(Value::as_str)
+                        .ok_or_else(|| CoreError::InvalidInput("content is required".into()))?;
                     let memory_id = uuid::Uuid::new_v4().to_string();
                     tx.execute("INSERT INTO memories(id,agent_id,content,metadata,deleted,created_at,updated_at) VALUES(?,?,?,? ,0,datetime('now'),datetime('now'))", params![memory_id, agent_id, content, serde_json::to_string(&payload)?])?;
                     record_history(&tx, &memory_id, &agent_id, "native-note", None)?;
                     json!({"id":memory_id,"recorded":true})
-                },
-                _ => return Err(CoreError::InvalidInput("unsupported advanced memory action".into())),
+                }
+                _ => {
+                    return Err(CoreError::InvalidInput(
+                        "unsupported advanced memory action".into(),
+                    ))
+                }
             };
             tx.commit()?;
             Ok(result)
@@ -1423,7 +1475,12 @@ pub struct SessionRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     Health,
-    MemoryAdvanced { agent_id: String, action: String, id: Option<String>, payload: Value },
+    MemoryAdvanced {
+        agent_id: String,
+        action: String,
+        id: Option<String>,
+        payload: Value,
+    },
     AuthKeyCreate {
         agent_id: String,
         name: String,
