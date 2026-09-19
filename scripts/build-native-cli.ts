@@ -19,18 +19,16 @@ import { dirname, join } from "node:path";
 const root = join(import.meta.dir, "..");
 const outDir = join(root, "dist", "native");
 const buildDir = join(root, ".native-build");
-const workerDir = join(buildDir, "workers");
 const platformKey = process.env.SIGNET_NATIVE_PLATFORM ?? `${platform()}-${arch()}`;
 const binaryName = platformKey.startsWith("win32-") ? `signet-${platformKey}.exe` : `signet-${platformKey}`;
 const outfile = join(outDir, binaryName);
-const daemonRequire = createRequire(join(root, "platform", "daemon", "package.json"));
-const tokenizerWasmPath = daemonRequire.resolve("tiktoken/tiktoken_bg.wasm");
 const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: unknown };
 const nativeVersion = typeof rootPackage.version === "string" ? rootPackage.version : "0.0.0";
+const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
 
 mkdirSync(outDir, { recursive: true });
 rmSync(buildDir, { recursive: true, force: true });
-mkdirSync(workerDir, { recursive: true });
+mkdirSync(buildDir, { recursive: true });
 
 function runBunBuild(args: readonly string[]): void {
 	const result = spawnSync(process.execPath, ["build", ...args], {
@@ -38,31 +36,7 @@ function runBunBuild(args: readonly string[]): void {
 		stdio: "inherit",
 		windowsHide: true,
 	});
-	if (result.status !== 0) {
-		process.exit(result.status ?? 1);
-	}
-}
-
-function assertNoUnbundledRelativeRequires(path: string, worker: string): void {
-	const source = readFileSync(path, "utf8");
-	const specifiers = new Set<string>();
-	const pattern = /(?:__)?require[A-Za-z0-9_$]*(?:\.resolve)?\(\s*["'](\.{1,2}[/\\][^"']+)["']\s*\)/g;
-	for (const match of source.matchAll(pattern)) {
-		const specifier = match[1];
-		const normalized = specifier?.replaceAll("\\", "/");
-		if (
-			specifier !== undefined &&
-			normalized !== undefined &&
-			!normalized.endsWith(".node") &&
-			!normalized.includes("/node_modules/")
-		)
-			specifiers.add(specifier);
-	}
-	if (specifiers.size > 0) {
-		throw new Error(
-			`Native worker ${worker} contains unbundled relative require(s): ${[...specifiers].sort().join(", ")}`,
-		);
-	}
+	if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
 function compileTargetFor(targetPlatform: string): string {
@@ -82,98 +56,18 @@ function compileTargetFor(targetPlatform: string): string {
 	}
 }
 
-function contentTypeFor(path: string): string {
-	if (path.endsWith(".html")) return "text/html; charset=utf-8";
-	if (path.endsWith(".js")) return "text/javascript; charset=utf-8";
-	if (path.endsWith(".css")) return "text/css; charset=utf-8";
-	if (path.endsWith(".json")) return "application/json; charset=utf-8";
-	if (path.endsWith(".svg")) return "image/svg+xml";
-	if (path.endsWith(".png")) return "image/png";
-	if (path.endsWith(".ico")) return "image/x-icon";
-	if (path.endsWith(".webp")) return "image/webp";
-	if (path.endsWith(".woff2")) return "font/woff2";
-	if (path.endsWith(".otf")) return "font/otf";
-	return "application/octet-stream";
-}
-
 function walkFiles(dir: string): string[] {
 	return readdirSync(dir)
 		.flatMap((name) => {
 			const path = join(dir, name);
-			const stat = statSync(path);
-			return stat.isDirectory() ? walkFiles(path) : stat.isFile() ? [path] : [];
+			const entry = statSync(path);
+			return entry.isDirectory() ? walkFiles(path) : entry.isFile() ? [path] : [];
 		})
 		.sort();
 }
 
-const dashboardDir = join(root, "surfaces", "dashboard", "build");
-if (!existsSync(join(dashboardDir, "index.html"))) {
-	throw new Error(
-		`Dashboard build is missing at ${dashboardDir}. Run bun run build:dashboard before build:native-bun.`,
-	);
-}
-const templatesDir = join(root, "surfaces", "cli", "templates");
-const skillsDir = join(root, "skills");
-const hermesPluginDir = join(root, "integrations", "hermes-agent", "connector", "hermes-plugin");
-const graphiqScriptPath = join(root, "scripts", "install-graphiq.sh");
-const workerThreadSmokeEntry = join(buildDir, "worker-thread-smoke.ts");
-writeFileSync(
-	workerThreadSmokeEntry,
-	`import { parentPort, threadId } from "node:worker_threads";
-if (parentPort === null) throw new Error("worker-thread smoke entrypoint requires a parent port");
-parentPort.postMessage({ type: "worker-thread-smoke", pid: process.pid, threadId });
-`,
-);
-
-const workerEntries = [
-	["synthesis-render-worker", "platform/daemon/src/synthesis-render-worker.ts"],
-	["database-integrity-worker", "platform/daemon/src/database-integrity-worker.ts"],
-	["db-owner-worker", "platform/daemon/src/db-owner-worker.ts"],
-	["native-memory-source-worker", "platform/daemon/src/native-memory-source-worker.ts"],
-	["harness-install-worker", "platform/daemon/src/harness-install-worker.ts"],
-	["harness-health-worker", "platform/daemon/src/harness-health-worker.ts"],
-	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],
-	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
-	["worker-thread-smoke", workerThreadSmokeEntry],
-] as const;
-const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
-const coreRequire = createRequire(join(root, "platform", "core", "package.json"));
-const nativeAddonAssets = (() => {
-	const packagePlatformKey = platformKey.startsWith("linux-") ? `${platformKey}-gnu` : platformKey;
-	const packageSuffix = platformKey === "win32-x64" ? "win32-x64-msvc" : packagePlatformKey;
-	const platformPackageName = `@napi-rs/keyring-${packageSuffix}`;
-	try {
-		const keyringPackageJson = coreRequire.resolve("@napi-rs/keyring/package.json");
-		const keyringRequire = createRequire(keyringPackageJson);
-		const platformPackageJson = keyringRequire.resolve(`${platformPackageName}/package.json`);
-		const nodeFile = join(dirname(platformPackageJson), `keyring.${packageSuffix}.node`);
-		if (!existsSync(nodeFile)) {
-			throw new Error(`Required @napi-rs/keyring native asset is missing for ${platformKey}: ${nodeFile}`);
-		}
-		return [{ name: "napi-rs-keyring", contentBase64: readFileSync(nodeFile).toString("base64") }];
-	} catch (error) {
-		throw new Error(
-			`Required @napi-rs/keyring native asset is not resolvable for ${platformKey}: ${platformPackageName} (${(error as Error).message})`,
-		);
-	}
-})();
-
-for (const [name, entry] of workerEntries) {
-	const output = join(workerDir, `${name}.mjs`);
-	runBunBuild(["--target=bun", "--format=esm", "--outfile", output, ...nativeExternalArgs, entry]);
-	assertNoUnbundledRelativeRequires(output, name);
-}
-
-const dashboardAssets = walkFiles(dashboardDir).map((path) => {
-	const relative = path.slice(dashboardDir.length).replaceAll("\\", "/");
-	return {
-		path: relative.startsWith("/") ? relative : `/${relative}`,
-		contentType: contentTypeFor(path),
-		contentBase64: readFileSync(path).toString("base64"),
-	};
-});
-const fileAssetsFor = (dir: string, prefix = "") =>
-	walkFiles(dir).map((path) => {
+function fileAssetsFor(dir: string, prefix = "") {
+	return walkFiles(dir).map((path) => {
 		const relative = path.slice(dir.length).replaceAll("\\", "/");
 		const normalized = relative.startsWith("/") ? relative.slice(1) : relative;
 		return {
@@ -182,8 +76,30 @@ const fileAssetsFor = (dir: string, prefix = "") =>
 			mode: statSync(path).mode & 0o777,
 		};
 	});
-const templateAssets = fileAssetsFor(templatesDir);
-const skillAssets = fileAssetsFor(skillsDir);
+}
+
+const templatesDir = join(root, "surfaces", "cli", "templates");
+const skillsDir = join(root, "skills");
+const hermesPluginDir = join(root, "integrations", "hermes-agent", "connector", "hermes-plugin");
+const graphiqScriptPath = join(root, "scripts", "install-graphiq.sh");
+for (const requiredPath of [templatesDir, skillsDir, hermesPluginDir, graphiqScriptPath]) {
+	if (!existsSync(requiredPath)) throw new Error(`Native CLI asset is missing: ${requiredPath}`);
+}
+
+const coreRequire = createRequire(join(root, "platform", "core", "package.json"));
+const packagePlatformKey = platformKey.startsWith("linux-") ? `${platformKey}-gnu` : platformKey;
+const packageSuffix = platformKey === "win32-x64" ? "win32-x64-msvc" : packagePlatformKey;
+const platformPackageName = `@napi-rs/keyring-${packageSuffix}`;
+const keyringPackageJson = coreRequire.resolve("@napi-rs/keyring/package.json");
+const keyringRequire = createRequire(keyringPackageJson);
+const platformPackageJson = keyringRequire.resolve(`${platformPackageName}/package.json`);
+const keyringNodeFile = join(dirname(platformPackageJson), `keyring.${packageSuffix}.node`);
+if (!existsSync(keyringNodeFile)) {
+	throw new Error(`Required @napi-rs/keyring native asset is missing for ${platformKey}: ${keyringNodeFile}`);
+}
+const nativeAddonAssets = [
+	{ name: "napi-rs-keyring", contentBase64: readFileSync(keyringNodeFile).toString("base64") },
+];
 const connectorAssets = fileAssetsFor(hermesPluginDir, "hermes-agent/hermes-plugin");
 const graphiqAssets = [
 	{
@@ -192,364 +108,47 @@ const graphiqAssets = [
 		mode: statSync(graphiqScriptPath).mode & 0o777,
 	},
 ];
-
-const workerAssets: { name: string; contentBase64: string }[] = [
-	...workerEntries.map(([name]) => ({
-		name,
-		contentBase64: readFileSync(join(workerDir, `${name}.mjs`)).toString("base64"),
-	})),
-];
-const transformersPackageJson = daemonRequire.resolve("@huggingface/transformers/package.json");
-const transformersDir = dirname(transformersPackageJson);
-const transformersRequire = createRequire(transformersPackageJson);
-const onnxRuntimeWebPackageJson = transformersRequire.resolve("onnxruntime-web/package.json");
-const onnxRuntimeWebDir = dirname(onnxRuntimeWebPackageJson);
-const onnxRuntimeWebWasmPath = join(onnxRuntimeWebDir, "dist", "ort.wasm.bundle.min.mjs");
-const onnxRuntimeWebRequire = createRequire(onnxRuntimeWebPackageJson);
-const onnxRuntimeCommonPackageJson = onnxRuntimeWebRequire.resolve("onnxruntime-common/package.json");
-const onnxRuntimeCommonEsmPath = join(dirname(onnxRuntimeCommonPackageJson), "dist", "esm", "index.js");
-const transformersWebRuntimePath = join(transformersDir, "dist", "transformers.web.js");
-let patchedTransformersWebRuntimeSource = readFileSync(transformersWebRuntimePath, "utf8");
-for (const [specifier, resolved] of [
-	["onnxruntime-common", onnxRuntimeCommonEsmPath],
-	["onnxruntime-web/webgpu", onnxRuntimeWebWasmPath],
-] as const) {
-	const externalImport = `from ${JSON.stringify(specifier)};`;
-	if (patchedTransformersWebRuntimeSource.split(externalImport).length !== 2) {
-		throw new Error(`Unsupported @huggingface/transformers web runtime: ${specifier} import changed`);
-	}
-	patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
-		externalImport,
-		`from ${JSON.stringify(resolved)};`,
-	);
-}
-const customRuntimeAnchor = "  ONNX = globalThis[ORT_SYMBOL];\n";
-if (patchedTransformersWebRuntimeSource.split(customRuntimeAnchor).length !== 2) {
-	throw new Error("Unsupported @huggingface/transformers web runtime: custom ONNX runtime anchor changed");
-}
-patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
-	customRuntimeAnchor,
-	`${customRuntimeAnchor}  // The custom-runtime branch does not populate device defaults; pin the\n  // WASM device like the web branch so inference defaults to 'wasm'.\n  supportedDevices.push('wasm');\n  defaultDevices = ['wasm'];\n`,
-);
-const nodeDeviceDefault = /defaultDevices = \["cpu"\];/g;
-if ((patchedTransformersWebRuntimeSource.match(nodeDeviceDefault) ?? []).length !== 1) {
-	throw new Error("Unsupported @huggingface/transformers web runtime: Node device default changed");
-}
-const deviceDefault = /var DEFAULT_DEVICE = apis\.IS_NODE_ENV \? "cpu" : "wasm";/g;
-if ((patchedTransformersWebRuntimeSource.match(deviceDefault) ?? []).length !== 1) {
-	throw new Error("Unsupported @huggingface/transformers web runtime: DEFAULT_DEVICE changed");
-}
-patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
-	deviceDefault,
-	'var DEFAULT_DEVICE = "wasm";',
-);
-for (const [name, specifier] of [
-	["fs", "node:fs"],
-	["path", "node:path"],
-	["url", "node:url"],
-] as const) {
-	const nodeStub = new RegExp(`// ignore-modules:node:${name}\\nvar node_${name}_default = \\{\\};`, "g");
-	if ((patchedTransformersWebRuntimeSource.match(nodeStub) ?? []).length !== 1) {
-		throw new Error(`Unsupported @huggingface/transformers web runtime: node:${name} stub changed`);
-	}
-	patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
-		nodeStub,
-		`import node_${name}_default from ${JSON.stringify(specifier)};`,
-	);
-}
-for (const returnPathAnchor of [
-	"const return_path = apis.IS_NODE_ENV;",
-	"return await getModelFile(pretrained_model_name_or_path, fullPath, true, options, apis.IS_NODE_ENV);",
-]) {
-	if ((patchedTransformersWebRuntimeSource.split(returnPathAnchor).length ?? 0) !== 2) {
-		throw new Error("Unsupported @huggingface/transformers web runtime: return_path anchor changed");
-	}
-	patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replace(
-		returnPathAnchor,
-		returnPathAnchor.replace("apis.IS_NODE_ENV", "false"),
-	);
-}
-const patchedTransformersWebRuntimePath = join(buildDir, "transformers.web.js");
-writeFileSync(patchedTransformersWebRuntimePath, patchedTransformersWebRuntimeSource);
-const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"].map((name) => ({
-	name,
-	contentBase64: readFileSync(join(onnxRuntimeWebDir, "dist", name)).toString("base64"),
-}));
-writeFileSync(
-	join(buildDir, "embedding-worker-transformers-runtime.ts"),
-	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { env, pipeline } = transformers;\n`,
-);
-runBunBuild([
-	"--target=bun",
-	"--format=esm",
-	"--outfile",
-	join(workerDir, "embedding-worker-transformers-runtime.mjs"),
-	...nativeExternalArgs,
-	join(buildDir, "embedding-worker-transformers-runtime.ts"),
-]);
-workerAssets.push({
-	name: "embedding-worker-transformers-runtime",
-	contentBase64: readFileSync(join(workerDir, "embedding-worker-transformers-runtime.mjs")).toString("base64"),
-});
+const skillAssets = fileAssetsFor(skillsDir);
+const templateAssets = fileAssetsFor(templatesDir);
 
 writeFileSync(
 	join(buildDir, "native-assets.ts"),
-	`export const dashboardAssets = ${JSON.stringify(dashboardAssets)} as const;\n` +
-		`export const connectorAssets = ${JSON.stringify(connectorAssets)} as const;\n` +
+	`export const connectorAssets = ${JSON.stringify(connectorAssets)} as const;\n` +
 		`export const graphiqAssets = ${JSON.stringify(graphiqAssets)} as const;\n` +
+		`export const nativeAddonAssets = ${JSON.stringify(nativeAddonAssets)} as const;\n` +
 		`export const skillAssets = ${JSON.stringify(skillAssets)} as const;\n` +
-		`export const templateAssets = ${JSON.stringify(templateAssets)} as const;\n` +
-		`export const workerAssets = ${JSON.stringify(workerAssets)} as const;\n` +
-		`export const wasmAssets = ${JSON.stringify(wasmAssets)} as const;\n` +
-		`export const nativeAddonAssets = ${JSON.stringify(nativeAddonAssets)} as const;\n`,
-);
-
-writeFileSync(
-	join(buildDir, "transformers-web-runtime.ts"),
-	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};
-globalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;
-const transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});
-export const { env, pipeline } = transformers;
-`,
+		`export const templateAssets = ${JSON.stringify(templateAssets)} as const;\n`,
 );
 
 writeFileSync(
 	join(buildDir, "cli-native.ts"),
-	`import { materializeEmbeddedAssetTree, materializeEmbeddedNativeAddon, registerNativeAssets, registerNativeTransformersBindings } from "../platform/daemon/src/native-runtime-assets";
-import tokenizerWasmAsset from ${JSON.stringify(tokenizerWasmPath)};
-import { handoffInspectorParent } from "../surfaces/cli/src/lib/inspector-proxy";
-import { connectorAssets, dashboardAssets, graphiqAssets, nativeAddonAssets, skillAssets, templateAssets, wasmAssets, workerAssets } from "./native-assets";
-import * as transformersWebRuntime from "./transformers-web-runtime";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+	`import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { connectorAssets, graphiqAssets, nativeAddonAssets, skillAssets, templateAssets } from "./native-assets";
 
-process.env.SIGNET_COMPILED_NATIVE = "1";
-registerNativeAssets({ connectors: connectorAssets, dashboard: dashboardAssets, graphiq: graphiqAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets, nativeAddons: nativeAddonAssets });
-registerNativeTransformersBindings(transformersWebRuntime);
-process.env.SIGNET_TIKTOKEN_WASM_PATH ??= tokenizerWasmAsset;
-process.env.SIGNET_VERSION = process.env.SIGNET_VERSION?.trim() || ${JSON.stringify(nativeVersion)};
-process.env.SIGNET_TEMPLATES_DIR ??= materializeEmbeddedAssetTree("templates") ?? "";
-process.env.SIGNET_SKILLS_SOURCE ??= materializeEmbeddedAssetTree("skills") ?? "";
-process.env.SIGNET_CONNECTOR_ASSETS_DIR ??= materializeEmbeddedAssetTree("connectors") ?? "";
+const root = join(tmpdir(), "signet-native", ${JSON.stringify(nativeVersion)});
+function materialize(name: string, assets: readonly { readonly path: string; readonly contentBase64: string; readonly mode?: number }[]): string {
+  const directory = join(root, name);
+  mkdirSync(directory, { recursive: true });
+  for (const asset of assets) {
+    const path = join(directory, asset.path);
+    mkdirSync(join(path, ".."), { recursive: true });
+    writeFileSync(path, Buffer.from(asset.contentBase64, "base64"));
+    if (asset.mode !== undefined && process.platform !== "win32") chmodSync(path, asset.mode);
+  }
+  return directory;
+}
+process.env.SIGNET_TEMPLATES_DIR ??= materialize("templates", templateAssets);
+process.env.SIGNET_SKILLS_SOURCE ??= materialize("skills", skillAssets);
+process.env.SIGNET_CONNECTOR_ASSETS_DIR ??= materialize("connectors", connectorAssets);
+process.env.SIGNET_GRAPHIQ_ASSETS_DIR ??= materialize("graphiq", graphiqAssets);
 if (!process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH?.trim()) {
-	const keyringAddonPath = materializeEmbeddedNativeAddon("napi-rs-keyring");
-	if (keyringAddonPath) process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH = keyringAddonPath;
+  const addon = nativeAddonAssets[0];
+  if (addon !== undefined) process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH = materialize("native", [{ path: "keyring.node", contentBase64: addon.contentBase64 }]) + "/keyring.node";
 }
-
-// When the binary is invoked directly (curl-install + signet install,
-// raw binary from PATH) without a parent process setting SIGNET_DIR,
-// fall back to the binary's own install root so connector plugins
-// extracted to \`<install-root>/runtime/connectors/...\` resolve. npm
-// wrapper installs set this explicitly via launch.js and win the
-// priority check below.
-if (!process.env.SIGNET_DIR?.trim()) {
-	const candidates = [
-		dirname(process.execPath),
-		join(dirname(process.execPath), ".."),
-		join(dirname(process.execPath), "..", ".."),
-	];
-	for (const candidate of candidates) {
-		if (existsSync(join(candidate, "runtime", "connectors"))) {
-			process.env.SIGNET_DIR = candidate;
-			break;
-		}
-	}
-}
-handoffInspectorParent();
-if (process.env.SIGNET_KEYRING_HELPER) {
-	const { runSecretKeyringChild } = await import("../platform/core/src/secrets-keyring-child");
-	await runSecretKeyringChild();
-} else if (process.env.SIGNET_KEYRING_HELPER_SMOKE) {
-	const { getSecretKeyring } = await import("../platform/core/src/secrets-keyring");
-	const startedAt = Date.now();
-	const keyring = getSecretKeyring("native-keyring-smoke");
-	const result = await (keyring.getStatus?.() ?? keyring.get());
-	process.stdout.write(JSON.stringify({ type: "keyring-helper-smoke", elapsedMs: Date.now() - startedAt, result }) + "\\n");
-} else if (process.env.SIGNET_NATIVE_SOURCE_WORKER_SMOKE) {
-	const { mkdtemp, readdir, rm, writeFile } = await import("node:fs/promises");
-	const { tmpdir } = await import("node:os");
-	const { createNativeSourceWorker, NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES } = await import("../platform/daemon/src/native-memory-source-worker");
-	const root = await mkdtemp(join(tmpdir(), "signet-native-source-smoke-"));
-	const worker = createNativeSourceWorker();
-	try {
-		await writeFile(join(root, "a-huge.md"), "x".repeat(NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES));
-		await writeFile(join(root, "b-ok.md"), "ok");
-		const source = { root, files: [{ glob: "**/*.md" as const, kind: "markdown" as const }] };
-		const first = await worker.scan({ source, cursor: null, frontier: null, pageSize: 100 });
-		const second = await worker.scan({ source, cursor: first.nextCursor, frontier: first.frontier, pageSize: 100 });
-		const countFds = async (): Promise<number | null> => {
-			if (process.platform !== "linux") return null;
-			return (await readdir("/proc/self/fd")).length;
-		};
-		const baselineFds = await countFds();
-		const crashEntry = join(root, "crash-worker.mjs");
-		await writeFile(
-			crashEntry,
-			'import { parentPort } from "node:worker_threads";\\nparentPort.postMessage({ version: 1, type: "ready" });\\nparentPort.on("message", () => process.exit(17));\\n',
-		);
-		const crashing = createNativeSourceWorker({ resolveEmbeddedPath: () => crashEntry, circuitCooldownMs: 1 });
-		let failures = 0;
-		while (failures < 30) {
-			try {
-				await crashing.scan({ source, cursor: null, frontier: null, pageSize: 1 });
-			} catch (error) {
-				if (error instanceof Error && error.message.includes("circuit is open")) {
-					await Bun.sleep(2);
-					continue;
-				}
-				failures++;
-			}
-		}
-		await crashing.close();
-		const hangingEntry = join(root, "hanging-worker.mjs");
-		await writeFile(
-			hangingEntry,
-			'import { parentPort } from "node:worker_threads";\\nparentPort.postMessage({ version: 1, type: "ready" });\\nparentPort.on("message", () => {});\\n',
-		);
-		const hanging = createNativeSourceWorker({ resolveEmbeddedPath: () => hangingEntry });
-		const pending = hanging.scan({ source, cursor: null, frontier: null, pageSize: 1 });
-		await Bun.sleep(20);
-		await hanging.cancel();
-		const cancelled = await pending.then(
-			() => false,
-			(error: unknown) => error instanceof Error && error.message.includes("cancelled"),
-		);
-		await hanging.close();
-		Bun.gc(true);
-		await Bun.sleep(20);
-		const finalFds = await countFds();
-		process.stdout.write(
-			JSON.stringify({
-				type: "native-source-worker-smoke",
-				rejected: first.rejected.map((item) => item.code),
-				continued: second.files.map((file) => file.path),
-				complete: second.complete,
-				failures,
-				cancelled,
-				fdDelta: baselineFds === null || finalFds === null ? null : finalFds - baselineFds,
-			}) + "\\n",
-		);
-	} finally {
-		await worker.close();
-		await rm(root, { recursive: true, force: true });
-	}
-} else if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PROXY_TARGET) {
-	const { runInspectorProxyFromEnvironment } = await import("../surfaces/cli/src/lib/inspector-proxy");
-	await runInspectorProxyFromEnvironment();
-} else if (process.env.SIGNET_DREAMING_MCP_CONFIG_SMOKE) {
-	const { createDreamingAcpxMcpConfig } = await import("../platform/daemon/src/pipeline/acpx-dreaming-mcp");
-	const config = createDreamingAcpxMcpConfig({
-		agentId: "native-smoke",
-		passId: "native-smoke-pass",
-		daemonUrl: "http://127.0.0.1:1",
-	});
-	try {
-		process.stdout.write(readFileSync(config.path, "utf8") + "\\n");
-	} finally {
-		config.dispose();
-	}
-} else if (process.env.SIGNET_MCP_STDIO_WORKER) {
-	const { runMcpStdio } = await import("../platform/daemon/src/mcp-stdio-runtime");
-	await runMcpStdio();
-} else if (process.env.SIGNET_DREAMING_TOKEN_WORKER_SMOKE) {
-	const { DreamingBacklogTokenCache } = await import("../platform/daemon/src/pipeline/dreaming-token-cache");
-	const cache = new DreamingBacklogTokenCache();
-	try {
-		const first = await cache.replaceExactSnapshot("native-smoke", [
-			{ key: "large", revision: "large-v1", text: "x".repeat(5_000) },
-		]);
-		const second = await cache.replaceExactSnapshot("native-smoke", [
-			{ key: "large", revision: "large-v1", text: "x".repeat(5_000) },
-			{ key: "later", revision: "later-v1", text: "ok" },
-		]);
-		process.stdout.write(JSON.stringify({ type: "dreaming-token-count", first, second }) + "\\n");
-	} finally {
-		cache.stop();
-	}
-} else if (process.env.SIGNET_RUNTIME_VERSION_SMOKE) {
-	process.stdout.write(JSON.stringify({ type: "runtime-version", bun: Bun.version }) + "\\n");
-} else if (process.env.SIGNET_NATIVE_WORKER_THREAD_SMOKE) {
-	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/native-runtime-assets");
-	const workerPath = resolveEmbeddedWorkerPath("worker-thread-smoke");
-	if (workerPath === null) throw new Error("worker-thread smoke requires an embedded worker asset");
-	const { Worker } = await import("node:worker_threads");
-	const worker = new Worker(workerPath, { type: "module" });
-	try {
-		const message = await new Promise<{ readonly pid: number; readonly threadId: number }>((resolve, reject) => {
-			let settled = false;
-			const finish = (operation: () => void): void => {
-				if (settled) return;
-				settled = true;
-				operation();
-			};
-			worker.once("message", (value: unknown) => {
-				if (
-					typeof value !== "object" ||
-					value === null ||
-					typeof (value as { pid?: unknown }).pid !== "number" ||
-					typeof (value as { threadId?: unknown }).threadId !== "number"
-				) {
-					finish(() => reject(new Error("worker-thread smoke returned an invalid message")));
-					return;
-				}
-				const message = value as { readonly pid: number; readonly threadId: number };
-				finish(() => resolve(message));
-			});
-			worker.once("error", (error: unknown) => finish(() => reject(error)));
-			worker.once("exit", (code: number) => {
-				if (code !== 0) finish(() => reject(new Error(\`worker-thread smoke exited with code \${code}\`)));
-			});
-		});
-		process.stdout.write(
-			JSON.stringify({
-				type: "worker-thread-smoke",
-				parentPid: process.pid,
-				workerPid: message.pid,
-				workerThreadId: message.threadId,
-			}) + "\\n",
-		);
-	} finally {
-		await worker.terminate();
-	}
-} else if (process.env.SIGNET_HEALTH_INSPECTION) {
-	await import("../platform/daemon/src/harness-health-worker");
-} else if (process.env.SIGNET_DB_OWNER_WORKER) {
-	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
-	runDbOwnerWorker();
-} else if (process.env.SIGNET_INSTALL_HARNESS) {
-	const { runHarnessInstallWorker } = await import("../platform/daemon/src/harness-install-worker");
-	await runHarnessInstallWorker();
-} else if (process.env.SIGNET_DB_OWNER_CLIENT_SMOKE) {
-	const dbPath = process.env.SIGNET_DB_OWNER_DB_PATH;
-	if (!dbPath) throw new Error("DB owner client smoke requires SIGNET_DB_OWNER_DB_PATH");
-	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/native-runtime-assets");
-	if (resolveEmbeddedWorkerPath("db-owner-worker") === null) {
-		throw new Error("DB owner client smoke requires embedded db-owner-worker asset");
-	}
-	const { createDbOwnerClient } = await import("../platform/daemon/src/db-owner-client");
-	const client = createDbOwnerClient({ dbPath });
-	try {
-		const handle = client.submit<readonly { readonly value: number }[]>(
-			{ kind: "query", statement: { sql: "SELECT 1 AS value", result: "all" } },
-			// The compiled client launches a nested copy of this binary as its
-			// owner. Allow slow macOS Intel runners to finish startup before the
-			// query deadline expires.
-			{ operation: "native.client-smoke", lane: "read", deadlineMs: 30_000 },
-		);
-		const result = await handle.result;
-		process.stdout.write(\`\${JSON.stringify({ type: "client-result", result })}\\n\`);
-	} finally {
-		await client.close();
-	}
-} else if (process.env.SIGNET_DB_OWNER_DB_PATH) {
-	const { runDbOwnerWorker } = await import("../platform/daemon/src/db-owner-worker");
-	runDbOwnerWorker();
-} else if (process.env.SIGNET_DATABASE_INTEGRITY_DB_PATH) {
-	const { runDatabaseIntegrityWorker } = await import("../platform/daemon/src/database-integrity-worker");
-	runDatabaseIntegrityWorker();
-} else {
-	await import("../surfaces/cli/src/cli.ts");
-}
+process.env.SIGNET_VERSION = process.env.SIGNET_VERSION?.trim() || ${JSON.stringify(nativeVersion)};
+await import("../surfaces/cli/src/cli.ts");
 `,
 );
 
@@ -562,8 +161,7 @@ runBunBuild([
 	".native-build/cli-native.ts",
 ]);
 
-console.log(`Built native Bun executable: ${outfile}`);
-
+console.log(`Built native CLI executable: ${outfile}`);
 if (!process.env.SIGNET_NATIVE_PLATFORM) {
 	const localName = platform() === "win32" ? "signet.exe" : "signet";
 	const localPath = join(outDir, localName);
