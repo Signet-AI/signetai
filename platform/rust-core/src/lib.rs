@@ -528,7 +528,7 @@ fn normalize_import_files(files: &Value) -> Result<Vec<Value>, CoreError> {
             let name = object
                 .get("name")
                 .and_then(Value::as_str)
-                .filter(|name| !name.trim().is_empty())
+                .filter(|name| !name.trim().is_empty() && name.len() <= 512)
                 .ok_or_else(|| CoreError::InvalidInput("file name is required".into()))?;
             let mut normalized = object.clone();
             let id = object
@@ -549,54 +549,36 @@ fn execute_operation(
     operation: Operation,
 ) -> Result<Value, CoreError> {
     match operation {
-        Operation::TranscriptImportCreate {
-            agent_id,
-            schema_id,
-            duplicate_mode,
-            files,
-        } => {
-            let agent_id = required_agent(&agent_id)?;
-            if schema_id != "signet-export"
-                || !matches!(duplicate_mode.as_str(), "skip" | "replace" | "reimport")
-            {
-                return Err(CoreError::InvalidInput(
-                    "unsupported import schema or duplicate mode".into(),
-                ));
-            }
-            let files = normalize_import_files(&files)?;
-            let id = uuid::Uuid::new_v4().to_string();
-            let tx = connection.transaction()?;
-            tx.execute("INSERT INTO transcript_import_jobs (id,agent_id,schema_id,duplicate_mode,state,files,created_at,updated_at) VALUES (?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,schema_id,duplicate_mode, "staging", serde_json::to_string(&files)?])?;
-            for (ordinal, file) in files.iter().enumerate() {
-                tx.execute("INSERT INTO transcript_import_files (id,job_id,agent_id,ordinal,name,state,storage_state,upload_generation,upload_offset,upload_digest,size_bytes,content,created_at,updated_at) VALUES (?,?,?,?,?,'staging','uploading',0,0,'',0,x'',datetime('now'),datetime('now'))", params![file["id"].as_str().unwrap_or_default(),id,agent_id,ordinal as i64,file["name"].as_str().unwrap_or_default()])?;
-            }
-            tx.commit()?;
-            Ok(
-                json!({"id":id,"jobId":id,"agentId":agent_id,"schemaId":schema_id,"duplicateMode":duplicate_mode,"state":"staging","files":files}),
-            )
+        Operation::TranscriptImportCreate { agent_id, workspace_id, schema_id, duplicate_mode, files } => {
+            let agent_id=required_agent(&agent_id)?; let workspace_id=bounded_text(&workspace_id,"workspace id",256)?;
+            let files=normalize_import_files(&files)?;
+            let mut ids=std::collections::HashSet::new(); for f in &files { if !ids.insert(f["id"].as_str().unwrap_or_default()) { return Err(CoreError::InvalidInput("duplicate file id".into())); } }
+            let id=uuid::Uuid::new_v4().to_string(); let tx=connection.transaction()?;
+            tx.execute("INSERT INTO transcript_import_jobs (id,agent_id,workspace_id,schema_id,duplicate_mode,state,files,created_at,updated_at) VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now'))",params![id,agent_id,workspace_id,schema_id,duplicate_mode,"staging",serde_json::to_string(&files)?])?;
+            for (ordinal,file) in files.iter().enumerate() { tx.execute("INSERT INTO transcript_import_files (id,job_id,agent_id,workspace_id,ordinal,name,state,storage_state,upload_generation,upload_offset,upload_digest,size_bytes,content,created_at,updated_at) VALUES (?,?,?,?,?,?,'staging','uploading',0,0,'',0,x'',datetime('now'),datetime('now'))",params![file["id"].as_str(),id,agent_id,workspace_id,ordinal as i64,file["name"].as_str()])?; }
+            tx.commit()?; Ok(json!({"id":id,"jobId":id,"agentId":agent_id,"workspaceId":workspace_id,"schemaId":schema_id,"duplicateMode":duplicate_mode,"state":"staging","files":files}))
         }
-        Operation::TranscriptImportGet { agent_id, id } => {
-            let value: Option<String> = connection.query_row("SELECT json_object('id',id,'jobId',id,'agentId',agent_id,'schemaId',schema_id,'duplicateMode',duplicate_mode,'state',state,'files',json(files),'createdAt',created_at,'updatedAt',updated_at) FROM transcript_import_jobs WHERE id=? AND agent_id=?", params![id, required_agent(&agent_id)?], |r| r.get(0)).optional()?;
-            value
-                .map(|v| serde_json::from_str(&v))
-                .transpose()?
-                .ok_or(CoreError::NotFound)
+        Operation::TranscriptImportGet { agent_id, workspace_id, id } => {
+            let v:Option<String>=connection.query_row("SELECT json_object('id',id,'jobId',id,'agentId',agent_id,'workspaceId',workspace_id,'schemaId',schema_id,'duplicateMode',duplicate_mode,'state',state,'files',json(files),'createdAt',created_at,'updatedAt',updated_at) FROM transcript_import_jobs WHERE id=? AND agent_id=? AND workspace_id=?",params![id,required_agent(&agent_id)?,workspace_id],|r|r.get(0)).optional()?; v.map(|x|serde_json::from_str(&x)).transpose()?.ok_or(CoreError::NotFound)
         }
-        Operation::TranscriptImportFile { agent_id, job_id, file_id, generation, action, offset, length, checksum, content } => {
-            let agent_id = required_agent(&agent_id)?;
-            if content.len() > 8 * 1024 * 1024 { return Err(CoreError::InvalidInput("upload exceeds 8 MiB".into())); }
-            let tx = connection.transaction()?;
-            let row: (String,i64,Option<i64>,i64,String) = tx.query_row("SELECT storage_state,upload_generation,upload_size,upload_offset,upload_digest FROM transcript_import_files WHERE id=? AND job_id=? AND agent_id=?",params![file_id,job_id,agent_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?.ok_or(CoreError::NotFound)?;
-            if row.1 != generation { return Err(CoreError::InvalidInput("upload generation mismatch".into())); }
-            match action.as_str() {
-                "begin" => { let n=length.ok_or_else(||CoreError::InvalidInput("upload length is required".into()))?; if n<0 || n as usize>8*1024*1024 { return Err(CoreError::InvalidInput("upload length exceeds 8 MiB".into())); } tx.execute("UPDATE transcript_import_files SET upload_size=?,upload_offset=0,upload_digest='',content_hash=NULL,size_bytes=0,storage_state='uploading',content=x'',updated_at=datetime('now') WHERE id=? AND job_id=? AND agent_id=? AND upload_generation=?",params![n,file_id,job_id,agent_id,generation])?; }
-                "append" => { let expected=offset.ok_or_else(||CoreError::InvalidInput("upload offset is required".into()))?; if expected != row.3 { return Err(CoreError::InvalidInput(format!("upload offset mismatch; expected {}",row.3))); } let declared=row.2.ok_or_else(||CoreError::InvalidInput("upload length is required".into()))?; if row.3+content.len() as i64>declared { return Err(CoreError::InvalidInput("upload exceeds declared length".into())); } let mut h=Sha256::new(); h.update(&content); let digest=format!("{:x}",h.finalize()); if let Some(expected)=checksum { if expected != digest && expected != format!("sha256:{digest}") { return Err(CoreError::InvalidInput("upload checksum mismatch".into())); } } tx.execute("UPDATE transcript_import_files SET content=content||?,upload_offset=?,upload_digest=?,size_bytes=?,updated_at=datetime('now') WHERE id=? AND job_id=? AND agent_id=? AND upload_generation=?",params![content,row.3+content.len() as i64,digest,row.3+content.len() as i64,file_id,job_id,agent_id,generation])?; }
-                "finalize" => { if row.2 != Some(row.3) { return Err(CoreError::InvalidInput("upload is incomplete".into())); } if row.0 != "sealed" { let bytes:Vec<u8>=tx.query_row("SELECT content FROM transcript_import_files WHERE id=?",params![file_id],|r|r.get(0))?; let mut h=Sha256::new(); h.update(&bytes); let digest=format!("{:x}",h.finalize()); tx.execute("UPDATE transcript_import_files SET storage_state='sealed',state='ready',content_hash=?,updated_at=datetime('now') WHERE id=? AND job_id=? AND agent_id=? AND upload_generation=?",params![digest,file_id,job_id,agent_id,generation])?; } }
-                "reset" => { tx.execute("UPDATE transcript_import_files SET storage_state='uploading',upload_generation=upload_generation+1,upload_offset=0,upload_size=NULL,upload_digest='',content_hash=NULL,size_bytes=0,content=x'',updated_at=datetime('now') WHERE id=? AND job_id=? AND agent_id=? AND storage_state IN ('uploading','purged')",params![file_id,job_id,agent_id])?; }
-                "content" => { let bytes:Vec<u8>=tx.query_row("SELECT content FROM transcript_import_files WHERE id=? AND job_id=? AND agent_id=? AND storage_state='sealed'",params![file_id,job_id,agent_id],|r|r.get(0)).optional()?.ok_or(CoreError::NotFound)?; let text=String::from_utf8(bytes).map_err(|_|CoreError::InvalidInput("content is not UTF-8".into()))?; tx.commit()?; return Ok(json!({"content":text,"generation":generation})); }
-                _ => return Err(CoreError::InvalidInput("unsupported file action".into())),
-            }
-            tx.commit()?; Ok(json!({"fileId":file_id,"state":if action=="finalize" {"sealed"} else {"uploading"},"generation":generation,"offset":offset.unwrap_or(0)+content.len() as i64}))
+        Operation::TranscriptImportList { agent_id, workspace_id, limit } => {
+            let mut s=connection.prepare("SELECT json_object('id',id,'jobId',id,'agentId',agent_id,'workspaceId',workspace_id,'schemaId',schema_id,'duplicateMode',duplicate_mode,'state',state,'files',json(files),'createdAt',created_at,'updatedAt',updated_at) FROM transcript_import_jobs WHERE agent_id=? AND workspace_id=? AND state='completed' ORDER BY created_at DESC LIMIT ?")?;
+            let rows=s.query_map(params![required_agent(&agent_id)?,workspace_id,limit.clamp(1,100) as i64],|r|r.get::<_,String>(0))?; Ok(json!({"imports":rows.map(|r|Ok(serde_json::from_str::<Value>(&r?)?)).collect::<Result<Vec<_>,CoreError>>()?}))
+        }
+        Operation::TranscriptImportFile { agent_id, workspace_id, job_id, file_id, generation, action, offset, length, checksum, content } => {
+            let agent_id=required_agent(&agent_id)?; let tx=connection.transaction()?;
+            let row:Option<(String,i64,Option<i64>,i64,Vec<u8>,String)>=tx.query_row("SELECT storage_state,upload_generation,upload_size,upload_offset,content,upload_digest FROM transcript_import_files WHERE id=? AND job_id=? AND agent_id=? AND workspace_id=?",params![file_id,job_id,agent_id,workspace_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))).optional()?; let Some((state,gen,size,pos,bytes,digest))=row else{return Err(CoreError::NotFound)};
+            if gen!=generation{return Err(CoreError::InvalidInput("upload generation mismatch".into()));}
+            if content.len()>8*1024*1024{return Err(CoreError::InvalidInput("upload exceeds 8 MiB".into()));}
+            let sha=|b:&[u8]| format!("{:x}",Sha256::digest(b)); let valid_checksum=|c:&str,d:&str| c==d || c==format!("sha256:{d}");
+            match action.as_str(){
+              "begin"=>{let n=length.ok_or_else(||CoreError::InvalidInput("upload length is required".into()))?; if n<0||n>8*1024*1024{return Err(CoreError::InvalidInput("upload length exceeds 8 MiB".into()))}; if state=="sealed"{return Ok(json!({"fileId":file_id,"state":"sealed","generation":gen,"offset":pos}))}; tx.execute("UPDATE transcript_import_files SET upload_size=?,upload_offset=0,upload_digest='',content_hash=NULL,size_bytes=0,storage_state='uploading',state='staging',content=x'',updated_at=datetime('now') WHERE id=?",params![n,file_id])?;}
+              "append"=>{if state!="uploading"{return Err(CoreError::InvalidInput("file is not uploading".into()))}; let o=offset.ok_or_else(||CoreError::InvalidInput("upload offset is required".into()))?; if o!=pos{return Err(CoreError::InvalidInput("upload offset mismatch".into()))}; let n=size.ok_or_else(||CoreError::InvalidInput("upload length is required".into()))?; if pos+content.len() as i64>n{return Err(CoreError::InvalidInput("upload exceeds declared length".into()))}; if let Some(c)=checksum.as_deref(){if !valid_checksum(c,&sha(&content)){return Err(CoreError::InvalidInput("upload checksum mismatch".into()))}}; let all=[bytes.as_slice(),content.as_slice()].concat(); let d=sha(&all); tx.execute("UPDATE transcript_import_files SET content=?,upload_offset=?,upload_digest=?,size_bytes=?,updated_at=datetime('now') WHERE id=?",params![all,pos+content.len() as i64,d,pos+content.len() as i64,file_id])?;}
+              "finalize"=>{if state=="sealed"{return Ok(json!({"fileId":file_id,"state":"sealed","generation":gen,"offset":pos}))}; if size!=Some(pos){return Err(CoreError::InvalidInput("upload is incomplete".into()))}; if let Some(c)=checksum.as_deref(){if !valid_checksum(c,&sha(&bytes)){return Err(CoreError::InvalidInput("final checksum mismatch".into()))}}; let d=sha(&bytes); tx.execute("UPDATE transcript_import_files SET storage_state='sealed',state='ready',content_hash=?,updated_at=datetime('now') WHERE id=?",params![d,file_id])?;}
+              "reset"=>{let ng=gen+1; tx.execute("UPDATE transcript_import_files SET storage_state='uploading',state='staging',upload_generation=?,upload_offset=0,upload_size=NULL,upload_digest='',content_hash=NULL,size_bytes=0,content=x'',updated_at=datetime('now') WHERE id=?",params![ng,file_id])?;}
+              "content"=>{if state!="sealed"{return Err(CoreError::NotFound)}; tx.commit()?; return Ok(json!({"contentBytes":bytes,"contentType":"application/octet-stream","generation":gen,"offset":pos}));}
+              _=>return Err(CoreError::InvalidInput("unsupported file action".into()))}
+            let v: (i64,i64,String)=tx.query_row("SELECT upload_generation,upload_offset,storage_state FROM transcript_import_files WHERE id=?",params![file_id],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?; tx.commit()?; Ok(json!({"fileId":file_id,"state":v.2,"generation":v.0,"offset":v.1}))
         }
         Operation::TranscriptUpsert {
             agent_id,
@@ -2452,16 +2434,24 @@ pub enum Operation {
     },
     TranscriptImportCreate {
         agent_id: String,
+        workspace_id: String,
         schema_id: String,
         duplicate_mode: String,
         files: Value,
     },
     TranscriptImportGet {
         agent_id: String,
+        workspace_id: String,
         id: String,
+    },
+    TranscriptImportList {
+        agent_id: String,
+        workspace_id: String,
+        limit: usize,
     },
     TranscriptImportFile {
         agent_id: String,
+        workspace_id: String,
         job_id: String,
         file_id: String,
         generation: i64,
@@ -2818,8 +2808,8 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS pipeline_state (agent_id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'idle', paused INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS sessions (key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, runtime_path TEXT, project TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(key, agent_id));
          CREATE TABLE IF NOT EXISTS event_records (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, session_key TEXT, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS transcript_import_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, schema_id TEXT NOT NULL, duplicate_mode TEXT NOT NULL, state TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS transcript_import_files (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, ordinal INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, storage_state TEXT NOT NULL, upload_generation INTEGER NOT NULL DEFAULT 0, upload_offset INTEGER NOT NULL DEFAULT 0, upload_size INTEGER, upload_digest TEXT NOT NULL DEFAULT '', content_hash TEXT, size_bytes INTEGER NOT NULL DEFAULT 0, content BLOB NOT NULL DEFAULT x'', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS transcript_import_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', schema_id TEXT NOT NULL, duplicate_mode TEXT NOT NULL, state TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS transcript_import_files (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', ordinal INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, storage_state TEXT NOT NULL, upload_generation INTEGER NOT NULL DEFAULT 0, upload_offset INTEGER NOT NULL DEFAULT 0, upload_size INTEGER, upload_digest TEXT NOT NULL DEFAULT '', content_hash TEXT, size_bytes INTEGER NOT NULL DEFAULT 0, content BLOB NOT NULL DEFAULT x'', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS transcript_import_files_scope ON transcript_import_files(job_id,agent_id,ordinal);
          CREATE TABLE IF NOT EXISTS session_transcripts (session_key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, project TEXT, content TEXT NOT NULL, content_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, PRIMARY KEY(agent_id, session_key));
          CREATE INDEX IF NOT EXISTS event_records_scope ON event_records(agent_id, session_key, id);

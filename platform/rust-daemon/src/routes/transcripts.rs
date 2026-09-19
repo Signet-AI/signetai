@@ -33,6 +33,16 @@ struct CreateImport {
 fn default_schema() -> String {
     "signet-export".into()
 }
+fn workspace(headers: &HeaderMap) -> String {
+    headers
+        .get("x-signet-workspace-id")
+        .or_else(|| headers.get("x-workspace-id"))
+        .or_else(|| headers.get("x-signet-workspace"))
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or("default")
+        .to_owned()
+}
 fn default_mode() -> String {
     "skip".into()
 }
@@ -76,6 +86,7 @@ async fn create(
                 &state,
                 Operation::TranscriptImportCreate {
                     agent_id,
+                    workspace_id: workspace(&headers),
                     schema_id,
                     duplicate_mode,
                     files: Value::Array(body.files),
@@ -95,6 +106,7 @@ async fn get_job(
             &state,
             Operation::TranscriptImportGet {
                 agent_id: agent(&headers, None, None)?,
+                workspace_id: workspace(&headers),
                 id,
             },
         )
@@ -106,9 +118,17 @@ async fn list(
     headers: HeaderMap,
     Query(q): Query<AgentQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(Json(
-        json!({"imports":execute(&state,Operation::TranscriptList{agent_id:agent(&headers,Some(&q),None)?,limit:100}).await?}),
-    ))
+    Ok(Json(json!(
+        execute(
+            &state,
+            Operation::TranscriptImportList {
+                agent_id: agent(&headers, Some(&q), None)?,
+                workspace_id: workspace(&headers),
+                limit: 100
+            }
+        )
+        .await?
+    )))
 }
 fn scope(
     headers: &HeaderMap,
@@ -159,6 +179,7 @@ async fn file_action(
             &state,
             Operation::TranscriptImportFile {
                 agent_id: agent(&headers, None, None)?,
+                workspace_id: workspace(&headers),
                 job_id,
                 file_id,
                 generation,
@@ -247,15 +268,21 @@ async fn content(
     )
     .await?
     .0;
-    let text = v
-        .get("content")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_owned();
+    let bytes: Vec<u8> = serde_json::from_value(
+        v.get("contentBytes")
+            .cloned()
+            .unwrap_or(Value::Array(vec![])),
+    )
+    .map_err(|_| ApiError::internal("invalid stored content"))?;
     Ok(Response::builder()
         .status(StatusCode::OK)
-        .header("content-type", "application/x-ndjson")
-        .body(text.into())
+        .header(
+            "content-type",
+            v.get("contentType")
+                .and_then(Value::as_str)
+                .unwrap_or("application/octet-stream"),
+        )
+        .body(bytes.into())
         .unwrap())
 }
 async fn upsert(
@@ -286,7 +313,20 @@ async fn upsert(
         ),
     ))
 }
-async fn unsupported() -> Result<Json<Value>, ApiError> {
+async fn unsupported(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(job_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let _ = execute(
+        &state,
+        Operation::TranscriptImportGet {
+            agent_id: agent(&headers, None, None)?,
+            workspace_id: workspace(&headers),
+            id: job_id,
+        },
+    )
+    .await?;
     Err(ApiError::not_implemented(
         "transcript import execution requires a provider/parser worker",
     ))
