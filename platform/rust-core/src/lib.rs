@@ -850,7 +850,13 @@ fn execute_operation(
                         return Err(CoreError::NotFound);
                     }
                     tx.execute("INSERT INTO memory_feedback(memory_id,agent_id,rating,note,created_at) VALUES(?,?,?,?,datetime('now'))", params![memory_id, agent_id, rating, payload.get("note").and_then(Value::as_str)])?;
-                    record_history(&tx, &memory_id, &agent_id, "feedback", payload.get("note").and_then(Value::as_str))?;
+                    record_history(
+                        &tx,
+                        &memory_id,
+                        &agent_id,
+                        "feedback",
+                        payload.get("note").and_then(Value::as_str),
+                    )?;
                     json!({"recorded":1,"memoryId":memory_id,"rating":rating})
                 }
                 "forget" | "tombstone" => {
@@ -887,9 +893,16 @@ fn execute_operation(
                     json!({"id":memory_id,"content":content})
                 }
                 "timeline" | "lineage" | "review" => {
-                    let memory_id = id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
-                    let exists: i64 = tx.query_row("SELECT count(*) FROM memories WHERE id=? AND agent_id=?", params![memory_id, agent_id], |r| r.get(0))?;
-                    if exists == 0 { return Err(CoreError::NotFound); }
+                    let memory_id =
+                        id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
+                    let exists: i64 = tx.query_row(
+                        "SELECT count(*) FROM memories WHERE id=? AND agent_id=?",
+                        params![memory_id, agent_id],
+                        |r| r.get(0),
+                    )?;
+                    if exists == 0 {
+                        return Err(CoreError::NotFound);
+                    }
                     let mut stmt = tx.prepare("SELECT operation,content,created_at FROM memory_history WHERE memory_id=? AND agent_id=? ORDER BY id")?;
                     let rows = stmt.query_map(params![memory_id, agent_id], |r| Ok(json!({"operation":r.get::<_,String>(0)?,"content":r.get::<_,Option<String>>(1)?,"createdAt":r.get::<_,String>(2)?})))?;
                     json!({"id":memory_id,"items":rows.collect::<Result<Vec<_>,_>>()?})
@@ -909,7 +922,9 @@ fn execute_operation(
                             CoreError::InvalidInput("supersededBy is required".into())
                         })?;
                     if new_id == old_id || required_id(new_id).is_err() {
-                        return Err(CoreError::InvalidInput("supersededBy must be a different valid memory id".into()));
+                        return Err(CoreError::InvalidInput(
+                            "supersededBy must be a different valid memory id".into(),
+                        ));
                     }
                     let target_exists: i64 = tx.query_row(
                         "SELECT count(*) FROM memories WHERE id=? AND agent_id=? AND deleted=0",
@@ -923,9 +938,22 @@ fn execute_operation(
                     if changed == 0 {
                         return Err(CoreError::NotFound);
                     }
-                    let reason = payload.get("reason").or_else(||payload.get("supersededReason")).and_then(Value::as_str);
-                    record_history(&tx, &old_id, &agent_id, "supersede", reason.or(Some(new_id)))?;
-                    let superseded_at: String = tx.query_row("SELECT superseded_at FROM memories WHERE id=? AND agent_id=?", params![old_id, agent_id], |r| r.get(0))?;
+                    let reason = payload
+                        .get("reason")
+                        .or_else(|| payload.get("supersededReason"))
+                        .and_then(Value::as_str);
+                    record_history(
+                        &tx,
+                        &old_id,
+                        &agent_id,
+                        "supersede",
+                        reason.or(Some(new_id)),
+                    )?;
+                    let superseded_at: String = tx.query_row(
+                        "SELECT superseded_at FROM memories WHERE id=? AND agent_id=?",
+                        params![old_id, agent_id],
+                        |r| r.get(0),
+                    )?;
                     json!({"id":old_id,"status":"superseded","supersededBy":new_id,"supersededAt":superseded_at,"supersededReason":reason})
                 }
                 "native-note" => {
