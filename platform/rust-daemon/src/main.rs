@@ -1,6 +1,6 @@
 use axum::{
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{header, HeaderMap, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -23,6 +23,7 @@ struct AppState {
     owner: Arc<WorkspaceOwner>,
     started_at: u64,
     workspace: PathBuf,
+    dashboard: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
@@ -427,11 +428,75 @@ async fn search(
     Ok(Json(json!({ "results": result })))
 }
 
-async fn sources(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> { let agent_id=agent(&headers,None,None)?; Ok(Json(json!({"sources": execute(&state, Operation::ListSources{agent_id}).await?}))) }
-#[derive(Debug, Deserialize)] struct SourceRequest { kind: String, name: String, #[serde(default)] config: Value }
-async fn create_source(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<SourceRequest>) -> Result<(StatusCode,Json<Value>),ApiError> { let agent_id=agent(&headers,None,None)?; Ok((StatusCode::CREATED,Json(execute(&state,Operation::CreateSource{agent_id,kind:req.kind,name:req.name,config:req.config}).await?))) }
-#[derive(Debug, Deserialize)] struct DocumentRequest { source_id: String, path: String, content: String, #[serde(default)] metadata: Value }
-async fn import_document(State(state): State<AppState>, headers: HeaderMap, Json(req): Json<DocumentRequest>) -> Result<(StatusCode,Json<Value>),ApiError> { let agent_id=agent(&headers,None,None)?; Ok((StatusCode::CREATED,Json(execute(&state,Operation::IngestDocument{agent_id,source_id:req.source_id,path:req.path,content:req.content,metadata:req.metadata}).await?))) }
+async fn sources(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    Ok(Json(
+        json!({"sources": execute(&state, Operation::ListSources{agent_id}).await?}),
+    ))
+}
+#[derive(Debug, Deserialize)]
+struct SourceRequest {
+    kind: String,
+    name: String,
+    #[serde(default)]
+    config: Value,
+}
+async fn create_source(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<SourceRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            execute(
+                &state,
+                Operation::CreateSource {
+                    agent_id,
+                    kind: req.kind,
+                    name: req.name,
+                    config: req.config,
+                },
+            )
+            .await?,
+        ),
+    ))
+}
+#[derive(Debug, Deserialize)]
+struct DocumentRequest {
+    source_id: String,
+    path: String,
+    content: String,
+    #[serde(default)]
+    metadata: Value,
+}
+async fn import_document(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<DocumentRequest>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            execute(
+                &state,
+                Operation::IngestDocument {
+                    agent_id,
+                    source_id: req.source_id,
+                    path: req.path,
+                    content: req.content,
+                    metadata: req.metadata,
+                },
+            )
+            .await?,
+        ),
+    ))
+}
 
 async fn features() -> Json<Value> {
     Json(
@@ -471,6 +536,90 @@ fn database_path(workspace: &FsPath) -> PathBuf {
     workspace.join("memory").join("memories.db")
 }
 
+fn resolve_dashboard_path() -> Option<PathBuf> {
+    let candidates = [
+        env::var_os("SIGNET_DASHBOARD_DIR").map(PathBuf::from),
+        env::var_os("SIGNET_DIR")
+            .map(|root| PathBuf::from(root).join("runtime/rust-daemon/dashboard")),
+        env::current_exe().ok().and_then(|path| {
+            path.parent()
+                .and_then(FsPath::parent)
+                .map(|root| root.join("dashboard"))
+        }),
+    ];
+    candidates
+        .into_iter()
+        .flatten()
+        .find(|path| path.join("index.html").is_file())
+}
+
+fn content_type(path: &FsPath) -> &'static str {
+    match path.extension().and_then(|extension| extension.to_str()) {
+        Some("css") => "text/css; charset=utf-8",
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        _ => "application/octet-stream",
+    }
+}
+
+async fn dashboard(State(state): State<AppState>, uri: Uri) -> Response {
+    let Some(root) = state.dashboard else {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "dashboard_unavailable" })),
+        )
+            .into_response();
+    };
+    let raw_path = uri.path().trim_start_matches('/');
+    if raw_path.split('/').any(|part| part == "..") {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let relative = if raw_path.is_empty() || !raw_path.contains('.') {
+        "index.html"
+    } else {
+        raw_path
+    };
+    let path = root.join(relative);
+    let body = match tokio::fs::read(&path).await {
+        Ok(body) => body,
+        Err(_) if relative != "index.html" => {
+            let fallback = root.join("index.html");
+            match tokio::fs::read(&fallback).await {
+                Ok(body) => body,
+                Err(_) => return StatusCode::NOT_FOUND.into_response(),
+            }
+        }
+        Err(_) => return StatusCode::NOT_FOUND.into_response(),
+    };
+    let mime_path = if path.is_file() {
+        path.as_path()
+    } else {
+        FsPath::new("index.html")
+    };
+    let mut response = body.into_response();
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        content_type(mime_path).parse().unwrap(),
+    );
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        if relative == "index.html" {
+            "no-cache"
+        } else {
+            "public, max-age=31536000, immutable"
+        }
+        .parse()
+        .unwrap(),
+    );
+    response
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace_path();
@@ -479,6 +628,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
         owner,
         started_at: now_seconds(),
+        dashboard: resolve_dashboard_path(),
         workspace,
     };
     let host = env::var("SIGNET_BIND").unwrap_or_else(|_| "127.0.0.1".to_owned());
@@ -510,6 +660,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/memory/{id}",
             get(get_one).patch(patch_one).delete(delete_one),
         )
+        .fallback(dashboard)
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(address).await?;
     axum::serve(listener, router)

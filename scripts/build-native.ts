@@ -12,6 +12,7 @@ const nativeDir = join(import.meta.dir, "..", "platform", "native");
 const root = join(import.meta.dir, "..");
 const daemonManifest = join(root, "platform", "rust-daemon", "Cargo.toml");
 const daemonTarget = `${process.platform}-${process.arch}`;
+const dashboardSource = join(root, "surfaces", "dashboard", "dist");
 const daemonBinary = join(
 	root,
 	"platform",
@@ -29,6 +30,7 @@ const stagedDaemon = join(
 	daemonTarget,
 	process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon",
 );
+const stagedDashboard = join(root, "dist", "signetai", "runtime", "rust-daemon", "dashboard");
 
 if (process.env.SIGNET_SKIP_NATIVE_BUILD === "1") {
 	console.log("[signet] skipping native build (SIGNET_SKIP_NATIVE_BUILD=1)");
@@ -56,6 +58,11 @@ try {
 	rmSync(join(stagedDaemon, ".."), { recursive: true, force: true });
 	mkdirSync(join(stagedDaemon, ".."), { recursive: true });
 	cpSync(daemonBinary, stagedDaemon);
+	if (!existsSync(join(dashboardSource, "index.html"))) {
+		throw new Error(`dashboard build is missing: ${join(dashboardSource, "index.html")}`);
+	}
+	rmSync(stagedDashboard, { recursive: true, force: true });
+	cpSync(dashboardSource, stagedDashboard, { recursive: true });
 	if (process.platform !== "win32") chmodSync(stagedDaemon, 0o755);
 	console.log(`[signet] staged Rust daemon: ${stagedDaemon}`);
 } catch {
