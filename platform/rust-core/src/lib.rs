@@ -886,11 +886,15 @@ fn execute_operation(
                     json!({"id":memory_id,"content":content})
                 }
                 "timeline" | "lineage" | "review" => {
-                    let memory_id =
-                        id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
+                    let memory_id = id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
                     let mut stmt = tx.prepare("SELECT operation,content,created_at FROM memory_history WHERE memory_id=? AND agent_id=? ORDER BY id")?;
                     let rows = stmt.query_map(params![memory_id, agent_id], |r| Ok(json!({"operation":r.get::<_,String>(0)?,"content":r.get::<_,Option<String>>(1)?,"createdAt":r.get::<_,String>(2)?})))?;
                     json!({"id":memory_id,"items":rows.collect::<Result<Vec<_>,_>>()?})
+                }
+                "review-queue" => {
+                    let mut stmt = tx.prepare("SELECT id,content,updated_at FROM memories WHERE agent_id=? AND deleted=0 ORDER BY updated_at DESC LIMIT 100")?;
+                    let rows = stmt.query_map(params![agent_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"content":r.get::<_,String>(1)?,"updatedAt":r.get::<_,Option<String>>(2)?})))?;
+                    json!({"items":rows.collect::<Result<Vec<_>,_>>()?})
                 }
                 "supersede" => {
                     let old_id =
@@ -901,7 +905,7 @@ fn execute_operation(
                         .ok_or_else(|| {
                             CoreError::InvalidInput("supersededBy is required".into())
                         })?;
-                    let changed = tx.execute("UPDATE memories SET deleted=1, updated_at=datetime('now') WHERE id=? AND agent_id=? AND deleted=0", params![old_id, agent_id])?;
+                    let changed = tx.execute("UPDATE memories SET deleted=1, superseded_by=?, superseded_at=datetime('now'), superseded_reason=?, updated_at=datetime('now') WHERE id=? AND agent_id=? AND deleted=0", params![new_id, payload.get("reason").or_else(||payload.get("supersededReason")).and_then(Value::as_str), old_id, agent_id])?;
                     if changed == 0 {
                         return Err(CoreError::NotFound);
                     }
@@ -2039,7 +2043,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', created_at TEXT);
          CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', content_hash TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT);
          CREATE TABLE IF NOT EXISTS source_tombstones (agent_id TEXT NOT NULL, source_id TEXT NOT NULL, generation INTEGER NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY(agent_id,source_id));
-         CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT, updated_at TEXT);
+         CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, superseded_by TEXT, superseded_at TEXT, superseded_reason TEXT, created_at TEXT, updated_at TEXT);
          CREATE TABLE IF NOT EXISTS memory_history (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL, agent_id TEXT NOT NULL, operation TEXT NOT NULL, content TEXT, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS ontology_records (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -2112,6 +2116,9 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         [],
     )?;
     ensure_column(&transaction, "schema_migrations", "checksum", "TEXT")?;
+    ensure_column(&transaction, "memories", "superseded_by", "TEXT")?;
+    ensure_column(&transaction, "memories", "superseded_at", "TEXT")?;
+    ensure_column(&transaction, "memories", "superseded_reason", "TEXT")?;
     ensure_column(
         &transaction,
         "api_keys",
