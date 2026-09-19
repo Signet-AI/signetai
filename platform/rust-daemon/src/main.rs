@@ -453,7 +453,7 @@ async fn remember(
         &state,
         Operation::TelemetryRecord {
             agent_id: telemetry_agent,
-            workspace_id: "default".to_owned(),
+            workspace_id: workspace_id(&headers, None),
             event: "memory.remembered".to_owned(),
             payload: json!({"source":"native-memory-route"}),
         },
@@ -683,7 +683,7 @@ struct DocumentRequest {
     workspace_id: Option<String>,
 }
 
-fn document_workspace(headers: &HeaderMap, requested: Option<&str>) -> String {
+pub(crate) fn workspace_id(headers: &HeaderMap, requested: Option<&str>) -> String {
     headers
         .get("x-signet-workspace-id")
         .or_else(|| headers.get("x-workspace-id"))
@@ -696,6 +696,10 @@ fn document_workspace(headers: &HeaderMap, requested: Option<&str>) -> String {
                 .and_then(|value| non_empty(&value))
         })
         .unwrap_or_else(|| "default".to_owned())
+}
+
+fn document_workspace(headers: &HeaderMap, requested: Option<&str>) -> String {
+    workspace_id(headers, requested)
 }
 
 async fn import_document(

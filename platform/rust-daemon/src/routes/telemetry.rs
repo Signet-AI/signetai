@@ -1,5 +1,5 @@
 use super::auth;
-use crate::{execute, ApiError, AppState};
+use crate::{execute, workspace_id, ApiError, AppState};
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
@@ -104,7 +104,7 @@ async fn events(
                 .map(str::to_owned)
         })
         .ok_or_else(|| ApiError::bad_request("agent is required"))?;
-    let workspace = q.workspace.unwrap_or_else(|| "default".into());
+    let workspace = workspace_id(&headers, q.workspace.as_deref());
     check(&authority, &agent, &workspace)?;
     let limit = q.limit.unwrap_or(100);
     if !(1..=10_000).contains(&limit) {
@@ -138,10 +138,11 @@ async fn health(
         .get("agentId")
         .and_then(Value::as_str)
         .unwrap_or("default");
-    check(&authority, agent, "default")?;
+    let workspace = workspace_id(&headers, None);
+    check(&authority, agent, &workspace)?;
     let db = execute(&state, signet_core_native::Operation::Health).await?;
     Ok(Json(
-        json!({"status":"healthy","enabled":true,"events":{"enabled":true,"delivery":"unsupported","aggregation":"unsupported","export":"unsupported","memorySearch":"unsupported"},"database":db}),
+        json!({"status":"healthy","enabled":true,"workspace":workspace,"events":{"enabled":true,"delivery":"unsupported","aggregation":"unsupported","export":"unsupported","memorySearch":"unsupported"},"database":db}),
     ))
 }
 
