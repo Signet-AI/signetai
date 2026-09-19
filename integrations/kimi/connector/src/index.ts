@@ -31,6 +31,7 @@ import {
 	BaseConnector,
 	atomicWriteJson,
 	resolveRemoteDaemonUrl,
+	resolveSignetMcpCommand,
 	type InstallResult,
 	type UninstallResult,
 } from "@signet/connector-base";
@@ -63,20 +64,6 @@ function resolveSignetArgs(): string[] {
 	const signetJs = join(entry, "..", "..", "bin", "signet.js");
 	if (existsSync(signetJs)) return [process.execPath, signetJs];
 	return ["signet"];
-}
-
-export interface KimiMcpStdioConfig {
-	readonly command: string;
-	readonly args: readonly string[];
-}
-
-/** Resolve signet-mcp as { command, args } for Kimi mcp.json (stdio transport). */
-function resolveSignetMcp(): KimiMcpStdioConfig {
-	if (process.platform !== "win32") return { command: "signet-mcp", args: [] };
-	const entry = process.argv[1] || "";
-	const mcpJs = join(entry, "..", "..", "bin", "mcp-stdio.js");
-	if (existsSync(mcpJs)) return { command: process.execPath, args: [mcpJs] };
-	return { command: "signet-mcp", args: [] };
 }
 
 function readEnv(name: string): string | undefined {
@@ -292,7 +279,7 @@ function readMcpJson(path: string): KimiMcpJson | null {
 	}
 }
 
-function patchMcpJson(path: string, mcp: KimiMcpStdioConfig): boolean {
+function patchMcpJson(path: string, mcp: ReturnType<typeof resolveSignetMcpCommand>): boolean {
 	mkdirSync(join(path, ".."), { recursive: true });
 	const config = readMcpJson(path);
 	if (config === null) return false;
@@ -390,7 +377,7 @@ export class KimiConnector extends BaseConnector {
 
 		// 3. Register MCP server in mcp.json
 		const mcpPath = this.getMcpJsonPath();
-		if (patchMcpJson(mcpPath, resolveSignetMcp())) {
+		if (patchMcpJson(mcpPath, resolveSignetMcpCommand())) {
 			configsPatched.push(mcpPath);
 		} else if (readMcpJson(mcpPath) === null) {
 			warnings.push(`Skipped MCP registration — could not parse ${mcpPath}`);
