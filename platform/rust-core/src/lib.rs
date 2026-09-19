@@ -888,6 +888,38 @@ fn execute_operation(
             let rows=s.query_map(params![agent_id,entity_id,entity_id,limit],|r| Ok(json!({"id":r.get::<_,String>(0)?,"fromId":r.get::<_,String>(1)?,"toId":r.get::<_,String>(2)?,"relation":r.get::<_,String>(3)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?}))
         }
+        Operation::KnowledgeAspectCreate { agent_id, workspace_id, entity_id, name, weight } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
+            let entity_id = required_id(&entity_id)?;
+            let name = bounded_text(&name, "aspect name", 256)?;
+            let weight = weight.clamp(0.0, 1.0);
+            let tx = connection.transaction()?;
+            let entity_ok: i64 = tx.query_row("SELECT count(*) FROM kg_entities WHERE id=? AND agent_id=? AND workspace_id=? AND deleted=0", params![entity_id, agent_id, workspace_id], |r| r.get(0))?;
+            if entity_ok != 1 { return Err(CoreError::NotFound); }
+            let id = uuid::Uuid::new_v4().to_string();
+            tx.execute("INSERT INTO kg_aspects(id,agent_id,workspace_id,entity_id,name,canonical_name,weight,created_at,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,entity_id,name,name.to_lowercase(),weight])?;
+            tx.commit()?;
+            Ok(json!({"id":id,"entityId":entity_id,"name":name,"weight":weight}))
+        }
+        Operation::KnowledgeAttributeCreate { agent_id, workspace_id, aspect_id, kind, content, claim_key, group_key, confidence, importance, memory_id } => {
+            let agent_id = required_agent(&agent_id)?; let workspace_id = required_id(&workspace_id)?;
+            let aspect_id = required_id(&aspect_id)?; let kind = bounded_text(&kind,"attribute kind",64)?; let content = bounded_text(&content,"attribute content",4096)?;
+            let tx = connection.transaction()?;
+            let ok: i64 = tx.query_row("SELECT count(*) FROM kg_aspects WHERE id=? AND agent_id=? AND workspace_id=?",params![aspect_id,agent_id,workspace_id],|r|r.get(0))?;
+            if ok != 1 { return Err(CoreError::NotFound); }
+            if let Some(ref mid)=memory_id { let n:i64=tx.query_row("SELECT count(*) FROM memories WHERE id=? AND agent_id=? AND deleted=0",params![mid,agent_id],|r|r.get(0))?; if n!=1{return Err(CoreError::NotFound)} }
+            let id=uuid::Uuid::new_v4().to_string();
+            tx.execute("INSERT INTO kg_attributes(id,agent_id,workspace_id,aspect_id,memory_id,kind,content,normalized_content,claim_key,group_key,confidence,importance,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'active',datetime('now'),datetime('now'))",params![id,agent_id,workspace_id,aspect_id,memory_id,kind,content,content.to_lowercase(),claim_key,group_key,confidence.clamp(0.0,1.0),importance.clamp(0.0,1.0)])?;
+            tx.commit()?; Ok(json!({"id":id,"aspectId":aspect_id,"kind":kind,"content":content,"status":"active"}))
+        }
+        Operation::KnowledgeTree { agent_id, workspace_id, entity_id, depth, max_aspects, max_attributes } => {
+            let agent_id=required_agent(&agent_id)?; let workspace_id=required_id(&workspace_id)?; let entity_id=required_id(&entity_id)?;
+            let mut s=connection.prepare("SELECT id,name,weight FROM kg_aspects WHERE agent_id=? AND workspace_id=? AND entity_id=? ORDER BY weight DESC LIMIT ?")?;
+            let aspects=s.query_map(params![agent_id,workspace_id,entity_id,max_aspects.clamp(1,100) as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"weight":r.get::<_,f64>(2)?})))?;
+            let mut out=Vec::new(); for a in aspects { let mut v=a?; let aid=v["id"].as_str().unwrap_or_default().to_string(); let mut q=connection.prepare("SELECT id,kind,content,status FROM kg_attributes WHERE agent_id=? AND workspace_id=? AND aspect_id=? AND status='active' ORDER BY importance DESC LIMIT ?")?; let rows=q.query_map(params![agent_id,workspace_id,aid,max_attributes.clamp(1,200) as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?; v["attributes"]=json!(rows.collect::<Result<Vec<_>,_>>()?); out.push(v); }
+            Ok(json!({"entityId":entity_id,"aspects":out,"depth":depth.min(3)}))
+        }
         Operation::SessionStart {
             agent_id,
             key,
@@ -944,6 +976,40 @@ fn execute_operation(
             let mut s=connection.prepare("SELECT id,event,payload,created_at FROM event_records WHERE agent_id=? AND (? IS NULL OR session_key=?) ORDER BY id DESC LIMIT ?")?;
             let rows=s.query_map(params![agent_id,key,key,limit],|r| Ok(json!({"id":r.get::<_,i64>(0)?,"event":r.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(3)?})))?;
             Ok(json!({"events":rows.collect::<Result<Vec<_>,_>>()?}))
+        }
+        Operation::HookReceipt { agent_id, receipt_id, checkpoint, hook, session_key, payload } => {
+            let agent_id = required_agent(&agent_id)?;
+            let receipt_id = bounded_text(&receipt_id, "receipt id", 128)?;
+            let hook = bounded_text(&hook, "hook", 128)?;
+            let payload = bounded_json(&payload)?;
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO hook_receipts(receipt_id,agent_id,session_key,hook,checkpoint,payload,created_at) VALUES(?,?,?,?,?,?,datetime('now')) ON CONFLICT(agent_id,receipt_id) DO UPDATE SET checkpoint=excluded.checkpoint,payload=excluded.payload", params![receipt_id,agent_id,session_key,hook,checkpoint,payload])?;
+            tx.commit()?;
+            Ok(json!({"receiptId":receipt_id,"durable":true,"checkpoint":checkpoint}))
+        }
+        Operation::HookReceipts { agent_id, session_key, after_id, limit } => {
+            let agent_id = required_agent(&agent_id)?;
+            let mut s = connection.prepare("SELECT id,receipt_id,session_key,hook,checkpoint,payload,created_at FROM hook_receipts WHERE agent_id=? AND id>? AND (? IS NULL OR session_key=?) ORDER BY id ASC LIMIT ?")?;
+            let rows = s.query_map(params![agent_id,after_id,session_key,session_key,limit.clamp(1,MAX_EVENT_RECORDS) as i64], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"receiptId":r.get::<_,String>(1)?,"sessionKey":r.get::<_,Option<String>>(2)?,"hook":r.get::<_,String>(3)?,"checkpoint":r.get::<_,Option<String>>(4)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(5)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(6)?})))?;
+            Ok(json!({"receipts":rows.collect::<Result<Vec<_>,_>>()?}))
+        }
+        Operation::CrossAgentSend { agent_id, workspace_id, recipient_agent_id, kind, payload } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let recipient_agent_id = required_agent(&recipient_agent_id)?;
+            let kind = bounded_text(&kind, "message kind", 128)?;
+            let payload = bounded_json(&payload)?;
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO cross_agent_messages(workspace_id,sender_agent_id,recipient_agent_id,kind,payload,created_at) VALUES(?,?,?,?,?,datetime('now'))", params![workspace_id,agent_id,recipient_agent_id,kind,payload])?;
+            let id = tx.last_insert_rowid(); tx.commit()?;
+            Ok(json!({"id":id,"workspaceId":workspace_id,"delivered":true}))
+        }
+        Operation::CrossAgentList { agent_id, workspace_id, after_id, limit } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let mut s = connection.prepare("SELECT id,sender_agent_id,recipient_agent_id,kind,payload,created_at FROM cross_agent_messages WHERE workspace_id=? AND recipient_agent_id=? AND id>? ORDER BY id ASC LIMIT ?")?;
+            let rows = s.query_map(params![workspace_id,agent_id,after_id,limit.clamp(1,MAX_EVENT_RECORDS) as i64], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"senderAgentId":r.get::<_,String>(1)?,"recipientAgentId":r.get::<_,String>(2)?,"kind":r.get::<_,String>(3)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
+            Ok(json!({"messages":rows.collect::<Result<Vec<_>,_>>()?}))
         }
     }
 }
@@ -1131,6 +1197,9 @@ pub enum Operation {
         entity_id: String,
         limit: usize,
     },
+    KnowledgeAspectCreate { agent_id: String, workspace_id: String, entity_id: String, name: String, weight: f64 },
+    KnowledgeAttributeCreate { agent_id: String, workspace_id: String, aspect_id: String, kind: String, content: String, claim_key: Option<String>, group_key: Option<String>, confidence: f64, importance: f64, memory_id: Option<String> },
+    KnowledgeTree { agent_id: String, workspace_id: String, entity_id: String, depth: usize, max_aspects: usize, max_attributes: usize },
     SessionStart {
         agent_id: String,
         key: String,
@@ -1155,6 +1224,33 @@ pub enum Operation {
     EventList {
         agent_id: String,
         key: Option<String>,
+        limit: usize,
+    },
+    HookReceipt {
+        agent_id: String,
+        receipt_id: String,
+        checkpoint: Option<String>,
+        hook: String,
+        session_key: Option<String>,
+        payload: Value,
+    },
+    HookReceipts {
+        agent_id: String,
+        session_key: Option<String>,
+        after_id: i64,
+        limit: usize,
+    },
+    CrossAgentSend {
+        agent_id: String,
+        workspace_id: String,
+        recipient_agent_id: String,
+        kind: String,
+        payload: Value,
+    },
+    CrossAgentList {
+        agent_id: String,
+        workspace_id: String,
+        after_id: i64,
         limit: usize,
     },
 }
@@ -1261,8 +1357,10 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS memory_history (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL, agent_id TEXT NOT NULL, operation TEXT NOT NULL, content TEXT, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS ontology_records (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS kg_entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, name TEXT NOT NULL, entity_type TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS kg_relations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, from_id TEXT NOT NULL, to_id TEXT NOT NULL, relation TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS kg_entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', name TEXT NOT NULL, entity_type TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS kg_relations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', from_id TEXT NOT NULL, to_id TEXT NOT NULL, relation TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS kg_aspects (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, entity_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT NOT NULL, weight REAL NOT NULL DEFAULT 0.5, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,entity_id,canonical_name));
+         CREATE TABLE IF NOT EXISTS kg_attributes (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, aspect_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT NOT NULL, claim_key TEXT, group_key TEXT, confidence REAL NOT NULL DEFAULT 0, importance REAL NOT NULL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'active', superseded_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS kg_entities_scope ON kg_entities(agent_id, name);
          CREATE INDEX IF NOT EXISTS kg_relations_scope ON kg_relations(agent_id, from_id, to_id);
          CREATE INDEX IF NOT EXISTS ontology_scope_idx ON ontology_records(agent_id, workspace_id, kind, deleted);
@@ -1276,9 +1374,25 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS session_transcripts (session_key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, project TEXT, content TEXT NOT NULL, content_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, PRIMARY KEY(agent_id, session_key));
          CREATE UNIQUE INDEX IF NOT EXISTS session_transcripts_idempotency ON session_transcripts(agent_id, idempotency_key);
          CREATE INDEX IF NOT EXISTS event_records_scope ON event_records(agent_id, session_key, id);
+         CREATE TABLE IF NOT EXISTS hook_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id TEXT NOT NULL, agent_id TEXT NOT NULL, session_key TEXT, hook TEXT NOT NULL, checkpoint TEXT, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, UNIQUE(agent_id, receipt_id));
+         CREATE INDEX IF NOT EXISTS hook_receipts_scope ON hook_receipts(agent_id, session_key, id);
+         CREATE TABLE IF NOT EXISTS cross_agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, sender_agent_id TEXT NOT NULL, recipient_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS cross_agent_messages_scope ON cross_agent_messages(workspace_id, recipient_agent_id, id);
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
+    ensure_column(&transaction, "kg_entities", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
+    ensure_column(&transaction, "kg_entities", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&transaction, "kg_relations", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
+    ensure_column(&transaction, "kg_relations", "deleted", "INTEGER NOT NULL DEFAULT 0")?;
+    transaction.execute("CREATE TABLE IF NOT EXISTS kg_aspects (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, entity_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT NOT NULL, weight REAL NOT NULL DEFAULT 0.5, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,entity_id,canonical_name))", [])?;
+    transaction.execute("CREATE TABLE IF NOT EXISTS kg_attributes (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, aspect_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT NOT NULL, claim_key TEXT, group_key TEXT, confidence REAL NOT NULL DEFAULT 0, importance REAL NOT NULL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'active', superseded_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)", [])?;
+    transaction.execute("CREATE INDEX IF NOT EXISTS kg_aspects_scope ON kg_aspects(agent_id,workspace_id,entity_id)", [])?;
+    transaction.execute("CREATE INDEX IF NOT EXISTS kg_attributes_scope ON kg_attributes(agent_id,workspace_id,aspect_id,status)", [])?;
+    transaction.execute("UPDATE kg_entities SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    transaction.execute("UPDATE kg_relations SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    transaction.execute("UPDATE kg_entities SET deleted=0 WHERE deleted IS NULL", [])?;
+    transaction.execute("UPDATE kg_relations SET deleted=0 WHERE deleted IS NULL", [])?;
     ensure_column(&transaction, "schema_migrations", "checksum", "TEXT")?;
     ensure_column(
         &transaction,
