@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::{params, types::Value as SqlValue, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -381,6 +381,14 @@ impl Core {
 
     pub fn submit(&self, operation: Operation) -> Result<Value, CoreError> {
         self.call(move |connection| execute_operation(connection, operation))
+    }
+
+    pub fn database_schema(&self) -> Result<Value, CoreError> {
+        self.call(|connection| database_schema(connection))
+    }
+
+    pub fn database_sample(&self, table: String, limit: usize, offset: usize, agent: Option<String>, workspace: Option<String>) -> Result<Value, CoreError> {
+        self.call(move |connection| database_sample(connection, &table, limit, offset, agent.as_deref(), workspace.as_deref()))
     }
 
     /// Claim exactly one executable job on the workspace-owner thread.
@@ -1964,8 +1972,35 @@ fn execute_operation(
     }
 }
 
-pub struct WorkspaceOwner(Core);
+fn database_schema(connection: &Connection) -> Result<Value, CoreError> {
+    let mut stmt = connection.prepare("SELECT name,type,sql FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%' ORDER BY name")?;
+    let mut tables = Vec::new();
+    for row in stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?)))? {
+        let (name, kind, sql) = row?;
+        let mut columns = Vec::new();
+        let pragma = format!("PRAGMA table_info({})", quote_identifier(&name));
+        for c in connection.prepare(&pragma)?.query_map([], |r| Ok(json!({"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"notNull":r.get::<_,i64>(3)? != 0,"default":r.get::<_,Option<String>>(4)?,"primaryKey":r.get::<_,i64>(5)? != 0})))? { columns.push(c?); }
+        let count: i64 = connection.query_row(&format!("SELECT count(*) FROM {}", quote_identifier(&name)), [], |r| r.get(0))?;
+        tables.push(json!({"name":name,"type":kind,"sql":sql,"columns":columns,"indexes":[],"foreignKeys":[],"rowCount":count}));
+    }
+    Ok(json!({"tables":tables,"groups":[],"sample":{"supported":true,"defaultLimit":25,"maxLimit":100,"scope":"native-schema-only"},"complete":true,"unsupported":[]}))
+}
 
+fn quote_identifier(name: &str) -> String { format!("\"{}\"", name.replace('"', "\"\"")) }
+fn database_sample(connection: &Connection, table: &str, limit: usize, offset: usize, agent: Option<&str>, workspace: Option<&str>) -> Result<Value, CoreError> {
+    if !(1..=100).contains(&limit) { return Err(CoreError::InvalidInput("limit must be an integer from 1 to 100".into())); }
+    if table.starts_with("sqlite_") || table.contains("_fts") || table.ends_with("_content") || table.ends_with("_data") || table.ends_with("_idx") || table.ends_with("_docsize") || table.ends_with("_config") { return Err(CoreError::InvalidInput("table is not sampleable".into())); }
+    let exists: Option<String> = connection.query_row("SELECT name FROM sqlite_master WHERE name=? AND type IN ('table','view')", [table], |r| r.get(0)).optional()?;
+    let Some(name) = exists else { return Err(CoreError::NotFound); };
+    let mut stmt = connection.prepare(&format!("SELECT * FROM {} LIMIT ? OFFSET ?", quote_identifier(&name)))?;
+    let names = stmt.column_names().iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
+    let mut rows_out = Vec::new();
+    let mut rows = stmt.query(params![limit as i64, offset as i64])?;
+    while let Some(row) = rows.next()? { let mut obj=serde_json::Map::new(); for (i,n) in names.iter().enumerate() { let v: SqlValue=row.get(i)?; obj.insert(n.clone(), match v { SqlValue::Null=>Value::Null, SqlValue::Integer(v)=>json!(v), SqlValue::Real(v)=>json!(v), SqlValue::Text(v)=>json!(v), SqlValue::Blob(v)=>json!(format!("[blob:{} bytes]",v.len())) }); } rows_out.push(Value::Object(obj)); }
+    Ok(json!({"table":name,"limit":limit,"offset":offset,"columns":names,"rows":rows_out,"complete":rows_out.len()<limit,"scope":"native-schema-only"}))
+}
+
+pub struct WorkspaceOwner(Core);
 impl Clone for WorkspaceOwner {
     fn clone(&self) -> Self {
         Self(self.0.clone())
@@ -1992,6 +2027,14 @@ impl WorkspaceOwner {
     pub fn worker_claim(&self) -> Result<Option<WorkerJob>, CoreError> {
         self.0.worker_claim()
     }
+    pub fn database_schema(&self) -> Result<Value, CoreError> {
+        self.0.database_schema()
+    }
+
+    pub fn database_sample(&self, table: String, limit: usize, offset: usize, agent: Option<String>, workspace: Option<String>) -> Result<Value, CoreError> {
+        self.0.database_sample(table, limit, offset, agent, workspace)
+    }
+
     pub fn finish_worker_job(
         &self,
         job: WorkerJob,
