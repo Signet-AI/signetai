@@ -1180,6 +1180,40 @@ fn execute_operation(
             tx.commit()?;
             Ok(result)
         }
+        Operation::SecretList {
+            agent_id,
+            workspace_id,
+            limit,
+        } => {
+            let agent_id = bounded_text(&agent_id, "agent id", 256)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let limit = bounded_page_limit(Some(limit))?;
+            let mut stmt = connection.prepare("SELECT name,provider,created_at,updated_at FROM secrets WHERE agent_id=? AND workspace_id=? AND deleted=0 ORDER BY rowid DESC LIMIT ?")?;
+            let rows = stmt.query_map(params![agent_id, workspace_id, limit as i64], |r| Ok(json!({"name":r.get::<_,String>(0)?,"provider":r.get::<_,String>(1)?,"createdAt":r.get::<_,String>(2)?,"updatedAt":r.get::<_,String>(3)?})))?;
+            Ok(json!({"items": rows.collect::<Result<Vec<_>,_>>()?}))
+        }
+        Operation::SecretUpsert {
+            agent_id,
+            workspace_id,
+            name,
+            value,
+        } => {
+            let agent_id = bounded_text(&agent_id, "agent id", 256)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let name = bounded_text(&name, "secret name", 256)?;
+            let value = bounded_text(&value, "secret value", 64 * 1024)?;
+            let id = uuid::Uuid::new_v4().to_string();
+            connection.execute("INSERT INTO secrets(id,agent_id,workspace_id,name,provider,value,deleted,created_at,updated_at) VALUES(?,?,?,?, 'local', ?,0,datetime('now'),datetime('now')) ON CONFLICT(agent_id,workspace_id,name) DO UPDATE SET value=excluded.value,deleted=0,updated_at=datetime('now')", params![id,agent_id,workspace_id,name,value])?;
+            Ok(json!({"name":name,"provider":"local"}))
+        }
+        Operation::SecretDelete {
+            agent_id,
+            workspace_id,
+            name,
+        } => {
+            let changed = connection.execute("UPDATE secrets SET deleted=1,updated_at=datetime('now') WHERE agent_id=? AND workspace_id=? AND name=? AND deleted=0", params![bounded_text(&agent_id,"agent id",256)?,bounded_text(&workspace_id,"workspace id",256)?,bounded_text(&name,"secret name",256)?])?;
+            Ok(json!({"deleted": changed > 0}))
+        }
         Operation::Health => {
             let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
             let migrations: i64 = connection.query_row(
@@ -2009,6 +2043,22 @@ pub struct SessionRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     Health,
+    SecretList {
+        agent_id: String,
+        workspace_id: String,
+        limit: usize,
+    },
+    SecretUpsert {
+        agent_id: String,
+        workspace_id: String,
+        name: String,
+        value: String,
+    },
+    SecretDelete {
+        agent_id: String,
+        workspace_id: String,
+        name: String,
+    },
     MemoryAdvanced {
         agent_id: String,
         action: String,
@@ -2466,6 +2516,8 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
 
          CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'agent', scope_json TEXT NOT NULL DEFAULT '{}', permissions_json TEXT NOT NULL DEFAULT '[]', connector TEXT, harness TEXT, agent_id TEXT, allowed_projects_json TEXT, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT);
          CREATE INDEX IF NOT EXISTS api_keys_scope ON api_keys(agent_id, revoked_at, expires_at);
+         CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,name));
+         CREATE INDEX IF NOT EXISTS secrets_scope ON secrets(agent_id,workspace_id,deleted);
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;

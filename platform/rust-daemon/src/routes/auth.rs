@@ -163,7 +163,7 @@ fn role_rank(role: &str) -> Option<u8> {
     }
 }
 
-fn authority_allows(
+pub(crate) fn authority_allows(
     authority: &Value,
     requested_role: &str,
     requested_scope: &Value,
@@ -223,7 +223,7 @@ fn configured_credential() -> Option<String> {
                 .filter(|value| !value.is_empty())
         })
 }
-async fn gate(state: &AppState, headers: &HeaderMap) -> Result<Value, ApiError> {
+pub(crate) async fn gate(state: &AppState, headers: &HeaderMap) -> Result<Value, ApiError> {
     let token = credential(headers).ok_or_else(|| {
         ApiError::unauthorized("valid Bearer token or x-signet-api-key is required")
     })?;

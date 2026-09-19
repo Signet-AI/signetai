@@ -9,6 +9,7 @@ pub(crate) mod mcp;
 pub(crate) mod memory_advanced;
 pub(crate) mod ontology;
 pub(crate) mod pipeline;
+pub(crate) mod secrets;
 pub(crate) mod session_hook_boundary;
 pub(crate) mod sessions;
 pub(crate) mod source_lifecycle;
@@ -22,6 +23,7 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .merge(integrations::routes())
         .merge(auth::router())
+        .merge(secrets::router())
         .merge(inference::router())
         .merge(jobs::router())
         .merge(knowledge::router())
