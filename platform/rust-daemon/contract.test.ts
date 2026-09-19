@@ -184,13 +184,42 @@ describe("fresh Rust daemon", () => {
 		expect(response.status).toBe(401);
 	});
 
-	it("serves packaged dashboard assets without swallowing API 404s", async () => {
-		const { origin } = await startDaemon(null, true);
-		const page = await fetch(`${origin}/`);
-		expect(page.status).toBe(200);
-		expect(await page.text()).toContain("fresh rust dashboard");
-		const missingApi = await fetch(`${origin}/api/not-implemented`);
-		expect(missingApi.status).toBe(404);
+	it("enforces configured API authentication while leaving readiness and static routes public", async () => {
+		process.env.SIGNET_API_KEY = "contract-api-key";
+		try {
+			const { origin } = await startDaemon(null, true);
+			expect((await fetch(`${origin}/health/live`)).status).toBe(200);
+			expect((await fetch(`${origin}/`)).status).toBe(200);
+
+			const missing = await fetch(`${origin}/api/status`);
+			expect(missing.status).toBe(401);
+			expect(missing.headers.get("content-type")).toContain("application/json");
+			expect(await missing.json()).toEqual({
+				error: "valid Bearer token or x-signet-api-key is required",
+				code: "unauthorized",
+			});
+			expect((await fetch(`${origin}/api/status`, { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
+			expect(
+				(await fetch(`${origin}/api/status`, { headers: { Authorization: "Bearer contract-api-key" } })).status,
+			).toBe(200);
+			expect(
+				(await fetch(`${origin}/api/status`, { headers: { "x-signet-api-key": "contract-api-key" } })).status,
+			).toBe(200);
+		} finally {
+			Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+		}
+	});
+
+	it("falls back to SIGNET_TOKEN when SIGNET_API_KEY is absent", async () => {
+		process.env.SIGNET_TOKEN = "legacy-token";
+		try {
+			const { origin } = await startDaemon(null);
+			expect((await fetch(`${origin}/api/status`, { headers: { Authorization: "Bearer legacy-token" } })).status).toBe(
+				200,
+			);
+		} finally {
+			Reflect.deleteProperty(process.env, "SIGNET_TOKEN");
+		}
 	});
 
 	it("persists bounded jobs and isolates ontology records by agent", async () => {

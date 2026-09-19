@@ -2,7 +2,8 @@ mod routes;
 
 use axum::{
     extract::{Path, Query, State},
-    http::{header, HeaderMap, StatusCode, Uri},
+    http::{header, HeaderMap, Request, StatusCode, Uri},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -38,6 +39,48 @@ pub(crate) struct ApiError {
     status: StatusCode,
     code: &'static str,
     message: String,
+}
+
+fn configured_api_key() -> Option<String> {
+    env::var("SIGNET_API_KEY")
+        .ok()
+        .and_then(|value| non_empty(&value))
+        .or_else(|| {
+            env::var("SIGNET_TOKEN")
+                .ok()
+                .and_then(|value| non_empty(&value))
+        })
+}
+
+async fn authenticate_api(request: Request<axum::body::Body>, next: Next) -> Response {
+    let Some(expected) = configured_api_key() else {
+        return next.run(request).await;
+    };
+    if !request.uri().path().starts_with("/api/") {
+        return next.run(request).await;
+    }
+    let headers = request.headers();
+    let supplied = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .or_else(|| {
+            headers
+                .get("x-signet-api-key")
+                .and_then(|value| value.to_str().ok())
+        });
+    if supplied == Some(expected.as_str()) {
+        return next.run(request).await;
+    }
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Bearer")],
+        Json(ErrorBody {
+            error: "valid Bearer token or x-signet-api-key is required".to_owned(),
+            code: "unauthorized".to_owned(),
+        }),
+    )
+        .into_response()
 }
 
 impl ApiError {
@@ -99,6 +142,7 @@ impl From<CoreError> for ApiError {
     fn from(error: CoreError) -> Self {
         match error {
             CoreError::NotFound => Self::not_found("record not found"),
+            CoreError::InvalidInput(message) => Self::bad_request(message),
             CoreError::QueueFull { capacity } => Self::unavailable(format!(
                 "database owner queue is saturated (capacity {capacity})"
             )),
@@ -661,6 +705,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .merge(routes::router())
         .fallback(dashboard)
+        .layer(middleware::from_fn(authenticate_api))
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(address).await?;
     axum::serve(listener, router)
