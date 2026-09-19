@@ -109,13 +109,13 @@ impl From<CoreError> for ApiError {
 }
 
 #[derive(Debug, Deserialize, Default)]
-struct AgentQuery {
+pub(crate) struct AgentQuery {
     #[serde(alias = "agent_id")]
     agent_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
-struct RememberRequest {
+pub(crate) struct RememberRequest {
     content: String,
     #[serde(default, alias = "agentId")]
     agent_id: Option<String>,
@@ -500,12 +500,6 @@ async fn import_document(
     ))
 }
 
-async fn features() -> Json<Value> {
-    Json(
-        json!({ "runtime": "rust", "features": { "memory": true, "recall": true, "dreaming": false, "embeddings": false } }),
-    )
-}
-
 async fn whoami(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -649,7 +643,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/api/status", get(status))
         .route("/api/pipeline/status", get(status))
-        .route("/api/features", get(features))
         .route("/api/sources", get(sources).post(create_source))
         .route("/api/import/documents", post(import_document))
         .route("/api/sources/documents", post(import_document))
@@ -666,6 +659,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "/api/memory/{id}",
             get(get_one).patch(patch_one).delete(delete_one),
         )
+        .merge(routes::router())
         .fallback(dashboard)
         .with_state(state);
     let listener = tokio::net::TcpListener::bind(address).await?;

@@ -1,2 +1,13 @@
-// Current Rust daemon route modules live here. Each module must use the shared
-// owner operation boundary from the crate and must not open SQLite itself.
+pub(crate) mod integrations;
+pub(crate) mod jobs;
+pub(crate) mod ontology;
+
+use crate::AppState;
+use axum::Router;
+
+pub(crate) fn router() -> Router<AppState> {
+    Router::new()
+        .merge(integrations::routes())
+        .merge(jobs::router())
+        .merge(ontology::router())
+}

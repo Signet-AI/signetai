@@ -192,4 +192,40 @@ describe("fresh Rust daemon", () => {
 		const missingApi = await fetch(`${origin}/api/not-implemented`);
 		expect(missingApi.status).toBe(404);
 	});
+
+	it("persists bounded jobs and isolates ontology records by agent", async () => {
+		const { origin } = await startDaemon();
+		const agentA = { "content-type": "application/json", "x-signet-agent": "agent-a" };
+		const job = await fetch(`${origin}/api/jobs`, {
+			method: "POST",
+			headers: agentA,
+			body: JSON.stringify({ kind: "dreaming", payload: { batch: 1 } }),
+		});
+		expect(job.status).toBe(200);
+		const jobId = ((await job.json()) as { id: string }).id;
+		const listed = await fetch(`${origin}/api/jobs`, { headers: { "x-signet-agent": "agent-a" } });
+		expect(listed.status).toBe(200);
+		expect((await listed.json()).length).toBe(1);
+		const cancelled = await fetch(`${origin}/api/jobs/${jobId}`, {
+			method: "DELETE",
+			headers: { "x-signet-agent": "agent-a" },
+		});
+		expect(cancelled.status).toBe(200);
+		expect((await cancelled.json()).state).toBe("cancelled");
+
+		const claim = await fetch(`${origin}/api/claims?workspace_id=workspace-a`, {
+			method: "POST",
+			headers: agentA,
+			body: JSON.stringify({ id: "claim-1", value: { text: "agent A claim" } }),
+		});
+		expect(claim.status).toBe(200);
+		const ownClaims = await fetch(`${origin}/api/claims?workspace_id=workspace-a`, {
+			headers: { "x-signet-agent": "agent-a" },
+		});
+		expect((await ownClaims.json()).items).toHaveLength(1);
+		const otherClaims = await fetch(`${origin}/api/claims?workspace_id=workspace-a`, {
+			headers: { "x-signet-agent": "agent-b" },
+		});
+		expect((await otherClaims.json()).items).toHaveLength(0);
+	});
 });
