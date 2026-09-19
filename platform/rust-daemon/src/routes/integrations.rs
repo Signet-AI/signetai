@@ -7,7 +7,7 @@
 use axum::{extract::State, routing::get, Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::time::Duration;
+use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt, time::Duration};
 use tokio::fs;
 
 use crate::{execute, ApiError, AppState};
@@ -62,7 +62,7 @@ async fn config(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
     let mut files = Vec::new();
     for name in CONFIG_NAMES {
         let path = directory.join(name);
-        let metadata = match bounded(fs::metadata(&path)).await {
+        let metadata = match bounded(fs::symlink_metadata(&path)).await {
             Ok(metadata) if metadata.is_file() => metadata,
             Ok(_) | Err(_) => continue,
         };
@@ -71,7 +71,7 @@ async fn config(State(state): State<AppState>) -> Result<Json<Value>, ApiError> 
                 "configuration file {name} exceeds size limit"
             )));
         }
-        let content = bounded(fs::read_to_string(&path)).await.map_err(|_| {
+        let content = bounded(read_utf8_no_follow(path)).await.map_err(|_| {
             ApiError::unavailable(format!("configuration file {name} could not be read"))
         })?;
         files.push(json!({ "name": name, "content": content, "size": metadata.len() }));
@@ -102,7 +102,7 @@ async fn write_config(
     let temporary = state
         .workspace
         .join(format!(".{}.tmp-{}", request.file, std::process::id()));
-    bounded(fs::write(&temporary, request.content.as_bytes()))
+    bounded(write_new_file(&temporary, request.content.as_bytes()))
         .await
         .map_err(|_| ApiError::unavailable("configuration file could not be written"))?;
     if let Err(error) = fs::rename(&temporary, &path).await {
@@ -118,17 +118,35 @@ async fn write_config(
 
 async fn connectors() -> Json<Value> {
     Json(json!({
-        "connectors": [],
-        "count": 0,
+        "connectors": [{
+            "name": "native",
+            "implemented": false,
+            "configured": "unknown",
+            "detected": "unknown",
+            "probed": false,
+            "status": "unsupported",
+            "reason": "No native connector provider is implemented at this boundary"
+        }],
+        "count": 1,
         "status": "unknown",
-        "note": "No connector registry is available in the native route surface; external health is not asserted."
+        "probed": false,
+        "note": "Provider health is not asserted without an implemented probe."
     }))
 }
 
 async fn integrations() -> Json<Value> {
     Json(json!({
-        "integrations": [],
+        "integrations": [{
+            "name": "external-providers",
+            "implemented": false,
+            "configured": "unknown",
+            "detected": "unknown",
+            "probed": false,
+            "status": "unsupported",
+            "reason": "No external integration probe is implemented at this boundary"
+        }],
         "status": "unknown",
+        "probed": false,
         "note": "No external integration probe was requested or performed."
     }))
 }
@@ -142,7 +160,7 @@ async fn integration_health(State(state): State<AppState>) -> Result<Json<Value>
     Ok(Json(json!({
         "status": if ready { "degraded" } else { "unavailable" },
         "database": { "status": if ready { "healthy" } else { "unavailable" }, "ready": ready },
-        "connectors": { "status": "unknown", "probed": false },
+        "connectors": { "status": "unknown", "probed": false, "implemented": false },
         "external": { "status": "unknown", "probed": false },
         "note": "External connector health requires a real provider probe."
     })))
@@ -156,4 +174,35 @@ where
         .await
         .map_err(|_| "operation timed out".to_owned())?
         .map_err(|error| error.to_string())
+}
+
+async fn read_utf8_no_follow(path: std::path::PathBuf) -> std::io::Result<String> {
+    tokio::task::spawn_blocking(move || {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .custom_flags(0o400000)
+            .open(path)?;
+        let mut content = String::new();
+        std::io::Read::read_to_string(&mut file, &mut content)?;
+        Ok(content)
+    })
+    .await
+    .map_err(std::io::Error::other)?
+}
+
+async fn write_new_file(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
+    let path = path.to_owned();
+    let content = content.to_owned();
+    tokio::task::spawn_blocking(move || {
+        use std::io::Write;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .custom_flags(0o400000)
+            .open(path)?;
+        file.write_all(&content)?;
+        file.sync_all()
+    })
+    .await
+    .map_err(std::io::Error::other)?
 }
