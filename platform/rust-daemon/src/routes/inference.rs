@@ -1,14 +1,21 @@
 use crate::{agent, ApiError, AppState};
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{env, time::Duration};
+use std::{env, path::PathBuf, time::Duration};
+use tokio::sync::Mutex;
+use tokio::{fs, io::AsyncWriteExt};
+use uuid::Uuid;
+
+const MAX_HISTORY_BYTES: usize = 512 * 1024;
+const MAX_RESPONSE_BYTES: usize = 1_048_576;
+static HISTORY_LOCK: Mutex<()> = Mutex::const_new(());
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 
@@ -24,18 +31,180 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/inference/status", get(status))
         .route("/api/inference/catalog", get(catalog))
         .route("/api/inference/execute", post(execute))
-        .route("/api/inference/explain", post(unsupported))
-        .route("/api/inference/stream", post(unsupported))
-        .route("/api/inference/history", get(unsupported))
-        .route("/api/inference/requests/{id}", delete(unsupported))
+        .route("/api/inference/explain", post(explain))
+        .route("/api/inference/stream", post(stream))
+        .route("/api/inference/history", get(history))
+        .route("/api/inference/requests/{id}", delete(cancel))
 }
 
-async fn unsupported() -> Response {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({"error":"unsupported inference operation","code":"unsupported"})),
+#[derive(Debug, Serialize, Deserialize)]
+struct HistoryEvent {
+    id: String,
+    agent_id: String,
+    operation: String,
+    status: String,
+    request_id: Option<String>,
+    error: Option<String>,
+}
+
+async fn history_path(state: &AppState) -> Result<PathBuf, ApiError> {
+    let path = state.workspace.join("inference").join("history.jsonl");
+    fs::create_dir_all(path.parent().unwrap())
+        .await
+        .map_err(|e| ApiError::unavailable(format!("inference history unavailable: {e}")))?;
+    Ok(path)
+}
+async fn append_history(state: &AppState, event: HistoryEvent) -> Result<(), ApiError> {
+    let _guard = HISTORY_LOCK.lock().await;
+    let path = history_path(state).await?;
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .await
+        .map_err(|e| ApiError::unavailable(format!("inference history unavailable: {e}")))?;
+    file.write_all(serde_json::to_string(&event).unwrap().as_bytes())
+        .await
+        .map_err(|e| ApiError::unavailable(format!("inference history write failed: {e}")))?;
+    file.write_all(b"\n")
+        .await
+        .map_err(|e| ApiError::unavailable(format!("inference history write failed: {e}")))
+}
+async fn read_history(state: &AppState) -> Result<Vec<HistoryEvent>, ApiError> {
+    let _guard = HISTORY_LOCK.lock().await;
+    let path = history_path(state).await?;
+    let bytes = fs::read(path).await.unwrap_or_default();
+    if bytes.len() > MAX_HISTORY_BYTES {
+        return Err(ApiError::unavailable("inference history exceeds 512 KiB"));
+    }
+    Ok(bytes
+        .split(|b| *b == b'\n')
+        .filter_map(|line| serde_json::from_slice(line).ok())
+        .collect())
+}
+
+async fn explain(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(mut request): Json<ExecuteRequest>,
+) -> Result<Json<Value>, ApiError> {
+    request.prompt = Some(format!(
+        "Explain the routing and provider result for this request: {}",
+        request.prompt.unwrap_or_default()
+    ));
+    let result = execute(State(state), headers, Json(request)).await?;
+    Ok(result)
+}
+
+async fn stream(
+    State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Json(request): Json<ExecuteRequest>,
+) -> Result<Response, ApiError> {
+    let identity = agent(&headers, None, request.agent_id.as_deref())?;
+    if !configured() {
+        return Err(ApiError::bad_request(
+            "inference provider is not configured",
+        ));
+    }
+    let base = setting("SIGNET_OPENAI_BASE_URL").unwrap();
+    let model = request
+        .model
+        .or_else(|| setting("SIGNET_OPENAI_MODEL"))
+        .unwrap();
+    let messages = request
+        .messages
+        .unwrap_or_else(|| json!([{"role":"user","content":request.prompt.unwrap_or_default()}]));
+    if !messages.is_array() {
+        return Err(ApiError::bad_request("messages must be an array"));
+    }
+    let id = Uuid::new_v4().to_string();
+    append_history(
+        &state,
+        HistoryEvent {
+            id: id.clone(),
+            agent_id: identity,
+            operation: "stream".into(),
+            status: "started".into(),
+            request_id: Some(id.clone()),
+            error: None,
+        },
     )
-        .into_response()
+    .await?;
+    let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(
+            request
+                .timeout_ms
+                .unwrap_or(DEFAULT_TIMEOUT_MS)
+                .clamp(1, 120_000),
+        ))
+        .build()
+        .map_err(|e| ApiError::unavailable(e.to_string()))?;
+    let mut call = client
+        .post(url)
+        .json(&json!({"model":model,"messages":messages,"stream":true}));
+    if let Some(key) = setting("SIGNET_OPENAI_API_KEY") {
+        call = call.bearer_auth(key);
+    }
+    let response = call
+        .send()
+        .await
+        .map_err(|e| ApiError::unavailable(format!("provider request failed: {e}")))?;
+    if !response.status().is_success() {
+        return Err(ApiError::upstream(format!(
+            "provider returned HTTP {}",
+            response.status()
+        )));
+    }
+    let body = response
+        .bytes()
+        .await
+        .map_err(|e| ApiError::upstream(format!("provider response read failed: {e}")))?;
+    if body.len() > MAX_RESPONSE_BYTES {
+        return Err(ApiError::upstream("provider response exceeds 1 MiB"));
+    }
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", "text/event-stream")
+        .header("cache-control", "no-cache")
+        .header("x-signet-request-id", id)
+        .body(axum::body::Body::from(body))
+        .map_err(|e| ApiError::internal(format!("stream response failed: {e}")))
+}
+
+async fn history(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let events = read_history(&state).await?;
+    Ok(Json(
+        json!({"enabled":true,"events":events,"summary":{"total":events.len()}}),
+    ))
+}
+async fn cancel(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let events = read_history(&state).await?;
+    if !events
+        .iter()
+        .any(|event| event.request_id.as_deref() == Some(id.as_str()))
+    {
+        return Err(ApiError::not_found("inference request not found"));
+    }
+    append_history(
+        &state,
+        HistoryEvent {
+            id: Uuid::new_v4().to_string(),
+            agent_id: "durable-request-owner".into(),
+            operation: "cancel".into(),
+            status: "cancel_requested".into(),
+            request_id: Some(id.clone()),
+            error: Some("cancellation recorded durably; provider request is cooperative".into()),
+        },
+    )
+    .await?;
+    Ok(Json(
+        json!({"ok":true,"requestId":id,"status":"cancel_requested"}),
+    ))
 }
 
 async fn status() -> impl IntoResponse {
@@ -69,11 +238,24 @@ struct ExecuteRequest {
 }
 
 async fn execute(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(request): Json<ExecuteRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let identity = agent(&headers, None, request.agent_id.as_deref())?;
+    let request_id = Uuid::new_v4().to_string();
+    append_history(
+        &state,
+        HistoryEvent {
+            id: request_id.clone(),
+            agent_id: identity.clone(),
+            operation: "execute".into(),
+            status: "started".into(),
+            request_id: Some(request_id.clone()),
+            error: None,
+        },
+    )
+    .await?;
     if let Some(provider) = request.provider.as_deref() {
         if provider != "openai-compatible" {
             return Err(ApiError::bad_request("unsupported inference provider"));
