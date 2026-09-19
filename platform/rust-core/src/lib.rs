@@ -54,7 +54,12 @@ pub struct Source {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DocumentInput { pub source_id: String, pub path: String, pub content: String, pub metadata: Value }
+pub struct DocumentInput {
+    pub source_id: String,
+    pub path: String,
+    pub content: String,
+    pub metadata: Value,
+}
 
 impl NewMemory {
     pub fn text(content: impl Into<String>) -> Self {
@@ -341,38 +346,252 @@ impl Core {
             .map_err(|_| CoreError::OwnerStopped)?
     }
 
-    pub fn create_source(&self, agent: &str, kind: &str, name: &str, config: Value) -> Result<Source, CoreError> {
-        let agent = required_agent(agent)?; let kind = required_id(kind)?; let name = required_id(name)?;
+    pub fn create_source(
+        &self,
+        agent: &str,
+        kind: &str,
+        name: &str,
+        config: Value,
+    ) -> Result<Source, CoreError> {
+        let agent = required_agent(agent)?;
+        let kind = required_id(kind)?;
+        let name = required_id(name)?;
         self.call(move |connection| { let id = uuid::Uuid::new_v4().to_string(); let config = serde_json::to_string(&config)?;
             connection.execute("INSERT INTO sources (id, agent_id, kind, name, config, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))", params![id, agent, kind, name, config])?;
             Ok(Source { id, agent_id: agent, kind, name, config: serde_json::from_str(&config)?, created_at: Some(String::new()) }) })
     }
 
-    pub fn list_sources(&self, agent: &str) -> Result<Vec<Source>, CoreError> { let agent = required_agent(agent)?; self.call(move |c| { let mut s=c.prepare("SELECT id,agent_id,kind,name,config,created_at FROM sources WHERE agent_id=? ORDER BY rowid DESC")?; let rows=s.query_map(params![agent], |r| Ok(Source{id:r.get(0)?,agent_id:r.get(1)?,kind:r.get(2)?,name:r.get(3)?,config:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or(json!({})),created_at:r.get(5).ok()}))?; Ok(rows.collect::<Result<Vec<_>,_>>()?) }) }
+    pub fn list_sources(&self, agent: &str) -> Result<Vec<Source>, CoreError> {
+        let agent = required_agent(agent)?;
+        self.call(move |c| { let mut s=c.prepare("SELECT id,agent_id,kind,name,config,created_at FROM sources WHERE agent_id=? ORDER BY rowid DESC")?; let rows=s.query_map(params![agent], |r| Ok(Source{id:r.get(0)?,agent_id:r.get(1)?,kind:r.get(2)?,name:r.get(3)?,config:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or(json!({})),created_at:r.get(5).ok()}))?; Ok(rows.collect::<Result<Vec<_>,_>>()?) })
+    }
 
-    pub fn ingest_document(&self, agent: &str, input: DocumentInput) -> Result<String, CoreError> { let agent=required_agent(agent)?; if input.content.trim().is_empty(){return Err(CoreError::InvalidInput("content must not be empty".into()));} self.call(move |c| { let exists:i64=c.query_row("SELECT count(*) FROM sources WHERE id=? AND agent_id=?",params![input.source_id,agent],|r|r.get(0))?; if exists==0{return Err(CoreError::NotFound)} let id=uuid::Uuid::new_v4().to_string(); let metadata=serde_json::to_string(&input.metadata)?; c.execute("INSERT INTO documents (id,agent_id,source_id,path,content,metadata,created_at) VALUES (?,?,?,?,?,?,datetime('now'))",params![id,agent,input.source_id,input.path,input.content,metadata])?; Ok(id) }) }
+    pub fn ingest_document(&self, agent: &str, input: DocumentInput) -> Result<String, CoreError> {
+        let agent = required_agent(agent)?;
+        if input.content.trim().is_empty() {
+            return Err(CoreError::InvalidInput("content must not be empty".into()));
+        }
+        self.call(move |c| { let exists:i64=c.query_row("SELECT count(*) FROM sources WHERE id=? AND agent_id=?",params![input.source_id,agent],|r|r.get(0))?; if exists==0{return Err(CoreError::NotFound)} let id=uuid::Uuid::new_v4().to_string(); let metadata=serde_json::to_string(&input.metadata)?; c.execute("INSERT INTO documents (id,agent_id,source_id,path,content,metadata,created_at) VALUES (?,?,?,?,?,?,datetime('now'))",params![id,agent,input.source_id,input.path,input.content,metadata])?; Ok(id) })
+    }
 
     pub fn submit(&self, operation: Operation) -> Result<Value, CoreError> {
-        self.call(move |connection| match operation {
-            Operation::Health => Ok(serde_json::json!({ "ready": true })),
-            Operation::Remember { agent_id, content, metadata } => {
-                let agent = required_agent(&agent_id)?;
-                if content.trim().is_empty() { return Err(CoreError::InvalidInput("content must not be empty".into())); }
-                let id = uuid::Uuid::new_v4().to_string();
-                let tx = connection.transaction()?;
-                tx.execute("INSERT INTO memories (id,agent_id,content,metadata,deleted,created_at,updated_at) VALUES (?,?,?, ?,0,datetime('now'),datetime('now'))", params![id, agent, content, serde_json::to_string(&metadata)?])?;
-                record_history(&tx, &id, &agent, "remember", None)?;
-                tx.commit()?;
-                Ok(serde_json::json!({"id": id}))
+        self.call(move |connection| execute_operation(connection, operation))
+    }
+}
+
+fn execute_operation(
+    connection: &mut Connection,
+    operation: Operation,
+) -> Result<Value, CoreError> {
+    match operation {
+        Operation::Health => {
+            let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
+            Ok(json!({ "ready": value == 1 }))
+        }
+        Operation::Remember {
+            agent_id,
+            content,
+            metadata,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            if content.trim().is_empty() {
+                return Err(CoreError::InvalidInput("content must not be empty".into()));
             }
-            Operation::List { agent_id, include_deleted } => {
-                let agent = required_agent(&agent_id)?;
-                let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at FROM memories WHERE COALESCE(agent_id,'default')=? AND (? OR deleted=0) ORDER BY rowid DESC LIMIT 10000")?;
-                let rows = stmt.query_map(params![agent, include_deleted as i64], memory_row)?;
-                Ok(serde_json::to_value(rows.collect::<Result<Vec<_>,_>>()?)?)
+            let id = uuid::Uuid::new_v4().to_string();
+            let metadata = serde_json::to_string(&metadata)?;
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "INSERT INTO memories (id, agent_id, content, metadata, deleted, created_at, updated_at) VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'))",
+                params![id, agent_id, content, metadata],
+            )?;
+            record_history(&transaction, &id, &agent_id, "remember", None)?;
+            transaction.commit()?;
+            Ok(json!({ "id": id }))
+        }
+        Operation::List {
+            agent_id,
+            include_deleted,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let mut statement = connection.prepare(
+                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                 FROM memories
+                 WHERE COALESCE(agent_id, 'default') = ? AND (? OR deleted = 0)
+                 ORDER BY rowid DESC LIMIT 10000",
+            )?;
+            let rows =
+                statement.query_map(params![agent_id, include_deleted as i64], memory_row)?;
+            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
+        }
+        Operation::Get { agent_id, id } => {
+            let agent_id = required_agent(&agent_id)?;
+            let id = required_id(&id)?;
+            let memory = connection
+                .query_row(
+                    "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                     FROM memories
+                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                    params![id, agent_id],
+                    memory_row,
+                )
+                .optional()?;
+            Ok(serde_json::to_value(memory)?)
+        }
+        Operation::Update {
+            agent_id,
+            id,
+            content,
+            metadata,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let id = required_id(&id)?;
+            if content.trim().is_empty() {
+                return Err(CoreError::InvalidInput("content must not be empty".into()));
             }
-            other => Err(CoreError::InvalidInput(format!("operation {:?} is not yet owner-inline", std::mem::discriminant(&other)))),
-        })
+            let metadata = serde_json::to_string(&metadata)?;
+            let transaction = connection.transaction()?;
+            let changed = transaction.execute(
+                "UPDATE memories SET content = ?, metadata = ?, updated_at = datetime('now')
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                params![content, metadata, id, agent_id],
+            )?;
+            if changed == 0 {
+                return Err(CoreError::NotFound);
+            }
+            record_history(&transaction, &id, &agent_id, "update", Some(&content))?;
+            transaction.commit()?;
+            Ok(json!({ "updated": true }))
+        }
+        Operation::SoftDelete { agent_id, id } => {
+            let agent_id = required_agent(&agent_id)?;
+            let id = required_id(&id)?;
+            let transaction = connection.transaction()?;
+            let changed = transaction.execute(
+                "UPDATE memories SET deleted = 1, updated_at = datetime('now')
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                params![id, agent_id],
+            )?;
+            if changed == 0 {
+                return Err(CoreError::NotFound);
+            }
+            record_history(&transaction, &id, &agent_id, "delete", None)?;
+            transaction.commit()?;
+            Ok(json!({ "deleted": true }))
+        }
+        Operation::Recover { agent_id, id } => {
+            let agent_id = required_agent(&agent_id)?;
+            let id = required_id(&id)?;
+            let transaction = connection.transaction()?;
+            let changed = transaction.execute(
+                "UPDATE memories SET deleted = 0, updated_at = datetime('now')
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 1",
+                params![id, agent_id],
+            )?;
+            if changed == 0 {
+                return Err(CoreError::NotFound);
+            }
+            record_history(&transaction, &id, &agent_id, "recover", None)?;
+            transaction.commit()?;
+            Ok(json!({ "recovered": true }))
+        }
+        Operation::History { agent_id, id } => {
+            let agent_id = required_agent(&agent_id)?;
+            let id = required_id(&id)?;
+            let mut statement = connection.prepare(
+                "SELECT id, memory_id, operation, content, created_at
+                 FROM memory_history
+                 WHERE memory_id = ? AND agent_id = ?
+                 ORDER BY id ASC LIMIT 1000",
+            )?;
+            let rows = statement.query_map(params![id, agent_id], |row| {
+                Ok(json!({
+                    "id": row.get::<_, i64>(0)?,
+                    "memoryId": row.get::<_, String>(1)?,
+                    "operation": row.get::<_, String>(2)?,
+                    "content": row.get::<_, Option<String>>(3)?,
+                    "createdAt": row.get::<_, String>(4)?,
+                }))
+            })?;
+            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
+        }
+        Operation::Recall { agent_id, query } => {
+            let agent_id = required_agent(&agent_id)?;
+            let query = query.trim();
+            if query.is_empty() {
+                return Err(CoreError::InvalidInput("query must not be empty".into()));
+            }
+            let mut statement = connection.prepare(
+                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                 FROM memories
+                 WHERE COALESCE(agent_id, 'default') = ? AND deleted = 0 AND content LIKE ?
+                 ORDER BY rowid DESC LIMIT 1000",
+            )?;
+            let rows = statement.query_map(params![agent_id, format!("%{query}%")], memory_row)?;
+            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
+        }
+        Operation::CreateSource {
+            agent_id,
+            kind,
+            name,
+            config,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let kind = required_id(&kind)?;
+            let name = required_id(&name)?;
+            let config_text = serde_json::to_string(&config)?;
+            let id = uuid::Uuid::new_v4().to_string();
+            let transaction = connection.transaction()?;
+            transaction.execute(
+                "INSERT INTO sources (id, agent_id, kind, name, config, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                params![id, agent_id, kind, name, config_text],
+            )?;
+            let source = transaction.query_row(
+                "SELECT id, agent_id, kind, name, config, created_at FROM sources WHERE id = ? AND agent_id = ?",
+                params![id, agent_id],
+                source_row,
+            )?;
+            transaction.commit()?;
+            Ok(serde_json::to_value(source)?)
+        }
+        Operation::ListSources { agent_id } => {
+            let agent_id = required_agent(&agent_id)?;
+            let mut statement = connection.prepare(
+                "SELECT id, agent_id, kind, name, config, created_at FROM sources WHERE agent_id = ? ORDER BY rowid DESC",
+            )?;
+            let rows = statement.query_map(params![agent_id], source_row)?;
+            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
+        }
+        Operation::IngestDocument {
+            agent_id,
+            source_id,
+            path,
+            content,
+            metadata,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let source_id = required_id(&source_id)?;
+            let path = required_id(&path)?;
+            if content.trim().is_empty() {
+                return Err(CoreError::InvalidInput("content must not be empty".into()));
+            }
+            let metadata = serde_json::to_string(&metadata)?;
+            let id = uuid::Uuid::new_v4().to_string();
+            let transaction = connection.transaction()?;
+            let source_exists: i64 = transaction.query_row(
+                "SELECT count(*) FROM sources WHERE id = ? AND agent_id = ?",
+                params![source_id, agent_id],
+                |row| row.get(0),
+            )?;
+            if source_exists == 0 {
+                return Err(CoreError::NotFound);
+            }
+            transaction.execute(
+                "INSERT INTO documents (id, agent_id, source_id, path, content, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                params![id, agent_id, source_id, path, content, metadata],
+            )?;
+            transaction.commit()?;
+            Ok(json!({ "id": id }))
+        }
     }
 }
 
@@ -439,9 +658,22 @@ pub enum Operation {
         agent_id: String,
         query: String,
     },
-    CreateSource { agent_id: String, kind: String, name: String, config: Value },
-    ListSources { agent_id: String },
-    IngestDocument { agent_id: String, source_id: String, path: String, content: String, metadata: Value },
+    CreateSource {
+        agent_id: String,
+        kind: String,
+        name: String,
+        config: Value,
+    },
+    ListSources {
+        agent_id: String,
+    },
+    IngestDocument {
+        agent_id: String,
+        source_id: String,
+        path: String,
+        content: String,
+        metadata: Value,
+    },
 }
 
 fn owner_loop(
@@ -503,6 +735,20 @@ fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
     })
 }
 
+fn source_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Source> {
+    let config = row.get::<_, String>(4).unwrap_or_else(|_| "{}".into());
+    Ok(Source {
+        id: row.get(0)?,
+        agent_id: row
+            .get::<_, Option<String>>(1)?
+            .unwrap_or_else(|| "default".into()),
+        kind: row.get(2)?,
+        name: row.get(3).unwrap_or_default(),
+        config: serde_json::from_str(&config).unwrap_or_else(|_| json!({})),
+        created_at: row.get(5).ok(),
+    })
+}
+
 fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(
@@ -517,6 +763,75 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
     ensure_column(&transaction, "schema_migrations", "checksum", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "sources",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(&transaction, "sources", "name", "TEXT NOT NULL DEFAULT ''")?;
+    ensure_column(
+        &transaction,
+        "sources",
+        "config",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    ensure_column(
+        &transaction,
+        "sources",
+        "metadata",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    ensure_column(&transaction, "sources", "created_at", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "documents",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "documents",
+        "path",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &transaction,
+        "documents",
+        "content",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &transaction,
+        "documents",
+        "metadata",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    ensure_column(&transaction, "documents", "created_at", "TEXT")?;
+    transaction.execute(
+        "UPDATE sources SET agent_id = 'default' WHERE agent_id IS NULL OR trim(agent_id) = ''",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE sources SET config = COALESCE(config, metadata, '{}') WHERE config IS NULL OR trim(config) = ''",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE sources SET created_at = datetime('now') WHERE created_at IS NULL OR trim(created_at) = ''",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE documents SET agent_id = 'default' WHERE agent_id IS NULL OR trim(agent_id) = ''",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE documents SET metadata = '{}' WHERE metadata IS NULL OR trim(metadata) = ''",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE documents SET created_at = datetime('now') WHERE created_at IS NULL OR trim(created_at) = ''",
+        [],
+    )?;
     ensure_column(
         &transaction,
         "memories",

@@ -81,10 +81,123 @@ fn workspace_submit_operations_run_on_owner_without_requeue_deadlock() {
     let d = tempdir().unwrap();
     let owner = WorkspaceOwner::open(&d.path().join("owner.sqlite"), 2).unwrap();
     assert_eq!(owner.submit(Operation::Health).unwrap()["ready"], true);
-    let created = owner.submit(Operation::Remember {
-        agent_id: "agent".into(), content: "inline".into(), metadata: serde_json::json!({}),
-    }).unwrap();
+    let created = owner
+        .submit(Operation::Remember {
+            agent_id: "agent".into(),
+            content: "inline".into(),
+            metadata: serde_json::json!({}),
+        })
+        .unwrap();
     assert!(created["id"].as_str().is_some());
-    let listed = owner.submit(Operation::List { agent_id: "agent".into(), include_deleted: false }).unwrap();
+    let listed = owner
+        .submit(Operation::List {
+            agent_id: "agent".into(),
+            include_deleted: false,
+        })
+        .unwrap();
     assert_eq!(listed.as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn workspace_submit_supports_all_durable_operation_variants() {
+    let d = tempdir().unwrap();
+    let owner = WorkspaceOwner::open(&d.path().join("all-operations.sqlite"), 8).unwrap();
+    let source = owner
+        .submit(Operation::CreateSource {
+            agent_id: "agent".into(),
+            kind: "notes".into(),
+            name: "fixture".into(),
+            config: serde_json::json!({"root": "/workspace"}),
+        })
+        .unwrap();
+    let source_id = source["id"].as_str().unwrap().to_owned();
+    assert_eq!(
+        owner
+            .submit(Operation::ListSources {
+                agent_id: "agent".into()
+            })
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let document = owner
+        .submit(Operation::IngestDocument {
+            agent_id: "agent".into(),
+            source_id,
+            path: "note.md".into(),
+            content: "document body".into(),
+            metadata: serde_json::json!({}),
+        })
+        .unwrap();
+    assert!(document["id"].as_str().is_some());
+    let memory = owner
+        .submit(Operation::Remember {
+            agent_id: "agent".into(),
+            content: "operation body".into(),
+            metadata: serde_json::json!({"kind": "test"}),
+        })
+        .unwrap();
+    let id = memory["id"].as_str().unwrap().to_owned();
+    assert!(owner
+        .submit(Operation::Get {
+            agent_id: "agent".into(),
+            id: id.clone()
+        })
+        .unwrap()["content"]
+        .is_string());
+    assert_eq!(
+        owner
+            .submit(Operation::Recall {
+                agent_id: "agent".into(),
+                query: "operation".into()
+            })
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        owner
+            .submit(Operation::Update {
+                agent_id: "agent".into(),
+                id: id.clone(),
+                content: "updated body".into(),
+                metadata: serde_json::json!({})
+            })
+            .unwrap()["updated"],
+        true
+    );
+    assert_eq!(
+        owner
+            .submit(Operation::SoftDelete {
+                agent_id: "agent".into(),
+                id: id.clone()
+            })
+            .unwrap()["deleted"],
+        true
+    );
+    assert_eq!(
+        owner
+            .submit(Operation::History {
+                agent_id: "agent".into(),
+                id: id.clone()
+            })
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    assert_eq!(
+        owner
+            .submit(Operation::Recover {
+                agent_id: "agent".into(),
+                id
+            })
+            .unwrap()["recovered"],
+        true
+    );
 }
