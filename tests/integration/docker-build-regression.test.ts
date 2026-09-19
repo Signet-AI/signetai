@@ -105,6 +105,8 @@ describe("Docker build pipeline regression guard", () => {
 		expect(entrypoint).toContain("exec /app/bin/signet");
 		expect(entrypoint).not.toContain("exec /app/bin/signet-daemon");
 		expect(entrypoint).not.toContain("exec bun /app/dist/signetai/dist/daemon.js");
+		expect(entrypoint).not.toContain("bun:sqlite");
+		expect(entrypoint).not.toContain("bun -e");
 	});
 
 	it("builds and stages the fresh Rust daemon after the dashboard", () => {

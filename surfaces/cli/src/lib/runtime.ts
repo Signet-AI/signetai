@@ -1448,7 +1448,7 @@ export async function startDaemon(
 	mkdirSync(daemonDir, { recursive: true });
 	mkdirSync(logDir, { recursive: true });
 
-	const attributionNotice = macOSLaunchAgentAttributionNotice(daemonPath);
+	const attributionNotice = macOSLaunchAgentAttributionNotice();
 	if (attributionNotice) {
 		console.warn(chalk.yellow(`  Note: ${attributionNotice}`));
 	}

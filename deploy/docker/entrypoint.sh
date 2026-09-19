@@ -12,13 +12,13 @@ auth:
 YAML
 	printf '%s\n' "[docker] wrote default auth.mode=team to $cfg"
 fi
-db="$root/memory/memories.db"
-if [ ! -f "$db" ]; then
-	mkdir -p "$(dirname "$db")"
-	bun -e 'import { Database } from "bun:sqlite"; const db = new Database(process.argv[1]); db.close();' "$db"
-	printf '%s\n' "[docker] initialized workspace database at $db"
-fi
 
+# The fresh Rust daemon creates and migrates memory/memories.db through its
+# owner boundary. The entrypoint must not open SQLite with Bun or another
+# client-side runtime before the daemon starts.
+
+
+# seed default workspace scripts/skills for fresh volumes
 tpl="/app/dist/signetai/templates"
 
 if [ -d "$tpl/scripts" ] && [ ! -d "$root/scripts" ]; then

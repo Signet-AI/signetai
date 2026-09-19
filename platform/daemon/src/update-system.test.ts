@@ -924,13 +924,13 @@ describe("Bug 4: log level for disabled auto-updates", () => {
 
 describe("Bug 6: service unit uses the native daemon executable", () => {
 	it("rejects legacy Bun/Node launchers", () => {
-		expect(SERVICE_SRC).not.toContain(String.raw`${locator} bun`);
-		expect(SERVICE_SRC).not.toContain(String.raw`${locator} node`);
+		expect(SERVICE_SRC).not.toContain(["${", "locator} bun"].join(""));
+		expect(SERVICE_SRC).not.toContain(["${", "locator} node"].join(""));
 		expect(SERVICE_SRC).toContain("getDaemonPath");
 	});
 
 	it("uses the native executable directly for systemd and launchd", () => {
-		expect(SERVICE_SRC).toContain(String.raw`ExecStart=${runtimePath}`);
+		expect(SERVICE_SRC).toContain(["ExecStart=${", "runtimePath}"].join(""));
 		expect(SERVICE_SRC).toContain("resolveDaemonLaunchCommand(daemonPath)");
 		expect(SERVICE_SRC).not.toContain("programArguments: [resolveRuntimePath(), daemonPath]");
 	});
