@@ -52,6 +52,7 @@ async function startDaemon(
 	agentId: string | null = environmentValue("SIGNET_AGENT_ID"),
 	withDashboard = false,
 	withAuthSecret = false,
+	inheritAuthEnvironment = false,
 ): Promise<{ readonly origin: string; readonly workspace: string; readonly child: NativeProcess }> {
 	const workspace = mkdtempSync(join(tmpdir(), "signet-rust-workspace-"));
 	if (withDashboard) {
@@ -65,10 +66,17 @@ async function startDaemon(
 	}
 	workspaces.push(workspace);
 	const port = nextPort++;
+	const authEnvironment = inheritAuthEnvironment
+		? {
+				SIGNET_API_KEY: environmentValue("SIGNET_API_KEY") ?? "",
+				SIGNET_TOKEN: environmentValue("SIGNET_TOKEN") ?? "",
+			}
+		: { SIGNET_API_KEY: "", SIGNET_TOKEN: "" };
 	const child = Bun.spawn([requireBinary()], {
 		cwd: root,
 		env: {
 			...process.env,
+			...authEnvironment,
 			SIGNET_PATH: workspace,
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_PORT: String(port),
@@ -87,12 +95,20 @@ async function startDaemon(
 async function startDaemonInWorkspace(
 	workspace: string,
 	agentId: string | null = environmentValue("SIGNET_AGENT_ID"),
+	inheritAuthEnvironment = false,
 ): Promise<{ readonly origin: string; readonly child: NativeProcess }> {
 	const port = nextPort++;
+	const authEnvironment = inheritAuthEnvironment
+		? {
+				SIGNET_API_KEY: environmentValue("SIGNET_API_KEY") ?? "",
+				SIGNET_TOKEN: environmentValue("SIGNET_TOKEN") ?? "",
+			}
+		: { SIGNET_API_KEY: "", SIGNET_TOKEN: "" };
 	const child = Bun.spawn([requireBinary()], {
 		cwd: root,
 		env: {
 			...process.env,
+			...authEnvironment,
 			SIGNET_PATH: workspace,
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_PORT: String(port),
@@ -215,7 +231,7 @@ describe("fresh Rust daemon", () => {
 	it("enforces configured API authentication while leaving readiness and static routes public", async () => {
 		process.env.SIGNET_API_KEY = "contract-api-key";
 		try {
-			const { origin } = await startDaemon(null, true);
+			const { origin } = await startDaemon(null, true, false, true);
 			expect((await fetch(`${origin}/health/live`)).status).toBe(200);
 			expect((await fetch(`${origin}/`)).status).toBe(200);
 
@@ -242,7 +258,7 @@ describe("fresh Rust daemon", () => {
 	it("falls back to SIGNET_TOKEN when SIGNET_API_KEY is absent", async () => {
 		process.env.SIGNET_TOKEN = "legacy-token";
 		try {
-			const { origin } = await startDaemon(null);
+			const { origin } = await startDaemon(null, false, false, true);
 			expect((await fetch(`${origin}/api/status`, { headers: { Authorization: "Bearer legacy-token" } })).status).toBe(
 				200,
 			);
@@ -254,7 +270,7 @@ describe("fresh Rust daemon", () => {
 	it("issues and verifies HMAC tokens from the durable workspace secret", async () => {
 		process.env.SIGNET_API_KEY = "bootstrap-token-key";
 		try {
-			const { origin } = await startDaemon(null, false, true);
+			const { origin } = await startDaemon(null, false, true, true);
 			const response = await fetch(`${origin}/api/auth/token`, {
 				method: "POST",
 				headers: {
@@ -282,7 +298,7 @@ describe("fresh Rust daemon", () => {
 	it("persists, scopes, expires, and revokes API keys across native restart", async () => {
 		process.env.SIGNET_API_KEY = "bootstrap-api-key";
 		try {
-			const first = await startDaemon(null);
+			const first = await startDaemon(null, false, false, true);
 			const bootstrap = {
 				"content-type": "application/json",
 				"x-signet-api-key": "bootstrap-api-key",
@@ -311,11 +327,11 @@ describe("fresh Rust daemon", () => {
 			});
 			expect(listed.status).toBe(200);
 			expect((await listed.json()).apiKeys).toHaveLength(1);
-		const otherAgent = await fetch(`${first.origin}/api/auth/api-keys`, {
+			const otherAgent = await fetch(`${first.origin}/api/auth/api-keys`, {
 				headers: { ...bootstrap, "x-signet-agent": "auth-agent-b" },
-		});
-		expect(otherAgent.status).toBe(200);
-		expect((await otherAgent.json()).apiKeys).toHaveLength(0);
+			});
+			expect(otherAgent.status).toBe(200);
+			expect((await otherAgent.json()).apiKeys).toHaveLength(0);
 
 			const expired = await fetch(`${first.origin}/api/auth/api-keys`, {
 				method: "POST",
@@ -328,19 +344,19 @@ describe("fresh Rust daemon", () => {
 				}),
 			});
 			expect(expired.status).toBe(201);
-		const expiredBody = (await expired.json()) as { apiKey: { key: string } };
-		expect(
-			(
-				await fetch(`${first.origin}/api/status`, {
-					headers: { "x-signet-api-key": expiredBody.apiKey.key },
-				})
-			).status,
-		).toBe(401);
+			const expiredBody = (await expired.json()) as { apiKey: { key: string } };
+			expect(
+				(
+					await fetch(`${first.origin}/api/status`, {
+						headers: { "x-signet-api-key": expiredBody.apiKey.key },
+					})
+				).status,
+			).toBe(401);
 
 			first.child.kill("SIGTERM");
 			await first.child.exited;
 			children.splice(children.indexOf(first.child), 1);
-			const second = await startDaemonInWorkspace(first.workspace, null);
+			const second = await startDaemonInWorkspace(first.workspace, null, true);
 			const afterRestart = await fetch(`${second.origin}/api/auth/api-keys`, {
 				headers: bootstrap,
 			});
@@ -373,7 +389,11 @@ describe("fresh Rust daemon", () => {
 
 	it("persists bounded jobs and isolates ontology records by agent", async () => {
 		const { origin } = await startDaemon();
-		const agentA = { "content-type": "application/json", "x-signet-agent": "agent-a" };
+		const agentA = {
+			"content-type": "application/json",
+			"x-signet-agent": "agent-a",
+			"x-workspace-id": "workspace-a",
+		};
 		const job = await fetch(`${origin}/api/jobs`, {
 			method: "POST",
 			headers: agentA,
@@ -381,12 +401,14 @@ describe("fresh Rust daemon", () => {
 		});
 		expect(job.status).toBe(200);
 		const jobId = ((await job.json()) as { id: string }).id;
-		const listed = await fetch(`${origin}/api/jobs`, { headers: { "x-signet-agent": "agent-a" } });
+		const listed = await fetch(`${origin}/api/jobs`, {
+			headers: { "x-signet-agent": "agent-a", "x-workspace-id": "workspace-a" },
+		});
 		expect(listed.status).toBe(200);
 		expect((await listed.json()).length).toBe(1);
 		const cancelled = await fetch(`${origin}/api/jobs/${jobId}`, {
 			method: "DELETE",
-			headers: { "x-signet-agent": "agent-a" },
+			headers: { "x-signet-agent": "agent-a", "x-workspace-id": "workspace-a" },
 		});
 		expect(cancelled.status).toBe(200);
 		expect((await cancelled.json()).state).toBe("cancelled");

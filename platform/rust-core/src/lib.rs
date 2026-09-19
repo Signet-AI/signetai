@@ -483,31 +483,56 @@ fn execute_operation(
             transaction.commit()?;
             Ok(json!({"id":id,"state":"queued","workspaceId":workspace_id}))
         }
-        Operation::JobGet { agent_id, workspace_id, id } => {
+        Operation::JobGet {
+            agent_id,
+            workspace_id,
+            id,
+        } => {
             let value: Option<String> = connection.query_row("SELECT json_object('id',id,'agentId',agent_id,'workspaceId',workspace_id,'kind',kind,'state',state,'payload',json(payload),'result',CASE WHEN result IS NULL THEN NULL ELSE json(result) END,'error',error,'deadlineAt',deadline_at,'createdAt',created_at,'updatedAt',updated_at) FROM jobs WHERE id=? AND agent_id=? AND workspace_id=?", params![id,agent_id,workspace_id], |r| r.get(0)).optional()?;
             value
                 .map(|v| serde_json::from_str(&v))
                 .transpose()?
                 .ok_or(CoreError::NotFound)
         }
-        Operation::JobCancel { agent_id, workspace_id, id, actor, reason } => {
+        Operation::JobCancel {
+            agent_id,
+            workspace_id,
+            id,
+            actor,
+            reason,
+        } => {
             let tx = connection.transaction()?;
-            let state: Option<String> = tx.query_row("SELECT state FROM jobs WHERE id=? AND agent_id=? AND workspace_id=?", params![id,agent_id,workspace_id], |r| r.get(0)).optional()?;
+            let state: Option<String> = tx
+                .query_row(
+                    "SELECT state FROM jobs WHERE id=? AND agent_id=? AND workspace_id=?",
+                    params![id, agent_id, workspace_id],
+                    |r| r.get(0),
+                )
+                .optional()?;
             let state = state.ok_or(CoreError::NotFound)?;
-            let final_state = if matches!(state.as_str(), "queued"|"running") {
+            let final_state = if matches!(state.as_str(), "queued" | "running") {
                 tx.execute("UPDATE jobs SET state='cancelled', updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id=? AND state IN ('queued','running')", params![id,agent_id,workspace_id])?;
                 tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?,'cancelled',?,datetime('now'))", params![id,agent_id,serde_json::to_string(&json!({"actor":actor,"reason":reason}))?])?;
                 "cancelled"
-            } else { state.as_str() };
+            } else {
+                state.as_str()
+            };
             tx.execute("INSERT INTO job_cancellations(job_id,agent_id,actor,reason,provenance,created_at) VALUES(?,?,?,?,?,datetime('now'))", params![id,agent_id,actor,reason,"api"])?;
             tx.commit()?;
-            Ok(json!({"id":id,"state":final_state,"cancellation":{"actor":actor,"reason":reason,"provenance":"api"}}))
+            Ok(
+                json!({"id":id,"state":final_state,"cancellation":{"actor":actor,"reason":reason,"provenance":"api"}}),
+            )
         }
-        Operation::JobList { agent_id, workspace_id, limit } => {
+        Operation::JobList {
+            agent_id,
+            workspace_id,
+            limit,
+        } => {
             let mut s=connection.prepare("SELECT json_object('id',id,'agentId',agent_id,'workspaceId',workspace_id,'kind',kind,'state',state,'error',error,'createdAt',created_at,'updatedAt',updated_at) FROM jobs WHERE agent_id=? AND workspace_id=? ORDER BY id DESC LIMIT ?")?;
-            let rows = s.query_map(params![agent_id, workspace_id, limit.clamp(1, 100) as i64], |r| {
-                r.get::<_, String>(0)
-            })?;
+            let rows = s.query_map(
+                params![agent_id, workspace_id, limit.clamp(1, 100) as i64],
+                |r| r.get::<_, String>(0),
+            )?;
             let values = rows
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
@@ -515,9 +540,24 @@ fn execute_operation(
                 .collect::<Result<Vec<Value>, _>>()?;
             Ok(json!(values))
         }
-        Operation::JobEvents { agent_id, workspace_id, id, cursor, limit } => {
+        Operation::JobEvents {
+            agent_id,
+            workspace_id,
+            id,
+            cursor,
+            limit,
+        } => {
             let mut s=connection.prepare("SELECT json_object('cursor',e.id,'event',e.event,'data',json(e.data),'createdAt',e.created_at) FROM job_events e JOIN jobs j ON j.id=e.job_id AND j.agent_id=e.agent_id WHERE e.job_id=? AND e.agent_id=? AND j.workspace_id=? AND e.id>? ORDER BY e.id LIMIT ?")?;
-            let rows = s.query_map(params![id, agent_id, workspace_id, cursor, limit.clamp(1, 1000) as i64], |r| r.get::<_, String>(0))?;
+            let rows = s.query_map(
+                params![
+                    id,
+                    agent_id,
+                    workspace_id,
+                    cursor,
+                    limit.clamp(1, 1000) as i64
+                ],
+                |r| r.get::<_, String>(0),
+            )?;
             let values = rows
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
@@ -2030,7 +2070,12 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
-    ensure_column(&transaction, "jobs", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
+    ensure_column(
+        &transaction,
+        "jobs",
+        "workspace_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
     ensure_column(
         &transaction,
         "kg_entities",
