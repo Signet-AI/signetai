@@ -26,9 +26,8 @@ pub(crate) fn router() -> Router<AppState> {
 }
 
 async fn status() -> impl IntoResponse {
-    Json(
-        json!({"configured": configured(), "provider": if configured() { "openai-compatible" } else { Value::Null }, "available": configured()}),
-    )
+    let provider = configured().then_some("openai-compatible");
+    Json(json!({"configured": configured(), "provider": provider, "available": configured()}))
 }
 
 async fn catalog() -> impl IntoResponse {
@@ -62,6 +61,11 @@ async fn execute(
     Json(request): Json<ExecuteRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let identity = agent(&headers, None, request.agent_id.as_deref())?;
+    if let Some(provider) = request.provider.as_deref() {
+        if provider != "openai-compatible" {
+            return Err(ApiError::bad_request("unsupported inference provider"));
+        }
+    }
     if !configured() {
         return Err(ApiError::bad_request(
             "inference provider is not configured",
@@ -111,7 +115,7 @@ async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Val
         .map_err(|e| format!("provider connection failed: {e}"))?;
     let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
     let auth = key
-        .map(|k| format!("Authorization: Bearer {k}\r\n"))
+        .map(|value| format!("Authorization: Bearer {value}\r\n"))
         .unwrap_or_default();
     let request = format!("POST {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n", bytes.len());
     use tokio::io::{AsyncReadExt, AsyncWriteExt};

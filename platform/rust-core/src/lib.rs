@@ -793,7 +793,13 @@ fn execute_operation(
             let rows=s.query_map(params![agent_id,entity_id,entity_id,limit],|r| Ok(json!({"id":r.get::<_,String>(0)?,"fromId":r.get::<_,String>(1)?,"toId":r.get::<_,String>(2)?,"relation":r.get::<_,String>(3)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?}))
         }
-        Operation::SessionStart { agent_id, key, harness, runtime_path, project } => {
+        Operation::SessionStart {
+            agent_id,
+            key,
+            harness,
+            runtime_path,
+            project,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let key = bounded_text(&key, "session key", 512)?;
             let harness = bounded_text(&harness, "harness", 128)?;
@@ -808,7 +814,9 @@ fn execute_operation(
             let key = required_id(&key)?;
             let tx = connection.transaction()?;
             let changed = tx.execute("UPDATE sessions SET status='ended',ended_at=datetime('now') WHERE key=? AND agent_id=? AND status='active'", params![key,agent_id])?;
-            if changed == 0 { return Err(CoreError::NotFound); }
+            if changed == 0 {
+                return Err(CoreError::NotFound);
+            }
             tx.execute("INSERT INTO event_records(agent_id,session_key,event,payload,created_at) VALUES(?,?,?,?,datetime('now'))", params![agent_id,key,"session-end","{}"])?;
             tx.commit()?;
             Ok(json!({"key":key,"status":"ended"}))
@@ -819,13 +827,25 @@ fn execute_operation(
             let rows=s.query_map(params![agent_id,limit.clamp(1,MAX_EVENT_RECORDS) as i64],|r| Ok(json!({"key":r.get::<_,String>(0)?,"agentId":r.get::<_,String>(1)?,"harness":r.get::<_,String>(2)?,"runtimePath":r.get::<_,Option<String>>(3)?,"project":r.get::<_,Option<String>>(4)?,"status":r.get::<_,String>(5)?,"startedAt":r.get::<_,String>(6)?,"endedAt":r.get::<_,Option<String>>(7)?})))?;
             Ok(json!({"sessions":rows.collect::<Result<Vec<_>,_>>()?}))
         }
-        Operation::HookDeliver { agent_id, key, hook, payload } => {
-            let agent_id=required_agent(&agent_id)?; let hook=bounded_text(&hook,"hook",128)?; let payload=bounded_json(&payload)?;
+        Operation::HookDeliver {
+            agent_id,
+            key,
+            hook,
+            payload,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let hook = bounded_text(&hook, "hook", 128)?;
+            let payload = bounded_json(&payload)?;
             connection.execute("INSERT INTO event_records(agent_id,session_key,event,payload,created_at) VALUES(?,?,?,?,datetime('now'))",params![agent_id,key,hook,payload])?;
             Ok(json!({"delivered":true}))
         }
-        Operation::EventList { agent_id, key, limit } => {
-            let agent_id=required_agent(&agent_id)?; let limit=limit.clamp(1,MAX_EVENT_RECORDS) as i64;
+        Operation::EventList {
+            agent_id,
+            key,
+            limit,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let limit = limit.clamp(1, MAX_EVENT_RECORDS) as i64;
             let mut s=connection.prepare("SELECT id,event,payload,created_at FROM event_records WHERE agent_id=? AND (? IS NULL OR session_key=?) ORDER BY id DESC LIMIT ?")?;
             let rows=s.query_map(params![agent_id,key,key,limit],|r| Ok(json!({"id":r.get::<_,i64>(0)?,"event":r.get::<_,String>(1)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(2)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(3)?})))?;
             Ok(json!({"events":rows.collect::<Result<Vec<_>,_>>()?}))
@@ -995,11 +1015,32 @@ pub enum Operation {
         entity_id: String,
         limit: usize,
     },
-    SessionStart { agent_id: String, key: String, harness: String, runtime_path: Option<String>, project: Option<String> },
-    SessionEnd { agent_id: String, key: String },
-    SessionList { agent_id: String, limit: usize },
-    HookDeliver { agent_id: String, key: Option<String>, hook: String, payload: Value },
-    EventList { agent_id: String, key: Option<String>, limit: usize },
+    SessionStart {
+        agent_id: String,
+        key: String,
+        harness: String,
+        runtime_path: Option<String>,
+        project: Option<String>,
+    },
+    SessionEnd {
+        agent_id: String,
+        key: String,
+    },
+    SessionList {
+        agent_id: String,
+        limit: usize,
+    },
+    HookDeliver {
+        agent_id: String,
+        key: Option<String>,
+        hook: String,
+        payload: Value,
+    },
+    EventList {
+        agent_id: String,
+        key: Option<String>,
+        limit: usize,
+    },
 }
 
 fn owner_loop(

@@ -306,6 +306,93 @@ describe("fresh Rust daemon", () => {
 		expect(rejected.status).toBe(400);
 	});
 
+	it("persists scoped sessions and hook events", async () => {
+		const { origin } = await startDaemon();
+		const headers = { "content-type": "application/json", "x-signet-agent": "hook-agent" };
+		const started = await fetch(`${origin}/api/hooks/session-start`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ sessionKey: "session-1", harness: "contract", project: "signet" }),
+		});
+		expect(started.status).toBe(200);
+		expect((await started.json()).status).toBe("active");
+
+		const delivered = await fetch(`${origin}/api/hooks/deliver`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ hook: "remember", sessionKey: "session-1", payload: { id: "memory-1" } }),
+		});
+		expect(delivered.status).toBe(200);
+		expect((await delivered.json()).delivered).toBe(true);
+
+		const events = await fetch(`${origin}/api/hooks/events/session-1`, {
+			headers: { "x-signet-agent": "hook-agent" },
+		});
+		expect(events.status).toBe(200);
+		expect((await events.json()).events).toHaveLength(2);
+
+		const sessions = await fetch(`${origin}/api/sessions`, {
+			headers: { "x-signet-agent": "hook-agent" },
+		});
+		expect(sessions.status).toBe(200);
+		expect((await sessions.json()).sessions[0].status).toBe("active");
+
+		const ended = await fetch(`${origin}/api/hooks/session-end`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ sessionKey: "session-1" }),
+		});
+		expect(ended.status).toBe(200);
+		expect((await ended.json()).status).toBe("ended");
+
+		const otherAgent = await fetch(`${origin}/api/hooks/events/session-1`, {
+			headers: { "x-signet-agent": "other-agent" },
+		});
+		expect((await otherAgent.json()).events).toHaveLength(0);
+	});
+
+	it("forwards configured inference requests with bounded provider access", async () => {
+		let authorization: string | null = null;
+		let providerBody: Record<string, unknown> | null = null;
+		const provider = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				authorization = request.headers.get("authorization");
+				providerBody = (await request.json()) as Record<string, unknown>;
+				return Response.json({ id: "completion-1", choices: [{ message: { content: "provider response" } }] });
+			},
+		});
+		process.env.SIGNET_OPENAI_BASE_URL = `http://127.0.0.1:${provider.port}`;
+		process.env.SIGNET_OPENAI_MODEL = "contract-model";
+		process.env.SIGNET_OPENAI_API_KEY = "provider-secret";
+		try {
+			const { origin } = await startDaemon("inference-agent");
+			const response = await fetch(`${origin}/api/inference/execute`, {
+				method: "POST",
+				headers: { "content-type": "application/json", "x-signet-agent": "inference-agent" },
+				body: JSON.stringify({ prompt: "hello" }),
+			});
+			expect(response.status).toBe(200);
+			expect(authorization).toBe("Bearer provider-secret");
+			expect(providerBody?.model).toBe("contract-model");
+			expect((await response.json()).response.id).toBe("completion-1");
+		} finally {
+			provider.stop(true);
+			Reflect.deleteProperty(process.env, "SIGNET_OPENAI_BASE_URL");
+			Reflect.deleteProperty(process.env, "SIGNET_OPENAI_MODEL");
+			Reflect.deleteProperty(process.env, "SIGNET_OPENAI_API_KEY");
+		}
+	});
+
+	it("reports the native MCP boundary without a JavaScript fallback", async () => {
+		const { origin } = await startDaemon();
+		const status = await fetch(`${origin}/api/mcp/status`);
+		expect(status.status).toBe(200);
+		expect(await status.json()).toMatchObject({ native: true, js_runtime_required: false });
+		const ready = await fetch(`${origin}/api/mcp/ready`);
+		expect(ready.status).toBe(400);
+	});
+
 	it("serves scoped knowledge entities and relations with bounded 4xx validation", async () => {
 		const { origin } = await startDaemon();
 		const headers = { "content-type": "application/json", "x-signet-agent": "graph-a" };
