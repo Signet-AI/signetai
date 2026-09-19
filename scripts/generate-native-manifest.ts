@@ -19,7 +19,6 @@ interface ComponentEntry {
 
 type ComponentsMap = {
 	readonly connectors?: ComponentEntry;
-	readonly daemonJs?: ComponentEntry;
 };
 
 const root = join(import.meta.dir, "..");
@@ -34,9 +33,10 @@ function platformFromName(name: string): string | null {
 	if (
 		name === "native-manifest.json" ||
 		name.endsWith(".sha256") ||
-		name.startsWith("signet-connectors-") ||
-		name.startsWith("signet-daemon-js-") ||
-		name === "daemon-js-manifest.json"
+		// Connector-asset tarball is a component, not a binary. Skip it
+		// from the `assets` listing so the install-time platform lookup
+		// doesn't accidentally match `connectors-<version>.tar.gz`.
+		name.startsWith("signet-connectors-")
 	) {
 		return null;
 	}
@@ -71,34 +71,22 @@ function loadConnectorComponent(): ComponentEntry | null {
 	if (!stat.isFile() || stat.size === 0) return null;
 	const sha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
 	return {
+		// The wrapper resolves the manifest URL relative to the GitHub release
+		// page that hosts the binary. Keep the path consistent with how the
+		// release workflow uploads the tarball.
 		url: `signet-connectors-${version}.tar.gz`,
 		sha256,
 		size: stat.size,
 	};
 }
 
-function loadDaemonJsComponent(): ComponentEntry | null {
-	const tarballName = `signet-daemon-js-${version}.tar.gz`;
-	const tarballPath = join(nativeDir, tarballName);
-	if (!existsSync(tarballPath)) return null;
-	const stat = statSync(tarballPath);
-	if (!stat.isFile() || stat.size === 0) return null;
-	return {
-		url: tarballName,
-		sha256: createHash("sha256").update(readFileSync(tarballPath)).digest("hex"),
-		size: stat.size,
-	};
-}
-
 const connectors = loadConnectorComponent();
-const daemonJs = loadDaemonJsComponent();
-if (assets.length === 0 && !connectors && !daemonJs) {
+if (assets.length === 0 && !connectors) {
 	throw new Error(`No native Signet binaries or runtime components found in ${nativeDir}`);
 }
 
 const components: ComponentsMap = {
 	...(connectors ? { connectors } : {}),
-	...(daemonJs ? { daemonJs } : {}),
 };
 
 const manifest = {

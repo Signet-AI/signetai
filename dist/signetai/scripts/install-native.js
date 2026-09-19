@@ -23,7 +23,7 @@ const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
 
 const CONNECTOR_COMPONENT = "connectors";
-const DAEMON_JS_COMPONENT = "daemonJs";
+
 
 // Phase-1 telemetry (issue #1026): a single anonymous install counter sent to
 // the Signet PostHog project. Payload is version+platform only — no
@@ -173,10 +173,10 @@ async function main() {
 		throw err;
 	}
 
-	// Companion runtime assets. Connector plugin payloads and the Bun JavaScript
-	// daemon bundle ship separately so the runtime can find
-	// `$SIGNET_DIR/runtime/{connectors,daemon-js}/...` without a first-run
-	// network fetch.
+	// Connector plugin payloads ship separately; the Rust daemon is included
+	// directly in the package's installed-like runtime tree.
+	const daemonPath = join(packageDir, "runtime", "daemon", process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon");
+	if (!existsSync(daemonPath)) throw new Error(`Rust daemon is missing from package runtime: ${daemonPath}`);
 	await installRuntimeAssets();
 }
 
@@ -300,68 +300,8 @@ async function installConnectorAssets() {
 	}
 }
 
-async function installDaemonJsAssets() {
-	const manifest = loadManifest();
-	const component = manifest?.components?.[DAEMON_JS_COMPONENT];
-	const targetDir = join(packageDir, "runtime", "daemon-js");
-	const packagedRuntime = [
-		join(targetDir, "daemon.js"),
-		join(targetDir, "runtime-manifest.json"),
-		join(targetDir, "vendor", "tiktoken_bg.wasm"),
-		join(targetDir, "vendor", "node_modules", "@firecrawl", "anydoc"),
-	].every(existsSync);
-	if (packagedRuntime) return;
-	if (!component) return;
-
-	const targetMarker = join(targetDir, ".signet-daemon-js-version");
-	let installedMarker = null;
-	try {
-		installedMarker = JSON.parse(readFileSync(targetMarker, "utf8"));
-	} catch {
-		// Reinstall legacy or malformed markers instead of trusting stale assets.
-	}
-	if (
-		existsSync(targetMarker) &&
-		isConnectorMarker(installedMarker) &&
-		installedMarker.version === manifest.version &&
-		installedMarker.sha256.toLowerCase() === component.sha256.toLowerCase()
-	) {
-		return;
-	}
-
-	const tempPath = join(packageDir, `signet-daemon-js-${manifest.version}.tar.gz.tmp`);
-	const url = component.url.startsWith("http")
-		? component.url
-		: `${releaseBaseUrl()}/${component.url}`;
-
-	try {
-		await downloadTo(url, tempPath);
-		verifySha256(tempPath, component.sha256);
-		const stat = readFileSync(tempPath);
-		if (stat.length !== component.size) {
-			rmSync(tempPath, { force: true });
-			throw new Error(`Tarball size mismatch: expected ${component.size}, got ${stat.length}`);
-		}
-
-		if (existsSync(targetDir)) rmSync(targetDir, { recursive: true, force: true });
-		mkdirSync(packageDir, { recursive: true });
-		const result = spawnSync("tar", ["xzf", tempPath, "-C", packageDir], { stdio: "inherit" });
-		if (result.status !== 0) {
-			throw new Error(`tar extraction failed with status ${result.status ?? "unknown"}`);
-		}
-		writeFileSync(
-			targetMarker,
-			`${JSON.stringify({ version: manifest.version, sha256: component.sha256 })}\n`,
-		);
-		console.log(`Installed Bun JavaScript daemon assets to ${targetDir}`);
-	} finally {
-		rmSync(tempPath, { force: true });
-	}
-}
-
 async function installRuntimeAssets() {
 	await installConnectorAssets();
-	await installDaemonJsAssets();
 }
 
 main()
