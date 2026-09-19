@@ -4,6 +4,8 @@ node_modules
 **/node_modules
 **/dist
 **/build
+!surfaces/dashboard/build
+!surfaces/dashboard/build/**
 **/.svelte-kit
 **/target
 !dist

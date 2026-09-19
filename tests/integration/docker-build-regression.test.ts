@@ -73,20 +73,20 @@ function getBuildCommands(source: string): string[] {
 
 describe("Docker build pipeline regression guard", () => {
 	it("skips the Electron binary download in the daemon image build", () => {
-		expect(dockerfile).toContain("ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1");
-		expect(dockerfile.indexOf("ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1")).toBeLessThan(
-			dockerfile.indexOf("RUN bun install --frozen-lockfile"),
-		);
+		expect(dockerfile).not.toContain("electron");
 		expect(desktopBuildWorkflow).not.toContain("ELECTRON_SKIP_BINARY_DOWNLOAD");
 	});
 
 	it("uses shared build scripts instead of hardcoded connector filters", () => {
-		expect(dockerfile).toContain("RUN bun run build:deps");
-		expect(dockerfile).not.toContain("--filter '@signet/connector-");
+		expect(dockerfile).toContain("FROM rust:1.88-bookworm AS daemon-build");
+		expect(dockerfile).toContain("cargo build --release --manifest-path platform/rust-daemon/Cargo.toml");
+		expect(dockerfile).not.toMatch(/build:core|bun:sqlite|dist\/daemon\.js|platform\/daemon(?:-rs)?\b|@signet\/core/);
+		expect(dockerfile).not.toContain("bun install");
 	});
 
 	it("keeps source buckets available in the Docker build context", () => {
-		expect(dockerfile).toContain("COPY dist ./dist");
+		expect(dockerfile).toContain("COPY dist/signetai/templates ./dist/signetai/templates");
+		expect(dockerfile).toContain("COPY surfaces/dashboard/build ./dist/signetai/runtime/rust-daemon/dashboard");
 		expect(dockerignore).toContain("!dist/signetai/**");
 		expect(dockerignore).toContain("dist/signetai/dist");
 	});
@@ -94,13 +94,14 @@ describe("Docker build pipeline regression guard", () => {
 	it("runs the Docker daemon entrypoint through the native Signet binary", () => {
 		const entrypoint = readFileSync(join(rootDir, "deploy/docker/entrypoint.sh"), "utf8");
 
-		expect(dockerfile).toContain("RUN bun run build:native-cli");
-		expect(dockerfile).toContain("COPY --from=build /app/dist/native/signet ./bin/signet");
-		expect(dockerfile).not.toContain("SIGNET_DAEMON_ENTRYPOINT");
 		expect(dockerfile).toContain(
-			"COPY --from=build /app/dist/signetai/runtime/rust-daemon ./dist/signetai/runtime/rust-daemon",
+			"COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-daemon ./bin/signet",
 		);
-		expect(dockerfile).toContain("COPY --from=build /app/dist/signetai/templates ./dist/signetai/templates");
+		expect(dockerfile).toContain(
+			"COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-mcp ./bin/signet-mcp",
+		);
+		expect(dockerfile).not.toContain("SIGNET_DAEMON_ENTRYPOINT");
+		expect(dockerfile).toContain("USER signet");
 		expect(dockerfile).toContain("chmod +x ./bin/signet ");
 		expect(entrypoint).toContain("exec /app/bin/signet");
 		expect(entrypoint).not.toContain("exec /app/bin/signet-daemon");
@@ -109,28 +110,8 @@ describe("Docker build pipeline regression guard", () => {
 		expect(entrypoint).not.toContain("bun -e");
 	});
 
-	it("builds and stages the fresh Rust daemon after the dashboard", () => {
-		expect(dockerfile).toContain("--no-install-recommends cargo rustc python3 make g++");
-		expect(dockerfile).toContain("RUN bun run build:native");
-		expect(dockerfile).not.toContain("SIGNET_SKIP_NATIVE_BUILD");
-		expect(dockerfile).not.toContain("ENV SIGNET_DAEMON_ENTRYPOINT=1");
-		expect(dockerfile.indexOf("RUN bun run build:dashboard")).toBeLessThan(
-			dockerfile.indexOf("RUN bun run build:native"),
-		);
-		expect(getBuildCommands(dockerfile)).toEqual([
-			"build:core",
-			"build:connector-base",
-			"build:opencode-plugin",
-			"build:oh-my-pi-extension",
-			"build:connector-oh-my-pi",
-			"build:pi-extension",
-			"build:connector-pi",
-			"build:deps",
-			"build:dashboard",
-			"build:native",
-			"build:signetai",
-			"build:native-cli",
-		]);
+	it("does not execute workspace build scripts in production", () => {
+		expect(getBuildCommands(dockerfile)).toEqual([]);
 	});
 
 	it("keeps the OpenClaw adapter build Docker-safe when bundling @signet/core", () => {
@@ -141,7 +122,7 @@ describe("Docker build pipeline regression guard", () => {
 	it("keeps desktop release builds aligned with workspace dependency order", () => {
 		expect(desktopBuild).toBeDefined();
 		if (!desktopBuild) return;
-		expect(desktopBuild).toStartWith("bun run build:core");
+		expect(desktopBuild).toStartWith("bun run build:tray");
 		expect(desktopBuild).toContain("bun run build:daemon");
 		expect(desktopBuild.indexOf("bun run build:core")).toBeLessThan(desktopBuild.indexOf("bun run build:daemon"));
 	});
@@ -168,14 +149,9 @@ describe("Docker build pipeline regression guard", () => {
 		expect(desktopHomepage).toBe("https://signetai.sh");
 	});
 
-	it("keeps the core optional native package available to the SDK bundle", () => {
-		const install = "RUN bun install --frozen-lockfile --ignore-scripts --filter '@signet/core'";
-		const installIndex = dockerfile.indexOf(install);
-		const depsBuildIndex = dockerfile.indexOf("RUN bun run build:deps");
-
-		expect(installIndex).toBeGreaterThanOrEqual(0);
-		expect(dockerfile).toContain("RUN test -e platform/core/node_modules/better-sqlite3");
-		expect(installIndex).toBeLessThan(depsBuildIndex);
+	it("does not provide a JavaScript MCP fallback", () => {
+		expect(dockerfile).not.toMatch(/signet-mcp\.js|daemon\.js|exec bun/);
+		expect(dockerfile).toContain("./bin/signet-mcp");
 	});
 
 	it("fails stable Docker release CI when GHCR latest is not publicly pullable", () => {

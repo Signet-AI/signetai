@@ -1,84 +1,31 @@
 # syntax=docker/dockerfile:1.7
 
-FROM oven/bun:1.4.0 AS build
+FROM rust:1.88-bookworm AS daemon-build
 WORKDIR /app
-ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
+COPY platform/rust-core ./platform/rust-core
+COPY platform/rust-daemon/Cargo.toml platform/rust-daemon/Cargo.lock ./platform/rust-daemon/
+COPY platform/rust-daemon/src ./platform/rust-daemon/src
+RUN cargo build --release --manifest-path platform/rust-daemon/Cargo.toml \
+	&& test -x platform/rust-daemon/target/release/signet-daemon \
+	&& test -x platform/rust-daemon/target/release/signet-mcp
 
-RUN apt-get update \
-	&& apt-get install -y --no-install-recommends cargo rustc python3 make g++ \
-	&& rm -rf /var/lib/apt/lists/*
-
-COPY package.json bun.lock bunfig.toml tsconfig.json biome.json ./
-COPY AGENTS.md CLAUDE.md LICENSE README.md ./
-COPY scripts ./scripts
-COPY skills ./skills
-COPY memorybench ./memorybench
-COPY platform ./platform
-COPY surfaces ./surfaces
-COPY integrations ./integrations
-COPY libs ./libs
-COPY dist ./dist
-COPY plugins ./plugins
-COPY public ./public
-COPY web ./web
-
-RUN bun install --frozen-lockfile
-RUN bun install --frozen-lockfile --ignore-scripts --filter '@signet/core'
-RUN test -e platform/core/node_modules/better-sqlite3
-ARG TARGETOS=linux
-ARG TARGETARCH
-RUN set -eux; \
-	arch="${TARGETARCH:-$(uname -m)}"; \
-	case "$arch" in \
-		amd64|x86_64) arch="x64" ;; \
-		aarch64) arch="arm64" ;; \
-	esac; \
-	pkg="sqlite-vec-${TARGETOS}-${arch}"; \
-	vec_path="$(find node_modules -path "*/${pkg}/vec0.so" -type f | head -n 1)"; \
-	test -n "$vec_path"; \
-	mkdir -p dist/docker-sqlite-vec; \
-	cp "$vec_path" dist/docker-sqlite-vec/vec0.so
-RUN bun run build:core
-RUN bun run build:connector-base
-RUN bun run build:opencode-plugin
-RUN bun run build:oh-my-pi-extension
-RUN bun run build:connector-oh-my-pi
-RUN bun run build:pi-extension
-RUN bun run build:connector-pi
-RUN bun run build:deps
-RUN bun run build:dashboard
-RUN bun run build:native
-RUN bun run build:signetai
-RUN bun run build:native-cli
-
-FROM oven/bun:1.4.0 AS runtime
+FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-
-ENV NODE_ENV=production
-ENV SIGNET_PATH=/data/agents
-ENV SIGNET_BIND=0.0.0.0
-ENV SIGNET_PORT=3850
-ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so
-ENV PATH="/root/.bun/bin:${PATH}"
-
+ENV NODE_ENV=production SIGNET_PATH=/data/agents SIGNET_BIND=0.0.0.0 SIGNET_PORT=3850
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends ca-certificates nodejs \
-	&& rm -rf /var/lib/apt/lists/*
-
-ARG CODEX_CLI_VERSION=0.142.5
-RUN bun install -g @openai/codex@${CODEX_CLI_VERSION}
-
-COPY --from=build /app/dist/native/signet ./bin/signet
-COPY --from=build /app/dist/docker-sqlite-vec ./sqlite-vec
-COPY --from=build /app/dist/signetai/runtime/rust-daemon ./dist/signetai/runtime/rust-daemon
-COPY --from=build /app/dist/signetai/templates ./dist/signetai/templates
+	&& apt-get install -y --no-install-recommends ca-certificates \
+	&& rm -rf /var/lib/apt/lists/* \
+	&& useradd --create-home --uid 10001 --shell /usr/sbin/nologin signet
+COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-daemon ./bin/signet
+COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-mcp ./bin/signet-mcp
+COPY surfaces/dashboard/build ./dist/signetai/runtime/rust-daemon/dashboard
+COPY dist/signetai/templates ./dist/signetai/templates
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY deploy/docker/scripts ./deploy/docker/scripts
-
-RUN chmod +x ./bin/signet ./deploy/docker/entrypoint.sh ./deploy/docker/scripts/create-token.mjs ./deploy/docker/scripts/healthcheck.mjs
-
+RUN chmod +x ./bin/signet ./bin/signet-mcp ./deploy/docker/entrypoint.sh \
+	./deploy/docker/scripts/create-token.mjs ./deploy/docker/scripts/healthcheck.mjs \
+	&& mkdir -p /data/agents && chown -R signet:signet /app /data/agents
+USER signet
 EXPOSE 3850
-
-HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=5 CMD bun /app/deploy/docker/scripts/healthcheck.mjs
-
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=5 CMD /app/deploy/docker/scripts/healthcheck.mjs
 ENTRYPOINT ["/app/deploy/docker/entrypoint.sh"]
