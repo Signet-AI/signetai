@@ -22,7 +22,6 @@ import {
 	resolveRemoteDaemonUrl,
 	resolveSignetApiKey,
 	resolveSignetCliCommand,
-	resolveSignetMcpCommand,
 } from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
 
@@ -133,7 +132,28 @@ function resolveSignetArgs(runtime: string | null = null): string[] {
 	const resolved = resolveSignetCliCommand();
 	return [resolved.command, ...resolved.args];
 }
-function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
+/** Resolve the native Rust MCP executable for Codex; never a JS/TS stdio worker. */
+export function resolveSignetMcpBinary(env: NodeJS.ProcessEnv = process.env): string {
+	const explicit = env.SIGNET_RUST_MCP_BIN?.trim();
+	const packageRoot = env.SIGNET_DIR?.trim() ?? env.SIGNET_WRAPPER_DIR?.trim();
+	const binary = process.platform === "win32" ? "signet-mcp.exe" : "signet-mcp";
+	const candidates = [
+		explicit,
+		packageRoot
+			? join(packageRoot, "runtime", "rust-daemon", `${process.platform}-${process.arch}`, binary)
+			: undefined,
+	];
+	const resolved = candidates.find(
+		(candidate) => candidate && !/\.(?:js|ts|mjs|cjs)$/i.test(candidate) && isExistingFile(candidate),
+	);
+	if (!resolved)
+		throw new Error(`Signet native MCP binary is missing; set SIGNET_RUST_MCP_BIN or install the packaged ${binary}`);
+	return resolved;
+}
+
+/** Resolve signet-mcp as { command, args } for Codex config.toml.
+ *  Codex expects `command` as a string and `args` as a separate array. */
+function resolveSignetMcp(_runtime: string | null = null): SignetMcpConfig {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
 		const apiKey = readAuthTokenEnv();
@@ -144,15 +164,7 @@ function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
 			...(apiKey ? { httpHeaders: { Authorization: `Bearer ${apiKey}` } } : {}),
 		};
 	}
-	const entry = resolveSignetEntry();
-	const mcpEntry = entry ? join(dirname(entry), "..", "dist", "mcp-stdio.js") : null;
-	const scriptRuntime = runtime ?? (isScriptRuntime(process.execPath) ? process.execPath : null);
-	if (scriptRuntime && mcpEntry && existsSync(mcpEntry)) return { command: scriptRuntime, args: [mcpEntry] };
-	const nativeBinary = resolveSignetNativeBinary();
-	if (nativeBinary) {
-		return { command: nativeBinary, args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } };
-	}
-	return resolveSignetMcpCommand();
+	return { command: resolveSignetMcpBinary(), args: [], env: { SIGNET_MCP_STDIO_WORKER: "1" } };
 }
 
 const CODEX_RUNTIME_SCAN_DEPTH = 8;
