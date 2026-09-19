@@ -221,6 +221,8 @@ struct RecallRequest {
     query: String,
     #[serde(default, alias = "agentId")]
     agent_id: Option<String>,
+    #[serde(default)]
+    limit: Option<Value>,
 }
 
 pub(crate) fn configured_agent() -> Option<String> {
@@ -232,6 +234,38 @@ pub(crate) fn configured_agent() -> Option<String> {
 pub(crate) fn non_empty(value: &str) -> Option<String> {
     let value = value.trim();
     (!value.is_empty()).then(|| value.to_owned())
+}
+
+fn parse_limit_value(value: Option<&Value>) -> Result<usize, ApiError> {
+    let Some(value) = value else {
+        return Ok(10);
+    };
+    let Some(raw) = value.as_u64() else {
+        return Err(ApiError::bad_request(
+            "limit must be an integer from 1 to 100",
+        ));
+    };
+    if !(1..=100).contains(&raw) {
+        return Err(ApiError::bad_request(
+            "limit must be an integer from 1 to 100",
+        ));
+    }
+    Ok(raw as usize)
+}
+
+fn parse_limit_text(raw: Option<&str>) -> Result<usize, ApiError> {
+    let Some(raw) = raw else {
+        return Ok(10);
+    };
+    let value = raw
+        .parse::<u64>()
+        .map_err(|_| ApiError::bad_request("limit must be an integer from 1 to 100"))?;
+    if !(1..=100).contains(&value) {
+        return Err(ApiError::bad_request(
+            "limit must be an integer from 1 to 100",
+        ));
+    }
+    Ok(value as usize)
 }
 
 pub(crate) fn agent(
@@ -475,15 +509,17 @@ async fn recall(
     if request.query.trim().is_empty() {
         return Err(ApiError::bad_request("query must not be empty"));
     }
+    let limit = parse_limit_value(request.limit.as_ref())?;
     let result = execute(
         &state,
-        Operation::Recall {
+        Operation::MemorySearch {
             agent_id,
             query: request.query,
+            limit,
         },
     )
     .await?;
-    Ok(Json(json!({ "memories": result })))
+    Ok(Json(result))
 }
 
 async fn search(
@@ -500,15 +536,17 @@ async fn search(
     if text.trim().is_empty() {
         return Err(ApiError::bad_request("q or query is required"));
     }
+    let limit = parse_limit_text(query.get("limit").map(String::as_str))?;
     let result = execute(
         &state,
-        Operation::Recall {
+        Operation::MemorySearch {
             agent_id,
             query: text,
+            limit,
         },
     )
     .await?;
-    Ok(Json(json!({ "results": result })))
+    Ok(Json(result))
 }
 
 async fn sources(

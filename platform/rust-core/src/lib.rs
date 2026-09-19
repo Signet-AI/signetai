@@ -384,6 +384,64 @@ impl Core {
     }
 }
 
+fn retrieval_tokens(query: &str) -> Vec<String> {
+    query
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|s| s.to_lowercase())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+fn execute_memory_search(
+    connection: &mut Connection,
+    agent_id: String,
+    query: String,
+    limit: usize,
+) -> Result<Value, CoreError> {
+    let agent_id = required_agent(&agent_id)?;
+    let tokens = retrieval_tokens(query.trim());
+    if tokens.is_empty() {
+        return Err(CoreError::InvalidInput(
+            "query must contain at least one token".into(),
+        ));
+    }
+    let limit = limit.clamp(1, 100) as i64;
+    let has_fts: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='memories_fts')",
+        [],
+        |r| r.get(0),
+    )?;
+    let mut rows = Vec::new();
+    if has_fts {
+        let match_query = tokens
+            .iter()
+            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
+        let mapped = stmt.query_map(params![match_query, agent_id, limit], memory_search_row)?;
+        rows = mapped.collect::<Result<Vec<_>, _>>()?;
+    } else {
+        // Compatibility fallback is deliberately token-aware and marked partial;
+        // it is not presented as an FTS result.
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL ORDER BY rowid DESC LIMIT 1000")?;
+        let candidates = stmt.query_map(params![agent_id], memory_row)?;
+        for memory in candidates {
+            let memory = memory?;
+            let words = retrieval_tokens(&memory.content);
+            if tokens.iter().all(|t| words.iter().any(|w| w == t)) {
+                rows.push(json!({"id":memory.id,"agentId":memory.agent_id,"content":memory.content,"metadata":memory.metadata,"deleted":memory.deleted,"createdAt":memory.created_at,"updatedAt":memory.updated_at,"score":0.0}));
+            }
+            if rows.len() >= limit as usize {
+                break;
+            }
+        }
+    }
+    Ok(
+        json!({"results":rows,"query":query,"method":"keyword","meta":{"totalReturned":rows.len(),"noHits":rows.is_empty(),"lexical":{"available":has_fts,"completeness":if has_fts {"complete"} else {"partial"}},"channels":{"vector":{"supported":false},"graph":{"supported":false},"aggregate":{"supported":false}}}}),
+    )
+}
+
 fn execute_operation(
     connection: &mut Connection,
     operation: Operation,
@@ -1157,6 +1215,11 @@ fn execute_operation(
             let rows = statement.query_map(params![agent_id, format!("%{query}%")], memory_row)?;
             Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
         }
+        Operation::MemorySearch {
+            agent_id,
+            query,
+            limit,
+        } => execute_memory_search(connection, agent_id, query, limit),
         Operation::CreateSource {
             agent_id,
             kind,
@@ -1797,6 +1860,11 @@ pub enum Operation {
         agent_id: String,
         query: String,
     },
+    MemorySearch {
+        agent_id: String,
+        query: String,
+        limit: usize,
+    },
     CreateSource {
         agent_id: String,
         kind: String,
@@ -2104,6 +2172,14 @@ fn bounded_json(value: &Value) -> Result<String, CoreError> {
         return Err(CoreError::InvalidInput("metadata exceeds 64 KiB".into()));
     }
     Ok(text)
+}
+
+fn memory_search_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let memory = memory_row(row)?;
+    let score: f64 = row.get(7)?;
+    Ok(
+        json!({"id":memory.id,"agentId":memory.agent_id,"content":memory.content,"metadata":memory.metadata,"deleted":memory.deleted,"createdAt":memory.created_at,"updatedAt":memory.updated_at,"score":1.0/(1.0+score.abs())}),
+    )
 }
 
 fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
