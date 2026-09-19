@@ -710,6 +710,41 @@ fn execute_operation(
             tx.commit()?;
             Ok(json!({"fileId":file_id,"state":v.2,"generation":v.0,"offset":v.1}))
         }
+        Operation::TranscriptImportControl { agent_id, workspace_id, job_id, action } => {
+            let agent_id = required_agent(&agent_id)?;
+            let tx = connection.transaction()?;
+            let files_json: String = tx.query_row(
+                "SELECT files FROM transcript_import_jobs WHERE id=? AND agent_id=? AND workspace_id=?",
+                params![job_id, agent_id, workspace_id], |r| r.get(0)).optional()?.ok_or(CoreError::NotFound)?;
+            let mut files: Vec<Value> = serde_json::from_str(&files_json)?;
+            let current: String = tx.query_row("SELECT state FROM transcript_import_jobs WHERE id=?", params![job_id], |r| r.get(0))?;
+            if action == "cancel" {
+                if current != "completed" { tx.execute("UPDATE transcript_import_jobs SET state='canceled',updated_at=datetime('now') WHERE id=?", params![job_id])?; }
+                tx.commit()?;
+                return Ok(json!({"jobId":job_id,"state":"canceled","files":files,"imported":0,"rejected":0,"pending":0}));
+            }
+            if action == "pause" { if current == "running" { tx.execute("UPDATE transcript_import_jobs SET state='paused',updated_at=datetime('now') WHERE id=?", params![job_id])?; } tx.commit()?; return Ok(json!({"jobId":job_id,"state":"paused"})); }
+            if action == "resume" || action == "retry" || action == "start" {
+                if current == "completed" && action == "start" { tx.commit()?; return Ok(json!({"jobId":job_id,"state":"completed","imported":files.iter().filter(|f| f.get("state")==Some(&json!("completed"))).count(),"rejected":0,"pending":0})); }
+                tx.execute("UPDATE transcript_import_jobs SET state='running',updated_at=datetime('now') WHERE id=?", params![job_id])?;
+                let mut imported=0usize; let mut rejected=0usize; let mut pending=0usize;
+                for file in files.iter_mut() {
+                    let fid=file.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
+                    let (state, bytes): (String,Vec<u8>) = tx.query_row("SELECT state,content FROM transcript_import_files WHERE id=? AND job_id=?",params![fid,job_id],|r|Ok((r.get(0)?,r.get(1)?)))?;
+                    if state == "completed" { imported += 1; continue; }
+                    if state != "ready" { pending += 1; file["state"]=json!(state); continue; }
+                    let name=file.get("name").and_then(Value::as_str).unwrap_or("");
+                    if !name.ends_with(".jsonl") { rejected += 1; file["state"]=json!("rejected"); file["rejection"]=json!("unsupported format; only newline-delimited JSON (.jsonl) is supported"); tx.execute("UPDATE transcript_import_files SET state='rejected',updated_at=datetime('now') WHERE id=?",params![fid])?; continue; }
+                    let mut bad=0usize; let mut good=0usize;
+                    for line in bytes.split(|b| *b==b'\n') { if line.iter().all(u8::is_ascii_whitespace) { continue; } match serde_json::from_slice::<Value>(line) { Ok(v) => { let session=v.get("sessionKey").or_else(||v.get("session_id")).and_then(Value::as_str).unwrap_or(""); let harness=v.get("harness").and_then(Value::as_str).unwrap_or(""); let content=v.get("content").and_then(Value::as_str).unwrap_or(""); let idem=v.get("idempotencyKey").or_else(||v.get("idempotency_key")).and_then(Value::as_str).unwrap_or(""); if session.is_empty()||harness.is_empty()||content.is_empty()||idem.is_empty() {bad+=1;} else { let mut h=Sha256::new(); h.update(content.as_bytes()); let hash=format!("{:x}",h.finalize()); tx.execute("INSERT INTO session_transcripts (session_key,agent_id,harness,project,content,content_hash,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(agent_id,idempotency_key) DO NOTHING",params![session,agent_id,harness,v.get("project").and_then(Value::as_str),content,hash,idem])?; good+=1; } }, Err(_)=>bad+=1 } }
+                    if good==0 && bad>0 { rejected+=1; file["state"]=json!("rejected"); file["rejection"]=json!("no valid transcript records"); tx.execute("UPDATE transcript_import_files SET state='rejected' WHERE id=?",params![fid])?; } else { imported+=1; file["state"]=json!("completed"); file["importedRecords"]=json!(good); file["rejectedRecords"]=json!(bad); tx.execute("UPDATE transcript_import_files SET state='completed' WHERE id=?",params![fid])?; }
+                }
+                let final_state=if rejected>0 && imported==0 {"failed"} else if pending>0 {"paused"} else {"completed"};
+                tx.execute("UPDATE transcript_import_jobs SET state=?,files=?,updated_at=datetime('now') WHERE id=?",params![final_state,serde_json::to_string(&files)?,job_id])?; tx.commit()?;
+                return Ok(json!({"jobId":job_id,"state":final_state,"files":files,"imported":imported,"rejected":rejected,"pending":pending}));
+            }
+            Err(CoreError::InvalidInput("unsupported transcript import action".into()))
+        }
         Operation::TranscriptUpsert {
             agent_id,
             session_key,
@@ -2590,6 +2625,12 @@ pub enum Operation {
         length: Option<i64>,
         checksum: Option<String>,
         content: Vec<u8>,
+    },
+    TranscriptImportControl {
+        agent_id: String,
+        workspace_id: String,
+        job_id: String,
+        action: String,
     },
     TranscriptUpsert {
         agent_id: String,

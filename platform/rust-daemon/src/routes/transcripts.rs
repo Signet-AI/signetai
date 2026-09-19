@@ -296,23 +296,59 @@ async fn upsert(
         ),
     ))
 }
-async fn unsupported(
+async fn control(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(job_id): Path<String>,
+    action: &str,
 ) -> Result<Json<Value>, ApiError> {
-    let _ = execute(
-        &state,
-        Operation::TranscriptImportGet {
-            agent_id: agent(&headers, None, None)?,
-            workspace_id: workspace(&headers),
-            id: job_id,
-        },
-    )
-    .await?;
-    Err(ApiError::not_implemented(
-        "transcript import execution requires a provider/parser worker",
+    Ok(Json(
+        execute(
+            &state,
+            Operation::TranscriptImportControl {
+                agent_id: agent(&headers, None, None)?,
+                workspace_id: workspace(&headers),
+                job_id,
+                action: action.into(),
+            },
+        )
+        .await?,
     ))
+}
+async fn start(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    control(State(s), h, p, "start").await
+}
+async fn pause(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    control(State(s), h, p, "pause").await
+}
+async fn resume(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    control(State(s), h, p, "resume").await
+}
+async fn retry(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    control(State(s), h, p, "retry").await
+}
+async fn cancel(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    control(State(s), h, p, "cancel").await
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -335,10 +371,10 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/sources/imports/{job_id}/files/{file_id}/content",
             get(content),
         )
-        .route("/api/sources/imports/{job_id}/start", post(unsupported))
-        .route("/api/sources/imports/{job_id}/pause", post(unsupported))
-        .route("/api/sources/imports/{job_id}/resume", post(unsupported))
-        .route("/api/sources/imports/{job_id}/retry", post(unsupported))
-        .route("/api/sources/imports/{job_id}/cancel", post(unsupported))
+        .route("/api/sources/imports/{job_id}/start", post(start))
+        .route("/api/sources/imports/{job_id}/pause", post(pause))
+        .route("/api/sources/imports/{job_id}/resume", post(resume))
+        .route("/api/sources/imports/{job_id}/retry", post(retry))
+        .route("/api/sources/imports/{job_id}/cancel", post(cancel))
         .route("/api/transcripts", post(upsert).get(list))
 }

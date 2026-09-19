@@ -186,7 +186,7 @@ test("fresh native durable transcript import staging lifecycle", async () => {
 	for (const control of ["start", "pause", "resume", "retry", "cancel"])
 		check(
 			(await fetch(`${daemon.origin}/api/sources/imports/${job.id}/${control}`, { method: "POST", headers })).status,
-			501,
+			200,
 		);
 	for (const bad of ["not-json", JSON.stringify({ files: [] }), JSON.stringify({ files: [{ name: "x".repeat(513) }] })])
 		check(
