@@ -1,0 +1,179 @@
+import { afterEach, describe, expect, it } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+interface NativeProcess {
+	readonly kill: (signal?: number | NodeJS.Signals) => void;
+	readonly exited: Promise<number>;
+}
+
+const children: NativeProcess[] = [];
+const workspaces: string[] = [];
+let nextPort = 38_600;
+const root = process.cwd();
+function environmentValue(name: string): string | undefined {
+	const value = Reflect.get(process.env, name);
+	return typeof value === "string" ? value : undefined;
+}
+
+const binary =
+	environmentValue("SIGNET_RUST_DAEMON_BIN") ??
+	join(root, "platform", "rust-daemon", "target", "debug", "signet-daemon");
+
+function requireBinary(): string {
+	if (!existsSync(binary)) {
+		throw new Error(`fresh Rust daemon binary is missing: ${binary}; build it before running this test`);
+	}
+	return binary;
+}
+
+async function waitForReady(origin: string, child: NativeProcess): Promise<void> {
+	const deadline = Date.now() + 5_000;
+	let lastError = "";
+	while (Date.now() < deadline) {
+		try {
+			const response = await fetch(`${origin}/health/ready`);
+			if (response.ok) return;
+			lastError = await response.text();
+		} catch (error) {
+			lastError = error instanceof Error ? error.message : String(error);
+		}
+		const exit = await Promise.race([
+			child.exited.then((code) => code),
+			new Promise<null>((resolve) => setTimeout(() => resolve(null), 25)),
+		]);
+		if (exit !== null) throw new Error(`native daemon exited during readiness (${exit}): ${lastError}`);
+	}
+	throw new Error(`native daemon did not become ready: ${lastError}`);
+}
+
+async function startDaemon(
+	agentId: string | null = environmentValue("SIGNET_AGENT_ID"),
+): Promise<{ readonly origin: string; readonly workspace: string; readonly child: NativeProcess }> {
+	const workspace = mkdtempSync(join(tmpdir(), "signet-rust-workspace-"));
+	workspaces.push(workspace);
+	const port = nextPort++;
+	const child = Bun.spawn([requireBinary()], {
+		cwd: root,
+		env: {
+			...process.env,
+			SIGNET_PATH: workspace,
+			SIGNET_BIND: "127.0.0.1",
+			SIGNET_PORT: String(port),
+			...(agentId === null ? { SIGNET_AGENT_ID: "" } : agentId === undefined ? {} : { SIGNET_AGENT_ID: agentId }),
+		},
+		stderr: "pipe",
+		stdout: "ignore",
+	}) as unknown as NativeProcess;
+	children.push(child);
+	const origin = `http://127.0.0.1:${port}`;
+	await waitForReady(origin, child);
+	return { origin, workspace, child };
+}
+
+afterEach(async () => {
+	for (const child of children.splice(0)) {
+		child.kill("SIGTERM");
+		await Promise.race([child.exited, new Promise<void>((resolve) => setTimeout(resolve, 1_000))]);
+	}
+	for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
+});
+
+describe("fresh Rust daemon", () => {
+	it("serves health from a native process and preserves scoped durable memory", async () => {
+		const { origin } = await startDaemon();
+		const live = await fetch(`${origin}/health/live`);
+		expect(live.status).toBe(200);
+		expect((await live.json()).runtime).toBe("rust");
+
+		const remember = await fetch(`${origin}/api/memory/remember`, {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-signet-agent": "agent-a" },
+			body: JSON.stringify({ content: "durable UTF-8 memory: café" }),
+		});
+		expect(remember.status).toBe(201);
+		const created = (await remember.json()) as { id: string };
+
+		const own = await fetch(`${origin}/api/memory/${created.id}`, { headers: { "x-signet-agent": "agent-a" } });
+		expect(own.status).toBe(200);
+		expect((await own.json()).content).toBe("durable UTF-8 memory: café");
+
+		const other = await fetch(`${origin}/api/memory/${created.id}`, { headers: { "x-signet-agent": "agent-b" } });
+		expect(other.status).toBe(404);
+	});
+
+	it("persists a committed transition across restart without exposing the database to the client", async () => {
+		const first = await startDaemon();
+		const remember = await fetch(`${first.origin}/api/memory/remember`, {
+			method: "POST",
+			headers: { "content-type": "application/json", "x-signet-agent": "restart-agent" },
+			body: JSON.stringify({ content: "survives restart" }),
+		});
+		expect(remember.status).toBe(201);
+		const firstId = ((await remember.json()) as { id: string }).id;
+		first.child.kill("SIGTERM");
+		await first.child.exited;
+		children.splice(children.indexOf(first.child), 1);
+
+		const port = nextPort++;
+		const child = Bun.spawn([requireBinary()], {
+			cwd: root,
+			env: { ...process.env, SIGNET_PATH: first.workspace, SIGNET_BIND: "127.0.0.1", SIGNET_PORT: String(port) },
+			stderr: "pipe",
+			stdout: "ignore",
+		}) as unknown as NativeProcess;
+		children.push(child);
+		const origin = `http://127.0.0.1:${port}`;
+		await waitForReady(origin, child);
+		const read = await fetch(`${origin}/api/memory/${firstId}`, { headers: { "x-signet-agent": "restart-agent" } });
+		expect(read.status).toBe(200);
+		expect((await read.json()).content).toBe("survives restart");
+
+		const db = join(first.workspace, "memory", "memories.db");
+		expect(existsSync(db)).toBe(true);
+		expect(readFileSync(db).length).toBeGreaterThan(0);
+	});
+
+	it("records scoped mutation history and recovers a soft-deleted memory", async () => {
+		const { origin } = await startDaemon();
+		const headers = { "content-type": "application/json", "x-signet-agent": "history-agent" };
+		const remember = await fetch(`${origin}/api/memory/remember`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ content: "history target", metadata: { source: "test" } }),
+		});
+		expect(remember.status).toBe(201);
+		const id = ((await remember.json()) as { id: string }).id;
+
+		const patch = await fetch(`${origin}/api/memory/${id}`, {
+			method: "PATCH",
+			headers,
+			body: JSON.stringify({ metadata: { source: "patched" } }),
+		});
+		expect(patch.status).toBe(200);
+		const deleted = await fetch(`${origin}/api/memory/${id}`, { method: "DELETE", headers });
+		expect(deleted.status).toBe(200);
+		expect((await fetch(`${origin}/api/memory/${id}`, { headers })).status).toBe(404);
+
+		const history = await fetch(`${origin}/api/memory/${id}/history`, { headers });
+		expect(history.status).toBe(200);
+		expect((await history.json()).history).toHaveLength(3);
+
+		const recovered = await fetch(`${origin}/api/memory/${id}/recover`, { method: "POST", headers });
+		expect(recovered.status).toBe(200);
+		const restored = await fetch(`${origin}/api/memory/${id}`, { headers });
+		expect((await restored.json()).metadata.source).toBe("patched");
+		expect((await fetch(`${origin}/api/memory/${id}/history`, { headers })).status).toBe(200);
+	});
+
+	it("rejects unscoped writes instead of guessing an agent", async () => {
+		const { origin } = await startDaemon(null);
+		const response = await fetch(`${origin}/api/memory/remember`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ content: "must be rejected" }),
+		});
+		expect(response.status).toBe(401);
+	});
+});
