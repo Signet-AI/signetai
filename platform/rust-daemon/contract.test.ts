@@ -256,4 +256,24 @@ describe("fresh Rust daemon", () => {
 		const otherSources = await fetch(`${origin}/api/sources`, { headers: { "x-signet-agent": "agent-b" } });
 		expect((await otherSources.json()).sources).toHaveLength(0);
 	});
+
+	it("atomically updates an allowlisted configuration file", async () => {
+		const { origin } = await startDaemon();
+		const write = await fetch(`${origin}/api/config`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ file: "USER.md", content: "# user\n" }),
+		});
+		expect(write.status).toBe(200);
+		const read = await fetch(`${origin}/api/config`);
+		const payload = (await read.json()) as { files?: Array<{ name?: string; content?: string }> };
+		expect(read.status).toBe(200);
+		expect(payload.files).toContainEqual({ name: "USER.md", content: "# user\n", size: 7 });
+		const rejected = await fetch(`${origin}/api/config`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ file: "../escape", content: "nope" }),
+		});
+		expect(rejected.status).toBe(400);
+	});
 });
