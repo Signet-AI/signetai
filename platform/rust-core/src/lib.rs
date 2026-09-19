@@ -742,14 +742,30 @@ fn execute_operation(
         }
         Operation::PipelineStatus { agent_id } => {
             let agent_id = required_agent(&agent_id)?;
-            let row: Option<(String, i64)> = connection
+            let row: Option<(i64, i64)> = connection
                 .query_row(
-                    "SELECT state, paused FROM pipeline_state WHERE agent_id=?",
-                    params![agent_id],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    "SELECT COALESCE(SUM(state='queued'),0), COALESCE(SUM(state='running'),0) FROM jobs WHERE agent_id=? AND kind LIKE 'dream.%'",
+                    params![agent_id], |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
-            let (state, paused) = row.unwrap_or_else(|| ("idle".into(), 0));
+            let paused: i64 = connection
+                .query_row(
+                    "SELECT paused FROM pipeline_state WHERE agent_id=?",
+                    params![agent_id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .unwrap_or(0);
+            let (queued, running) = row.unwrap_or((0, 0));
+            let state = if paused != 0 {
+                "paused"
+            } else if running > 0 {
+                "running"
+            } else if queued > 0 {
+                "queued"
+            } else {
+                "idle"
+            };
             Ok(json!({"agentId":agent_id,"state":state,"paused":paused != 0}))
         }
         Operation::PipelineSetPaused { agent_id, paused } => {
@@ -757,7 +773,8 @@ fn execute_operation(
             let tx = connection.transaction()?;
             tx.execute("INSERT INTO pipeline_state(agent_id,state,paused,updated_at) VALUES(?, 'idle', ?, datetime('now')) ON CONFLICT(agent_id) DO UPDATE SET paused=excluded.paused, updated_at=datetime('now')", params![agent_id, paused as i64])?;
             tx.commit()?;
-            Ok(json!({"agentId":agent_id,"state":"idle","paused":paused}))
+            let state = if paused { "paused" } else { "idle" };
+            Ok(json!({"agentId":agent_id,"state":state,"paused":paused}))
         }
         Operation::DreamStatus { agent_id } => {
             let status = execute_operation(
@@ -814,7 +831,7 @@ fn execute_operation(
             tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?, 'queued','{}',datetime('now'))", params![id,agent_id])?;
             tx.commit()?;
             Ok(
-                json!({"id":id,"agentId":agent_id,"workspaceId":workspace_id,"kind":"dream.trigger","state":"queued"}),
+                json!({"id":id,"jobId":id,"agentId":agent_id,"workspaceId":workspace_id,"kind":"dream.trigger","state":"queued"}),
             )
         }
         Operation::AuthKeyCreate {
