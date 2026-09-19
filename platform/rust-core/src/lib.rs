@@ -909,6 +909,19 @@ fn execute_operation(
                     .collect::<Result<Vec<Value>, CoreError>>()?,
             ))
         }
+        Operation::QueueDiagnostics { agent_id, workspace_id, cursor, limit } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let limit = bounded_page_limit(Some(limit))?;
+            let admitted: i64 = connection.query_row("SELECT count(*) FROM queue WHERE agent_id=?", params![agent_id], |r| r.get(0))?;
+            let mut s = connection.prepare("SELECT json_object('id',id,'agentId',agent_id,'workspaceId',workspace_id,'kind',kind,'state',state,'createdAt',created_at,'updatedAt',updated_at) FROM jobs WHERE agent_id=? AND workspace_id=? AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?")?;
+            let rows = s.query_map(params![agent_id, workspace_id, cursor, cursor, limit as i64], |r| r.get::<_, String>(0))?;
+            let items = rows.collect::<Result<Vec<_>, _>>()?.into_iter().map(|v| serde_json::from_str(&v)).collect::<Result<Vec<Value>, _>>()?;
+            let next_cursor = items.last().and_then(|v| v.get("id")).cloned();
+            let jobs: i64 = connection.query_row("SELECT count(*) FROM jobs WHERE agent_id=? AND workspace_id=?", params![agent_id, workspace_id], |r| r.get(0))?;
+            let events: i64 = connection.query_row("SELECT count(*) FROM job_events e JOIN jobs j ON j.id=e.job_id AND j.agent_id=e.agent_id WHERE e.agent_id=? AND j.workspace_id=?", params![agent_id, workspace_id], |r| r.get(0))?;
+            Ok(json!({"agentId":agent_id,"workspaceId":workspace_id,"admission":{"queued":admitted},"jobs":{"count":jobs,"items":items,"nextCursor":next_cursor},"jobEvents":{"count":events}}))
+        }
         Operation::JobSubmit {
             agent_id,
             workspace_id,
@@ -2756,6 +2769,12 @@ pub enum Operation {
     },
     TranscriptList {
         agent_id: String,
+        limit: usize,
+    },
+    QueueDiagnostics {
+        agent_id: String,
+        workspace_id: String,
+        cursor: Option<String>,
         limit: usize,
     },
     JobSubmit {
