@@ -146,6 +146,10 @@ impl Core {
     pub fn initialize(&self) -> Result<(), CoreError> {
         self.call(|connection| {
             migrate(connection)?;
+            let tx = connection.transaction()?;
+            tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) SELECT id,agent_id,'recovered','{\"from\":\"running\",\"to\":\"queued\"}',datetime('now') FROM jobs WHERE state='running'", [])?;
+            tx.execute("UPDATE jobs SET state='queued', updated_at=datetime('now') WHERE state='running'", [])?;
+            tx.commit()?;
             Ok(())
         })
     }
@@ -457,6 +461,7 @@ fn execute_operation(
         }
         Operation::JobSubmit {
             agent_id,
+            workspace_id,
             kind,
             payload,
             deadline_at,
@@ -472,9 +477,11 @@ fn execute_operation(
             if payload.len() > 1_048_576 {
                 return Err(CoreError::InvalidInput("job payload exceeds 1 MiB".into()));
             }
-            connection.execute("INSERT INTO jobs (id,agent_id,kind,state,payload,deadline_at,created_at,updated_at) VALUES (?,?,?,'queued',?,?,datetime('now'),datetime('now'))", params![id,agent_id,kind,payload,deadline_at])?;
-            connection.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, 'queued','{}',datetime('now'))", params![id,agent_id])?;
-            Ok(json!({"id":id,"state":"queued"}))
+            let transaction = connection.transaction()?;
+            transaction.execute("INSERT INTO jobs (id,agent_id,workspace_id,kind,state,payload,deadline_at,created_at,updated_at) VALUES (?,?,?,? ,'queued',?,?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,kind,payload,deadline_at])?;
+            transaction.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, 'queued','{}',datetime('now'))", params![id,agent_id])?;
+            transaction.commit()?;
+            Ok(json!({"id":id,"state":"queued","workspaceId":workspace_id}))
         }
         Operation::JobGet { agent_id, id } => {
             let value: Option<String> = connection.query_row("SELECT json_object('id',id,'agent_id',agent_id,'kind',kind,'state',state,'payload',json(payload),'result',CASE WHEN result IS NULL THEN NULL ELSE json(result) END,'error',error,'deadline_at',deadline_at,'created_at',created_at,'updated_at',updated_at) FROM jobs WHERE id=? AND agent_id=?", params![id,agent_id], |r| r.get(0)).optional()?;
@@ -483,13 +490,18 @@ fn execute_operation(
                 .transpose()?
                 .ok_or(CoreError::NotFound)
         }
-        Operation::JobCancel { agent_id, id } => {
-            let changed = connection.execute("UPDATE jobs SET state=CASE WHEN state IN ('queued','running') THEN 'cancelled' ELSE state END, updated_at=datetime('now') WHERE id=? AND agent_id=? AND state IN ('queued','running')", params![id,agent_id])?;
-            if changed == 0 {
-                return Err(CoreError::NotFound);
-            }
-            connection.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, 'cancelled','{}',datetime('now'))", params![id,agent_id])?;
-            Ok(json!({"id":id,"state":"cancelled"}))
+        Operation::JobCancel { agent_id, id, actor, reason } => {
+            let tx = connection.transaction()?;
+            let state: Option<String> = tx.query_row("SELECT state FROM jobs WHERE id=? AND agent_id=?", params![id,agent_id], |r| r.get(0)).optional()?;
+            let state = state.ok_or(CoreError::NotFound)?;
+            let final_state = if matches!(state.as_str(), "queued"|"running") {
+                tx.execute("UPDATE jobs SET state='cancelled', updated_at=datetime('now') WHERE id=? AND agent_id=? AND state IN ('queued','running')", params![id,agent_id])?;
+                tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?,'cancelled',?,datetime('now'))", params![id,agent_id,serde_json::to_string(&json!({"actor":actor,"reason":reason}))?])?;
+                "cancelled"
+            } else { state.as_str() };
+            tx.execute("INSERT INTO job_cancellations(job_id,agent_id,actor,reason,provenance,created_at) VALUES(?,?,?,?,?,datetime('now'))", params![id,agent_id,actor,reason,"api"])?;
+            tx.commit()?;
+            Ok(json!({"id":id,"state":final_state,"cancellation":{"actor":actor,"reason":reason,"provenance":"api"}}))
         }
         Operation::JobList { agent_id, limit } => {
             let mut s=connection.prepare("SELECT json_object('id',id,'kind',kind,'state',state,'error',error,'created_at',created_at,'updated_at',updated_at) FROM jobs WHERE agent_id=? ORDER BY created_at DESC LIMIT ?")?;
@@ -503,9 +515,9 @@ fn execute_operation(
                 .collect::<Result<Vec<Value>, _>>()?;
             Ok(json!(values))
         }
-        Operation::JobEvents { agent_id, id } => {
-            let mut s=connection.prepare("SELECT json_object('event',event,'data',json(data),'created_at',created_at) FROM job_events WHERE job_id=? AND agent_id=? ORDER BY id")?;
-            let rows = s.query_map(params![id, agent_id], |r| r.get::<_, String>(0))?;
+        Operation::JobEvents { agent_id, id, cursor, limit } => {
+            let mut s=connection.prepare("SELECT json_object('cursor',id,'event',event,'data',json(data),'created_at',created_at) FROM job_events WHERE job_id=? AND agent_id=? AND id>? ORDER BY id LIMIT ?")?;
+            let rows = s.query_map(params![id, agent_id, cursor, limit.clamp(1, 1000) as i64], |r| r.get::<_, String>(0))?;
             let values = rows
                 .collect::<Result<Vec<_>, _>>()?
                 .into_iter()
@@ -1709,6 +1721,7 @@ pub enum Operation {
     },
     JobSubmit {
         agent_id: String,
+        workspace_id: String,
         kind: String,
         payload: Value,
         deadline_at: Option<String>,
@@ -1720,6 +1733,8 @@ pub enum Operation {
     JobCancel {
         agent_id: String,
         id: String,
+        actor: String,
+        reason: String,
     },
     JobList {
         agent_id: String,
@@ -1728,6 +1743,8 @@ pub enum Operation {
     JobEvents {
         agent_id: String,
         id: String,
+        cursor: i64,
+        limit: usize,
     },
     PipelineStatus {
         agent_id: String,
@@ -1985,8 +2002,9 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE INDEX IF NOT EXISTS kg_entities_scope ON kg_entities(agent_id, name);
          CREATE INDEX IF NOT EXISTS kg_relations_scope ON kg_relations(agent_id, from_id, to_id);
          CREATE INDEX IF NOT EXISTS ontology_scope_idx ON ontology_records(agent_id, workspace_id, kind, deleted);
-         CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', result TEXT, error TEXT, deadline_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', result TEXT, error TEXT, deadline_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS jobs_agent_state ON jobs(agent_id, state, created_at);
+         CREATE TABLE IF NOT EXISTS job_cancellations (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL, provenance TEXT NOT NULL, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS job_events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, event TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS pipeline_state (agent_id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'idle', paused INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS sessions (key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, runtime_path TEXT, project TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(key, agent_id));
@@ -2004,6 +2022,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
+    ensure_column(&transaction, "jobs", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
     ensure_column(
         &transaction,
         "kg_entities",

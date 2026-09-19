@@ -25,6 +25,7 @@ pub struct JobRequest {
 #[derive(Deserialize)]
 pub struct ListQuery {
     pub limit: Option<usize>,
+    pub cursor: Option<i64>,
 }
 
 pub async fn submit(
@@ -48,6 +49,11 @@ pub async fn submit(
             &state,
             Operation::JobSubmit {
                 agent_id,
+                workspace_id: headers
+                    .get("x-workspace-id")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("default")
+                    .to_string(),
                 kind: body.kind,
                 payload: body.payload,
                 deadline_at: body.deadline_at,
@@ -73,7 +79,24 @@ pub async fn cancel(
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
     Ok(Json(
-        execute(&state, Operation::JobCancel { agent_id, id }).await?,
+        execute(
+            &state,
+            Operation::JobCancel {
+                agent_id,
+                id,
+                actor: headers
+                    .get("x-actor")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("api")
+                    .to_string(),
+                reason: headers
+                    .get("x-reason")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("requested")
+                    .to_string(),
+            },
+        )
+        .await?,
     ))
 }
 pub async fn list(
@@ -97,9 +120,19 @@ pub async fn events(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
+    Query(query): Query<ListQuery>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
-    let value = execute(&state, Operation::JobEvents { agent_id, id }).await?;
+    let value = execute(
+        &state,
+        Operation::JobEvents {
+            agent_id,
+            id,
+            cursor: query.cursor.unwrap_or(0),
+            limit: query.limit.unwrap_or(100).min(1000),
+        },
+    )
+    .await?;
     let event = Event::default()
         .event("snapshot")
         .json_data(value)
@@ -111,8 +144,11 @@ pub async fn events(
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/jobs", post(submit).get(list))
+        .route("/api/memory/jobs", post(submit).get(list))
         .route("/api/jobs/{id}", route_get(get).delete(cancel))
         .route("/api/jobs/{id}/events", route_get(events))
+        .route("/api/memory/jobs/{id}", route_get(get).delete(cancel))
+        .route("/api/memory/jobs/{id}/events", route_get(events))
 }
 
 // The router above is mounted by the daemon's shared route assembly.
