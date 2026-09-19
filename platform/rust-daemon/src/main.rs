@@ -56,7 +56,9 @@ async fn authenticate_api(request: Request<axum::body::Body>, next: Next) -> Res
     let Some(expected) = configured_api_key() else {
         return next.run(request).await;
     };
-    if !request.uri().path().starts_with("/api/") {
+    let path = request.uri().path();
+    let protected = path.starts_with("/api/") || path == "/memory/search";
+    if !protected {
         return next.run(request).await;
     }
     let headers = request.headers();
@@ -112,6 +114,14 @@ impl ApiError {
         Self {
             status: StatusCode::SERVICE_UNAVAILABLE,
             code: "database_unavailable",
+            message: message.into(),
+        }
+    }
+
+    pub(crate) fn upstream(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_GATEWAY,
+            code: "upstream_error",
             message: message.into(),
         }
     }

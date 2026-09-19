@@ -199,6 +199,7 @@ describe("fresh Rust daemon", () => {
 				code: "unauthorized",
 			});
 			expect((await fetch(`${origin}/api/status`, { headers: { Authorization: "Bearer wrong" } })).status).toBe(401);
+			expect((await fetch(`${origin}/memory/search?q=secret`)).status).toBe(401);
 			expect(
 				(await fetch(`${origin}/api/status`, { headers: { Authorization: "Bearer contract-api-key" } })).status,
 			).toBe(200);

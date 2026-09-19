@@ -27,7 +27,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/inference/explain", post(unsupported))
         .route("/api/inference/stream", post(unsupported))
         .route("/api/inference/history", get(unsupported))
-        .route("/api/inference/requests/:id", delete(unsupported))
+        .route("/api/inference/requests/{id}", delete(unsupported))
 }
 
 async fn unsupported() -> Response {
@@ -108,63 +108,66 @@ async fn execute(
     )
     .await
     .map_err(|_| ApiError::unavailable("inference provider request timed out"))?
-    .map_err(|message| ApiError::internal(message))?;
+    .map_err(|error| match error {
+        ProviderError::Transport(message) => ApiError::unavailable(message),
+        ProviderError::Upstream { status, message } => {
+            ApiError::upstream(format!("provider returned HTTP {status}: {message}"))
+        }
+        ProviderError::InvalidResponse(message) => ApiError::upstream(message),
+    })?;
     Ok(Json(
         json!({"provider":"openai-compatible", "agent_id":identity, "response":response}),
     ))
 }
 
-async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Value, String> {
-    let url = base.trim_end_matches('/').to_owned() + "/v1/chat/completions";
+#[derive(Debug)]
+enum ProviderError {
+    Transport(String),
+    Upstream { status: u16, message: String },
+    InvalidResponse(String),
+}
+
+async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Value, ProviderError> {
+    let base = base.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{base}/chat/completions")
+    } else {
+        format!("{base}/v1/chat/completions")
+    };
     if !(url.starts_with("http://") || url.starts_with("https://")) {
-        return Err("provider URL must use http:// or https://".to_owned());
-    }
-    let parsed = url
-        .strip_prefix("http://")
-        .or_else(|| url.strip_prefix("https://"))
-        .unwrap();
-    let (host_port, path) = parsed
-        .split_once('/')
-        .map(|(h, p)| (h, format!("/{p}")))
-        .unwrap_or((parsed, "/".to_owned()));
-    let mut stream = tokio::net::TcpStream::connect(host_port)
-        .await
-        .map_err(|e| format!("provider connection failed: {e}"))?;
-    let bytes = serde_json::to_vec(&body).map_err(|e| e.to_string())?;
-    let auth = key
-        .map(|value| format!("Authorization: Bearer {value}\r\n"))
-        .unwrap_or_default();
-    let request = format!("POST {path} HTTP/1.1\r\nHost: {host_port}\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\nConnection: close\r\n\r\n", bytes.len());
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
-    stream
-        .write_all(request.as_bytes())
-        .await
-        .map_err(|e| e.to_string())?;
-    stream.write_all(&bytes).await.map_err(|e| e.to_string())?;
-    let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .await
-        .map_err(|e| e.to_string())?;
-    let split = response
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .ok_or_else(|| "provider returned malformed HTTP".to_owned())?;
-    let head = String::from_utf8_lossy(&response[..split]);
-    let status = head
-        .lines()
-        .next()
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|v| v.parse::<u16>().ok())
-        .unwrap_or(0);
-    let body = &response[split + 4..];
-    let value: Value =
-        serde_json::from_slice(body).map_err(|e| format!("provider returned invalid JSON: {e}"))?;
-    if !(200..300).contains(&status) {
-        return Err(format!(
-            "provider returned HTTP {status}: {}",
-            value.get("error").unwrap_or(&value)
+        return Err(ProviderError::Transport(
+            "provider URL must use http:// or https://".to_owned(),
         ));
+    }
+    let client = reqwest::Client::builder()
+        .build()
+        .map_err(|error| ProviderError::Transport(format!("provider client failed: {error}")))?;
+    let mut request = client.post(url).json(&body);
+    if let Some(key) = key {
+        request = request.bearer_auth(key);
+    }
+    let response = request
+        .send()
+        .await
+        .map_err(|error| ProviderError::Transport(format!("provider request failed: {error}")))?;
+    let status = response.status().as_u16();
+    let bytes = response.bytes().await.map_err(|error| {
+        ProviderError::InvalidResponse(format!("provider response read failed: {error}"))
+    })?;
+    if bytes.len() > 1_048_576 {
+        return Err(ProviderError::InvalidResponse(
+            "provider response exceeds 1 MiB".to_owned(),
+        ));
+    }
+    let value: Value = serde_json::from_slice(&bytes).map_err(|error| {
+        ProviderError::InvalidResponse(format!("provider returned invalid JSON: {error}"))
+    })?;
+    if !(200..300).contains(&status) {
+        let message = value
+            .get("error")
+            .map(Value::to_string)
+            .unwrap_or_else(|| value.to_string());
+        return Err(ProviderError::Upstream { status, message });
     }
     Ok(value)
 }

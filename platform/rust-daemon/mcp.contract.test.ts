@@ -61,7 +61,8 @@ describe("native MCP JSON-RPC boundary", () => {
 			},
 			"agent-a",
 		);
-		expect((await saved.json()).result.structuredContent.content).toBe("native mcp contract needle");
+		const savedBody = await saved.json();
+		expect(typeof savedBody.result.structuredContent.id).toBe("string");
 		const recalled = await call(
 			{
 				jsonrpc: "2.0",
@@ -71,7 +72,9 @@ describe("native MCP JSON-RPC boundary", () => {
 			},
 			"agent-a",
 		);
-		expect((await recalled.json()).result.structuredContent.length).toBeGreaterThan(0);
+		const recalledBody = await recalled.json();
+		expect(recalledBody.result.structuredContent.length).toBeGreaterThan(0);
+		expect(recalledBody.result.structuredContent[0].content).toContain("native mcp contract needle");
 	});
 	it("returns structured errors and enforces auth and agent isolation", async () => {
 		expect((await (await call({ jsonrpc: "2.0", id: 5, method: "wat", params: {} })).json()).error.code).toBe(-32601);
