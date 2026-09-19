@@ -87,8 +87,8 @@ describe("install copy", () => {
 		expect(installer).toContain("signet-win32-x64.exe");
 		expect(installer).toContain("Get-FileHash -Algorithm SHA256");
 		expect(installer).toContain("--connector-assets");
-		expect(installer).toContain("daemonJs");
-		expect(installer).toContain("--daemon-js-assets");
+		expect(installer).not.toContain("daemonJs");
+		expect(installer).not.toContain("--daemon-js-assets");
 		expect(installer).toContain('SetEnvironmentVariable("Path", $updatedUserPath, "User")');
 		expect(installer).toContain("SIGNET_CHANNEL");
 		expect(installer).not.toContain("npm install -g signetai");
@@ -132,9 +132,9 @@ describe("install copy", () => {
 		expect(installer).toContain("Skipping Signet native binary linking in workspace install");
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("CONNECTOR_COMPONENT");
-		expect(installer).toContain("DAEMON_JS_COMPONENT");
-		expect(installer).toContain("installDaemonJsAssets");
-		expect(installer).toContain('join(packageDir, "runtime", "daemon-js")');
+		expect(installer).not.toContain("DAEMON_JS_COMPONENT");
+		expect(installer).not.toContain("installDaemonJsAssets");
+		expect(installer).not.toContain('join(packageDir, "runtime", "daemon-js")');
 		expect(installer).toContain("verifySha256");
 		expect(installer).toContain(`signet-connectors-\${manifest.version}.tar.gz`);
 		expect(installer).not.toContain("bun.sh/install");
@@ -163,9 +163,9 @@ describe("install copy", () => {
 		const installer = read("web/marketing/public/install.sh");
 		expect(installer).toContain("manifest_component_value()");
 		expect(installer).toContain("manifest_component_value connectors url");
-		expect(installer).toContain("manifest_component_value daemonJs url");
+		expect(installer).not.toContain("manifest_component_value daemonJs url");
 		expect(installer).toContain("--connector-assets");
-		expect(installer).toContain("--daemon-js-assets");
+		expect(installer).not.toContain("--daemon-js-assets");
 		expect(installer).toContain("install --force --connector-assets");
 	});
 

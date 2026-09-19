@@ -360,8 +360,6 @@ jobs:
           set -euo pipefail
           SIGNET_VERSION="$NEW_VERSION" bun scripts/build-connector-assets.ts
           gh release upload "v${NEW_VERSION}" dist/native/signet-connectors-"${NEW_VERSION}".tar.gz --clobber
-          bun run build:daemon-js-assets
-          gh release upload "v${NEW_VERSION}" dist/native/signet-daemon-js-"${NEW_VERSION}".tar.gz --clobber
           SIGNET_VERSION="$NEW_VERSION" bun scripts/generate-native-manifest.ts
           gh release upload "v${NEW_VERSION}" dist/native/native-manifest.json --clobber
         env:
@@ -384,7 +382,6 @@ jobs:
             signet-win32-x64.exe
             signet-win32-x64.exe.sha256
             signet-connectors-${NEW_VERSION}.tar.gz
-            signet-daemon-js-${NEW_VERSION}.tar.gz
             native-manifest.json
           )
           for asset in "${expected[@]}"; do

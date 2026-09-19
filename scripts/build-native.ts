@@ -11,6 +11,7 @@ import { join } from "node:path";
 const nativeDir = join(import.meta.dir, "..", "platform", "native");
 const root = join(import.meta.dir, "..");
 const daemonManifest = join(root, "platform", "rust-daemon", "Cargo.toml");
+const daemonTarget = `${process.platform}-${process.arch}`;
 const daemonBinary = join(
 	root,
 	"platform",
@@ -24,7 +25,8 @@ const stagedDaemon = join(
 	"dist",
 	"signetai",
 	"runtime",
-	"daemon",
+	"rust-daemon",
+	daemonTarget,
 	process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon",
 );
 

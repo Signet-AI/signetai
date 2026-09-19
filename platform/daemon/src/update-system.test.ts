@@ -462,64 +462,6 @@ describe("active executable update targeting", () => {
 		expect(existsSync(temp)).toBe(false);
 	});
 
-	it("refreshes the Bun JavaScript daemon bundle when the active runtime is bun-js", async () => {
-		const binary = Buffer.from("fake-native-binary");
-		const daemonJs = Buffer.from("fake-daemon-js-archive");
-		const daemonJsName = "signet-daemon-js-0.78.1.tar.gz";
-		const daemonJsSha256 = createHash("sha256").update(daemonJs).digest("hex");
-		const temp = mkdtempSync(join(tmpdir(), "signet-bun-js-update-test-"));
-		let installArgs: readonly string[] = [];
-		initUpdateSystem("0.78.0", temp);
-
-		try {
-			const result = await runUpdate(version, {
-				detectInstallations: () => ({
-					target: { kind: "native", executablePath: activeNative },
-					installations: [],
-					inactive: [],
-				}),
-				platform: "linux",
-				arch: "x64",
-				env: { SIGNET_DAEMON_RUNTIME: "bun-js" },
-				downloadBase: "https://release.test/v0.78.1",
-				createTempDir: async () => temp,
-				fetch: (async (input) => {
-					const url = String(input);
-					if (url.endsWith("/native-manifest.json")) {
-						return new Response(
-							manifestFor(binary, undefined, {
-								daemonJs: { url: daemonJsName, sha256: daemonJsSha256, size: daemonJs.length },
-							}),
-						);
-					}
-					if (url.endsWith("/signet-linux-x64")) return new Response(binary);
-					if (url.endsWith(`/${daemonJsName}`)) return new Response(daemonJs);
-					return new Response("not found", { status: 404 });
-				}) as typeof fetch,
-				runCommand: async (_command, args) => {
-					if (args[0] === "--version") {
-						return { exitCode: 0, stdout: `${version}\n`, stderr: "", timedOut: false };
-					}
-					installArgs = args;
-					const assetIndex = args.indexOf("--daemon-js-assets");
-					expect(assetIndex).toBeGreaterThanOrEqual(0);
-					expect(readFileSync(args[assetIndex + 1])).toEqual(daemonJs);
-					return { exitCode: 0, stdout: "installed", stderr: "", timedOut: false };
-				},
-				finalizeSuccessfulUpdate: async (installedVersion, _output, metadata) => {
-					expect(installedVersion).toBe(version);
-					expect(metadata.installMethod).toBe("native");
-					return successResult("native", activeNative);
-				},
-			});
-
-			expect(result.success).toBe(true);
-			expect(installArgs).toContain("--daemon-js-assets");
-		} finally {
-			rmSync(temp, { recursive: true, force: true });
-		}
-	});
-
 	it("keeps the package manager that owns the active executable", async () => {
 		const activeExecutable = "/home/test/.bun/install/global/node_modules/signetai/native/signet";
 		const commands: string[] = [];

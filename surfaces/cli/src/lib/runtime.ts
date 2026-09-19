@@ -82,7 +82,14 @@ export interface DaemonHealthProbe {
 	readonly listenerPresent: boolean;
 	readonly processPid: number | null;
 	readonly stalePid: number | null;
+	/** Present only when /health/ready reported not_ready; absent when readiness is unknown (older daemon). */
 	readonly readinessReasons?: readonly string[];
+	/**
+	 * The daemon's own last-exit record (`.daemon/lifecycle.json`), when one
+	 * exists. A record stuck at "starting"/"running" while no daemon process
+	 * is alive means the death was not recorded — an external kill or hard
+	 * crash (issue #1148).
+	 */
 	readonly lastExit?: DaemonLastExit | null;
 }
 
@@ -98,6 +105,8 @@ export interface DaemonLastExit {
 	readonly reason?: string;
 	readonly error?: string;
 }
+
+/** Tolerant read of the daemon lifecycle record; null when absent or corrupt. */
 export function readDaemonLifecycleRecord(agentsDir: string): DaemonLastExit | null {
 	try {
 		const raw = readFileSync(join(agentsDir, ".daemon", "lifecycle.json"), "utf-8");
@@ -161,14 +170,17 @@ interface DaemonInstance {
 		readonly failed: number;
 		readonly dead: number;
 	} | null;
+	/** Daemon composite health from `/api/status` (score + status). */
 	readonly health: {
 		readonly score: number | null;
 		readonly status: string | null;
 	} | null;
+	/** Pipeline queue counts from `/api/status` (memory plus legacy summary compatibility). */
 	readonly queue: {
 		readonly memory: QueueCountsFromStatus | null;
 		readonly summary: QueueCountsFromStatus | null;
 	} | null;
+	/** Latest periodic Dreaming scheduler decision reported by `/api/status`. */
 	readonly scheduler: DreamingSchedulerStatusFromStatus | null;
 	readonly probe: DaemonHealthProbe;
 	readonly openclaw: DaemonOpenClawHealthSummary | null;
@@ -251,6 +263,8 @@ function pidFile(agentsDir: string): string {
 export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
 	return [packagedDaemonPath(env)];
 }
+
+/** Resolve the daemon executable that the current CLI would launch. */
 export function resolveDaemonPath(env: NodeJS.ProcessEnv = process.env): string | null {
 	return resolveDaemonPaths(env).find(isNativeExecutable) ?? null;
 }
@@ -296,7 +310,9 @@ function findBundleDirectory(bundleDir: string, name: string): string | null {
 		const candidate = join(root, name);
 		try {
 			if (statSync(candidate).isDirectory()) return candidate;
-		} catch {}
+		} catch {
+			// Try the next bundle root.
+		}
 	}
 	return null;
 }
@@ -347,6 +363,12 @@ export function resolveDaemonJsWasmPath(daemonPath: string): string | null {
 	}
 	return null;
 }
+
+/**
+ * Check the on-disk production Bun daemon layout before spawning it. A daemon
+ * JS entrypoint without its worker siblings or runtime assets is not a valid
+ * profiling target, so callers must not fall back to TypeScript source.
+ */
 export function inspectDaemonJsBundle(daemonPath: string): DaemonJsBundleInspection {
 	const missing: string[] = [];
 	const bundleDir = dirname(daemonPath);
@@ -363,7 +385,7 @@ export function inspectDaemonJsBundle(daemonPath: string): DaemonJsBundleInspect
 }
 
 /** Resolve the packaged native executable for the daemon. */
-	export function resolveDaemonPathForRuntime(
+export function resolveDaemonPathForRuntime(
 	runtime: DaemonRuntime,
 	env: NodeJS.ProcessEnv = process.env,
 	preferredDaemonPath?: string,
@@ -400,6 +422,12 @@ async function isDaemonHealthyAt(baseUrl: string): Promise<boolean> {
 		return false;
 	}
 }
+
+/**
+ * Cheap liveness check: hits /health/live which never touches the DB.
+ * Used during startup polling so a daemon running migrations or recovery
+ * (where /health may be slow or unavailable) is still detected as alive.
+ */
 async function isDaemonAliveAt(baseUrl: string): Promise<boolean> {
 	try {
 		const response = await fetch(`${baseUrl}/health/live`, {
@@ -412,6 +440,8 @@ async function isDaemonAliveAt(baseUrl: string): Promise<boolean> {
 }
 
 let daemonLivenessFlight: Promise<boolean> | null = null;
+
+/** Coalesce all liveness callers so startup cannot duplicate /health/live probes. */
 function probeDaemonLiveness(): Promise<boolean> {
 	if (daemonLivenessFlight !== null) return daemonLivenessFlight;
 
@@ -431,6 +461,9 @@ interface DaemonReadiness {
 	readonly ready: boolean;
 	readonly reasons: string[];
 }
+
+// Readiness is null when /health/ready is unreachable (e.g. an older daemon
+// without the route); callers must treat null as unknown, never as not-ready.
 async function fetchDaemonReadiness(baseUrl: string): Promise<DaemonReadiness | null> {
 	try {
 		const response = await fetch(`${baseUrl}/health/ready`, {
@@ -597,6 +630,14 @@ async function buildUnreachableDaemonProbe(agentsDir: string): Promise<DaemonHea
 }
 
 let reachableDaemonUrlsFlight: Promise<string[]> | null = null;
+
+/**
+ * Probe daemon listeners at most once while a result is in flight. Several CLI
+ * startup/status paths ask the same question concurrently. Without this
+ * single-flight boundary, each caller starts another pair of health requests
+ * and the resulting probe storm can keep the CLI's event loop busy while the
+ * daemon is starting.
+ */
 export function getReachableDaemonUrls(): Promise<string[]> {
 	if (reachableDaemonUrlsFlight !== null) return reachableDaemonUrlsFlight;
 
@@ -757,7 +798,9 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						openclaw: summarizeOpenClawHealth(openclawReport),
 					};
 				}
-			} catch {}
+			} catch {
+				// Fall back to health-only instance metadata.
+			}
 
 			return {
 				baseUrl,
@@ -844,7 +887,9 @@ function readCmd(pid: number): string | null {
 			const value = raw.replaceAll("\u0000", " ").trim();
 			return value.length > 0 ? value : null;
 		}
-	} catch {}
+	} catch {
+		// Fall through.
+	}
 
 	if (process.platform === "win32") {
 		const script = `$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($process) { $process.CommandLine }`;
@@ -855,7 +900,9 @@ function readCmd(pid: number): string | null {
 					timeout: 3000,
 				});
 				if (proc.status === 0 && proc.stdout.trim()) return proc.stdout.trim();
-			} catch {}
+			} catch {
+				// Try the next available PowerShell command.
+			}
 		}
 	}
 
@@ -921,6 +968,9 @@ function readProcessGroupId(pid: number): number | null {
 
 function readOwnedProcessGroupId(pid: number): number | null {
 	const groupId = readProcessGroupId(pid);
+	// Detached daemon spawns are process-group leaders. Never signal a group
+	// unless the pid still owns that group, or a reused pid could kill unrelated
+	// processes in the caller's group.
 	return groupId === pid ? groupId : null;
 }
 
@@ -951,20 +1001,29 @@ async function waitForProcessGroupExit(groupId: number): Promise<boolean> {
 
 export async function stopManagedDaemonProcess(pid: number): Promise<void> {
 	if (process.platform === "win32") {
+		// Windows has no POSIX process-group equivalent. taskkill's tree mode is
+		// the bounded, OS-native way to release child-held resources (for example
+		// the DB owner or an integration worker) when the daemon is detached.
 		try {
 			const result = spawnSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
 				stdio: ["ignore", "ignore", "ignore"],
 				timeout: 5000,
 			});
 			if (result.status === 0 || !isAlive(pid)) return;
-		} catch {}
+		} catch {
+			// Fall through to the signal-based fallback below.
+		}
 		try {
 			process.kill(pid, "SIGTERM");
-		} catch {}
+		} catch {
+			// Process might already be dead.
+		}
 		if (!(await waitForPidExit(pid))) {
 			try {
 				process.kill(pid, "SIGKILL");
-			} catch {}
+			} catch {
+				// Process might already be dead.
+			}
 			await waitForPidExit(pid);
 		}
 		return;
@@ -973,13 +1032,17 @@ export async function stopManagedDaemonProcess(pid: number): Promise<void> {
 	const groupId = readOwnedProcessGroupId(pid);
 	try {
 		process.kill(groupId === null ? pid : -groupId, "SIGTERM");
-	} catch {}
+	} catch {
+		// Process might already be dead.
+	}
 
 	if (groupId !== null) {
 		if (!(await waitForProcessGroupExit(groupId))) {
 			try {
 				process.kill(-groupId, "SIGKILL");
-			} catch {}
+			} catch {
+				// Process group already gone.
+			}
 			await waitForProcessGroupExit(groupId);
 		}
 		return;
@@ -989,7 +1052,9 @@ export async function stopManagedDaemonProcess(pid: number): Promise<void> {
 	if (!leaderExited) {
 		try {
 			process.kill(pid, "SIGKILL");
-		} catch {}
+		} catch {
+			// Process might already be dead.
+		}
 	}
 }
 
@@ -1014,6 +1079,9 @@ export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: Daemo
 		const marker = deps.readEnv ? isDaemonEntrypointEnvironment(deps.readEnv(pid) ?? "") : readDaemonEntrypoint(pid);
 		if (marker === true) return pid;
 		if (marker === false) return null;
+
+		// On platforms without a readable process environment, only reclaim a
+		// live PID whose command line still identifies a Signet daemon.
 		const cmd = (deps.readCmd ?? readCmd)(pid);
 		if (!cmd) return null;
 		const paths = deps.daemonPaths ?? daemonPaths();
@@ -1094,6 +1162,8 @@ async function readDaemonStatus(): Promise<{
 }
 
 let daemonStatusFlight: Promise<Awaited<ReturnType<typeof readDaemonStatus>>> | null = null;
+
+/** Coalesce concurrent status requests so startup cannot amplify daemon probes. */
 export function getDaemonStatus(): Promise<Awaited<ReturnType<typeof readDaemonStatus>>> {
 	if (daemonStatusFlight !== null) return daemonStatusFlight;
 
@@ -1115,8 +1185,12 @@ export interface DaemonStartArgsInput {
 	readonly bind: string;
 	readonly startupLogPath: string;
 	readonly unitName?: string;
+	// The parent CLI forwards this only when it is not already a Bun process.
+	// A Bun parent has already bound BUN_INSPECT before this code runs.
 	readonly bunInspect?: string;
+	/** Forward Bun runtime options through service-manager boundaries. */
 	readonly bunOptions?: string;
+	/** Source environment for the allowlisted telemetry variables below. */
 	readonly telemetryEnv?: NodeJS.ProcessEnv;
 }
 
@@ -1125,6 +1199,13 @@ export type SystemdDaemonStartArgsInput = DaemonStartArgsInput;
 export interface LaunchdDaemonPlistInput extends DaemonStartArgsInput {
 	readonly label?: string;
 }
+
+/**
+ * Resolve the inspector setting for the daemon child. Bun binds BUN_INSPECT
+ * before the CLI reaches this function, so forwarding the same setting to the
+ * child creates an EADDRINUSE failure. A Node parent does not bind it and must
+ * continue forwarding the setting to the Bun daemon child.
+ */
 export function resolveDaemonChildInspector(
 	env: NodeJS.ProcessEnv = process.env,
 	runtimeIsBun: boolean = typeof process.versions.bun === "string",
@@ -1177,6 +1258,7 @@ export async function resolveDaemonInspectorForwarding(
 		const targetInspector = formatInspectorEndpoint({ host: "127.0.0.1", port: targetPort, path: "/" }, "/json");
 		return { childInspector: targetInspector, proxy: { publicInspector, targetInspector } };
 	} catch {
+		// Preserve the handshake fix when an invalid inspector setting cannot be proxied.
 		return { childInspector: undefined };
 	}
 }
@@ -1266,7 +1348,9 @@ export function readDaemonStartFailureDiagnostics(
 			if (startupLines.length > 0) {
 				return ["Daemon failed to start. stderr output:", ...startupLines];
 			}
-		} catch {}
+		} catch {
+			// Continue to service-manager diagnostics.
+		}
 	}
 
 	if ((input.platform ?? process.platform) === "linux" && input.systemdUnitName) {
@@ -1362,6 +1446,8 @@ export function resolveDaemonLaunchCommand(
 export function macOSLaunchAgentAttributionNotice(): string | null {
 	return null;
 }
+
+/** Base name retained for compatibility with the pre-workspace launchd job. */
 export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
 
 function currentLaunchdDomain(): string {
@@ -1435,6 +1521,12 @@ function readLaunchdWorkspace(plist: string): string | null {
 	const match = plist.match(/<key>SIGNET_PATH<\/key>\s*<string>([\s\S]*?)<\/string>/);
 	return match?.[1] ? decodePlistValue(match[1]) : null;
 }
+
+/**
+ * Decide how to handle the pre-#1479 global launchd plist before creating a
+ * per-workspace job. A legacy job for another workspace is preserved so the
+ * second workspace does not silently stop the first one.
+ */
 export function resolveLaunchdDaemonMigration(
 	agentsDir: string,
 	home: string = homedir(),
@@ -1448,7 +1540,9 @@ export function resolveLaunchdDaemonMigration(
 	let legacyWorkspace: string | null = null;
 	try {
 		legacyWorkspace = readLaunchdWorkspace(deps.readFileSync(legacyPlistPath, "utf-8"));
-	} catch {}
+	} catch {
+		// Treat an unreadable plist as an obsolete job that must be replaced.
+	}
 
 	if (legacyWorkspace !== null && normalize(legacyWorkspace) !== normalize(agentsDir)) {
 		return {
@@ -1515,6 +1609,8 @@ export function buildLaunchdDaemonStartArgs(plistPath: string): string[] {
 export function buildLaunchdDaemonStopArgs(label: string = LAUNCHD_DAEMON_LABEL): string[] {
 	return ["bootout", `${currentLaunchdDomain()}/${label}`];
 }
+
+/** Minimal structural shape of the `launchctl print` probe so tests can stub it. */
 type LaunchctlProbeSpawnSync = (
 	command: string,
 	args: readonly string[],
@@ -1522,6 +1618,12 @@ type LaunchctlProbeSpawnSync = (
 ) => {
 	readonly status: number | null;
 };
+
+/**
+ * Whether launchd currently has the per-workspace Signet daemon job loaded.
+ * Under KeepAlive the job respawns the daemon on exit, so `stop`/`start` must
+ * coordinate with it. The object overload keeps existing probe callers stable.
+ */
 export function isLaunchdDaemonLoaded(
 	agentsDirOrDeps: string | LaunchdDaemonLoadDeps = AGENTS_DIR,
 	maybeDeps: LaunchdDaemonLoadDeps = {},
@@ -1612,7 +1714,6 @@ export async function startDaemon(
 	}
 
 	const net = resolveDaemonNetwork(agentsDir, process.env);
-	const inspectorForwarding = await resolveDaemonInspectorForwarding();
 
 	const daemonDir = join(agentsDir, ".daemon");
 	const logDir = join(daemonDir, "logs");
@@ -1625,13 +1726,19 @@ export async function startDaemon(
 	}
 
 	const startupLogPath = join(logDir, "startup.log");
+	// Transient unit name derived from the starting CLI's pid; used for the
+	// systemd-run unit and, via --setenv SIGNET_DAEMON_UNIT, recorded in the
+	// daemon lifecycle record so post-mortems can query the unit's journald
+	// exit status (issue #1148).
 	const systemdUnitName = `signet-daemon-${process.pid}`;
 	let stderrFd: number | null = null;
 	let stderrTarget: "ignore" | number = "ignore";
 	try {
 		stderrFd = openSync(startupLogPath, "w");
 		stderrTarget = stderrFd;
-	} catch {}
+	} catch {
+		// Non-fatal.
+	}
 
 	const daemonEnv = {
 		...process.env,
@@ -1640,11 +1747,15 @@ export async function startDaemon(
 		SIGNET_BIND: net.bind,
 		SIGNET_PATH: agentsDir,
 		[DAEMON_RUNTIME_ENV]: runtime,
-		...(nodePath ? { NODE_PATH: appendNodePath(nodePath, process.env.NODE_PATH) } : {}),
-		...(tokenizerWasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: tokenizerWasmPath } : {}),
 		SIGNET_DAEMON_ENTRYPOINT: "1",
-		BUN_INSPECT: inspectorForwarding.childInspector,
 	};
+
+	// `detached: true` only creates a new process group; it does not escape the
+	// caller's service manager ownership. If `signet daemon start` is run from a
+	// short-lived Linux systemd unit or macOS launchd job, that owner can reap the
+	// daemon when the caller exits. Prefer the platform service manager first so
+	// the daemon is owned independently, then fall back to detached spawn on
+	// platforms or environments where that is unavailable.
 	let procExited = false;
 	let startedByServiceManager = false;
 	if (process.platform === "linux") {
@@ -1657,8 +1768,6 @@ export async function startDaemon(
 			bind: net.bind,
 			startupLogPath,
 			unitName: systemdUnitName,
-			bunInspect: inspectorForwarding.childInspector,
-			bunOptions: process.env.BUN_OPTIONS,
 			telemetryEnv: process.env,
 		});
 		const result = spawnSync("systemd-run", systemdArgs, {
@@ -1673,7 +1782,9 @@ export async function startDaemon(
 					startupLogPath,
 					`[systemd-run fallback] status=${result.status ?? "null"} error=${result.error?.message ?? ""}\n`,
 				);
-			} catch {}
+			} catch {
+				// Best effort.
+			}
 		}
 	} else if (process.platform === "darwin") {
 		const migration = resolveLaunchdDaemonMigration(agentsDir);
@@ -1717,10 +1828,14 @@ export async function startDaemon(
 				host: net.host,
 				bind: net.bind,
 				startupLogPath,
-				bunInspect: inspectorForwarding.childInspector,
 				telemetryEnv: process.env,
 			}),
 		);
+		// Boot out any loaded job before (re)bootstrap. When no job is loaded
+		// (fresh start, or a restart that already booted it out), launchctl
+		// exits 3 with "Boot-out failed: 3: No such process" — launchd handoff
+		// noise, not a start failure. Skip the bootout in that case so the
+		// message never pollutes the startup log (#1074).
 		let bootout: SpawnSyncReturns<Buffer> | null = null;
 		if (isLaunchdDaemonLoaded(agentsDir)) {
 			bootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(launchdDaemonLabel(agentsDir)), {
@@ -1750,7 +1865,9 @@ export async function startDaemon(
 						`[launchd fallback] bootoutStatus=${bootout ? (bootout.status ?? "null") : "skipped"} bootstrapStatus=${bootstrap.status ?? "null"} kickstartStatus=${kickstart.status ?? "null"} bootoutError=${bootout?.error?.message ?? ""} bootstrapError=${bootstrap.error?.message ?? ""} kickstartError=${kickstart.error?.message ?? ""}
 `,
 					);
-				} catch {}
+				} catch {
+					// Best effort.
+				}
 			}
 		}
 	}
@@ -1766,8 +1883,14 @@ export async function startDaemon(
 		proc.on("error", (err) => {
 			try {
 				appendFileSync(startupLogPath, `[spawn error] ${err.message}\n`);
-			} catch {}
+			} catch {
+				// Best effort.
+			}
 		});
+
+		// Track process exit so the poll loop can short-circuit on fast failures
+		// (port conflict, missing binary, bad config) rather than waiting the
+		// full deadline.
 		proc.on("exit", () => {
 			procExited = true;
 		});
@@ -1775,15 +1898,23 @@ export async function startDaemon(
 		if (typeof proc.pid === "number") {
 			try {
 				writeFileSync(pidFile(agentsDir), `${proc.pid}\n`);
-			} catch {}
+			} catch {
+				// Best effort.
+			}
 		}
 
 		proc.unref();
 	}
-	if (inspectorForwarding.proxy) spawnInspectorProxy(inspectorForwarding.proxy);
 	if (stderrFd !== null) {
 		closeSync(stderrFd);
 	}
+
+	// Use wall-clock deadline instead of iteration count so the budget
+	// is always sufficient regardless of how long each health probe takes.
+	// A large/legacy workspace may need 30-40s for migrations + startup
+	// recovery before the HTTP server binds. 60s covers the worst case
+	// while still failing fast on a genuinely broken daemon.
+	// If the spawned process exits early (fast failure), break immediately.
 	const deadline = Date.now() + 60_000;
 	const ready = await waitForDaemonLiveness(deadline, () => procExited);
 	if (ready) return true;
@@ -1799,7 +1930,9 @@ export async function startDaemon(
 				console.error(chalk.dim(line));
 			}
 		}
-	} catch {}
+	} catch {
+		// Best effort.
+	}
 
 	return false;
 }
@@ -1844,7 +1977,9 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 	if (existsSync(path)) {
 		try {
 			rmSync(path, { force: true });
-		} catch {}
+		} catch {
+			// Ignore.
+		}
 	}
 
 	return !(await isDaemonRunning());

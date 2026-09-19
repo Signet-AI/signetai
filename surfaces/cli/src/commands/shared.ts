@@ -6,7 +6,6 @@ export interface PathOptions {
 
 export interface RuntimeOptions {
 	runtime?: string;
-	daemonJsPath?: string;
 }
 
 export interface StartOptions extends PathOptions, RuntimeOptions {}

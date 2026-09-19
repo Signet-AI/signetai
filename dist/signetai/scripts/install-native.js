@@ -175,7 +175,13 @@ async function main() {
 
 	// Connector plugin payloads ship separately; the Rust daemon is included
 	// directly in the package's installed-like runtime tree.
-	const daemonPath = join(packageDir, "runtime", "daemon", process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon");
+	const daemonPath = join(
+		packageDir,
+		"runtime",
+		"rust-daemon",
+		`${process.platform}-${process.arch}`,
+		process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon",
+	);
 	if (!existsSync(daemonPath)) throw new Error(`Rust daemon is missing from package runtime: ${daemonPath}`);
 	await installRuntimeAssets();
 }

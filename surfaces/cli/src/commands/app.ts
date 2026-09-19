@@ -52,7 +52,6 @@ interface InstallOptions {
 	force?: boolean;
 	json?: boolean;
 	connectorAssets?: string;
-	daemonJsAssets?: string;
 }
 
 interface AppDeps {

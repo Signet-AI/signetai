@@ -19,7 +19,6 @@ export interface NativeInstallOptions {
 	readonly force?: boolean;
 	readonly json?: boolean;
 	readonly connectorAssets?: string;
-	readonly daemonJsAssets?: string;
 }
 
 export interface NativeInstallResult {
@@ -30,7 +29,6 @@ export interface NativeInstallResult {
 	readonly pathProfile: string | null;
 	readonly pathPersisted: boolean;
 	readonly connectorAssetsDir: string | null;
-	readonly daemonJsAssetsDir: string | null;
 }
 
 function isRuntimeExecutable(path: string): boolean {
@@ -147,12 +145,24 @@ function verifySha256(path: string, expected: string): void {
 
 function extractConnectorAssets(archivePath: string, extractRoot: string): void {
 	mkdirSync(extractRoot, { recursive: true });
+	// Tarballs are produced by `scripts/build-connector-assets.ts` with a
+	// `runtime/connectors/<harness>/...` layout, so we extract to the
+	// runtime root and let the tarball's own `runtime/` prefix land
+	// naturally at `<extractRoot>/runtime/connectors/...`.
 	const result = spawnSync("tar", ["xzf", archivePath, "-C", extractRoot], { stdio: "inherit" });
 	if (result.status !== 0) {
 		throw new Error(`tar extraction failed with status ${result.status ?? "unknown"}`);
 	}
 }
-type RuntimeComponent = "connectors" | "daemonJs";
+
+/**
+ * Install connector plugin assets (e.g. the Hermes Python memory
+ * provider) alongside the Signet binary. The tarball is verified
+ * against the manifest's `components.connectors.sha256` and extracted
+ * to `<binDir>/../runtime/connectors/`, mirroring the layout the npm
+ * wrapper uses after `install-native.js` runs.
+ */
+type RuntimeComponent = "connectors";
 
 function installRuntimeAssetsFromManifest(
 	tarballPath: string,
@@ -160,6 +170,9 @@ function installRuntimeAssetsFromManifest(
 	component: RuntimeComponent,
 	componentLabel: string,
 ): string {
+	// Look up the expected SHA-256 from the manifest. Curl installs keep the
+	// manifest next to the native binary; workspace and older installs may not
+	// have one, so extraction remains compatible with the connector path.
 	const manifestCandidates = [
 		join(process.cwd(), "native-manifest.json"),
 		join(dirname(process.execPath), "native-manifest.json"),
@@ -185,20 +198,17 @@ function installRuntimeAssetsFromManifest(
 			if (error instanceof Error && (error.message.startsWith("SHA-256") || error.message.startsWith("Tarball size"))) {
 				throw error;
 			}
+			// Ignore malformed manifests and try the next candidate.
 		}
 	}
 
 	const extractRoot = join(binDir, "..");
 	extractConnectorAssets(tarballPath, extractRoot);
-	return join(extractRoot, "runtime", component === "daemonJs" ? "daemon-js" : "connectors");
+	return join(extractRoot, "runtime", "connectors");
 }
 
 function installConnectorAssetsFromManifest(tarballPath: string, binDir: string): string {
 	return installRuntimeAssetsFromManifest(tarballPath, binDir, "connectors", "connector assets");
-}
-
-function installDaemonJsAssetsFromManifest(tarballPath: string, binDir: string): string {
-	return installRuntimeAssetsFromManifest(tarballPath, binDir, "daemonJs", "Bun JavaScript daemon assets");
 }
 
 export function installNativeBinary(options: NativeInstallOptions = {}): NativeInstallResult {
@@ -216,9 +226,6 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		const connectorAssetsDir = options.connectorAssets
 			? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
 			: null;
-		const daemonJsAssetsDir = options.daemonJsAssets
-			? installDaemonJsAssetsFromManifest(options.daemonJsAssets, binDir)
-			: null;
 		const pathPersistence = persistNativeInstallPath(binDir, {
 			interactive: process.stdin.isTTY === true && process.stdout.isTTY === true,
 		});
@@ -231,14 +238,14 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 			pathProfile: pathPersistence.profilePath,
 			pathPersisted: pathPersistence.persisted,
 			connectorAssetsDir,
-			daemonJsAssetsDir,
 		};
 	}
+
+	// Validate and extract companion assets before replacing an existing
+	// executable. A connector checksum or extraction failure must leave the
+	// previously working Signet binary in place.
 	const connectorAssetsDir = options.connectorAssets
 		? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
-		: null;
-	const daemonJsAssetsDir = options.daemonJsAssets
-		? installDaemonJsAssetsFromManifest(options.daemonJsAssets, binDir)
 		: null;
 
 	mkdirSync(binDir, { recursive: true });
@@ -248,7 +255,7 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 	try {
 		if (process.platform !== "win32") chmodSync(tmp, 0o755);
 		if (process.platform === "win32" && existsSync(target)) {
-			const backup = join(dirname(target), `.${basename(target)}.backup`);
+			const backup = join(dirname(target), `.${basename(target)}.backup`); // Parent may still execute this renamed image.
 			rmSync(backup, { force: true });
 			renameSync(target, backup);
 			try {
@@ -260,6 +267,8 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 				throw error;
 			}
 		} else {
+			// POSIX rename replaces the existing path atomically, so a failed
+			// copy or checksum never removes the previously installed binary.
 			renameSync(tmp, target);
 		}
 	} finally {
@@ -278,7 +287,6 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 		pathProfile: pathPersistence.profilePath,
 		pathPersisted: pathPersistence.persisted,
 		connectorAssetsDir,
-		daemonJsAssetsDir,
 	};
 }
 
@@ -297,10 +305,6 @@ export function printNativeInstallResult(result: NativeInstallResult, json = fal
 
 	if (result.connectorAssetsDir) {
 		console.log(chalk.green(`Installed connector assets to ${result.connectorAssetsDir}`));
-	}
-
-	if (result.daemonJsAssetsDir) {
-		console.log(chalk.green(`Installed Bun JavaScript daemon assets to ${result.daemonJsAssetsDir}`));
 	}
 
 	if (result.pathPersisted && result.pathProfile) {
