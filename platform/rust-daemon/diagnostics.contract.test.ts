@@ -40,9 +40,19 @@ describe("native database diagnostics", () => {
 		const schema = await (await request("/api/diagnostics/database/schema")).json();
 		expect(schema.complete).toBe(true);
 		expect(schema.tables.some((table: { name: string }) => table.name === "memories")).toBe(true);
+		const memories = schema.tables.find((table: { name: string }) => table.name === "memories");
+		expect(memories.indexes.length).toBeGreaterThan(0);
+		expect(
+			schema.tables.every(
+				(table: { name: string }, i: number, all: { name: string }[]) =>
+					i === 0 || all[i - 1].name.localeCompare(table.name) <= 0,
+			),
+		).toBe(true);
 		const sample = await (await request("/api/diagnostics/database/tables/memories/sample?limit=1&offset=0")).json();
 		expect(sample.limit).toBe(1);
 		expect(sample.offset).toBe(0);
+		expect(sample.scope).toEqual({ agent: false, workspace: false, isolated: false });
+		expect((await request("/api/diagnostics/database/tables/schema_migrations/sample")).status).toBe(200);
 		expect((await request("/api/diagnostics/database/tables/no_such_table/sample")).status).toBe(404);
 		expect((await request("/api/diagnostics/database/tables/sqlite_master/sample")).status).toBe(400);
 		expect((await request("/api/diagnostics/database/tables/memories/sample?limit=101")).status).toBe(400);

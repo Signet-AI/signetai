@@ -387,8 +387,24 @@ impl Core {
         self.call(|connection| database_schema(connection))
     }
 
-    pub fn database_sample(&self, table: String, limit: usize, offset: usize, agent: Option<String>, workspace: Option<String>) -> Result<Value, CoreError> {
-        self.call(move |connection| database_sample(connection, &table, limit, offset, agent.as_deref(), workspace.as_deref()))
+    pub fn database_sample(
+        &self,
+        table: String,
+        limit: usize,
+        offset: usize,
+        agent: Option<String>,
+        workspace: Option<String>,
+    ) -> Result<Value, CoreError> {
+        self.call(move |connection| {
+            database_sample(
+                connection,
+                &table,
+                limit,
+                offset,
+                agent.as_deref(),
+                workspace.as_deref(),
+            )
+        })
     }
 
     /// Claim exactly one executable job on the workspace-owner thread.
@@ -1973,31 +1989,171 @@ fn execute_operation(
 }
 
 fn database_schema(connection: &Connection) -> Result<Value, CoreError> {
-    let mut stmt = connection.prepare("SELECT name,type,sql FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%' ORDER BY name")?;
+    let mut stmt = connection.prepare("SELECT name,type,sql FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '%_fts%' ORDER BY name COLLATE BINARY")?;
     let mut tables = Vec::new();
-    for row in stmt.query_map([], |r| Ok((r.get::<_,String>(0)?, r.get::<_,String>(1)?, r.get::<_,Option<String>>(2)?)))? {
+    for row in stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<String>>(2)?,
+        ))
+    })? {
         let (name, kind, sql) = row?;
-        let mut columns = Vec::new();
-        let pragma = format!("PRAGMA table_info({})", quote_identifier(&name));
-        for c in connection.prepare(&pragma)?.query_map([], |r| Ok(json!({"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"notNull":r.get::<_,i64>(3)? != 0,"default":r.get::<_,Option<String>>(4)?,"primaryKey":r.get::<_,i64>(5)? != 0})))? { columns.push(c?); }
-        let count: i64 = connection.query_row(&format!("SELECT count(*) FROM {}", quote_identifier(&name)), [], |r| r.get(0))?;
-        tables.push(json!({"name":name,"type":kind,"sql":sql,"columns":columns,"indexes":[],"foreignKeys":[],"rowCount":count}));
+        let columns = table_column_metadata(connection, &name)?;
+        let indexes = table_indexes(connection, &name)?;
+        let foreign_keys = table_foreign_keys(connection, &name)?;
+        let count: i64 = connection.query_row(
+            &format!("SELECT count(*) FROM {}", quote_identifier(&name)),
+            [],
+            |r| r.get(0),
+        )?;
+        tables.push(json!({"name":name,"type":kind,"sql":sql,"columns":columns,"indexes":indexes,"foreignKeys":foreign_keys,"rowCount":count}));
     }
-    Ok(json!({"tables":tables,"groups":[],"sample":{"supported":true,"defaultLimit":25,"maxLimit":100,"scope":"native-schema-only"},"complete":true,"unsupported":[]}))
+    Ok(
+        json!({"tables":tables,"groups":[],"sample":{"supported":true,"defaultLimit":25,"maxLimit":100,"scope":"native-schema-only"},"complete":true,"unsupported":[]}),
+    )
 }
 
-fn quote_identifier(name: &str) -> String { format!("\"{}\"", name.replace('"', "\"\"")) }
-fn database_sample(connection: &Connection, table: &str, limit: usize, offset: usize, agent: Option<&str>, workspace: Option<&str>) -> Result<Value, CoreError> {
-    if !(1..=100).contains(&limit) { return Err(CoreError::InvalidInput("limit must be an integer from 1 to 100".into())); }
-    if table.starts_with("sqlite_") || table.contains("_fts") || table.ends_with("_content") || table.ends_with("_data") || table.ends_with("_idx") || table.ends_with("_docsize") || table.ends_with("_config") { return Err(CoreError::InvalidInput("table is not sampleable".into())); }
-    let exists: Option<String> = connection.query_row("SELECT name FROM sqlite_master WHERE name=? AND type IN ('table','view')", [table], |r| r.get(0)).optional()?;
-    let Some(name) = exists else { return Err(CoreError::NotFound); };
-    let mut stmt = connection.prepare(&format!("SELECT * FROM {} LIMIT ? OFFSET ?", quote_identifier(&name)))?;
-    let names = stmt.column_names().iter().map(|v| (*v).to_owned()).collect::<Vec<_>>();
+fn table_columns(connection: &Connection, table: &str) -> Result<Vec<String>, CoreError> {
+    let pragma = format!("PRAGMA table_info({})", quote_identifier(table));
+    Ok(connection
+        .prepare(&pragma)?
+        .query_map([], |r| r.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn table_column_metadata(connection: &Connection, table: &str) -> Result<Vec<Value>, CoreError> {
+    let pragma = format!("PRAGMA table_info({})", quote_identifier(table));
+    Ok(connection.prepare(&pragma)?.query_map([], |r| Ok(json!({"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"notNull":r.get::<_,i64>(3)? != 0,"default":r.get::<_,Option<String>>(4)?,"primaryKey":r.get::<_,i64>(5)? != 0})))?.collect::<Result<Vec<_>,_>>()?)
+}
+
+fn table_indexes(connection: &Connection, table: &str) -> Result<Vec<Value>, CoreError> {
+    let pragma = format!("PRAGMA index_list({})", quote_identifier(table));
+    let indexes = connection
+        .prepare(&pragma)?
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(1)?,
+                r.get::<_, i64>(2)? != 0,
+                r.get::<_, String>(3).unwrap_or_default(),
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    indexes
+        .into_iter()
+        .map(|(name, unique, origin)| {
+            let info = format!("PRAGMA index_info({})", quote_identifier(&name));
+            let columns = connection
+                .prepare(&info)?
+                .query_map([], |r| {
+                    Ok(json!({"seq":r.get::<_,i64>(0)?,"name":r.get::<_,Option<String>>(2)?}))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(json!({"name":name,"unique":unique,"origin":origin,"columns":columns}))
+        })
+        .collect()
+}
+
+fn table_foreign_keys(connection: &Connection, table: &str) -> Result<Vec<Value>, CoreError> {
+    let pragma = format!("PRAGMA foreign_key_list({})", quote_identifier(table));
+    Ok(connection.prepare(&pragma)?.query_map([], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"seq":r.get::<_,i64>(1)?,"table":r.get::<_,String>(2)?,"from":r.get::<_,String>(3)?,"to":r.get::<_,Option<String>>(4)?,"onUpdate":r.get::<_,String>(5)?,"onDelete":r.get::<_,String>(6)?})))?.collect::<Result<Vec<_>,_>>()?)
+}
+
+fn quote_identifier(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+fn database_sample(
+    connection: &Connection,
+    table: &str,
+    limit: usize,
+    offset: usize,
+    agent: Option<&str>,
+    workspace: Option<&str>,
+) -> Result<Value, CoreError> {
+    if !(1..=100).contains(&limit) {
+        return Err(CoreError::InvalidInput(
+            "limit must be an integer from 1 to 100".into(),
+        ));
+    }
+    if table.starts_with("sqlite_")
+        || table.contains("_fts")
+        || table.ends_with("_content")
+        || table.ends_with("_data")
+        || table.ends_with("_idx")
+        || table.ends_with("_docsize")
+        || table.ends_with("_config")
+    {
+        return Err(CoreError::InvalidInput("table is not sampleable".into()));
+    }
+    let exists: Option<String> = connection
+        .query_row(
+            "SELECT name FROM sqlite_master WHERE name=? AND type IN ('table','view')",
+            [table],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(name) = exists else {
+        return Err(CoreError::NotFound);
+    };
+    let names = table_columns(connection, &name)?;
+    let has_agent = names.iter().any(|column| column == "agent_id");
+    let has_workspace = names.iter().any(|column| column == "workspace_id");
+    if agent.is_some() && !has_agent {
+        return Err(CoreError::InvalidInput(
+            "table has no agent_id scope column".into(),
+        ));
+    }
+    if workspace.is_some() && !has_workspace {
+        return Err(CoreError::InvalidInput(
+            "table has no workspace_id scope column".into(),
+        ));
+    }
+    let mut predicates = Vec::new();
+    let mut values: Vec<SqlValue> = Vec::new();
+    if let Some(value) = agent {
+        predicates.push(format!("{} = ?", quote_identifier("agent_id")));
+        values.push(SqlValue::Text(value.to_owned()));
+    }
+    if let Some(value) = workspace {
+        predicates.push(format!("{} = ?", quote_identifier("workspace_id")));
+        values.push(SqlValue::Text(value.to_owned()));
+    }
+    let where_clause = if predicates.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", predicates.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT * FROM {}{} LIMIT ? OFFSET ?",
+        quote_identifier(&name),
+        where_clause
+    );
+    let mut stmt = connection.prepare(&sql)?;
+    values.push(SqlValue::Integer(limit as i64));
+    values.push(SqlValue::Integer(offset as i64));
     let mut rows_out = Vec::new();
-    let mut rows = stmt.query(params![limit as i64, offset as i64])?;
-    while let Some(row) = rows.next()? { let mut obj=serde_json::Map::new(); for (i,n) in names.iter().enumerate() { let v: SqlValue=row.get(i)?; obj.insert(n.clone(), match v { SqlValue::Null=>Value::Null, SqlValue::Integer(v)=>json!(v), SqlValue::Real(v)=>json!(v), SqlValue::Text(v)=>json!(v), SqlValue::Blob(v)=>json!(format!("[blob:{} bytes]",v.len())) }); } rows_out.push(Value::Object(obj)); }
-    Ok(json!({"table":name,"limit":limit,"offset":offset,"columns":names,"rows":rows_out,"complete":rows_out.len()<limit,"scope":"native-schema-only"}))
+    let mut rows = stmt.query(rusqlite::params_from_iter(values.iter()))?;
+    while let Some(row) = rows.next()? {
+        let mut obj = serde_json::Map::new();
+        for (i, n) in names.iter().enumerate() {
+            let v: SqlValue = row.get(i)?;
+            obj.insert(
+                n.clone(),
+                match v {
+                    SqlValue::Null => Value::Null,
+                    SqlValue::Integer(v) => json!(v),
+                    SqlValue::Real(v) => json!(v),
+                    SqlValue::Text(v) => json!(v),
+                    SqlValue::Blob(v) => json!(format!("[blob:{} bytes]", v.len())),
+                },
+            );
+        }
+        rows_out.push(Value::Object(obj));
+    }
+    let scope = json!({"agent":agent.is_some(),"workspace":workspace.is_some(),"isolated":!predicates.is_empty()});
+    Ok(
+        json!({"table":name,"limit":limit,"offset":offset,"columns":names,"rows":rows_out,"complete":rows_out.len()<limit,"scope":scope}),
+    )
 }
 
 pub struct WorkspaceOwner(Core);
@@ -2031,8 +2187,16 @@ impl WorkspaceOwner {
         self.0.database_schema()
     }
 
-    pub fn database_sample(&self, table: String, limit: usize, offset: usize, agent: Option<String>, workspace: Option<String>) -> Result<Value, CoreError> {
-        self.0.database_sample(table, limit, offset, agent, workspace)
+    pub fn database_sample(
+        &self,
+        table: String,
+        limit: usize,
+        offset: usize,
+        agent: Option<String>,
+        workspace: Option<String>,
+    ) -> Result<Value, CoreError> {
+        self.0
+            .database_sample(table, limit, offset, agent, workspace)
     }
 
     pub fn finish_worker_job(
