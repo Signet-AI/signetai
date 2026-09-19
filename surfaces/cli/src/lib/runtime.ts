@@ -27,7 +27,6 @@ import {
 	parseDaemonRuntime,
 	parseSimpleYaml,
 	preflightWorkspace,
-	resolveDaemonRuntime,
 	resolveSignetDaemonUrl,
 	type DaemonRuntime,
 } from "@signet/core";
@@ -211,6 +210,12 @@ interface DaemonProbeDeps {
 const pkgDir = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
 const DAEMON_BINARY_ENV = "SIGNET_DAEMON_PATH" as const;
+function selectNativeDaemonRuntime(preferred?: DaemonRuntime): DaemonRuntime {
+	if (preferred !== undefined && preferred !== "compiled") {
+		throw new Error("Only the native compiled daemon is supported.");
+	}
+	return "compiled";
+}
 function isNativeExecutable(path: string): boolean {
 	try {
 		accessSync(path, constants.X_OK);
@@ -1069,7 +1074,7 @@ function resolveTelemetryEnvironment(env: NodeJS.ProcessEnv): Partial<Record<Tel
 
 export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput): string[] {
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
-	const runtime = input.runtime ?? resolveDaemonRuntime(undefined, sourceEnvironment);
+	const runtime = input.runtime ?? selectNativeDaemonRuntime(undefined);
 	return [
 		"--user",
 		"--quiet",
@@ -1172,7 +1177,7 @@ export function resolveDaemonRuntimeCommand(
 	_pathValue: string | undefined = process.env.PATH,
 	runtime?: DaemonRuntime,
 ): string {
-	const selectedRuntime = runtime ?? resolveDaemonRuntime(undefined, env);
+	const selectedRuntime = runtime ?? selectNativeDaemonRuntime(undefined);
 	if (selectedRuntime !== "compiled") throw new Error("Only the native compiled daemon is supported.");
 	const daemonPath = packagedDaemonPath(env);
 	if (isNativeExecutable(daemonPath)) return daemonPath;
@@ -1183,10 +1188,10 @@ export function resolveDaemonRuntimeCommand(
 
 export function resolveDaemonLaunchCommand(
 	daemonPath: string,
-	env: NodeJS.ProcessEnv = process.env,
+	_env: NodeJS.ProcessEnv = process.env,
 	runtime?: DaemonRuntime,
 ): string[] {
-	const selectedRuntime = runtime ?? resolveDaemonRuntime(undefined, env);
+	const selectedRuntime = runtime ?? selectNativeDaemonRuntime(undefined);
 	if (selectedRuntime !== "compiled") throw new Error("Only the native compiled daemon is supported.");
 	if (/\.(?:js|ts|mjs|cjs)$/i.test(daemonPath)) throw new Error("Native Signet daemon executable is required.");
 	return [daemonPath];
@@ -1322,7 +1327,7 @@ export function resolveLaunchdDaemonMigration(
 export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
 	const label = input.label ?? launchdDaemonLabel(input.agentsDir);
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
-	const runtime = input.runtime ?? resolveDaemonRuntime(undefined, sourceEnvironment);
+	const runtime = input.runtime ?? selectNativeDaemonRuntime(undefined);
 	const environment = buildLaunchdEnvironment({
 		environment: sourceEnvironment,
 		values: {
@@ -1416,7 +1421,7 @@ export async function startDaemon(
 
 	let runtime: DaemonRuntime;
 	try {
-		runtime = resolveDaemonRuntime(preferredRuntime, process.env);
+		runtime = selectNativeDaemonRuntime(preferredRuntime);
 	} catch (error) {
 		console.error(chalk.red(error instanceof Error ? error.message : String(error)));
 		return false;

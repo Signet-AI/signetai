@@ -2,13 +2,11 @@ import type { ChildProcess, DaemonRuntime } from "@signet/core";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { confirm } from "@inquirer/prompts";
-import { detectSchema, ensureUnifiedSchema, runMigrations } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import type { LogOptions, PathOptions, RestartOptions, StartOptions } from "../commands/shared.js";
 import { daemonAccessLines } from "../lib/network.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
-import Database from "../sqlite.js";
 import { readPipelinePauseState, releaseOllamaModels, setPipelinePaused } from "./pipeline-pause.js";
 
 interface DaemonStatus {
@@ -77,6 +75,12 @@ export async function launchDashboard(options: PathOptions, deps: Deps): Promise
 			console.error(chalk.red("  Failed to start daemon"));
 			process.exit(1);
 		}
+
+		// The health probe can transiently false-negative (e.g. an event-loop
+		// block) while the daemon process itself was alive the whole time.
+		// startDaemon short-circuits to "already running" in that case, so the
+		// same PID before and after means we did not start anything — do not
+		// claim we did (issue #1045).
 		if (before.pid !== null && before.pid === after.pid) {
 			console.log(chalk.dim("  Daemon is running"));
 		} else {
@@ -94,84 +98,255 @@ export async function launchDashboard(options: PathOptions, deps: Deps): Promise
 }
 
 export async function migrateSchema(options: PathOptions, deps: Deps): Promise<void> {
-	const basePath = readPath(options, deps);
-	const dbPath = join(basePath, "memory", "memories.db");
+	// Schema ownership belongs to the native daemon. The CLI must never open,
+	// inspect, migrate, or write the daemon-owned SQLite database.
+	void options;
+	void deps;
+	console.error(
+		chalk.red("Schema migration is owned by the native daemon and is not available as a local CLI operation."),
+	);
+	console.error(chalk.dim("Start the native daemon or use its supported HTTP management API."));
+}
 
-	console.log(deps.signetLogo());
+async function fetchApiLogs(limit: number, options: LogOptions, deps: Deps): Promise<LogPayload | null> {
+	try {
+		const params = new URLSearchParams({ limit: String(limit) });
+		if (options.level) {
+			params.set("level", options.level);
+		}
+		if (options.category) {
+			params.set("category", options.category);
+		}
 
-	if (!existsSync(dbPath)) {
-		console.log(chalk.yellow("  No database found."));
-		console.log(`  Run ${chalk.bold("signet setup")} to create one.`);
+		const fetchImpl = deps.fetch ?? fetch;
+		const res = await fetchImpl(`http://127.0.0.1:${deps.defaultPort}/api/logs?${params}`);
+		const json = await res.json();
+		return readLogPayload(json);
+	} catch {
+		return null;
+	}
+}
+
+function printApiLogs(payload: LogPayload): void {
+	if (payload.logs.length === 0) {
+		console.log(chalk.dim("  No logs found"));
 		return;
 	}
 
-	const spinner = ora("Checking database schema...").start();
-	let db: ReturnType<typeof Database> | null = null;
+	console.log(chalk.bold(`  Recent Logs (${payload.count})\n`));
+	for (const entry of payload.logs) {
+		console.log(`  ${formatLogEntry(entry)}`);
+	}
+}
+
+async function followLogs(port: number, fetchImpl: FetchLike = fetch): Promise<void> {
+	console.log();
+	console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
 
 	try {
-		db = Database(dbPath, { readonly: true });
-		const info = detectSchema(db);
-		db.close();
-		db = null;
-
-		if (info.type === "core") {
-			spinner.succeed("Database already on unified schema");
+		const res = await fetchImpl(`http://127.0.0.1:${port}/api/logs/stream`, {
+			headers: { Accept: "text/event-stream" },
+		});
+		if (!res.ok || !res.body) {
+			console.log(chalk.red("  Stream disconnected"));
 			return;
 		}
 
-		if (info.type === "unknown" && !info.hasMemories) {
-			spinner.succeed("Database is empty or has no memories");
-			return;
+		const reader = res.body.getReader();
+		const decoder = new TextDecoder();
+		let buffer = "";
+
+		while (true) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			buffer += decoder.decode(value, { stream: true });
+			buffer = printCompleteLogEvents(buffer);
 		}
 
-		spinner.text = `Migrating from ${info.type} schema...`;
-		spinner.info();
-
-		const running = await deps.isDaemonRunning();
-		if (running) {
-			console.log(chalk.dim("  Stopping daemon for migration..."));
-			const stopped = await deps.stopDaemon(basePath);
-			if (!stopped) {
-				spinner.fail("Migration aborted");
-				console.log(chalk.red("  Could not stop the daemon cleanly before migration."));
-				return;
-			}
-			await deps.sleep(1000);
-		}
-
-		db = Database(dbPath);
-		const result = ensureUnifiedSchema(db);
-		printMigrationErrors(result.errors);
-
-		if (result.migrated) {
-			console.log(
-				chalk.green(`  ✓ Migrated ${result.memoriesMigrated} memories from ${result.fromSchema} to ${result.toSchema}`),
-			);
-		} else {
-			console.log(chalk.dim("  No migration needed"));
-		}
-
-		runMigrations(db);
-		db.close();
-		db = null;
-
-		if (running) {
-			console.log(chalk.dim("  Restarting daemon..."));
-			const restarted = await deps.startDaemon(basePath);
-			if (!restarted) {
-				console.log(chalk.yellow("  Migration finished, but the daemon did not restart cleanly."));
-				return;
-			}
-		}
-
-		console.log();
-		console.log(chalk.green("  Migration complete!"));
-	} catch (err) {
-		spinner.fail("Migration failed");
-		console.log(chalk.red(`  ${readErr(err)}`));
-	} finally {
-		db?.close();
+		buffer += decoder.decode();
+		printCompleteLogEvents(`${buffer}\n\n`);
+	} catch {
+		console.log(chalk.red("  Stream disconnected"));
 	}
+}
+
+function printCompleteLogEvents(buffer: string): string {
+	const normalized = buffer.replace(/\r\n/g, "\n");
+	let remaining = normalized;
+	let boundary = remaining.indexOf("\n\n");
+	while (boundary !== -1) {
+		const eventBlock = remaining.slice(0, boundary);
+		printLogEventBlock(eventBlock);
+		remaining = remaining.slice(boundary + 2);
+		boundary = remaining.indexOf("\n\n");
+	}
+	return remaining;
+}
+
+function printLogEventBlock(eventBlock: string): void {
+	const data = eventBlock
+		.split("\n")
+		.filter((line) => line.startsWith("data:"))
+		.map((line) => line.slice(5).trimStart())
+		.join("\n");
+	if (!data) return;
+
+	try {
+		const json = JSON.parse(data);
+		const entry = readLogEntry(json);
+		if (entry === null || entry.category === "connected") {
+			return;
+		}
+		console.log(`  ${formatLogEntry(entry)}`);
+	} catch {
+		// Ignore malformed SSE payloads.
+	}
+}
+
+function readFileLogs(basePath: string, limit: number, options: LogOptions): void {
+	const logDir = join(basePath, ".daemon", "logs");
+	const logFile = join(logDir, `signet-${new Date().toISOString().split("T")[0]}.log`);
+
+	if (!existsSync(logFile)) {
+		console.log(chalk.dim("  No log files found"));
+		return;
+	}
+
+	const content = readFileSync(logFile, "utf-8");
+	const lines = content.trim().split("\n").slice(-limit);
+	for (const line of lines) {
+		try {
+			const json = JSON.parse(line);
+			const entry = readLogEntry(json);
+			if (entry === null) {
+				console.log(`  ${line}`);
+				continue;
+			}
+			if (options.level && entry.level !== options.level) {
+				continue;
+			}
+			if (options.category && entry.category !== options.category) {
+				continue;
+			}
+			console.log(`  ${formatLogEntry(entry)}`);
+		} catch {
+			console.log(`  ${line}`);
+		}
+	}
+}
+
+function formatLogEntry(entry: LogEntry): string {
+	const colors = {
+		debug: chalk.gray,
+		info: chalk.cyan,
+		warn: chalk.yellow,
+		error: chalk.red,
+	};
+	const paint = colors[entry.level] ?? chalk.white;
+	const time = entry.timestamp.split("T")[1]?.slice(0, 8) || "";
+	const level = entry.level.toUpperCase().padEnd(5);
+	const category = `[${entry.category}]`.padEnd(12);
+
+	let line = `${chalk.dim(time)} ${paint(level)} ${category} ${entry.message}`;
+	if (typeof entry.duration === "number") {
+		line += chalk.dim(` (${entry.duration}ms)`);
+	}
+	if (entry.data && Object.keys(entry.data).length > 0) {
+		line += chalk.dim(` ${JSON.stringify(entry.data)}`);
+	}
+	if (entry.error) {
+		line += `\n  ${chalk.red(entry.error.name)}: ${entry.error.message}`;
+	}
+	return line;
+}
+
+function isInteractiveTerminal(): boolean {
+	return process.stdin.isTTY === true && process.stdout.isTTY === true;
+}
+
+async function confirmRestartSync(): Promise<boolean> {
+	return confirm({
+		message: "Run `signet sync` now?",
+		default: false,
+	});
+}
+
+function readLogPayload(value: unknown): LogPayload | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	if (!Array.isArray(value.logs) || typeof value.count !== "number") {
+		return null;
+	}
+	const logs = value.logs.flatMap((entry) => {
+		const log = readLogEntry(entry);
+		return log === null ? [] : [log];
+	});
+	return { logs, count: value.count };
+}
+
+function readLogLimit(value: string | undefined): number {
+	if (!value) {
+		return 50;
+	}
+
+	const parsed = Number.parseInt(value, 10);
+	if (!Number.isInteger(parsed) || parsed <= 0) {
+		return 50;
+	}
+
+	return parsed;
+}
+
+function readLogEntry(value: unknown): LogEntry | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+	const timestamp = readString(value.timestamp);
+	const category = readString(value.category);
+	const message = readString(value.message);
+	const level = readLevel(value.level);
+	if (!timestamp || !category || !message || !level) {
+		return null;
+	}
+
+	const data = isRecord(value.data) ? value.data : undefined;
+	const duration = typeof value.duration === "number" ? value.duration : undefined;
+	const error = readLogError(value.error);
+	return { timestamp, level, category, message, data, duration, error };
+}
+
+function readLogError(value: unknown): LogEntry["error"] | undefined {
+	if (!isRecord(value)) {
+		return undefined;
+	}
+	const name = readString(value.name);
+	const message = readString(value.message);
+	if (!name || !message) {
+		return undefined;
+	}
+	const stack = readString(value.stack) ?? undefined;
+	return { name, message, stack };
+}
+
+function readLevel(value: unknown): LogEntry["level"] | null {
+	switch (value) {
+		case "debug":
+		case "info":
+		case "warn":
+		case "error":
+			return value;
+		default:
+			return null;
+	}
+}
+
+function readString(value: unknown): string | null {
+	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
 }
 
 export async function showLogs(options: LogOptions, deps: Deps): Promise<void> {
@@ -239,6 +414,9 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 	const basePath = readPath(options, deps);
 	const running = await deps.isDaemonRunning();
 	const stale = running ? false : await deps.hasDaemonProcess(basePath);
+	// Under launchd KeepAlive the daemon respawns on exit, so an unhealthy
+	// daemon still counts as managed: `stop` must boot the job out or the
+	// reported "stop" is silently undone moments later (#1074).
 	const launchdManaged = running ? false : await (deps.isLaunchdDaemonLoaded?.(basePath) ?? Promise.resolve(false));
 	if (!running && !stale && !launchdManaged) {
 		console.log(chalk.yellow("  Daemon is not running"));
@@ -554,251 +732,6 @@ async function togglePipelinePause(options: PathOptions, deps: Deps, paused: boo
 		spinner.fail(paused ? "Failed to pause extraction pipeline" : "Failed to resume extraction pipeline");
 		console.log(chalk.red(`  ${readErr(err)}`));
 	}
-}
-
-function printMigrationErrors(errors: readonly string[]): void {
-	for (const err of errors) {
-		console.log(chalk.red(`  Error: ${err}`));
-	}
-}
-
-async function fetchApiLogs(limit: number, options: LogOptions, deps: Deps): Promise<LogPayload | null> {
-	try {
-		const params = new URLSearchParams({ limit: String(limit) });
-		if (options.level) {
-			params.set("level", options.level);
-		}
-		if (options.category) {
-			params.set("category", options.category);
-		}
-
-		const fetchImpl = deps.fetch ?? fetch;
-		const res = await fetchImpl(`http://127.0.0.1:${deps.defaultPort}/api/logs?${params}`);
-		const json = await res.json();
-		return readLogPayload(json);
-	} catch {
-		return null;
-	}
-}
-
-function printApiLogs(payload: LogPayload): void {
-	if (payload.logs.length === 0) {
-		console.log(chalk.dim("  No logs found"));
-		return;
-	}
-
-	console.log(chalk.bold(`  Recent Logs (${payload.count})\n`));
-	for (const entry of payload.logs) {
-		console.log(`  ${formatLogEntry(entry)}`);
-	}
-}
-
-async function followLogs(port: number, fetchImpl: FetchLike = fetch): Promise<void> {
-	console.log();
-	console.log(chalk.dim("  Streaming logs... (Ctrl+C to stop)\n"));
-
-	try {
-		const res = await fetchImpl(`http://127.0.0.1:${port}/api/logs/stream`, {
-			headers: { Accept: "text/event-stream" },
-		});
-		if (!res.ok || !res.body) {
-			console.log(chalk.red("  Stream disconnected"));
-			return;
-		}
-
-		const reader = res.body.getReader();
-		const decoder = new TextDecoder();
-		let buffer = "";
-
-		while (true) {
-			const { done, value } = await reader.read();
-			if (done) break;
-			buffer += decoder.decode(value, { stream: true });
-			buffer = printCompleteLogEvents(buffer);
-		}
-
-		buffer += decoder.decode();
-		printCompleteLogEvents(`${buffer}\n\n`);
-	} catch {
-		console.log(chalk.red("  Stream disconnected"));
-	}
-}
-
-function printCompleteLogEvents(buffer: string): string {
-	const normalized = buffer.replace(/\r\n/g, "\n");
-	let remaining = normalized;
-	let boundary = remaining.indexOf("\n\n");
-	while (boundary !== -1) {
-		const eventBlock = remaining.slice(0, boundary);
-		printLogEventBlock(eventBlock);
-		remaining = remaining.slice(boundary + 2);
-		boundary = remaining.indexOf("\n\n");
-	}
-	return remaining;
-}
-
-function printLogEventBlock(eventBlock: string): void {
-	const data = eventBlock
-		.split("\n")
-		.filter((line) => line.startsWith("data:"))
-		.map((line) => line.slice(5).trimStart())
-		.join("\n");
-	if (!data) return;
-
-	try {
-		const json = JSON.parse(data);
-		const entry = readLogEntry(json);
-		if (entry === null || entry.category === "connected") {
-			return;
-		}
-		console.log(`  ${formatLogEntry(entry)}`);
-	} catch {}
-}
-
-function readFileLogs(basePath: string, limit: number, options: LogOptions): void {
-	const logDir = join(basePath, ".daemon", "logs");
-	const logFile = join(logDir, `signet-${new Date().toISOString().split("T")[0]}.log`);
-
-	if (!existsSync(logFile)) {
-		console.log(chalk.dim("  No log files found"));
-		return;
-	}
-
-	const content = readFileSync(logFile, "utf-8");
-	const lines = content.trim().split("\n").slice(-limit);
-	for (const line of lines) {
-		try {
-			const json = JSON.parse(line);
-			const entry = readLogEntry(json);
-			if (entry === null) {
-				console.log(`  ${line}`);
-				continue;
-			}
-			if (options.level && entry.level !== options.level) {
-				continue;
-			}
-			if (options.category && entry.category !== options.category) {
-				continue;
-			}
-			console.log(`  ${formatLogEntry(entry)}`);
-		} catch {
-			console.log(`  ${line}`);
-		}
-	}
-}
-
-function formatLogEntry(entry: LogEntry): string {
-	const colors = {
-		debug: chalk.gray,
-		info: chalk.cyan,
-		warn: chalk.yellow,
-		error: chalk.red,
-	};
-	const paint = colors[entry.level] ?? chalk.white;
-	const time = entry.timestamp.split("T")[1]?.slice(0, 8) || "";
-	const level = entry.level.toUpperCase().padEnd(5);
-	const category = `[${entry.category}]`.padEnd(12);
-
-	let line = `${chalk.dim(time)} ${paint(level)} ${category} ${entry.message}`;
-	if (typeof entry.duration === "number") {
-		line += chalk.dim(` (${entry.duration}ms)`);
-	}
-	if (entry.data && Object.keys(entry.data).length > 0) {
-		line += chalk.dim(` ${JSON.stringify(entry.data)}`);
-	}
-	if (entry.error) {
-		line += `\n  ${chalk.red(entry.error.name)}: ${entry.error.message}`;
-	}
-	return line;
-}
-
-function isInteractiveTerminal(): boolean {
-	return process.stdin.isTTY === true && process.stdout.isTTY === true;
-}
-
-async function confirmRestartSync(): Promise<boolean> {
-	return confirm({
-		message: "Run `signet sync` now?",
-		default: false,
-	});
-}
-
-function readLogPayload(value: unknown): LogPayload | null {
-	if (!isRecord(value)) {
-		return null;
-	}
-	if (!Array.isArray(value.logs) || typeof value.count !== "number") {
-		return null;
-	}
-	const logs = value.logs.flatMap((entry) => {
-		const log = readLogEntry(entry);
-		return log === null ? [] : [log];
-	});
-	return { logs, count: value.count };
-}
-
-function readLogLimit(value: string | undefined): number {
-	if (!value) {
-		return 50;
-	}
-
-	const parsed = Number.parseInt(value, 10);
-	if (!Number.isInteger(parsed) || parsed <= 0) {
-		return 50;
-	}
-
-	return parsed;
-}
-
-function readLogEntry(value: unknown): LogEntry | null {
-	if (!isRecord(value)) {
-		return null;
-	}
-	const timestamp = readString(value.timestamp);
-	const category = readString(value.category);
-	const message = readString(value.message);
-	const level = readLevel(value.level);
-	if (!timestamp || !category || !message || !level) {
-		return null;
-	}
-
-	const data = isRecord(value.data) ? value.data : undefined;
-	const duration = typeof value.duration === "number" ? value.duration : undefined;
-	const error = readLogError(value.error);
-	return { timestamp, level, category, message, data, duration, error };
-}
-
-function readLogError(value: unknown): LogEntry["error"] | undefined {
-	if (!isRecord(value)) {
-		return undefined;
-	}
-	const name = readString(value.name);
-	const message = readString(value.message);
-	if (!name || !message) {
-		return undefined;
-	}
-	const stack = readString(value.stack) ?? undefined;
-	return { name, message, stack };
-}
-
-function readLevel(value: unknown): LogEntry["level"] | null {
-	switch (value) {
-		case "debug":
-		case "info":
-		case "warn":
-		case "error":
-			return value;
-		default:
-			return null;
-	}
-}
-
-function readString(value: unknown): string | null {
-	return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
 }
 
 function readErr(err: unknown): string {
