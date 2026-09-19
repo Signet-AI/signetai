@@ -15,6 +15,27 @@ use std::{convert::Infallible, time::Duration};
 const MAX_JOB_KIND_BYTES: usize = 64;
 const MAX_JOB_PAYLOAD_BYTES: usize = 1_048_576;
 const MAX_HEADER_BYTES: usize = 256;
+const MAX_DEADLINE_BYTES: usize = 64;
+
+fn deadline(value: Option<String>) -> Result<Option<String>, ApiError> {
+    let Some(value) = value else { return Ok(None) };
+    let value = value.trim().to_owned();
+    let bytes = value.as_bytes();
+    if value.len() > MAX_DEADLINE_BYTES
+        || bytes.len() < 20
+        || bytes.get(4) != Some(&b'-')
+        || bytes.get(7) != Some(&b'-')
+        || bytes.get(10) != Some(&b'T')
+        || bytes.get(13) != Some(&b':')
+        || bytes.get(16) != Some(&b':')
+        || !(value.ends_with('Z') || bytes.get(19) == Some(&b'+') || bytes.get(19) == Some(&b'-'))
+    {
+        return Err(ApiError::bad_request(
+            "deadline_at must be RFC3339 and at most 64 bytes",
+        ));
+    }
+    Ok(Some(value))
+}
 
 fn workspace(headers: &HeaderMap) -> Result<String, ApiError> {
     let value = headers
@@ -53,7 +74,7 @@ pub struct JobRequest {
 #[derive(Deserialize)]
 pub struct ListQuery {
     pub limit: Option<usize>,
-    pub cursor: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 pub async fn submit(
@@ -81,7 +102,7 @@ pub async fn submit(
                 workspace_id,
                 kind: body.kind,
                 payload: body.payload,
-                deadline_at: body.deadline_at,
+                deadline_at: deadline(body.deadline_at)?,
             },
         )
         .await?,
@@ -140,6 +161,7 @@ pub async fn list(
             Operation::JobList {
                 agent_id,
                 workspace_id,
+                cursor: query.cursor,
                 limit: query.limit.unwrap_or(50).min(100),
             },
         )
@@ -160,7 +182,12 @@ pub async fn events(
             agent_id,
             workspace_id,
             id,
-            cursor: query.cursor.unwrap_or(0),
+            cursor: query
+                .cursor
+                .as_deref()
+                .unwrap_or("0")
+                .parse()
+                .map_err(|_| ApiError::bad_request("cursor must be an integer"))?,
             limit: query.limit.unwrap_or(100).min(1000),
         },
     )

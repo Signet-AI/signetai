@@ -147,7 +147,7 @@ impl Core {
         self.call(|connection| {
             migrate(connection)?;
             let tx = connection.transaction()?;
-            tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) SELECT id,agent_id,'recovered','{\"from\":\"running\",\"to\":\"queued\"}',datetime('now') FROM jobs WHERE state='running'", [])?;
+            tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) SELECT j.id,j.agent_id,'recovered','{\"from\":\"running\",\"to\":\"queued\"}',datetime('now') FROM jobs j WHERE j.state='running' AND NOT EXISTS (SELECT 1 FROM job_events e WHERE e.job_id=j.id AND e.event='recovered')", [])?;
             tx.execute("UPDATE jobs SET state='queued', updated_at=datetime('now') WHERE state='running'", [])?;
             tx.commit()?;
             Ok(())
@@ -467,6 +467,10 @@ fn execute_operation(
             deadline_at,
         } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let deadline_at = deadline_at
+                .map(|value| validate_deadline(&value))
+                .transpose()?;
             if kind.trim().is_empty() || kind.len() > 64 {
                 return Err(CoreError::InvalidInput(
                     "job kind must be 1-64 bytes".into(),
@@ -517,7 +521,11 @@ fn execute_operation(
             } else {
                 state.as_str()
             };
-            tx.execute("INSERT INTO job_cancellations(job_id,agent_id,actor,reason,provenance,created_at) VALUES(?,?,?,?,?,datetime('now'))", params![id,agent_id,actor,reason,"api"])?;
+            let actor = bounded_text(&actor, "actor", 256)?;
+            let reason = bounded_text(&reason, "reason", 256)?;
+            if state != "cancelled" {
+                tx.execute("INSERT INTO job_cancellations(job_id,agent_id,actor,reason,provenance,created_at) VALUES(?,?,?,?,?,datetime('now'))", params![id,agent_id,actor,reason,"api"])?;
+            }
             tx.commit()?;
             Ok(
                 json!({"id":id,"state":final_state,"cancellation":{"actor":actor,"reason":reason,"provenance":"api"}}),
@@ -526,11 +534,18 @@ fn execute_operation(
         Operation::JobList {
             agent_id,
             workspace_id,
+            cursor,
             limit,
         } => {
-            let mut s=connection.prepare("SELECT json_object('id',id,'agentId',agent_id,'workspaceId',workspace_id,'kind',kind,'state',state,'error',error,'createdAt',created_at,'updatedAt',updated_at) FROM jobs WHERE agent_id=? AND workspace_id=? ORDER BY id DESC LIMIT ?")?;
+            let mut s=connection.prepare("SELECT json_object('id',id,'agentId',agent_id,'workspaceId',workspace_id,'kind',kind,'state',state,'error',error,'createdAt',created_at,'updatedAt',updated_at) FROM jobs WHERE agent_id=? AND workspace_id=? AND (? IS NULL OR id < ?) ORDER BY id DESC LIMIT ?")?;
             let rows = s.query_map(
-                params![agent_id, workspace_id, limit.clamp(1, 100) as i64],
+                params![
+                    agent_id,
+                    workspace_id,
+                    cursor,
+                    cursor,
+                    limit.clamp(1, 100) as i64
+                ],
                 |r| r.get::<_, String>(0),
             )?;
             let values = rows
@@ -538,7 +553,8 @@ fn execute_operation(
                 .into_iter()
                 .map(|v| serde_json::from_str(&v))
                 .collect::<Result<Vec<Value>, _>>()?;
-            Ok(json!(values))
+            let next_cursor = values.last().and_then(|value| value.get("id")).cloned();
+            Ok(json!({"items":values,"cursor":next_cursor}))
         }
         Operation::JobEvents {
             agent_id,
@@ -1839,6 +1855,7 @@ pub enum Operation {
     JobList {
         agent_id: String,
         workspace_id: String,
+        cursor: Option<String>,
         limit: usize,
     },
     JobEvents {
@@ -2046,6 +2063,24 @@ fn bounded_text(value: &str, label: &str, max: usize) -> Result<String, CoreErro
         )));
     }
     Ok(value.to_owned())
+}
+
+fn validate_deadline(value: &str) -> Result<String, CoreError> {
+    let value = bounded_text(value, "deadline_at", 64)?;
+    let bytes = value.as_bytes();
+    let valid_shape = bytes.len() >= 20
+        && bytes[4] == b'-'
+        && bytes[7] == b'-'
+        && bytes[10] == b'T'
+        && bytes[13] == b':'
+        && bytes[16] == b':'
+        && (bytes.ends_with(b"Z") || bytes[19] == b'+' || bytes[19] == b'-');
+    if !valid_shape {
+        return Err(CoreError::InvalidInput(
+            "deadline_at must be RFC3339".into(),
+        ));
+    }
+    Ok(value)
 }
 
 fn bounded_json(value: &Value) -> Result<String, CoreError> {
