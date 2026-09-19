@@ -545,7 +545,20 @@ fn execute_operation(
             let mut hasher = Sha256::new();
             hasher.update(content.as_bytes());
             let hash = format!("{:x}", hasher.finalize());
-            connection.execute("INSERT INTO session_transcripts (session_key,agent_id,harness,project,content,content_hash,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(agent_id,session_key) DO UPDATE SET content=excluded.content,content_hash=excluded.content_hash,updated_at=datetime('now')", params![session_key,agent_id,harness,project,content,hash,idempotency_key])?;
+            let transaction = connection.transaction()?;
+            if let Some((session_key, content_hash)) = transaction
+                .query_row(
+                    "SELECT session_key,content_hash FROM session_transcripts WHERE agent_id=? AND idempotency_key=?",
+                    params![agent_id, idempotency_key],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+                )
+                .optional()?
+            {
+                transaction.commit()?;
+                return Ok(json!({"sessionKey":session_key,"agentId":agent_id,"contentHash":content_hash,"state":"stored"}));
+            }
+            transaction.execute("INSERT INTO session_transcripts (session_key,agent_id,harness,project,content,content_hash,idempotency_key,created_at,updated_at) VALUES (?,?,?,?,?,?,?,datetime('now'),datetime('now')) ON CONFLICT(agent_id,session_key) DO UPDATE SET content=excluded.content,content_hash=excluded.content_hash,updated_at=datetime('now')", params![session_key,agent_id,harness,project,content,hash,idempotency_key])?;
+            transaction.commit()?;
             Ok(
                 json!({"sessionKey":session_key,"agentId":agent_id,"contentHash":hash,"state":"stored"}),
             )
@@ -739,8 +752,13 @@ fn execute_operation(
                 .collect::<Result<Vec<Value>, _>>()?;
             Ok(json!({"agentId":agent_id,"passes":values}))
         }
-        Operation::DreamTrigger { agent_id, payload } => {
+        Operation::DreamTrigger {
+            agent_id,
+            workspace_id,
+            payload,
+        } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
             let payload = bounded_json(&payload)?;
             let paused: i64 = connection
                 .query_row(
@@ -763,10 +781,12 @@ fn execute_operation(
             }
             let id = uuid::Uuid::new_v4().to_string();
             let tx = connection.transaction()?;
-            tx.execute("INSERT INTO jobs(id,agent_id,kind,state,payload,created_at,updated_at) VALUES(?,?, 'dream.trigger','queued',?,datetime('now'),datetime('now'))", params![id,agent_id,payload])?;
+            tx.execute("INSERT INTO jobs(id,agent_id,workspace_id,kind,state,payload,created_at,updated_at) VALUES(?,?,?, 'dream.trigger','queued',?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,payload])?;
             tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?, 'queued','{}',datetime('now'))", params![id,agent_id])?;
             tx.commit()?;
-            Ok(json!({"id":id,"agentId":agent_id,"kind":"dream.trigger","state":"queued"}))
+            Ok(
+                json!({"id":id,"agentId":agent_id,"workspaceId":workspace_id,"kind":"dream.trigger","state":"queued"}),
+            )
         }
         Operation::AuthKeyCreate {
             agent_id,
@@ -2027,6 +2047,7 @@ pub enum Operation {
     },
     DreamTrigger {
         agent_id: String,
+        workspace_id: String,
         payload: Value,
     },
     OntologyList {

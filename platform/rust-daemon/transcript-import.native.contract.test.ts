@@ -89,7 +89,9 @@ test("native transcript and source-import HTTP contract", async () => {
 		}),
 	});
 	expect(repeat.status).toBe(200);
-	expect(await body(repeat)).toEqual(first);
+	const repeated = await body(repeat);
+	expect(repeated).toEqual(first);
+	expect(repeated.contentHash).toBe(first.contentHash);
 	const listed = await body(await fetch(`${daemon.origin}/api/transcripts`, { headers: h }));
 	expect(listed.transcripts).toEqual(
 		expect.arrayContaining([expect.objectContaining({ sessionKey: "session-utf8", content: "héllo 🌲" })]),

@@ -86,6 +86,13 @@ pub(crate) async fn trigger(
     body: Option<Json<Value>>,
 ) -> Result<Json<Value>, ApiError> {
     let payload = body.map(|Json(value)| value).unwrap_or_else(|| json!({}));
+    let workspace_id = headers
+        .get("x-workspace-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("default")
+        .to_owned();
     if serde_json::to_vec(&payload)
         .map_err(|_| ApiError::bad_request("invalid payload"))?
         .len()
@@ -98,6 +105,7 @@ pub(crate) async fn trigger(
             &state,
             Operation::DreamTrigger {
                 agent_id: agent(&headers, None, None)?,
+                workspace_id,
                 payload,
             },
         )

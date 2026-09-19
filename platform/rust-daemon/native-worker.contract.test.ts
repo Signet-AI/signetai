@@ -32,7 +32,11 @@ it("runs DreamTrigger jobs through durable worker failure without provider", asy
 			await Bun.sleep(25);
 		}
 		expect(ready, `daemon readiness failed for ${bin}: ${lastReadyError}`).toBe(true);
-		const headers = { "content-type": "application/json", "x-signet-agent-id": "worker-contract" };
+		const headers = {
+			"content-type": "application/json",
+			"x-signet-agent-id": "worker-contract",
+			"x-workspace-id": "worker-workspace",
+		};
 		const response = await fetch(`${origin}/api/dream/trigger`, {
 			method: "POST",
 			headers,
@@ -41,6 +45,7 @@ it("runs DreamTrigger jobs through durable worker failure without provider", asy
 		expect(response.ok).toBe(true);
 		const created = (await response.json()) as { id: string; state: string };
 		expect(created.state).toBe("queued");
+		expect((created as { workspaceId?: string }).workspaceId).toBe("worker-workspace");
 		let terminal: Record<string, unknown> | undefined;
 		for (let i = 0; i < 80; i++) {
 			const current = await fetch(`${origin}/api/jobs/${created.id}`, { headers });
@@ -54,6 +59,7 @@ it("runs DreamTrigger jobs through durable worker failure without provider", asy
 			await Bun.sleep(25);
 		}
 		expect(terminal?.state).toBe("failed");
+		expect(terminal?.workspaceId).toBe("worker-workspace");
 		expect(String(terminal?.error)).toContain("unsupported external provider");
 	} finally {
 		child.kill();
