@@ -2,6 +2,8 @@ import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type SpawnSyncRetur
 import { createHash } from "node:crypto";
 import {
 	appendFileSync,
+	accessSync,
+	constants,
 	closeSync,
 	existsSync,
 	mkdirSync,
@@ -216,6 +218,26 @@ export const DAEMON_JS_WORKER_FILES = [
 const DAEMON_JS_REQUIRED_ASSETS = ["tokenizer WASM"] as const;
 const DAEMON_JS_EXTERNAL_DEPENDENCIES = ["@firecrawl/anydoc"] as const;
 
+const DAEMON_BINARY_ENV = "SIGNET_DAEMON_PATH" as const;
+function isNativeExecutable(path: string): boolean {
+	try {
+		accessSync(path, constants.X_OK);
+		return statSync(path).isFile() && !/\.(?:js|ts|mjs|cjs)$/i.test(path);
+	} catch {
+		return false;
+	}
+}
+export function packagedDaemonPath(env: NodeJS.ProcessEnv = process.env): string {
+	const name = process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon";
+	const target = `${process.platform}-${process.arch}`;
+	return (
+		env[DAEMON_BINARY_ENV]?.trim() ||
+		(env.SIGNET_DIR
+			? join(env.SIGNET_DIR, "runtime", "rust-daemon", target, name)
+			: join(pkgDir, "..", "..", "runtime", "rust-daemon", target, name))
+	);
+}
+
 function currentNativeExecutablePath(execPath: string = process.execPath): string | null {
 	const name = basename(execPath).toLowerCase();
 	if (name === "bun" || name === "bun.exe" || name === "node" || name === "node.exe") return null;
@@ -227,22 +249,10 @@ function pidFile(agentsDir: string): string {
 }
 
 export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
-	const currentNativeExecutable = currentNativeExecutablePath();
-	const bundledJsDaemon = env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null;
-	const bundledRuntimePaths = [bundledJsDaemon];
-	return [
-		currentNativeExecutable,
-		...bundledRuntimePaths,
-		join(__dirname, "daemon.js"),
-		join(cliDir, "daemon.js"),
-		join(pkgDir, "..", "daemon", "dist", "daemon.js"),
-		join(pkgDir, "..", "daemon", "src", "daemon.ts"),
-	]
-		.filter((path): path is string => path !== null)
-		.filter((path, index, items) => items.indexOf(path) === index);
+	return [packagedDaemonPath(env)];
 }
 export function resolveDaemonPath(env: NodeJS.ProcessEnv = process.env): string | null {
-	return resolveDaemonPaths(env).find((path) => existsSync(path)) ?? null;
+	return resolveDaemonPaths(env).find(isNativeExecutable) ?? null;
 }
 
 export interface DaemonJsBundleInspection {
@@ -1395,16 +1405,10 @@ export function resolveDaemonLaunchCommand(
 	runtime?: DaemonRuntime,
 ): string[] {
 	const selectedRuntime = runtime ?? resolveDaemonRuntime(undefined, env);
-	if (!isJavaScriptDaemonPath(daemonPath)) {
-		if (selectedRuntime === "bun-js") {
-			throw new Error("The bun-js daemon runtime requires a JavaScript daemon bundle.");
-		}
-		return [daemonPath];
-	}
-	if (selectedRuntime === "bun-js" && !daemonPath.toLowerCase().endsWith(".js")) {
-		throw new Error("The bun-js daemon runtime does not launch TypeScript source. Build @signet/daemon first.");
-	}
-	return [resolveDaemonRuntimeCommand(env, process.execPath, env.PATH, selectedRuntime), daemonPath];
+	if (selectedRuntime !== "compiled" || isJavaScriptDaemonPath(daemonPath))
+		throw new Error("Bun/Node daemon launch is unsupported; use a native platform/rust-daemon executable.");
+	if (!isNativeExecutable(daemonPath)) throw new Error(`Selected daemon is missing or not executable: ${daemonPath}`);
+	return [daemonPath];
 }
 
 export function macOSLaunchAgentAttributionNotice(

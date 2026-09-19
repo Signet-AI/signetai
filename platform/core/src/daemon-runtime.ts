@@ -1,6 +1,7 @@
 export const DAEMON_RUNTIME_ENV = "SIGNET_DAEMON_RUNTIME" as const;
 
 export const DAEMON_RUNTIME_VALUES = ["compiled", "bun-js"] as const;
+// bun-js is accepted only for parsing old configuration; spawning it is forbidden.
 
 export type DaemonRuntime = (typeof DAEMON_RUNTIME_VALUES)[number];
 

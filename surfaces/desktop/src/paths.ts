@@ -6,7 +6,6 @@ import { app } from "electron";
 
 const distDir = dirname(fileURLToPath(import.meta.url));
 const appRoot = normalize(resolve(distDir, ".."));
-const repoRoot = normalize(resolve(appRoot, "../.."));
 
 interface BunPathInput {
 	readonly bundled: string;
@@ -60,13 +59,12 @@ export function bunPath(): string {
 }
 
 export function daemonRoot(): string {
-	const bundled = appResourcePath("daemon");
-	if (existsSync(join(bundled, "dist", "daemon.js"))) return bundled;
-	return assertSafePath(repoRoot, resolve(repoRoot, "platform/daemon"));
+	return appResourcePath("rust-daemon");
 }
 
 export function daemonEntry(): string {
-	return join(daemonRoot(), "dist", "daemon.js");
+	const executable = process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon";
+	return join(daemonRoot(), `${process.platform}-${process.arch}`, executable);
 }
 
 export function dashboardRoot(): string {

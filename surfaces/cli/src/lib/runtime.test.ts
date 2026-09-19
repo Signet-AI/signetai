@@ -44,9 +44,10 @@ afterEach(() => {
 });
 
 describe("resolveDaemonPaths", () => {
-	it("keeps the JavaScript daemon bundle as the default when SIGNET_DIR is set", () => {
+	it("selects only the fresh native daemon path", () => {
 		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet" });
-		expect(paths[0]).toBe(join("/opt/signet", "runtime", "daemon-js", "daemon.js"));
+		expect(paths[0]).toContain(join("/opt/signet", "runtime", "rust-daemon"));
+		expect(paths[0]).not.toMatch(/\.js$/);
 	});
 });
 
