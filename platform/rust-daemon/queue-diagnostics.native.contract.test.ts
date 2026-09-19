@@ -1,14 +1,28 @@
 import { afterEach, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createHmac, randomBytes } from "node:crypto";
 import { join } from "node:path";
+import { createServer } from "node:net";
 
-// biome-ignore lint/suspicious/noUndeclaredEnvVars: contract accepts an explicit binary override
 const bin =
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: contract accepts an explicit binary override
 	process.env.SIGNET_RUST_DAEMON_BIN ?? join(process.cwd(), "platform/rust-daemon/target/debug/signet-daemon");
 const children: Bun.Subprocess[] = [];
+const stderrReads = new WeakMap<Bun.Subprocess, Promise<string>>();
+const origins = new WeakMap<Bun.Subprocess, string>();
+const stopped = new WeakSet<Bun.Subprocess>();
 const dirs: string[] = [];
-let port = 39100;
+async function availablePort() {
+	return await new Promise<number>((resolve, reject) => {
+		const server = createServer();
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			if (!address || typeof address === "string") return reject(Error("failed to allocate a port"));
+			server.close((error) => (error ? reject(error) : resolve(address.port)));
+		});
+	});
+}
 const b64 = (v: string) => Buffer.from(v).toString("base64url");
 function token(secret: Buffer, role: string, agent: string, workspace: string) {
 	const p = b64(
@@ -26,9 +40,11 @@ function token(secret: Buffer, role: string, agent: string, workspace: string) {
 async function start(dir = mkdtempSync(`/mnt/work/hermes-scratch/queue-${Date.now()}-`)) {
 	dirs.push(dir);
 	mkdirSync(join(dir, ".daemon"), { recursive: true });
-	const secret = randomBytes(32);
-	writeFileSync(join(dir, ".daemon/auth-secret"), secret);
-	const p = port++;
+	const secretPath = join(dir, ".daemon/auth-secret");
+	const existingSecret = existsSync(secretPath) ? readFileSync(secretPath) : undefined;
+	const secret = existingSecret?.length === 32 ? existingSecret : randomBytes(32);
+	writeFileSync(secretPath, secret);
+	const p = await availablePort();
 	const child = Bun.spawn([bin], {
 		env: { SIGNET_PATH: dir, SIGNET_BIND: "127.0.0.1", SIGNET_PORT: `${p}`, SIGNET_API_KEY: "", SIGNET_TOKEN: "" },
 		stdout: "ignore",
@@ -36,6 +52,8 @@ async function start(dir = mkdtempSync(`/mnt/work/hermes-scratch/queue-${Date.no
 	});
 	children.push(child);
 	const origin = `http://127.0.0.1:${p}`;
+	origins.set(child, origin);
+	stderrReads.set(child, new Response(child.stderr).text());
 	for (let i = 0; i < 200; i++) {
 		try {
 			if ((await fetch(`${origin}/health/ready`)).ok) return { origin, child, secret, dir };
@@ -45,8 +63,26 @@ async function start(dir = mkdtempSync(`/mnt/work/hermes-scratch/queue-${Date.no
 	throw Error("readiness timeout");
 }
 async function stop(child: Bun.Subprocess) {
-	child.kill();
-	await child.exited;
+	if (stopped.has(child)) return;
+	stopped.add(child);
+	child.kill("SIGTERM");
+	const stderrRead = stderrReads.get(child);
+	if (!stderrRead) throw Error("missing daemon stderr capture");
+	const [exitCode, stderr] = await Promise.all([child.exited, stderrRead]);
+	if (exitCode !== 0 && exitCode !== null && exitCode !== 143) throw Error(`daemon exited unexpectedly: ${exitCode}`);
+	expect(stderr).not.toContain("panicked at");
+	const origin = origins.get(child);
+	if (origin) {
+		for (let i = 0; i < 40; i++) {
+			try {
+				await fetch(`${origin}/health/ready`);
+			} catch {
+				return;
+			}
+			await Bun.sleep(25);
+		}
+		throw Error("daemon listener remained after exit");
+	}
 }
 const h = (t: string, agent: string, workspace: string) => ({
 	authorization: `Bearer ${t}`,
@@ -64,7 +100,11 @@ it("serves scoped native queue diagnostics without legacy fallback or repair", a
 	const readonly = token(s.secret, "readonly", "agent-a", "workspace-a");
 	expect((await fetch(`${s.origin}/api/diagnostics/queue`)).status).toBe(401);
 	expect(
-		(await fetch(`${s.origin}/api/diagnostics/queue`, { headers: h(readonly, "agent-a", "workspace-a") })).status,
+		(
+			await fetch(`${s.origin}/api/diagnostics/queue?agentId=agent-a&workspaceId=workspace-a`, {
+				headers: h(readonly, "agent-a", "workspace-a"),
+			})
+		).status,
 	).toBe(403);
 	const job = await fetch(`${s.origin}/api/jobs`, {
 		method: "POST",
@@ -111,8 +151,10 @@ it("serves scoped native queue diagnostics without legacy fallback or repair", a
 	const dir = s.dir;
 	await stop(s.child);
 	const restarted = await start(dir);
+	const restartedAdmin = token(readFileSync(join(dir, ".daemon/auth-secret")), "admin", "agent-a", "workspace-a");
 	const persisted = await fetch(`${restarted.origin}/api/diagnostics/queue?agentId=agent-a&workspaceId=workspace-a`, {
-		headers: h(admin, "agent-a", "workspace-a"),
+		headers: h(restartedAdmin, "agent-a", "workspace-a"),
 	});
-	expect((await persisted.json()).jobs.count).toBe(1);
+	const persistedBody = await persisted.json();
+	expect(persistedBody.jobs.count).toBe(1);
 });
