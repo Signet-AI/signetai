@@ -1,4 +1,5 @@
 mod routes;
+mod worker;
 
 use axum::{
     body::Body,
@@ -762,6 +763,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(workspace.join("memory"))?;
     let owner = Arc::new(WorkspaceOwner::open(&database_path(&workspace), 256)?);
     owner.initialize()?;
+    let worker_stop = worker::start(owner.clone());
     let state = AppState {
         owner,
         started_at: now_seconds(),
@@ -807,6 +809,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown_signal())
         .await?;
+    worker_stop.abort();
     Ok(())
 }
 

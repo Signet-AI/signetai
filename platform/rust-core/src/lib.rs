@@ -382,6 +382,50 @@ impl Core {
     pub fn submit(&self, operation: Operation) -> Result<Value, CoreError> {
         self.call(move |connection| execute_operation(connection, operation))
     }
+
+    /// Claim exactly one executable job on the workspace-owner thread.
+    pub fn worker_claim(&self) -> Result<Option<WorkerJob>, CoreError> {
+        self.call(|connection| {
+            let tx = connection.transaction()?;
+            let row: Option<(String,String,String,String,String)> = tx.query_row(
+                "SELECT j.id,j.agent_id,COALESCE(j.workspace_id,'default'),j.kind,j.payload FROM jobs j LEFT JOIN pipeline_state p ON p.agent_id=j.agent_id WHERE j.state='queued' AND COALESCE(p.paused,0)=0 AND j.kind IN ('dream.trigger','dream.pass') ORDER BY j.created_at,j.id LIMIT 1",
+                [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+            let Some((id,agent_id,workspace_id,kind,payload)) = row else { tx.commit()?; return Ok(None); };
+            let changed = tx.execute("UPDATE jobs SET state='running',updated_at=datetime('now') WHERE id=? AND agent_id=? AND state='queued'", params![id,agent_id])?;
+            if changed == 0 { tx.commit()?; return Ok(None); }
+            tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?, 'running',?,datetime('now'))", params![id,agent_id,serde_json::to_string(&json!({"from":"queued","to":"running"}))?])?;
+            tx.commit()?;
+            Ok(Some(WorkerJob { id, agent_id, workspace_id, kind, payload }))
+        })
+    }
+
+    pub fn worker_finish(
+        &self,
+        job: WorkerJob,
+        state: &str,
+        error: Option<&str>,
+    ) -> Result<(), CoreError> {
+        let state = state.to_owned();
+        let error = error.map(str::to_owned);
+        self.call(move |connection| {
+            if !matches!(state.as_str(), "completed" | "failed") { return Err(CoreError::InvalidInput("invalid worker terminal state".into())); }
+            let tx = connection.transaction()?;
+            let changed = tx.execute("UPDATE jobs SET state=?,error=?,updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id=? AND state='running'", params![state, error, job.id, job.agent_id, job.workspace_id])?;
+            if changed == 0 { return Ok(()); }
+            tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?,?, ?,datetime('now'))", params![job.id,job.agent_id,state,serde_json::to_string(&json!({"error":error}))?])?;
+            tx.commit()?;
+            Ok(())
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct WorkerJob {
+    pub id: String,
+    pub agent_id: String,
+    pub workspace_id: String,
+    pub kind: String,
+    pub payload: String,
 }
 
 fn retrieval_tokens(query: &str) -> Vec<String> {
@@ -1476,6 +1520,7 @@ fn execute_operation(
         }
         Operation::KnowledgeEntityCreate {
             agent_id,
+            workspace_id,
             name,
             entity_type,
             metadata,
@@ -1492,14 +1537,16 @@ fn execute_operation(
         }
         Operation::KnowledgeEntityList {
             agent_id,
+            workspace_id,
             limit,
             offset,
         } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
             let limit = limit.clamp(1, 200) as i64;
             let offset = offset.min(100_000) as i64;
-            let mut s=connection.prepare("SELECT id,name,entity_type,metadata,created_at,updated_at FROM kg_entities WHERE agent_id=? ORDER BY rowid DESC LIMIT ? OFFSET ?")?;
-            let rows=s.query_map(params![agent_id,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(4)?,"updatedAt":r.get::<_,String>(5)?})))?;
+            let mut s=connection.prepare("SELECT id,name,entity_type,metadata,created_at,updated_at FROM kg_entities WHERE agent_id=? AND workspace_id=? AND deleted=0 ORDER BY name ASC,id ASC LIMIT ? OFFSET ?")?;
+            let rows=s.query_map(params![agent_id,workspace_id,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(4)?,"updatedAt":r.get::<_,String>(5)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?,"limit":limit,"offset":offset}))
         }
         Operation::KnowledgeRelationCreate {
@@ -1776,6 +1823,18 @@ impl WorkspaceOwner {
     pub async fn submit_async(&self, operation: Operation) -> Result<Value, CoreError> {
         self.0.submit_async(operation).await
     }
+
+    pub fn worker_claim(&self) -> Result<Option<WorkerJob>, CoreError> {
+        self.0.worker_claim()
+    }
+    pub fn finish_worker_job(
+        &self,
+        job: WorkerJob,
+        state: &str,
+        error: Option<&str>,
+    ) -> Result<(), CoreError> {
+        self.0.worker_finish(job, state, error)
+    }
 }
 
 pub type Value = serde_json::Value;
@@ -1991,6 +2050,7 @@ pub enum Operation {
     },
     KnowledgeEntityCreate {
         agent_id: String,
+        workspace_id: String,
         name: String,
         entity_type: String,
         metadata: Value,
@@ -2002,6 +2062,7 @@ pub enum Operation {
     },
     KnowledgeRelationCreate {
         agent_id: String,
+        workspace_id: String,
         from_id: String,
         to_id: String,
         relation: String,
@@ -2009,6 +2070,7 @@ pub enum Operation {
     },
     KnowledgeRelations {
         agent_id: String,
+        workspace_id: String,
         entity_id: String,
         limit: usize,
     },
