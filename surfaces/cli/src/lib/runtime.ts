@@ -259,12 +259,7 @@ function daemonPaths(): string[] {
 }
 
 function daemonMarks(paths: readonly string[]): string[] {
-	return [
-		...paths,
-		"/signetai/dist/daemon.js",
-		"/platform/daemon/dist/daemon.js",
-		"/platform/daemon/src/daemon.ts",
-	].filter((path, index, items) => items.indexOf(path) === index);
+	return [...paths].filter((path, index, items) => items.indexOf(path) === index);
 }
 
 export function sleep(ms: number): Promise<void> {

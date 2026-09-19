@@ -115,7 +115,7 @@ import {
 } from "./lib/runtime.js";
 import "./sqlite.js";
 
-const isDaemonEntrypoint = process.env.SIGNET_DAEMON_ENTRYPOINT === "1";
+// Template directory location (relative to built CLI)
 function getTemplatesDir() {
 	if (process.env.SIGNET_TEMPLATES_DIR && existsSync(process.env.SIGNET_TEMPLATES_DIR)) {
 		return process.env.SIGNET_TEMPLATES_DIR;
@@ -1145,8 +1145,4 @@ registerDefaultAction(program, {
 	signetBanner: () => signetBanner({ version: VERSION }),
 });
 
-if (isDaemonEntrypoint) {
-	await import("../../../platform/daemon/src/daemon.js");
-} else {
-	program.parse();
-}
+program.parse();

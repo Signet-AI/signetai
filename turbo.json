@@ -58,8 +58,7 @@
 				"@signet/connector-oh-my-pi#build",
 				"@signet/connector-openclaw#build",
 				"@signet/connector-opencode#build",
-				"@signet/connector-pi#build",
-				"@signet/daemon#build"
+				"@signet/connector-pi#build"
 			],
 			"outputs": ["dist/**", "build/**", "dashboard/**", "target/**", "!.svelte-kit/**"]
 		}
