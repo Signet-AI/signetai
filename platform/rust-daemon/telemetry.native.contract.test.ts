@@ -122,6 +122,13 @@ describe("fresh Rust telemetry boundary", () => {
 				})
 			).status,
 		).toBe(400);
+		const conflictingHeaders = await fetch(`${base()}/api/telemetry/events?agent=${agent}&workspace=${workspaceId}`, {
+			headers: {
+				...auth(authority),
+				"x-workspace-id": "other-workspace",
+			},
+		});
+		expect(conflictingHeaders.status).toBe(400);
 		const empty = await body(
 			await fetch(`${base()}/api/telemetry/events?agent=${agent}&workspace=${workspaceId}&cursor=${page.nextCursor}`, {
 				headers: auth(authority),
@@ -137,6 +144,13 @@ describe("fresh Rust telemetry boundary", () => {
 		expect(value.enabled).toBe(true);
 		expect(value.workspace).toBe(workspaceId);
 		expect((value.events as Record<string, unknown>).aggregation).toBe("unsupported");
+		expect(
+			(
+				await fetch(`${base()}/api/telemetry/health`, {
+					headers: { ...auth(authority), "x-workspace-id": "other-workspace" },
+				})
+			).status,
+		).toBe(400);
 		expect((await fetch(`${base()}/api/telemetry/export`, { headers: auth(authority) })).status).toBe(501);
 	});
 	test("preserves events across restart and cleans up the listener", async () => {

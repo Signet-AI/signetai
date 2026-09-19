@@ -80,11 +80,21 @@ fn check(authority: &Value, agent: &str, workspace: &str) -> Result<(), ApiError
 }
 
 fn telemetry_workspace(headers: &HeaderMap, requested: Option<&str>) -> Result<String, ApiError> {
-    let header = headers
+    let signed_header = headers
         .get("x-signet-workspace-id")
-        .or_else(|| headers.get("x-workspace-id"))
         .and_then(|value| value.to_str().ok())
         .and_then(non_empty);
+    let compatibility_header = headers
+        .get("x-workspace-id")
+        .and_then(|value| value.to_str().ok())
+        .and_then(non_empty);
+    if signed_header.is_some()
+        && compatibility_header.is_some()
+        && signed_header != compatibility_header
+    {
+        return Err(ApiError::bad_request("workspace headers disagree"));
+    }
+    let header = signed_header.or(compatibility_header);
     let requested = requested.and_then(non_empty);
     if header.is_some() && requested.is_some() && header != requested {
         return Err(ApiError::bad_request(
@@ -153,7 +163,7 @@ async fn health(
         .get("agentId")
         .and_then(Value::as_str)
         .unwrap_or("default");
-    let workspace = workspace_id(&headers, None);
+    let workspace = telemetry_workspace(&headers, None)?;
     check(&authority, agent, &workspace)?;
     let db = execute(&state, signet_core_native::Operation::Health).await?;
     Ok(Json(
