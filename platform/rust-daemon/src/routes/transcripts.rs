@@ -130,23 +130,6 @@ async fn list(
         .await?
     )))
 }
-fn scope(
-    headers: &HeaderMap,
-    path: &Path<String>,
-) -> Result<(String, String, String, i64), ApiError> {
-    let generation = headers
-        .get("upload-generation")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("0")
-        .parse()
-        .map_err(|_| ApiError::bad_request("invalid upload generation"))?;
-    Ok((
-        agent(headers, None, None)?,
-        path.0.clone(),
-        String::new(),
-        generation,
-    ))
-}
 async fn file_action(
     State(state): State<AppState>,
     headers: HeaderMap,
