@@ -63,7 +63,7 @@ const desktopHomepage =
 const openclawEntry = readFileSync(join(rootDir, "integrations/openclaw/memory-adapter/src/index.ts"), "utf8");
 
 function getBuildCommands(source: string): string[] {
-	const runBuildPattern = /^RUN (?:SIGNET_SKIP_NATIVE_BUILD=1 )?bun run /;
+	const runBuildPattern = /^RUN bun run /;
 
 	return source
 		.split("\n")
@@ -96,7 +96,10 @@ describe("Docker build pipeline regression guard", () => {
 
 		expect(dockerfile).toContain("RUN bun run build:native-cli");
 		expect(dockerfile).toContain("COPY --from=build /app/dist/native/signet ./bin/signet");
-		expect(dockerfile).toContain("ENV SIGNET_DAEMON_ENTRYPOINT=1");
+		expect(dockerfile).not.toContain("SIGNET_DAEMON_ENTRYPOINT");
+		expect(dockerfile).toContain(
+			"COPY --from=build /app/dist/signetai/runtime/rust-daemon ./dist/signetai/runtime/rust-daemon",
+		);
 		expect(dockerfile).toContain("COPY --from=build /app/dist/signetai/templates ./dist/signetai/templates");
 		expect(dockerfile).toContain("chmod +x ./bin/signet ");
 		expect(entrypoint).toContain("exec /app/bin/signet");
@@ -104,19 +107,25 @@ describe("Docker build pipeline regression guard", () => {
 		expect(entrypoint).not.toContain("exec bun /app/dist/signetai/dist/daemon.js");
 	});
 
-	it("keeps the shared prebuild sequence aligned before packaging signetai", () => {
-		expect(dockerfile).toContain("RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native");
+	it("builds and stages the fresh Rust daemon after the dashboard", () => {
+		expect(dockerfile).toContain("--no-install-recommends cargo rustc python3 make g++");
+		expect(dockerfile).toContain("RUN bun run build:native");
+		expect(dockerfile).not.toContain("SIGNET_SKIP_NATIVE_BUILD");
+		expect(dockerfile).not.toContain("ENV SIGNET_DAEMON_ENTRYPOINT=1");
+		expect(dockerfile.indexOf("RUN bun run build:dashboard")).toBeLessThan(
+			dockerfile.indexOf("RUN bun run build:native"),
+		);
 		expect(getBuildCommands(dockerfile)).toEqual([
 			"build:core",
 			"build:connector-base",
 			"build:opencode-plugin",
-			"build:native",
 			"build:oh-my-pi-extension",
 			"build:connector-oh-my-pi",
 			"build:pi-extension",
 			"build:connector-pi",
 			"build:deps",
 			"build:dashboard",
+			"build:native",
 			"build:signetai",
 			"build:native-cli",
 		]);

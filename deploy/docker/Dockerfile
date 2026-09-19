@@ -5,7 +5,7 @@ WORKDIR /app
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends python3 make g++ \
+	&& apt-get install -y --no-install-recommends cargo rustc python3 make g++ \
 	&& rm -rf /var/lib/apt/lists/*
 
 COPY package.json bun.lock bunfig.toml tsconfig.json biome.json ./
@@ -41,13 +41,13 @@ RUN set -eux; \
 RUN bun run build:core
 RUN bun run build:connector-base
 RUN bun run build:opencode-plugin
-RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
 RUN bun run build:oh-my-pi-extension
 RUN bun run build:connector-oh-my-pi
 RUN bun run build:pi-extension
 RUN bun run build:connector-pi
 RUN bun run build:deps
 RUN bun run build:dashboard
+RUN bun run build:native
 RUN bun run build:signetai
 RUN bun run build:native-cli
 
@@ -58,7 +58,6 @@ ENV NODE_ENV=production
 ENV SIGNET_PATH=/data/agents
 ENV SIGNET_BIND=0.0.0.0
 ENV SIGNET_PORT=3850
-ENV SIGNET_DAEMON_ENTRYPOINT=1
 ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so
 ENV PATH="/root/.bun/bin:${PATH}"
 
@@ -71,6 +70,7 @@ RUN bun install -g @openai/codex@${CODEX_CLI_VERSION}
 
 COPY --from=build /app/dist/native/signet ./bin/signet
 COPY --from=build /app/dist/docker-sqlite-vec ./sqlite-vec
+COPY --from=build /app/dist/signetai/runtime/rust-daemon ./dist/signetai/runtime/rust-daemon
 COPY --from=build /app/dist/signetai/templates ./dist/signetai/templates
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY deploy/docker/scripts ./deploy/docker/scripts
