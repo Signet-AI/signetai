@@ -22,8 +22,6 @@ import {
 	readManagedDaemonPid,
 	resolveDaemonProbeUrls,
 	resolveLaunchdDaemonMigration,
-	resolveDaemonChildInspector,
-	resolveDaemonInspectorForwarding,
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
 	stopManagedDaemonProcess,
@@ -72,42 +70,11 @@ describe("resolveDaemonLaunchCommand", () => {
 	});
 });
 
-describe("resolveDaemonChildInspector", () => {
-	it("does not forward the inspector setting from a Bun parent", () => {
-		expect(resolveDaemonChildInspector({ BUN_INSPECT: "127.0.0.1:9230" }, true)).toBeUndefined();
-	});
-
-	it("forwards the inspector setting from a non-Bun parent", () => {
-		expect(resolveDaemonChildInspector({ BUN_INSPECT: "127.0.0.1:9230" }, false)).toBe("127.0.0.1:9230");
-	});
-});
-
-describe("resolveDaemonInspectorForwarding", () => {
-	it("moves a Bun daemon inspector behind a discovery-compatible proxy", async () => {
-		const forwarding = await resolveDaemonInspectorForwarding({ BUN_INSPECT: "127.0.0.1:9230" }, true);
-
-		expect(forwarding.proxy).toEqual({
-			publicInspector: "127.0.0.1:9230",
-			targetInspector: expect.stringMatching(/^127\.0\.0\.1:\d+\/json$/),
-		});
-		expect(forwarding.childInspector).toBe(forwarding.proxy?.targetInspector);
-	});
-
-	it("uses the handed-off public inspector when the Bun parent released BUN_INSPECT", async () => {
-		const forwarding = await resolveDaemonInspectorForwarding(
-			{ BUN_INSPECT: "", SIGNET_INSPECTOR_PUBLIC: "127.0.0.1:9230" },
-			true,
-		);
-
-		expect(forwarding.proxy?.publicInspector).toBe("127.0.0.1:9230");
-	});
-});
-
 describe("buildLaunchdDaemonPlist", () => {
 	it("starts daemon as a macOS LaunchAgent with explicit env and log routing", () => {
 		if (process.platform !== "darwin") return;
 		const plist = buildLaunchdDaemonPlist({
-			daemonPath: "/opt/signet/dist/daemon.js",
+			daemonPath: "/opt/signet/bin/signet-daemon",
 			agentsDir: "/Users/user/.agents",
 			port: 3850,
 			host: "127.0.0.1",
@@ -119,8 +86,7 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<key>Label</key>");
 		expect(plist).toContain("<string>ai.signet.daemon.test</string>");
 		expect(plist).toContain("<key>ProgramArguments</key>");
-		expect(plist).toContain(`<string>${process.execPath}</string>`);
-		expect(plist).toContain("<string>/opt/signet/dist/daemon.js</string>");
+		expect(plist).toContain("<string>/opt/signet/bin/signet-daemon</string>");
 		expect(plist).not.toContain("/bin/bash");
 		expect(plist).not.toContain("exec");
 		expect(plist).toContain("<key>SIGNET_PORT</key>");
@@ -133,7 +99,6 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<string>/Users/user/.agents</string>");
 		expect(plist).toContain("<key>SIGNET_DAEMON_ENTRYPOINT</key>");
 		expect(plist).toMatch(/<key>SIGNET_DAEMON_SERVICE<\/key>\s*<string>launchd<\/string>/);
-		expect(plist).toMatch(/<key>BUN_INSPECT<\/key>\s*<string><\/string>/);
 		expect(plist).toContain("<string>1</string>");
 		expect(plist).toContain("<key>HOME</key>");
 		expect(plist).toContain("<key>RunAtLoad</key>");
