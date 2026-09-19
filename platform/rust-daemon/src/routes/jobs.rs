@@ -36,18 +36,25 @@ pub async fn submit(
     if body.kind.trim().is_empty() || body.kind.len() > MAX_JOB_KIND_BYTES {
         return Err(ApiError::bad_request("job kind must be 1-64 bytes"));
     }
-    if serde_json::to_vec(&body.payload).map_err(|_| ApiError::bad_request("invalid job payload"))?.len() > MAX_JOB_PAYLOAD_BYTES {
+    if serde_json::to_vec(&body.payload)
+        .map_err(|_| ApiError::bad_request("invalid job payload"))?
+        .len()
+        > MAX_JOB_PAYLOAD_BYTES
+    {
         return Err(ApiError::bad_request("job payload exceeds 1 MiB"));
     }
-    Ok(Json(execute(
-        &state,
-        Operation::JobSubmit {
-            agent_id,
-            kind: body.kind,
-            payload: body.payload,
-            deadline_at: body.deadline_at,
-        },
-    ).await?))
+    Ok(Json(
+        execute(
+            &state,
+            Operation::JobSubmit {
+                agent_id,
+                kind: body.kind,
+                payload: body.payload,
+                deadline_at: body.deadline_at,
+            },
+        )
+        .await?,
+    ))
 }
 pub async fn get(
     State(state): State<AppState>,
