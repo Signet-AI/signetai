@@ -1,8 +1,7 @@
 use crate::{agent, ApiError, AppState};
 use axum::{
     extract::{Path, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
@@ -14,7 +13,6 @@ use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
 
 const MAX_HISTORY_BYTES: usize = 512 * 1024;
-const MAX_RESPONSE_BYTES: usize = 1_048_576;
 static HISTORY_LOCK: Mutex<()> = Mutex::const_new(());
 
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -100,93 +98,13 @@ async fn stream(
     State(_state): State<AppState>,
     headers: axum::http::HeaderMap,
     Json(_request): Json<ExecuteRequest>,
-) -> Result<Response, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     let _ = agent(&headers, None, None)?;
     Err(ApiError::bad_request(
         "streaming is unsupported; use execute",
     ))
 }
 
-/*
-    let identity = agent(&headers, None, request.agent_id.as_deref())?;
-    if !configured() {
-        return Err(ApiError::bad_request(
-            "inference provider is not configured",
-        ));
-    }
-    let base = setting("SIGNET_OPENAI_BASE_URL").unwrap();
-    let model = request
-        .model
-        .or_else(|| setting("SIGNET_OPENAI_MODEL"))
-        .unwrap();
-    if let Some(prompt) = request.prompt.as_ref() {
-        if prompt.len() > 64 * 1024 { return Err(ApiError::bad_request("prompt exceeds 64 KiB")); }
-    }
-    let messages = request
-        .messages
-        .unwrap_or_else(|| json!([{"role":"user","content":request.prompt.unwrap_or_default()}]));
-    if !messages.is_array() {
-        return Err(ApiError::bad_request("messages must be an array"));
-    }
-    if serde_json::to_vec(&messages).map(|bytes| bytes.len()).unwrap_or(usize::MAX) > 256 * 1024 {
-        return Err(ApiError::bad_request("messages exceed 256 KiB"));
-    }
-    let id = Uuid::new_v4().to_string();
-    append_history(
-        &state,
-        HistoryEvent {
-            id: id.clone(),
-            agent_id: identity,
-            operation: "stream".into(),
-            status: "started".into(),
-            request_id: Some(id.clone()),
-            error: None,
-        },
-    )
-    .await?;
-    let url = format!("{}/v1/chat/completions", base.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_millis(
-            request
-                .timeout_ms
-                .unwrap_or(DEFAULT_TIMEOUT_MS)
-                .clamp(1, 120_000),
-        ))
-        .build()
-        .map_err(|e| ApiError::unavailable(e.to_string()))?;
-    let mut call = client
-        .post(url)
-        .json(&json!({"model":model,"messages":messages,"stream":true}));
-    if let Some(key) = setting("SIGNET_OPENAI_API_KEY") {
-        call = call.bearer_auth(key);
-    }
-    let response = call
-        .send()
-        .await
-        .map_err(|e| ApiError::unavailable(format!("provider request failed: {e}")))?;
-    if !response.status().is_success() {
-        return Err(ApiError::upstream(format!(
-            "provider returned HTTP {}",
-            response.status()
-        )));
-    }
-    let body = response
-        .bytes()
-        .await
-        .map_err(|e| ApiError::upstream(format!("provider response read failed: {e}")))?;
-    if body.len() > MAX_RESPONSE_BYTES {
-        return Err(ApiError::upstream("provider response exceeds 1 MiB"));
-    }
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", "text/event-stream")
-        .header("cache-control", "no-cache")
-        .header("x-signet-request-id", id)
-        .body(axum::body::Body::from(body))
-        .map_err(|e| ApiError::internal(format!("stream response failed: {e}")))
-}
-
-*/
 async fn history(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
