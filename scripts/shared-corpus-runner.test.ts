@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test";
-import { validateManifest, validateLaneOptions, type ManifestEntry } from "./shared-corpus-runner";
+import {
+	discoverPaths,
+	parseJUnitReport,
+	validateBaselineWorktree,
+	validateManifest,
+	validateLaneOptions,
+	type ManifestEntry,
+} from "./shared-corpus-runner";
 
 describe("shared corpus admission", () => {
 	test("rejects a manifest that is not the pinned 497-path baseline", () => {
@@ -15,5 +22,31 @@ describe("shared corpus admission", () => {
 	test("requires the pinned worktree or real Rust artifact for each lane", () => {
 		expect(() => validateLaneOptions("typescript", {})).toThrow(/worktree/i);
 		expect(() => validateLaneOptions("rust", {})).toThrow(/artifact/i);
+	});
+
+	test("classifies the pinned corpus with all accepted roots and load script", () => {
+		const paths = discoverPaths([
+			"test/tests/__tests__/one.ts",
+			"tests/__tests__/two.ts",
+			"foo.test.ts",
+			"scripts/load-test-daemon.ts",
+			"README.md",
+		]);
+		expect(paths).toEqual([
+			"foo.test.ts",
+			"scripts/load-test-daemon.ts",
+			"test/tests/__tests__/one.ts",
+			"tests/__tests__/two.ts",
+		]);
+	});
+
+	test("requires the baseline worktree to be pinned", () => {
+		expect(() => validateBaselineWorktree("/tmp/not-a-worktree")).toThrow(/pinned/i);
+	});
+
+	test("does not count a JUnit suite as passed without testcases", () => {
+		expect(() => parseJUnitReport('<testsuite tests="0" failures="0"/>', ["a.test.ts"])).toThrow(
+			/accounting|testcase/i,
+		);
 	});
 });
