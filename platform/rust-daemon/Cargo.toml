@@ -25,6 +25,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 base64 = "0.22"
 hmac = "0.12"
 sha2 = "0.10"
+libc = "0.2"
 time = { version = "0.3", features = ["formatting"] }
 
 [profile.release]

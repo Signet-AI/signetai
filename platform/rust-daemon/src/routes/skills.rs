@@ -76,9 +76,9 @@ async fn gate(
             });
         }
     }
-    if destructive && role != "admin" {
+    if role != "admin" {
         let allowed = perms
-            .map(|p| !p.is_empty() && p.iter().any(|v| v.as_str() == Some(capability)))
+            .map(|p| p.iter().any(|v| v.as_str() == Some(capability)))
             .unwrap_or(false);
         if !allowed {
             return Err(ApiError {
@@ -87,18 +87,8 @@ async fn gate(
                 message: format!("{capability} capability is required"),
             });
         }
-    } else if let Some(values) = perms {
-        if !values.is_empty()
-            && !values.iter().any(|p| p.as_str() == Some(capability))
-            && role != "admin"
-        {
-            return Err(ApiError {
-                status: StatusCode::FORBIDDEN,
-                code: "forbidden",
-                message: format!("{capability} capability is required"),
-            });
-        }
     }
+    let _ = destructive;
     Ok(())
 }
 fn root_dir(state: &AppState) -> Result<PathBuf, ApiError> {
@@ -191,8 +181,21 @@ fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
             message: "skill content exceeds 1 MiB".into(),
         });
     }
-    let file =
-        fs::File::open(&canonical).map_err(|_| ApiError::unavailable("failed to read skill"))?;
+    let file = {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&md)
+        }
+        #[cfg(not(unix))]
+        {
+            fs::File::open(&md)
+        }
+    }
+    .map_err(|_| ApiError::unavailable("failed to read skill"))?;
     let mut data = Vec::with_capacity(meta.len() as usize);
     file.take(MAX_CONTENT_BYTES + 1)
         .read_to_end(&mut data)
@@ -228,17 +231,21 @@ fn all_skills(root: &FsPath) -> Result<Vec<Value>, ApiError> {
         fs::read_dir(root).map_err(|_| ApiError::unavailable("skills directory is unavailable"))?
     {
         let entry = entry.map_err(|_| ApiError::unavailable("failed to list skills"))?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| ApiError::bad_request("skill name must be UTF-8"))?;
-        let meta = fs::symlink_metadata(entry.path())
-            .map_err(|_| ApiError::bad_request("invalid skill path"))?;
+        let name = match entry.file_name().into_string() {
+            Ok(name) => name,
+            Err(_) => continue,
+        };
+        let meta = match fs::symlink_metadata(entry.path()) {
+            Ok(meta) => meta,
+            Err(_) => continue,
+        };
         if meta.file_type().is_symlink() {
-            return Err(ApiError::bad_request("invalid skill path"));
+            continue;
         }
         if meta.file_type().is_dir() {
-            entries.push(read_skill(root, &name)?);
+            if let Ok(skill) = read_skill(root, &name) {
+                entries.push(skill);
+            }
         }
     }
     entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));

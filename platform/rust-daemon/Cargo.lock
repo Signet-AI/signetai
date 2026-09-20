@@ -1021,6 +1021,7 @@ dependencies = [
  "base64",
  "futures-util",
  "hmac",
+ "libc",
  "reqwest",
  "serde",
  "serde_json",
