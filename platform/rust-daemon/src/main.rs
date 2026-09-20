@@ -889,7 +889,11 @@ async fn whoami(
         .get("authorization")
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.strip_prefix("Bearer "))
-        .or_else(|| headers.get("x-signet-api-key").and_then(|value| value.to_str().ok()));
+        .or_else(|| {
+            headers
+                .get("x-signet-api-key")
+                .and_then(|value| value.to_str().ok())
+        });
     let claims = credential.and_then(|token| {
         if configured_api_key().as_deref() == Some(token) {
             Some(json!({"sub":"token:admin","role":"admin","scope":{}}))
