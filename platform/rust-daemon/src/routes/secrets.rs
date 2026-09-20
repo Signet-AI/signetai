@@ -30,6 +30,11 @@ fn bounded(value: &str, label: &str, max: usize) -> Result<String, ApiError> {
     }
     Ok(value.to_owned())
 }
+fn header_alias(headers: &HeaderMap, names: &[&str], label: &str) -> Result<Option<String>, ApiError> {
+    let values = names.iter().filter_map(|name| headers.get(*name)).map(|value| value.to_str().map(str::trim)).collect::<Result<Vec<_>, _>>().map_err(|_| ApiError::bad_request(format!("{label} header must be valid UTF-8")))?;
+    if values.windows(2).any(|pair| pair[0] != pair[1]) { return Err(ApiError::bad_request(format!("conflicting {label} aliases"))); }
+    Ok(values.first().filter(|value| !value.is_empty()).map(|value| (*value).to_owned()))
+}
 async fn authority(
     state: &AppState,
     headers: &HeaderMap,
@@ -57,16 +62,11 @@ async fn authority(
             message: format!("{capability} capability is required"),
         });
     }
-    let agent = headers
-        .get("x-signet-agent-id")
-        .or_else(|| headers.get("x-signet-agent"))
-        .and_then(|v| v.to_str().ok())
-        .or_else(|| claims.get("agentId").and_then(Value::as_str))
+    let agent = header_alias(headers, &["x-signet-agent-id", "x-signet-agent"], "agent")?
+        .or_else(|| claims.get("agentId").and_then(Value::as_str).map(str::to_owned))
         .ok_or_else(|| ApiError::unauthorized("agent identity is required"))?;
-    let workspace = headers
-        .get("x-signet-workspace-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("default");
+    let workspace = header_alias(headers, &["x-signet-workspace-id", "x-signet-workspace", "x-workspace-id"], "workspace")?
+        .unwrap_or_else(|| "default".to_owned());
     let scope = claims.get("scope").and_then(Value::as_object);
     if let Some(scope) = scope {
         if scope
@@ -116,17 +116,8 @@ async fn list(
     if limit == 0 || limit > 100 {
         return Err(ApiError::bad_request("limit must be between 1 and 100"));
     }
-    Ok(Json(
-        execute(
-            &state,
-            signet_core_native::Operation::SecretList {
-                agent_id,
-                workspace_id,
-                limit,
-            },
-        )
-        .await?,
-    ))
+    let result = execute(&state, signet_core_native::Operation::SecretList { agent_id, workspace_id, limit }).await?;
+    Ok(Json(serde_json::json!({ "secrets": result.get("items").cloned().unwrap_or_else(|| Value::Array(vec![])), "provider": "local" })))
 }
 async fn upsert(
     State(state): State<AppState>,
@@ -156,21 +147,9 @@ async fn upsert_inner(
     let (agent_id, workspace_id) = authority(&state, &headers, "secrets:write").await?;
     let name = bounded(&name, "secret name", 256)?;
     let value = bounded(&value, "secret value", 64 * 1024)?;
-    Ok((
-        StatusCode::CREATED,
-        Json(
-            execute(
-                &state,
-                signet_core_native::Operation::SecretUpsert {
-                    agent_id,
-                    workspace_id,
-                    name,
-                    value,
-                },
-            )
-            .await?,
-        ),
-    ))
+    let result = execute(&state, signet_core_native::Operation::SecretUpsert { agent_id, workspace_id, name: name.clone(), value }).await?;
+    let _ = result;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "success": true, "name": name }))))
 }
 async fn remove(
     State(state): State<AppState>,
@@ -178,17 +157,9 @@ async fn remove(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let (agent_id, workspace_id) = authority(&state, &headers, "secrets:delete").await?;
-    Ok(Json(
-        execute(
-            &state,
-            signet_core_native::Operation::SecretDelete {
-                agent_id,
-                workspace_id,
-                name: bounded(&name, "secret name", 256)?,
-            },
-        )
-        .await?,
-    ))
+    let name = bounded(&name, "secret name", 256)?;
+    execute(&state, signet_core_native::Operation::SecretDelete { agent_id, workspace_id, name: name.clone() }).await?;
+    Ok(Json(serde_json::json!({ "success": true, "name": name })))
 }
 async fn unsupported_exec(
     State(state): State<AppState>,
