@@ -292,7 +292,7 @@ async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Val
     if let Some(key) = key {
         request = request.bearer_auth(key);
     }
-    let response = request
+    let mut response = request
         .send()
         .await
         .map_err(|error| ProviderError::Transport(format!("provider request failed: {error}")))?;
@@ -304,9 +304,17 @@ async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Val
             ));
         }
     }
-    let bytes = response.bytes().await.map_err(|error| {
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| {
         ProviderError::InvalidResponse(format!("provider response read failed: {error}"))
-    })?;
+    })? {
+        if bytes.len().saturating_add(chunk.len()) > 1_048_576 {
+            return Err(ProviderError::InvalidResponse(
+                "provider response exceeds 1 MiB".to_owned(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
     if bytes.len() > 1_048_576 {
         return Err(ProviderError::InvalidResponse(
             "provider response exceeds 1 MiB".to_owned(),
