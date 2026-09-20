@@ -63,7 +63,7 @@ async fn capabilities() -> Json<Value> {
     Json(json!({
         "transport": "streamable-http",
         "native": true,
-        "stdio": {"supported": true, "provider_execution": false},
+        "stdio": {"supported": false, "provider_execution": false},
         "management": {"supported": false, "reason": "not represented by native Operations"},
         "analytics": {"supported": false, "reason": "not represented by native Operations"},
     }))
