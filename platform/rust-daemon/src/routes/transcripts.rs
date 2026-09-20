@@ -118,17 +118,16 @@ async fn list(
     headers: HeaderMap,
     Query(q): Query<AgentQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!(
-        execute(
+    Ok(Json(json!({
+        "transcripts": execute(
             &state,
-            Operation::TranscriptImportList {
+            Operation::TranscriptList {
                 agent_id: agent(&headers, Some(&q), None)?,
-                workspace_id: workspace(&headers),
-                limit: 100
-            }
+                limit: 100,
+            },
         )
-        .await?
-    )))
+        .await?,
+    })))
 }
 async fn file_action(
     State(state): State<AppState>,
