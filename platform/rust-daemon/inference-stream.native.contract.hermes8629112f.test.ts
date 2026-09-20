@@ -15,6 +15,11 @@ it("streams bounded OpenAI SSE with auth, validation, and cleanup", async () => 
 			if (new URL(req.url).pathname !== "/v1/chat/completions") return new Response("missing", { status: 404 });
 			const body = await req.json();
 			if (body.stream !== true) return Response.json({ error: "stream required" }, { status: 400 });
+			if (body.messages?.[0]?.content === "upstream") return Response.json({ error: "nope" }, { status: 429 });
+			if (body.messages?.[0]?.content === "malformed")
+				return new Response("data: {bad}\n\n", { headers: { "content-type": "text/event-stream" } });
+			if (body.messages?.[0]?.content === "invalid-json")
+				return new Response(new Uint8Array([0xff, 0xfe]), { headers: { "content-type": "text/event-stream" } });
 			const encoder = new TextEncoder();
 			const stream = new ReadableStream({
 				start(controller) {
@@ -63,10 +68,19 @@ it("streams bounded OpenAI SSE with auth, validation, and cleanup", async () => 
 			body: JSON.stringify({ prompt: "x" }),
 		});
 		expect(denied.status).toBe(401);
+		for (const prompt of ["upstream", "malformed", "invalid-json"]) {
+			const failed = await fetch(`${origin}/api/inference/stream`, {
+				method: "POST",
+				headers,
+				body: JSON.stringify({ prompt }),
+			});
+			expect(failed.status).toBe(502);
+			expect(failed.status).toBe(502);
+		}
 		const response = await fetch(`${origin}/api/inference/stream`, {
 			method: "POST",
 			headers,
-			body: JSON.stringify({ prompt: "x" }),
+			body: JSON.stringify({ prompt: "x", maxTokens: 42, model: "override" }),
 		});
 		expect(response.status).toBe(200);
 		expect(response.headers.get("content-type")).toContain("text/event-stream");

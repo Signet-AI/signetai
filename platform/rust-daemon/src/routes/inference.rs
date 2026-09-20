@@ -412,28 +412,80 @@ async fn call_openai_stream(
         .await
         .map_err(|e| ProviderError::Transport(format!("provider request failed: {e}")))?;
     let status = response.status().as_u16();
-    let stream =
-        futures_util::stream::unfold((response, 0usize), |(mut response, total)| async move {
+    if !(200..300).contains(&status) {
+        let message = response.text().await.unwrap_or_default();
+        return Err(ProviderError::Upstream {
+            status,
+            message: message.chars().take(512).collect(),
+        });
+    }
+    let stream = futures_util::stream::unfold(
+        (response, 0usize, Vec::<u8>::new(), false),
+        |(mut response, total, mut pending, mut done)| async move {
+            if done {
+                return None;
+            }
             match response.chunk().await {
                 Ok(Some(chunk)) => {
                     let next = total.saturating_add(chunk.len());
                     if next > 1_048_576 {
                         return Some((
                             Err(std::io::Error::other("provider stream exceeds 1 MiB")),
-                            (response, next),
+                            (response, next, pending, true),
                         ));
                     }
-                    Some((Ok(chunk), (response, next)))
+                    pending.extend_from_slice(&chunk);
+                    while let Some(end) = pending.windows(2).position(|w| w == b"\n\n") {
+                        let event = pending.drain(..end + 2).collect::<Vec<_>>();
+                        let text = match String::from_utf8(event.clone()) {
+                            Ok(text) => text,
+                            Err(_) => {
+                                return Some((
+                                    Err(std::io::Error::other(
+                                        "provider stream contains invalid UTF-8",
+                                    )),
+                                    (response, next, pending, true),
+                                ))
+                            }
+                        };
+                        for line in text.lines().filter(|line| line.starts_with("data:")) {
+                            let data = line[5..].trim();
+                            if data != "[DONE]" && serde_json::from_str::<Value>(data).is_err() {
+                                return Some((
+                                    Err(std::io::Error::other(
+                                        "provider stream contains invalid JSON",
+                                    )),
+                                    (response, next, pending, true),
+                                ));
+                            }
+                            if data == "[DONE]" {
+                                done = true;
+                            }
+                        }
+                    }
+                    Some((Ok(chunk), (response, next, pending, done)))
                 }
-                Ok(None) => None,
+                Ok(None) => {
+                    if pending.iter().any(|b| !b.is_ascii_whitespace()) {
+                        Some((
+                            Err(std::io::Error::other(
+                                "provider stream ended with incomplete SSE",
+                            )),
+                            (response, total, pending, true),
+                        ))
+                    } else {
+                        None
+                    }
+                }
                 Err(error) => Some((
                     Err(std::io::Error::other(format!(
                         "provider response read failed: {error}"
                     ))),
-                    (response, total),
+                    (response, total, pending, true),
                 )),
             }
-        });
+        },
+    );
     Ok((status, Body::from_stream(stream)))
 }
 
