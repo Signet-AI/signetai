@@ -605,6 +605,21 @@ fn execute_operation(
     operation: Operation,
 ) -> Result<Value, CoreError> {
     match operation {
+        Operation::ReflectionList { agent_id, limit } => {
+            let agent_id = required_agent(&agent_id)?;
+            let limit = limit.clamp(1, 100);
+            let mut statement = connection.prepare("SELECT id,date,summary,patterns,question,answer,answer_memory_id,created_at,answered_at FROM daily_reflections WHERE agent_id=? ORDER BY created_at DESC LIMIT ?")?;
+            let rows = statement.query_map(params![agent_id, limit as i64], reflection_row)?;
+            Ok(json!({"reflections": rows.collect::<Result<Vec<_>, _>>()?}))
+        }
+        Operation::ReflectionToday { agent_id, date, limit } => {
+            let agent_id = required_agent(&agent_id)?;
+            let limit = limit.clamp(1, 100);
+            let mut statement = connection.prepare("SELECT id,date,summary,patterns,question,answer,answer_memory_id,created_at,answered_at FROM daily_reflections WHERE agent_id=? AND date=? ORDER BY created_at DESC LIMIT ?")?;
+            let rows = statement.query_map(params![agent_id, date, limit as i64], reflection_row)?;
+            let reflections = rows.collect::<Result<Vec<_>, _>>()?;
+            Ok(json!({"reflection": reflections.first().cloned().unwrap_or(Value::Null), "reflections": reflections}))
+        }
         Operation::TranscriptImportCreate {
             agent_id,
             workspace_id,
@@ -2945,6 +2960,8 @@ pub struct SessionRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     Health,
+    ReflectionList { agent_id: String, limit: usize },
+    ReflectionToday { agent_id: String, date: String, limit: usize },
     SecretList {
         agent_id: String,
         workspace_id: String,
@@ -3503,6 +3520,18 @@ fn source_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Source> {
     })
 }
 
+fn reflection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
+    let patterns: String = row.get(3)?;
+    Ok(json!({
+        "id": row.get::<_, String>(0)?, "date": row.get::<_, String>(1)?,
+        "summary": row.get::<_, String>(2)?,
+        "patterns": serde_json::from_str::<Value>(&patterns).unwrap_or_else(|_| json!([])),
+        "question": row.get::<_, Option<String>>(4)?, "answer": row.get::<_, Option<String>>(5)?,
+        "answerMemoryId": row.get::<_, Option<String>>(6)?, "createdAt": row.get::<_, String>(7)?,
+        "answeredAt": row.get::<_, Option<String>>(8)?,
+    }))
+}
+
 fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     let transaction = connection.transaction()?;
     transaction.execute_batch(
@@ -3539,6 +3568,9 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS hook_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id TEXT NOT NULL, agent_id TEXT NOT NULL, session_key TEXT, hook TEXT NOT NULL, checkpoint TEXT, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, UNIQUE(agent_id, receipt_id));
          CREATE INDEX IF NOT EXISTS hook_receipts_scope ON hook_receipts(agent_id, session_key, id);
          CREATE TABLE IF NOT EXISTS cross_agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, sender_agent_id TEXT NOT NULL, recipient_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS daily_reflections (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', date TEXT NOT NULL, summary TEXT NOT NULL, patterns TEXT NOT NULL DEFAULT '[]', question TEXT, answer TEXT, answer_memory_id TEXT, memory_ids TEXT NOT NULL DEFAULT '[]', summary_ids TEXT NOT NULL DEFAULT '[]', model TEXT, created_at TEXT NOT NULL, answered_at TEXT, content_key TEXT);
+         CREATE INDEX IF NOT EXISTS daily_reflections_agent_created ON daily_reflections(agent_id, created_at DESC);
+         CREATE INDEX IF NOT EXISTS daily_reflections_agent_date ON daily_reflections(agent_id, date, created_at DESC);
 
          CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'agent', scope_json TEXT NOT NULL DEFAULT '{}', permissions_json TEXT NOT NULL DEFAULT '[]', connector TEXT, harness TEXT, agent_id TEXT, allowed_projects_json TEXT, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT);
          CREATE INDEX IF NOT EXISTS api_keys_scope ON api_keys(agent_id, revoked_at, expires_at);

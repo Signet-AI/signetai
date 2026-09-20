@@ -14,6 +14,7 @@ pub(crate) mod ontology;
 pub(crate) mod pipeline;
 pub(crate) mod plugins;
 pub(crate) mod queue_diagnostics;
+pub(crate) mod reflection;
 pub(crate) mod repair;
 pub(crate) mod secrets;
 pub(crate) mod session_hook_boundary;
@@ -49,6 +50,7 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(pipeline::router())
         .merge(queue_diagnostics::router())
         .merge(repair::router())
+        .merge(reflection::router())
         .merge(source_lifecycle::router())
         .merge(telemetry::router())
         .merge(transcripts::router())
