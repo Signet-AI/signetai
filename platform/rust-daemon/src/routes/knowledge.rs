@@ -67,17 +67,11 @@ pub(crate) fn router() -> Router<AppState> {
         )
         .route("/api/knowledge/relations", post(create_relation))
         .route("/api/knowledge/navigation/entities", get(list_entities))
-        .route(
-            "/api/knowledge/entities/{id}",
-            get(unsupported_entity_detail),
-        )
-        .route(
-            "/api/knowledge/entities/{id}/aspects",
-            get(unsupported_entity_aspects),
-        )
+        .route("/api/knowledge/entities/{id}", get(entity_detail))
+        .route("/api/knowledge/entities/{id}/aspects", get(entity_aspects))
         .route(
             "/api/knowledge/entities/{entity_id}/aspects/{aspect_id}/attributes",
-            get(unsupported_aspect_attributes),
+            get(aspect_attributes),
         )
         .route(
             "/api/knowledge/entities/{id}/dependencies",
@@ -94,21 +88,66 @@ pub(crate) fn router() -> Router<AppState> {
         )
 }
 
-async fn unsupported_entity_detail() -> Result<Json<Value>, ApiError> {
-    Err(ApiError::not_implemented(
-        "knowledge entity detail is unsupported by the fresh native operation boundary",
+async fn entity_detail(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeEntityDetail {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&q)?,
+                entity_id: id,
+            },
+        )
+        .await?,
     ))
 }
-async fn unsupported_entity_aspects() -> Result<Json<Value>, ApiError> {
-    Err(ApiError::not_implemented(
-        "knowledge aspect listing is unsupported by the fresh native operation boundary",
+async fn entity_aspects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeAspects {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&q)?,
+                entity_id: id,
+            },
+        )
+        .await?,
     ))
 }
-async fn unsupported_aspect_attributes() -> Result<Json<Value>, ApiError> {
-    Err(ApiError::not_implemented(
-        "knowledge attribute listing is unsupported by the fresh native operation boundary",
+async fn aspect_attributes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((entity_id, aspect_id)): Path<(String, String)>,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeAttributes {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&q)?,
+                entity_id,
+                aspect_id,
+                limit: limit(q.limit),
+                offset: q.offset.unwrap_or(0),
+                kind: None,
+                status: None,
+            },
+        )
+        .await?,
     ))
 }
+
 async fn unsupported_dependencies() -> Result<Json<Value>, ApiError> {
     Err(ApiError::not_implemented(
         "knowledge dependencies are unsupported by the fresh native operation boundary",

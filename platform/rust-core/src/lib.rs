@@ -2349,6 +2349,48 @@ fn execute_operation(
                 json!({"id":id,"aspectId":aspect_id,"kind":kind,"content":content,"status":"active"}),
             )
         }
+        Operation::KnowledgeEntityDetail {
+            agent_id,
+            workspace_id,
+            entity_id,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let entity_id = required_id(&entity_id)?;
+            connection.query_row("SELECT id,name,entity_type,metadata,created_at,updated_at FROM kg_entities WHERE id=? AND agent_id=? AND workspace_id=? AND deleted=0", params![entity_id,agent_id,workspace_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(4)?,"updatedAt":r.get::<_,String>(5)?}))).optional()?.ok_or(CoreError::NotFound)
+        }
+        Operation::KnowledgeAspects {
+            agent_id,
+            workspace_id,
+            entity_id,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let entity_id = required_id(&entity_id)?;
+            let mut s=connection.prepare("SELECT id,name,weight FROM kg_aspects WHERE agent_id=? AND workspace_id=? AND entity_id=? AND deleted=0 ORDER BY weight DESC LIMIT 100")?;
+            let rows=s.query_map(params![agent_id,workspace_id,entity_id],|r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"weight":r.get::<_,f64>(2)?})))?;
+            Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?}))
+        }
+        Operation::KnowledgeAttributes {
+            agent_id,
+            workspace_id,
+            entity_id,
+            aspect_id,
+            limit,
+            offset,
+            kind,
+            status,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let entity_id = required_id(&entity_id)?;
+            let aspect_id = required_id(&aspect_id)?;
+            let limit = limit.clamp(1, 200) as i64;
+            let offset = offset.min(100_000) as i64;
+            let mut s=connection.prepare("SELECT a.id,a.kind,a.content,a.status FROM kg_attributes a JOIN kg_aspects p ON p.id=a.aspect_id WHERE a.agent_id=? AND a.workspace_id=? AND p.entity_id=? AND a.aspect_id=? AND (? IS NULL OR a.kind=?) AND (? IS NULL OR a.status=?) ORDER BY a.importance DESC LIMIT ? OFFSET ?")?;
+            let rows=s.query_map(params![agent_id,workspace_id,entity_id,aspect_id,kind,kind,status,status,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?;
+            Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?,"limit":limit,"offset":offset}))
+        }
         Operation::KnowledgeTree {
             agent_id,
             workspace_id,
@@ -3108,6 +3150,26 @@ pub enum Operation {
         confidence: f64,
         importance: f64,
         memory_id: Option<String>,
+    },
+    KnowledgeEntityDetail {
+        agent_id: String,
+        workspace_id: String,
+        entity_id: String,
+    },
+    KnowledgeAspects {
+        agent_id: String,
+        workspace_id: String,
+        entity_id: String,
+    },
+    KnowledgeAttributes {
+        agent_id: String,
+        workspace_id: String,
+        entity_id: String,
+        aspect_id: String,
+        limit: usize,
+        offset: usize,
+        kind: Option<String>,
+        status: Option<String>,
     },
     KnowledgeTree {
         agent_id: String,

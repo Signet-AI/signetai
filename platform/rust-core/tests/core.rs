@@ -58,6 +58,92 @@ fn failed_update_rolls_back() {
 }
 
 #[test]
+fn knowledge_detail_aspects_and_attributes_are_scoped_and_bounded() {
+    let c = core();
+    let id = c
+        .submit(Operation::KnowledgeEntityCreate {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            name: "Thing".into(),
+            entity_type: "project".into(),
+            metadata: serde_json::json!({}),
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let aspect = c
+        .submit(Operation::KnowledgeAspectCreate {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: id.clone(),
+            name: "Facts".into(),
+            weight: 0.8,
+        })
+        .unwrap();
+    let aid = aspect["id"].as_str().unwrap().to_owned();
+    c.submit(Operation::KnowledgeAttributeCreate {
+        agent_id: "a".into(),
+        workspace_id: "w".into(),
+        aspect_id: aid.clone(),
+        kind: "attribute".into(),
+        content: "blue".into(),
+        claim_key: None,
+        group_key: None,
+        confidence: 0.9,
+        importance: 0.7,
+        memory_id: None,
+    })
+    .unwrap();
+    assert_eq!(
+        c.submit(Operation::KnowledgeEntityDetail {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: id.clone()
+        })
+        .unwrap()["name"],
+        "Thing"
+    );
+    assert_eq!(
+        c.submit(Operation::KnowledgeAspects {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: id.clone()
+        })
+        .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        c.submit(Operation::KnowledgeAttributes {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: id,
+            aspect_id: aid,
+            limit: 999,
+            offset: 0,
+            kind: None,
+            status: None
+        })
+        .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(matches!(
+        c.submit(Operation::KnowledgeEntityDetail {
+            agent_id: "other".into(),
+            workspace_id: "w".into(),
+            entity_id: "nope".into()
+        }),
+        Err(CoreError::NotFound)
+    ));
+}
+
+#[test]
 fn opens_a_current_style_workspace_without_destroying_existing_rows() {
     let d = tempdir().unwrap();
     let p = d.path().join("current.sqlite");
