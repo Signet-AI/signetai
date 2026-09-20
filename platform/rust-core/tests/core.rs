@@ -1356,6 +1356,51 @@ fn source_removal_lease_fences_stale_finalizer_and_blocks_ingest() {
 }
 
 #[test]
+fn legacy_markdown_import_rejects_unbounded_files_and_invalid_calendar_dates() {
+    let owner = core();
+    let too_many = serde_json::Value::Array(
+        (0..26)
+            .map(|i| serde_json::json!({"name": format!("2026-01-{i:02}.md"), "content":"x"}))
+            .collect(),
+    );
+    assert!(
+        matches!(owner.submit(Operation::LegacyMarkdownImport { agent_id:"a".into(), workspace_id:"w".into(), files:too_many }), Err(CoreError::InvalidInput(message)) if message.contains("1-25"))
+    );
+    let invalid = serde_json::json!([{"name":"2026-02-31.md","content":"x"},{"name":"0000-00-00.md","content":"x"}]);
+    let result = owner
+        .submit(Operation::LegacyMarkdownImport {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            files: invalid,
+        })
+        .unwrap();
+    assert_eq!(result["imported"], 0);
+    assert_eq!(result["skipped"], 2);
+}
+
+#[test]
+fn legacy_markdown_import_chunks_single_paragraphs_and_fences_workspace_deduplication() {
+    let owner = core();
+    let content = "x".repeat(3000);
+    let first = owner
+        .submit(Operation::LegacyMarkdownImport {
+            agent_id: "a".into(),
+            workspace_id: "one".into(),
+            files: serde_json::json!([{"name":"2026-01-01.md","content":content}]),
+        })
+        .unwrap();
+    assert!(first["imported"].as_u64().unwrap() > 1);
+    let second = owner
+        .submit(Operation::LegacyMarkdownImport {
+            agent_id: "a".into(),
+            workspace_id: "two".into(),
+            files: serde_json::json!([{"name":"2026-01-01.md","content":content}]),
+        })
+        .unwrap();
+    assert_eq!(second["imported"], first["imported"]);
+}
+
+#[test]
 fn legacy_markdown_import_is_scoped_deduplicated_and_reports_counts() {
     let owner = core();
     let files = serde_json::json!([

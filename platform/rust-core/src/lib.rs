@@ -10,7 +10,7 @@ use std::{
     thread,
 };
 use thiserror::Error;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -631,6 +631,46 @@ fn normalize_import_files(files: &Value) -> Result<Vec<Value>, CoreError> {
         .collect()
 }
 
+fn valid_daily_log_date(name: &str) -> bool {
+    let Some(stem) = name.strip_suffix(".md") else {
+        return false;
+    };
+    if stem.len() != 10
+        || !stem.is_ascii()
+        || stem.as_bytes()[4] != b'-'
+        || stem.as_bytes()[7] != b'-'
+    {
+        return false;
+    }
+    let year = stem[0..4].parse::<i32>().ok();
+    let month = stem[5..7]
+        .parse::<u8>()
+        .ok()
+        .and_then(|m| Month::try_from(m).ok());
+    let day = stem[8..10].parse::<u8>().ok();
+    match (year, month, day) {
+        (Some(y), Some(m), Some(d)) => Date::from_calendar_date(y, m, d).is_ok(),
+        _ => false,
+    }
+}
+
+fn import_chunks(content: &str) -> impl Iterator<Item = &str> {
+    content
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .flat_map(|paragraph| {
+            let boundaries: Vec<usize> = paragraph
+                .char_indices()
+                .map(|(i, _)| i)
+                .chain(std::iter::once(paragraph.len()))
+                .collect();
+            (0..boundaries.len() - 1).step_by(2048).map(move |index| {
+                &paragraph[boundaries[index]..boundaries[(index + 2048).min(boundaries.len() - 1)]]
+            })
+        })
+}
+
 fn execute_operation(
     connection: &mut Connection,
     operation: Operation,
@@ -643,9 +683,8 @@ fn execute_operation(
         } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
-            let files = files
-                .as_array()
-                .ok_or_else(|| CoreError::InvalidInput("files must be an array".into()))?;
+            let files = normalize_import_files(&files)?;
+            let transaction = connection.transaction()?;
             let mut imported = 0usize;
             let mut skipped = 0usize;
             let mut errors = Vec::new();
@@ -660,15 +699,7 @@ fn execute_operation(
                     skipped += 1;
                     continue;
                 }
-                let valid_date = name.len() == 13
-                    && name.ends_with(".md")
-                    && name[..10].chars().enumerate().all(|(i, c)| {
-                        if i == 4 || i == 7 {
-                            c == '-'
-                        } else {
-                            c.is_ascii_digit()
-                        }
-                    });
+                let valid_date = valid_daily_log_date(name);
                 if !valid_date {
                     skipped += 1;
                     errors.push(format!(
@@ -681,24 +712,20 @@ fn execute_operation(
                     skipped += 1;
                     continue;
                 }
-                for (chunk_index, chunk) in content
-                    .split("\n\n")
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .enumerate()
-                {
+                for (chunk_index, chunk) in import_chunks(content).enumerate() {
                     let metadata = json!({"type":"daily-log","category":&name[..10],"sourceType":"import","sourceId":name,"tags":["imported","daily-log"],"updatedBy":"signet-import","_workspaceId":workspace_id,"_importChunk":chunk_index});
                     let metadata_text = serde_json::to_string(&metadata)?;
-                    let exists: i64 = connection.query_row("SELECT count(*) FROM memories WHERE agent_id=? AND deleted=0 AND metadata=?", params![agent_id, metadata_text], |r| r.get(0))?;
+                    let exists: i64 = transaction.query_row("SELECT count(*) FROM memories WHERE agent_id=? AND deleted=0 AND metadata=?", params![agent_id, metadata_text], |r| r.get(0))?;
                     if exists > 0 {
                         skipped += 1;
                         continue;
                     }
                     let id = uuid::Uuid::new_v4().to_string();
-                    connection.execute("INSERT INTO memories(id,agent_id,content,metadata,deleted,created_at,updated_at) VALUES(?,?,?,?,0,datetime('now'),datetime('now'))", params![id,agent_id,chunk,metadata_text])?;
+                    transaction.execute("INSERT INTO memories(id,agent_id,content,metadata,deleted,created_at,updated_at) VALUES(?,?,?,?,0,datetime('now'),datetime('now'))", params![id,agent_id,chunk,metadata_text])?;
                     imported += 1;
                 }
             }
+            transaction.commit()?;
             Ok(json!({"imported":imported,"skipped":skipped,"errors":errors}))
         }
         Operation::Cancellation {
