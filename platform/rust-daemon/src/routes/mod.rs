@@ -14,6 +14,7 @@ pub(crate) mod queue_diagnostics;
 pub(crate) mod secrets;
 pub(crate) mod session_hook_boundary;
 pub(crate) mod sessions;
+pub(crate) mod skills;
 pub(crate) mod source_lifecycle;
 pub(crate) mod telemetry;
 pub(crate) mod transcripts;
@@ -28,6 +29,7 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(diagnostics::router())
         .merge(auth::router())
         .merge(secrets::router())
+        .merge(skills::router())
         .merge(inference::router())
         .merge(jobs::router())
         .merge(knowledge::router())
