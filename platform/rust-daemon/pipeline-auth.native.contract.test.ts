@@ -47,7 +47,7 @@ afterEach(async () => {
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-test("unsupported pipeline and Dreaming surfaces require authentication", async () => {
+test("unsupported Dreaming surfaces require authentication while models are catalogued", async () => {
 	const routes = [
 		["GET", "/api/pipeline/models"],
 		["GET", "/api/dream/quality"],
@@ -64,10 +64,14 @@ test("unsupported pipeline and Dreaming surfaces require authentication", async 
 	const authorizedDir = mkdtempSync(join(tmpdir(), "pipeline-auth-authorized-"));
 	dirs.push(authorizedDir);
 	const daemon = await start(authorizedDir, "pipeline-contract-key");
-	for (const [method, path] of routes) {
+	const authHeaders = { "x-signet-api-key": "pipeline-contract-key" };
+	const models = await fetch(`${daemon.origin}/api/pipeline/models`, { headers: authHeaders });
+	expect(models.status).toBe(200);
+	expect((await models.json()).models.length).toBeGreaterThan(20);
+	for (const [method, path] of routes.slice(1)) {
 		const authorized = await fetch(`${daemon.origin}${path}`, {
 			method,
-			headers: { "x-signet-api-key": "pipeline-contract-key" },
+			headers: authHeaders,
 		});
 		expect(authorized.status).toBe(501);
 		const body = await authorized.json();
