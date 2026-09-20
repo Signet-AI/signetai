@@ -4,7 +4,12 @@
 //! connector is reported as configured/unknown until a real provider-specific probe exists;
 //! configuration is never presented as external health.
 
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{fs::OpenOptions, time::Duration};
@@ -32,8 +37,16 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/features", get(features))
         .route("/api/config", get(config).post(write_config))
-        .route("/api/connectors", get(connectors))
+        .route(
+            "/api/connectors",
+            get(connectors).post(unsupported_connector_registration),
+        )
         .route("/api/integrations", get(integrations))
+        .route(
+            "/api/harnesses/regenerate",
+            post(unsupported_harness_regeneration),
+        )
+        .route("/api/harnesses", get(harnesses))
         .route("/health/integrations", get(integration_health))
 }
 
@@ -111,9 +124,49 @@ async fn write_config(
             "configuration file could not be committed: {error}"
         )));
     }
+    bounded(sync_directory(&state.workspace))
+        .await
+        .map_err(|_| ApiError::unavailable("configuration directory could not be synchronized"))?;
     Ok(Json(
         json!({ "name": request.file, "size": request.content.len() }),
     ))
+}
+
+async fn unsupported_connector_registration() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "status": "unsupported",
+            "operation": "connector-registration",
+            "implemented": false,
+            "probed": false,
+            "reason": "Native connector registration requires provider-specific storage and authorization"
+        })),
+    )
+}
+
+async fn unsupported_harness_regeneration() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({
+            "status": "unsupported",
+            "operation": "harness-regeneration",
+            "implemented": false,
+            "probed": false,
+            "reason": "Native harness regeneration cannot execute external scripts"
+        })),
+    )
+}
+
+async fn harnesses() -> Json<Value> {
+    Json(json!({
+        "harnesses": [],
+        "configuredHarnesses": [],
+        "status": "unsupported",
+        "implemented": false,
+        "probed": false,
+        "reason": "Native harness discovery requires provider-specific configuration"
+    }))
 }
 
 async fn connectors() -> Json<Value> {
@@ -198,6 +251,13 @@ async fn write_new_file(path: &std::path::Path, content: &[u8]) -> std::io::Resu
     })
     .await
     .map_err(std::io::Error::other)?
+}
+
+async fn sync_directory(path: &std::path::Path) -> std::io::Result<()> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || std::fs::File::open(path)?.sync_all())
+        .await
+        .map_err(std::io::Error::other)?
 }
 
 #[cfg(unix)]
