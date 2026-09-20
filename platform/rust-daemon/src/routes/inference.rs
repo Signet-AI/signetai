@@ -142,19 +142,6 @@ async fn stream(
     {
         return Err(ApiError::bad_request("messages exceed 256 KiB"));
     }
-    let request_id = Uuid::new_v4().to_string();
-    append_history(
-        &state,
-        HistoryEvent {
-            id: request_id.clone(),
-            agent_id: identity,
-            operation: "stream".into(),
-            status: "started".into(),
-            request_id: Some(request_id),
-            error: None,
-        },
-    )
-    .await?;
     let max_tokens = request
         .max_tokens
         .or_else(|| request.max_tokens_camel)
@@ -169,9 +156,23 @@ async fn stream(
     let model = request
         .model
         .or_else(|| setting("SIGNET_OPENAI_MODEL"))
+        .filter(|model| !model.trim().is_empty())
         .ok_or_else(|| {
             ApiError::bad_request("model is required when no default model is configured")
         })?;
+    let request_id = Uuid::new_v4().to_string();
+    append_history(
+        &state,
+        HistoryEvent {
+            id: request_id.clone(),
+            agent_id: identity.clone(),
+            operation: "stream".into(),
+            status: "started".into(),
+            request_id: Some(request_id.clone()),
+            error: None,
+        },
+    )
+    .await?;
     let body =
         json!({"model": model, "messages": messages, "stream": true, "max_tokens": max_tokens});
     let timeout = Duration::from_millis(
@@ -186,6 +187,10 @@ async fn stream(
             &setting("SIGNET_OPENAI_BASE_URL").unwrap(),
             setting("SIGNET_OPENAI_API_KEY"),
             body,
+            timeout,
+            state.clone(),
+            identity,
+            request_id,
         ),
     )
     .await
@@ -385,10 +390,25 @@ enum ProviderError {
     InvalidResponse(String),
 }
 
+fn sse_event_end(bytes: &[u8]) -> Option<usize> {
+    let lf = bytes.windows(2).position(|w| w == b"\n\n");
+    let crlf = bytes.windows(4).position(|w| w == b"\r\n\r\n");
+    match (lf, crlf) {
+        (Some(lf), Some(crlf)) => Some(lf.min(crlf)),
+        (Some(lf), None) => Some(lf),
+        (None, Some(crlf)) => Some(crlf),
+        (None, None) => None,
+    }
+}
+
 async fn call_openai_stream(
     base: &str,
     key: Option<String>,
     body: Value,
+    timeout: Duration,
+    state: AppState,
+    agent_id: String,
+    request_id: String,
 ) -> Result<(u16, Body), ProviderError> {
     let url = format!(
         "{}/v1/chat/completions",
@@ -424,9 +444,9 @@ async fn call_openai_stream(
     let mut pending = Vec::new();
     let mut initial = VecDeque::new();
     let first_event = loop {
-        let chunk = response
-            .chunk()
+        let chunk = tokio::time::timeout(timeout, response.chunk())
             .await
+            .map_err(|_| ProviderError::InvalidResponse("provider stream read timed out".into()))?
             .map_err(|error| {
                 ProviderError::InvalidResponse(format!("provider response read failed: {error}"))
             })?
@@ -443,8 +463,9 @@ async fn call_openai_stream(
         }
         initial.push_back(chunk.to_vec());
         pending.extend_from_slice(&chunk);
-        if let Some(end) = pending.windows(2).position(|w| w == b"\n\n") {
-            break pending.drain(..end + 2).collect::<Vec<_>>();
+        if let Some(end) = sse_event_end(&pending) {
+            let delimiter_len = if pending[end..].starts_with(b"\r\n\r\n") { 4 } else { 2 };
+            break pending.drain(..end + delimiter_len).collect::<Vec<_>>();
         }
     };
     pending.clear();
@@ -466,9 +487,16 @@ async fn call_openai_stream(
             "provider stream contains no data event".into(),
         ));
     }
+    let history_state = state.clone();
+    let history_agent = agent_id.clone();
+    let history_request = request_id.clone();
     let stream = futures_util::stream::unfold(
         (response, total, pending, false, initial),
-        |(mut response, total, mut pending, mut done, mut initial)| async move {
+        move |(mut response, total, mut pending, mut done, mut initial)| {
+            let history_state = history_state.clone();
+            let history_agent = history_agent.clone();
+            let history_request = history_request.clone();
+            async move {
             if done {
                 return None;
             }
@@ -478,7 +506,16 @@ async fn call_openai_stream(
             if done {
                 return None;
             }
-            match response.chunk().await {
+            let next_chunk = match tokio::time::timeout(timeout, response.chunk()).await {
+                Ok(result) => result,
+                Err(_) => {
+                    return Some((
+                        Err(std::io::Error::other("provider stream read timed out")),
+                        (response, total, pending, true, initial),
+                    ));
+                }
+            };
+            match next_chunk {
                 Ok(Some(chunk)) => {
                     let next = total.saturating_add(chunk.len());
                     if next > 1_048_576 {
@@ -513,6 +550,15 @@ async fn call_openai_stream(
                             }
                             if data == "[DONE]" {
                                 done = true;
+                                let state = history_state.clone();
+                                let agent_id = history_agent.clone();
+                                let request_id = history_request.clone();
+                                tokio::spawn(async move {
+                                    let _ = append_history(&state, HistoryEvent {
+                                        id: Uuid::new_v4().to_string(), agent_id, operation: "stream".into(),
+                                        status: "succeeded".into(), request_id: Some(request_id), error: None,
+                                    }).await;
+                                });
                             }
                         }
                     }
@@ -536,6 +582,7 @@ async fn call_openai_stream(
                     ))),
                     (response, total, pending, true, initial),
                 )),
+            }
             }
         },
     );
