@@ -40,6 +40,22 @@ afterAll(async () => {
 });
 
 describe("native MCP JSON-RPC boundary", () => {
+	it("authenticates MCP management boundary before returning unsupported", async () => {
+		const unauthenticated = await fetch(`${origin}/api/mcp/servers`);
+		expect(unauthenticated.status).toBe(401);
+		expect((await unauthenticated.json()).error).not.toBe("unsupported");
+
+		const authorized = await fetch(`${origin}/api/mcp/servers`, {
+			headers: { authorization: `Bearer ${token}` },
+		});
+		expect(authorized.status).toBe(501);
+		expect(await authorized.json()).toEqual({
+			error: "unsupported",
+			operation: "mcp management",
+			supported: false,
+			reason: "not represented by native Operations",
+		});
+	});
 	it("initializes and lists bounded tools", async () => {
 		const init = await call({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
 		expect(init.status).toBe(200);

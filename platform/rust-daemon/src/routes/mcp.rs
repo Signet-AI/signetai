@@ -35,8 +35,12 @@ async fn analytics_unsupported() -> (StatusCode, Json<Value>) {
     unsupported("analytics")
 }
 
-async fn unsupported_management() -> (StatusCode, Json<Value>) {
-    unsupported("management")
+async fn unsupported_management(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    crate::routes::auth::gate(&state, &headers).await?;
+    Ok(unsupported("management"))
 }
 
 fn unsupported(surface: &str) -> (StatusCode, Json<Value>) {
