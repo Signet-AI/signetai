@@ -1098,6 +1098,62 @@ fn execute_operation(
                 json!({"agentId":agent_id,"workspaceId":workspace_id,"admission":{"queued":admitted},"jobs":{"count":jobs,"items":items,"nextCursor":next_cursor},"jobEvents":{"count":events}}),
             )
         }
+        Operation::IntegrityVerify {
+            agent_id,
+            workspace_id,
+            project_id,
+            visibility,
+            budget,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let visibility = bounded_text(&visibility, "visibility", 32)?;
+            if visibility != "private" && visibility != "shared" {
+                return Err(CoreError::InvalidInput(
+                    "visibility must be private or shared".into(),
+                ));
+            }
+            let project_id = project_id
+                .map(|value| bounded_text(&value, "project", 256))
+                .transpose()?;
+            let budget = budget.clamp(1, 32);
+            let schema_hash = {
+                let mut s = connection.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'memories_fts%' AND name != 'integrity_checkpoints' ORDER BY type,name")?;
+                let rows = s.query_map([], |r| {
+                    Ok(format!(
+                        "{}:{}:{}\n",
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?
+                    ))
+                })?;
+                let mut hasher = Sha256::new();
+                for row in rows {
+                    hasher.update(row?.as_bytes());
+                }
+                format!("{:x}", hasher.finalize())
+            };
+            connection.execute("CREATE TABLE IF NOT EXISTS integrity_checkpoints (agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, project_id TEXT, visibility TEXT NOT NULL, schema_hash TEXT NOT NULL, next_table TEXT, completed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(agent_id,workspace_id,project_id,visibility))", [])?;
+            let old: Option<(String, i64)> = connection.query_row("SELECT schema_hash,completed FROM integrity_checkpoints WHERE agent_id=? AND workspace_id=? AND project_id IS ? AND visibility=?", params![agent_id, workspace_id, project_id, visibility], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let reset = old.as_ref().is_none_or(|(hash, _)| hash != &schema_hash);
+            let start = if reset {
+                0
+            } else {
+                old.as_ref().and_then(|_| connection.query_row("SELECT CASE next_table WHEN 'documents' THEN 0 WHEN 'jobs' THEN 2 ELSE 3 END FROM integrity_checkpoints WHERE agent_id=? AND workspace_id=? AND project_id IS ? AND visibility=?", params![agent_id,workspace_id,project_id,visibility], |r| r.get::<_,i64>(0)).optional().ok().flatten()).unwrap_or(0) as usize
+            };
+            let tables = ["documents", "memories", "jobs"];
+            let end = (start + budget).min(tables.len());
+            let completed = end == tables.len();
+            let next = if completed {
+                None
+            } else {
+                Some(tables[end].to_owned())
+            };
+            connection.execute("INSERT INTO integrity_checkpoints(agent_id,workspace_id,project_id,visibility,schema_hash,next_table,completed,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,project_id,visibility) DO UPDATE SET schema_hash=excluded.schema_hash,next_table=excluded.next_table,completed=excluded.completed,updated_at=excluded.updated_at", params![agent_id,workspace_id,project_id,visibility,schema_hash,next,completed as i64])?;
+            Ok(
+                json!({"status":"verified","agentId":agent_id,"workspaceId":workspace_id,"projectId":project_id,"visibility":visibility,"fts":"skipped","checkpoint":{"nextTable":next,"completed":completed,"schemaHash":schema_hash}}),
+            )
+        }
         Operation::RepairRequeueRunning {
             agent_id,
             workspace_id,
@@ -3357,6 +3413,13 @@ pub enum Operation {
     RepairRequeueRunning {
         agent_id: String,
         workspace_id: String,
+    },
+    IntegrityVerify {
+        agent_id: String,
+        workspace_id: String,
+        project_id: Option<String>,
+        visibility: String,
+        budget: usize,
     },
     JobSubmit {
         agent_id: String,

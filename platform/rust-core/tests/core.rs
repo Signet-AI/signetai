@@ -18,6 +18,33 @@ fn fresh_db_and_idempotent_init() {
     c.initialize().unwrap();
     c.initialize().unwrap();
 }
+
+#[test]
+fn integrity_checkpoint_is_scoped_durable_and_excludes_fts() {
+    let c = core();
+    let first = c
+        .submit(Operation::IntegrityVerify {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            project_id: Some("project-a".into()),
+            visibility: "private".into(),
+            budget: 2,
+        })
+        .unwrap();
+    assert_eq!(first["status"], "verified");
+    assert_eq!(first["checkpoint"]["nextTable"], "jobs");
+    assert_eq!(first["fts"], "skipped");
+    let second = c
+        .submit(Operation::IntegrityVerify {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            project_id: Some("project-a".into()),
+            visibility: "private".into(),
+            budget: 2,
+        })
+        .unwrap();
+    assert_eq!(second["checkpoint"]["completed"], true);
+}
 #[test]
 fn scoped_writes_and_reads() {
     let c = core();
