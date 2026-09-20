@@ -158,15 +158,50 @@ async fn unsupported_harness_regeneration() -> (StatusCode, Json<Value>) {
     )
 }
 
-async fn harnesses() -> Json<Value> {
-    Json(json!({
-        "harnesses": [],
-        "configuredHarnesses": [],
-        "status": "unsupported",
-        "implemented": false,
-        "probed": false,
-        "reason": "Native harness discovery requires provider-specific configuration"
-    }))
+async fn harnesses(State(state): State<AppState>) -> Json<Value> {
+    let configured = match bounded(read_utf8_no_follow(state.workspace.join("agent.yaml"))).await {
+        Ok(content) => parse_harnesses(&content),
+        Err(_) => Vec::new(),
+    };
+    let harnesses: Vec<Value> = configured
+        .iter()
+        .map(|name| json!({ "name": name, "id": name, "path": "", "exists": true }))
+        .collect();
+    if configured.is_empty() {
+        return Json(json!({
+            "harnesses": [],
+            "configuredHarnesses": [],
+            "status": "unsupported",
+            "implemented": false,
+            "probed": false,
+            "reason": "Native harness discovery requires provider-specific configuration"
+        }));
+    }
+    Json(json!({ "harnesses": harnesses, "configuredHarnesses": configured }))
+}
+
+fn parse_harnesses(content: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut in_list = false;
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed == "harnesses:" {
+            in_list = true;
+            continue;
+        }
+        if !in_list {
+            continue;
+        }
+        if let Some(value) = trimmed.strip_prefix("- ") {
+            let value = value.trim();
+            if !value.is_empty() && value.len() <= 256 {
+                values.push(value.to_owned());
+            }
+        } else if !trimmed.is_empty() && !line.starts_with(' ') && !line.starts_with('\t') {
+            break;
+        }
+    }
+    values
 }
 
 async fn connectors() -> Json<Value> {
