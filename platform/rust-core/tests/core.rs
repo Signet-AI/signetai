@@ -126,6 +126,7 @@ fn blank_document_workspaces_are_default_scoped_across_all_operations() {
             workspace_id: "default".into(),
             kind: "folder".into(),
             name: "blank-workspaces".into(),
+            source_id: None,
             config: serde_json::json!({}),
         })
         .unwrap();
@@ -441,6 +442,53 @@ fn source_tombstones_are_workspace_scoped_and_legacy_rows_backfill() {
     assert_eq!(connection.query_row("SELECT count(*) FROM source_tombstones WHERE agent_id='agent-a' AND source_id='same-source'", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
     owner.initialize().unwrap();
 }
+
+#[test]
+fn explicit_source_reuse_fences_stale_generation() {
+    let owner = core();
+    let create = |owner: &Core| {
+        owner
+            .submit(Operation::CreateSource {
+                agent_id: "agent".into(),
+                workspace_id: "workspace".into(),
+                kind: "notes".into(),
+                name: "reused".into(),
+                source_id: Some("stable-id".into()),
+                config: serde_json::json!({}),
+            })
+            .unwrap()
+    };
+    create(&owner);
+    owner
+        .submit(Operation::DeleteSourceWithGeneration {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            source_id: "stable-id".into(),
+            generation: Some(0),
+        })
+        .unwrap();
+    let recreated = create(&owner);
+    assert_eq!(recreated["id"], "stable-id");
+    let stale = owner.submit(Operation::IngestDocument {
+        agent_id: "agent".into(),
+        workspace_id: "workspace".into(),
+        source_id: "stable-id".into(),
+        path: "stale".into(),
+        content: "body".into(),
+        metadata: serde_json::json!({"_generation": 0}),
+    });
+    assert!(matches!(stale, Err(CoreError::NotFound)));
+    let current = owner.submit(Operation::IngestDocument {
+        agent_id: "agent".into(),
+        workspace_id: "workspace".into(),
+        source_id: "stable-id".into(),
+        path: "current".into(),
+        content: "body".into(),
+        metadata: serde_json::json!({"_generation": 1}),
+    });
+    assert!(current.is_ok());
+}
+
 #[test]
 fn paginated_lists_are_bounded_scoped_and_complete() {
     let d = tempdir().unwrap();
@@ -526,6 +574,7 @@ fn workspace_submit_supports_all_durable_operation_variants() {
             workspace_id: "workspace".into(),
             kind: "notes".into(),
             name: "fixture".into(),
+            source_id: None,
             config: serde_json::json!({"root": "/workspace"}),
         })
         .unwrap();

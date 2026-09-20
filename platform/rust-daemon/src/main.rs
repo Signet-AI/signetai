@@ -642,6 +642,8 @@ async fn sources(
 }
 #[derive(Debug, Deserialize)]
 struct SourceRequest {
+    #[serde(default, alias = "sourceId")]
+    source_id: Option<String>,
     kind: String,
     name: String,
     #[serde(default)]
@@ -667,6 +669,7 @@ async fn create_source(
                     kind: req.kind,
                     name: req.name,
                     config: req.config,
+                    source_id: req.source_id,
                 },
             )
             .await?,

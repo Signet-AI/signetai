@@ -1822,17 +1822,31 @@ fn execute_operation(
             kind,
             name,
             config,
+            source_id,
         } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
             let kind = required_id(&kind)?;
             let name = required_id(&name)?;
             let config_text = serde_json::to_string(&config)?;
-            let id = uuid::Uuid::new_v4().to_string();
+            let id = source_id
+                .map(|id| required_id(&id))
+                .transpose()?
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let transaction = connection.transaction()?;
+            if transaction
+                .query_row("SELECT 1 FROM sources WHERE id=?", params![id], |r| {
+                    r.get::<_, i64>(0)
+                })
+                .optional()?
+                .is_some()
+            {
+                return Err(CoreError::InvalidInput("source id already exists".into()));
+            }
+            let generation: i64 = transaction.query_row("SELECT generation FROM source_tombstones WHERE agent_id=? AND workspace_id=? AND source_id=?", params![agent_id, workspace_id, id], |r| r.get(0)).optional()?.unwrap_or(0).max(0);
             transaction.execute(
-                "INSERT INTO sources (id, agent_id, workspace_id, kind, name, config, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
-                params![id, agent_id, workspace_id, kind, name, config_text],
+                "INSERT INTO sources (id, agent_id, workspace_id, kind, name, config, generation, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))",
+                params![id, agent_id, workspace_id, kind, name, config_text, generation],
             )?;
             let source = transaction.query_row(
                 "SELECT id, agent_id, workspace_id, kind, name, config, created_at FROM sources WHERE id = ? AND agent_id = ? AND workspace_id = ?",
@@ -2867,6 +2881,7 @@ pub enum Operation {
         kind: String,
         name: String,
         config: Value,
+        source_id: Option<String>,
     },
     ListSources {
         agent_id: String,
@@ -3565,7 +3580,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "workspace_id",
         "TEXT DEFAULT 'default'",
     )?;
-    transaction.execute("UPDATE source_tombstones SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+
     let tombstone_pk: Vec<String> = {
         let mut stmt = transaction.prepare("PRAGMA table_info(source_tombstones)")?;
         let rows = stmt
@@ -3578,9 +3593,18 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
             .map(|(_, name)| name)
             .collect()
     };
-    if tombstone_pk != ["agent_id", "workspace_id", "source_id"] {
+    let tombstones_dirty: bool = transaction.query_row("SELECT EXISTS(SELECT 1 FROM source_tombstones WHERE workspace_id IS NULL OR trim(workspace_id)='')", [], |r| r.get::<_, i64>(0))? != 0;
+    let mut actual_pk = tombstone_pk.clone();
+    actual_pk.sort();
+    let mut required_pk = vec![
+        "agent_id".to_owned(),
+        "workspace_id".to_owned(),
+        "source_id".to_owned(),
+    ];
+    required_pk.sort();
+    if actual_pk != required_pk || tombstones_dirty {
         transaction.execute_batch("ALTER TABLE source_tombstones RENAME TO source_tombstones_legacy; CREATE TABLE source_tombstones (agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', source_id TEXT NOT NULL, generation INTEGER NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY(agent_id,workspace_id,source_id));")?;
-        transaction.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) SELECT agent_id,COALESCE(NULLIF(trim(workspace_id),''),'default'),source_id,generation,deleted_at FROM source_tombstones_legacy", [])?;
+        transaction.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) SELECT agent_id,COALESCE(NULLIF(trim(workspace_id),''),'default'),source_id,MAX(generation),MAX(deleted_at) FROM source_tombstones_legacy GROUP BY agent_id,COALESCE(NULLIF(trim(workspace_id),''),'default'),source_id", [])?;
         transaction.execute("DROP TABLE source_tombstones_legacy", [])?;
     }
 
