@@ -444,6 +444,38 @@ fn source_tombstones_are_workspace_scoped_and_legacy_rows_backfill() {
 }
 
 #[test]
+fn explicit_source_ids_are_scoped_by_agent_and_workspace() {
+    let owner = core();
+    for (agent, workspace) in [
+        ("agent-a", "workspace-a"),
+        ("agent-a", "workspace-b"),
+        ("agent-b", "workspace-a"),
+    ] {
+        owner
+            .submit(Operation::CreateSource {
+                agent_id: agent.into(),
+                workspace_id: workspace.into(),
+                kind: "notes".into(),
+                name: "same".into(),
+                source_id: Some("shared-id".into()),
+                config: serde_json::json!({}),
+            })
+            .unwrap();
+    }
+    let duplicate = owner.submit(Operation::CreateSource {
+        agent_id: "agent-a".into(),
+        workspace_id: "workspace-a".into(),
+        kind: "notes".into(),
+        name: "duplicate".into(),
+        source_id: Some("shared-id".into()),
+        config: serde_json::json!({}),
+    });
+    assert!(
+        matches!(duplicate, Err(CoreError::InvalidInput(message)) if message == "source id already exists")
+    );
+}
+
+#[test]
 fn explicit_source_reuse_fences_stale_generation() {
     let owner = core();
     let create = |owner: &Core| {

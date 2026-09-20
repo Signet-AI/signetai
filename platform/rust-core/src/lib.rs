@@ -1835,9 +1835,11 @@ fn execute_operation(
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let transaction = connection.transaction()?;
             if transaction
-                .query_row("SELECT 1 FROM sources WHERE id=?", params![id], |r| {
-                    r.get::<_, i64>(0)
-                })
+                .query_row(
+                    "SELECT 1 FROM sources WHERE id=? AND agent_id=? AND workspace_id=?",
+                    params![id, agent_id, workspace_id],
+                    |r| r.get::<_, i64>(0),
+                )
                 .optional()?
                 .is_some()
             {
@@ -3320,7 +3322,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT);
          CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');
-         CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', created_at TEXT);
+         CREATE TABLE IF NOT EXISTS sources (id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY(agent_id,workspace_id,id));
          CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', content_hash TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT);
          CREATE TABLE IF NOT EXISTS source_tombstones (agent_id TEXT NOT NULL, source_id TEXT NOT NULL, generation INTEGER NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY(agent_id,source_id));
          CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, superseded_by TEXT, superseded_at TEXT, superseded_reason TEXT, created_at TEXT, updated_at TEXT);
@@ -3574,6 +3576,36 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "UPDATE sources SET workspace_id = 'default' WHERE workspace_id IS NULL OR trim(workspace_id) = ''",
         [],
     )?;
+    let source_pk: Vec<String> = {
+        let mut stmt = transaction.prepare("PRAGMA table_info(sources)")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .filter(|(pk, _)| *pk > 0)
+            .map(|(_, name)| name)
+            .collect()
+    };
+    let mut actual_source_pk = source_pk;
+    actual_source_pk.sort();
+    let mut required_source_pk = vec![
+        "agent_id".to_owned(),
+        "workspace_id".to_owned(),
+        "id".to_owned(),
+    ];
+    required_source_pk.sort();
+    if actual_source_pk != required_source_pk {
+        transaction.execute_batch(
+            "ALTER TABLE sources RENAME TO sources_legacy;
+             CREATE TABLE sources (id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY(agent_id,workspace_id,id));
+             INSERT INTO sources(id,agent_id,workspace_id,kind,name,config,generation,created_at)
+               SELECT id,COALESCE(NULLIF(trim(agent_id),''),'default'),COALESCE(NULLIF(trim(workspace_id),''),'default'),kind,COALESCE(name,''),COALESCE(config,'{}'),COALESCE(generation,0),created_at FROM sources_legacy;
+             DROP TABLE sources_legacy;",
+        )?;
+    }
+
     ensure_column(
         &transaction,
         "source_tombstones",
@@ -3609,7 +3641,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     }
 
     transaction.execute(
-        "UPDATE sources SET config = COALESCE(config, metadata, '{}') WHERE config IS NULL OR trim(config) = ''",
+        "UPDATE sources SET config = COALESCE(config, '{}') WHERE config IS NULL OR trim(config) = ''",
         [],
     )?;
     transaction.execute(
