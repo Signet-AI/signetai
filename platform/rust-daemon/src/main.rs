@@ -18,7 +18,7 @@ use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(windows)]
-use std::os::windows::ffi::OsStrExt;
+use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
 use std::{
     collections::HashMap,
     env,
@@ -36,6 +36,8 @@ use uuid::Uuid;
 #[cfg(windows)]
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+#[cfg(windows)]
+use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::CreateMutexW;
 
@@ -1508,14 +1510,29 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
     {
         let parent = path.parent().ok_or("database owner lock has no parent")?;
         std::fs::create_dir_all(parent)?;
-        let canonical_parent = std::fs::canonicalize(parent)?;
         if std::fs::symlink_metadata(path)
             .map(|m| m.file_type().is_symlink())
             .unwrap_or(false)
         {
             return Err("database owner lock path is a symlink".into());
         }
-        let identity = format!("{}\\{}", canonical_parent.display(), path.display());
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)?;
+        let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+        if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) } == 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // File index + volume serial is the kernel identity, so hardlink aliases
+        // converge while a path rename/replacement cannot steal an existing lock.
+        let identity = format!(
+            "volume={:08x};file={:08x}{:08x}",
+            info.dwVolumeSerialNumber,
+            info.nFileIndexHigh,
+            info.nFileIndexLow
+        );
         use sha2::Digest;
         let digest = sha2::Sha256::digest(identity.as_bytes());
         let name = format!(
@@ -1539,11 +1556,6 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
             }
             return Err("database owner already running".into());
         }
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(path)?;
         file.set_len(0)?;
         write!(
             file,
