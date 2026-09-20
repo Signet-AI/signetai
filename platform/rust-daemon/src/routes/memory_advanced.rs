@@ -28,6 +28,10 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/memory/lineage/{id}", get(lineage))
         .route("/api/memory/review/{id}", get(review))
         .route("/api/memory/native-note", post(native_note))
+        .route(
+            "/api/memory/semantic-search",
+            post(semantic_search_unsupported),
+        )
 }
 async fn dispatch(
     state: State<AppState>,
@@ -176,4 +180,14 @@ async fn native_note(
     Json(p): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     dispatch(State(s), h, "native-note", None, p).await
+}
+
+async fn semantic_search_unsupported(
+    State(_s): State<AppState>,
+    _h: HeaderMap,
+    Json(_p): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    Err(ApiError::not_implemented(
+        "semantic memory search requires an embedding/provider path not implemented by the fresh native daemon",
+    ))
 }
