@@ -1,6 +1,7 @@
 import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
 const driver = process.env.SIGNET_RUST_CORE_DRIVER_BIN;
 if (!driver) throw new Error("SIGNET_RUST_CORE_DRIVER_BIN is required");
 const path = resolve(driver);

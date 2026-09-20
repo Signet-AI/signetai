@@ -1,3 +1,4 @@
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
 const driver = process.env.SIGNET_RUST_CORE_DRIVER_BIN;
 if (!driver) throw new Error("SIGNET_RUST_CORE_DRIVER_BIN is required");
 const driverPath: string = driver;
@@ -6,7 +7,7 @@ const driverPath: string = driver;
 function call(path: string, request: Record<string, unknown>): any {
 	const result = Bun.spawnSync([driverPath, path], {
 		// biome-ignore lint/suspicious/noExplicitAny: Bun accepts string stdin at runtime.
-		stdin: (`${JSON.stringify(request)}\n{"op":"close"}\n`) as any,
+		stdin: `${JSON.stringify(request)}\n{"op":"close"}\n` as any,
 		stdout: "pipe",
 		stderr: "pipe",
 	});
