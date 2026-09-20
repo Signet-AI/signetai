@@ -44,7 +44,7 @@ fn open_workspace(workspace: &Path) -> Option<File> {
     let mut current = if workspace.is_absolute() {
         let fd = unsafe {
             libc::open(
-                b"/\\0".as_ptr().cast(),
+                b"/\0".as_ptr().cast(),
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
             )
         };
@@ -55,7 +55,7 @@ fn open_workspace(workspace: &Path) -> Option<File> {
     } else {
         let fd = unsafe {
             libc::open(
-                b".\\0".as_ptr().cast(),
+                b".\0".as_ptr().cast(),
                 libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
             )
         };
@@ -169,8 +169,10 @@ fn replace_section(current: &str, section: &str) -> Option<String> {
     } else {
         "\n"
     };
-    let mut base = String::new();
-    let mut skipping = false;
+    let mut offset = 0;
+    let mut section_start = None;
+    let mut section_end = None;
+    let mut last_nonempty_end = None;
     for raw in current.split_inclusive('\n') {
         let line = raw
             .strip_suffix('\n')
@@ -179,32 +181,44 @@ fn replace_section(current: &str, section: &str) -> Option<String> {
             .unwrap_or(raw);
         let indent = line.len() - line.trim_start().len();
         let trimmed = line.trim();
-        if trimmed == "updates:" || trimmed == "update:" {
-            if indent != 0 {
-                return None;
-            }
-            skipping = true;
-            continue;
-        }
-        if skipping && !trimmed.is_empty() && indent == 0 {
-            skipping = false;
-        }
-        if skipping && !trimmed.is_empty() && indent != 2 {
+        if (trimmed == "updates:" || trimmed == "update:") && indent != 0 {
             return None;
         }
-        if !skipping {
-            base.push_str(raw);
+        if section_start.is_none() && indent == 0 && (trimmed == "updates:" || trimmed == "update:")
+        {
+            section_start = Some(offset);
+            last_nonempty_end = Some(offset + raw.len());
+        } else if let Some(start) = section_start {
+            if section_end.is_none() && !trimmed.is_empty() && indent == 0 {
+                section_end = Some(offset);
+            } else if section_end.is_none() && !trimmed.is_empty() {
+                if indent != 2 {
+                    return None;
+                }
+                last_nonempty_end = Some(offset + raw.len());
+            }
+            if section_end.is_none() && start == offset {
+                last_nonempty_end = Some(offset + raw.len());
+            }
         }
+        offset += raw.len();
     }
-    let suffix_start = current.trim_end().len();
-    let suffix = &current[suffix_start..];
-    let base = base.trim_end_matches(|c: char| c.is_ascii_whitespace());
     let section = section.replace('\n', newline);
-    Some(if base.is_empty() {
-        format!("{}{}", section, suffix)
-    } else {
-        format!("{}{}{}{}{}", base, newline, newline, section, suffix)
-    })
+    if let Some(start) = section_start {
+        let end = section_end.unwrap_or(current.len());
+        let body_end = last_nonempty_end.unwrap_or(start).min(end);
+        let prefix = &current[..start];
+        let separator = &current[body_end..end];
+        let suffix = &current[end..];
+        return Some(format!("{}{}{}{}", prefix, section, separator, suffix));
+    }
+    let insertion = current
+        .trim_end_matches(|c: char| c.is_ascii_whitespace())
+        .len();
+    let prefix = &current[..insertion];
+    let suffix = &current[insertion..];
+    let separator = if prefix.is_empty() { "" } else { newline };
+    Some(format!("{}{}{}{}", prefix, separator, section, suffix))
 }
 
 fn persist(workspace: &Path, config: &Config) -> bool {
@@ -294,7 +308,8 @@ fn persist(workspace: &Path, config: &Config) -> bool {
         && {
             let latest = open_config(&dir).and_then(|f| f.metadata().ok());
             match (metadata.as_ref(), latest) {
-                (None, None) | (None, Some(_)) => true,
+                (None, None) => true,
+                (None, Some(_)) => false,
                 (Some(old), Some(new)) => (old.dev(), old.ino()) == (new.dev(), new.ino()),
                 _ => false,
             }

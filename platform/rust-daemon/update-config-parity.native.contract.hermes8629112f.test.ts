@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,7 +7,12 @@ const bin = join(process.cwd(), "platform/rust-daemon/target/debug/signet-daemon
 
 it("serves authenticated bounded update config parity and leaves discovery unsupported", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "signet-update-parity-"));
-	const port = 41000 + Math.floor(Math.random() * 1000);
+	const portProbe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+	const rootPortProbe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+	const port = portProbe.port;
+	const rootPort = rootPortProbe.port;
+	portProbe.stop();
+	rootPortProbe.stop();
 	const child = Bun.spawn([bin], {
 		env: {
 			...process.env,
@@ -89,7 +94,7 @@ it("serves authenticated bounded update config parity and leaves discovery unsup
 			body: JSON.stringify({ channel: "nightly" }),
 		});
 		expect((await trailing.json()).persisted).toBe(true);
-		expect(readFileSync(join(dir, "agent.yaml"), "utf8")).toEndWith("\n\n\n  	 \n");
+		expect(readFileSync(join(dir, "agent.yaml"), "utf8")).toEndWith("\n\n  	 \n");
 
 		const target = join(dir, "outside-target.yaml");
 		writeFileSync(target, "sentinel: keep\\n");
@@ -112,7 +117,7 @@ it("serves authenticated bounded update config parity and leaves discovery unsup
 				...process.env,
 				SIGNET_PATH: rootLink,
 				SIGNET_BIND: "127.0.0.1",
-				SIGNET_PORT: String(port + 1),
+				SIGNET_PORT: String(rootPort),
 				SIGNET_API_KEY: "update-parity-key",
 			},
 			stdout: "ignore",
@@ -120,10 +125,14 @@ it("serves authenticated bounded update config parity and leaves discovery unsup
 		});
 		try {
 			await Bun.sleep(150);
-			const rejected = await fetch(`http://127.0.0.1:${port + 1}/api/update/config`, { headers: auth }).catch(
-				() => undefined,
-			);
+			const rejected = await fetch(`http://127.0.0.1:${rootPort}/api/update/config`, {
+				method: "POST",
+				headers: { ...auth, "content-type": "application/json" },
+				body: JSON.stringify({ channel: "nightly" }),
+			}).catch(() => undefined);
 			expect(rejected?.status).toBe(200);
+			expect(await rejected?.json()).toMatchObject({ persisted: false, success: true });
+			expect(existsSync(join(rootTarget, "agent.yaml"))).toBe(false);
 		} finally {
 			rootChild.kill("SIGTERM");
 			await Promise.race([rootChild.exited, Bun.sleep(500).then(() => rootChild.kill("SIGKILL"))]);
