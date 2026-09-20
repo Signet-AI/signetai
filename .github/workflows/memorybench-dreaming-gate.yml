@@ -13,6 +13,8 @@ on:
       - "memorybench/src/types/provider.ts"
       - "platform/daemon/src/**"
       - "platform/core/src/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
       - ".github/workflows/memorybench-dreaming-gate.yml"
   push:
     branches: [main]
@@ -27,6 +29,8 @@ on:
       - "memorybench/src/types/provider.ts"
       - "platform/daemon/src/**"
       - "platform/core/src/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
       - ".github/workflows/memorybench-dreaming-gate.yml"
 
 permissions:
@@ -34,10 +38,7 @@ permissions:
 
 jobs:
   dreaming-gate:
-    # Compatibility/parity evidence only. It imports the displaced TypeScript
-    # daemon source and is not a native production validation gate.
-    continue-on-error: true
-    name: "TypeScript parity: deterministic Dreaming fixture and scope"
+    name: "Native Rust Dreaming and scope gate"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

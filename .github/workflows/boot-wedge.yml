@@ -5,6 +5,8 @@ on:
       - "platform/daemon/**"
       - "platform/core/**"
       - "platform/native/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
       - "libs/lifecycle-proof/**"
       - "scripts/**"
       - "package.json"
@@ -19,6 +21,8 @@ on:
       - "platform/daemon/**"
       - "platform/core/**"
       - "platform/native/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
       - "libs/lifecycle-proof/**"
       - "scripts/**"
       - "package.json"
@@ -33,10 +37,7 @@ permissions:
 
 jobs:
   boot-wedge:
-    # Compatibility evidence only. This source-run harness exercises the
-    # displaced TypeScript daemon and must not block native production gates.
-    continue-on-error: true
-    name: "TypeScript parity: source-run boot, liveness, and CPU ceiling"
+    name: "Native Rust boot, liveness, and CPU ceiling"
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:

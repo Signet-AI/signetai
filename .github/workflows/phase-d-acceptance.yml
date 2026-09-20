@@ -5,12 +5,16 @@ on:
     paths:
       - "platform/rust-daemon/**"
       - "platform/rust-core/**"
+      - "scripts/build-native-cli.ts"
+      - "scripts/native-packaged-acceptance.test.ts"
       - ".github/workflows/phase-d-acceptance.yml"
   push:
     branches: [main]
     paths:
       - "platform/rust-daemon/**"
       - "platform/rust-core/**"
+      - "scripts/build-native-cli.ts"
+      - "scripts/native-packaged-acceptance.test.ts"
       - ".github/workflows/phase-d-acceptance.yml"
   schedule:
     - cron: "15 7 * * *"
@@ -33,9 +37,10 @@ jobs:
         run: bun run build:native-cli
       - name: Run Rust daemon contract tests
         run: bun test platform/rust-daemon/contract.test.ts
-      - name: Packaged smoke without Bun or Node
+      - name: Packaged Rust acceptance without Bun or Node
         shell: bash
         run: |
           set -euo pipefail
           test -s dist/native/signet-linux-x64
-          env -i HOME="$HOME" PATH=/usr/bin:/bin SIGNET_TELEMETRY_OPTOUT=1 dist/native/signet-linux-x64 --help >/dev/null
+          test -s dist/native/signet-linux-x64.provenance.json
+          env -i HOME="$HOME" PATH=/usr/bin:/bin SIGNET_NATIVE_ACCEPTANCE_BINARY="$GITHUB_WORKSPACE/dist/native/signet-linux-x64" SIGNET_NATIVE_PROVENANCE="$GITHUB_WORKSPACE/dist/native/signet-linux-x64.provenance.json" bun test scripts/native-packaged-acceptance.test.ts
