@@ -58,6 +58,48 @@ fn failed_update_rolls_back() {
 }
 
 #[test]
+fn repair_requeue_does_not_event_preexisting_queued_job() {
+    let c = core();
+    let submit = |kind: &str| {
+        c.submit(Operation::JobSubmit {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            kind: kind.into(),
+            payload: serde_json::json!({}),
+            deadline_at: None,
+        })
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let running_id = submit("dreaming");
+    let claimed_id = c.worker_claim().unwrap().unwrap().id;
+    assert_eq!(claimed_id, running_id);
+    let queued_id = submit("dreaming");
+
+    let repaired = c
+        .submit(Operation::RepairRequeueRunning {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+        })
+        .unwrap();
+    assert_eq!(repaired["requeued"], 1);
+
+    let events = c
+        .submit(Operation::JobEvents {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            id: queued_id,
+            cursor: 0,
+            limit: 100,
+        })
+        .unwrap();
+    assert_eq!(events.as_array().unwrap().len(), 1);
+    assert_eq!(events[0]["event"], "queued");
+}
+
+#[test]
 fn knowledge_detail_aspects_and_attributes_are_scoped_and_bounded() {
     let c = core();
     let id = c

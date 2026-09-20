@@ -1007,8 +1007,18 @@ fn execute_operation(
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
             let tx = connection.transaction()?;
-            let count = tx.execute("UPDATE jobs SET state='queued', updated_at=datetime('now'), error=NULL WHERE agent_id=? AND workspace_id=? AND state='running'", params![agent_id, workspace_id])?;
-            tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) SELECT id,agent_id,'requeued',?,datetime('now') FROM jobs WHERE agent_id=? AND workspace_id=? AND state='queued' AND updated_at >= datetime('now','-1 second')", params![serde_json::to_string(&json!({"source":"repair"}))?, agent_id, workspace_id])?;
+            let changed: Vec<(String, String)> = {
+                let mut updated = tx.prepare("UPDATE jobs SET state='queued', updated_at=datetime('now'), error=NULL WHERE agent_id=? AND workspace_id=? AND state='running' RETURNING id,agent_id")?;
+                let rows = updated.query_map(params![agent_id, workspace_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?;
+                rows.collect::<Result<Vec<_>, _>>()?
+            };
+            let count = changed.len();
+            let event_data = serde_json::to_string(&json!({"source":"repair"}))?;
+            for (job_id, job_agent_id) in changed {
+                tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?,'requeued',?,datetime('now'))", params![job_id, job_agent_id, event_data])?;
+            }
             tx.commit()?;
             Ok(
                 json!({"action":"requeue_running","agentId":agent_id,"workspaceId":workspace_id,"requeued":count}),
