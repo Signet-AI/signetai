@@ -3568,14 +3568,11 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "TEXT NOT NULL DEFAULT '{}'",
     )?;
     ensure_column(&transaction, "documents", "created_at", "TEXT")?;
-    transaction.execute(
-        "UPDATE sources SET agent_id = 'default' WHERE agent_id IS NULL OR trim(agent_id) = ''",
+    let source_identity_dirty: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sources WHERE agent_id IS NULL OR trim(agent_id) = '' OR workspace_id IS NULL OR trim(workspace_id) = '')",
         [],
-    )?;
-    transaction.execute(
-        "UPDATE sources SET workspace_id = 'default' WHERE workspace_id IS NULL OR trim(workspace_id) = ''",
-        [],
-    )?;
+        |row| row.get::<_, i64>(0),
+    )? != 0;
     let source_pk: Vec<String> = {
         let mut stmt = transaction.prepare("PRAGMA table_info(sources)")?;
         let rows = stmt
@@ -3603,20 +3600,21 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
             .collect::<Result<Vec<_>, _>>()?;
         columns.iter().any(|name| name == "metadata")
     };
-    if actual_source_pk != required_source_pk {
+    if actual_source_pk != required_source_pk || source_identity_dirty {
         transaction.execute_batch(
             "ALTER TABLE sources RENAME TO sources_legacy;
              CREATE TABLE sources (id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY(agent_id,workspace_id,id));",
         )?;
         let config_expression = if source_has_metadata {
-            "COALESCE(NULLIF(trim(config),''), NULLIF(trim(metadata),''), '{}')"
+            "COALESCE(NULLIF(trim(s.config),''), NULLIF(trim(s.metadata),''), (SELECT NULLIF(trim(l.metadata),'') FROM sources_legacy l WHERE l.id=s.id AND COALESCE(NULLIF(trim(l.agent_id),''),'default')=COALESCE(NULLIF(trim(s.agent_id),''),'default') AND COALESCE(NULLIF(trim(l.workspace_id),''),'default')=COALESCE(NULLIF(trim(s.workspace_id),''),'default') AND NULLIF(trim(l.metadata),'') IS NOT NULL ORDER BY COALESCE(l.generation,0) DESC, l.created_at DESC, l.rowid DESC LIMIT 1), '{}')"
         } else {
-            "COALESCE(config, '{}')"
+            "COALESCE(NULLIF(trim(s.config),''), '{}')"
         };
         transaction.execute(
             &format!(
-                "INSERT INTO sources(id,agent_id,workspace_id,kind,name,config,generation,created_at)
-                 SELECT id,COALESCE(NULLIF(trim(agent_id),''),'default'),COALESCE(NULLIF(trim(workspace_id),''),'default'),kind,COALESCE(name,''),{},COALESCE(generation,0),created_at FROM sources_legacy",
+                "WITH ranked AS (SELECT s.*, ROW_NUMBER() OVER (PARTITION BY COALESCE(NULLIF(trim(agent_id),''),'default'), COALESCE(NULLIF(trim(workspace_id),''),'default'), id ORDER BY COALESCE(generation,0) DESC, created_at DESC, rowid DESC) AS rn FROM sources_legacy s)
+                 INSERT INTO sources(id,agent_id,workspace_id,kind,name,config,generation,created_at)
+                 SELECT id,COALESCE(NULLIF(trim(agent_id),''),'default'),COALESCE(NULLIF(trim(workspace_id),''),'default'),kind,COALESCE(name,''),{},COALESCE(generation,0),created_at FROM ranked s WHERE rn=1",
                 config_expression
             ),
             [],

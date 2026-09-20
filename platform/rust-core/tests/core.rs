@@ -280,6 +280,45 @@ fn migrates_legacy_source_and_document_workspace_to_default_and_cleans_up() {
 }
 
 #[test]
+fn collapses_legacy_source_identity_collisions_without_losing_meaningful_config() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-source-collision.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE sources (id TEXT NOT NULL, agent_id TEXT, workspace_id TEXT, kind TEXT NOT NULL, name TEXT, config TEXT, metadata TEXT, generation INTEGER, created_at TEXT, PRIMARY KEY (id, agent_id, workspace_id));
+             INSERT INTO sources VALUES ('same', NULL, NULL, 'folder', 'older', '', '{\"path\":\"/meaningful\"}', 3, '2026-01-01');
+             INSERT INTO sources VALUES ('same', '', '', 'folder', 'winner', '   ', NULL, 4, '2026-01-02');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let owner = Core::open(&p, 4).unwrap();
+    let sources = owner
+        .submit(Operation::ListSources {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+        })
+        .unwrap();
+    let sources = sources.as_array().unwrap();
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["name"], "winner");
+    let connection = Connection::open(&p).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT generation FROM sources WHERE agent_id='default' AND workspace_id='default' AND id='same'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+        4
+    );
+    assert_eq!(sources[0]["config"]["path"], "/meaningful");
+    owner.initialize().unwrap();
+}
+
+#[test]
 fn preserves_legacy_source_metadata_configuration_when_config_is_blank_or_null() {
     let d = tempdir().unwrap();
     let p = d.path().join("legacy-source-metadata.sqlite");
