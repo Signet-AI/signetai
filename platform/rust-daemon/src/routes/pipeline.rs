@@ -112,12 +112,40 @@ pub(crate) async fn trigger(
         .await?,
     ))
 }
+async fn unsupported_models() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "pipeline model registry is unsupported by the fresh native operation boundary",
+    ))
+}
+
+async fn unsupported_dreaming() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "Dreaming orchestration is unsupported by the fresh native operation boundary",
+    ))
+}
+
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/pipeline/status", get(pipeline_status))
         .route("/api/pipeline/pause", post(pause))
         .route("/api/pipeline/resume", post(resume))
+        .route("/api/pipeline/models", get(unsupported_models))
+        .route("/api/pipeline/models/by-provider", get(unsupported_models))
+        .route("/api/pipeline/models/refresh", post(unsupported_models))
         .route("/api/dream/status", get(dream_status))
         .route("/api/dream/passes/active", get(active_passes))
+        .route(
+            "/api/dream/passes/{pass_id}/events",
+            get(unsupported_dreaming),
+        )
+        .route(
+            "/api/dream/passes/{pass_id}/tools",
+            get(unsupported_dreaming),
+        )
+        .route("/api/dream/quality", get(unsupported_dreaming))
+        .route("/api/dream/exclusions/requeue", post(unsupported_dreaming))
+        .route("/api/dream/operations", post(unsupported_dreaming))
+        .route("/api/dream/tools", get(unsupported_dreaming))
+        .route("/api/dream/tools/{capability}", post(unsupported_dreaming))
         .route("/api/dream/trigger", post(trigger))
 }
