@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     fs,
+    io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -51,20 +52,75 @@ fn audit_path(state: &AppState) -> PathBuf {
 fn load(state: &AppState) -> Result<Value, ApiError> {
     let path = registry_path(state);
     match fs::read_to_string(path) {
-        Ok(s) => serde_json::from_str(&s).map_err(|_| ApiError {
-            status: StatusCode::CONFLICT,
-            code: "invalid_registry",
-            message: "plugin registry is malformed".into(),
-        }),
+        Ok(s) => {
+            let value: Value = serde_json::from_str(&s).map_err(|_| ApiError {
+                status: StatusCode::CONFLICT,
+                code: "invalid_registry",
+                message: "plugin registry is malformed".into(),
+            })?;
+            let valid = value.get("version").and_then(Value::as_u64) == Some(1)
+                && value
+                    .get("plugins")
+                    .and_then(Value::as_object)
+                    .is_some_and(|plugins| plugins.values().all(|p| p.is_object()));
+            if valid {
+                Ok(value)
+            } else {
+                Err(ApiError {
+                    status: StatusCode::CONFLICT,
+                    code: "invalid_registry",
+                    message: "plugin registry shape is invalid".into(),
+                })
+            }
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({"version":1,"plugins":{}})),
         Err(e) => Err(ApiError::internal(e.to_string())),
     }
 }
 fn save(state: &AppState, value: &Value) -> Result<(), ApiError> {
     let path = registry_path(state);
-    fs::create_dir_all(path.parent().unwrap()).map_err(|e| ApiError::internal(e.to_string()))?;
-    fs::write(path, serde_json::to_vec_pretty(value).unwrap())
-        .map_err(|e| ApiError::internal(e.to_string()))
+    let parent = path.parent().unwrap();
+    fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut tmp = None;
+    for n in 0..16u32 {
+        let candidate = parent.join(format!(
+            ".registry-v1.json.tmp-{}-{}",
+            std::process::id(),
+            n
+        ));
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(mut f) => {
+                f.write_all(&bytes)
+                    .and_then(|_| f.sync_all())
+                    .map_err(|e| {
+                        let _ = fs::remove_file(&candidate);
+                        ApiError::internal(e.to_string())
+                    })?;
+                tmp = Some(candidate);
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(ApiError::internal(e.to_string())),
+        }
+    }
+    let tmp =
+        tmp.ok_or_else(|| ApiError::internal("could not allocate registry temporary file"))?;
+    fs::rename(&tmp, &path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        ApiError::internal(e.to_string())
+    })?;
+    #[cfg(unix)]
+    {
+        fs::File::open(parent)
+            .and_then(|f| f.sync_all())
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+    }
+    Ok(())
 }
 fn surfaces(id: &str) -> Value {
     if id == "signet-secrets" {
@@ -169,9 +225,25 @@ async fn audit(
     h: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     gate(&s, &h).await?;
+    const MAX_AUDIT_BYTES: u64 = 2 * 1024 * 1024;
     let mut out = Vec::new();
-    if let Ok(text) = fs::read_to_string(audit_path(&s)) {
-        for l in text.lines() {
+    let mut truncated = false;
+    let mut bytes_scanned = 0u64;
+    if let Ok(mut f) = fs::File::open(audit_path(&s)) {
+        let len = f
+            .metadata()
+            .map_err(|e| ApiError::internal(e.to_string()))?
+            .len();
+        let start = len.saturating_sub(MAX_AUDIT_BYTES);
+        truncated = start > 0;
+        f.seek(SeekFrom::Start(start))
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        let mut text = String::new();
+        f.take(MAX_AUDIT_BYTES)
+            .read_to_string(&mut text)
+            .map_err(|e| ApiError::internal(e.to_string()))?;
+        bytes_scanned = text.len() as u64;
+        for l in text.lines().skip(if truncated { 1 } else { 0 }) {
             if let Ok(v) = serde_json::from_str::<Value>(l) {
                 if q.plugin_id.as_ref().is_some_and(|x| v["pluginId"] != *x)
                     || q.event.as_ref().is_some_and(|x| v["event"] != *x)
@@ -184,14 +256,16 @@ async fn audit(
                 {
                     continue;
                 }
-                out.push(v)
+                out.push(v);
             }
         }
     }
     out.reverse();
     out.truncate(q.limit.unwrap_or(100).clamp(1, 500));
     let n = out.len();
-    Ok(Json(json!({"events":out,"count":n})))
+    Ok(Json(
+        json!({"events":out,"count":n,"truncated":truncated,"bytesScanned":bytes_scanned}),
+    ))
 }
 async fn update(
     State(s): State<AppState>,
@@ -211,16 +285,22 @@ async fn update(
         .to_string();
     st["plugins"][&id] = json!({"enabled":u.enabled,"installedAt":installed,"updatedAt":now()});
     save(&s, &st)?;
-    let p = audit_path(&s);
-    fs::create_dir_all(p.parent().unwrap()).map_err(|e| ApiError::internal(e.to_string()))?;
-    use std::io::Write;
-    let mut f = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(p)
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    writeln!(f,"{}",json!({"timestamp":now(),"pluginId":id,"event":if u.enabled{"plugin.enabled"}else{"plugin.disabled"}})).map_err(|e| ApiError::internal(e.to_string()))?;
-    Ok(Json(
-        records(&s)?.into_iter().find(|x| x["id"] == id).unwrap(),
-    ))
+    let audit_result = (|| -> Result<(), String> {
+        let p = audit_path(&s);
+        fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
+        let mut f = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)
+            .map_err(|e| e.to_string())?;
+        writeln!(f, "{}", json!({"timestamp":now(),"pluginId":id,"event":if u.enabled{"plugin.enabled"}else{"plugin.disabled"}})).map_err(|e| e.to_string())?;
+        f.sync_all().map_err(|e| e.to_string())
+    })();
+    let committed = records(&s)?.into_iter().find(|x| x["id"] == id).unwrap();
+    let mut response = committed;
+    response["auditDegraded"] = Value::Bool(audit_result.is_err());
+    if let Err(e) = audit_result {
+        response["auditError"] = Value::String(e);
+    }
+    Ok(Json(response))
 }

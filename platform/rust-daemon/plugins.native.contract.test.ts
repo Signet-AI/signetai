@@ -88,3 +88,37 @@ it("refuses malformed registry instead of overwriting it", async () => {
 	expect(r.status).toBe(409);
 	expect(readFileSync(path, "utf8")).toBe("not-json");
 });
+it("rejects semantically invalid registry shapes", async () => {
+	const { origin, workspace } = await start();
+	const path = join(workspace, ".daemon/plugins/registry-v1.json");
+	mkdirSync(join(workspace, ".daemon/plugins"), { recursive: true });
+	for (const value of [
+		{ version: 2, plugins: {} },
+		{ version: 1, plugins: [] },
+		{ version: 1, plugins: { "signet-graphiq": [] } },
+	]) {
+		writeFileSync(path, JSON.stringify(value));
+		expect((await get(origin, "/api/plugins", auth)).status).toBe(409);
+	}
+});
+it("bounds audit reads and reports truncation while preserving newest filtering", async () => {
+	const { origin, workspace } = await start();
+	const path = join(workspace, ".daemon/plugins/audit-v1.ndjson");
+	mkdirSync(join(workspace, ".daemon/plugins"), { recursive: true });
+	const lines = Array.from({ length: 12000 }, (_, i) =>
+		JSON.stringify({
+			timestamp: String(i),
+			pluginId: "signet-graphiq",
+			event: "plugin.disabled",
+			payload: "x".repeat(180),
+		}),
+	);
+	writeFileSync(path, `${lines.join("\n")}\n`);
+	const r = await (
+		await get(origin, "/api/plugins/audit?plugin_id=signet-graphiq&event=plugin.disabled&limit=3", auth)
+	).json();
+	expect(r.events).toHaveLength(3);
+	expect(r.events[0].timestamp).toBe("11999");
+	expect(r.truncated).toBe(true);
+	expect(r.bytesScanned).toBeLessThan(2_100_000);
+});
