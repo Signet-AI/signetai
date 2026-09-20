@@ -76,7 +76,7 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
-	return accessor.withWriteTxAsync(processBatch, { siteToken: "startup-recovery.ts:78" });
+	return accessor.withWriteTxAsync(processBatch, { siteToken: "startup-recovery.ts:79" });
 }
 
 /**
@@ -99,7 +99,7 @@ async function drainBatchesAsync<Item>(
 	while (processed < maxTotal) {
 		const limit = Math.min(BATCH_SIZE, maxTotal - processed);
 		const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit), {
-			siteToken: "startup-recovery.ts:100",
+			siteToken: "startup-recovery.ts:101",
 		});
 		if (!batch || batch.length === 0) return processed;
 		await writeBatch(accessor, (db) => processBatch(db, batch));
@@ -530,7 +530,7 @@ async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerC
 					| undefined;
 				return state?.state === "building";
 			},
-			{ siteToken: "startup-recovery.ts:521" },
+			{ siteToken: "startup-recovery.ts:522" },
 		);
 
 		if (migrationInProgress) {

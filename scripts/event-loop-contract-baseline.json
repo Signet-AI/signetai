@@ -5161,21 +5161,21 @@
     },
     {
       "path": "startup-recovery.ts",
-      "line": 78,
+      "line": 79,
       "api": "withWriteTxAsync",
-      "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"startup-recovery.ts:78\" });",
+      "source": "return accessor.withWriteTxAsync(processBatch, { siteToken: \"startup-recovery.ts:79\" });",
       "category": "hot-path"
     },
     {
       "path": "startup-recovery.ts",
-      "line": 100,
+      "line": 101,
       "api": "withReadDbAsync",
       "source": "const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit), {",
       "category": "hot-path"
     },
     {
       "path": "startup-recovery.ts",
-      "line": 521,
+      "line": 522,
       "api": "withReadDbAsync",
       "source": "const migrationInProgress = await accessor.withReadDbAsync(",
       "category": "hot-path"

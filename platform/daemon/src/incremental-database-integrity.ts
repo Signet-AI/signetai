@@ -499,7 +499,6 @@ function progressFrom(
 	ownerQueueAdmissionMs: number,
 	ownerExecutionMs: number,
 	cancellationReason: string | null,
-	degradationReason: string | null,
 ): IncrementalIntegrityProgress {
 	return {
 		checkpointKey: key,
@@ -515,7 +514,7 @@ function progressFrom(
 		ownerQueueAdmissionMs,
 		ownerExecutionMs,
 		cancellationReason,
-		degradationReason,
+		degradationReason: null,
 	};
 }
 
@@ -546,7 +545,6 @@ export async function runIncrementalDatabaseIntegrityCheck(
 	};
 	let phase: IncrementalIntegrityPhase = "running";
 	let cancellationReason: string | null = null;
-	const degradationReason: string | null = null;
 	let checkpoint: Checkpoint = {
 		cursor: "",
 		checkedTables: 0,
@@ -593,7 +591,6 @@ export async function runIncrementalDatabaseIntegrityCheck(
 			ownerQueueAdmissionMs,
 			ownerExecutionMs,
 			reason,
-			degradationReason,
 		);
 		updateDatabaseIntegrityStatus(progress, errors, options.owner);
 		await options.onProgress?.(progress);
@@ -616,7 +613,6 @@ export async function runIncrementalDatabaseIntegrityCheck(
 			ownerQueueAdmissionMs,
 			ownerExecutionMs,
 			cancellationReason,
-			degradationReason,
 		);
 	};
 	const restartIfSchemaChanged = async (): Promise<boolean> => {
@@ -787,7 +783,6 @@ export async function runIncrementalDatabaseIntegrityCheck(
 				ownerQueueAdmissionMs,
 				ownerExecutionMs,
 				reason,
-				degradationReason,
 			);
 			updateDatabaseIntegrityStatus(progress, [...errors, reason], options.owner);
 			return { ...progress, errors: [...errors, reason] };
