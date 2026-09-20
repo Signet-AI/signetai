@@ -8,7 +8,12 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{fs, path::Path};
+use std::{
+    fs::{File, OpenOptions},
+    io::{Read, Write},
+    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    path::Path,
+};
 
 const MAX_BODY: usize = 64 * 1024;
 const MIN_INTERVAL: u64 = 300;
@@ -31,31 +36,59 @@ struct Config {
     channel: &'static str,
 }
 
+fn open_config(path: &Path, write: bool) -> Option<File> {
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .write(write)
+        .create(write)
+        .truncate(false);
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.file_type().is_file() {
+        return None;
+    }
+    Some(file)
+}
+
+fn read_config(workspace: &Path) -> Option<String> {
+    let mut file = open_config(&workspace.join("agent.yaml"), false)?;
+    let metadata = file.metadata().ok()?;
+    if metadata.len() > MAX_BODY as u64 {
+        return None;
+    }
+    let mut text = String::new();
+    file.read_to_string(&mut text).ok()?;
+    let after = file.metadata().ok()?;
+    if (metadata.dev(), metadata.ino()) == (after.dev(), after.ino()) {
+        Some(text)
+    } else {
+        None
+    }
+}
+
 fn parse_config(workspace: &Path) -> Config {
     let mut config = Config {
         auto_install: false,
         check_interval: DEFAULT_INTERVAL,
         channel: "stable",
     };
-    let path = workspace.join("agent.yaml");
-    let Ok(bytes) = fs::read(&path) else {
+    let Some(text) = read_config(workspace) else {
         return config;
     };
-    if bytes.len() > MAX_BODY {
-        return config;
-    }
-    let text = String::from_utf8_lossy(&bytes);
-    let mut updates = false;
+    let mut in_section = false;
     for line in text.lines() {
+        let indent = line.len() - line.trim_start().len();
         let trimmed = line.trim();
-        if trimmed == "updates:" || trimmed == "update:" {
-            updates = true;
+        if indent == 0 && (trimmed == "updates:" || trimmed == "update:") {
+            in_section = true;
             continue;
         }
-        if updates && !line.starts_with(' ') && !line.starts_with('\t') {
-            updates = false;
+        if in_section && (trimmed.is_empty() || indent == 0) {
+            in_section = false;
         }
-        if !updates {
+        if !in_section || !(indent == 2 || trimmed.is_empty()) {
             continue;
         }
         let Some((key, value)) = trimmed.split_once(':') else {
@@ -63,7 +96,9 @@ fn parse_config(workspace: &Path) -> Config {
         };
         let value = value.trim();
         match key {
-            "auto_install" | "autoInstall" => config.auto_install = value == "true",
+            "auto_install" | "autoInstall" if value == "true" || value == "false" => {
+                config.auto_install = value == "true"
+            }
             "check_interval" | "checkInterval" => {
                 if let Ok(v) = value.parse() {
                     if (MIN_INTERVAL..=MAX_INTERVAL).contains(&v) {
@@ -71,26 +106,48 @@ fn parse_config(workspace: &Path) -> Config {
                     }
                 }
             }
-            "channel" => {
-                if value == "stable" || value == "latest" {
-                    config.channel = "stable"
-                } else if value == "nightly" || value == "next" {
-                    config.channel = "nightly"
-                }
-            }
+            "channel" if value == "stable" || value == "latest" => config.channel = "stable",
+            "channel" if value == "nightly" || value == "next" => config.channel = "nightly",
             _ => {}
         }
     }
     config
 }
 
-fn config_json(config: &Config) -> Value {
-    json!({ "autoInstall": config.auto_install, "checkInterval": config.check_interval, "channel": config.channel, "minInterval": MIN_INTERVAL, "maxInterval": MAX_INTERVAL, "pendingRestartVersion": null, "lastAutoUpdateAt": null, "lastAutoUpdateError": null, "updateInProgress": false })
+fn replace_section(current: &str, section: &str) -> Option<String> {
+    let mut lines = Vec::new();
+    let mut skipping = false;
+    for line in current.lines() {
+        let indent = line.len() - line.trim_start().len();
+        let trimmed = line.trim();
+        if trimmed == "updates:" || trimmed == "update:" {
+            if indent != 0 {
+                return None;
+            }
+            skipping = true;
+            continue;
+        }
+        if skipping && !trimmed.is_empty() && indent == 0 {
+            skipping = false;
+        }
+        if skipping && !trimmed.is_empty() && indent != 2 {
+            return None;
+        }
+        if !skipping {
+            lines.push(line);
+        }
+    }
+    let base = lines.join("\n");
+    Some(if base.trim().is_empty() {
+        section.to_owned()
+    } else {
+        format!("{}\n\n{}", base.trim_end(), section)
+    })
 }
 
 fn persist(workspace: &Path, config: &Config) -> bool {
     let path = workspace.join("agent.yaml");
-    let current = fs::read_to_string(&path).unwrap_or_default();
+    let current = read_config(workspace).unwrap_or_default();
     if current.len() > MAX_BODY {
         return false;
     }
@@ -98,27 +155,30 @@ fn persist(workspace: &Path, config: &Config) -> bool {
         "updates:\n  auto_install: {}\n  check_interval: {}\n  channel: {}\n",
         config.auto_install, config.check_interval, config.channel
     );
-    let mut lines = Vec::new();
-    let mut skipping = false;
-    for line in current.lines() {
-        if line.trim() == "updates:" || line.trim() == "update:" {
-            skipping = true;
-            continue;
-        }
-        if skipping && !line.starts_with(' ') && !line.starts_with('\t') {
-            skipping = false;
-        }
-        if !skipping {
-            lines.push(line);
-        }
-    }
-    let base = lines.join("\n");
-    let output = if base.trim().is_empty() {
-        section
-    } else {
-        format!("{}\n\n{}", base.trim_end(), section)
+    let Some(output) = replace_section(&current, &section) else {
+        return false;
     };
-    fs::write(path, output).is_ok()
+    if output.len() > MAX_BODY {
+        return false;
+    }
+    let Some(mut file) = open_config(&path, true) else {
+        return false;
+    };
+    let metadata = match file.metadata() {
+        Ok(value) => value,
+        Err(_) => return false,
+    };
+    if !metadata.file_type().is_file() {
+        return false;
+    }
+    if file.set_len(0).is_err() || file.write_all(output.as_bytes()).is_err() {
+        return false;
+    }
+    true
+}
+
+fn config_json(config: &Config) -> Value {
+    json!({ "autoInstall": config.auto_install, "checkInterval": config.check_interval, "channel": config.channel, "minInterval": MIN_INTERVAL, "maxInterval": MAX_INTERVAL, "pendingRestartVersion": null, "lastAutoUpdateAt": null, "lastAutoUpdateError": null, "updateInProgress": false })
 }
 
 /// Update lifecycle is intentionally bounded until fresh Rust core operations

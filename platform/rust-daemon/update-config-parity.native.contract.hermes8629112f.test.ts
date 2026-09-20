@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -48,6 +48,37 @@ it("serves authenticated bounded update config parity and leaves discovery unsup
 		expect(saved.status).toBe(200);
 		expect((await saved.json()).config).toMatchObject({ autoInstall: true, checkInterval: 600, channel: "nightly" });
 		expect(readFileSync(join(dir, "agent.yaml"), "utf8")).toContain("channel: nightly");
+
+		const malformedDir = mkdtempSync(join(tmpdir(), "signet-update-malformed-"));
+		const outside = join(malformedDir, "outside.yaml");
+		writeFileSync(outside, ["sentinel: keep", ""].join("\n"));
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			["service:", "  name: keep", "  updates:", "    auto_install: true", "other: keep", ""].join("\n"),
+		);
+		const malformedSection = await fetch(`${origin}/api/update/config`, {
+			method: "POST",
+			headers: { ...auth, "content-type": "application/json" },
+			body: JSON.stringify({ channel: "stable" }),
+		});
+		expect(malformedSection.status).toBe(200);
+		expect((await malformedSection.json()).persisted).toBe(false);
+		expect(readFileSync(join(dir, "agent.yaml"), "utf8")).toContain("service:");
+		rmSync(malformedDir, { recursive: true, force: true });
+
+		const target = join(dir, "outside-target.yaml");
+		writeFileSync(target, "sentinel: keep\\n");
+		rmSync(join(dir, "agent.yaml"), { force: true });
+		symlinkSync(target, join(dir, "agent.yaml"));
+		const symlinkResponse = await fetch(`${origin}/api/update/config`, {
+			method: "POST",
+			headers: { ...auth, "content-type": "application/json" },
+			body: JSON.stringify({ channel: "nightly" }),
+		});
+		expect(symlinkResponse.status).toBe(200);
+		expect((await symlinkResponse.json()).persisted).toBe(false);
+		expect(readFileSync(target, "utf8")).toBe("sentinel: keep\\n");
+
 		for (const body of [
 			{ checkInterval: 299 },
 			{ check_interval: 604801 },
