@@ -455,9 +455,7 @@ fn wire_core_error(error: &CoreError) -> Value {
         CoreError::UnsupportedMigrationHistory(message) => {
             json!({"errorKind":"unsupported_migration_history","error":message})
         }
-        CoreError::Sql(_)
-        | CoreError::Serialization(_)
-        | CoreError::Remote(_) => {
+        CoreError::Sql(_) | CoreError::Serialization(_) | CoreError::Remote(_) => {
             json!({"errorKind":"internal","error":error.to_string()})
         }
     }
@@ -478,12 +476,16 @@ mod migration_error_tests {
     #[test]
     fn unsupported_migration_history_round_trips_from_owner_wire() {
         let response = json!({"errorKind":"unsupported_migration_history","error":"version 153 is newer than 2"});
-        assert!(matches!(remote_core_error(&response), CoreError::UnsupportedMigrationHistory(message) if message == "version 153 is newer than 2"));
+        assert!(
+            matches!(remote_core_error(&response), CoreError::UnsupportedMigrationHistory(message) if message == "version 153 is newer than 2")
+        );
     }
 
     #[test]
     fn unsupported_migration_history_uses_startup_unavailable_response_contract() {
-        let api = ApiError::from(CoreError::UnsupportedMigrationHistory("history mismatch".into()));
+        let api = ApiError::from(CoreError::UnsupportedMigrationHistory(
+            "history mismatch".into(),
+        ));
         assert_eq!(api.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(api.code, "unsupported_migration_history");
         assert_eq!(api.message, "history mismatch");
