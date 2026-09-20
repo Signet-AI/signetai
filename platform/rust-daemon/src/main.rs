@@ -706,8 +706,14 @@ fn source_workspace(headers: &HeaderMap, requested: Option<&str>) -> Result<Stri
     if let Some(body) = body.as_deref() {
         values.push(body);
     }
+    let environment = env::var("SIGNET_WORKSPACE_ID")
+        .ok()
+        .and_then(|value| non_empty(&value));
+    if let Some(environment) = environment.as_deref() {
+        values.push(environment);
+    }
     if values.is_empty() {
-        return Err(ApiError::bad_request("workspace identity is required"));
+        values.push("default");
     }
     if values.iter().any(|value| *value != values[0]) {
         return Err(ApiError::bad_request("conflicting workspace identities"));
