@@ -163,21 +163,38 @@ async fn harnesses(State(state): State<AppState>) -> Json<Value> {
         Ok(content) => parse_harnesses(&content),
         Err(_) => Vec::new(),
     };
-    let harnesses: Vec<Value> = configured
+    let connectors: Vec<Value> = configured
         .iter()
-        .map(|name| json!({ "name": name, "id": name, "path": "", "exists": true }))
+        .map(|name| {
+            json!({
+                "id": name,
+                "displayName": name,
+                "icon": Value::Null,
+                "configPath": Value::Null,
+                "detected": false,
+                "lastSeen": Value::Null,
+                "available": false,
+                "health": { "status": "unavailable", "message": "Harness probing is unavailable in the native boundary" },
+                "capabilities": { "connect": false, "repair": false, "reinitialize": false }
+            })
+        })
         .collect();
-    if configured.is_empty() {
-        return Json(json!({
-            "harnesses": [],
-            "configuredHarnesses": [],
-            "status": "unsupported",
-            "implemented": false,
-            "probed": false,
-            "reason": "Native harness discovery requires provider-specific configuration"
-        }));
-    }
-    Json(json!({ "harnesses": harnesses, "configuredHarnesses": configured }))
+    let harnesses: Vec<Value> = connectors
+        .iter()
+        .map(|connector| {
+            json!({
+                "name": connector.get("displayName").and_then(Value::as_str).unwrap_or_default(),
+                "id": connector.get("id").cloned().unwrap_or(Value::Null),
+                "icon": connector.get("icon").cloned().unwrap_or(Value::Null),
+                "path": connector.get("configPath").and_then(Value::as_str).unwrap_or_default(),
+                "exists": connector.get("detected").and_then(Value::as_bool).unwrap_or(false),
+                "lastSeen": connector.get("lastSeen").cloned().unwrap_or(Value::Null)
+            })
+        })
+        .collect();
+    Json(
+        json!({ "harnesses": harnesses, "connectors": connectors, "configuredHarnesses": configured }),
+    )
 }
 
 fn parse_harnesses(content: &str) -> Vec<String> {
