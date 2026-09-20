@@ -48,7 +48,7 @@ fn integrity_checkpoint_is_scoped_durable_and_excludes_fts() {
     assert_eq!(second["checkpoint"]["completed"], true);
 }
 #[test]
-fn remember_persists_current_provenance_and_extract_memory_kind() {
+fn remember_persists_current_provenance_and_memory_kind() {
     let c = core();
     let id = c
         .submit(Operation::Remember {
@@ -56,7 +56,7 @@ fn remember_persists_current_provenance_and_extract_memory_kind() {
             content: "derived fact".into(),
             metadata: serde_json::json!({
                 "sourceId": "src-1",
-                "sourceType": "extract",
+                "sourceType": "manual",
                 "sourcePath": "notes.md",
                 "runtimePath": "plugin",
                 "idempotencyKey": "idem-1"
@@ -73,11 +73,29 @@ fn remember_persists_current_provenance_and_extract_memory_kind() {
         })
         .unwrap();
     assert_eq!(got["sourceId"], "src-1");
-    assert_eq!(got["sourceType"], "extract");
+    assert_eq!(got["sourceType"], "manual");
     assert_eq!(got["sourcePath"], "notes.md");
     assert_eq!(got["runtimePath"], "plugin");
     assert_eq!(got["idempotencyKey"], "idem-1");
     assert_eq!(got["memoryKind"], "episodic");
+
+    let derived_id = c
+        .submit(Operation::Remember {
+            agent_id: "agent-a".into(),
+            content: "daemon-derived fact".into(),
+            metadata: serde_json::json!({"sourceType": "extract"}),
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let derived = c
+        .submit(Operation::Get {
+            agent_id: "agent-a".into(),
+            id: derived_id,
+        })
+        .unwrap();
+    assert!(derived.get("memoryKind").is_none() || derived["memoryKind"].is_null());
 }
 
 #[test]

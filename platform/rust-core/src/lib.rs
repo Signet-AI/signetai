@@ -1999,10 +1999,14 @@ fn execute_operation(
             let id = uuid::Uuid::new_v4().to_string();
             let metadata_value = metadata.clone();
             let metadata = serde_json::to_string(&metadata)?;
+            let memory_kind = match metadata_value.get("sourceType").and_then(Value::as_str) {
+                Some("extract" | "aggregate-recall" | "session_end" | "checkpoint" | "dreaming") => None,
+                _ => Some("episodic"),
+            };
             let transaction = connection.transaction()?;
             transaction.execute(
                 "INSERT INTO memories (id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind) VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)",
-                params![id, agent_id, content, metadata, metadata_value.get("sourceId").and_then(Value::as_str), metadata_value.get("sourceType").and_then(Value::as_str), metadata_value.get("sourcePath").and_then(Value::as_str), metadata_value.get("runtimePath").and_then(Value::as_str), metadata_value.get("idempotencyKey").and_then(Value::as_str), (metadata_value.get("sourceType").and_then(Value::as_str) == Some("extract")).then_some("episodic")],
+                params![id, agent_id, content, metadata, metadata_value.get("sourceId").and_then(Value::as_str), metadata_value.get("sourceType").and_then(Value::as_str), metadata_value.get("sourcePath").and_then(Value::as_str), metadata_value.get("runtimePath").and_then(Value::as_str), metadata_value.get("idempotencyKey").and_then(Value::as_str), memory_kind],
             )?;
             record_history(&transaction, &id, &agent_id, "remember", None)?;
             transaction.commit()?;
@@ -2011,7 +2015,7 @@ fn execute_operation(
                 for key in ["sourceId", "sourceType", "sourcePath", "runtimePath", "idempotencyKey"] {
                     if let Some(value) = fields.get(key) { result[key] = value.clone(); }
                 }
-                if fields.get("sourceType").and_then(Value::as_str) == Some("extract") { result["memoryKind"] = json!("episodic"); }
+                if memory_kind.is_some() { result["memoryKind"] = json!("episodic"); }
             }
             Ok(result)
         }
@@ -2070,7 +2074,11 @@ fn execute_operation(
             if let Some(object) = value.as_object_mut() {
                 if let Some(metadata) = object.get("metadata").and_then(Value::as_object).cloned() {
                     for key in ["sourceId", "sourceType", "sourcePath", "runtimePath", "idempotencyKey"] { if let Some(v) = metadata.get(key) { object.insert(key.into(), v.clone()); } }
-                    if metadata.get("sourceType").and_then(Value::as_str) == Some("extract") { object.insert("memoryKind".into(), json!("episodic")); }
+                    let memory_kind = match metadata.get("sourceType").and_then(Value::as_str) {
+                        Some("extract" | "aggregate-recall" | "session_end" | "checkpoint" | "dreaming") => None,
+                        _ => Some("episodic"),
+                    };
+                    if memory_kind.is_some() { object.insert("memoryKind".into(), json!("episodic")); }
                 }
             }
             Ok(value)
