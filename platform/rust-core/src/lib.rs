@@ -2341,25 +2341,26 @@ fn execute_operation(
             let workspace_id = canonical_workspace(&workspace_id)?;
             let entity_id = required_id(&entity_id)?;
             let limit = limit.clamp(1, 200) as i64;
-            let entity_exists: i64 = connection.query_row("SELECT count(*) FROM kg_entities WHERE id=? AND agent_id=? AND workspace_id=? AND deleted=0", params![entity_id, agent_id, workspace_id], |r| r.get(0))?;
+            let direction = if matches!(direction.as_str(), "incoming" | "outgoing") {
+                direction.as_str()
+            } else {
+                "both"
+            };
+            let entity_exists: i64 = connection.query_row("SELECT count(*) FROM entities WHERE id=? AND agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active'", params![entity_id, agent_id, workspace_id], |r| r.get(0))?;
             if entity_exists != 1 {
                 return Err(CoreError::NotFound);
             }
-            if !matches!(direction.as_str(), "incoming" | "outgoing" | "both") {
-                return Err(CoreError::InvalidInput(
-                    "invalid dependency direction".into(),
-                ));
-            }
-            let clause = match direction.as_str() {
-                "incoming" => "r.to_id=?",
-                "outgoing" => "r.from_id=?",
-                _ => "(r.from_id=? OR r.to_id=?)",
+            let clause = match direction {
+                "incoming" => "dep.target_entity_id=?",
+                "outgoing" => "dep.source_entity_id=?",
+                _ => "(dep.source_entity_id=? OR dep.target_entity_id=?)",
             };
-            let sql = format!("SELECT r.id,r.from_id,r.to_id,r.relation,r.metadata,r.created_at,s.name,t.name FROM kg_relations r JOIN kg_entities s ON s.id=r.from_id AND s.agent_id=r.agent_id AND s.workspace_id=r.workspace_id AND s.deleted=0 JOIN kg_entities t ON t.id=r.to_id AND t.agent_id=r.agent_id AND t.workspace_id=r.workspace_id AND t.deleted=0 WHERE r.agent_id=? AND r.workspace_id=? AND r.deleted=0 AND {} ORDER BY r.rowid DESC LIMIT ?", clause);
+            let sql = format!("SELECT dep.id,dep.source_entity_id,dep.target_entity_id,dep.dependency_type,dep.strength,dep.aspect_id,dep.reason,dep.status,dep.updated_at,src.name,dst.name FROM entity_dependencies dep JOIN entities src ON src.id=dep.source_entity_id AND src.agent_id=dep.agent_id AND src.workspace_id=dep.workspace_id AND COALESCE(src.status,'active')='active' JOIN entities dst ON dst.id=dep.target_entity_id AND dst.agent_id=dep.agent_id AND dst.workspace_id=dep.workspace_id AND COALESCE(dst.status,'active')='active' WHERE dep.agent_id=? AND dep.workspace_id=? AND COALESCE(dep.status,'active')='active' AND {} ORDER BY dep.strength DESC, dep.updated_at DESC LIMIT ?", clause);
             let mut stmt = connection.prepare(&sql)?;
             let map = |r: &rusqlite::Row<'_>| {
+                let source: String = r.get(1)?;
                 Ok(
-                    json!({"id":r.get::<_,String>(0)?,"direction":if direction == "incoming" {"incoming"} else if direction == "outgoing" {"outgoing"} else {if r.get::<_,String>(1)? == entity_id {"outgoing"} else {"incoming"}},"dependencyType":r.get::<_,String>(3)?,"strength":0,"aspectId":Value::Null,"reason":Value::Null,"sourceEntityId":r.get::<_,String>(1)?,"sourceEntityName":r.get::<_,String>(6)?,"targetEntityId":r.get::<_,String>(2)?,"targetEntityName":r.get::<_,String>(7)?,"createdAt":r.get::<_,String>(5)?,"updatedAt":r.get::<_,String>(5)?}),
+                    json!({"id":r.get::<_,String>(0)?,"direction":if direction == "incoming" {"incoming"} else if direction == "outgoing" {"outgoing"} else if source == entity_id {"outgoing"} else {"incoming"},"dependencyType":r.get::<_,String>(3)?,"strength":r.get::<_,f64>(4)?,"aspectId":r.get::<_,Option<String>>(5)?,"reason":r.get::<_,Option<String>>(6)?,"status":r.get::<_,String>(7)?,"sourceEntityId":source,"sourceEntityName":r.get::<_,String>(9)?,"targetEntityId":r.get::<_,String>(2)?,"targetEntityName":r.get::<_,String>(10)?,"updatedAt":r.get::<_,String>(8)?}),
                 )
             };
             let rows = if direction == "both" {
@@ -3609,6 +3610,9 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS ontology_records (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, kind TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS kg_entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', name TEXT NOT NULL, entity_type TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS kg_relations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', from_id TEXT NOT NULL, to_id TEXT NOT NULL, relation TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active');
+         CREATE TABLE IF NOT EXISTS entity_dependencies (id TEXT PRIMARY KEY, source_entity_id TEXT NOT NULL, target_entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', dependency_type TEXT NOT NULL, strength REAL NOT NULL, aspect_id TEXT, reason TEXT, status TEXT NOT NULL DEFAULT 'active', updated_at TEXT NOT NULL);
+         CREATE INDEX IF NOT EXISTS entity_dependencies_scope ON entity_dependencies(agent_id,workspace_id,source_entity_id,target_entity_id);
          CREATE TABLE IF NOT EXISTS kg_aspects (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, entity_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT NOT NULL, weight REAL NOT NULL DEFAULT 0.5, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,entity_id,canonical_name));
          CREATE TABLE IF NOT EXISTS kg_attributes (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, aspect_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT NOT NULL, claim_key TEXT, group_key TEXT, confidence REAL NOT NULL DEFAULT 0, importance REAL NOT NULL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'active', superseded_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS kg_entities_scope ON kg_entities(agent_id, name);

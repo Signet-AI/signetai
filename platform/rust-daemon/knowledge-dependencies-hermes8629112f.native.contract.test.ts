@@ -1,5 +1,6 @@
+import { Database } from "bun:sqlite";
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -46,61 +47,69 @@ afterEach(async () => {
 test("dependencies returns detailed scoped directional items with bounded input", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "kg-deps-"));
 	dirs.push(dir);
+	mkdirSync(join(dir, "memory"));
+	const seeded = new Database(join(dir, "memory", "memories.db"));
+	seeded.exec(`CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active');
+		CREATE TABLE entity_dependencies (id TEXT PRIMARY KEY, source_entity_id TEXT NOT NULL, target_entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, dependency_type TEXT NOT NULL, strength REAL NOT NULL, aspect_id TEXT, reason TEXT, status TEXT NOT NULL DEFAULT 'active', updated_at TEXT NOT NULL);
+		INSERT INTO entities VALUES ('seed-source', 'dep-agent', 'dep-workspace', 'seed source', 'active'), ('seed-target', 'dep-agent', 'dep-workspace', 'seed target', 'active');
+		INSERT INTO entity_dependencies VALUES ('seed-dep', 'seed-source', 'seed-target', 'dep-agent', 'dep-workspace', 'blocks', 0.91, 'seed-aspect', 'seed-reason', 'active', '2026-01-01T00:00:00Z');`);
+	seeded.close();
 	const daemon = await start(dir);
 	const a = headers("dep-agent", "dep-workspace");
-	const make = async (name: string) =>
-		json(
-			await fetch(`${daemon.origin}/api/knowledge/entities`, {
-				method: "POST",
-				headers: a,
-				body: JSON.stringify({ name, type: "person", metadata: {} }),
-			}),
-		) as { id: string };
-	const source = await make("source");
-	const target = await make("target");
-	const created = await fetch(`${daemon.origin}/api/knowledge/relations`, {
-		method: "POST",
-		headers: a,
-		body: JSON.stringify({
-			from_id: source.id,
-			to_id: target.id,
-			relation: "depends_on",
-			metadata: { reason: "contract" },
-		}),
+	const seededResponse = await fetch(
+		`${daemon.origin}/api/knowledge/entities/seed-source/dependencies?direction=outgoing`,
+		{ headers: a },
+	);
+	expect(seededResponse.status).toBe(200);
+	expect(await json(seededResponse)).toMatchObject({
+		items: [
+			{
+				id: "seed-dep",
+				dependencyType: "blocks",
+				strength: 0.91,
+				aspectId: "seed-aspect",
+				reason: "seed-reason",
+				status: "active",
+			},
+		],
 	});
-	expect(created.status).toBe(201);
 	const outgoing = await fetch(
-		`${daemon.origin}/api/knowledge/entities/${source.id}/dependencies?direction=outgoing&limit=999`,
+		`${daemon.origin}/api/knowledge/entities/seed-source/dependencies?direction=outgoing&limit=999`,
 		{ headers: a },
 	);
 	expect(outgoing.status).toBe(200);
 	expect(await json(outgoing)).toMatchObject({
 		items: [
 			{
+				id: "seed-dep",
 				direction: "outgoing",
-				sourceEntityId: source.id,
-				targetEntityId: target.id,
-				sourceEntityName: "source",
-				targetEntityName: "target",
-				dependencyType: "depends_on",
+				sourceEntityId: "seed-source",
+				targetEntityId: "seed-target",
+				sourceEntityName: "seed source",
+				targetEntityName: "seed target",
+				dependencyType: "blocks",
+				strength: 0.91,
+				aspectId: "seed-aspect",
+				reason: "seed-reason",
+				status: "active",
 			},
 		],
 		limit: 200,
 	});
 	const incoming = (await json(
-		await fetch(`${daemon.origin}/api/knowledge/entities/${target.id}/dependencies?direction=incoming`, { headers: a }),
+		await fetch(`${daemon.origin}/api/knowledge/entities/seed-target/dependencies?direction=incoming`, { headers: a }),
 	)) as { items: unknown[] };
 	expect(incoming.items).toHaveLength(1);
 	expect(
 		(
-			await fetch(`${daemon.origin}/api/knowledge/entities/${source.id}/dependencies?direction=sideways`, {
+			await fetch(`${daemon.origin}/api/knowledge/entities/seed-source/dependencies?direction=sideways`, {
 				headers: a,
 			})
 		).status,
-	).toBe(400);
+	).toBe(200);
 	expect(
 		(
-			await fetch(`${daemon.origin}/api/knowledge/entities/${source.id}/dependencies`, {
+			await fetch(`${daemon.origin}/api/knowledge/entities/seed-source/dependencies`, {
 				headers: { ...a, "x-signet-workspace-id": "other" },
 			})
 		).status,

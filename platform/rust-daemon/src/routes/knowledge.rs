@@ -167,11 +167,6 @@ async fn entity_dependencies(
     Query(q): Query<EntityQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let direction = q.direction.as_deref().unwrap_or("both");
-    if !matches!(direction, "incoming" | "outgoing" | "both") {
-        return Err(ApiError::bad_request(
-            "direction must be incoming, outgoing, or both",
-        ));
-    }
     Ok(Json(
         execute(
             &state,
