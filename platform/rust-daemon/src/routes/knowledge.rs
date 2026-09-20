@@ -66,6 +66,68 @@ pub(crate) fn router() -> Router<AppState> {
             get(list_relations),
         )
         .route("/api/knowledge/relations", post(create_relation))
+        .route("/api/knowledge/navigation/entities", get(list_entities))
+        .route(
+            "/api/knowledge/entities/{id}",
+            get(unsupported_entity_detail),
+        )
+        .route(
+            "/api/knowledge/entities/{id}/aspects",
+            get(unsupported_entity_aspects),
+        )
+        .route(
+            "/api/knowledge/entities/{entity_id}/aspects/{aspect_id}/attributes",
+            get(unsupported_aspect_attributes),
+        )
+        .route(
+            "/api/knowledge/entities/{id}/dependencies",
+            get(unsupported_dependencies),
+        )
+        .route("/api/knowledge/stats", get(unsupported_stats))
+        .route(
+            "/api/knowledge/traversal/status",
+            get(unsupported_traversal),
+        )
+        .route(
+            "/api/knowledge/constellation",
+            get(unsupported_constellation),
+        )
+}
+
+async fn unsupported_entity_detail() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "knowledge entity detail is unsupported by the fresh native operation boundary",
+    ))
+}
+async fn unsupported_entity_aspects() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "knowledge aspect listing is unsupported by the fresh native operation boundary",
+    ))
+}
+async fn unsupported_aspect_attributes() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "knowledge attribute listing is unsupported by the fresh native operation boundary",
+    ))
+}
+async fn unsupported_dependencies() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "knowledge dependencies are unsupported by the fresh native operation boundary",
+    ))
+}
+async fn unsupported_stats() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "knowledge stats are unsupported by the fresh native operation boundary",
+    ))
+}
+async fn unsupported_traversal() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "knowledge traversal status is unsupported by the fresh native operation boundary",
+    ))
+}
+async fn unsupported_constellation() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "knowledge constellation is unsupported by the fresh native operation boundary",
+    ))
 }
 
 async fn list_entities(
