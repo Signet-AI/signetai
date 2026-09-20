@@ -7,7 +7,7 @@
 use axum::{extract::State, routing::get, Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{fs::OpenOptions, os::unix::fs::OpenOptionsExt, time::Duration};
+use std::{fs::OpenOptions, time::Duration};
 use tokio::fs;
 
 use crate::{execute, ApiError, AppState};
@@ -178,10 +178,7 @@ where
 
 async fn read_utf8_no_follow(path: std::path::PathBuf) -> std::io::Result<String> {
     tokio::task::spawn_blocking(move || {
-        let mut file = OpenOptions::new()
-            .read(true)
-            .custom_flags(0o400000)
-            .open(path)?;
+        let mut file = open_read_no_follow(&path)?;
         let mut content = String::new();
         std::io::Read::read_to_string(&mut file, &mut content)?;
         Ok(content)
@@ -195,14 +192,69 @@ async fn write_new_file(path: &std::path::Path, content: &[u8]) -> std::io::Resu
     let content = content.to_owned();
     tokio::task::spawn_blocking(move || {
         use std::io::Write;
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .custom_flags(0o400000)
-            .open(path)?;
+        let mut file = open_new_file_no_follow(&path)?;
         file.write_all(&content)?;
         file.sync_all()
     })
     .await
     .map_err(std::io::Error::other)?
+}
+
+#[cfg(unix)]
+fn open_read_no_follow(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    OpenOptions::new()
+        .read(true)
+        .custom_flags(0o400000)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_read_no_follow(_path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "safe no-follow configuration reads are unavailable on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn open_new_file_no_follow(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(0o400000)
+        .open(path)
+}
+
+#[cfg(not(unix))]
+fn open_new_file_no_follow(_path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "safe no-follow configuration writes are unavailable on this platform",
+    ))
+}
+
+#[cfg(all(test, not(unix)))]
+mod platform_contract_tests {
+    use super::{open_new_file_no_follow, open_read_no_follow};
+    use std::io::ErrorKind;
+
+    #[test]
+    fn configuration_io_fails_closed_without_no_follow_support() {
+        assert_eq!(
+            open_read_no_follow(std::path::Path::new("config.yaml"))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::Unsupported
+        );
+        assert_eq!(
+            open_new_file_no_follow(std::path::Path::new("config.yaml"))
+                .unwrap_err()
+                .kind(),
+            ErrorKind::Unsupported
+        );
+    }
 }
