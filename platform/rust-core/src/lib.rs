@@ -727,8 +727,8 @@ fn execute_operation(
                     skipped += 1;
                     continue;
                 }
+                let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
                 for (chunk_index, chunk) in import_chunks(content).enumerate() {
-                    let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
                     let metadata = json!({"type":"daily-log","category":&name[..10],"sourceType":"import","sourceId":name,"tags":["imported","daily-log"],"updatedBy":"signet-import","_workspaceId":workspace_id,"_importChunk":chunk_index,"_contentHash":content_hash});
                     let metadata_text = serde_json::to_string(&metadata)?;
                     let exists: i64 = transaction.query_row("SELECT count(*) FROM memories WHERE agent_id=? AND deleted=0 AND metadata=?", params![agent_id, metadata_text], |r| r.get(0))?;

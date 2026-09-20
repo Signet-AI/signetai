@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
+import { performance } from "node:perf_hooks";
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: contract runner injects the daemon URL
 const base = process.env.SIGNET_NATIVE_DAEMON_URL;
 
 describe("native legacy markdown import contract", () => {
 	test("persists scoped imports, chunks, validates, and deduplicates retries", async () => {
+		const startedAt = performance.now();
 		expect(base).toBeTruthy();
 		const headers = {
 			"content-type": "application/json",
@@ -56,5 +58,6 @@ describe("native legacy markdown import contract", () => {
 			{ name: "2026-02-05.md", content: "before rejection" },
 		]);
 		expect(await afterRejection.json()).toMatchObject({ imported: 1, skipped: 0 });
-	});
+		expect(performance.now() - startedAt).toBeLessThan(10_000);
+	}, 30_000);
 });
