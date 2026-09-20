@@ -213,11 +213,7 @@ async fn stream(
                 Some(message.clone()),
             )
             .await;
-            return Err(if status == "upstream_error" {
-                ApiError::upstream(message)
-            } else {
-                ApiError::unavailable(message)
-            });
+            return Err(ApiError::upstream(message));
         }
     };
     if !(200..300).contains(&status) {

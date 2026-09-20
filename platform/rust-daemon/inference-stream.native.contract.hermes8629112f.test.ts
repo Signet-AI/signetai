@@ -85,6 +85,12 @@ it("streams bounded OpenAI SSE with auth, validation, and cleanup", async () => 
 			expect(failed.status).toBe(502);
 			expect(failedBody).toContain("upstream_error");
 		}
+		const history = await fetch(`${origin}/api/inference/history`, { headers });
+		expect(history.status).toBe(200);
+		const historyBody = (await history.json()) as { events: Array<{ status: string; request_id?: string }> };
+		expect(historyBody.events.map((event) => event.status)).toEqual(
+			expect.arrayContaining(["upstream_error", "invalid"]),
+		);
 		const crlf = await fetch(`${origin}/api/inference/stream`, {
 			method: "POST",
 			headers,
