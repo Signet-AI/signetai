@@ -534,12 +534,37 @@ pub(crate) async fn execute(state: &AppState, operation: Operation) -> Result<Va
 }
 
 #[derive(Debug, Deserialize)]
-struct CancellationRequest { action: String, #[serde(rename="operationId")] operation_id: String, content: Option<String>, fault: Option<String> }
+struct CancellationRequest {
+    action: String,
+    #[serde(rename = "operationId")]
+    operation_id: String,
+    content: Option<String>,
+    fault: Option<String>,
+}
 
-async fn cancellation(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<CancellationRequest>) -> Result<Json<Value>, ApiError> {
-    if !env::var("SIGNET_MODE").map(|v| v.eq_ignore_ascii_case("local")).unwrap_or(false) { return Err(ApiError::not_found("not found")); }
+async fn cancellation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CancellationRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if !env::var("SIGNET_MODE")
+        .map(|v| v.eq_ignore_ascii_case("local"))
+        .unwrap_or(false)
+    {
+        return Err(ApiError::not_found("not found"));
+    }
     let agent_id = agent(&headers, None, None)?;
-    let result = execute(&state, Operation::Cancellation { agent_id, action: request.action, operation_id: request.operation_id, content: request.content, fault: request.fault }).await?;
+    let result = execute(
+        &state,
+        Operation::Cancellation {
+            agent_id,
+            action: request.action,
+            operation_id: request.operation_id,
+            content: request.content,
+            fault: request.fault,
+        },
+    )
+    .await?;
     Ok(Json(result))
 }
 

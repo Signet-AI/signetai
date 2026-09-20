@@ -634,7 +634,13 @@ fn execute_operation(
     operation: Operation,
 ) -> Result<Value, CoreError> {
     match operation {
-        Operation::Cancellation { agent_id, action, operation_id, content, fault } => {
+        Operation::Cancellation {
+            agent_id,
+            action,
+            operation_id,
+            content,
+            fault,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let operation_id = bounded_text(&operation_id, "operation id", 256)?;
             match action.as_str() {
@@ -642,8 +648,16 @@ fn execute_operation(
                     let existing: Option<(String, Option<String>)> = connection.query_row(
                         "SELECT outcome,content FROM cancellation_operations WHERE agent_id=? AND operation_id=?",
                         params![agent_id, operation_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
-                    if let Some((outcome, stored)) = existing { return Ok(json!({"operationId":operation_id,"outcome":outcome,"content":stored})); }
-                    let outcome = if fault.as_deref() == Some("commit_before_reply") { "unknown" } else { "committed" };
+                    if let Some((outcome, stored)) = existing {
+                        return Ok(
+                            json!({"operationId":operation_id,"outcome":outcome,"content":stored}),
+                        );
+                    }
+                    let outcome = if fault.as_deref() == Some("commit_before_reply") {
+                        "unknown"
+                    } else {
+                        "committed"
+                    };
                     let tx = connection.transaction()?;
                     tx.execute("INSERT INTO cancellation_operations(agent_id,operation_id,outcome,content,created_at) VALUES(?,?,?,?,datetime('now'))", params![agent_id, operation_id, outcome, content])?;
                     tx.commit()?;
@@ -652,7 +666,9 @@ fn execute_operation(
                 "cancel" => {
                     let tx = connection.transaction()?;
                     let changed = tx.execute("UPDATE cancellation_operations SET outcome='cancelled' WHERE agent_id=? AND operation_id=? AND outcome='queued'", params![agent_id, operation_id])?;
-                    if changed == 0 { tx.execute("INSERT OR IGNORE INTO cancellation_operations(agent_id,operation_id,outcome,content,created_at) VALUES(?,?, 'cancelled',NULL,datetime('now'))", params![agent_id, operation_id])?; }
+                    if changed == 0 {
+                        tx.execute("INSERT OR IGNORE INTO cancellation_operations(agent_id,operation_id,outcome,content,created_at) VALUES(?,?, 'cancelled',NULL,datetime('now'))", params![agent_id, operation_id])?;
+                    }
                     tx.commit()?;
                     Ok(json!({"operationId":operation_id,"outcome":"cancelled"}))
                 }
@@ -660,7 +676,9 @@ fn execute_operation(
                     let row: (String, Option<String>) = connection.query_row("SELECT outcome,content FROM cancellation_operations WHERE agent_id=? AND operation_id=?", params![agent_id, operation_id], |r| Ok((r.get(0)?,r.get(1)?))).optional()?.ok_or(CoreError::NotFound)?;
                     Ok(json!({"operationId":operation_id,"outcome":row.0,"content":row.1}))
                 }
-                _ => Err(CoreError::InvalidInput("unknown cancellation action".into()))
+                _ => Err(CoreError::InvalidInput(
+                    "unknown cancellation action".into(),
+                )),
             }
         }
         Operation::ReflectionList { agent_id, limit } => {
@@ -3124,7 +3142,13 @@ pub struct SessionRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
-    Cancellation { agent_id: String, action: String, operation_id: String, content: Option<String>, fault: Option<String> },
+    Cancellation {
+        agent_id: String,
+        action: String,
+        operation_id: String,
+        content: Option<String>,
+        fault: Option<String>,
+    },
     Health,
     ReflectionList {
         agent_id: String,
