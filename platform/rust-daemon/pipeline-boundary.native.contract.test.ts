@@ -15,6 +15,7 @@ async function start(path: string) {
 		env: {
 			...process.env,
 			SIGNET_PATH: path,
+			SIGNET_API_KEY: "pipeline-contract-key",
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_PORT: String(port),
 			SIGNET_AGENT_ID: "pipeline-agent",
@@ -51,6 +52,7 @@ test("fresh pipeline boundary preserves owner operations and names unsupported c
 	const headers = {
 		"content-type": "application/json",
 		"x-signet-agent": "pipeline-agent",
+		"x-signet-api-key": "pipeline-contract-key",
 		"x-workspace-id": "workspace-a",
 	};
 
