@@ -22,6 +22,15 @@ describe("native legacy markdown import contract", () => {
 			{ name: "2026-02-03.md", content: "contract note\n\nsecond note" },
 		]);
 		expect(await retry.json()).toMatchObject({ imported: 0, skipped: 2 });
+		const changed = await request("contract-workspace-a", [
+			{ name: "2026-02-03.md", content: "changed note\n\nsecond note" },
+		]);
+		expect(await changed.json()).toMatchObject({ imported: 2, skipped: 0 });
+		const duplicateBatch = await request("contract-workspace-a", [
+			{ name: "2026-02-04.md", content: "same descriptor" },
+			{ name: "2026-02-04.md", content: "same descriptor" },
+		]);
+		expect(await duplicateBatch.json()).toMatchObject({ imported: 1, skipped: 1 });
 		const isolated = await request("contract-workspace-b", [
 			{ name: "2026-02-03.md", content: "contract note\n\nsecond note" },
 		]);
@@ -31,5 +40,14 @@ describe("native legacy markdown import contract", () => {
 			Array.from({ length: 26 }, (_, i) => ({ name: `2026-01-${String(i + 1).padStart(2, "0")}.md`, content: "x" })),
 		);
 		expect(invalid.ok).toBe(false);
+		const oversized = await request("contract-workspace-c", [
+			{ name: "2026-02-05.md", content: "before rejection" },
+			{ name: "2026-02-06.md", content: "x".repeat(8 * 1024 * 1024 + 1) },
+		]);
+		expect(oversized.ok).toBe(false);
+		const afterRejection = await request("contract-workspace-c", [
+			{ name: "2026-02-05.md", content: "before rejection" },
+		]);
+		expect(await afterRejection.json()).toMatchObject({ imported: 1, skipped: 0 });
 	});
 });

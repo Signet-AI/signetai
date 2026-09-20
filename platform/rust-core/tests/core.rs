@@ -1470,6 +1470,63 @@ fn legacy_markdown_import_is_scoped_deduplicated_and_reports_counts() {
 }
 
 #[test]
+fn legacy_markdown_import_rejects_oversized_direct_operation_atomically() {
+    let owner = core();
+    let oversized = "x".repeat(8 * 1024 * 1024 + 1);
+    let result = owner.submit(Operation::LegacyMarkdownImport {
+        agent_id: "agent".into(),
+        workspace_id: "workspace".into(),
+        files: serde_json::json!([
+            {"name":"2026-01-01.md","content":"accepted before rejection"},
+            {"name":"2026-01-02.md","content":oversized}
+        ]),
+    });
+    assert!(matches!(result, Err(CoreError::InvalidInput(message)) if message.contains("content")));
+    assert_eq!(
+        owner
+            .submit(Operation::List {
+                agent_id: "agent".into(),
+                include_deleted: false,
+                limit: None,
+                cursor: None
+            })
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn legacy_markdown_import_deduplicates_exact_content_but_imports_changed_content() {
+    let owner = core();
+    let import = |content: &str| {
+        owner
+            .submit(Operation::LegacyMarkdownImport {
+                agent_id: "agent".into(),
+                workspace_id: "workspace".into(),
+                files: serde_json::json!([{"name":"2026-01-01.md","content":content}]),
+            })
+            .unwrap()
+    };
+    assert_eq!(import("first")["imported"], 1);
+    assert_eq!(import("first")["imported"], 0);
+    assert_eq!(import("changed")["imported"], 1);
+    let duplicate_batch = owner
+        .submit(Operation::LegacyMarkdownImport {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            files: serde_json::json!([
+                {"name":"2026-01-02.md","content":"same"},
+                {"name":"2026-01-02.md","content":"same"}
+            ]),
+        })
+        .unwrap();
+    assert_eq!(duplicate_batch["imported"], 1);
+}
+
+#[test]
 fn source_removal_lease_blocks_direct_deletes_and_preserves_source_documents() {
     for delete in [false, true] {
         let owner = core();

@@ -606,6 +606,7 @@ fn normalize_import_files(files: &Value) -> Result<Vec<Value>, CoreError> {
             "files must contain 1-25 entries".into(),
         ));
     }
+    let mut total_content_bytes = 0usize;
     files
         .iter()
         .map(|file| {
@@ -626,6 +627,20 @@ fn normalize_import_files(files: &Value) -> Result<Vec<Value>, CoreError> {
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             normalized.insert("id".into(), Value::String(id));
             normalized.insert("name".into(), Value::String(name.to_owned()));
+            let content_bytes = object
+                .get("content")
+                .and_then(Value::as_str)
+                .map(str::len)
+                .unwrap_or(0);
+            if content_bytes > 8 * 1024 * 1024 {
+                return Err(CoreError::InvalidInput("file content exceeds 8 MiB".into()));
+            }
+            total_content_bytes = total_content_bytes.saturating_add(content_bytes);
+            if total_content_bytes > 32 * 1024 * 1024 {
+                return Err(CoreError::InvalidInput(
+                    "import content exceeds 32 MiB".into(),
+                ));
+            }
             Ok(Value::Object(normalized))
         })
         .collect()
@@ -713,7 +728,8 @@ fn execute_operation(
                     continue;
                 }
                 for (chunk_index, chunk) in import_chunks(content).enumerate() {
-                    let metadata = json!({"type":"daily-log","category":&name[..10],"sourceType":"import","sourceId":name,"tags":["imported","daily-log"],"updatedBy":"signet-import","_workspaceId":workspace_id,"_importChunk":chunk_index});
+                    let content_hash = format!("{:x}", Sha256::digest(content.as_bytes()));
+                    let metadata = json!({"type":"daily-log","category":&name[..10],"sourceType":"import","sourceId":name,"tags":["imported","daily-log"],"updatedBy":"signet-import","_workspaceId":workspace_id,"_importChunk":chunk_index,"_contentHash":content_hash});
                     let metadata_text = serde_json::to_string(&metadata)?;
                     let exists: i64 = transaction.query_row("SELECT count(*) FROM memories WHERE agent_id=? AND deleted=0 AND metadata=?", params![agent_id, metadata_text], |r| r.get(0))?;
                     if exists > 0 {
