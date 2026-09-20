@@ -1330,7 +1330,40 @@ fn validate_startup_config(workspace: &FsPath) -> Result<(), String> {
     {
         return Err(format!("{}: invalid YAML syntax", path.display()));
     }
+    let mut in_auth = false;
+    for line in text.lines() {
+        if line.trim() == "auth:" {
+            in_auth = true;
+        } else if !line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty() {
+            in_auth = false;
+        } else if in_auth && line.trim_start().starts_with("mode:") {
+            let mode = line.trim_start()[5..].trim();
+            if !matches!(mode, "local" | "team" | "hybrid") {
+                return Err(format!("{}: invalid auth mode", path.display()));
+            }
+        }
+    }
     Ok(())
+}
+
+fn start_runtime_config_watcher(workspace: &FsPath) {
+    let path = workspace.join("agent.yaml");
+    let initial = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    std::thread::spawn(move || {
+        let mut last = initial;
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let current = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            if current.is_some() && current != last {
+                last = current;
+                if let Err(error) =
+                    validate_startup_config(path.parent().unwrap_or(FsPath::new(".")))
+                {
+                    eprintln!("Rejected runtime config change: {error}");
+                }
+            }
+        }
+    });
 }
 
 fn resolve_dashboard_path() -> Option<PathBuf> {
@@ -1450,6 +1483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ExternalOwner::spawn(&workspace)
             .map_err(|error| format!("database owner startup: {error}"))?,
     );
+    start_runtime_config_watcher(&workspace);
     let config_dir = routes::git_sync::admit_config_dir(&workspace);
     let state = AppState {
         owner,
