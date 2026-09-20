@@ -1,3 +1,4 @@
+use crate::routes::auth;
 use crate::{agent, execute, ApiError, AppState};
 use axum::{
     extract::State,
@@ -112,13 +113,21 @@ pub(crate) async fn trigger(
         .await?,
     ))
 }
-async fn unsupported_models() -> Result<Json<Value>, ApiError> {
+async fn unsupported_models(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    auth::gate(&state, &headers).await?;
     Err(ApiError::not_implemented(
         "pipeline model registry is unsupported by the fresh native operation boundary",
     ))
 }
 
-async fn unsupported_dreaming() -> Result<Json<Value>, ApiError> {
+async fn unsupported_dreaming(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    auth::gate(&state, &headers).await?;
     Err(ApiError::not_implemented(
         "Dreaming orchestration is unsupported by the fresh native operation boundary",
     ))
