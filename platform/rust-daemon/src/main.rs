@@ -213,6 +213,7 @@ pub(crate) struct AppState {
     pub(crate) owner: Arc<ExternalOwner>,
     pub(crate) started_at: u64,
     pub(crate) workspace: PathBuf,
+    pub(crate) config_dir: Result<Arc<File>, String>,
     pub(crate) dashboard: Option<PathBuf>,
     pub(crate) auth_secret: Option<Vec<u8>>,
     pub(crate) cancellation: Arc<CancellationRuntime>,
@@ -1394,12 +1395,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ExternalOwner::spawn(&workspace)
             .map_err(|error| format!("database owner startup: {error}"))?,
     );
+    let config_dir = routes::git_sync::admit_config_dir(&workspace);
     let state = AppState {
         owner,
         started_at: now_seconds(),
         dashboard: resolve_dashboard_path(),
         auth_secret: routes::auth::load_secret(&workspace),
         workspace,
+        config_dir,
         cancellation: Arc::new(CancellationRuntime::default()),
     };
     let worker_owner = state.owner.clone();

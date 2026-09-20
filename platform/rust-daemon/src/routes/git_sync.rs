@@ -11,13 +11,10 @@ use std::os::unix::{
 use std::{
     fs::{File, OpenOptions},
     io::Read,
-    path::{Path, PathBuf},
-    sync::OnceLock,
+    path::Path,
 };
 
-const MAX_CONFIG_BYTES: u64 = 64 * 1024;
-static CONFIG_ROOT: OnceLock<PathBuf> = OnceLock::new();
-static CONFIG_DIR: OnceLock<Result<File, String>> = OnceLock::new();
+pub(crate) const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 
 #[derive(Debug, Serialize)]
 pub(crate) struct GitConfigResponse {
@@ -47,6 +44,14 @@ struct GitConfigPatch {
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/api/git/config", get(config).post(update_config))
+}
+
+/// Admit the workspace once, before the router is made available. Every request
+/// then reads relative to this retained descriptor rather than a replaceable path.
+pub(crate) fn admit_config_dir(workspace: &Path) -> Result<std::sync::Arc<File>, String> {
+    let root = std::fs::canonicalize(workspace)
+        .map_err(|_| "workspace is not a safe directory".to_owned())?;
+    open_config_dir(&root).map(std::sync::Arc::new)
 }
 
 async fn authorize(state: &AppState, headers: &HeaderMap) -> Result<(), ApiError> {
@@ -86,11 +91,7 @@ async fn config(
         remote: "origin".into(),
         branch: "main".into(),
     };
-    let root = CONFIG_ROOT.get_or_init(|| {
-        std::fs::canonicalize(&state.workspace).unwrap_or_else(|_| state.workspace.clone())
-    });
-    let dir = CONFIG_DIR.get_or_init(|| open_config_dir(root));
-    let dir = dir.as_ref().map_err(|_| {
+    let dir = state.config_dir.as_ref().map_err(|_| {
         ApiError::unavailable("git configuration workspace cannot be safely opened")
     })?;
     if let Some(content) = read_config_file(dir)? {
@@ -159,9 +160,22 @@ fn read_open_config_file(mut file: File) -> Result<Option<String>, ApiError> {
             "git configuration exceeds the size limit",
         ));
     }
-    let mut content = String::with_capacity(meta.len() as usize);
-    file.read_to_string(&mut content)
+    let capacity = meta.len().min(MAX_CONFIG_BYTES) as usize;
+    let mut content = String::with_capacity(capacity);
+    file.by_ref()
+        .take(MAX_CONFIG_BYTES)
+        .read_to_string(&mut content)
         .map_err(|_| ApiError::unavailable("git configuration could not be read"))?;
+    let mut extra = [0u8; 1];
+    if file
+        .read(&mut extra)
+        .map_err(|_| ApiError::unavailable("git configuration could not be read"))?
+        != 0
+    {
+        return Err(ApiError::bad_request(
+            "git configuration exceeds the size limit",
+        ));
+    }
     Ok(Some(content))
 }
 
@@ -233,6 +247,11 @@ fn _path_is_workspace_relative(workspace: &Path, path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::{
+        fs,
+        time::{SystemTime, UNIX_EPOCH},
+    };
     #[test]
     fn config_parser_clamps_interval_and_keeps_defaults() {
         let mut c = GitConfigResponse {
@@ -246,5 +265,51 @@ mod tests {
         parse_config("git:\n  syncInterval: 1\n  autoSync: true\n", &mut c);
         assert_eq!(c.sync_interval, 60);
         assert!(c.auto_sync);
+    }
+
+    #[cfg(unix)]
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "signet-git-sync-{name}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admitted_directory_survives_workspace_replacement() {
+        let original = temp_dir("replacement");
+        let replacement = temp_dir("replacement-new");
+        fs::create_dir(&original).unwrap();
+        fs::create_dir(&replacement).unwrap();
+        let dir = admit_config_dir(&original).unwrap();
+        fs::remove_dir(&original).unwrap();
+        fs::write(
+            replacement.join("agent.yaml"),
+            "git:\n  remote: replacement\n",
+        )
+        .unwrap();
+        assert!(matches!(read_config_file(&dir), Ok(None)));
+        fs::remove_dir_all(replacement).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn oversized_config_is_rejected() {
+        let root = temp_dir("oversize");
+        fs::create_dir(&root).unwrap();
+        fs::write(
+            root.join("agent.yaml"),
+            vec![b'x'; MAX_CONFIG_BYTES as usize + 1],
+        )
+        .unwrap();
+        let dir = admit_config_dir(&root).unwrap();
+        let error = read_config_file(&dir).unwrap_err();
+        assert_eq!(error.status, axum::http::StatusCode::BAD_REQUEST);
+        fs::remove_dir_all(root).unwrap();
     }
 }
