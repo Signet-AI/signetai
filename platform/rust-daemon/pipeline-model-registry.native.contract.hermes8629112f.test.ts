@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,7 +7,9 @@ const bin = join(process.cwd(), "platform/rust-daemon/target/debug/signet-daemon
 
 it("serves the bounded static pipeline model registry", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "signet-pipeline-models-"));
-	const port = 39400 + Math.floor(Math.random() * 100);
+	const reservation = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+	const port = reservation.port;
+	reservation.stop();
 	const child = Bun.spawn([bin], {
 		env: {
 			...process.env,
@@ -16,17 +18,23 @@ it("serves the bounded static pipeline model registry", async () => {
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_PORT: String(port),
 		},
-		stdout: "pipe",
+		stdout: "ignore",
 		stderr: "pipe",
 	});
 	try {
 		const origin = `http://127.0.0.1:${port}`;
+		let ready = false;
 		for (let i = 0; i < 100; i++) {
+			if (child.exitCode !== null) break;
 			try {
-				if ((await fetch(`${origin}/health/ready`)).ok) break;
+				if ((await fetch(`${origin}/health/ready`)).ok) {
+					ready = true;
+					break;
+				}
 			} catch {}
 			await Bun.sleep(25);
 		}
+		if (!ready) throw new Error(`daemon readiness failed: ${await new Response(child.stderr).text()}`);
 		const auth = { Authorization: "Bearer pipeline-contract" };
 		const denied = await fetch(`${origin}/api/pipeline/models`);
 		expect(denied.status).toBe(401);
@@ -72,13 +80,19 @@ it("serves the bounded static pipeline model registry", async () => {
 			"openai-compatible": expect.any(Array),
 		});
 		expect(groupedBody.anthropic).toHaveLength(3);
+		const expectedByProvider = Object.fromEntries(
+			Object.keys(body.registry.modelCounts).map((provider) => [
+				provider,
+				body.models.filter((model: { provider: string }) => model.provider === provider),
+			]),
+		);
 		const refreshed = await fetch(`${origin}/api/pipeline/models/refresh`, { method: "POST", headers: auth });
 		const refreshedBody = await refreshed.json();
 		expect(refreshed.ok).toBe(true);
-		expect(refreshedBody).toEqual({ models: expect.any(Array), registry: body.registry });
+		expect(refreshedBody).toEqual({ models: expectedByProvider, registry: body.registry });
 		const throttled = await fetch(`${origin}/api/pipeline/models/refresh`, { method: "POST", headers: auth });
 		expect(throttled.status).toBe(429);
-		expect(await throttled.json()).toEqual({ models: expect.any(Array), registry: body.registry, throttled: true });
+		expect(await throttled.json()).toEqual({ models: expectedByProvider, registry: body.registry, throttled: true });
 		expect((await fetch(`${origin}/api/pipeline/models?provider=unknown`, { headers: auth })).status).toBe(200);
 		expect(
 			(await (await fetch(`${origin}/api/pipeline/models?provider=unknown`, { headers: auth })).json()).models,
@@ -86,7 +100,12 @@ it("serves the bounded static pipeline model registry", async () => {
 		expect((await fetch(`${origin}/api/pipeline/models?limit=101`, { headers: auth })).status).toBe(400);
 		expect((await fetch(`${origin}/api/pipeline/models?deprecated=wat`, { headers: auth })).status).toBe(200);
 	} finally {
-		child.kill();
-		await child.exited;
+		child.kill("SIGTERM");
+		await Promise.race([child.exited, Bun.sleep(1_000)]);
+		if (child.exitCode === null) {
+			child.kill("SIGKILL");
+			await child.exited;
+		}
+		rmSync(dir, { recursive: true, force: true });
 	}
 });

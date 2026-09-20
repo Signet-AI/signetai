@@ -77,14 +77,8 @@ test("fresh pipeline boundary preserves owner operations and names unsupported c
 	expect(triggerBody).toMatchObject({ agentId: "pipeline-agent", workspaceId: "workspace-a" });
 	expect(typeof triggerBody.id).toBe("string");
 
-	for (const path of [
-		"/api/pipeline/models",
-		"/api/pipeline/models/by-provider",
-		"/api/pipeline/models/refresh",
-		"/api/dream/quality",
-		"/api/dream/operations",
-		"/api/dream/tools",
-	]) {
+	// Model registry behavior is covered by pipeline-model-registry.native.contract.hermes8629112f.test.ts.
+	for (const path of ["/api/dream/quality", "/api/dream/operations", "/api/dream/tools"]) {
 		const response = await fetch(`${daemon.origin}${path}`, {
 			method: path.endsWith("refresh") || path.endsWith("operations") ? "POST" : "GET",
 			headers,
