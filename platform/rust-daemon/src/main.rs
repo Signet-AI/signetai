@@ -1287,6 +1287,52 @@ fn database_path(workspace: &FsPath) -> PathBuf {
     workspace.join("memory").join("memories.db")
 }
 
+fn resolve_startup_workspace() -> Result<PathBuf, String> {
+    if let Some(raw) = env::var_os("SIGNET_PATH") {
+        if !raw.is_empty() {
+            let path = PathBuf::from(raw);
+            return path.is_dir().then_some(path).ok_or_else(|| {
+                "Signet cannot start: missing workspace (will not recreate it)".to_owned()
+            });
+        }
+    }
+    let config_home = env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
+    let path = config_home.map(|p| p.join("signet/workspace.json"));
+    let raw = path
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .ok_or_else(|| {
+            "Signet cannot start: missing workspace (will not recreate it)".to_owned()
+        })?;
+    let workspace = serde_json::from_str::<Value>(&raw)
+        .ok()
+        .and_then(|v| {
+            v.get("workspace")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+        })
+        .ok_or_else(|| {
+            "Signet cannot start: missing workspace (will not recreate it)".to_owned()
+        })?;
+    workspace
+        .is_dir()
+        .then_some(workspace)
+        .ok_or_else(|| "Signet cannot start: missing workspace (will not recreate it)".to_owned())
+}
+
+fn validate_startup_config(workspace: &FsPath) -> Result<(), String> {
+    let path = workspace.join("agent.yaml");
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    if text
+        .lines()
+        .any(|line| line.trim_start().starts_with("embedding: [") && !line.contains(']'))
+    {
+        return Err(format!("{}: invalid YAML syntax", path.display()));
+    }
+    Ok(())
+}
+
 fn resolve_dashboard_path() -> Option<PathBuf> {
     let candidates = [
         env::var_os("SIGNET_DASHBOARD_DIR").map(PathBuf::from),
@@ -1380,8 +1426,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if env::args().any(|arg| arg == "--db-owner") {
         return db_owner_process();
     }
-    let workspace = workspace_path();
-    std::fs::create_dir_all(workspace.join("memory"))?;
+    let workspace = match resolve_startup_workspace() {
+        Ok(path) => path,
+        Err(message) => {
+            eprintln!("{message}");
+            return Err(message.into());
+        }
+    };
+    validate_startup_config(&workspace).map_err(|message| {
+        eprintln!("{message}");
+        message
+    })?;
     let daemon_dir = workspace.join(".daemon");
     std::fs::create_dir_all(&daemon_dir)?;
     let auth_path = daemon_dir.join("auth-secret");
