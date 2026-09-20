@@ -76,7 +76,6 @@ function nextMemoryFence(text: string, from: number, lowerText = text.toLowerCas
 		const name = names.find((candidate) => lowerText.startsWith(candidate, cursor));
 		if (!name) continue;
 		const afterName = cursor + name.length;
-		if (afterName < text.length && text[afterName] !== undefined && !/[\s>]/.test(text[afterName])) continue;
 		const end = text.indexOf(">", afterName);
 		if (end < 0) return undefined;
 		return { start: index, end: end + 1, closing };
@@ -86,16 +85,17 @@ function nextMemoryFence(text: string, from: number, lowerText = text.toLowerCas
 
 function memoryFenceRanges(text: string): Array<readonly [number, number]> {
 	const ranges: Array<readonly [number, number]> = [];
-	const openings: number[] = [];
+	let opening: number | undefined;
 	const lowerText = text.toLowerCase();
 	let cursor = 0;
 	while (true) {
 		const fence = nextMemoryFence(text, cursor, lowerText);
 		if (!fence) break;
-		if (fence.closing && openings.length) {
-			ranges.push([openings.pop() as number, fence.end]);
-		} else if (!fence.closing) {
-			openings.push(fence.start);
+		if (opening !== undefined) {
+			ranges.push([opening, fence.end]);
+			opening = undefined;
+		} else {
+			opening = fence.start;
 		}
 		cursor = fence.end;
 	}
@@ -103,18 +103,22 @@ function memoryFenceRanges(text: string): Array<readonly [number, number]> {
 }
 
 export function stripInternalMemoryContext(text: string): string {
-	const ranges = memoryFenceRanges(text);
-	if (!ranges.length) return text;
-	let result = "";
-	let cursor = 0;
-	for (const [start, end] of ranges.sort((a, b) => a[0] - b[0])) {
-		if (start < cursor) continue;
-		result += text.slice(cursor, start);
-		cursor = end;
+	let result = text;
+	for (let pass = 0; pass < 8; pass++) {
+		const ranges = memoryFenceRanges(result);
+		if (!ranges.length) break;
+		let next = "";
+		let cursor = 0;
+		for (const [start, end] of ranges) {
+			next += result.slice(cursor, start);
+			cursor = end;
+		}
+		next += result.slice(cursor);
+		if (next === result) break;
+		result = next;
 	}
-	result += text.slice(cursor);
 	let scrubbed = "";
-	cursor = 0;
+	let cursor = 0;
 	const lowerResult = result.toLowerCase();
 	while (true) {
 		const fence = nextMemoryFence(result, cursor, lowerResult);

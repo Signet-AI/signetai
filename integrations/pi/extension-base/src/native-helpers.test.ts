@@ -36,6 +36,10 @@ describe("native connector helpers", () => {
 		expect(elapsed).toBeLessThan(250);
 	});
 
+	it("pairs adjacent fence tokens instead of nesting them", () => {
+		expect(stripInternalMemoryContext("<signet-memory>a<signet-memory>b</signet-memory>c</signet-memory>Z")).toBe("bZ");
+	});
+
 	it("scrubs memory fences and escapes injected content", () => {
 		expect(stripInternalMemoryContext("a <signet-memory>secret</signet-memory> b")).toBe("a  b");
 		expect(escapeMemoryContextForFence("<signet-memory>x</signet-memory>")).toContain("&lt;");
