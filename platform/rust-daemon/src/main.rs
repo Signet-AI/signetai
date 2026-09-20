@@ -13,6 +13,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use signet_core_native::{CoreError, Operation, WorkspaceOwner};
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::{
     collections::HashMap,
     env,
@@ -48,7 +50,11 @@ impl Drop for OwnerPipe {
     fn drop(&mut self) {
         if let Ok(mut session) = self.session.lock() {
             let generation = session.generation.clone();
-            let _ = writeln!(session.stdin, "{{\"id\":null,\"generation\":\"{}\",\"op\":\"shutdown\"}}", generation);
+            let _ = writeln!(
+                session.stdin,
+                "{{\"id\":null,\"generation\":\"{}\",\"op\":\"shutdown\"}}",
+                generation
+            );
             let _ = session.stdin.flush();
             let _ = session.child.wait();
         }
@@ -135,7 +141,8 @@ impl ExternalOwner {
             return Err(CoreError::OwnerStopped);
         }
         let mut line = String::new();
-        if session.stdout.read_line(&mut line).is_err() {
+        let read = session.stdout.read_line(&mut line);
+        if !matches!(read, Ok(size) if size > 0) {
             if matches!(operation, Operation::Health) {
                 *session = Self::start_session(&self.inner.workspace)?;
                 drop(session);
@@ -1285,30 +1292,54 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// Dedicated database-owner process protocol. The HTTP process never enters this mode;
 /// it is launched as a child and communicates with bounded newline-delimited JSON.
+struct OwnerLock {
+    _file: File,
+    path: PathBuf,
+}
+
+impl Drop for OwnerLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Error>> {
+    #[cfg(unix)]
+    {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(path)?;
+        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if result != 0 {
+            return Err("database owner already running".into());
+        }
+        file.set_len(0)?;
+        write!(&mut file, "{}", std::process::id())?;
+        file.flush()?;
+        return Ok(OwnerLock {
+            _file: file,
+            path: path.to_path_buf(),
+        });
+    }
+    #[cfg(not(unix))]
+    {
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        write!(&mut file, "{}", std::process::id())?;
+        file.flush()?;
+        Ok(OwnerLock {
+            _file: file,
+            path: path.to_path_buf(),
+        })
+    }
+}
+
 fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace_path();
     let path = database_path(&workspace);
     let lock_path = workspace.join(".daemon").join("db-owner.lock");
-    if lock_path.exists() {
-        let stale = std::fs::read_to_string(&lock_path)
-            .ok()
-            .and_then(|pid| pid.trim().parse::<u32>().ok())
-            .map(|pid| {
-                let stat = FsPath::new("/proc").join(pid.to_string()).join("stat");
-                std::fs::read_to_string(stat)
-                    .map(|value| !value.contains(") Z "))
-                    .unwrap_or(false)
-            });
-        let stale = stale.unwrap_or(false);
-        if stale {
-            let _ = std::fs::remove_file(&lock_path);
-        }
-    }
-    let _lock: File = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&lock_path)?;
-    std::fs::write(&lock_path, std::process::id().to_string())?;
+    let _lock = acquire_owner_lock(&lock_path)?;
     let owner = WorkspaceOwner::open(&path, 256)?;
     owner.initialize()?;
     let generation = Uuid::new_v4().to_string();
@@ -1322,7 +1353,12 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
         }))?,
     )?;
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
-    writeln!(out, "{{\"ready\":true,\"pid\":{},\"generation\":\"{}\"}}", std::process::id(), generation)?;
+    writeln!(
+        out,
+        "{{\"ready\":true,\"pid\":{},\"generation\":\"{}\"}}",
+        std::process::id(),
+        generation
+    )?;
     out.flush()?;
     let stdin = std::io::stdin();
     for line in BufReader::new(stdin.lock()).lines() {

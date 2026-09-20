@@ -21,9 +21,11 @@ async function start(workspace: string) {
 	const child = Bun.spawn([binary], {
 		env: {
 			...process.env,
+			SIGNET_API_KEY: "",
 			SIGNET_PATH: workspace,
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_PORT: String(p),
+			SIGNET_MODE: "local",
 			SIGNET_AGENT_ID: agent,
 		},
 		stdout: "ignore",
@@ -40,20 +42,31 @@ async function start(workspace: string) {
 	throw new Error("daemon did not start");
 }
 
+async function stop(child: Bun.Subprocess) {
+	if (child.exitCode === null) {
+		child.kill("SIGTERM");
+		await child.exited;
+	}
+}
+
 it("integrates durable graph-linked memories into bounded search results", async () => {
 	if (!existsSync(binary)) throw new Error(`build daemon first: ${binary}`);
 	const workspace = mkdtempSync(join(tmpdir(), "signet-retrieval-completeness-"));
-	const { child, origin } = await start(workspace);
+	const first = await start(workspace);
 	try {
-		const memoryId = "memory-graph-1";
+		const seeded = await fetch(`${first.origin}/api/memory/remember`, {
+			method: "POST",
+			headers: {
+				"content-type": "application/json",
+				"x-signet-agent-id": agent,
+				"x-workspace-id": "default",
+			},
+			body: JSON.stringify({ content: "durable graph fact" }),
+		});
+		expect(seeded.status).toBe(201);
+		const memoryId = (await seeded.json()).id as string;
+		await stop(first.child);
 		const db = new Database(join(workspace, "memory", "memories.db"));
-		db.query("INSERT INTO agents(id,metadata) VALUES (?,?)").run(agent, "{}");
-		db.query("INSERT INTO memories(id,agent_id,content,metadata,deleted) VALUES (?,?,?,?,0)").run(
-			memoryId,
-			agent,
-			"durable graph fact",
-			"{}",
-		);
 		db.query(
 			"INSERT INTO kg_entities(id,agent_id,workspace_id,name,entity_type,created_at,updated_at) VALUES (?,?,?,?,?,?,?)",
 		).run("entity-1", agent, "default", "Rust", "topic", "now", "now");
@@ -76,7 +89,8 @@ it("integrates durable graph-linked memories into bounded search results", async
 			"now",
 		);
 		db.close();
-		const response = await fetch(`${origin}/api/memory/search?q=tokengraph&agent_id=${agent}&limit=1`, {
+		const restarted = await start(workspace);
+		const response = await fetch(`${restarted.origin}/api/memory/search?q=tokengraph&agent_id=${agent}&limit=1`, {
 			headers: { "x-signet-agent-id": agent },
 		});
 		expect(response.status).toBe(200);
@@ -84,9 +98,9 @@ it("integrates durable graph-linked memories into bounded search results", async
 		expect(body.results.some((row: { id: string }) => row.id === memoryId)).toBe(true);
 		expect(body.meta.channels.graph.supported).toBe(true);
 		expect(body.meta.channels.graph.resultCount).toBeGreaterThan(0);
+		await stop(restarted.child);
 	} finally {
-		child.kill("SIGTERM");
-		await child.exited;
+		await stop(first.child);
 		rmSync(workspace, { recursive: true, force: true });
 	}
 });

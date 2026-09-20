@@ -59,8 +59,10 @@ async function start(dir = mkdtempSync(join(tmpdir(), "signet-owner-lifecycle-")
 
 afterEach(async () => {
 	for (const child of children.splice(0)) {
-		child.kill("SIGTERM");
-		await Promise.race([child.exited, Bun.sleep(1500)]);
+		if (child.exitCode === null) {
+			child.kill("SIGTERM");
+			await Promise.race([child.exited, Bun.sleep(1500)]);
+		}
 	}
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -100,21 +102,29 @@ it("proves the fresh external owner process boundary and recovery lifecycle", as
 		method: "POST",
 		headers: {
 			"content-type": "application/json",
+			"x-signet-api-key": "owner-contract-secret",
 			"x-signet-agent-id": "owner-contract-agent",
 			"x-workspace-id": "owner-contract-workspace",
 		},
 		body: JSON.stringify({ content: "owner lifecycle proof", type: "fact" }),
 	});
+	const writeBody = await write.text();
+	if (!write.ok) throw new Error(`post-recovery write failed: ${write.status} ${writeBody}`);
 	expect(write.ok).toBe(true);
 	expect(
 		(
 			await (
 				await fetch(`${first.origin}/api/memory/search?q=owner%20lifecycle%20proof`, {
-					headers: { "x-signet-agent-id": "owner-contract-agent", "x-workspace-id": "owner-contract-workspace" },
+					headers: {
+						"x-signet-api-key": "owner-contract-secret",
+						"x-signet-agent-id": "owner-contract-agent",
+						"x-workspace-id": "owner-contract-workspace",
+					},
 				})
 			).text()
 		).length,
 	).toBeGreaterThan(0);
+	first.child.kill("SIGTERM");
 	await first.child.exited;
 	expect(existsSync(first.markerPath)).toBe(false);
 	expect(existsSync(db)).toBe(true);
