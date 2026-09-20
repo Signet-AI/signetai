@@ -79,7 +79,17 @@ it("serves authenticated bounded update config parity and leaves discovery unsup
 		expect(malformedSection.status).toBe(200);
 		expect((await malformedSection.json()).persisted).toBe(false);
 		expect(readFileSync(join(dir, "agent.yaml"), "utf8")).toContain("service:");
-		rmSync(malformedDir, { recursive: true, force: true });
+		writeFileSync(
+			join(dir, "agent.yaml"),
+			"service:\n  name: keep\n\nupdates:\n  auto_install: false\n  check_interval: 900\n  channel: stable\n\n  	 \n",
+		);
+		const trailing = await fetch(`${origin}/api/update/config`, {
+			method: "POST",
+			headers: { ...auth, "content-type": "application/json" },
+			body: JSON.stringify({ channel: "nightly" }),
+		});
+		expect((await trailing.json()).persisted).toBe(true);
+		expect(readFileSync(join(dir, "agent.yaml"), "utf8")).toEndWith("\n\n\n  	 \n");
 
 		const target = join(dir, "outside-target.yaml");
 		writeFileSync(target, "sentinel: keep\\n");
@@ -93,6 +103,33 @@ it("serves authenticated bounded update config parity and leaves discovery unsup
 		expect(symlinkResponse.status).toBe(200);
 		expect((await symlinkResponse.json()).persisted).toBe(false);
 		expect(readFileSync(target, "utf8")).toBe("sentinel: keep\\n");
+
+		const rootTarget = mkdtempSync(join(tmpdir(), "signet-update-root-target-"));
+		const rootLink = join(malformedDir, "workspace-link");
+		symlinkSync(rootTarget, rootLink);
+		const rootChild = Bun.spawn([bin], {
+			env: {
+				...process.env,
+				SIGNET_PATH: rootLink,
+				SIGNET_BIND: "127.0.0.1",
+				SIGNET_PORT: String(port + 1),
+				SIGNET_API_KEY: "update-parity-key",
+			},
+			stdout: "ignore",
+			stderr: "pipe",
+		});
+		try {
+			await Bun.sleep(150);
+			const rejected = await fetch(`http://127.0.0.1:${port + 1}/api/update/config`, { headers: auth }).catch(
+				() => undefined,
+			);
+			expect(rejected?.status).toBe(200);
+		} finally {
+			rootChild.kill("SIGTERM");
+			await Promise.race([rootChild.exited, Bun.sleep(500).then(() => rootChild.kill("SIGKILL"))]);
+			rmSync(rootTarget, { recursive: true, force: true });
+			rmSync(malformedDir, { recursive: true, force: true });
+		}
 
 		for (const body of [
 			{ checkInterval: 299 },

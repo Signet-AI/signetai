@@ -10,11 +10,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    fs::{rename, File, OpenOptions},
+    fs::File,
     io::{Read, Write},
     os::unix::{
-        fs::{MetadataExt, OpenOptionsExt},
-        io::AsRawFd,
+        fs::MetadataExt,
+        io::{AsRawFd, FromRawFd},
     },
     path::Path,
 };
@@ -41,27 +41,71 @@ struct Config {
 }
 
 fn open_workspace(workspace: &Path) -> Option<File> {
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let file = options.open(workspace).ok()?;
-    file.metadata().ok()?.file_type().is_dir().then_some(file)
+    let mut current = if workspace.is_absolute() {
+        let fd = unsafe {
+            libc::open(
+                b"/\\0".as_ptr().cast(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return None;
+        }
+        unsafe { File::from_raw_fd(fd) }
+    } else {
+        let fd = unsafe {
+            libc::open(
+                b".\\0".as_ptr().cast(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return None;
+        }
+        unsafe { File::from_raw_fd(fd) }
+    };
+    for component in workspace.components() {
+        let name = match component {
+            std::path::Component::RootDir | std::path::Component::CurDir => continue,
+            std::path::Component::Normal(name) => {
+                std::ffi::CString::new(name.as_encoded_bytes()).ok()?
+            }
+            _ => return None,
+        };
+        let fd = unsafe {
+            libc::openat(
+                current.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return None;
+        }
+        current = unsafe { File::from_raw_fd(fd) };
+    }
+    Some(current)
 }
 
-fn open_config(workspace: &Path) -> Option<File> {
-    let _dir = open_workspace(workspace)?;
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let file = options.open(workspace.join("agent.yaml")).ok()?;
+fn open_config(dir: &File) -> Option<File> {
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            b"agent.yaml\0".as_ptr().cast(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return None;
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
     let metadata = file.metadata().ok()?;
     (metadata.file_type().is_file() && metadata.len() <= MAX_BODY as u64).then_some(file)
 }
 
 fn read_config(workspace: &Path) -> Option<String> {
-    let mut file = open_config(workspace)?;
+    let dir = open_workspace(workspace)?;
+    let mut file = open_config(&dir)?;
     let metadata = file.metadata().ok()?;
     let mut text = String::with_capacity(metadata.len() as usize);
     (&mut file)
@@ -120,9 +164,19 @@ fn parse_config(workspace: &Path) -> Config {
 }
 
 fn replace_section(current: &str, section: &str) -> Option<String> {
-    let mut lines = Vec::new();
+    let newline = if current.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut base = String::new();
     let mut skipping = false;
-    for line in current.lines() {
+    for raw in current.split_inclusive('\n') {
+        let line = raw
+            .strip_suffix('\n')
+            .unwrap_or(raw)
+            .strip_suffix('\r')
+            .unwrap_or(raw);
         let indent = line.len() - line.trim_start().len();
         let trimmed = line.trim();
         if trimmed == "updates:" || trimmed == "update:" {
@@ -139,14 +193,17 @@ fn replace_section(current: &str, section: &str) -> Option<String> {
             return None;
         }
         if !skipping {
-            lines.push(line);
+            base.push_str(raw);
         }
     }
-    let base = lines.join("\n");
-    Some(if base.trim().is_empty() {
-        section.to_owned()
+    let suffix_start = current.trim_end().len();
+    let suffix = &current[suffix_start..];
+    let base = base.trim_end_matches(|c: char| c.is_ascii_whitespace());
+    let section = section.replace('\n', newline);
+    Some(if base.is_empty() {
+        format!("{}{}", section, suffix)
     } else {
-        format!("{}\n\n{}", base.trim_end(), section)
+        format!("{}{}{}{}{}", base, newline, newline, section, suffix)
     })
 }
 
@@ -155,11 +212,26 @@ fn persist(workspace: &Path, config: &Config) -> bool {
         Some(v) => v,
         None => return false,
     };
-    let path = workspace.join("agent.yaml");
-    let current_file = match open_config(workspace) {
+    let current_file = match open_config(&dir) {
         Some(v) => Some(v),
-        None if std::fs::symlink_metadata(&path).is_err() => None,
-        None => return false,
+        None => {
+            let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+            let result = unsafe {
+                libc::fstatat(
+                    dir.as_raw_fd(),
+                    b"agent.yaml\0".as_ptr().cast(),
+                    stat.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            if result == -1
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::NotFound
+            {
+                None
+            } else {
+                return false;
+            }
+        }
     };
     let metadata = current_file.as_ref().and_then(|f| f.metadata().ok());
     let mut current = String::new();
@@ -196,34 +268,50 @@ fn persist(workspace: &Path, config: &Config) -> bool {
     }
     let mut temp = None;
     for n in 0..32u32 {
-        let candidate = workspace.join(format!(".agent.yaml.tmp.{}.{}", std::process::id(), n));
-        let mut options = OpenOptions::new();
-        options
-            .write(true)
-            .create_new(true)
-            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-        if let Ok(file) = options.open(&candidate) {
-            temp = Some((candidate, file));
+        let candidate = format!(".agent.yaml.tmp.{}.{}", std::process::id(), n);
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                std::ffi::CString::new(candidate.as_str()).unwrap().as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd >= 0 {
+            temp = Some((candidate, unsafe { File::from_raw_fd(fd) }));
             break;
         }
     }
     let Some((tmp_path, mut file)) = temp else {
         return false;
     };
+    let tmp_c = match std::ffi::CString::new(tmp_path.as_str()) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
     let ok = file.write_all(output.as_bytes()).is_ok()
         && file.sync_all().is_ok()
         && {
-            let latest = open_config(workspace).and_then(|f| f.metadata().ok());
+            let latest = open_config(&dir).and_then(|f| f.metadata().ok());
             match (metadata.as_ref(), latest) {
                 (None, None) | (None, Some(_)) => true,
                 (Some(old), Some(new)) => (old.dev(), old.ino()) == (new.dev(), new.ino()),
                 _ => false,
             }
         }
-        && rename(&tmp_path, &path).is_ok()
+        && unsafe {
+            libc::renameat(
+                dir.as_raw_fd(),
+                tmp_c.as_ptr(),
+                dir.as_raw_fd(),
+                b"agent.yaml\0".as_ptr().cast(),
+            ) == 0
+        }
         && unsafe { libc::fsync(dir.as_raw_fd()) == 0 };
     if !ok {
-        let _ = std::fs::remove_file(&tmp_path);
+        unsafe {
+            libc::unlinkat(dir.as_raw_fd(), tmp_c.as_ptr(), 0);
+        }
     }
     ok
 }
