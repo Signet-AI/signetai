@@ -3,10 +3,10 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: contract runner override
 const bin =
 	process.env.SIGNET_RUST_DAEMON_BIN ?? join(process.cwd(), "platform/rust-daemon/target/debug/signet-daemon");
-
-it("runs DreamTrigger jobs through durable worker failure without provider", async () => {
+async function run(payload: Record<string, unknown>) {
 	const dir = mkdtempSync(join(tmpdir(), "signet-native-worker-"));
 	const port = 39080 + Math.floor(Math.random() * 100);
 	const child = Bun.spawn([bin], {
@@ -17,21 +17,16 @@ it("runs DreamTrigger jobs through durable worker failure without provider", asy
 	try {
 		const origin = `http://127.0.0.1:${port}`;
 		let ready = false;
-		let lastReadyError = "no response";
 		for (let i = 0; i < 100; i++) {
 			try {
-				const response = await fetch(`${origin}/health/ready`);
-				if (response.ok) {
+				if ((await fetch(`${origin}/health/ready`)).ok) {
 					ready = true;
 					break;
 				}
-				lastReadyError = `HTTP ${response.status}`;
-			} catch (error) {
-				lastReadyError = String(error);
-			}
+			} catch {}
 			await Bun.sleep(25);
 		}
-		expect(ready, `daemon readiness failed for ${bin}: ${lastReadyError}`).toBe(true);
+		expect(ready).toBe(true);
 		const headers = {
 			"content-type": "application/json",
 			"x-signet-agent-id": "worker-contract",
@@ -40,29 +35,33 @@ it("runs DreamTrigger jobs through durable worker failure without provider", asy
 		const response = await fetch(`${origin}/api/dream/trigger`, {
 			method: "POST",
 			headers,
-			body: JSON.stringify({ reason: "contract" }),
+			body: JSON.stringify(payload),
 		});
 		expect(response.ok).toBe(true);
 		const created = (await response.json()) as { id: string; state: string };
 		expect(created.state).toBe("queued");
-		expect((created as { workspaceId?: string }).workspaceId).toBe("worker-workspace");
-		let terminal: Record<string, unknown> | undefined;
-		for (let i = 0; i < 80; i++) {
+		for (let i = 0; i < 100; i++) {
 			const current = await fetch(`${origin}/api/jobs/${created.id}`, { headers });
 			if (current.ok) {
 				const value = (await current.json()) as Record<string, unknown>;
-				if (value.state === "failed") {
-					terminal = value;
-					break;
-				}
+				if (value.state === "completed" || value.state === "failed") return value;
 			}
 			await Bun.sleep(25);
 		}
-		expect(terminal?.state).toBe("failed");
-		expect(terminal?.workspaceId).toBe("worker-workspace");
-		expect(String(terminal?.error)).toContain("unsupported external provider");
+		throw new Error("job did not reach terminal state");
 	} finally {
 		child.kill();
 		await child.exited;
 	}
+}
+it("executes fixture DreamTrigger and persists scoped result/provenance", async () => {
+	const value = await run({ provider: "fixture", content: "deterministic dream output" });
+	expect(value.state).toBe("completed");
+	expect(value.workspaceId).toBe("worker-workspace");
+	expect(JSON.stringify(value.result)).toContain("provenance");
+});
+it("fails unavailable providers explicitly", async () => {
+	const value = await run({ provider: "unavailable", content: "no-op" });
+	expect(value.state).toBe("failed");
+	expect(String(value.error)).toContain("provider unavailable");
 });

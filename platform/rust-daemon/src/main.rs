@@ -21,7 +21,6 @@ use std::{
     path::{Path as FsPath, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
     sync::{Arc, Mutex},
-
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::signal;
@@ -40,41 +39,102 @@ struct OwnerPipe {
 
 impl ExternalOwner {
     fn spawn(workspace: &FsPath) -> Result<Self, CoreError> {
-        let exe = env::var_os("SIGNET_DAEMON_BIN").map(PathBuf::from)
-            .or_else(|| env::current_exe().ok()).ok_or(CoreError::OwnerStopped)?;
-        let mut child = Command::new(exe).arg("--db-owner")
-            .env("SIGNET_PATH", workspace).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()
+        let exe = env::var_os("SIGNET_DAEMON_BIN")
+            .map(PathBuf::from)
+            .or_else(|| env::current_exe().ok())
+            .ok_or(CoreError::OwnerStopped)?;
+        let mut child = Command::new(exe)
+            .arg("--db-owner")
+            .env("SIGNET_PATH", workspace)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
             .map_err(|_| CoreError::OwnerStopped)?;
         let stdin = child.stdin.take().ok_or(CoreError::OwnerStopped)?;
         let stdout = child.stdout.take().ok_or(CoreError::OwnerStopped)?;
         let mut stdout = BufReader::new(stdout);
         let mut line = String::new();
-        stdout.read_line(&mut line).map_err(|_| CoreError::OwnerStopped)?;
+        stdout
+            .read_line(&mut line)
+            .map_err(|_| CoreError::OwnerStopped)?;
         let ready: Value = serde_json::from_str(&line).map_err(|_| CoreError::OwnerStopped)?;
-        let generation = ready.get("generation").and_then(Value::as_str).ok_or(CoreError::OwnerStopped)?.to_owned();
-        Ok(Self { inner: Arc::new(OwnerPipe { child: Mutex::new(child), stdin: Mutex::new(stdin), stdout: Mutex::new(stdout), generation }) })
+        let generation = ready
+            .get("generation")
+            .and_then(Value::as_str)
+            .ok_or(CoreError::OwnerStopped)?
+            .to_owned();
+        Ok(Self {
+            inner: Arc::new(OwnerPipe {
+                child: Mutex::new(child),
+                stdin: Mutex::new(stdin),
+                stdout: Mutex::new(stdout),
+                generation,
+            }),
+        })
     }
     fn submit(&self, operation: Operation) -> Result<Value, CoreError> {
-        let mut stdin = self.inner.stdin.lock().map_err(|_| CoreError::OwnerStopped)?;
+        let mut stdin = self
+            .inner
+            .stdin
+            .lock()
+            .map_err(|_| CoreError::OwnerStopped)?;
         let id = Uuid::new_v4().to_string();
-        serde_json::to_writer(&mut *stdin, &json!({"id":id,"generation":self.inner.generation,"operation":operation})).map_err(|_| CoreError::OwnerStopped)?;
-        stdin.write_all(b"\n").map_err(|_| CoreError::OwnerStopped)?;
+        serde_json::to_writer(
+            &mut *stdin,
+            &json!({"id":id,"generation":self.inner.generation,"operation":operation}),
+        )
+        .map_err(|_| CoreError::OwnerStopped)?;
+        stdin
+            .write_all(b"\n")
+            .map_err(|_| CoreError::OwnerStopped)?;
         stdin.flush().map_err(|_| CoreError::OwnerStopped)?;
-        let mut stdout = self.inner.stdout.lock().map_err(|_| CoreError::OwnerStopped)?;
+        let mut stdout = self
+            .inner
+            .stdout
+            .lock()
+            .map_err(|_| CoreError::OwnerStopped)?;
         let mut line = String::new();
-        stdout.read_line(&mut line).map_err(|_| CoreError::OwnerStopped)?;
+        stdout
+            .read_line(&mut line)
+            .map_err(|_| CoreError::OwnerStopped)?;
         let response: Value = serde_json::from_str(&line).map_err(|_| CoreError::OwnerStopped)?;
-        if response.get("ok").and_then(Value::as_bool) == Some(true) { response.get("result").cloned().ok_or(CoreError::OwnerStopped) }
-        else { Err(CoreError::InvalidInput(response.get("error").and_then(Value::as_str).unwrap_or("owner error").to_owned())) }
+        if response.get("ok").and_then(Value::as_bool) == Some(true) {
+            response
+                .get("result")
+                .cloned()
+                .ok_or(CoreError::OwnerStopped)
+        } else {
+            Err(CoreError::InvalidInput(
+                response
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("owner error")
+                    .to_owned(),
+            ))
+        }
     }
     async fn submit_async(&self, operation: Operation) -> Result<Value, CoreError> {
         let owner = self.clone();
-        tokio::task::spawn_blocking(move || owner.submit(operation)).await.map_err(|_| CoreError::OwnerStopped)?
+        tokio::task::spawn_blocking(move || owner.submit(operation))
+            .await
+            .map_err(|_| CoreError::OwnerStopped)?
     }
-    fn database_sample(&self, _table: String, _limit: usize, _offset: usize, _agent: Option<String>, _workspace: Option<String>) -> Result<Value, CoreError> {
-        Err(CoreError::InvalidInput("database sampling is unavailable through the owner boundary".into()))
+    fn database_sample(
+        &self,
+        _table: String,
+        _limit: usize,
+        _offset: usize,
+        _agent: Option<String>,
+        _workspace: Option<String>,
+    ) -> Result<Value, CoreError> {
+        Err(CoreError::InvalidInput(
+            "database sampling is unavailable through the owner boundary".into(),
+        ))
     }
-    fn database_schema(&self) -> Result<Value, CoreError> { self.submit(Operation::Health) }
+    fn database_schema(&self) -> Result<Value, CoreError> {
+        self.submit(Operation::Health)
+    }
 }
 
 #[derive(Clone)]
@@ -184,7 +244,11 @@ impl ApiError {
     }
 
     pub(crate) fn forbidden(message: impl Into<String>) -> Self {
-        Self { status: StatusCode::FORBIDDEN, code: "forbidden", message: message.into() }
+        Self {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message: message.into(),
+        }
     }
 
     pub(crate) fn unauthorized(message: impl Into<String>) -> Self {
@@ -1103,7 +1167,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         secret.extend_from_slice(Uuid::new_v4().as_bytes());
         std::fs::write(auth_path, secret)?;
     }
-    let owner = Arc::new(ExternalOwner::spawn(&workspace).map_err(|error| format!("database owner startup: {error}"))?);
+    let owner = Arc::new(
+        ExternalOwner::spawn(&workspace)
+            .map_err(|error| format!("database owner startup: {error}"))?,
+    );
     let state = AppState {
         owner,
         started_at: now_seconds(),
@@ -1111,6 +1178,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth_secret: routes::auth::load_secret(&workspace),
         workspace,
     };
+    let worker_owner = state.owner.clone();
+    let _worker = worker::start(worker_owner);
     let host = env::var("SIGNET_BIND").unwrap_or_else(|_| "127.0.0.1".to_owned());
     let port = env::var("SIGNET_PORT")
         .ok()

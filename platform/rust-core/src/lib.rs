@@ -499,7 +499,7 @@ impl Core {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerJob {
     pub id: String,
     pub agent_id: String,
@@ -1261,6 +1261,21 @@ fn execute_operation(
                 .map(|v| serde_json::from_str(&v))
                 .collect::<Result<Vec<Value>, _>>()?;
             Ok(json!({"agentId":agent_id,"passes":values}))
+        }
+        Operation::WorkerClaim => {
+            let job = claim_worker_connection(connection)?;
+            Ok(job.map_or(Value::Null, |job| {
+                serde_json::to_value(job).unwrap_or(Value::Null)
+            }))
+        }
+        Operation::WorkerFinish {
+            job,
+            state,
+            error,
+            result,
+        } => {
+            finish_worker_connection(connection, &job, &state, error.as_deref(), result)?;
+            Ok(json!({"ok":true}))
         }
         Operation::DreamTrigger {
             agent_id,
@@ -2913,6 +2928,48 @@ fn database_sample(
     )
 }
 
+fn claim_worker_connection(connection: &mut Connection) -> Result<Option<WorkerJob>, CoreError> {
+    let tx = connection.transaction()?;
+    tx.execute("UPDATE jobs SET state='expired',error='deadline exceeded',updated_at=datetime('now') WHERE state='queued' AND deadline_at IS NOT NULL AND julianday(deadline_at) <= julianday('now')", [])?;
+    let row: Option<(String,String,String,String,String)> = tx.query_row("SELECT id,agent_id,workspace_id,kind,payload FROM jobs WHERE state='queued' AND (deadline_at IS NULL OR julianday(deadline_at)>julianday('now')) AND kind IN ('dream.trigger','dream.pass','dreaming') ORDER BY created_at,id LIMIT 1", [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+    let Some((id, agent_id, workspace_id, kind, payload)) = row else {
+        tx.commit()?;
+        return Ok(None);
+    };
+    if tx.execute("UPDATE jobs SET state='running',updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id=? AND state='queued'", params![id,agent_id,workspace_id])? == 0 { tx.commit()?; return Ok(None) }
+    tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?, 'running','{\"from\":\"queued\",\"to\":\"running\"}',datetime('now'))", params![id,agent_id])?;
+    tx.commit()?;
+    Ok(Some(WorkerJob {
+        id,
+        agent_id,
+        workspace_id: Some(workspace_id),
+        kind,
+        payload,
+    }))
+}
+
+fn finish_worker_connection(
+    connection: &mut Connection,
+    job: &WorkerJob,
+    state: &str,
+    error: Option<&str>,
+    result: Option<Value>,
+) -> Result<(), CoreError> {
+    if !matches!(state, "completed" | "failed") {
+        return Err(CoreError::InvalidInput(
+            "invalid worker terminal state".into(),
+        ));
+    }
+    let result_text = result.as_ref().map(serde_json::to_string).transpose()?;
+    let tx = connection.transaction()?;
+    let changed = tx.execute("UPDATE jobs SET state=?,error=?,result=?,updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id=? AND state='running' AND (deadline_at IS NULL OR julianday(deadline_at)>julianday('now'))", params![state,error,result_text,job.id,job.agent_id,job.workspace_id])?;
+    if changed > 0 {
+        tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?,?, ?,datetime('now'))", params![job.id,job.agent_id,state,serde_json::to_string(&json!({"error":error,"result":result}))?])?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 pub struct WorkspaceOwner(Core);
 impl Clone for WorkspaceOwner {
     fn clone(&self) -> Self {
@@ -3267,6 +3324,13 @@ pub enum Operation {
         agent_id: String,
         workspace_id: String,
         payload: Value,
+    },
+    WorkerClaim,
+    WorkerFinish {
+        job: WorkerJob,
+        state: String,
+        error: Option<String>,
+        result: Option<Value>,
     },
     OntologyList {
         agent_id: String,
