@@ -16,6 +16,7 @@ use signet_core_native::{CoreError, Operation, WorkspaceOwner};
 use std::{
     collections::HashMap,
     env,
+    io::{BufRead, BufReader, Write},
     net::SocketAddr,
     path::{Path as FsPath, PathBuf},
     sync::Arc,
@@ -62,7 +63,10 @@ async fn authenticate_api(
     next: Next,
 ) -> Response {
     let expected = configured_api_key();
-    if expected.is_none() && state.auth_secret.is_none() {
+    let explicitly_open = env::var("SIGNET_MODE")
+        .map(|mode| mode.eq_ignore_ascii_case("local"))
+        .unwrap_or(false);
+    if expected.is_none() && state.auth_secret.is_none() && explicitly_open {
         return next.run(request).await;
     }
     let path = request.uri().path();
@@ -1029,6 +1033,9 @@ async fn dashboard(State(state): State<AppState>, uri: Uri) -> Response {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if env::args().any(|arg| arg == "--db-owner") {
+        return db_owner_process();
+    }
     let workspace = workspace_path();
     std::fs::create_dir_all(workspace.join("memory"))?;
     let daemon_dir = workspace.join(".daemon");
@@ -1097,6 +1104,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     worker_stop.abort();
+    Ok(())
+}
+
+/// Dedicated database-owner process protocol. The HTTP process never enters this mode;
+/// it is launched as a child and communicates with bounded newline-delimited JSON.
+fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = workspace_path();
+    let path = database_path(&workspace);
+    let owner = WorkspaceOwner::open(&path, 256)?;
+    owner.initialize()?;
+    let generation = Uuid::new_v4().to_string();
+    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
+    writeln!(out, "{{\"ready\":true,\"generation\":\"{}\"}}", generation)?;
+    out.flush()?;
+    let stdin = std::io::stdin();
+    for line in BufReader::new(stdin.lock()).lines() {
+        let line = line?;
+        if line.len() > 1_048_576 {
+            break;
+        }
+        let request: serde_json::Value = serde_json::from_str(&line)?;
+        let id = request.get("id").cloned().unwrap_or(Value::Null);
+        let request_generation = request.get("generation").and_then(Value::as_str);
+        if request_generation != Some(generation.as_str()) {
+            writeln!(out, "{{\"id\":{},\"error\":\"stale_generation\"}}", id)?;
+            out.flush()?;
+            continue;
+        }
+        if request.get("op").and_then(Value::as_str) == Some("shutdown") {
+            break;
+        }
+        let operation: Operation =
+            serde_json::from_value(request.get("operation").cloned().unwrap_or(Value::Null))?;
+        let response = match owner.submit(operation) {
+            Ok(value) => {
+                serde_json::json!({"id":id,"generation":generation,"ok":true,"result":value})
+            }
+            Err(error) => {
+                serde_json::json!({"id":id,"generation":generation,"ok":false,"error":error.to_string()})
+            }
+        };
+        serde_json::to_writer(&mut out, &response)?;
+        writeln!(out)?;
+        out.flush()?;
+    }
     Ok(())
 }
 

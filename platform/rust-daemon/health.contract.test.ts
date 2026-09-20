@@ -47,6 +47,12 @@ it("exposes truthful native health aliases and persists across SIGTERM restart",
 		if (path !== "/health/ready") expect(body.implementation).toBe("fresh");
 	}
 	expect((await fetch(`${daemon.origin}/api/mode`)).status).toBe(200);
+	const protectedWithoutCredentials = await fetch(`${daemon.origin}/api/memory/recall`, {
+		method: "POST",
+		headers: { "content-type": "application/json" },
+		body: JSON.stringify({ query: "secret" }),
+	});
+	expect(protectedWithoutCredentials.status).toBe(401);
 	const features = await fetch(`${daemon.origin}/api/features`);
 	expect(features.status).toBe(200);
 	expect((await features.json()).features.providerProbes).toBe(false);
