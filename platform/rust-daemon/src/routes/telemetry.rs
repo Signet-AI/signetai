@@ -27,31 +27,7 @@ struct HealthParams {
 }
 
 async fn authority(state: &AppState, headers: &HeaderMap) -> Result<Value, ApiError> {
-    let token = headers
-        .get("authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .or_else(|| {
-            headers
-                .get("x-signet-api-key")
-                .and_then(|v| v.to_str().ok())
-        })
-        .ok_or_else(|| ApiError::unauthorized("telemetry identity is required"))?;
-    if let Some(value) = auth::verify_token(state, token) {
-        return Ok(value);
-    }
-    let value = state
-        .owner
-        .submit_async(signet_core_native::Operation::AuthKeyVerify {
-            token: token.to_owned(),
-        })
-        .await
-        .map_err(ApiError::from)?;
-    if value.get("authenticated").and_then(Value::as_bool) == Some(true) {
-        Ok(value)
-    } else {
-        Err(ApiError::unauthorized("invalid telemetry identity"))
-    }
+    auth::gate(state, headers).await
 }
 
 fn check(authority: &Value, agent: &str, workspace: &str) -> Result<(), ApiError> {
@@ -142,21 +118,23 @@ async fn events(
             "limit must be an integer from 1 to 10000",
         ));
     }
-    Ok(Json(
-        execute(
-            &state,
-            signet_core_native::Operation::TelemetryList {
-                agent_id: agent,
-                workspace_id: workspace,
-                event: q.event,
-                since: q.since,
-                until: q.until,
-                cursor: q.cursor,
-                limit,
-            },
-        )
-        .await?,
-    ))
+    let result = execute(
+        &state,
+        signet_core_native::Operation::TelemetryList {
+            agent_id: agent,
+            workspace_id: workspace,
+            event: q.event,
+            since: q.since,
+            until: q.until,
+            cursor: q.cursor,
+            limit,
+        },
+    )
+    .await?;
+    Ok(Json(json!({
+        "events": result.get("events").cloned().unwrap_or_else(|| json!([])),
+        "enabled": true,
+    })))
 }
 
 async fn health(
