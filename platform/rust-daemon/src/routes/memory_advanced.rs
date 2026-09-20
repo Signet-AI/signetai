@@ -28,6 +28,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/memory/lineage/{id}", get(lineage))
         .route("/api/memory/review/{id}", get(review))
         .route("/api/memory/native-note", post(native_note))
+        .route("/api/memory/import", post(import_markdown))
         .route("/api/memory/semantic-search", post(semantic_search))
 }
 async fn dispatch(
@@ -177,6 +178,33 @@ async fn native_note(
     Json(p): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     dispatch(State(s), h, "native-note", None, p).await
+}
+
+async fn import_markdown(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Json(p): Json<Value>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let agent_id = agent(&h, None, None)?;
+    let workspace_id = p
+        .get("workspaceId")
+        .and_then(Value::as_str)
+        .unwrap_or("default")
+        .to_owned();
+    let files = p
+        .get("files")
+        .cloned()
+        .ok_or_else(|| ApiError::bad_request("files must be an array"))?;
+    let result = execute(
+        &s,
+        Operation::LegacyMarkdownImport {
+            agent_id,
+            workspace_id,
+            files,
+        },
+    )
+    .await?;
+    Ok((StatusCode::OK, Json(result)))
 }
 
 async fn semantic_search(

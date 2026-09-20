@@ -1356,6 +1356,75 @@ fn source_removal_lease_fences_stale_finalizer_and_blocks_ingest() {
 }
 
 #[test]
+fn legacy_markdown_import_is_scoped_deduplicated_and_reports_counts() {
+    let owner = core();
+    let files = serde_json::json!([
+        {"name":"2026-01-02.md", "content":"first note\n\nsecond note"},
+        {"name":"TEMPLATE.md", "content":"ignored"},
+        {"name":"not-a-date.md", "content":"invalid"},
+        {"name":"2026-01-03.md", "content":"   "}
+    ]);
+    let request = || {
+        owner
+            .submit(Operation::LegacyMarkdownImport {
+                agent_id: "agent-a".into(),
+                workspace_id: "workspace-a".into(),
+                files: files.clone(),
+            })
+            .unwrap()
+    };
+    let first = request();
+    assert_eq!(first["imported"], 2);
+    assert_eq!(first["skipped"], 3);
+    assert_eq!(first["errors"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        owner
+            .submit(Operation::List {
+                agent_id: "agent-a".into(),
+                include_deleted: false,
+                limit: None,
+                cursor: None
+            })
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let second = request();
+    assert_eq!(second["imported"], 0);
+    assert_eq!(second["skipped"], 5);
+    assert_eq!(
+        owner
+            .submit(Operation::List {
+                agent_id: "agent-a".into(),
+                include_deleted: false,
+                limit: None,
+                cursor: None
+            })
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        owner
+            .submit(Operation::List {
+                agent_id: "other-agent".into(),
+                include_deleted: false,
+                limit: None,
+                cursor: None
+            })
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
 fn source_removal_lease_blocks_direct_deletes_and_preserves_source_documents() {
     for delete in [false, true] {
         let owner = core();

@@ -636,6 +636,71 @@ fn execute_operation(
     operation: Operation,
 ) -> Result<Value, CoreError> {
     match operation {
+        Operation::LegacyMarkdownImport {
+            agent_id,
+            workspace_id,
+            files,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let files = files
+                .as_array()
+                .ok_or_else(|| CoreError::InvalidInput("files must be an array".into()))?;
+            let mut imported = 0usize;
+            let mut skipped = 0usize;
+            let mut errors = Vec::new();
+            for file in files {
+                let Some(object) = file.as_object() else {
+                    return Err(CoreError::InvalidInput(
+                        "file descriptors must be objects".into(),
+                    ));
+                };
+                let name = object.get("name").and_then(Value::as_str).unwrap_or("");
+                if name.starts_with("TEMPLATE") {
+                    skipped += 1;
+                    continue;
+                }
+                let valid_date = name.len() == 13
+                    && name.ends_with(".md")
+                    && name[..10].chars().enumerate().all(|(i, c)| {
+                        if i == 4 || i == 7 {
+                            c == '-'
+                        } else {
+                            c.is_ascii_digit()
+                        }
+                    });
+                if !valid_date {
+                    skipped += 1;
+                    errors.push(format!(
+                        "Invalid filename format (expected YYYY-MM-DD.md): {name}"
+                    ));
+                    continue;
+                }
+                let content = object.get("content").and_then(Value::as_str).unwrap_or("");
+                if content.trim().is_empty() {
+                    skipped += 1;
+                    continue;
+                }
+                for (chunk_index, chunk) in content
+                    .split("\n\n")
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .enumerate()
+                {
+                    let metadata = json!({"type":"daily-log","category":&name[..10],"sourceType":"import","sourceId":name,"tags":["imported","daily-log"],"updatedBy":"signet-import","_workspaceId":workspace_id,"_importChunk":chunk_index});
+                    let metadata_text = serde_json::to_string(&metadata)?;
+                    let exists: i64 = connection.query_row("SELECT count(*) FROM memories WHERE agent_id=? AND deleted=0 AND metadata=?", params![agent_id, metadata_text], |r| r.get(0))?;
+                    if exists > 0 {
+                        skipped += 1;
+                        continue;
+                    }
+                    let id = uuid::Uuid::new_v4().to_string();
+                    connection.execute("INSERT INTO memories(id,agent_id,content,metadata,deleted,created_at,updated_at) VALUES(?,?,?,?,0,datetime('now'),datetime('now'))", params![id,agent_id,chunk,metadata_text])?;
+                    imported += 1;
+                }
+            }
+            Ok(json!({"imported":imported,"skipped":skipped,"errors":errors}))
+        }
         Operation::Cancellation {
             agent_id,
             action,
@@ -3291,6 +3356,11 @@ pub struct SessionRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
+    LegacyMarkdownImport {
+        agent_id: String,
+        workspace_id: String,
+        files: Value,
+    },
     Cancellation {
         agent_id: String,
         action: String,
