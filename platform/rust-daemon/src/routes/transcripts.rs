@@ -113,13 +113,29 @@ async fn get_job(
         .await?,
     ))
 }
-async fn list(
+async fn list_transcripts(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<AgentQuery>,
 ) -> Result<Json<Value>, ApiError> {
     Ok(Json(json!({
         "transcripts": execute(
+            &state,
+            Operation::TranscriptList {
+                agent_id: agent(&headers, Some(&q), None)?,
+                limit: 100,
+            },
+        )
+        .await?,
+    })))
+}
+async fn list_imports(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<AgentQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(json!({
+        "imports": execute(
             &state,
             Operation::TranscriptList {
                 agent_id: agent(&headers, Some(&q), None)?,
@@ -352,7 +368,7 @@ async fn cancel(
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/sources/imports", post(create).get(list))
+        .route("/api/sources/imports", post(create).get(list_imports))
         .route("/api/sources/imports/{id}", get(get_job))
         .route(
             "/api/sources/imports/{job_id}/files/{file_id}",
@@ -375,5 +391,5 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/sources/imports/{job_id}/resume", post(resume))
         .route("/api/sources/imports/{job_id}/retry", post(retry))
         .route("/api/sources/imports/{job_id}/cancel", post(cancel))
-        .route("/api/transcripts", post(upsert).get(list))
+        .route("/api/transcripts", post(upsert).get(list_transcripts))
 }

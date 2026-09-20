@@ -162,8 +162,7 @@ test("native transcript and source-import HTTP contract", async () => {
 	});
 	expect(unsupportedSchema.status).toBe(400);
 	const importList = await body(await fetch(`${daemon.origin}/api/sources/imports`, { headers: h }));
-	// Current native route truthfully exposes the transcript-list envelope for this GET; it does not fabricate import rows.
-	expect(Array.isArray(importList.transcripts)).toBe(true);
+	expect(Array.isArray(importList.imports)).toBe(true);
 	for (const mode of ["", "bogus", "x".repeat(33)]) {
 		const response = await fetch(`${daemon.origin}/api/sources/imports`, {
 			method: "POST",
