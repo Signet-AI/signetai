@@ -317,9 +317,15 @@ async fn catalog_fetch(base: &str, path: &str) -> Result<Value, String> {
     if response.content_length().unwrap_or(0) > MAX_CATALOG_BYTES as u64 {
         return Err("catalog response too large".into());
     }
-    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-    if bytes.len() > MAX_CATALOG_BYTES {
-        return Err("catalog response too large".into());
+    let content_length = response.content_length();
+    let mut bytes =
+        Vec::with_capacity(content_length.unwrap_or(0).min(MAX_CATALOG_BYTES as u64) as usize);
+    let mut response = response;
+    while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+        if chunk.len() > MAX_CATALOG_BYTES.saturating_sub(bytes.len()) {
+            return Err("catalog response too large".into());
+        }
+        bytes.extend_from_slice(&chunk);
     }
     serde_json::from_slice(&bytes).map_err(|e| format!("malformed catalog response: {e}"))
 }
