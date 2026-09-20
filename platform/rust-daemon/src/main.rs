@@ -16,6 +16,7 @@ use signet_core_native::{CoreError, Operation, WorkspaceOwner};
 use std::{
     collections::HashMap,
     env,
+    fs::{File, OpenOptions},
     io::{BufRead, BufReader, Write},
     net::SocketAddr,
     path::{Path as FsPath, PathBuf},
@@ -24,21 +25,27 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::signal;
+use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct ExternalOwner {
     inner: Arc<OwnerPipe>,
 }
-struct OwnerPipe {
-    child: Mutex<Child>,
-    stdin: Mutex<ChildStdin>,
-    stdout: Mutex<BufReader<std::process::ChildStdout>>,
+struct OwnerSession {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<std::process::ChildStdout>,
     generation: String,
+}
+struct OwnerPipe {
+    workspace: PathBuf,
+    session: Mutex<OwnerSession>,
+    admission: Arc<Semaphore>,
 }
 
 impl ExternalOwner {
-    fn spawn(workspace: &FsPath) -> Result<Self, CoreError> {
+    fn start_session(workspace: &FsPath) -> Result<OwnerSession, CoreError> {
         let exe = env::var_os("SIGNET_DAEMON_BIN")
             .map(PathBuf::from)
             .or_else(|| env::current_exe().ok())
@@ -64,41 +71,72 @@ impl ExternalOwner {
             .and_then(Value::as_str)
             .ok_or(CoreError::OwnerStopped)?
             .to_owned();
+        Ok(OwnerSession {
+            child,
+            stdin,
+            stdout,
+            generation,
+        })
+    }
+    fn spawn(workspace: &FsPath) -> Result<Self, CoreError> {
+        let session = Self::start_session(workspace)?;
         Ok(Self {
             inner: Arc::new(OwnerPipe {
-                child: Mutex::new(child),
-                stdin: Mutex::new(stdin),
-                stdout: Mutex::new(stdout),
-                generation,
+                workspace: workspace.to_path_buf(),
+                session: Mutex::new(session),
+                admission: Arc::new(Semaphore::new(32)),
             }),
         })
     }
     fn submit(&self, operation: Operation) -> Result<Value, CoreError> {
-        let mut stdin = self
+        let _permit = self
             .inner
-            .stdin
+            .admission
+            .try_acquire()
+            .map_err(|_| CoreError::InvalidInput("owner IPC capacity exhausted".into()))?;
+        let mut session = self
+            .inner
+            .session
             .lock()
             .map_err(|_| CoreError::OwnerStopped)?;
         let id = Uuid::new_v4().to_string();
-        serde_json::to_writer(
-            &mut *stdin,
-            &json!({"id":id,"generation":self.inner.generation,"operation":operation}),
-        )
-        .map_err(|_| CoreError::OwnerStopped)?;
-        stdin
-            .write_all(b"\n")
-            .map_err(|_| CoreError::OwnerStopped)?;
-        stdin.flush().map_err(|_| CoreError::OwnerStopped)?;
-        let mut stdout = self
-            .inner
-            .stdout
-            .lock()
-            .map_err(|_| CoreError::OwnerStopped)?;
+        let generation = session.generation.clone();
+        let request = json!({"id":id,"generation":generation,"operation":operation.clone()});
+        let failed = serde_json::to_writer(&mut session.stdin, &request)
+            .and_then(|_| {
+                session
+                    .stdin
+                    .write_all(b"\n")
+                    .map_err(serde_json::Error::io)
+            })
+            .and_then(|_| session.stdin.flush().map_err(serde_json::Error::io))
+            .is_err();
+        if failed {
+            if matches!(operation, Operation::Health) {
+                let replacement = Self::start_session(&self.inner.workspace)?;
+                *session = replacement;
+                drop(session);
+                return self.submit(Operation::Health);
+            }
+            return Err(CoreError::OwnerStopped);
+        }
         let mut line = String::new();
-        stdout
-            .read_line(&mut line)
-            .map_err(|_| CoreError::OwnerStopped)?;
+        if session.stdout.read_line(&mut line).is_err() {
+            if matches!(operation, Operation::Health) {
+                *session = Self::start_session(&self.inner.workspace)?;
+                drop(session);
+                return self.submit(Operation::Health);
+            }
+            return Err(CoreError::OwnerStopped);
+        }
         let response: Value = serde_json::from_str(&line).map_err(|_| CoreError::OwnerStopped)?;
+        if response.get("id").and_then(Value::as_str) != Some(id.as_str())
+            || response.get("generation").and_then(Value::as_str) != Some(generation.as_str())
+        {
+            return Err(CoreError::InvalidInput(
+                "stale owner response rejected".into(),
+            ));
+        }
         if response.get("ok").and_then(Value::as_bool) == Some(true) {
             response
                 .get("result")
@@ -1236,6 +1274,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace_path();
     let path = database_path(&workspace);
+    let lock_path = workspace.join(".daemon").join("db-owner.lock");
+    if lock_path.exists() {
+        let stale = std::fs::read_to_string(&lock_path)
+            .ok()
+            .and_then(|pid| pid.trim().parse::<u32>().ok())
+            .map(|pid| !FsPath::new("/proc").join(pid.to_string()).exists())
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_file(&lock_path);
+        }
+    }
+    let _lock: File = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)?;
+    std::fs::write(&lock_path, std::process::id().to_string())?;
     let owner = WorkspaceOwner::open(&path, 256)?;
     owner.initialize()?;
     let generation = Uuid::new_v4().to_string();
