@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 const binary = process.env.SIGNET_RUST_DAEMON_BIN;
 if (!binary || !existsSync(binary))
 	throw new Error("SIGNET_RUST_DAEMON_BIN is required; refusing TypeScript/source fallback");
@@ -32,4 +32,5 @@ try {
 } finally {
 	child.kill("SIGTERM");
 	await child.exited;
+	rmSync(workspace.trim(), { recursive: true, force: true });
 }

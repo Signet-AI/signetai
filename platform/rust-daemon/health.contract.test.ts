@@ -9,11 +9,17 @@ const children: Bun.Subprocess[] = [];
 const workspaces: string[] = [];
 let port = 39600;
 
-async function start(workspace = mkdtempSync(join(tmpdir(), "signet-health-"))) {
+async function start(workspace = mkdtempSync(join(tmpdir(), "signet-health-")), open = true) {
 	workspaces.push(workspace);
 	const child = Bun.spawn([binary], {
 		cwd: root,
-		env: { ...process.env, SIGNET_PATH: workspace, SIGNET_BIND: "127.0.0.1", SIGNET_PORT: String(port++) },
+		env: {
+			...process.env,
+			...(open ? { SIGNET_MODE: "local" } : {}),
+			SIGNET_PATH: workspace,
+			SIGNET_BIND: "127.0.0.1",
+			SIGNET_PORT: String(port++),
+		},
 		stdout: "ignore",
 		stderr: "pipe",
 	});
@@ -47,12 +53,6 @@ it("exposes truthful native health aliases and persists across SIGTERM restart",
 		if (path !== "/health/ready") expect(body.implementation).toBe("fresh");
 	}
 	expect((await fetch(`${daemon.origin}/api/mode`)).status).toBe(200);
-	const protectedWithoutCredentials = await fetch(`${daemon.origin}/api/memory/recall`, {
-		method: "POST",
-		headers: { "content-type": "application/json" },
-		body: JSON.stringify({ query: "secret" }),
-	});
-	expect(protectedWithoutCredentials.status).toBe(401);
 	const features = await fetch(`${daemon.origin}/api/features`);
 	expect(features.status).toBe(200);
 	expect((await features.json()).features.providerProbes).toBe(false);
@@ -71,4 +71,10 @@ it("keeps live cheap and rejects malformed query input without crashing", async 
 	expect((await fetch(`${origin}/health/live?%zz`)).status).toBe(200);
 	expect((await fetch(`${origin}/api/memory/search?limit=not-an-integer`)).status).toBe(400);
 	expect((await fetch(`${origin}/api/mode?x=${"x".repeat(8192)}`)).status).toBe(200);
+});
+
+it("requires credentials when local mode is not explicitly open", async () => {
+	const { origin } = await start(undefined, false);
+	const response = await fetch(`${origin}/api/status`);
+	expect(response.status).toBe(401);
 });

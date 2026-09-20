@@ -27,6 +27,7 @@ const cleanPath = "/usr/bin:/bin";
 const childEnv = {
 	HOME: root,
 	PATH: cleanPath,
+	SIGNET_MODE: "local",
 	SIGNET_PATH: root,
 	SIGNET_BIND: "127.0.0.1",
 	SIGNET_PORT: String(port),

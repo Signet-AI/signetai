@@ -1,11 +1,18 @@
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 const binary = process.env.SIGNET_RUST_DAEMON_BIN;
 if (!binary || !existsSync(binary)) throw new Error("native Rust binary is required");
 const workspace = (await Bun.$`mktemp -d`).text();
 const path = (await workspace).trim();
 const port = 39700;
 const child = Bun.spawn([binary], {
-	env: { HOME: path, PATH: "/usr/bin:/bin", SIGNET_PATH: path, SIGNET_BIND: "127.0.0.1", SIGNET_PORT: String(port) },
+	env: {
+		HOME: path,
+		PATH: "/usr/bin:/bin",
+		SIGNET_MODE: "local",
+		SIGNET_PATH: path,
+		SIGNET_BIND: "127.0.0.1",
+		SIGNET_PORT: String(port),
+	},
 	stdout: "ignore",
 	stderr: "pipe",
 });
@@ -28,4 +35,5 @@ try {
 } finally {
 	child.kill("SIGTERM");
 	await child.exited;
+	rmSync(path, { recursive: true, force: true });
 }

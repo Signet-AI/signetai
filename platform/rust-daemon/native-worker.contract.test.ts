@@ -1,5 +1,5 @@
 import { expect, it } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,7 +10,13 @@ async function run(payload: Record<string, unknown>) {
 	const dir = mkdtempSync(join(tmpdir(), "signet-native-worker-"));
 	const port = 39080 + Math.floor(Math.random() * 100);
 	const child = Bun.spawn([bin], {
-		env: { ...process.env, SIGNET_PATH: dir, SIGNET_BIND: "127.0.0.1", SIGNET_PORT: String(port) },
+		env: {
+			...process.env,
+			SIGNET_MODE: "local",
+			SIGNET_PATH: dir,
+			SIGNET_BIND: "127.0.0.1",
+			SIGNET_PORT: String(port),
+		},
 		stdout: "ignore",
 		stderr: "ignore",
 	});
@@ -52,6 +58,7 @@ async function run(payload: Record<string, unknown>) {
 	} finally {
 		child.kill();
 		await child.exited;
+		rmSync(dir, { recursive: true, force: true });
 	}
 }
 it("executes fixture DreamTrigger and persists scoped result/provenance", async () => {

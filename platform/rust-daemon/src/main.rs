@@ -178,7 +178,7 @@ async fn authenticate_api(
     let explicitly_open = env::var("SIGNET_MODE")
         .map(|mode| mode.eq_ignore_ascii_case("local"))
         .unwrap_or(false);
-    if expected.is_none() && state.auth_secret.is_none() && explicitly_open {
+    if explicitly_open && expected.is_none() {
         return next.run(request).await;
     }
     let path = request.uri().path();
@@ -202,7 +202,9 @@ async fn authenticate_api(
                 .and_then(|value| value.to_str().ok())
         })
         .map(str::to_owned);
-    let configured = expected.as_deref() == supplied.as_deref();
+    let configured = expected
+        .as_deref()
+        .is_some_and(|value| Some(value) == supplied.as_deref());
     let durable = if configured {
         true
     } else if let Some(token) = supplied.as_deref() {
