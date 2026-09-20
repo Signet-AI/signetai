@@ -378,7 +378,7 @@ struct MarketplaceInstallRequest {
 }
 
 fn marketplace_state_path(state: &AppState) -> PathBuf {
-    state.workspace.join(".daemon/plugins/marketplace-v1.json")
+    state.workspace.join("marketplace/mcp-servers.json")
 }
 
 fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
@@ -540,7 +540,7 @@ async fn install_marketplace(
     let updated = state["servers"].get(&server_id).is_some();
 
     let now = now();
-    let server = json!({"id":server_id,"catalogId":request.id,"source":request.source.unwrap_or_else(|| "mcpservers.org".into()),"config":config,"scope":request.scope.unwrap_or_else(|| json!({"harnesses":[],"workspaces":[]})),"enabled":true,"probe":{"state":"not_run","bounded":true},"installedAt":now,"updatedAt":now});
+    let server = json!({"id":server_id,"catalogId":request.id,"source":request.source.unwrap_or_else(|| "mcpservers.org".into()),"name":server_id,"description":"Installed MCP server","category":"Other","official":false,"config":config,"scope":request.scope.unwrap_or_else(|| json!({"harnesses":[],"workspaces":[],"channels":[]})),"enabled":true,"installedAt":now,"updatedAt":now});
     state["servers"][&server_id] = server.clone();
     if !key.is_empty() {
         state["idempotency"][&key] = json!({"fingerprint":fingerprint,"serverId":server_id});
@@ -594,8 +594,11 @@ fn bounded_json(path: &std::path::Path) -> Result<Option<Value>, ApiError> {
 }
 fn scope_matches(scope: &Value, harness: &str, workspace: &str, channel: Option<&str>) -> bool {
     fn dim(v: Option<&Value>, current: &str, workspace: bool) -> bool {
-        let Some(a) = v.and_then(Value::as_array) else {
+        let Some(v) = v else {
             return true;
+        };
+        let Some(a) = v.as_array() else {
+            return false;
         };
         if a.is_empty() {
             return true;
@@ -604,7 +607,9 @@ fn scope_matches(scope: &Value, harness: &str, workspace: &str, channel: Option<
             let x = x.to_ascii_lowercase().replace('\\', "/");
             let c = current.to_ascii_lowercase().replace('\\', "/");
             if workspace {
-                c == x || c.starts_with(&(x + "/"))
+                let x = x.trim_end_matches('/').to_string();
+                let wildcard = x.strip_suffix('*').unwrap_or(&x).trim_end_matches('/');
+                c == wildcard || c.starts_with(&(wildcard.to_string() + "/"))
             } else {
                 c == x
             }
@@ -621,16 +626,17 @@ fn parse_policy(v: &Value) -> Option<Value> {
     }
     let clamp = |key: &str, default: u64, min: u64, max: u64| {
         v.get(key)
-            .and_then(Value::as_u64)
+            .and_then(Value::as_f64)
+            .filter(|n| n.is_finite())
+            .map(|n| n.round().max(min as f64).min(max as f64) as u64)
             .unwrap_or(default)
-            .clamp(min, max)
     };
     Some(
         json!({"mode":mode,"maxExpandedTools":clamp("maxExpandedTools",12,0,100),"maxSearchResults":clamp("maxSearchResults",8,1,50),"updatedAt":v.get("updatedAt").and_then(Value::as_str).unwrap_or("1970-01-01T00:00:00.000Z")}),
     )
 }
 fn policy_path(s: &AppState) -> PathBuf {
-    s.workspace.join(".daemon/plugins/mcp-policy.json")
+    s.workspace.join("marketplace/mcp-policy.json")
 }
 fn read_policy(s: &AppState) -> Value {
     bounded_json(&policy_path(s)).ok().flatten().and_then(|v|parse_policy(&v)).unwrap_or(json!({"mode":"hybrid","maxExpandedTools":12,"maxSearchResults":8,"updatedAt":"1970-01-01T00:00:00.000Z"}))
@@ -655,21 +661,40 @@ async fn list_marketplace(
     gate(&s, &h).await?;
     let raw = bounded_json(&marketplace_state_path(&s))?.unwrap_or(json!({"servers":{}}));
     let mut servers = Vec::new();
-    let harness = q.harness.as_deref().unwrap_or("");
-    let workspace = q.workspace.as_deref().unwrap_or("");
-    let scoped = q
-        .scoped
-        .as_deref()
-        .map(|x| x == "1")
-        .unwrap_or(q.harness.is_some() || q.workspace.is_some() || q.channel.is_some());
+    let header_value = |name: &str| {
+        h.get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+    };
+    let choose =
+        |query: Option<&String>, header: Option<&str>| -> Result<Option<String>, ApiError> {
+            match (query.map(|v| v.trim()).filter(|v| !v.is_empty()), header) {
+                (Some(q), Some(h)) if q != h => {
+                    Err(ApiError::bad_request("conflicting marketplace scope"))
+                }
+                (Some(q), _) => Ok(Some(q.to_owned())),
+                (None, Some(h)) => Ok(Some(h.to_owned())),
+                _ => Ok(None),
+            }
+        };
+    let harness = choose(q.harness.as_ref(), header_value("x-signet-harness"))?;
+    let workspace = choose(q.workspace.as_ref(), header_value("x-signet-workspace"))?;
+    let channel = choose(q.channel.as_ref(), header_value("x-signet-channel"))?;
+    let scoped = match q.scoped.as_deref() {
+        Some("1") => true,
+        Some("0") => false,
+        Some(_) => return Err(ApiError::bad_request("scoped must be 0 or 1")),
+        None => harness.is_some() || workspace.is_some() || channel.is_some(),
+    };
     if let Some(map) = raw.get("servers").and_then(Value::as_object) {
         for v in map.values() {
             if !scoped
                 || scope_matches(
                     v.get("scope").unwrap_or(&json!({})),
-                    harness,
-                    workspace,
-                    q.channel.as_deref(),
+                    harness.as_deref().unwrap_or(""),
+                    workspace.as_deref().unwrap_or(""),
+                    channel.as_deref(),
                 )
             {
                 servers.push(v.clone())
@@ -677,7 +702,7 @@ async fn list_marketplace(
         }
     }
     Ok(Json(
-        json!({"servers":servers,"count":servers.len(),"scoped":scoped,"context":{"harness":q.harness,"workspace":q.workspace,"channel":q.channel},"runtime":{"runtime":"rust","implementation":"fresh","supported":true}}),
+        json!({"servers":servers,"count":servers.len(),"scoped":scoped,"context":{"harness":harness,"workspace":workspace,"channel":channel},"runtime":{"runtime":"rust","implementation":"fresh","supported":false,"supportedOperations":["installed-list","policy-get","policy-patch"]}}),
     ))
 }
 async fn get_policy(State(s): State<AppState>, h: HeaderMap) -> Result<Json<Value>, ApiError> {
