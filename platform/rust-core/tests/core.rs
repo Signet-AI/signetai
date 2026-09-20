@@ -360,6 +360,85 @@ fn migrates_legacy_telemetry_before_scoped_index_and_preserves_rows() {
 }
 
 #[test]
+fn migrates_legacy_api_keys_before_scoped_index_and_preserves_rows() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-api-keys.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection.execute_batch(
+        "CREATE TABLE api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL, scope_json TEXT NOT NULL, created_at TEXT NOT NULL);
+         INSERT INTO api_keys(id,prefix,name,key_hash,role,scope_json,created_at) VALUES ('k1','p1','legacy','hash','agent','{}','2026-01-01');",
+    ).unwrap();
+    drop(connection);
+
+    let owner = Core::open(&p, 4).unwrap();
+    let connection = Connection::open(&p).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name, agent_id, revoked_at, expires_at FROM api_keys WHERE id='k1'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?
+                ))
+            )
+            .unwrap(),
+        ("legacy".to_string(), None, None, None)
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM sqlite_schema WHERE type='index' AND name='api_keys_scope'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "api_keys_scope"
+    );
+    drop(connection);
+    owner.initialize().unwrap();
+}
+
+#[test]
+fn migrates_legacy_secrets_before_scoped_index_and_preserves_rows() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-secrets.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection.execute_batch(
+        "CREATE TABLE secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+         INSERT INTO secrets(id,agent_id,workspace_id,name,provider,value,created_at,updated_at) VALUES ('s1','a','w','legacy','local','value','2026-01-01','2026-01-01');",
+    ).unwrap();
+    drop(connection);
+
+    let owner = Core::open(&p, 4).unwrap();
+    let connection = Connection::open(&p).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name, deleted FROM secrets WHERE id='s1'",
+                [],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            )
+            .unwrap(),
+        ("legacy".to_string(), 0)
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM sqlite_schema WHERE type='index' AND name='secrets_scope'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "secrets_scope"
+    );
+    drop(connection);
+    owner.initialize().unwrap();
+}
+
+#[test]
 fn migrates_legacy_transcripts_before_idempotency_index() {
     let d = tempdir().unwrap();
     let p = d.path().join("legacy-transcripts.sqlite");

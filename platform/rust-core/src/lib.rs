@@ -3586,9 +3586,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE INDEX IF NOT EXISTS daily_reflections_agent_date ON daily_reflections(agent_id, date, created_at DESC);
 
          CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'agent', scope_json TEXT NOT NULL DEFAULT '{}', permissions_json TEXT NOT NULL DEFAULT '[]', connector TEXT, harness TEXT, agent_id TEXT, allowed_projects_json TEXT, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT);
-         CREATE INDEX IF NOT EXISTS api_keys_scope ON api_keys(agent_id, revoked_at, expires_at);
          CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,name));
-         CREATE INDEX IF NOT EXISTS secrets_scope ON secrets(agent_id,workspace_id,deleted);
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
@@ -3735,7 +3733,23 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     ensure_column(&transaction, "api_keys", "connector", "TEXT")?;
     ensure_column(&transaction, "api_keys", "harness", "TEXT")?;
     ensure_column(&transaction, "api_keys", "agent_id", "TEXT")?;
+    ensure_column(&transaction, "api_keys", "revoked_at", "TEXT")?;
+    ensure_column(&transaction, "api_keys", "expires_at", "TEXT")?;
     ensure_column(&transaction, "api_keys", "allowed_projects_json", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "secrets",
+        "deleted",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    transaction.execute(
+        "CREATE INDEX IF NOT EXISTS api_keys_scope ON api_keys(agent_id, revoked_at, expires_at)",
+        [],
+    )?;
+    transaction.execute(
+        "CREATE INDEX IF NOT EXISTS secrets_scope ON secrets(agent_id,workspace_id,deleted)",
+        [],
+    )?;
     ensure_column(
         &transaction,
         "sources",
