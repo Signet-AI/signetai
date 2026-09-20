@@ -40,7 +40,11 @@ describe("fresh Rust auth/secrets/inference boundary", () => {
 			};
 			const methods = await fetch(`${origin}/api/auth/methods`, { headers });
 			expect(methods.status).toBe(200);
-			expect((await methods.json()).providers).toEqual([{ id: "api-key", type: "api-key", enabled: true }]);
+			expect((await methods.json()).providers).toEqual([
+				{ id: "password", type: "password", enabled: false, username: "admin" },
+				{ id: "sso", type: "oidc", enabled: false, startPath: "/api/auth/sso/start" },
+				{ id: "saml", type: "saml", enabled: false, startPath: "/api/auth/saml/start" },
+			]);
 			const sso = await fetch(`${origin}/api/auth/sso/start`, { headers });
 			expect(sso.status).toBe(501);
 			const provider = await fetch(`${origin}/api/secrets/bitwarden/status`, {
