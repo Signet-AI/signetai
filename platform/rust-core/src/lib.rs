@@ -2090,33 +2090,7 @@ fn execute_operation(
                     memory_row,
                 )
                 .optional()?;
-            let mut value = serde_json::to_value(memory)?;
-            if let Some(object) = value.as_object_mut() {
-                if let Some(metadata) = object.get("metadata").and_then(Value::as_object).cloned() {
-                    for key in [
-                        "sourceId",
-                        "sourceType",
-                        "sourcePath",
-                        "runtimePath",
-                        "idempotencyKey",
-                    ] {
-                        if let Some(v) = metadata.get(key) {
-                            object.insert(key.into(), v.clone());
-                        }
-                    }
-                    let memory_kind = match metadata.get("sourceType").and_then(Value::as_str) {
-                        Some(
-                            "extract" | "aggregate-recall" | "session_end" | "checkpoint"
-                            | "dreaming",
-                        ) => None,
-                        _ => Some("episodic"),
-                    };
-                    if memory_kind.is_some() {
-                        object.insert("memoryKind".into(), json!("episodic"));
-                    }
-                }
-            }
-            Ok(value)
+            Ok(serde_json::to_value(memory)?)
         }
         Operation::Update {
             agent_id,
@@ -2129,12 +2103,15 @@ fn execute_operation(
             if content.trim().is_empty() {
                 return Err(CoreError::InvalidInput("content must not be empty".into()));
             }
+            let metadata_value = metadata.clone();
             let metadata = serde_json::to_string(&metadata)?;
+            let memory_kind =
+                classify_memory_kind(metadata_value.get("sourceType").and_then(Value::as_str));
             let transaction = connection.transaction()?;
             let changed = transaction.execute(
-                "UPDATE memories SET content = ?, metadata = ?, updated_at = datetime('now')
+                "UPDATE memories SET content = ?, metadata = ?, source_id = ?, source_type = ?, source_path = ?, runtime_path = ?, idempotency_key = ?, memory_kind = ?, updated_at = datetime('now')
                  WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
-                params![content, metadata, id, agent_id],
+                params![content, metadata, metadata_value.get("sourceId").and_then(Value::as_str), metadata_value.get("sourceType").and_then(Value::as_str), metadata_value.get("sourcePath").and_then(Value::as_str), metadata_value.get("runtimePath").and_then(Value::as_str), metadata_value.get("idempotencyKey").and_then(Value::as_str), memory_kind, id, agent_id],
             )?;
             if changed == 0 {
                 return Err(CoreError::NotFound);

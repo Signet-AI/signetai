@@ -48,54 +48,118 @@ fn integrity_checkpoint_is_scoped_durable_and_excludes_fts() {
     assert_eq!(second["checkpoint"]["completed"], true);
 }
 #[test]
-fn remember_persists_current_provenance_and_memory_kind() {
+fn memory_provenance_is_persisted_and_consistent_across_reads_and_updates() {
     let c = core();
-    let id = c
-        .submit(Operation::Remember {
+    let manual_id = c.submit(Operation::Remember {
+        agent_id: "agent-a".into(),
+        content: "manual fact".into(),
+        metadata: serde_json::json!({"sourceId":"src-1","sourceType":"manual","sourcePath":"notes.md","runtimePath":"plugin","idempotencyKey":"idem-1"}),
+    }).unwrap()["id"].as_str().unwrap().to_owned();
+    let derived_types = [
+        "extract",
+        "aggregate-recall",
+        "session_end",
+        "checkpoint",
+        "dreaming",
+    ];
+    let mut ids = vec![manual_id.clone()];
+    for source_type in derived_types {
+        ids.push(
+            c.submit(Operation::Remember {
+                agent_id: "agent-a".into(),
+                content: format!("{source_type} fact"),
+                metadata: serde_json::json!({"sourceType":source_type}),
+            })
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    ids.push(
+        c.submit(Operation::Remember {
             agent_id: "agent-a".into(),
-            content: "derived fact".into(),
-            metadata: serde_json::json!({
-                "sourceId": "src-1",
-                "sourceType": "manual",
-                "sourcePath": "notes.md",
-                "runtimePath": "plugin",
-                "idempotencyKey": "idem-1"
-            }),
+            content: "unknown fact".into(),
+            metadata: serde_json::json!({"sourceType":"unknown"}),
         })
         .unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let got = c
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    );
+    for id in &ids {
+        let got = c
+            .submit(Operation::Get {
+                agent_id: "agent-a".into(),
+                id: id.clone(),
+            })
+            .unwrap();
+        let listed = c
+            .submit(Operation::List {
+                agent_id: "agent-a".into(),
+                include_deleted: false,
+                limit: None,
+                cursor: None,
+            })
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|v| v["id"] == *id)
+            .cloned()
+            .unwrap();
+        let recalled = c
+            .submit(Operation::Recall {
+                agent_id: "agent-a".into(),
+                query: got["content"].as_str().unwrap().into(),
+            })
+            .unwrap()
+            .as_array()
+            .unwrap()[0]
+            .clone();
+        assert_eq!(
+            (
+                got.get("sourceId"),
+                got.get("sourceType"),
+                got.get("sourcePath"),
+                got.get("runtimePath"),
+                got.get("idempotencyKey"),
+                got.get("memoryKind")
+            ),
+            (
+                listed.get("sourceId"),
+                listed.get("sourceType"),
+                listed.get("sourcePath"),
+                listed.get("runtimePath"),
+                listed.get("idempotencyKey"),
+                listed.get("memoryKind")
+            )
+        );
+        assert_eq!(recalled.get("memoryKind"), got.get("memoryKind"));
+    }
+    assert_eq!(
+        c.submit(Operation::Get {
+            agent_id: "agent-a".into(),
+            id: manual_id.clone()
+        })
+        .unwrap()["memoryKind"],
+        "episodic"
+    );
+    c.submit(Operation::Update {
+        agent_id: "agent-a".into(),
+        id: manual_id.clone(),
+        content: "updated".into(),
+        metadata: serde_json::json!({"sourceType":"extract"}),
+    })
+    .unwrap();
+    let updated = c
         .submit(Operation::Get {
             agent_id: "agent-a".into(),
-            id,
+            id: manual_id,
         })
         .unwrap();
-    assert_eq!(got["sourceId"], "src-1");
-    assert_eq!(got["sourceType"], "manual");
-    assert_eq!(got["sourcePath"], "notes.md");
-    assert_eq!(got["runtimePath"], "plugin");
-    assert_eq!(got["idempotencyKey"], "idem-1");
-    assert_eq!(got["memoryKind"], "episodic");
-
-    let derived_id = c
-        .submit(Operation::Remember {
-            agent_id: "agent-a".into(),
-            content: "daemon-derived fact".into(),
-            metadata: serde_json::json!({"sourceType": "extract"}),
-        })
-        .unwrap()["id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let derived = c
-        .submit(Operation::Get {
-            agent_id: "agent-a".into(),
-            id: derived_id,
-        })
-        .unwrap();
-    assert!(derived.get("memoryKind").is_none() || derived["memoryKind"].is_null());
+    assert!(updated["memoryKind"].is_null());
+    assert_eq!(updated["sourceType"], "extract");
 }
 
 #[test]
@@ -108,7 +172,55 @@ fn legacy_memory_rows_migrate_without_data_loss() {
     let c = Core::open(&p, 2).unwrap();
     let got = c.get("a", "old").unwrap().unwrap();
     assert_eq!(got.content, "preserve");
+    let new_id = c
+        .submit(Operation::Remember {
+            agent_id: "a".into(),
+            content: "migrated remember".into(),
+            metadata: serde_json::json!({
+                "sourceId": "legacy-source",
+                "sourceType": "manual",
+                "sourcePath": "legacy.md",
+                "runtimePath": "runtime",
+                "idempotencyKey": "legacy-idem"
+            }),
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let remembered = c
+        .submit(Operation::Get {
+            agent_id: "a".into(),
+            id: new_id.clone(),
+        })
+        .unwrap();
+    assert_eq!(remembered["memoryKind"], "episodic");
+    assert!(c
+        .submit(Operation::Get {
+            agent_id: "other-agent".into(),
+            id: new_id.clone(),
+        })
+        .unwrap()
+        .is_null());
     let db = Connection::open(&p).unwrap();
+    let raw: (Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind FROM memories WHERE id=?",
+            [&new_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        raw,
+        (
+            Some("legacy-source".into()),
+            Some("manual".into()),
+            Some("legacy.md".into()),
+            Some("runtime".into()),
+            Some("legacy-idem".into()),
+            Some("episodic".into())
+        )
+    );
     let cols: Vec<String> = db
         .prepare("PRAGMA table_info(memories)")
         .unwrap()
