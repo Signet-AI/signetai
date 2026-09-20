@@ -37,11 +37,169 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/ontology/{kind}", get(list).post(upsert))
         .route("/api/ontology/{kind}/{id}", get(get_one).delete(remove))
+        .route(
+            "/api/ontology/proposals",
+            get(list_proposals).post(create_proposal),
+        )
+        .route(
+            "/api/ontology/proposals/{id}",
+            get(get_proposal).delete(delete_proposal),
+        )
+        .route("/api/ontology/claims", get(list_claims).post(create_claim))
+        .route(
+            "/api/ontology/claims/{id}",
+            get(get_claim).delete(delete_claim),
+        )
+        .route(
+            "/api/ontology/constraints",
+            get(list_constraints).post(create_constraint),
+        )
+        .route(
+            "/api/ontology/constraints/{id}",
+            get(get_constraint).delete(delete_constraint),
+        )
+        .route(
+            "/api/ontology/assertions",
+            get(list_assertions).post(create_assertion),
+        )
+        .route(
+            "/api/ontology/assertions/{id}",
+            get(get_assertion).delete(delete_assertion),
+        )
+        .route(
+            "/api/ontology/proposals/{id}/apply",
+            axum::routing::post(unsupported),
+        )
+        .route(
+            "/api/ontology/proposals/{id}/reject",
+            axum::routing::post(unsupported),
+        )
+        .route("/api/ontology/proposals/conflicts", get(unsupported))
+        .route(
+            "/api/ontology/proposals/repair/duplicates",
+            axum::routing::post(unsupported),
+        )
+        .route(
+            "/api/ontology/proposals/repair/merge-plan",
+            axum::routing::post(unsupported),
+        )
+        .route("/api/ontology/proposals/{id}/evidence", get(unsupported))
+        .route("/api/ontology/claims/evidence", get(unsupported))
+        .route("/api/ontology/claims/versions", get(unsupported))
+        .route("/api/ontology/claims/version", get(unsupported))
+        .route("/api/ontology/claims/explain", get(unsupported))
+        .route("/api/ontology/extract", axum::routing::post(unsupported))
+        .route(
+            "/api/ontology/consolidate",
+            axum::routing::post(unsupported),
+        )
+        .route("/api/ontology/contradictions", get(unsupported))
         .route("/api/claims", get(list_claims).post(create_claim))
         .route(
             "/api/constraints",
             get(list_constraints).post(create_constraint),
         )
+}
+
+async fn unsupported() -> Result<Json<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "ontology operation is unsupported by the fresh Rust boundary",
+    ))
+}
+
+async fn list_proposals(
+    s: State<AppState>,
+    h: HeaderMap,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    list(s, h, Path("proposal".into()), q).await
+}
+async fn create_proposal(
+    s: State<AppState>,
+    h: HeaderMap,
+    q: Query<OntologyQuery>,
+    b: Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    upsert(s, h, Path("proposal".into()), q, b).await
+}
+async fn get_proposal(
+    s: State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    get_one(s, h, Path(("proposal".into(), p.0)), q).await
+}
+async fn delete_proposal(
+    s: State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    remove(s, h, Path(("proposal".into(), p.0)), q).await
+}
+async fn get_claim(
+    s: State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    get_one(s, h, Path(("claim".into(), p.0)), q).await
+}
+async fn delete_claim(
+    s: State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    remove(s, h, Path(("claim".into(), p.0)), q).await
+}
+async fn get_constraint(
+    s: State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    get_one(s, h, Path(("constraint".into(), p.0)), q).await
+}
+async fn delete_constraint(
+    s: State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    remove(s, h, Path(("constraint".into(), p.0)), q).await
+}
+async fn list_assertions(
+    s: State<AppState>,
+    h: HeaderMap,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    list(s, h, Path("assertion".into()), q).await
+}
+async fn create_assertion(
+    s: State<AppState>,
+    h: HeaderMap,
+    q: Query<OntologyQuery>,
+    b: Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    upsert(s, h, Path("assertion".into()), q, b).await
+}
+async fn get_assertion(
+    s: State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    get_one(s, h, Path(("assertion".into(), p.0)), q).await
+}
+async fn delete_assertion(
+    s: State<AppState>,
+    h: HeaderMap,
+    p: Path<String>,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    remove(s, h, Path(("assertion".into(), p.0)), q).await
 }
 
 async fn list(
