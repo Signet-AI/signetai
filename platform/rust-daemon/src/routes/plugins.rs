@@ -1,6 +1,7 @@
-use crate::{ApiError, AppState};
+use crate::{routes::auth, ApiError, AppState};
 use axum::{
     extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
     routing::get,
     Json, Router,
 };
@@ -30,8 +31,8 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/plugins", get(list))
         .route("/api/plugins/prompt-contributions", get(prompts))
         .route("/api/plugins/audit", get(audit))
-        .route("/api/plugins/:id/diagnostics", get(diagnostics))
-        .route("/api/plugins/:id", get(detail).patch(update))
+        .route("/api/plugins/{id}/diagnostics", get(diagnostics))
+        .route("/api/plugins/{id}", get(detail).patch(update))
 }
 
 fn now() -> String {
@@ -47,12 +48,17 @@ fn registry_path(state: &AppState) -> PathBuf {
 fn audit_path(state: &AppState) -> PathBuf {
     state.workspace.join(".daemon/plugins/audit-v1.ndjson")
 }
-fn load(state: &AppState) -> Value {
+fn load(state: &AppState) -> Result<Value, ApiError> {
     let path = registry_path(state);
-    fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_else(|| json!({"version":1,"plugins":{}}))
+    match fs::read_to_string(path) {
+        Ok(s) => serde_json::from_str(&s).map_err(|_| ApiError {
+            status: StatusCode::CONFLICT,
+            code: "invalid_registry",
+            message: "plugin registry is malformed".into(),
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({"version":1,"plugins":{}})),
+        Err(e) => Err(ApiError::internal(e.to_string())),
+    }
 }
 fn save(state: &AppState, value: &Value) -> Result<(), ApiError> {
     let path = registry_path(state);
@@ -97,22 +103,40 @@ fn manifest(id: &str) -> Value {
     };
     json!({"id":id,"name":name,"version":version,"publisher":publisher,"description":"Bundled native registry manifest","runtime":{"language":"typescript","kind":"host-managed"},"compatibility":{"signet":">=0.103.0 <1.0.0","pluginApi":"1.x"},"trustTier":if id=="signet-secrets"{"core"}else{"verified"},"capabilities":capabilities,"surfaces":surfaces(id),"docs":{"capabilities":{}},"promptContributions":[]})
 }
-fn records(state: &AppState) -> Vec<Value> {
-    let persisted = load(state);
-    ["signet-secrets","signet-graphiq"].into_iter().map(|id| {
-        let old=persisted.get("plugins").and_then(|p|p.get(id)); let enabled=old.and_then(|x|x.get("enabled")).and_then(Value::as_bool).unwrap_or(true); let t=old.and_then(|x|x.get("installedAt")).and_then(Value::as_str).unwrap_or("0");
-        let caps=manifest(id).get("capabilities").cloned().unwrap_or(json!([]));
-        json!({"id":id,"name":manifest(id)["name"],"version":"1.0.0","publisher":manifest(id)["publisher"],"source":"bundled","trustTier":manifest(id)["trustTier"],"enabled":enabled,"state":if enabled{"active"}else{"disabled"},"stateReason":if enabled {Value::Null}else{json!("disabled by host policy")},"declaredCapabilities":caps,"grantedCapabilities":if enabled{caps}else{json!([])},"pendingCapabilities":[],"surfaces":if enabled{surfaces(id)}else{json!({"daemonRoutes":[],"cliCommands":[],"mcpTools":[],"dashboardPanels":[],"sdkClients":[],"connectorCapabilities":[],"promptContributions":[]})},"health":{"status":"healthy","checkedAt":now()},"installedAt":t,"updatedAt":now()})
-    }).collect()
+fn records(state: &AppState) -> Result<Vec<Value>, ApiError> {
+    let persisted = load(state)?;
+    Ok(["signet-secrets", "signet-graphiq"].into_iter().map(|id| {
+        let old = persisted.get("plugins").and_then(|p| p.get(id)); let enabled = old.and_then(|x| x.get("enabled")).and_then(Value::as_bool).unwrap_or(true); let t = old.and_then(|x| x.get("installedAt")).and_then(Value::as_str).unwrap_or("0"); let caps = manifest(id).get("capabilities").cloned().unwrap_or(json!([]));
+        json!({"id":id,"name":manifest(id)["name"],"version":"1.0.0","publisher":manifest(id)["publisher"],"source":"bundled","trustTier":manifest(id)["trustTier"],"enabled":enabled,"state":if enabled{"active"}else{"disabled"},"stateReason":if enabled {Value::Null}else{json!("disabled by host policy")},"declaredCapabilities":caps,"grantedCapabilities":if enabled{caps}else{json!([])},"pendingCapabilities":[],"surfaces":if enabled{surfaces(id)}else{json!({})},"health":{"status":"healthy","checkedAt":now()},"installedAt":t,"updatedAt":now()})
+    }).collect())
 }
-async fn list(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(json!({"plugins":records(&s)})))
+async fn gate(s: &AppState, h: &HeaderMap) -> Result<(), ApiError> {
+    let c = auth::gate(s, h).await?;
+    if c.get("role").and_then(Value::as_str) == Some("admin")
+        || c.get("permissions")
+            .and_then(Value::as_array)
+            .is_some_and(|p| p.iter().any(|x| x.as_str() == Some("plugin:admin")))
+    {
+        Ok(())
+    } else {
+        Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message: "plugin admin authority required".into(),
+        })
+    }
+}
+async fn list(State(s): State<AppState>, h: HeaderMap) -> Result<Json<Value>, ApiError> {
+    gate(&s, &h).await?;
+    Ok(Json(json!({"plugins":records(&s)?})))
 }
 async fn detail(
     State(s): State<AppState>,
     Path(id): Path<String>,
+    h: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    records(&s)
+    gate(&s, &h).await?;
+    records(&s)?
         .into_iter()
         .find(|x| x["id"] == id)
         .map(|x| Json(x))
@@ -121,14 +145,20 @@ async fn detail(
 async fn diagnostics(
     State(s): State<AppState>,
     Path(id): Path<String>,
+    h: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
-    let r = detail(State(s.clone()), Path(id.clone())).await?.0;
+    gate(&s, &h).await?;
+    let r = records(&s)?
+        .into_iter()
+        .find(|x| x["id"] == id)
+        .ok_or_else(|| ApiError::not_found("plugin not found"))?;
     Ok(Json(
         json!({"plugin":{"record":r,"manifest":manifest(&id),"activeSurfaces":surfaces(&id),"plannedSurfaces":surfaces(&id),"promptContributions":[],"promptContributionDiagnostics":[],"validationErrors":[]}}),
     ))
 }
-async fn prompts(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let contributions=records(&s).into_iter().filter(|x|x["state"]=="active").flat_map(|x| if x["id"]=="signet-graphiq" {vec![json!({"id":"signet.graphiq.code-retrieval-guidance","pluginId":"signet-graphiq","target":"user-prompt-submit","mode":"context","priority":430,"maxTokens":100,"content":"Prefer generic code retrieval tools for indexed code."})]} else {vec![]}).collect::<Vec<_>>();
+async fn prompts(State(s): State<AppState>, h: HeaderMap) -> Result<Json<Value>, ApiError> {
+    gate(&s, &h).await?;
+    let contributions=records(&s)?.into_iter().filter(|x|x["state"]=="active").flat_map(|x| if x["id"]=="signet-graphiq" {vec![json!({"id":"signet.graphiq.code-retrieval-guidance","pluginId":"signet-graphiq","target":"user-prompt-submit","mode":"context","priority":430,"maxTokens":100,"content":"Prefer generic code retrieval tools for indexed code."})]} else {vec![]}).collect::<Vec<_>>();
     Ok(Json(
         json!({"contributions":contributions,"activeCount":contributions.len()}),
     ))
@@ -136,13 +166,21 @@ async fn prompts(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
 async fn audit(
     State(s): State<AppState>,
     Query(q): Query<AuditQuery>,
+    h: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
+    gate(&s, &h).await?;
     let mut out = Vec::new();
     if let Ok(text) = fs::read_to_string(audit_path(&s)) {
         for l in text.lines() {
             if let Ok(v) = serde_json::from_str::<Value>(l) {
                 if q.plugin_id.as_ref().is_some_and(|x| v["pluginId"] != *x)
                     || q.event.as_ref().is_some_and(|x| v["event"] != *x)
+                    || q.since
+                        .as_ref()
+                        .is_some_and(|x| v["timestamp"].as_str().unwrap_or("") < x.as_str())
+                    || q.until
+                        .as_ref()
+                        .is_some_and(|x| v["timestamp"].as_str().unwrap_or("") > x.as_str())
                 {
                     continue;
                 }
@@ -161,21 +199,28 @@ async fn update(
     headers: axum::http::HeaderMap,
     Json(u): Json<Update>,
 ) -> Result<Json<Value>, ApiError> {
-    if headers.get("x-signet-admin").and_then(|v| v.to_str().ok()) != Some("true")
-        && headers
-            .get("x-signet-capabilities")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| !v.split(',').any(|x| x.trim() == "plugin:admin"))
-            .unwrap_or(true)
-    {
-        return Err(ApiError::unauthorized("plugin admin capability required"));
-    }
-    let mut st = load(&s);
-    if records(&s).iter().all(|x| x["id"] != id) {
+    gate(&s, &headers).await?;
+    let mut st = load(&s)?;
+    if records(&s)?.iter().all(|x| x["id"] != id) {
         return Err(ApiError::not_found("plugin not found"));
     }
-    st["plugins"][&id] = json!({"enabled":u.enabled,"installedAt":"0","updatedAt":now()});
+    let installed = st["plugins"][&id]
+        .get("installedAt")
+        .and_then(Value::as_str)
+        .unwrap_or("0")
+        .to_string();
+    st["plugins"][&id] = json!({"enabled":u.enabled,"installedAt":installed,"updatedAt":now()});
     save(&s, &st)?;
-    let r = detail(State(s), Path(id)).await?;
-    Ok(r)
+    let p = audit_path(&s);
+    fs::create_dir_all(p.parent().unwrap()).map_err(|e| ApiError::internal(e.to_string()))?;
+    use std::io::Write;
+    let mut f = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(p)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    writeln!(f,"{}",json!({"timestamp":now(),"pluginId":id,"event":if u.enabled{"plugin.enabled"}else{"plugin.disabled"}})).map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(Json(
+        records(&s)?.into_iter().find(|x| x["id"] == id).unwrap(),
+    ))
 }
