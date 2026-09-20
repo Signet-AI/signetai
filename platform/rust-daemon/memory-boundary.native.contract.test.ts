@@ -1,14 +1,25 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-const root = process.cwd();
-// biome-ignore lint/suspicious/noUndeclaredEnvVars: test-only binary override
-const bin = process.env.SIGNET_RUST_DAEMON_BIN ?? join(root, "platform/rust-daemon/target/debug/signet-daemon");
+const root = join(import.meta.dir, "../..");
+const configuredBinary = Reflect.get(process.env, "SIGNET_RUST_DAEMON_BIN");
+const bin =
+	(typeof configuredBinary === "string" ? configuredBinary : undefined) ??
+	join(root, "platform/rust-daemon/target/debug/signet-daemon");
 const children: Bun.Subprocess[] = [];
 const dirs: string[] = [];
 const headers = { "content-type": "application/json", "x-signet-agent": "memory-contract-agent" };
+
+async function stop(child: Bun.Subprocess): Promise<void> {
+	if (child.exitCode !== null) return;
+	child.kill("SIGTERM");
+	if (await Promise.race([child.exited.then(() => true), Bun.sleep(1_000).then(() => false)])) return;
+	child.kill("SIGKILL");
+	await Promise.race([child.exited, Bun.sleep(1_000)]);
+}
 async function start(path: string) {
+	expect(existsSync(bin)).toBe(true);
 	const port = 46000 + Math.floor(Math.random() * 10000);
 	const child = Bun.spawn([bin], {
 		cwd: root,
@@ -24,20 +35,24 @@ async function start(path: string) {
 	});
 	children.push(child);
 	const origin = `http://127.0.0.1:${port}`;
+	const stderr = new Response(child.stderr).text();
 	for (let i = 0; i < 240; i++) {
+		if (child.exitCode !== null) break;
 		try {
 			if ((await fetch(`${origin}/health/ready`)).ok) return { child, origin };
 		} catch {}
 		await Bun.sleep(25);
 	}
-	throw new Error(`daemon readiness timeout: ${await new Response(child.stderr).text()}`);
+	await stop(child);
+	throw new Error(`daemon readiness timeout: ${await stderr}`);
 }
+
 afterEach(async () => {
-	for (const child of children.splice(0)) child.kill("SIGTERM");
+	for (const child of children.splice(0)) await stop(child);
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-test("native memory boundary preserves mutation/readback scope and rejects semantic providers explicitly", async () => {
+test("native memory boundary preserves mutation/readback scope and supports bounded keyword search", async () => {
 	const dir = mkdtempSync("/mnt/work/hermes-scratch/memory-contract-");
 	dirs.push(dir);
 	let daemon = await start(dir);
@@ -66,12 +81,15 @@ test("native memory boundary preserves mutation/readback scope and rejects seman
 	const timeline = await fetch(`${daemon.origin}/api/memory/timeline/${created.id}`, { headers });
 	expect(timeline.status).toBe(200);
 	expect((await timeline.json()).items.length).toBeGreaterThanOrEqual(3);
-	const unsupported = await fetch(`${daemon.origin}/api/memory/semantic-search`, {
+	const search = await fetch(`${daemon.origin}/api/memory/semantic-search`, {
 		method: "POST",
 		headers,
-		body: JSON.stringify({ query: "native" }),
+		body: JSON.stringify({ query: "native", limit: 10 }),
 	});
-	expect(unsupported.status).toBe(501);
+	expect(search.status).toBe(200);
+	const searchBody = await search.json();
+	expect(searchBody).toMatchObject({ query: "native", method: "keyword" });
+	expect(searchBody.results.some((item: { id: string }) => item.id === created.id)).toBe(true);
 	const tombstone = await fetch(`${daemon.origin}/api/memories/${created.id}/tombstone`, {
 		method: "POST",
 		headers,
