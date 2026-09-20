@@ -51,6 +51,11 @@ async fn sample(
     let claims = authorize(&state, &headers).await?;
     let limit = query.limit.unwrap_or(25);
     let offset = query.offset.unwrap_or(0);
+    if !(1..=100).contains(&limit) {
+        return Err(ApiError::bad_request(
+            "limit must be an integer from 1 to 100",
+        ));
+    }
     let agent = claims
         .get("agentId")
         .and_then(Value::as_str)
