@@ -97,24 +97,7 @@ fn root_dir(state: &AppState) -> Result<PathBuf, ApiError> {
         .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
     Ok(root)
 }
-fn contained(root: &FsPath, name: &str) -> Result<PathBuf, ApiError> {
-    valid_name(name)?;
-    let canonical_root = root
-        .canonicalize()
-        .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
-    let candidate = canonical_root.join(name);
-    if let Ok(meta) = fs::symlink_metadata(&candidate) {
-        if meta.file_type().is_symlink() {
-            return Err(ApiError::bad_request("invalid skill path"));
-        }
-        if let Ok(canonical) = candidate.canonicalize() {
-            if !canonical.starts_with(&canonical_root) {
-                return Err(ApiError::bad_request("invalid skill path"));
-            }
-        }
-    }
-    Ok(candidate)
-}
+
 fn frontmatter(content: &str) -> Result<Value, ApiError> {
     let mut out = serde_json::Map::new();
     let mut lines = content.lines();
@@ -152,26 +135,42 @@ fn frontmatter(content: &str) -> Result<Value, ApiError> {
     }
     Ok(Value::Object(out))
 }
+#[cfg(unix)]
 fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
-    let dir = contained(root, name)?;
-    let dir_meta = fs::symlink_metadata(&dir)
-        .map_err(|_| ApiError::not_found(format!("skill '{name}' not found")))?;
-    if !dir_meta.file_type().is_dir() || dir_meta.file_type().is_symlink() {
-        return Err(ApiError::bad_request("invalid skill path"));
-    }
-    let md = dir.join("SKILL.md");
-    let meta = fs::symlink_metadata(&md)
-        .map_err(|_| ApiError::not_found(format!("skill '{name}' not found")))?;
-    if !meta.file_type().is_file() || meta.file_type().is_symlink() {
-        return Err(ApiError::bad_request("invalid skill path"));
-    }
-    let canonical_root = root
-        .canonicalize()
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+
+    valid_name(name)?;
+    let root_file = fs::File::open(root)
         .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
-    let canonical = md
-        .canonicalize()
-        .map_err(|_| ApiError::bad_request("invalid skill path"))?;
-    if !canonical.starts_with(&canonical_root) {
+    let cname = CString::new(name).map_err(|_| ApiError::bad_request("invalid skill name"))?;
+    let dir_fd = unsafe {
+        libc::openat(
+            root_file.as_raw_fd(),
+            cname.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if dir_fd < 0 {
+        return Err(ApiError::not_found(format!("skill '{name}' not found")));
+    }
+    let dir = unsafe { OwnedFd::from_raw_fd(dir_fd) };
+    let cmd = CString::new("SKILL.md").unwrap();
+    let file_fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            cmd.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if file_fd < 0 {
+        return Err(ApiError::not_found(format!("skill '{name}' not found")));
+    }
+    let file = unsafe { fs::File::from_raw_fd(file_fd) };
+    let meta = file
+        .metadata()
+        .map_err(|_| ApiError::unavailable("failed to read skill"))?;
+    if !meta.file_type().is_file() || meta.file_type().is_symlink() {
         return Err(ApiError::bad_request("invalid skill path"));
     }
     if meta.len() > MAX_CONTENT_BYTES {
@@ -181,21 +180,6 @@ fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
             message: "skill content exceeds 1 MiB".into(),
         });
     }
-    let file = {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            fs::OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW)
-                .open(&md)
-        }
-        #[cfg(not(unix))]
-        {
-            fs::File::open(&md)
-        }
-    }
-    .map_err(|_| ApiError::unavailable("failed to read skill"))?;
     let mut data = Vec::with_capacity(meta.len() as usize);
     file.take(MAX_CONTENT_BYTES + 1)
         .read_to_end(&mut data)
@@ -212,10 +196,16 @@ fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
     let mut value = frontmatter(&content)?;
     if let Value::Object(ref mut map) = value {
         map.insert("name".into(), json!(name));
-        map.insert("path".into(), json!(dir));
+        map.insert("path".into(), json!(root.join(name)));
         map.insert("content".into(), json!(content));
     }
     Ok(value)
+}
+#[cfg(not(unix))]
+fn read_skill(_root: &FsPath, _name: &str) -> Result<Value, ApiError> {
+    Err(ApiError::not_implemented(
+        "skills filesystem operations are unsupported on this platform",
+    ))
 }
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
@@ -335,15 +325,8 @@ async fn remove(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     gate(&state, &headers, "skills:delete", true).await?;
-    let root = root_dir(&state)?;
-    let dir = contained(&root, &name)?;
-    let meta = fs::symlink_metadata(&dir)
-        .map_err(|_| ApiError::not_found(format!("skill '{name}' not found")))?;
-    if !meta.file_type().is_dir() || meta.file_type().is_symlink() {
-        return Err(ApiError::bad_request("invalid skill path"));
-    }
-    fs::remove_dir(&dir).map_err(|_| ApiError::unavailable("failed to remove skill"))?;
-    Ok(Json(
-        json!({"success":true,"name":name,"message":format!("Removed {name}")}),
+    let _ = (state, name);
+    Err(ApiError::not_implemented(
+        "skill deletion is unsupported without an atomic directory-relative delete primitive",
     ))
 }
