@@ -3,6 +3,8 @@ import {
 	discoverPaths,
 	parseJUnitReport,
 	runnableSelectedPaths,
+	buildTypeScriptCommand,
+	resolveReportPath,
 	validateBaselineWorktree,
 	validateManifest,
 	validateLaneOptions,
@@ -58,5 +60,26 @@ describe("shared corpus admission", () => {
 			{ path: "fixtures/input.json", sha256: "b" },
 		];
 		expect(runnableSelectedPaths(["fixtures/input.json", "a.test.ts"], manifest)).toEqual(["a.test.ts"]);
+	});
+
+	test("TypeScript accepts its CLI's default report contract", () => {
+		expect(() => validateLaneOptions("typescript", { worktree: "/tmp/not-a-worktree" })).toThrow(/pinned/i);
+		expect(resolveReportPath("typescript", "/repo")).toBeUndefined();
+	});
+
+	test("selected mode builds a command containing the selected paths", () => {
+		expect(buildTypeScriptCommand(["a.test.ts", "b.spec.ts"])).toEqual([
+			"bun",
+			"run",
+			"test:hermetic",
+			"a.test.ts",
+			"b.spec.ts",
+		]);
+	});
+
+	test("missing report is incomplete rather than passed", () => {
+		const result = parseJUnitReport("", ["a.test.ts"]);
+		expect(result.incomplete).toBe(true);
+		expect(result.crash).toBe(true);
 	});
 });

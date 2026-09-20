@@ -108,10 +108,22 @@ export function validateLaneOptions(
 	} else {
 		if (!o.artifact || !existsSync(o.artifact) || !statSync(o.artifact).isFile())
 			throw new Error("rust lane requires a real Rust artifact");
-		if (!o.adapter || !existsSync(o.adapter) || !statSync(o.adapter).isFile())
-			throw new Error("rust lane requires a faithful adapter");
+		if (
+			!o.adapter ||
+			!existsSync(o.adapter) ||
+			!statSync(o.adapter).isFile() ||
+			(statSync(o.adapter).mode & 0o111) === 0
+		)
+			throw new Error("rust lane requires a faithful executable adapter");
 		if (!o.report) throw new Error("rust lane requires a report location");
 	}
+}
+export function resolveReportPath(backend: Backend, _repo: string, report?: string): string | undefined {
+	if (report) return resolve(report);
+	return backend === "rust" ? undefined : undefined;
+}
+export function buildTypeScriptCommand(selected?: string[]): string[] {
+	return selected ? ["bun", "run", "test:hermetic", ...selected] : ["bun", "run", "test:workspace"];
 }
 export function buildExecutionManifest(repo: string): ExecutionManifest {
 	const packageJson = String(git(repo, ["show", `${BASELINE_SHA}:package.json`]));
@@ -134,6 +146,12 @@ export function runnableSelectedPaths(paths: string[], manifest: ManifestEntry[]
 	const out = paths.filter((p) => allowed.has(p) && /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(p));
 	if (!out.length) throw new Error("selected mode requires valid test entrypoints");
 	return [...new Set(out)].sort();
+}
+export function runnableManifestPaths(manifest: ManifestEntry[]): string[] {
+	return manifest
+		.map((e) => e.path)
+		.filter((p) => /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(p))
+		.sort();
 }
 export function parseJUnitReport(xml: string, expected: string[] = []): Accounting {
 	const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map((m) => m[0]);
@@ -162,37 +180,66 @@ export function run(
 	const manifest = buildExecutionManifest(repo);
 	validateManifest(manifest.protectedCorpus, currentManifest(repo, manifest.protectedCorpus));
 	const selected = o.paths ? runnableSelectedPaths(o.paths, manifest.protectedCorpus) : undefined;
+	const expected = selected ?? runnableManifestPaths(manifest.protectedCorpus);
+	const report = resolveReportPath(backend, repo, o.report);
 	const command =
 		backend === "typescript"
-			? ["bun", "run", "test:workspace"]
+			? buildTypeScriptCommand(selected)
 			: [
 					o.adapter ?? "",
 					"--artifact",
 					o.artifact ?? "",
 					"--manifest",
 					JSON.stringify(manifest),
+					"--paths",
+					JSON.stringify(expected),
 					"--report",
-					o.report ?? "",
+					report ?? "",
 				];
 	const executable = command[0];
 	if (!executable) throw new Error("lane command is empty");
+	const before = report && existsSync(report) ? statSync(report).mtimeMs : 0;
 	const child = spawnSync(executable, command.slice(1), {
 		cwd: backend === "typescript" ? o.worktree : repo,
 		env: { ...process.env },
 		encoding: "utf8",
 	});
-	if (!o.report || !existsSync(o.report)) throw new Error(`${backend} lane did not produce a report`);
-	const accounting = parseJUnitReport(readFileSync(o.report, "utf8"), selected ?? []);
-	const crash = child.status !== 0 && accounting.tests === 0;
+	const fresh = report && existsSync(report) && statSync(report).mtimeMs > before;
+	if (!fresh) {
+		if (backend === "rust") throw new Error("rust lane did not produce a complete report");
+		return {
+			baselineSha: BASELINE_SHA,
+			backend,
+			execution: selected ? "supplementary-selected" : "full-baseline-selection",
+			manifest,
+			command,
+			reportPath: report,
+			worktree: o.worktree,
+			tests: 0,
+			passed: 0,
+			failed: 0,
+			skipped: 0,
+			crash: child.status !== 0,
+			incomplete: true,
+			status: "incomplete",
+		};
+	}
+	const accounting = parseJUnitReport(readFileSync(report, "utf8"), selected ?? []);
+	const crash = child.status !== 0;
+	const incomplete = accounting.incomplete || accounting.tests === 0;
 	return {
 		baselineSha: BASELINE_SHA,
 		backend,
 		execution: selected ? "supplementary-selected" : "full-baseline-selection",
 		manifest,
 		command,
+		reportPath: report,
+		worktree: o.worktree,
+		artifact: o.artifact,
 		...accounting,
 		crash,
-		status: crash || accounting.crash ? "crash" : accounting.failed || accounting.incomplete ? "failed" : "passed",
+		incomplete,
+		status: crash ? "crash" : accounting.failed || incomplete ? "failed" : "passed",
 	};
 }
 if (import.meta.main) {
@@ -207,6 +254,7 @@ if (import.meta.main) {
 				artifact: value("--artifact"),
 				adapter: value("--adapter"),
 				report: value("--report"),
+				paths: value("--paths") ? JSON.parse(value("--paths") as string) : undefined,
 			}),
 		),
 	);
