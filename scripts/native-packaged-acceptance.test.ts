@@ -176,7 +176,9 @@ describe("shipped packaged Rust executable", () => {
 		restarted.kill("SIGTERM");
 		await restarted.exited;
 		expect(readdirSync(root)).toContain("memory");
-		expect(readdirSync(join(root, ".daemon")).filter((name) => /db-owner|\.lock$/.test(name))).toEqual([]);
+		const daemonEntries = readdirSync(join(root, ".daemon"));
+		expect(daemonEntries).toContain("db-owner.lock");
+		expect(daemonEntries).not.toContain("db-owner.json");
 	});
 	test("exercises the shipped database-owner child protocol and recovery evidence", async () => {
 		const owner = Bun.spawn([binary, "--db-owner"], {

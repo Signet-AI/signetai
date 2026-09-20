@@ -15,11 +15,13 @@ use serde_json::{json, Value};
 use signet_core_native::{CoreError, Operation, WorkspaceOwner};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
 use std::{
     collections::HashMap,
     env,
     fs::{File, OpenOptions},
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::SocketAddr,
     path::{Path as FsPath, PathBuf},
     process::{Child, ChildStdin, Command, Stdio},
@@ -60,7 +62,6 @@ impl Drop for OwnerPipe {
         }
         let daemon_dir = self.workspace.join(".daemon");
         let _ = std::fs::remove_file(daemon_dir.join("db-owner.json"));
-        let _ = std::fs::remove_file(daemon_dir.join("db-owner.lock"));
     }
 }
 
@@ -1405,44 +1406,94 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// it is launched as a child and communicates with bounded newline-delimited JSON.
 struct OwnerLock {
     _file: File,
-    path: PathBuf,
+    #[cfg(unix)]
+    _directory: File,
 }
 
 impl Drop for OwnerLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
+    fn drop(&mut self) {}
+}
+
+#[cfg(unix)]
+fn legacy_owner_is_live(metadata: &str) -> bool {
+    let Some(pid) = metadata
+        .split_whitespace()
+        .next()
+        .and_then(|value| value.parse::<libc::pid_t>().ok())
+    else {
+        return false;
+    };
+    if pid <= 0 || pid == 1 || pid == std::process::id() as libc::pid_t {
+        return false;
     }
+    let result = unsafe { libc::kill(pid, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Error>> {
     #[cfg(unix)]
     {
-        let mut file = OpenOptions::new()
+        let parent = path
+            .parent()
+            .ok_or_else(|| "database owner lock has no parent directory".to_owned())?;
+        std::fs::create_dir_all(parent)?;
+        let canonical_parent = std::fs::canonicalize(parent)?;
+        let directory = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(&canonical_parent)?;
+        if unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            return Err("database owner already running".into());
+        }
+        let mut file = match OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open(path)?;
-        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if result != 0 {
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+        {
+            Ok(file) => file,
+            Err(error) => {
+                let _ = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_UN) };
+                return Err(error.into());
+            }
+        };
+        if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+            let _ = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_UN) };
+            return Err("database owner already running".into());
+        }
+        let mut metadata = String::new();
+        file.read_to_string(&mut metadata)?;
+        if !metadata.contains("signet-kernel-lock-v1") && legacy_owner_is_live(&metadata) {
+            let _ = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_UN) };
+            let _ = unsafe { libc::flock(directory.as_raw_fd(), libc::LOCK_UN) };
             return Err("database owner already running".into());
         }
         file.set_len(0)?;
-        write!(&mut file, "{}", std::process::id())?;
+        file.seek(SeekFrom::Start(0))?;
+        write!(
+            file,
+            "{}\\n{}\\nsignet-kernel-lock-v1\\n",
+            std::process::id(),
+            now_seconds()
+        )?;
         file.flush()?;
         return Ok(OwnerLock {
             _file: file,
-            path: path.to_path_buf(),
+            _directory: directory,
         });
     }
     #[cfg(not(unix))]
     {
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
-        write!(&mut file, "{}", std::process::id())?;
+        write!(
+            file,
+            "{}\\n{}\\nsignet-kernel-lock-v1\\n",
+            std::process::id(),
+            now_seconds()
+        )?;
         file.flush()?;
-        Ok(OwnerLock {
-            _file: file,
-            path: path.to_path_buf(),
-        })
+        Ok(OwnerLock { _file: file })
     }
 }
 
