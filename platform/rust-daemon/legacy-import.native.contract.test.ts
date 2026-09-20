@@ -8,13 +8,24 @@ describe("native legacy markdown import contract", () => {
 	test("persists scoped imports, chunks, validates, and deduplicates retries", async () => {
 		const startedAt = performance.now();
 		expect(base).toBeTruthy();
-		const headers = {
+		const headers: Record<string, string> = {
 			"content-type": "application/json",
 			"x-signet-api-key": "contract-api-key",
 			"x-signet-agent": "contract-agent",
 		};
-		const request = (workspaceId: string, files: unknown[]) =>
-			fetch(`${base}/api/memory/import`, { method: "POST", headers, body: JSON.stringify({ workspaceId, files }) });
+		const request = (workspaceId: string, files: unknown[], requestHeaders = headers) =>
+			fetch(`${base}/api/memory/import`, {
+				method: "POST",
+				headers: requestHeaders,
+				body: JSON.stringify({ workspaceId, files }),
+			});
+		const conflicting = await request(
+			"contract-workspace-body",
+			[{ name: "2026-02-02.md", content: "must not import" }],
+			{ ...headers, "x-signet-workspace-id": "contract-workspace-header" },
+		);
+		expect(conflicting.ok).toBe(false);
+		expect(conflicting.status).toBe(400);
 		const response = await request("contract-workspace-a", [
 			{ name: "2026-02-03.md", content: "contract note\n\nsecond note" },
 		]);

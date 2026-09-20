@@ -189,11 +189,7 @@ async fn import_markdown(
     Json(p): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let agent_id = agent(&h, None, None)?;
-    let workspace_id = p
-        .get("workspaceId")
-        .and_then(Value::as_str)
-        .unwrap_or("default")
-        .to_owned();
+    let workspace_id = crate::source_workspace(&h, p.get("workspaceId").and_then(Value::as_str))?;
     let files = p
         .get("files")
         .cloned()

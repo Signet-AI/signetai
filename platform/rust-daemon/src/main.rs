@@ -1044,7 +1044,10 @@ struct DocumentRequest {
     workspace_id: Option<String>,
 }
 
-fn source_workspace(headers: &HeaderMap, requested: Option<&str>) -> Result<String, ApiError> {
+pub(crate) fn source_workspace(
+    headers: &HeaderMap,
+    requested: Option<&str>,
+) -> Result<String, ApiError> {
     let header_values = ["x-signet-workspace-id", "x-workspace-id"]
         .iter()
         .filter_map(|name| {
