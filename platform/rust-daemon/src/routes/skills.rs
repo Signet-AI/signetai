@@ -17,6 +17,9 @@ use std::{
 
 const MAX_SKILLS: usize = 100;
 const MAX_CONTENT_BYTES: u64 = 1024 * 1024;
+const MAX_CATALOG_BYTES: usize = 5 * 1024 * 1024;
+const MAX_CATALOG_ITEMS: usize = 500;
+const CATALOG_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 #[derive(Deserialize, Default)]
 struct ListQuery {
@@ -276,6 +279,91 @@ async fn detail(
     gate(&state, &headers, "skills:read", false).await?;
     Ok(Json(read_skill(&root_dir(&state)?, &name)?))
 }
+async fn catalog_fetch(base: &str, path: &str) -> Result<Value, String> {
+    let client = reqwest::Client::builder()
+        .timeout(CATALOG_TIMEOUT)
+        .build()
+        .map_err(|e| e.to_string())?;
+    let response = client
+        .get(format!("{}{}", base.trim_end_matches('/'), path))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!("catalog HTTP {}", response.status()));
+    }
+    if response.content_length().unwrap_or(0) > MAX_CATALOG_BYTES as u64 {
+        return Err("catalog response too large".into());
+    }
+    let bytes = response.bytes().await.map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_CATALOG_BYTES {
+        return Err("catalog response too large".into());
+    }
+    serde_json::from_slice(&bytes).map_err(|e| format!("malformed catalog response: {e}"))
+}
+
+async fn external_catalog_results(root: &FsPath) -> (Vec<Value>, Vec<String>) {
+    let installed: std::collections::HashSet<String> = all_skills(root)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|v| v["name"].as_str().map(String::from))
+        .collect();
+    let mut results = Vec::new();
+    let mut degraded = Vec::new();
+    for (provider, env, path) in [
+        ("skills.sh", "SIGNET_SKILLS_SH_BASE_URL", "/api/skills"),
+        ("clawhub", "SIGNET_CLAWHUB_BASE_URL", "/api/v1/skills"),
+    ] {
+        let base = std::env::var(env).unwrap_or_else(|_| {
+            if provider == "skills.sh" {
+                "https://skills.sh".into()
+            } else {
+                "https://clawhub.ai".into()
+            }
+        });
+        match catalog_fetch(&base, path).await {
+            Ok(value) => {
+                let items = value
+                    .get("skills")
+                    .or_else(|| value.get("items"))
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                for item in items.into_iter().take(MAX_CATALOG_ITEMS) {
+                    let name = item
+                        .get("name")
+                        .or_else(|| item.get("slug"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    if name.is_empty() {
+                        continue;
+                    }
+                    let description = item
+                        .get("description")
+                        .or_else(|| item.get("summary"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("");
+                    let installs = item
+                        .get("installs")
+                        .or_else(|| item.get("downloads"))
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    results.push(json!({"name":name,"fullName":format!("{}@{}", provider, name),"catalogKey":format!("{}:{}",provider,name),"installsRaw":installs,"installs":installs.to_string(),"popularityScore":installs,"description":description,"installed":installed.contains(name),"provider":provider,"category":"Other"}));
+                }
+            }
+            Err(error) => degraded.push(format!("{provider}: {error}")),
+        }
+    }
+    results.sort_by(|a, b| {
+        b["popularityScore"]
+            .as_u64()
+            .cmp(&a["popularityScore"].as_u64())
+            .then_with(|| a["catalogKey"].as_str().cmp(&b["catalogKey"].as_str()))
+    });
+    results.truncate(MAX_CATALOG_ITEMS);
+    (results, degraded)
+}
+
 async fn browse(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -283,11 +371,21 @@ async fn browse(
 ) -> Result<Json<Value>, ApiError> {
     gate(&state, &headers, "skills:browse", false).await?;
     let max = limit(q.limit)?;
-    let all = all_skills(&root_dir(&state)?)?;
-    let total = all.len();
-    let results: Vec<_> = all.into_iter().take(max).collect();
+    let root = root_dir(&state)?;
+    let local = all_skills(&root)?;
+    let (mut external, degraded) = external_catalog_results(&root).await;
+    let mut results = local;
+    results.append(&mut external);
+    results.sort_by(|a, b| {
+        a["name"]
+            .as_str()
+            .cmp(&b["name"].as_str())
+            .then_with(|| a["catalogKey"].as_str().cmp(&b["catalogKey"].as_str()))
+    });
+    let total = results.len();
+    results.truncate(max);
     Ok(Json(
-        json!({"results":results,"total":total,"truncated":total>results.len()}),
+        json!({"results":results,"total":total,"truncated":total>results.len(),"degraded":degraded,"complete":degraded.is_empty()}),
     ))
 }
 async fn search(

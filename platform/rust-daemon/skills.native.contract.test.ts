@@ -13,7 +13,10 @@ async function start(cwd = root) {
 	const workspace = mkdtempSync(join(tmpdir(), "signet-skills-"));
 	workspaces.push(workspace);
 	mkdirSync(join(workspace, "skills", "demo"), { recursive: true });
-	writeFileSync(join(workspace, "skills", "demo", "SKILL.md"), "---\ndescription: local demo\n---\nhello");
+	writeFileSync(
+		join(workspace, "skills", "demo", "SKILL.md"),
+		"---\ndescription: local demo\nuser_invocable: true\npermissions: [network, filesystem]\nverified: false\n---\nhello",
+	);
 	const child = Bun.spawn([binary], {
 		cwd,
 		env: {
@@ -55,6 +58,11 @@ it.each([root, join(root, "platform/rust-daemon")])("bounds and safely filters s
 	symlinkSync(join(workspace, "skills", "missing"), join(workspace, "skills", "dangling"));
 	const listed = await (await get(origin, "/api/skills?limit=1")).json();
 	expect(listed.count).toBe(1);
+	expect(listed.skills[0]).toMatchObject({
+		user_invocable: true,
+		verified: false,
+		permissions: ["network", "filesystem"],
+	});
 	expect(listed.total).toBe(2);
 	expect(listed.truncated).toBe(true);
 	for (const limit of ["0", "101", "abc"]) expect((await get(origin, `/api/skills?limit=${limit}`)).status).toBe(400);
