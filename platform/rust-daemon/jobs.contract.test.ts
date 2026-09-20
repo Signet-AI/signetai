@@ -62,7 +62,7 @@ it("exercises native durable job identity, cursor, cancellation, and recovery co
 		const created = await fetch(`${first.origin}/api/jobs`, {
 			method: "POST",
 			headers: h,
-			body: JSON.stringify({ kind: "contract", payload: { index } }),
+			body: JSON.stringify({ kind: "dream.trigger", payload: { index } }),
 		});
 		expect(created.status).toBe(200);
 		jobs.push(await created.json());
@@ -151,12 +151,16 @@ it("exercises native durable job identity, cursor, cancellation, and recovery co
 	const recoveryJobResponse = await fetch(`${first.origin}/api/jobs`, {
 		method: "POST",
 		headers: h,
-		body: JSON.stringify({ kind: "recovery", payload: {} }),
+		body: JSON.stringify({ kind: "dream.trigger", payload: {} }),
 	});
 	const recoveryJob = await recoveryJobResponse.json();
 	await stop(first.child);
 	const db = new Database(join(first.dir, "memory", "memories.db"));
 	db.run("UPDATE jobs SET state='running', updated_at=datetime('now') WHERE id=?", [recoveryJob.id]);
+	db.run(
+		"INSERT INTO pipeline_state(agent_id,state,paused,updated_at) VALUES(?, 'paused', 1, datetime('now')) ON CONFLICT(agent_id) DO UPDATE SET paused=1",
+		["agent-a"],
+	);
 	db.close();
 
 	const restarted = await start(first.dir);
@@ -174,4 +178,29 @@ it("exercises native durable job identity, cursor, cancellation, and recovery co
 		{ headers: h },
 	);
 	expect(await eventValues(recoveryEventsAgain)).toHaveLength(2);
+});
+
+it("terminalizes unsupported and overdue jobs with durable events", async () => {
+	const started = await start();
+	const h = headers("agent-lifecycle", "workspace-lifecycle");
+	const unsupportedResponse = await fetch(`${started.origin}/api/jobs`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ kind: "never-supported", payload: {} }),
+	});
+	expect(unsupportedResponse.status).toBe(200);
+	const unsupported = await unsupportedResponse.json();
+	expect(unsupported.state).toBe("unsupported");
+	const unsupportedEvents = await fetch(`${started.origin}/api/jobs/${unsupported.id}/events?cursor=0`, { headers: h });
+	expect((await eventValues(unsupportedEvents)).map((event) => event.event)).toEqual(["unsupported"]);
+	const overdueResponse = await fetch(`${started.origin}/api/jobs`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ kind: "dream.trigger", payload: {}, deadline_at: "2000-01-01T00:00:00Z" }),
+	});
+	expect(overdueResponse.status).toBe(200);
+	const overdue = await overdueResponse.json();
+	expect(overdue.state).toBe("expired");
+	const overdueEvents = await fetch(`${started.origin}/api/jobs/${overdue.id}/events?cursor=0`, { headers: h });
+	expect((await eventValues(overdueEvents)).map((event) => event.event)).toEqual(["expired"]);
 });

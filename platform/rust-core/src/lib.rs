@@ -415,8 +415,17 @@ impl Core {
     pub fn worker_claim(&self) -> Result<Option<WorkerJob>, CoreError> {
         self.call(|connection| {
             let tx = connection.transaction()?;
+            tx.execute("UPDATE jobs SET state='expired',error='deadline exceeded',updated_at=datetime('now') WHERE state='queued' AND deadline_at IS NOT NULL AND julianday(deadline_at) <= julianday('now')", [])?;
+            {
+                let mut expired = tx.prepare("SELECT id,agent_id FROM jobs WHERE state='expired' AND error='deadline exceeded' AND NOT EXISTS (SELECT 1 FROM job_events e WHERE e.job_id=jobs.id AND e.event='expired')")?;
+                let rows = expired.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                for row in rows {
+                    let (id, agent_id) = row?;
+                    tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?, 'expired',?,datetime('now'))", params![id, agent_id, serde_json::to_string(&json!({"reason":"deadline exceeded"}))?])?;
+                }
+            }
             let row: Option<(String, String, Option<String>, String, String)> = tx.query_row(
-                "SELECT j.id,j.agent_id,j.workspace_id,j.kind,j.payload FROM jobs j LEFT JOIN pipeline_state p ON p.agent_id=j.agent_id WHERE j.state='queued' AND COALESCE(p.paused,0)=0 AND j.kind IN ('dream.trigger','dream.pass') ORDER BY j.created_at,j.id LIMIT 1",
+                "SELECT j.id,j.agent_id,j.workspace_id,j.kind,j.payload FROM jobs j LEFT JOIN pipeline_state p ON p.agent_id=j.agent_id WHERE j.state='queued' AND (j.deadline_at IS NULL OR julianday(j.deadline_at) > julianday('now')) AND COALESCE(p.paused,0)=0 AND j.kind IN ('dream.trigger','dream.pass') ORDER BY j.created_at,j.id LIMIT 1",
                 [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
             let Some((id,agent_id,workspace_id,kind,payload)) = row else { tx.commit()?; return Ok(None); };
             let changed = tx.execute("UPDATE jobs SET state='running',updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id IS ? AND state='queued'", params![id,agent_id,workspace_id])?;
@@ -970,11 +979,32 @@ fn execute_operation(
             if payload.len() > 1_048_576 {
                 return Err(CoreError::InvalidInput("job payload exceeds 1 MiB".into()));
             }
+            let expired = deadline_at.as_deref().is_some_and(|value| {
+                connection
+                    .query_row(
+                        "SELECT julianday(?) <= julianday('now')",
+                        params![value],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false)
+            });
+            let (state, event, error) = if !matches!(kind.as_str(), "dream.trigger" | "dream.pass")
+            {
+                (
+                    "unsupported",
+                    "unsupported",
+                    Some(format!("unsupported job kind: {kind}")),
+                )
+            } else if expired {
+                ("expired", "expired", Some("deadline exceeded".to_owned()))
+            } else {
+                ("queued", "queued", None)
+            };
             let transaction = connection.transaction()?;
-            transaction.execute("INSERT INTO jobs (id,agent_id,workspace_id,kind,state,payload,deadline_at,created_at,updated_at) VALUES (?,?,?,? ,'queued',?,?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,kind,payload,deadline_at])?;
-            transaction.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, 'queued','{}',datetime('now'))", params![id,agent_id])?;
+            transaction.execute("INSERT INTO jobs (id,agent_id,workspace_id,kind,state,payload,deadline_at,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,kind,state,payload,deadline_at,error])?;
+            transaction.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, ?,?,datetime('now'))", params![id,agent_id,event,serde_json::to_string(&json!({"error":error}))?])?;
             transaction.commit()?;
-            Ok(json!({"id":id,"state":"queued","workspaceId":workspace_id}))
+            Ok(json!({"id":id,"state":state,"workspaceId":workspace_id,"error":error}))
         }
         Operation::JobGet {
             agent_id,

@@ -1,9 +1,8 @@
 use signet_core_native::{WorkerJob, WorkspaceOwner};
 use std::sync::Arc;
-use tokio::time::{sleep, timeout, Duration};
+use tokio::time::{sleep, Duration};
 
 const MAX_CONCURRENCY: usize = 2;
-const MAX_RUNTIME: Duration = Duration::from_secs(30);
 
 pub(crate) fn start(owner: Arc<WorkspaceOwner>) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -26,11 +25,12 @@ pub(crate) fn start(owner: Arc<WorkspaceOwner>) -> tokio::task::JoinHandle<()> {
 
 async fn execute(owner: Arc<WorkspaceOwner>, job: WorkerJob) {
     let reason = format!("unsupported external provider for job kind {}", job.kind);
-    let result = timeout(MAX_RUNTIME, async move {
-        owner.finish_worker_job(job, "failed", Some(&reason))
-    })
-    .await;
+    let result =
+        tokio::task::spawn_blocking(move || owner.finish_worker_job(job, "failed", Some(&reason)))
+            .await;
     if let Ok(Err(error)) = result {
         eprintln!("durable worker terminal update failed: {error}");
+    } else if let Err(error) = result {
+        eprintln!("worker terminal task failed: {error}");
     }
 }
