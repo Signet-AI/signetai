@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 const binary =
 	// biome-ignore lint/suspicious/noUndeclaredEnvVars: test-only binary override
-	process.env.SIGNET_RUST_DAEMON_BIN ?? join(process.cwd(), "platform/rust-daemon/target/release/signet-daemon");
+	process.env.SIGNET_RUST_DAEMON_BIN ?? join(import.meta.dir, "target/release/signet-daemon");
 type D = { child: ReturnType<typeof Bun.spawn>; base: string; dir: string };
 const ds: D[] = [];
 async function start(dir = mkdtempSync(join(tmpdir(), "ontology-contract-"))) {
@@ -26,7 +26,15 @@ async function start(dir = mkdtempSync(join(tmpdir(), "ontology-contract-"))) {
 		} catch {}
 		await Bun.sleep(20);
 	}
+	child.kill("SIGKILL");
+	await child.exited.catch(() => -1);
 	throw new Error("daemon did not start");
+}
+async function stop(d: D) {
+	d.child.kill("SIGTERM");
+	const exited = await Promise.race([d.child.exited.then(() => true), Bun.sleep(1_000).then(() => false)]);
+	if (!exited) d.child.kill("SIGKILL");
+	await d.child.exited.catch(() => -1);
 }
 async function req(d: D, path: string, init: RequestInit = {}, agent = "contract-agent") {
 	const r = await fetch(d.base + path, {
@@ -38,8 +46,7 @@ async function req(d: D, path: string, init: RequestInit = {}, agent = "contract
 }
 afterEach(async () => {
 	for (const d of ds.splice(0)) {
-		d.child.kill("SIGTERM");
-		await d.child.exited;
+		await stop(d);
 		rmSync(d.dir, { recursive: true, force: true });
 	}
 });
@@ -61,8 +68,7 @@ it("supports scoped proposal/claim/constraint CRUD and truthful unsupported onto
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a")).r.status).toBe(501);
 	expect((await req(d, "/api/ontology/proposals/p-1?workspace_id=ws-a", { method: "DELETE" })).r.status).toBe(200);
 	expect((await req(d, "/api/ontology/proposals/p-1?workspace_id=ws-a")).r.status).toBe(404);
-	d.child.kill("SIGTERM");
-	await d.child.exited;
+	await stop(d);
 	ds.splice(ds.indexOf(d), 1);
 	d = await start(d.dir);
 	expect((await req(d, "/api/ontology/proposals/p-1?workspace_id=ws-a")).r.status).toBe(404);

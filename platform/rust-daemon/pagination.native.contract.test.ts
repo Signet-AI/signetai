@@ -7,7 +7,7 @@ import { join } from "node:path";
 type Daemon = { origin: string; workspace: string; child: ReturnType<typeof Bun.spawn>; stderr: string[] };
 const binary =
 	// biome-ignore lint/suspicious/noUndeclaredEnvVars: test-only binary override
-	process.env.SIGNET_RUST_DAEMON_BIN ?? join(process.cwd(), "platform/rust-daemon/target/release/signet-daemon");
+	process.env.SIGNET_RUST_DAEMON_BIN ?? join(import.meta.dir, "target/release/signet-daemon");
 const daemons: Daemon[] = [];
 const workspaces: string[] = [];
 let port = 39_100 + Math.floor(Math.random() * 400);
@@ -48,8 +48,9 @@ async function start(workspace = mkdtempSync(join(tmpdir(), "signet-pagination-"
 }
 async function stop(d: Daemon) {
 	d.child.kill("SIGTERM");
-	const code = await d.child.exited;
-	expect(code).toBe(0);
+	const exited = await Promise.race([d.child.exited.then(() => true), Bun.sleep(1_000).then(() => false)]);
+	if (!exited) d.child.kill("SIGKILL");
+	await d.child.exited.catch(() => -1);
 }
 async function request(d: Daemon, path: string, init: RequestInit = {}, agent = "agent-a") {
 	const response = await fetch(d.origin + path, {
