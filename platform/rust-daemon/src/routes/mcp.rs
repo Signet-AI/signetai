@@ -31,8 +31,12 @@ pub(crate) fn router() -> Router<AppState> {
         .layer(DefaultBodyLimit::max(256 * 1024))
 }
 
-async fn analytics_unsupported() -> (StatusCode, Json<Value>) {
-    unsupported("analytics")
+async fn analytics_unsupported(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    crate::routes::auth::gate(&state, &headers).await?;
+    Ok(unsupported("analytics"))
 }
 
 async fn unsupported_management(
