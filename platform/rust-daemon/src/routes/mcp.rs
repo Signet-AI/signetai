@@ -19,6 +19,12 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/mcp/status", get(status))
         .route("/api/mcp/ready", get(ready))
+        .route("/api/mcp/capabilities", get(capabilities))
+        .route("/api/mcp/servers", get(unsupported_management))
+        .route("/api/mcp/servers/{server}", get(unsupported_management))
+        .route("/api/mcp/search", get(unsupported_management))
+        .route("/api/mcp/policy", get(unsupported_management))
+        .route("/api/mcp/call", post(unsupported_management))
         .route("/api/mcp/analytics", get(analytics_unsupported))
         .route("/api/mcp/analytics/{server}", get(analytics_unsupported))
         .route("/api/mcp", post(rpc))
@@ -26,10 +32,33 @@ pub(crate) fn router() -> Router<AppState> {
 }
 
 async fn analytics_unsupported() -> (StatusCode, Json<Value>) {
+    unsupported("analytics")
+}
+
+async fn unsupported_management() -> (StatusCode, Json<Value>) {
+    unsupported("management")
+}
+
+fn unsupported(surface: &str) -> (StatusCode, Json<Value>) {
     (
         StatusCode::NOT_IMPLEMENTED,
-        Json(json!({"error":"unsupported","operation":"mcp analytics"})),
+        Json(json!({
+            "error": "unsupported",
+            "operation": format!("mcp {surface}"),
+            "supported": false,
+            "reason": "not represented by native Operations",
+        })),
     )
+}
+
+async fn capabilities() -> Json<Value> {
+    Json(json!({
+        "transport": "streamable-http",
+        "native": true,
+        "stdio": {"supported": true, "provider_execution": false},
+        "management": {"supported": false, "reason": "not represented by native Operations"},
+        "analytics": {"supported": false, "reason": "not represented by native Operations"},
+    }))
 }
 
 #[derive(Debug, Deserialize)]
