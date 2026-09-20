@@ -147,3 +147,42 @@ it("bounds audit reads and reports truncation while preserving newest filtering"
 	expect(r.truncated).toBe(true);
 	expect(r.bytesScanned).toBeLessThan(2_100_000);
 });
+
+it("strictly validates persisted manifest versions and prompt budgets", async () => {
+	const { origin, workspace } = await start();
+	const path = join(workspace, ".daemon/plugins/registry-v1.json");
+	mkdirSync(join(workspace, ".daemon/plugins"), { recursive: true });
+	const record = (version: string, maxTokens: unknown = 1, priority: unknown = 0) => ({
+		id: "signet-graphiq",
+		name: "GraphIQ",
+		version,
+		publisher: "aaf2tbz",
+		description: "GraphIQ",
+		runtime: {},
+		compatibility: {},
+		trustTier: "verified",
+		capabilities: [],
+		surfaces: {},
+		docs: {},
+		promptContributions: [{ maxTokens, priority }],
+		enabled: true,
+		installedAt: "1",
+		updatedAt: "1",
+	});
+	for (const version of ["1.01.0", "1.0.0-", "1.0.0-01", " 1.0.0", "1.0.0 ", "1.0.0+build.1"]) {
+		writeFileSync(path, JSON.stringify({ version: 1, plugins: { "signet-graphiq": record(version) } }));
+		expect((await get(origin, "/api/plugins", auth)).status).toBe(version === "1.0.0+build.1" ? 200 : 409);
+	}
+	for (const [maxTokens, priority] of [
+		[0, 0],
+		[1, -1],
+		[Number.NaN, 0],
+		[1, Number.POSITIVE_INFINITY],
+	]) {
+		writeFileSync(
+			path,
+			JSON.stringify({ version: 1, plugins: { "signet-graphiq": record("1.0.0", maxTokens, priority) } }),
+		);
+		expect((await get(origin, "/api/plugins", auth)).status).toBe(409);
+	}
+});

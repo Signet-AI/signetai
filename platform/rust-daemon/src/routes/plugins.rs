@@ -94,6 +94,48 @@ fn registry_path(state: &AppState) -> PathBuf {
 fn audit_path(state: &AppState) -> PathBuf {
     state.workspace.join(".daemon/plugins/audit-v1.ndjson")
 }
+fn valid_semver(version: &str) -> bool {
+    let (without_build, build) = match version.split_once('+') {
+        Some((core, build)) => (core, Some(build)),
+        None => (version, None),
+    };
+    let (core, prerelease) = match without_build.split_once('-') {
+        Some((core, prerelease)) => (core, Some(prerelease)),
+        None => (without_build, None),
+    };
+    let core_parts: Vec<&str> = core.split('.').collect();
+    if core_parts.len() != 3
+        || core_parts.iter().any(|part| {
+            part.is_empty()
+                || (part.len() > 1 && part.starts_with('0'))
+                || !part.bytes().all(|b| b.is_ascii_digit())
+        })
+    {
+        return false;
+    }
+    let valid_identifiers = |value: &str, prerelease: bool| {
+        !value.is_empty()
+            && value.split('.').all(|identifier| {
+                !identifier.is_empty()
+                    && identifier
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+                    && (!prerelease
+                        || !identifier.bytes().all(|b| b.is_ascii_digit())
+                        || identifier.len() == 1
+                        || !identifier.starts_with('0'))
+            })
+    };
+    prerelease.is_none_or(|value| valid_identifiers(value, true))
+        && build.is_none_or(|value| valid_identifiers(value, false))
+}
+
+fn valid_prompt_budget(value: &Value, minimum: f64) -> bool {
+    value
+        .as_f64()
+        .is_some_and(|number| number.is_finite() && number >= minimum)
+}
+
 fn valid_record(id: &str, value: &Value) -> bool {
     if !matches!(id, "signet-secrets" | "signet-graphiq") || !value.is_object() {
         return false;
@@ -162,6 +204,7 @@ fn valid_record(id: &str, value: &Value) -> bool {
         if !object["id"].is_string()
             || !object["name"].is_string()
             || !object["version"].is_string()
+            || !valid_semver(object["version"].as_str().unwrap_or(""))
             || !object["publisher"].is_string()
             || !object["description"].is_string()
             || !object["runtime"].is_object()
@@ -171,6 +214,18 @@ fn valid_record(id: &str, value: &Value) -> bool {
             || !object["surfaces"].is_object()
             || !object["docs"].is_object()
             || !object["promptContributions"].is_array()
+        {
+            return false;
+        }
+        if object["promptContributions"]
+            .as_array()
+            .is_some_and(|items| {
+                items.iter().any(|item| {
+                    !item.is_object()
+                        || !valid_prompt_budget(item.get("maxTokens").unwrap_or(&Value::Null), 1.0)
+                        || !valid_prompt_budget(item.get("priority").unwrap_or(&Value::Null), 0.0)
+                })
+            })
         {
             return false;
         }
