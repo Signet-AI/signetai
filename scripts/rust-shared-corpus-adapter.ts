@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /** Execute unchanged pinned baseline tests through the Rust daemon boundary. */
-import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
+import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, realpathSync } from "node:fs";
 import { resolve, basename, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -42,20 +42,29 @@ function readManifest(value: string): Manifest {
 	}
 }
 const artifact = resolve(required("--artifact"));
+const coreDriver = resolve(required("--core-driver"));
 const manifestValue = required("--manifest");
 const pathsValue = required("--paths");
 const report = resolve(required("--report"));
+function validateElf(value: string, identity: string, label: string): void {
+	if (!existsSync(value) || !statSync(value).isFile() || (statSync(value).mode & 0o111) === 0)
+		fail(`${label} must be an executable file`);
+	if (basename(value) !== identity) fail(`${label} identity is not ${identity}`);
+	const header = readFileSync(value).subarray(0, 4);
+	if (header[0] !== 0x7f || header[1] !== 0x45 || header[2] !== 0x4c || header[3] !== 0x46)
+		fail(`${label} is not an ELF Rust executable; JS/TS fallback is forbidden`);
+}
+validateElf(artifact, "signet-daemon", "daemon artifact");
+validateElf(coreDriver, "signet-core-test-driver", "core driver artifact");
+if (!realpathSync(coreDriver).includes("/platform/rust-core/target/"))
+	fail("core driver artifact is stale or outside the fresh Rust core target");
+if (!realpathSync(artifact).includes("/platform/rust-daemon/target/"))
+	fail("daemon artifact is stale or outside the fresh Rust daemon target");
+if (FORBIDDEN.test(coreDriver) || FORBIDDEN.test(artifact))
+	fail("forbidden archived daemon/source path in execution boundary");
+/* Keep the daemon checks explicit and unchanged in meaning. */
 if (!existsSync(artifact) || !statSync(artifact).isFile() || (statSync(artifact).mode & 0o111) === 0)
 	fail("artifact must be an executable file");
-if (basename(artifact) !== "signet-daemon") fail("artifact identity is not the fresh Rust daemon");
-const artifactHeader = readFileSync(artifact).subarray(0, 4);
-if (
-	artifactHeader[0] !== 0x7f ||
-	artifactHeader[1] !== 0x45 ||
-	artifactHeader[2] !== 0x4c ||
-	artifactHeader[3] !== 0x46
-)
-	fail("artifact is not an ELF Rust executable; JS/TS fallback is forbidden");
 if (FORBIDDEN.test(artifact) || FORBIDDEN.test(process.cwd()))
 	fail("forbidden daemon/source path in execution boundary");
 const manifest = readManifest(manifestValue);
@@ -80,20 +89,22 @@ const child = spawnSync(
 	[
 		"test",
 		"--preload",
-		resolve(import.meta.dir, "rust-baseline-proof-daemon.preload.ts"),
+		resolve(import.meta.dir, "rust-shared-corpus-combined.preload.ts"),
 		"--reporter=junit",
 		`--reporter-outfile=${junitPath}`,
 		...selected,
 	],
 	{
 		cwd: process.cwd(),
-		env: { ...process.env, SIGNET_RUST_DAEMON_BIN: artifact },
+		env: { ...process.env, SIGNET_RUST_DAEMON_BIN: artifact, SIGNET_RUST_CORE_DRIVER_BIN: coreDriver },
 		encoding: "utf8",
 	},
 );
 const stderr = `${child.stderr ?? ""}`;
 const stdout = `${child.stdout ?? ""}`;
-const nativeEvidence = /"backend"\s*:\s*"rust-daemon"/.test(stderr);
+const daemonEvidence = /"backend"\s*:\s*"rust-daemon"/.test(stderr);
+const coreEvidence = /backend=fresh-rust artifact=signet-core-test-driver/.test(stderr);
+const nativeEvidence = daemonEvidence || coreEvidence;
 const cases: string[] = [];
 if (existsSync(junitPath)) {
 	const reportXml = readFileSync(junitPath, "utf8");
