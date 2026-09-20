@@ -672,7 +672,7 @@ fn valid_daily_log_date(name: &str) -> bool {
         .and_then(|m| Month::try_from(m).ok());
     let day = stem[8..10].parse::<u8>().ok();
     match (year, month, day) {
-        (Some(y), Some(m), Some(d)) => Date::from_calendar_date(y, m, d).is_ok(),
+        (Some(y), Some(m), Some(d)) if y != 0 => Date::from_calendar_date(y, m, d).is_ok(),
         _ => false,
     }
 }
@@ -4622,6 +4622,7 @@ mod daily_log_date_tests {
     fn rejects_non_decimal_date_fields() {
         for name in [
             "+001-01-01.md",
+            "0000-01-01.md",
             "202a-01-01.md",
             "2024-0a-01.md",
             "2024-01-0a.md",
