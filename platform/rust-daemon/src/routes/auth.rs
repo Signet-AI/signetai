@@ -264,7 +264,29 @@ pub(crate) async fn gate(state: &AppState, headers: &HeaderMap) -> Result<Value,
     }
 }
 async fn methods() -> Json<Value> {
-    Json(json!({"mode":"api-key","providers":[{"id":"api-key","type":"api-key","enabled":true}]}))
+    Json(json!({
+        "mode": "local",
+        "providers": [
+            {
+                "id": "password",
+                "type": "password",
+                "enabled": false,
+                "username": "admin",
+            },
+            {
+                "id": "sso",
+                "type": "oidc",
+                "enabled": false,
+                "startPath": "/api/auth/sso/start",
+            },
+            {
+                "id": "saml",
+                "type": "saml",
+                "enabled": false,
+                "startPath": "/api/auth/saml/start",
+            },
+        ],
+    }))
 }
 
 async fn unsupported_sso() -> Result<Json<Value>, ApiError> {
