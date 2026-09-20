@@ -23,7 +23,10 @@ fn workspace_id(
     if header_values.windows(2).any(|pair| pair[0] != pair[1]) {
         return Err(ApiError::bad_request("conflicting workspace aliases"));
     }
-    let header = header_values.first().copied().filter(|value| !value.is_empty());
+    let header = header_values
+        .first()
+        .copied()
+        .filter(|value| !value.is_empty());
     let body = body
         .ok()
         .and_then(|Json(value)| value.workspace_id)
