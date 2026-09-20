@@ -144,6 +144,98 @@ fn knowledge_detail_aspects_and_attributes_are_scoped_and_bounded() {
 }
 
 #[test]
+fn knowledge_lists_exclude_deleted_parent_entity_and_aspect() {
+    let c = core();
+    let entity = c
+        .submit(Operation::KnowledgeEntityCreate {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            name: "Thing".into(),
+            entity_type: "project".into(),
+            metadata: serde_json::json!({}),
+        })
+        .unwrap();
+    let entity_id = entity["id"].as_str().unwrap().to_owned();
+    let aspect = c
+        .submit(Operation::KnowledgeAspectCreate {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: entity_id.clone(),
+            name: "Facts".into(),
+            weight: 1.0,
+        })
+        .unwrap();
+    let aspect_id = aspect["id"].as_str().unwrap().to_owned();
+    c.submit(Operation::KnowledgeAttributeCreate {
+        agent_id: "a".into(),
+        workspace_id: "w".into(),
+        aspect_id: aspect_id.clone(),
+        kind: "attribute".into(),
+        content: "blue".into(),
+        claim_key: None,
+        group_key: None,
+        confidence: 1.0,
+        importance: 1.0,
+        memory_id: None,
+    })
+    .unwrap();
+    assert_eq!(
+        c.submit(Operation::KnowledgeAspects {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: entity_id.clone()
+        })
+        .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        c.submit(Operation::KnowledgeAttributes {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id,
+            aspect_id,
+            limit: 10,
+            offset: 0,
+            kind: None,
+            status: None
+        })
+        .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn dreaming_jobs_queue_and_cancel() {
+    let c = core();
+    let job = c
+        .submit(Operation::JobSubmit {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            kind: "dreaming".into(),
+            payload: serde_json::json!({"batch": 1}),
+            deadline_at: None,
+        })
+        .unwrap();
+    assert_eq!(job["state"], "queued");
+    let cancelled = c
+        .submit(Operation::JobCancel {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            id: job["id"].as_str().unwrap().into(),
+            actor: "api".into(),
+            reason: "requested".into(),
+        })
+        .unwrap();
+    assert_eq!(cancelled["state"], "cancelled");
+}
+
+#[test]
 fn opens_a_current_style_workspace_without_destroying_existing_rows() {
     let d = tempdir().unwrap();
     let p = d.path().join("current.sqlite");

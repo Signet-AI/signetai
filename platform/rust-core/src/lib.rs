@@ -462,7 +462,7 @@ impl Core {
                 }
             }
             let row: Option<(String, String, Option<String>, String, String)> = tx.query_row(
-                "SELECT j.id,j.agent_id,j.workspace_id,j.kind,j.payload FROM jobs j LEFT JOIN pipeline_state p ON p.agent_id=j.agent_id WHERE j.state='queued' AND (j.deadline_at IS NULL OR julianday(j.deadline_at) > julianday('now')) AND COALESCE(p.paused,0)=0 AND j.kind IN ('dream.trigger','dream.pass') ORDER BY j.created_at,j.id LIMIT 1",
+                "SELECT j.id,j.agent_id,j.workspace_id,j.kind,j.payload FROM jobs j LEFT JOIN pipeline_state p ON p.agent_id=j.agent_id WHERE j.state='queued' AND (j.deadline_at IS NULL OR julianday(j.deadline_at) > julianday('now')) AND COALESCE(p.paused,0)=0 AND j.kind IN ('dream.trigger','dream.pass','dreaming') ORDER BY j.created_at,j.id LIMIT 1",
                 [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
             let Some((id,agent_id,workspace_id,kind,payload)) = row else { tx.commit()?; return Ok(None); };
             let changed = tx.execute("UPDATE jobs SET state='running',updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id IS ? AND state='queued'", params![id,agent_id,workspace_id])?;
@@ -1031,18 +1031,18 @@ fn execute_operation(
                     )
                     .unwrap_or(false)
             });
-            let (state, event, error) = if !matches!(kind.as_str(), "dream.trigger" | "dream.pass")
-            {
-                (
-                    "unsupported",
-                    "unsupported",
-                    Some(format!("unsupported job kind: {kind}")),
-                )
-            } else if expired {
-                ("expired", "expired", Some("deadline exceeded".to_owned()))
-            } else {
-                ("queued", "queued", None)
-            };
+            let (state, event, error) =
+                if !matches!(kind.as_str(), "dream.trigger" | "dream.pass" | "dreaming") {
+                    (
+                        "unsupported",
+                        "unsupported",
+                        Some(format!("unsupported job kind: {kind}")),
+                    )
+                } else if expired {
+                    ("expired", "expired", Some("deadline exceeded".to_owned()))
+                } else {
+                    ("queued", "queued", None)
+                };
             let transaction = connection.transaction()?;
             transaction.execute("INSERT INTO jobs (id,agent_id,workspace_id,kind,state,payload,deadline_at,error,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,kind,state,payload,deadline_at,error])?;
             transaction.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) VALUES (?,?, ?,?,datetime('now'))", params![id,agent_id,event,serde_json::to_string(&json!({"error":error}))?])?;
@@ -2367,7 +2367,7 @@ fn execute_operation(
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
             let entity_id = required_id(&entity_id)?;
-            let mut s=connection.prepare("SELECT id,name,weight FROM kg_aspects WHERE agent_id=? AND workspace_id=? AND entity_id=? AND deleted=0 ORDER BY weight DESC LIMIT 100")?;
+            let mut s=connection.prepare("SELECT p.id,p.name,p.weight FROM kg_aspects p JOIN kg_entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id AND e.deleted=0 WHERE p.agent_id=? AND p.workspace_id=? AND p.entity_id=? AND p.deleted=0 ORDER BY p.weight DESC LIMIT 100")?;
             let rows=s.query_map(params![agent_id,workspace_id,entity_id],|r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"weight":r.get::<_,f64>(2)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?}))
         }
@@ -2387,7 +2387,7 @@ fn execute_operation(
             let aspect_id = required_id(&aspect_id)?;
             let limit = limit.clamp(1, 200) as i64;
             let offset = offset.min(100_000) as i64;
-            let mut s=connection.prepare("SELECT a.id,a.kind,a.content,a.status FROM kg_attributes a JOIN kg_aspects p ON p.id=a.aspect_id WHERE a.agent_id=? AND a.workspace_id=? AND p.entity_id=? AND a.aspect_id=? AND (? IS NULL OR a.kind=?) AND (? IS NULL OR a.status=?) ORDER BY a.importance DESC LIMIT ? OFFSET ?")?;
+            let mut s=connection.prepare("SELECT a.id,a.kind,a.content,a.status FROM kg_attributes a JOIN kg_aspects p ON p.id=a.aspect_id AND p.deleted=0 JOIN kg_entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND p.entity_id=? AND a.aspect_id=? AND a.status != 'deleted' AND (? IS NULL OR a.kind=?) AND (? IS NULL OR a.status=?) ORDER BY a.importance DESC LIMIT ? OFFSET ?")?;
             let rows=s.query_map(params![agent_id,workspace_id,entity_id,aspect_id,kind,kind,status,status,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?,"limit":limit,"offset":offset}))
         }

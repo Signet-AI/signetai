@@ -37,13 +37,27 @@ struct RelationBody {
 fn limit(value: Option<usize>) -> usize {
     value.unwrap_or(50).clamp(1, 200)
 }
-fn workspace(q: &EntityQuery) -> Result<String, ApiError> {
-    Ok(q.workspace_id
+fn workspace(headers: &HeaderMap, q: &EntityQuery) -> Result<String, ApiError> {
+    let aliases = ["x-workspace-id", "x-signet-workspace-id"];
+    let values = aliases
+        .iter()
+        .filter_map(|name| headers.get(*name))
+        .map(|v| v.to_str().map(str::trim))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ApiError::bad_request("workspace header must be valid UTF-8"))?;
+    if values.windows(2).any(|pair| pair[0] != pair[1]) {
+        return Err(ApiError::bad_request("conflicting workspace aliases"));
+    }
+    let header = values.first().copied();
+    let query = q
+        .workspace_id
         .as_deref()
         .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .unwrap_or("default")
-        .to_owned())
+        .filter(|v| !v.is_empty());
+    if header.is_some() && query.is_some() && header != query {
+        return Err(ApiError::bad_request("conflicting workspace scope"));
+    }
+    Ok(header.or(query).unwrap_or("default").to_owned())
 }
 fn valid_metadata(v: &Value) -> Result<Value, ApiError> {
     if v.is_null() {
@@ -99,7 +113,7 @@ async fn entity_detail(
             &state,
             Operation::KnowledgeEntityDetail {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
-                workspace_id: workspace(&q)?,
+                workspace_id: workspace(&headers, &q)?,
                 entity_id: id,
             },
         )
@@ -117,7 +131,7 @@ async fn entity_aspects(
             &state,
             Operation::KnowledgeAspects {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
-                workspace_id: workspace(&q)?,
+                workspace_id: workspace(&headers, &q)?,
                 entity_id: id,
             },
         )
@@ -135,7 +149,7 @@ async fn aspect_attributes(
             &state,
             Operation::KnowledgeAttributes {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
-                workspace_id: workspace(&q)?,
+                workspace_id: workspace(&headers, &q)?,
                 entity_id,
                 aspect_id,
                 limit: limit(q.limit),
@@ -179,7 +193,7 @@ async fn list_entities(
             &state,
             Operation::KnowledgeEntityList {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
-                workspace_id: workspace(&q)?,
+                workspace_id: workspace(&headers, &q)?,
                 limit: limit(q.limit),
                 offset: q.offset.unwrap_or(0),
             },
@@ -197,7 +211,7 @@ async fn create_entity(
         &state,
         Operation::KnowledgeEntityCreate {
             agent_id: agent(&headers, Some(&q.agent), None)?,
-            workspace_id: workspace(&q)?,
+            workspace_id: workspace(&headers, &q)?,
             name: body.name,
             entity_type: body.entity_type,
             metadata: valid_metadata(&body.metadata)?,
@@ -216,7 +230,7 @@ async fn create_relation(
         &state,
         Operation::KnowledgeRelationCreate {
             agent_id: agent(&headers, Some(&q.agent), None)?,
-            workspace_id: workspace(&q)?,
+            workspace_id: workspace(&headers, &q)?,
             from_id: body.from_id,
             to_id: body.to_id,
             relation: body.relation,
@@ -237,7 +251,7 @@ async fn list_relations(
             &state,
             Operation::KnowledgeRelations {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
-                workspace_id: workspace(&q)?,
+                workspace_id: workspace(&headers, &q)?,
                 entity_id: id,
                 limit: limit(q.limit),
             },
