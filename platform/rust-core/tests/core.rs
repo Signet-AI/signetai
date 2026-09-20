@@ -34,6 +34,8 @@ fn integrity_checkpoint_is_scoped_durable_and_excludes_fts() {
     assert_eq!(first["status"], "verified");
     assert_eq!(first["checkpoint"]["nextTable"], "jobs");
     assert_eq!(first["fts"], "skipped");
+    assert_eq!(first["integrityCheck"], "ok");
+    assert_eq!(first["checkedTables"].as_array().unwrap().len(), 2);
     let second = c
         .submit(Operation::IntegrityVerify {
             agent_id: "agent-a".into(),

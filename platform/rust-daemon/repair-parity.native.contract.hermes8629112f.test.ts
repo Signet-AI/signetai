@@ -69,6 +69,13 @@ it("requeues only scoped running jobs through the owner and reports cleanup", as
 			body: JSON.stringify({ kind: "dreaming", payload: {} }),
 		});
 		expect(submitted.r.status).toBe(200);
+		const verified = await req(d, "/api/repair/verify-integrity", {
+			method: "POST",
+			body: JSON.stringify({ workspaceId: "repair-workspace", budget: 2 }),
+		});
+		expect(verified.r.status).toBe(200);
+		expect(verified.body).toMatchObject({ status: "verified", fts: "skipped", integrityCheck: "ok" });
+		expect(verified.body.checkedTables.length).toBe(2);
 		const id = submitted.body.id;
 		const repaired = await req(d, "/api/repair/requeue-running", {
 			method: "POST",

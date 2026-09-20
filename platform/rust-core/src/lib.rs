@@ -1136,13 +1136,22 @@ fn execute_operation(
             connection.execute("CREATE TABLE IF NOT EXISTS integrity_checkpoints (agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, project_id TEXT, visibility TEXT NOT NULL, schema_hash TEXT NOT NULL, next_table TEXT, completed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(agent_id,workspace_id,project_id,visibility))", [])?;
             let old: Option<(String, i64)> = connection.query_row("SELECT schema_hash,completed FROM integrity_checkpoints WHERE agent_id=? AND workspace_id=? AND project_id IS ? AND visibility=?", params![agent_id, workspace_id, project_id, visibility], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
             let reset = old.as_ref().is_none_or(|(hash, _)| hash != &schema_hash);
+            let tables = ["documents", "memories", "jobs"];
             let start = if reset {
                 0
             } else {
-                old.as_ref().and_then(|_| connection.query_row("SELECT CASE next_table WHEN 'documents' THEN 0 WHEN 'jobs' THEN 2 ELSE 3 END FROM integrity_checkpoints WHERE agent_id=? AND workspace_id=? AND project_id IS ? AND visibility=?", params![agent_id,workspace_id,project_id,visibility], |r| r.get::<_,i64>(0)).optional().ok().flatten()).unwrap_or(0) as usize
+                old.as_ref().and_then(|_| connection.query_row("SELECT CASE next_table WHEN 'documents' THEN 0 WHEN 'memories' THEN 1 WHEN 'jobs' THEN 2 ELSE 3 END FROM integrity_checkpoints WHERE agent_id=? AND workspace_id=? AND project_id IS ? AND visibility=?", params![agent_id,workspace_id,project_id,visibility], |r| r.get::<_,i64>(0)).optional().ok().flatten()).unwrap_or(0) as usize
             };
-            let tables = ["documents", "memories", "jobs"];
             let end = (start + budget).min(tables.len());
+            let mut checked_tables = Vec::new();
+            for table in &tables[start..end] {
+                let count: i64 = connection.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))?;
+                checked_tables.push(json!({"table": table, "rows": count}));
+            }
+            let integrity_check: String = connection.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+            if integrity_check != "ok" {
+                return Err(CoreError::InvalidInput(format!("integrity check failed: {integrity_check}")));
+            }
             let completed = end == tables.len();
             let next = if completed {
                 None
@@ -1151,7 +1160,7 @@ fn execute_operation(
             };
             connection.execute("INSERT INTO integrity_checkpoints(agent_id,workspace_id,project_id,visibility,schema_hash,next_table,completed,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,project_id,visibility) DO UPDATE SET schema_hash=excluded.schema_hash,next_table=excluded.next_table,completed=excluded.completed,updated_at=excluded.updated_at", params![agent_id,workspace_id,project_id,visibility,schema_hash,next,completed as i64])?;
             Ok(
-                json!({"status":"verified","agentId":agent_id,"workspaceId":workspace_id,"projectId":project_id,"visibility":visibility,"fts":"skipped","checkpoint":{"nextTable":next,"completed":completed,"schemaHash":schema_hash}}),
+                json!({"status":"verified","agentId":agent_id,"workspaceId":workspace_id,"projectId":project_id,"visibility":visibility,"fts":"skipped","integrityCheck":integrity_check,"checkedTables":checked_tables,"checkpoint":{"nextTable":next,"completed":completed,"schemaHash":schema_hash}}),
             )
         }
         Operation::RepairRequeueRunning {
@@ -1160,6 +1169,10 @@ fn execute_operation(
         } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
+            let integrity_check: String = connection.query_row("PRAGMA integrity_check", [], |r| r.get(0))?;
+            if integrity_check != "ok" {
+                return Err(CoreError::InvalidInput("repair refused: database integrity check failed".into()));
+            }
             let tx = connection.transaction()?;
             let changed: Vec<(String, String)> = {
                 let mut updated = tx.prepare("UPDATE jobs SET state='queued', updated_at=datetime('now'), error=NULL WHERE agent_id=? AND workspace_id=? AND state='running' RETURNING id,agent_id")?;
