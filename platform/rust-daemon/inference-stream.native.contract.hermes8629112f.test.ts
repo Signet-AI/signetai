@@ -35,7 +35,9 @@ it("streams bounded OpenAI SSE with auth, validation, and cleanup", async () => 
 		},
 	});
 	const workspace = mkdtempSync(join(tmpdir(), "signet-stream-"));
-	const port = 40000 + Math.floor(Math.random() * 1000);
+	const portProbe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {}, open() {}, close() {} } });
+	const port = portProbe.port;
+	portProbe.stop();
 	const child = Bun.spawn([bin], {
 		env: {
 			...process.env,
@@ -74,8 +76,9 @@ it("streams bounded OpenAI SSE with auth, validation, and cleanup", async () => 
 				headers,
 				body: JSON.stringify({ prompt }),
 			});
+			const failedBody = await failed.text();
 			expect(failed.status).toBe(502);
-			expect(failed.status).toBe(502);
+			expect(failedBody).toContain("upstream_error");
 		}
 		const response = await fetch(`${origin}/api/inference/stream`, {
 			method: "POST",
@@ -100,6 +103,8 @@ it("streams bounded OpenAI SSE with auth, validation, and cleanup", async () => 
 	} finally {
 		child.kill("SIGTERM");
 		await child.exited;
+		const stderr = await new Response(child.stderr).text();
+		expect(stderr).not.toContain(token);
 		upstream.stop(true);
 		rmSync(workspace, { recursive: true, force: true });
 	}

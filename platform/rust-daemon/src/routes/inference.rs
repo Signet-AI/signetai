@@ -9,7 +9,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{env, path::PathBuf, time::Duration};
+use std::{collections::VecDeque, env, path::PathBuf, time::Duration};
 use tokio::sync::Mutex;
 use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
@@ -197,6 +197,11 @@ async fn stream(
         }
         ProviderError::InvalidResponse(m) => ApiError::upstream(m),
     })?;
+    if !(200..300).contains(&status) {
+        return Err(ApiError::upstream(format!(
+            "provider returned HTTP {status}"
+        )));
+    }
     let mut response = Response::new(stream_body);
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -205,11 +210,6 @@ async fn stream(
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
-    if !(200..300).contains(&status) {
-        return Err(ApiError::upstream(format!(
-            "provider returned HTTP {status}"
-        )));
-    }
     Ok(response)
 }
 
@@ -419,9 +419,62 @@ async fn call_openai_stream(
             message: message.chars().take(512).collect(),
         });
     }
+    let mut response = response;
+    let mut total = 0usize;
+    let mut pending = Vec::new();
+    let mut initial = VecDeque::new();
+    let first_event = loop {
+        let chunk = response
+            .chunk()
+            .await
+            .map_err(|error| {
+                ProviderError::InvalidResponse(format!("provider response read failed: {error}"))
+            })?
+            .ok_or_else(|| {
+                ProviderError::InvalidResponse(
+                    "provider stream ended before first SSE event".into(),
+                )
+            })?;
+        total = total.saturating_add(chunk.len());
+        if total > 1_048_576 {
+            return Err(ProviderError::InvalidResponse(
+                "provider stream exceeds 1 MiB".into(),
+            ));
+        }
+        initial.push_back(chunk.to_vec());
+        pending.extend_from_slice(&chunk);
+        if let Some(end) = pending.windows(2).position(|w| w == b"\n\n") {
+            break pending.drain(..end + 2).collect::<Vec<_>>();
+        }
+    };
+    pending.clear();
+    let text = String::from_utf8(first_event).map_err(|_| {
+        ProviderError::InvalidResponse("provider stream contains invalid UTF-8".into())
+    })?;
+    let mut saw_data = false;
+    for line in text.lines().filter(|line| line.starts_with("data:")) {
+        saw_data = true;
+        let data = line[5..].trim();
+        if data != "[DONE]" {
+            serde_json::from_str::<Value>(data).map_err(|_| {
+                ProviderError::InvalidResponse("provider stream contains invalid JSON".into())
+            })?;
+        }
+    }
+    if !saw_data {
+        return Err(ProviderError::InvalidResponse(
+            "provider stream contains no data event".into(),
+        ));
+    }
     let stream = futures_util::stream::unfold(
-        (response, 0usize, Vec::<u8>::new(), false),
-        |(mut response, total, mut pending, mut done)| async move {
+        (response, total, pending, false, initial),
+        |(mut response, total, mut pending, mut done, mut initial)| async move {
+            if done {
+                return None;
+            }
+            if let Some(chunk) = initial.pop_front() {
+                return Some((Ok(chunk), (response, total, pending, done, initial)));
+            }
             if done {
                 return None;
             }
@@ -431,7 +484,7 @@ async fn call_openai_stream(
                     if next > 1_048_576 {
                         return Some((
                             Err(std::io::Error::other("provider stream exceeds 1 MiB")),
-                            (response, next, pending, true),
+                            (response, next, pending, true, initial),
                         ));
                     }
                     pending.extend_from_slice(&chunk);
@@ -444,7 +497,7 @@ async fn call_openai_stream(
                                     Err(std::io::Error::other(
                                         "provider stream contains invalid UTF-8",
                                     )),
-                                    (response, next, pending, true),
+                                    (response, next, pending, true, initial),
                                 ))
                             }
                         };
@@ -455,7 +508,7 @@ async fn call_openai_stream(
                                     Err(std::io::Error::other(
                                         "provider stream contains invalid JSON",
                                     )),
-                                    (response, next, pending, true),
+                                    (response, next, pending, true, initial),
                                 ));
                             }
                             if data == "[DONE]" {
@@ -463,7 +516,7 @@ async fn call_openai_stream(
                             }
                         }
                     }
-                    Some((Ok(chunk), (response, next, pending, done)))
+                    Some((Ok(chunk.to_vec()), (response, next, pending, done, initial)))
                 }
                 Ok(None) => {
                     if pending.iter().any(|b| !b.is_ascii_whitespace()) {
@@ -471,7 +524,7 @@ async fn call_openai_stream(
                             Err(std::io::Error::other(
                                 "provider stream ended with incomplete SSE",
                             )),
-                            (response, total, pending, true),
+                            (response, total, pending, true, initial),
                         ))
                     } else {
                         None
@@ -481,7 +534,7 @@ async fn call_openai_stream(
                     Err(std::io::Error::other(format!(
                         "provider response read failed: {error}"
                     ))),
-                    (response, total, pending, true),
+                    (response, total, pending, true, initial),
                 )),
             }
         },
