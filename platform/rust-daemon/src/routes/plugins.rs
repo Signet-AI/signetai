@@ -2,7 +2,7 @@ use crate::{routes::auth, ApiError, AppState};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::get,
+    routing::{get, patch, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -34,6 +34,51 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/plugins/audit", get(audit))
         .route("/api/plugins/{id}/diagnostics", get(diagnostics))
         .route("/api/plugins/{id}", get(detail).patch(update))
+        .route("/api/marketplace/mcp", get(unsupported_marketplace))
+        .route(
+            "/api/marketplace/mcp/policy",
+            get(unsupported_marketplace).patch(unsupported_marketplace),
+        )
+        .route("/api/marketplace/mcp/browse", get(unsupported_marketplace))
+        .route("/api/marketplace/mcp/detail", get(unsupported_marketplace))
+        .route("/api/marketplace/mcp/test", post(unsupported_marketplace))
+        .route(
+            "/api/marketplace/mcp/install",
+            post(unsupported_marketplace),
+        )
+        .route(
+            "/api/marketplace/mcp/register",
+            post(unsupported_marketplace),
+        )
+        .route("/api/marketplace/mcp/tools", get(unsupported_marketplace))
+        .route("/api/marketplace/mcp/search", get(unsupported_marketplace))
+        .route("/api/marketplace/mcp/call", post(unsupported_marketplace))
+        .route(
+            "/api/marketplace/mcp/read-resource",
+            post(unsupported_marketplace),
+        )
+        .route(
+            "/api/marketplace/mcp/{id}",
+            get(unsupported_marketplace)
+                .patch(unsupported_marketplace)
+                .delete(unsupported_marketplace),
+        )
+        .route(
+            "/api/marketplace/reviews",
+            get(unsupported_marketplace).post(unsupported_marketplace),
+        )
+        .route(
+            "/api/marketplace/reviews/config",
+            get(unsupported_marketplace).patch(unsupported_marketplace),
+        )
+        .route(
+            "/api/marketplace/reviews/sync",
+            post(unsupported_marketplace),
+        )
+        .route(
+            "/api/marketplace/reviews/{id}",
+            patch(unsupported_marketplace).delete(unsupported_marketplace),
+        )
 }
 
 fn now() -> String {
@@ -267,6 +312,16 @@ async fn gate(s: &AppState, h: &HeaderMap) -> Result<(), ApiError> {
         })
     }
 }
+async fn unsupported_marketplace(
+    State(s): State<AppState>,
+    h: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    gate(&s, &h).await?;
+    Err(ApiError::not_implemented(
+        "marketplace operation is unsupported by the fresh native boundary",
+    ))
+}
+
 async fn list(State(s): State<AppState>, h: HeaderMap) -> Result<Json<Value>, ApiError> {
     gate(&s, &h).await?;
     Ok(Json(json!({"plugins":records(&s)?})))
