@@ -63,21 +63,76 @@ export function formatRecallText(raw: unknown): string {
 	].join("\n");
 }
 
-const fences = /<\\?\/?(?:signet-memory(?:-context)?|memory-context)[^>]*>/gi;
-export function stripInternalMemoryContext(text: string): string {
-	let result = text;
-	for (let i = 0; i < 8; i++) {
-		const next = result.replace(
-			/<\\?\/?(?:signet-memory(?:-context)?|memory-context)[^>]*>[\s\S]*?<\\?\/?(?:signet-memory(?:-context)?|memory-context)[^>]*>/gi,
-			"",
-		);
-		if (next === result) break;
-		result = next;
+type MemoryFence = { readonly start: number; readonly end: number; readonly closing: boolean };
+
+function nextMemoryFence(text: string, from: number, lowerText = text.toLowerCase()): MemoryFence | undefined {
+	for (let index = text.indexOf("<", from); index >= 0; index = text.indexOf("<", index + 1)) {
+		let cursor = index + 1;
+		if (text[cursor] === "\\") cursor++;
+		const closing = text[cursor] === "/";
+		if (closing) cursor++;
+
+		const names = ["signet-memory-context", "signet-memory", "memory-context"];
+		const name = names.find((candidate) => lowerText.startsWith(candidate, cursor));
+		if (!name) continue;
+		const afterName = cursor + name.length;
+		if (afterName < text.length && text[afterName] !== undefined && !/[\s>]/.test(text[afterName])) continue;
+		const end = text.indexOf(">", afterName);
+		if (end < 0) return undefined;
+		return { start: index, end: end + 1, closing };
 	}
-	return result.replace(fences, "");
+	return undefined;
+}
+
+function memoryFenceRanges(text: string): Array<readonly [number, number]> {
+	const ranges: Array<readonly [number, number]> = [];
+	const openings: number[] = [];
+	const lowerText = text.toLowerCase();
+	let cursor = 0;
+	while (true) {
+		const fence = nextMemoryFence(text, cursor, lowerText);
+		if (!fence) break;
+		if (fence.closing && openings.length) {
+			ranges.push([openings.pop() as number, fence.end]);
+		} else if (!fence.closing) {
+			openings.push(fence.start);
+		}
+		cursor = fence.end;
+	}
+	return ranges;
+}
+
+export function stripInternalMemoryContext(text: string): string {
+	const ranges = memoryFenceRanges(text);
+	if (!ranges.length) return text;
+	let result = "";
+	let cursor = 0;
+	for (const [start, end] of ranges.sort((a, b) => a[0] - b[0])) {
+		if (start < cursor) continue;
+		result += text.slice(cursor, start);
+		cursor = end;
+	}
+	result += text.slice(cursor);
+	let scrubbed = "";
+	cursor = 0;
+	const lowerResult = result.toLowerCase();
+	while (true) {
+		const fence = nextMemoryFence(result, cursor, lowerResult);
+		if (!fence) return scrubbed + result.slice(cursor);
+		scrubbed += result.slice(cursor, fence.start);
+		cursor = fence.end;
+	}
 }
 export function escapeMemoryContextForFence(text: string): string {
-	return text.replace(fences, (match) => `&lt;${match.slice(1)}`);
+	let result = "";
+	let cursor = 0;
+	const lowerText = text.toLowerCase();
+	while (true) {
+		const fence = nextMemoryFence(text, cursor, lowerText);
+		if (!fence) return result + text.slice(cursor);
+		result += `${text.slice(cursor, fence.start)}&lt;${text.slice(fence.start + 1, fence.end)}`;
+		cursor = fence.end;
+	}
 }
 
 export function readStaticIdentity(
