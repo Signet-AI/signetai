@@ -1402,8 +1402,33 @@ fn source_removal_lease_blocks_direct_deletes_and_preserves_source_documents() {
                 source_id: "leased-source".into(),
             })
         };
-        assert!(matches!(result, Err(CoreError::InvalidInput(message)) if message.contains("removal pending")));
-        assert_eq!(owner.submit(Operation::ListSources { agent_id: "agent".into(), workspace_id: "workspace".into() }).unwrap().as_array().unwrap().len(), 1);
-        assert_eq!(owner.submit(Operation::DocumentList { agent_id: "agent".into(), workspace_id: "workspace".into(), limit: 10 }).unwrap()["items"].as_array().unwrap().len(), 1);
+        assert!(
+            matches!(result, Err(CoreError::InvalidInput(message)) if message.contains("removal pending"))
+        );
+        assert_eq!(
+            owner
+                .submit(Operation::ListSources {
+                    agent_id: "agent".into(),
+                    workspace_id: "workspace".into()
+                })
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            owner
+                .submit(Operation::DocumentList {
+                    agent_id: "agent".into(),
+                    workspace_id: "workspace".into(),
+                    limit: 10
+                })
+                .unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 }
