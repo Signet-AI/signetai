@@ -1,14 +1,39 @@
-import { expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { afterEach, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-// biome-ignore lint/suspicious/noUndeclaredEnvVars: contract binary is supplied by the test runner
-const binary = process.env.SIGNET_NATIVE_BIN;
+const root = join(import.meta.dir, "../..");
+const configuredBinary = Reflect.get(process.env, "SIGNET_RUST_DAEMON_BIN");
+const binary =
+	(typeof configuredBinary === "string" ? configuredBinary : undefined) ??
+	join(root, "platform/rust-daemon/target/debug/signet-daemon");
+const children: Bun.Subprocess[] = [];
+const workspaces: string[] = [];
+
+async function stop(child: Bun.Subprocess): Promise<void> {
+	child.kill("SIGTERM");
+	if (await Promise.race([child.exited.then(() => true), Bun.sleep(1_000).then(() => false)])) return;
+	child.kill("SIGKILL");
+	await Promise.race([child.exited, Bun.sleep(1_000)]);
+}
+
+afterEach(async () => {
+	for (const child of children.splice(0)) await stop(child);
+	for (const workspace of workspaces.splice(0)) rmSync(workspace, { recursive: true, force: true });
+});
 
 test("native git config route is process reachable", async () => {
-	if (!binary) throw new Error("SIGNET_NATIVE_BIN is required");
-	const port = 39882;
-	const workspace = `/tmp/signet-git-config-contract-${process.pid}`;
-	const child = spawn(binary, [], {
+	expect(existsSync(binary)).toBe(true);
+	const workspace = mkdtempSync(join(tmpdir(), "signet-git-config-contract-"));
+	workspaces.push(workspace);
+	writeFileSync(
+		join(workspace, "agent.yaml"),
+		"git:\n  enabled: false\n  autoCommit: true\n  autoSync: true\n  syncInterval: 1\n  remote: upstream\n  branch: feature\n",
+	);
+	const port = 39_000 + Math.floor(Math.random() * 1_000);
+	const child = Bun.spawn([binary], {
+		cwd: root,
 		env: {
 			...process.env,
 			SIGNET_PATH: workspace,
@@ -16,22 +41,38 @@ test("native git config route is process reachable", async () => {
 			SIGNET_PORT: String(port),
 			SIGNET_API_KEY: "contract-key",
 		},
+		stdout: "ignore",
+		stderr: "pipe",
 	});
-	try {
-		for (let i = 0; i < 50; i++) {
-			try {
-				await fetch(`http://127.0.0.1:${port}/health/live`);
+	children.push(child);
+	const stderr = new Response(child.stderr).text();
+	const origin = `http://127.0.0.1:${port}`;
+	let ready = false;
+	for (let i = 0; i < 200; i++) {
+		if (child.exitCode !== null) break;
+		try {
+			if ((await fetch(`${origin}/health/ready`)).ok) {
+				ready = true;
 				break;
-			} catch {
-				await Bun.sleep(100);
 			}
-		}
-		const response = await fetch(`http://127.0.0.1:${port}/api/git/config`, {
-			headers: { "x-signet-api-key": "contract-key" },
-		});
-		expect(response.status).toBe(200);
-		expect((await response.json()).remote).toBe("origin");
-	} finally {
-		child.kill("SIGTERM");
+		} catch {}
+		await Bun.sleep(25);
 	}
+	if (!ready) {
+		await stop(child);
+		throw new Error(`native daemon did not become ready: ${await stderr}`);
+	}
+
+	const response = await fetch(`${origin}/api/git/config`, {
+		headers: { "x-signet-api-key": "contract-key" },
+	});
+	expect(response.status).toBe(200);
+	expect(await response.json()).toEqual({
+		enabled: false,
+		autoCommit: true,
+		autoSync: true,
+		syncInterval: 60,
+		remote: "upstream",
+		branch: "feature",
+	});
 });
