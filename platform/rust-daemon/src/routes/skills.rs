@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     fs,
+    io::Read,
     path::{Path as FsPath, PathBuf},
 };
 
@@ -40,24 +41,57 @@ fn valid_name(name: &str) -> Result<(), ApiError> {
         || name == ".."
         || name.contains('/')
         || name.contains('\\')
-        || name.chars().any(|c| c.is_control())
+        || name.chars().any(char::is_control)
     {
-        return Err(ApiError::bad_request("invalid skill name"));
+        Err(ApiError::bad_request("invalid skill name"))
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 fn limit(value: Option<usize>) -> Result<usize, ApiError> {
-    let value = value.unwrap_or(MAX_SKILLS);
-    if value == 0 || value > MAX_SKILLS {
-        Err(ApiError::bad_request("limit must be between 1 and 100"))
+    let n = value.unwrap_or(MAX_SKILLS);
+    if (1..=MAX_SKILLS).contains(&n) {
+        Ok(n)
     } else {
-        Ok(value)
+        Err(ApiError::bad_request("limit must be between 1 and 100"))
     }
 }
-async fn gate(state: &AppState, headers: &HeaderMap, capability: &str) -> Result<(), ApiError> {
+async fn gate(
+    state: &AppState,
+    headers: &HeaderMap,
+    capability: &str,
+    destructive: bool,
+) -> Result<(), ApiError> {
     let claims = auth::gate(state, headers).await?;
-    if let Some(perms) = claims.get("permissions").and_then(Value::as_array) {
-        if !perms.is_empty() && !perms.iter().any(|p| p.as_str() == Some(capability)) {
+    let role = claims.get("role").and_then(Value::as_str).unwrap_or("");
+    let perms = claims.get("permissions").and_then(Value::as_array);
+    if let Some(values) = perms {
+        if values.iter().any(|p| {
+            p.as_str() == Some(&format!("deny:{capability}")) || p.as_str() == Some("skills:deny")
+        }) {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                code: "forbidden",
+                message: format!("{capability} capability is denied"),
+            });
+        }
+    }
+    if destructive && role != "admin" {
+        let allowed = perms
+            .map(|p| !p.is_empty() && p.iter().any(|v| v.as_str() == Some(capability)))
+            .unwrap_or(false);
+        if !allowed {
+            return Err(ApiError {
+                status: StatusCode::FORBIDDEN,
+                code: "forbidden",
+                message: format!("{capability} capability is required"),
+            });
+        }
+    } else if let Some(values) = perms {
+        if !values.is_empty()
+            && !values.iter().any(|p| p.as_str() == Some(capability))
+            && role != "admin"
+        {
             return Err(ApiError {
                 status: StatusCode::FORBIDDEN,
                 code: "forbidden",
@@ -75,73 +109,94 @@ fn root_dir(state: &AppState) -> Result<PathBuf, ApiError> {
 }
 fn contained(root: &FsPath, name: &str) -> Result<PathBuf, ApiError> {
     valid_name(name)?;
-    let root = root
+    let canonical_root = root
         .canonicalize()
         .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
-    let candidate = root.join(name);
-    if candidate.exists() {
-        let canonical = candidate
-            .canonicalize()
-            .map_err(|_| ApiError::bad_request("invalid skill path"))?;
-        if !canonical.starts_with(&root) {
+    let candidate = canonical_root.join(name);
+    if let Ok(meta) = fs::symlink_metadata(&candidate) {
+        if meta.file_type().is_symlink() {
             return Err(ApiError::bad_request("invalid skill path"));
+        }
+        if let Ok(canonical) = candidate.canonicalize() {
+            if !canonical.starts_with(&canonical_root) {
+                return Err(ApiError::bad_request("invalid skill path"));
+            }
         }
     }
     Ok(candidate)
 }
-fn metadata(content: &str) -> Value {
-    let mut result = serde_json::Map::new();
-    for key in [
-        "description",
-        "version",
-        "author",
-        "maintainer",
-        "license",
-        "arg_hint",
-    ] {
-        if let Some(line) = content
-            .lines()
-            .find(|line| line.starts_with(&format!("{key}:")))
-        {
-            result.insert(
-                key.to_owned(),
-                Value::String(
-                    line[key.len() + 1..]
-                        .trim()
-                        .trim_matches(['"', '\''])
-                        .to_owned(),
-                ),
-            );
+fn frontmatter(content: &str) -> Result<Value, ApiError> {
+    let mut out = serde_json::Map::new();
+    let mut lines = content.lines();
+    if lines.next() != Some("---") {
+        return Ok(Value::Object(out));
+    }
+    let mut closed = false;
+    for line in lines {
+        if line == "---" {
+            closed = true;
+            break;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            if [
+                "description",
+                "version",
+                "author",
+                "maintainer",
+                "license",
+                "arg_hint",
+            ]
+            .contains(&key)
+            {
+                out.insert(
+                    key.into(),
+                    Value::String(value.trim().trim_matches(['"', '\'']).into()),
+                );
+            } else if key == "verified" && value.trim() == "true" {
+                out.insert("verified".into(), Value::Bool(true));
+            }
         }
     }
-    if content.lines().any(|line| line.trim() == "verified: true") {
-        result.insert("verified".into(), Value::Bool(true));
+    if !closed {
+        return Err(ApiError::bad_request("malformed skill frontmatter"));
     }
-    Value::Object(result)
+    Ok(Value::Object(out))
 }
-fn read_skill(root: &FsPath, name: &str) -> Result<Option<Value>, ApiError> {
+fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
     let dir = contained(root, name)?;
-    let md = dir.join("SKILL.md");
-    let meta = fs::symlink_metadata(&md).map_err(|e| {
-        if e.kind() == std::io::ErrorKind::NotFound {
-            ApiError::not_found(format!("skill '{name}' not found"))
-        } else {
-            ApiError::bad_request("invalid skill path")
-        }
-    })?;
-    if !meta.file_type().is_file() {
+    let dir_meta = fs::symlink_metadata(&dir)
+        .map_err(|_| ApiError::not_found(format!("skill '{name}' not found")))?;
+    if !dir_meta.file_type().is_dir() || dir_meta.file_type().is_symlink() {
         return Err(ApiError::bad_request("invalid skill path"));
     }
+    let md = dir.join("SKILL.md");
+    let meta = fs::symlink_metadata(&md)
+        .map_err(|_| ApiError::not_found(format!("skill '{name}' not found")))?;
+    if !meta.file_type().is_file() || meta.file_type().is_symlink() {
+        return Err(ApiError::bad_request("invalid skill path"));
+    }
+    let canonical_root = root
+        .canonicalize()
+        .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
     let canonical = md
         .canonicalize()
         .map_err(|_| ApiError::bad_request("invalid skill path"))?;
-    let root_c = root
-        .canonicalize()
-        .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
-    if !canonical.starts_with(&root_c) {
+    if !canonical.starts_with(&canonical_root) {
         return Err(ApiError::bad_request("invalid skill path"));
     }
-    let data = fs::read(&canonical).map_err(|_| ApiError::unavailable("failed to read skill"))?;
+    if meta.len() > MAX_CONTENT_BYTES {
+        return Err(ApiError {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code: "payload_too_large",
+            message: "skill content exceeds 1 MiB".into(),
+        });
+    }
+    let file =
+        fs::File::open(&canonical).map_err(|_| ApiError::unavailable("failed to read skill"))?;
+    let mut data = Vec::with_capacity(meta.len() as usize);
+    file.take(MAX_CONTENT_BYTES + 1)
+        .read_to_end(&mut data)
+        .map_err(|_| ApiError::unavailable("failed to read skill"))?;
     if data.len() as u64 > MAX_CONTENT_BYTES {
         return Err(ApiError {
             status: StatusCode::PAYLOAD_TOO_LARGE,
@@ -151,13 +206,13 @@ fn read_skill(root: &FsPath, name: &str) -> Result<Option<Value>, ApiError> {
     }
     let content = String::from_utf8(data)
         .map_err(|_| ApiError::bad_request("skill content must be UTF-8"))?;
-    let mut value = metadata(&content);
+    let mut value = frontmatter(&content)?;
     if let Value::Object(ref mut map) = value {
         map.insert("name".into(), json!(name));
         map.insert("path".into(), json!(dir));
         map.insert("content".into(), json!(content));
     }
-    Ok(Some(value))
+    Ok(value)
 }
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
@@ -167,73 +222,76 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/skills/install", post(install))
         .route("/api/skills/{name}", get(detail).delete(remove))
 }
+fn all_skills(root: &FsPath) -> Result<Vec<Value>, ApiError> {
+    let mut entries = Vec::new();
+    for entry in
+        fs::read_dir(root).map_err(|_| ApiError::unavailable("skills directory is unavailable"))?
+    {
+        let entry = entry.map_err(|_| ApiError::unavailable("failed to list skills"))?;
+        let name = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| ApiError::bad_request("skill name must be UTF-8"))?;
+        let meta = fs::symlink_metadata(entry.path())
+            .map_err(|_| ApiError::bad_request("invalid skill path"))?;
+        if meta.file_type().is_symlink() {
+            return Err(ApiError::bad_request("invalid skill path"));
+        }
+        if meta.file_type().is_dir() {
+            entries.push(read_skill(root, &name)?);
+        }
+    }
+    entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+    Ok(entries)
+}
 async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    gate(&state, &headers, "skills:list").await?;
+    gate(&state, &headers, "skills:list", false).await?;
     let max = limit(q.limit)?;
-    let root = root_dir(&state)?;
-    let mut skills = Vec::new();
-    for entry in
-        fs::read_dir(&root).map_err(|_| ApiError::unavailable("skills directory is unavailable"))?
-    {
-        if skills.len() >= max {
-            break;
-        }
-        let entry = entry.map_err(|_| ApiError::unavailable("failed to list skills"))?;
-        if entry
-            .file_type()
-            .map_err(|_| ApiError::bad_request("invalid skill path"))?
-            .is_dir()
-        {
-            if let Some(name) = entry.file_name().to_str() {
-                if let Ok(Some(v)) = read_skill(&root, name) {
-                    skills.push(v);
-                }
-            }
-        }
-    }
-    Ok(Json(json!({"skills": skills, "count": skills.len()})))
+    let all = all_skills(&root_dir(&state)?)?;
+    let total = all.len();
+    let skills: Vec<_> = all.into_iter().take(max).collect();
+    Ok(Json(
+        json!({"skills": skills, "count": skills.len(), "total": total, "truncated": total > skills.len()}),
+    ))
 }
 async fn detail(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    gate(&state, &headers, "skills:read").await?;
-    Ok(Json(read_skill(&root_dir(&state)?, &name)?.ok_or_else(
-        || ApiError::not_found(format!("skill '{name}' not found")),
-    )?))
+    gate(&state, &headers, "skills:read", false).await?;
+    Ok(Json(read_skill(&root_dir(&state)?, &name)?))
 }
 async fn browse(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    gate(&state, &headers, "skills:browse").await?;
-    let result = list(State(state), headers, Query(q)).await?.0;
-    let skills = result.get("skills").cloned().unwrap_or_else(|| json!([]));
-    let total = skills.as_array().map_or(0, Vec::len);
-    Ok(Json(json!({"results": skills, "total": total})))
+    gate(&state, &headers, "skills:browse", false).await?;
+    let max = limit(q.limit)?;
+    let all = all_skills(&root_dir(&state)?)?;
+    let total = all.len();
+    let results: Vec<_> = all.into_iter().take(max).collect();
+    Ok(Json(
+        json!({"results":results,"total":total,"truncated":total>results.len()}),
+    ))
 }
 async fn search(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<SearchQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    gate(&state, &headers, "skills:search").await?;
+    gate(&state, &headers, "skills:search", false).await?;
     let term =
         q.q.ok_or_else(|| ApiError::bad_request("query parameter q is required"))?
             .to_lowercase();
-    let result = list(State(state), headers, Query(ListQuery { limit: q.limit }))
-        .await?
-        .0;
-    let results: Vec<Value> = result["skills"]
-        .as_array()
+    let max = limit(q.limit)?;
+    let matches: Vec<_> = all_skills(&root_dir(&state)?)?
         .into_iter()
-        .flatten()
         .filter(|v| {
             v["name"]
                 .as_str()
@@ -246,19 +304,22 @@ async fn search(
                     .to_lowercase()
                     .contains(&term)
         })
-        .cloned()
         .collect();
-    Ok(Json(json!({"results": results})))
+    let total = matches.len();
+    let results: Vec<_> = matches.into_iter().take(max).collect();
+    Ok(Json(
+        json!({"results":results,"total":total,"truncated":total>results.len()}),
+    ))
 }
 async fn install(
     State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<InstallBody>,
 ) -> Result<Json<Value>, ApiError> {
-    gate(&state, &headers, "skills:install").await?;
+    gate(&state, &headers, "skills:install", true).await?;
     let _ = (body.name, body.source);
     Err(ApiError::not_implemented(
-        "external skill installation is unsupported",
+        "external skill installation is unsupported; unsupported_marker=skills_remote_provider",
     ))
 }
 async fn remove(
@@ -266,7 +327,7 @@ async fn remove(
     headers: HeaderMap,
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    gate(&state, &headers, "skills:delete").await?;
+    gate(&state, &headers, "skills:delete", true).await?;
     let root = root_dir(&state)?;
     let dir = contained(&root, &name)?;
     let meta = fs::symlink_metadata(&dir)
@@ -274,8 +335,8 @@ async fn remove(
     if !meta.file_type().is_dir() || meta.file_type().is_symlink() {
         return Err(ApiError::bad_request("invalid skill path"));
     }
-    fs::remove_dir_all(&dir).map_err(|_| ApiError::unavailable("failed to remove skill"))?;
+    fs::remove_dir(&dir).map_err(|_| ApiError::unavailable("failed to remove skill"))?;
     Ok(Json(
-        json!({"success": true, "name": name, "message": format!("Removed {name}")}),
+        json!({"success":true,"name":name,"message":format!("Removed {name}")}),
     ))
 }

@@ -2,7 +2,7 @@ import { afterEach, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-const root = process.cwd();
+const root = join(import.meta.dir, "../..");
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: test override for compiled daemon
 const binary = process.env.SIGNET_RUST_DAEMON_BIN ?? join(root, "platform/rust-daemon/target/debug/signet-daemon");
 const children: Bun.Subprocess[] = [];
@@ -14,7 +14,6 @@ async function start() {
 	workspaces.push(workspace);
 	mkdirSync(join(workspace, "skills", "demo"), { recursive: true });
 	writeFileSync(join(workspace, "skills", "demo", "SKILL.md"), "---\ndescription: local demo\n---\nhello");
-	symlinkSync(workspace, join(workspace, "skills", "escape"));
 	const child = Bun.spawn([binary], {
 		cwd: root,
 		env: {
@@ -45,7 +44,7 @@ afterEach(async () => {
 	for (const path of workspaces.splice(0)) rmSync(path, { recursive: true, force: true });
 });
 it("serves bounded local skills and rejects traversal/symlink escape", async () => {
-	const { origin } = await start();
+	const { origin, workspace } = await start();
 	const list = await fetch(`${origin}/api/skills?limit=1`, { headers: auth });
 	expect(list.status).toBe(200);
 	expect((await list.json()).count).toBe(1);
@@ -53,7 +52,9 @@ it("serves bounded local skills and rejects traversal/symlink escape", async () 
 	expect(detail.status).toBe(200);
 	expect((await detail.json()).content).toContain("hello");
 	expect((await fetch(`${origin}/api/skills/../demo`, { headers: auth })).status).not.toBe(200);
-	expect((await fetch(`${origin}/api/skills/escape`, { headers: auth })).status).toBe(400);
+	writeFileSync(join(workspace, "skills", "escape"), "not a directory");
+	symlinkSync(workspace, join(workspace, "skills", "escape-link"));
+	expect((await fetch(`${origin}/api/skills/escape-link`, { headers: auth })).status).toBe(400);
 	expect(
 		(
 			await fetch(`${origin}/api/skills/install`, {
