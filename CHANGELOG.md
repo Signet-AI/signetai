@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-20
+- Bug fixes: use kernel-owned instance lock.
+
 ### 2026-09-17
 - Bug fixes: refresh event-loop ledger; harden vector repair safety; bound vector repair reconciliation.
 - Refactoring: deduplicate vector repair policy.
@@ -28,12 +31,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: add dynamic connector health dashboard; add daemon JS bundle path flag; add selectable Bun JS runtime.
 - Bug fixes: enforce connector deadlines across native I/O; bound connector inspection and avoid unverified healthy status; harden Bun daemon runtime and installer.
 
-### 2026-09-09
-- Features: add ChatGPT desktop plugin path.
-- Bug fixes: make episodic artifact indexing self-healing; index memory_artifacts by source_sha256 for the backlog probe; require maintenance before admission; restore maintenance before admission; cancel stale cache work on stop; keep worker available at startup.
-- Refactoring: dedupe setup/cache code.
-
 ## Release Ledger
+
+## [0.226.8] - 2026-09-20
+
+Release summary: 1 bug fix.
+Tag range: `v0.226.7..v0.226.8`.
+
+### Bug Fixes
+
+- **daemon**: use kernel-owned instance lock (#1928)
 
 ## [0.226.7] - 2026-09-17
 
