@@ -67,6 +67,20 @@ describe("single-instance daemon lock", () => {
 		}
 	});
 
+	it("does not trust legacy container PID 1 metadata", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-single-instance-legacy-pid1-"));
+		const path = join(dir, "daemon.lock");
+		writeFileSync(path, "1\n0\n");
+
+		try {
+			const lock = acquireSingleInstanceLock(path);
+			expect(lock).not.toBeNull();
+			if (lock !== null) releaseSingleInstanceLock(lock);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	it("keeps the lock inode after release", () => {
 		const dir = mkdtempSync(join(tmpdir(), "signet-single-instance-release-"));
 		const path = join(dir, "daemon.lock");

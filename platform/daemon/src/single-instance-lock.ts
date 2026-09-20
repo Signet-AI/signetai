@@ -156,7 +156,7 @@ function hasLiveLegacyOwner(fd: number): boolean {
 		const fields = readFileSync(fd, "utf8").trim().split(/\s+/);
 		if (fields[2] === KERNEL_LOCK_METADATA) return false;
 		const pid = Number.parseInt(fields[0] ?? "", 10);
-		if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+		if (!Number.isInteger(pid) || pid <= 0 || pid === 1 || pid === process.pid) return false;
 		return isAlive(pid);
 	} catch {
 		return false;
