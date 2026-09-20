@@ -1,5 +1,6 @@
 use crate::AppState;
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Json, Router};
+
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::json;
@@ -11,10 +12,30 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+mod tests {
+    use super::MAX_BYTES;
+
+    #[test]
+    fn rejects_chunked_response_when_accumulated_bytes_exceed_limit() {
+        let mut accumulated = Vec::new();
+        assert!(super::append_bounded(&mut accumulated, vec![0; MAX_BYTES - 1]).is_ok());
+        assert!(super::append_bounded(&mut accumulated, vec![0; 2]).is_err());
+    }
+}
+
 const BASE: &str = "https://raw.githubusercontent.com/Signet-AI/signetai/main";
 const TTL_MS: u64 = 5 * 60 * 1000;
 const MAX_BYTES: usize = 2 * 1024 * 1024;
 const MAX_RELEASES: usize = 30;
+
+fn append_bounded(accumulated: &mut Vec<u8>, chunk: Vec<u8>) -> Result<(), ()> {
+    if chunk.len() > MAX_BYTES.saturating_sub(accumulated.len()) {
+        return Err(());
+    }
+    accumulated.extend_from_slice(&chunk);
+    Ok(())
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct Entry {
@@ -179,10 +200,21 @@ async fn source(state: &AppState, name: &'static str) -> Option<Entry> {
         if response.status().is_success()
             && response.content_length().unwrap_or(0) <= MAX_BYTES as u64
         {
-            if let Ok(bytes) = response.bytes().await {
-                if bytes.len() <= MAX_BYTES {
-                    raw = String::from_utf8(bytes.to_vec()).ok();
+            let mut response = response;
+            let mut bytes = Vec::new();
+            let mut within_limit = true;
+            loop {
+                match response.chunk().await {
+                    Ok(Some(chunk)) if append_bounded(&mut bytes, chunk.to_vec()).is_ok() => {}
+                    Ok(None) => break,
+                    _ => {
+                        within_limit = false;
+                        break;
+                    }
                 }
+            }
+            if within_limit {
+                raw = String::from_utf8(bytes).ok();
             }
         }
     }
