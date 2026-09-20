@@ -119,7 +119,9 @@ describe("fresh Rust auth boundary", () => {
 			expect(token.response.status).toBe(200);
 			expect((token.body as any).token).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
 			await Bun.sleep(1200);
-			expect((await request(d.origin, "/api/auth/whoami", {}, (token.body as any).token)).response.status).toBe(401);
+			const expired = await request(d.origin, "/api/auth/whoami", {}, (token.body as any).token);
+			expect(expired.response.status).toBe(200);
+			expect((expired.body as any).authenticated).toBe(false);
 			await stop(d);
 			d = await daemon(d.workspace);
 			expect((await request(d.origin, "/api/auth/whoami", {}, key)).response.status).toBe(200);
@@ -127,7 +129,9 @@ describe("fresh Rust auth boundary", () => {
 				(await request(d.origin, `/api/auth/api-keys/${(created.body as any).apiKey.id}`, { method: "DELETE" }))
 					.response.status,
 			).toBe(200);
-			expect((await request(d.origin, "/api/auth/whoami", {}, key)).response.status).toBe(401);
+			const revokedWhoami = await request(d.origin, "/api/auth/whoami", {}, key);
+			expect(revokedWhoami.response.status).toBe(200);
+			expect((revokedWhoami.body as any).authenticated).toBe(false);
 			const malformed = await request(d.origin, "/api/auth/token", { method: "POST", body: "{" });
 			expect(malformed.response.status).toBe(400);
 			expect(malformed.text).not.toContain(admin);
