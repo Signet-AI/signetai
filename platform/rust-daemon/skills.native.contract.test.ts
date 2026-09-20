@@ -25,6 +25,8 @@ async function start(cwd = root) {
 			SIGNET_PATH: workspace,
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_PORT: String(port++),
+			SIGNET_SKILLS_SH_BASE_URL: "http://127.0.0.1:1",
+			SIGNET_CLAWHUB_BASE_URL: "http://127.0.0.1:1",
 		},
 		stdout: "ignore",
 		stderr: "pipe",
