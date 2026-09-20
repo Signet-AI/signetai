@@ -1354,3 +1354,56 @@ fn source_removal_lease_fences_stale_finalizer_and_blocks_ingest() {
         .unwrap();
     assert_eq!(done["outcome"], "success");
 }
+
+#[test]
+fn source_removal_lease_blocks_direct_deletes_and_preserves_source_documents() {
+    for delete in [false, true] {
+        let owner = core();
+        owner
+            .submit(Operation::CreateSource {
+                agent_id: "agent".into(),
+                workspace_id: "workspace".into(),
+                kind: "notes".into(),
+                name: "leased".into(),
+                config: serde_json::json!({}),
+                source_id: Some("leased-source".into()),
+            })
+            .unwrap();
+        owner
+            .submit(Operation::IngestDocument {
+                agent_id: "agent".into(),
+                workspace_id: "workspace".into(),
+                source_id: "leased-source".into(),
+                path: "kept".into(),
+                content: "body".into(),
+                metadata: serde_json::json!({}),
+            })
+            .unwrap();
+        owner
+            .submit(Operation::AcquireSourceRemovalLease {
+                agent_id: "agent".into(),
+                workspace_id: "workspace".into(),
+                source_id: "leased-source".into(),
+                generation: Some(0),
+            })
+            .unwrap();
+
+        let result = if delete {
+            owner.submit(Operation::DeleteSourceWithGeneration {
+                agent_id: "agent".into(),
+                workspace_id: "workspace".into(),
+                source_id: "leased-source".into(),
+                generation: Some(0),
+            })
+        } else {
+            owner.submit(Operation::DeleteSource {
+                agent_id: "agent".into(),
+                workspace_id: "workspace".into(),
+                source_id: "leased-source".into(),
+            })
+        };
+        assert!(matches!(result, Err(CoreError::InvalidInput(message)) if message.contains("removal pending")));
+        assert_eq!(owner.submit(Operation::ListSources { agent_id: "agent".into(), workspace_id: "workspace".into() }).unwrap().as_array().unwrap().len(), 1);
+        assert_eq!(owner.submit(Operation::DocumentList { agent_id: "agent".into(), workspace_id: "workspace".into(), limit: 10 }).unwrap()["items"].as_array().unwrap().len(), 1);
+    }
+}

@@ -2267,6 +2267,9 @@ fn execute_operation(
             if generation.is_some_and(|g| g != current) {
                 return Err(CoreError::NotFound);
             }
+            if tx.query_row("SELECT 1 FROM source_removal_leases WHERE agent_id=? AND workspace_id=? AND source_id=? AND status='pending'", params![agent_id, workspace_id, source_id], |r| r.get::<_, i64>(0)).optional()?.is_some() {
+                return Err(CoreError::InvalidInput("source removal pending".into()));
+            }
             let changed = tx.execute(
                 "DELETE FROM documents WHERE agent_id=? AND source_id=? AND workspace_id=?",
                 params![agent_id, source_id, workspace_id],
@@ -2297,6 +2300,9 @@ fn execute_operation(
             let current = current.ok_or(CoreError::NotFound)?;
             if generation.is_some_and(|g| g != current) {
                 return Err(CoreError::NotFound);
+            }
+            if tx.query_row("SELECT 1 FROM source_removal_leases WHERE agent_id=? AND workspace_id=? AND source_id=? AND status='pending'", params![agent_id, workspace_id, source_id], |r| r.get::<_, i64>(0)).optional()?.is_some() {
+                return Err(CoreError::InvalidInput("source removal pending".into()));
             }
             let changed = tx.execute(
                 "DELETE FROM documents WHERE agent_id=? AND source_id=? AND workspace_id=?",
