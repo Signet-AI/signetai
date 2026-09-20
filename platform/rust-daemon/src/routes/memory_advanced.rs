@@ -1,6 +1,6 @@
 use crate::{agent, execute, ApiError, AppState};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -28,7 +28,10 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/memory/lineage/{id}", get(lineage))
         .route("/api/memory/review/{id}", get(review))
         .route("/api/memory/native-note", post(native_note))
-        .route("/api/memory/import", post(import_markdown))
+        .route(
+            "/api/memory/import",
+            post(import_markdown).layer(DefaultBodyLimit::max(33 * 1024 * 1024)),
+        )
         .route("/api/memory/semantic-search", post(semantic_search))
 }
 async fn dispatch(
