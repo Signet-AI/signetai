@@ -3596,14 +3596,32 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "id".to_owned(),
     ];
     required_source_pk.sort();
+    let source_has_metadata: bool = {
+        let mut stmt = transaction.prepare("PRAGMA table_info(sources)")?;
+        let columns = stmt
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        columns.iter().any(|name| name == "metadata")
+    };
     if actual_source_pk != required_source_pk {
         transaction.execute_batch(
             "ALTER TABLE sources RENAME TO sources_legacy;
-             CREATE TABLE sources (id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY(agent_id,workspace_id,id));
-             INSERT INTO sources(id,agent_id,workspace_id,kind,name,config,generation,created_at)
-               SELECT id,COALESCE(NULLIF(trim(agent_id),''),'default'),COALESCE(NULLIF(trim(workspace_id),''),'default'),kind,COALESCE(name,''),COALESCE(config,'{}'),COALESCE(generation,0),created_at FROM sources_legacy;
-             DROP TABLE sources_legacy;",
+             CREATE TABLE sources (id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY(agent_id,workspace_id,id));",
         )?;
+        let config_expression = if source_has_metadata {
+            "COALESCE(NULLIF(trim(config),''), NULLIF(trim(metadata),''), '{}')"
+        } else {
+            "COALESCE(config, '{}')"
+        };
+        transaction.execute(
+            &format!(
+                "INSERT INTO sources(id,agent_id,workspace_id,kind,name,config,generation,created_at)
+                 SELECT id,COALESCE(NULLIF(trim(agent_id),''),'default'),COALESCE(NULLIF(trim(workspace_id),''),'default'),kind,COALESCE(name,''),{},COALESCE(generation,0),created_at FROM sources_legacy",
+                config_expression
+            ),
+            [],
+        )?;
+        transaction.execute_batch("DROP TABLE sources_legacy;")?;
     }
 
     ensure_column(

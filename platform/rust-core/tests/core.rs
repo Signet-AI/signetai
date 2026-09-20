@@ -280,6 +280,35 @@ fn migrates_legacy_source_and_document_workspace_to_default_and_cleans_up() {
 }
 
 #[test]
+fn preserves_legacy_source_metadata_configuration_when_config_is_blank_or_null() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-source-metadata.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE sources (id TEXT PRIMARY KEY, agent_id TEXT, kind TEXT NOT NULL, name TEXT, config TEXT, metadata TEXT, generation INTEGER, created_at TEXT);
+             INSERT INTO sources VALUES ('blank-config', 'agent-a', 'folder', 'blank', '   ', '{\"path\":\"/blank\"}', 7, '2026-01-01');
+             INSERT INTO sources VALUES ('null-config', 'agent-a', 'folder', 'null', NULL, '{\"path\":\"/null\"}', 8, '2026-01-02');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let owner = Core::open(&p, 4).unwrap();
+    let sources = owner
+        .submit(Operation::ListSources {
+            agent_id: "agent-a".into(),
+            workspace_id: "default".into(),
+        })
+        .unwrap();
+    let sources = sources.as_array().unwrap();
+    assert_eq!(sources.len(), 2);
+    for source in sources {
+        let expected_path = format!("/{}", source["name"].as_str().unwrap());
+        assert_eq!(source["config"]["path"], expected_path);
+    }
+}
+
+#[test]
 fn repairs_incomplete_version_two_document_backfill() {
     let d = tempdir().unwrap();
     let p = d.path().join("incomplete-v2.sqlite");
