@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./single-instance-lock";
@@ -38,13 +38,45 @@ describe("single-instance daemon lock", () => {
 		try {
 			await waitForFile(ready);
 			expect(acquireSingleInstanceLock(path)).toBeNull();
-			child.kill("SIGTERM");
+			child.kill("SIGKILL");
 			await waitForExit(child);
+			expect(existsSync(path)).toBe(true);
 			const recovered = acquireSingleInstanceLock(path);
 			expect(recovered).not.toBeNull();
 			if (recovered !== null) releaseSingleInstanceLock(recovered);
 		} finally {
 			if (child.exitCode === null) child.kill("SIGKILL");
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("treats persisted PID metadata as diagnostic after taking the kernel lock", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-single-instance-metadata-"));
+		const path = join(dir, "daemon.lock");
+		const old = new Date(Date.now() - 10 * 60_000);
+		writeFileSync(path, `${process.pid}\n${old.getTime()}\nsignet-kernel-lock-v1\n`);
+		utimesSync(path, old, old);
+
+		try {
+			const lock = acquireSingleInstanceLock(path);
+			expect(lock).not.toBeNull();
+			if (lock !== null) releaseSingleInstanceLock(lock);
+			expect(existsSync(path)).toBe(true);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps the lock inode after release", () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-single-instance-release-"));
+		const path = join(dir, "daemon.lock");
+
+		try {
+			const lock = acquireSingleInstanceLock(path);
+			expect(lock).not.toBeNull();
+			if (lock !== null) releaseSingleInstanceLock(lock);
+			expect(existsSync(path)).toBe(true);
+		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
