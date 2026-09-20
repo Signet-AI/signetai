@@ -189,16 +189,25 @@ pub(crate) fn authority_allows(
     let authority_scope = authority.get("scope").and_then(Value::as_object);
     let requested_scope = requested_scope.as_object();
     let authority_is_unscoped = authority_scope.is_none_or(|scope| scope.is_empty());
-    if let (Some(parent), Some(child)) = (authority_scope, requested_scope) {
-        if !authority_is_unscoped {
-            for (key, value) in child {
-                if let Some(parent_value) = parent.get(key) {
-                    if parent_value != value {
-                        return false;
-                    }
-                } else if key == "agent" || key == "workspace" {
+    if let Some(parent) = authority_scope.filter(|scope| !scope.is_empty()) {
+        let Some(child) = requested_scope else {
+            return false;
+        };
+        for (key, parent_value) in parent {
+            let Some(child_value) = child.get(key) else {
+                return false;
+            };
+            if child_value != parent_value {
+                return false;
+            }
+        }
+        for (key, child_value) in child {
+            if let Some(parent_value) = parent.get(key) {
+                if parent_value != child_value {
                     return false;
                 }
+            } else if key == "agent" || key == "workspace" {
+                return false;
             }
         }
     } else if requested_scope.is_some() && !authority_is_unscoped && authority_role < 3 {
@@ -309,6 +318,9 @@ async fn token(
     body: Bytes,
 ) -> Result<Json<Value>, ApiError> {
     let claims = gate(&state, &headers).await?;
+    if claims.get("role").and_then(Value::as_str) == Some("readonly") {
+        return Err(ApiError::forbidden("read-only authority cannot mutate"));
+    }
     if body.len() > MAX_BODY {
         return Err(ApiError::bad_request("request body exceeds limit"));
     }
@@ -366,6 +378,9 @@ async fn create(
     body: Bytes,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let claims = gate(&state, &headers).await?;
+    if claims.get("role").and_then(Value::as_str) == Some("readonly") {
+        return Err(ApiError::forbidden("read-only authority cannot mutate"));
+    }
     if body.len() > MAX_BODY {
         return Err(ApiError::bad_request("request body exceeds limit"));
     }
@@ -423,6 +438,9 @@ async fn revoke(
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let claims = gate(&state, &headers).await?;
+    if claims.get("role").and_then(Value::as_str) == Some("readonly") {
+        return Err(ApiError::forbidden("read-only authority cannot mutate"));
+    }
     let agent_id = claims
         .get("agentId")
         .and_then(Value::as_str)
