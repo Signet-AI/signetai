@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, symlinkSync, rmSync } from "node
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const root = process.cwd();
+const root = join(import.meta.dir, "../..");
 const configuredBinary = Reflect.get(process.env, "SIGNET_RUST_DAEMON_BIN");
 const binary =
 	(typeof configuredBinary === "string" && configuredBinary.length > 0 ? configuredBinary : undefined) ??
