@@ -1,60 +1,22 @@
 name: MemoryBench Dreaming Gate
-
 on:
   pull_request:
-    paths:
-      - "memorybench/config/dreaming-gate/**"
-      - "memorybench/src/benchmarks/dreaming-scenarios/**"
-      - "memorybench/src/benchmarks/index.ts"
-      - "memorybench/src/cli/index.ts"
-      - "memorybench/src/providers/signet/**"
-      - "memorybench/src/orchestrator/**"
-      - "memorybench/src/types/benchmark.ts"
-      - "memorybench/src/types/provider.ts"
-      - "platform/daemon/src/**"
-      - "platform/core/src/**"
-      - "platform/rust-daemon/**"
-      - "platform/rust-core/**"
-      - ".github/workflows/memorybench-dreaming-gate.yml"
+    paths: ["platform/rust-daemon/**", "platform/rust-core/**", "scripts/native-dreaming-gate.ts", ".github/workflows/memorybench-dreaming-gate.yml"]
   push:
     branches: [main]
-    paths:
-      - "memorybench/config/dreaming-gate/**"
-      - "memorybench/src/benchmarks/dreaming-scenarios/**"
-      - "memorybench/src/benchmarks/index.ts"
-      - "memorybench/src/cli/index.ts"
-      - "memorybench/src/providers/signet/**"
-      - "memorybench/src/orchestrator/**"
-      - "memorybench/src/types/benchmark.ts"
-      - "memorybench/src/types/provider.ts"
-      - "platform/daemon/src/**"
-      - "platform/core/src/**"
-      - "platform/rust-daemon/**"
-      - "platform/rust-core/**"
-      - ".github/workflows/memorybench-dreaming-gate.yml"
-
-permissions:
-  contents: read
-
+    paths: ["platform/rust-daemon/**", "platform/rust-core/**", "scripts/native-dreaming-gate.ts", ".github/workflows/memorybench-dreaming-gate.yml"]
+permissions: { contents: read }
 jobs:
   dreaming-gate:
-    name: "Native Rust Dreaming and scope gate"
+    name: Native Rust Dreaming scope and restart contract
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - name: Install dependencies
+      - name: Build fresh Rust binary
+        run: cargo build --manifest-path platform/rust-daemon/Cargo.toml
+      - name: Run blocking Bun-driven Dreaming contract
         env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: bun install --frozen-lockfile
-      - name: Build @signet/core for daemon source imports
-        run: bun run --filter '@signet/core' build
-      - name: Validate deterministic Dreaming scenarios
-        run: >-
-          bun test
-          memorybench/src/benchmarks/dreaming-scenarios/index.test.ts
-          memorybench/src/orchestrator/checkpoint.test.ts
-          memorybench/src/providers/signet/index.test.ts
-          platform/daemon/src/pipeline/memorybench-dreaming-gate.test.ts
+          SIGNET_RUST_DAEMON_BIN: ${{ github.workspace }}/platform/rust-daemon/target/debug/signet-daemon
+        run: bun scripts/native-dreaming-gate.ts

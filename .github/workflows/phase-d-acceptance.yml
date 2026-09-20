@@ -41,6 +41,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test -s dist/native/signet-linux-x64
-          test -s dist/native/signet-linux-x64.provenance.json
-          env -i HOME="$HOME" PATH=/usr/bin:/bin SIGNET_NATIVE_ACCEPTANCE_BINARY="$GITHUB_WORKSPACE/dist/native/signet-linux-x64" SIGNET_NATIVE_PROVENANCE="$GITHUB_WORKSPACE/dist/native/signet-linux-x64.provenance.json" bun test scripts/native-packaged-acceptance.test.ts
+          platform="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m)"
+          case "$platform-$arch" in linux-x86_64) key=linux-x64 ;; linux-aarch64) key=linux-arm64 ;; darwin-x86_64) key=darwin-x64 ;; darwin-arm64) key=darwin-arm64 ;; *) echo "unsupported runner target: $platform-$arch" >&2; exit 1 ;; esac
+          artifact="$GITHUB_WORKSPACE/dist/native/signet-$key"
+          provenance="$artifact.provenance.json"
+          test -s "$artifact" && test -s "$provenance"
+          env -i HOME="$HOME" PATH=/usr/bin:/bin SIGNET_NATIVE_ACCEPTANCE_BINARY="$artifact" SIGNET_NATIVE_PROVENANCE="$provenance" bun test scripts/native-packaged-acceptance.test.ts

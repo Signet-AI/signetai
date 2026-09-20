@@ -1,72 +1,22 @@
 name: Boot Wedge Safety Gate
 on:
   pull_request:
-    paths:
-      - "platform/daemon/**"
-      - "platform/core/**"
-      - "platform/native/**"
-      - "platform/rust-daemon/**"
-      - "platform/rust-core/**"
-      - "libs/lifecycle-proof/**"
-      - "scripts/**"
-      - "package.json"
-      - "bun.lock"
-      - "bunfig.toml"
-      - "**/tsconfig*.json"
-      - "tests/integration/boot-wedge/**"
-      - ".github/workflows/boot-wedge.yml"
+    paths: ["platform/rust-daemon/**", "platform/rust-core/**", "scripts/native-rust-process-gate.ts", ".github/workflows/boot-wedge.yml"]
   push:
     branches: [main]
-    paths:
-      - "platform/daemon/**"
-      - "platform/core/**"
-      - "platform/native/**"
-      - "platform/rust-daemon/**"
-      - "platform/rust-core/**"
-      - "libs/lifecycle-proof/**"
-      - "scripts/**"
-      - "package.json"
-      - "bun.lock"
-      - "bunfig.toml"
-      - "**/tsconfig*.json"
-      - "tests/integration/boot-wedge/**"
-      - ".github/workflows/boot-wedge.yml"
-
-permissions:
-  contents: read
-
+    paths: ["platform/rust-daemon/**", "platform/rust-core/**", "scripts/native-rust-process-gate.ts", ".github/workflows/boot-wedge.yml"]
+permissions: { contents: read }
 jobs:
   boot-wedge:
-    name: "Native Rust boot, liveness, and CPU ceiling"
+    name: Native Rust boot, liveness, and CPU ceiling
     runs-on: ubuntu-latest
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-
-      - name: Install dependencies
-        shell: bash
+      - name: Build fresh Rust binary
+        run: cargo build --manifest-path platform/rust-daemon/Cargo.toml
+      - name: Run blocking Bun-driven Rust gate
         env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
-        run: bun install --frozen-lockfile
-
-      - name: Build @signet/core
-        shell: bash
-        run: bun run --filter '@signet/core' build
-
-      - name: Run source-run boot-wedge gate
-        shell: bash
-        run: |
-          mkdir -p "$GITHUB_WORKSPACE/boot-wedge-artifacts"
-          bun tests/integration/boot-wedge/run.ts --out "$GITHUB_WORKSPACE/boot-wedge-artifacts"
-
-      - name: Upload boot-wedge diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: boot-wedge-${{ github.run_id }}
-          path: boot-wedge-artifacts/
-          if-no-files-found: ignore
+          SIGNET_RUST_DAEMON_BIN: ${{ github.workspace }}/platform/rust-daemon/target/debug/signet-daemon
+        run: bun scripts/native-rust-process-gate.ts

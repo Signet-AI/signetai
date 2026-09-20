@@ -1,43 +1,22 @@
-name: Event-loop Contract Audit
-
+name: Event-loop Contract Gate
 on:
   pull_request:
-    paths:
-      - "platform/daemon/src/**"
-      - "scripts/audit-event-loop-contract.ts"
-      - "scripts/event-loop-contract-baseline.json"
-      - "scripts/legacy-sync-db-baseline.json"
-      - "scripts/legacy-sync-db-baseline.ts"
-      - "scripts/audit-event-loop-contract.test.ts"
-      - "docs/event-loop-contract-audit.md"
-      - ".github/workflows/event-loop-contract.yml"
+    paths: ["platform/rust-daemon/**", "platform/rust-core/**", "scripts/native-rust-process-gate.ts", ".github/workflows/event-loop-contract.yml"]
   push:
     branches: [main]
-    paths:
-      - "platform/daemon/src/**"
-      - "scripts/audit-event-loop-contract.ts"
-      - "scripts/event-loop-contract-baseline.json"
-      - "scripts/legacy-sync-db-baseline.json"
-      - "scripts/legacy-sync-db-baseline.ts"
-      - "scripts/audit-event-loop-contract.test.ts"
-      - "docs/event-loop-contract-audit.md"
-      - ".github/workflows/event-loop-contract.yml"
-
-permissions:
-  contents: read
-
+    paths: ["platform/rust-daemon/**", "platform/rust-core/**", "scripts/native-rust-process-gate.ts", ".github/workflows/event-loop-contract.yml"]
+permissions: { contents: read }
 jobs:
-  audit:
-    name: Enforce async DB accessor boundary
+  rust-process:
+    name: Blocking Rust process lifecycle gate
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Audit type boundary and migration ledger
-        run: bun scripts/audit-event-loop-contract.ts
-      - name: Test boundary fixtures
-        run: bun test scripts/audit-event-loop-contract.test.ts
+      - name: Build fresh Rust binary
+        run: cargo build --manifest-path platform/rust-daemon/Cargo.toml
+      - name: Enforce native process lifecycle
+        env:
+          SIGNET_RUST_DAEMON_BIN: ${{ github.workspace }}/platform/rust-daemon/target/debug/signet-daemon
+        run: bun scripts/native-rust-process-gate.ts

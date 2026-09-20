@@ -1,31 +1,47 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { spawn } from "node:child_process";
+import { basename, dirname, join, resolve } from "node:path";
 
-const binary = process.env.SIGNET_NATIVE_ACCEPTANCE_BINARY?.trim();
-if (!binary) throw new Error("SIGNET_NATIVE_ACCEPTANCE_BINARY is required; refusing checkout/debug fallback");
-if (!existsSync(binary)) throw new Error(`packaged native artifact missing: ${binary}`);
-const root = mkdtempSync(join(tmpdir(), "signet-packaged-acceptance-"));
+const artifact = process.env.SIGNET_NATIVE_ACCEPTANCE_BINARY?.trim();
+const provenancePath = process.env.SIGNET_NATIVE_PROVENANCE?.trim();
+if (!artifact || !provenancePath) throw new Error("packaged artifact and provenance are required");
+if (!existsSync(artifact) || !existsSync(provenancePath)) throw new Error("packaged artifact/provenance missing");
+const provenance = JSON.parse(readFileSync(provenancePath, "utf8")) as {
+	artifact: string;
+	target: string;
+	sha256: string;
+	sourceRevision: string;
+};
+const checksum = createHash("sha256").update(readFileSync(artifact)).digest("hex");
+if (provenance.sha256 !== checksum) throw new Error(`artifact checksum mismatch: ${checksum} != ${provenance.sha256}`);
+if (!provenance.sourceRevision || !provenance.target) throw new Error("incomplete artifact provenance");
+const staged = mkdtempSync(join(tmpdir(), "signet-packaged-outside-checkout-"));
+const binary = join(staged, basename(artifact));
+await Bun.write(binary, Bun.file(artifact));
+const root = mkdtempSync(join(tmpdir(), "signet-packaged-workspace-"));
 const port = 28761 + Math.floor(Math.random() * 1000);
-const env = {
-	...process.env,
+const origin = `http://127.0.0.1:${port}`;
+const cleanPath = "/usr/bin:/bin";
+const childEnv = {
 	HOME: root,
+	PATH: cleanPath,
 	SIGNET_PATH: root,
 	SIGNET_BIND: "127.0.0.1",
 	SIGNET_PORT: String(port),
 	SIGNET_TELEMETRY_OPTOUT: "1",
 };
-const child = spawn(binary, [], { cwd: root, env, stdio: ["ignore", "pipe", "pipe"] });
+const child = Bun.spawn([binary], { cwd: staged, env: childEnv, stdout: "pipe", stderr: "pipe" });
 let output = "";
-child.stdout.on("data", (b) => (output += b));
-child.stderr.on("data", (b) => (output += b));
-const origin = `http://127.0.0.1:${port}`;
-
+(async () => {
+	output += await new Response(child.stdout).text();
+})();
+(async () => {
+	output += await new Response(child.stderr).text();
+})();
 async function ready() {
-	for (let i = 0; i < 100; i++) {
+	for (let i = 0; i < 150; i++) {
 		try {
 			if ((await fetch(`${origin}/health/ready`)).ok) return;
 		} catch {}
@@ -33,30 +49,88 @@ async function ready() {
 	}
 	throw new Error(`packaged daemon did not become ready\n${output}`);
 }
-
-beforeAll(ready, 15_000);
-afterAll(() => {
+async function stop() {
 	child.kill("SIGTERM");
+	await Promise.race([child.exited, Bun.sleep(3000)]);
+}
+async function remember(agent: string, content: string) {
+	const response = await fetch(`${origin}/api/memory/remember`, {
+		method: "POST",
+		headers: { "content-type": "application/json", "x-signet-agent": agent, "x-workspace-id": agent },
+		body: JSON.stringify({ content }),
+	});
+	expect(response.status).toBe(201);
+	return (await response.json()) as { id: string };
+}
+
+beforeAll(ready, 20_000);
+afterAll(async () => {
+	if (child.exitCode === null) await stop();
 	rmSync(root, { recursive: true, force: true });
+	rmSync(staged, { recursive: true, force: true });
 });
 
-describe("packaged Rust daemon acceptance", () => {
-	test("has provenance and runtime process evidence", () => {
-		const provenance = process.env.SIGNET_NATIVE_PROVENANCE;
-		expect(provenance).toBeTruthy();
-		const stat = Bun.file(binary);
-		expect(stat.size).toBeGreaterThan(0);
-		expect(createHash("sha256").update(readFileSync(binary)).digest("hex")).toMatch(/^[a-f0-9]{64}$/);
+describe("shipped packaged Rust executable", () => {
+	test("records exact target, revision, checksum, and runs outside checkout without Bun/Node", () => {
+		expect(provenance.artifact).toBe(resolve(artifact));
+		expect(provenance.sha256).toMatch(/^[a-f0-9]{64}$/);
 		expect(child.exitCode).toBeNull();
+		expect(process.env.BUN_INSTALL).toBeUndefined();
+		expect(process.env.NODE_PATH).toBeUndefined();
+		expect(dirname(binary)).not.toContain("/signetai/");
 	});
-	test("readiness and scoped API isolation are live", async () => {
-		const a = { "x-workspace-id": "acceptance-a" };
-		const b = { "x-workspace-id": "acceptance-b" };
-		const status = await fetch(`${origin}/api/pipeline/status`, { headers: a });
-		expect(status.status).toBe(200);
-		const other = await fetch(`${origin}/api/pipeline/status`, { headers: b });
-		expect(other.status).toBe(200);
-		expect(await (await fetch(`${origin}/health/live`)).json()).toBeTruthy();
+	test("performs scoped write/read and isolates another workspace", async () => {
+		const created = await remember("acceptance-a", "packaged durable memory");
+		const own = await fetch(`${origin}/api/memory/${created.id}`, {
+			headers: { "x-signet-agent": "acceptance-a", "x-workspace-id": "acceptance-a" },
+		});
+		expect(own.status).toBe(200);
+		expect((await own.json()).content).toBe("packaged durable memory");
+		const other = await fetch(`${origin}/api/memory/${created.id}`, {
+			headers: { "x-signet-agent": "acceptance-b", "x-workspace-id": "acceptance-b" },
+		});
+		expect(other.status).toBe(404);
 	});
-	test("does not silently accept a missing artifact", () => expect(existsSync(binary)).toBe(true));
+	test("persists through stop/restart and upgrades an existing workspace", async () => {
+		const created = await remember("restart-a", "survives packaged restart");
+		await stop();
+		const restarted = Bun.spawn([binary], {
+			cwd: staged,
+			env: { ...childEnv, SIGNET_PORT: String(port + 1) },
+			stdout: "ignore",
+			stderr: "pipe",
+		});
+		const restartedOrigin = `http://127.0.0.1:${port + 1}`;
+		for (let i = 0; i < 100; i++) {
+			try {
+				if ((await fetch(`${restartedOrigin}/health/ready`)).ok) break;
+			} catch {}
+			await Bun.sleep(100);
+		}
+		const read = await fetch(`${restartedOrigin}/api/memory/${created.id}`, {
+			headers: { "x-signet-agent": "restart-a", "x-workspace-id": "restart-a" },
+		});
+		expect(read.status).toBe(200);
+		expect((await read.json()).content).toBe("survives packaged restart");
+		restarted.kill("SIGTERM");
+		await restarted.exited;
+		expect(readdirSync(root)).toContain("memory");
+	});
+	test("exercises the shipped database-owner child protocol and recovery evidence", async () => {
+		const owner = Bun.spawn([binary, "--db-owner"], {
+			cwd: staged,
+			env: childEnv,
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		const reader = owner.stdout.getReader();
+		const first = new TextDecoder().decode((await reader.read()).value);
+		expect(first).toMatch(/"ready":true/);
+		expect(owner.pid).toBeGreaterThan(0);
+		owner.kill("SIGTERM");
+		await owner.exited;
+		expect(owner.exitCode).not.toBeNull();
+		expect(existsSync(`/proc/${owner.pid}/fd`)).toBe(false);
+	});
 });
