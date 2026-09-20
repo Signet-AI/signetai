@@ -66,7 +66,10 @@ async fn authenticate_api(
         return next.run(request).await;
     }
     let path = request.uri().path();
-    let protected = (path.starts_with("/api/") && path != "/api/mode" && path != "/api/features")
+    let protected = (path.starts_with("/api/")
+        && path != "/api/mode"
+        && path != "/api/features"
+        && path != "/api/auth/whoami")
         || path == "/memory/search";
     if !protected {
         return next.run(request).await;
@@ -875,12 +878,40 @@ async fn document_delete(
 async fn whoami(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<AgentQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let agent_id = agent(&headers, Some(&query), None)?;
-    Ok(Json(
-        json!({ "agentId": agent_id, "workspace": state.workspace }),
-    ))
+    // This route is deliberately public: the auth middleware excludes it so the
+    // dashboard can discover whether another login is required.
+    let mode = env::var("SIGNET_AUTH_MODE")
+        .ok()
+        .filter(|value| matches!(value.as_str(), "local" | "hybrid" | "remote"))
+        .unwrap_or_else(|| "hybrid".to_owned());
+    let credential = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .or_else(|| headers.get("x-signet-api-key").and_then(|value| value.to_str().ok()));
+    let claims = credential.and_then(|token| {
+        if configured_api_key().as_deref() == Some(token) {
+            Some(json!({"sub":"token:admin","role":"admin","scope":{}}))
+        } else {
+            routes::auth::verify_token(&state, token)
+        }
+    });
+    let authenticated = claims.is_some();
+    let trusted_local = false;
+    let providers = json!([
+        {"id":"password","type":"password","enabled":env::var("SIGNET_ADMIN_PASSWORD").is_ok() || env::var("SIGNET_ADMIN_PASSWORD_HASH").is_ok(),"username":env::var("SIGNET_ADMIN_USERNAME").unwrap_or_else(|_| "admin".to_owned())},
+        {"id":"sso","type":"oidc","enabled":false,"startPath":"/api/auth/sso/start"},
+        {"id":"saml","type":"saml","enabled":false,"startPath":"/api/auth/saml/start"}
+    ]);
+    Ok(Json(json!({
+        "authenticated": authenticated,
+        "trustedLocal": trusted_local,
+        "effectiveAccess": mode == "local" || authenticated || trusted_local,
+        "claims": claims,
+        "mode": mode,
+        "providers": providers,
+    })))
 }
 
 fn elapsed_seconds(started_at: u64) -> u64 {
