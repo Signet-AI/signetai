@@ -36,6 +36,16 @@ pub struct HookBody {
     #[serde(default)]
     pub payload: Value,
 }
+#[derive(Deserialize)]
+pub struct ReceiptBody {
+    pub receipt_id: String,
+    pub checkpoint: Option<String>,
+    pub hook: String,
+    #[serde(alias = "sessionKey", alias = "session_id")]
+    pub session_key: Option<String>,
+    #[serde(default)]
+    pub payload: Value,
+}
 fn key(start: Option<String>, id: Option<String>) -> Result<String, ApiError> {
     start
         .or(id)
@@ -100,6 +110,28 @@ pub async fn deliver(
         .await?,
     ))
 }
+pub async fn receipt(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ReceiptBody>,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(&headers, None, None)?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::HookReceipt {
+                agent_id,
+                receipt_id: body.receipt_id,
+                checkpoint: body.checkpoint,
+                hook: body.hook,
+                session_key: body.session_key,
+                payload: body.payload,
+            },
+        )
+        .await?,
+    ))
+}
+
 pub async fn events(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -121,7 +153,10 @@ pub async fn events(
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/hooks/session-start", post(session_start))
+        .route("/api/hooks/session_start", post(session_start))
         .route("/api/hooks/session-end", post(session_end))
+        .route("/api/hooks/session_end", post(session_end))
         .route("/api/hooks/deliver", post(deliver))
+        .route("/api/hooks/receipt", post(receipt))
         .route("/api/hooks/events/{key}", get(events))
 }
