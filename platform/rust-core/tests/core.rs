@@ -640,6 +640,60 @@ fn migrates_legacy_source_and_document_workspace_to_default_and_cleans_up() {
 }
 
 #[test]
+fn migrates_legacy_documents_before_source_path_index() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-documents-index.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE documents (
+                id TEXT PRIMARY KEY,
+                source_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                metadata TEXT,
+                created_at TEXT
+            );
+            INSERT INTO documents(id,source_id,content,metadata,created_at)
+            VALUES ('legacy-doc','legacy-source','legacy body','{}','2026-01-01');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let _owner = Core::open(&p, 4).unwrap();
+    let connection = Connection::open(&p).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT agent_id, workspace_id, path, content FROM documents WHERE id='legacy-doc'",
+                [],
+                |row| Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            )
+            .unwrap(),
+        (
+            "default".into(),
+            "default".into(),
+            "".into(),
+            "legacy body".into()
+        )
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM sqlite_schema WHERE type='index' AND name='documents_source_path'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "documents_source_path"
+    );
+}
+
+#[test]
 fn collapses_legacy_source_identity_collisions_without_losing_meaningful_config() {
     let d = tempdir().unwrap();
     let p = d.path().join("legacy-source-collision.sqlite");

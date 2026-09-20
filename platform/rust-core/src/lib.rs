@@ -3819,7 +3819,6 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
             [],
         )?;
     }
-    transaction.execute("CREATE INDEX IF NOT EXISTS documents_source_path ON documents(agent_id,workspace_id,source_id,path)", [])?;
     ensure_column(&transaction, "sources", "created_at", "TEXT")?;
     ensure_column(
         &transaction,
@@ -3846,6 +3845,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "TEXT NOT NULL DEFAULT '{}'",
     )?;
     ensure_column(&transaction, "documents", "created_at", "TEXT")?;
+    transaction.execute("CREATE INDEX IF NOT EXISTS documents_source_path ON documents(agent_id,workspace_id,source_id,path)", [])?;
     let source_identity_dirty: bool = transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM sources WHERE agent_id IS NULL OR trim(agent_id) = '' OR workspace_id IS NULL OR trim(workspace_id) = '')",
         [],
