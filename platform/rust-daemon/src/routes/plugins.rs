@@ -38,10 +38,10 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/plugins/audit", get(audit))
         .route("/api/plugins/{id}/diagnostics", get(diagnostics))
         .route("/api/plugins/{id}", get(detail).patch(update))
-        .route("/api/marketplace/mcp", get(unsupported_marketplace))
+        .route("/api/marketplace/mcp", get(list_marketplace))
         .route(
             "/api/marketplace/mcp/policy",
-            get(unsupported_marketplace).patch(unsupported_marketplace),
+            get(get_policy).patch(patch_policy),
         )
         .route("/api/marketplace/mcp/browse", get(unsupported_marketplace))
         .route("/api/marketplace/mcp/detail", get(unsupported_marketplace))
@@ -555,6 +555,211 @@ async fn install_marketplace(
     Ok(Json(
         json!({"success":true,"updated":updated,"operation":{"id":if key.is_empty(){server_id.clone()}else{key},"state":"succeeded","mutation":"committed","probe":"not_run"},"server":server}),
     ))
+}
+
+#[derive(Deserialize, Default)]
+struct McpQuery {
+    harness: Option<String>,
+    workspace: Option<String>,
+    channel: Option<String>,
+    scoped: Option<String>,
+}
+fn marketplace_relative_path(raw: &str) -> Option<PathBuf> {
+    let p = std::path::Path::new(raw);
+    if p.is_absolute()
+        || p.components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        None
+    } else {
+        Some(p.to_path_buf())
+    }
+}
+fn bounded_json(path: &std::path::Path) -> Result<Option<Value>, ApiError> {
+    const MAX: u64 = 2 * 1024 * 1024;
+    let meta = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(ApiError::internal(e.to_string())),
+    };
+    if meta.len() > MAX {
+        return Err(ApiError::internal("marketplace state exceeds 2 MiB"));
+    }
+    let text = fs::read_to_string(path).map_err(|e| ApiError::internal(e.to_string()))?;
+    serde_json::from_str(&text).map(Some).map_err(|_| ApiError {
+        status: StatusCode::CONFLICT,
+        code: "invalid_marketplace_state",
+        message: "marketplace state is malformed".into(),
+    })
+}
+fn scope_matches(scope: &Value, harness: &str, workspace: &str, channel: Option<&str>) -> bool {
+    fn dim(v: Option<&Value>, current: &str, workspace: bool) -> bool {
+        let Some(a) = v.and_then(Value::as_array) else {
+            return true;
+        };
+        if a.is_empty() {
+            return true;
+        }
+        a.iter().filter_map(Value::as_str).any(|x| {
+            let x = x.to_ascii_lowercase().replace('\\', "/");
+            let c = current.to_ascii_lowercase().replace('\\', "/");
+            if workspace {
+                c == x || c.starts_with(&(x + "/"))
+            } else {
+                c == x
+            }
+        })
+    }
+    dim(scope.get("harnesses"), harness, false)
+        && dim(scope.get("workspaces"), workspace, true)
+        && dim(scope.get("channels"), channel.unwrap_or(""), false)
+}
+fn parse_policy(v: &Value) -> Option<Value> {
+    let mode = v.get("mode")?.as_str()?;
+    if !matches!(mode, "compact" | "hybrid" | "expanded") {
+        return None;
+    }
+    let clamp = |key: &str, default: u64, min: u64, max: u64| {
+        v.get(key)
+            .and_then(Value::as_u64)
+            .unwrap_or(default)
+            .clamp(min, max)
+    };
+    Some(
+        json!({"mode":mode,"maxExpandedTools":clamp("maxExpandedTools",12,0,100),"maxSearchResults":clamp("maxSearchResults",8,1,50),"updatedAt":v.get("updatedAt").and_then(Value::as_str).unwrap_or("1970-01-01T00:00:00.000Z")}),
+    )
+}
+fn policy_path(s: &AppState) -> PathBuf {
+    s.workspace.join(".daemon/plugins/mcp-policy.json")
+}
+fn read_policy(s: &AppState) -> Value {
+    bounded_json(&policy_path(s)).ok().flatten().and_then(|v|parse_policy(&v)).unwrap_or(json!({"mode":"hybrid","maxExpandedTools":12,"maxSearchResults":8,"updatedAt":"1970-01-01T00:00:00.000Z"}))
+}
+fn atomic_write_json(path: &std::path::Path, value: &Value) -> Result<(), ApiError> {
+    let parent = path.parent().unwrap();
+    fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
+    let tmp = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().unwrap().to_string_lossy(),
+        std::process::id()
+    ));
+    let bytes = serde_json::to_vec_pretty(value).unwrap();
+    fs::write(&tmp, bytes).map_err(|e| ApiError::internal(e.to_string()))?;
+    replace_file(&tmp, path).map_err(|e| ApiError::internal(e.to_string()))
+}
+async fn list_marketplace(
+    State(s): State<AppState>,
+    Query(q): Query<McpQuery>,
+    h: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    gate(&s, &h).await?;
+    let raw = bounded_json(&marketplace_state_path(&s))?.unwrap_or(json!({"servers":{}}));
+    let mut servers = Vec::new();
+    let harness = q.harness.as_deref().unwrap_or("");
+    let workspace = q.workspace.as_deref().unwrap_or("");
+    let scoped = q
+        .scoped
+        .as_deref()
+        .map(|x| x == "1")
+        .unwrap_or(q.harness.is_some() || q.workspace.is_some() || q.channel.is_some());
+    if let Some(map) = raw.get("servers").and_then(Value::as_object) {
+        for v in map.values() {
+            if !scoped
+                || scope_matches(
+                    v.get("scope").unwrap_or(&json!({})),
+                    harness,
+                    workspace,
+                    q.channel.as_deref(),
+                )
+            {
+                servers.push(v.clone())
+            }
+        }
+    }
+    Ok(Json(
+        json!({"servers":servers,"count":servers.len(),"scoped":scoped,"context":{"harness":q.harness,"workspace":q.workspace,"channel":q.channel},"runtime":{"runtime":"rust","implementation":"fresh","supported":true}}),
+    ))
+}
+async fn get_policy(State(s): State<AppState>, h: HeaderMap) -> Result<Json<Value>, ApiError> {
+    gate(&s, &h).await?;
+    Ok(Json(json!({"policy":read_policy(&s)})))
+}
+async fn patch_policy(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    body: Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    gate(&s, &h).await?;
+    let _lock = MARKETPLACE_INSTALL_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| ApiError::internal("marketplace policy lock poisoned"))?;
+    let Json(v) = body;
+    let cur = read_policy(&s);
+    let mut next = cur.clone();
+    let o = v.as_object().ok_or_else(|| ApiError {
+        status: StatusCode::BAD_REQUEST,
+        code: "invalid_json",
+        message: "Invalid JSON body".into(),
+    })?;
+    for k in ["mode", "maxExpandedTools", "maxSearchResults"] {
+        if let Some(x) = o.get(k) {
+            next[k] = x.clone()
+        }
+    }
+    let mode = next
+        .get("mode")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_mode",
+            message: "mode must be compact, hybrid, or expanded".into(),
+        })?;
+    if !matches!(mode, "compact" | "hybrid" | "expanded") {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_mode",
+            message: "mode must be compact, hybrid, or expanded".into(),
+        });
+    }
+    next["updatedAt"] = json!(now());
+    let next = parse_policy(&next).unwrap();
+    atomic_write_json(&policy_path(&s), &next)?;
+    let read = read_policy(&s);
+    Ok(Json(json!({"success":true,"policy":read})))
+}
+
+#[cfg(test)]
+mod marketplace_contract_tests {
+    use super::*;
+
+    #[test]
+    fn scope_matching_supports_workspace_descendants_and_dimensions() {
+        let scope = json!({"harnesses":["desktop"],"workspaces":["/work/team"],"channels":[]});
+        assert!(scope_matches(&scope, "desktop", "/work/team/project", None));
+        assert!(!scope_matches(&scope, "cli", "/work/team/project", None));
+        assert!(!scope_matches(&scope, "desktop", "/work/other", None));
+    }
+
+    #[test]
+    fn exposure_policy_clamps_limits_and_rejects_invalid_mode() {
+        assert_eq!(
+            parse_policy(&json!({"mode":"expanded","maxExpandedTools":999,"maxSearchResults":0}))
+                .unwrap()["maxExpandedTools"],
+            100
+        );
+        assert_eq!(
+            parse_policy(&json!({"mode":"compact"})).unwrap()["maxSearchResults"],
+            8
+        );
+        assert!(parse_policy(&json!({"mode":"invalid"})).is_none());
+    }
+
+    #[test]
+    fn installed_read_is_bounded_and_workspace_local() {
+        assert!(marketplace_relative_path(".daemon/plugins/marketplace-v1.json").is_some());
+        assert!(marketplace_relative_path("../outside.json").is_none());
+    }
 }
 
 async fn unsupported_marketplace(

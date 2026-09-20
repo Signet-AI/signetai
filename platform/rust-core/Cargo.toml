@@ -16,5 +16,9 @@ sha2 = "0.10"
 [lib]
 path = "src/lib.rs"
 
+[[bin]]
+name = "signet-core-test-driver"
+path = "src/bin/signet-core-test-driver.rs"
+
 [dev-dependencies]
 tempfile = "3"
