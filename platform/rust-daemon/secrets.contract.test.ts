@@ -204,8 +204,8 @@ describe("fresh native local-secrets contract", () => {
 			check(updated.response.status, 201);
 			expect(updated.text).not.toContain(updatedValue);
 			assertions++;
-			check((await request(d, "/api/secrets", {}, d.credential, `${agent}-other`, workspace)).body.items, []);
-			check((await request(d, "/api/secrets", {}, d.credential, agent, `${workspace}-other`)).body.items, []);
+			check((await request(d, "/api/secrets", {}, d.credential, `${agent}-other`, workspace)).body.secrets, []);
+			check((await request(d, "/api/secrets", {}, d.credential, agent, `${workspace}-other`)).body.secrets, []);
 			check(
 				(
 					await request(
@@ -262,7 +262,7 @@ describe("fresh native local-secrets contract", () => {
 			await stop(d);
 			d = await start(d.root);
 			check((await request(d, "/api/secrets", {}, d.credential, agent, workspace)).response.status, 200);
-			check((await request(d, "/api/secrets", {}, d.credential, agent, workspace)).body.items[0].name, name);
+			check((await request(d, "/api/secrets", {}, d.credential, agent, workspace)).body.secrets[0].name, name);
 			const deleted = await request(d, `/api/secrets/${name}`, { method: "DELETE" }, d.credential, agent, workspace);
 			check(deleted.response.status, 200);
 			check(
