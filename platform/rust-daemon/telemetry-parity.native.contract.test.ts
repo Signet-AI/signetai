@@ -65,7 +65,13 @@ it("returns the current telemetry events envelope through the native daemon", as
 		headers: { "x-signet-api-key": "telemetry-admin", "x-signet-agent": "agent-a" },
 	});
 	expect(response.status).toBe(200);
-	expect(await response.json()).toEqual({ events: [], enabled: true });
+	expect(await response.json()).toEqual({
+		events: [],
+		nextCursor: null,
+		limit: 1,
+		complete: true,
+		enabled: true,
+	});
 });
 
 it("preserves telemetry auth, scope, and malformed-limit boundaries", async () => {

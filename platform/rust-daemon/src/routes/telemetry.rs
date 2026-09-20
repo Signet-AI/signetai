@@ -131,10 +131,9 @@ async fn events(
         },
     )
     .await?;
-    Ok(Json(json!({
-        "events": result.get("events").cloned().unwrap_or_else(|| json!([])),
-        "enabled": true,
-    })))
+    let mut response = result;
+    response["enabled"] = json!(true);
+    Ok(Json(response))
 }
 
 async fn health(
