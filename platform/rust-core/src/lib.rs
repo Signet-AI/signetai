@@ -388,7 +388,36 @@ impl Core {
         if input.content.trim().is_empty() {
             return Err(CoreError::InvalidInput("content must not be empty".into()));
         }
-        self.call(move |c| { let exists:i64=c.query_row("SELECT count(*) FROM sources WHERE id=? AND agent_id=?",params![input.source_id,agent],|r|r.get(0))?; if exists==0{return Err(CoreError::NotFound)} let id=uuid::Uuid::new_v4().to_string(); let metadata=serde_json::to_string(&input.metadata)?; c.execute("INSERT INTO documents (id,agent_id,source_id,path,content,metadata,created_at) VALUES (?,?,?,?,?,?,datetime('now'))",params![id,agent,input.source_id,input.path,input.content,metadata])?; Ok(id) })
+        self.call(move |c| {
+            let mut metadata = match input.metadata {
+                Value::Null => json!({}),
+                Value::Object(_) => input.metadata,
+                _ => return Err(CoreError::InvalidInput("metadata must be an object".into())),
+            };
+            let workspace = metadata
+                .get("_workspaceId")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("default")
+                .to_owned();
+            metadata["_workspaceId"] = Value::String(workspace.clone());
+            let (source_workspace, generation): (String, i64) = c
+                .query_row(
+                    "SELECT COALESCE(NULLIF(trim(workspace_id), ''), 'default'), generation FROM sources WHERE id=? AND agent_id=? AND workspace_id=?",
+                    params![input.source_id, agent, workspace],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)?;
+            let id = uuid::Uuid::new_v4().to_string();
+            let mut hash = Sha256::new();
+            hash.update(input.content.as_bytes());
+            let content_hash = format!("{:x}", hash.finalize());
+            let metadata = serde_json::to_string(&metadata)?;
+            c.execute("INSERT INTO documents (id,agent_id,workspace_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id, agent, source_workspace, input.source_id, input.path, input.content, metadata, content_hash, generation])?;
+            Ok(id)
+        })
     }
 
     pub fn submit(&self, operation: Operation) -> Result<Value, CoreError> {
@@ -1980,6 +2009,7 @@ fn execute_operation(
             workspace_id,
             source_id,
         } => {
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let generation: Option<i64> = None;
             let tx = connection.transaction()?;
             let current: Option<i64> = tx
@@ -2011,6 +2041,7 @@ fn execute_operation(
             source_id,
             generation,
         } => {
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let tx = connection.transaction()?;
             let current: Option<i64> = tx
                 .query_row(
@@ -2040,6 +2071,7 @@ fn execute_operation(
             workspace_id,
             source_id,
         } => {
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let exists: Option<i64> = connection
                 .query_row(
                     "SELECT 1 FROM sources WHERE agent_id = ? AND workspace_id = ? AND id = ?",
@@ -2051,7 +2083,7 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let documents: i64 = connection.query_row(
-                "SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''), 'default') = ?",
+                "SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ? AND workspace_id = ?",
                 params![agent_id, source_id, workspace_id],
                 |r| r.get(0),
             )?;
@@ -3467,10 +3499,23 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "workspace_id",
         "TEXT DEFAULT 'default'",
     )?;
-    transaction.execute(
-        "UPDATE documents SET workspace_id = CASE WHEN json_valid(metadata) AND json_type(metadata,'$._workspaceId')='text' AND trim(json_extract(metadata,'$._workspaceId')) <> '' THEN trim(json_extract(metadata,'$._workspaceId')) ELSE 'default' END",
-        [],
-    )?;
+    let document_scope_backfill: Option<i64> = transaction
+        .query_row(
+            "SELECT version FROM schema_migrations WHERE version=2",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if document_scope_backfill.is_none() {
+        transaction.execute(
+            "UPDATE documents SET workspace_id = CASE WHEN json_valid(metadata) AND json_type(metadata,'$._workspaceId')='text' AND trim(json_extract(metadata,'$._workspaceId')) <> '' THEN trim(json_extract(metadata,'$._workspaceId')) ELSE 'default' END",
+            [],
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (2, datetime('now'), 'document-workspace-backfill-v1')",
+            [],
+        )?;
+    }
     transaction.execute("CREATE INDEX IF NOT EXISTS documents_source_path ON documents(agent_id,workspace_id,source_id,path)", [])?;
     ensure_column(&transaction, "sources", "created_at", "TEXT")?;
     ensure_column(
