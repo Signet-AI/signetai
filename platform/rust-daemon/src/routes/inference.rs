@@ -1,7 +1,9 @@
 use crate::{agent, ApiError, AppState};
 use axum::{
+    body::Body,
     extract::{Path, State},
-    response::IntoResponse,
+    http::{header, HeaderValue, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
@@ -95,14 +97,96 @@ async fn explain(
 }
 
 async fn stream(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: axum::http::HeaderMap,
-    Json(_request): Json<ExecuteRequest>,
-) -> Result<Json<Value>, ApiError> {
-    let _ = agent(&headers, None, None)?;
-    Err(ApiError::bad_request(
-        "streaming is unsupported; use execute",
-    ))
+    Json(request): Json<ExecuteRequest>,
+) -> Result<Response, ApiError> {
+    let identity = agent(&headers, None, request.agent_id.as_deref())?;
+    if request
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        return Err(ApiError::bad_request("prompt is required"));
+    }
+    if request
+        .provider
+        .as_deref()
+        .is_some_and(|p| p != "openai-compatible")
+    {
+        return Err(ApiError::bad_request("unsupported inference provider"));
+    }
+    if !configured() {
+        return Err(ApiError {
+            status: StatusCode::NOT_IMPLEMENTED,
+            code: "unsupported",
+            message: "inference provider is not configured".into(),
+        });
+    }
+    let prompt = request.prompt.unwrap_or_default();
+    if prompt.len() > 64 * 1024 {
+        return Err(ApiError::bad_request("prompt exceeds 64 KiB"));
+    }
+    let messages = request
+        .messages
+        .unwrap_or_else(|| json!([{"role":"user","content":prompt}]));
+    if !messages.is_array() {
+        return Err(ApiError::bad_request("messages must be an array"));
+    }
+    if serde_json::to_vec(&messages)
+        .map(|b| b.len())
+        .unwrap_or(usize::MAX)
+        > 256 * 1024
+    {
+        return Err(ApiError::bad_request("messages exceed 256 KiB"));
+    }
+    let request_id = Uuid::new_v4().to_string();
+    append_history(
+        &state,
+        HistoryEvent {
+            id: request_id.clone(),
+            agent_id: identity,
+            operation: "stream".into(),
+            status: "started".into(),
+            request_id: Some(request_id),
+            error: None,
+        },
+    )
+    .await?;
+    let body = json!({"model": request.model.or_else(|| setting("SIGNET_OPENAI_MODEL")), "messages": messages, "stream": true});
+    let timeout = Duration::from_millis(
+        request
+            .timeout_ms
+            .unwrap_or(DEFAULT_TIMEOUT_MS)
+            .clamp(1, 120_000),
+    );
+    let bytes = tokio::time::timeout(
+        timeout,
+        call_openai_stream(
+            &setting("SIGNET_OPENAI_BASE_URL").unwrap(),
+            setting("SIGNET_OPENAI_API_KEY"),
+            body,
+        ),
+    )
+    .await
+    .map_err(|_| ApiError::unavailable("inference provider request timed out"))?
+    .map_err(|e| match e {
+        ProviderError::Transport(m) => ApiError::unavailable(m),
+        ProviderError::Upstream { status, message } => {
+            ApiError::upstream(format!("provider returned HTTP {status}: {message}"))
+        }
+        ProviderError::InvalidResponse(m) => ApiError::upstream(m),
+    })?;
+    let mut response = Response::new(Body::from(bytes));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/event-stream"),
+    );
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    Ok(response)
 }
 
 async fn history(
@@ -271,6 +355,70 @@ enum ProviderError {
     Transport(String),
     Upstream { status: u16, message: String },
     InvalidResponse(String),
+}
+
+async fn call_openai_stream(
+    base: &str,
+    key: Option<String>,
+    body: Value,
+) -> Result<Vec<u8>, ProviderError> {
+    let url = format!(
+        "{}/v1/chat/completions",
+        base.trim_end_matches('/').trim_end_matches("/v1")
+    );
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(ProviderError::Transport(
+            "provider URL must use http:// or https://".into(),
+        ));
+    }
+    let client = reqwest::Client::builder()
+        .build()
+        .map_err(|e| ProviderError::Transport(format!("provider client failed: {e}")))?;
+    let mut request = client
+        .post(url)
+        .header(reqwest::header::ACCEPT, "text/event-stream")
+        .json(&body);
+    if let Some(key) = key {
+        request = request.bearer_auth(key);
+    }
+    let mut response = request
+        .send()
+        .await
+        .map_err(|e| ProviderError::Transport(format!("provider request failed: {e}")))?;
+    let status = response.status().as_u16();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
+        ProviderError::InvalidResponse(format!("provider response read failed: {e}"))
+    })? {
+        if bytes.len().saturating_add(chunk.len()) > 1_048_576 {
+            return Err(ProviderError::InvalidResponse(
+                "provider stream exceeds 1 MiB".into(),
+            ));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    if !(200..300).contains(&status) {
+        return Err(ProviderError::Upstream {
+            status,
+            message: "provider stream request failed".into(),
+        });
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| ProviderError::InvalidResponse("provider stream is not UTF-8".into()))?;
+    for line in text.lines().filter(|line| line.starts_with("data:")) {
+        let data = line.trim_start_matches("data:").trim();
+        if data != "[DONE]" {
+            serde_json::from_str::<Value>(data).map_err(|e| {
+                ProviderError::InvalidResponse(format!("provider returned malformed SSE: {e}"))
+            })?;
+        }
+    }
+    if !text.contains("data:") {
+        return Err(ProviderError::InvalidResponse(
+            "provider returned malformed SSE".into(),
+        ));
+    }
+    Ok(bytes)
 }
 
 async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Value, ProviderError> {
