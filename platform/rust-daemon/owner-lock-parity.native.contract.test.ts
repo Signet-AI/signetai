@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -14,6 +14,39 @@ async function waitForFile(path: string): Promise<void> {
 	}
 	throw new Error(`timed out waiting for ${path}`);
 }
+
+test("rejects lock-path replacement while the canonical parent owner is live", async () => {
+	if (process.platform !== "linux") return;
+	const workspace = mkdtempSync(join(tmpdir(), "signet-owner-lock-replace-"));
+	mkdirSync(join(workspace, "memory"), { recursive: true });
+	mkdirSync(join(workspace, ".daemon"), { recursive: true });
+	const marker = join(workspace, ".daemon", "db-owner.json");
+	const lock = join(workspace, ".daemon", "db-owner.lock");
+	const moved = join(workspace, ".daemon", "db-owner.lock.moved");
+	const child = Bun.spawn([bin, "--db-owner"], {
+		env: { ...process.env, SIGNET_PATH: workspace },
+		stdin: "pipe",
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	try {
+		await waitForFile(marker);
+		renameSync(lock, moved);
+		const competing = Bun.spawn([bin, "--db-owner"], {
+			env: { ...process.env, SIGNET_PATH: workspace },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		await competing.exited;
+		expect(competing.exitCode).not.toBe(0);
+		child.kill("SIGTERM");
+		await child.exited;
+		expect(existsSync(lock)).toBe(true);
+	} finally {
+		if (child.exitCode === null) child.kill("SIGKILL");
+		rmSync(workspace, { recursive: true, force: true });
+	}
+});
 
 test("keeps the kernel-owned database lock path across graceful owner release", async () => {
 	const workspace = mkdtempSync(join(tmpdir(), "signet-owner-lock-"));

@@ -28,6 +28,9 @@ sha2 = "0.10"
 libc = "0.2"
 time = { version = "0.3", features = ["formatting"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading"] }
+
 [profile.release]
 lto = true
 codegen-units = 1

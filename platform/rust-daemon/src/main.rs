@@ -17,6 +17,8 @@ use signet_core_native::{CoreError, Operation, WorkspaceOwner};
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::{
     collections::HashMap,
     env,
@@ -31,6 +33,11 @@ use std::{
 use tokio::signal;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
+#[cfg(windows)]
+#[cfg(windows)]
+use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+#[cfg(windows)]
+use windows_sys::Win32::System::Threading::CreateMutexW;
 
 #[derive(Clone)]
 pub(crate) struct ExternalOwner {
@@ -1406,12 +1413,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// it is launched as a child and communicates with bounded newline-delimited JSON.
 struct OwnerLock {
     _file: File,
+    path: PathBuf,
     #[cfg(unix)]
     _directory: File,
+    #[cfg(windows)]
+    _mutex: HANDLE,
 }
 
 impl Drop for OwnerLock {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        // The path is durable metadata, not the ownership primitive. Recreate it
+        // if a concurrent rename replaced it while the kernel lock was held.
+        if !self.path.exists() {
+            let _ = OpenOptions::new().write(true).create(true).open(&self.path);
+        }
+        #[cfg(windows)]
+        unsafe { CloseHandle(self._mutex); }
+    }
 }
 
 #[cfg(unix)]
@@ -1480,10 +1498,31 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
         file.flush()?;
         return Ok(OwnerLock {
             _file: file,
+            path: path.to_path_buf(),
             _directory: directory,
         });
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let parent = path.parent().ok_or("database owner lock has no parent")?;
+        std::fs::create_dir_all(parent)?;
+        let canonical_parent = std::fs::canonicalize(parent)?;
+        if std::fs::symlink_metadata(path).map(|m| m.file_type().is_symlink()).unwrap_or(false) { return Err("database owner lock path is a symlink".into()); }
+        let identity = format!("{}\\{}", canonical_parent.display(), path.display());
+        use sha2::Digest;
+        let digest = sha2::Sha256::digest(identity.as_bytes());
+        let name = format!("Global\\SignetDbOwner-{}", digest.iter().map(|b| format!("{b:02x}")).collect::<String>());
+        let wide: Vec<u16> = std::ffi::OsStr::new(&name).encode_wide().chain(std::iter::once(0)).collect();
+        let mutex = unsafe { CreateMutexW(std::ptr::null(), 1, wide.as_ptr()) };
+        if mutex.is_null() { return Err(std::io::Error::last_os_error().into()); }
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS { unsafe { CloseHandle(mutex); } return Err("database owner already running".into()); }
+        let mut file = OpenOptions::new().read(true).write(true).create(true).open(path)?;
+        file.set_len(0)?;
+        write!(file, "{}\\n{}\\nsignet-kernel-lock-v1\\n", std::process::id(), now_seconds())?;
+        file.flush()?;
+        return Ok(OwnerLock { _file: file, path: path.to_path_buf(), _mutex: mutex });
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
         write!(
@@ -1552,6 +1591,9 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_writer(&mut out, &response)?;
         writeln!(out)?;
         out.flush()?;
+    }
+    if !lock_path.exists() {
+        let _ = OpenOptions::new().write(true).create(true).open(&lock_path);
     }
     Ok(())
 }
