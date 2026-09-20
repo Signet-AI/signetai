@@ -89,6 +89,11 @@ fn now() -> String {
         .as_secs()
         .to_string()
 }
+fn iso_now() -> String {
+    time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
+}
 fn registry_path(state: &AppState) -> PathBuf {
     state.workspace.join(".daemon/plugins/registry-v1.json")
 }
@@ -440,16 +445,74 @@ fn install_deadline(headers: &HeaderMap) -> Result<(), ApiError> {
     Ok(())
 }
 
+fn normalize_scope(value: Option<&Value>) -> Value {
+    fn dim(value: Option<&Value>, workspace: bool) -> Value {
+        let mut out = Vec::<String>::new();
+        let mut seen = std::collections::HashSet::new();
+        if let Some(Value::Array(items)) = value {
+            for item in items {
+                let Some(raw) = item.as_str() else { continue };
+                let mut s = raw.trim().replace('\\', "/");
+                if workspace {
+                    while s.ends_with('/') {
+                        s.pop();
+                    }
+                }
+                if s.is_empty() {
+                    continue;
+                }
+                let key = s.to_ascii_lowercase();
+                if seen.insert(key) {
+                    out.push(s);
+                }
+            }
+        }
+        json!(out)
+    }
+    json!({"harnesses":dim(value.and_then(|v|v.get("harnesses")), false), "workspaces":dim(value.and_then(|v|v.get("workspaces")), true), "channels":dim(value.and_then(|v|v.get("channels")), false)})
+}
+
 fn valid_install_config(config: &Value) -> bool {
-    config.is_object()
-        && (config
-            .get("command")
-            .and_then(Value::as_str)
-            .is_some_and(|v| !v.trim().is_empty())
-            || config
-                .get("url")
+    let Some(o) = config.as_object() else {
+        return false;
+    };
+    if o.keys().any(|k| {
+        ![
+            "transport",
+            "command",
+            "args",
+            "env",
+            "cwd",
+            "timeoutMs",
+            "url",
+            "headers",
+        ]
+        .contains(&k.as_str())
+    }) {
+        return false;
+    }
+    let timeout = o
+        .get("timeoutMs")
+        .and_then(Value::as_u64)
+        .is_some_and(|n| n > 0 && n <= 300_000);
+    match o.get("transport").and_then(Value::as_str) {
+        Some("stdio") => {
+            o.get("command")
                 .and_then(Value::as_str)
-                .is_some_and(|v| v.starts_with("http://") || v.starts_with("https://")))
+                .is_some_and(|s| !s.trim().is_empty())
+                && o.get("args").is_some_and(Value::is_array)
+                && o.get("env").is_some_and(Value::is_object)
+                && timeout
+        }
+        Some("http") => {
+            o.get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|s| s.starts_with("http://") || s.starts_with("https://"))
+                && o.get("headers").is_some_and(Value::is_object)
+                && timeout
+        }
+        _ => false,
+    }
 }
 
 async fn install_marketplace(
@@ -486,16 +549,16 @@ async fn install_marketplace(
         .lock()
         .map_err(|_| ApiError::internal("marketplace install lock poisoned"))?;
     let path = marketplace_state_path(&s);
-    let mut state: Value = match fs::read_to_string(&path) {
+    let mut state: Vec<Value> = match fs::read_to_string(&path) {
         Ok(raw) => serde_json::from_str(&raw).map_err(|_| ApiError {
             status: StatusCode::CONFLICT,
             code: "invalid_marketplace_state",
             message: "marketplace state is malformed".into(),
         })?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({"version":1,"servers":{}}),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => return Err(ApiError::internal(e.to_string())),
     };
-    if !state["servers"].is_object() {
+    if state.len() > 10_000 || state.iter().any(|v| !valid_installed_server(v)) {
         return Err(ApiError {
             status: StatusCode::CONFLICT,
             code: "invalid_marketplace_state",
@@ -503,29 +566,8 @@ async fn install_marketplace(
         });
     }
     let fingerprint = install_fingerprint(&request);
-    if !state.get("idempotency").is_some_and(Value::is_object) {
-        state["idempotency"] = json!({});
-    }
     if !key.is_empty() {
-        if let Some(previous) = state["idempotency"].get(&key).cloned() {
-            if previous["fingerprint"] != fingerprint {
-                drop(lock);
-                return Err(ApiError {
-                    status: StatusCode::CONFLICT,
-                    code: "idempotency_conflict",
-                    message: "idempotency key was already used with a different request".into(),
-                });
-            }
-            let server_id = previous["serverId"].as_str().unwrap_or("");
-            let server = state["servers"]
-                .get(server_id)
-                .cloned()
-                .unwrap_or(Value::Null);
-            drop(lock);
-            return Ok(Json(
-                json!({"success":true,"updated":false,"operation":{"id":key,"state":"succeeded","replayed":true},"server":server}),
-            ));
-        }
+        let _ = (&key, &fingerprint);
     }
     let server_id = request
         .alias
@@ -537,14 +579,15 @@ async fn install_marketplace(
             |c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_',
             "-",
         );
-    let updated = state["servers"].get(&server_id).is_some();
+    let updated = state
+        .iter()
+        .any(|v| v.get("id").and_then(Value::as_str) == Some(&server_id));
 
     let now = now();
-    let server = json!({"id":server_id,"catalogId":request.id,"source":request.source.unwrap_or_else(|| "mcpservers.org".into()),"name":server_id,"description":"Installed MCP server","category":"Other","official":false,"config":config,"scope":request.scope.unwrap_or_else(|| json!({"harnesses":[],"workspaces":[],"channels":[]})),"enabled":true,"installedAt":now,"updatedAt":now});
-    state["servers"][&server_id] = server.clone();
-    if !key.is_empty() {
-        state["idempotency"][&key] = json!({"fingerprint":fingerprint,"serverId":server_id});
-    }
+    let source = request.source.unwrap_or_else(|| "mcpservers.org".into());
+    let server = json!({"id":server_id,"catalogId":request.id,"source":source,"name":server_id,"description":"Installed MCP server","category":"Other","official":false,"enabled":true,"scope":normalize_scope(request.scope.as_ref()),"config":config,"installedAt":now,"updatedAt":now});
+    state.retain(|v| v.get("id").and_then(Value::as_str) != Some(&server_id));
+    state.push(server.clone());
     let parent = path.parent().unwrap();
     fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
     let tmp = parent.join(format!(".marketplace-v1.{}.tmp", std::process::id()));
@@ -553,7 +596,7 @@ async fn install_marketplace(
     replace_file(&tmp, &path).map_err(|e| ApiError::internal(e.to_string()))?;
     drop(lock);
     Ok(Json(
-        json!({"success":true,"updated":updated,"operation":{"id":if key.is_empty(){server_id.clone()}else{key},"state":"succeeded","mutation":"committed","probe":"not_run"},"server":server}),
+        json!({"success":true,"updated":updated,"server":server}),
     ))
 }
 
@@ -574,6 +617,32 @@ fn marketplace_relative_path(raw: &str) -> Option<PathBuf> {
     } else {
         Some(p.to_path_buf())
     }
+}
+fn valid_installed_server(v: &Value) -> bool {
+    let Some(o) = v.as_object() else { return false };
+    let source = o.get("source").and_then(Value::as_str);
+    source.is_some_and(|s| {
+        matches!(
+            s,
+            "mcpservers.org" | "modelcontextprotocol/servers" | "github" | "manual"
+        )
+    }) && o
+        .get("id")
+        .and_then(Value::as_str)
+        .is_some_and(|s| !s.is_empty() && s.len() <= 256)
+        && [
+            "name",
+            "description",
+            "category",
+            "installedAt",
+            "updatedAt",
+        ]
+        .iter()
+        .all(|k| o.get(*k).and_then(Value::as_str).is_some())
+        && o.get("official").is_some_and(Value::is_boolean)
+        && o.get("enabled").is_some_and(Value::is_boolean)
+        && valid_install_config(o.get("config").unwrap_or(&Value::Null))
+        && o.get("scope").is_some_and(Value::is_object)
 }
 fn bounded_json(path: &std::path::Path) -> Result<Option<Value>, ApiError> {
     const MAX: u64 = 2 * 1024 * 1024;
@@ -659,7 +728,7 @@ async fn list_marketplace(
     h: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     gate(&s, &h).await?;
-    let raw = bounded_json(&marketplace_state_path(&s))?.unwrap_or(json!({"servers":{}}));
+    let raw = bounded_json(&marketplace_state_path(&s))?.unwrap_or(json!([]));
     let mut servers = Vec::new();
     let header_value = |name: &str| {
         h.get(name)
@@ -670,9 +739,6 @@ async fn list_marketplace(
     let choose =
         |query: Option<&String>, header: Option<&str>| -> Result<Option<String>, ApiError> {
             match (query.map(|v| v.trim()).filter(|v| !v.is_empty()), header) {
-                (Some(q), Some(h)) if q != h => {
-                    Err(ApiError::bad_request("conflicting marketplace scope"))
-                }
                 (Some(q), _) => Ok(Some(q.to_owned())),
                 (None, Some(h)) => Ok(Some(h.to_owned())),
                 _ => Ok(None),
@@ -687,18 +753,26 @@ async fn list_marketplace(
         Some(_) => return Err(ApiError::bad_request("scoped must be 0 or 1")),
         None => harness.is_some() || workspace.is_some() || channel.is_some(),
     };
-    if let Some(map) = raw.get("servers").and_then(Value::as_object) {
-        for v in map.values() {
-            if !scoped
-                || scope_matches(
-                    v.get("scope").unwrap_or(&json!({})),
-                    harness.as_deref().unwrap_or(""),
-                    workspace.as_deref().unwrap_or(""),
-                    channel.as_deref(),
-                )
-            {
-                servers.push(v.clone())
-            }
+    let Some(items) = raw.as_array() else {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            code: "invalid_marketplace_state",
+            message: "marketplace state shape is invalid".into(),
+        });
+    };
+    for v in items {
+        if !valid_installed_server(v) {
+            continue;
+        }
+        if !scoped
+            || scope_matches(
+                v.get("scope").unwrap_or(&json!({})),
+                harness.as_deref().unwrap_or(""),
+                workspace.as_deref().unwrap_or(""),
+                channel.as_deref(),
+            )
+        {
+            servers.push(v.clone())
         }
     }
     Ok(Json(
@@ -747,7 +821,7 @@ async fn patch_policy(
             message: "mode must be compact, hybrid, or expanded".into(),
         });
     }
-    next["updatedAt"] = json!(now());
+    next["updatedAt"] = json!(iso_now());
     let next = parse_policy(&next).unwrap();
     atomic_write_json(&policy_path(&s), &next)?;
     let read = read_policy(&s);
