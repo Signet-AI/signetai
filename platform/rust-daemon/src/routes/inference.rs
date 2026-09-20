@@ -23,8 +23,9 @@ fn setting(name: &str) -> Option<String> {
     env::var(name).ok().and_then(|v| crate::non_empty(&v))
 }
 fn configured() -> bool {
-    setting("SIGNET_OPENAI_BASE_URL").is_some() && setting("SIGNET_OPENAI_MODEL").is_some()
+    setting("SIGNET_OPENAI_BASE_URL").is_some()
 }
+const MAX_TOKENS: u64 = 16_384;
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
@@ -154,14 +155,32 @@ async fn stream(
         },
     )
     .await?;
-    let body = json!({"model": request.model.or_else(|| setting("SIGNET_OPENAI_MODEL")), "messages": messages, "stream": true});
+    let max_tokens = request
+        .max_tokens
+        .or_else(|| request.max_tokens_camel)
+        .map(|v| {
+            if v == 0 || v > MAX_TOKENS {
+                Err(ApiError::bad_request("maxTokens exceeds limit"))
+            } else {
+                Ok(v)
+            }
+        })
+        .transpose()?;
+    let model = request
+        .model
+        .or_else(|| setting("SIGNET_OPENAI_MODEL"))
+        .ok_or_else(|| {
+            ApiError::bad_request("model is required when no default model is configured")
+        })?;
+    let body =
+        json!({"model": model, "messages": messages, "stream": true, "max_tokens": max_tokens});
     let timeout = Duration::from_millis(
         request
             .timeout_ms
             .unwrap_or(DEFAULT_TIMEOUT_MS)
             .clamp(1, 120_000),
     );
-    let bytes = tokio::time::timeout(
+    let (status, stream_body) = tokio::time::timeout(
         timeout,
         call_openai_stream(
             &setting("SIGNET_OPENAI_BASE_URL").unwrap(),
@@ -178,7 +197,7 @@ async fn stream(
         }
         ProviderError::InvalidResponse(m) => ApiError::upstream(m),
     })?;
-    let mut response = Response::new(Body::from(bytes));
+    let mut response = Response::new(stream_body);
     response.headers_mut().insert(
         header::CONTENT_TYPE,
         HeaderValue::from_static("text/event-stream"),
@@ -186,6 +205,11 @@ async fn stream(
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    if !(200..300).contains(&status) {
+        return Err(ApiError::upstream(format!(
+            "provider returned HTTP {status}"
+        )));
+    }
     Ok(response)
 }
 
@@ -257,6 +281,10 @@ struct ExecuteRequest {
     prompt: Option<String>,
     #[serde(default)]
     messages: Option<Value>,
+    #[serde(default, alias = "maxTokens", alias = "max_tokens")]
+    max_tokens: Option<u64>,
+    #[serde(default, skip_deserializing)]
+    max_tokens_camel: Option<u64>,
     #[serde(default, alias = "timeoutMs")]
     timeout_ms: Option<u64>,
     #[serde(default, alias = "agentId")]
@@ -361,7 +389,7 @@ async fn call_openai_stream(
     base: &str,
     key: Option<String>,
     body: Value,
-) -> Result<Vec<u8>, ProviderError> {
+) -> Result<(u16, Body), ProviderError> {
     let url = format!(
         "{}/v1/chat/completions",
         base.trim_end_matches('/').trim_end_matches("/v1")
@@ -371,9 +399,7 @@ async fn call_openai_stream(
             "provider URL must use http:// or https://".into(),
         ));
     }
-    let client = reqwest::Client::builder()
-        .build()
-        .map_err(|e| ProviderError::Transport(format!("provider client failed: {e}")))?;
+    let client = reqwest::Client::new();
     let mut request = client
         .post(url)
         .header(reqwest::header::ACCEPT, "text/event-stream")
@@ -381,44 +407,34 @@ async fn call_openai_stream(
     if let Some(key) = key {
         request = request.bearer_auth(key);
     }
-    let mut response = request
+    let response = request
         .send()
         .await
         .map_err(|e| ProviderError::Transport(format!("provider request failed: {e}")))?;
     let status = response.status().as_u16();
-    let mut bytes = Vec::new();
-    while let Some(chunk) = response.chunk().await.map_err(|e| {
-        ProviderError::InvalidResponse(format!("provider response read failed: {e}"))
-    })? {
-        if bytes.len().saturating_add(chunk.len()) > 1_048_576 {
-            return Err(ProviderError::InvalidResponse(
-                "provider stream exceeds 1 MiB".into(),
-            ));
-        }
-        bytes.extend_from_slice(&chunk);
-    }
-    if !(200..300).contains(&status) {
-        return Err(ProviderError::Upstream {
-            status,
-            message: "provider stream request failed".into(),
+    let stream =
+        futures_util::stream::unfold((response, 0usize), |(mut response, total)| async move {
+            match response.chunk().await {
+                Ok(Some(chunk)) => {
+                    let next = total.saturating_add(chunk.len());
+                    if next > 1_048_576 {
+                        return Some((
+                            Err(std::io::Error::other("provider stream exceeds 1 MiB")),
+                            (response, next),
+                        ));
+                    }
+                    Some((Ok(chunk), (response, next)))
+                }
+                Ok(None) => None,
+                Err(error) => Some((
+                    Err(std::io::Error::other(format!(
+                        "provider response read failed: {error}"
+                    ))),
+                    (response, total),
+                )),
+            }
         });
-    }
-    let text = std::str::from_utf8(&bytes)
-        .map_err(|_| ProviderError::InvalidResponse("provider stream is not UTF-8".into()))?;
-    for line in text.lines().filter(|line| line.starts_with("data:")) {
-        let data = line.trim_start_matches("data:").trim();
-        if data != "[DONE]" {
-            serde_json::from_str::<Value>(data).map_err(|e| {
-                ProviderError::InvalidResponse(format!("provider returned malformed SSE: {e}"))
-            })?;
-        }
-    }
-    if !text.contains("data:") {
-        return Err(ProviderError::InvalidResponse(
-            "provider returned malformed SSE".into(),
-        ));
-    }
-    Ok(bytes)
+    Ok((status, Body::from_stream(stream)))
 }
 
 async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Value, ProviderError> {

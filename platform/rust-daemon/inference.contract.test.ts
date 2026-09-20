@@ -171,7 +171,7 @@ describe("fresh Rust inference route", () => {
 			).toBe(200);
 			expect(
 				(await call(d, "/api/inference/stream", { method: "POST", body: JSON.stringify({ prompt }) })).response.status,
-			).toBe(400);
+			).toBe(502);
 			expect((await call(d, "/api/inference/execute", { method: "POST", body: "{" })).response.status).toBe(400);
 			expect(
 				(
