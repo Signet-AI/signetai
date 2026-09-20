@@ -2369,7 +2369,9 @@ async function main() {
 	const lock = acquireSingleInstanceLock(join(DAEMON_DIR, "daemon.lock"));
 	if (lock === null) {
 		logger.error("daemon", "Another daemon instance is already running or the lock is unavailable. Exiting.");
-		process.exit(0);
+		logger.shutdown(false);
+		process.exitCode = 1;
+		return;
 	}
 	process.on("exit", () => {
 		releaseSingleInstanceLock(lock);
