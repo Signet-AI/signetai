@@ -101,6 +101,31 @@ it("rejects semantically invalid registry shapes", async () => {
 		expect((await get(origin, "/api/plugins", auth)).status).toBe(409);
 	}
 });
+it("rejects a foreign plugin record in an otherwise valid registry", async () => {
+	const { origin, workspace } = await start();
+	const path = join(workspace, ".daemon/plugins/registry-v1.json");
+	mkdirSync(join(workspace, ".daemon/plugins"), { recursive: true });
+	writeFileSync(
+		path,
+		JSON.stringify({ version: 1, plugins: { foreign: { enabled: true, installedAt: "1", updatedAt: "1" } } }),
+	);
+	expect((await get(origin, "/api/plugins", auth)).status).toBe(409);
+});
+
+it("includes an event when the bounded audit window starts on its newline", async () => {
+	const { origin, workspace } = await start();
+	const path = join(workspace, ".daemon/plugins/audit-v1.ndjson");
+	mkdirSync(join(workspace, ".daemon/plugins"), { recursive: true });
+	const event = JSON.stringify({ timestamp: "boundary", pluginId: "signet-graphiq", event: "plugin.disabled" });
+	const prefix = `x\n${"x".repeat(2 * 1024 * 1024 - 2)}\n`;
+	expect(prefix.length).toBe(2 * 1024 * 1024 + 1);
+	writeFileSync(path, prefix + event + "\n");
+	const r = await (await get(origin, "/api/plugins/audit?event=plugin.disabled&limit=1", auth)).json();
+	expect(r.events[0].timestamp).toBe("boundary");
+	expect(r.truncated).toBe(true);
+	expect(r.bytesScanned).toBeLessThanOrEqual(2 * 1024 * 1024);
+});
+
 it("bounds audit reads and reports truncation while preserving newest filtering", async () => {
 	const { origin, workspace } = await start();
 	const path = join(workspace, ".daemon/plugins/audit-v1.ndjson");

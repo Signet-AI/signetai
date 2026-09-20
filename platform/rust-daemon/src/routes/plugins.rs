@@ -49,6 +49,89 @@ fn registry_path(state: &AppState) -> PathBuf {
 fn audit_path(state: &AppState) -> PathBuf {
     state.workspace.join(".daemon/plugins/audit-v1.ndjson")
 }
+fn valid_record(id: &str, value: &Value) -> bool {
+    if !matches!(id, "signet-secrets" | "signet-graphiq") || !value.is_object() {
+        return false;
+    }
+    let object = value.as_object().unwrap();
+    let allowed = [
+        "id",
+        "name",
+        "version",
+        "publisher",
+        "description",
+        "runtime",
+        "compatibility",
+        "trustTier",
+        "capabilities",
+        "surfaces",
+        "docs",
+        "promptContributions",
+        "source",
+        "enabled",
+        "state",
+        "stateReason",
+        "declaredCapabilities",
+        "grantedCapabilities",
+        "pendingCapabilities",
+        "health",
+        "installedAt",
+        "updatedAt",
+    ];
+    if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+        return false;
+    }
+    for key in ["enabled", "installedAt", "updatedAt"] {
+        let Some(v) = object.get(key) else {
+            return false;
+        };
+        let valid = match key {
+            "enabled" => v.is_boolean(),
+            _ => v.is_string(),
+        };
+        if !valid {
+            return false;
+        }
+    }
+    let manifest_keys = [
+        "id",
+        "name",
+        "version",
+        "publisher",
+        "description",
+        "runtime",
+        "compatibility",
+        "trustTier",
+        "capabilities",
+        "surfaces",
+        "docs",
+        "promptContributions",
+    ];
+    let has_manifest = object
+        .keys()
+        .any(|key| manifest_keys.contains(&key.as_str()));
+    if has_manifest {
+        if manifest_keys.iter().any(|key| !object.contains_key(*key)) || object["id"] != id {
+            return false;
+        }
+        if !object["id"].is_string()
+            || !object["name"].is_string()
+            || !object["version"].is_string()
+            || !object["publisher"].is_string()
+            || !object["description"].is_string()
+            || !object["runtime"].is_object()
+            || !object["compatibility"].is_object()
+            || !object["trustTier"].is_string()
+            || !object["capabilities"].is_array()
+            || !object["surfaces"].is_object()
+            || !object["docs"].is_object()
+            || !object["promptContributions"].is_array()
+        {
+            return false;
+        }
+    }
+    true
+}
 fn load(state: &AppState) -> Result<Value, ApiError> {
     let path = registry_path(state);
     match fs::read_to_string(path) {
@@ -62,7 +145,9 @@ fn load(state: &AppState) -> Result<Value, ApiError> {
                 && value
                     .get("plugins")
                     .and_then(Value::as_object)
-                    .is_some_and(|plugins| plugins.values().all(|p| p.is_object()));
+                    .is_some_and(|plugins| {
+                        plugins.iter().all(|(id, plugin)| valid_record(id, plugin))
+                    });
             if valid {
                 Ok(value)
             } else {
@@ -243,7 +328,11 @@ async fn audit(
             .read_to_string(&mut text)
             .map_err(|e| ApiError::internal(e.to_string()))?;
         bytes_scanned = text.len() as u64;
-        for l in text.lines().skip(if truncated { 1 } else { 0 }) {
+        for l in text.lines().skip(if truncated && !text.starts_with('\n') {
+            1
+        } else {
+            0
+        }) {
             if let Ok(v) = serde_json::from_str::<Value>(l) {
                 if q.plugin_id.as_ref().is_some_and(|x| v["pluginId"] != *x)
                     || q.event.as_ref().is_some_and(|x| v["event"] != *x)
