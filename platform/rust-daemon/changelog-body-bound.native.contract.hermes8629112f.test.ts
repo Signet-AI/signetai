@@ -63,6 +63,7 @@ it("bounds chunked changelog, roadmap, and readme bodies in a real daemon proces
 				SIGNET_PATH: workspace,
 				SIGNET_BIND: "127.0.0.1",
 				SIGNET_PORT: String(port),
+				SIGNET_CHANGELOG_MODE: "test",
 				SIGNET_CHANGELOG_BASE_URL: `http://127.0.0.1:${upstream.port}`,
 			},
 			stdout: "ignore",

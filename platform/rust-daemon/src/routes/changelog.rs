@@ -4,6 +4,7 @@ use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::ge
 use reqwest::Client;
 use serde::Serialize;
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     env,
@@ -21,6 +22,33 @@ mod tests {
         let mut accumulated = Vec::new();
         assert!(super::append_bounded(&mut accumulated, vec![0; MAX_BYTES - 1]).is_ok());
         assert!(super::append_bounded(&mut accumulated, vec![0; 2]).is_err());
+    }
+
+    #[test]
+    fn release_ignores_changelog_override() {
+        std::env::set_var("SIGNET_CHANGELOG_BASE_URL", "https://attacker.invalid");
+        std::env::remove_var("SIGNET_CHANGELOG_MODE");
+        assert_eq!(super::base_url(), super::BASE);
+    }
+
+    #[test]
+    fn development_mode_allows_changelog_override() {
+        std::env::set_var("SIGNET_CHANGELOG_MODE", "development");
+        std::env::set_var("SIGNET_CHANGELOG_BASE_URL", "http://127.0.0.1:1234");
+        assert_eq!(super::base_url(), "http://127.0.0.1:1234");
+    }
+
+    #[test]
+    fn inline_renders_safe_links_and_escapes_text() {
+        let html = super::inline(&super::escape(
+            "[<click>](https://example.com) [run](javascript:alert(1))",
+        ));
+        assert!(
+            html.contains("<a href=\"https://example.com\"><code>&lt;click&gt;</code></a>")
+                || html.contains("<a href=\"https://example.com\">&lt;click&gt;</a>")
+        );
+        assert!(!html.contains("javascript:"));
+        assert!(!html.contains("<click>"));
     }
 }
 
@@ -46,11 +74,25 @@ pub(crate) struct Entry {
 }
 
 fn base_url() -> String {
-    env::var("SIGNET_CHANGELOG_BASE_URL").unwrap_or_else(|_| BASE.to_owned())
+    let mode = env::var("SIGNET_CHANGELOG_MODE").unwrap_or_default();
+    if matches!(mode.as_str(), "test" | "development") {
+        env::var("SIGNET_CHANGELOG_BASE_URL").unwrap_or_else(|_| BASE.to_owned())
+    } else {
+        BASE.to_owned()
+    }
+}
+fn cache_identity(name: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(base_url().as_bytes());
+    if let Ok(root) = env::var("SIGNET_DEV_REPO_ROOT") {
+        hasher.update(root.as_bytes());
+    }
+    hasher.update(name.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
-fn cache() -> &'static Mutex<HashMap<&'static str, Entry>> {
-    static CACHE_STORE: OnceLock<Mutex<HashMap<&'static str, Entry>>> = OnceLock::new();
+fn cache() -> &'static Mutex<HashMap<String, Entry>> {
+    static CACHE_STORE: OnceLock<Mutex<HashMap<String, Entry>>> = OnceLock::new();
     CACHE_STORE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 fn now() -> u64 {
@@ -66,10 +108,30 @@ fn escape(s: &str) -> String {
         .replace('"', "&quot;")
 }
 fn inline(s: &str) -> String {
-    let mut out = s.to_owned();
-    for (a, b) in [("**", "<strong>"), ("`", "<code>")] {
-        let _ = (a, b);
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(start) = rest.find('[') {
+        out.push_str(&rest[..start]);
+        let Some(mid) = rest[start + 1..].find("](") else {
+            out.push_str(&rest[start..]);
+            break;
+        };
+        let mid = start + 1 + mid;
+        let Some(end) = rest[mid + 2..].find(')') else {
+            out.push_str(&rest[start..]);
+            break;
+        };
+        let end = mid + 2 + end;
+        let label = &rest[start + 1..mid];
+        let url = &rest[mid + 2..end];
+        if url.starts_with("https://") || url.starts_with("http://") || url.starts_with("mailto:") {
+            out.push_str(&format!("<a href=\"{}\">{}</a>", url, label));
+        } else {
+            out.push_str(label);
+        }
+        rest = &rest[end + 1..];
     }
+    out.push_str(rest);
     out = regex_replace_pairs(&out, "**", "<strong>", "</strong>");
     out = regex_replace_pairs(&out, "`", "<code>", "</code>");
     out = regex_replace_pairs(&out, "*", "<em>", "</em>");
@@ -180,10 +242,11 @@ fn readme(s: &str) -> String {
 }
 async fn source(state: &AppState, name: &'static str) -> Option<Entry> {
     let timestamp = now();
+    let key = cache_identity(name);
     if let Some(e) = cache()
         .lock()
         .ok()?
-        .get(name)
+        .get(&key)
         .filter(|e| timestamp.saturating_sub(e.cached_at) < TTL_MS)
         .cloned()
     {
@@ -243,7 +306,9 @@ async fn source(state: &AppState, name: &'static str) -> Option<Entry> {
         source: kind,
         cached_at: timestamp,
     };
-    cache().lock().ok()?.insert(name, entry.clone());
+    if kind == "github" {
+        cache().lock().ok()?.insert(key, entry.clone());
+    }
     let _ = state;
     Some(entry)
 }
