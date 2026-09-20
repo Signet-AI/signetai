@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-20
-- Bug fixes: use kernel-owned instance lock.
+- Bug fixes: capture UNC DB attribution; harden Windows DB attribution paths; preserve runtime DB attribution; accept absolute-path stack tokens in bundled runtime (#1764 regression); use kernel-owned instance lock.
 
 ### 2026-09-17
 - Bug fixes: refresh event-loop ledger; harden vector repair safety; bound vector repair reconciliation.
@@ -32,6 +32,18 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: enforce connector deadlines across native I/O; bound connector inspection and avoid unverified healthy status; harden Bun daemon runtime and installer.
 
 ## Release Ledger
+
+## [0.226.9] - 2026-09-20
+
+Release summary: 4 bug fixes.
+Tag range: `v0.226.8..v0.226.9`.
+
+### Bug Fixes
+
+- **daemon**: capture UNC DB attribution
+- **daemon**: harden Windows DB attribution paths
+- **daemon**: preserve runtime DB attribution
+- **attribution**: accept absolute-path stack tokens in bundled runtime (#1764 regression)
 
 ## [0.226.8] - 2026-09-20
 
