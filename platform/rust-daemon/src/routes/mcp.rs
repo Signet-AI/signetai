@@ -1,7 +1,7 @@
 use crate::{agent, execute, ApiError, AppState};
 use axum::{
     extract::{DefaultBodyLimit, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -19,8 +19,17 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/mcp/status", get(status))
         .route("/api/mcp/ready", get(ready))
+        .route("/api/mcp/analytics", get(analytics_unsupported))
+        .route("/api/mcp/analytics/{server}", get(analytics_unsupported))
         .route("/api/mcp", post(rpc))
         .layer(DefaultBodyLimit::max(256 * 1024))
+}
+
+async fn analytics_unsupported() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        Json(json!({"error":"unsupported","operation":"mcp analytics"})),
+    )
 }
 
 #[derive(Debug, Deserialize)]
