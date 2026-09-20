@@ -73,3 +73,49 @@ it("keeps unbacked marketplace/provider/install/review/network operations explic
 		expect(await response.json()).toMatchObject({ code: "unsupported" });
 	}
 });
+
+it("replaces repeat installs, isolates idempotency records, and reports updated accurately", async () => {
+	const origin = await start();
+	const body = { id: "mcpservers.org/demo", config: { command: "demo-v1" }, scope: { workspaces: ["one"] } };
+	const first = await fetch(origin + "/api/marketplace/mcp/install", {
+		method: "POST",
+		headers: { ...auth, "content-type": "application/json", "idempotency-key": "marketplace-key-1" },
+		body: JSON.stringify(body),
+	});
+	expect(first.status).toBe(200);
+	const firstJson = await first.json();
+	expect(firstJson.updated).toBe(false);
+	expect(firstJson.server.id).toBe("demo");
+
+	const replay = await fetch(origin + "/api/marketplace/mcp/install", {
+		method: "POST",
+		headers: { ...auth, "content-type": "application/json", "idempotency-key": "marketplace-key-1" },
+		body: JSON.stringify(body),
+	});
+	expect(replay.status).toBe(200);
+	expect((await replay.json()).operation.replayed).toBe(true);
+
+	const conflict = await fetch(origin + "/api/marketplace/mcp/install", {
+		method: "POST",
+		headers: { ...auth, "content-type": "application/json", "idempotency-key": "marketplace-key-1" },
+		body: JSON.stringify({ ...body, config: { command: "demo-v2" } }),
+	});
+	expect(conflict.status).toBe(409);
+	expect(await conflict.json()).toMatchObject({ code: "idempotency_conflict" });
+
+	const update = await fetch(origin + "/api/marketplace/mcp/install", {
+		method: "POST",
+		headers: { ...auth, "content-type": "application/json", "idempotency-key": "marketplace-key-2" },
+		body: JSON.stringify({ ...body, config: { command: "demo-v2" } }),
+	});
+	expect(update.status).toBe(200);
+	const updateJson = await update.json();
+	expect(updateJson.updated).toBe(true);
+	expect(updateJson.server.config.command).toBe("demo-v2");
+
+	const workspace = workspaces[0];
+	if (!workspace) throw new Error("test workspace missing");
+	const state = await Bun.file(join(workspace, ".daemon/plugins/marketplace-v1.json")).json();
+	expect(state.servers["marketplace-key-1"]).toBeUndefined();
+	expect(state.idempotency["marketplace-key-1"].fingerprint).toEqual(expect.any(String));
+});

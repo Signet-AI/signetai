@@ -7,6 +7,7 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{Read, Seek, SeekFrom, Write},
@@ -380,6 +381,40 @@ fn marketplace_state_path(state: &AppState) -> PathBuf {
     state.workspace.join(".daemon/plugins/marketplace-v1.json")
 }
 
+fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+        };
+        let from: Vec<u16> = tmp.as_os_str().encode_wide().chain(Some(0)).collect();
+        let to: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+        if unsafe {
+            MoveFileExW(
+                from.as_ptr(),
+                to.as_ptr(),
+                MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+            )
+        } == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(tmp, path)
+    }
+}
+
+fn install_fingerprint(request: &MarketplaceInstallRequest) -> String {
+    let value = json!({"id":request.id,"source":request.source,"alias":request.alias,"config":request.config,"scope":request.scope});
+    let mut hasher = Sha256::new();
+    hasher.update(serde_json::to_vec(&value).expect("fingerprint serialization cannot fail"));
+    format!("{:x}", hasher.finalize())
+}
+
 fn install_deadline(headers: &HeaderMap) -> Result<(), ApiError> {
     if let Some(raw) = headers
         .get("x-signet-deadline-ms")
@@ -431,7 +466,7 @@ async fn install_marketplace(
             message: "id must be a non-empty scoped catalog identifier".into(),
         });
     }
-    let config = request.config.ok_or_else(|| ApiError { status: StatusCode::UNPROCESSABLE_ENTITY, code: "config_required", message: "fresh native marketplace install requires a direct MCP config; catalog provider is unavailable".into() })?;
+    let config = request.config.clone().ok_or_else(|| ApiError { status: StatusCode::UNPROCESSABLE_ENTITY, code: "config_required", message: "fresh native marketplace install requires a direct MCP config; catalog provider is unavailable".into() })?;
     if !valid_install_config(&config) {
         return Err(ApiError {
             status: StatusCode::BAD_REQUEST,
@@ -467,11 +502,28 @@ async fn install_marketplace(
             message: "marketplace state shape is invalid".into(),
         });
     }
+    let fingerprint = install_fingerprint(&request);
+    if !state.get("idempotency").is_some_and(Value::is_object) {
+        state["idempotency"] = json!({});
+    }
     if !key.is_empty() {
-        if let Some(previous) = state["servers"].get(&key).cloned() {
+        if let Some(previous) = state["idempotency"].get(&key).cloned() {
+            if previous["fingerprint"] != fingerprint {
+                drop(lock);
+                return Err(ApiError {
+                    status: StatusCode::CONFLICT,
+                    code: "idempotency_conflict",
+                    message: "idempotency key was already used with a different request".into(),
+                });
+            }
+            let server_id = previous["serverId"].as_str().unwrap_or("");
+            let server = state["servers"]
+                .get(server_id)
+                .cloned()
+                .unwrap_or(Value::Null);
             drop(lock);
             return Ok(Json(
-                json!({"success":true,"operation":{"id":key,"state":"succeeded","replayed":true},"server":previous}),
+                json!({"success":true,"updated":false,"operation":{"id":key,"state":"succeeded","replayed":true},"server":server}),
             ));
         }
     }
@@ -485,21 +537,23 @@ async fn install_marketplace(
             |c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_',
             "-",
         );
+    let updated = state["servers"].get(&server_id).is_some();
+
     let now = now();
     let server = json!({"id":server_id,"catalogId":request.id,"source":request.source.unwrap_or_else(|| "mcpservers.org".into()),"config":config,"scope":request.scope.unwrap_or_else(|| json!({"harnesses":[],"workspaces":[]})),"enabled":true,"probe":{"state":"not_run","bounded":true},"installedAt":now,"updatedAt":now});
     state["servers"][&server_id] = server.clone();
     if !key.is_empty() {
-        state["servers"][&key] = server.clone();
+        state["idempotency"][&key] = json!({"fingerprint":fingerprint,"serverId":server_id});
     }
     let parent = path.parent().unwrap();
     fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
     let tmp = parent.join(format!(".marketplace-v1.{}.tmp", std::process::id()));
     fs::write(&tmp, serde_json::to_vec_pretty(&state).unwrap())
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    fs::rename(&tmp, &path).map_err(|e| ApiError::internal(e.to_string()))?;
+    replace_file(&tmp, &path).map_err(|e| ApiError::internal(e.to_string()))?;
     drop(lock);
     Ok(Json(
-        json!({"success":true,"updated":state["servers"].get(&server_id).is_some_and(|v| v["installedAt"] != now),"operation":{"id":if key.is_empty(){server_id.clone()}else{key},"state":"succeeded","mutation":"committed","probe":"not_run"},"server":server}),
+        json!({"success":true,"updated":updated,"operation":{"id":if key.is_empty(){server_id.clone()}else{key},"state":"succeeded","mutation":"committed","probe":"not_run"},"server":server}),
     ))
 }
 
