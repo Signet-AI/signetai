@@ -2330,6 +2330,48 @@ fn execute_operation(
             let rows=s.query_map(params![agent_id,workspace_id,entity_id,entity_id,limit],|r| Ok(json!({"id":r.get::<_,String>(0)?,"fromId":r.get::<_,String>(1)?,"toId":r.get::<_,String>(2)?,"relation":r.get::<_,String>(3)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?}))
         }
+        Operation::KnowledgeDependencies {
+            agent_id,
+            workspace_id,
+            entity_id,
+            limit,
+            direction,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let entity_id = required_id(&entity_id)?;
+            let limit = limit.clamp(1, 200) as i64;
+            let entity_exists: i64 = connection.query_row("SELECT count(*) FROM kg_entities WHERE id=? AND agent_id=? AND workspace_id=? AND deleted=0", params![entity_id, agent_id, workspace_id], |r| r.get(0))?;
+            if entity_exists != 1 {
+                return Err(CoreError::NotFound);
+            }
+            if !matches!(direction.as_str(), "incoming" | "outgoing" | "both") {
+                return Err(CoreError::InvalidInput(
+                    "invalid dependency direction".into(),
+                ));
+            }
+            let clause = match direction.as_str() {
+                "incoming" => "r.to_id=?",
+                "outgoing" => "r.from_id=?",
+                _ => "(r.from_id=? OR r.to_id=?)",
+            };
+            let sql = format!("SELECT r.id,r.from_id,r.to_id,r.relation,r.metadata,r.created_at,s.name,t.name FROM kg_relations r JOIN kg_entities s ON s.id=r.from_id AND s.agent_id=r.agent_id AND s.workspace_id=r.workspace_id AND s.deleted=0 JOIN kg_entities t ON t.id=r.to_id AND t.agent_id=r.agent_id AND t.workspace_id=r.workspace_id AND t.deleted=0 WHERE r.agent_id=? AND r.workspace_id=? AND r.deleted=0 AND {} ORDER BY r.rowid DESC LIMIT ?", clause);
+            let mut stmt = connection.prepare(&sql)?;
+            let map = |r: &rusqlite::Row<'_>| {
+                Ok(
+                    json!({"id":r.get::<_,String>(0)?,"direction":if direction == "incoming" {"incoming"} else if direction == "outgoing" {"outgoing"} else {if r.get::<_,String>(1)? == entity_id {"outgoing"} else {"incoming"}},"dependencyType":r.get::<_,String>(3)?,"strength":0,"aspectId":Value::Null,"reason":Value::Null,"sourceEntityId":r.get::<_,String>(1)?,"sourceEntityName":r.get::<_,String>(6)?,"targetEntityId":r.get::<_,String>(2)?,"targetEntityName":r.get::<_,String>(7)?,"createdAt":r.get::<_,String>(5)?,"updatedAt":r.get::<_,String>(5)?}),
+                )
+            };
+            let rows = if direction == "both" {
+                stmt.query_map(
+                    params![agent_id, workspace_id, entity_id, entity_id, limit],
+                    map,
+                )?
+            } else {
+                stmt.query_map(params![agent_id, workspace_id, entity_id, limit], map)?
+            };
+            Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?,"limit":limit}))
+        }
         Operation::KnowledgeAspectCreate {
             agent_id,
             workspace_id,
@@ -3277,6 +3319,13 @@ pub enum Operation {
         workspace_id: String,
         entity_id: String,
         limit: usize,
+    },
+    KnowledgeDependencies {
+        agent_id: String,
+        workspace_id: String,
+        entity_id: String,
+        limit: usize,
+        direction: String,
     },
     KnowledgeAspectCreate {
         agent_id: String,

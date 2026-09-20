@@ -16,6 +16,7 @@ struct EntityQuery {
     limit: Option<usize>,
     offset: Option<usize>,
     workspace_id: Option<String>,
+    direction: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 struct EntityBody {
@@ -89,7 +90,7 @@ pub(crate) fn router() -> Router<AppState> {
         )
         .route(
             "/api/knowledge/entities/{id}/dependencies",
-            get(unsupported_dependencies),
+            get(entity_dependencies),
         )
         .route("/api/knowledge/stats", get(stats))
         .route(
@@ -159,9 +160,30 @@ async fn aspect_attributes(
     ))
 }
 
-async fn unsupported_dependencies() -> Result<Json<Value>, ApiError> {
-    Err(ApiError::not_implemented(
-        "knowledge dependencies are unsupported by the fresh native operation boundary",
+async fn entity_dependencies(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let direction = q.direction.as_deref().unwrap_or("both");
+    if !matches!(direction, "incoming" | "outgoing" | "both") {
+        return Err(ApiError::bad_request(
+            "direction must be incoming, outgoing, or both",
+        ));
+    }
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeDependencies {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&headers, &q)?,
+                entity_id: id,
+                limit: limit(q.limit),
+                direction: direction.to_owned(),
+            },
+        )
+        .await?,
     ))
 }
 async fn stats(
