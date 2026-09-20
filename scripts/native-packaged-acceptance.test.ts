@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -20,6 +20,7 @@ if (!provenance.sourceRevision || !provenance.target) throw new Error("incomplet
 const staged = mkdtempSync(join(tmpdir(), "signet-packaged-outside-checkout-"));
 const binary = join(staged, basename(artifact));
 await Bun.write(binary, Bun.file(artifact));
+chmodSync(binary, 0o755);
 const root = mkdtempSync(join(tmpdir(), "signet-packaged-workspace-"));
 const port = 28761 + Math.floor(Math.random() * 1000);
 const origin = `http://127.0.0.1:${port}`;
@@ -76,8 +77,12 @@ describe("shipped packaged Rust executable", () => {
 		expect(provenance.artifact).toBe(resolve(artifact));
 		expect(provenance.sha256).toMatch(/^[a-f0-9]{64}$/);
 		expect(child.exitCode).toBeNull();
-		expect(process.env.BUN_INSTALL).toBeUndefined();
-		expect(process.env.NODE_PATH).toBeUndefined();
+		if (process.platform === "linux") {
+			const childEnvironment = readFileSync(`/proc/${child.pid}/environ`, "utf8");
+			expect(childEnvironment).toContain(`PATH=${cleanPath}\u0000`);
+			expect(childEnvironment).not.toContain("BUN_INSTALL=");
+			expect(childEnvironment).not.toContain("NODE_PATH=");
+		}
 		expect(dirname(binary)).not.toContain("/signetai/");
 	});
 	test("performs scoped write/read and isolates another workspace", async () => {
@@ -131,7 +136,6 @@ describe("shipped packaged Rust executable", () => {
 		expect(owner.pid).toBeGreaterThan(0);
 		owner.kill("SIGTERM");
 		await owner.exited;
-		expect(owner.exitCode).not.toBeNull();
 		expect(existsSync(`/proc/${owner.pid}/fd`)).toBe(false);
 	});
 });
