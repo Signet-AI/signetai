@@ -1000,6 +1000,20 @@ fn execute_operation(
                 json!({"agentId":agent_id,"workspaceId":workspace_id,"admission":{"queued":admitted},"jobs":{"count":jobs,"items":items,"nextCursor":next_cursor},"jobEvents":{"count":events}}),
             )
         }
+        Operation::RepairRequeueRunning {
+            agent_id,
+            workspace_id,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let tx = connection.transaction()?;
+            let count = tx.execute("UPDATE jobs SET state='queued', updated_at=datetime('now'), error=NULL WHERE agent_id=? AND workspace_id=? AND state='running'", params![agent_id, workspace_id])?;
+            tx.execute("INSERT INTO job_events (job_id,agent_id,event,data,created_at) SELECT id,agent_id,'requeued',?,datetime('now') FROM jobs WHERE agent_id=? AND workspace_id=? AND state='queued' AND updated_at >= datetime('now','-1 second')", params![serde_json::to_string(&json!({"source":"repair"}))?, agent_id, workspace_id])?;
+            tx.commit()?;
+            Ok(
+                json!({"action":"requeue_running","agentId":agent_id,"workspaceId":workspace_id,"requeued":count}),
+            )
+        }
         Operation::JobSubmit {
             agent_id,
             workspace_id,
@@ -3115,6 +3129,10 @@ pub enum Operation {
         workspace_id: String,
         cursor: Option<String>,
         limit: usize,
+    },
+    RepairRequeueRunning {
+        agent_id: String,
+        workspace_id: String,
     },
     JobSubmit {
         agent_id: String,
