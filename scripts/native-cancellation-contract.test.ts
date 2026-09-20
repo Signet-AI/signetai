@@ -35,6 +35,24 @@ test("cancellation has durable unknown outcomes, fenced replay, and restart visi
 			await call(port, { action: "begin", operationId: "op-1", content: "durable" })
 		).json()) as Record<string, unknown>;
 		expect(begun).toMatchObject({ outcome: "committed", operationId: "op-1" });
+		const admitted = call(port, {
+			action: "begin",
+			operationId: "admitted-op",
+			content: "must-not-commit",
+			fault: "delay",
+		});
+		await Bun.sleep(50);
+		const cancelStarted = performance.now();
+		const admittedCancellation = (await (
+			await call(port, { action: "cancel", operationId: "admitted-op" })
+		).json()) as Record<string, unknown>;
+		expect(performance.now() - cancelStarted).toBeLessThan(500);
+		expect(admittedCancellation).toMatchObject({ operationId: "admitted-op", outcome: "cancelled" });
+		expect(await (await admitted).json()).toMatchObject({ outcome: "queued" });
+		await Bun.sleep(350);
+		expect(await (await call(port, { action: "get", operationId: "admitted-op" })).json()).toMatchObject({
+			outcome: "cancelled",
+		});
 		expect(
 			((await (await call(port, { action: "cancel", operationId: "queued-op" })).json()) as Record<string, unknown>)
 				.outcome,

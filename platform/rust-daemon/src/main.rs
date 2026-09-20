@@ -203,6 +203,19 @@ pub(crate) struct AppState {
     pub(crate) workspace: PathBuf,
     pub(crate) dashboard: Option<PathBuf>,
     pub(crate) auth_secret: Option<Vec<u8>>,
+    pub(crate) cancellation: Arc<CancellationRuntime>,
+}
+
+#[derive(Default)]
+pub(crate) struct CancellationRuntime {
+    operations: Mutex<HashMap<String, CancellationState>>,
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CancellationState {
+    Queued,
+    InFlight,
+    Cancelled,
+    Finished,
 }
 
 #[derive(Debug, Serialize)]
@@ -554,6 +567,71 @@ async fn cancellation(
         return Err(ApiError::not_found("not found"));
     }
     let agent_id = agent(&headers, None, None)?;
+    let key = format!("{agent_id}:{}", request.operation_id);
+    if request.action == "begin" && request.fault.as_deref() == Some("delay") {
+        let mut operations = state.cancellation.operations.lock().unwrap();
+        if operations.contains_key(&key) {
+            return Ok(Json(
+                json!({"operationId":request.operation_id,"outcome":"queued"}),
+            ));
+        }
+        operations.insert(key.clone(), CancellationState::Queued);
+        drop(operations);
+        let runtime = state.cancellation.clone();
+        let owner = state.owner.clone();
+        let operation_id = request.operation_id.clone();
+        let content = request.content.clone();
+        let agent_for_task = agent_id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            let cancelled = {
+                let mut ops = runtime.operations.lock().unwrap();
+                match ops.get_mut(&key) {
+                    Some(state @ CancellationState::Queued) => {
+                        *state = CancellationState::InFlight;
+                        false
+                    }
+                    Some(CancellationState::Cancelled) => true,
+                    _ => true,
+                }
+            };
+            let _ = owner.submit(Operation::Cancellation {
+                agent_id: agent_for_task,
+                action: if cancelled {
+                    "cancel".into()
+                } else {
+                    "begin".into()
+                },
+                operation_id,
+                content: if cancelled { None } else { content },
+                fault: None,
+            });
+            if let Some(state) = runtime.operations.lock().unwrap().get_mut(&key) {
+                *state = if cancelled {
+                    CancellationState::Cancelled
+                } else {
+                    CancellationState::Finished
+                };
+            }
+        });
+        return Ok(Json(
+            json!({"operationId":request.operation_id,"outcome":"queued"}),
+        ));
+    }
+    if request.action == "cancel" {
+        let mut operations = state.cancellation.operations.lock().unwrap();
+        if let Some(operation) = operations.get_mut(&key) {
+            if *operation == CancellationState::Queued {
+                *operation = CancellationState::Cancelled;
+                return Ok(Json(
+                    json!({"operationId":request.operation_id,"outcome":"cancelled"}),
+                ));
+            }
+            return Ok(Json(
+                json!({"operationId":request.operation_id,"outcome":"unknown"}),
+            ));
+        }
+    }
     let result = execute(
         &state,
         Operation::Cancellation {
@@ -1269,6 +1347,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         dashboard: resolve_dashboard_path(),
         auth_secret: routes::auth::load_secret(&workspace),
         workspace,
+        cancellation: Arc::new(CancellationRuntime::default()),
     };
     let worker_owner = state.owner.clone();
     let _worker = worker::start(worker_owner);
