@@ -39,6 +39,18 @@ pub struct Memory {
     pub deleted: bool,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    #[serde(rename = "sourceId")]
+    pub source_id: Option<String>,
+    #[serde(rename = "sourceType")]
+    pub source_type: Option<String>,
+    #[serde(rename = "sourcePath")]
+    pub source_path: Option<String>,
+    #[serde(rename = "runtimePath")]
+    pub runtime_path: Option<String>,
+    #[serde(rename = "idempotencyKey")]
+    pub idempotency_key: Option<String>,
+    #[serde(rename = "memoryKind")]
+    pub memory_kind: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -188,7 +200,7 @@ impl Core {
         let agent = required_agent(agent)?;
         self.call(move |connection| {
             let mut statement = connection.prepare(
-                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                  FROM memories
                  WHERE COALESCE(agent_id, 'default') = ? AND (? OR deleted = 0)
                  ORDER BY rowid DESC LIMIT 10000",
@@ -204,7 +216,7 @@ impl Core {
         self.call(move |connection| {
             connection
                 .query_row(
-                    "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                    "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                      FROM memories
                      WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
                     params![id, agent],
@@ -223,7 +235,7 @@ impl Core {
         }
         self.call(move |connection| {
             let mut statement = connection.prepare(
-                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                  FROM memories
                  WHERE COALESCE(agent_id, 'default') = ? AND deleted = 0 AND content LIKE ?
                  ORDER BY rowid DESC LIMIT 1000",
@@ -544,13 +556,13 @@ fn execute_memory_search(
             .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
             .collect::<Vec<_>>()
             .join(" ");
-        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
+        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,m.source_id,m.source_type,m.source_path,m.runtime_path,m.idempotency_key,m.memory_kind,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
         let mapped = stmt.query_map(params![match_query, agent_id, limit], memory_search_row)?;
         rows = mapped.collect::<Result<Vec<_>, _>>()?;
     } else {
         // Compatibility fallback is deliberately token-aware and marked partial;
         // it is not presented as an FTS result.
-        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL ORDER BY rowid DESC LIMIT 1000")?;
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL ORDER BY rowid DESC LIMIT 1000")?;
         let candidates = stmt.query_map(params![agent_id], memory_row)?;
         for memory in candidates {
             let memory = memory?;
@@ -586,7 +598,7 @@ fn execute_memory_search(
         if rows.len() >= limit as usize {
             break;
         }
-        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at FROM memories WHERE id=? AND agent_id=? AND deleted=0 AND superseded_by IS NULL")?;
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE id=? AND agent_id=? AND deleted=0 AND superseded_by IS NULL")?;
         if let Ok(memory) = stmt.query_row(params![id, agent_id], memory_row) {
             rows.push(json!({"id":memory.id,"agentId":memory.agent_id,"content":memory.content,"metadata":memory.metadata,"deleted":memory.deleted,"createdAt":memory.created_at,"updatedAt":memory.updated_at,"score":0.5,"source":"graph"}));
         }
@@ -1999,10 +2011,8 @@ fn execute_operation(
             let id = uuid::Uuid::new_v4().to_string();
             let metadata_value = metadata.clone();
             let metadata = serde_json::to_string(&metadata)?;
-            let memory_kind = match metadata_value.get("sourceType").and_then(Value::as_str) {
-                Some("extract" | "aggregate-recall" | "session_end" | "checkpoint" | "dreaming") => None,
-                _ => Some("episodic"),
-            };
+            let memory_kind =
+                classify_memory_kind(metadata_value.get("sourceType").and_then(Value::as_str));
             let transaction = connection.transaction()?;
             transaction.execute(
                 "INSERT INTO memories (id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind) VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)",
@@ -2012,10 +2022,20 @@ fn execute_operation(
             transaction.commit()?;
             let mut result = json!({ "id": id });
             if let Value::Object(fields) = metadata_value {
-                for key in ["sourceId", "sourceType", "sourcePath", "runtimePath", "idempotencyKey"] {
-                    if let Some(value) = fields.get(key) { result[key] = value.clone(); }
+                for key in [
+                    "sourceId",
+                    "sourceType",
+                    "sourcePath",
+                    "runtimePath",
+                    "idempotencyKey",
+                ] {
+                    if let Some(value) = fields.get(key) {
+                        result[key] = value.clone();
+                    }
                 }
-                if memory_kind.is_some() { result["memoryKind"] = json!("episodic"); }
+                if memory_kind.is_some() {
+                    result["memoryKind"] = json!("episodic");
+                }
             }
             Ok(result)
         }
@@ -2029,7 +2049,7 @@ fn execute_operation(
             let limit = bounded_page_limit(limit)?;
             let cursor = parse_cursor(cursor)?;
             let mut statement = connection.prepare(
-                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, rowid
+                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind, rowid
                  FROM memories
                  WHERE COALESCE(agent_id, 'default') = ? AND (? OR deleted = 0) AND (? IS NULL OR rowid < ?)
                  ORDER BY rowid DESC LIMIT ?",
@@ -2046,7 +2066,7 @@ fn execute_operation(
             let mut last_rowid = None;
             while let Some(row) = rows.next()? {
                 let item = memory_row(row)?;
-                let rowid: i64 = row.get(7)?;
+                let rowid: i64 = row.get(13)?;
                 if items.len() == limit {
                     next_cursor = last_rowid.map(|value: i64| value.to_string());
                     break;
@@ -2063,7 +2083,7 @@ fn execute_operation(
             let id = required_id(&id)?;
             let memory = connection
                 .query_row(
-                    "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                    "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                      FROM memories
                      WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
                     params![id, agent_id],
@@ -2073,12 +2093,27 @@ fn execute_operation(
             let mut value = serde_json::to_value(memory)?;
             if let Some(object) = value.as_object_mut() {
                 if let Some(metadata) = object.get("metadata").and_then(Value::as_object).cloned() {
-                    for key in ["sourceId", "sourceType", "sourcePath", "runtimePath", "idempotencyKey"] { if let Some(v) = metadata.get(key) { object.insert(key.into(), v.clone()); } }
+                    for key in [
+                        "sourceId",
+                        "sourceType",
+                        "sourcePath",
+                        "runtimePath",
+                        "idempotencyKey",
+                    ] {
+                        if let Some(v) = metadata.get(key) {
+                            object.insert(key.into(), v.clone());
+                        }
+                    }
                     let memory_kind = match metadata.get("sourceType").and_then(Value::as_str) {
-                        Some("extract" | "aggregate-recall" | "session_end" | "checkpoint" | "dreaming") => None,
+                        Some(
+                            "extract" | "aggregate-recall" | "session_end" | "checkpoint"
+                            | "dreaming",
+                        ) => None,
                         _ => Some("episodic"),
                     };
-                    if memory_kind.is_some() { object.insert("memoryKind".into(), json!("episodic")); }
+                    if memory_kind.is_some() {
+                        object.insert("memoryKind".into(), json!("episodic"));
+                    }
                 }
             }
             Ok(value)
@@ -2167,7 +2202,7 @@ fn execute_operation(
                 return Err(CoreError::InvalidInput("query must not be empty".into()));
             }
             let mut statement = connection.prepare(
-                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at
+                "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                  FROM memories
                  WHERE COALESCE(agent_id, 'default') = ? AND deleted = 0 AND content LIKE ?
                  ORDER BY rowid DESC LIMIT 1000",
@@ -3999,10 +4034,21 @@ fn bounded_json(value: &Value) -> Result<String, CoreError> {
 
 fn memory_search_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     let memory = memory_row(row)?;
-    let score: f64 = row.get(7)?;
+    let score: f64 = row.get(13)?;
     Ok(
-        json!({"id":memory.id,"agentId":memory.agent_id,"content":memory.content,"metadata":memory.metadata,"deleted":memory.deleted,"createdAt":memory.created_at,"updatedAt":memory.updated_at,"score":1.0/(1.0+score.abs())}),
+        json!({"id":memory.id,"agentId":memory.agent_id,"content":memory.content,"metadata":memory.metadata,"deleted":memory.deleted,"createdAt":memory.created_at,"updatedAt":memory.updated_at,"sourceId":memory.source_id,"sourceType":memory.source_type,"sourcePath":memory.source_path,"runtimePath":memory.runtime_path,"idempotencyKey":memory.idempotency_key,"memoryKind":memory.memory_kind,"score":1.0/(1.0+score.abs())}),
     )
+}
+
+fn classify_memory_kind(source_type: Option<&str>) -> Option<&'static str> {
+    match source_type {
+        Some("extract" | "aggregate-recall" | "session_end" | "checkpoint" | "dreaming") => None,
+        _ => Some("episodic"),
+    }
+}
+
+fn optional_text(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<String>> {
+    Ok(row.get::<_, String>(index).ok())
 }
 
 fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
@@ -4017,6 +4063,12 @@ fn memory_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Memory> {
         deleted: row.get::<_, i64>(4)? != 0,
         created_at: row.get(5).ok(),
         updated_at: row.get(6).ok(),
+        source_id: optional_text(row, 7)?,
+        source_type: optional_text(row, 8)?,
+        source_path: optional_text(row, 9)?,
+        runtime_path: optional_text(row, 10)?,
+        idempotency_key: optional_text(row, 11)?,
+        memory_kind: optional_text(row, 12)?,
     })
 }
 
@@ -4307,6 +4359,21 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     ensure_column(&transaction, "memories", "runtime_path", "TEXT")?;
     ensure_column(&transaction, "memories", "idempotency_key", "TEXT")?;
     ensure_column(&transaction, "memories", "memory_kind", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "memories",
+        "metadata",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    // Preserve provenance from legacy TypeScript column names before serving rows.
+    if has_column(&transaction, "memories", "source")? {
+        transaction.execute("UPDATE memories SET source_id=COALESCE(NULLIF(source_id,''),source) WHERE source IS NOT NULL", [])?;
+    }
+    if has_column(&transaction, "memories", "accessed_at")? {
+        transaction.execute("UPDATE memories SET source_path=COALESCE(NULLIF(source_path,''),accessed_at) WHERE accessed_at IS NOT NULL", [])?;
+    }
+    transaction.execute("UPDATE memories SET source_id=COALESCE(NULLIF(source_id,''),json_extract(metadata,'$.sourceId'),json_extract(metadata,'$.source_id')), source_type=COALESCE(NULLIF(source_type,''),json_extract(metadata,'$.sourceType'),json_extract(metadata,'$.source_type')), source_path=COALESCE(NULLIF(source_path,''),json_extract(metadata,'$.sourcePath'),json_extract(metadata,'$.source_path')), runtime_path=COALESCE(NULLIF(runtime_path,''),json_extract(metadata,'$.runtimePath'),json_extract(metadata,'$.runtime_path')), idempotency_key=COALESCE(NULLIF(idempotency_key,''),json_extract(metadata,'$.idempotencyKey'),json_extract(metadata,'$.idempotency_key')) WHERE metadata IS NOT NULL", [])?;
+    transaction.execute("UPDATE memories SET memory_kind=CASE WHEN source_type IN ('extract','aggregate-recall','session_end','checkpoint','dreaming') THEN NULL ELSE 'episodic' END WHERE memory_kind IS NULL", [])?;
     ensure_column(&transaction, "schema_migrations", "checksum", "TEXT")?;
     ensure_column(&transaction, "memories", "superseded_by", "TEXT")?;
     ensure_column(&transaction, "memories", "superseded_at", "TEXT")?;
