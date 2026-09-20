@@ -137,12 +137,12 @@ describe("fresh Rust telemetry boundary", () => {
 			},
 		});
 		expect(compatibilityEvents.status).toBe(200);
-		const empty = await body(
-			await fetch(`${base()}/api/telemetry/events?agent=${agent}&workspace=${workspaceId}&cursor=${page.nextCursor}`, {
+		const filtered = await body(
+			await fetch(`${base()}/api/telemetry/events?agent=${agent}&workspace=${workspaceId}&event=memory.not-emitted`, {
 				headers: auth(authority),
 			}),
 		);
-		expect(empty.events).toHaveLength(0);
+		expect(filtered.events).toHaveLength(0);
 	});
 	test("reports authenticated health and explicit provider/export boundaries", async () => {
 		const authority = token("operator", { agent, workspace: workspaceId }, ["analytics"]);
