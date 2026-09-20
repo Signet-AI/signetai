@@ -91,15 +91,12 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/knowledge/entities/{id}/dependencies",
             get(unsupported_dependencies),
         )
-        .route("/api/knowledge/stats", get(unsupported_stats))
+        .route("/api/knowledge/stats", get(stats))
         .route(
             "/api/knowledge/traversal/status",
             get(unsupported_traversal),
         )
-        .route(
-            "/api/knowledge/constellation",
-            get(unsupported_constellation),
-        )
+        .route("/api/knowledge/constellation", get(constellation))
 }
 
 async fn entity_detail(
@@ -167,9 +164,20 @@ async fn unsupported_dependencies() -> Result<Json<Value>, ApiError> {
         "knowledge dependencies are unsupported by the fresh native operation boundary",
     ))
 }
-async fn unsupported_stats() -> Result<Json<Value>, ApiError> {
-    Err(ApiError::not_implemented(
-        "knowledge stats are unsupported by the fresh native operation boundary",
+async fn stats(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeStats {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&headers, &q)?,
+            },
+        )
+        .await?,
     ))
 }
 async fn unsupported_traversal() -> Result<Json<Value>, ApiError> {
@@ -177,9 +185,21 @@ async fn unsupported_traversal() -> Result<Json<Value>, ApiError> {
         "knowledge traversal status is unsupported by the fresh native operation boundary",
     ))
 }
-async fn unsupported_constellation() -> Result<Json<Value>, ApiError> {
-    Err(ApiError::not_implemented(
-        "knowledge constellation is unsupported by the fresh native operation boundary",
+async fn constellation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeConstellation {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&headers, &q)?,
+                limit: limit(q.limit),
+            },
+        )
+        .await?,
     ))
 }
 

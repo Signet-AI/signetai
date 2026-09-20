@@ -220,6 +220,8 @@ impl From<CoreError> for ApiError {
 pub(crate) struct AgentQuery {
     #[serde(alias = "agent_id")]
     agent_id: Option<String>,
+    #[serde(rename = "agentId")]
+    agent_id_camel: Option<String>,
     limit: Option<usize>,
     cursor: Option<String>,
 }
@@ -302,21 +304,41 @@ pub(crate) fn agent(
     query: Option<&AgentQuery>,
     body: Option<&str>,
 ) -> Result<String, ApiError> {
-    headers
-        .get("x-signet-agent-id")
-        .or_else(|| headers.get("x-signet-agent"))
-        .and_then(|value| value.to_str().ok())
-        .and_then(non_empty)
-        .or_else(|| {
-            query
-                .and_then(|value| value.agent_id.clone())
-                .and_then(|value| non_empty(&value))
-        })
-        .or_else(|| body.and_then(non_empty))
-        .or_else(configured_agent)
-        .ok_or_else(|| {
-            ApiError::unauthorized("an agent identity is required (x-signet-agent-id or agent_id)")
-        })
+    let mut identities = Vec::new();
+    for name in ["x-signet-agent-id", "x-signet-agent"] {
+        for value in headers.get_all(name).iter() {
+            let value = value
+                .to_str()
+                .map_err(|_| ApiError::bad_request("agent identity header must be valid UTF-8"))?;
+            if let Some(value) = non_empty(value) {
+                identities.push(value);
+            }
+        }
+    }
+    if let Some(query) = query {
+        if let Some(value) = query.agent_id.as_deref().and_then(non_empty) {
+            identities.push(value);
+        }
+        if let Some(value) = query.agent_id_camel.as_deref().and_then(non_empty) {
+            identities.push(value);
+        }
+    }
+    if let Some(value) = body.and_then(non_empty) {
+        identities.push(value);
+    }
+    if identities.is_empty() {
+        if let Some(value) = configured_agent() {
+            identities.push(value);
+        }
+    }
+    identities.dedup();
+    match identities.as_slice() {
+        [] => Err(ApiError::unauthorized(
+            "an agent identity is required (x-signet-agent-id or agent_id)",
+        )),
+        [identity] => Ok(identity.clone()),
+        _ => Err(ApiError::bad_request("conflicting agent identities")),
+    }
 }
 
 pub(crate) fn metadata(request: &RememberRequest) -> Value {

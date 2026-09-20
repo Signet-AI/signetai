@@ -82,7 +82,7 @@ test("fresh knowledge graph boundary is scoped, bounded, durable, and explicit a
 	const attr = await fetch(`${daemon.origin}/api/knowledge/attributes?workspace_id=workspace-a`, {
 		method: "POST",
 		headers: a,
-		body: JSON.stringify({ aspect_id: aspect.id, kind: "fact", content: "human" }),
+		body: JSON.stringify({ aspect_id: aspect.id, kind: "attribute", content: "human" }),
 	});
 	expect(attr.status).toBe(201);
 	const relation = await fetch(`${daemon.origin}/api/knowledge/relations?workspace_id=workspace-a`, {
@@ -130,7 +130,30 @@ test("fresh knowledge graph boundary is scoped, bounded, durable, and explicit a
 	});
 	expect(detail.status).toBe(200);
 	expect(await body(detail)).toMatchObject({ id: alice.id, name: "Alice", type: "person" });
-	expect((await fetch(`${daemon.origin}/api/knowledge/constellation`, { headers: a })).status).toBe(501);
+	const stats = await body(
+		await fetch(`${daemon.origin}/api/knowledge/stats?workspace_id=workspace-a`, { headers: a }),
+	);
+	expect(stats).toEqual({
+		entityCount: 2,
+		aspectCount: 1,
+		attributeCount: 1,
+		constraintCount: 0,
+		dependencyCount: 0,
+		unassignedMemoryCount: 0,
+		coveragePercent: 0,
+		feedbackUpdatedAspectCount: 1,
+		averageAspectWeight: 0.8,
+		maxWeightAspectCount: 0,
+		minWeightAspectCount: 0,
+	});
+	const constellation = await body(
+		await fetch(`${daemon.origin}/api/knowledge/constellation?workspace_id=workspace-a&limit=1`, { headers: a }),
+	);
+	expect(constellation.entities).toHaveLength(1);
+	expect(constellation.relations).toHaveLength(1);
+	expect((await fetch(`${daemon.origin}/api/knowledge/constellation`, { headers: b })).status).toBe(200);
+	const isolatedConstellation = await body(await fetch(`${daemon.origin}/api/knowledge/constellation`, { headers: b }));
+	expect(isolatedConstellation).toEqual({ entities: [], relations: [] });
 	await new Promise((r) => setTimeout(r, 50));
 	daemon.child.kill("SIGTERM");
 	await daemon.child.exited;

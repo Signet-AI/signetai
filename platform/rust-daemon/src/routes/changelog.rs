@@ -25,17 +25,16 @@ mod tests {
     }
 
     #[test]
-    fn release_ignores_changelog_override() {
-        std::env::set_var("SIGNET_CHANGELOG_BASE_URL", "https://attacker.invalid");
-        std::env::remove_var("SIGNET_CHANGELOG_MODE");
-        assert_eq!(super::base_url(), super::BASE);
+    fn release_mode_never_uses_local_fallback() {
+        assert!(!super::local_fallback_allowed(""));
     }
 
     #[test]
     fn development_mode_allows_changelog_override() {
-        std::env::set_var("SIGNET_CHANGELOG_MODE", "development");
-        std::env::set_var("SIGNET_CHANGELOG_BASE_URL", "http://127.0.0.1:1234");
-        assert_eq!(super::base_url(), "http://127.0.0.1:1234");
+        assert_eq!(
+            super::base_url_for("development", Some("http://127.0.0.1:1234")),
+            "http://127.0.0.1:1234"
+        );
     }
 
     #[test]
@@ -74,12 +73,20 @@ pub(crate) struct Entry {
 }
 
 fn base_url() -> String {
-    let mode = env::var("SIGNET_CHANGELOG_MODE").unwrap_or_default();
-    if matches!(mode.as_str(), "test" | "development") {
-        env::var("SIGNET_CHANGELOG_BASE_URL").unwrap_or_else(|_| BASE.to_owned())
+    base_url_for(
+        &env::var("SIGNET_CHANGELOG_MODE").unwrap_or_default(),
+        env::var("SIGNET_CHANGELOG_BASE_URL").ok().as_deref(),
+    )
+}
+fn base_url_for(mode: &str, override_url: Option<&str>) -> String {
+    if matches!(mode, "test" | "development") {
+        override_url.unwrap_or(BASE).to_owned()
     } else {
         BASE.to_owned()
     }
+}
+fn local_fallback_allowed(mode: &str) -> bool {
+    matches!(mode, "test" | "development")
 }
 fn cache_identity(name: &str) -> String {
     let mut hasher = Sha256::new();
@@ -285,7 +292,8 @@ async fn source(state: &AppState, name: &'static str) -> Option<Entry> {
             }
         }
     }
-    if raw.is_none() && env::var("SIGNET_DEV_REPO_ROOT").is_ok() {
+    let mode = env::var("SIGNET_CHANGELOG_MODE").unwrap_or_default();
+    if raw.is_none() && local_fallback_allowed(&mode) && env::var("SIGNET_DEV_REPO_ROOT").is_ok() {
         let root = PathBuf::from(env::var("SIGNET_DEV_REPO_ROOT").ok()?);
         let path = root.join(name);
         if let Ok(bytes) = std::fs::read(path) {

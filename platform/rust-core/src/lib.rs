@@ -2349,6 +2349,93 @@ fn execute_operation(
                 json!({"id":id,"aspectId":aspect_id,"kind":kind,"content":content,"status":"active"}),
             )
         }
+        Operation::KnowledgeStats {
+            agent_id,
+            workspace_id,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let scoped = |sql: &str| -> Result<i64, CoreError> {
+                Ok(connection.query_row(sql, params![&agent_id, &workspace_id], |r| r.get(0))?)
+            };
+            let agent_only = |sql: &str| -> Result<i64, CoreError> {
+                Ok(connection.query_row(sql, params![&agent_id], |r| r.get(0))?)
+            };
+            let entity_count = scoped(
+                "SELECT count(*) FROM kg_entities WHERE agent_id=? AND workspace_id=? AND deleted=0",
+            )?;
+            let aspect_count = scoped(
+                "SELECT count(*) FROM kg_aspects a JOIN kg_entities e ON e.id=a.entity_id AND e.agent_id=a.agent_id AND e.workspace_id=a.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND a.deleted=0",
+            )?;
+            let attribute_count = scoped(
+                "SELECT count(*) FROM kg_attributes a JOIN kg_aspects p ON p.id=a.aspect_id AND p.agent_id=a.agent_id AND p.workspace_id=a.workspace_id AND p.deleted=0 JOIN kg_entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND a.kind='attribute' AND a.status='active'",
+            )?;
+            let constraint_count = scoped(
+                "SELECT count(*) FROM kg_attributes a JOIN kg_aspects p ON p.id=a.aspect_id AND p.agent_id=a.agent_id AND p.workspace_id=a.workspace_id AND p.deleted=0 JOIN kg_entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND a.kind='constraint' AND a.status='active'",
+            )?;
+            let dependency_count = 0_i64;
+            let scoped_memory_count = agent_only(
+                "SELECT count(*) FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL",
+            )?;
+            let assigned_memory_count = scoped(
+                "SELECT count(DISTINCT a.memory_id) FROM kg_attributes a JOIN kg_aspects p ON p.id=a.aspect_id AND p.agent_id=a.agent_id AND p.workspace_id=a.workspace_id AND p.deleted=0 JOIN kg_entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND a.status='active' AND a.memory_id IS NOT NULL",
+            )?;
+            let unassigned_memory_count = (scoped_memory_count - assigned_memory_count).max(0);
+            let coverage_percent = if scoped_memory_count > 0 {
+                ((assigned_memory_count as f64 / scoped_memory_count as f64) * 1000.0).round()
+                    / 10.0
+            } else {
+                0.0
+            };
+            let feedback_updated_aspect_count: i64 = connection.query_row(
+                "SELECT count(*) FROM kg_aspects a JOIN kg_entities e ON e.id=a.entity_id AND e.agent_id=a.agent_id AND e.workspace_id=a.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND a.deleted=0 AND a.updated_at >= datetime('now','-7 days')",
+                params![&agent_id, &workspace_id],
+                |r| r.get(0),
+            )?;
+            let average_aspect_weight: f64 = connection.query_row(
+                "SELECT coalesce(avg(a.weight),0) FROM kg_aspects a JOIN kg_entities e ON e.id=a.entity_id AND e.agent_id=a.agent_id AND e.workspace_id=a.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND a.deleted=0",
+                params![&agent_id, &workspace_id],
+                |r| r.get(0),
+            )?;
+            let max_weight_aspect_count: i64 = connection.query_row(
+                "SELECT count(*) FROM kg_aspects a JOIN kg_entities e ON e.id=a.entity_id AND e.agent_id=a.agent_id AND e.workspace_id=a.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND a.deleted=0 AND a.weight >= 1.0",
+                params![&agent_id, &workspace_id],
+                |r| r.get(0),
+            )?;
+            let min_weight_aspect_count: i64 = connection.query_row(
+                "SELECT count(*) FROM kg_aspects a JOIN kg_entities e ON e.id=a.entity_id AND e.agent_id=a.agent_id AND e.workspace_id=a.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND a.deleted=0 AND a.weight <= 0.1",
+                params![&agent_id, &workspace_id],
+                |r| r.get(0),
+            )?;
+            Ok(json!({
+                "entityCount": entity_count,
+                "aspectCount": aspect_count,
+                "attributeCount": attribute_count,
+                "constraintCount": constraint_count,
+                "dependencyCount": dependency_count,
+                "unassignedMemoryCount": unassigned_memory_count,
+                "coveragePercent": coverage_percent,
+                "feedbackUpdatedAspectCount": feedback_updated_aspect_count,
+                "averageAspectWeight": (average_aspect_weight * 1000.0).round() / 1000.0,
+                "maxWeightAspectCount": max_weight_aspect_count,
+                "minWeightAspectCount": min_weight_aspect_count,
+            }))
+        }
+        Operation::KnowledgeConstellation {
+            agent_id,
+            workspace_id,
+            limit,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let limit = limit.clamp(1, 1000) as i64;
+            let mut s = connection.prepare("SELECT id,name,entity_type,metadata FROM kg_entities WHERE agent_id=? AND workspace_id=? AND deleted=0 ORDER BY rowid DESC LIMIT ?")?;
+            let rows = s.query_map(params![&agent_id, &workspace_id, limit], |r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(3)?).unwrap_or(json!({}))})))?;
+            let entities = rows.collect::<Result<Vec<_>, _>>()?;
+            let mut s = connection.prepare("SELECT id,from_id,to_id,relation,metadata FROM kg_relations WHERE agent_id=? AND workspace_id=? AND deleted=0 ORDER BY rowid DESC LIMIT ?")?;
+            let rows = s.query_map(params![&agent_id, &workspace_id, limit], |r| Ok(json!({"id":r.get::<_,String>(0)?,"fromId":r.get::<_,String>(1)?,"toId":r.get::<_,String>(2)?,"relation":r.get::<_,String>(3)?,"metadata":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({}))})))?;
+            Ok(json!({"entities":entities,"relations":rows.collect::<Result<Vec<_>, _>>()?}))
+        }
         Operation::KnowledgeEntityDetail {
             agent_id,
             workspace_id,
@@ -3170,6 +3257,15 @@ pub enum Operation {
         offset: usize,
         kind: Option<String>,
         status: Option<String>,
+    },
+    KnowledgeStats {
+        agent_id: String,
+        workspace_id: String,
+    },
+    KnowledgeConstellation {
+        agent_id: String,
+        workspace_id: String,
+        limit: usize,
     },
     KnowledgeTree {
         agent_id: String,
