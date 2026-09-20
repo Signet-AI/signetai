@@ -1997,15 +1997,23 @@ fn execute_operation(
                 return Err(CoreError::InvalidInput("content must not be empty".into()));
             }
             let id = uuid::Uuid::new_v4().to_string();
+            let metadata_value = metadata.clone();
             let metadata = serde_json::to_string(&metadata)?;
             let transaction = connection.transaction()?;
             transaction.execute(
-                "INSERT INTO memories (id, agent_id, content, metadata, deleted, created_at, updated_at) VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'))",
-                params![id, agent_id, content, metadata],
+                "INSERT INTO memories (id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind) VALUES (?, ?, ?, ?, 0, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?)",
+                params![id, agent_id, content, metadata, metadata_value.get("sourceId").and_then(Value::as_str), metadata_value.get("sourceType").and_then(Value::as_str), metadata_value.get("sourcePath").and_then(Value::as_str), metadata_value.get("runtimePath").and_then(Value::as_str), metadata_value.get("idempotencyKey").and_then(Value::as_str), (metadata_value.get("sourceType").and_then(Value::as_str) == Some("extract")).then_some("episodic")],
             )?;
             record_history(&transaction, &id, &agent_id, "remember", None)?;
             transaction.commit()?;
-            Ok(json!({ "id": id }))
+            let mut result = json!({ "id": id });
+            if let Value::Object(fields) = metadata_value {
+                for key in ["sourceId", "sourceType", "sourcePath", "runtimePath", "idempotencyKey"] {
+                    if let Some(value) = fields.get(key) { result[key] = value.clone(); }
+                }
+                if fields.get("sourceType").and_then(Value::as_str) == Some("extract") { result["memoryKind"] = json!("episodic"); }
+            }
+            Ok(result)
         }
         Operation::List {
             agent_id,
@@ -2058,7 +2066,14 @@ fn execute_operation(
                     memory_row,
                 )
                 .optional()?;
-            Ok(serde_json::to_value(memory)?)
+            let mut value = serde_json::to_value(memory)?;
+            if let Some(object) = value.as_object_mut() {
+                if let Some(metadata) = object.get("metadata").and_then(Value::as_object).cloned() {
+                    for key in ["sourceId", "sourceType", "sourcePath", "runtimePath", "idempotencyKey"] { if let Some(v) = metadata.get(key) { object.insert(key.into(), v.clone()); } }
+                    if metadata.get("sourceType").and_then(Value::as_str) == Some("extract") { object.insert("memoryKind".into(), json!("episodic")); }
+                }
+            }
+            Ok(value)
         }
         Operation::Update {
             agent_id,
@@ -4278,6 +4293,12 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "UPDATE kg_relations SET deleted=0 WHERE deleted IS NULL",
         [],
     )?;
+    ensure_column(&transaction, "memories", "source_id", "TEXT")?;
+    ensure_column(&transaction, "memories", "source_type", "TEXT")?;
+    ensure_column(&transaction, "memories", "source_path", "TEXT")?;
+    ensure_column(&transaction, "memories", "runtime_path", "TEXT")?;
+    ensure_column(&transaction, "memories", "idempotency_key", "TEXT")?;
+    ensure_column(&transaction, "memories", "memory_kind", "TEXT")?;
     ensure_column(&transaction, "schema_migrations", "checksum", "TEXT")?;
     ensure_column(&transaction, "memories", "superseded_by", "TEXT")?;
     ensure_column(&transaction, "memories", "superseded_at", "TEXT")?;

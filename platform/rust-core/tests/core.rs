@@ -48,6 +48,60 @@ fn integrity_checkpoint_is_scoped_durable_and_excludes_fts() {
     assert_eq!(second["checkpoint"]["completed"], true);
 }
 #[test]
+fn remember_persists_current_provenance_and_extract_memory_kind() {
+    let c = core();
+    let id = c
+        .submit(Operation::Remember {
+            agent_id: "agent-a".into(),
+            content: "derived fact".into(),
+            metadata: serde_json::json!({
+                "sourceId": "src-1",
+                "sourceType": "extract",
+                "sourcePath": "notes.md",
+                "runtimePath": "plugin",
+                "idempotencyKey": "idem-1"
+            }),
+        })
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let got = c
+        .submit(Operation::Get {
+            agent_id: "agent-a".into(),
+            id,
+        })
+        .unwrap();
+    assert_eq!(got["sourceId"], "src-1");
+    assert_eq!(got["sourceType"], "extract");
+    assert_eq!(got["sourcePath"], "notes.md");
+    assert_eq!(got["runtimePath"], "plugin");
+    assert_eq!(got["idempotencyKey"], "idem-1");
+    assert_eq!(got["memoryKind"], "episodic");
+}
+
+#[test]
+fn legacy_memory_rows_migrate_without_data_loss() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-memory.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL, agent_id TEXT, is_deleted INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO memories VALUES ('old','preserve','a',0,'t','t');").unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let got = c.get("a", "old").unwrap().unwrap();
+    assert_eq!(got.content, "preserve");
+    let db = Connection::open(&p).unwrap();
+    let cols: Vec<String> = db
+        .prepare("PRAGMA table_info(memories)")
+        .unwrap()
+        .query_map([], |r| r.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(cols.iter().any(|c| c == "source_id"));
+}
+
+#[test]
 fn scoped_writes_and_reads() {
     let c = core();
     let a = c.remember("a", NewMemory::text("hello world")).unwrap();
