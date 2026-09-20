@@ -274,15 +274,13 @@ if (import.meta.main) {
 	const value = (f: string) => (a.includes(f) ? a[a.indexOf(f) + 1] : undefined);
 	const backend = value("--backend") as Backend;
 	if (backend !== "typescript" && backend !== "rust") throw new Error("--backend must be typescript or rust");
-	console.log(
-		JSON.stringify(
-			run(resolve("."), backend, {
-				worktree: value("--worktree"),
-				artifact: value("--artifact"),
-				adapter: value("--adapter"),
-				report: value("--report"),
-				paths: value("--paths") ? JSON.parse(value("--paths") as string) : undefined,
-			}),
-		),
-	);
+	const result = run(resolve("."), backend, {
+		worktree: value("--worktree"),
+		artifact: value("--artifact"),
+		adapter: value("--adapter"),
+		report: value("--report"),
+		paths: value("--paths") ? JSON.parse(value("--paths") as string) : undefined,
+	});
+	console.log(JSON.stringify(result));
+	if (result.status !== "passed") process.exitCode = 1;
 }
