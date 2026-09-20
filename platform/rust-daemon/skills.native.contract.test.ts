@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const root = join(import.meta.dir, "../..");
@@ -96,6 +96,21 @@ it.each([root, join(root, "platform/rust-daemon")])("bounds and safely filters s
 			})
 		).status,
 	).toBe(501);
+});
+
+it("does not follow a replaced workspace skills root", async () => {
+	const { origin, workspace } = await start();
+	const outside = mkdtempSync(join(tmpdir(), "signet-skills-outside-"));
+	workspaces.push(outside);
+	mkdirSync(join(outside, "secret"));
+	writeFileSync(join(outside, "secret", "SKILL.md"), "---\ndescription: outside secret\n---\nmust not be read");
+	renameSync(join(workspace, "skills"), join(workspace, "skills-real"));
+	symlinkSync(outside, join(workspace, "skills"));
+
+	expect((await get(origin, "/api/skills")).status).toBe(503);
+	expect((await get(origin, "/api/skills/secret")).status).toBe(503);
+	expect((await get(origin, "/api/skills/browse")).status).toBe(503);
+	expect((await get(origin, "/api/skills/search?q=secret")).status).toBe(503);
 });
 
 it("enforces signed capability denial while preserving admin API-key access", async () => {

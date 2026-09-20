@@ -9,6 +9,8 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 #[cfg(unix)]
 use std::io;
+#[cfg(unix)]
+use std::os::fd::AsRawFd;
 use std::{
     fs,
     io::Read,
@@ -96,11 +98,49 @@ async fn gate(
     let _ = destructive;
     Ok(())
 }
-fn root_dir(state: &AppState) -> Result<PathBuf, ApiError> {
+#[cfg(unix)]
+struct SkillsRoot {
+    file: fs::File,
+    path: PathBuf,
+}
+#[cfg(unix)]
+fn root_dir(state: &AppState) -> Result<SkillsRoot, ApiError> {
     let root = skills_root(state);
-    fs::create_dir_all(&root)
-        .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
-    Ok(root)
+    use std::os::fd::FromRawFd;
+    let fd = unsafe {
+        libc::open(
+            std::ffi::CString::new(root.as_os_str().as_encoded_bytes())
+                .unwrap()
+                .as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        if io::Error::last_os_error().raw_os_error() != Some(libc::ENOENT) {
+            return Err(ApiError::unavailable("skills directory is unavailable"));
+        }
+        fs::create_dir_all(&root)
+            .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
+        let fd = unsafe {
+            libc::open(
+                std::ffi::CString::new(root.as_os_str().as_encoded_bytes())
+                    .unwrap()
+                    .as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(ApiError::unavailable("skills directory is unavailable"));
+        }
+        return Ok(SkillsRoot {
+            file: unsafe { fs::File::from_raw_fd(fd) },
+            path: root,
+        });
+    }
+    Ok(SkillsRoot {
+        file: unsafe { fs::File::from_raw_fd(fd) },
+        path: root,
+    })
 }
 
 fn frontmatter(content: &str) -> Result<Value, ApiError> {
@@ -163,23 +203,22 @@ fn frontmatter(content: &str) -> Result<Value, ApiError> {
     Ok(Value::Object(out))
 }
 #[cfg(unix)]
-fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
+fn read_skill(root: &SkillsRoot, name: &str) -> Result<Value, ApiError> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
     valid_name(name)?;
-    if fs::symlink_metadata(root.join(name))
+    if fs::symlink_metadata(root.path.join(name))
         .map(|meta| meta.file_type().is_symlink())
         .unwrap_or(false)
     {
         return Err(ApiError::bad_request("invalid skill path"));
     }
-    let root_file = fs::File::open(root)
-        .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
+
     let cname = CString::new(name).map_err(|_| ApiError::bad_request("invalid skill name"))?;
     let dir_fd = unsafe {
         libc::openat(
-            root_file.as_raw_fd(),
+            root.file.as_raw_fd(),
             cname.as_ptr(),
             libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
         )
@@ -234,7 +273,7 @@ fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
     let mut value = frontmatter(&content)?;
     if let Value::Object(ref mut map) = value {
         map.insert("name".into(), json!(name));
-        map.insert("path".into(), json!(root.join(name)));
+        map.insert("path".into(), json!(root.path.join(name)));
         map.insert("content".into(), json!(content));
     }
     Ok(value)
@@ -253,10 +292,10 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/skills/install", post(install))
         .route("/api/skills/{name}", get(detail).delete(remove))
 }
-fn all_skills(root: &FsPath) -> Result<Vec<Value>, ApiError> {
+fn all_skills(root: &SkillsRoot) -> Result<Vec<Value>, ApiError> {
     let mut entries = Vec::new();
-    for entry in
-        fs::read_dir(root).map_err(|_| ApiError::unavailable("skills directory is unavailable"))?
+    for entry in fs::read_dir(format!("/proc/self/fd/{}", root.file.as_raw_fd()))
+        .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?
     {
         let entry = entry.map_err(|_| ApiError::unavailable("failed to list skills"))?;
         let name = match entry.file_name().into_string() {
@@ -330,7 +369,7 @@ async fn catalog_fetch(base: &str, path: &str) -> Result<Value, String> {
     serde_json::from_slice(&bytes).map_err(|e| format!("malformed catalog response: {e}"))
 }
 
-async fn external_catalog_results(root: &FsPath) -> (Vec<Value>, Vec<String>) {
+async fn external_catalog_results(root: &SkillsRoot) -> (Vec<Value>, Vec<String>) {
     let installed: std::collections::HashSet<String> = all_skills(root)
         .unwrap_or_default()
         .into_iter()
