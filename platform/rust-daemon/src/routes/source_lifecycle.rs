@@ -1,4 +1,4 @@
-use crate::{agent, execute, ApiError, AppState};
+use crate::{agent, execute, source_workspace, ApiError, AppState};
 use axum::{
     extract::{Path, State},
     http::HeaderMap,
@@ -15,11 +15,19 @@ async fn delete_source(
     payload: Option<Json<Value>>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = source_workspace(
+        &headers,
+        payload
+            .as_ref()
+            .and_then(|Json(v)| v.get("workspaceId"))
+            .and_then(Value::as_str),
+    )?;
     Ok(Json(
         execute(
             &state,
             Operation::DeleteSourceWithGeneration {
                 agent_id,
+                workspace_id,
                 source_id,
                 generation: payload
                     .as_ref()
@@ -37,11 +45,13 @@ async fn source_health(
     Path(source_id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = source_workspace(&headers, None)?;
     Ok(Json(
         execute(
             &state,
             Operation::SourceHealth {
                 agent_id,
+                workspace_id,
                 source_id,
             },
         )

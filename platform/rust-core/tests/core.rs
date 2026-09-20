@@ -197,6 +197,7 @@ fn workspace_submit_supports_all_durable_operation_variants() {
     let source = owner
         .submit(Operation::CreateSource {
             agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
             kind: "notes".into(),
             name: "fixture".into(),
             config: serde_json::json!({"root": "/workspace"}),
@@ -206,7 +207,8 @@ fn workspace_submit_supports_all_durable_operation_variants() {
     assert_eq!(
         owner
             .submit(Operation::ListSources {
-                agent_id: "agent".into()
+                agent_id: "agent".into(),
+                workspace_id: "workspace".into(),
             })
             .unwrap()
             .as_array()
@@ -217,6 +219,7 @@ fn workspace_submit_supports_all_durable_operation_variants() {
     let document = owner
         .submit(Operation::IngestDocument {
             agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
             source_id,
             path: "note.md".into(),
             content: "document body".into(),

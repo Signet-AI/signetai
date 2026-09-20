@@ -52,7 +52,7 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 	const workspace = mkdtempSync(join(tmpdir(), "signet-source-contract-"));
 	workspaces.push(workspace);
 	let daemon = await start(workspace, "agent-a");
-	const h = { "x-signet-agent": "agent-a", "content-type": "application/json" };
+	const h = { "x-signet-agent": "agent-a", "x-signet-workspace-id": "workspace-a", "content-type": "application/json" };
 	const created = await json(
 		await fetch(`${daemon.origin}/api/sources`, {
 			method: "POST",
@@ -64,7 +64,25 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 	const sourceId = created.id;
 	expect((await json(await fetch(`${daemon.origin}/api/sources`, { headers: h }))).sources).toHaveLength(1);
 	expect(
-		(await json(await fetch(`${daemon.origin}/api/sources`, { headers: { "x-signet-agent": "agent-b" } }))).sources,
+		(await fetch(`${daemon.origin}/api/sources`, { headers: { ...h, "x-workspace-id": "workspace-b" } })).status,
+	).toBe(400);
+	expect(
+		(
+			await json(
+				await fetch(`${daemon.origin}/api/sources`, {
+					headers: { "x-signet-agent": "agent-a", "x-signet-workspace-id": "workspace-b" },
+				}),
+			)
+		).sources,
+	).toHaveLength(0);
+	expect(
+		(
+			await json(
+				await fetch(`${daemon.origin}/api/sources`, {
+					headers: { "x-signet-agent": "agent-b", "x-signet-workspace-id": "workspace-a" },
+				}),
+			)
+		).sources,
 	).toHaveLength(0);
 	const ingest = async (content: string, duplicateMode = "skip") =>
 		json(
@@ -79,7 +97,11 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 	expect(first.contentHash).toBe("7692c3ad3540bb803c020b3aee66cd8887123234ea0c6e7143c0add73ff431ed");
 	const crossAgent = await fetch(`${daemon.origin}/api/import/documents`, {
 		method: "POST",
-		headers: { "x-signet-agent": "agent-b", "content-type": "application/json" },
+		headers: {
+			"x-signet-agent": "agent-b",
+			"x-signet-workspace-id": "workspace-a",
+			"content-type": "application/json",
+		},
 		body: JSON.stringify({ source_id: sourceId, path: "b.md", content: "hidden" }),
 	});
 	expect(crossAgent.status).toBe(404);
@@ -112,8 +134,11 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 		externalProvider: "not_checked",
 	});
 	expect(
-		(await fetch(`${daemon.origin}/api/sources/${sourceId}/health`, { headers: { "x-signet-agent": "agent-b" } }))
-			.status,
+		(
+			await fetch(`${daemon.origin}/api/sources/${sourceId}/health`, {
+				headers: { "x-signet-agent": "agent-b", "x-signet-workspace-id": "workspace-a" },
+			})
+		).status,
 	).toBe(404);
 	daemon.child.kill("SIGTERM");
 	await daemon.child.exited;

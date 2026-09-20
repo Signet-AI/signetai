@@ -635,8 +635,9 @@ async fn sources(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = source_workspace(&headers, None)?;
     Ok(Json(
-        json!({"sources": execute(&state, Operation::ListSources{agent_id}).await?}),
+        json!({"sources": execute(&state, Operation::ListSources{agent_id, workspace_id}).await?}),
     ))
 }
 #[derive(Debug, Deserialize)]
@@ -645,6 +646,8 @@ struct SourceRequest {
     name: String,
     #[serde(default)]
     config: Value,
+    #[serde(default, alias = "workspaceId")]
+    workspace_id: Option<String>,
 }
 async fn create_source(
     State(state): State<AppState>,
@@ -652,6 +655,7 @@ async fn create_source(
     Json(req): Json<SourceRequest>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let agent_id = agent(&headers, None, None)?;
+    let workspace_id = source_workspace(&headers, req.workspace_id.as_deref())?;
     Ok((
         StatusCode::CREATED,
         Json(
@@ -659,6 +663,7 @@ async fn create_source(
                 &state,
                 Operation::CreateSource {
                     agent_id,
+                    workspace_id,
                     kind: req.kind,
                     name: req.name,
                     config: req.config,
@@ -681,6 +686,33 @@ struct DocumentRequest {
     generation: Option<i64>,
     #[serde(default, alias = "workspaceId")]
     workspace_id: Option<String>,
+}
+
+fn source_workspace(headers: &HeaderMap, requested: Option<&str>) -> Result<String, ApiError> {
+    let header_values = ["x-signet-workspace-id", "x-workspace-id"]
+        .iter()
+        .filter_map(|name| {
+            headers
+                .get(*name)
+                .and_then(|v| v.to_str().ok())
+                .and_then(non_empty)
+        })
+        .collect::<Vec<_>>();
+    let body = requested;
+    let mut values = header_values.iter().map(|v| v.as_str()).collect::<Vec<_>>();
+    if let Some(body) = body {
+        values.push(body);
+    }
+    if values.is_empty() {
+        return Err(ApiError::bad_request("workspace identity is required"));
+    }
+    if values.iter().any(|value| *value != values[0]) {
+        return Err(ApiError::bad_request("conflicting workspace identities"));
+    }
+    if values[0].len() > 256 {
+        return Err(ApiError::bad_request("workspace identity is too long"));
+    }
+    Ok(values[0].to_owned())
 }
 
 pub(crate) fn workspace_id(headers: &HeaderMap, requested: Option<&str>) -> String {
@@ -716,6 +748,7 @@ async fn import_document(
                 &state,
                 Operation::IngestDocument {
                     agent_id,
+                    workspace_id: workspace_id.clone(),
                     source_id: req.source_id,
                     path: req.path,
                     content: req.content,

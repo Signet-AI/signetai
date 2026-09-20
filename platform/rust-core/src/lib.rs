@@ -48,6 +48,7 @@ pub struct NewMemory {
 pub struct Source {
     pub id: String,
     pub agent_id: String,
+    pub workspace_id: String,
     pub kind: String,
     pub name: String,
     pub config: Value,
@@ -354,21 +355,24 @@ impl Core {
     pub fn create_source(
         &self,
         agent: &str,
+        workspace: &str,
         kind: &str,
         name: &str,
         config: Value,
     ) -> Result<Source, CoreError> {
         let agent = required_agent(agent)?;
+        let workspace = required_id(workspace)?;
         let kind = required_id(kind)?;
         let name = required_id(name)?;
         self.call(move |connection| { let id = uuid::Uuid::new_v4().to_string(); let config = serde_json::to_string(&config)?;
-            connection.execute("INSERT INTO sources (id, agent_id, kind, name, config, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))", params![id, agent, kind, name, config])?;
-            Ok(Source { id, agent_id: agent, kind, name, config: serde_json::from_str(&config)?, created_at: Some(String::new()) }) })
+            connection.execute("INSERT INTO sources (id, agent_id, workspace_id, kind, name, config, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))", params![id, agent, workspace, kind, name, config])?;
+            Ok(Source { id, agent_id: agent, workspace_id: workspace, kind, name, config: serde_json::from_str(&config)?, created_at: Some(String::new()) }) })
     }
 
-    pub fn list_sources(&self, agent: &str) -> Result<Vec<Source>, CoreError> {
+    pub fn list_sources(&self, agent: &str, workspace: &str) -> Result<Vec<Source>, CoreError> {
         let agent = required_agent(agent)?;
-        self.call(move |c| { let mut s=c.prepare("SELECT id,agent_id,kind,name,config,created_at FROM sources WHERE agent_id=? ORDER BY rowid DESC")?; let rows=s.query_map(params![agent], |r| Ok(Source{id:r.get(0)?,agent_id:r.get(1)?,kind:r.get(2)?,name:r.get(3)?,config:serde_json::from_str(&r.get::<_,String>(4)?).unwrap_or(json!({})),created_at:r.get(5).ok()}))?; Ok(rows.collect::<Result<Vec<_>,_>>()?) })
+        let workspace = required_id(workspace)?;
+        self.call(move |c| { let mut s=c.prepare("SELECT id,agent_id,workspace_id,kind,name,config,created_at FROM sources WHERE agent_id=? AND workspace_id=? ORDER BY rowid DESC")?; let rows=s.query_map(params![agent,workspace], |r| Ok(Source{id:r.get(0)?,agent_id:r.get(1)?,workspace_id:r.get(2)?,kind:r.get(3)?,name:r.get(4)?,config:serde_json::from_str(&r.get::<_,String>(5)?).unwrap_or(json!({})),created_at:r.get(6).ok()}))?; Ok(rows.collect::<Result<Vec<_>,_>>()?) })
     }
 
     pub fn ingest_document(&self, agent: &str, input: DocumentInput) -> Result<String, CoreError> {
@@ -1741,38 +1745,45 @@ fn execute_operation(
         } => execute_memory_search(connection, agent_id, query, limit),
         Operation::CreateSource {
             agent_id,
+            workspace_id,
             kind,
             name,
             config,
         } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
             let kind = required_id(&kind)?;
             let name = required_id(&name)?;
             let config_text = serde_json::to_string(&config)?;
             let id = uuid::Uuid::new_v4().to_string();
             let transaction = connection.transaction()?;
             transaction.execute(
-                "INSERT INTO sources (id, agent_id, kind, name, config, created_at) VALUES (?, ?, ?, ?, ?, datetime('now'))",
-                params![id, agent_id, kind, name, config_text],
+                "INSERT INTO sources (id, agent_id, workspace_id, kind, name, config, created_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))",
+                params![id, agent_id, workspace_id, kind, name, config_text],
             )?;
             let source = transaction.query_row(
-                "SELECT id, agent_id, kind, name, config, created_at FROM sources WHERE id = ? AND agent_id = ?",
-                params![id, agent_id],
+                "SELECT id, agent_id, workspace_id, kind, name, config, created_at FROM sources WHERE id = ? AND agent_id = ? AND workspace_id = ?",
+                params![id, agent_id, workspace_id],
                 source_row,
             )?;
             transaction.commit()?;
             Ok(serde_json::to_value(source)?)
         }
-        Operation::ListSources { agent_id } => {
+        Operation::ListSources {
+            agent_id,
+            workspace_id,
+        } => {
             let agent_id = required_agent(&agent_id)?;
+            let workspace_id = required_id(&workspace_id)?;
             let mut statement = connection.prepare(
-                "SELECT id, agent_id, kind, name, config, created_at FROM sources WHERE agent_id = ? ORDER BY rowid DESC",
+                "SELECT id, agent_id, workspace_id, kind, name, config, created_at FROM sources WHERE agent_id = ? AND workspace_id = ? ORDER BY rowid DESC",
             )?;
-            let rows = statement.query_map(params![agent_id], source_row)?;
+            let rows = statement.query_map(params![agent_id, workspace_id], source_row)?;
             Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
         }
         Operation::IngestDocument {
             agent_id,
+            workspace_id,
             source_id,
             path,
             content,
@@ -1809,8 +1820,8 @@ fn execute_operation(
             let tx = connection.transaction()?;
             let source_generation: i64 = tx
                 .query_row(
-                    "SELECT generation FROM sources WHERE id=? AND agent_id=?",
-                    params![source_id, agent_id],
+                    "SELECT generation FROM sources WHERE id=? AND agent_id=? AND workspace_id=?",
+                    params![source_id, agent_id, workspace_id],
                     |r| r.get(0),
                 )
                 .optional()?
@@ -1886,14 +1897,15 @@ fn execute_operation(
         }
         Operation::DeleteSource {
             agent_id,
+            workspace_id,
             source_id,
         } => {
             let generation: Option<i64> = None;
             let tx = connection.transaction()?;
             let current: Option<i64> = tx
                 .query_row(
-                    "SELECT generation FROM sources WHERE agent_id=? AND id=?",
-                    params![agent_id, source_id],
+                    "SELECT generation FROM sources WHERE agent_id=? AND workspace_id=? AND id=?",
+                    params![agent_id, workspace_id, source_id],
                     |r| r.get(0),
                 )
                 .optional()?;
@@ -1902,27 +1914,28 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let changed = tx.execute(
-                "DELETE FROM documents WHERE agent_id=? AND source_id=?",
-                params![agent_id, source_id],
+                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND COALESCE(json_extract(metadata,'$._workspaceId'), '')=?",
+                params![agent_id, source_id, workspace_id],
             )?;
             tx.execute("INSERT INTO source_tombstones(agent_id,source_id,generation,deleted_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(agent_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,source_id,current+1])?;
             tx.execute(
-                "DELETE FROM sources WHERE agent_id=? AND id=?",
-                params![agent_id, source_id],
+                "DELETE FROM sources WHERE agent_id=? AND workspace_id=? AND id=?",
+                params![agent_id, workspace_id, source_id],
             )?;
             tx.commit()?;
             Ok(json!({"deleted":true,"documentsDeleted":changed,"generation":current+1}))
         }
         Operation::DeleteSourceWithGeneration {
             agent_id,
+            workspace_id,
             source_id,
             generation,
         } => {
             let tx = connection.transaction()?;
             let current: Option<i64> = tx
                 .query_row(
-                    "SELECT generation FROM sources WHERE agent_id=? AND id=?",
-                    params![agent_id, source_id],
+                    "SELECT generation FROM sources WHERE agent_id=? AND workspace_id=? AND id=?",
+                    params![agent_id, workspace_id, source_id],
                     |r| r.get(0),
                 )
                 .optional()?;
@@ -1931,25 +1944,26 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let changed = tx.execute(
-                "DELETE FROM documents WHERE agent_id=? AND source_id=?",
-                params![agent_id, source_id],
+                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND COALESCE(json_extract(metadata,'$._workspaceId'), '')=?",
+                params![agent_id, source_id, workspace_id],
             )?;
             tx.execute("INSERT INTO source_tombstones(agent_id,source_id,generation,deleted_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(agent_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,source_id,current+1])?;
             tx.execute(
-                "DELETE FROM sources WHERE agent_id=? AND id=?",
-                params![agent_id, source_id],
+                "DELETE FROM sources WHERE agent_id=? AND workspace_id=? AND id=?",
+                params![agent_id, workspace_id, source_id],
             )?;
             tx.commit()?;
             Ok(json!({"deleted":true,"documentsDeleted":changed,"generation":current+1}))
         }
         Operation::SourceHealth {
             agent_id,
+            workspace_id,
             source_id,
         } => {
             let exists: Option<i64> = connection
                 .query_row(
-                    "SELECT 1 FROM sources WHERE agent_id = ? AND id = ?",
-                    params![agent_id, source_id],
+                    "SELECT 1 FROM sources WHERE agent_id = ? AND workspace_id = ? AND id = ?",
+                    params![agent_id, workspace_id, source_id],
                     |r| r.get(0),
                 )
                 .optional()?;
@@ -1957,8 +1971,8 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let documents: i64 = connection.query_row(
-                "SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ?",
-                params![agent_id, source_id],
+                "SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ? AND COALESCE(json_extract(metadata,'$._workspaceId'), '') = ?",
+                params![agent_id, source_id, workspace_id],
                 |r| r.get(0),
             )?;
             Ok(
@@ -2734,15 +2748,18 @@ pub enum Operation {
     },
     CreateSource {
         agent_id: String,
+        workspace_id: String,
         kind: String,
         name: String,
         config: Value,
     },
     ListSources {
         agent_id: String,
+        workspace_id: String,
     },
     IngestDocument {
         agent_id: String,
+        workspace_id: String,
         source_id: String,
         path: String,
         content: String,
@@ -2771,15 +2788,18 @@ pub enum Operation {
     },
     DeleteSource {
         agent_id: String,
+        workspace_id: String,
         source_id: String,
     },
     DeleteSourceWithGeneration {
         agent_id: String,
+        workspace_id: String,
         source_id: String,
         generation: Option<i64>,
     },
     SourceHealth {
         agent_id: String,
+        workspace_id: String,
         source_id: String,
     },
     TranscriptImportCreate {
@@ -3146,16 +3166,23 @@ fn document_json_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 }
 
 fn source_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Source> {
-    let config = row.get::<_, String>(4).unwrap_or_else(|_| "{}".into());
+    let config = row.get::<_, String>(5).unwrap_or_else(|_| "{}".into());
     Ok(Source {
         id: row.get(0)?,
         agent_id: row
             .get::<_, Option<String>>(1)?
             .unwrap_or_else(|| "default".into()),
-        kind: row.get(2)?,
-        name: row.get(3).unwrap_or_default(),
+        workspace_id: row.get::<_, Option<String>>(2)?.ok_or_else(|| {
+            rusqlite::Error::InvalidColumnType(
+                2,
+                "workspace_id".into(),
+                rusqlite::types::Type::Null,
+            )
+        })?,
+        kind: row.get(3)?,
+        name: row.get(4).unwrap_or_default(),
         config: serde_json::from_str(&config).unwrap_or_else(|_| json!({})),
-        created_at: row.get(5).ok(),
+        created_at: row.get(6).ok(),
     })
 }
 
@@ -3164,7 +3191,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT);
          CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');
-         CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', created_at TEXT);
+         CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT, kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', created_at TEXT);
          CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', content_hash TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT);
          CREATE TABLE IF NOT EXISTS source_tombstones (agent_id TEXT NOT NULL, source_id TEXT NOT NULL, generation INTEGER NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY(agent_id,source_id));
          CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, superseded_by TEXT, superseded_at TEXT, superseded_reason TEXT, created_at TEXT, updated_at TEXT);
@@ -3203,6 +3230,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
+    ensure_column(&transaction, "sources", "workspace_id", "TEXT")?;
     ensure_column(
         &transaction,
         "jobs",
