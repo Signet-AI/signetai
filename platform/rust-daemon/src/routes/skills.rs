@@ -473,8 +473,9 @@ async fn browse(
     });
     let total = results.len();
     results.truncate(max);
+    let truncated = total > results.len();
     Ok(Json(
-        json!({"results":results,"total":total,"truncated":total>results.len(),"degraded":degraded,"complete":degraded.is_empty()}),
+        json!({"results":results,"total":total,"truncated":truncated,"degraded":degraded,"complete":degraded.is_empty()}),
     ))
 }
 async fn search(
@@ -514,7 +515,18 @@ async fn install(
     Json(body): Json<InstallBody>,
 ) -> Result<Json<Value>, ApiError> {
     gate(&state, &headers, "skills:install", true).await?;
-    let _ = (body.name, body.source);
+    let name = body
+        .name
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("name is required"))?;
+    valid_name(name)?;
+    let source = body
+        .source
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("source is required"))?;
+    if source.len() > 2048 || source.chars().any(char::is_control) {
+        return Err(ApiError::bad_request("source is invalid"));
+    }
     Err(ApiError::not_implemented(
         "external skill installation is unsupported; unsupported_marker=skills_remote_provider",
     ))
@@ -525,7 +537,8 @@ async fn remove(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
     gate(&state, &headers, "skills:delete", true).await?;
-    let _ = (state, name);
+    valid_name(&name)?;
+    let _ = state;
     Err(ApiError::not_implemented(
         "skill deletion is unsupported without an atomic directory-relative delete primitive",
     ))
