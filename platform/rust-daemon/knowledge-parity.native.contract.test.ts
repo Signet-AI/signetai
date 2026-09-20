@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -30,19 +31,29 @@ async function start(path: string) {
 const headers = (agent: string, workspace: string) => ({
 	"content-type": "application/json",
 	"x-signet-agent": agent,
-	"x-signet-workspace": workspace,
+	"x-workspace-id": workspace,
 });
 // biome-ignore lint/suspicious/noExplicitAny: dynamic HTTP contract payloads
 async function body(r: Response): Promise<any> {
 	return r.json();
 }
 afterEach(async () => {
-	for (const child of children.splice(0)) child.kill("SIGTERM");
+	for (const child of children.splice(0)) {
+		child.kill("SIGTERM");
+		const exited = await Promise.race([
+			child.exited,
+			new Promise<null>((resolve) => setTimeout(() => resolve(null), 1_000)),
+		]);
+		if (exited === null) {
+			child.kill("SIGKILL");
+			await child.exited;
+		}
+	}
 	for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
 });
 
 test("fresh knowledge graph boundary is scoped, bounded, durable, and explicit about unsupported aliases", async () => {
-	const dir = mkdtempSync("/mnt/work/hermes-scratch/kg-contract-");
+	const dir = mkdtempSync(join(tmpdir(), "kg-contract-"));
 	dirs.push(dir);
 	let daemon = await start(dir);
 	const a = headers("agent-a", "workspace-a");
