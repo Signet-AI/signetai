@@ -446,7 +446,10 @@ fn wire_core_error(error: &CoreError) -> Value {
             json!({"errorKind":"queue_full","capacity":capacity,"error":error.to_string()})
         }
         CoreError::OwnerStopped => json!({"errorKind":"owner_stopped","error":error.to_string()}),
-        CoreError::Sql(_) | CoreError::Serialization(_) | CoreError::Remote(_) => {
+        CoreError::Sql(_)
+        | CoreError::Serialization(_)
+        | CoreError::UnsupportedMigrationHistory(_)
+        | CoreError::Remote(_) => {
             json!({"errorKind":"internal","error":error.to_string()})
         }
     }
