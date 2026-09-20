@@ -1,14 +1,11 @@
 #!/usr/bin/env bun
-/** Execute unchanged pinned baseline tests against the fresh Rust daemon only. */
-import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+/** Execute unchanged pinned baseline tests through the Rust daemon boundary. */
+import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync, unlinkSync } from "node:fs";
 import { resolve, basename, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 
 const BASELINE = "11e4720c07107caf7fdd57a685eca24e8a82e654";
-const ADAPTED = new Set(["platform/daemon/src/workspace-startup.test.ts"]);
-const FORBIDDEN =
-	/(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
-
+const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
 type Manifest = { baselineSha?: string; protectedCorpus?: Array<{ path: string; sha256: string }> };
 const args = Bun.argv.slice(2);
 const arg = (name: string) => {
@@ -24,69 +21,120 @@ function required(name: string): string {
 	if (!value) fail(`missing ${name}`);
 	return value;
 }
-
+function esc(value: string): string {
+	return value
+		.replaceAll("&", "&amp;")
+		.replaceAll("<", "&lt;")
+		.replaceAll(">", "&gt;")
+		.replaceAll('"', "&quot;")
+		.replaceAll("'", "&apos;");
+}
+function readManifest(value: string): Manifest {
+	try {
+		return JSON.parse(value) as Manifest;
+	} catch {
+		if (!existsSync(value)) fail("manifest is missing or invalid");
+		try {
+			return JSON.parse(readFileSync(value, "utf8")) as Manifest;
+		} catch {
+			fail("manifest is invalid");
+		}
+	}
+}
 const artifact = resolve(required("--artifact"));
-const manifestPath = resolve(required("--manifest"));
-const pathsPath = required("--paths");
+const manifestValue = required("--manifest");
+const pathsValue = required("--paths");
 const report = resolve(required("--report"));
 if (!existsSync(artifact) || !statSync(artifact).isFile() || (statSync(artifact).mode & 0o111) === 0)
 	fail("artifact must be an executable file");
 if (basename(artifact) !== "signet-daemon") fail("artifact identity is not the fresh Rust daemon");
+const artifactHeader = readFileSync(artifact).subarray(0, 4);
+if (
+	artifactHeader[0] !== 0x7f ||
+	artifactHeader[1] !== 0x45 ||
+	artifactHeader[2] !== 0x4c ||
+	artifactHeader[3] !== 0x46
+)
+	fail("artifact is not an ELF Rust executable; JS/TS fallback is forbidden");
 if (FORBIDDEN.test(artifact) || FORBIDDEN.test(process.cwd()))
 	fail("forbidden daemon/source path in execution boundary");
-const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest;
+const manifest = readManifest(manifestValue);
 if (manifest.baselineSha !== BASELINE) fail(`manifest baseline must be ${BASELINE}`);
-if (!manifest.protectedCorpus || manifest.protectedCorpus.length !== 497)
-	fail("manifest must contain the pinned 497-path corpus");
-const entries = new Map(manifest.protectedCorpus.map((e) => [e.path, e.sha256]));
-const paths = JSON.parse(pathsPath) as unknown;
-if (!Array.isArray(paths) || paths.length === 0 || paths.some((p) => typeof p !== "string"))
+if (manifest.protectedCorpus?.length !== 497) fail("manifest must contain the pinned 497-path corpus");
+const entries = new Map(manifest.protectedCorpus.map((entry) => [entry.path, entry.sha256]));
+let paths: unknown;
+try {
+	paths = JSON.parse(pathsValue);
+} catch {
+	fail("--paths must be valid JSON");
+}
+if (!Array.isArray(paths) || paths.length === 0 || paths.some((path) => typeof path !== "string"))
 	fail("--paths must be a non-empty JSON string array");
 const selected = [...new Set(paths as string[])].sort();
 for (const path of selected) if (!entries.has(path)) fail(`requested path is outside the pinned corpus: ${path}`);
-const adapted = selected.filter((path) => ADAPTED.has(path));
-const unsupported = selected.filter((path) => !ADAPTED.has(path));
-
 mkdirSync(dirname(report), { recursive: true });
 const junitPath = `${report}.bun.xml`;
-const cases: string[] = [];
-let exitCode = 0;
-if (adapted.length) {
-	const child = spawnSync(
-		"bun",
-		[
-			"test",
-			"--preload",
-			resolve(import.meta.dir, "rust-baseline-proof-daemon.preload.ts"),
-			"--reporter=junit",
-			`--reporter-outfile=${junitPath}`,
-			...adapted,
-		],
-		{
-			cwd: process.cwd(),
-			env: { ...process.env, SIGNET_RUST_DAEMON_BIN: artifact },
-			encoding: "utf8",
-		},
-	);
-	exitCode = child.status ?? 1;
-	if (existsSync(junitPath)) {
-		const xml = readFileSync(junitPath, "utf8");
-		const matches = xml.match(/<testcase\b[\s\S]*?<\/testcase>|<testcase\b[^>]*\/>/g);
-		if (matches) cases.push(...matches);
-	}
-	if (!cases.length)
-		cases.push(
-			`<testcase classname="${adapted.join(",")}" name="rust-adapter-execution"><error message="Rust test process produced no JUnit testcase"/></testcase>`,
-		);
-}
-for (const path of unsupported)
-	cases.push(
-		`<testcase classname="rust-shared-corpus-adapter" name="${path.replaceAll("&", "&amp;")}"><failure message="unadapted Rust responsibility"/></testcase>`,
-	);
-const failures = cases.filter((c) => /<(?:failure|error)\b/.test(c)).length;
-const xml = `<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" tests="${cases.length}" failures="${failures}" errors="0" skipped="0">${cases.join("")}</testsuite>`;
-writeFileSync(report, xml);
-console.error(
-	JSON.stringify({ backend: "fresh-rust", artifact, selected, executed: adapted, unadapted: unsupported, exitCode }),
+if (existsSync(junitPath)) unlinkSync(junitPath);
+const child = spawnSync(
+	"bun",
+	[
+		"test",
+		"--preload",
+		resolve(import.meta.dir, "rust-baseline-proof-daemon.preload.ts"),
+		"--reporter=junit",
+		`--reporter-outfile=${junitPath}`,
+		...selected,
+	],
+	{
+		cwd: process.cwd(),
+		env: { ...process.env, SIGNET_RUST_DAEMON_BIN: artifact },
+		encoding: "utf8",
+	},
 );
-process.exit(failures || exitCode !== 0 ? 1 : 0);
+const stderr = `${child.stderr ?? ""}`;
+const stdout = `${child.stdout ?? ""}`;
+const nativeEvidence = /"backend"\s*:\s*"rust-daemon"/.test(stderr);
+const cases: string[] = [];
+if (existsSync(junitPath)) {
+	const reportXml = readFileSync(junitPath, "utf8");
+	const matches = reportXml.match(/<testcase\b[\s\S]*?<\/testcase>|<testcase\b[^>]*\/>/g);
+	if (matches) cases.push(...matches);
+}
+const observedFiles = new Set(cases.flatMap((testcase) => selected.filter((path) => testcase.includes(path))));
+const evidence =
+	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
+if (!existsSync(junitPath) || !cases.length)
+	cases.push(
+		`<testcase classname="rust-shared-corpus-adapter" name="adapter-execution"><error message="missing JUnit report or testcases">${esc(evidence)}</error></testcase>`,
+	);
+if (!nativeEvidence)
+	cases.push(
+		`<testcase classname="rust-shared-corpus-adapter" name="native-boundary-evidence"><failure message="no observed Rust daemon launch evidence">${esc(evidence)}</failure></testcase>`,
+	);
+for (const path of selected)
+	if (!observedFiles.has(path))
+		cases.push(
+			`<testcase classname="rust-shared-corpus-adapter" name="${esc(path)}"><failure message="selected source produced no observed testcase identity or runtime evidence">${esc(evidence)}</failure></testcase>`,
+		);
+if (child.status !== 0 || child.signal)
+	cases.push(
+		`<testcase classname="rust-shared-corpus-adapter" name="child-process"><failure message="child status=${esc(String(child.status))} signal=${esc(String(child.signal ?? "none"))}">${esc(evidence)}</failure></testcase>`,
+	);
+const failures = cases.filter((testcase) => /<(?:failure|error)\b/.test(testcase)).length;
+writeFileSync(
+	report,
+	`<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" tests="${cases.length}" failures="${failures}" errors="0" skipped="0">${cases.join("")}</testsuite>`,
+);
+console.error(
+	JSON.stringify({
+		backend: "fresh-rust",
+		artifact,
+		selected,
+		executed: selected,
+		nativeEvidence,
+		childStatus: child.status,
+		childSignal: child.signal,
+		stderr,
+	}),
+);
+process.exit(failures ? 1 : 0);
