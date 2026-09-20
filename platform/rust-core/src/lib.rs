@@ -1903,7 +1903,7 @@ fn execute_operation(
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
             let limit = bounded_page_limit(Some(limit))? as i64;
-            let mut statement = connection.prepare("SELECT id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at FROM documents WHERE agent_id=? AND COALESCE(json_extract(metadata,'$._workspaceId'),'default')=? ORDER BY rowid DESC LIMIT ?")?;
+            let mut statement = connection.prepare("SELECT id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at FROM documents WHERE agent_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=? ORDER BY rowid DESC LIMIT ?")?;
             let rows =
                 statement.query_map(params![agent_id, workspace_id, limit], document_json_row)?;
             Ok(
@@ -1915,7 +1915,7 @@ fn execute_operation(
             workspace_id,
             id,
         } => {
-            let value = connection.query_row("SELECT id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at FROM documents WHERE id=? AND agent_id=? AND COALESCE(json_extract(metadata,'$._workspaceId'),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?], document_json_row).optional()?;
+            let value = connection.query_row("SELECT id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at FROM documents WHERE id=? AND agent_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?], document_json_row).optional()?;
             Ok(value.unwrap_or(Value::Null))
         }
         Operation::DocumentChunks {
@@ -1924,7 +1924,7 @@ fn execute_operation(
             id,
             limit,
         } => {
-            let content: String = connection.query_row("SELECT content FROM documents WHERE id=? AND agent_id=? AND COALESCE(json_extract(metadata,'$._workspaceId'),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?], |row| row.get(0)).optional()?.ok_or(CoreError::NotFound)?;
+            let content: String = connection.query_row("SELECT content FROM documents WHERE id=? AND agent_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?], |row| row.get(0)).optional()?.ok_or(CoreError::NotFound)?;
             let limit = limit.clamp(1, 100);
             let items = content.as_bytes().chunks(4096).take(limit).enumerate().map(|(index, bytes)| json!({"index":index,"content":String::from_utf8_lossy(bytes)})).collect::<Vec<_>>();
             Ok(
@@ -1936,7 +1936,7 @@ fn execute_operation(
             workspace_id,
             id,
         } => {
-            let changed = connection.execute("DELETE FROM documents WHERE id=? AND agent_id=? AND COALESCE(json_extract(metadata,'$._workspaceId'),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?])?;
+            let changed = connection.execute("DELETE FROM documents WHERE id=? AND agent_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?])?;
             Ok(json!({"id":id,"status":"deleted","deleted":changed > 0,"idempotent":true}))
         }
         Operation::DeleteSource {

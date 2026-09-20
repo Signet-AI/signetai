@@ -116,6 +116,103 @@ fn migrates_legacy_transcripts_before_idempotency_index() {
 }
 
 #[test]
+fn blank_document_workspaces_are_default_scoped_across_all_operations() {
+    let owner = core();
+    let source = owner
+        .submit(Operation::CreateSource {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+            kind: "folder".into(),
+            name: "blank-workspaces".into(),
+            config: serde_json::json!({}),
+        })
+        .unwrap();
+    let source_id = source["id"].as_str().unwrap().to_owned();
+    let mut ids = Vec::new();
+    for (path, metadata) in [
+        ("null.md", serde_json::Value::Null),
+        ("empty.md", serde_json::json!({"_workspaceId": ""})),
+        ("whitespace.md", serde_json::json!({"_workspaceId": "   "})),
+    ] {
+        ids.push(
+            owner
+                .submit(Operation::IngestDocument {
+                    agent_id: "default".into(),
+                    workspace_id: "default".into(),
+                    source_id: source_id.clone(),
+                    path: path.into(),
+                    content: format!("body for {path}"),
+                    metadata,
+                })
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        );
+    }
+    let listed = owner
+        .submit(Operation::DocumentList {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(listed["items"].as_array().unwrap().len(), 3);
+    for id in &ids {
+        let document = owner
+            .submit(Operation::DocumentGet {
+                agent_id: "default".into(),
+                workspace_id: "default".into(),
+                id: id.clone(),
+            })
+            .unwrap();
+        assert!(!document.is_null());
+        assert_eq!(
+            owner
+                .submit(Operation::DocumentChunks {
+                    agent_id: "default".into(),
+                    workspace_id: "default".into(),
+                    id: id.clone(),
+                    limit: 10,
+                })
+                .unwrap()["items"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+    let deleted = owner
+        .submit(Operation::DocumentDelete {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+            id: ids[0].clone(),
+        })
+        .unwrap();
+    assert_eq!(deleted["deleted"], true);
+    assert_eq!(
+        owner
+            .submit(Operation::SourceHealth {
+                agent_id: "default".into(),
+                workspace_id: "default".into(),
+                source_id: source_id.clone()
+            })
+            .unwrap()["documents"],
+        2
+    );
+    let deleted_source = owner
+        .submit(Operation::DeleteSource {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+            source_id,
+        })
+        .unwrap();
+    assert_eq!(deleted_source["documentsDeleted"], 2);
+    owner.initialize().unwrap();
+    owner.initialize().unwrap();
+}
+
+#[test]
 fn migrates_legacy_source_and_document_workspace_to_default_and_cleans_up() {
     let d = tempdir().unwrap();
     let p = d.path().join("legacy-sources.sqlite");
