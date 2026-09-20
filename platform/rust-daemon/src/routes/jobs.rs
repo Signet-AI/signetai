@@ -87,6 +87,11 @@ pub async fn submit(
     if body.kind.trim().is_empty() || body.kind.len() > MAX_JOB_KIND_BYTES {
         return Err(ApiError::bad_request("job kind must be 1-64 bytes"));
     }
+    if body.kind.starts_with("provider.") {
+        return Err(ApiError::not_implemented(
+            "provider-backed job execution is unsupported by the fresh native operation boundary",
+        ));
+    }
     if serde_json::to_vec(&body.payload)
         .map_err(|_| ApiError::bad_request("invalid job payload"))?
         .len()
