@@ -7,15 +7,9 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::path::PathBuf;
 #[cfg(unix)]
-use std::io;
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
-use std::{
-    fs,
-    io::Read,
-    path::{Path as FsPath, PathBuf},
-};
+use std::{fs, io, io::Read, os::fd::AsRawFd};
 
 const MAX_SKILLS: usize = 100;
 const MAX_CONTENT_BYTES: u64 = 1024 * 1024;
@@ -103,6 +97,8 @@ struct SkillsRoot {
     file: fs::File,
     path: PathBuf,
 }
+#[cfg(not(unix))]
+struct SkillsRoot;
 #[cfg(unix)]
 fn root_dir(state: &AppState) -> Result<SkillsRoot, ApiError> {
     let root = skills_root(state);
@@ -141,6 +137,12 @@ fn root_dir(state: &AppState) -> Result<SkillsRoot, ApiError> {
         file: unsafe { fs::File::from_raw_fd(fd) },
         path: root,
     })
+}
+#[cfg(not(unix))]
+fn root_dir(_state: &AppState) -> Result<SkillsRoot, ApiError> {
+    Err(ApiError::not_implemented(
+        "skills filesystem operations are unsupported on this platform",
+    ))
 }
 
 fn frontmatter(content: &str) -> Result<Value, ApiError> {
@@ -279,7 +281,7 @@ fn read_skill(root: &SkillsRoot, name: &str) -> Result<Value, ApiError> {
     Ok(value)
 }
 #[cfg(not(unix))]
-fn read_skill(_root: &FsPath, _name: &str) -> Result<Value, ApiError> {
+fn read_skill(_root: &SkillsRoot, _name: &str) -> Result<Value, ApiError> {
     Err(ApiError::not_implemented(
         "skills filesystem operations are unsupported on this platform",
     ))
@@ -292,6 +294,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/skills/install", post(install))
         .route("/api/skills/{name}", get(detail).delete(remove))
 }
+#[cfg(unix)]
 fn all_skills(root: &SkillsRoot) -> Result<Vec<Value>, ApiError> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(format!("/proc/self/fd/{}", root.file.as_raw_fd()))
@@ -317,6 +320,12 @@ fn all_skills(root: &SkillsRoot) -> Result<Vec<Value>, ApiError> {
     }
     entries.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
     Ok(entries)
+}
+#[cfg(not(unix))]
+fn all_skills(_root: &SkillsRoot) -> Result<Vec<Value>, ApiError> {
+    Err(ApiError::not_implemented(
+        "skills filesystem operations are unsupported on this platform",
+    ))
 }
 async fn list(
     State(state): State<AppState>,
