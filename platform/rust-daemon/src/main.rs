@@ -44,6 +44,20 @@ struct OwnerPipe {
     admission: Arc<Semaphore>,
 }
 
+impl Drop for OwnerPipe {
+    fn drop(&mut self) {
+        if let Ok(mut session) = self.session.lock() {
+            let generation = session.generation.clone();
+            let _ = writeln!(session.stdin, "{{\"id\":null,\"generation\":\"{}\",\"op\":\"shutdown\"}}", generation);
+            let _ = session.stdin.flush();
+            let _ = session.child.wait();
+        }
+        let daemon_dir = self.workspace.join(".daemon");
+        let _ = std::fs::remove_file(daemon_dir.join("db-owner.json"));
+        let _ = std::fs::remove_file(daemon_dir.join("db-owner.lock"));
+    }
+}
+
 impl ExternalOwner {
     fn start_session(workspace: &FsPath) -> Result<OwnerSession, CoreError> {
         let exe = env::var_os("SIGNET_DAEMON_BIN")
@@ -1279,8 +1293,13 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
         let stale = std::fs::read_to_string(&lock_path)
             .ok()
             .and_then(|pid| pid.trim().parse::<u32>().ok())
-            .map(|pid| !FsPath::new("/proc").join(pid.to_string()).exists())
-            .unwrap_or(false);
+            .map(|pid| {
+                let stat = FsPath::new("/proc").join(pid.to_string()).join("stat");
+                std::fs::read_to_string(stat)
+                    .map(|value| !value.contains(") Z "))
+                    .unwrap_or(false)
+            });
+        let stale = stale.unwrap_or(false);
         if stale {
             let _ = std::fs::remove_file(&lock_path);
         }
@@ -1293,8 +1312,17 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     let owner = WorkspaceOwner::open(&path, 256)?;
     owner.initialize()?;
     let generation = Uuid::new_v4().to_string();
+    let marker_path = workspace.join(".daemon").join("db-owner.json");
+    std::fs::write(
+        &marker_path,
+        serde_json::to_vec(&serde_json::json!({
+            "pid": std::process::id(),
+            "generation": generation,
+            "database": path,
+        }))?,
+    )?;
     let mut out = std::io::BufWriter::new(std::io::stdout().lock());
-    writeln!(out, "{{\"ready\":true,\"generation\":\"{}\"}}", generation)?;
+    writeln!(out, "{{\"ready\":true,\"pid\":{},\"generation\":\"{}\"}}", std::process::id(), generation)?;
     out.flush()?;
     let stdin = std::io::stdin();
     for line in BufReader::new(stdin.lock()).lines() {
