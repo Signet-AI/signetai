@@ -117,7 +117,7 @@ legacy synchronous read attempts rejected at the hard connection cap. The
 active leases; `eventLoopLag` is the bounded independent event-loop sample.
 
 The `dbOwner` block is read from the registered DB-owner maintenance authority. The
-The legacy accessor is not a second health source. `/health` samples the owner after
+legacy accessor is not a second health source. `/health` samples the owner after
 its bounded owner probe completes (including a failed probe), then projects that
 same snapshot into `databaseIntegrity.ownerState` and
 `databaseIntegrity.ownerGeneration`.
