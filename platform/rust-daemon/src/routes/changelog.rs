@@ -45,6 +45,10 @@ pub(crate) struct Entry {
     cached_at: u64,
 }
 
+fn base_url() -> String {
+    env::var("SIGNET_CHANGELOG_BASE_URL").unwrap_or_else(|_| BASE.to_owned())
+}
+
 fn cache() -> &'static Mutex<HashMap<&'static str, Entry>> {
     static CACHE_STORE: OnceLock<Mutex<HashMap<&'static str, Entry>>> = OnceLock::new();
     CACHE_STORE.get_or_init(|| Mutex::new(HashMap::new()))
@@ -192,7 +196,7 @@ async fn source(state: &AppState, name: &'static str) -> Option<Entry> {
     let mut raw = None;
     let mut kind = "github";
     if let Ok(response) = client
-        .get(format!("{BASE}/{name}"))
+        .get(format!("{}/{name}", base_url().trim_end_matches('/')))
         .header("User-Agent", "signet-daemon")
         .send()
         .await
