@@ -12,7 +12,7 @@ const children: Array<{ kill: (signal?: string) => void; exited: Promise<number>
 const workspaces: string[] = [];
 let port = 39700;
 
-async function start(workspace: string, agent: string) {
+async function start(workspace: string) {
 	const child = Bun.spawn([bin], {
 		cwd: root,
 		env: {
@@ -20,7 +20,8 @@ async function start(workspace: string, agent: string) {
 			SIGNET_PATH: workspace,
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_PORT: String(port++),
-			SIGNET_AGENT_ID: agent,
+			SIGNET_AGENT_ID: "",
+			SIGNET_MODE: "local",
 		},
 		stdout: "ignore",
 		stderr: "pipe",
@@ -51,7 +52,7 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 	expect(existsSync(bin)).toBe(true);
 	const workspace = mkdtempSync(join(tmpdir(), "signet-source-contract-"));
 	workspaces.push(workspace);
-	let daemon = await start(workspace, "agent-a");
+	let daemon = await start(workspace);
 	const h = { "x-signet-agent": "agent-a", "x-signet-workspace-id": "workspace-a", "content-type": "application/json" };
 	const created = await json(
 		await fetch(`${daemon.origin}/api/sources`, {
@@ -143,7 +144,7 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 	daemon.child.kill("SIGTERM");
 	await daemon.child.exited;
 	children.splice(children.indexOf(daemon.child), 1);
-	daemon = await start(workspace, "agent-a");
+	daemon = await start(workspace);
 	expect((await ingest("two")).status).toBe("skipped");
 	expect(
 		(
@@ -163,6 +164,49 @@ test("native Rust source lifecycle is durable, scoped, fenced, and provider-loca
 			})
 		).status,
 	).toBe(200);
+	const leased = await json(
+		await fetch(`${daemon.origin}/api/sources`, {
+			method: "POST",
+			headers: h,
+			body: JSON.stringify({ kind: "folder", name: "leased", config: {} }),
+		}),
+	);
+	const leasedSourceId = leased.id;
+	expect(typeof leasedSourceId).toBe("string");
+	const leaseResponse = await fetch(`${daemon.origin}/api/sources/${leasedSourceId}/removal-lease`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({}),
+	});
+	expect(leaseResponse.status).toBe(200);
+	const lease = await json(leaseResponse);
+	expect(lease).toMatchObject({ status: "pending", outcome: "retryable" });
+	const blocked = await fetch(`${daemon.origin}/api/import/documents`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ source_id: leasedSourceId, path: "blocked.md", content: "blocked" }),
+	});
+	expect(blocked.status).toBe(400);
+	expect(await json(blocked)).toMatchObject({ error: "source removal pending", code: "invalid_request" });
+	const staleFinalize = await fetch(`${daemon.origin}/api/sources/${leasedSourceId}/finalize-removal`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ generation: lease.generation, leaseToken: "stale" }),
+	});
+	expect(staleFinalize.status).toBe(404);
+	const finalize = await fetch(`${daemon.origin}/api/sources/${leasedSourceId}/finalize-removal`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ generation: lease.generation, leaseToken: lease.leaseToken }),
+	});
+	expect(finalize.status).toBe(200);
+	expect(await json(finalize)).toMatchObject({ outcome: "success", deleted: true });
+	const replayFinalize = await fetch(`${daemon.origin}/api/sources/${leasedSourceId}/finalize-removal`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ generation: lease.generation, leaseToken: lease.leaseToken }),
+	});
+	expect(replayFinalize.status).toBe(404);
 	const late = await fetch(`${daemon.origin}/api/import/documents`, {
 		method: "POST",
 		headers: h,

@@ -59,7 +59,11 @@ it("keeps unbacked marketplace/provider/install/review/network operations explic
 	];
 	for (const [method, path] of operations) {
 		expect((await fetch(origin + path, { method })).status).toBe(401);
-		const response = await fetch(origin + path, { method, headers: auth });
+		const response = await fetch(origin + path, {
+			method,
+			headers: path === "/api/marketplace/mcp/install" ? { ...auth, "content-type": "application/json" } : auth,
+			body: path === "/api/marketplace/mcp/install" ? JSON.stringify({ id: "mcpservers.org/demo" }) : undefined,
+		});
 		if (path === "/api/marketplace/mcp/install") {
 			expect(response.status).toBe(422);
 			expect(await response.json()).toMatchObject({ code: "config_required" });

@@ -180,13 +180,7 @@ impl ExternalOwner {
                 .cloned()
                 .ok_or(CoreError::OwnerStopped)
         } else {
-            Err(CoreError::InvalidInput(
-                response
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("owner error")
-                    .to_owned(),
-            ))
+            Err(remote_core_error(&response))
         }
     }
     async fn submit_async(&self, operation: Operation) -> Result<Value, CoreError> {
@@ -412,7 +406,45 @@ impl From<CoreError> for ApiError {
                 "database owner queue is saturated (capacity {capacity})"
             )),
             CoreError::OwnerStopped => Self::unavailable("database owner is unavailable"),
+            CoreError::Remote(message) => Self::internal(message),
             other => Self::internal(other.to_string()),
+        }
+    }
+}
+
+fn remote_core_error(response: &Value) -> CoreError {
+    let message = response
+        .get("error")
+        .and_then(Value::as_str)
+        .unwrap_or("owner error")
+        .to_owned();
+    match response.get("errorKind").and_then(Value::as_str) {
+        Some("not_found") => CoreError::NotFound,
+        Some("invalid_input") => CoreError::InvalidInput(message),
+        Some("queue_full") => CoreError::QueueFull {
+            capacity: response
+                .get("capacity")
+                .and_then(Value::as_u64)
+                .unwrap_or_default() as usize,
+        },
+        Some("owner_stopped") => CoreError::OwnerStopped,
+        Some("internal") => CoreError::Remote(message),
+        _ => CoreError::Remote(message),
+    }
+}
+
+fn wire_core_error(error: &CoreError) -> Value {
+    match error {
+        CoreError::NotFound => json!({"errorKind":"not_found","error":error.to_string()}),
+        CoreError::InvalidInput(message) => {
+            json!({"errorKind":"invalid_input","error":message})
+        }
+        CoreError::QueueFull { capacity } => {
+            json!({"errorKind":"queue_full","capacity":capacity,"error":error.to_string()})
+        }
+        CoreError::OwnerStopped => json!({"errorKind":"owner_stopped","error":error.to_string()}),
+        CoreError::Sql(_) | CoreError::Serialization(_) | CoreError::Remote(_) => {
+            json!({"errorKind":"internal","error":error.to_string()})
         }
     }
 }
@@ -1715,7 +1747,11 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
                 serde_json::json!({"id":id,"generation":generation,"ok":true,"result":value})
             }
             Err(error) => {
-                serde_json::json!({"id":id,"generation":generation,"ok":false,"error":error.to_string()})
+                let mut response = wire_core_error(&error);
+                response["id"] = id;
+                response["generation"] = json!(generation);
+                response["ok"] = json!(false);
+                response
             }
         };
         serde_json::to_writer(&mut out, &response)?;

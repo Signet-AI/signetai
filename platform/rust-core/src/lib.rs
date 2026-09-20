@@ -26,6 +26,8 @@ pub enum CoreError {
     NotFound,
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("remote owner error: {0}")]
+    Remote(String),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
