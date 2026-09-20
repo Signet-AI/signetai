@@ -1,38 +1,213 @@
-import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync } from "node:fs";
+/**
+ * Regression guard for the published `signet-mcp` stdio server.
+ *
+ * Background: PR #816 changed the npm wrapper's `signet-mcp` bin from
+ * `dist/mcp-stdio.js` (a real MCP stdio server) to `bin/signet-mcp.js`
+ * (a wrapper that shells out to the native binary's management CLI).
+ * Connectors like `claude-code` spawn `signet-mcp` as a JSON-RPC stdio
+ * server, so the regression broke every harness using the default
+ * `{"command": "signet-mcp"}` MCP config (issue #826).
+ *
+ * The shipped `signet-mcp` must accept a JSON-RPC `initialize` request
+ * and return a valid `result`. If this test fails, the wrapper has
+ * regressed to forwarding into the native binary's management CLI.
+ */
+
+import { afterEach, describe, expect, test } from "bun:test";
+import { type ChildProcess, spawn } from "node:child_process";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectNativePlatform, resolveNativeBinaryPath } from "../dist/signetai/bin/native-platforms.js";
 
 const root = join(import.meta.dir, "..");
-const packageJson = join(root, "dist/signetai/package.json");
-const launcher = join(root, "dist/signetai/bin/signet-mcp.js");
+const wrapperPackageJsonPath = join(root, "dist", "signetai", "package.json");
+const stdioBundlePath = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
+const runningChildren: ChildProcess[] = [];
 
-describe("published native signet-mcp package", () => {
-	test("manifest points at the native launcher and includes it", () => {
-		expect(existsSync(packageJson)).toBe(true);
-		const pkg = JSON.parse(readFileSync(packageJson, "utf8")) as { bin?: Record<string, string>; files?: string[] };
-		expect(pkg.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
-		expect(pkg.files ?? []).toContain("bin/signet-mcp.js");
-		expect(pkg.files ?? []).toContain("runtime");
-		expect(pkg.bin?.["signet-mcp"]).not.toContain("mcp-stdio");
+afterEach(() => {
+	for (const child of runningChildren.splice(0)) {
+		if (!child.killed) child.kill("SIGTERM");
+	}
+});
+
+interface StdioHandshake {
+	readonly status: number | null;
+	readonly signal: NodeJS.Signals | null;
+	readonly stdout: string;
+	readonly stderr: string;
+}
+
+function spawnStdioServer(
+	input: string,
+	timeoutMs = 30_000,
+	bundlePath = stdioBundlePath,
+	env = process.env,
+): Promise<StdioHandshake> {
+	return new Promise((resolve, reject) => {
+		const child = spawn("node", [bundlePath], {
+			env,
+			stdio: ["pipe", "pipe", "pipe"],
+		});
+		runningChildren.push(child);
+		const stdout: Buffer[] = [];
+		const stderr: Buffer[] = [];
+		child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+		child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+		child.on("error", reject);
+		child.on("close", (status, signal) => {
+			clearTimeout(timer);
+			resolve({
+				status,
+				signal,
+				stdout: Buffer.concat(stdout).toString("utf8"),
+				stderr: Buffer.concat(stderr).toString("utf8"),
+			});
+		});
+		// Hard timeout — if the stdio server hangs (MCP SDK regression,
+		// hung daemon probe, etc.) kill the child and surface a clear
+		// failure rather than blocking the whole `bun test` run.
+		const timer = setTimeout(() => {
+			child.kill("SIGTERM");
+			reject(
+				new Error(
+					`signet-mcp stdio bundle did not exit within ${timeoutMs}ms — ` +
+						`child killed, stderr so far: ${Buffer.concat(stderr).toString("utf8").slice(0, 500)}`,
+				),
+			);
+		}, timeoutMs);
+		timer.unref();
+		child.stdin.write(`${input}\n`);
+		child.stdin.end();
+	});
+}
+
+interface JsonRpcResponse {
+	readonly jsonrpc?: unknown;
+	readonly id?: unknown;
+	readonly result?: { readonly protocolVersion?: unknown; readonly capabilities?: unknown };
+	readonly error?: { readonly code: unknown; readonly message: unknown };
+}
+
+describe("signet-mcp stdio server (regression guard for issue #826)", () => {
+	// The manifest test runs regardless of build state — it only depends on
+	// the tracked package.json file. The bundle and handshake tests skip
+	// cleanly when the bundle hasn't been built, so `bun test` works in
+	// clean checkouts that haven't run `bun run build:signetai` yet.
+	test("wrapper package ships a self-contained stdio bundle as signet-mcp", () => {
+		if (!existsSync(wrapperPackageJsonPath)) {
+			throw new Error(
+				`wrapper package.json not found at ${wrapperPackageJsonPath} — this file should always be tracked`,
+			);
+		}
+		const wrapper = JSON.parse(readFileSync(wrapperPackageJsonPath, "utf-8")) as {
+			readonly bin?: Record<string, string>;
+			readonly files?: readonly string[];
+		};
+		expect(wrapper.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
+		expect(wrapper.files ?? []).toContain("dist/mcp-stdio.js");
+		// The pre-#816 forwarder shim must not be in the tarball.
+		expect(wrapper.files ?? []).not.toContain("bin/signet-mcp.js");
 	});
 
-	test("launcher is a tracked executable Node adapter with no archived or JS daemon fallback", () => {
-		expect(existsSync(launcher)).toBe(true);
-		expect(statSync(launcher).isFile()).toBe(true);
-		const source = readFileSync(launcher, "utf8");
-		expect(source.startsWith("#!/usr/bin/env node")).toBe(true);
-		expect(source).toContain("SIGNET_RUST_MCP_BIN");
-		expect(source).toContain("resolveNativeBinaryPath");
-		expect(source).not.toMatch(/platform\/daemon-rs|mcp-stdio\.js|require\(['"](?:bun|tsx|ts-node)/);
+	test("bundle is a real Node-runnable file (not a redirect or stub)", () => {
+		if (!existsSync(stdioBundlePath)) {
+			// Skipped on clean checkouts — the bundle is a build artifact.
+			return;
+		}
+		const stat = statSync(stdioBundlePath);
+		expect(stat.isFile()).toBe(true);
+		// Bundle must have a Node shebang so `signet-mcp` runs directly when
+		// the package manager installs the bin symlink with default perms.
+		const head = readFileSync(stdioBundlePath, { encoding: "utf-8", flag: "r" }).slice(0, 64);
+		expect(head.startsWith("#!/usr/bin/env node")).toBe(true);
 	});
 
-	test("wrappers share one strict platform/package contract", () => {
-		expect(detectNativePlatform("linux", "x64")).toBe("linux-x64");
-		expect(resolveNativeBinaryPath({ packageDir: "/pkg", platform: "linux", arch: "x64", staged: true })).toBe(
-			join("/pkg", "runtime", "rust-daemon", "linux-x64", "signet"),
-		);
-		expect(() => detectNativePlatform("freebsd", "x64")).toThrow("Unsupported platform");
-		expect(() => detectNativePlatform("linux", "ia32")).toThrow("Unsupported platform");
-	});
+	test(
+		"responds to a JSON-RPC initialize request with a valid handshake",
+		async () => {
+			if (!existsSync(stdioBundlePath)) {
+				// Skipped on clean checkouts — the bundle is a build artifact.
+				return;
+			}
+
+			const request = JSON.stringify({
+				jsonrpc: "2.0",
+				id: 1,
+				method: "initialize",
+				params: {
+					protocolVersion: "2024-11-05",
+					capabilities: {},
+					clientInfo: { name: "signet-mcp-stdio-smoke", version: "0" },
+				},
+			});
+
+			const result = await spawnStdioServer(request);
+
+			// The server must shut down cleanly when its stdin closes.
+			expect(result.status).toBe(0);
+			// The native management CLI prints "Usage: signet mcp ..." to stderr.
+			// A real stdio server should not produce any non-protocol output.
+			expect(result.stderr.trim()).toBe("");
+
+			// The first non-empty stdout line must be a JSON-RPC response to our
+			// initialize request. This is the exact shape a harness expects to
+			// see during the MCP handshake.
+			const lines = result.stdout.split("\n").filter((line) => line.length > 0);
+			expect(lines.length).toBeGreaterThan(0);
+			const parsed = JSON.parse(lines[0]) as JsonRpcResponse;
+			expect(parsed.jsonrpc).toBe("2.0");
+			expect(parsed.id).toBe(1);
+			expect(parsed.error).toBeUndefined();
+			expect(parsed.result).toBeDefined();
+			expect(typeof parsed.result?.protocolVersion).toBe("string");
+			expect(parsed.result?.capabilities).toBeDefined();
+		},
+		{ timeout: 30_000 },
+	);
+
+	test(
+		"starts under Node without resolving better-sqlite3 from the package",
+		async () => {
+			if (!existsSync(stdioBundlePath)) {
+				// Skipped on clean checkouts — the bundle is a build artifact.
+				return;
+			}
+
+			// Run a copy outside the repository so Node cannot find workspace
+			// dependencies while resolving the bundle's optional DB code. The MCP
+			// transport must not open SQLite itself; that work belongs to the daemon.
+			const isolatedDir = mkdtempSync(join(tmpdir(), "signet-mcp-node-smoke-"));
+			const isolatedBundlePath = join(isolatedDir, "mcp-stdio.js");
+			copyFileSync(stdioBundlePath, isolatedBundlePath);
+			const env = { ...process.env };
+			delete env.NODE_PATH;
+
+			try {
+				const request = JSON.stringify({
+					jsonrpc: "2.0",
+					id: 1,
+					method: "initialize",
+					params: {
+						protocolVersion: "2024-11-05",
+						capabilities: {},
+						clientInfo: { name: "signet-mcp-node-dependency-smoke", version: "0" },
+					},
+				});
+				const result = await spawnStdioServer(request, 30_000, isolatedBundlePath, env);
+
+				expect(result.status).toBe(0);
+				expect(result.stderr.trim()).toBe("");
+				const lines = result.stdout.split("\n").filter((line) => line.length > 0);
+				expect(lines.length).toBeGreaterThan(0);
+				const parsed = JSON.parse(lines[0]) as JsonRpcResponse;
+				expect(parsed.jsonrpc).toBe("2.0");
+				expect(parsed.id).toBe(1);
+				expect(parsed.error).toBeUndefined();
+				expect(parsed.result).toBeDefined();
+			} finally {
+				rmSync(isolatedDir, { recursive: true, force: true });
+			}
+		},
+		{ timeout: 30_000 },
+	);
 });

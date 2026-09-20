@@ -30,7 +30,7 @@ describe("check-publish-manifests", () => {
 	test("does not ship the retired threaded extraction worker", () => {
 		const root = join(import.meta.dir, "..");
 		const daemonBuild = readFileSync(join(root, "platform", "daemon", "build.ts"), "utf-8");
-		const nativeBuild = readFileSync(join(root, "scripts", "build-native-cli.ts"), "utf-8");
+		const nativeBuild = readFileSync(join(root, "scripts", "build-native-bun.ts"), "utf-8");
 
 		expect(daemonBuild).not.toContain('entrypoint: "./src/pipeline/extraction-thread.ts"');
 		expect(daemonBuild).not.toContain('outfile: "./dist/extraction-thread.js"');
@@ -51,7 +51,7 @@ describe("check-publish-manifests", () => {
 		}
 
 		expect(missingSources).toEqual([]);
-		expect(dockerfile).toContain("RUN bun run build:native-cli");
+		expect(dockerfile).toContain("RUN bun run build:native-bun");
 		expect(dockerfile).toContain('pkg="sqlite-vec-${TARGETOS}-${arch}"');
 		expect(dockerfile).toContain("ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so");
 		expect(dockerfile).toContain("COPY --from=build /app/dist/native/signet ./bin/signet");
@@ -94,21 +94,28 @@ describe("check-publish-manifests", () => {
 	test("builds native Signet binaries in the release matrix", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
-		const buildScript = readFileSync(join(root, "scripts", "build-native-cli.ts"), "utf-8");
+		const buildScript = readFileSync(join(root, "scripts", "build-native-bun.ts"), "utf-8");
 		const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")) as {
 			scripts?: Record<string, string>;
 		};
 
-		expect(rootPackage.scripts?.["build:native-cli"]).toBe("bun scripts/build-native-cli.ts");
-		expect(buildScript).toContain("cargo");
+		expect(rootPackage.scripts?.["build:native-bun"]).toBe("bun scripts/build-native-bun.ts");
+		expect(buildScript).toContain("bun");
 		expect(buildScript).toContain("build");
-		expect(buildScript).toContain("--release");
-		expect(buildScript).toContain("--manifest-path");
-		expect(buildScript).toContain('join(root, "platform", "rust-daemon", "Cargo.toml")');
-		expect(buildScript).toContain("signet-daemon");
-		expect(buildScript).toContain('join(root, "dist", "native")');
-		expect(buildScript).toContain("process.env.SIGNET_NATIVE_PLATFORM");
-		expect(buildScript).not.toContain("daemon.js");
+		expect(buildScript).toContain("--compile");
+		expect(buildScript).toContain("bun-linux-arm64");
+		expect(buildScript).toContain('createRequire(join(root, "platform", "daemon", "package.json"))');
+		expect(buildScript).toContain("surfaces/cli/src/cli.ts");
+		expect(buildScript).toContain('join(root, "surfaces", "cli", "templates")');
+		expect(buildScript).toContain('join(root, "skills")');
+		expect(buildScript).toContain("templateAssets");
+		expect(buildScript).toContain("skillAssets");
+		expect(buildScript).toContain("connectorAssets");
+		expect(buildScript).toContain("process.env.SIGNET_VERSION");
+		expect(buildScript).toContain("process.env.SIGNET_VERSION?.trim()");
+		expect(buildScript).toContain("SIGNET_TEMPLATES_DIR");
+		expect(buildScript).toContain("SIGNET_SKILLS_SOURCE");
+		expect(buildScript).toContain("SIGNET_CONNECTOR_ASSETS_DIR");
 		expect(buildScript).not.toContain('"@1password/sdk"');
 		expect(workflow).toContain("build-native:");
 		expect(workflow).toContain("platform: linux-x64");
@@ -125,9 +132,9 @@ describe("check-publish-manifests", () => {
 		expect(workflow).toContain("platform: win32-x64");
 		expect(workflow).toContain("asset: signet-win32-x64.exe");
 		expect(workflow.indexOf("run: bun run build:dashboard")).toBeLessThan(
-			workflow.indexOf("run: bun run build:native-cli"),
+			workflow.indexOf("run: bun run build:native-bun"),
 		);
-		expect(workflow).toContain("bun run build:native-cli");
+		expect(workflow).toContain("bun run build:native-bun");
 		expect(workflow).toContain('./dist/native/"$RELEASE_ASSET" --help');
 		expect(workflow).not.toContain("if: matrix.platform != 'linux-arm64'");
 	});
@@ -369,13 +376,24 @@ describe("check-publish-manifests", () => {
 		expect(installer).not.toContain("releases/download/bundle-latest");
 	});
 
-	test("wires the native signet-mcp resolver into the signetai build", () => {
+	test("wires the signet-mcp stdio bundle into the signetai build", () => {
+		// Guards against the dead-code pattern from PR #816: the meta-package
+		// prebuild must rebuild the stdio bundle, otherwise the npm tarball
+		// ships an empty/missing dist/mcp-stdio.js and the signet-mcp bin
+		// symlink points at nothing (issue #826).
 		const root = join(import.meta.dir, "..");
 		const wrapper = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
 			scripts?: Record<string, string>;
 		};
+		const buildScript = readFileSync(join(root, "scripts", "build-signet-mcp.ts"), "utf-8");
+
 		expect(wrapper.scripts?.prebuild).toContain("scripts/build-signet-mcp.ts");
-		expect(readFileSync(join(root, "dist", "signetai", "bin", "signet-mcp.js"), "utf-8")).toContain('join(packageDir, "runtime", "rust-daemon"');
+		// Build must target the same entry the bin ships. Asserting on the
+		// full join() call shape (rather than loose substrings) catches
+		// any drift in the path components — a TS file that just happens
+		// to mention "platform" or "mcp-stdio.ts" wouldn't satisfy these.
+		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"platform"\s*,\s*"daemon"\s*,\s*"src"\s*,\s*"mcp-stdio\.ts"\s*\)/);
+		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"dist"\s*,\s*"signetai"\s*,\s*"dist"\s*,\s*"mcp-stdio\.js"\s*\)/);
 	});
 
 	test("keeps the signetai package as a thin publishable native wrapper", () => {
@@ -400,9 +418,13 @@ describe("check-publish-manifests", () => {
 		expect(manifest.files).not.toContain("native/**");
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
-		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
-		expect(manifest.files).toContain("bin/signet-mcp.js");
-		expect(manifest.files).not.toContain("dist/mcp-stdio.js");
+		// signet-mcp must be the self-contained stdio JSON-RPC bundle
+		// (issue #826) — the previous `bin/signet-mcp.js` shim forwarded
+		// to the native binary's management CLI, which broke the MCP
+		// handshake for every harness using the default connector config.
+		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
+		expect(manifest.files).toContain("dist/mcp-stdio.js");
+		expect(manifest.files).not.toContain("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
 		expect(launcher).toContain("require.resolve");

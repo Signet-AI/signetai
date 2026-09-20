@@ -9,7 +9,8 @@ mock.module("electron", () => ({
 	app: { getPath: (_name: string) => "/tmp/signet-test-userdata", isPackaged: false },
 }));
 mock.module("./paths.js", () => ({
-	daemonEntry: () => "/tmp/signet-test-daemon/linux-x64/signet-daemon",
+	bunPath: () => "/usr/local/bin/bun",
+	daemonEntry: () => "/tmp/signet-test-daemon/dist/daemon.js",
 	daemonRoot: () => "/tmp/signet-test-daemon",
 }));
 const { DaemonManager } = await import("./daemon-manager.js");
@@ -25,7 +26,7 @@ const HEALTHY_PAYLOAD = {
 	version: "1.0.0-test",
 	pid: 42,
 	uptime: 100,
-	runtime: "compiled",
+	runtime: "bun-js",
 	agentsDir: "/tmp/signet-workspace",
 };
 function healthyFetchResponse(): Response {
@@ -73,7 +74,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		const manager = new DaemonManager({ workspacePath: "/tmp/signet-workspace" });
 		await manager.ensureStarted();
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
-		expect(spawnSpy.mock.calls[0][0]).toContain("signet-daemon");
+		expect(spawnSpy.mock.calls[0][0]).toBe("/usr/local/bin/bun");
 
 		const spawnOpts = spawnSpy.mock.calls[0][2] as { stdio: unknown[] };
 		const stdioArg = spawnOpts.stdio;
@@ -101,7 +102,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		expect(spawnSpy).not.toHaveBeenCalled();
 		expect(status.mode).toBe("attached");
 		expect(manager.daemonMode).toBe("attached");
-		expect(status.runtime).toBe("compiled");
+		expect(status.runtime).toBe("bun-js");
 	});
 	test("ensureStarted spawns bundled when probe fails", async () => {
 		let fetchCallCount = 0;
@@ -147,13 +148,13 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		});
 
 		const manager = new DaemonManager({ workspacePath: "/tmp/signet-workspace" });
-		await expect(manager.ensureStarted()).rejects.toThrow("Reinstall the desktop app");
+		await expect(manager.ensureStarted()).rejects.toThrow("Reinstall the desktop app or install Bun");
 
 		const status = await manager.status();
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
 		expect(status.running).toBe(false);
 		expect(status.mode).toBe("none");
 		expect(status.startupErrorCode).toBe("bundled-runtime-enoent");
-		expect(status.startupError).toContain("Reinstall the desktop app");
+		expect(status.startupError).toContain("Reinstall the desktop app or install Bun");
 	});
 });

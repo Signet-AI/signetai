@@ -142,8 +142,6 @@ let previousWrapperDir: string | undefined;
 let previousCodexHome: string | undefined;
 let previousArgvEntry: string | undefined;
 let previousExecPath: string;
-let previousMcpBin: string | undefined;
-let testMcpBin: string;
 
 function restoreEnv(name: string, value: string | undefined): void {
 	if (value === undefined) {
@@ -165,7 +163,6 @@ beforeEach(() => {
 	previousCodexHome = process.env.CODEX_HOME;
 	previousArgvEntry = process.argv[1];
 	previousExecPath = process.execPath;
-	previousMcpBin = process.env.SIGNET_RUST_MCP_BIN;
 	Reflect.deleteProperty(process.env, "SIGNET_SESSION_START_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_FETCH_TIMEOUT");
 	Reflect.deleteProperty(process.env, "SIGNET_PROMPT_SUBMIT_TIMEOUT");
@@ -180,10 +177,6 @@ beforeEach(() => {
 	configPath = join(codexDir, "config.toml");
 	hooksPath = join(codexDir, "hooks.json");
 	mkdirSync(codexDir, { recursive: true });
-	testMcpBin = join(tempHome, "signet-mcp");
-	writeFileSync(testMcpBin, "native fixture\n");
-	chmodSync(testMcpBin, 0o755);
-	process.env.SIGNET_RUST_MCP_BIN = testMcpBin;
 });
 
 afterEach(() => {
@@ -196,7 +189,6 @@ afterEach(() => {
 	restoreEnv("SIGNET_CODEX_FORCE_COMPAT_HOOKS", previousForceCompatHooks);
 	restoreEnv("SIGNET_WRAPPER_DIR", previousWrapperDir);
 	restoreEnv("CODEX_HOME", previousCodexHome);
-	restoreEnv("SIGNET_RUST_MCP_BIN", previousMcpBin);
 	if (previousArgvEntry === undefined) process.argv.splice(1, 1);
 	else process.argv[1] = previousArgvEntry;
 	process.execPath = previousExecPath;
@@ -255,7 +247,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(existsSync(configPath)).toBe(true);
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[mcp_servers.signet]");
-		expect(content).toContain(`command = '${testMcpBin}'`);
+		expect(content).toContain("command = 'signet-mcp'");
 		expect(content).not.toContain("disabled_tools");
 		expect(content).not.toContain("command = [");
 	});
@@ -266,7 +258,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		await connector().install(tempHome);
 
 		const content = readFileSync(configPath, "utf-8");
-		expect(content).toContain(`command = '${testMcpBin}'`);
+		expect(content).toContain("command = 'signet-mcp'");
 		expect(content).not.toContain("command = [");
 	});
 
@@ -283,7 +275,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain('name = "gpt-4o"');
 		expect(content).toContain("[history]");
 		expect(content).toContain("enabled = true");
-		expect(content).toContain(`command = '${testMcpBin}'`);
+		expect(content).toContain("command = 'signet-mcp'");
 		expect(content).not.toContain("command = [");
 	});
 
@@ -296,7 +288,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 				"",
 				"# Signet MCP server",
 				"[mcp_servers.signet]",
-				`command = '${testMcpBin}'`,
+				"command = 'signet-mcp'",
 				"disabled_tools = ['memory_search', 'memory_store']",
 				"",
 				"[history]",
@@ -310,7 +302,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[model]");
 		expect(content).toContain("[history]");
-		expect(content).toContain(`command = '${testMcpBin}'`);
+		expect(content).toContain("command = 'signet-mcp'");
 		expect(content).not.toContain("disabled_tools");
 	});
 
@@ -322,7 +314,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).toContain("[model]");
 		expect(content).toContain("[mcp_servers.signet]");
-		expect(content).toContain(`command = '${testMcpBin}'`);
+		expect(content).toContain("command = 'signet-mcp'");
 	});
 
 	test("idempotent: re-running install produces identical config.toml", async () => {
@@ -386,7 +378,7 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain("startup_timeout_sec = 10");
 		expect(content).toContain("tool_timeout_sec = 30");
 		expect(content).not.toContain("disabled_tools");
-		expect(content).not.toContain(`command = '${testMcpBin}'`);
+		expect(content).not.toContain("command = 'signet-mcp'");
 	});
 
 	test("removes stale remote MCP auth header tables on reinstall without an API key", async () => {
@@ -629,7 +621,7 @@ describe("CodexConnector.install — native plugin bundle", () => {
 				"",
 				"[mcp_servers.signet]",
 				"transport = 'sse'",
-				`command = '${testMcpBin}'`,
+				"command = 'signet-mcp'",
 				"",
 			].join("\n"),
 		);
@@ -743,7 +735,7 @@ describe("CodexConnector.uninstall — config.toml cleanup", () => {
 				"",
 				"# Signet MCP server",
 				"[mcp_servers.signet]",
-				`command = '${testMcpBin}'`,
+				"command = 'signet-mcp'",
 				"args = [",
 				"  '--verbose'",
 				"]",
@@ -798,10 +790,10 @@ describe("buildMcpBlock — TOML quoting", () => {
 	test("Windows paths with backslashes are quoted correctly", () => {
 		const block = buildMcpBlock({
 			command: "C:\\Program Files\\node.exe",
-			args: [`C:\\signet\\${["mcp-stdio", "js"].join(".")}`],
+			args: ["C:\\signet\\mcp-stdio.js"],
 		});
 		expect(block).toContain("command = 'C:\\Program Files\\node.exe'");
-		expect(block).toContain(`args = ['C:\\signet\\${["mcp-stdio", "js"].join(".")}']`);
+		expect(block).toContain("args = ['C:\\signet\\mcp-stdio.js']");
 		expect(block).not.toContain("command = [");
 	});
 
@@ -1071,7 +1063,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 
 		const packageRoot = join(tempHome, "signetai");
 		const signetEntry = join(packageRoot, "bin", "signet.js");
-		const mcpEntry = join(packageRoot, "dist", ["mcp-stdio", "js"].join("."));
+		const mcpEntry = join(packageRoot, "dist", "mcp-stdio.js");
 		mkdirSync(join(signetEntry, ".."), { recursive: true });
 		mkdirSync(join(mcpEntry, ".."), { recursive: true });
 		writeFileSync(signetEntry, "// fixture\n", "utf-8");
@@ -1083,7 +1075,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 
 		writeFileSync(
 			configPath,
-			`[mcp_servers.signet]\ncommand = '/old/Codex.app/Contents/Resources/node'\nargs = ['/old/${["mcp-stdio", "js"].join(".")}']\n`,
+			"[mcp_servers.signet]\ncommand = '/old/Codex.app/Contents/Resources/node'\nargs = ['/old/mcp-stdio.js']\n",
 		);
 
 		const result = await desktopRuntimeConnector(appPath, runtime).install(tempHome);
@@ -1098,8 +1090,8 @@ describe("CodexConnector.install — hooks.json schema", () => {
 				expect(handler?.command).toContain(`${runtime} ${signetEntry}`);
 			}
 		}
-		expect(readFileSync(configPath, "utf-8")).toContain(`command = '${testMcpBin}'`);
-		expect(readFileSync(configPath, "utf-8")).not.toContain("mcp-stdio");
+		expect(readFileSync(configPath, "utf-8")).toContain(`command = '${runtime}'`);
+		expect(readFileSync(configPath, "utf-8")).toContain(`args = ['${mcpEntry}']`);
 		expect(result.warnings).toContain(
 			"Detected a missing Signet Codex runtime path; refreshed only Signet-owned hooks and MCP configuration.",
 		);
@@ -1114,7 +1106,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 
 		const packageRoot = join(tempHome, "signetai");
 		const signetEntry = join(packageRoot, "bin", "signet.js");
-		const mcpEntry = join(packageRoot, "dist", ["mcp-stdio", "js"].join("."));
+		const mcpEntry = join(packageRoot, "dist", "mcp-stdio.js");
 		const optionalNative = join(packageRoot, "node_modules", "signetai-darwin-arm64", "bin", "signet");
 		mkdirSync(join(signetEntry, ".."), { recursive: true });
 		mkdirSync(join(mcpEntry, ".."), { recursive: true });
@@ -1139,8 +1131,8 @@ describe("CodexConnector.install — hooks.json schema", () => {
 			}
 		}
 		const config = readFileSync(configPath, "utf-8");
-		expect(config).toContain(`command = '${testMcpBin}'`);
-		expect(readFileSync(configPath, "utf-8")).not.toContain("mcp-stdio");
+		expect(config).toContain(`command = '${runtime}'`);
+		expect(config).toContain(`args = ['${mcpEntry}']`);
 	});
 
 	test("discovers nested Codex Desktop runtimes", async () => {
@@ -1272,7 +1264,7 @@ describe("CodexConnector.install — hooks.json schema", () => {
 		}
 
 		const config = readFileSync(configPath, "utf-8");
-		expect(config).toContain(`command = '${testMcpBin}'`);
+		expect(config).toContain(`command = '${nativeBinary}'`);
 		expect(config).toContain("[mcp_servers.signet.env]");
 		expect(config).toContain("SIGNET_MCP_STDIO_WORKER = '1'");
 	});

@@ -15,7 +15,7 @@
  *       [--port 3850] [--writes] [--token <bearer>]
  *
  * Against the live daemon (default) or a scratch one:
- *   SIGNET_PATH=/tmp/signet-loadtest SIGNET_RUST_DAEMON_BIN=./platform/rust-daemon/target/debug/signet-daemon ./platform/rust-daemon/target/debug/signet-daemon &
+ *   SIGNET_PATH=/tmp/signet-loadtest bun platform/daemon/src/daemon.ts &  # scratch daemon
  *   bun scripts/load-test-daemon.ts --port 3850
  *
  * Exit code 0 = daemon stayed healthy through the run (p95 < 2s), 1 = failure.

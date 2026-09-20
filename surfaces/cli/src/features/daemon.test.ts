@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
+import { resolve } from "node:path";
+import { Command } from "commander";
+import { withRuntime } from "../commands/shared.js";
+import * as runtime from "../lib/runtime.js";
 import {
 	doRestart,
 	doStart,
@@ -94,7 +98,100 @@ function makeDeps(overrides?: Partial<Parameters<typeof doRestart>[1]>): Paramet
 	};
 }
 
+describe("daemon bundle flag", () => {
+	for (const action of [doStart, doRestart]) {
+		it(`${action.name} forwards the parsed absolute bundle path after stopping`, async () => {
+			const path = resolve("local/daemon.js");
+			const inspection = spyOn(runtime, "inspectDaemonJsBundle").mockReturnValue({
+				daemonPath: path,
+				valid: true,
+				missing: [],
+			});
+			const calls: unknown[] = [];
+			const deps = makeDeps({
+				isDaemonRunning: async () => true,
+				getDaemonStatus: async () => ({ ...(await makeDeps().getDaemonStatus()), runtime: "bun-js" }),
+				stopDaemon: async () => {
+					calls.push("stop");
+					return true;
+				},
+				startDaemon: async (...args) => {
+					calls.push(args);
+					return true;
+				},
+			});
+			try {
+				const command = withRuntime(new Command()).action((options) => action(options, deps));
+				await command.parseAsync(["--runtime", "bun-js", "--daemon-js-path", "local/daemon.js"], { from: "user" });
+				expect(inspection).toHaveBeenCalledWith(path);
+				expect(calls).toEqual(["stop", [deps.agentsDir, "bun-js", path]]);
+			} finally {
+				inspection.mockRestore();
+			}
+		});
+
+		it(`${action.name} rejects invalid selections before stopping`, async () => {
+			const deps = makeDeps({ isDaemonRunning: async () => true });
+			const stop = spyOn(deps, "stopDaemon");
+			try {
+				await expect(action({ runtime: "compiled", daemonJsPath: "missing.js" }, deps)).rejects.toThrow(
+					"requires --runtime bun-js",
+				);
+				await expect(action({ runtime: "bun-js", daemonJsPath: "" }, deps)).rejects.toThrow("must name");
+				await expect(action({ runtime: "bun-js", daemonJsPath: "missing.js" }, deps)).rejects.toThrow("incomplete");
+				expect(stop).not.toHaveBeenCalled();
+			} finally {
+				stop.mockRestore();
+			}
+		});
+	}
+});
+
 describe("daemon lifecycle recovery", () => {
+	it("passes an explicit runtime to startDaemon", async () => {
+		let selected: string | undefined;
+		const deps = makeDeps({
+			startDaemon: async (_agentsDir, runtime) => {
+				selected = runtime;
+				return true;
+			},
+		});
+
+		await doStart({ runtime: "bun-js" }, deps);
+
+		expect(selected).toBe("bun-js");
+	});
+
+	it("stops a running daemon before changing its runtime", async () => {
+		const calls: string[] = [];
+		const deps = makeDeps({
+			getDaemonStatus: async () => ({
+				running: true,
+				pid: 42,
+				uptime: 1,
+				version: "0.77.1",
+				runtime: "compiled",
+				host: "127.0.0.1",
+				bindHost: "0.0.0.0",
+				networkMode: "local",
+				extraction: null,
+			}),
+			isDaemonRunning: async () => true,
+			stopDaemon: async () => {
+				calls.push("stop");
+				return true;
+			},
+			startDaemon: async (_agentsDir, runtime) => {
+				calls.push(runtime ?? "default");
+				return true;
+			},
+		});
+
+		await doStart({ runtime: "bun-js" }, deps);
+
+		expect(calls).toEqual(["stop", "bun-js"]);
+	});
+
 	it("lets an already-running daemon reconcile its installation owner", async () => {
 		let started = false;
 		const deps = makeDeps({

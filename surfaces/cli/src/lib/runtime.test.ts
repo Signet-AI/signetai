@@ -5,25 +5,34 @@ import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	DAEMON_JS_WORKER_FILES,
 	buildLaunchdDaemonPlist,
 	buildLaunchdDaemonStartArgs,
 	buildLaunchdDaemonStopArgs,
+	buildSystemdDaemonStartArgs,
 	didLaunchdDaemonStart,
 	didSystemdDaemonStart,
 	getDaemonStatus,
 	getLaunchdDaemonLoadState,
+	inspectDaemonJsBundle,
+	resolveBunJsDaemonBundle,
 	isDaemonEntrypointEnvironment,
 	isDaemonRunning,
 	isLaunchdDaemonLoaded,
 	launchdDaemonLegacyPlistPath,
 	launchdDaemonLabel,
 	launchdDaemonPlistPath,
+	macOSLaunchAgentAttributionNotice,
 	readDaemonStartFailureDiagnostics,
 	readManagedDaemonPid,
 	resolveDaemonProbeUrls,
 	resolveLaunchdDaemonMigration,
+	resolveDaemonChildInspector,
+	resolveDaemonInspectorForwarding,
 	resolveDaemonLaunchCommand,
 	resolveDaemonPaths,
+	resolveDaemonPathForRuntime,
+	resolveDaemonRuntimeCommand,
 	stopManagedDaemonProcess,
 	waitForDaemonLiveness,
 } from "./runtime.js";
@@ -35,10 +44,83 @@ afterEach(() => {
 });
 
 describe("resolveDaemonPaths", () => {
-	it("selects only the fresh native daemon path", () => {
+	it("keeps the JavaScript daemon bundle as the default when SIGNET_DIR is set", () => {
 		const paths = resolveDaemonPaths({ SIGNET_DIR: "/opt/signet" });
-		expect(paths[0]).toContain(join("/opt/signet", "runtime", "rust-daemon"));
-		expect(paths[0]).not.toMatch(/\.js$/);
+		expect(paths[0]).toBe(join("/opt/signet", "runtime", "daemon-js", "daemon.js"));
+	});
+});
+
+describe("bun-js daemon bundle selection", () => {
+	it("requires the production entrypoint, workers, assets, and external dependencies", () => {
+		const bundleDir = mkdtempSync(join(tmpdir(), "signet-daemon-js-bundle-"));
+		try {
+			writeFileSync(join(bundleDir, "daemon.js"), "export {};");
+			for (const worker of DAEMON_JS_WORKER_FILES) writeFileSync(join(bundleDir, worker), "export {};");
+			mkdirSync(join(bundleDir, "dashboard"));
+			writeFileSync(join(bundleDir, "dashboard", "index.html"), "<!doctype html>");
+			mkdirSync(join(bundleDir, "skills"));
+			writeFileSync(join(bundleDir, "skills", "README.md"), "skills");
+			mkdirSync(join(bundleDir, "vendor"), { recursive: true });
+			writeFileSync(join(bundleDir, "vendor", "tiktoken_bg.wasm"), "wasm");
+			mkdirSync(join(bundleDir, "vendor", "node_modules", "@firecrawl", "anydoc"), { recursive: true });
+
+			expect(inspectDaemonJsBundle(join(bundleDir, "daemon.js"))).toEqual({
+				daemonPath: join(bundleDir, "daemon.js"),
+				valid: true,
+				missing: [],
+			});
+			expect(
+				resolveDaemonPathForRuntime("bun-js", { SIGNET_DAEMON_JS_PATH: "missing.js" }, join(bundleDir, "daemon.js")),
+			).toBe(join(bundleDir, "daemon.js"));
+			rmSync(join(bundleDir, "embedding-worker.js"));
+			expect(inspectDaemonJsBundle(join(bundleDir, "daemon.js")).missing).toContain("embedding-worker.js");
+		} finally {
+			rmSync(bundleDir, { recursive: true, force: true });
+		}
+	});
+
+	it("does not use a JavaScript path for the compiled runtime", () => {
+		const daemonPath = join(mkdtempSync(join(tmpdir(), "signet-daemon-runtime-")), "daemon.js");
+		try {
+			writeFileSync(daemonPath, "export {};");
+			expect(resolveDaemonPathForRuntime("compiled", {}, daemonPath)).toBeNull();
+		} finally {
+			rmSync(join(daemonPath, ".."), { recursive: true, force: true });
+		}
+	});
+
+	it("does not fall back when an explicit bundle path is incomplete", () => {
+		const bundleDir = mkdtempSync(join(tmpdir(), "signet-daemon-js-invalid-"));
+		try {
+			writeFileSync(join(bundleDir, "daemon.js"), "export {};");
+			expect(resolveBunJsDaemonBundle({ SIGNET_DAEMON_JS_PATH: join(bundleDir, "daemon.js") })).toEqual({
+				daemonPath: join(bundleDir, "daemon.js"),
+				valid: false,
+				missing: expect.arrayContaining(["embedding-worker.js"]),
+			});
+		} finally {
+			rmSync(bundleDir, { recursive: true, force: true });
+		}
+	});
+
+	it("selects a complete bundle from the explicit environment path", () => {
+		const bundleDir = mkdtempSync(join(tmpdir(), "signet-daemon-js-path-"));
+		try {
+			writeFileSync(join(bundleDir, "daemon.js"), "export {};");
+			for (const worker of DAEMON_JS_WORKER_FILES) writeFileSync(join(bundleDir, worker), "export {};");
+			mkdirSync(join(bundleDir, "dashboard"));
+			writeFileSync(join(bundleDir, "dashboard", "index.html"), "<!doctype html>");
+			mkdirSync(join(bundleDir, "skills"));
+			writeFileSync(join(bundleDir, "skills", "README.md"), "skills");
+			mkdirSync(join(bundleDir, "vendor"), { recursive: true });
+			writeFileSync(join(bundleDir, "vendor", "tiktoken_bg.wasm"), "wasm");
+			mkdirSync(join(bundleDir, "vendor", "node_modules", "@firecrawl", "anydoc"), { recursive: true });
+			expect(resolveBunJsDaemonBundle({ SIGNET_DAEMON_JS_PATH: join(bundleDir, "daemon.js") })?.daemonPath).toBe(
+				join(bundleDir, "daemon.js"),
+			);
+		} finally {
+			rmSync(bundleDir, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -64,14 +146,274 @@ describe("daemon entrypoint ownership", () => {
 	});
 });
 
+describe("resolveDaemonRuntimeCommand", () => {
+	it("uses the bundled Node runtime when SIGNET_DIR points at a native bundle install", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-node-"));
+		const nodeName = process.platform === "win32" ? "node.exe" : "node";
+		const nodePath = join(root, "runtime", "node", "bin", nodeName);
+		mkdirSync(join(root, "runtime", "node", "bin"), { recursive: true });
+		writeFileSync(nodePath, "");
+
+		expect(resolveDaemonRuntimeCommand({ SIGNET_DIR: root }, join("/usr/bin", nodeName), "")).toBe(nodePath);
+
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	it("resolves bun.exe from PATH when a compiled Windows binary selects bun-js", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-runtime-bun-path-"));
+		const bunName = process.platform === "win32" ? "bun.exe" : "bun";
+		const bunPath = join(root, "bin", bunName);
+		try {
+			mkdirSync(join(root, "bin"), { recursive: true });
+			writeFileSync(bunPath, "");
+			expect(
+				resolveDaemonRuntimeCommand(
+					{},
+					join("/opt/signet", process.platform === "win32" ? "signet.exe" : "signet"),
+					join(root, "bin"),
+					"bun-js",
+				),
+			).toBe(bunPath);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
 describe("resolveDaemonLaunchCommand", () => {
 	it("launches native daemon binaries directly", () => {
 		expect(resolveDaemonLaunchCommand("/opt/signet/bin/signet")).toEqual(["/opt/signet/bin/signet"]);
 	});
 
-	it("rejects displaced JavaScript daemon launch paths", () => {
-		const legacyPath = "/opt/signet/dist/" + "daemon" + ".js";
-		expect(() => resolveDaemonLaunchCommand(legacyPath)).toThrow("Native Signet daemon executable is required");
+	it("launches JavaScript daemon scripts through the runtime command", () => {
+		expect(resolveDaemonLaunchCommand("/opt/signet/runtime/daemon-js/daemon.js")).toEqual([
+			process.execPath,
+			"/opt/signet/runtime/daemon-js/daemon.js",
+		]);
+	});
+});
+
+describe("macOSLaunchAgentAttributionNotice", () => {
+	it("warns when macOS launchd will attribute a JavaScript daemon to Bun", () => {
+		const notice = macOSLaunchAgentAttributionNotice("/opt/signet/dist/daemon.js", {
+			env: {},
+			execPath: "/Users/user/.bun/bin/bun",
+			pathValue: "",
+			platform: "darwin",
+		});
+
+		expect(notice).toContain("Background Activity");
+		expect(notice).toContain("Jarred Sumner");
+		expect(notice).toContain("compiled Signet binary");
+	});
+
+	it("does not warn for native daemon binaries", () => {
+		expect(
+			macOSLaunchAgentAttributionNotice("/opt/signet/bin/signet", {
+				env: {},
+				execPath: "/Users/user/.bun/bin/bun",
+				pathValue: "",
+				platform: "darwin",
+			}),
+		).toBeNull();
+	});
+
+	it("does not warn outside macOS", () => {
+		expect(
+			macOSLaunchAgentAttributionNotice("/opt/signet/dist/daemon.js", {
+				env: {},
+				execPath: "/Users/user/.bun/bin/bun",
+				pathValue: "",
+				platform: "linux",
+			}),
+		).toBeNull();
+	});
+});
+
+describe("resolveDaemonChildInspector", () => {
+	it("does not forward the inspector setting from a Bun parent", () => {
+		expect(resolveDaemonChildInspector({ BUN_INSPECT: "127.0.0.1:9230" }, true)).toBeUndefined();
+	});
+
+	it("forwards the inspector setting from a non-Bun parent", () => {
+		expect(resolveDaemonChildInspector({ BUN_INSPECT: "127.0.0.1:9230" }, false)).toBe("127.0.0.1:9230");
+	});
+});
+
+describe("resolveDaemonInspectorForwarding", () => {
+	it("moves a Bun daemon inspector behind a discovery-compatible proxy", async () => {
+		const forwarding = await resolveDaemonInspectorForwarding({ BUN_INSPECT: "127.0.0.1:9230" }, true);
+
+		expect(forwarding.proxy).toEqual({
+			publicInspector: "127.0.0.1:9230",
+			targetInspector: expect.stringMatching(/^127\.0\.0\.1:\d+\/json$/),
+		});
+		expect(forwarding.childInspector).toBe(forwarding.proxy?.targetInspector);
+	});
+
+	it("uses the handed-off public inspector when the Bun parent released BUN_INSPECT", async () => {
+		const forwarding = await resolveDaemonInspectorForwarding(
+			{ BUN_INSPECT: "", SIGNET_INSPECTOR_PUBLIC: "127.0.0.1:9230" },
+			true,
+		);
+
+		expect(forwarding.proxy?.publicInspector).toBe("127.0.0.1:9230");
+	});
+});
+
+describe("buildSystemdDaemonStartArgs", () => {
+	it("starts daemon in a transient user service with explicit env and log routing", () => {
+		const args = buildSystemdDaemonStartArgs({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+		});
+
+		expect(args).toContain("--user");
+		expect(args).toContain("--collect");
+		expect(args).toContain("--quiet");
+		expect(args).toContain("--setenv=SIGNET_PORT=3850");
+		expect(args).toContain("--setenv=SIGNET_HOST=127.0.0.1");
+		expect(args).toContain("--setenv=SIGNET_BIND=0.0.0.0");
+		expect(args).toContain("--setenv=SIGNET_PATH=/home/user/.agents");
+		expect(args).toContain("--setenv=SIGNET_DAEMON_ENTRYPOINT=1");
+		expect(args).toContain("--setenv=BUN_INSPECT=");
+		expect(args).toContain("--property=StandardError=append:/home/user/.agents/.daemon/logs/startup.log");
+		expect(args.slice(-2)).toEqual([process.execPath, "/opt/signet/dist/daemon.js"]);
+	});
+
+	it("propagates the selected runtime through systemd and launchd", () => {
+		const input = {
+			daemonPath: "/opt/signet/runtime/daemon-js/daemon.js",
+			runtime: "bun-js" as const,
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+		};
+
+		const args = buildSystemdDaemonStartArgs(input);
+		const plist = buildLaunchdDaemonPlist(input);
+
+		expect(args).toContain("--setenv=SIGNET_DAEMON_RUNTIME=bun-js");
+		expect(args.slice(-2)).toEqual([process.execPath, input.daemonPath]);
+		expect(plist).toMatch(/<key>SIGNET_DAEMON_RUNTIME<\/key>\s*<string>bun-js<\/string>/);
+		expect(plist).toContain(`<string>${input.daemonPath}</string>`);
+	});
+
+	it("propagates Bun-JS vendor assets through service managers", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-daemon-service-assets-"));
+		const bundleDir = join(root, "daemon", "dist");
+		const daemonPath = join(bundleDir, "daemon.js");
+		const nodePath = join(bundleDir, "vendor", "node_modules");
+		const wasmPath = join(bundleDir, "vendor", "tiktoken_bg.wasm");
+		try {
+			mkdirSync(join(nodePath, "@firecrawl", "anydoc"), { recursive: true });
+			writeFileSync(daemonPath, "export {};");
+			writeFileSync(wasmPath, "wasm");
+			const input = {
+				daemonPath,
+				runtime: "bun-js" as const,
+				agentsDir: "/home/user/.agents",
+				port: 3850,
+				host: "127.0.0.1",
+				bind: "0.0.0.0",
+				startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+			};
+			const args = buildSystemdDaemonStartArgs(input);
+			const plist = buildLaunchdDaemonPlist(input);
+			expect(args).toContain(`--setenv=NODE_PATH=${nodePath}`);
+			expect(args).toContain(`--setenv=SIGNET_TIKTOKEN_WASM_PATH=${wasmPath}`);
+			expect(plist).toContain(`<string>${nodePath}</string>`);
+			expect(plist).toContain(`<string>${wasmPath}</string>`);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("forwards the Bun inspector setting through the transient service boundary", () => {
+		const args = buildSystemdDaemonStartArgs({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+			bunInspect: "127.0.0.1:9230",
+		});
+
+		expect(args).toContain("--setenv=BUN_INSPECT=127.0.0.1:9230");
+	});
+
+	it("forwards Bun runtime options through the transient service boundary", () => {
+		const args = buildSystemdDaemonStartArgs({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+			bunOptions: "--cpu-prof --cpu-prof-dir=/tmp/signet-profile",
+		});
+
+		expect(args).toContain("--setenv=BUN_OPTIONS=--cpu-prof --cpu-prof-dir=/tmp/signet-profile");
+	});
+
+	it("forwards only allowlisted telemetry variables through service-manager boundaries", () => {
+		const input = {
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+			telemetryEnv: {
+				SIGNET_TELEMETRY_ENV: "dev",
+				SIGNET_TELEMETRY_OPTOUT: "1",
+				SIGNET_TELEMETRY_DEPLOYMENT_ROLE: "ci",
+				SIGNET_TELEMETRY_INSTALL_CHANNEL: "package-manager",
+				SIGNET_TELEMETRY_SECRET: "must-not-cross-boundary",
+			},
+		};
+
+		const args = buildSystemdDaemonStartArgs(input);
+		const plist = buildLaunchdDaemonPlist(input);
+
+		expect(args).toEqual(
+			expect.arrayContaining([
+				"--setenv=SIGNET_TELEMETRY_ENV=dev",
+				"--setenv=SIGNET_TELEMETRY_OPTOUT=1",
+				"--setenv=SIGNET_TELEMETRY_DEPLOYMENT_ROLE=ci",
+				"--setenv=SIGNET_TELEMETRY_INSTALL_CHANNEL=package-manager",
+			]),
+		);
+		expect(plist).toContain("<key>SIGNET_TELEMETRY_ENV</key>");
+		expect(plist).toContain("<key>SIGNET_TELEMETRY_OPTOUT</key>");
+		expect(plist).toContain("<key>SIGNET_TELEMETRY_DEPLOYMENT_ROLE</key>");
+		expect(plist).toContain("<key>SIGNET_TELEMETRY_INSTALL_CHANNEL</key>");
+		expect(args.join(" ")).not.toContain("SIGNET_TELEMETRY_SECRET");
+		expect(plist).not.toContain("SIGNET_TELEMETRY_SECRET");
+	});
+
+	it("clears empty inspector settings at the service boundary", () => {
+		const input = {
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+		};
+
+		const args = buildSystemdDaemonStartArgs({ ...input, bunInspect: "" });
+		const plist = buildLaunchdDaemonPlist({ ...input, bunInspect: "" });
+
+		expect(args).toContain("--setenv=BUN_INSPECT=");
+		expect(plist).toMatch(/<key>BUN_INSPECT<\/key>\s*<string><\/string>/);
 	});
 });
 
@@ -79,7 +421,7 @@ describe("buildLaunchdDaemonPlist", () => {
 	it("starts daemon as a macOS LaunchAgent with explicit env and log routing", () => {
 		if (process.platform !== "darwin") return;
 		const plist = buildLaunchdDaemonPlist({
-			daemonPath: "/opt/signet/bin/signet-daemon",
+			daemonPath: "/opt/signet/dist/daemon.js",
 			agentsDir: "/Users/user/.agents",
 			port: 3850,
 			host: "127.0.0.1",
@@ -91,7 +433,8 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<key>Label</key>");
 		expect(plist).toContain("<string>ai.signet.daemon.test</string>");
 		expect(plist).toContain("<key>ProgramArguments</key>");
-		expect(plist).toContain("<string>/opt/signet/bin/signet-daemon</string>");
+		expect(plist).toContain(`<string>${process.execPath}</string>`);
+		expect(plist).toContain("<string>/opt/signet/dist/daemon.js</string>");
 		expect(plist).not.toContain("/bin/bash");
 		expect(plist).not.toContain("exec");
 		expect(plist).toContain("<key>SIGNET_PORT</key>");
@@ -104,6 +447,7 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toContain("<string>/Users/user/.agents</string>");
 		expect(plist).toContain("<key>SIGNET_DAEMON_ENTRYPOINT</key>");
 		expect(plist).toMatch(/<key>SIGNET_DAEMON_SERVICE<\/key>\s*<string>launchd<\/string>/);
+		expect(plist).toMatch(/<key>BUN_INSPECT<\/key>\s*<string><\/string>/);
 		expect(plist).toContain("<string>1</string>");
 		expect(plist).toContain("<key>HOME</key>");
 		expect(plist).toContain("<key>RunAtLoad</key>");
@@ -112,6 +456,45 @@ describe("buildLaunchdDaemonPlist", () => {
 		expect(plist).toMatch(/<key>KeepAlive<\/key>\s*<true\/>/);
 		expect(plist).toContain("<key>StandardErrorPath</key>");
 		expect(plist).toContain("<string>/Users/user/.agents/.daemon/logs/startup.log</string>");
+	});
+
+	it("forwards the Bun inspector setting into the persistent launch agent", () => {
+		if (process.platform !== "darwin") return;
+		const plist = buildLaunchdDaemonPlist({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/Users/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/Users/user/.agents/.daemon/logs/startup.log",
+			bunInspect: "127.0.0.1:9230",
+		});
+
+		expect(plist).toContain("<key>BUN_INSPECT</key>");
+		expect(plist).toContain("<string>127.0.0.1:9230</string>");
+	});
+
+	it("invokes runtime directly without bash wrapper", () => {
+		if (process.platform !== "darwin") return;
+		const plist = buildLaunchdDaemonPlist({
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/Users/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/Users/user/.agents/.daemon/logs/startup.log",
+		});
+
+		const programArgsMatch = plist.match(/<key>ProgramArguments<\/key>\s*<array>([\s\S]*?)<\/array>/);
+		expect(programArgsMatch).not.toBeNull();
+
+		const inner = programArgsMatch?.[1] ?? "";
+		const strings = [...inner.matchAll(/<string>(.*?)<\/string>/g)].map((m) => m[1]);
+		expect(strings).toHaveLength(2);
+		expect(strings[0]).toBe(process.execPath);
+		expect(strings[1]).toBe("/opt/signet/dist/daemon.js");
+		expect(plist).toContain(`<string>${launchdDaemonLabel("/Users/user/.agents")}</string>`);
+		expect(strings[0]).toMatch(/^\//);
 	});
 
 	it("uses a persistent user LaunchAgent path", () => {
@@ -255,9 +638,9 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(join(dir, "pid"), "4242\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/bin/signet-daemon"],
+			daemonPaths: ["/opt/signet/dist/daemon.js"],
 			isAlive: () => true,
-			readCmd: () => "/opt/signet/bin/signet-daemon",
+			readCmd: () => "bun /opt/signet/dist/daemon.js",
 			readEnv: () => "SIGNET_DAEMON_ENTRYPOINT=1\u0000",
 		});
 
@@ -273,9 +656,9 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(join(dir, "pid"), "6262\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/bin/signet-daemon"],
+			daemonPaths: ["/opt/signet/dist/daemon.js"],
 			isAlive: () => true,
-			readCmd: () => "/opt/signet/bin/signet-daemon daemon start",
+			readCmd: () => "bun /opt/signet/dist/daemon.js daemon start",
 			readEnv: () => "PATH=/usr/bin\u0000",
 		});
 
@@ -291,9 +674,9 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(join(dir, "pid"), "5252\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/bin/signet-daemon"],
+			daemonPaths: ["/home/nicholai/.bun/install/global/node_modules/signetai/dist/daemon.js"],
 			isAlive: () => true,
-			readCmd: () => "/opt/signet/bin/signet-daemon",
+			readCmd: () => "bun /home/nicholai/.bun/install/cache/signetai@0.77.0/node_modules/signetai/dist/daemon.js",
 			readEnv: () => "SIGNET_DAEMON_ENTRYPOINT=1\u0000",
 		});
 
@@ -310,7 +693,7 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(path, "7777\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/bin/signet-daemon"],
+			daemonPaths: ["/opt/signet/dist/daemon.js"],
 			isAlive: () => true,
 			readCmd: () => "/usr/bin/python3 /tmp/something-else.py",
 			readEnv: () => "PATH=/usr/bin\u0000",
@@ -330,7 +713,7 @@ describe("readManagedDaemonPid", () => {
 		writeFileSync(path, "8888\n");
 
 		const pid = readManagedDaemonPid(root, {
-			daemonPaths: ["/opt/signet/bin/signet-daemon"],
+			daemonPaths: ["/opt/signet/dist/daemon.js"],
 			isAlive: () => false,
 			readCmd: () => null,
 		});

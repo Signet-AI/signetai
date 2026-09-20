@@ -16,19 +16,6 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HermesAgentConnector, diagnoseHermesIntegration } from "./src/index.js";
 
-describe("production boundary", () => {
-	it("does not import or depend on Signet core or daemon", () => {
-		const source = readFileSync(join(import.meta.dir, "src", "index.ts"), "utf-8");
-		const packageJson = JSON.parse(readFileSync(join(import.meta.dir, "package.json"), "utf-8")) as {
-			dependencies?: Record<string, string>;
-		};
-		expect(source).not.toContain("@signet/core");
-		expect(source).not.toContain("@signet/daemon");
-		expect(JSON.stringify(packageJson.dependencies ?? {})).not.toContain("@signet/core");
-		expect(JSON.stringify(packageJson.dependencies ?? {})).not.toContain("@signet/daemon");
-	});
-});
-
 const originalEnv = {
 	HOME: process.env.HOME,
 	PATH: process.env.PATH,

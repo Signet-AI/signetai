@@ -87,8 +87,8 @@ describe("install copy", () => {
 		expect(installer).toContain("signet-win32-x64.exe");
 		expect(installer).toContain("Get-FileHash -Algorithm SHA256");
 		expect(installer).toContain("--connector-assets");
-		expect(installer).not.toContain("legacyDaemonAssets");
-		expect(installer).not.toContain("--legacy-daemon-assets");
+		expect(installer).toContain("daemonJs");
+		expect(installer).toContain("--daemon-js-assets");
 		expect(installer).toContain('SetEnvironmentVariable("Path", $updatedUserPath, "User")');
 		expect(installer).toContain("SIGNET_CHANNEL");
 		expect(installer).not.toContain("npm install -g signetai");
@@ -110,18 +110,16 @@ describe("install copy", () => {
 		expect(manifest.dependencies).toBeUndefined();
 		expect(manifest.optionalDependencies).toBeUndefined();
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
-		// signet-mcp resolves and launches the packaged native MCP binary.
-		expect(manifest.bin?.["signet-mcp"]).toBe("bin/signet-mcp.js");
-		expect(manifest.files).toContain("bin/signet-mcp.js");
+		// signet-mcp is the self-contained stdio JSON-RPC bundle, not a
+		// wrapper that forwards to the native binary (issue #826).
+		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
+		expect(manifest.files).toContain("dist/mcp-stdio.js");
 		expect(manifest.files).toContain("native-manifest.json");
 		expect(manifest.files).toContain("runtime");
+		expect(manifest.files).not.toContain("bin/signet-mcp.js");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
-		// The published ESM wrapper must resolve optional native packages from
-		// its own package context; a bare `require.resolve` is unavailable in ESM
-		// and would not preserve that package-bound resolution contract.
-		expect(launcher).toContain('import { createRequire } from "node:module"');
-		expect(launcher).toContain("const require = createRequire(import.meta.url)");
+		expect(launcher).toContain("require.resolve");
 		expect(launcher).toContain("SIGNET_DIR");
 		expect(launcher).toContain(
 			'SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "package-manager"',
@@ -141,9 +139,9 @@ describe("install copy", () => {
 		// expects to find at `$SIGNET_DIR/runtime/connectors/...`.
 		expect(installer).toContain("native-manifest.json");
 		expect(installer).toContain("CONNECTOR_COMPONENT");
-		expect(installer).not.toContain("DAEMON_JS_COMPONENT");
-		expect(installer).not.toContain("installLegacyDaemonAssets");
-		expect(installer).not.toContain('join(packageDir, "runtime", "legacy-daemon")');
+		expect(installer).toContain("DAEMON_JS_COMPONENT");
+		expect(installer).toContain("installDaemonJsAssets");
+		expect(installer).toContain('join(packageDir, "runtime", "daemon-js")');
 		expect(installer).toContain("verifySha256");
 		expect(installer).toContain(`signet-connectors-\${manifest.version}.tar.gz`);
 		expect(installer).not.toContain("bun.sh/install");
@@ -187,9 +185,9 @@ describe("install copy", () => {
 		// passes the verified paths to the native installer.
 		expect(installer).toContain("manifest_component_value()");
 		expect(installer).toContain("manifest_component_value connectors url");
-		expect(installer).not.toContain("manifest_component_value legacyDaemonAssets url");
+		expect(installer).toContain("manifest_component_value daemonJs url");
 		expect(installer).toContain("--connector-assets");
-		expect(installer).not.toContain("--legacy-daemon-assets");
+		expect(installer).toContain("--daemon-js-assets");
 		expect(installer).toContain("install --force --connector-assets");
 	});
 

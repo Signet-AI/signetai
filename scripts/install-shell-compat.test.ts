@@ -86,6 +86,9 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 			const connectorName = "signet-connectors-v-test.tar.gz";
 			const connectorArchive = Buffer.from("connector archive");
 			writeFileSync(join(fixtureDir, connectorName), connectorArchive);
+			const daemonJsName = "signet-daemon-js-v-test.tar.gz";
+			const daemonJsArchive = Buffer.from("bun-js archive");
+			writeFileSync(join(fixtureDir, daemonJsName), daemonJsArchive);
 			writeFileSync(
 				join(fixtureDir, "native-manifest.json"),
 				JSON.stringify({
@@ -99,6 +102,10 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 						connectors: {
 							url: connectorName,
 							sha256: createHash("sha256").update(connectorArchive).digest("hex"),
+						},
+						daemonJs: {
+							url: daemonJsName,
+							sha256: createHash("sha256").update(daemonJsArchive).digest("hex"),
 						},
 					},
 				}),
@@ -130,6 +137,8 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 						"--force",
 						"--connector-assets",
 						join(downloadDir, connectorName),
+						"--daemon-js-assets",
+						join(downloadDir, daemonJsName),
 						"--json",
 						"",
 					]);

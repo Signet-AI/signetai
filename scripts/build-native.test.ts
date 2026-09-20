@@ -78,14 +78,9 @@ describe("build-native", () => {
 		expect(result.stderr).toContain("SIGNET_SKIP_NATIVE_BUILD=1");
 	});
 
-	test("builds and packages the fresh Rust daemon in Docker", () => {
+	test("keeps Docker builds on the explicit native-build opt-out path", () => {
 		const source = readFileSync(dockerfile, "utf8");
 
-		expect(source).toContain("RUN bun run build:native");
-		expect(source).toContain(
-			"COPY --from=build /app/dist/signetai/runtime/rust-daemon ./dist/signetai/runtime/rust-daemon",
-		);
-		expect(source).not.toContain("SIGNET_SKIP_NATIVE_BUILD");
-		expect(source).not.toContain("SIGNET_DAEMON_ENTRYPOINT");
+		expect(source).toContain("RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native");
 	});
 });

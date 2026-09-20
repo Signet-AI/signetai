@@ -111,24 +111,7 @@ describe("atomicWriteText", () => {
 		atomicWriteText(file, "{\n  // preserved\n}\n");
 
 		expect(readFileSync(file, "utf-8")).toBe("{\n  // preserved\n}\n");
-		if (process.platform !== "win32") {
-			// Some sandbox/overlay filesystems report chmod success but retain a
-			// fixed mode. Keep the security assertion where chmod is enforceable,
-			// while making the harness limitation explicit instead of hiding it.
-			const capabilityProbe = join(dir, "chmod-capability-probe");
-			writeFileSync(capabilityProbe, "probe\n", "utf-8");
-			chmodSync(capabilityProbe, 0o600);
-			const chmodEnforced = (statSync(capabilityProbe).mode & 0o777) === 0o600;
-			if (chmodEnforced) {
-				expect(statSync(file).mode & 0o777).toBe(0o600);
-			} else {
-				console.warn(
-					`[connector-base] chmod capability unavailable; expected 0600 but filesystem reports ${(
-						statSync(capabilityProbe).mode & 0o777
-					).toString(8)}. Secure-mode assertion skipped for this harness.`,
-				);
-			}
-		}
+		if (process.platform !== "win32") expect(statSync(file).mode & 0o777).toBe(0o600);
 	});
 });
 

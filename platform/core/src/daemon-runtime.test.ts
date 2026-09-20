@@ -7,19 +7,17 @@ describe("daemon runtime selection", () => {
 	});
 
 	test("reads the environment when no explicit value is provided", () => {
-		expect(() => resolveDaemonRuntime(undefined, { SIGNET_DAEMON_RUNTIME: "legacy-js" })).toThrow(
-			"native compiled daemon",
-		);
+		expect(resolveDaemonRuntime(undefined, { SIGNET_DAEMON_RUNTIME: "bun-js" })).toBe("bun-js");
 	});
 
 	test("explicit values take precedence over the environment", () => {
-		expect(resolveDaemonRuntime("compiled", { SIGNET_DAEMON_RUNTIME: "legacy-js" })).toBe("compiled");
+		expect(resolveDaemonRuntime("compiled", { SIGNET_DAEMON_RUNTIME: "bun-js" })).toBe("compiled");
 	});
 
 	test("rejects unsupported values", () => {
 		expect(parseDaemonRuntime("node")).toBeNull();
-		expect(parseDaemonRuntime("LEGACY-JS")).toBeNull();
-		expect(() => resolveDaemonRuntime("node", {})).toThrow("native compiled daemon");
-		expect(() => resolveDaemonRuntime(" ", {})).toThrow("native compiled daemon");
+		expect(parseDaemonRuntime("BUN-JS")).toBeNull();
+		expect(() => resolveDaemonRuntime("node", {})).toThrow("Choose one of: compiled, bun-js");
+		expect(() => resolveDaemonRuntime(" ", {})).toThrow("Choose one of: compiled, bun-js");
 	});
 });

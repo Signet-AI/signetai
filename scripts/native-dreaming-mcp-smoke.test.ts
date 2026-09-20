@@ -90,7 +90,7 @@ describe("compiled native Dreaming MCP", () => {
 		async () => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
-				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-cli)`);
+				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
 			}
 			const config = dreamingMcpProcess(binary);
 			expect(resolve(config.command)).toBe(binary);

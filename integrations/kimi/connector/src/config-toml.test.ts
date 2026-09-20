@@ -227,15 +227,12 @@ describe("KimiConnector.install — config.toml hook registration", () => {
 });
 
 describe("KimiConnector.install — mcp.json registration", () => {
-	test("creates mcp.json with the packaged/native resolver, never a JS fallback", async () => {
+	test("creates mcp.json with stdio signet server when file does not exist", async () => {
 		await connector().install(tempHome);
 
 		expect(existsSync(mcpPath)).toBe(true);
 		const json = readMcpJson();
-		const signet = (json.mcpServers as Record<string, Record<string, unknown>>).signet;
-		expect(signet.command).not.toBe(process.execPath);
-		expect(signet.args).not.toContain(expect.stringContaining("mcp-stdio.js"));
-		expect(signet).toEqual({ command: "signet-mcp", args: [] });
+		expect(json.mcpServers).toEqual({ signet: { command: "signet-mcp", args: [] } });
 	});
 
 	test("merges signet server into existing mcp.json without clobbering other servers", async () => {

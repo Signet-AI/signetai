@@ -194,27 +194,6 @@ describe("SignetTransport", () => {
 		expect(receivedHeaders["x-custom"]).toBe("custom-value");
 	});
 
-	test("native auth and workspace headers are propagated by the client", async () => {
-		let headers: Headers | undefined;
-		const server = mockServer((req) => {
-			headers = req.headers;
-			return Response.json({ ok: true });
-		});
-		const { SignetClient } = await import("../index.js");
-		await new SignetClient({
-			daemonUrl: `http://localhost:${server.port}`,
-			retries: 0,
-			token: "secret",
-			agentId: "agent-a",
-			agentType: "worker",
-			workspaceId: "workspace-a",
-		}).health();
-		expect(headers?.get("authorization")).toBe("Bearer secret");
-		expect(headers?.get("x-signet-agent-id")).toBe("agent-a");
-		expect(headers?.get("x-signet-agent-type")).toBe("worker");
-		expect(headers?.get("x-signet-workspace")).toBe("workspace-a");
-	});
-
 	test("query parameters are correctly appended to URL", async () => {
 		let receivedUrl = "";
 

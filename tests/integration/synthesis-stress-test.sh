@@ -34,7 +34,7 @@ echo "Worktree:  $WORKTREE"
 echo "==================================================================="
 echo ""
 SIGNET_PATH="$WORKSPACE" SIGNET_PORT=3851 SIGNET_BIND=127.0.0.1 \
-  "${SIGNET_RUST_DAEMON_BIN:-$WORKTREE/platform/rust-daemon/target/debug/signet-daemon}" >"$LOG" 2>&1 &
+  bun run "$WORKTREE/platform/daemon/src/daemon.ts" >"$LOG" 2>&1 &
 DAEMON_PID=$!
 echo "Daemon started (PID=$DAEMON_PID), waiting for healthy..."
 MAX_WAIT_ITERS=60
