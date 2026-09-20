@@ -1,5 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
@@ -32,12 +33,19 @@ async function start(path: string) {
 	throw new Error(`daemon readiness timeout: ${await new Response(child.stderr).text()}`);
 }
 afterEach(async () => {
-	for (const child of children.splice(0)) child.kill("SIGTERM");
+	for (const child of children.splice(0)) {
+		child.kill("SIGTERM");
+		await Promise.race([child.exited, Bun.sleep(1_000)]);
+		if (child.exitCode === null) {
+			child.kill("SIGKILL");
+			await child.exited;
+		}
+	}
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 test("fresh pipeline boundary preserves owner operations and names unsupported consumer surfaces", async () => {
-	const dir = mkdtempSync("/mnt/work/hermes-scratch/pipeline-contract-");
+	const dir = mkdtempSync(join(tmpdir(), "pipeline-contract-"));
 	dirs.push(dir);
 	const daemon = await start(dir);
 	const headers = {
