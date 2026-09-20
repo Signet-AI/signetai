@@ -60,6 +60,11 @@ it("keeps unbacked marketplace/provider/install/review/network operations explic
 	for (const [method, path] of operations) {
 		expect((await fetch(origin + path, { method })).status).toBe(401);
 		const response = await fetch(origin + path, { method, headers: auth });
+		if (path === "/api/marketplace/mcp/install") {
+			expect(response.status).toBe(422);
+			expect(await response.json()).toMatchObject({ code: "config_required" });
+			continue;
+		}
 		expect(response.status).toBe(501);
 		expect(await response.json()).toMatchObject({ code: "unsupported" });
 	}

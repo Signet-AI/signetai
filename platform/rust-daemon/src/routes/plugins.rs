@@ -11,8 +11,11 @@ use std::{
     fs,
     io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
+    sync::{Mutex, OnceLock},
     time::{SystemTime, UNIX_EPOCH},
 };
+
+static MARKETPLACE_INSTALL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Deserialize, Default)]
 struct AuditQuery {
@@ -42,10 +45,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/marketplace/mcp/browse", get(unsupported_marketplace))
         .route("/api/marketplace/mcp/detail", get(unsupported_marketplace))
         .route("/api/marketplace/mcp/test", post(unsupported_marketplace))
-        .route(
-            "/api/marketplace/mcp/install",
-            post(unsupported_marketplace),
-        )
+        .route("/api/marketplace/mcp/install", post(install_marketplace))
         .route(
             "/api/marketplace/mcp/register",
             post(unsupported_marketplace),
@@ -367,6 +367,142 @@ async fn gate(s: &AppState, h: &HeaderMap) -> Result<(), ApiError> {
         })
     }
 }
+#[derive(Deserialize)]
+struct MarketplaceInstallRequest {
+    id: String,
+    source: Option<String>,
+    alias: Option<String>,
+    config: Option<Value>,
+    scope: Option<Value>,
+}
+
+fn marketplace_state_path(state: &AppState) -> PathBuf {
+    state.workspace.join(".daemon/plugins/marketplace-v1.json")
+}
+
+fn install_deadline(headers: &HeaderMap) -> Result<(), ApiError> {
+    if let Some(raw) = headers
+        .get("x-signet-deadline-ms")
+        .and_then(|v| v.to_str().ok())
+    {
+        let deadline = raw.parse::<u128>().map_err(|_| ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_deadline",
+            message: "x-signet-deadline-ms must be epoch milliseconds".into(),
+        })?;
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        if deadline <= now {
+            return Err(ApiError {
+                status: StatusCode::REQUEST_TIMEOUT,
+                code: "deadline_exceeded",
+                message: "marketplace install deadline exceeded before mutation".into(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn valid_install_config(config: &Value) -> bool {
+    config.is_object()
+        && (config
+            .get("command")
+            .and_then(Value::as_str)
+            .is_some_and(|v| !v.trim().is_empty())
+            || config
+                .get("url")
+                .and_then(Value::as_str)
+                .is_some_and(|v| v.starts_with("http://") || v.starts_with("https://")))
+}
+
+async fn install_marketplace(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Json(request): Json<MarketplaceInstallRequest>,
+) -> Result<Json<Value>, ApiError> {
+    gate(&s, &h).await?;
+    install_deadline(&h)?;
+    if request.id.trim().is_empty() || request.id.contains("..") || request.id.starts_with('/') {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_catalog_id",
+            message: "id must be a non-empty scoped catalog identifier".into(),
+        });
+    }
+    let config = request.config.ok_or_else(|| ApiError { status: StatusCode::UNPROCESSABLE_ENTITY, code: "config_required", message: "fresh native marketplace install requires a direct MCP config; catalog provider is unavailable".into() })?;
+    if !valid_install_config(&config) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_config",
+            message: "config must include command or http(s) url".into(),
+        });
+    }
+    let key = h
+        .get("idempotency-key")
+        .or_else(|| h.get("x-signet-operation-id"))
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .trim()
+        .to_owned();
+    let lock = MARKETPLACE_INSTALL_LOCK
+        .get_or_init(|| Mutex::new(()))
+        .lock()
+        .map_err(|_| ApiError::internal("marketplace install lock poisoned"))?;
+    let path = marketplace_state_path(&s);
+    let mut state: Value = match fs::read_to_string(&path) {
+        Ok(raw) => serde_json::from_str(&raw).map_err(|_| ApiError {
+            status: StatusCode::CONFLICT,
+            code: "invalid_marketplace_state",
+            message: "marketplace state is malformed".into(),
+        })?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => json!({"version":1,"servers":{}}),
+        Err(e) => return Err(ApiError::internal(e.to_string())),
+    };
+    if !state["servers"].is_object() {
+        return Err(ApiError {
+            status: StatusCode::CONFLICT,
+            code: "invalid_marketplace_state",
+            message: "marketplace state shape is invalid".into(),
+        });
+    }
+    if !key.is_empty() {
+        if let Some(previous) = state["servers"].get(&key).cloned() {
+            drop(lock);
+            return Ok(Json(
+                json!({"success":true,"operation":{"id":key,"state":"succeeded","replayed":true},"server":previous}),
+            ));
+        }
+    }
+    let server_id = request
+        .alias
+        .as_deref()
+        .unwrap_or(request.id.rsplit('/').next().unwrap_or(&request.id))
+        .trim()
+        .to_ascii_lowercase()
+        .replace(
+            |c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_',
+            "-",
+        );
+    let now = now();
+    let server = json!({"id":server_id,"catalogId":request.id,"source":request.source.unwrap_or_else(|| "mcpservers.org".into()),"config":config,"scope":request.scope.unwrap_or_else(|| json!({"harnesses":[],"workspaces":[]})),"enabled":true,"probe":{"state":"not_run","bounded":true},"installedAt":now,"updatedAt":now});
+    state["servers"][&server_id] = server.clone();
+    if !key.is_empty() {
+        state["servers"][&key] = server.clone();
+    }
+    let parent = path.parent().unwrap();
+    fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
+    let tmp = parent.join(format!(".marketplace-v1.{}.tmp", std::process::id()));
+    fs::write(&tmp, serde_json::to_vec_pretty(&state).unwrap())
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    fs::rename(&tmp, &path).map_err(|e| ApiError::internal(e.to_string()))?;
+    drop(lock);
+    Ok(Json(
+        json!({"success":true,"updated":state["servers"].get(&server_id).is_some_and(|v| v["installedAt"] != now),"operation":{"id":if key.is_empty(){server_id.clone()}else{key},"state":"succeeded","mutation":"committed","probe":"not_run"},"server":server}),
+    ))
+}
+
 async fn unsupported_marketplace(
     State(s): State<AppState>,
     h: HeaderMap,
