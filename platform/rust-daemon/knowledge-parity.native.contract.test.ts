@@ -114,7 +114,11 @@ test("fresh knowledge graph boundary is scoped, bounded, durable, and explicit a
 			})
 		).status,
 	).toBe(400);
-	expect((await fetch(`${daemon.origin}/api/knowledge/entities/${alice.id}`, { headers: a })).status).toBe(501);
+	const detail = await fetch(`${daemon.origin}/api/knowledge/entities/${alice.id}?workspace_id=workspace-a`, {
+		headers: a,
+	});
+	expect(detail.status).toBe(200);
+	expect(await body(detail)).toMatchObject({ id: alice.id, name: "Alice", type: "person" });
 	expect((await fetch(`${daemon.origin}/api/knowledge/constellation`, { headers: a })).status).toBe(501);
 	await new Promise((r) => setTimeout(r, 50));
 	daemon.child.kill("SIGTERM");
