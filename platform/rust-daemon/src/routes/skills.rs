@@ -7,6 +7,8 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+#[cfg(unix)]
+use std::io;
 use std::{
     fs,
     io::Read,
@@ -141,6 +143,12 @@ fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 
     valid_name(name)?;
+    if fs::symlink_metadata(root.join(name))
+        .map(|meta| meta.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        return Err(ApiError::bad_request("invalid skill path"));
+    }
     let root_file = fs::File::open(root)
         .map_err(|_| ApiError::unavailable("skills directory is unavailable"))?;
     let cname = CString::new(name).map_err(|_| ApiError::bad_request("invalid skill name"))?;
@@ -152,7 +160,12 @@ fn read_skill(root: &FsPath, name: &str) -> Result<Value, ApiError> {
         )
     };
     if dir_fd < 0 {
-        return Err(ApiError::not_found(format!("skill '{name}' not found")));
+        let error = io::Error::last_os_error();
+        return if error.raw_os_error() == Some(libc::ELOOP) {
+            Err(ApiError::bad_request("invalid skill path"))
+        } else {
+            Err(ApiError::not_found(format!("skill '{name}' not found")))
+        };
     }
     let dir = unsafe { OwnedFd::from_raw_fd(dir_fd) };
     let cmd = CString::new("SKILL.md").unwrap();
