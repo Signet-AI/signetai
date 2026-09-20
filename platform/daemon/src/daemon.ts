@@ -2168,9 +2168,11 @@ async function main() {
 		return;
 	}
 
-	if (DAEMON_RUNTIME === null) {
+	if (DAEMON_RUNTIME === null || DAEMON_RUNTIME !== "compiled") {
 		console.error(
-			`Signet cannot start: unsupported ${DAEMON_RUNTIME_ENV} value ${JSON.stringify(process.env.SIGNET_DAEMON_RUNTIME)}. Only the native compiled daemon is supported.`,
+			DAEMON_RUNTIME === "bun-js"
+				? `Signet cannot start: ${DAEMON_RUNTIME_ENV}=bun-js is unsupported for production launch. Only the native compiled daemon is supported.`
+				: `Signet cannot start: unsupported ${DAEMON_RUNTIME_ENV} value ${JSON.stringify(process.env.SIGNET_DAEMON_RUNTIME)}. Only the native compiled daemon is supported.`,
 		);
 		logger.shutdown(false);
 		process.exitCode = 1;
