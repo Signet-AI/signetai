@@ -584,7 +584,7 @@ fn execute_operation(
             files,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let files = normalize_import_files(&files)?;
             let mut ids = std::collections::HashSet::new();
             for f in &files {
@@ -943,7 +943,7 @@ fn execute_operation(
             limit,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let limit = bounded_page_limit(Some(limit))?;
             let admitted: i64 = connection.query_row(
                 "SELECT count(*) FROM queue WHERE agent_id=?",
@@ -979,7 +979,7 @@ fn execute_operation(
             deadline_at,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let deadline_at = deadline_at
                 .map(|value| validate_deadline(&value))
                 .transpose()?;
@@ -1193,7 +1193,7 @@ fn execute_operation(
             payload,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let payload = bounded_json(&payload)?;
             let paused: i64 = connection
                 .query_row(
@@ -1575,7 +1575,7 @@ fn execute_operation(
             limit,
         } => {
             let agent_id = bounded_text(&agent_id, "agent id", 256)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let limit = bounded_page_limit(Some(limit))?;
             let mut stmt = connection.prepare("SELECT name,provider,created_at,updated_at FROM secrets WHERE agent_id=? AND workspace_id=? AND deleted=0 ORDER BY rowid DESC LIMIT ?")?;
             let rows = stmt.query_map(params![agent_id, workspace_id, limit as i64], |r| Ok(json!({"name":r.get::<_,String>(0)?,"provider":r.get::<_,String>(1)?,"createdAt":r.get::<_,String>(2)?,"updatedAt":r.get::<_,String>(3)?})))?;
@@ -1588,7 +1588,7 @@ fn execute_operation(
             value,
         } => {
             let agent_id = bounded_text(&agent_id, "agent id", 256)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let name = bounded_text(&name, "secret name", 256)?;
             let value = bounded_text(&value, "secret value", 64 * 1024)?;
             let id = uuid::Uuid::new_v4().to_string();
@@ -1600,7 +1600,7 @@ fn execute_operation(
             workspace_id,
             name,
         } => {
-            let changed = connection.execute("UPDATE secrets SET deleted=1,updated_at=datetime('now') WHERE agent_id=? AND workspace_id=? AND name=? AND deleted=0", params![bounded_text(&agent_id,"agent id",256)?,bounded_text(&workspace_id,"workspace id",256)?,bounded_text(&name,"secret name",256)?])?;
+            let changed = connection.execute("UPDATE secrets SET deleted=1,updated_at=datetime('now') WHERE agent_id=? AND workspace_id=? AND name=? AND deleted=0", params![bounded_text(&agent_id,"agent id",256)?,canonical_workspace(&workspace_id)?,bounded_text(&name,"secret name",256)?])?;
             Ok(json!({"deleted": changed > 0}))
         }
         Operation::Health => {
@@ -1795,7 +1795,7 @@ fn execute_operation(
             config,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let kind = required_id(&kind)?;
             let name = required_id(&name)?;
             let config_text = serde_json::to_string(&config)?;
@@ -1818,7 +1818,7 @@ fn execute_operation(
             workspace_id,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let mut statement = connection.prepare(
                 "SELECT id, agent_id, workspace_id, kind, name, config, created_at FROM sources WHERE agent_id = ? AND workspace_id = ? ORDER BY rowid DESC",
             )?;
@@ -1833,6 +1833,24 @@ fn execute_operation(
             content,
             metadata,
         } => {
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let mut metadata = match metadata {
+                Value::Null => json!({}),
+                Value::Object(_) => metadata,
+                _ => return Err(CoreError::InvalidInput("metadata must be an object".into())),
+            };
+            let metadata_workspace = metadata.get("_workspaceId");
+            if let Some(value) = metadata_workspace {
+                if !value.is_null()
+                    && (!value.is_string() || !value.as_str().unwrap_or("").trim().is_empty())
+                    && value.as_str().map(str::trim) != Some(workspace_id.as_str())
+                {
+                    return Err(CoreError::InvalidInput(
+                        "metadata _workspaceId conflicts with workspace_id".into(),
+                    ));
+                }
+            }
+            metadata["_workspaceId"] = Value::String(workspace_id.clone());
             let generation = metadata.get("_generation").and_then(Value::as_i64);
             let duplicate_mode = metadata
                 .get("_duplicateMode")
@@ -1873,7 +1891,7 @@ fn execute_operation(
             if generation.is_some_and(|g| g != source_generation) {
                 return Err(CoreError::NotFound);
             }
-            let existing: Option<(String,String)> = tx.query_row("SELECT id,content_hash FROM documents WHERE agent_id=? AND source_id=? AND path=?", params![agent_id,source_id,path], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let existing: Option<(String,String)> = tx.query_row("SELECT id,content_hash FROM documents WHERE agent_id=? AND workspace_id=? AND source_id=? AND path=?", params![agent_id,workspace_id,source_id,path], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
             if let Some((existing_id, existing_hash)) = existing {
                 if mode == "skip" {
                     return Ok(
@@ -1881,7 +1899,7 @@ fn execute_operation(
                     );
                 }
                 if mode == "replace" {
-                    tx.execute("UPDATE documents SET content=?,metadata=?,content_hash=?,updated_at=datetime('now') WHERE id=?", params![content,metadata,content_hash,existing_id])?;
+                    tx.execute("UPDATE documents SET content=?,metadata=?,workspace_id=?,content_hash=?,updated_at=datetime('now') WHERE id=?", params![content,metadata,workspace_id,content_hash,existing_id])?;
                     tx.commit()?;
                     return Ok(
                         json!({"id":existing_id,"status":"replaced","contentHash":content_hash,"duplicateMode":"replace","generation":source_generation}),
@@ -1889,7 +1907,7 @@ fn execute_operation(
                 }
             }
             let id = uuid::Uuid::new_v4().to_string();
-            tx.execute("INSERT INTO documents (id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at) VALUES (?,?,?,?,?,?,?, ?,datetime('now'),datetime('now'))", params![id,agent_id,source_id,path,content,metadata,content_hash,source_generation])?;
+            tx.execute("INSERT INTO documents (id,agent_id,workspace_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at) VALUES (?,?,?,?,?,?,?, ?, ?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,source_id,path,content,metadata,content_hash,source_generation])?;
             tx.commit()?;
             Ok(
                 json!({"id":id,"status":if mode=="reimport" {"reimported"} else {"stored"},"contentHash":content_hash,"duplicateMode":mode,"generation":source_generation}),
@@ -1901,9 +1919,9 @@ fn execute_operation(
             limit,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let limit = bounded_page_limit(Some(limit))? as i64;
-            let mut statement = connection.prepare("SELECT id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at FROM documents WHERE agent_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=? ORDER BY rowid DESC LIMIT ?")?;
+            let mut statement = connection.prepare("SELECT id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at FROM documents WHERE agent_id=? AND workspace_id=? ORDER BY rowid DESC LIMIT ?")?;
             let rows =
                 statement.query_map(params![agent_id, workspace_id, limit], document_json_row)?;
             Ok(
@@ -1915,7 +1933,7 @@ fn execute_operation(
             workspace_id,
             id,
         } => {
-            let value = connection.query_row("SELECT id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at FROM documents WHERE id=? AND agent_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?], document_json_row).optional()?;
+            let value = connection.query_row("SELECT id,agent_id,source_id,path,content,metadata,content_hash,generation,created_at,updated_at FROM documents WHERE id=? AND agent_id=? AND workspace_id=?", params![required_id(&id)?,required_agent(&agent_id)?,canonical_workspace(&workspace_id)?], document_json_row).optional()?;
             Ok(value.unwrap_or(Value::Null))
         }
         Operation::DocumentChunks {
@@ -1924,7 +1942,18 @@ fn execute_operation(
             id,
             limit,
         } => {
-            let content: String = connection.query_row("SELECT content FROM documents WHERE id=? AND agent_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?], |row| row.get(0)).optional()?.ok_or(CoreError::NotFound)?;
+            let content: String = connection
+                .query_row(
+                    "SELECT content FROM documents WHERE id=? AND agent_id=? AND workspace_id=?",
+                    params![
+                        required_id(&id)?,
+                        required_agent(&agent_id)?,
+                        canonical_workspace(&workspace_id)?
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)?;
             let limit = limit.clamp(1, 100);
             let items = content.as_bytes().chunks(4096).take(limit).enumerate().map(|(index, bytes)| json!({"index":index,"content":String::from_utf8_lossy(bytes)})).collect::<Vec<_>>();
             Ok(
@@ -1936,7 +1965,14 @@ fn execute_operation(
             workspace_id,
             id,
         } => {
-            let changed = connection.execute("DELETE FROM documents WHERE id=? AND agent_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?", params![required_id(&id)?,required_agent(&agent_id)?,bounded_text(&workspace_id,"workspace id",256)?])?;
+            let changed = connection.execute(
+                "DELETE FROM documents WHERE id=? AND agent_id=? AND workspace_id=?",
+                params![
+                    required_id(&id)?,
+                    required_agent(&agent_id)?,
+                    canonical_workspace(&workspace_id)?
+                ],
+            )?;
             Ok(json!({"id":id,"status":"deleted","deleted":changed > 0,"idempotent":true}))
         }
         Operation::DeleteSource {
@@ -1958,7 +1994,7 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let changed = tx.execute(
-                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?",
+                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND workspace_id=?",
                 params![agent_id, source_id, workspace_id],
             )?;
             tx.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,workspace_id,source_id,current+1])?;
@@ -1988,7 +2024,7 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let changed = tx.execute(
-                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?",
+                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND workspace_id=?",
                 params![agent_id, source_id, workspace_id],
             )?;
             tx.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,workspace_id,source_id,current+1])?;
@@ -2031,7 +2067,7 @@ fn execute_operation(
             cursor,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let kind = required_id(&kind)?;
             let limit = bounded_page_limit(limit)?;
             let cursor = parse_cursor(cursor)?;
@@ -2078,7 +2114,7 @@ fn execute_operation(
             value,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let kind = required_id(&kind)?;
             let id = id
                 .map(|v| required_id(&v))
@@ -2129,7 +2165,7 @@ fn execute_operation(
             metadata,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let name = bounded_text(&name, "entity name", 256)?;
             let entity_type = bounded_text(&entity_type, "entity type", 64)?;
             let metadata = bounded_json(&metadata)?;
@@ -2146,7 +2182,7 @@ fn execute_operation(
             offset,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let limit = limit.clamp(1, 200) as i64;
             let offset = offset.min(100_000) as i64;
             let mut s=connection.prepare("SELECT id,name,entity_type,metadata,created_at,updated_at FROM kg_entities WHERE agent_id=? AND workspace_id=? AND deleted=0 ORDER BY rowid DESC LIMIT ? OFFSET ?")?;
@@ -2162,7 +2198,7 @@ fn execute_operation(
             metadata,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let from_id = required_id(&from_id)?;
             let to_id = required_id(&to_id)?;
             let relation = bounded_text(&relation, "relation", 128)?;
@@ -2193,7 +2229,7 @@ fn execute_operation(
             limit,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let entity_id = required_id(&entity_id)?;
             let limit = limit.clamp(1, 200) as i64;
             let mut s=connection.prepare("SELECT id,from_id,to_id,relation,metadata,created_at FROM kg_relations WHERE agent_id=? AND workspace_id=? AND deleted=0 AND (from_id=? OR to_id=?) ORDER BY rowid DESC LIMIT ?")?;
@@ -2208,7 +2244,7 @@ fn execute_operation(
             weight,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let entity_id = required_id(&entity_id)?;
             let name = bounded_text(&name, "aspect name", 256)?;
             let weight = weight.clamp(0.0, 1.0);
@@ -2235,7 +2271,7 @@ fn execute_operation(
             memory_id,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let aspect_id = required_id(&aspect_id)?;
             let kind = bounded_text(&kind, "attribute kind", 64)?;
             let content = bounded_text(&content, "attribute content", 4096)?;
@@ -2274,7 +2310,7 @@ fn execute_operation(
             max_attributes,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = required_id(&workspace_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let entity_id = required_id(&entity_id)?;
             let mut s=connection.prepare("SELECT id,name,weight FROM kg_aspects WHERE agent_id=? AND workspace_id=? AND entity_id=? ORDER BY weight DESC LIMIT ?")?;
             let aspects=s.query_map(params![agent_id,workspace_id,entity_id,max_aspects.clamp(1,100) as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"weight":r.get::<_,f64>(2)?})))?;
@@ -2353,7 +2389,7 @@ fn execute_operation(
             payload,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let event = bounded_text(&event, "event", 128)?;
             let payload = bounded_json(&payload)?;
             let tx = connection.transaction()?;
@@ -2374,7 +2410,7 @@ fn execute_operation(
             limit,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let limit = limit.clamp(1, 10_000) as i64;
             let mut s = connection.prepare("SELECT id,agent_id,workspace_id,event,payload,created_at FROM telemetry_events WHERE agent_id=? AND workspace_id=? AND (? IS NULL OR event=?) AND (? IS NULL OR created_at>=?) AND (? IS NULL OR created_at<=?) AND (? IS NULL OR id>?) ORDER BY id ASC LIMIT ?")?;
             let rows = s.query_map(params![agent_id,workspace_id,event,event,since,since,until,until,cursor,cursor,limit], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"agentId":r.get::<_,String>(1)?,"workspaceId":r.get::<_,String>(2)?,"event":r.get::<_,String>(3)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
@@ -2418,7 +2454,7 @@ fn execute_operation(
             payload,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let recipient_agent_id = required_agent(&recipient_agent_id)?;
             let kind = bounded_text(&kind, "message kind", 128)?;
             let payload = bounded_json(&payload)?;
@@ -2435,7 +2471,7 @@ fn execute_operation(
             limit,
         } => {
             let agent_id = required_agent(&agent_id)?;
-            let workspace_id = bounded_text(&workspace_id, "workspace id", 256)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let mut s = connection.prepare("SELECT id,sender_agent_id,recipient_agent_id,kind,payload,created_at FROM cross_agent_messages WHERE workspace_id=? AND recipient_agent_id=? AND id>? ORDER BY id ASC LIMIT ?")?;
             let rows = s.query_map(params![workspace_id,agent_id,after_id,limit.clamp(1,MAX_EVENT_RECORDS) as i64], |r| Ok(json!({"id":r.get::<_,i64>(0)?,"senderAgentId":r.get::<_,String>(1)?,"recipientAgentId":r.get::<_,String>(2)?,"kind":r.get::<_,String>(3)?,"payload":serde_json::from_str::<Value>(&r.get::<_,String>(4)?).unwrap_or(json!({})),"createdAt":r.get::<_,String>(5)?})))?;
             Ok(json!({"messages":rows.collect::<Result<Vec<_>,_>>()?}))
@@ -3146,6 +3182,18 @@ fn required_id(id: &str) -> Result<String, CoreError> {
     Ok(id.to_owned())
 }
 
+fn canonical_workspace(value: &str) -> Result<String, CoreError> {
+    bounded_text(
+        if value.trim().is_empty() {
+            "default"
+        } else {
+            value
+        },
+        "workspace id",
+        256,
+    )
+}
+
 fn bounded_text(value: &str, label: &str, max: usize) -> Result<String, CoreError> {
     let value = value.trim();
     if value.is_empty() || value.len() > max {
@@ -3413,10 +3461,17 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     ensure_column(&transaction, "documents", "updated_at", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "documents",
+        "workspace_id",
+        "TEXT DEFAULT 'default'",
+    )?;
     transaction.execute(
-        "CREATE INDEX IF NOT EXISTS documents_source_path ON documents(agent_id,source_id,path)",
+        "UPDATE documents SET workspace_id = CASE WHEN json_valid(metadata) AND json_type(metadata,'$._workspaceId')='text' AND trim(json_extract(metadata,'$._workspaceId')) <> '' THEN trim(json_extract(metadata,'$._workspaceId')) ELSE 'default' END",
         [],
     )?;
+    transaction.execute("CREATE INDEX IF NOT EXISTS documents_source_path ON documents(agent_id,workspace_id,source_id,path)", [])?;
     ensure_column(&transaction, "sources", "created_at", "TEXT")?;
     ensure_column(
         &transaction,
