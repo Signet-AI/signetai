@@ -137,13 +137,14 @@ it("proves the native session/hook/event boundary with two scoped agents", async
 		(await post(first.origin, "/api/boundary/hooks/receipt", "agent-a", { ...receipt, receipt_id: "x".repeat(257) }))
 			.status,
 	).toBe(400);
-	expect(
-		(
-			await fetch(`${first.origin}/api/boundary/events?workspace_id=${workspace}&after_id=0`, {
-				headers: { "x-signet-agent-id": "agent-b", "x-workspace-id": workspace },
-			})
-		).text(),
-	).resolves.toContain("event: snapshot");
+	const events = await fetch(`${first.origin}/api/boundary/events?workspace_id=${workspace}&after_id=0`, {
+		headers: { "x-signet-agent-id": "agent-b", "x-workspace-id": workspace },
+	});
+	expect(events.status).toBe(501);
+	expect(await events.json()).toMatchObject({
+		code: "unsupported",
+		error: "live event streaming is unsupported; use snapshot polling",
+	});
 	await stop(first.child);
 	const restarted = await start(first.workspace);
 	const persisted = await fetch(
