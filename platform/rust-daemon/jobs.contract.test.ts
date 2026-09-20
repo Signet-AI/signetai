@@ -141,6 +141,12 @@ it("exercises native durable job identity, cursor, cancellation, and recovery co
 		body: JSON.stringify({ kind: "deadline", payload: {}, deadline_at: "not-a-deadline" }),
 	});
 	expect(invalidDeadline.status).toBe(400);
+	const impossibleDate = await fetch(`${first.origin}/api/jobs`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ kind: "deadline", payload: {}, deadline_at: "2026-02-30T00:00:00Z" }),
+	});
+	expect(impossibleDate.status).toBe(400);
 	const oversizedDeadline = await fetch(`${first.origin}/api/jobs`, {
 		method: "POST",
 		headers: h,

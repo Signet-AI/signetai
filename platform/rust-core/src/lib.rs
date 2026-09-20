@@ -10,6 +10,7 @@ use std::{
     thread,
 };
 use thiserror::Error;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -352,6 +353,13 @@ impl Core {
             .map_err(|_| CoreError::OwnerStopped)?
     }
 
+    pub async fn worker_claim_async(&self) -> Result<Option<WorkerJob>, CoreError> {
+        let core = self.clone();
+        tokio::task::spawn_blocking(move || core.worker_claim())
+            .await
+            .map_err(|_| CoreError::OwnerStopped)?
+    }
+
     pub fn create_source(
         &self,
         agent: &str,
@@ -447,6 +455,12 @@ impl Core {
         self.call(move |connection| {
             if !matches!(state.as_str(), "completed" | "failed") { return Err(CoreError::InvalidInput("invalid worker terminal state".into())); }
             let tx = connection.transaction()?;
+            let expired = tx.execute("UPDATE jobs SET state='expired',error='deadline exceeded',updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id IS ? AND state='running' AND deadline_at IS NOT NULL AND julianday(deadline_at) <= julianday('now')", params![job.id,job.agent_id,job.workspace_id])?;
+            if expired > 0 {
+                tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) SELECT ?,?, 'expired',?,datetime('now') WHERE NOT EXISTS (SELECT 1 FROM job_events WHERE job_id=? AND agent_id=? AND event='expired')", params![job.id,job.agent_id,serde_json::to_string(&json!({"reason":"deadline exceeded"}))?,job.id,job.agent_id])?;
+                tx.commit()?;
+                return Ok(());
+            }
             let changed = tx.execute("UPDATE jobs SET state=?,error=?,updated_at=datetime('now') WHERE id=? AND agent_id=? AND workspace_id IS ? AND state='running'", params![state, error, job.id, job.agent_id, job.workspace_id])?;
             if changed == 0 { return Ok(()); }
             tx.execute("INSERT INTO job_events(job_id,agent_id,event,data,created_at) VALUES(?,?,?, ?,datetime('now'))", params![job.id,job.agent_id,state,serde_json::to_string(&json!({"error":error}))?])?;
@@ -2624,6 +2638,9 @@ impl WorkspaceOwner {
     pub fn worker_claim(&self) -> Result<Option<WorkerJob>, CoreError> {
         self.0.worker_claim()
     }
+    pub async fn worker_claim_async(&self) -> Result<Option<WorkerJob>, CoreError> {
+        self.0.worker_claim_async().await
+    }
     pub fn database_schema(&self) -> Result<Value, CoreError> {
         self.0.database_schema()
     }
@@ -3141,20 +3158,11 @@ fn bounded_text(value: &str, label: &str, max: usize) -> Result<String, CoreErro
 
 fn validate_deadline(value: &str) -> Result<String, CoreError> {
     let value = bounded_text(value, "deadline_at", 64)?;
-    let bytes = value.as_bytes();
-    let valid_shape = bytes.len() >= 20
-        && bytes[4] == b'-'
-        && bytes[7] == b'-'
-        && bytes[10] == b'T'
-        && bytes[13] == b':'
-        && bytes[16] == b':'
-        && (bytes.ends_with(b"Z") || bytes[19] == b'+' || bytes[19] == b'-');
-    if !valid_shape {
-        return Err(CoreError::InvalidInput(
-            "deadline_at must be RFC3339".into(),
-        ));
-    }
-    Ok(value)
+    let parsed = OffsetDateTime::parse(&value, &Rfc3339)
+        .map_err(|_| CoreError::InvalidInput("deadline_at must be RFC3339".into()))?;
+    parsed
+        .format(&Rfc3339)
+        .map_err(|_| CoreError::InvalidInput("deadline_at must be RFC3339".into()))
 }
 
 fn bounded_json(value: &Value) -> Result<String, CoreError> {

@@ -10,7 +10,7 @@ pub(crate) fn start(owner: Arc<WorkspaceOwner>) -> tokio::task::JoinHandle<()> {
         loop {
             active.retain(|task: &tokio::task::JoinHandle<()>| !task.is_finished());
             while active.len() < MAX_CONCURRENCY {
-                let Ok(Some(job)) = owner.worker_claim() else {
+                let Ok(Some(job)) = owner.worker_claim_async().await else {
                     break;
                 };
                 let worker_owner = owner.clone();
