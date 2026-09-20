@@ -28,10 +28,7 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/memory/lineage/{id}", get(lineage))
         .route("/api/memory/review/{id}", get(review))
         .route("/api/memory/native-note", post(native_note))
-        .route(
-            "/api/memory/semantic-search",
-            post(semantic_search_unsupported),
-        )
+        .route("/api/memory/semantic-search", post(semantic_search))
 }
 async fn dispatch(
     state: State<AppState>,
@@ -182,12 +179,39 @@ async fn native_note(
     dispatch(State(s), h, "native-note", None, p).await
 }
 
-async fn semantic_search_unsupported(
-    State(_s): State<AppState>,
-    _h: HeaderMap,
-    Json(_p): Json<Value>,
+async fn semantic_search(
+    State(s): State<AppState>,
+    h: HeaderMap,
+    Json(p): Json<Value>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    Err(ApiError::not_implemented(
-        "semantic memory search requires an embedding/provider path not implemented by the fresh native daemon",
-    ))
+    let query = p
+        .get("query")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::bad_request("query must not be empty"))?;
+    if query.len() > 512 {
+        return Err(ApiError::bad_request(
+            "query must be at most 512 characters",
+        ));
+    }
+    let limit = match p.get("limit") {
+        None => 10,
+        Some(value) => value
+            .as_u64()
+            .filter(|value| (1..=100).contains(value))
+            .map(|value| value as usize)
+            .ok_or_else(|| ApiError::bad_request("limit must be an integer from 1 to 100"))?,
+    };
+    let agent_id = agent(&h, None, None)?;
+    let result = execute(
+        &s,
+        Operation::MemorySearch {
+            agent_id,
+            query: query.to_owned(),
+            limit,
+        },
+    )
+    .await?;
+    Ok((StatusCode::OK, Json(result)))
 }
