@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { acquireSingleInstanceLock, releaseSingleInstanceLock } from "./single-instance-lock";
@@ -37,6 +37,9 @@ describe("single-instance daemon lock", () => {
 
 		try {
 			await waitForFile(ready);
+			expect(acquireSingleInstanceLock(path)).toBeNull();
+			renameSync(path, `${path}.moved`);
+			writeFileSync(path, "replacement\n");
 			expect(acquireSingleInstanceLock(path)).toBeNull();
 			child.kill("SIGKILL");
 			await waitForExit(child);

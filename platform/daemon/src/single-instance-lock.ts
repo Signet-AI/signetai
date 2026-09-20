@@ -2,13 +2,15 @@ import { createHash } from "node:crypto";
 import {
 	closeSync,
 	constants as fsConstants,
+	fstatSync,
 	ftruncateSync,
 	mkdirSync,
 	openSync,
 	readFileSync,
+	realpathSync,
 	writeSync,
 } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { dlopen, ptr } from "bun:ffi";
 
 const LOCK_EX = 2;
@@ -18,6 +20,7 @@ const WAIT_OBJECT_0 = 0;
 const WAIT_ABANDONED = 0x80;
 const KERNEL_LOCK_METADATA = "signet-kernel-lock-v1";
 const LOCK_OPEN_FLAGS = fsConstants.O_RDWR | fsConstants.O_CREAT | (fsConstants.O_NOFOLLOW ?? 0);
+const DIRECTORY_OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_DIRECTORY ?? 0) | (fsConstants.O_NOFOLLOW ?? 0);
 
 type NativePointer = ReturnType<typeof ptr>;
 
@@ -37,8 +40,8 @@ type WindowsApi = {
 };
 
 type NativeLock =
-	| { readonly kind: "posix"; readonly api: PosixApi }
-	| { readonly kind: "windows"; readonly api: WindowsApi; readonly handle: NativePointer };
+	| { readonly kind: "posix"; readonly api: PosixApi; readonly directoryFd: number }
+	| { readonly kind: "windows"; readonly api: WindowsApi; readonly handles: readonly NativePointer[] };
 
 type SingleInstanceLock = {
 	readonly fd: number;
@@ -101,36 +104,93 @@ function loadWindowsApi(): WindowsApi | null {
 	return windowsApi;
 }
 
-function mutexName(path: string): NativePointer {
-	const name = `Global\\SignetDaemon-${createHash("sha256").update(resolve(path).toLowerCase()).digest("hex")}`;
+function mutexName(key: string): NativePointer {
+	const name = `Global\\SignetDaemon-${createHash("sha256").update(key).digest("hex")}`;
 	return ptr(Buffer.from(`${name}\0`));
 }
 
-function acquireWindowsLock(path: string): NativeLock | null {
+function closeWindowsHandles(api: WindowsApi, handles: readonly NativePointer[], release: boolean): void {
+	for (const handle of [...handles].reverse()) {
+		if (release) {
+			try {
+				api.symbols.ReleaseMutex(handle);
+			} catch {
+				// The kernel releases the mutex when the handle closes.
+			}
+		}
+		try {
+			api.symbols.CloseHandle(handle);
+		} catch {
+			// The handle may already be closed during process shutdown.
+		}
+	}
+}
+
+function windowsMutexKeys(path: string, fd: number): readonly string[] {
+	const directory = realpathSync(dirname(path)).toLowerCase();
+	const identity = fstatSync(fd, { bigint: true });
+	return [`directory:${directory}`, `file:${identity.dev}:${identity.ino}`];
+}
+
+function acquireWindowsLock(path: string, fd: number): NativeLock | null {
 	const api = loadWindowsApi();
 	if (api === null) return null;
 
+	const handles: NativePointer[] = [];
 	try {
-		const handle = api.symbols.CreateMutexA(0, false, mutexName(path));
-		if (handle === 0) return null;
-		const result = api.symbols.WaitForSingleObject(handle, 0);
-		if (result === WAIT_OBJECT_0 || result === WAIT_ABANDONED) return { kind: "windows", api, handle };
-		api.symbols.CloseHandle(handle);
+		for (const key of windowsMutexKeys(path, fd)) {
+			const handle = api.symbols.CreateMutexA(0, false, mutexName(key));
+			if (handle === 0) {
+				closeWindowsHandles(api, handles, true);
+				return null;
+			}
+			const result = api.symbols.WaitForSingleObject(handle, 0);
+			if (result !== WAIT_OBJECT_0 && result !== WAIT_ABANDONED) {
+				closeWindowsHandles(api, [...handles, handle], true);
+				return null;
+			}
+			handles.push(handle);
+		}
+		return { kind: "windows", api, handles };
 	} catch {
+		closeWindowsHandles(api, handles, true);
 		return null;
 	}
-	return null;
+}
+
+function closeDirectoryLock(api: PosixApi, directoryFd: number): void {
+	try {
+		api.symbols.flock(directoryFd, LOCK_UN);
+	} catch {
+		// The kernel releases the lock when the descriptor closes.
+	}
+	try {
+		closeSync(directoryFd);
+	} catch {
+		// The descriptor may already be closed during process shutdown.
+	}
 }
 
 function acquireNativeLock(fd: number, path: string): NativeLock | null {
-	if (process.platform === "win32") return acquireWindowsLock(path);
+	if (process.platform === "win32") return acquireWindowsLock(path, fd);
 
 	const api = loadPosixApi();
 	if (api === null) return null;
+	let directoryFd: number | null = null;
 	try {
-		if (api.symbols.flock(fd, LOCK_EX | LOCK_NB) !== 0) return null;
-		return { kind: "posix", api };
+		const directory = realpathSync(dirname(path));
+		directoryFd = openSync(join(directory, "."), DIRECTORY_OPEN_FLAGS);
+		if (api.symbols.flock(directoryFd, LOCK_EX | LOCK_NB) !== 0) {
+			closeDirectoryLock(api, directoryFd);
+			return null;
+		}
+		if (api.symbols.flock(fd, LOCK_EX | LOCK_NB) !== 0) {
+			closeDirectoryLock(api, directoryFd);
+			return null;
+		}
+		return { kind: "posix", api, directoryFd };
 	} catch {
+		if (directoryFd !== null) closeDirectoryLock(api, directoryFd);
 		return null;
 	}
 }
@@ -138,11 +198,15 @@ function acquireNativeLock(fd: number, path: string): NativeLock | null {
 function releaseNativeLock(lock: NativeLock, fd: number): void {
 	try {
 		if (lock.kind === "posix") {
-			lock.api.symbols.flock(fd, LOCK_UN);
+			try {
+				lock.api.symbols.flock(fd, LOCK_UN);
+			} catch {
+				// The descriptor may already be closed during process shutdown.
+			}
+			closeDirectoryLock(lock.api, lock.directoryFd);
 			return;
 		}
-		lock.api.symbols.ReleaseMutex(lock.handle);
-		lock.api.symbols.CloseHandle(lock.handle);
+		closeWindowsHandles(lock.api, lock.handles, true);
 	} catch {
 		// Kernel ownership is also released when the descriptor or handle closes.
 	}
