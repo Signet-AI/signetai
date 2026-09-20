@@ -466,35 +466,35 @@
     },
     {
       "path": "daemon.ts",
-      "line": 2527,
+      "line": 2529,
       "api": "existsSync",
       "source": "const workerPath = existsSync(bundled)",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2602,
+      "line": 2604,
       "api": "writeFileSync",
       "source": "writeFileSync(PID_FILE, process.pid.toString());",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3375,
+      "line": 3377,
       "api": "existsSync",
       "source": "if (existsSync(healthStampPath)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3376,
+      "line": 3378,
       "api": "readFileSync",
       "source": "const prev = JSON.parse(readFileSync(healthStampPath, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3379,
+      "line": 3381,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"
@@ -5063,58 +5063,16 @@
     },
     {
       "path": "single-instance-lock.ts",
-      "line": 28,
+      "line": 220,
       "api": "readFileSync",
-      "source": "const pid = Number.parseInt(readFileSync(path, \"utf8\").trim().split(/\\s+/)[0] ?? \"\", 10);",
+      "source": "const fields = readFileSync(fd, \"utf8\").trim().split(/\\s+/);",
       "category": "hot-path"
     },
     {
       "path": "single-instance-lock.ts",
-      "line": 40,
-      "api": "statSync",
-      "source": "return Date.now() - statSync(path).mtimeMs > STALE_LOCK_AGE_MS;",
-      "category": "hot-path"
-    },
-    {
-      "path": "single-instance-lock.ts",
-      "line": 49,
-      "api": "renameSync",
-      "source": "renameSync(path, stalePath);",
-      "category": "hot-path"
-    },
-    {
-      "path": "single-instance-lock.ts",
-      "line": 55,
-      "api": "unlinkSync",
-      "source": "unlinkSync(stalePath);",
-      "category": "hot-path"
-    },
-    {
-      "path": "single-instance-lock.ts",
-      "line": 63,
+      "line": 237,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
-      "category": "hot-path"
-    },
-    {
-      "path": "single-instance-lock.ts",
-      "line": 69,
-      "api": "writeFileSync",
-      "source": "writeFileSync(fd, `${process.pid}\\n${Date.now()}\\n`);",
-      "category": "hot-path"
-    },
-    {
-      "path": "single-instance-lock.ts",
-      "line": 73,
-      "api": "unlinkSync",
-      "source": "unlinkSync(path);",
-      "category": "hot-path"
-    },
-    {
-      "path": "single-instance-lock.ts",
-      "line": 91,
-      "api": "unlinkSync",
-      "source": "unlinkSync(lock.path);",
       "category": "hot-path"
     },
     {
