@@ -116,6 +116,113 @@ fn migrates_legacy_transcripts_before_idempotency_index() {
 }
 
 #[test]
+fn migrates_legacy_source_and_document_workspace_to_default_and_cleans_up() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-sources.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection.execute_batch(
+        "CREATE TABLE sources (id TEXT PRIMARY KEY, agent_id TEXT, kind TEXT NOT NULL, name TEXT, config TEXT, created_at TEXT);
+         CREATE TABLE documents (id TEXT PRIMARY KEY, agent_id TEXT, source_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, created_at TEXT);
+         INSERT INTO sources VALUES ('legacy-source', NULL, 'folder', 'legacy', '{}', '2026-01-01');
+         INSERT INTO documents VALUES ('legacy-doc', NULL, 'legacy-source', 'legacy.md', 'legacy body', '{}', '2026-01-01');",
+    ).unwrap();
+    drop(connection);
+    let owner = Core::open(&p, 4).unwrap();
+    assert_eq!(
+        owner
+            .submit(Operation::ListSources {
+                agent_id: "default".into(),
+                workspace_id: "default".into()
+            })
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let docs = owner
+        .submit(Operation::DocumentList {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(docs["items"].as_array().unwrap().len(), 1);
+    let health = owner
+        .submit(Operation::SourceHealth {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+            source_id: "legacy-source".into(),
+        })
+        .unwrap();
+    assert_eq!(health["documents"], 1);
+    let deleted = owner
+        .submit(Operation::DeleteSource {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+            source_id: "legacy-source".into(),
+        })
+        .unwrap();
+    assert_eq!(deleted["documentsDeleted"], 1);
+    assert_eq!(
+        owner
+            .submit(Operation::DocumentList {
+                agent_id: "default".into(),
+                workspace_id: "default".into(),
+                limit: 10
+            })
+            .unwrap()["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn source_tombstones_are_workspace_scoped_and_legacy_rows_backfill() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-tombstones.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection.execute_batch(
+        "CREATE TABLE source_tombstones (agent_id TEXT NOT NULL, source_id TEXT NOT NULL, generation INTEGER NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY(agent_id,source_id));
+         INSERT INTO source_tombstones VALUES ('agent-a','same-source',3,'2026-01-01');",
+    ).unwrap();
+    drop(connection);
+    let owner = Core::open(&p, 4).unwrap();
+    let connection = Connection::open(&p).unwrap();
+    let columns: Vec<String> = connection
+        .prepare("PRAGMA table_info(source_tombstones)")
+        .unwrap()
+        .query_map([], |row| row.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        columns,
+        vec![
+            "agent_id",
+            "workspace_id",
+            "source_id",
+            "generation",
+            "deleted_at"
+        ]
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT workspace_id FROM source_tombstones WHERE agent_id='agent-a'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "default"
+    );
+    connection.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) VALUES('agent-a','other','same-source',4,'2026-01-02')", []).unwrap();
+    assert_eq!(connection.query_row("SELECT count(*) FROM source_tombstones WHERE agent_id='agent-a' AND source_id='same-source'", [], |row| row.get::<_, i64>(0)).unwrap(), 2);
+    owner.initialize().unwrap();
+}
+#[test]
 fn paginated_lists_are_bounded_scoped_and_complete() {
     let d = tempdir().unwrap();
     let owner = WorkspaceOwner::open(&d.path().join("page.sqlite"), 8).unwrap();

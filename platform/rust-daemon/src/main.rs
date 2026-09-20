@@ -698,9 +698,9 @@ fn source_workspace(headers: &HeaderMap, requested: Option<&str>) -> Result<Stri
                 .and_then(non_empty)
         })
         .collect::<Vec<_>>();
-    let body = requested;
+    let body = requested.and_then(non_empty);
     let mut values = header_values.iter().map(|v| v.as_str()).collect::<Vec<_>>();
-    if let Some(body) = body {
+    if let Some(body) = body.as_deref() {
         values.push(body);
     }
     if values.is_empty() {

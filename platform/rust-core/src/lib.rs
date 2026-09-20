@@ -1944,10 +1944,10 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let changed = tx.execute(
-                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND COALESCE(json_extract(metadata,'$._workspaceId'), '')=?",
+                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?",
                 params![agent_id, source_id, workspace_id],
             )?;
-            tx.execute("INSERT INTO source_tombstones(agent_id,source_id,generation,deleted_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(agent_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,source_id,current+1])?;
+            tx.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,workspace_id,source_id,current+1])?;
             tx.execute(
                 "DELETE FROM sources WHERE agent_id=? AND workspace_id=? AND id=?",
                 params![agent_id, workspace_id, source_id],
@@ -1974,10 +1974,10 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let changed = tx.execute(
-                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND COALESCE(json_extract(metadata,'$._workspaceId'), '')=?",
+                "DELETE FROM documents WHERE agent_id=? AND source_id=? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''),'default')=?",
                 params![agent_id, source_id, workspace_id],
             )?;
-            tx.execute("INSERT INTO source_tombstones(agent_id,source_id,generation,deleted_at) VALUES(?,?,?,datetime('now')) ON CONFLICT(agent_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,source_id,current+1])?;
+            tx.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,workspace_id,source_id,current+1])?;
             tx.execute(
                 "DELETE FROM sources WHERE agent_id=? AND workspace_id=? AND id=?",
                 params![agent_id, workspace_id, source_id],
@@ -2001,7 +2001,7 @@ fn execute_operation(
                 return Err(CoreError::NotFound);
             }
             let documents: i64 = connection.query_row(
-                "SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ? AND COALESCE(json_extract(metadata,'$._workspaceId'), '') = ?",
+                "SELECT count(*) FROM documents WHERE agent_id = ? AND source_id = ? AND COALESCE(NULLIF(trim(json_extract(metadata,'$._workspaceId')), ''), 'default') = ?",
                 params![agent_id, source_id, workspace_id],
                 |r| r.get(0),
             )?;
@@ -3202,13 +3202,9 @@ fn source_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Source> {
         agent_id: row
             .get::<_, Option<String>>(1)?
             .unwrap_or_else(|| "default".into()),
-        workspace_id: row.get::<_, Option<String>>(2)?.ok_or_else(|| {
-            rusqlite::Error::InvalidColumnType(
-                2,
-                "workspace_id".into(),
-                rusqlite::types::Type::Null,
-            )
-        })?,
+        workspace_id: row
+            .get::<_, Option<String>>(2)?
+            .unwrap_or_else(|| "default".into()),
         kind: row.get(3)?,
         name: row.get(4).unwrap_or_default(),
         config: serde_json::from_str(&config).unwrap_or_else(|_| json!({})),
@@ -3443,6 +3439,35 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "UPDATE sources SET agent_id = 'default' WHERE agent_id IS NULL OR trim(agent_id) = ''",
         [],
     )?;
+    transaction.execute(
+        "UPDATE sources SET workspace_id = 'default' WHERE workspace_id IS NULL OR trim(workspace_id) = ''",
+        [],
+    )?;
+    ensure_column(
+        &transaction,
+        "source_tombstones",
+        "workspace_id",
+        "TEXT DEFAULT 'default'",
+    )?;
+    transaction.execute("UPDATE source_tombstones SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    let tombstone_pk: Vec<String> = {
+        let mut stmt = transaction.prepare("PRAGMA table_info(source_tombstones)")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, i64>(5)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .filter(|(pk, _)| *pk > 0)
+            .map(|(_, name)| name)
+            .collect()
+    };
+    if tombstone_pk != ["agent_id", "workspace_id", "source_id"] {
+        transaction.execute_batch("ALTER TABLE source_tombstones RENAME TO source_tombstones_legacy; CREATE TABLE source_tombstones (agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', source_id TEXT NOT NULL, generation INTEGER NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY(agent_id,workspace_id,source_id));")?;
+        transaction.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) SELECT agent_id,COALESCE(NULLIF(trim(workspace_id),''),'default'),source_id,generation,deleted_at FROM source_tombstones_legacy", [])?;
+        transaction.execute("DROP TABLE source_tombstones_legacy", [])?;
+    }
+
     transaction.execute(
         "UPDATE sources SET config = COALESCE(config, metadata, '{}') WHERE config IS NULL OR trim(config) = ''",
         [],
