@@ -1307,3 +1307,50 @@ fn legacy_knowledge_dependency_schema_is_reconciled_idempotently() {
     core.initialize().unwrap();
     assert_eq!(dependencies()["items"].as_array().unwrap().len(), 1);
 }
+
+#[test]
+fn source_removal_lease_fences_stale_finalizer_and_blocks_ingest() {
+    let owner = core();
+    owner
+        .submit(Operation::CreateSource {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            kind: "notes".into(),
+            name: "leased".into(),
+            config: serde_json::json!({}),
+            source_id: Some("leased-source".into()),
+        })
+        .unwrap();
+    let lease = owner
+        .submit(Operation::AcquireSourceRemovalLease {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            source_id: "leased-source".into(),
+            generation: Some(0),
+        })
+        .unwrap();
+    assert_eq!(lease["status"], "pending");
+    assert!(
+        matches!(owner.submit(Operation::IngestDocument { agent_id:"agent".into(), workspace_id:"workspace".into(), source_id:"leased-source".into(), path:"blocked".into(), content:"body".into(), metadata:serde_json::json!({}) }), Err(CoreError::InvalidInput(message)) if message.contains("removal pending"))
+    );
+    owner
+        .submit(Operation::FinalizeSourceRemoval {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            source_id: "leased-source".into(),
+            generation: 0,
+            lease_token: "stale".into(),
+        })
+        .unwrap_err();
+    let token = lease["leaseToken"].as_str().unwrap().to_string();
+    let done = owner
+        .submit(Operation::FinalizeSourceRemoval {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            source_id: "leased-source".into(),
+            generation: 0,
+            lease_token: token,
+        })
+        .unwrap();
+    assert_eq!(done["outcome"], "success");
+}

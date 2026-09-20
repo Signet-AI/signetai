@@ -2148,6 +2148,9 @@ fn execute_operation(
             let content_hash = format!("{:x}", hash.finalize());
             let metadata = bounded_json(&metadata)?;
             let tx = connection.transaction()?;
+            if tx.query_row("SELECT 1 FROM source_removal_leases WHERE agent_id=? AND workspace_id=? AND source_id=? AND status='pending'", params![agent_id, workspace_id, source_id], |r| r.get::<_, i64>(0)).optional()?.is_some() {
+                return Err(CoreError::InvalidInput("source removal pending".into()));
+            }
             let source_generation: i64 = tx
                 .query_row(
                     "SELECT generation FROM sources WHERE id=? AND agent_id=? AND workspace_id=?",
@@ -2304,6 +2307,58 @@ fn execute_operation(
             )?;
             tx.commit()?;
             Ok(json!({"deleted":true,"documentsDeleted":changed,"generation":current+1}))
+        }
+        Operation::AcquireSourceRemovalLease {
+            agent_id,
+            workspace_id,
+            source_id,
+            generation,
+        } => {
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let tx = connection.transaction()?;
+            let current: i64 = tx
+                .query_row(
+                    "SELECT generation FROM sources WHERE agent_id=? AND workspace_id=? AND id=?",
+                    params![agent_id, workspace_id, source_id],
+                    |r| r.get(0),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)?;
+            if generation.is_some_and(|g| g != current) {
+                return Err(CoreError::NotFound);
+            }
+            if tx.query_row("SELECT 1 FROM source_removal_leases WHERE agent_id=? AND workspace_id=? AND source_id=? AND status='pending'", params![agent_id,workspace_id,source_id], |r| r.get::<_,i64>(0)).optional()?.is_some() { return Err(CoreError::InvalidInput("source removal already pending".into())); }
+            let token = uuid::Uuid::new_v4().to_string();
+            tx.execute("INSERT INTO source_removal_leases(agent_id,workspace_id,source_id,generation,lease_token,status,created_at,updated_at) VALUES(?,?,?,?,?,'pending',datetime('now'),datetime('now'))", params![agent_id,workspace_id,source_id,current,token])?;
+            tx.commit()?;
+            Ok(
+                json!({"status":"pending","outcome":"retryable","leaseToken":token,"generation":current}),
+            )
+        }
+        Operation::FinalizeSourceRemoval {
+            agent_id,
+            workspace_id,
+            source_id,
+            generation,
+            lease_token,
+        } => {
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let tx = connection.transaction()?;
+            let valid: Option<i64> = tx.query_row("SELECT generation FROM source_removal_leases WHERE agent_id=? AND workspace_id=? AND source_id=? AND generation=? AND lease_token=? AND status='pending'", params![agent_id,workspace_id,source_id,generation,lease_token], |r| r.get(0)).optional()?;
+            if valid.is_none() {
+                return Err(CoreError::NotFound);
+            }
+            let changed = tx.execute("DELETE FROM documents WHERE agent_id=? AND workspace_id=? AND source_id=? AND generation=?", params![agent_id,workspace_id,source_id,generation])?;
+            tx.execute("INSERT INTO source_tombstones(agent_id,workspace_id,source_id,generation,deleted_at) VALUES(?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,source_id) DO UPDATE SET generation=excluded.generation,deleted_at=excluded.deleted_at", params![agent_id,workspace_id,source_id,generation+1])?;
+            tx.execute(
+                "DELETE FROM sources WHERE agent_id=? AND workspace_id=? AND id=? AND generation=?",
+                params![agent_id, workspace_id, source_id, generation],
+            )?;
+            tx.execute("UPDATE source_removal_leases SET status='completed',updated_at=datetime('now') WHERE agent_id=? AND workspace_id=? AND source_id=? AND lease_token=?", params![agent_id,workspace_id,source_id,lease_token])?;
+            tx.commit()?;
+            Ok(
+                json!({"outcome":"success","deleted":true,"documentsDeleted":changed,"generation":generation+1}),
+            )
         }
         Operation::SourceHealth {
             agent_id,
@@ -3382,6 +3437,19 @@ pub enum Operation {
         source_id: String,
         generation: Option<i64>,
     },
+    AcquireSourceRemovalLease {
+        agent_id: String,
+        workspace_id: String,
+        source_id: String,
+        generation: Option<i64>,
+    },
+    FinalizeSourceRemoval {
+        agent_id: String,
+        workspace_id: String,
+        source_id: String,
+        generation: i64,
+        lease_token: String,
+    },
     SourceHealth {
         agent_id: String,
         workspace_id: String,
@@ -3845,6 +3913,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS sources (id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY(agent_id,workspace_id,id));
          CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', content_hash TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT);
          CREATE TABLE IF NOT EXISTS source_tombstones (agent_id TEXT NOT NULL, source_id TEXT NOT NULL, generation INTEGER NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY(agent_id,source_id));
+         CREATE TABLE IF NOT EXISTS source_removal_leases (agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', source_id TEXT NOT NULL, generation INTEGER NOT NULL, lease_token TEXT NOT NULL UNIQUE, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, PRIMARY KEY(agent_id,workspace_id,source_id,status));
          CREATE TABLE IF NOT EXISTS memories (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, superseded_by TEXT, superseded_at TEXT, superseded_reason TEXT, created_at TEXT, updated_at TEXT);
          CREATE TABLE IF NOT EXISTS memory_history (id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id TEXT NOT NULL, agent_id TEXT NOT NULL, operation TEXT NOT NULL, content TEXT, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS queue (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
