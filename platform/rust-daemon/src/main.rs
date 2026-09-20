@@ -35,10 +35,14 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 #[cfg(windows)]
 #[cfg(windows)]
-use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, GENERIC_READ, HANDLE,
+};
 #[cfg(windows)]
 use windows_sys::Win32::Storage::FileSystem::{
-    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+    CreateFileW, GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_NORMAL,
+    FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    OPEN_EXISTING,
 };
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::CreateMutexW;
@@ -1422,6 +1426,8 @@ struct OwnerLock {
     _directory: File,
     #[cfg(windows)]
     _mutex: HANDLE,
+    #[cfg(windows)]
+    _parent_mutex: HANDLE,
 }
 
 impl Drop for OwnerLock {
@@ -1434,6 +1440,7 @@ impl Drop for OwnerLock {
         #[cfg(windows)]
         unsafe {
             CloseHandle(self._mutex);
+            CloseHandle(self._parent_mutex);
         }
     }
 }
@@ -1523,9 +1530,71 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
             .write(true)
             .create(true)
             .open(path)?;
+        let canonical_parent = std::fs::canonicalize(parent)?;
+        let parent_wide: Vec<u16> = canonical_parent
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let parent_handle = unsafe {
+            CreateFileW(
+                parent_wide.as_ptr(),
+                GENERIC_READ,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                std::ptr::null(),
+                OPEN_EXISTING,
+                FILE_ATTRIBUTE_NORMAL | FILE_FLAG_BACKUP_SEMANTICS,
+                std::ptr::null_mut(),
+            )
+        };
+        if parent_handle == -1isize as HANDLE {
+            return Err(std::io::Error::last_os_error().into());
+        }
         let mut info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
         if unsafe { GetFileInformationByHandle(file.as_raw_handle() as HANDLE, &mut info) } == 0 {
+            unsafe {
+                CloseHandle(parent_handle);
+            }
             return Err(std::io::Error::last_os_error().into());
+        }
+        let mut parent_info = unsafe { std::mem::zeroed::<BY_HANDLE_FILE_INFORMATION>() };
+        if unsafe { GetFileInformationByHandle(parent_handle, &mut parent_info) } == 0 {
+            unsafe {
+                CloseHandle(parent_handle);
+            }
+            return Err(std::io::Error::last_os_error().into());
+        }
+        // The canonical parent-directory mutex closes the path-replacement gap;
+        // aliases and replacements must contend on the opened directory identity.
+        let parent_identity = format!(
+            "volume={:08x};directory={:08x}{:08x}",
+            parent_info.dwVolumeSerialNumber, parent_info.nFileIndexHigh, parent_info.nFileIndexLow
+        );
+        use sha2::Digest;
+        let parent_digest = sha2::Sha256::digest(parent_identity.as_bytes());
+        let parent_name = format!(
+            "Global\\SignetDbOwnerParent-{}",
+            parent_digest
+                .iter()
+                .map(|b| format!("{b:02x}"))
+                .collect::<String>()
+        );
+        let parent_wide_name: Vec<u16> = std::ffi::OsStr::new(&parent_name)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let parent_mutex = unsafe { CreateMutexW(std::ptr::null(), 1, parent_wide_name.as_ptr()) };
+        unsafe {
+            CloseHandle(parent_handle);
+        }
+        if parent_mutex.is_null() {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+            unsafe {
+                CloseHandle(parent_mutex);
+            }
+            return Err("database owner already running".into());
         }
         // File index + volume serial is the kernel identity, so hardlink aliases
         // converge while a path rename/replacement cannot steal an existing lock.
@@ -1533,7 +1602,6 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
             "volume={:08x};file={:08x}{:08x}",
             info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
         );
-        use sha2::Digest;
         let digest = sha2::Sha256::digest(identity.as_bytes());
         let name = format!(
             "Global\\SignetDbOwner-{}",
@@ -1548,26 +1616,40 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
             .collect();
         let mutex = unsafe { CreateMutexW(std::ptr::null(), 1, wide.as_ptr()) };
         if mutex.is_null() {
+            unsafe {
+                CloseHandle(parent_mutex);
+            }
             return Err(std::io::Error::last_os_error().into());
         }
         if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
             unsafe {
                 CloseHandle(mutex);
+                CloseHandle(parent_mutex);
             }
             return Err("database owner already running".into());
         }
-        file.set_len(0)?;
-        write!(
-            file,
-            "{}\n{}\nsignet-kernel-lock-v1\n",
-            std::process::id(),
-            now_seconds()
-        )?;
-        file.flush()?;
+        let write_result = (|| -> Result<(), std::io::Error> {
+            file.set_len(0)?;
+            write!(
+                file,
+                "{}\n{}\nsignet-kernel-lock-v1\n",
+                std::process::id(),
+                now_seconds()
+            )?;
+            file.flush()
+        })();
+        if let Err(error) = write_result {
+            unsafe {
+                CloseHandle(mutex);
+                CloseHandle(parent_mutex);
+            }
+            return Err(error.into());
+        }
         return Ok(OwnerLock {
             _file: file,
             path: path.to_path_buf(),
             _mutex: mutex,
+            _parent_mutex: parent_mutex,
         });
     }
     #[cfg(not(any(unix, windows)))]

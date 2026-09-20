@@ -7,6 +7,13 @@ const repoRoot = join(import.meta.dir, "../..");
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: contract selects the compiled daemon binary
 const bin = process.env.SIGNET_RUST_DAEMON_BIN ?? join(repoRoot, "platform/rust-daemon/target/debug/signet-daemon");
 
+test("Windows owner lock includes a canonical parent-directory mutex", () => {
+	const source = readFileSync(join(repoRoot, "platform/rust-daemon/src/main.rs"), "utf8");
+	expect(source).toContain("canonical parent-directory mutex");
+	expect(source).toContain("SignetDbOwnerParent-");
+	expect(source).toContain("_parent_mutex: HANDLE");
+});
+
 async function waitForFile(path: string): Promise<void> {
 	for (let attempt = 0; attempt < 200; attempt++) {
 		if (existsSync(path)) return;
