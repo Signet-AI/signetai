@@ -1,35 +1,73 @@
 #!/usr/bin/env bun
-/** Run the narrow Rust backend proof lanes against the frozen baseline checkout. */
-import { existsSync } from "node:fs";
+/** Run the narrow supplementary Rust proofs against the immutable baseline checkout. */
+import { existsSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 
 const repo = resolve(import.meta.dir, "..");
 const baseline = process.env.SIGNET_BASELINE ?? "/mnt/work/hermes-scratch/pr-1867-main";
-const binary = process.env.SIGNET_RUST_DAEMON_BIN;
-if (!binary || !existsSync(binary)) {
-	console.error("FAIL CLOSED: SIGNET_RUST_DAEMON_BIN must name an existing Rust daemon binary");
-	process.exit(2);
+const daemonBinary = process.env.SIGNET_RUST_DAEMON_BIN;
+const coreDriver = process.env.SIGNET_RUST_CORE_DRIVER_BIN;
+const expectedBaseline = "11e4720c07107caf7fdd57a685eca24e8a82e654";
+
+function fail(status: number, message: string): never {
+	console.error(`FAIL CLOSED [${status}]: ${message}`);
+	process.exit(status);
 }
-if (!existsSync(baseline)) throw new Error(`baseline checkout missing: ${baseline}`);
 
+function requireArtifact(name: string, value: string | undefined, status: number): string {
+	if (!value) fail(status, `${name} must be explicitly set to an existing Rust proof artifact`);
+	const path = resolve(value);
+	if (!existsSync(path) || !statSync(path).isFile()) fail(status, `${name} is missing or stale: ${path}`);
+	return path;
+}
+
+if (!existsSync(baseline)) fail(7, `baseline checkout missing: ${baseline}`);
+const baselineHead = Bun.spawnSync(["git", "-C", baseline, "rev-parse", "HEAD"], { stdout: "pipe", stderr: "pipe" });
+const head = new TextDecoder().decode(baselineHead.stdout).trim();
+if (baselineHead.exitCode !== 0 || head !== expectedBaseline) {
+	fail(7, `baseline HEAD must be ${expectedBaseline}; got ${head || "unavailable"}`);
+}
+
+const daemon = requireArtifact("SIGNET_RUST_DAEMON_BIN", daemonBinary, 2);
+const core = requireArtifact("SIGNET_RUST_CORE_DRIVER_BIN", coreDriver, 3);
 const daemonTest = `${baseline}/platform/daemon/src/workspace-startup.test.ts`;
-const preload = `${repo}/scripts/rust-baseline-proof-daemon.preload.ts`;
-console.error(JSON.stringify({ backend: "rust-daemon", binary, pid: process.pid, baseline, test: daemonTest }));
-const daemon = Bun.spawnSync(["bun", "test", "--preload", preload, daemonTest], {
-	cwd: baseline,
-	env: { ...process.env, SIGNET_RUST_DAEMON_BIN: binary },
-	stdout: "inherit",
-	stderr: "inherit",
-});
-if (daemon.exitCode !== 0) process.exit(daemon.exitCode ?? 1);
+const coreTest = `${baseline}/platform/core/src/database.test.ts`;
+const daemonPreload = `${repo}/scripts/rust-baseline-proof-daemon.preload.ts`;
+const corePreload = `${repo}/scripts/rust-baseline-proof-core.preload.ts`;
 
-// The frozen Database test cannot be forwarded faithfully: its contract requires
-// addMemory provenance columns (sourceId/sourceType/sourcePath/runtimePath,
-// idempotencyKey, manualOverride) and reads memory_kind through bun:sqlite.
-// Rust Operation::Remember accepts only content/metadata and the Rust owner does
-// not expose the legacy addMemory shape. Refuse rather than fake or call TS core.
-console.error("BLOCKED: database.test.ts has no faithful Rust adapter boundary");
-console.error(
-	"BLOCKER: Rust Operation::Remember lacks the tested provenance fields and the test directly observes memory_kind via bun:sqlite",
+function runProof(label: string, command: string[], cwd: string, env: Record<string, string>, status: number): void {
+	console.error(
+		JSON.stringify({
+			label,
+			backend: "fresh-rust",
+			artifact: env.SIGNET_RUST_DAEMON_BIN ?? env.SIGNET_RUST_CORE_DRIVER_BIN,
+			pid: process.pid,
+			baseline,
+			test: command.at(-1),
+			account: "supplementary-baseline-proof",
+		}),
+	);
+	const result = Bun.spawnSync(command, { cwd, env: { ...process.env, ...env }, stdout: "inherit", stderr: "pipe" });
+	const stderr = new TextDecoder().decode(result.stderr);
+	if (stderr) process.stderr.write(`[${label} child stderr]\n${stderr}`);
+	console.error(JSON.stringify({ label, exitCode: result.exitCode }));
+	if (result.exitCode !== 0) fail(status, `${label} proof failed with exit ${result.exitCode ?? "unknown"}`);
+}
+
+runProof(
+	"daemon-workspace-startup",
+	["bun", "test", "--preload", daemonPreload, daemonTest],
+	baseline,
+	{ SIGNET_RUST_DAEMON_BIN: daemon },
+	5,
 );
-process.exit(3);
+runProof(
+	"core-database",
+	["bun", "test", "--preload", corePreload, coreTest],
+	baseline,
+	{ SIGNET_RUST_CORE_DRIVER_BIN: core },
+	6,
+);
+console.error(
+	JSON.stringify({ status: "PASS", scope: "supplementary proofs only", fullSharedCorpus: false, baseline, head }),
+);
