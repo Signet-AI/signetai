@@ -130,8 +130,30 @@ fn frontmatter(content: &str) -> Result<Value, ApiError> {
                     key.into(),
                     Value::String(value.trim().trim_matches(['"', '\'']).into()),
                 );
-            } else if key == "verified" && value.trim() == "true" {
-                out.insert("verified".into(), Value::Bool(true));
+            } else if ["user_invocable", "verified"].contains(&key) {
+                match value.trim() {
+                    "true" => {
+                        out.insert(key.into(), Value::Bool(true));
+                    }
+                    "false" => {
+                        out.insert(key.into(), Value::Bool(false));
+                    }
+                    _ => return Err(ApiError::bad_request("malformed skill frontmatter")),
+                }
+            } else if key == "permissions" {
+                let raw = value.trim();
+                let items = raw
+                    .strip_prefix('[')
+                    .and_then(|v| v.strip_suffix(']'))
+                    .ok_or_else(|| ApiError::bad_request("malformed skill frontmatter"))?;
+                let values = items
+                    .split(',')
+                    .filter_map(|item| {
+                        let item = item.trim().trim_matches(['"', '\'']);
+                        (!item.is_empty()).then(|| Value::String(item.into()))
+                    })
+                    .collect::<Vec<_>>();
+                out.insert(key.into(), Value::Array(values));
             }
         }
     }
@@ -373,6 +395,19 @@ async fn browse(
     let max = limit(q.limit)?;
     let root = root_dir(&state)?;
     let local = all_skills(&root)?;
+    let local = local
+        .into_iter()
+        .map(|mut item| {
+            let name = item["name"].as_str().unwrap_or("").to_owned();
+            if let Value::Object(map) = &mut item {
+                map.insert("catalogKey".into(), json!(format!("local:{name}")));
+                map.insert("provider".into(), json!("local"));
+                map.insert("installed".into(), json!(true));
+                map.insert("category".into(), json!("Installed"));
+            }
+            item
+        })
+        .collect::<Vec<_>>();
     let (mut external, degraded) = external_catalog_results(&root).await;
     let mut results = local;
     results.append(&mut external);

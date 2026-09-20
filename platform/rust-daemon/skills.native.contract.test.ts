@@ -67,6 +67,13 @@ it.each([root, join(root, "platform/rust-daemon")])("bounds and safely filters s
 	expect(listed.truncated).toBe(true);
 	for (const limit of ["0", "101", "abc"]) expect((await get(origin, `/api/skills?limit=${limit}`)).status).toBe(400);
 	expect((await get(origin, "/api/skills/browse?limit=1")).status).toBe(200);
+	const browse = await (await get(origin, "/api/skills/browse?limit=1")).json();
+	expect(browse.results[0]).toMatchObject({
+		catalogKey: "local:demo",
+		provider: "local",
+		installed: true,
+		category: "Installed",
+	});
 	const search = await (await get(origin, "/api/skills/search?q=demo&limit=1")).json();
 	expect(search.total).toBe(1);
 	expect(search.truncated).toBe(false);
