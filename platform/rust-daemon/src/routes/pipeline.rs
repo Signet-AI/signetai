@@ -329,12 +329,7 @@ async fn models(
     Ok(Json(json!({"models": models, "registry": registry()})))
 }
 
-async fn models_by_provider(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    _query: Query<ModelQuery>,
-) -> Result<Json<Value>, ApiError> {
-    auth::gate(&state, &headers).await?;
+fn models_by_provider_value() -> Value {
     let mut by_provider = BTreeMap::new();
     for model in catalog() {
         if let Some(p) = model["provider"].as_str() {
@@ -344,7 +339,16 @@ async fn models_by_provider(
                 .push(model);
         }
     }
-    Ok(Json(json!(by_provider)))
+    json!(by_provider)
+}
+
+async fn models_by_provider(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    _query: Query<ModelQuery>,
+) -> Result<Json<Value>, ApiError> {
+    auth::gate(&state, &headers).await?;
+    Ok(Json(models_by_provider_value()))
 }
 
 async fn refresh_models(
@@ -354,15 +358,16 @@ async fn refresh_models(
     auth::gate(&state, &headers).await?;
     let refresh = LAST_REFRESH.get_or_init(|| Mutex::new(None));
     let mut last = refresh.lock().expect("refresh mutex poisoned");
+    let models = models_by_provider_value();
     if last.is_some_and(|instant| instant.elapsed() < Duration::from_secs(60)) {
         return Ok((
             StatusCode::TOO_MANY_REQUESTS,
-            Json(json!({"models": catalog(), "registry": registry(), "throttled": true})),
+            Json(json!({"models": models, "registry": registry(), "throttled": true})),
         )
             .into_response());
     }
     *last = Some(Instant::now());
-    Ok(Json(json!({"models": catalog(), "registry": registry()})).into_response())
+    Ok(Json(json!({"models": models, "registry": registry()})).into_response())
 }
 
 async fn unsupported_dreaming(
