@@ -3499,20 +3499,28 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "workspace_id",
         "TEXT DEFAULT 'default'",
     )?;
-    let document_scope_backfill: Option<i64> = transaction
+    const DOCUMENT_SCOPE_BACKFILL_CHECKSUM: &str = "document-workspace-backfill-v1";
+    let document_scope_backfill: Option<String> = transaction
         .query_row(
-            "SELECT version FROM schema_migrations WHERE version=2",
+            "SELECT checksum FROM schema_migrations WHERE version=2",
             [],
             |row| row.get(0),
         )
         .optional()?;
-    if document_scope_backfill.is_none() {
+    let documents_need_scope_backfill: i64 = transaction.query_row(
+        "SELECT count(*) FROM documents WHERE workspace_id IS NULL OR trim(workspace_id) = ''",
+        [],
+        |row| row.get(0),
+    )?;
+    if document_scope_backfill.as_deref() != Some(DOCUMENT_SCOPE_BACKFILL_CHECKSUM)
+        || documents_need_scope_backfill > 0
+    {
         transaction.execute(
             "UPDATE documents SET workspace_id = CASE WHEN json_valid(metadata) AND json_type(metadata,'$._workspaceId')='text' AND trim(json_extract(metadata,'$._workspaceId')) <> '' THEN trim(json_extract(metadata,'$._workspaceId')) ELSE 'default' END",
             [],
         )?;
         transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (2, datetime('now'), 'document-workspace-backfill-v1')",
+            "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (2, datetime('now'), 'document-workspace-backfill-v1') ON CONFLICT(version) DO UPDATE SET applied_at=excluded.applied_at, checksum=excluded.checksum",
             [],
         )?;
     }

@@ -1,5 +1,7 @@
 use rusqlite::Connection;
-use signet_core_native::{Core, CoreError, NewMemory, Operation, UpdateMemory, WorkspaceOwner};
+use signet_core_native::{
+    Core, CoreError, DocumentInput, NewMemory, Operation, UpdateMemory, WorkspaceOwner,
+};
 use tempfile::tempdir;
 
 fn core() -> Core {
@@ -274,6 +276,126 @@ fn migrates_legacy_source_and_document_workspace_to_default_and_cleans_up() {
             .len(),
         0
     );
+}
+
+#[test]
+fn repairs_incomplete_version_two_document_backfill() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("incomplete-v2.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT); INSERT INTO schema_migrations VALUES (2, '2026-01-01', 'wrong-checksum'); CREATE TABLE documents (id TEXT PRIMARY KEY, agent_id TEXT, source_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT, created_at TEXT); INSERT INTO documents VALUES ('legacy-doc', 'agent', 'source', 'legacy.md', 'body', '{}', '2026-01-01');").unwrap();
+    drop(connection);
+    let _owner = Core::open(&p, 4).unwrap();
+    let connection = Connection::open(&p).unwrap();
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT workspace_id FROM documents WHERE id='legacy-doc'",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "default"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT checksum FROM schema_migrations WHERE version=2",
+                [],
+                |row| row.get::<_, String>(0)
+            )
+            .unwrap(),
+        "document-workspace-backfill-v1"
+    );
+}
+
+#[test]
+fn direct_ingest_document_handles_metadata_and_missing_source() {
+    let owner = core();
+    let source = owner
+        .create_source(
+            "agent",
+            "default",
+            "folder",
+            "fixture",
+            serde_json::json!({}),
+        )
+        .unwrap();
+    let id = owner
+        .ingest_document(
+            "agent",
+            DocumentInput {
+                source_id: source.id.clone(),
+                path: "note.md".into(),
+                content: "document body".into(),
+                metadata: serde_json::Value::Null,
+            },
+        )
+        .unwrap();
+    let document = owner
+        .submit(Operation::DocumentGet {
+            agent_id: "agent".into(),
+            workspace_id: "default".into(),
+            id,
+        })
+        .unwrap();
+    assert_eq!(document["metadata"]["_workspaceId"], "default");
+    assert_eq!(document["generation"], 0);
+    assert!(document["contentHash"]
+        .as_str()
+        .is_some_and(|hash| hash.len() == 64));
+    assert!(document["createdAt"].as_str().is_some());
+    assert!(document["updatedAt"].as_str().is_some());
+    let custom_source = owner
+        .create_source(
+            "agent",
+            "custom",
+            "folder",
+            "custom-fixture",
+            serde_json::json!({}),
+        )
+        .unwrap();
+    let explicit_id = owner
+        .ingest_document(
+            "agent",
+            DocumentInput {
+                source_id: custom_source.id,
+                path: "custom.md".into(),
+                content: "custom body".into(),
+                metadata: serde_json::json!({"_workspaceId": "custom"}),
+            },
+        )
+        .unwrap();
+    let explicit = owner
+        .submit(Operation::DocumentGet {
+            agent_id: "agent".into(),
+            workspace_id: "custom".into(),
+            id: explicit_id,
+        })
+        .unwrap();
+    assert_eq!(explicit["metadata"]["_workspaceId"], "custom");
+    assert!(owner
+        .ingest_document(
+            "agent",
+            DocumentInput {
+                source_id: "missing".into(),
+                path: "bad.md".into(),
+                content: "body".into(),
+                metadata: serde_json::json!({})
+            }
+        )
+        .is_err());
+    assert!(owner
+        .ingest_document(
+            "agent",
+            DocumentInput {
+                source_id: source.id,
+                path: "bad.md".into(),
+                content: "body".into(),
+                metadata: serde_json::json!([])
+            }
+        )
+        .is_err());
 }
 
 #[test]
