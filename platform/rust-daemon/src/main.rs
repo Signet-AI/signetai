@@ -37,7 +37,9 @@ use uuid::Uuid;
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE};
 #[cfg(windows)]
-use windows_sys::Win32::Storage::FileSystem::{GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION};
+use windows_sys::Win32::Storage::FileSystem::{
+    GetFileInformationByHandle, BY_HANDLE_FILE_INFORMATION,
+};
 #[cfg(windows)]
 use windows_sys::Win32::System::Threading::CreateMutexW;
 
@@ -1495,7 +1497,7 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
         file.seek(SeekFrom::Start(0))?;
         write!(
             file,
-            "{}\\n{}\\nsignet-kernel-lock-v1\\n",
+            "{}\n{}\nsignet-kernel-lock-v1\n",
             std::process::id(),
             now_seconds()
         )?;
@@ -1529,9 +1531,7 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
         // converge while a path rename/replacement cannot steal an existing lock.
         let identity = format!(
             "volume={:08x};file={:08x}{:08x}",
-            info.dwVolumeSerialNumber,
-            info.nFileIndexHigh,
-            info.nFileIndexLow
+            info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow
         );
         use sha2::Digest;
         let digest = sha2::Sha256::digest(identity.as_bytes());
@@ -1559,7 +1559,7 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
         file.set_len(0)?;
         write!(
             file,
-            "{}\\n{}\\nsignet-kernel-lock-v1\\n",
+            "{}\n{}\nsignet-kernel-lock-v1\n",
             std::process::id(),
             now_seconds()
         )?;
@@ -1575,7 +1575,7 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
         let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
         write!(
             file,
-            "{}\\n{}\\nsignet-kernel-lock-v1\\n",
+            "{}\n{}\nsignet-kernel-lock-v1\n",
             std::process::id(),
             now_seconds()
         )?;
