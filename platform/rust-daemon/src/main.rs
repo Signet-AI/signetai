@@ -164,22 +164,6 @@ impl ApiError {
         }
     }
 
-    pub(crate) fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            code: "conflict",
-            message: message.into(),
-        }
-    }
-
-    pub(crate) fn too_large(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::PAYLOAD_TOO_LARGE,
-            code: "payload_too_large",
-            message: message.into(),
-        }
-    }
-
     pub(crate) fn internal(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,

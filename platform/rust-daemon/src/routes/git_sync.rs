@@ -99,7 +99,23 @@ async fn update_config(
     Json(patch): Json<GitConfigPatch>,
 ) -> Result<Json<Value>, ApiError> {
     authorize(&state, &headers).await?;
-    let _ = (state, patch);
+    let GitConfigPatch {
+        enabled,
+        auto_commit,
+        auto_sync,
+        sync_interval,
+        remote,
+        branch,
+    } = patch;
+    let _ = (
+        state,
+        enabled,
+        auto_commit,
+        auto_sync,
+        sync_interval,
+        remote,
+        branch,
+    );
     Err(ApiError::not_implemented("git-config-update: runtime git configuration persistence and timer lifecycle are not implemented natively"))
 }
 
