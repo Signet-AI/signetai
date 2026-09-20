@@ -657,6 +657,14 @@ fn valid_daily_log_date(name: &str) -> bool {
     {
         return false;
     }
+    if !stem.as_bytes()[0..4]
+        .iter()
+        .chain(&stem.as_bytes()[5..7])
+        .chain(&stem.as_bytes()[8..10])
+        .all(u8::is_ascii_digit)
+    {
+        return false;
+    }
     let year = stem[0..4].parse::<i32>().ok();
     let month = stem[5..7]
         .parse::<u8>()
@@ -4604,4 +4612,21 @@ pub fn import_current_schema(_path: &Path) -> Result<(), CoreError> {
         "schema import is performed by WorkspaceOwner::open; callers cannot bypass the owner"
             .into(),
     ))
+}
+
+#[cfg(test)]
+mod daily_log_date_tests {
+    use super::valid_daily_log_date;
+
+    #[test]
+    fn rejects_non_decimal_date_fields() {
+        for name in [
+            "+001-01-01.md",
+            "202a-01-01.md",
+            "2024-0a-01.md",
+            "2024-01-0a.md",
+        ] {
+            assert!(!valid_daily_log_date(name), "accepted {name}");
+        }
+    }
 }

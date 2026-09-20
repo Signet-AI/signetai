@@ -1700,6 +1700,43 @@ fn acquire_owner_lock(path: &FsPath) -> Result<OwnerLock, Box<dyn std::error::Er
     }
 }
 
+fn read_owner_request_line<R: BufRead>(reader: &mut R) -> std::io::Result<Option<String>> {
+    let mut line = Vec::new();
+    loop {
+        let buffer = reader.fill_buf()?;
+        if buffer.is_empty() {
+            if line.is_empty() {
+                return Ok(None);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "unterminated owner request",
+            ));
+        }
+        let newline = buffer.iter().position(|&byte| byte == b'\n');
+        let take = newline.map_or(buffer.len(), |index| index + 1);
+        if line.len() + take > MAX_OWNER_REQUEST_LINE_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "owner request line exceeds limit",
+            ));
+        }
+        line.extend_from_slice(&buffer[..take]);
+        reader.consume(take);
+        if newline.is_some() {
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            return String::from_utf8(line)
+                .map(Some)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error));
+        }
+    }
+}
+
 fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace_path();
     let path = database_path(&workspace);
@@ -1726,8 +1763,8 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     out.flush()?;
     let stdin = std::io::stdin();
-    for line in BufReader::new(stdin.lock()).lines() {
-        let line = line?;
+    let mut reader = BufReader::new(stdin.lock());
+    while let Some(line) = read_owner_request_line(&mut reader)? {
         if line.len() > MAX_OWNER_REQUEST_LINE_BYTES {
             break;
         }
@@ -1782,4 +1819,16 @@ async fn shutdown_signal() {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
     tokio::select! { _ = ctrl_c => {}, _ = terminate => {} }
+}
+
+#[cfg(test)]
+mod owner_reader_tests {
+    use super::*;
+
+    #[test]
+    fn rejects_unterminated_owner_request_without_allocating_the_whole_line() {
+        let input = vec![b'x'; MAX_OWNER_REQUEST_LINE_BYTES + 1];
+        let result = read_owner_request_line(&mut BufReader::new(std::io::Cursor::new(input)));
+        assert!(result.is_err());
+    }
 }
