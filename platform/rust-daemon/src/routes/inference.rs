@@ -173,7 +173,7 @@ struct ExecuteRequest {
     prompt: Option<String>,
     #[serde(default)]
     messages: Option<Value>,
-    #[serde(default)]
+    #[serde(default, alias = "timeoutMs")]
     timeout_ms: Option<u64>,
     #[serde(default, alias = "agentId")]
     agent_id: Option<String>,
@@ -185,6 +185,14 @@ async fn execute(
     Json(request): Json<ExecuteRequest>,
 ) -> Result<Json<Value>, ApiError> {
     let identity = agent(&headers, None, request.agent_id.as_deref())?;
+    if request
+        .prompt
+        .as_deref()
+        .map(str::trim)
+        .is_none_or(str::is_empty)
+    {
+        return Err(ApiError::bad_request("prompt is required"));
+    }
     let request_id = Uuid::new_v4().to_string();
     append_history(
         &state,
@@ -289,6 +297,13 @@ async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Val
         .await
         .map_err(|error| ProviderError::Transport(format!("provider request failed: {error}")))?;
     let status = response.status().as_u16();
+    if let Some(length) = response.content_length() {
+        if length > 1_048_576 {
+            return Err(ProviderError::InvalidResponse(
+                "provider response exceeds 1 MiB".to_owned(),
+            ));
+        }
+    }
     let bytes = response.bytes().await.map_err(|error| {
         ProviderError::InvalidResponse(format!("provider response read failed: {error}"))
     })?;
