@@ -612,13 +612,20 @@ fn execute_operation(
             let rows = statement.query_map(params![agent_id, limit as i64], reflection_row)?;
             Ok(json!({"reflections": rows.collect::<Result<Vec<_>, _>>()?}))
         }
-        Operation::ReflectionToday { agent_id, date, limit } => {
+        Operation::ReflectionToday {
+            agent_id,
+            date,
+            limit,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let limit = limit.clamp(1, 100);
             let mut statement = connection.prepare("SELECT id,date,summary,patterns,question,answer,answer_memory_id,created_at,answered_at FROM daily_reflections WHERE agent_id=? AND date=? ORDER BY created_at DESC LIMIT ?")?;
-            let rows = statement.query_map(params![agent_id, date, limit as i64], reflection_row)?;
+            let rows =
+                statement.query_map(params![agent_id, date, limit as i64], reflection_row)?;
             let reflections = rows.collect::<Result<Vec<_>, _>>()?;
-            Ok(json!({"reflection": reflections.first().cloned().unwrap_or(Value::Null), "reflections": reflections}))
+            Ok(
+                json!({"reflection": reflections.first().cloned().unwrap_or(Value::Null), "reflections": reflections}),
+            )
         }
         Operation::TranscriptImportCreate {
             agent_id,
@@ -2960,8 +2967,15 @@ pub struct SessionRecord {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     Health,
-    ReflectionList { agent_id: String, limit: usize },
-    ReflectionToday { agent_id: String, date: String, limit: usize },
+    ReflectionList {
+        agent_id: String,
+        limit: usize,
+    },
+    ReflectionToday {
+        agent_id: String,
+        date: String,
+        limit: usize,
+    },
     SecretList {
         agent_id: String,
         workspace_id: String,
