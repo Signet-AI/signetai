@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -42,15 +42,46 @@ let output = "";
 (async () => {
 	output += await new Response(child.stderr).text();
 })();
-async function ready() {
+async function readyAt(url = origin) {
 	for (let i = 0; i < 150; i++) {
 		try {
-			if ((await fetch(`${origin}/health/ready`)).ok) return;
+			if ((await fetch(`${url}/health/ready`)).ok) return;
 		} catch {}
 		await Bun.sleep(100);
 	}
 	throw new Error(`packaged daemon did not become ready\n${output}`);
 }
+async function ready() {
+	await readyAt();
+}
+function fdTargets(pid: number) {
+	if (process.platform !== "linux") return [];
+	return readdirSync(`/proc/${pid}/fd`).flatMap((fd) => {
+		try {
+			return [readlinkSync(`/proc/${pid}/fd/${fd}`)];
+		} catch {
+			return [];
+		}
+	});
+}
+function ownerMarker() {
+	return JSON.parse(readFileSync(join(root, ".daemon", "db-owner.json"), "utf8")) as {
+		pid: number;
+		generation: string;
+	};
+}
+async function waitForOwnerChange(previousPid: number, previousGeneration: string) {
+	for (let i = 0; i < 150; i++) {
+		try {
+			const marker = ownerMarker();
+			if (marker.pid !== previousPid && marker.generation !== previousGeneration) return marker;
+		} catch {}
+		await readyAt();
+		await Bun.sleep(100);
+	}
+	throw new Error("database owner was not replaced");
+}
+
 async function stop() {
 	child.kill("SIGTERM");
 	await Promise.race([child.exited, Bun.sleep(3000)]);
@@ -97,6 +128,30 @@ describe("shipped packaged Rust executable", () => {
 		});
 		expect(other.status).toBe(404);
 	});
+	test("keeps database handles in the owner, replaces a killed owner, and recovers HTTP state", async () => {
+		if (process.platform !== "linux") return;
+		const initial = ownerMarker();
+		const parentFds = fdTargets(child.pid);
+		const ownerFds = fdTargets(initial.pid);
+		expect(parentFds.some((fd) => /memories\.db(?:-|$)/.test(fd))).toBe(false);
+		expect(ownerFds.some((fd) => /memories\.db(?:-|$)/.test(fd))).toBe(true);
+
+		const competing = Bun.spawn([binary, "--db-owner"], { cwd: staged, env: childEnv, stdout: "pipe", stderr: "pipe" });
+		await competing.exited;
+		expect(competing.exitCode).not.toBe(0);
+
+		initial.pid && process.kill(initial.pid, "SIGKILL");
+		await readyAt();
+		const recovered = await waitForOwnerChange(initial.pid, initial.generation);
+		expect(recovered.pid).not.toBe(initial.pid);
+		const fresh = await remember("recovery-a", "written after owner recovery");
+		const read = await fetch(`${origin}/api/memory/${fresh.id}`, {
+			headers: { "x-signet-agent": "recovery-a", "x-workspace-id": "recovery-a" },
+		});
+		expect(read.status).toBe(200);
+		expect((await read.json()).content).toBe("written after owner recovery");
+	}, 30_000);
+
 	test("persists through stop/restart and upgrades an existing workspace", async () => {
 		const created = await remember("restart-a", "survives packaged restart");
 		await stop();
@@ -121,6 +176,7 @@ describe("shipped packaged Rust executable", () => {
 		restarted.kill("SIGTERM");
 		await restarted.exited;
 		expect(readdirSync(root)).toContain("memory");
+		expect(readdirSync(join(root, ".daemon")).filter((name) => /db-owner|\.lock$/.test(name))).toEqual([]);
 	});
 	test("exercises the shipped database-owner child protocol and recovery evidence", async () => {
 		const owner = Bun.spawn([binary, "--db-owner"], {
