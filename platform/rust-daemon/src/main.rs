@@ -409,6 +409,11 @@ impl From<CoreError> for ApiError {
                 "database owner queue is saturated (capacity {capacity})"
             )),
             CoreError::OwnerStopped => Self::unavailable("database owner is unavailable"),
+            CoreError::UnsupportedMigrationHistory(message) => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "unsupported_migration_history",
+                message,
+            },
             CoreError::Remote(message) => Self::internal(message),
             other => Self::internal(other.to_string()),
         }
@@ -431,6 +436,7 @@ fn remote_core_error(response: &Value) -> CoreError {
                 .unwrap_or_default() as usize,
         },
         Some("owner_stopped") => CoreError::OwnerStopped,
+        Some("unsupported_migration_history") => CoreError::UnsupportedMigrationHistory(message),
         Some("internal") => CoreError::Remote(message),
         _ => CoreError::Remote(message),
     }
@@ -446,12 +452,41 @@ fn wire_core_error(error: &CoreError) -> Value {
             json!({"errorKind":"queue_full","capacity":capacity,"error":error.to_string()})
         }
         CoreError::OwnerStopped => json!({"errorKind":"owner_stopped","error":error.to_string()}),
+        CoreError::UnsupportedMigrationHistory(message) => {
+            json!({"errorKind":"unsupported_migration_history","error":message})
+        }
         CoreError::Sql(_)
         | CoreError::Serialization(_)
-        | CoreError::UnsupportedMigrationHistory(_)
         | CoreError::Remote(_) => {
             json!({"errorKind":"internal","error":error.to_string()})
         }
+    }
+}
+
+#[cfg(test)]
+mod migration_error_tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_migration_history_has_stable_owner_wire_envelope() {
+        let error = CoreError::UnsupportedMigrationHistory("version 153 is newer than 2".into());
+        let wire = wire_core_error(&error);
+        assert_eq!(wire["errorKind"], "unsupported_migration_history");
+        assert_eq!(wire["error"], "version 153 is newer than 2");
+    }
+
+    #[test]
+    fn unsupported_migration_history_round_trips_from_owner_wire() {
+        let response = json!({"errorKind":"unsupported_migration_history","error":"version 153 is newer than 2"});
+        assert!(matches!(remote_core_error(&response), CoreError::UnsupportedMigrationHistory(message) if message == "version 153 is newer than 2"));
+    }
+
+    #[test]
+    fn unsupported_migration_history_uses_startup_unavailable_response_contract() {
+        let api = ApiError::from(CoreError::UnsupportedMigrationHistory("history mismatch".into()));
+        assert_eq!(api.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(api.code, "unsupported_migration_history");
+        assert_eq!(api.message, "history mismatch");
     }
 }
 
