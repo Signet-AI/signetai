@@ -33,13 +33,11 @@ it("serves the bounded static pipeline model registry", async () => {
 		const all = await fetch(`${origin}/api/pipeline/models?limit=100`, { headers: auth });
 		const body = await all.json();
 		expect(all.ok).toBe(true);
-		expect(body.throttled).toBe(false);
+		expect(Object.keys(body).sort()).toEqual(["models", "registry"]);
 		expect(body.registry).toEqual({
 			initialized: true,
 			lastRefreshAt: 0,
 			modelCounts: {
-				none: 0,
-				command: 0,
 				acpx: 3,
 				"llama-cpp": 2,
 				ollama: 2,
@@ -63,16 +61,24 @@ it("serves the bounded static pipeline model registry", async () => {
 		const grouped = await fetch(`${origin}/api/pipeline/models/by-provider?provider=anthropic`, { headers: auth });
 		const groupedBody = await grouped.json();
 		expect(groupedBody).toEqual({
+			acpx: expect.any(Array),
+			"llama-cpp": expect.any(Array),
+			ollama: expect.any(Array),
+			"claude-code": expect.any(Array),
+			codex: expect.any(Array),
+			opencode: expect.any(Array),
 			anthropic: expect.any(Array),
+			openrouter: expect.any(Array),
+			"openai-compatible": expect.any(Array),
 		});
 		expect(groupedBody.anthropic).toHaveLength(3);
 		const refreshed = await fetch(`${origin}/api/pipeline/models/refresh`, { method: "POST", headers: auth });
 		const refreshedBody = await refreshed.json();
 		expect(refreshed.ok).toBe(true);
-		expect(refreshedBody).toMatchObject({ models: expect.any(Array), registry: body.registry });
-		expect(refreshedBody.throttled).toBe(false);
+		expect(refreshedBody).toEqual({ models: expect.any(Array), registry: body.registry });
 		const throttled = await fetch(`${origin}/api/pipeline/models/refresh`, { method: "POST", headers: auth });
 		expect(throttled.status).toBe(429);
+		expect(await throttled.json()).toEqual({ models: expect.any(Array), registry: body.registry, throttled: true });
 		expect((await fetch(`${origin}/api/pipeline/models?provider=unknown`, { headers: auth })).status).toBe(200);
 		expect(
 			(await (await fetch(`${origin}/api/pipeline/models?provider=unknown`, { headers: auth })).json()).models,

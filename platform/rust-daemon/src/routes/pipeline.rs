@@ -127,20 +127,6 @@ struct ModelQuery {
     limit: Option<usize>,
 }
 
-const PROVIDERS: &[&str] = &[
-    "none",
-    "command",
-    "acpx",
-    "llama-cpp",
-    "ollama",
-    "claude-code",
-    "codex",
-    "opencode",
-    "anthropic",
-    "openrouter",
-    "openai-compatible",
-];
-
 fn catalog() -> Vec<Value> {
     let entries: &[(&str, &[(&str, &str, &str, &str, &str)])] = &[
         (
@@ -309,9 +295,6 @@ fn catalog() -> Vec<Value> {
 
 fn registry() -> Value {
     let mut counts = BTreeMap::new();
-    for provider in PROVIDERS {
-        counts.insert((*provider).to_owned(), 0);
-    }
     for model in catalog() {
         if let Some(provider) = model["provider"].as_str() {
             *counts.entry(provider.to_owned()).or_insert(0) += 1;
@@ -343,20 +326,17 @@ async fn models(
         })
         .take(limit)
         .collect::<Vec<_>>();
-    Ok(Json(
-        json!({"models": models, "registry": registry(), "throttled": false}),
-    ))
+    Ok(Json(json!({"models": models, "registry": registry()})))
 }
 
 async fn models_by_provider(
     State(state): State<AppState>,
     headers: HeaderMap,
-    query: Query<ModelQuery>,
+    _query: Query<ModelQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let Json(value) = models(State(state), headers, query).await?;
-    let models = value.get("models").cloned().unwrap_or_else(|| json!([]));
+    auth::gate(&state, &headers).await?;
     let mut by_provider = BTreeMap::new();
-    for model in models.as_array().cloned().unwrap_or_default() {
+    for model in catalog() {
         if let Some(p) = model["provider"].as_str() {
             by_provider
                 .entry(p.to_owned())
@@ -382,10 +362,7 @@ async fn refresh_models(
             .into_response());
     }
     *last = Some(Instant::now());
-    Ok(
-        Json(json!({"models": catalog(), "registry": registry(), "throttled": false}))
-            .into_response(),
-    )
+    Ok(Json(json!({"models": catalog(), "registry": registry()})).into_response())
 }
 
 async fn unsupported_dreaming(
