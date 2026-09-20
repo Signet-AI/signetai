@@ -3,9 +3,20 @@ use crate::{routes::auth, ApiError, AppState};
 use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::Path};
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+use std::{
+    fs::OpenOptions,
+    io::Read,
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
+
+#[cfg(unix)]
+const O_NOFOLLOW: i32 = 0o400000;
 
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
+static CONFIG_ROOT: OnceLock<PathBuf> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 pub(crate) struct GitConfigResponse {
@@ -74,23 +85,47 @@ async fn config(
         remote: "origin".into(),
         branch: "main".into(),
     };
-    let path = state.workspace.join("agent.yaml");
-    if let Ok(meta) = fs::symlink_metadata(&path) {
-        if meta.file_type().is_symlink() || !meta.is_file() {
-            return Err(ApiError::bad_request(
-                "git configuration path must be a regular file",
-            ));
-        }
-        if meta.len() > MAX_CONFIG_BYTES {
-            return Err(ApiError::bad_request(
-                "git configuration exceeds the size limit",
-            ));
-        }
-        let content = fs::read_to_string(&path)
-            .map_err(|_| ApiError::unavailable("git configuration could not be read"))?;
+    let root = CONFIG_ROOT.get_or_init(|| {
+        std::fs::canonicalize(&state.workspace).unwrap_or_else(|_| state.workspace.clone())
+    });
+    let path = root.join("agent.yaml");
+    if let Some(content) = read_config_file(&path)? {
         parse_config(&content, &mut result);
     }
     Ok(Json(result))
+}
+
+fn read_config_file(path: &Path) -> Result<Option<String>, ApiError> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    options.custom_flags(O_NOFOLLOW);
+    let mut file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => {
+            return Err(ApiError::bad_request(
+                "git configuration path must be a regular file",
+            ))
+        }
+    };
+    let meta = file
+        .metadata()
+        .map_err(|_| ApiError::unavailable("git configuration could not be read"))?;
+    if !meta.is_file() {
+        return Err(ApiError::bad_request(
+            "git configuration path must be a regular file",
+        ));
+    }
+    if meta.len() > MAX_CONFIG_BYTES {
+        return Err(ApiError::bad_request(
+            "git configuration exceeds the size limit",
+        ));
+    }
+    let mut content = String::with_capacity(meta.len() as usize);
+    file.read_to_string(&mut content)
+        .map_err(|_| ApiError::unavailable("git configuration could not be read"))?;
+    Ok(Some(content))
 }
 
 async fn update_config(
