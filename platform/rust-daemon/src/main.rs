@@ -33,6 +33,8 @@ use std::{
 use tokio::signal;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
+
+const MAX_OWNER_REQUEST_LINE_BYTES: usize = 40 * 1024 * 1024;
 #[cfg(windows)]
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{
@@ -1726,7 +1728,7 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     let stdin = std::io::stdin();
     for line in BufReader::new(stdin.lock()).lines() {
         let line = line?;
-        if line.len() > 1_048_576 {
+        if line.len() > MAX_OWNER_REQUEST_LINE_BYTES {
             break;
         }
         let request: serde_json::Value = serde_json::from_str(&line)?;

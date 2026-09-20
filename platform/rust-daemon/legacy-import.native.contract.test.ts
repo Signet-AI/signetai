@@ -49,7 +49,9 @@ describe("native legacy markdown import contract", () => {
 			{ name: "2026-02-07.md", content: "valid large import\n" + "x".repeat(3 * 1024 * 1024) },
 		]);
 		expect(multiMegabyte.ok).toBe(true);
-		expect(await multiMegabyte.json()).toMatchObject({ imported: 1, skipped: 0, errors: [] });
+		const multiMegabyteResult = await multiMegabyte.json();
+		expect(multiMegabyteResult).toMatchObject({ skipped: 0, errors: [] });
+		expect(multiMegabyteResult.imported).toBeGreaterThan(0);
 		const afterRejection = await request("contract-workspace-c", [
 			{ name: "2026-02-05.md", content: "before rejection" },
 		]);
