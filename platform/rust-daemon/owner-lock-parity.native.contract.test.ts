@@ -15,6 +15,21 @@ async function waitForFile(path: string): Promise<void> {
 	throw new Error(`timed out waiting for ${path}`);
 }
 
+async function waitForOwnerPid(marker: string, pid: number): Promise<void> {
+	for (let attempt = 0; attempt < 200; attempt++) {
+		if (existsSync(marker)) {
+			try {
+				const owner = JSON.parse(readFileSync(marker, "utf8")) as { pid?: number };
+				if (owner.pid === pid) return;
+			} catch {
+				// The owner writes the marker atomically during startup.
+			}
+		}
+		await Bun.sleep(25);
+	}
+	throw new Error(`timed out waiting for owner pid ${pid}`);
+}
+
 test("rejects lock-path replacement while the canonical parent owner is live", async () => {
 	if (process.platform !== "linux") return;
 	const workspace = mkdtempSync(join(tmpdir(), "signet-owner-lock-replace-"));
@@ -41,7 +56,23 @@ test("rejects lock-path replacement while the canonical parent owner is live", a
 		expect(competing.exitCode).not.toBe(0);
 		child.kill("SIGTERM");
 		await child.exited;
-		expect(existsSync(lock)).toBe(true);
+		const replacement = Bun.spawn([bin, "--db-owner"], {
+			env: { ...process.env, SIGNET_PATH: workspace },
+			stdin: "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		try {
+			await waitForOwnerPid(marker, replacement.pid);
+			expect(existsSync(lock)).toBe(true);
+			const owner = JSON.parse(readFileSync(marker, "utf8")) as { generation: string };
+			replacement.stdin.write(`${JSON.stringify({ id: null, generation: owner.generation, op: "shutdown" })}\n`);
+			await replacement.exited;
+			expect(replacement.exitCode).toBe(0);
+			expect(existsSync(lock)).toBe(true);
+		} finally {
+			if (replacement.exitCode === null) replacement.kill("SIGKILL");
+		}
 	} finally {
 		if (child.exitCode === null) child.kill("SIGKILL");
 		rmSync(workspace, { recursive: true, force: true });
