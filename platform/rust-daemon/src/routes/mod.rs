@@ -10,6 +10,7 @@ pub(crate) mod mcp;
 pub(crate) mod memory_advanced;
 pub(crate) mod ontology;
 pub(crate) mod pipeline;
+pub(crate) mod plugins;
 pub(crate) mod queue_diagnostics;
 pub(crate) mod secrets;
 pub(crate) mod session_hook_boundary;

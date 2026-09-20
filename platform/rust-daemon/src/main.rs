@@ -1038,6 +1038,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             get(get_one).patch(patch_one).delete(delete_one),
         )
         .merge(routes::router())
+        .merge(routes::plugins::router())
         .fallback(dashboard)
         .layer(middleware::from_fn_with_state(
             state.clone(),
