@@ -6,10 +6,15 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use axum::{http::StatusCode, response::IntoResponse};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use signet_core_native::Operation;
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
+};
 
 pub(crate) async fn pipeline_status(
     State(state): State<AppState>,
@@ -118,7 +123,7 @@ pub(crate) async fn trigger(
 #[derive(Debug, Deserialize)]
 struct ModelQuery {
     provider: Option<String>,
-    deprecated: Option<bool>,
+    deprecated: Option<String>,
     limit: Option<usize>,
 }
 
@@ -299,8 +304,23 @@ fn catalog() -> Vec<Value> {
             ],
         ),
     ];
-    entries.iter().flat_map(|(provider, models)| models.iter().map(move |(id, label, tier, source, deprecated)| json!({"id": id, "provider": provider, "label": label, "tier": tier, "source": source, "deprecated": deprecated == &"true"}))).collect()
+    entries.iter().flat_map(|(provider, models)| models.iter().map(move |(id, label, tier, _source, deprecated)| json!({"id": id, "provider": provider, "label": label, "tier": tier, "deprecated": deprecated == &"true"}))).collect()
 }
+
+fn registry() -> Value {
+    let mut counts = BTreeMap::new();
+    for provider in PROVIDERS {
+        counts.insert((*provider).to_owned(), 0);
+    }
+    for model in catalog() {
+        if let Some(provider) = model["provider"].as_str() {
+            *counts.entry(provider.to_owned()).or_insert(0) += 1;
+        }
+    }
+    json!({"initialized": true, "lastRefreshAt": 0, "modelCounts": counts})
+}
+
+static LAST_REFRESH: OnceLock<Mutex<Option<Instant>>> = OnceLock::new();
 
 async fn models(
     State(state): State<AppState>,
@@ -312,23 +332,19 @@ async fn models(
     if limit == 0 || limit > 100 {
         return Err(ApiError::bad_request("limit must be between 1 and 100"));
     }
-    if let Some(provider) = &query.provider {
-        if !PROVIDERS.contains(&provider.as_str()) {
-            return Err(ApiError::bad_request("unknown provider"));
-        }
-    }
     let models = catalog()
         .into_iter()
         .filter(|m| query.provider.as_deref().is_none_or(|p| m["provider"] == p))
-        .filter(|m| query.deprecated.is_none_or(|d| m["deprecated"] == d))
+        .filter(|m| {
+            query
+                .deprecated
+                .as_deref()
+                .is_none_or(|d| m["deprecated"] == (d == "true"))
+        })
         .take(limit)
         .collect::<Vec<_>>();
-    let mut registry = BTreeMap::new();
-    for p in PROVIDERS {
-        registry.insert(*p, true);
-    }
     Ok(Json(
-        json!({"models": models, "registry": registry, "throttled": false}),
+        json!({"models": models, "registry": registry(), "throttled": false}),
     ))
 }
 
@@ -348,21 +364,28 @@ async fn models_by_provider(
                 .push(model);
         }
     }
-    Ok(Json(
-        json!({"models": by_provider, "registry": value["registry"], "throttled": value["throttled"]}),
-    ))
+    Ok(Json(json!(by_provider)))
 }
 
 async fn refresh_models(
     State(state): State<AppState>,
     headers: HeaderMap,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     auth::gate(&state, &headers).await?;
-    let mut registry = BTreeMap::new();
-    for p in PROVIDERS {
-        registry.insert(*p, true);
+    let refresh = LAST_REFRESH.get_or_init(|| Mutex::new(None));
+    let mut last = refresh.lock().expect("refresh mutex poisoned");
+    if last.is_some_and(|instant| instant.elapsed() < Duration::from_secs(60)) {
+        return Ok((
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"models": catalog(), "registry": registry(), "throttled": true})),
+        )
+            .into_response());
     }
-    Ok(Json(json!({"registry": registry, "throttled": false})))
+    *last = Some(Instant::now());
+    Ok(
+        Json(json!({"models": catalog(), "registry": registry(), "throttled": false}))
+            .into_response(),
+    )
 }
 
 async fn unsupported_dreaming(
