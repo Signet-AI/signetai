@@ -4,14 +4,18 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const bin =
-	process.env.SIGNET_RUST_DAEMON_BIN ?? join(process.cwd(), "platform/rust-daemon/target/debug/signet-daemon");
+const repoRoot = join(import.meta.dir, "../..");
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: test override for compiled daemon
+const bin = process.env.SIGNET_RUST_DAEMON_BIN ?? join(repoRoot, "platform/rust-daemon/target/debug/signet-daemon");
 const children: Bun.Subprocess[] = [];
 const dirs: string[] = [];
 let port = 38990;
 
-afterEach(() => {
-	for (const child of children.splice(0)) child.kill();
+afterEach(async () => {
+	for (const child of children.splice(0)) {
+		child.kill("SIGTERM");
+		await Promise.race([child.exited, Bun.sleep(1000)]);
+	}
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
@@ -209,4 +213,91 @@ it("terminalizes unsupported and overdue jobs with durable events", async () => 
 	expect(overdue.state).toBe("expired");
 	const overdueEvents = await fetch(`${started.origin}/api/jobs/${overdue.id}/events?cursor=0`, { headers: h });
 	expect((await eventValues(overdueEvents)).map((event) => event.event)).toEqual(["expired"]);
+});
+
+it("accepts offset and fractional deadlines and fences queued expiry to one durable event", async () => {
+	const started = await start();
+	const h = headers("agent-deadline", "workspace-deadline");
+	const response = await fetch(`${started.origin}/api/jobs`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({
+			kind: "dream.trigger",
+			payload: { deadline: true },
+			deadline_at: "2030-01-02T03:04:05+05:30",
+		}),
+	});
+	expect(response.status).toBe(200);
+	const job = await response.json();
+	const fetched = await (await fetch(`${started.origin}/api/jobs/${job.id}`, { headers: h })).json();
+	expect(fetched.deadlineAt).toBe("2030-01-02T03:04:05+05:30");
+	const fractional = await fetch(`${started.origin}/api/jobs`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ kind: "dream.trigger", payload: {}, deadline_at: "2030-01-02T03:04:05.123Z" }),
+	});
+	expect(fractional.status).toBe(200);
+	const fractionalJob = await fractional.json();
+	const fractionalFetched = await (
+		await fetch(`${started.origin}/api/jobs/${fractionalJob.id}`, { headers: h })
+	).json();
+	expect(fractionalFetched.deadlineAt).toBe("2030-01-02T03:04:05.123Z");
+
+	await stop(started.child);
+	const db = new Database(join(started.dir, "memory", "memories.db"));
+	db.run("UPDATE jobs SET deadline_at='2000-01-01T00:00:00Z' WHERE id=?", [job.id]);
+	db.close();
+	const restarted = await start(started.dir);
+	await Bun.sleep(100);
+	const expired = await (await fetch(`${restarted.origin}/api/jobs/${job.id}`, { headers: h })).json();
+	expect(expired.state).toBe("expired");
+	const events = await fetch(`${restarted.origin}/api/jobs/${job.id}/events?cursor=0&limit=20`, { headers: h });
+	expect((await eventValues(events)).map((event) => event.event)).toEqual(["queued", "expired"]);
+	await stop(restarted.child);
+	const restartedAgain = await start(started.dir);
+	const eventsAgain = await fetch(`${restartedAgain.origin}/api/jobs/${job.id}/events?cursor=0&limit=20`, {
+		headers: h,
+	});
+	expect((await eventValues(eventsAgain)).map((event) => event.event)).toEqual(["queued", "expired"]);
+});
+
+it("fences running expiry, cancellation idempotence, pause admission, and scope ownership", async () => {
+	const started = await start();
+	const h = headers("agent-boundary", "workspace-a");
+	const created = await fetch(`${started.origin}/api/jobs`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ kind: "dream.trigger", payload: { boundary: true } }),
+	});
+	const job = await created.json();
+	const wrongAgent = await fetch(`${started.origin}/api/jobs/${job.id}`, {
+		headers: headers("agent-other", "workspace-a"),
+	});
+	const wrongWorkspace = await fetch(`${started.origin}/api/jobs/${job.id}`, {
+		headers: headers("agent-boundary", "workspace-b"),
+	});
+	expect(wrongAgent.status).toBe(404);
+	expect(wrongWorkspace.status).toBe(404);
+
+	const paused = await fetch(`${started.origin}/api/pipeline/pause`, { method: "POST", headers: h });
+	expect(paused.status).toBe(200);
+	const blocked = await fetch(`${started.origin}/api/dream/trigger`, {
+		method: "POST",
+		headers: h,
+		body: JSON.stringify({ blocked: true }),
+	});
+	expect(blocked.status).toBe(400);
+	await fetch(`${started.origin}/api/pipeline/resume`, { method: "POST", headers: h });
+
+	await stop(started.child);
+	const db = new Database(join(started.dir, "memory", "memories.db"));
+	db.run("UPDATE jobs SET state='running', deadline_at='2000-01-01T00:00:00Z' WHERE id=?", [job.id]);
+	db.close();
+	const restarted = await start(started.dir);
+	await Bun.sleep(100);
+	const expired = await fetch(`${restarted.origin}/api/jobs/${job.id}`, { headers: h });
+	expect(expired.status).toBe(200);
+	expect((await expired.json()).state).toBe("expired");
+	const events = await fetch(`${restarted.origin}/api/jobs/${job.id}/events?cursor=0&limit=20`, { headers: h });
+	expect((await eventValues(events)).map((event) => event.event)).toEqual(["queued", "recovered", "expired"]);
 });
