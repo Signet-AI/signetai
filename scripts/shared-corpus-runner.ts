@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 
@@ -22,6 +22,7 @@ export type Accounting = {
 	skipped: number;
 	crash: boolean;
 	incomplete: boolean;
+	status?: "passed" | "failed";
 };
 
 function git(repo: string, args: string[], binary = false): string | Buffer {
@@ -74,9 +75,18 @@ export function discoverBaseline(repo: string): ManifestEntry[] {
 		sha256: sha256(git(repo, ["show", `${BASELINE_SHA}:${path}`], true) as Buffer),
 	}));
 }
-export function validateManifest(entries: ManifestEntry[], current?: Map<string, string>): void {
+export function validateManifest(
+	entries: ManifestEntry[],
+	current?: Map<string, string>,
+	baseline?: ManifestEntry[],
+): void {
 	if (entries.length !== CORPUS_SIZE) throw new Error(`manifest must contain ${CORPUS_SIZE} paths`);
 	if (new Set(entries.map((e) => e.path)).size !== entries.length) throw new Error("manifest contains duplicate paths");
+	if (baseline) {
+		const expected = new Map(baseline.map((e) => [e.path, e.sha256]));
+		for (const e of entries)
+			if (expected.get(e.path) !== e.sha256) throw new Error(`manifest is not the pinned baseline: ${e.path}`);
+	}
 	if (current)
 		for (const e of entries) if (current.get(e.path) !== e.sha256) throw new Error(`hash mismatch for ${e.path}`);
 }
@@ -153,21 +163,38 @@ export function runnableManifestPaths(manifest: ManifestEntry[]): string[] {
 		.filter((p) => /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(p))
 		.sort();
 }
-export function parseJUnitReport(xml: string, expected: string[] = []): Accounting {
+export function parseJUnitReport(xml: string, expected: string[] = [], childStatus: number | null = 0): Accounting {
 	const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map((m) => m[0]);
 	const suite = xml.match(/<testsuite\b[^>]*>/)?.[0] ?? "";
 	const suiteFailed =
 		Number(suite.match(/failures="(\d+)"/)?.[1] ?? 0) + Number(suite.match(/errors="(\d+)"/)?.[1] ?? 0);
-	if (!cases.length) return { tests: 0, passed: 0, failed: suiteFailed, skipped: 0, crash: true, incomplete: true };
+	if (!cases.length)
+		return {
+			tests: 0,
+			passed: 0,
+			failed: Math.max(1, suiteFailed),
+			skipped: 0,
+			crash: true,
+			incomplete: true,
+			status: "failed",
+		};
 	const failed = cases.filter((c) => /<(?:failure|error)\b/.test(c)).length;
 	const skipped = cases.filter((c) => /<skipped\b/.test(c)).length;
+	const identities = cases.map(
+		(c) => `${c.match(/classname="([^"]*)"/)?.[1] ?? ""}\0${c.match(/name="([^"]*)"/)?.[1] ?? ""}`,
+	);
+	const duplicate = new Set(identities).size !== identities.length;
+	const declared = Number(suite.match(/tests="(\d+)"/)?.[1] ?? cases.length);
+	const incomplete = duplicate || declared !== cases.length || (expected.length > 0 && cases.length < expected.length);
+	const crashed = childStatus !== 0;
 	return {
 		tests: cases.length,
 		passed: cases.length - failed - skipped,
-		failed: failed + Math.max(0, suiteFailed - failed),
+		failed: failed + Math.max(0, suiteFailed - failed) + (duplicate ? 1 : 0),
 		skipped,
-		crash: false,
-		incomplete: expected.length > 0 && cases.length < expected.length,
+		crash: crashed || duplicate,
+		incomplete: incomplete || crashed,
+		status: crashed || duplicate || failed > 0 || incomplete ? "failed" : "passed",
 	};
 }
 
@@ -198,13 +225,13 @@ export function run(
 				];
 	const executable = command[0];
 	if (!executable) throw new Error("lane command is empty");
-	const before = report && existsSync(report) ? statSync(report).mtimeMs : 0;
+	if (report && existsSync(report)) unlinkSync(report);
 	const child = spawnSync(executable, command.slice(1), {
 		cwd: backend === "typescript" ? o.worktree : repo,
 		env: { ...process.env },
 		encoding: "utf8",
 	});
-	const fresh = report && existsSync(report) && statSync(report).mtimeMs > before;
+	const fresh = report && existsSync(report);
 	if (!fresh) {
 		if (backend === "rust") throw new Error("rust lane did not produce a complete report");
 		return {
@@ -224,8 +251,8 @@ export function run(
 			status: "incomplete",
 		};
 	}
-	const accounting = parseJUnitReport(readFileSync(report, "utf8"), selected ?? []);
-	const crash = child.status !== 0;
+	const accounting = parseJUnitReport(readFileSync(report, "utf8"), selected ?? [], child.status);
+	const crash = child.status !== 0 || child.signal !== null;
 	const incomplete = accounting.incomplete || accounting.tests === 0;
 	return {
 		baselineSha: BASELINE_SHA,
@@ -239,7 +266,7 @@ export function run(
 		...accounting,
 		crash,
 		incomplete,
-		status: crash ? "crash" : accounting.failed || incomplete ? "failed" : "passed",
+		status: crash || accounting.failed || incomplete ? "failed" : "passed",
 	};
 }
 if (import.meta.main) {

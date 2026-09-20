@@ -82,4 +82,22 @@ describe("shared corpus admission", () => {
 		expect(result.incomplete).toBe(true);
 		expect(result.crash).toBe(true);
 	});
+
+	test("rejects duplicate testcase identities and substituted expected identities", () => {
+		const xml = '<testsuite tests="2"><testcase classname="x" name="a"/><testcase classname="x" name="a"/></testsuite>';
+		const result = parseJUnitReport(xml, ["a.test.ts", "b.test.ts"]);
+		expect(result.incomplete).toBe(true);
+		expect(result.crash).toBe(true);
+		expect(result.failed).toBeGreaterThan(0);
+	});
+
+	test("nonzero child status cannot be represented as passed", () => {
+		const result = parseJUnitReport(
+			'<testsuite tests="1"><testcase classname="x" name="a"/></testsuite>',
+			["a.test.ts"],
+			1,
+		);
+		expect(result.crash).toBe(true);
+		expect(result.status).toBe("failed");
+	});
 });
