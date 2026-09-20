@@ -10,13 +10,11 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
+    fs::OpenOptions,
     io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
-    sync::{Mutex, OnceLock},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
-
-static MARKETPLACE_INSTALL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Deserialize, Default)]
 struct AuditQuery {
@@ -385,6 +383,97 @@ struct MarketplaceInstallRequest {
 fn marketplace_state_path(state: &AppState) -> PathBuf {
     state.workspace.join("marketplace/mcp-servers.json")
 }
+fn marketplace_lock_path(state: &AppState) -> PathBuf {
+    state.workspace.join("marketplace/mcp-servers.lock")
+}
+
+struct MarketplaceFileLock(PathBuf);
+impl Drop for MarketplaceFileLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
+}
+fn acquire_marketplace_lock(state: &AppState) -> Result<MarketplaceFileLock, ApiError> {
+    let path = marketplace_lock_path(state);
+    fs::create_dir_all(path.parent().unwrap()).map_err(|e| ApiError::internal(e.to_string()))?;
+    for _ in 0..200 {
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return Ok(MarketplaceFileLock(path)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                std::thread::sleep(Duration::from_millis(5))
+            }
+            Err(e) => return Err(ApiError::internal(e.to_string())),
+        }
+    }
+    Err(ApiError {
+        status: StatusCode::CONFLICT,
+        code: "marketplace_busy",
+        message: "marketplace state is locked".into(),
+    })
+}
+fn atomic_write_json(path: &std::path::Path, value: &Value) -> Result<(), ApiError> {
+    let parent = path.parent().unwrap();
+    fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
+    let tmp = parent.join(format!(
+        ".{}.tmp-{}",
+        path.file_name().unwrap().to_string_lossy(),
+        uuid::Uuid::new_v4()
+    ));
+    let bytes = serde_json::to_vec_pretty(value).map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut f = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    f.write_all(&bytes)
+        .and_then(|_| f.sync_all())
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    replace_file(&tmp, path).map_err(|e| ApiError::internal(e.to_string()))
+}
+fn valid_catalog_source(source: &str) -> bool {
+    matches!(
+        source,
+        "mcpservers.org" | "modelcontextprotocol/servers" | "github"
+    )
+}
+fn idempotency_matches(v: &Value, key: &str, fingerprint: &str) -> bool {
+    v.get("key").and_then(Value::as_str) == Some(key)
+        && v.get("fingerprint").and_then(Value::as_str) == Some(fingerprint)
+}
+fn idempotency_path(state: &AppState) -> PathBuf {
+    state.workspace.join("marketplace/mcp-idempotency-v1.json")
+}
+fn load_idempotency(state: &AppState) -> Result<Vec<Value>, ApiError> {
+    match bounded_json(&idempotency_path(state))? {
+        None => Ok(Vec::new()),
+        Some(v) => v.as_array().cloned().ok_or_else(|| ApiError {
+            status: StatusCode::CONFLICT,
+            code: "invalid_marketplace_idempotency",
+            message: "marketplace idempotency state is malformed".into(),
+        }),
+    }
+}
+fn remember_idempotency(
+    state: &AppState,
+    key: &str,
+    fingerprint: &str,
+    response: &Value,
+) -> Result<(), ApiError> {
+    let mut entries = load_idempotency(state)?;
+    entries.retain(|v| {
+        v.get("createdAt").and_then(Value::as_u64).unwrap_or(0) + 86400
+            > SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs()
+    });
+    entries.retain(|v| v.get("key").and_then(Value::as_str) != Some(key));
+    entries.push(json!({"key":key,"fingerprint":fingerprint,"response":response,"createdAt":SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()}));
+    if entries.len() > 256 {
+        entries.drain(..entries.len() - 256);
+    }
+    atomic_write_json(&idempotency_path(state), &json!(entries))
+}
 
 fn replace_file(tmp: &std::path::Path, path: &std::path::Path) -> std::io::Result<()> {
     #[cfg(windows)]
@@ -544,10 +633,7 @@ async fn install_marketplace(
         .unwrap_or("")
         .trim()
         .to_owned();
-    let lock = MARKETPLACE_INSTALL_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| ApiError::internal("marketplace install lock poisoned"))?;
+    let _lock = acquire_marketplace_lock(&s)?;
     let path = marketplace_state_path(&s);
     let mut state: Vec<Value> = match fs::read_to_string(&path) {
         Ok(raw) => serde_json::from_str(&raw).map_err(|_| ApiError {
@@ -567,7 +653,23 @@ async fn install_marketplace(
     }
     let fingerprint = install_fingerprint(&request);
     if !key.is_empty() {
-        let _ = (&key, &fingerprint);
+        for prior in load_idempotency(&s)? {
+            if prior.get("key").and_then(Value::as_str) == Some(&key) {
+                if idempotency_matches(&prior, &key, &fingerprint) {
+                    return Ok(Json(
+                        prior
+                            .get("response")
+                            .cloned()
+                            .unwrap_or(json!({"success":true})),
+                    ));
+                }
+                return Err(ApiError {
+                    status: StatusCode::CONFLICT,
+                    code: "idempotency_conflict",
+                    message: "idempotency key was already used for a different request".into(),
+                });
+            }
+        }
     }
     let server_id = request
         .alias
@@ -584,20 +686,27 @@ async fn install_marketplace(
         .any(|v| v.get("id").and_then(Value::as_str) == Some(&server_id));
 
     let now = now();
-    let source = request.source.unwrap_or_else(|| "mcpservers.org".into());
+    let source = request
+        .source
+        .clone()
+        .unwrap_or_else(|| "mcpservers.org".into());
+    if !valid_catalog_source(&source) {
+        return Err(ApiError {
+            status: StatusCode::BAD_REQUEST,
+            code: "invalid_source",
+            message: "source must be mcpservers.org, modelcontextprotocol/servers, or github"
+                .into(),
+        });
+    }
     let server = json!({"id":server_id,"catalogId":request.id,"source":source,"name":server_id,"description":"Installed MCP server","category":"Other","official":false,"enabled":true,"scope":normalize_scope(request.scope.as_ref()),"config":config,"installedAt":now,"updatedAt":now});
     state.retain(|v| v.get("id").and_then(Value::as_str) != Some(&server_id));
     state.push(server.clone());
-    let parent = path.parent().unwrap();
-    fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
-    let tmp = parent.join(format!(".marketplace-v1.{}.tmp", std::process::id()));
-    fs::write(&tmp, serde_json::to_vec_pretty(&state).unwrap())
-        .map_err(|e| ApiError::internal(e.to_string()))?;
-    replace_file(&tmp, &path).map_err(|e| ApiError::internal(e.to_string()))?;
-    drop(lock);
-    Ok(Json(
-        json!({"success":true,"updated":updated,"server":server}),
-    ))
+    atomic_write_json(&path, &json!(state))?;
+    let response = json!({"success":true,"updated":updated,"server":server});
+    if !key.is_empty() {
+        remember_idempotency(&s, &key, &fingerprint, &response)?;
+    }
+    Ok(Json(response))
 }
 
 #[derive(Deserialize, Default)]
@@ -694,33 +803,35 @@ fn parse_policy(v: &Value) -> Option<Value> {
         return None;
     }
     let clamp = |key: &str, default: u64, min: u64, max: u64| {
-        v.get(key)
-            .and_then(Value::as_f64)
-            .filter(|n| n.is_finite())
-            .map(|n| n.round().max(min as f64).min(max as f64) as u64)
-            .unwrap_or(default)
+        if v.get(key).is_some_and(|x| !x.is_number()) {
+            return None;
+        }
+        Some(
+            v.get(key)
+                .and_then(Value::as_f64)
+                .filter(|n| n.is_finite())
+                .map(|n| n.round().max(min as f64).min(max as f64) as u64)
+                .unwrap_or(default),
+        )
     };
     Some(
-        json!({"mode":mode,"maxExpandedTools":clamp("maxExpandedTools",12,0,100),"maxSearchResults":clamp("maxSearchResults",8,1,50),"updatedAt":v.get("updatedAt").and_then(Value::as_str).unwrap_or("1970-01-01T00:00:00.000Z")}),
+        json!({"mode":mode,"maxExpandedTools":clamp("maxExpandedTools",12,0,100)?,"maxSearchResults":clamp("maxSearchResults",8,1,50)?,"updatedAt":v.get("updatedAt").and_then(Value::as_str).unwrap_or("1970-01-01T00:00:00.000Z")}),
     )
 }
 fn policy_path(s: &AppState) -> PathBuf {
     s.workspace.join("marketplace/mcp-policy.json")
 }
-fn read_policy(s: &AppState) -> Value {
-    bounded_json(&policy_path(s)).ok().flatten().and_then(|v|parse_policy(&v)).unwrap_or(json!({"mode":"hybrid","maxExpandedTools":12,"maxSearchResults":8,"updatedAt":"1970-01-01T00:00:00.000Z"}))
-}
-fn atomic_write_json(path: &std::path::Path, value: &Value) -> Result<(), ApiError> {
-    let parent = path.parent().unwrap();
-    fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
-    let tmp = parent.join(format!(
-        ".{}.tmp-{}",
-        path.file_name().unwrap().to_string_lossy(),
-        std::process::id()
-    ));
-    let bytes = serde_json::to_vec_pretty(value).unwrap();
-    fs::write(&tmp, bytes).map_err(|e| ApiError::internal(e.to_string()))?;
-    replace_file(&tmp, path).map_err(|e| ApiError::internal(e.to_string()))
+fn read_policy(s: &AppState) -> Result<Value, ApiError> {
+    match bounded_json(&policy_path(s))? {
+        None => Ok(
+            json!({"mode":"hybrid","maxExpandedTools":12,"maxSearchResults":8,"updatedAt":"1970-01-01T00:00:00.000Z"}),
+        ),
+        Some(v) => parse_policy(&v).ok_or_else(|| ApiError {
+            status: StatusCode::CONFLICT,
+            code: "invalid_marketplace_policy",
+            message: "marketplace policy is malformed".into(),
+        }),
+    }
 }
 async fn list_marketplace(
     State(s): State<AppState>,
@@ -781,7 +892,7 @@ async fn list_marketplace(
 }
 async fn get_policy(State(s): State<AppState>, h: HeaderMap) -> Result<Json<Value>, ApiError> {
     gate(&s, &h).await?;
-    Ok(Json(json!({"policy":read_policy(&s)})))
+    Ok(Json(json!({"policy":read_policy(&s)?})))
 }
 async fn patch_policy(
     State(s): State<AppState>,
@@ -789,12 +900,9 @@ async fn patch_policy(
     body: Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
     gate(&s, &h).await?;
-    let _lock = MARKETPLACE_INSTALL_LOCK
-        .get_or_init(|| Mutex::new(()))
-        .lock()
-        .map_err(|_| ApiError::internal("marketplace policy lock poisoned"))?;
+    let _lock = acquire_marketplace_lock(&s)?;
     let Json(v) = body;
-    let cur = read_policy(&s);
+    let cur = read_policy(&s)?;
     let mut next = cur.clone();
     let o = v.as_object().ok_or_else(|| ApiError {
         status: StatusCode::BAD_REQUEST,
@@ -824,7 +932,7 @@ async fn patch_policy(
     next["updatedAt"] = json!(iso_now());
     let next = parse_policy(&next).unwrap();
     atomic_write_json(&policy_path(&s), &next)?;
-    let read = read_policy(&s);
+    let read = read_policy(&s)?;
     Ok(Json(json!({"success":true,"policy":read})))
 }
 
@@ -858,6 +966,27 @@ mod marketplace_contract_tests {
     fn installed_read_is_bounded_and_workspace_local() {
         assert!(marketplace_relative_path(".daemon/plugins/marketplace-v1.json").is_some());
         assert!(marketplace_relative_path("../outside.json").is_none());
+    }
+
+    #[test]
+    fn install_accepts_only_typescript_catalog_sources() {
+        assert!(valid_catalog_source("mcpservers.org"));
+        assert!(valid_catalog_source("modelcontextprotocol/servers"));
+        assert!(valid_catalog_source("github"));
+        assert!(!valid_catalog_source("evil"));
+    }
+
+    #[test]
+    fn malformed_policy_is_an_explicit_error_not_a_default() {
+        assert!(parse_policy(&json!({"mode":"wat"})).is_none());
+        assert!(parse_policy(&json!({"mode":"hybrid","maxExpandedTools":"12"})).is_none());
+    }
+
+    #[test]
+    fn idempotency_conflict_is_detectable_without_request_secrets() {
+        let a = json!({"key":"k","fingerprint":"a","response":{"success":true}});
+        assert!(idempotency_matches(&a, "k", "a"));
+        assert!(!idempotency_matches(&a, "k", "b"));
     }
 }
 
