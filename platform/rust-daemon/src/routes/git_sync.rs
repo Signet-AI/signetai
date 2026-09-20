@@ -4,19 +4,20 @@ use axum::{extract::State, http::HeaderMap, routing::get, Json, Router};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::{
+    fs::OpenOptionsExt,
+    io::{AsRawFd, FromRawFd},
+};
 use std::{
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::Read,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
 
-#[cfg(unix)]
-const O_NOFOLLOW: i32 = 0o400000;
-
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 static CONFIG_ROOT: OnceLock<PathBuf> = OnceLock::new();
+static CONFIG_DIR: OnceLock<Result<File, String>> = OnceLock::new();
 
 #[derive(Debug, Serialize)]
 pub(crate) struct GitConfigResponse {
@@ -88,27 +89,63 @@ async fn config(
     let root = CONFIG_ROOT.get_or_init(|| {
         std::fs::canonicalize(&state.workspace).unwrap_or_else(|_| state.workspace.clone())
     });
-    let path = root.join("agent.yaml");
-    if let Some(content) = read_config_file(&path)? {
+    let dir = CONFIG_DIR.get_or_init(|| open_config_dir(root));
+    let dir = dir.as_ref().map_err(|_| {
+        ApiError::unavailable("git configuration workspace cannot be safely opened")
+    })?;
+    if let Some(content) = read_config_file(dir)? {
         parse_config(&content, &mut result);
     }
     Ok(Json(result))
 }
 
-fn read_config_file(path: &Path) -> Result<Option<String>, ApiError> {
+#[cfg(unix)]
+fn open_config_dir(root: &Path) -> Result<File, String> {
     let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(O_NOFOLLOW);
-    let mut file = match options.open(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(_) => {
-            return Err(ApiError::bad_request(
-                "git configuration path must be a regular file",
-            ))
-        }
+    options
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    options
+        .open(root)
+        .map_err(|_| "workspace is not a safe directory".into())
+}
+
+#[cfg(not(unix))]
+fn open_config_dir(_root: &Path) -> Result<File, String> {
+    Err("safe descriptor-anchored workspace reads are unsupported on this platform".into())
+}
+
+#[cfg(unix)]
+fn read_config_file(dir: &File) -> Result<Option<String>, ApiError> {
+    let name = std::ffi::CString::new("agent.yaml").unwrap();
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
     };
+    if fd < 0 {
+        return match std::io::Error::last_os_error().kind() {
+            std::io::ErrorKind::NotFound => Ok(None),
+            _ => Err(ApiError::bad_request(
+                "git configuration path must be a regular file",
+            )),
+        };
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    read_open_config_file(file)
+}
+
+#[cfg(not(unix))]
+fn read_config_file(_dir: &File) -> Result<Option<String>, ApiError> {
+    Err(ApiError::unavailable(
+        "safe descriptor-anchored config reads are unsupported on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn read_open_config_file(mut file: File) -> Result<Option<String>, ApiError> {
     let meta = file
         .metadata()
         .map_err(|_| ApiError::unavailable("git configuration could not be read"))?;
