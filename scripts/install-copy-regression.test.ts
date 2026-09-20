@@ -117,7 +117,11 @@ describe("install copy", () => {
 		expect(manifest.files).toContain("runtime");
 		expect(launcher).toContain('join(packageDir, "native"');
 		expect(launcher).toContain("resolveNativePackageBinaryPath");
-		expect(launcher).toContain("require.resolve");
+		// The published ESM wrapper must resolve optional native packages from
+		// its own package context; a bare `require.resolve` is unavailable in ESM
+		// and would not preserve that package-bound resolution contract.
+		expect(launcher).toContain('import { createRequire } from "node:module"');
+		expect(launcher).toContain("const require = createRequire(import.meta.url)");
 		expect(launcher).toContain("SIGNET_DIR");
 		expect(launcher).toContain(
 			'SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "package-manager"',
