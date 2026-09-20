@@ -3,15 +3,13 @@ use crate::{agent, execute, ApiError, AppState};
 use axum::{
     extract::{DefaultBodyLimit, Query, State},
     http::HeaderMap,
-    response::sse::{Event, KeepAlive, Sse},
     routing::{get, post},
     Json, Router,
 };
-use futures_util::stream::{self, Stream};
+
 use serde::Deserialize;
 use serde_json::{json, Value};
 use signet_core_native::Operation;
-use std::{convert::Infallible, time::Duration};
 
 const MAX_BODY_BYTES: usize = 256 * 1024;
 const MAX_PAYLOAD_BYTES: usize = 128 * 1024;
@@ -276,23 +274,21 @@ pub async fn poll(
 }
 
 pub async fn live(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(query): Query<Poll>,
-) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
-    let snapshot = poll(State(state), headers, Query(query)).await?.0;
-    let event = Event::default()
-        .event("snapshot")
-        .json_data(snapshot)
-        .map_err(|_| ApiError::internal("sse encoding failed"))?;
-    Ok(Sse::new(stream::once(async move { Ok(event) }))
-        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15))))
+    State(_state): State<AppState>,
+    _headers: HeaderMap,
+    Query(_query): Query<Poll>,
+) -> Result<axum::response::Response, ApiError> {
+    Err(ApiError::not_implemented(
+        "live event streaming is unsupported; use snapshot polling",
+    ))
 }
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/boundary/sessions/start", post(start))
         .route("/api/boundary/sessions/end", post(end))
+        .route("/api/sessions/start", post(start))
+        .route("/api/sessions/end", post(end))
         .route("/api/boundary/hooks/receipt", post(receipt))
         .route("/api/boundary/messages", post(messages))
         .route("/api/boundary/poll", get(poll))
