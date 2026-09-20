@@ -3703,6 +3703,10 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "UPDATE entity_dependencies SET status='active' WHERE status IS NULL OR trim(status)=''",
         [],
     )?;
+    transaction.execute(
+        "UPDATE entity_dependencies SET updated_at='1970-01-01T00:00:00Z' WHERE updated_at IS NULL OR trim(updated_at)=''",
+        [],
+    )?;
     transaction.execute("CREATE INDEX IF NOT EXISTS entity_dependencies_scope ON entity_dependencies(agent_id,workspace_id,source_entity_id,target_entity_id)", [])?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
     ensure_column(

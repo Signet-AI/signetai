@@ -1197,11 +1197,11 @@ fn legacy_knowledge_dependency_schema_is_reconciled_idempotently() {
              CREATE TABLE entity_dependencies (
                id TEXT PRIMARY KEY, source_entity_id TEXT NOT NULL,
                target_entity_id TEXT NOT NULL, dependency_type TEXT NOT NULL,
-               strength REAL NOT NULL
+               strength REAL NOT NULL, updated_at TEXT
              );
              INSERT INTO entities(id,name) VALUES ('source','Source'),('target','Target');
-             INSERT INTO entity_dependencies(id,source_entity_id,target_entity_id,dependency_type,strength)
-               VALUES ('dep-1','source','target','blocks',0.75);",
+             INSERT INTO entity_dependencies(id,source_entity_id,target_entity_id,dependency_type,strength,updated_at)
+               VALUES ('dep-1','source','target','blocks',0.75,NULL);",
         ).unwrap();
     }
     let core = Core::open(&path, 2).unwrap();
@@ -1221,6 +1221,7 @@ fn legacy_knowledge_dependency_schema_is_reconciled_idempotently() {
     assert_eq!(result["items"][0]["status"], "active");
     assert_eq!(result["items"][0]["aspectId"], serde_json::Value::Null);
     assert_eq!(result["items"][0]["reason"], serde_json::Value::Null);
+    assert_eq!(result["items"][0]["updatedAt"], "1970-01-01T00:00:00Z");
     let connection = Connection::open(&path).unwrap();
     for table in ["entities", "entity_dependencies"] {
         let mut statement = connection
@@ -1257,6 +1258,22 @@ fn legacy_knowledge_dependency_schema_is_reconciled_idempotently() {
             )
             .unwrap(),
         "default:default"
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT updated_at FROM entity_dependencies WHERE id='dep-1'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "1970-01-01T00:00:00Z"
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM entity_dependencies WHERE updated_at IS NULL OR trim(updated_at)=''", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        0
     );
     core.initialize().unwrap();
     assert_eq!(dependencies()["items"].as_array().unwrap().len(), 1);
