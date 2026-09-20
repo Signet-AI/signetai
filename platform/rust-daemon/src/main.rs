@@ -527,14 +527,20 @@ pub(crate) fn metadata(request: &RememberRequest) -> Value {
 
 pub(crate) async fn execute(state: &AppState, operation: Operation) -> Result<Value, ApiError> {
     let owner = state.owner.clone();
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        tokio::task::spawn_blocking(move || owner.submit(operation)),
-    )
-    .await
-    .map_err(|_| ApiError::unavailable("database operation deadline exceeded"))?
-    .map_err(|error| ApiError::unavailable(format!("database owner task failed: {error}")))?
-    .map_err(ApiError::from)
+    tokio::task::spawn_blocking(move || owner.submit(operation))
+        .await
+        .map_err(|error| ApiError::unavailable(format!("database owner task failed: {error}")))?
+        .map_err(ApiError::from)
+}
+
+#[derive(Debug, Deserialize)]
+struct CancellationRequest { action: String, #[serde(rename="operationId")] operation_id: String, content: Option<String>, fault: Option<String> }
+
+async fn cancellation(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<CancellationRequest>) -> Result<Json<Value>, ApiError> {
+    if !env::var("SIGNET_MODE").map(|v| v.eq_ignore_ascii_case("local")).unwrap_or(false) { return Err(ApiError::not_found("not found")); }
+    let agent_id = agent(&headers, None, None)?;
+    let result = execute(&state, Operation::Cancellation { agent_id, action: request.action, operation_id: request.operation_id, content: request.content, fault: request.fault }).await?;
+    Ok(Json(result))
 }
 
 async fn live(State(state): State<AppState>) -> impl IntoResponse {
@@ -1253,6 +1259,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/health", get(health))
         .route("/api/status", get(status))
         .route("/api/mode", get(mode))
+        .route("/api/testing/cancellation", post(cancellation))
         .route("/api/sources", get(sources).post(create_source))
         .route("/api/import/documents", post(import_document))
         .route("/api/documents", get(document_list).post(import_document))

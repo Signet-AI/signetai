@@ -634,6 +634,35 @@ fn execute_operation(
     operation: Operation,
 ) -> Result<Value, CoreError> {
     match operation {
+        Operation::Cancellation { agent_id, action, operation_id, content, fault } => {
+            let agent_id = required_agent(&agent_id)?;
+            let operation_id = bounded_text(&operation_id, "operation id", 256)?;
+            match action.as_str() {
+                "begin" => {
+                    let existing: Option<(String, Option<String>)> = connection.query_row(
+                        "SELECT outcome,content FROM cancellation_operations WHERE agent_id=? AND operation_id=?",
+                        params![agent_id, operation_id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+                    if let Some((outcome, stored)) = existing { return Ok(json!({"operationId":operation_id,"outcome":outcome,"content":stored})); }
+                    let outcome = if fault.as_deref() == Some("commit_before_reply") { "unknown" } else { "committed" };
+                    let tx = connection.transaction()?;
+                    tx.execute("INSERT INTO cancellation_operations(agent_id,operation_id,outcome,content,created_at) VALUES(?,?,?,?,datetime('now'))", params![agent_id, operation_id, outcome, content])?;
+                    tx.commit()?;
+                    Ok(json!({"operationId":operation_id,"outcome":outcome,"content":content}))
+                }
+                "cancel" => {
+                    let tx = connection.transaction()?;
+                    let changed = tx.execute("UPDATE cancellation_operations SET outcome='cancelled' WHERE agent_id=? AND operation_id=? AND outcome='queued'", params![agent_id, operation_id])?;
+                    if changed == 0 { tx.execute("INSERT OR IGNORE INTO cancellation_operations(agent_id,operation_id,outcome,content,created_at) VALUES(?,?, 'cancelled',NULL,datetime('now'))", params![agent_id, operation_id])?; }
+                    tx.commit()?;
+                    Ok(json!({"operationId":operation_id,"outcome":"cancelled"}))
+                }
+                "get" => {
+                    let row: (String, Option<String>) = connection.query_row("SELECT outcome,content FROM cancellation_operations WHERE agent_id=? AND operation_id=?", params![agent_id, operation_id], |r| Ok((r.get(0)?,r.get(1)?))).optional()?.ok_or(CoreError::NotFound)?;
+                    Ok(json!({"operationId":operation_id,"outcome":row.0,"content":row.1}))
+                }
+                _ => Err(CoreError::InvalidInput("unknown cancellation action".into()))
+            }
+        }
         Operation::ReflectionList { agent_id, limit } => {
             let agent_id = required_agent(&agent_id)?;
             let limit = limit.clamp(1, 100);
@@ -3095,6 +3124,7 @@ pub struct SessionRecord {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
+    Cancellation { agent_id: String, action: String, operation_id: String, content: Option<String>, fault: Option<String> },
     Health,
     ReflectionList {
         agent_id: String,
@@ -3694,6 +3724,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT);
          CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');
+         CREATE TABLE IF NOT EXISTS cancellation_operations (agent_id TEXT NOT NULL, operation_id TEXT NOT NULL, outcome TEXT NOT NULL, content TEXT, created_at TEXT NOT NULL, PRIMARY KEY(agent_id,operation_id));
          CREATE TABLE IF NOT EXISTS sources (id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY(agent_id,workspace_id,id));
          CREATE TABLE IF NOT EXISTS documents (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, source_id TEXT NOT NULL, path TEXT NOT NULL, content TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', content_hash TEXT NOT NULL DEFAULT '', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT);
          CREATE TABLE IF NOT EXISTS source_tombstones (agent_id TEXT NOT NULL, source_id TEXT NOT NULL, generation INTEGER NOT NULL, deleted_at TEXT NOT NULL, PRIMARY KEY(agent_id,source_id));
