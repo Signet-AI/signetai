@@ -26,6 +26,8 @@ pub enum CoreError {
     NotFound,
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("unsupported migration history: {0}")]
+    UnsupportedMigrationHistory(String),
     #[error("remote owner error: {0}")]
     Remote(String),
 }
@@ -4132,6 +4134,16 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,name));
          SELECT 1;",
     )?;
+    let max_schema_version: Option<i64> =
+        transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    if max_schema_version.unwrap_or(0) > 2 {
+        return Err(CoreError::UnsupportedMigrationHistory(format!(
+            "schema_migrations version {} is newer than Rust core compatibility (2)",
+            max_schema_version.unwrap()
+        )));
+    }
 
     // Legacy TypeScript-era knowledge tables may predate scope and query columns.
     // Add/backfill them before creating dependent indexes or serving queries.
@@ -4351,6 +4363,14 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     }
     transaction.execute("UPDATE memories SET source_id=COALESCE(NULLIF(source_id,''),json_extract(metadata,'$.sourceId'),json_extract(metadata,'$.source_id')), source_type=COALESCE(NULLIF(source_type,''),json_extract(metadata,'$.sourceType'),json_extract(metadata,'$.source_type')), source_path=COALESCE(NULLIF(source_path,''),json_extract(metadata,'$.sourcePath'),json_extract(metadata,'$.source_path')), runtime_path=COALESCE(NULLIF(runtime_path,''),json_extract(metadata,'$.runtimePath'),json_extract(metadata,'$.runtime_path')), idempotency_key=COALESCE(NULLIF(idempotency_key,''),json_extract(metadata,'$.idempotencyKey'),json_extract(metadata,'$.idempotency_key')) WHERE metadata IS NOT NULL", [])?;
     transaction.execute("UPDATE memories SET memory_kind=CASE WHEN source_type IN ('extract','aggregate-recall','session_end','checkpoint','dreaming') THEN NULL ELSE 'episodic' END WHERE memory_kind IS NULL", [])?;
+    if has_table(&transaction, "entity_attributes")?
+        && has_column(&transaction, "entity_attributes", "memory_id")?
+    {
+        transaction.execute(
+            "UPDATE memories SET memory_kind='derived' WHERE id IN (SELECT memory_id FROM entity_attributes WHERE memory_id IS NOT NULL)",
+            [],
+        )?;
+    }
     ensure_column(&transaction, "schema_migrations", "checksum", "TEXT")?;
     ensure_column(&transaction, "memories", "superseded_by", "TEXT")?;
     ensure_column(&transaction, "memories", "superseded_at", "TEXT")?;
@@ -4634,6 +4654,16 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE INDEX IF NOT EXISTS memory_history_scope_idx ON memory_history(memory_id, agent_id, id);
          CREATE INDEX IF NOT EXISTS queue_created_idx ON queue(created_at);",
     )?;
+    let max_schema_version: Option<i64> =
+        transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?;
+    if max_schema_version.unwrap_or(0) > 2 {
+        return Err(CoreError::UnsupportedMigrationHistory(format!(
+            "schema_migrations version {} is newer than Rust core compatibility (2)",
+            max_schema_version.unwrap()
+        )));
+    }
     transaction.execute(
         "INSERT OR IGNORE INTO schema_migrations(version, applied_at, checksum) VALUES (1, datetime('now'), 'fresh-rust-core-v1')",
         [],
@@ -4654,6 +4684,14 @@ fn record_history(
         params![memory_id, agent_id, operation, content],
     )?;
     Ok(())
+}
+
+fn has_table(transaction: &Transaction<'_>, table: &str) -> Result<bool, CoreError> {
+    Ok(transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )? != 0)
 }
 
 fn has_column(transaction: &Transaction<'_>, table: &str, column: &str) -> Result<bool, CoreError> {

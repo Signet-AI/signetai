@@ -1787,3 +1787,35 @@ fn source_removal_lease_blocks_direct_deletes_and_preserves_source_documents() {
         );
     }
 }
+
+#[test]
+fn legacy_entity_attributes_mark_referenced_memory_derived() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("entity-attributes.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL, agent_id TEXT, is_deleted INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, memory_id TEXT, attribute TEXT NOT NULL); INSERT INTO memories VALUES ('old','preserve','a',0,'t','t'); INSERT INTO entity_attributes VALUES ('attr','entity','old','value');").unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    c.initialize().unwrap();
+    let db = Connection::open(&p).unwrap();
+    let kind: Option<String> = db
+        .query_row("SELECT memory_kind FROM memories WHERE id='old'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(kind.as_deref(), Some("derived"));
+}
+
+#[test]
+fn current_typescript_migration_history_fails_closed() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("current-ts.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL); INSERT INTO schema_migrations VALUES (153,'now','ts-checksum');").unwrap();
+    drop(db);
+    let error = match Core::open(&p, 2) {
+        Ok(_) => panic!("current TypeScript migration history must fail closed"),
+        Err(error) => error,
+    };
+    assert!(format!("{error:?}").contains("UnsupportedMigrationHistory"));
+}
