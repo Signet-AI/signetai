@@ -2387,8 +2387,8 @@ fn execute_operation(
             let aspect_id = required_id(&aspect_id)?;
             let limit = limit.clamp(1, 200) as i64;
             let offset = offset.min(100_000) as i64;
-            let mut s=connection.prepare("SELECT a.id,a.kind,a.content,a.status FROM kg_attributes a JOIN kg_aspects p ON p.id=a.aspect_id AND p.deleted=0 JOIN kg_entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND p.entity_id=? AND a.aspect_id=? AND a.status != 'deleted' AND (? IS NULL OR a.kind=?) AND (? IS NULL OR a.status=?) ORDER BY a.importance DESC LIMIT ? OFFSET ?")?;
-            let rows=s.query_map(params![agent_id,workspace_id,entity_id,aspect_id,kind,kind,status,status,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?;
+            let mut s=connection.prepare("SELECT a.id,a.kind,a.content,a.status FROM kg_attributes a JOIN kg_aspects p ON p.id=a.aspect_id AND p.deleted=0 JOIN kg_entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id AND e.deleted=0 WHERE a.agent_id=? AND a.workspace_id=? AND p.entity_id=? AND a.aspect_id=? AND (? IS NOT NULL OR a.status != 'deleted') AND (? IS NULL OR a.kind=?) AND (? IS NULL OR a.status=?) ORDER BY a.importance DESC LIMIT ? OFFSET ?")?;
+            let rows=s.query_map(params![agent_id,workspace_id,entity_id,aspect_id,status,status,kind,kind,status,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?,"limit":limit,"offset":offset}))
         }
         Operation::KnowledgeTree {
