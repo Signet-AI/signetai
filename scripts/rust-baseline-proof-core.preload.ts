@@ -65,4 +65,6 @@ Bun.plugin({
 		}));
 	},
 });
-console.error("backend=fresh-rust artifact=signet-core-test-driver process=transport account=preload");
+console.error(
+	`backend=fresh-rust artifact=signet-core-test-driver process=transport pid=${process.pid} account=preload`,
+);
