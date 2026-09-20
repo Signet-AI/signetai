@@ -3612,7 +3612,6 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS kg_relations (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', from_id TEXT NOT NULL, to_id TEXT NOT NULL, relation TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', name TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'active');
          CREATE TABLE IF NOT EXISTS entity_dependencies (id TEXT PRIMARY KEY, source_entity_id TEXT NOT NULL, target_entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', dependency_type TEXT NOT NULL, strength REAL NOT NULL, aspect_id TEXT, reason TEXT, status TEXT NOT NULL DEFAULT 'active', updated_at TEXT NOT NULL);
-         CREATE INDEX IF NOT EXISTS entity_dependencies_scope ON entity_dependencies(agent_id,workspace_id,source_entity_id,target_entity_id);
          CREATE TABLE IF NOT EXISTS kg_aspects (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, entity_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT NOT NULL, weight REAL NOT NULL DEFAULT 0.5, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,entity_id,canonical_name));
          CREATE TABLE IF NOT EXISTS kg_attributes (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, aspect_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT NOT NULL, claim_key TEXT, group_key TEXT, confidence REAL NOT NULL DEFAULT 0, importance REAL NOT NULL DEFAULT 0.5, status TEXT NOT NULL DEFAULT 'active', superseded_by TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS kg_entities_scope ON kg_entities(agent_id, name);
@@ -3642,6 +3641,69 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,name));
          SELECT 1;",
     )?;
+
+    // Legacy TypeScript-era knowledge tables may predate scope and query columns.
+    // Add/backfill them before creating dependent indexes or serving queries.
+    ensure_column(
+        &transaction,
+        "entities",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "entities",
+        "workspace_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "entities",
+        "status",
+        "TEXT NOT NULL DEFAULT 'active'",
+    )?;
+    ensure_column(
+        &transaction,
+        "entity_dependencies",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "entity_dependencies",
+        "workspace_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(&transaction, "entity_dependencies", "aspect_id", "TEXT")?;
+    ensure_column(&transaction, "entity_dependencies", "reason", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "entity_dependencies",
+        "status",
+        "TEXT NOT NULL DEFAULT 'active'",
+    )?;
+    ensure_column(
+        &transaction,
+        "entity_dependencies",
+        "updated_at",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    transaction.execute(
+        "UPDATE entities SET agent_id='default' WHERE agent_id IS NULL OR trim(agent_id)=''",
+        [],
+    )?;
+    transaction.execute("UPDATE entities SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    transaction.execute(
+        "UPDATE entities SET status='active' WHERE status IS NULL OR trim(status)=''",
+        [],
+    )?;
+    transaction.execute("UPDATE entity_dependencies SET agent_id='default' WHERE agent_id IS NULL OR trim(agent_id)=''", [])?;
+    transaction.execute("UPDATE entity_dependencies SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
+    transaction.execute(
+        "UPDATE entity_dependencies SET status='active' WHERE status IS NULL OR trim(status)=''",
+        [],
+    )?;
+    transaction.execute("CREATE INDEX IF NOT EXISTS entity_dependencies_scope ON entity_dependencies(agent_id,workspace_id,source_entity_id,target_entity_id)", [])?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
     ensure_column(
         &transaction,

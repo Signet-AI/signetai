@@ -1185,3 +1185,79 @@ fn workspace_submit_supports_all_durable_operation_variants() {
         true
     );
 }
+
+#[test]
+fn legacy_knowledge_dependency_schema_is_reconciled_idempotently() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("legacy.sqlite");
+    {
+        let connection = Connection::open(&path).unwrap();
+        connection.execute_batch(
+            "CREATE TABLE entities (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE entity_dependencies (
+               id TEXT PRIMARY KEY, source_entity_id TEXT NOT NULL,
+               target_entity_id TEXT NOT NULL, dependency_type TEXT NOT NULL,
+               strength REAL NOT NULL
+             );
+             INSERT INTO entities(id,name) VALUES ('source','Source'),('target','Target');
+             INSERT INTO entity_dependencies(id,source_entity_id,target_entity_id,dependency_type,strength)
+               VALUES ('dep-1','source','target','blocks',0.75);",
+        ).unwrap();
+    }
+    let core = Core::open(&path, 2).unwrap();
+    let dependencies = || {
+        core.submit(Operation::KnowledgeDependencies {
+            agent_id: "default".into(),
+            workspace_id: "default".into(),
+            entity_id: "source".into(),
+            limit: 10,
+            direction: "outgoing".into(),
+        })
+        .unwrap()
+    };
+    let result = dependencies();
+    assert_eq!(result["items"].as_array().unwrap().len(), 1);
+    assert_eq!(result["items"][0]["id"], "dep-1");
+    assert_eq!(result["items"][0]["status"], "active");
+    assert_eq!(result["items"][0]["aspectId"], serde_json::Value::Null);
+    assert_eq!(result["items"][0]["reason"], serde_json::Value::Null);
+    let connection = Connection::open(&path).unwrap();
+    for table in ["entities", "entity_dependencies"] {
+        let mut statement = connection
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .unwrap();
+        let columns: Vec<String> = statement
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        for required in ["agent_id", "workspace_id"] {
+            assert!(columns.iter().any(|c| c == required));
+        }
+    }
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM entities", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        connection
+            .query_row("SELECT count(*) FROM entity_dependencies", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT agent_id || ':' || workspace_id FROM entity_dependencies WHERE id='dep-1'",
+                [],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "default:default"
+    );
+    core.initialize().unwrap();
+    assert_eq!(dependencies()["items"].as_array().unwrap().len(), 1);
+}
