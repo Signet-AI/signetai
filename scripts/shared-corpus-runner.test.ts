@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
 	discoverPaths,
 	parseJUnitReport,
+	runnableSelectedPaths,
 	validateBaselineWorktree,
 	validateManifest,
 	validateLaneOptions,
@@ -45,8 +46,17 @@ describe("shared corpus admission", () => {
 	});
 
 	test("does not count a JUnit suite as passed without testcases", () => {
-		expect(() => parseJUnitReport('<testsuite tests="0" failures="0"/>', ["a.test.ts"])).toThrow(
-			/accounting|testcase/i,
-		);
+		const result = parseJUnitReport('<testsuite tests="0" failures="0"/>', ["a.test.ts"]);
+		expect(result.tests).toBe(0);
+		expect(result.incomplete).toBe(true);
+		expect(result.crash).toBe(true);
+	});
+
+	test("selected mode admits only runnable baseline test entrypoints", () => {
+		const manifest = [
+			{ path: "a.test.ts", sha256: "a" },
+			{ path: "fixtures/input.json", sha256: "b" },
+		];
+		expect(runnableSelectedPaths(["fixtures/input.json", "a.test.ts"], manifest)).toEqual(["a.test.ts"]);
 	});
 });
