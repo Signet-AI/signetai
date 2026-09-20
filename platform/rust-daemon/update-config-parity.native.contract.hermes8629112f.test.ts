@@ -54,6 +54,21 @@ it("serves authenticated bounded update config parity and leaves discovery unsup
 		writeFileSync(outside, ["sentinel: keep", ""].join("\n"));
 		writeFileSync(
 			join(dir, "agent.yaml"),
+			[
+				"service:",
+				"  name: keep",
+				"updates:",
+				"  auto_install: true # valid YAML comment",
+				"  check_interval: 900 # seconds",
+				"  channel: next # alias",
+				"other: keep",
+				"",
+			].join("\n"),
+		);
+		const parsed = await fetch(`${origin}/api/update/config`, { headers: auth });
+		expect(await parsed.json()).toMatchObject({ autoInstall: true, checkInterval: 900, channel: "nightly" });
+		writeFileSync(
+			join(dir, "agent.yaml"),
 			["service:", "  name: keep", "  updates:", "    auto_install: true", "other: keep", ""].join("\n"),
 		);
 		const malformedSection = await fetch(`${origin}/api/update/config`, {

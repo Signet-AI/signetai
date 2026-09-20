@@ -1,17 +1,21 @@
-use crate::AppState;
+use crate::{routes::auth, AppState};
 use axum::{
     extract::{Json, State},
+    http::HeaderMap,
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    fs::{File, OpenOptions},
+    fs::{rename, File, OpenOptions},
     io::{Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    os::unix::{
+        fs::{MetadataExt, OpenOptionsExt},
+        io::AsRawFd,
+    },
     path::Path,
 };
 
@@ -36,36 +40,37 @@ struct Config {
     channel: &'static str,
 }
 
-fn open_config(path: &Path, write: bool) -> Option<File> {
+fn open_workspace(workspace: &Path) -> Option<File> {
     let mut options = OpenOptions::new();
     options
         .read(true)
-        .write(write)
-        .create(write)
-        .truncate(false);
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    let file = options.open(path).ok()?;
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(workspace).ok()?;
+    file.metadata().ok()?.file_type().is_dir().then_some(file)
+}
+
+fn open_config(workspace: &Path) -> Option<File> {
+    let _dir = open_workspace(workspace)?;
+    let mut options = OpenOptions::new();
+    options
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+    let file = options.open(workspace.join("agent.yaml")).ok()?;
     let metadata = file.metadata().ok()?;
-    if !metadata.file_type().is_file() {
-        return None;
-    }
-    Some(file)
+    (metadata.file_type().is_file() && metadata.len() <= MAX_BODY as u64).then_some(file)
 }
 
 fn read_config(workspace: &Path) -> Option<String> {
-    let mut file = open_config(&workspace.join("agent.yaml"), false)?;
+    let mut file = open_config(workspace)?;
     let metadata = file.metadata().ok()?;
-    if metadata.len() > MAX_BODY as u64 {
-        return None;
-    }
-    let mut text = String::new();
-    file.read_to_string(&mut text).ok()?;
+    let mut text = String::with_capacity(metadata.len() as usize);
+    (&mut file)
+        .take(MAX_BODY as u64 + 1)
+        .read_to_string(&mut text)
+        .ok()?;
     let after = file.metadata().ok()?;
-    if (metadata.dev(), metadata.ino()) == (after.dev(), after.ino()) {
-        Some(text)
-    } else {
-        None
-    }
+    ((metadata.dev(), metadata.ino()) == (after.dev(), after.ino()) && text.len() <= MAX_BODY)
+        .then_some(text)
 }
 
 fn parse_config(workspace: &Path) -> Config {
@@ -94,7 +99,7 @@ fn parse_config(workspace: &Path) -> Config {
         let Some((key, value)) = trimmed.split_once(':') else {
             continue;
         };
-        let value = value.trim();
+        let value = value.split_once('#').map_or(value, |(v, _)| v).trim();
         match key {
             "auto_install" | "autoInstall" if value == "true" || value == "false" => {
                 config.auto_install = value == "true"
@@ -146,10 +151,38 @@ fn replace_section(current: &str, section: &str) -> Option<String> {
 }
 
 fn persist(workspace: &Path, config: &Config) -> bool {
+    let dir = match open_workspace(workspace) {
+        Some(v) => v,
+        None => return false,
+    };
     let path = workspace.join("agent.yaml");
-    let current = read_config(workspace).unwrap_or_default();
-    if current.len() > MAX_BODY {
-        return false;
+    let current_file = match open_config(workspace) {
+        Some(v) => Some(v),
+        None if std::fs::symlink_metadata(&path).is_err() => None,
+        None => return false,
+    };
+    let metadata = current_file.as_ref().and_then(|f| f.metadata().ok());
+    let mut current = String::new();
+    if let Some(mut current_file) = current_file {
+        if (&mut current_file)
+            .take(MAX_BODY as u64 + 1)
+            .read_to_string(&mut current)
+            .is_err()
+            || current.len() > MAX_BODY
+        {
+            return false;
+        }
+        let after = match current_file.metadata() {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        if metadata
+            .as_ref()
+            .map(|m| (m.dev(), m.ino()) != (after.dev(), after.ino()))
+            .unwrap_or(true)
+        {
+            return false;
+        }
     }
     let section = format!(
         "updates:\n  auto_install: {}\n  check_interval: {}\n  channel: {}\n",
@@ -161,20 +194,38 @@ fn persist(workspace: &Path, config: &Config) -> bool {
     if output.len() > MAX_BODY {
         return false;
     }
-    let Some(mut file) = open_config(&path, true) else {
+    let mut temp = None;
+    for n in 0..32u32 {
+        let candidate = workspace.join(format!(".agent.yaml.tmp.{}.{}", std::process::id(), n));
+        let mut options = OpenOptions::new();
+        options
+            .write(true)
+            .create_new(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
+        if let Ok(file) = options.open(&candidate) {
+            temp = Some((candidate, file));
+            break;
+        }
+    }
+    let Some((tmp_path, mut file)) = temp else {
         return false;
     };
-    let metadata = match file.metadata() {
-        Ok(value) => value,
-        Err(_) => return false,
-    };
-    if !metadata.file_type().is_file() {
-        return false;
+    let ok = file.write_all(output.as_bytes()).is_ok()
+        && file.sync_all().is_ok()
+        && {
+            let latest = open_config(workspace).and_then(|f| f.metadata().ok());
+            match (metadata.as_ref(), latest) {
+                (None, None) | (None, Some(_)) => true,
+                (Some(old), Some(new)) => (old.dev(), old.ino()) == (new.dev(), new.ino()),
+                _ => false,
+            }
+        }
+        && rename(&tmp_path, &path).is_ok()
+        && unsafe { libc::fsync(dir.as_raw_fd()) == 0 };
+    if !ok {
+        let _ = std::fs::remove_file(&tmp_path);
     }
-    if file.set_len(0).is_err() || file.write_all(output.as_bytes()).is_err() {
-        return false;
-    }
-    true
+    ok
 }
 
 fn config_json(config: &Config) -> Value {
@@ -209,21 +260,35 @@ pub(crate) fn router() -> Router<AppState> {
         .layer(axum::extract::DefaultBodyLimit::max(MAX_BODY))
 }
 
-async fn check() -> impl IntoResponse {
-    unsupported("update check")
+async fn check(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(error) = auth::gate(&state, &headers).await {
+        return error.into_response();
+    }
+    unsupported("update check").into_response()
 }
 
-async fn get_config(State(state): State<AppState>) -> impl IntoResponse {
+async fn get_config(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(error) = auth::gate(&state, &headers).await {
+        return error.into_response();
+    }
     (
         StatusCode::OK,
         Json(config_json(&parse_config(&state.workspace))),
     )
+        .into_response()
 }
 
 async fn set_config(
     State(state): State<AppState>,
+    headers: HeaderMap,
     body: Result<Json<ConfigRequest>, axum::extract::rejection::JsonRejection>,
 ) -> impl IntoResponse {
+    if let Err(error) = auth::gate(&state, &headers).await {
+        return (
+            error.status,
+            Json(json!({"success": false, "error": error.message})),
+        );
+    }
     let Ok(Json(body)) = body else {
         return (
             StatusCode::BAD_REQUEST,
@@ -282,6 +347,9 @@ async fn set_config(
     )
 }
 
-async fn run() -> impl IntoResponse {
-    unsupported("package update")
+async fn run(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(error) = auth::gate(&state, &headers).await {
+        return error.into_response();
+    }
+    unsupported("package update").into_response()
 }
