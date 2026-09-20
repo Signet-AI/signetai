@@ -204,9 +204,11 @@ async fn execute(
         }
     }
     if !configured() {
-        return Err(ApiError::bad_request(
-            "inference provider is not configured",
-        ));
+        return Err(ApiError {
+            status: axum::http::StatusCode::NOT_IMPLEMENTED,
+            code: "unsupported",
+            message: "inference provider is not configured".into(),
+        });
     }
     let base = setting("SIGNET_OPENAI_BASE_URL").unwrap();
     let model = request

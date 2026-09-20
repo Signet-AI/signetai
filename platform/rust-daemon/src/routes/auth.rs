@@ -136,6 +136,10 @@ pub(crate) fn router() -> Router<AppState> {
 pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/auth/methods", get(methods))
+        .route("/api/auth/sso/start", get(unsupported_sso))
+        .route("/api/auth/sso/callback", get(unsupported_sso))
+        .route("/api/auth/saml/start", get(unsupported_saml))
+        .route("/api/auth/saml/acs", post(unsupported_saml))
         .route("/api/auth/token", post(token))
         .route("/api/auth/api-keys", get(list).post(create))
         .route("/api/auth/api-keys/{id}", delete(revoke))
@@ -261,6 +265,21 @@ pub(crate) async fn gate(state: &AppState, headers: &HeaderMap) -> Result<Value,
 }
 async fn methods() -> Json<Value> {
     Json(json!({"mode":"api-key","providers":[{"id":"api-key","type":"api-key","enabled":true}]}))
+}
+
+async fn unsupported_sso() -> Result<Json<Value>, ApiError> {
+    Err(ApiError {
+        status: StatusCode::NOT_IMPLEMENTED,
+        code: "unsupported",
+        message: "SSO login is not configured".into(),
+    })
+}
+async fn unsupported_saml() -> Result<Json<Value>, ApiError> {
+    Err(ApiError {
+        status: StatusCode::NOT_IMPLEMENTED,
+        code: "unsupported",
+        message: "SAML login is not configured".into(),
+    })
 }
 async fn token(
     State(state): State<AppState>,
