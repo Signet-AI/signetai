@@ -561,9 +561,24 @@ fn execute_memory_search(
             }
         }
     }
-    Ok(
-        json!({"results":rows,"query":query,"method":"keyword","meta":{"totalReturned":rows.len(),"noHits":rows.is_empty(),"lexical":{"available":has_fts,"completeness":if has_fts {"complete"} else {"partial"}},"channels":{"vector":{"supported":false},"graph":{"supported":false},"aggregate":{"supported":false}}}}),
-    )
+    // Integrated graph recall is backed by durable, scoped knowledge attributes.
+    let mut graph_ids = Vec::new();
+    for token in &tokens {
+        let pattern = format!("%{}%", token);
+        let mut stmt = connection.prepare("SELECT DISTINCT a.memory_id FROM kg_attributes a JOIN memories m ON m.id=a.memory_id WHERE a.agent_id=? AND a.status='active' AND a.memory_id IS NOT NULL AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND (a.normalized_content LIKE ? OR a.content LIKE ?) ORDER BY a.updated_at DESC LIMIT ?")?;
+        let ids = stmt.query_map(params![agent_id, agent_id, pattern, pattern, limit], |row| row.get::<_, String>(0))?;
+        graph_ids.extend(ids.collect::<Result<Vec<_>, _>>()?);
+    }
+    graph_ids.sort();
+    graph_ids.dedup();
+    for id in &graph_ids {
+        if rows.iter().any(|row| row.get("id").and_then(Value::as_str) == Some(id)) { continue; }
+        if rows.len() >= limit as usize { break; }
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at FROM memories WHERE id=? AND agent_id=? AND deleted=0 AND superseded_by IS NULL")?;
+        if let Ok(memory) = stmt.query_row(params![id, agent_id], memory_row) { rows.push(json!({"id":memory.id,"agentId":memory.agent_id,"content":memory.content,"metadata":memory.metadata,"deleted":memory.deleted,"createdAt":memory.created_at,"updatedAt":memory.updated_at,"score":0.5,"source":"graph"})); }
+    }
+    let graph_count = graph_ids.len();
+    Ok(json!({"results":rows,"query":query,"method":"keyword","meta":{"totalReturned":rows.len(),"noHits":rows.is_empty(),"lexical":{"available":has_fts,"completeness":if has_fts {"complete"} else {"partial"}},"channels":{"vector":{"supported":false,"reason":"embedding_runtime_unavailable"},"graph":{"supported":true,"resultCount":graph_count,"bounded":true},"aggregate":{"supported":false,"reason":"aggregate_provider_unavailable"}}}}))
 }
 
 fn normalize_import_files(files: &Value) -> Result<Vec<Value>, CoreError> {
