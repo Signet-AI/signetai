@@ -9,7 +9,12 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{collections::VecDeque, env, path::PathBuf, time::Duration};
+use std::{
+    collections::VecDeque,
+    env,
+    path::PathBuf,
+    time::{Duration, Instant},
+};
 use tokio::sync::Mutex;
 use tokio::{fs, io::AsyncWriteExt};
 use uuid::Uuid;
@@ -160,6 +165,11 @@ async fn stream(
         .ok_or_else(|| {
             ApiError::bad_request("model is required when no default model is configured")
         })?;
+    let timeout_ms = request.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
+    if timeout_ms == 0 || timeout_ms > 120_000 {
+        return Err(ApiError::bad_request("timeoutMs exceeds limit"));
+    }
+    let timeout = Duration::from_millis(timeout_ms);
     let request_id = Uuid::new_v4().to_string();
     append_history(
         &state,
@@ -175,33 +185,41 @@ async fn stream(
     .await?;
     let body =
         json!({"model": model, "messages": messages, "stream": true, "max_tokens": max_tokens});
-    let timeout = Duration::from_millis(
-        request
-            .timeout_ms
-            .unwrap_or(DEFAULT_TIMEOUT_MS)
-            .clamp(1, 120_000),
-    );
-    let (status, stream_body) = tokio::time::timeout(
+    let (status, stream_body) = match call_openai_stream(
+        &setting("SIGNET_OPENAI_BASE_URL").unwrap(),
+        setting("SIGNET_OPENAI_API_KEY"),
+        body,
         timeout,
-        call_openai_stream(
-            &setting("SIGNET_OPENAI_BASE_URL").unwrap(),
-            setting("SIGNET_OPENAI_API_KEY"),
-            body,
-            timeout,
-            state.clone(),
-            identity,
-            request_id,
-        ),
+        state.clone(),
+        identity.clone(),
+        request_id.clone(),
     )
     .await
-    .map_err(|_| ApiError::unavailable("inference provider request timed out"))?
-    .map_err(|e| match e {
-        ProviderError::Transport(m) => ApiError::unavailable(m),
-        ProviderError::Upstream { status, message } => {
-            ApiError::upstream(format!("provider returned HTTP {status}: {message}"))
+    {
+        Ok(result) => result,
+        Err(error) => {
+            let (status, message) = match error {
+                ProviderError::Transport(message) => ("transport", message),
+                ProviderError::Upstream { status, .. } => {
+                    ("upstream_error", format!("provider returned HTTP {status}"))
+                }
+                ProviderError::InvalidResponse(message) => ("invalid", message),
+            };
+            record_stream_terminal(
+                &state,
+                &identity,
+                &request_id,
+                status,
+                Some(message.clone()),
+            )
+            .await;
+            return Err(if status == "upstream_error" {
+                ApiError::upstream(message)
+            } else {
+                ApiError::unavailable(message)
+            });
         }
-        ProviderError::InvalidResponse(m) => ApiError::upstream(m),
-    })?;
+    };
     if !(200..300).contains(&status) {
         return Err(ApiError::upstream(format!(
             "provider returned HTTP {status}"
@@ -390,15 +408,67 @@ enum ProviderError {
     InvalidResponse(String),
 }
 
-fn sse_event_end(bytes: &[u8]) -> Option<usize> {
-    let lf = bytes.windows(2).position(|w| w == b"\n\n");
-    let crlf = bytes.windows(4).position(|w| w == b"\r\n\r\n");
-    match (lf, crlf) {
-        (Some(lf), Some(crlf)) => Some(lf.min(crlf)),
-        (Some(lf), None) => Some(lf),
-        (None, Some(crlf)) => Some(crlf),
-        (None, None) => None,
+async fn record_stream_terminal(
+    state: &AppState,
+    agent_id: &str,
+    request_id: &str,
+    status: &str,
+    error: Option<String>,
+) {
+    let _ = append_history(
+        state,
+        HistoryEvent {
+            id: Uuid::new_v4().to_string(),
+            agent_id: agent_id.to_owned(),
+            operation: "stream".into(),
+            status: status.into(),
+            request_id: Some(request_id.to_owned()),
+            error,
+        },
+    )
+    .await;
+}
+
+fn stream_error_frame(message: &str) -> Vec<u8> {
+    format!("event: error\ndata: {}\n\n", json!({"error": message})).into_bytes()
+}
+
+fn split_sse_event(bytes: &[u8]) -> Option<(usize, usize)> {
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            return Some((i, 2));
+        }
+        if bytes[i] == b'\r'
+            && i + 3 < bytes.len()
+            && bytes[i + 1] == b'\n'
+            && bytes[i + 2] == b'\r'
+            && bytes[i + 3] == b'\n'
+        {
+            return Some((i, 4));
+        }
+        i += 1;
     }
+    None
+}
+
+fn validate_sse_event(event: &[u8]) -> Result<bool, &'static str> {
+    let text = std::str::from_utf8(event).map_err(|_| "provider stream contains invalid UTF-8")?;
+    let mut saw_data = false;
+    for line in text.lines().filter(|line| line.starts_with("data:")) {
+        saw_data = true;
+        let data = line[5..].trim();
+        if data != "[DONE]" && serde_json::from_str::<Value>(data).is_err() {
+            return Err("provider stream contains invalid JSON");
+        }
+        if data == "[DONE]" {
+            return Ok(true);
+        }
+    }
+    if !saw_data {
+        return Err("provider stream contains no data event");
+    }
+    Ok(false)
 }
 
 async fn call_openai_stream(
@@ -419,6 +489,7 @@ async fn call_openai_stream(
             "provider URL must use http:// or https://".into(),
         ));
     }
+    let deadline = Instant::now() + timeout;
     let client = reqwest::Client::new();
     let mut request = client
         .post(url)
@@ -427,28 +498,33 @@ async fn call_openai_stream(
     if let Some(key) = key {
         request = request.bearer_auth(key);
     }
-    let response = request
-        .send()
+    let response = tokio::time::timeout_at(deadline.into(), request.send())
         .await
+        .map_err(|_| ProviderError::InvalidResponse("provider request timed out".into()))?
         .map_err(|e| ProviderError::Transport(format!("provider request failed: {e}")))?;
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
-        let message = response.text().await.unwrap_or_default();
         return Err(ProviderError::Upstream {
             status,
-            message: message.chars().take(512).collect(),
+            message: "provider rejected the request".into(),
         });
     }
     let mut response = response;
     let mut total = 0usize;
     let mut pending = Vec::new();
     let mut initial = VecDeque::new();
-    let first_event = loop {
-        let chunk = tokio::time::timeout(timeout, response.chunk())
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(ProviderError::InvalidResponse(
+                "provider stream request timed out".into(),
+            ));
+        }
+        let chunk = tokio::time::timeout(remaining, response.chunk())
             .await
             .map_err(|_| ProviderError::InvalidResponse("provider stream read timed out".into()))?
-            .map_err(|error| {
-                ProviderError::InvalidResponse(format!("provider response read failed: {error}"))
+            .map_err(|e| {
+                ProviderError::InvalidResponse(format!("provider response read failed: {e}"))
             })?
             .ok_or_else(|| {
                 ProviderError::InvalidResponse(
@@ -463,126 +539,158 @@ async fn call_openai_stream(
         }
         initial.push_back(chunk.to_vec());
         pending.extend_from_slice(&chunk);
-        if let Some(end) = sse_event_end(&pending) {
-            let delimiter_len = if pending[end..].starts_with(b"\r\n\r\n") { 4 } else { 2 };
-            break pending.drain(..end + delimiter_len).collect::<Vec<_>>();
+        if let Some((end, delim)) = split_sse_event(&pending) {
+            let event: Vec<u8> = pending.drain(..end + delim).collect();
+            validate_sse_event(&event).map_err(|e| ProviderError::InvalidResponse(e.into()))?;
+            break;
         }
-    };
-    pending.clear();
-    let text = String::from_utf8(first_event).map_err(|_| {
-        ProviderError::InvalidResponse("provider stream contains invalid UTF-8".into())
-    })?;
-    let mut saw_data = false;
-    for line in text.lines().filter(|line| line.starts_with("data:")) {
-        saw_data = true;
-        let data = line[5..].trim();
-        if data != "[DONE]" {
-            serde_json::from_str::<Value>(data).map_err(|_| {
-                ProviderError::InvalidResponse("provider stream contains invalid JSON".into())
-            })?;
-        }
-    }
-    if !saw_data {
-        return Err(ProviderError::InvalidResponse(
-            "provider stream contains no data event".into(),
-        ));
     }
     let history_state = state.clone();
     let history_agent = agent_id.clone();
     let history_request = request_id.clone();
     let stream = futures_util::stream::unfold(
-        (response, total, pending, false, initial),
-        move |(mut response, total, mut pending, mut done, mut initial)| {
-            let history_state = history_state.clone();
-            let history_agent = history_agent.clone();
-            let history_request = history_request.clone();
+        (response, total, pending, false, initial, deadline, false),
+        move |(mut response, mut total, mut pending, mut done, mut initial, deadline, terminal)| {
+            let state = history_state.clone();
+            let agent = history_agent.clone();
+            let request = history_request.clone();
             async move {
-            if done {
-                return None;
-            }
-            if let Some(chunk) = initial.pop_front() {
-                return Some((Ok(chunk), (response, total, pending, done, initial)));
-            }
-            if done {
-                return None;
-            }
-            let next_chunk = match tokio::time::timeout(timeout, response.chunk()).await {
-                Ok(result) => result,
-                Err(_) => {
+                if done {
+                    return None;
+                }
+                if let Some(chunk) = initial.pop_front() {
                     return Some((
-                        Err(std::io::Error::other("provider stream read timed out")),
-                        (response, total, pending, true, initial),
+                        Ok::<Vec<u8>, std::io::Error>(chunk),
+                        (response, total, pending, done, initial, deadline, terminal),
                     ));
                 }
-            };
-            match next_chunk {
-                Ok(Some(chunk)) => {
-                    let next = total.saturating_add(chunk.len());
-                    if next > 1_048_576 {
-                        return Some((
-                            Err(std::io::Error::other("provider stream exceeds 1 MiB")),
-                            (response, next, pending, true, initial),
-                        ));
+                let fail = |message: &'static str,
+                            status: &'static str,
+                            state: AppState,
+                            agent: String,
+                            request: String,
+                            response,
+                            total,
+                            pending,
+                            initial,
+                            deadline| async move {
+                    record_stream_terminal(&state, &agent, &request, status, Some(message.into()))
+                        .await;
+                    Some((
+                        Ok(stream_error_frame(message)),
+                        (response, total, pending, false, initial, deadline, true),
+                    ))
+                };
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() && !terminal {
+                    return fail(
+                        "provider stream timed out",
+                        "timeout",
+                        state,
+                        agent,
+                        request,
+                        response,
+                        total,
+                        pending,
+                        initial,
+                        deadline,
+                    )
+                    .await;
+                }
+                let next = match tokio::time::timeout(remaining, response.chunk()).await {
+                    Ok(Ok(Some(chunk))) => chunk,
+                    Ok(Ok(None)) => {
+                        if pending.iter().any(|b| !b.is_ascii_whitespace()) && !terminal {
+                            return fail(
+                                "provider stream ended with incomplete SSE",
+                                "invalid",
+                                state,
+                                agent,
+                                request,
+                                response,
+                                total,
+                                pending,
+                                initial,
+                                deadline,
+                            )
+                            .await;
+                        }
+                        if !terminal {
+                            record_stream_terminal(&state, &agent, &request, "succeeded", None)
+                                .await;
+                        }
+                        return None;
                     }
-                    pending.extend_from_slice(&chunk);
-                    while let Some(end) = pending.windows(2).position(|w| w == b"\n\n") {
-                        let event = pending.drain(..end + 2).collect::<Vec<_>>();
-                        let text = match String::from_utf8(event.clone()) {
-                            Ok(text) => text,
-                            Err(_) => {
-                                return Some((
-                                    Err(std::io::Error::other(
-                                        "provider stream contains invalid UTF-8",
-                                    )),
-                                    (response, next, pending, true, initial),
-                                ))
-                            }
-                        };
-                        for line in text.lines().filter(|line| line.starts_with("data:")) {
-                            let data = line[5..].trim();
-                            if data != "[DONE]" && serde_json::from_str::<Value>(data).is_err() {
-                                return Some((
-                                    Err(std::io::Error::other(
-                                        "provider stream contains invalid JSON",
-                                    )),
-                                    (response, next, pending, true, initial),
-                                ));
-                            }
-                            if data == "[DONE]" {
-                                done = true;
-                                let state = history_state.clone();
-                                let agent_id = history_agent.clone();
-                                let request_id = history_request.clone();
-                                tokio::spawn(async move {
-                                    let _ = append_history(&state, HistoryEvent {
-                                        id: Uuid::new_v4().to_string(), agent_id, operation: "stream".into(),
-                                        status: "succeeded".into(), request_id: Some(request_id), error: None,
-                                    }).await;
-                                });
-                            }
+                    Ok(Err(_)) => {
+                        return fail(
+                            "provider response read failed",
+                            "read_failed",
+                            state,
+                            agent,
+                            request,
+                            response,
+                            total,
+                            pending,
+                            initial,
+                            deadline,
+                        )
+                        .await;
+                    }
+                    Err(_) => {
+                        return fail(
+                            "provider stream timed out",
+                            "timeout",
+                            state,
+                            agent,
+                            request,
+                            response,
+                            total,
+                            pending,
+                            initial,
+                            deadline,
+                        )
+                        .await;
+                    }
+                };
+                total = total.saturating_add(next.len());
+                if total > 1_048_576 {
+                    return fail(
+                        "provider stream exceeds 1 MiB",
+                        "overflow",
+                        state,
+                        agent,
+                        request,
+                        response,
+                        total,
+                        pending,
+                        initial,
+                        deadline,
+                    )
+                    .await;
+                }
+                pending.extend_from_slice(&next);
+                while let Some((end, delim)) = split_sse_event(&pending) {
+                    let event: Vec<u8> = pending.drain(..end + delim).collect();
+                    match validate_sse_event(&event) {
+                        Ok(true) => {
+                            done = true;
+                            record_stream_terminal(&state, &agent, &request, "succeeded", None)
+                                .await;
+                        }
+                        Ok(false) => {}
+                        Err(message) => {
+                            return fail(
+                                message, "invalid", state, agent, request, response, total,
+                                pending, initial, deadline,
+                            )
+                            .await;
                         }
                     }
-                    Some((Ok(chunk.to_vec()), (response, next, pending, done, initial)))
                 }
-                Ok(None) => {
-                    if pending.iter().any(|b| !b.is_ascii_whitespace()) {
-                        Some((
-                            Err(std::io::Error::other(
-                                "provider stream ended with incomplete SSE",
-                            )),
-                            (response, total, pending, true, initial),
-                        ))
-                    } else {
-                        None
-                    }
-                }
-                Err(error) => Some((
-                    Err(std::io::Error::other(format!(
-                        "provider response read failed: {error}"
-                    ))),
-                    (response, total, pending, true, initial),
-                )),
-            }
+                Some((
+                    Ok(next.to_vec()),
+                    (response, total, pending, done, initial, deadline, terminal),
+                ))
             }
         },
     );

@@ -18,6 +18,11 @@ it("streams bounded OpenAI SSE with auth, validation, and cleanup", async () => 
 			if (body.messages?.[0]?.content === "upstream") return Response.json({ error: "nope" }, { status: 429 });
 			if (body.messages?.[0]?.content === "malformed")
 				return new Response("data: {bad}\n\n", { headers: { "content-type": "text/event-stream" } });
+			if (body.messages?.[0]?.content === "crlf")
+				return new Response(
+					`data: ${JSON.stringify({ choices: [{ delta: { content: "crlf" } }] })}\r\n\r\ndata: [DONE]\r\n\r\n`,
+					{ headers: { "content-type": "text/event-stream" } },
+				);
 			if (body.messages?.[0]?.content === "invalid-json")
 				return new Response(new Uint8Array([0xff, 0xfe]), { headers: { "content-type": "text/event-stream" } });
 			const encoder = new TextEncoder();
@@ -80,6 +85,13 @@ it("streams bounded OpenAI SSE with auth, validation, and cleanup", async () => 
 			expect(failed.status).toBe(502);
 			expect(failedBody).toContain("upstream_error");
 		}
+		const crlf = await fetch(`${origin}/api/inference/stream`, {
+			method: "POST",
+			headers,
+			body: JSON.stringify({ prompt: "crlf" }),
+		});
+		expect(crlf.status).toBe(200);
+		expect(await crlf.text()).toContain('"content":"crlf"');
 		const response = await fetch(`${origin}/api/inference/stream`, {
 			method: "POST",
 			headers,
