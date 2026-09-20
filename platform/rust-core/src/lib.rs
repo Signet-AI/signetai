@@ -3573,7 +3573,6 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS sessions (key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, runtime_path TEXT, project TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(key, agent_id));
          CREATE TABLE IF NOT EXISTS event_records (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, session_key TEXT, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS telemetry_events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
-         CREATE INDEX IF NOT EXISTS telemetry_events_scope ON telemetry_events(agent_id,workspace_id,id);
          CREATE TABLE IF NOT EXISTS transcript_import_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', schema_id TEXT NOT NULL, duplicate_mode TEXT NOT NULL, state TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS transcript_import_files (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', ordinal INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, storage_state TEXT NOT NULL, upload_generation INTEGER NOT NULL DEFAULT 0, upload_offset INTEGER NOT NULL DEFAULT 0, upload_size INTEGER, upload_digest TEXT NOT NULL DEFAULT '', content_hash TEXT, size_bytes INTEGER NOT NULL DEFAULT 0, content BLOB NOT NULL DEFAULT x'', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS transcript_import_files_scope ON transcript_import_files(job_id,agent_id,ordinal);
@@ -3593,6 +3592,39 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          SELECT 1;",
     )?;
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "telemetry_events",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "telemetry_events",
+        "workspace_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "telemetry_events",
+        "payload",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    ensure_column(
+        &transaction,
+        "telemetry_events",
+        "created_at",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    if has_column(&transaction, "telemetry_events", "timestamp")? {
+        transaction.execute(
+            "UPDATE telemetry_events SET created_at=timestamp WHERE created_at='' AND timestamp IS NOT NULL",
+            [],
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE INDEX IF NOT EXISTS telemetry_events_scope ON telemetry_events(agent_id,workspace_id,id);",
+    )?;
     ensure_column(&transaction, "sources", "workspace_id", "TEXT")?;
     ensure_column(
         &transaction,

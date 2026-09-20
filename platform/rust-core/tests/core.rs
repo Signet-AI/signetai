@@ -299,6 +299,67 @@ fn opens_a_current_style_workspace_without_destroying_existing_rows() {
 }
 
 #[test]
+fn migrates_legacy_telemetry_before_scoped_index_and_preserves_rows() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-telemetry.sqlite");
+    let connection = Connection::open(&p).unwrap();
+    connection
+        .execute_batch(
+            "CREATE TABLE telemetry_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event TEXT NOT NULL,
+                queue TEXT,
+                timestamp TEXT NOT NULL,
+                unsent INTEGER NOT NULL DEFAULT 1
+            );
+            INSERT INTO telemetry_events(event, queue, timestamp, unsent)
+            VALUES ('legacy.event', 'legacy-queue', '2026-01-01T00:00:00Z', 1);",
+        )
+        .unwrap();
+    drop(connection);
+
+    let owner = Core::open(&p, 4).unwrap();
+    let connection = Connection::open(&p).unwrap();
+    let row = connection
+        .query_row(
+            "SELECT event, payload, created_at, agent_id, workspace_id FROM telemetry_events WHERE id=1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        row,
+        (
+            "legacy.event".into(),
+            "{}".into(),
+            "2026-01-01T00:00:00Z".into(),
+            "default".into(),
+            "default".into()
+        )
+    );
+    assert_eq!(
+        connection
+            .query_row(
+                "SELECT name FROM sqlite_schema WHERE type='index' AND name='telemetry_events_scope'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "telemetry_events_scope"
+    );
+    drop(connection);
+    owner.initialize().unwrap();
+}
+
+#[test]
 fn migrates_legacy_transcripts_before_idempotency_index() {
     let d = tempdir().unwrap();
     let p = d.path().join("legacy-transcripts.sqlite");
