@@ -75,6 +75,27 @@ fn fresh_db_and_idempotent_init() {
 }
 
 #[test]
+fn session_summary_expansion_is_typed_and_scoped() {
+    let c = core();
+    c.initialize().unwrap();
+    let result = c
+        .submit(Operation::KnowledgeSessionExpand {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            project_id: Some("project-a".into()),
+            entity_name: "Signet".into(),
+            session_id: None,
+            time_range: None,
+            max_results: 0,
+        })
+        .unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!({"entityName":"Signet","summaries":[],"total":0})
+    );
+}
+
+#[test]
 fn integrity_checkpoint_is_scoped_durable_and_excludes_fts() {
     let c = core();
     let first = c

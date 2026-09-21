@@ -2683,6 +2683,65 @@ fn execute_operation(
             tx.commit()?;
             Ok(json!({"deleted":true,"id":id}))
         }
+        Operation::KnowledgeSessionExpand {
+            agent_id,
+            workspace_id,
+            project_id,
+            entity_name,
+            session_id,
+            time_range,
+            max_results,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let entity_name = bounded_text(&entity_name, "entity name", 256)?;
+            if entity_name.trim().is_empty() {
+                return Err(CoreError::InvalidInput("entityName is required".into()));
+            }
+            let canonical = canonical_key(&entity_name);
+            let entity: Option<(String, String)> = connection.query_row(
+                "SELECT id,name FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND (LOWER(COALESCE(canonical_name,name))=? OR LOWER(name)=?) ORDER BY CASE WHEN LOWER(COALESCE(canonical_name,name))=? THEN 0 ELSE 1 END, mentions DESC, updated_at DESC LIMIT 1",
+                params![agent_id, workspace_id, canonical, canonical, canonical],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            ).optional()?;
+            let Some((entity_id, resolved_name)) = entity else {
+                return Ok(json!({"entityName": entity_name, "summaries": [], "total": 0}));
+            };
+            let max_results = max_results.clamp(1, 50) as i64;
+            let mut conditions = vec![
+                "ss.agent_id=?".to_owned(),
+                "ss.kind='session'".to_owned(),
+                "COALESCE(ss.source_type,'summary')='summary'".to_owned(),
+            ];
+            let mut args: Vec<SqlValue> = vec![agent_id.into()];
+            if let Some(project) = project_id.filter(|v| !v.trim().is_empty()) {
+                conditions.push("ss.project=?".into());
+                args.push(project.into());
+            }
+            if let Some(session) = session_id.filter(|v| !v.trim().is_empty()) {
+                conditions.push("ss.session_key=?".into());
+                args.push(session.into());
+            }
+            if time_range.as_deref() == Some("last_week") {
+                conditions.push("ss.latest_at >= datetime('now','-7 days')".into());
+            } else if time_range.as_deref() == Some("last_month") {
+                conditions.push("ss.latest_at >= datetime('now','-30 days')".into());
+            } else if let Some(range) = time_range.filter(|v| !v.trim().is_empty()) {
+                conditions.push("ss.latest_at >= ?".into());
+                args.push(range.into());
+            }
+            let text = format!("% {} %", canonical.replace('%', "\\%"));
+            let sql = format!("SELECT DISTINCT ss.id,ss.content,ss.session_key,ss.harness,ss.earliest_at,ss.latest_at FROM session_summaries ss WHERE {} AND (EXISTS (SELECT 1 FROM session_summary_memories ssm JOIN memory_entity_mentions mem ON mem.memory_id=ssm.memory_id WHERE ssm.summary_id=ss.id AND mem.entity_id=?) OR LOWER(' '||replace(replace(replace(ss.content,'.',' '),',',' '),'-',' ')||' ') LIKE ? ESCAPE '\\\\') ORDER BY ss.latest_at DESC LIMIT ?", conditions.join(" AND "));
+            args.push(entity_id.into());
+            args.push(text.into());
+            args.push(max_results.into());
+            let mut stmt = connection.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| Ok(json!({"id":r.get::<_,String>(0)?,"sessionKey":r.get::<_,Option<String>>(2)?,"harness":r.get::<_,Option<String>>(3)?,"earliestAt":r.get::<_,String>(4)?,"latestAt":r.get::<_,String>(5)?,"content":r.get::<_,String>(1)?})))?;
+            let summaries: Vec<Value> = rows.collect::<Result<Vec<_>, _>>()?;
+            Ok(
+                json!({"entityName": resolved_name, "summaries": summaries, "total": summaries.len()}),
+            )
+        }
         Operation::KnowledgeNavigationEntity {
             agent_id,
             workspace_id,
@@ -4180,6 +4239,15 @@ pub enum Operation {
         limit: usize,
         offset: usize,
     },
+    KnowledgeSessionExpand {
+        agent_id: String,
+        workspace_id: String,
+        project_id: Option<String>,
+        entity_name: String,
+        session_id: Option<String>,
+        time_range: Option<String>,
+        max_results: usize,
+    },
     KnowledgeNavigationEntity {
         agent_id: String,
         workspace_id: String,
@@ -4560,6 +4628,9 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS transcript_import_files (id TEXT PRIMARY KEY, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', ordinal INTEGER NOT NULL, name TEXT NOT NULL, state TEXT NOT NULL, storage_state TEXT NOT NULL, upload_generation INTEGER NOT NULL DEFAULT 0, upload_offset INTEGER NOT NULL DEFAULT 0, upload_size INTEGER, upload_digest TEXT NOT NULL DEFAULT '', content_hash TEXT, size_bytes INTEGER NOT NULL DEFAULT 0, content BLOB NOT NULL DEFAULT x'', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS transcript_import_files_scope ON transcript_import_files(job_id,agent_id,ordinal);
          CREATE TABLE IF NOT EXISTS session_transcripts (session_key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, project TEXT, content TEXT NOT NULL, content_hash TEXT NOT NULL, idempotency_key TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, PRIMARY KEY(agent_id, session_key));
+         CREATE TABLE IF NOT EXISTS session_summaries (id TEXT PRIMARY KEY, project TEXT, depth INTEGER NOT NULL DEFAULT 0, kind TEXT NOT NULL, content TEXT NOT NULL, token_count INTEGER, earliest_at TEXT NOT NULL, latest_at TEXT NOT NULL, session_key TEXT, harness TEXT, agent_id TEXT NOT NULL DEFAULT 'default', source_type TEXT, source_ref TEXT, meta_json TEXT, created_at TEXT NOT NULL);
+         CREATE TABLE IF NOT EXISTS session_summary_memories (summary_id TEXT NOT NULL, memory_id TEXT NOT NULL, PRIMARY KEY(summary_id,memory_id));
+         CREATE TABLE IF NOT EXISTS memory_entity_mentions (memory_id TEXT NOT NULL, entity_id TEXT NOT NULL, PRIMARY KEY(memory_id,entity_id));
          CREATE INDEX IF NOT EXISTS event_records_scope ON event_records(agent_id, session_key, id);
          CREATE TABLE IF NOT EXISTS hook_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id TEXT NOT NULL, agent_id TEXT NOT NULL, session_key TEXT, hook TEXT NOT NULL, checkpoint TEXT, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, UNIQUE(agent_id, receipt_id));
          CREATE INDEX IF NOT EXISTS hook_receipts_scope ON hook_receipts(agent_id, session_key, id);

@@ -82,6 +82,19 @@ struct RelationBody {
     #[serde(default)]
     metadata: Value,
 }
+#[derive(Debug, Deserialize)]
+struct SessionExpandBody {
+    #[serde(rename = "entityName")]
+    entity_name: Option<String>,
+    #[serde(rename = "agentId")]
+    agent_id: Option<String>,
+    #[serde(rename = "sessionId")]
+    session_id: Option<String>,
+    #[serde(rename = "timeRange")]
+    time_range: Option<String>,
+    #[serde(rename = "maxResults")]
+    max_results: Option<usize>,
+}
 
 fn bounded(value: Option<&str>, fallback: usize, max: usize) -> usize {
     value
@@ -174,6 +187,42 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/knowledge/stats", get(stats))
         .route("/api/knowledge/traversal/status", get(traversal_status))
         .route("/api/knowledge/constellation", get(constellation))
+        .route("/api/knowledge/expand/session", post(expand_session))
+}
+
+async fn expand_session(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<SessionExpandBody>,
+) -> Result<Json<Value>, ApiError> {
+    let entity_name = body.entity_name.as_deref().map(str::trim).unwrap_or("");
+    if entity_name.is_empty() {
+        return Err(ApiError::bad_request("entityName is required"));
+    }
+    let agent_id = agent(&headers, None, body.agent_id.as_deref())?;
+    let workspace_id = headers
+        .get("x-workspace-id")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("default")
+        .to_owned();
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeSessionExpand {
+                agent_id,
+                workspace_id,
+                project_id: headers
+                    .get("x-signet-project-id")
+                    .and_then(|v| v.to_str().ok())
+                    .map(str::to_owned),
+                entity_name: entity_name.to_owned(),
+                session_id: body.session_id,
+                time_range: body.time_range,
+                max_results: body.max_results.unwrap_or(10).clamp(1, 50),
+            },
+        )
+        .await?,
+    ))
 }
 
 async fn navigation_entity(
