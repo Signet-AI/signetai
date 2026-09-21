@@ -560,13 +560,13 @@ fn execute_memory_search(
             .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
             .collect::<Vec<_>>()
             .join(" ");
-        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,m.source_id,m.source_type,m.source_path,m.runtime_path,m.idempotency_key,m.memory_kind,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND COALESCE(CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.staleAt') END, CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.stale_at') END) IS NULL AND COALESCE(CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.supersededBy') END, CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.superseded_by') END) IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
+        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,m.source_id,m.source_type,m.source_path,m.runtime_path,m.idempotency_key,m.memory_kind,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND m.stale_at IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
         let mapped = stmt.query_map(params![match_query, agent_id, limit], memory_search_row)?;
         rows = mapped.collect::<Result<Vec<_>, _>>()?;
     } else {
         // Compatibility fallback is deliberately token-aware and marked partial;
         // it is not presented as an FTS result.
-        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL AND COALESCE(source_type,'') != 'aggregate-recall' AND COALESCE(CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.staleAt') END, CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.stale_at') END) IS NULL AND COALESCE(CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.supersededBy') END, CASE WHEN json_valid(metadata) THEN json_extract(metadata,'$.superseded_by') END) IS NULL ORDER BY rowid DESC LIMIT 1000")?;
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL AND COALESCE(source_type,'') != 'aggregate-recall' AND stale_at IS NULL ORDER BY rowid DESC LIMIT 1000")?;
         let candidates = stmt.query_map(params![agent_id], memory_row)?;
         for memory in candidates {
             let memory = memory?;
@@ -583,7 +583,7 @@ fn execute_memory_search(
     let mut graph_ids = Vec::new();
     for token in &tokens {
         let pattern = format!("%{}%", token);
-        let mut stmt = connection.prepare("SELECT DISTINCT a.memory_id FROM kg_attributes a JOIN memories m ON m.id=a.memory_id WHERE a.agent_id=? AND a.status='active' AND a.memory_id IS NOT NULL AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND COALESCE(CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.staleAt') END, CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.stale_at') END) IS NULL AND COALESCE(CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.supersededBy') END, CASE WHEN json_valid(m.metadata) THEN json_extract(m.metadata,'$.superseded_by') END) IS NULL AND (a.normalized_content LIKE ? OR a.content LIKE ?) ORDER BY a.updated_at DESC LIMIT ?")?;
+        let mut stmt = connection.prepare("SELECT DISTINCT a.memory_id FROM kg_attributes a JOIN memories m ON m.id=a.memory_id WHERE a.agent_id=? AND a.status='active' AND a.memory_id IS NOT NULL AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND m.stale_at IS NULL AND (a.normalized_content LIKE ? OR a.content LIKE ?) ORDER BY a.updated_at DESC LIMIT ?")?;
         let ids = stmt.query_map(
             params![agent_id, agent_id, pattern, pattern, limit],
             |row| row.get::<_, String>(0),
@@ -602,7 +602,7 @@ fn execute_memory_search(
         if rows.len() >= limit as usize {
             break;
         }
-        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE id=? AND agent_id=? AND deleted=0 AND superseded_by IS NULL")?;
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE id=? AND agent_id=? AND deleted=0 AND superseded_by IS NULL AND stale_at IS NULL")?;
         if let Ok(memory) = stmt.query_row(params![id, agent_id], memory_row) {
             rows.push(json!({"id":memory.id,"agentId":memory.agent_id,"content":memory.content,"metadata":memory.metadata,"deleted":memory.deleted,"createdAt":memory.created_at,"updatedAt":memory.updated_at,"score":0.5,"source":"graph"}));
         }
