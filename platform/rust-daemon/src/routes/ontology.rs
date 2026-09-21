@@ -1,13 +1,39 @@
 use crate::{agent, execute, source_workspace, AgentQuery, ApiError, AppState};
+use crate::routes::auth;
 use axum::{
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
     routing::get,
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
 use signet_core_native::Operation;
+
+#[cfg(test)]
+mod auth_contract_tests {
+    use super::proposal_auth_error;
+
+    #[test]
+    fn unauthenticated_proposal_access_is_forbidden() {
+        let error = proposal_auth_error();
+        assert_eq!(error.status, axum::http::StatusCode::FORBIDDEN);
+    }
+}
+
+fn proposal_auth_error() -> ApiError {
+    ApiError {
+        status: StatusCode::FORBIDDEN,
+        code: "forbidden",
+        message: "ontology proposal permission required".into(),
+    }
+}
+
+async fn require_proposal_auth(state: &AppState, headers: &HeaderMap, query: &OntologyQuery, permission: &str) -> Result<(), ApiError> {
+    let claims = auth::gate(state, headers).await.map_err(|_| proposal_auth_error())?;
+    let scope = json!({"agent": agent(headers, Some(&query.agent), None)?, "workspace": workspace(query)?});
+    if auth::authority_allows(&claims, "agent", &scope, &[permission.to_owned()]) { Ok(()) } else { Err(proposal_auth_error()) }
+}
 
 #[derive(Debug, Deserialize, Default)]
 pub(crate) struct OntologyQuery {
@@ -112,6 +138,7 @@ async fn list_conflicts(
     headers: HeaderMap,
     q: Query<OntologyQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    require_proposal_auth(&state, &headers, &q, "recall").await?;
     let result = execute(
         &state,
         Operation::OntologyProposalConflicts {
@@ -129,6 +156,7 @@ async fn list_proposals(
     h: HeaderMap,
     q: Query<OntologyQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    require_proposal_auth(&s, &h, &q, "recall").await?;
     list(s, h, Path("proposal".into()), q).await
 }
 async fn create_proposal(
@@ -137,6 +165,7 @@ async fn create_proposal(
     q: Query<OntologyQuery>,
     b: Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
+    require_proposal_auth(&s, &h, &q, "modify").await?;
     upsert(s, h, Path("proposal".into()), q, b).await
 }
 async fn get_proposal(
