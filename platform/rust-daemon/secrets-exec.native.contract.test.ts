@@ -10,6 +10,8 @@ const key = process.env.SIGNET_API_KEY ?? "test-native-api-key";
 let root = "";
 let child: ChildProcess | undefined;
 let origin = "";
+let stdoutPath = "";
+let stderrPath = "";
 const headers = () => ({
 	authorization: `Bearer ${key}`,
 	"content-type": "application/json",
@@ -37,9 +39,20 @@ describe("native secrets exec HTTP contract", () => {
 		probe.stop();
 		origin = `http://127.0.0.1:${port}`;
 		child = spawn(bin, ["--host", "127.0.0.1", "--port", String(port)], {
-			env: { ...process.env, SIGNET_DATA_DIR: root, SIGNET_API_KEY: key },
+			env: {
+				...process.env,
+				SIGNET_PATH: root,
+				SIGNET_BIND: "127.0.0.1",
+				SIGNET_MODE: "test",
+				SIGNET_PORT: String(port),
+				SIGNET_API_KEY: key,
+			},
 			stdio: ["ignore", "pipe", "pipe"],
 		});
+		stdoutPath = join(root, "daemon.stdout.log");
+		stderrPath = join(root, "daemon.stderr.log");
+		child.stdout?.on("data", (chunk) => Bun.write(stdoutPath, chunk, { createPath: true }));
+		child.stderr?.on("data", (chunk) => Bun.write(stderrPath, chunk, { createPath: true }));
 		await waitReady();
 		expect((await fetch(`${origin}/api/secrets/exec`, { method: "POST", body: "{}" })).status).toBe(401);
 		const put = await request("/api/secrets", {
@@ -64,7 +77,7 @@ describe("native secrets exec HTTP contract", () => {
 		let done = made.body;
 		for (let i = 0; i < 100 && done.status === "queued"; i++) {
 			await Bun.sleep(25);
-			done = (await request(`/api/secrets/exec/${made.body.jobId as string}`, { headers: headers() })).body;
+			done = (await request(`/api/secrets/exec/${made.body.id as string}`, { headers: headers() })).body;
 		}
 		expect(["completed", "failed"]).toContain(done.status);
 		expect(JSON.stringify(done)).not.toContain("native-secret-value");
