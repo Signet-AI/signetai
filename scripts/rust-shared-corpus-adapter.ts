@@ -125,7 +125,8 @@ const junitPath = `${report}.bun.xml`;
 if (existsSync(junitPath)) unlinkSync(junitPath);
 const stdoutFd = openSync(stdoutPath, "w");
 const stderrFd = openSync(stderrPath, "w");
-let child: ReturnType<typeof spawnSync>;
+let child: ReturnType<typeof spawnSync> | undefined;
+let spawnError: unknown;
 try {
 	child = spawnSync(
 		"bun",
@@ -148,9 +149,15 @@ try {
 			stdio: ["ignore", stdoutFd, stderrFd],
 		},
 	);
+} catch (error) {
+	spawnError = error;
 } finally {
 	closeSync(stdoutFd);
 	closeSync(stderrFd);
+}
+if (!child) {
+	const message = spawnError instanceof Error ? spawnError.message : String(spawnError ?? "unknown spawn error");
+	fail(`Rust child could not start: ${message}`);
 }
 const stderr = existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "";
 const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf8") : "";
@@ -160,12 +167,27 @@ const coreEvidence =
 	/backend=fresh-rust artifact=signet-core-test-driver process=transport/.test(readFileSync(evidenceFile, "utf8"));
 const nativeEvidence = daemonEvidence || coreEvidence;
 let cases: string[] = [];
+let observedFiles = new Set<string>();
 if (existsSync(junitPath)) {
 	const reportXml = readFileSync(junitPath, "utf8");
 	cases = reportXml.match(/<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g) ?? [];
+	observedFiles = new Set(
+		cases.map((testcase) => testcase.match(/file="([^"]*)"/)?.[1]).filter((file): file is string => Boolean(file)),
+	);
 }
-const infrastructureFailure = child.signal !== null || child.error !== undefined || !cases.length;
-if (!cases.length) cases = parseConsoleCases(`${stderr}\n${stdout}`, 0).cases;
+if (!cases.length) {
+	const parsed = parseConsoleCases(`${stderr}\n${stdout}`, 0);
+	cases = parsed.cases;
+	observedFiles = parsed.observed;
+}
+const missingSelected = selected.filter((path) => !observedFiles.has(path));
+const unexpectedFiles = [...observedFiles].filter((path) => !selected.includes(path));
+const infrastructureFailure =
+	child.signal !== null ||
+	child.error !== undefined ||
+	!cases.length ||
+	missingSelected.length > 0 ||
+	unexpectedFiles.length > 0;
 const evidence =
 	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
 if (!cases.length) fail(`Rust child produced no real testcase identities: ${evidence}`);
@@ -186,6 +208,8 @@ console.error(
 		childStatus: child.status,
 		childSignal: child.signal,
 		infrastructureFailure,
+		missingSelected,
+		unexpectedFiles,
 		stderr: stderr.slice(-8192),
 		stdout: stdout.slice(-8192),
 		stderrBytes: Buffer.byteLength(stderr),

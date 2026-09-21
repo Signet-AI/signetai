@@ -174,9 +174,60 @@ export function runnableManifestPaths(manifest: ManifestEntry[]): string[] {
 }
 export function parseJUnitReport(xml: string, expected: string[] = [], childStatus: number | null = 0): Accounting {
 	const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map((m) => m[0]);
-	const suite = xml.match(/<(?:testsuites|testsuite)\b[^>]*>/)?.[0] ?? "";
-	const suiteFailed =
-		Number(suite.match(/failures="(\d+)"/)?.[1] ?? 0) + Number(suite.match(/errors="(\d+)"/)?.[1] ?? 0);
+	const suiteStats = (() => {
+		type Stats = { tests?: number; failures?: number; errors?: number };
+		const roots: Array<{ kind: "testsuites" | "testsuite"; stats: Stats }> = [];
+		const directSuites: Stats[] = [];
+		const stack: Array<"testsuites" | "testsuite"> = [];
+		const number = (attrs: string, name: string): number | undefined => {
+			const value = attrs.match(new RegExp(`${name}="(\\d+)"`))?.[1];
+			return value === undefined ? undefined : Number(value);
+		};
+		const tags = /<(testsuites|testsuite)\b([^>]*?)(\/?)>|<\/(testsuites|testsuite)\s*>/g;
+		for (const match of xml.matchAll(tags)) {
+			const opening = match[1] as "testsuites" | "testsuite" | undefined;
+			if (opening) {
+				const stats: Stats = {
+					tests: number(match[2] ?? "", "tests"),
+					failures: number(match[2] ?? "", "failures"),
+					errors: number(match[2] ?? "", "errors"),
+				};
+				if (!stack.length) roots.push({ kind: opening, stats });
+				else if (stack.length === 1 && stack[0] === "testsuites" && opening === "testsuite") directSuites.push(stats);
+				if (match[3] !== "/") stack.push(opening);
+				continue;
+			}
+			const closing = match[4] as "testsuites" | "testsuite" | undefined;
+			if (closing) {
+				const index = stack.lastIndexOf(closing);
+				if (index >= 0) stack.splice(index, 1);
+			}
+		}
+		const sum = (values: Array<number | undefined>): number | undefined => {
+			const present = values.filter((value): value is number => value !== undefined);
+			return present.length ? present.reduce((total, value) => total + value, 0) : undefined;
+		};
+		const childTests = sum(directSuites.map((stats) => stats.tests));
+		const childFailures = sum(directSuites.map((stats) => (stats.failures ?? 0) + (stats.errors ?? 0))) ?? 0;
+		const root = roots.length === 1 ? roots[0] : undefined;
+		if (root?.kind === "testsuites") {
+			return {
+				declared: root.stats.tests ?? childTests,
+				failed: Math.max((root.stats.failures ?? 0) + (root.stats.errors ?? 0), childFailures),
+			};
+		}
+		if (root?.kind === "testsuite") {
+			return {
+				declared: root.stats.tests,
+				failed: (root.stats.failures ?? 0) + (root.stats.errors ?? 0),
+			};
+		}
+		return {
+			declared: sum(roots.map((entry) => entry.stats.tests)),
+			failed: roots.reduce((total, entry) => total + (entry.stats.failures ?? 0) + (entry.stats.errors ?? 0), 0),
+		};
+	})();
+	const suiteFailed = suiteStats.failed;
 	if (!cases.length)
 		return {
 			tests: 0,
@@ -212,7 +263,7 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 	const missingFiles = expected.length > 0 ? expected.filter((file) => !observedFiles.has(file)) : [];
 	const unexpectedFiles = expected.length > 0 ? [...observedFiles].filter((file) => !expectedFiles.has(file)) : [];
 	const missingIdentity = expected.length > 0 && identities.some((identity) => !identity.file);
-	const declared = Number(suite.match(/tests="(\d+)"/)?.[1] ?? cases.length);
+	const declared = suiteStats.declared ?? cases.length;
 	const incomplete =
 		duplicate ||
 		declared !== cases.length ||
@@ -224,16 +275,19 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 	// failures is a failed test run, not a crashed runner. Preserve crash
 	// classification for nonzero exits that produced no reported test failure.
 	const crashed = childStatus !== 0 && failed === 0;
+	const suiteOnlyFailures = Math.max(0, suiteFailed - failed);
+	const duplicateFailures = duplicate ? 1 : 0;
+	const totalFailed = failed + suiteOnlyFailures + duplicateFailures;
 	return {
 		tests: cases.length,
-		passed: cases.length - failed - skipped,
-		failed: failed + Math.max(0, suiteFailed - failed) + (duplicate ? 1 : 0),
+		passed: Math.max(0, cases.length - failed - skipped - suiteOnlyFailures - duplicateFailures),
+		failed: totalFailed,
 		skipped,
 		missingFiles,
 		unexpectedFiles,
 		crash: crashed || duplicate,
 		incomplete: incomplete || crashed,
-		status: crashed || duplicate || failed > 0 || incomplete ? "failed" : "passed",
+		status: crashed || totalFailed > 0 || incomplete ? "failed" : "passed",
 	};
 }
 

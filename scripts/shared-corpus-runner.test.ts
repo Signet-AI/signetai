@@ -127,4 +127,16 @@ describe("shared corpus admission", () => {
 		expect(result.missingFiles).toEqual(["a.test.ts", "b.test.ts"]);
 		expect(result.unexpectedFiles).toEqual(["wrong-a.test.ts", "wrong-b.test.ts"]);
 	});
+
+	test("preserves nested JUnit suite errors", () => {
+		const result = parseJUnitReport(
+			'<testsuites><testsuite tests="1" errors="1"><testcase file="a.test.ts" line="1" classname="x" name="a"/></testsuite></testsuites>',
+			["a.test.ts"],
+			0,
+		);
+		expect(result.tests).toBe(1);
+		expect(result.failed).toBe(1);
+		expect(result.incomplete).toBe(false);
+		expect(result.status).toBe("failed");
+	});
 });
