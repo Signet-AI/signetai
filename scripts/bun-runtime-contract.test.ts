@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 const root = resolve(import.meta.dir, "..");
-const requiredVersion = "1.4.2";
+const requiredVersion = "1.4.0";
 
 function text(path: string): string {
 	return readFileSync(join(root, path), "utf8");
