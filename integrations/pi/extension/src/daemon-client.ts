@@ -9,5 +9,6 @@ export function createDaemonClient(daemonUrl: string): DaemonClient {
 		actorName: "pi-extension",
 		runtimePath: RUNTIME_PATH,
 		defaultTimeout: READ_TIMEOUT,
+		logFailures: false,
 	});
 }
