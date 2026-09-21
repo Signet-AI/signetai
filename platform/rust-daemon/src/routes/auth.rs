@@ -48,6 +48,12 @@ pub(crate) fn verify_token(state: &AppState, token: &str) -> Option<Value> {
         return None;
     }
     let scope = claims.get("scope")?.as_object()?;
+    if let Some(permissions) = claims.get("permissions") {
+        let permissions = permissions.as_array()?;
+        if permissions.iter().any(|permission| !permission.is_string()) {
+            return None;
+        }
+    }
     let iat = claims.get("iat")?.as_u64()?;
     let exp = claims.get("exp")?.as_u64()?;
     if exp <= now_seconds() || iat > exp {
@@ -150,10 +156,9 @@ mod tests {
         )
         .unwrap_or_else(|_| panic!("token issuance"));
         let payload = token.split('.').next().expect("payload");
-        let claims: Value = serde_json::from_slice(
-            &URL_SAFE_NO_PAD.decode(payload).expect("payload encoding"),
-        )
-        .expect("claims");
+        let claims: Value =
+            serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).expect("payload encoding"))
+                .expect("claims");
         assert_eq!(claims["permissions"], json!(["recall"]));
     }
 }
@@ -242,12 +247,16 @@ pub(crate) fn authority_allows(
         return false;
     }
     let allowed = authority.get("permissions").and_then(Value::as_array);
+    if authority.get("permissions").is_some() && allowed.is_none() {
+        return false;
+    }
     if let Some(allowed) = allowed {
         if !requested_permissions.iter().all(|permission| {
             allowed
                 .iter()
                 .any(|value| value.as_str() == Some(permission))
-        }) {
+        }) && authority_role < 3
+        {
             return false;
         }
     }
@@ -393,6 +402,9 @@ async fn token(
 }
 async fn list(State(state): State<AppState>, headers: HeaderMap) -> Result<Json<Value>, ApiError> {
     let claims = gate(&state, &headers).await?;
+    if claims.get("role").and_then(Value::as_str) != Some("admin") {
+        return Err(ApiError::forbidden("admin authority is required"));
+    }
     let agent_id = claims
         .get("agentId")
         .and_then(Value::as_str)
@@ -435,7 +447,7 @@ async fn create(
     };
     let requested_role = req.role.unwrap_or_else(|| "agent".into());
     if !authority_allows(&claims, &requested_role, &req.scope, &permissions) {
-        return Err(ApiError::unauthorized(
+        return Err(ApiError::forbidden(
             "requested key authority exceeds authenticated authority",
         ));
     }
