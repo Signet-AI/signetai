@@ -61,9 +61,10 @@ async function daemonFetchResult<T>(
 		readonly method?: string;
 		readonly body?: unknown;
 		readonly timeout?: number;
+		readonly parseJson?: boolean;
 	} = {},
 ): Promise<DaemonFetchResult<T>> {
-	const { method = "POST", body, timeout = config.defaultTimeout } = options;
+	const { method = "POST", body, timeout = config.defaultTimeout, parseJson = true } = options;
 
 	try {
 		const init: RequestInit = {
@@ -80,6 +81,15 @@ async function daemonFetchResult<T>(
 		if (!response.ok) {
 			logWarning(config, `[${config.logPrefix}] ${method} ${path} failed: ${response.status}`);
 			return { ok: false, reason: "http", status: response.status };
+		}
+
+		if (!parseJson) {
+			try {
+				await response.body?.cancel();
+			} catch {
+				// Status-only callers intentionally ignore response body failures.
+			}
+			return { ok: true, data: undefined as T };
 		}
 
 		try {
@@ -122,7 +132,11 @@ export interface DaemonClient {
 	postResult<T>(path: string, body: unknown, timeout?: number): Promise<DaemonFetchResult<T>>;
 }
 
-export function createDaemonClient(daemonUrl: string, config: DaemonClientConfig): DaemonClient {
+export interface DaemonStatusClient extends DaemonClient {
+	postStatus(path: string, body: unknown, timeout?: number): Promise<DaemonFetchResult<void>>;
+}
+
+export function createDaemonClient(daemonUrl: string, config: DaemonClientConfig): DaemonStatusClient {
 	return {
 		async post<T>(path: string, body: unknown, timeout = config.defaultTimeout): Promise<T | null> {
 			const result = await daemonFetchResult<T>(daemonUrl, path, config, {
@@ -138,6 +152,14 @@ export function createDaemonClient(daemonUrl: string, config: DaemonClientConfig
 				method: "POST",
 				body,
 				timeout,
+			});
+		},
+		postStatus(path: string, body: unknown, timeout = config.defaultTimeout): Promise<DaemonFetchResult<void>> {
+			return daemonFetchResult<void>(daemonUrl, path, config, {
+				method: "POST",
+				body,
+				timeout,
+				parseJson: false,
 			});
 		},
 	};
