@@ -78,6 +78,35 @@ test("fresh daemon pin HTTP contract enforces modify auth and durable scope", as
 	expect(
 		(await fetch(`${daemon.origin}/api/knowledge/entities/${entity}/pin`, { method: "POST", headers: auth })).status,
 	).toBe(200);
+	const readonlyIssue = await fetch(`${daemon.origin}/api/auth/token`, {
+		method: "POST",
+		headers: { ...scope, "x-signet-api-key": "pin-test-key", "content-type": "application/json" },
+		body: JSON.stringify({ role: "readonly", scope: { agent: "pin-owner", workspace: "pin-workspace" } }),
+	});
+	expect(readonlyIssue.status).toBe(200);
+	const readonlyToken = (await readonlyIssue.json()).token as string;
+	expect(readonlyToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+	const readonlyAuth = { ...scope, authorization: `Bearer ${readonlyToken}` };
+	expect(
+		(await fetch(`${daemon.origin}/api/knowledge/entities/${entity}/pin`, { method: "POST", headers: readonlyAuth }))
+			.status,
+	).toBe(403);
+	const pinnedByAdmin = await (
+		await fetch(`${daemon.origin}/api/knowledge/entities/pinned?agent_id=pin-owner&workspace_id=pin-workspace`, {
+			headers: auth,
+		})
+	).json();
+	expect(pinnedByAdmin.map((x: { id: string }) => x.id)).toContain(entity);
+	expect(
+		(await fetch(`${daemon.origin}/api/knowledge/entities/${entity}/pin`, { method: "DELETE", headers: readonlyAuth }))
+			.status,
+	).toBe(403);
+	const pinnedAfterReadonly = await (
+		await fetch(`${daemon.origin}/api/knowledge/entities/pinned?agent_id=pin-owner&workspace_id=pin-workspace`, {
+			headers: auth,
+		})
+	).json();
+	expect(pinnedAfterReadonly.map((x: { id: string }) => x.id)).toContain(entity);
 	const pinned = await (
 		await fetch(`${daemon.origin}/api/knowledge/entities/pinned?agent_id=pin-owner&workspace_id=pin-workspace`, {
 			headers: { ...scope, "x-signet-api-key": "pin-test-key" },
