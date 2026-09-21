@@ -43,7 +43,7 @@ fn should_recover_health(attempts: usize) -> bool {
 #[cfg(windows)]
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{
-    CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, GENERIC_READ, HANDLE,
+    CloseHandle, GetLastError, FILETIME, ERROR_ACCESS_DENIED, ERROR_ALREADY_EXISTS, GENERIC_READ, HANDLE,
 };
 #[cfg(windows)]
 use windows_sys::Win32::Storage::FileSystem::{
@@ -52,7 +52,9 @@ use windows_sys::Win32::Storage::FileSystem::{
     OPEN_EXISTING,
 };
 #[cfg(windows)]
-use windows_sys::Win32::System::Threading::CreateMutexW;
+use windows_sys::Win32::System::Threading::{
+    CreateMutexW, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+};
 
 #[derive(Clone)]
 pub(crate) struct ExternalOwner {
@@ -87,6 +89,41 @@ impl Drop for OwnerPipe {
     }
 }
 
+#[cfg(unix)]
+fn owner_process_start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let (_, fields) = stat.rsplit_once(") ")?;
+    fields.split_whitespace().nth(19)?.parse().ok()
+}
+
+#[cfg(windows)]
+fn owner_process_start_time(pid: u32) -> Option<u64> {
+    if pid == 0 {
+        return None;
+    }
+    let handle = unsafe {
+        OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid)
+    };
+    if handle.is_null() {
+        return None;
+    }
+    let mut creation = FILETIME::default();
+    let mut exit = FILETIME::default();
+    let mut kernel = FILETIME::default();
+    let mut user = FILETIME::default();
+    let result = unsafe {
+        GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user)
+    };
+    unsafe {
+        CloseHandle(handle);
+    }
+    if result == 0 {
+        None
+    } else {
+        Some((u64::from(creation.dwHighDateTime) << 32) | u64::from(creation.dwLowDateTime))
+    }
+}
+
 fn owner_marker_is_live(path: &FsPath) -> bool {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return false;
@@ -97,17 +134,44 @@ fn owner_marker_is_live(path: &FsPath) -> bool {
     let Some(pid) = value.get("pid").and_then(Value::as_u64) else {
         return false;
     };
+    let expected_start_time = value.get("pidStartTime").and_then(Value::as_u64);
     #[cfg(unix)]
     {
-        if pid == 0 || pid == 1 {
+        if pid == 0 || pid == 1 || pid > libc::pid_t::MAX as u64 {
             return false;
+        }
+        if let (Some(expected), Some(actual)) = (
+            expected_start_time,
+            owner_process_start_time(pid as u32),
+        ) {
+            if expected != actual {
+                return false;
+            }
         }
         let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
         result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(windows)]
     {
-        pid > 0
+        if pid > u32::MAX as u64 {
+            return false;
+        }
+        if let (Some(expected), Some(actual)) = (
+            expected_start_time,
+            owner_process_start_time(pid as u32),
+        ) {
+            if expected != actual {
+                return false;
+            }
+        }
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
+        if handle.is_null() {
+            return unsafe { GetLastError() } == ERROR_ACCESS_DENIED;
+        }
+        unsafe {
+            CloseHandle(handle);
+        }
+        true
     }
 }
 
@@ -628,6 +692,23 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
             let _cleanup = StartupMarkerGuard::new(marker.clone());
         }
         assert!(marker.exists());
+        std::fs::write(&marker, format!(r#"{{"pid":{}}}"#, u64::MAX)).unwrap();
+        {
+            let _cleanup = StartupMarkerGuard::new(marker.clone());
+        }
+        assert!(!marker.exists());
+        #[cfg(any(target_os = "linux", windows))]
+        {
+            std::fs::write(
+                &marker,
+                format!(r#"{{"pid":{},"pidStartTime":0}}"#, std::process::id()),
+            )
+            .unwrap();
+            {
+                let _cleanup = StartupMarkerGuard::new(marker.clone());
+            }
+            assert!(!marker.exists());
+        }
         let _ = std::fs::remove_dir_all(&directory);
     }
 
@@ -2099,6 +2180,7 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
         &marker_path,
         serde_json::to_vec(&serde_json::json!({
             "pid": std::process::id(),
+            "pidStartTime": owner_process_start_time(std::process::id()),
             "generation": generation,
             "database": path,
         }))?,
