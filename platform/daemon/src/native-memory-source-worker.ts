@@ -66,6 +66,39 @@ type WorkerEvent =
 	  }
 	| { readonly type: "error"; readonly id: string; readonly message: string };
 
+const NATIVE_SOURCE_WORKER_PROTOCOL_VERSION = 1;
+const NATIVE_SOURCE_WORKER_ERROR_BYTES = 16 * 1024;
+
+/** The only size/accounting boundary used by both worker directions. */
+function encodeWorkerFrame(event: WorkerEvent): WorkerEvent & { readonly version: number } {
+	const bounded =
+		event.type === "error" && event.message.length > NATIVE_SOURCE_WORKER_ERROR_BYTES
+			? { ...event, message: event.message.slice(0, NATIVE_SOURCE_WORKER_ERROR_BYTES) }
+			: event;
+	const frame = { version: NATIVE_SOURCE_WORKER_PROTOCOL_VERSION, ...bounded } as WorkerEvent & {
+		readonly version: number;
+	};
+	if (Buffer.byteLength(JSON.stringify(frame), "utf8") > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES)
+		return {
+			version: NATIVE_SOURCE_WORKER_PROTOCOL_VERSION,
+			type: "error",
+			id: "id" in event ? event.id : "worker",
+			message: "native source worker frame exceeds IPC limit",
+		};
+	return frame;
+}
+
+function decodeWorkerFrame(value: unknown): WorkerEvent | null {
+	if (
+		typeof value !== "object" ||
+		value === null ||
+		(value as { version?: unknown }).version !== NATIVE_SOURCE_WORKER_PROTOCOL_VERSION
+	)
+		return null;
+	const frame = value as WorkerEvent;
+	return typeof frame.type === "string" ? frame : null;
+}
+
 interface PendingScan {
 	readonly resolve: (page: NativeSourceWorkerPage) => void;
 	readonly reject: (error: Error) => void;
@@ -191,7 +224,10 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 				frontier,
 				permissionDeniedPaths,
 			};
-			const candidateBytes = Buffer.byteLength(JSON.stringify(candidate), "utf8");
+			const candidateBytes = Buffer.byteLength(
+				JSON.stringify(encodeWorkerFrame({ type: "result", id: command.id, result: candidate })),
+				"utf8",
+			);
 			if (files.length > 0 && candidateBytes > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES) {
 				frontier.push(path);
 				break;
@@ -228,12 +264,23 @@ export function runNativeSourceWorker(): void {
 	const port = parentPort;
 	if (port === null) throw new Error("native source worker requires a parent port");
 	const send = (event: WorkerEvent): void => {
-		const serialized = JSON.stringify(event);
-		if (Buffer.byteLength(serialized, "utf8") > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES)
-			throw new Error(
-				`native source worker message exceeds the ${NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES}-byte IPC limit`,
-			);
-		port.postMessage(event);
+		try {
+			port.postMessage(encodeWorkerFrame(event));
+		} catch (error) {
+			if (event.type !== "error") {
+				try {
+					port.postMessage(
+						encodeWorkerFrame({
+							type: "error",
+							id: "id" in event ? event.id : "worker",
+							message: error instanceof Error ? error.message : String(error),
+						}),
+					);
+				} catch {
+					/* channel is gone */
+				}
+			}
+		}
 	};
 	send({ type: "ready", threadId });
 	port.on("message", (command: WorkerCommand) => {
@@ -328,7 +375,9 @@ export function createNativeSourceWorker(
 					reject(error);
 				}
 			};
-			current.on("message", (event: WorkerEvent) => {
+			current.on("message", (raw: unknown) => {
+				const event = decodeWorkerFrame(raw);
+				if (event === null) return;
 				if (event.type === "ready") {
 					ready = true;
 					resolve();
@@ -399,7 +448,7 @@ export function createNativeSourceWorker(
 			return await result;
 		}
 		try {
-			current.postMessage(command);
+			current.postMessage({ version: NATIVE_SOURCE_WORKER_PROTOCOL_VERSION, ...command });
 		} catch (error: unknown) {
 			if (pending.delete(id)) {
 				clearTimeout(timer);

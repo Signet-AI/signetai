@@ -149,4 +149,24 @@ describe("native source worker", () => {
 		).rejects.toThrow(/IPC limit/);
 		await worker.close();
 	});
+
+	it("reuses the worker after a bounded oversized-file rejection", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-reuse-"));
+		await writeFile(join(root, "huge.md"), "x".repeat(NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES + 1024));
+		await writeFile(join(root, "ok.md"), "ok");
+		const worker = createNativeSourceWorker();
+		try {
+			await expect(
+				worker.scan({ source: { root, files: [{ glob: "huge.md", kind: "markdown" }] }, cursor: null, pageSize: 1 }),
+			).rejects.toThrow(/IPC limit/);
+			const page = await worker.scan({
+				source: { root, files: [{ glob: "ok.md", kind: "markdown" }] },
+				cursor: null,
+				pageSize: 1,
+			});
+			expect(page.files[0]?.content).toBe("ok");
+		} finally {
+			await worker.close();
+		}
+	});
 });
