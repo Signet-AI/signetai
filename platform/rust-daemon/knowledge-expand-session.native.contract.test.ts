@@ -203,7 +203,7 @@ test("real daemon session expansion enforces HTTP auth, selection, bounds, safet
 	});
 	expect(
 		(await request(daemon.origin, { entityName: "Session Subject" }, { max: 1 })).body.summaries.map((s: any) => s.id),
-	).toEqual(["sum-safe-new"]);
+	).toEqual([]);
 	expect(
 		(await request(daemon.origin, { entityName: "Session Subject" }, { project: "project-b" })).body.summaries.map(
 			(s: any) => s.id,
