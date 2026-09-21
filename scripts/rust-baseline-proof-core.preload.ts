@@ -5,6 +5,9 @@ const driverPath: string = driver;
 
 // biome-ignore lint/suspicious/noExplicitAny: transport JSON is intentionally dynamic.
 function call(path: string, request: Record<string, unknown>): any {
+	console.error(
+		`backend=fresh-rust artifact=signet-core-test-driver process=transport pid=${process.pid} account=preload`,
+	);
 	const result = Bun.spawnSync([driverPath, path], {
 		// biome-ignore lint/suspicious/noExplicitAny: Bun accepts string stdin at runtime.
 		stdin: `${JSON.stringify(request)}\n{"op":"close"}\n` as any,
@@ -65,6 +68,3 @@ Bun.plugin({
 		}));
 	},
 });
-console.error(
-	`backend=fresh-rust artifact=signet-core-test-driver process=transport pid=${process.pid} account=preload`,
-);
