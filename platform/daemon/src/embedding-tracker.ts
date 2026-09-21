@@ -160,6 +160,7 @@ export function startEmbeddingTracker(
 	repairCfg: PipelineRepairConfig,
 	fetchEmbeddingFn: (text: string, cfg: EmbeddingConfig) => Promise<number[] | null>,
 	checkProviderFn: (cfg: EmbeddingConfig) => Promise<{ available: boolean }>,
+	agentId = "default",
 ): EmbeddingTrackerHandle {
 	let running = true;
 	let timer: ReturnType<typeof setTimeout> | null = null;
@@ -258,6 +259,7 @@ export function startEmbeddingTracker(
 					await finishEmbeddingRepairLease(accessor, admission.lease, {
 						successful: [],
 						failed: cycle.failedRows,
+						agentId,
 						model: embeddingCfg.model,
 						pollMs: trackerCfg.pollMs,
 						eligibility: (db) => isActiveEmbeddingConfig(db, embeddingCfg),
@@ -303,6 +305,7 @@ export function startEmbeddingTracker(
 				await finishEmbeddingRepairLease(accessor, admission.lease, {
 					successful: applied ? cycle.results.map(({ row }) => ({ id: row.id, contentHash: row.contentHash })) : [],
 					failed: cycle.failedRows.map((row) => ({ id: row.id, contentHash: row.contentHash })),
+					agentId,
 					model: embeddingCfg.model,
 					pollMs: trackerCfg.pollMs,
 					eligibility: applied || ((db) => isActiveEmbeddingConfig(db, embeddingCfg)),
@@ -313,6 +316,7 @@ export function startEmbeddingTracker(
 				await finishEmbeddingRepairLease(accessor, admission.lease, {
 					successful: [],
 					failed: [],
+					agentId,
 					model: embeddingCfg.model,
 					pollMs: trackerCfg.pollMs,
 					eligibility: (db) => isActiveEmbeddingConfig(db, embeddingCfg),

@@ -218,6 +218,7 @@ async function executeRecommendation(
 					successful: [],
 					affected,
 					failed: [],
+					agentId: embedding.agentId,
 					model: embedding.cfg.model,
 					pollMs: deps.cfg.embeddingTracker.pollMs,
 					eligibility: (db) => isActiveEmbeddingConfig(db, embedding.cfg),

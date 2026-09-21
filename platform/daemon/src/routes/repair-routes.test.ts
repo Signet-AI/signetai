@@ -167,3 +167,16 @@ describe("retired semantic repair routes", () => {
 		expect(response.status).toBe(404);
 	});
 });
+
+describe("POST /api/repair/re-embed", () => {
+	it("rejects a zero batch size before opening the repair database", async () => {
+		const response = await makeApp().request("/api/repair/re-embed", {
+			method: "POST",
+			headers: requestHeaders(),
+			body: JSON.stringify({ agentId: "agent-relink", batchSize: 0 }),
+		});
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "batchSize must be a positive integer" });
+	});
+});

@@ -41,11 +41,12 @@ function resolveRepairContext(c: Context): RepairContext {
 	return { reason, actor, actorType, requestId };
 }
 
-function repairHttpStatus(result: RepairResult): 200 | 429 | 500 {
+function repairHttpStatus(result: RepairResult): 200 | 400 | 429 | 500 {
 	if (result.success) return 200;
-	if ("status" in result && result.status === "running") return 200;
+	if (result.details?.status === "running") return 200;
+	if (result.details?.invalidInput === true) return 400;
 	if (
-		/cooldown active|hourly budget exhausted|denied by policy gate|autonomous\.|agents cannot trigger repairs|already in progress|owner (?:admission|job).*?(?:deadline|queue)|global vector reconciliation/i.test(
+		/cooldown active|hourly budget exhausted|retry backoff|denied by policy gate|autonomous\.|agents cannot trigger repairs|already in progress|owner (?:admission|job).*?(?:deadline|queue)|global vector reconciliation|cancelled|time budget|byte budget/i.test(
 			result.message,
 		)
 	) {
@@ -180,15 +181,27 @@ export function registerRepairRoutes(
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const accessor = deps.getDbAccessor?.() ?? getDbAccessor();
 		const ctx = resolveRepairContext(c);
-		let batchSize = 50;
+		let batchSize = 20;
 		let dryRun = false;
 		let fullSweep = false;
 		let operationId: string | undefined;
+		let invalidBatchSize = false;
 
 		let body: Record<string, unknown> = {};
 		try {
 			body = asRecord(await c.req.json());
-			if (typeof body.batchSize === "number") batchSize = body.batchSize;
+			if ("batchSize" in body) {
+				if (
+					typeof body.batchSize !== "number" ||
+					!Number.isFinite(body.batchSize) ||
+					!Number.isInteger(body.batchSize) ||
+					body.batchSize <= 0
+				) {
+					invalidBatchSize = true;
+				} else {
+					batchSize = body.batchSize;
+				}
+			}
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
 			operationId = readString(body, "operationId") ?? readString(body, "operation_id");
@@ -206,6 +219,7 @@ export function registerRepairRoutes(
 			resolveDaemonAgentId(),
 		);
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
+		if (invalidBatchSize) return c.json({ error: "batchSize must be a positive integer" }, 400);
 
 		const result = await reembedMissingMemories(
 			accessor,
@@ -218,8 +232,10 @@ export function registerRepairRoutes(
 			batchSize,
 			dryRun,
 			fullSweep,
-			fullSweep && ctx.actorType === "operator" ? 0 : undefined,
+			undefined,
 			operationId ?? c.req.query("operationId") ?? c.req.query("operation_id") ?? undefined,
+			undefined,
+			vectorRepairOptions(body, c.req.raw.signal),
 		);
 
 		return c.json(result, repairHttpStatus(result));

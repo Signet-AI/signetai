@@ -43,6 +43,7 @@ export interface EmbeddingRepairCheckpoint {
 	readonly checkpointId: string;
 	readonly agentId: string;
 	readonly model: string;
+	readonly profileFingerprint: string | null;
 	readonly status: EmbeddingRepairCheckpointStatus;
 	readonly batches: number;
 	readonly selected: number;
@@ -56,6 +57,7 @@ export interface EmbeddingRepairCheckpoint {
 }
 
 export interface EmbeddingRepairCheckpointUpdate {
+	readonly profileFingerprint?: string | null;
 	readonly batches?: number;
 	readonly selected?: number;
 	readonly written?: number;
@@ -76,6 +78,12 @@ interface BudgetRow {
 	readonly last_error: string | null;
 }
 
+interface ProgressRow {
+	readonly last_completed_at: string | null;
+	readonly last_affected: number;
+	readonly last_error: string | null;
+}
+
 interface FailureRow {
 	readonly memory_id: string;
 	readonly content_hash: string;
@@ -87,6 +95,7 @@ interface CheckpointRow {
 	readonly checkpoint_id: string;
 	readonly agent_id: string;
 	readonly model: string;
+	readonly profile_fingerprint: string | null;
 	readonly status: EmbeddingRepairCheckpointStatus;
 	readonly batches: number;
 	readonly selected: number;
@@ -141,6 +150,7 @@ function checkpointFromRow(row: CheckpointRow): EmbeddingRepairCheckpoint {
 		checkpointId: row.checkpoint_id,
 		agentId: row.agent_id,
 		model: row.model,
+		profileFingerprint: row.profile_fingerprint,
 		status: row.status,
 		batches: row.batches,
 		selected: row.selected,
@@ -158,7 +168,7 @@ function readCheckpoint(db: ReadDb, checkpointId: string): CheckpointRow | null 
 	return (
 		(db
 			.prepare(
-				`SELECT checkpoint_id, agent_id, model, status, batches, selected, written,
+				`SELECT checkpoint_id, agent_id, model, profile_fingerprint, status, batches, selected, written,
 					failed, stale, cross_agent_hash_conflicts, last_error, created_at, updated_at
 				 FROM embedding_repair_checkpoints WHERE checkpoint_id = ?`,
 			)
@@ -184,6 +194,7 @@ export async function ensureEmbeddingRepairCheckpoint(
 	checkpointId: string,
 	agentId: string,
 	model: string,
+	profileFingerprint: string,
 	now = Date.now(),
 ): Promise<EmbeddingRepairCheckpoint> {
 	return await accessor.withWriteTxAsync(
@@ -191,10 +202,10 @@ export async function ensureEmbeddingRepairCheckpoint(
 			const nowIso = iso(now);
 			db.prepare(
 				`INSERT OR IGNORE INTO embedding_repair_checkpoints
-				(checkpoint_id, agent_id, model, status, batches, selected, written, failed,
+				(checkpoint_id, agent_id, model, profile_fingerprint, status, batches, selected, written, failed,
 				 stale, cross_agent_hash_conflicts, last_error, created_at, updated_at)
-			 VALUES (?, ?, ?, 'running', 0, 0, 0, 0, 0, 0, NULL, ?, ?)`,
-			).run(checkpointId, agentId, model, nowIso, nowIso);
+			 VALUES (?, ?, ?, ?, 'running', 0, 0, 0, 0, 0, 0, NULL, ?, ?)`,
+			).run(checkpointId, agentId, model, profileFingerprint, nowIso, nowIso);
 			const row = readCheckpoint(db, checkpointId);
 			if (row === null) throw new Error(`embedding repair checkpoint ${checkpointId} was not initialized`);
 			if (row.agent_id !== agentId || row.model !== model) {
@@ -220,6 +231,7 @@ export async function updateEmbeddingRepairCheckpoint(
 			db.prepare(
 				`UPDATE embedding_repair_checkpoints
 			 SET status = COALESCE(?, status),
+			     profile_fingerprint = COALESCE(?, profile_fingerprint),
 			batches = batches + ?,
 			     selected = selected + ?,
 			     written = written + ?,
@@ -231,6 +243,7 @@ export async function updateEmbeddingRepairCheckpoint(
 			 WHERE checkpoint_id = ?`,
 			).run(
 				update.status ?? null,
+				update.profileFingerprint ?? null,
 				update.batches ?? 1,
 				update.selected ?? 0,
 				update.written ?? 0,
@@ -294,18 +307,29 @@ export async function acquireEmbeddingRepairLease(
 	);
 }
 
-export async function readEmbeddingRepairState(accessor: DbAccessor): Promise<EmbeddingRepairState | null> {
+export async function readEmbeddingRepairState(
+	accessor: DbAccessor,
+	agentId?: string,
+): Promise<EmbeddingRepairState | null> {
 	return await accessor.withReadDbAsync(
 		(db: import("./db-accessor").ReadDb) => {
 			const row = readBudget(db);
 			if (row == null) return null;
+			const progress =
+				agentId === undefined
+					? null
+					: ((db
+							.prepare(
+								"SELECT last_completed_at, last_affected, last_error FROM embedding_repair_progress WHERE agent_id = ?",
+							)
+							.get(agentId) as unknown as ProgressRow | null) ?? null);
 			return {
 				windowStartedAt: row.window_started_at,
 				batchesStarted: row.batches_started,
-				lastCompletedAt: row.last_completed_at,
-				lastAffected: row.last_affected,
+				lastCompletedAt: progress?.last_completed_at ?? (agentId === undefined ? row.last_completed_at : null),
+				lastAffected: progress?.last_affected ?? (agentId === undefined ? row.last_affected : 0),
 				leaseExpiresAt: row.lease_expires_at,
-				lastError: row.last_error,
+				lastError: progress?.last_error ?? (agentId === undefined ? row.last_error : null),
 			};
 		},
 		{ siteToken: "db:repair.state.read" },
@@ -351,6 +375,7 @@ export async function finishEmbeddingRepairLease(
 		readonly affected?: number;
 		readonly failed: readonly EmbeddingRepairKey[];
 		readonly model: string;
+		readonly agentId?: string;
 		readonly pollMs: number;
 		readonly eligibility: EmbeddingRepairEligibility;
 		readonly error?: string;
@@ -415,6 +440,18 @@ export async function finishEmbeddingRepairLease(
 					iso(now),
 					lease.id,
 				);
+				if (outcome.agentId !== undefined) {
+					db.prepare(
+						`INSERT INTO embedding_repair_progress
+						 (agent_id, last_completed_at, last_affected, last_error, updated_at)
+						 VALUES (?, ?, ?, ?, ?)
+						 ON CONFLICT(agent_id) DO UPDATE SET
+						   last_completed_at = excluded.last_completed_at,
+						   last_affected = excluded.last_affected,
+						   last_error = excluded.last_error,
+						   updated_at = excluded.updated_at`,
+					).run(outcome.agentId, iso(now), outcome.affected ?? outcome.successful.length, error, iso(now));
+				}
 				return true;
 			},
 			{ siteToken: "db:repair.lease.finish" },

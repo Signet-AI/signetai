@@ -164,6 +164,7 @@ import { up as transcriptImportStateMachine } from "./149-transcript-import-stat
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
 import { up as vectorRepairCheckpoints } from "./153-vector-repair-checkpoints";
 import { up as embeddingRepairCheckpoints } from "./156-embedding-repair-checkpoints";
+import { up as embeddingRepairProgress } from "./157-embedding-repair-progress";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1443,6 +1444,15 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "embedding-repair-checkpoints",
 		up: embeddingRepairCheckpoints,
 		artifacts: { tables: ["embedding_repair_checkpoints"] },
+	},
+	{
+		version: 157,
+		name: "embedding-repair-progress",
+		up: embeddingRepairProgress,
+		artifacts: {
+			tables: ["embedding_repair_progress"],
+			columns: [{ table: "embedding_repair_checkpoints", column: "profile_fingerprint" }],
+		},
 	},
 ];
 

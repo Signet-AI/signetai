@@ -391,4 +391,37 @@ describe("embedding repair state", () => {
 		expect(selected.map((row) => row.id)).toEqual(["eligible"]);
 		db.close();
 	});
+
+	it("keeps completion diagnostics scoped to the repaired agent", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = Date.parse("2026-08-11T12:00:00.000Z");
+		const lease = (await acquireEmbeddingRepairLease(accessor, 0, 5, now)).lease;
+		if (lease === undefined) throw new Error("expected repair lease");
+
+		await finishEmbeddingRepairLease(
+			accessor,
+			lease,
+			{
+				agentId: "agent-a",
+				successful: [{ id: "memory-a", contentHash: "hash-a" }],
+				failed: [],
+				model: "test-model",
+				pollMs: 1_000,
+				eligibility: true,
+			},
+			now + 1,
+		);
+
+		expect(await readEmbeddingRepairState(accessor, "agent-a")).toMatchObject({
+			lastAffected: 1,
+			lastError: null,
+		});
+		expect(await readEmbeddingRepairState(accessor, "agent-b")).toMatchObject({
+			lastAffected: 0,
+			lastError: null,
+		});
+		db.close();
+	});
 });

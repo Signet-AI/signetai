@@ -413,30 +413,49 @@ Requires `admin` permission.
 
 ### POST /api/repair/re-embed
 
-Batch re-embeds memories that are missing vector embeddings. Processes
-up to `batchSize` memories per call. Requires `admin` permission.
-Rate-limited — returns `429` when the limit is exceeded.
+Batch re-embeds memories that are missing vector embeddings. Processes at most
+20 memories per call, subject to the durable cooldown, hourly budget, byte
+budget, and run-time budget. Requires `admin` permission. Rate-limited — returns
+`429` when the limit is exceeded.
+
+A full sweep uses `fullSweep: true` and returns an `operationId`. Repeat the
+request with that operation ID after the reported cooldown to resume the next
+bounded batch. Checkpoint state survives daemon restarts. Provider failures,
+request cancellation, and budget exhaustion leave the operation resumable;
+profile changes or cross-agent hash conflicts fail the operation explicitly.
 
 **Request body**
 
 ```json
 {
-  "batchSize": 50,
+  "batchSize": 20,
+  "fullSweep": true,
+  "operationId": "embedding-repair-...",
+  "maxVectorBytes": 4194304,
+  "runBudgetMs": 30000,
   "dryRun": false
 }
 ```
 
-`batchSize` defaults to `50`. `dryRun: true` reports what would be
-embedded without calling the embedding provider.
+`batchSize` defaults to `20`, the server maximum. When supplied, it must be a
+positive integer. `maxVectorBytes` and `runBudgetMs` are bounded by server-side
+ceilings. `dryRun: true` reports what would be embedded without calling the
+embedding provider.
 
 **Response**
 
 ```json
 {
-  "action": "reEmbedMissingVectors",
+  "action": "reembedMissingMemories",
   "success": true,
-  "affected": 42,
-  "message": "re-embedded 42 memories"
+  "affected": 20,
+  "message": "re-embedded 20 of 20 memories in one bounded batch (22 still missing)",
+  "details": {
+    "operationId": "embedding-repair-...",
+    "status": "running",
+    "remaining": 22,
+    "batches": 1
+  }
 }
 ```
 

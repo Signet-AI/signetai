@@ -124,14 +124,28 @@ export function countUnembeddedMemories(db: ReadDb, agentId: string): number {
 	);
 }
 
-export function listUnembeddedMemories(db: ReadDb, limit: number, agentId: string): ReadonlyArray<UnembeddedRow> {
+export function listUnembeddedMemories(
+	db: ReadDb,
+	limit: number,
+	agentId: string,
+	model?: string,
+	now = new Date().toISOString(),
+): ReadonlyArray<UnembeddedRow> {
+	const backoffJoin =
+		model === undefined
+			? ""
+			: "LEFT JOIN embedding_repair_backoff b ON b.memory_id = m.id AND b.content_hash = m.content_hash AND b.model = ?";
+	const backoffFilter = model === undefined ? "" : "AND (b.retry_at IS NULL OR b.retry_at <= ?)";
+	const params = model === undefined ? [agentId, limit] : [model, agentId, now, limit];
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
 				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
 			 FROM memories m
+			 ${backoffJoin}
 			 WHERE m.is_deleted = 0
 			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
+			   ${backoffFilter}
 			   AND NOT EXISTS (
 			     SELECT 1 FROM embeddings e
 			     WHERE e.source_type = 'memory' AND e.source_id = m.id
@@ -145,7 +159,7 @@ export function listUnembeddedMemories(db: ReadDb, limit: number, agentId: strin
 			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
 			 LIMIT ?`,
 		)
-		.all(agentId, limit) as UnembeddedRow[];
+		.all(...params) as UnembeddedRow[];
 }
 
 export function countAllUnembeddedMemories(db: ReadDb): number {
@@ -166,13 +180,26 @@ export function countAllUnembeddedMemories(db: ReadDb): number {
 	);
 }
 
-export function listAllUnembeddedMemories(db: ReadDb, limit: number): ReadonlyArray<UnembeddedRow> {
+export function listAllUnembeddedMemories(
+	db: ReadDb,
+	limit: number,
+	model?: string,
+	now = new Date().toISOString(),
+): ReadonlyArray<UnembeddedRow> {
+	const backoffJoin =
+		model === undefined
+			? ""
+			: "LEFT JOIN embedding_repair_backoff b ON b.memory_id = m.id AND b.content_hash = m.content_hash AND b.model = ?";
+	const backoffFilter = model === undefined ? "" : "AND (b.retry_at IS NULL OR b.retry_at <= ?)";
+	const params = model === undefined ? [limit] : [model, now, limit];
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
 				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
 			 FROM memories m
+			 ${backoffJoin}
 			 WHERE m.is_deleted = 0
+			   ${backoffFilter}
 			   AND NOT EXISTS (
 			     SELECT 1 FROM embeddings e
 			     WHERE e.source_type = 'memory' AND e.source_id = m.id
@@ -186,7 +213,7 @@ export function listAllUnembeddedMemories(db: ReadDb, limit: number): ReadonlyAr
 			 ORDER BY CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END ASC, m.created_at ASC, m.id ASC
 			 LIMIT ?`,
 		)
-		.all(limit) as UnembeddedRow[];
+		.all(...params) as UnembeddedRow[];
 }
 
 export function listStaleEmbeddingRows(

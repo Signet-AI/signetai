@@ -1874,6 +1874,305 @@ describe("reembedMissingMemories", () => {
 		expect(remaining.n).toBe(0);
 	});
 
+	it("does not retry a provider failure while its durable backoff is active", async () => {
+		const now = new Date().toISOString();
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+		).run("mem-failing", "failing content", "hash-failing", now, now);
+		db.prepare(
+			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
+			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
+		).run("mem-next", "next content", "hash-next", now, now);
+		const cfg = { ...TEST_CFG, repair: { ...TEST_CFG.repair, reembedCooldownMs: 0, reembedHourlyBudget: 5 } };
+		let providerCalls = 0;
+		const first = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerCalls++;
+				return null;
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+		);
+		expect(first.success).toBe(false);
+		expect(providerCalls).toBe(1);
+
+		const secondInputs: string[] = [];
+		const second = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async (content) => {
+				secondInputs.push(content);
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+		);
+
+		expect(second.success).toBe(true);
+		expect(secondInputs).toEqual(["next content"]);
+		expect(providerCalls).toBe(1);
+	});
+
+	it("keeps a transient provider failure resumable through the same operation id", async () => {
+		insertMemory(db, "mem-provider-retry", "default", "hash-provider-retry");
+		const cfg = { ...TEST_CFG, repair: { ...TEST_CFG.repair, reembedCooldownMs: 0, reembedHourlyBudget: 5 } };
+		let shouldFail = true;
+		const first = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				if (shouldFail) return null;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			true,
+			0,
+		);
+		const operationId = first.details?.operationId;
+		expect(first.success).toBe(false);
+		expect(typeof operationId).toBe("string");
+		expect(first.details).toMatchObject({ status: "running" });
+
+		db.prepare("UPDATE embedding_repair_backoff SET retry_at = ? WHERE memory_id = ?").run(
+			new Date(Date.now() - 1).toISOString(),
+			"mem-provider-retry",
+		);
+		shouldFail = false;
+		const second = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			true,
+			0,
+			operationId as string,
+		);
+
+		expect(second.success).toBe(true);
+		expect(second.affected).toBe(1);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-provider-retry'").get()).toBeTruthy();
+	});
+
+	it("records a terminal checkpoint when the active profile changes before resume", async () => {
+		insertMemory(db, "mem-profile-retry", "default", "hash-profile-retry");
+		insertMemory(db, "mem-profile-retry-2", "default", "hash-profile-retry-2");
+		const cfg = { ...TEST_CFG, repair: { ...TEST_CFG.repair, reembedCooldownMs: 0, reembedHourlyBudget: 5 } };
+		const first = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			true,
+			0,
+		);
+		const operationId = first.details?.operationId as string;
+		ensureEmbeddingIndexState(db, TEST_EMBEDDING_CFG);
+		db.prepare("UPDATE embedding_index_state SET active_profile_json = ? WHERE id = 1").run(
+			JSON.stringify({
+				fingerprint: embeddingProfileFingerprint({ ...TEST_EMBEDDING_CFG, model: "promoted-model" }),
+				provider: TEST_EMBEDDING_CFG.provider,
+				model: "promoted-model",
+				dimensions: TEST_EMBEDDING_CFG.dimensions,
+				baseUrl: TEST_EMBEDDING_CFG.base_url,
+			}),
+		);
+
+		const resumed = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			true,
+			0,
+			operationId,
+		);
+
+		expect(resumed.success).toBe(false);
+		expect(resumed.message).toMatch(/does not match|profile changed/i);
+		expect(
+			db
+				.prepare("SELECT status, last_error FROM embedding_repair_checkpoints WHERE checkpoint_id = ?")
+				.get(operationId),
+		).toMatchObject({ status: "failed" });
+	});
+
+	it("respects the configured cooldown between full-sweep batches", async () => {
+		insertMemory(db, "mem-cooldown-1", "default", "hash-cooldown-1");
+		insertMemory(db, "mem-cooldown-2", "default", "hash-cooldown-2");
+		const cfg = { ...TEST_CFG, repair: { ...TEST_CFG.repair, reembedCooldownMs: 60_000, reembedHourlyBudget: 5 } };
+		const first = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			true,
+		);
+		const operationId = first.details?.operationId as string;
+		const second = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			true,
+			undefined,
+			operationId,
+		);
+
+		expect(second.success).toBe(false);
+		expect(second.message).toMatch(/cooldown active/);
+	});
+
+	it("rejects an invalid batch size before selecting provider work", async () => {
+		insertMemory(db, "mem-invalid-batch", "default", "hash-invalid-batch");
+		let providerCalls = 0;
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerCalls++;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			0,
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.details).toMatchObject({ invalidInput: true });
+		expect(providerCalls).toBe(0);
+	});
+
+	it("does not persist vectors after the batch byte budget is reached", async () => {
+		insertMemory(db, "mem-byte-budget", "default", "hash-byte-budget");
+		let providerCalls = 0;
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerCalls++;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			false,
+			undefined,
+			undefined,
+			undefined,
+			{ maxVectorBytes: 30 },
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.details).toMatchObject({ byteLimitReached: true });
+		expect(providerCalls).toBe(1);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-byte-budget'").get()).toBeNull();
+	});
+
+	it("discards provider work when the HTTP request is cancelled", async () => {
+		insertMemory(db, "mem-cancelled", "default", "hash-cancelled");
+		const controller = new AbortController();
+		let providerCalls = 0;
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerCalls++;
+				controller.abort();
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			false,
+			undefined,
+			undefined,
+			undefined,
+			{ signal: controller.signal },
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.details).toMatchObject({ cancelled: true });
+		expect(providerCalls).toBe(1);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-cancelled'").get()).toBeNull();
+	});
+
+	it("stops a batch when its run-time budget expires", async () => {
+		insertMemory(db, "mem-time-budget", "default", "hash-time-budget");
+		let providerCalls = 0;
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerCalls++;
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+			false,
+			false,
+			undefined,
+			undefined,
+			undefined,
+			{ runBudgetMs: 1 },
+		);
+
+		expect(result.success).toBe(false);
+		expect(result.details).toMatchObject({ timedOut: true });
+		expect(providerCalls).toBe(1);
+		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-time-budget'").get()).toBeNull();
+	});
+
 	it("clamps an oversized request before selecting provider work", async () => {
 		const now = new Date().toISOString();
 		for (let i = 0; i < 25; i++) {
