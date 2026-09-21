@@ -2693,6 +2693,13 @@ fn execute_operation(
             let metadata = bounded_json(&metadata)?;
             let id = uuid::Uuid::new_v4().to_string();
             let tx = connection.transaction()?;
+            let canonical_name = canonical_key(&name);
+            let description = serde_json::from_str::<Value>(&metadata).ok().and_then(|v| {
+                v.get("description")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            });
+            tx.execute("INSERT INTO entities(id,agent_id,workspace_id,name,canonical_name,entity_type,description,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',datetime('now'),datetime('now'))",params![id,agent_id,workspace_id,name,canonical_name,entity_type,description])?;
             tx.execute("INSERT INTO kg_entities(id,agent_id,workspace_id,name,entity_type,metadata,created_at,updated_at) VALUES(?,?,?,?,?,?,datetime('now'),datetime('now'))",params![id,agent_id,workspace_id,name,entity_type,metadata])?;
             tx.commit()?;
             Ok(json!({"id":id,"agentId":agent_id,"name":name,"type":entity_type}))
@@ -2814,12 +2821,13 @@ fn execute_operation(
             let name = bounded_text(&name, "aspect name", 256)?;
             let weight = weight.clamp(0.0, 1.0);
             let tx = connection.transaction()?;
-            let entity_ok: i64 = tx.query_row("SELECT count(*) FROM kg_entities WHERE id=? AND agent_id=? AND workspace_id=? AND deleted=0", params![entity_id, agent_id, workspace_id], |r| r.get(0))?;
+            let entity_ok: i64 = tx.query_row("SELECT count(*) FROM entities WHERE id=? AND agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active'", params![entity_id, agent_id, workspace_id], |r| r.get(0))?;
             if entity_ok != 1 {
                 return Err(CoreError::NotFound);
             }
             let id = uuid::Uuid::new_v4().to_string();
-            tx.execute("INSERT INTO kg_aspects(id,agent_id,workspace_id,entity_id,name,canonical_name,weight,created_at,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,entity_id,name,name.to_lowercase(),weight])?;
+            tx.execute("INSERT INTO entity_aspects(id,agent_id,workspace_id,entity_id,name,canonical_name,weight,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,'active',datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,entity_id,name,canonical_key(&name),weight])?;
+            tx.execute("INSERT INTO kg_aspects(id,agent_id,workspace_id,entity_id,name,canonical_name,weight,created_at,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,entity_id,name,canonical_key(&name),weight])?;
             tx.commit()?;
             Ok(json!({"id":id,"entityId":entity_id,"name":name,"weight":weight}))
         }
@@ -2842,7 +2850,7 @@ fn execute_operation(
             let content = bounded_text(&content, "attribute content", 4096)?;
             let tx = connection.transaction()?;
             let ok: i64 = tx.query_row(
-                "SELECT count(*) FROM kg_aspects WHERE id=? AND agent_id=? AND workspace_id=?",
+                "SELECT count(*) FROM entity_aspects WHERE id=? AND agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active'",
                 params![aspect_id, agent_id, workspace_id],
                 |r| r.get(0),
             )?;
@@ -2860,6 +2868,7 @@ fn execute_operation(
                 }
             }
             let id = uuid::Uuid::new_v4().to_string();
+            tx.execute("INSERT INTO entity_attributes(id,agent_id,workspace_id,aspect_id,memory_id,kind,content,normalized_content,claim_key,group_key,confidence,importance,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'active',datetime('now'),datetime('now'))",params![id,agent_id,workspace_id,aspect_id,memory_id,kind,content,content.to_lowercase(),claim_key,group_key,confidence.clamp(0.0,1.0),importance.clamp(0.0,1.0)])?;
             tx.execute("INSERT INTO kg_attributes(id,agent_id,workspace_id,aspect_id,memory_id,kind,content,normalized_content,claim_key,group_key,confidence,importance,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?, 'active',datetime('now'),datetime('now'))",params![id,agent_id,workspace_id,aspect_id,memory_id,kind,content,content.to_lowercase(),claim_key,group_key,confidence.clamp(0.0,1.0),importance.clamp(0.0,1.0)])?;
             tx.commit()?;
             Ok(

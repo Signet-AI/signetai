@@ -1841,6 +1841,78 @@ fn navigation_entity_resolves_current_schema_and_returns_detail_envelope() {
 }
 
 #[test]
+fn owner_knowledge_writes_seed_current_tree() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("owner-tree.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, entity_type TEXT NOT NULL DEFAULT 'person', description TEXT, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, weight REAL NOT NULL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, aspect_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT, group_key TEXT, claim_key TEXT, confidence REAL DEFAULT 0.5, importance REAL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);").unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let entity = c
+        .submit(Operation::KnowledgeEntityCreate {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            name: "Signet".into(),
+            entity_type: "project".into(),
+            metadata: serde_json::json!({"description":"owner"}),
+        })
+        .unwrap();
+    let eid = entity["id"].as_str().unwrap().to_owned();
+    let aspect = c
+        .submit(Operation::KnowledgeAspectCreate {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity_id: eid.clone(),
+            name: "Food".into(),
+            weight: 0.8,
+        })
+        .unwrap();
+    let aid = aspect["id"].as_str().unwrap().to_owned();
+    c.submit(Operation::KnowledgeAttributeCreate {
+        agent_id: "a1".into(),
+        workspace_id: "w1".into(),
+        aspect_id: aid,
+        kind: "attribute".into(),
+        content: "Pizza".into(),
+        claim_key: Some("favorite".into()),
+        group_key: Some("restaurants".into()),
+        confidence: 0.9,
+        importance: 0.9,
+        memory_id: None,
+    })
+    .unwrap();
+    let tree = c
+        .submit(Operation::KnowledgeTree {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity_id: eid,
+            depth: 3,
+            max_aspects: 10,
+            max_groups: 10,
+            max_claims: 10,
+            max_attributes: 10,
+        })
+        .unwrap();
+    assert_eq!(tree["entity"]["name"], "Signet");
+    assert_eq!(
+        tree["items"][0]["groups"][0]["claims"][0]["claimKey"],
+        "favorite"
+    );
+    assert!(c
+        .submit(Operation::KnowledgeTree {
+            agent_id: "other".into(),
+            workspace_id: "w1".into(),
+            entity_id: "Signet".into(),
+            depth: 3,
+            max_aspects: 10,
+            max_groups: 10,
+            max_claims: 10,
+            max_attributes: 10
+        })
+        .is_err());
+}
+
+#[test]
 fn current_schema_knowledge_tree_is_scoped_bounded_and_status_aware() {
     let d = tempdir().unwrap();
     let p = d.path().join("current-tree.sqlite");
