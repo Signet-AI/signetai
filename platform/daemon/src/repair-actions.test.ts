@@ -1143,7 +1143,6 @@ describe("reembedMissingMemories", () => {
 			10,
 			false,
 			false,
-			undefined,
 		);
 
 		expect(selected).toEqual(["content for mem-b-unique"]);
@@ -1183,10 +1182,11 @@ describe("reembedMissingMemories", () => {
 			.prepare("SELECT vector, chunk_text, source_id, agent_id, dimensions FROM embeddings WHERE id = 'emb-owner'")
 			.get();
 		const providerInputs: string[] = [];
+		const cfg = { ...TEST_CFG, repair: { ...TEST_CFG.repair, reembedCooldownMs: 0 } };
 
 		const result = await reembedMissingMemories(
 			accessor,
-			TEST_CFG,
+			cfg,
 			CTX_AGENT,
 			createRateLimiter(),
 			async (content) => {
@@ -1198,7 +1198,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			true,
-			0,
 		);
 
 		expect(providerInputs).toEqual(["content for mem-repairable"]);
@@ -1217,7 +1216,7 @@ describe("reembedMissingMemories", () => {
 
 		const conflict = await reembedMissingMemories(
 			accessor,
-			TEST_CFG,
+			cfg,
 			CTX_AGENT,
 			createRateLimiter(),
 			async () => [0.1, 0.2, 0.3],
@@ -1226,7 +1225,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			true,
-			0,
 			operationId as string,
 		);
 
@@ -1806,9 +1804,10 @@ describe("reembedMissingMemories", () => {
 		}
 
 		const limiter = createRateLimiter();
+		const cfg = { ...TEST_CFG, repair: { ...TEST_CFG.repair, reembedCooldownMs: 0 } };
 		const first = await reembedMissingMemories(
 			accessor,
-			TEST_CFG,
+			cfg,
 			CTX_OPERATOR,
 			limiter,
 			async () => [0.1, 0.2, 0.3],
@@ -1827,7 +1826,7 @@ describe("reembedMissingMemories", () => {
 
 		const second = await reembedMissingMemories(
 			accessor,
-			TEST_CFG,
+			cfg,
 			CTX_OPERATOR,
 			limiter,
 			async () => [0.1, 0.2, 0.3],
@@ -1836,7 +1835,6 @@ describe("reembedMissingMemories", () => {
 			2,
 			false,
 			true,
-			0,
 			operationId as string,
 		);
 
@@ -1846,7 +1844,7 @@ describe("reembedMissingMemories", () => {
 
 		const third = await reembedMissingMemories(
 			accessor,
-			TEST_CFG,
+			cfg,
 			CTX_OPERATOR,
 			limiter,
 			async () => [0.1, 0.2, 0.3],
@@ -1855,7 +1853,6 @@ describe("reembedMissingMemories", () => {
 			2,
 			false,
 			true,
-			0,
 			operationId as string,
 		);
 
@@ -1940,7 +1937,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			true,
-			0,
 		);
 		const operationId = first.details?.operationId;
 		expect(first.success).toBe(false);
@@ -1963,7 +1959,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			true,
-			0,
 			operationId as string,
 		);
 
@@ -2034,7 +2029,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			true,
-			0,
 		);
 		const operationId = first.details?.operationId as string;
 		ensureEmbeddingIndexState(db, TEST_EMBEDDING_CFG);
@@ -2059,7 +2053,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			true,
-			0,
 			operationId,
 		);
 
@@ -2100,7 +2093,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			true,
-			undefined,
 			operationId,
 		);
 
@@ -2181,7 +2173,6 @@ describe("reembedMissingMemories", () => {
 			false,
 			undefined,
 			undefined,
-			undefined,
 			{ maxVectorBytes: 30 },
 		);
 
@@ -2212,7 +2203,6 @@ describe("reembedMissingMemories", () => {
 			false,
 			undefined,
 			undefined,
-			undefined,
 			{ signal: controller.signal },
 		);
 
@@ -2240,7 +2230,6 @@ describe("reembedMissingMemories", () => {
 			1,
 			false,
 			false,
-			undefined,
 			undefined,
 			undefined,
 			{ runBudgetMs: 1 },

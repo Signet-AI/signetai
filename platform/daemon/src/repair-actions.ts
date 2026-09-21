@@ -1219,7 +1219,6 @@ export async function reembedMissingMemories(
 	batchSize: number = DEFAULT_REEMBED_BATCH,
 	dryRun = false,
 	runToCompletion = false,
-	cooldownMsOverride?: number,
 	operationId?: string,
 	existingLease?: EmbeddingRepairLease,
 	options?: ReembedOptions,
@@ -1235,10 +1234,7 @@ export async function reembedMissingMemories(
 			details: { invalidInput: true },
 		};
 	}
-	const effectiveCooldownMs =
-		typeof cooldownMsOverride === "number" && Number.isFinite(cooldownMsOverride)
-			? Math.max(0, Math.floor(cooldownMsOverride))
-			: cfg.repair.reembedCooldownMs;
+	const effectiveCooldownMs = cfg.repair.reembedCooldownMs;
 	const gate = checkRepairGate(cfg, ctx, limiter, action, effectiveCooldownMs, cfg.repair.reembedHourlyBudget);
 
 	if (!gate.allowed) {

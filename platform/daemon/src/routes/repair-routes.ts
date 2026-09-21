@@ -55,27 +55,30 @@ function repairHttpStatus(result: RepairResult): 200 | 400 | 429 | 500 {
 	return 500;
 }
 
+type VectorRepairOptions = {
+	batchSize?: number;
+	maxVectorBytes?: number;
+	maxBatches?: number;
+	runBudgetMs?: number;
+	signal?: AbortSignal;
+};
+
+function readPositiveNumber(body: Readonly<Record<string, unknown>>, key: string): number | undefined {
+	const value = body[key];
+	return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
 function vectorRepairOptions(
 	body: Readonly<Record<string, unknown>>,
 	signal: AbortSignal | undefined,
-): {
-	readonly batchSize?: number;
-	readonly maxVectorBytes?: number;
-	readonly maxBatches?: number;
-	readonly runBudgetMs?: number;
-	readonly signal?: AbortSignal;
-} {
-	const positive = (key: string): number | undefined => {
-		const value = body[key];
-		return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
-	};
-	return {
-		...(positive("batchSize") === undefined ? {} : { batchSize: positive("batchSize") }),
-		...(positive("maxVectorBytes") === undefined ? {} : { maxVectorBytes: positive("maxVectorBytes") }),
-		...(positive("maxBatches") === undefined ? {} : { maxBatches: positive("maxBatches") }),
-		...(positive("runBudgetMs") === undefined ? {} : { runBudgetMs: positive("runBudgetMs") }),
-		...(signal === undefined ? {} : { signal }),
-	};
+): VectorRepairOptions {
+	const options: VectorRepairOptions = {};
+	for (const key of ["batchSize", "maxVectorBytes", "maxBatches", "runBudgetMs"] as const) {
+		const value = readPositiveNumber(body, key);
+		if (value !== undefined) options[key] = value;
+	}
+	if (signal !== undefined) options.signal = signal;
+	return options;
 }
 
 function rejectGlobalVectorRepair(body: Readonly<Record<string, unknown>>): Response | null {
@@ -190,23 +193,19 @@ export function registerRepairRoutes(
 		let body: Record<string, unknown> = {};
 		try {
 			body = asRecord(await c.req.json());
-			if ("batchSize" in body) {
-				if (
-					typeof body.batchSize !== "number" ||
-					!Number.isFinite(body.batchSize) ||
-					!Number.isInteger(body.batchSize) ||
-					body.batchSize <= 0
-				) {
-					invalidBatchSize = true;
-				} else {
-					batchSize = body.batchSize;
-				}
-			}
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
 			operationId = readString(body, "operationId") ?? readString(body, "operation_id");
 		} catch {
 			// no body or invalid JSON — use defaults
+		}
+		const options = vectorRepairOptions(body, c.req.raw.signal);
+		if ("batchSize" in body) {
+			if (options.batchSize === undefined || !Number.isInteger(options.batchSize)) {
+				invalidBatchSize = true;
+			} else {
+				batchSize = options.batchSize;
+			}
 		}
 		const scoped = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
@@ -232,10 +231,9 @@ export function registerRepairRoutes(
 			batchSize,
 			dryRun,
 			fullSweep,
-			undefined,
 			operationId ?? c.req.query("operationId") ?? c.req.query("operation_id") ?? undefined,
 			undefined,
-			vectorRepairOptions(body, c.req.raw.signal),
+			options,
 		);
 
 		return c.json(result, repairHttpStatus(result));
