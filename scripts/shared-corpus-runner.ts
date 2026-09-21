@@ -245,22 +245,16 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 		};
 	const failed = cases.filter((c) => /<(?:failure|error)\b/.test(c)).length;
 	const skipped = cases.filter((c) => /<skipped\b/.test(c)).length;
-	const identities = cases.map((c) => ({
-		file: c.match(/file="([^"]*)"/)?.[1] ?? "",
-		line: c.match(/line="([^"]*)"/)?.[1] ?? "",
-		key: `${c.match(/file="([^"]*)"/)?.[1] ?? ""}\0${c.match(/line="([^"]*)"/)?.[1] ?? ""}\0${c.match(/classname="([^"]*)"/)?.[1] ?? ""}\0${c.match(/name="([^"]*)"/)?.[1] ?? ""}`,
-	}));
-	const duplicate = (() => {
-		const seen = new Set<string>();
-		for (const identity of identities) {
-			// Bun's parameterized cases can share file/line/class/name metadata;
-			// location-bearing records remain real cases, not substitutions.
-			if (identity.file || identity.line) continue;
-			if (seen.has(identity.key)) return true;
-			seen.add(identity.key);
-		}
-		return false;
-	})();
+	const attribute = (source: string, name: string): string =>
+		source.match(new RegExp(`(?:^|\\s)${name}="([^"]*)"`))?.[1] ?? "";
+	const identities = cases.map((c) => {
+		const file = attribute(c, "file");
+		const line = attribute(c, "line");
+		const classname = attribute(c, "classname");
+		const name = attribute(c, "name");
+		return { file, line, key: `${file}\0${line}\0${classname}\0${name}` };
+	});
+	const duplicate = new Set(identities.map((identity) => identity.key)).size !== identities.length;
 	const expectedFiles = new Set(expected);
 	const observedFiles = new Set(identities.map((identity) => identity.file).filter(Boolean));
 	const missingFiles = expected.length > 0 ? expected.filter((file) => !observedFiles.has(file)) : [];

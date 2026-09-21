@@ -91,6 +91,14 @@ describe("shared corpus admission", () => {
 		expect(result.failed).toBeGreaterThan(0);
 	});
 
+	test("rejects duplicate location-bearing testcase identities", () => {
+		const xml =
+			'<testsuite tests="2"><testcase classname="x" name="a" file="a.test.ts" line="10"/><testcase classname="x" name="a" file="a.test.ts" line="10"/></testsuite>';
+		const result = parseJUnitReport(xml, ["a.test.ts"]);
+		expect(result.incomplete).toBe(true);
+		expect(result.crash).toBe(true);
+	});
+
 	test("nonzero child status cannot be represented as passed", () => {
 		const result = parseJUnitReport(
 			'<testsuite tests="1"><testcase classname="x" name="a"/></testsuite>',
