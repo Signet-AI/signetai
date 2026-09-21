@@ -35,6 +35,11 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 const MAX_OWNER_REQUEST_LINE_BYTES: usize = 40 * 1024 * 1024;
+const MAX_HEALTH_RECOVERY_ATTEMPTS: usize = 1;
+
+fn should_recover_health(attempts: usize) -> bool {
+    attempts < MAX_HEALTH_RECOVERY_ATTEMPTS
+}
 #[cfg(windows)]
 #[cfg(windows)]
 use windows_sys::Win32::Foundation::{
@@ -137,52 +142,51 @@ impl ExternalOwner {
             .session
             .lock()
             .map_err(|_| CoreError::OwnerStopped)?;
-        let id = Uuid::new_v4().to_string();
-        let generation = session.generation.clone();
-        let request = json!({"id":id,"generation":generation,"operation":operation.clone()});
-        let failed = serde_json::to_writer(&mut session.stdin, &request)
-            .and_then(|_| {
-                session
-                    .stdin
-                    .write_all(b"\n")
-                    .map_err(serde_json::Error::io)
-            })
-            .and_then(|_| session.stdin.flush().map_err(serde_json::Error::io))
-            .is_err();
-        if failed {
-            if matches!(operation, Operation::Health) {
-                let replacement = Self::start_session(&self.inner.workspace)?;
-                *session = replacement;
-                drop(session);
-                return self.submit(Operation::Health);
-            }
-            return Err(CoreError::OwnerStopped);
-        }
+        let mut health_recovery_attempts = 0;
         let mut line = String::new();
-        let read = session.stdout.read_line(&mut line);
-        if !matches!(read, Ok(size) if size > 0) {
-            if matches!(operation, Operation::Health) {
-                *session = Self::start_session(&self.inner.workspace)?;
-                drop(session);
-                return self.submit(Operation::Health);
+        loop {
+            let id = Uuid::new_v4().to_string();
+            let generation = session.generation.clone();
+            let request = json!({"id":id,"generation":generation,"operation":operation.clone()});
+            let failed = serde_json::to_writer(&mut session.stdin, &request)
+                .and_then(|_| {
+                    session
+                        .stdin
+                        .write_all(b"\n")
+                        .map_err(serde_json::Error::io)
+                })
+                .and_then(|_| session.stdin.flush().map_err(serde_json::Error::io))
+                .is_err();
+            line.clear();
+            let read_failed =
+                failed || !matches!(session.stdout.read_line(&mut line), Ok(size) if size > 0);
+            if !read_failed {
+                let response: Value =
+                    serde_json::from_str(&line).map_err(|_| CoreError::OwnerStopped)?;
+                if response.get("id").and_then(Value::as_str) != Some(id.as_str())
+                    || response.get("generation").and_then(Value::as_str)
+                        != Some(generation.as_str())
+                {
+                    return Err(CoreError::InvalidInput(
+                        "stale owner response rejected".into(),
+                    ));
+                }
+                return if response.get("ok").and_then(Value::as_bool) == Some(true) {
+                    response
+                        .get("result")
+                        .cloned()
+                        .ok_or(CoreError::OwnerStopped)
+                } else {
+                    Err(remote_core_error(&response))
+                };
             }
-            return Err(CoreError::OwnerStopped);
-        }
-        let response: Value = serde_json::from_str(&line).map_err(|_| CoreError::OwnerStopped)?;
-        if response.get("id").and_then(Value::as_str) != Some(id.as_str())
-            || response.get("generation").and_then(Value::as_str) != Some(generation.as_str())
-        {
-            return Err(CoreError::InvalidInput(
-                "stale owner response rejected".into(),
-            ));
-        }
-        if response.get("ok").and_then(Value::as_bool) == Some(true) {
-            response
-                .get("result")
-                .cloned()
-                .ok_or(CoreError::OwnerStopped)
-        } else {
-            Err(remote_core_error(&response))
+            if !matches!(operation, Operation::Health)
+                || !should_recover_health(health_recovery_attempts)
+            {
+                return Err(CoreError::OwnerStopped);
+            }
+            health_recovery_attempts += 1;
+            *session = Self::start_session(&self.inner.workspace)?;
         }
     }
     async fn submit_async(&self, operation: Operation) -> Result<Value, CoreError> {
@@ -458,6 +462,16 @@ fn wire_core_error(error: &CoreError) -> Value {
         CoreError::Sql(_) | CoreError::Serialization(_) | CoreError::Remote(_) => {
             json!({"errorKind":"internal","error":error.to_string()})
         }
+    }
+}
+
+#[cfg(test)]
+mod owner_health_recovery_tests {
+    #[test]
+    fn health_recovery_allows_one_replacement_then_terminates() {
+        assert!(super::should_recover_health(0));
+        assert!(!super::should_recover_health(1));
+        assert!(!super::should_recover_health(2));
     }
 }
 
