@@ -1,13 +1,22 @@
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
+import { writeFileSync } from "node:fs";
+
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
 const driver = process.env.SIGNET_RUST_CORE_DRIVER_BIN;
 if (!driver) throw new Error("SIGNET_RUST_CORE_DRIVER_BIN is required");
 const driverPath: string = driver;
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
+const evidenceFile = process.env.SIGNET_RUST_CORE_EVIDENCE_FILE;
+
+function recordEvidence(): void {
+	if (!evidenceFile) throw new Error("SIGNET_RUST_CORE_EVIDENCE_FILE is required");
+	const marker = "backend=fresh-rust artifact=signet-core-test-driver process=transport";
+	writeFileSync(evidenceFile, `${marker} pid=${process.pid}\n`, { flag: "a" });
+}
 
 // biome-ignore lint/suspicious/noExplicitAny: transport JSON is intentionally dynamic.
 function call(path: string, request: Record<string, unknown>): any {
-	console.error(
-		`backend=fresh-rust artifact=signet-core-test-driver process=transport pid=${process.pid} account=preload`,
-	);
+	recordEvidence();
 	const result = Bun.spawnSync([driverPath, path], {
 		// biome-ignore lint/suspicious/noExplicitAny: Bun accepts string stdin at runtime.
 		stdin: `${JSON.stringify(request)}\n{"op":"close"}\n` as any,
@@ -21,7 +30,7 @@ function call(path: string, request: Record<string, unknown>): any {
 	return response.result;
 }
 
-class Database {
+export class Database {
 	path: string;
 	constructor(path: string) {
 		this.path = path;

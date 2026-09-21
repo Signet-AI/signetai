@@ -84,6 +84,8 @@ for (const path of selected) if (!entries.has(path)) fail(`requested path is out
 mkdirSync(dirname(report), { recursive: true });
 const junitPath = `${report}.bun.xml`;
 if (existsSync(junitPath)) unlinkSync(junitPath);
+const evidenceFile = `${report}.native-evidence`;
+if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
 const child = spawnSync(
 	"bun",
 	[
@@ -96,14 +98,21 @@ const child = spawnSync(
 	],
 	{
 		cwd: process.cwd(),
-		env: { ...process.env, SIGNET_RUST_DAEMON_BIN: artifact, SIGNET_RUST_CORE_DRIVER_BIN: coreDriver },
+		env: {
+			...process.env,
+			SIGNET_RUST_DAEMON_BIN: artifact,
+			SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,
+			SIGNET_RUST_CORE_EVIDENCE_FILE: evidenceFile,
+		},
 		encoding: "utf8",
 	},
 );
 const stderr = `${child.stderr ?? ""}`;
 const stdout = `${child.stdout ?? ""}`;
 const daemonEvidence = /"backend"\s*:\s*"rust-daemon"/.test(stderr);
-const coreEvidence = /backend=fresh-rust artifact=signet-core-test-driver/.test(stderr);
+const coreEvidence =
+	existsSync(evidenceFile) &&
+	/backend=fresh-rust artifact=signet-core-test-driver process=transport/.test(readFileSync(evidenceFile, "utf8"));
 const nativeEvidence = daemonEvidence || coreEvidence;
 const cases: string[] = [];
 if (existsSync(junitPath)) {
@@ -136,6 +145,7 @@ writeFileSync(
 	report,
 	`<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" tests="${cases.length}" failures="${failures}" errors="0" skipped="0">${cases.join("")}</testsuite>`,
 );
+if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
 console.error(
 	JSON.stringify({
 		backend: "fresh-rust",
