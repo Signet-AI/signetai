@@ -64,7 +64,7 @@ function makeKeyring(initial: SecretKeyringResult): SecretKeyringAdapter & { set
 			next = { state: "found", value };
 			return next;
 		},
-		getStatus(): SecretKeyringResult {
+		async getStatus(): Promise<SecretKeyringResult> {
 			return stored === undefined ? next : { state: "found", value: stored };
 		},
 	};
@@ -524,14 +524,18 @@ describe("local secrets provider", () => {
 		expect(readFileSync(secretsFile(), "utf-8")).toBe(mismatchedStore);
 	});
 
-	test("default signet.secrets plugin degrades when the local provider is unhealthy", () => {
+	test("default signet.secrets plugin discovery does not wait for provider health", async () => {
 		mkdirSync(join(agentsDir, ".secrets"), { recursive: true });
 		writeFileSync(secretsFile(), "not-json", { mode: 0o600 });
 		resetDefaultPluginHostForTests();
 		resetSecretExecJobsForTests();
 
-		const plugin = getDefaultPluginHost().get(SIGNET_SECRETS_PLUGIN_ID);
+		const host = getDefaultPluginHost();
+		expect(host.get(SIGNET_SECRETS_PLUGIN_ID)?.state).toBe("active");
+		expect(host.get(SIGNET_SECRETS_PLUGIN_ID)?.health).toBeUndefined();
 
+		await Bun.sleep(0);
+		const plugin = host.get(SIGNET_SECRETS_PLUGIN_ID);
 		expect(plugin?.state).toBe("degraded");
 		expect(plugin?.health?.status).toBe("unhealthy");
 		expect(plugin?.stateReason).toContain("Failed to read secrets store");

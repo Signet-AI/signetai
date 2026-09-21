@@ -113,6 +113,44 @@ async function waitForJsonEvent(
 	throw new Error(`native DB owner event did not arrive within ${timeoutMs}ms`);
 }
 
+function initializeWorkspace(binary: string, workspace: string): void {
+	const result = spawnSync(
+		binary,
+		[
+			"setup",
+			"--non-interactive",
+			"--path",
+			workspace,
+			"--name",
+			"Native Embedding Smoke",
+			"--identity-mode",
+			"managed",
+			"--identity-preset",
+			"minimal",
+			"--network-mode",
+			"localhost",
+			"--remote-url",
+			"http://127.0.0.1:1",
+			"--embedding-provider",
+			"none",
+			"--extraction-provider",
+			"none",
+			"--skip-git",
+			"--disable-signet-secrets",
+			"--disable-graphiq",
+		],
+		{
+			cwd: workspace,
+			env: { ...process.env, SIGNET_PATH: workspace, SIGNET_TELEMETRY_OPTOUT: "1" },
+			encoding: "utf8",
+			timeout: 30_000,
+		},
+	);
+	if (result.status !== 0) {
+		throw new Error(`native setup failed (${String(result.status)}): ${result.stdout}\n${result.stderr}`);
+	}
+}
+
 function floatVector(value: unknown): Float32Array {
 	if (!(value instanceof Uint8Array)) throw new Error("embedding vector was not stored as bytes");
 	return new Float32Array(value.buffer.slice(value.byteOffset, value.byteOffset + value.byteLength));
@@ -500,6 +538,7 @@ describe("compiled native embedding runtime", () => {
 				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
 			}
 			const workspace = tempDir();
+			initializeWorkspace(binary, workspace);
 			writeFileSync(
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Embedding Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: native\n  model: nomic-embed-text-v1.5\n  dimensions: 768\n",
@@ -579,6 +618,7 @@ describe("compiled native embedding runtime", () => {
 				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
 			}
 			const workspace = tempDir();
+			initializeWorkspace(binary, workspace);
 			writeFileSync(
 				join(workspace, "agent.yaml"),
 				"version: 1\nschema: signet/v1\nagent:\n  name: Native Embedding Isolation Smoke\nmemory:\n  database: memory/memories.db\n  pipelineV2:\n    enabled: false\nembedding:\n  provider: native\n  model: nomic-embed-text-v1.5\n  dimensions: 768\n",
