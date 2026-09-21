@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, statSync, readFileSync } from "node:fs";
+import { existsSync, realpathSync, statSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 export type RustArtifactProvenance = {
@@ -14,11 +14,14 @@ export type RustArtifactProvenance = {
 	sourceRevision: string;
 };
 
-type Inputs = {
-	artifact: string;
-	checkout: string;
+type Inputs = PackagedArtifactInputs & {
 	target: string;
 	sourceRevision: string;
+};
+
+export type PackagedArtifactInputs = {
+	artifact: string;
+	checkout: string;
 	cargoLock: string;
 };
 
@@ -42,7 +45,9 @@ export function verifyStagedArtifact(input: Inputs): RustArtifactProvenance {
 	const artifact = resolve(input.artifact);
 	const checkout = resolve(input.checkout);
 	if (!existsSync(artifact)) throw new Error(`staged artifact missing: ${artifact}`);
-	if (artifact === checkout || artifact.startsWith(`${checkout}/`)) {
+	const resolvedArtifact = realpathSync(artifact);
+	const resolvedCheckout = realpathSync(checkout);
+	if (resolvedArtifact === resolvedCheckout || resolvedArtifact.startsWith(`${resolvedCheckout}/`)) {
 		throw new Error(`artifact must be staged outside checkout: ${artifact}`);
 	}
 	if (!existsSync(input.cargoLock)) throw new Error(`Cargo.lock missing: ${input.cargoLock}`);
@@ -59,4 +64,25 @@ export function verifyStagedArtifact(input: Inputs): RustArtifactProvenance {
 	if (!/^[0-9a-f]{40}$/.test(provenance.sourceRevision)) throw new Error("source revision must be a full git SHA");
 	if (!provenance.size) throw new Error("staged artifact is empty");
 	return provenance;
+}
+
+export function verifyPackagedArtifactProvenance(
+	input: PackagedArtifactInputs,
+	expected: RustArtifactProvenance,
+): RustArtifactProvenance {
+	const actual = verifyStagedArtifact({ ...input, target: expected.target, sourceRevision: expected.sourceRevision });
+	const fields: Array<keyof RustArtifactProvenance> = [
+		"artifact",
+		"target",
+		"rustToolchain",
+		"cargoLockSha256",
+		"sha256",
+		"size",
+		"executableIdentity",
+		"sourceRevision",
+	];
+	for (const field of fields) {
+		if (actual[field] !== expected[field]) throw new Error(`${field} mismatch`);
+	}
+	return actual;
 }
