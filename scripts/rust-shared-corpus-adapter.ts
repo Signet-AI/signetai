@@ -1,6 +1,16 @@
 #!/usr/bin/env bun
 /** Execute unchanged pinned baseline tests through the Rust daemon boundary. */
-import { existsSync, statSync, readFileSync, writeFileSync, mkdirSync, unlinkSync, realpathSync } from "node:fs";
+import {
+	existsSync,
+	statSync,
+	readFileSync,
+	writeFileSync,
+	mkdirSync,
+	unlinkSync,
+	realpathSync,
+	openSync,
+	closeSync,
+} from "node:fs";
 import { resolve, basename, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 
@@ -78,29 +88,40 @@ const junitPath = `${report}.bun.xml`;
 if (existsSync(junitPath)) unlinkSync(junitPath);
 const evidenceFile = `${report}.native-evidence`;
 if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
-const child = spawnSync(
-	"bun",
-	[
-		"test",
-		"--preload",
-		resolve(import.meta.dir, "rust-shared-corpus-combined.preload.ts"),
-		"--reporter=junit",
-		`--reporter-outfile=${junitPath}`,
-		...selected,
-	],
-	{
-		cwd: process.cwd(),
-		env: {
-			...process.env,
-			SIGNET_RUST_DAEMON_BIN: artifact,
-			SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,
-			SIGNET_RUST_CORE_EVIDENCE_FILE: evidenceFile,
+const stdoutPath = `${report}.stdout`;
+const stderrPath = `${report}.stderr`;
+for (const path of [stdoutPath, stderrPath]) if (existsSync(path)) unlinkSync(path);
+const stdoutFd = openSync(stdoutPath, "w");
+const stderrFd = openSync(stderrPath, "w");
+let child: ReturnType<typeof spawnSync>;
+try {
+	child = spawnSync(
+		"bun",
+		[
+			"test",
+			"--preload",
+			resolve(import.meta.dir, "rust-shared-corpus-combined.preload.ts"),
+			"--reporter=junit",
+			`--reporter-outfile=${junitPath}`,
+			...selected,
+		],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				SIGNET_RUST_DAEMON_BIN: artifact,
+				SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,
+				SIGNET_RUST_CORE_EVIDENCE_FILE: evidenceFile,
+			},
+			stdio: ["ignore", stdoutFd, stderrFd],
 		},
-		encoding: "utf8",
-	},
-);
-const stderr = `${child.stderr ?? ""}`;
-const stdout = `${child.stdout ?? ""}`;
+	);
+} finally {
+	closeSync(stdoutFd);
+	closeSync(stderrFd);
+}
+const stderr = existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "";
+const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf8") : "";
 const daemonEvidence = /"backend"\s*:\s*"rust-daemon"/.test(stderr);
 const coreEvidence =
 	existsSync(evidenceFile) &&
@@ -135,7 +156,10 @@ console.error(
 		nativeEvidence,
 		childStatus: child.status,
 		childSignal: child.signal,
-		stderr,
+		stderr: stderr.slice(-8192),
+		stdout: stdout.slice(-8192),
+		stderrBytes: Buffer.byteLength(stderr),
+		stdoutBytes: Buffer.byteLength(stdout),
 	}),
 );
 process.exit(failures ? 1 : 0);

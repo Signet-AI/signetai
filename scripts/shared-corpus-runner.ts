@@ -241,6 +241,7 @@ export function run(
 		cwd: backend === "typescript" ? o.worktree : repo,
 		env: { ...process.env },
 		encoding: "utf8",
+		maxBuffer: 32 * 1024 * 1024,
 	});
 	const fresh = report && existsSync(report);
 	if (!fresh) {
