@@ -381,6 +381,7 @@ import * as transformersWebRuntime from "./transformers-web-runtime";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+process.env.SIGNET_COMPILED_NATIVE = "1";
 registerNativeAssets({ connectors: connectorAssets, dashboard: dashboardAssets, graphiq: graphiqAssets, skills: skillAssets, templates: templateAssets, workers: workerAssets, wasm: wasmAssets, nativeAddons: nativeAddonAssets });
 registerNativeTransformersBindings(transformersWebRuntime);
 process.env.SIGNET_TIKTOKEN_WASM_PATH ??= tokenizerWasmAsset;
@@ -413,7 +414,84 @@ if (!process.env.SIGNET_DIR?.trim()) {
 	}
 }
 handoffInspectorParent();
-if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PROXY_TARGET) {
+if (process.env.SIGNET_KEYRING_HELPER) {
+	const { runSecretKeyringChild } = await import("../platform/core/src/secrets-keyring-child");
+	await runSecretKeyringChild();
+} else if (process.env.SIGNET_KEYRING_HELPER_SMOKE) {
+	const { getSecretKeyring } = await import("../platform/core/src/secrets-keyring");
+	const startedAt = Date.now();
+	const keyring = getSecretKeyring("native-keyring-smoke");
+	const result = await (keyring.getStatus?.() ?? keyring.get());
+	process.stdout.write(JSON.stringify({ type: "keyring-helper-smoke", elapsedMs: Date.now() - startedAt, result }) + "\\n");
+} else if (process.env.SIGNET_NATIVE_SOURCE_WORKER_SMOKE) {
+	const { mkdtemp, readdir, rm, writeFile } = await import("node:fs/promises");
+	const { tmpdir } = await import("node:os");
+	const { createNativeSourceWorker, NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES } = await import("../platform/daemon/src/native-memory-source-worker");
+	const root = await mkdtemp(join(tmpdir(), "signet-native-source-smoke-"));
+	const worker = createNativeSourceWorker();
+	try {
+		await writeFile(join(root, "a-huge.md"), "x".repeat(NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES));
+		await writeFile(join(root, "b-ok.md"), "ok");
+		const source = { root, files: [{ glob: "**/*.md" as const, kind: "markdown" as const }] };
+		const first = await worker.scan({ source, cursor: null, frontier: null, pageSize: 100 });
+		const second = await worker.scan({ source, cursor: first.nextCursor, frontier: first.frontier, pageSize: 100 });
+		const countFds = async (): Promise<number | null> => {
+			if (process.platform !== "linux") return null;
+			return (await readdir("/proc/self/fd")).length;
+		};
+		const baselineFds = await countFds();
+		const crashEntry = join(root, "crash-worker.mjs");
+		await writeFile(
+			crashEntry,
+			'import { parentPort } from "node:worker_threads";\\nparentPort.postMessage({ version: 1, type: "ready" });\\nparentPort.on("message", () => process.exit(17));\\n',
+		);
+		const crashing = createNativeSourceWorker({ resolveEmbeddedPath: () => crashEntry, circuitCooldownMs: 1 });
+		let failures = 0;
+		while (failures < 30) {
+			try {
+				await crashing.scan({ source, cursor: null, frontier: null, pageSize: 1 });
+			} catch (error) {
+				if (error instanceof Error && error.message.includes("circuit is open")) {
+					await Bun.sleep(2);
+					continue;
+				}
+				failures++;
+			}
+		}
+		await crashing.close();
+		const hangingEntry = join(root, "hanging-worker.mjs");
+		await writeFile(
+			hangingEntry,
+			'import { parentPort } from "node:worker_threads";\\nparentPort.postMessage({ version: 1, type: "ready" });\\nparentPort.on("message", () => {});\\n',
+		);
+		const hanging = createNativeSourceWorker({ resolveEmbeddedPath: () => hangingEntry });
+		const pending = hanging.scan({ source, cursor: null, frontier: null, pageSize: 1 });
+		await Bun.sleep(20);
+		await hanging.cancel();
+		const cancelled = await pending.then(
+			() => false,
+			(error: unknown) => error instanceof Error && error.message.includes("cancelled"),
+		);
+		await hanging.close();
+		Bun.gc(true);
+		await Bun.sleep(20);
+		const finalFds = await countFds();
+		process.stdout.write(
+			JSON.stringify({
+				type: "native-source-worker-smoke",
+				rejected: first.rejected.map((item) => item.code),
+				continued: second.files.map((file) => file.path),
+				complete: second.complete,
+				failures,
+				cancelled,
+				fdDelta: baselineFds === null || finalFds === null ? null : finalFds - baselineFds,
+			}) + "\\n",
+		);
+	} finally {
+		await worker.close();
+		await rm(root, { recursive: true, force: true });
+	}
+} else if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PROXY_TARGET) {
 	const { runInspectorProxyFromEnvironment } = await import("../surfaces/cli/src/lib/inspector-proxy");
 	await runInspectorProxyFromEnvironment();
 } else if (process.env.SIGNET_DREAMING_MCP_CONFIG_SMOKE) {

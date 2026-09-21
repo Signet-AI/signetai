@@ -37,7 +37,14 @@ export function createDefaultPluginHost(opts: PluginHostOptionsV1 = {}): PluginH
 		source: "bundled",
 		enabled: true,
 		grantedCapabilities: signetSecretsManifest.capabilities,
-		health: getLocalSecretProviderHealth(),
+	});
+	void getLocalSecretProviderHealth().then((health) => {
+		host.discover(signetSecretsManifest, {
+			source: "bundled",
+			enabled: true,
+			grantedCapabilities: signetSecretsManifest.capabilities,
+			health,
+		});
 	});
 	host.discover(signetGraphiqManifest, {
 		source: "bundled",

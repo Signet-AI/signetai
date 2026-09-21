@@ -926,7 +926,7 @@ function healthForKeyringState(result: SecretKeyringResult): SecretProviderHealt
 	return { status: "healthy", checkedAt };
 }
 
-export function getLocalSecretProviderHealth(): SecretProviderHealthV1 {
+export async function getLocalSecretProviderHealth(): Promise<SecretProviderHealthV1> {
 	try {
 		const store = loadStore();
 		if (existsSync(join(getSecretsDir(), DEGRADED_WARNING_FILE))) {
@@ -938,18 +938,16 @@ export function getLocalSecretProviderHealth(): SecretProviderHealthV1 {
 		}
 		if (store.version === NATIVE_STORE_VERSION || store.provider === "native-keyring") {
 			const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
-			const state = keyring.getStatus?.();
-			if (state && state.state !== "found") return healthForKeyringState(state);
-			if (state) {
-				try {
-					decodeKeyringValue(state);
-				} catch (error) {
-					return {
-						status: "degraded",
-						message: `Native secrets keyring is corrupt: ${error instanceof Error ? error.message : String(error)}`,
-						checkedAt: new Date().toISOString(),
-					};
-				}
+			const state = await (keyring.getStatus?.() ?? keyring.get());
+			if (state.state !== "found") return healthForKeyringState(state);
+			try {
+				decodeKeyringValue(state);
+			} catch (error) {
+				return {
+					status: "degraded",
+					message: `Native secrets keyring is corrupt: ${error instanceof Error ? error.message : String(error)}`,
+					checkedAt: new Date().toISOString(),
+				};
 			}
 		}
 		return { status: "healthy", checkedAt: new Date().toISOString() };
