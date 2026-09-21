@@ -11,6 +11,7 @@ use std::{
 };
 use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -2733,22 +2734,29 @@ fn execute_operation(
             let text = format!("% {} %", canonical.replace('%', "\\%"));
             // Keep the historical query order and LIMIT semantics: select the bounded
             // session projection first, then apply content safety to that projection.
-            let safety_clause = if connection
+            let has_safety = if connection
                 .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_content_safety'", [], |_| Ok(1))
                 .optional()?.is_some()
             {
-                " AND NOT EXISTS (SELECT 1 FROM session_summary_memories unsafe_link JOIN memory_content_safety safety ON safety.agent_id=? AND safety.source_kind='memory' AND safety.source_id=unsafe_link.memory_id WHERE unsafe_link.summary_id=ss.id AND (COALESCE(safety.context_eligible,0)<>1 OR COALESCE(safety.status,'')<>'clean'))"
-            } else { "" };
-            let sql = format!("SELECT DISTINCT ss.id,ss.content,ss.session_key,ss.harness,ss.earliest_at,ss.latest_at FROM session_summaries ss WHERE {} AND (EXISTS (SELECT 1 FROM session_summary_memories ssm JOIN memory_entity_mentions mem ON mem.memory_id=ssm.memory_id WHERE ssm.summary_id=ss.id AND mem.entity_id=?) OR LOWER(' '||replace(replace(replace(ss.content,'.',' '),',',' '),'-',' ')||' ') LIKE ? ESCAPE '\\\\'){} ORDER BY ss.latest_at DESC LIMIT ?", conditions.join(" AND "), safety_clause);
-            if !safety_clause.is_empty() { args.push(agent_id.clone().into()); }
+                true
+            } else { false };
+            let sql = format!("SELECT DISTINCT ss.id,ss.content,ss.session_key,ss.harness,ss.earliest_at,ss.latest_at FROM session_summaries ss WHERE {} AND (EXISTS (SELECT 1 FROM session_summary_memories ssm JOIN memory_entity_mentions mem ON mem.memory_id=ssm.memory_id WHERE ssm.summary_id=ss.id AND mem.entity_id=?) OR LOWER(' '||replace(replace(replace(ss.content,'.',' '),',',' '),'-',' ')||' ') LIKE ? ESCAPE '\\\\') ORDER BY ss.latest_at DESC LIMIT ?", conditions.join(" AND "));
             args.push(entity_id.into());
             args.push(text.into());
             args.push(max_results.into());
             let mut stmt = connection.prepare(&sql)?;
-            let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| Ok(json!({"id":r.get::<_,String>(0)?,"sessionKey":r.get::<_,Option<String>>(2)?,"harness":r.get::<_,Option<String>>(3)?,"earliestAt":r.get::<_,String>(4)?,"latestAt":r.get::<_,String>(5)?,"content":r.get::<_,String>(1)?})))?;
-            let summaries: Vec<Value> = rows
+            let rows: Vec<Value> = stmt
+                .query_map(rusqlite::params_from_iter(args), |r| Ok(json!({"id":r.get::<_,String>(0)?,"sessionKey":r.get::<_,Option<String>>(2)?,"harness":r.get::<_,Option<String>>(3)?,"earliestAt":r.get::<_,String>(4)?,"latestAt":r.get::<_,String>(5)?,"content":r.get::<_,String>(1)?})))?
                 .filter_map(|row| row.ok())
-                .filter(|summary| summary.get("content").and_then(Value::as_str).is_none_or(memory_content_context_eligible))
+                .collect();
+            drop(stmt);
+            let summaries: Vec<Value> = rows
+                .into_iter()
+                .filter(|summary| {
+                    let content_ok = summary.get("content").and_then(Value::as_str).is_none_or(memory_content_context_eligible);
+                    let ledger_ok = !has_safety || connection.query_row("SELECT 1 FROM memory_content_safety WHERE agent_id=? AND source_kind='summary' AND source_id=? AND status='clean' AND context_eligible=1", params![agent_id, summary["id"].as_str().unwrap_or("")], |_| Ok(1)).optional().ok().flatten().is_some();
+                    content_ok && ledger_ok
+                })
                 .collect();
             Ok(
                 json!({"entityName": resolved_name, "summaries": summaries, "total": summaries.len()}),
@@ -4473,19 +4481,10 @@ fn owner_loop(
 }
 
 pub fn memory_content_context_eligible(content: &str) -> bool {
-    // This is intentionally a projection scanner, not a secret detector. NFKC
-    // is approximated for the full-width ASCII forms most often used to evade
-    // directive matching; invisibles are checked before normalization.
     let invisible = content.chars().any(|c| matches!(c, '\u{034f}' | '\u{00ad}' | '\u{061c}' | '\u{070f}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}' | '\u{2066}'..='\u{206f}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}'));
     if invisible { return false; }
-    let normalized: String = content.chars().map(|c| match c {
-        '\u{ff01}'..='\u{ff5e}' => char::from_u32(c as u32 - 0xfee0).unwrap_or(c),
-        '\u{3000}' => ' ',
-        _ => c,
-    }).collect();
+    let normalized: String = content.nfkc().collect();
     let lower = normalized.to_lowercase();
-    let reporting = ["security guidance", "security analysis", "threat model", "defensive", "example", "illustration", "sample", "quoted", "detector", "scanner", "classification"]
-        .iter().any(|marker| lower.contains(marker));
     let prompt = lower.contains("ignore previous instructions")
         || lower.contains("disregard prior instructions")
         || lower.contains("override the system")
@@ -4499,7 +4498,15 @@ pub fn memory_content_context_eligible(content: &str) -> bool {
     let shell = (lower.contains("curl ") || lower.contains("wget ")) && (lower.contains("| sh") || lower.contains("| bash"))
         || lower.contains("rm -rf /") || lower.contains("cat ~/.ssh/")
         || (lower.contains("printenv") && (lower.contains("curl") || lower.contains("wget") || lower.contains("upload")));
-    !(prompt || exfil || creds || shell) || reporting
+    if !(prompt || exfil || creds || shell) { return true; }
+    let reporting = ["security guidance", "security analysis", "threat model", "defensive"];
+    if reporting.iter().any(|m| lower.contains(m)) { return true; }
+    if let Some(pos) = ["example", "illustration", "sample", "quoted", "detector", "scanner", "classification"].iter().filter_map(|m| lower.find(m)).min() {
+        let before = &lower[..pos];
+        let after = &lower[pos..];
+        if (after.contains("says") || after.contains("should") || after.contains("flag") || after.contains("detect")) && before.len() < lower.len() { return true; }
+    }
+    false
 }
 
 fn required_agent(agent: &str) -> Result<String, CoreError> {
