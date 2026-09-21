@@ -2003,15 +2003,36 @@ fn current_schema_tree_reports_live_attribute_and_constraint_counts() {
         })
         .unwrap();
     }
-    let detail = c
-        .submit(Operation::KnowledgeNavigationEntity {
+    let tree = c
+        .submit(Operation::KnowledgeTree {
             agent_id: "a".into(),
             workspace_id: "w".into(),
-            name: "Counts".into(),
+            entity_id: "Counts".into(),
+            depth: 2,
+            max_aspects: 10,
+            max_groups: 10,
+            max_claims: 10,
+            max_attributes: 10,
         })
         .unwrap();
-    assert_eq!(detail["attributeCount"], 2);
-    assert_eq!(detail["constraintCount"], 1);
+    assert_eq!(tree["items"][0]["attributeCount"], 2);
+    assert_eq!(tree["items"][0]["constraintCount"], 1);
+    assert_eq!(tree["items"][0]["groupCount"], 1);
+    assert_eq!(tree["items"][0]["claimCount"], 1);
+    assert_eq!(tree["items"][0]["groups"][0]["attributeCount"], 2);
+    assert_eq!(tree["items"][0]["groups"][0]["constraintCount"], 1);
+    assert!(c
+        .submit(Operation::KnowledgeTree {
+            agent_id: "other".into(),
+            workspace_id: "w".into(),
+            entity_id: "Counts".into(),
+            depth: 3,
+            max_aspects: 10,
+            max_groups: 10,
+            max_claims: 10,
+            max_attributes: 10,
+        })
+        .is_err());
 }
 
 #[test]

@@ -3181,7 +3181,12 @@ fn execute_operation(
                 },
             )? {
                 let (aid, aname, canon, weight, created, updated) = r?;
-                let mut v = json!({"aspect":{"id":aid,"name":aname,"canonicalName":canon,"weight":weight,"createdAt":created,"updatedAt":updated},"attributeCount":0,"constraintCount":0,"groupCount":0,"claimCount":0,"groups":[]});
+                let (attribute_count, constraint_count, claim_count): (i64, i64, i64) = connection.query_row(
+                    "SELECT count(CASE WHEN kind='attribute' AND status='active' THEN 1 END), count(CASE WHEN kind='constraint' AND status='active' THEN 1 END), count(DISTINCT CASE WHEN status!='deleted' AND claim_key IS NOT NULL THEN claim_key END) FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=?",
+                    params![&aid, &agent_id, &workspace_id],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )?;
+                let mut v = json!({"aspect":{"id":aid,"name":aname,"canonicalName":canon,"weight":weight,"createdAt":created,"updatedAt":updated},"attributeCount":attribute_count,"constraintCount":constraint_count,"groupCount":0,"claimCount":claim_count,"groups":[]});
                 let mut gq=connection.prepare("SELECT COALESCE(group_key,'general'),count(CASE WHEN kind='attribute' AND status='active' THEN 1 END),count(CASE WHEN kind='constraint' AND status='active' THEN 1 END),count(DISTINCT claim_key),max(updated_at) FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND status!='deleted' GROUP BY COALESCE(group_key,'general') ORDER BY 2 DESC,3 DESC,4 DESC,1 ASC")?;
                 let mut gs = Vec::new();
                 for g in gq.query_map(params![&aid,&agent_id,&workspace_id],|r|Ok(json!({"groupKey":r.get::<_,String>(0)?,"attributeCount":r.get::<_,i64>(1)?,"constraintCount":r.get::<_,i64>(2)?,"claimCount":r.get::<_,i64>(3)?,"latestUpdatedAt":r.get::<_,Option<String>>(4)?,"claims":[]})))? {
