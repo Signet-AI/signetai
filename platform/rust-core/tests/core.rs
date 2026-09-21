@@ -2036,6 +2036,29 @@ fn current_schema_tree_reports_live_attribute_and_constraint_counts() {
 }
 
 #[test]
+fn current_schema_knowledge_tree_treats_like_wildcards_as_literal() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("tree-wildcards.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, entity_type TEXT NOT NULL DEFAULT 'person', description TEXT, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, weight REAL NOT NULL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, aspect_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT, group_key TEXT, claim_key TEXT, confidence REAL DEFAULT 0.5, importance REAL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO entities VALUES ('literal','a','w','100% real','100% real','person',NULL,'active','2026-01-01','2026-01-02'), ('arbitrary','a','w','100 percent real','100 percent real','person',NULL,'active','2026-01-01','2026-01-03');") .unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let got = c
+        .submit(Operation::KnowledgeTree {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: "100%".into(),
+            depth: 1,
+            max_aspects: 10,
+            max_groups: 10,
+            max_claims: 10,
+            max_attributes: 10,
+        })
+        .unwrap();
+    assert_eq!(got["entity"]["id"], "literal");
+}
+
+#[test]
 fn current_schema_navigation_treats_like_wildcards_as_literal() {
     let d = tempdir().unwrap();
     let p = d.path().join("wildcards.sqlite");

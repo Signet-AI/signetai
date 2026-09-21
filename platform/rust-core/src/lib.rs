@@ -3162,8 +3162,12 @@ fn execute_operation(
             let workspace_id = canonical_workspace(&workspace_id)?;
             let name = bounded_text(&entity_id, "entity", 256)?;
             let key = name.to_lowercase();
-            let like = format!("%{}%", key);
-            let entity=connection.query_row("SELECT id,name,canonical_name,entity_type,description,created_at,updated_at FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND (id=? OR lower(COALESCE(canonical_name,lower(name)))=? OR lower(name)=? OR lower(COALESCE(canonical_name,lower(name))) LIKE ? OR lower(name) LIKE ?) ORDER BY CASE WHEN id=? THEN 0 WHEN lower(COALESCE(canonical_name,lower(name)))=? THEN 1 WHEN lower(name)=? THEN 2 WHEN lower(COALESCE(canonical_name,lower(name))) LIKE ? THEN 3 ELSE 4 END,updated_at DESC,name ASC LIMIT 1",params![&agent_id,&workspace_id,&name,&key,&key,&like,&like,&name,&key,&key,&like],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"canonicalName":r.get::<_,Option<String>>(2)?,"entityType":r.get::<_,String>(3)?,"description":r.get::<_,Option<String>>(4)?,"createdAt":r.get::<_,String>(5)?,"updatedAt":r.get::<_,String>(6)?}))).optional()?.ok_or(CoreError::NotFound)?;
+            let escaped_key = key
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let like = format!("%{}%", escaped_key);
+            let entity=connection.query_row("SELECT id,name,canonical_name,entity_type,description,created_at,updated_at FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND (id=? OR lower(COALESCE(canonical_name,lower(name)))=? OR lower(name)=? OR lower(COALESCE(canonical_name,lower(name))) LIKE ? ESCAPE '\\' OR lower(name) LIKE ? ESCAPE '\\') ORDER BY CASE WHEN id=? THEN 0 WHEN lower(COALESCE(canonical_name,lower(name)))=? THEN 1 WHEN lower(name)=? THEN 2 WHEN lower(COALESCE(canonical_name,lower(name))) LIKE ? ESCAPE '\\' THEN 3 ELSE 4 END,updated_at DESC,name ASC LIMIT 1",params![&agent_id,&workspace_id,&name,&key,&key,&like,&like,&name,&key,&key,&like],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"canonicalName":r.get::<_,Option<String>>(2)?,"entityType":r.get::<_,String>(3)?,"description":r.get::<_,Option<String>>(4)?,"createdAt":r.get::<_,String>(5)?,"updatedAt":r.get::<_,String>(6)?}))).optional()?.ok_or(CoreError::NotFound)?;
             let eid = entity["id"].as_str().unwrap().to_string();
             let group_lim = max_groups.clamp(1, 200) as i64;
             let claim_lim = max_claims.clamp(1, 200) as i64;
