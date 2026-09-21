@@ -302,7 +302,13 @@ export function run(
 ): Record<string, unknown> {
 	validateLaneOptions(backend, o);
 	const manifest = buildExecutionManifest(repo);
-	validateManifest(manifest.protectedCorpus, currentManifest(repo, manifest.protectedCorpus));
+	validateManifest(manifest.protectedCorpus, currentManifest(repo, manifest.protectedCorpus), manifest.protectedCorpus);
+	if (backend === "typescript" && o.worktree)
+		validateManifest(
+			manifest.protectedCorpus,
+			currentManifest(o.worktree, manifest.protectedCorpus),
+			manifest.protectedCorpus,
+		);
 	const selected = o.paths ? runnableSelectedPaths(o.paths, manifest.protectedCorpus) : undefined;
 	const expected = selected ?? runnableManifestPaths(manifest.protectedCorpus);
 	const report = resolveReportPath(backend, repo, o.report);

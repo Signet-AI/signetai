@@ -93,38 +93,6 @@ if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
 const stdoutPath = `${report}.stdout`;
 const stderrPath = `${report}.stderr`;
 for (const path of [stdoutPath, stderrPath]) if (existsSync(path)) unlinkSync(path);
-const escapeXml = (value: string): string =>
-	value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
-const ANSI_PATTERN = new RegExp(`${String.fromCharCode(0x1b)}\\[[0-?]*[ -/]*[@-~]`, "g");
-const stripAnsi = (value: string): string => value.replace(ANSI_PATTERN, "");
-function parseConsoleCases(output: string, batchIndex: number): { cases: string[]; observed: Set<string> } {
-	const cases: string[] = [];
-	const observed = new Set<string>();
-	let currentFile = `bun-output-batch-${batchIndex}`;
-	for (const rawLine of stripAnsi(output).split(/\r?\n/)) {
-		const line = rawLine.trim();
-		const heading = selected.find((path) => line.endsWith(`${path}:`));
-		if (heading) {
-			currentFile = heading;
-			continue;
-		}
-		const match = line.match(/^\((pass|fail|skip|todo)\)\s+(.+?)(?:\s+\[[^\]]+\])?$/);
-		if (!match) continue;
-		const status = match[1] ?? "";
-		const name = match[2] ?? "";
-		if (selected.includes(currentFile)) observed.add(currentFile);
-		const body =
-			status === "fail"
-				? `<failure message="${escapeXml(name)}">${escapeXml(line)}</failure>`
-				: status === "skip" || status === "todo"
-					? "<skipped/>"
-					: "";
-		cases.push(
-			`<testcase classname="${escapeXml(currentFile)}" name="${escapeXml(name)}" file="${escapeXml(currentFile)}">${body}</testcase>`,
-		);
-	}
-	return { cases, observed };
-}
 const junitPath = `${report}.bun.xml`;
 if (existsSync(junitPath)) unlinkSync(junitPath);
 const stdoutFd = openSync(stdoutPath, "w");
@@ -183,20 +151,15 @@ const coreEvidence =
 	existsSync(evidenceFile) &&
 	/backend=fresh-rust artifact=signet-core-test-driver process=transport/.test(readFileSync(evidenceFile, "utf8"));
 const nativeEvidence = daemonEvidence || coreEvidence;
-let cases: string[] = [];
-let observedFiles = new Set<string>();
-if (existsSync(junitPath)) {
-	const reportXml = readFileSync(junitPath, "utf8");
-	cases = reportXml.match(/<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g) ?? [];
-	observedFiles = new Set(
-		cases.map((testcase) => testcase.match(/file="([^"]*)"/)?.[1]).filter((file): file is string => Boolean(file)),
-	);
-}
-if (!cases.length) {
-	const parsed = parseConsoleCases(`${stderr}\n${stdout}`, 0);
-	cases = parsed.cases;
-	observedFiles = parsed.observed;
-}
+const evidence =
+	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
+if (!existsSync(junitPath)) fail(`Rust child did not produce a JUnit report: ${evidence}`);
+const reportXml = readFileSync(junitPath, "utf8");
+const cases = reportXml.match(/<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g) ?? [];
+if (!cases.length) fail(`Rust child produced no real testcase identities: ${evidence}`);
+const observedFiles = new Set(
+	cases.map((testcase) => testcase.match(/file="([^"]*)"/)?.[1]).filter((file): file is string => Boolean(file)),
+);
 const missingSelected = selected.filter((path) => !observedFiles.has(path));
 const unexpectedFiles = [...observedFiles].filter((path) => !selected.includes(path));
 const infrastructureFailure =
@@ -205,9 +168,6 @@ const infrastructureFailure =
 	!cases.length ||
 	missingSelected.length > 0 ||
 	unexpectedFiles.length > 0;
-const evidence =
-	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
-if (!cases.length) fail(`Rust child produced no real testcase identities: ${evidence}`);
 const failures = cases.filter((testcase) => /<(?:failure|error)\b/.test(testcase)).length;
 writeFileSync(
 	report,
