@@ -2740,7 +2740,7 @@ fn execute_operation(
             {
                 true
             } else { false };
-            let sql = format!("SELECT DISTINCT ss.id,ss.content,ss.session_key,ss.harness,ss.earliest_at,ss.latest_at FROM session_summaries ss WHERE {} AND (EXISTS (SELECT 1 FROM session_summary_memories ssm JOIN memory_entity_mentions mem ON mem.memory_id=ssm.memory_id WHERE ssm.summary_id=ss.id AND mem.entity_id=?) OR LOWER(' '||replace(replace(replace(ss.content,'.',' '),',',' '),'-',' ')||' ') LIKE ? ESCAPE '\\\\') ORDER BY ss.latest_at DESC LIMIT ?", conditions.join(" AND "));
+            let sql = format!("SELECT DISTINCT ss.id,ss.content,ss.session_key,ss.harness,ss.earliest_at,ss.latest_at FROM session_summaries ss WHERE {} AND (EXISTS (SELECT 1 FROM session_summary_memories ssm JOIN memory_entity_mentions mem ON mem.memory_id=ssm.memory_id WHERE ssm.summary_id=ss.id AND mem.entity_id=?) OR LOWER(' '||replace(replace(replace(ss.content,'.',' '),',',' '),'-',' ')||' ') LIKE ? ESCAPE '\\') ORDER BY ss.latest_at DESC LIMIT ?", conditions.join(" AND "));
             args.push(entity_id.into());
             args.push(text.into());
             args.push(max_results.into());

@@ -121,6 +121,20 @@ fn fresh_db_and_idempotent_init() {
 }
 
 #[test]
+fn session_expansion_reads_seeded_safety_rows_through_owner_after_restart_shape() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("seeded.sqlite");
+    let c = Core::open(&p, 2).unwrap();
+    c.initialize().unwrap();
+    let db = Connection::open(&p).unwrap();
+    db.execute("INSERT INTO entities (id,agent_id,workspace_id,name,canonical_name,entity_type,status,created_at,updated_at) VALUES ('entity-1','agent','workspace','Session Subject','session_subject','person','active',datetime('now'),datetime('now'))", []).unwrap();
+    db.execute_batch("CREATE TABLE memory_content_safety (agent_id TEXT NOT NULL, source_kind TEXT NOT NULL, source_id TEXT NOT NULL, status TEXT NOT NULL, context_eligible INTEGER NOT NULL, reasons_json TEXT, policy_version TEXT, scanned_at TEXT NOT NULL, PRIMARY KEY(agent_id,source_kind,source_id)); INSERT INTO session_summaries (id,project,depth,kind,content,token_count,earliest_at,latest_at,session_key,harness,agent_id,source_type,created_at) VALUES ('sum-1','project-a',0,'session','Session Subject safe report',4,'2026-01-02','2026-01-02','sess-a','bun','agent','summary',datetime('now')); INSERT INTO session_summary_memories (summary_id,memory_id) VALUES ('sum-1','mem-1'); INSERT INTO memory_entity_mentions (memory_id,entity_id) VALUES ('mem-1','entity-1'); INSERT INTO memory_content_safety VALUES ('agent','summary','sum-1','clean',1,'{}','test',datetime('now'))").unwrap();
+    drop(db);
+    let got = c.submit(Operation::KnowledgeSessionExpand { agent_id: "agent".into(), workspace_id: "workspace".into(), project_id: Some("project-a".into()), entity_name: "Session Subject".into(), session_id: None, time_range: None, max_results: 10 }).unwrap();
+    assert_eq!(got["total"], 1, "seeded owner expansion: {got}");
+}
+
+#[test]
 fn session_summary_expansion_is_typed_and_scoped() {
     let c = core();
     c.initialize().unwrap();
