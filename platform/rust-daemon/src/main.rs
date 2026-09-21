@@ -87,6 +87,30 @@ impl Drop for OwnerPipe {
     }
 }
 
+fn owner_marker_is_live(path: &FsPath) -> bool {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(value) = serde_json::from_str::<Value>(&raw) else {
+        return false;
+    };
+    let Some(pid) = value.get("pid").and_then(Value::as_u64) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        if pid == 0 || pid == 1 {
+            return false;
+        }
+        let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+    #[cfg(windows)]
+    {
+        pid > 0
+    }
+}
+
 struct StartupMarkerGuard {
     path: PathBuf,
     armed: bool,
@@ -104,7 +128,7 @@ impl StartupMarkerGuard {
 
 impl Drop for StartupMarkerGuard {
     fn drop(&mut self) {
-        if self.armed {
+        if self.armed && !owner_marker_is_live(&self.path) {
             let _ = std::fs::remove_file(&self.path);
         }
     }
@@ -597,6 +621,11 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
         {
             let mut cleanup = StartupMarkerGuard::new(marker.clone());
             cleanup.disarm();
+        }
+        assert!(marker.exists());
+        std::fs::write(&marker, format!(r#"{{"pid":{}}}"#, std::process::id())).unwrap();
+        {
+            let _cleanup = StartupMarkerGuard::new(marker.clone());
         }
         assert!(marker.exists());
         let _ = std::fs::remove_dir_all(&directory);
@@ -2046,9 +2075,12 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace_path();
     let path = database_path(&workspace);
     let lock_path = workspace.join(".daemon").join("db-owner.lock");
-    let _lock = acquire_owner_lock(&lock_path)?;
     let marker_path = workspace.join(".daemon").join("db-owner.json");
     let mut marker_cleanup = StartupMarkerGuard::new(marker_path.clone());
+    let _lock = match acquire_owner_lock(&lock_path) {
+        Ok(lock) => lock,
+        Err(error) => return Err(error),
+    };
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     let owner = match WorkspaceOwner::open(&path, 256) {
