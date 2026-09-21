@@ -110,7 +110,7 @@ export function validateBaselineWorktree(worktree: string): void {
 }
 export function validateLaneOptions(
 	backend: Backend,
-	o: { worktree?: string; artifact?: string; adapter?: string; report?: string },
+	o: { worktree?: string; artifact?: string; coreDriver?: string; adapter?: string; report?: string },
 ): void {
 	if (backend === "typescript") {
 		if (!o.worktree) throw new Error("typescript lane requires an explicit pinned reference worktree");
@@ -125,6 +125,8 @@ export function validateLaneOptions(
 			(statSync(o.adapter).mode & 0o111) === 0
 		)
 			throw new Error("rust lane requires a faithful executable adapter");
+		if (!o.coreDriver || !existsSync(o.coreDriver) || !statSync(o.coreDriver).isFile())
+			throw new Error("rust lane requires a real Rust core driver");
 		if (!o.report) throw new Error("rust lane requires a report location");
 	}
 }
@@ -201,7 +203,7 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 export function run(
 	repo: string,
 	backend: Backend,
-	o: { worktree?: string; artifact?: string; adapter?: string; report?: string; paths?: string[] },
+	o: { worktree?: string; artifact?: string; coreDriver?: string; adapter?: string; report?: string; paths?: string[] },
 ): Record<string, unknown> {
 	validateLaneOptions(backend, o);
 	const manifest = buildExecutionManifest(repo);
@@ -214,6 +216,8 @@ export function run(
 			? buildTypeScriptCommand(selected)
 			: [
 					o.adapter ?? "",
+					"--core-driver",
+					o.coreDriver ?? "",
 					"--artifact",
 					o.artifact ?? "",
 					"--manifest",
@@ -278,6 +282,7 @@ if (import.meta.main) {
 		worktree: value("--worktree"),
 		artifact: value("--artifact"),
 		adapter: value("--adapter"),
+		coreDriver: value("--core-driver"),
 		report: value("--report"),
 		paths: value("--paths") ? JSON.parse(value("--paths") as string) : undefined,
 	});
