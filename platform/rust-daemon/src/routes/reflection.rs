@@ -144,7 +144,7 @@ fn reflection_date(timezone: Option<&str>) -> Result<String, ApiError> {
 }
 #[derive(Debug, Deserialize)]
 pub(crate) struct ReflectionQuery {
-    pub limit: Option<usize>,
+    pub limit: Option<String>,
     #[serde(alias = "agentId")]
     pub agent_id: Option<String>,
     pub count: Option<usize>,
@@ -156,7 +156,13 @@ struct AnswerBody {
 }
 
 fn limit(query: &ReflectionQuery) -> usize {
-    query.limit.unwrap_or(30).clamp(1, 100)
+    query
+        .limit
+        .as_deref()
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|value| *value > 0)
+        .map(|value| (value as usize).min(100))
+        .unwrap_or(30)
 }
 
 async fn authorize_reflection_read(
@@ -406,6 +412,28 @@ async fn answer(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_or_non_positive_limits_use_typescript_default() {
+        for raw in ["0", "-1", "not-a-number"] {
+            assert_eq!(
+                limit(&ReflectionQuery {
+                    limit: Some(raw.into()),
+                    agent_id: None,
+                    count: None,
+                }),
+                30
+            );
+        }
+        assert_eq!(
+            limit(&ReflectionQuery {
+                limit: Some("101".into()),
+                agent_id: None,
+                count: None,
+            }),
+            100
+        );
+    }
 
     #[test]
     fn config_reads_only_nested_memory_pipeline_reflections() {
