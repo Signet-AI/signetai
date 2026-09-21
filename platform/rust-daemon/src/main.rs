@@ -87,6 +87,29 @@ impl Drop for OwnerPipe {
     }
 }
 
+struct StartupMarkerGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl StartupMarkerGuard {
+    fn new(path: PathBuf) -> Self {
+        Self { path, armed: true }
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for StartupMarkerGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 fn failed_owner_start(mut child: Child, error: CoreError) -> Result<OwnerSession, CoreError> {
     let _ = child.kill();
     let _ = child.wait();
@@ -557,6 +580,41 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
             result,
             Err(CoreError::UnsupportedMigrationHistory(message))
                 if message == "version 153 is newer than 2"
+        ));
+    }
+
+    #[test]
+    fn startup_marker_is_removed_on_failed_start_and_preserved_after_ready() {
+        let directory = env::temp_dir().join(format!("signet-owner-marker-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let marker = directory.join("db-owner.json");
+        std::fs::write(&marker, b"stale").unwrap();
+        {
+            let _cleanup = StartupMarkerGuard::new(marker.clone());
+        }
+        assert!(!marker.exists());
+        std::fs::write(&marker, b"live").unwrap();
+        {
+            let mut cleanup = StartupMarkerGuard::new(marker.clone());
+            cleanup.disarm();
+        }
+        assert!(marker.exists());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn malformed_owner_startup_responses_fail_closed() {
+        assert!(matches!(
+            owner_startup_generation(&json!({})),
+            Err(CoreError::OwnerStopped)
+        ));
+        assert!(matches!(
+            owner_startup_generation(&json!({"ready":true})),
+            Err(CoreError::OwnerStopped)
+        ));
+        assert!(matches!(
+            owner_startup_generation(&json!({"ready":false,"errorKind":"unknown","error":"bad startup"})),
+            Err(CoreError::Remote(message)) if message == "bad startup"
         ));
     }
 
@@ -1989,21 +2047,22 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     let path = database_path(&workspace);
     let lock_path = workspace.join(".daemon").join("db-owner.lock");
     let _lock = acquire_owner_lock(&lock_path)?;
+    let marker_path = workspace.join(".daemon").join("db-owner.json");
+    let mut marker_cleanup = StartupMarkerGuard::new(marker_path.clone());
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
     let owner = match WorkspaceOwner::open(&path, 256) {
         Ok(owner) => owner,
         Err(error) => {
             write_owner_startup_failure(&mut out, &error)?;
-            return Ok(());
+            return Err(error.into());
         }
     };
     if let Err(error) = owner.initialize() {
         write_owner_startup_failure(&mut out, &error)?;
-        return Ok(());
+        return Err(error.into());
     }
     let generation = Uuid::new_v4().to_string();
-    let marker_path = workspace.join(".daemon").join("db-owner.json");
     std::fs::write(
         &marker_path,
         serde_json::to_vec(&serde_json::json!({
@@ -2019,6 +2078,7 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
         generation
     )?;
     out.flush()?;
+    marker_cleanup.disarm();
     let stdin = std::io::stdin();
     let mut reader = BufReader::new(stdin.lock());
     while let Some(line) = read_owner_request_line(&mut reader)? {
