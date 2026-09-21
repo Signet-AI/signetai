@@ -3019,7 +3019,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1267,
+      "line": 1268,
       "api": "withReadDbAsync",
       "source": "const resolvedEmbeddingCfg = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3027,7 +3027,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1594,
+      "line": 1595,
       "api": "withReadDbAsync",
       "source": "const { rows, totalMatching, sources, liveVecDimensions } = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3035,7 +3035,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1958,
+      "line": 1959,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3043,7 +3043,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2146,
+      "line": 2147,
       "api": "withReadDbAsync",
       "source": "const hashClusters = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3051,7 +3051,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2288,
+      "line": 2289,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3059,7 +3059,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2308,
+      "line": 2309,
       "api": "withReadDbAsync",
       "source": "const neighbors = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3067,7 +3067,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2380,
+      "line": 2381,
       "api": "withReadDbAsync",
       "source": "const total = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3075,7 +3075,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2441,
+      "line": 2442,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3083,7 +3083,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2573,
+      "line": 2574,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3091,7 +3091,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2779,
+      "line": 2780,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
