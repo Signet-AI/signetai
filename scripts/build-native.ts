@@ -92,6 +92,12 @@ try {
 				platform: platform(),
 				architecture: arch(),
 				sha256: checksum,
+				size: readFileSync(join(stagedDir, exe)).byteLength,
+				rustToolchain: execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim(),
+				cargoLockSha256: createHash("sha256")
+					.update(readFileSync(join(root, "platform/rust-daemon/Cargo.lock")))
+					.digest("hex"),
+				executableIdentity: execFileSync("file", ["-b", join(stagedDir, exe)], { encoding: "utf8" }).trim(),
 				sourceRevision: revision(),
 			},
 			null,

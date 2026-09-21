@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { arch, platform } from "node:os";
 import { join } from "node:path";
@@ -58,6 +58,12 @@ writeFileSync(
 			platform: platformKey.split("-")[0],
 			architecture: platformKey.split("-").slice(1).join("-"),
 			sha256: checksum,
+			size: statSync(outfile).size,
+			rustToolchain: execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim(),
+			cargoLockSha256: createHash("sha256")
+				.update(readFileSync(join(root, "platform/rust-daemon/Cargo.lock")))
+				.digest("hex"),
+			executableIdentity: execFileSync("file", ["-b", outfile], { encoding: "utf8" }).trim(),
 			sourceRevision:
 				process.env.GITHUB_SHA ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
 		},

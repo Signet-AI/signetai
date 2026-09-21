@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { verifyStagedArtifact } from "./native-artifact-provenance";
 
 const artifact = process.env.SIGNET_NATIVE_ACCEPTANCE_BINARY?.trim();
 const provenancePath = process.env.SIGNET_NATIVE_PROVENANCE?.trim();
@@ -13,6 +14,10 @@ const provenance = JSON.parse(readFileSync(provenancePath, "utf8")) as {
 	target: string;
 	sha256: string;
 	sourceRevision: string;
+	rustToolchain: string;
+	cargoLockSha256: string;
+	size: number;
+	executableIdentity: string;
 };
 const checksum = createHash("sha256").update(readFileSync(artifact)).digest("hex");
 if (provenance.sha256 !== checksum) throw new Error(`artifact checksum mismatch: ${checksum} != ${provenance.sha256}`);
@@ -21,6 +26,19 @@ const staged = mkdtempSync(join(tmpdir(), "signet-packaged-outside-checkout-"));
 const binary = join(staged, basename(artifact));
 await Bun.write(binary, Bun.file(artifact));
 chmodSync(binary, 0o755);
+const stagedProvenance = verifyStagedArtifact({
+	artifact: binary,
+	checkout: process.cwd(),
+	target: provenance.target,
+	sourceRevision: provenance.sourceRevision,
+	cargoLock: join(process.cwd(), "platform/rust-daemon/Cargo.lock"),
+});
+if (stagedProvenance.sha256 !== provenance.sha256) throw new Error("staged artifact checksum mismatch");
+if (stagedProvenance.size !== provenance.size) throw new Error("staged artifact size mismatch");
+if (stagedProvenance.rustToolchain !== provenance.rustToolchain) throw new Error("Rust toolchain mismatch");
+if (stagedProvenance.cargoLockSha256 !== provenance.cargoLockSha256) throw new Error("Cargo.lock hash mismatch");
+if (stagedProvenance.executableIdentity !== provenance.executableIdentity)
+	throw new Error("executable identity mismatch");
 const root = mkdtempSync(join(tmpdir(), "signet-packaged-workspace-"));
 const port = 28761 + Math.floor(Math.random() * 1000);
 const origin = `http://127.0.0.1:${port}`;

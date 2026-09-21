@@ -7,6 +7,8 @@ on:
       - "platform/rust-core/**"
       - "scripts/build-native-cli.ts"
       - "scripts/native-packaged-acceptance.test.ts"
+      - "scripts/native-artifact-provenance.ts"
+      - "scripts/native-artifact-provenance.test.ts"
       - ".github/workflows/phase-d-acceptance.yml"
   push:
     branches: [main]
@@ -15,6 +17,8 @@ on:
       - "platform/rust-core/**"
       - "scripts/build-native-cli.ts"
       - "scripts/native-packaged-acceptance.test.ts"
+      - "scripts/native-artifact-provenance.ts"
+      - "scripts/native-artifact-provenance.test.ts"
       - ".github/workflows/phase-d-acceptance.yml"
   schedule:
     - cron: "15 7 * * *"
