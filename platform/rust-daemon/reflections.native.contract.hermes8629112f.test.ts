@@ -52,6 +52,32 @@ afterEach(async () => {
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
+it("allows workspace-scoped recall to list and read today for its workspace", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "signet-reflections-workspace-contract-"));
+	dirs.push(dir);
+	const running = await start(dir, reserve());
+	const agent = "reflection-workspace-contract";
+	const workspace = "reflection-workspace";
+	const issue = await fetch(`${running.origin}/api/auth/token`, {
+		method: "POST",
+		headers: { "content-type": "application/json", "x-signet-api-key": "reflection-key" },
+		body: JSON.stringify({ role: "agent", scope: { agent, workspace }, permissions: ["recall"] }),
+	});
+	expect(issue.status).toBe(200);
+	const { token } = (await issue.json()) as { token: string };
+	const headers = {
+		authorization: "Bearer " + token,
+		"x-signet-agent-id": agent,
+		"x-workspace-id": workspace,
+	};
+	const list = await fetch(`${running.origin}/api/reflections?limit=1`, { headers });
+	expect(list.status).toBe(200);
+	expect(await list.json()).toEqual({ reflections: [] });
+	const today = await fetch(`${running.origin}/api/reflections/today?limit=1`, { headers });
+	expect(today.status).toBe(200);
+	expect(await today.json()).toMatchObject({ reflection: null, reflections: [] });
+});
+
 it("serves authenticated reflection list and today envelopes", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "signet-reflections-contract-"));
 	dirs.push(dir);

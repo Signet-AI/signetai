@@ -1,5 +1,5 @@
 use crate::routes::auth;
-use crate::{agent, execute, AgentQuery, ApiError, AppState};
+use crate::{agent, execute, source_workspace, AgentQuery, ApiError, AppState};
 use axum::http::StatusCode;
 use axum::{
     extract::{Path, Query, State},
@@ -165,7 +165,15 @@ async fn authorize_reflection_read(
     agent_id: &str,
 ) -> Result<(), ApiError> {
     let claims = auth::gate(state, headers).await?;
-    let scope = json!({"agent": agent_id});
+    let workspace = source_workspace(headers, None)?;
+    let mut scope = json!({"agent": agent_id});
+    if claims
+        .get("scope")
+        .and_then(Value::as_object)
+        .is_some_and(|authority_scope| authority_scope.contains_key("workspace"))
+    {
+        scope["workspace"] = json!(workspace);
+    }
     if !auth::authority_allows(&claims, "agent", &scope, &["recall".to_owned()]) {
         return Err(ApiError::forbidden("recall permission required"));
     }
