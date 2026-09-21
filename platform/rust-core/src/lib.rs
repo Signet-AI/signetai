@@ -2713,7 +2713,7 @@ fn execute_operation(
                 "ss.kind='session'".to_owned(),
                 "COALESCE(ss.source_type,'summary')='summary'".to_owned(),
             ];
-            let mut args: Vec<SqlValue> = vec![agent_id.into()];
+            let mut args: Vec<SqlValue> = vec![agent_id.clone().into()];
             if let Some(project) = project_id.filter(|v| !v.trim().is_empty()) {
                 conditions.push("ss.project=?".into());
                 args.push(project.into());
@@ -2731,7 +2731,16 @@ fn execute_operation(
                 args.push(range.into());
             }
             let text = format!("% {} %", canonical.replace('%', "\\%"));
-            let sql = format!("SELECT DISTINCT ss.id,ss.content,ss.session_key,ss.harness,ss.earliest_at,ss.latest_at FROM session_summaries ss WHERE {} AND (EXISTS (SELECT 1 FROM session_summary_memories ssm JOIN memory_entity_mentions mem ON mem.memory_id=ssm.memory_id WHERE ssm.summary_id=ss.id AND mem.entity_id=?) OR LOWER(' '||replace(replace(replace(ss.content,'.',' '),',',' '),'-',' ')||' ') LIKE ? ESCAPE '\\\\') ORDER BY ss.latest_at DESC LIMIT ?", conditions.join(" AND "));
+            // Keep the historical query order and LIMIT semantics: select the bounded
+            // session projection first, then apply content safety to that projection.
+            let safety_clause = if connection
+                .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='memory_content_safety'", [], |_| Ok(1))
+                .optional()?.is_some()
+            {
+                " AND NOT EXISTS (SELECT 1 FROM session_summary_memories unsafe_link JOIN memory_content_safety safety ON safety.agent_id=? AND safety.source_kind='memory' AND safety.source_id=unsafe_link.memory_id WHERE unsafe_link.summary_id=ss.id AND (COALESCE(safety.context_eligible,0)<>1 OR COALESCE(safety.status,'')<>'clean'))"
+            } else { "" };
+            let sql = format!("SELECT DISTINCT ss.id,ss.content,ss.session_key,ss.harness,ss.earliest_at,ss.latest_at FROM session_summaries ss WHERE {} AND (EXISTS (SELECT 1 FROM session_summary_memories ssm JOIN memory_entity_mentions mem ON mem.memory_id=ssm.memory_id WHERE ssm.summary_id=ss.id AND mem.entity_id=?) OR LOWER(' '||replace(replace(replace(ss.content,'.',' '),',',' '),'-',' ')||' ') LIKE ? ESCAPE '\\\\'){} ORDER BY ss.latest_at DESC LIMIT ?", conditions.join(" AND "), safety_clause);
+            if !safety_clause.is_empty() { args.push(agent_id.clone().into()); }
             args.push(entity_id.into());
             args.push(text.into());
             args.push(max_results.into());
@@ -4464,23 +4473,33 @@ fn owner_loop(
 }
 
 pub fn memory_content_context_eligible(content: &str) -> bool {
-    let lower = content.to_lowercase();
+    // This is intentionally a projection scanner, not a secret detector. NFKC
+    // is approximated for the full-width ASCII forms most often used to evade
+    // directive matching; invisibles are checked before normalization.
     let invisible = content.chars().any(|c| matches!(c, '\u{034f}' | '\u{00ad}' | '\u{061c}' | '\u{070f}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}' | '\u{2066}'..='\u{206f}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}'));
     if invisible { return false; }
-    let defensive = ["security guidance", "security analysis", "threat model", "defensive", "example", "quoted", "detector", "scanner", "classification"]
+    let normalized: String = content.chars().map(|c| match c {
+        '\u{ff01}'..='\u{ff5e}' => char::from_u32(c as u32 - 0xfee0).unwrap_or(c),
+        '\u{3000}' => ' ',
+        _ => c,
+    }).collect();
+    let lower = normalized.to_lowercase();
+    let reporting = ["security guidance", "security analysis", "threat model", "defensive", "example", "illustration", "sample", "quoted", "detector", "scanner", "classification"]
         .iter().any(|marker| lower.contains(marker));
-    let blocked = lower.contains("ignore previous instructions")
+    let prompt = lower.contains("ignore previous instructions")
         || lower.contains("disregard prior instructions")
-        || lower.contains("<system>")
-        || lower.contains("<tool_call")
-        || lower.contains("call the ") && lower.contains(" tool")
-        || lower.contains("reveal the system prompt")
-        || lower.contains("send the password")
-        || lower.contains("paste your api key")
-        || lower.contains("curl ") && lower.contains("| sh")
-        || lower.contains("rm -rf /")
-        || lower.contains("cat ~/.ssh/");
-    !blocked || defensive
+        || lower.contains("override the system")
+        || lower.contains("new system instructions")
+        || lower.contains("<system") || lower.contains("<developer") || lower.contains("<tool_call")
+        || lower.contains("call the ") && lower.contains(" tool");
+    let exfil = (lower.contains("reveal") || lower.contains("show") || lower.contains("send") || lower.contains("dump") || lower.contains("export"))
+        && (lower.contains("system prompt") || lower.contains("secret") || lower.contains("password") || lower.contains("api key") || lower.contains("token") || lower.contains(".env") || lower.contains("/etc/passwd"));
+    let creds = (lower.contains("enter") || lower.contains("paste") || lower.contains("provide") || lower.contains("share") || lower.contains("submit"))
+        && (lower.contains("password") || lower.contains("api key") || lower.contains("token") || lower.contains("credential") || lower.contains("secret"));
+    let shell = (lower.contains("curl ") || lower.contains("wget ")) && (lower.contains("| sh") || lower.contains("| bash"))
+        || lower.contains("rm -rf /") || lower.contains("cat ~/.ssh/")
+        || (lower.contains("printenv") && (lower.contains("curl") || lower.contains("wget") || lower.contains("upload")));
+    !(prompt || exfil || creds || shell) || reporting
 }
 
 fn required_agent(agent: &str) -> Result<String, CoreError> {
