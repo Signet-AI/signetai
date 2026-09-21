@@ -1,4 +1,5 @@
-// biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
+import { mock } from "bun:test";
+import { resolve } from "node:path";
 import { writeFileSync } from "node:fs";
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
@@ -18,8 +19,7 @@ function recordEvidence(): void {
 function call(path: string, request: Record<string, unknown>): any {
 	recordEvidence();
 	const result = Bun.spawnSync([driverPath, path], {
-		// biome-ignore lint/suspicious/noExplicitAny: Bun accepts string stdin at runtime.
-		stdin: `${JSON.stringify(request)}\n{"op":"close"}\n` as any,
+		stdin: Buffer.from(`${JSON.stringify(request)}\n{"op":"close"}\n`),
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -64,16 +64,10 @@ export class Database {
 	close() {}
 }
 
-Bun.plugin({
-	name: "rust-baseline-proof-core",
-	setup(build) {
-		build.onResolve({ filter: /(^|\/)database$/ }, () => ({
-			path: "rust-baseline-proof-core:database",
-			namespace: "rust-baseline-proof-core",
-		}));
-		build.onLoad({ filter: /.*/, namespace: "rust-baseline-proof-core" }, () => ({
-			exports: { Database },
-			loader: "object",
-		}));
-	},
-});
+const databaseModulePaths = [
+	resolve(import.meta.dir, "../platform/core/src/database.ts"),
+	resolve(import.meta.dir, "../platform/core/src/database"),
+	"/mnt/work/hermes-scratch/pr-1867-main/platform/core/src/database.ts",
+	"/mnt/work/hermes-scratch/pr-1867-main/platform/core/src/database",
+];
+for (const modulePath of databaseModulePaths) mock.module(modulePath, () => ({ Database }));
