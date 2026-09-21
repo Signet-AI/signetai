@@ -2754,7 +2754,7 @@ fn execute_operation(
                 .into_iter()
                 .filter(|summary| {
                     let content_ok = summary.get("content").and_then(Value::as_str).is_none_or(memory_content_context_eligible);
-                    let ledger_ok = !has_safety || connection.query_row("SELECT 1 FROM memory_content_safety WHERE agent_id=? AND source_kind='summary' AND source_id=? AND status='clean' AND context_eligible=1", params![agent_id, summary["id"].as_str().unwrap_or("")], |_| Ok(1)).optional().ok().flatten().is_some();
+                    let ledger_ok = summary_ledger_allows(has_safety, connection.query_row("SELECT status,context_eligible FROM memory_content_safety WHERE agent_id=? AND source_kind='summary' AND source_id=?", params![agent_id, summary["id"].as_str().unwrap_or("")], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))).optional().ok().flatten());
                     content_ok && ledger_ok
                 })
                 .collect();
@@ -4480,33 +4480,56 @@ fn owner_loop(
     }
 }
 
+pub fn summary_ledger_allows(has_safety: bool, row: Option<(String, i64)>) -> bool {
+    !has_safety
+        || row.is_none_or(|(status, context_eligible)| status == "clean" && context_eligible == 1)
+}
+
 pub fn memory_content_context_eligible(content: &str) -> bool {
     let invisible = content.chars().any(|c| matches!(c, '\u{034f}' | '\u{00ad}' | '\u{061c}' | '\u{070f}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}' | '\u{2066}'..='\u{206f}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}'));
-    if invisible { return false; }
-    let normalized: String = content.nfkc().collect();
-    let lower = normalized.to_lowercase();
-    let prompt = lower.contains("ignore previous instructions")
-        || lower.contains("disregard prior instructions")
-        || lower.contains("override the system")
-        || lower.contains("new system instructions")
-        || lower.contains("<system") || lower.contains("<developer") || lower.contains("<tool_call")
-        || lower.contains("call the ") && lower.contains(" tool");
-    let exfil = (lower.contains("reveal") || lower.contains("show") || lower.contains("send") || lower.contains("dump") || lower.contains("export"))
-        && (lower.contains("system prompt") || lower.contains("secret") || lower.contains("password") || lower.contains("api key") || lower.contains("token") || lower.contains(".env") || lower.contains("/etc/passwd"));
-    let creds = (lower.contains("enter") || lower.contains("paste") || lower.contains("provide") || lower.contains("share") || lower.contains("submit"))
-        && (lower.contains("password") || lower.contains("api key") || lower.contains("token") || lower.contains("credential") || lower.contains("secret"));
-    let shell = (lower.contains("curl ") || lower.contains("wget ")) && (lower.contains("| sh") || lower.contains("| bash"))
-        || lower.contains("rm -rf /") || lower.contains("cat ~/.ssh/")
-        || (lower.contains("printenv") && (lower.contains("curl") || lower.contains("wget") || lower.contains("upload")));
-    if !(prompt || exfil || creds || shell) { return true; }
-    let reporting = ["security guidance", "security analysis", "threat model", "defensive"];
-    if reporting.iter().any(|m| lower.contains(m)) { return true; }
-    if let Some(pos) = ["example", "illustration", "sample", "quoted", "detector", "scanner", "classification"].iter().filter_map(|m| lower.find(m)).min() {
-        let before = &lower[..pos];
-        let after = &lower[pos..];
-        if (after.contains("says") || after.contains("should") || after.contains("flag") || after.contains("detect")) && before.len() < lower.len() { return true; }
+    if invisible {
+        return false;
     }
-    false
+    let lower: String = content.nfkc().collect::<String>().to_lowercase();
+    let patterns = [
+        r"ignore\s+(?:previous|prior|above|earlier)\s+instructions?",
+        r"disregard\s+(?:previous|prior|above|earlier)\s+instructions?",
+        r"override\s+the\s+(?:system|safety)\s+instructions?",
+        r"new\s+(?:system|developer|assistant)?\s*instructions?",
+        r"<\s*(?:system|developer|tool[_-]?call)",
+        r"(?:call|invoke|use|run|execute)\s+(?:the\s+)?[a-z0-9_.-]+\s+tool",
+        r"(?:reveal|show|send|dump|export|exfiltrat\w*)[\s\S]{0,120}(?:system\s+prompt|secret|password|api\s*key|token|\.env|/etc/passwd)",
+        r"(?:enter|paste|provide|share|submit)\s+[\s\S]{0,80}(?:password|api\s*key|token|credential|secret)",
+        r"(?:curl|wget)[^\n]{0,240}\|\s*(?:ba|z|fi)?sh",
+        r"rm\s+-rf\s+(?:/|~|\.ssh)",
+        r"cat\s+~/?\.ssh/",
+    ];
+    let defensive = regex::Regex::new(
+        r"(?i)\b(?:security\s+(?:guidance|discussion|analysis)|threat\s+model|defensive)\b",
+    )
+    .unwrap();
+    let reporting_before = regex::Regex::new(r"(?i)\b(?:example|illustrat\w*|sample|quote|quoted|detector|scanner|classif\w*)\b[\s\S]{0,80}\b(?:say\w*|read\w*|show\w*|flag\w*|detect\w*|describ\w*|demonstrat\w*|contain\w*|match\w*|pattern)\b").unwrap();
+    let reporting_after = regex::Regex::new(r"(?i)\b(?:detector|scanner|classif\w*|flag\w*|pattern|dangerous|unsafe|malicious|hostile|should|would|must|never|do not|don't|avoid|quoted)\b").unwrap();
+    let report_word = regex::Regex::new(
+        r"(?i)\b(?:example|illustrat\w*|sample|quote|quoted|detector|scanner|classif\w*)\b",
+    )
+    .unwrap();
+    let negated_re = regex::Regex::new(r"(?i)\b(?:never|do not|don't|should not|must not|cannot|can't|avoid|prevent|detect|mitigat\w*)\b[\s\S]{0,80}$").unwrap();
+    for source in patterns {
+        let re = regex::Regex::new(&format!("(?i){source}")).unwrap();
+        for m in re.find_iter(&lower) {
+            let before = &lower[m.start().saturating_sub(120)..m.start()];
+            let after = &lower[m.end()..lower.len().min(m.end() + 160)];
+            let contextual = defensive.is_match(before)
+                || defensive.is_match(after)
+                || reporting_before.is_match(before)
+                || (report_word.is_match(before) && reporting_after.is_match(after));
+            if !(negated_re.is_match(before) || contextual) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn required_agent(agent: &str) -> Result<String, CoreError> {

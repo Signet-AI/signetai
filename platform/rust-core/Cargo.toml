@@ -13,6 +13,7 @@ thiserror = "1"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10"
 unicode-normalization = "0.1"
+regex = "1"
 
 [lib]
 path = "src/lib.rs"
