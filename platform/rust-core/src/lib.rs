@@ -5048,7 +5048,7 @@ fn reflection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 
 fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     let transaction = connection.transaction()?;
-    const NATIVE_SCHEMA_COMPATIBILITY_VERSION: i64 = 2;
+    const NATIVE_SCHEMA_COMPATIBILITY_VERSION: i64 = 155;
     if has_table(&transaction, "schema_migrations")? {
         let max_schema_version: Option<i64> = transaction.query_row(
             "SELECT MAX(version) FROM schema_migrations",
@@ -5112,6 +5112,37 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'agent', scope_json TEXT NOT NULL DEFAULT '{}', permissions_json TEXT NOT NULL DEFAULT '[]', connector TEXT, harness TEXT, agent_id TEXT, allowed_projects_json TEXT, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT);
          CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,name));
          SELECT 1;",
+    )?;
+    if has_table(&transaction, "transcript_capture_jobs")? {
+        ensure_column(&transaction, "transcript_capture_jobs", "source_identity", "TEXT")?;
+        ensure_column(&transaction, "transcript_capture_jobs", "source_sha256", "TEXT")?;
+        ensure_column(&transaction, "transcript_capture_jobs", "source_size_bytes", "INTEGER")?;
+        ensure_column(&transaction, "transcript_capture_jobs", "source_mtime_ms", "REAL")?;
+        ensure_column(&transaction, "transcript_capture_jobs", "source_format", "TEXT")?;
+        ensure_column(&transaction, "transcript_capture_jobs", "audit_path", "TEXT")?;
+        transaction.execute("CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_source_identity ON transcript_capture_jobs(agent_id, source_identity, status)", [])?;
+        transaction.execute("CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_source_digest ON transcript_capture_jobs(agent_id, source_sha256)", [])?;
+    }
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS source_sync_failures (
+            agent_id TEXT NOT NULL,
+            source_key TEXT NOT NULL,
+            phase TEXT NOT NULL,
+            item_path TEXT NOT NULL,
+            fingerprint TEXT NOT NULL,
+            failure_code TEXT NOT NULL,
+            terminal INTEGER NOT NULL DEFAULT 1,
+            diagnostic TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 1,
+            first_observed_at TEXT NOT NULL,
+            last_observed_at TEXT NOT NULL,
+            retry_after TEXT,
+            resolved_at TEXT,
+            PRIMARY KEY(agent_id, source_key, phase, item_path)
+        );
+        CREATE INDEX IF NOT EXISTS idx_source_sync_failures_active
+            ON source_sync_failures(agent_id, source_key, phase, item_path)
+            WHERE resolved_at IS NULL;",
     )?;
     ensure_column(&transaction, "memories", "is_deleted", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&transaction, "memories", "superseded_by", "TEXT")?;

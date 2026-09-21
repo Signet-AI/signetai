@@ -2238,19 +2238,58 @@ fn legacy_entity_attributes_mark_referenced_memory_derived() {
 }
 
 #[test]
-fn current_typescript_migration_history_fails_closed() {
+fn current_typescript_migration_history_is_compatible_without_source_sync_parity() {
     let d = tempdir().unwrap();
     let p = d.path().join("current-ts.sqlite");
     let db = Connection::open(&p).unwrap();
-    db.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL); INSERT INTO schema_migrations VALUES (153,'now','ts-checksum');").unwrap();
+    db.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL); INSERT INTO schema_migrations VALUES (155,'now','ts-checksum'); CREATE TABLE transcript_capture_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, status TEXT NOT NULL, transcript TEXT); INSERT INTO transcript_capture_jobs VALUES ('job-1','agent-a','pending','legacy');").unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    c.initialize().unwrap();
+    let db = Connection::open(&p).unwrap();
+    let row: (String, Option<String>, Option<String>) = db.query_row("SELECT transcript, source_identity, source_sha256 FROM transcript_capture_jobs WHERE id='job-1'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap();
+    assert_eq!(row, ("legacy".into(), None, None));
+    let columns: Vec<String> = db.prepare("PRAGMA table_info(transcript_capture_jobs)").unwrap().query_map([], |r| r.get(1)).unwrap().collect::<Result<_, _>>().unwrap();
+    for column in ["source_identity", "source_sha256", "source_size_bytes", "source_mtime_ms", "source_format", "audit_path"] { assert!(columns.iter().any(|name| name == column), "missing {column}"); }
+    let indexes: Vec<String> = db.prepare("PRAGMA index_list(transcript_capture_jobs)").unwrap().query_map([], |r| r.get(1)).unwrap().collect::<Result<_, _>>().unwrap();
+    assert!(indexes.iter().any(|name| name == "idx_transcript_capture_jobs_source_identity"));
+    assert!(indexes.iter().any(|name| name == "idx_transcript_capture_jobs_source_digest"));
+    let failure_columns: Vec<String> = db.prepare("PRAGMA table_info(source_sync_failures)").unwrap().query_map([], |r| r.get(1)).unwrap().collect::<Result<_, _>>().unwrap();
+    for column in ["agent_id", "source_key", "phase", "item_path", "fingerprint", "failure_code", "terminal", "diagnostic", "attempt_count", "first_observed_at", "last_observed_at", "retry_after", "resolved_at"] { assert!(failure_columns.iter().any(|name| name == column), "missing {column}"); }
+    let active_index: Option<String> = db.query_row("SELECT name FROM sqlite_master WHERE type='index' AND name='idx_source_sync_failures_active'", [], |r| r.get(0)).ok();
+    assert_eq!(active_index.as_deref(), Some("idx_source_sync_failures_active"));
+    drop(c);
+    Core::open(&p, 2).unwrap().initialize().unwrap();
+}
+
+#[test]
+fn pre_154_database_without_transcript_capture_jobs_gets_only_compatibility_tables() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("pre-154.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL); INSERT INTO schema_migrations VALUES (155,'now','ts-checksum');").unwrap();
+    drop(db);
+    Core::open(&p, 2).unwrap().initialize().unwrap();
+    let db = Connection::open(&p).unwrap();
+    let count: i64 = db.query_row("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='transcript_capture_jobs'", [], |r| r.get(0)).unwrap();
+    assert_eq!(count, 0);
+    assert!(db.query_row::<String, _, _>("SELECT name FROM sqlite_master WHERE type='table' AND name='source_sync_failures'", [], |r| r.get(0)).is_ok());
+}
+
+#[test]
+fn future_typescript_migration_history_fails_closed() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("future-ts.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL); INSERT INTO schema_migrations VALUES (156,'now','ts-checksum');").unwrap();
     drop(db);
     let error = match Core::open(&p, 2) {
-        Ok(_) => panic!("current TypeScript migration history must fail closed"),
+        Ok(_) => panic!("future TypeScript migration history must fail closed"),
         Err(error) => error,
     };
     assert!(
         matches!(error, CoreError::UnsupportedMigrationHistory(_)),
-        "migration history error must preserve its typed contract: {error:?}"
+        "typed migration history error: {error:?}"
     );
 }
 
