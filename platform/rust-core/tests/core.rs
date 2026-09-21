@@ -116,6 +116,117 @@ fn session_summary_content_safety_excludes_actionable_payloads_but_keeps_reports
     }
 }
 
+#[test]
+fn ontology_proposal_conflicts_group_distinct_values_and_respect_scope_and_limit() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("conflicts.sqlite");
+    let c = Core::open(&path, 2).unwrap();
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TABLE ontology_proposals (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, operation TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0.0, rationale TEXT NOT NULL DEFAULT '', evidence TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);").unwrap();
+    let insert = |id: &str,
+                  agent: &str,
+                  updated: &str,
+                  workspace: Option<&str>,
+                  value: serde_json::Value| {
+        let mut payload = serde_json::json!({
+            "entity": " Acme  Corp ", "aspect": "Profile", "claim_key": "Industry",
+            "value": value, "group_key": " General "
+        });
+        if let Some(workspace) = workspace {
+            payload["workspace_id"] = serde_json::json!(workspace);
+        }
+        db.execute(
+            "INSERT INTO ontology_proposals (id,agent_id,operation,status,payload,confidence,rationale,evidence,created_at,updated_at) VALUES (?,?,?,'pending',?,?,?,?,'2025-01-01',?)",
+            rusqlite::params![id, agent, "add_claim_value", payload.to_string(), 0.8, "why", "[1,2]", updated],
+        ).unwrap();
+    };
+    insert(
+        "p-new",
+        "agent-a",
+        "2025-01-04",
+        Some("ws-a"),
+        serde_json::json!("New"),
+    );
+    insert(
+        "p-old",
+        "agent-a",
+        "2025-01-03",
+        Some("ws-a"),
+        serde_json::json!("Old"),
+    );
+    insert(
+        "p-same",
+        "agent-a",
+        "2025-01-02",
+        Some("ws-a"),
+        serde_json::json!(" old "),
+    );
+    insert(
+        "p-other-workspace",
+        "agent-a",
+        "2025-01-05",
+        Some("ws-b"),
+        serde_json::json!("Elsewhere"),
+    );
+    insert(
+        "p-other-agent",
+        "agent-b",
+        "2025-01-06",
+        Some("ws-a"),
+        serde_json::json!("Elsewhere"),
+    );
+    db.execute("INSERT INTO ontology_proposals (id,agent_id,operation,status,payload,created_at,updated_at) VALUES ('malformed','agent-a','add_claim_value','pending','{}','2025-01-01','2025-01-01')", []).unwrap();
+
+    let result = c
+        .submit(Operation::OntologyProposalConflicts {
+            agent_id: "agent-a".into(),
+            workspace_id: "ws-a".into(),
+            limit: None,
+        })
+        .unwrap();
+    assert_eq!(result["count"], 1);
+    let item = &result["items"][0];
+    assert_eq!(item["entity"], " Acme  Corp ");
+    assert_eq!(item["groupKey"], " General ");
+    assert_eq!(item["count"], 3);
+    assert_eq!(
+        item["proposalIds"],
+        serde_json::json!(["p-new", "p-old", "p-same"])
+    );
+    assert_eq!(item["values"].as_array().unwrap().len(), 3);
+
+    let limited = c
+        .submit(Operation::OntologyProposalConflicts {
+            agent_id: "agent-a".into(),
+            workspace_id: "ws-a".into(),
+            limit: Some(2),
+        })
+        .unwrap();
+    assert_eq!(limited["count"], 1);
+    assert_eq!(
+        limited["items"][0]["proposalIds"],
+        serde_json::json!(["p-new", "p-old"])
+    );
+    assert_eq!(
+        c.submit(Operation::OntologyProposalConflicts {
+            agent_id: "agent-a".into(),
+            workspace_id: "ws-b".into(),
+            limit: None
+        })
+        .unwrap()["count"],
+        0
+    );
+    assert_eq!(
+        c.submit(Operation::OntologyProposalConflicts {
+            agent_id: "agent-b".into(),
+            workspace_id: "ws-a".into(),
+            limit: None
+        })
+        .unwrap()["count"],
+        0
+    );
+}
+
 fn core() -> Core {
     let d = tempdir().unwrap();
     let p = d.path().join("db.sqlite");

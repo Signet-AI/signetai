@@ -2864,26 +2864,85 @@ fn execute_operation(
                 "SELECT id,payload,confidence,rationale,evidence FROM ontology_proposals WHERE agent_id=? AND status='pending' AND operation='add_claim_value' AND (json_extract(payload,'$.workspace_id')=? OR json_extract(payload,'$._workspaceId')=? OR (json_extract(payload,'$.workspace_id') IS NULL AND json_extract(payload,'$._workspaceId') IS NULL)) ORDER BY updated_at DESC LIMIT ?"
             )?;
             let mut rows = stmt.query(params![agent_id, workspace_id, workspace_id, limit])?;
-            let mut items = Vec::new();
+            let mut groups: Vec<(String, Value, std::collections::HashSet<String>)> = Vec::new();
+            let mut indexes = std::collections::HashMap::new();
             while let Some(row) = rows.next()? {
-                let payload: Value =
-                    serde_json::from_str(&row.get::<_, String>(1)?).unwrap_or(json!({}));
-                let entity = payload.get("entity").and_then(Value::as_str).unwrap_or("");
-                let aspect = payload.get("aspect").and_then(Value::as_str).unwrap_or("");
-                let claim_key = payload
-                    .get("claim_key")
+                let payload: Value = match serde_json::from_str(&row.get::<_, String>(1)?) {
+                    Ok(payload) => payload,
+                    Err(_) => continue,
+                };
+                let entity = match payload.get("entity").and_then(Value::as_str) {
+                    Some(value) if !value.trim().is_empty() => value,
+                    _ => continue,
+                };
+                let aspect = match payload.get("aspect").and_then(Value::as_str) {
+                    Some(value) if !value.trim().is_empty() => value,
+                    _ => continue,
+                };
+                let claim_key = match payload.get("claim_key").and_then(Value::as_str) {
+                    Some(value) if !value.trim().is_empty() => value,
+                    _ => continue,
+                };
+                let value = match payload.get("value").and_then(Value::as_str) {
+                    Some(value) if !value.trim().is_empty() => value,
+                    _ => continue,
+                };
+                let group_key = payload
+                    .get("group_key")
                     .and_then(Value::as_str)
-                    .unwrap_or("");
-                let value = payload.get("value").and_then(Value::as_str).unwrap_or("");
-                if entity.is_empty()
-                    || aspect.is_empty()
-                    || claim_key.is_empty()
-                    || value.is_empty()
-                {
-                    continue;
-                }
-                items.push(json!({"entity":entity,"aspect":aspect,"groupKey":payload.get("group_key").and_then(Value::as_str).unwrap_or("general"),"claimKey":claim_key,"values":[{"proposalId":row.get::<_,String>(0)?,"value":value,"confidence":row.get::<_,f64>(2)?,"rationale":row.get::<_,String>(3)?,"evidenceCount":serde_json::from_str::<Value>(&row.get::<_,String>(4)?).ok().and_then(|v| v.as_array().map(|a| a.len())).unwrap_or(0)}],"proposalIds":[row.get::<_,String>(0)?],"count":1}));
+                    .unwrap_or("general");
+                let key = [entity, aspect, group_key, claim_key]
+                    .into_iter()
+                    .map(canonical_key)
+                    .collect::<Vec<_>>()
+                    .join("\u{1f}");
+                let proposal_id: String = row.get(0)?;
+                let entry = json!({
+                    "proposalId": proposal_id,
+                    "value": value,
+                    "confidence": row.get::<_, f64>(2)?,
+                    "rationale": row.get::<_, String>(3)?,
+                    "evidenceCount": serde_json::from_str::<Value>(&row.get::<_, String>(4)?)
+                        .ok()
+                        .and_then(|v| v.as_array().map(|a| a.len()))
+                        .unwrap_or(0)
+                });
+                let index = match indexes.get(&key) {
+                    Some(index) => *index,
+                    None => {
+                        let index = groups.len();
+                        indexes.insert(key, index);
+                        groups.push((
+                            String::new(),
+                            json!({
+                                "entity": entity,
+                                "aspect": aspect,
+                                "groupKey": group_key,
+                                "claimKey": claim_key,
+                                "values": [],
+                                "proposalIds": [],
+                                "count": 0
+                            }),
+                            std::collections::HashSet::new(),
+                        ));
+                        index
+                    }
+                };
+                let (_, item, distinct_values) = &mut groups[index];
+                distinct_values.insert(canonical_key(value));
+                item["values"].as_array_mut().unwrap().push(entry);
+                item["proposalIds"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(json!(proposal_id));
+                item["count"] = json!(item["count"].as_i64().unwrap_or(0) + 1);
             }
+            let items: Vec<Value> = groups
+                .into_iter()
+                .filter_map(|(_, item, distinct_values)| {
+                    (distinct_values.len() > 1).then_some(item)
+                })
+                .collect();
             Ok(json!({"items":items,"count":items.len()}))
         }
         Operation::KnowledgeEntityCreate {
