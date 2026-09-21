@@ -4492,17 +4492,21 @@ pub fn memory_content_context_eligible(content: &str) -> bool {
     }
     let text: String = content.nfkc().collect::<String>().to_lowercase();
     let patterns = [
-        r"ignore\s+(?:previous|prior|above|earlier)\s+instructions?",
+        r"(?:ignore|disregard|override|forget|bypass)\s+[\s\S]{0,100}(?:previous|prior|above|earlier|system|developer|assistant|safety|security)?\s*(?:instructions?|rules?|prompt|message)",
         r"disregard\s+(?:previous|prior|above|earlier)\s+instructions?",
         r"override\s+the\s+(?:system|safety)\s+instructions?",
-        r"new\s+(?:system|developer|assistant)?\s*instructions?",
-        r"<\s*(?:system|developer|tool[_-]?call)",
+        r"(?:new|following|these)\s+(?:(?:system|developer|assistant|hidden)\s+)?instructions?",
+        r"(?:^|\n)\s*(?:system|developer|instruction|prompt)\s*:",
+        r"<\s*(?:system|developer|assistant|instruction|prompt|tool[_-]?call)",
+        r"(?:you are now|act as|roleplay as|pretend to be)\s+[\s\S]{0,80}(?:system|admin|developer|unrestricted|jailbreak|different agent)",
         r"(?:call|invoke|use|run|execute)\s+(?:the\s+)?[a-z0-9_.-]+\s+tool",
-        r"(?:reveal|show|send|dump|export|exfiltrat\w*)[\s\S]{0,120}(?:system\s+prompt|secret|password|api\s*key|token|\.env|/etc/passwd)",
+        r"(?:reveal|show|print|send|upload|exfiltrat\w*|dump|forward|leak|transmit|export)[\s\S]{0,120}(?:system\s+prompt|hidden\s+instructions?|secret(?:s)?|password(?:s)?|api\s*keys?|tokens?|environment\s+variables?|\.env|/etc/(?:shadow|passwd))",
+        r"(?:system\s+prompt|hidden\s+instructions?|secret(?:s)?|password(?:s)?|api\s*keys?|tokens?|environment\s+variables?|\.env|/etc/(?:shadow|passwd))[\s\S]{0,120}(?:reveal|show|print|send|upload|exfiltrat\w*|dump|forward|leak|transmit|export)",
         r"(?:enter|paste|provide|share|submit)\s+[\s\S]{0,80}(?:password|api\s*key|token|credential|secret)",
         r"(?:curl|wget)[^\n]{0,240}\|\s*(?:ba|z|fi)?sh",
         r"rm\s+-rf\s+(?:/|~|\.ssh)",
         r"cat\s+~/?\.ssh/",
+        r"(?:printenv|env)\b[^\n]{0,120}(?:curl|wget|send|upload|post)",
     ];
     let defensive = regex::Regex::new(
         r"(?i)\b(?:security\s+(?:guidance|discussion|analysis)|threat\s+model|defensive)\b",
@@ -4531,11 +4535,13 @@ pub fn memory_content_context_eligible(content: &str) -> bool {
                 .unwrap_or(text.len());
             let before = &text[start..m.start()];
             let after = &text[m.end()..end];
-            let contextual = defensive.is_match(before)
+            let contextual = defensive.is_match(m.as_str())
+                || negated.is_match(before)
+                || defensive.is_match(before)
                 || defensive.is_match(after)
                 || reporting_before.is_match(before)
                 || (report_word.is_match(before) && reporting_after.is_match(after));
-            if !(negated.is_match(before) || contextual) {
+            if !contextual {
                 return false;
             }
         }
