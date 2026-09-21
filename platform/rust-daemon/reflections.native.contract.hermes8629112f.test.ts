@@ -60,15 +60,27 @@ it("serves authenticated reflection list and today envelopes", async () => {
 	const issue = await fetch(`${running.origin}/api/auth/token`, {
 		method: "POST",
 		headers: { "content-type": "application/json", "x-signet-api-key": "reflection-key" },
-		body: JSON.stringify({ role: "readonly", scope: { agent }, permissions: ["recall"] }),
+		body: JSON.stringify({ role: "agent", scope: { agent }, permissions: ["recall"] }),
 	});
 	expect(issue.status).toBe(200);
 	const { token } = (await issue.json()) as { token: string };
-	const headers = { authorization: `Bearer ${token}`, "x-signet-agent-id": agent };
+	const headers = { authorization: "Bearer " + token, "x-signet-agent-id": agent };
 	const unauthenticated = await fetch(`${running.origin}/api/reflections?limit=1`, {
 		headers: { "x-signet-agent-id": agent },
 	});
 	expect(unauthenticated.status).toBe(401);
+	const noRecallIssue = await fetch(`${running.origin}/api/auth/token`, {
+		method: "POST",
+		headers: { "content-type": "application/json", "x-signet-api-key": "reflection-key" },
+		body: JSON.stringify({ role: "agent", scope: { agent }, permissions: [] }),
+	});
+	expect(noRecallIssue.status).toBe(200);
+	const { token: noRecallToken } = (await noRecallIssue.json()) as { token: string };
+	const noRecallHeaders = { authorization: "Bearer " + noRecallToken, "x-signet-agent-id": agent };
+	const deniedList = await fetch(`${running.origin}/api/reflections?limit=1`, { headers: noRecallHeaders });
+	expect(deniedList.status).toBe(403);
+	const deniedToday = await fetch(`${running.origin}/api/reflections/today?limit=1`, { headers: noRecallHeaders });
+	expect(deniedToday.status).toBe(403);
 	const list = await fetch(`${running.origin}/api/reflections?limit=1`, { headers });
 	expect(list.status).toBe(200);
 	expect(await list.json()).toEqual({ reflections: [] });

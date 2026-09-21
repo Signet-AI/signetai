@@ -159,24 +159,39 @@ fn limit(query: &ReflectionQuery) -> usize {
     query.limit.unwrap_or(30).clamp(1, 100)
 }
 
+async fn authorize_reflection_read(
+    state: &AppState,
+    headers: &HeaderMap,
+    agent_id: &str,
+) -> Result<(), ApiError> {
+    let claims = auth::gate(state, headers).await?;
+    let scope = json!({"agent": agent_id});
+    if !auth::authority_allows(&claims, "agent", &scope, &["recall".to_owned()]) {
+        return Err(ApiError::forbidden("recall permission required"));
+    }
+    Ok(())
+}
+
 async fn list(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(query): Query<ReflectionQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(
+        &headers,
+        Some(&AgentQuery {
+            agent_id: query.agent_id.clone(),
+            agent_id_camel: None,
+            ..Default::default()
+        }),
+        None,
+    )?;
+    authorize_reflection_read(&state, &headers, &agent_id).await?;
     Ok(Json(
         execute(
             &state,
             Operation::ReflectionList {
-                agent_id: agent(
-                    &headers,
-                    Some(&AgentQuery {
-                        agent_id: query.agent_id.clone(),
-                        agent_id_camel: None,
-                        ..Default::default()
-                    }),
-                    None,
-                )?,
+                agent_id,
                 limit: limit(&query),
             },
         )
@@ -189,6 +204,16 @@ async fn today(
     headers: HeaderMap,
     Query(query): Query<ReflectionQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let agent_id = agent(
+        &headers,
+        Some(&AgentQuery {
+            agent_id: query.agent_id.clone(),
+            agent_id_camel: None,
+            ..Default::default()
+        }),
+        None,
+    )?;
+    authorize_reflection_read(&state, &headers, &agent_id).await?;
     let workspace = std::env::var_os("SIGNET_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
@@ -198,15 +223,7 @@ async fn today(
         execute(
             &state,
             Operation::ReflectionToday {
-                agent_id: agent(
-                    &headers,
-                    Some(&AgentQuery {
-                        agent_id: query.agent_id.clone(),
-                        agent_id_camel: None,
-                        ..Default::default()
-                    }),
-                    None,
-                )?,
+                agent_id,
                 date,
                 limit: limit(&query),
             },
