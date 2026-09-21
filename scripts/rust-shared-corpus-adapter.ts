@@ -14,10 +14,17 @@ import {
 import { resolve, basename, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { buildExecutionManifest } from "./shared-corpus-runner";
 
-const BASELINE = "11e4720c07107caf7fdd57a685eca24e8a82e654";
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
-type Manifest = { baselineSha?: string; protectedCorpus?: Array<{ path: string; sha256: string }> };
+type Manifest = {
+	baselineSha?: string;
+	packageJsonSha256?: string;
+	roots?: string[];
+	filters?: string[];
+	excludedDisabledCases?: string[];
+	protectedCorpus?: Array<{ path: string; sha256: string }>;
+};
 const args = Bun.argv.slice(2);
 const arg = (name: string) => {
 	const i = args.indexOf(name);
@@ -44,11 +51,38 @@ function readManifest(value: string): Manifest {
 		}
 	}
 }
-const artifact = resolve(required("--artifact"));
-const coreDriver = resolve(required("--core-driver"));
+function validatePinnedManifest(manifest: Manifest): void {
+	const expected = buildExecutionManifest(process.cwd());
+	const equalStrings = (actual: unknown, expectedValues: string[]): boolean =>
+		Array.isArray(actual) &&
+		actual.length === expectedValues.length &&
+		actual.every((value, index) => value === expectedValues[index]);
+	const actualCorpus = manifest.protectedCorpus;
+	const corpusMatches =
+		Array.isArray(actualCorpus) &&
+		actualCorpus.length === expected.protectedCorpus.length &&
+		actualCorpus.every(
+			(entry, index) =>
+				entry?.path === expected.protectedCorpus[index]?.path &&
+				entry?.sha256 === expected.protectedCorpus[index]?.sha256,
+		);
+	if (
+		manifest.baselineSha !== expected.baselineSha ||
+		manifest.packageJsonSha256 !== expected.packageJsonSha256 ||
+		!equalStrings(manifest.roots, expected.roots) ||
+		!equalStrings(manifest.filters, expected.filters) ||
+		!equalStrings(manifest.excludedDisabledCases, expected.excludedDisabledCases) ||
+		!corpusMatches
+	)
+		fail("manifest does not match the pinned baseline manifest");
+}
 const manifestValue = required("--manifest");
 const pathsValue = required("--paths");
 const report = resolve(required("--report"));
+const manifest = readManifest(manifestValue);
+validatePinnedManifest(manifest);
+const artifact = resolve(required("--artifact"));
+const coreDriver = resolve(required("--core-driver"));
 function validateElf(value: string, identity: string, label: string): void {
 	if (!existsSync(value) || !statSync(value).isFile() || (statSync(value).mode & 0o111) === 0)
 		fail(`${label} must be an executable file`);
@@ -70,10 +104,7 @@ if (!existsSync(artifact) || !statSync(artifact).isFile() || (statSync(artifact)
 	fail("artifact must be an executable file");
 if (FORBIDDEN.test(artifact) || FORBIDDEN.test(process.cwd()))
 	fail("forbidden daemon/source path in execution boundary");
-const manifest = readManifest(manifestValue);
-if (manifest.baselineSha !== BASELINE) fail(`manifest baseline must be ${BASELINE}`);
-if (manifest.protectedCorpus?.length !== 497) fail("manifest must contain the pinned 497-path corpus");
-const entries = new Map(manifest.protectedCorpus.map((entry) => [entry.path, entry.sha256]));
+const entries = new Map(manifest.protectedCorpus?.map((entry) => [entry.path, entry.sha256]) ?? []);
 let paths: unknown;
 try {
 	paths = JSON.parse(pathsValue);

@@ -12,17 +12,17 @@ if (!Bun.file(rustBinary).exists()) throw new Error(`SIGNET_RUST_DAEMON_BIN does
 const originalSpawn = Bun.spawn.bind(Bun);
 Bun.spawn = ((command: string[] | string, options?: Parameters<typeof Bun.spawn>[1]) => {
 	const argv = Array.isArray(command) ? command : [command];
-	const isBaselineDaemonLaunch = argv.some(
-		(value) => typeof value === "string" && value.endsWith("platform/daemon/src/daemon.ts"),
-	);
+	const isBaselineDaemonLaunch =
+		argv.length >= 2 && typeof argv[1] === "string" && argv[1].endsWith("platform/daemon/src/daemon.ts");
 	if (!isBaselineDaemonLaunch) return originalSpawn(command as never, options);
 	const env = { ...(options?.env ?? process.env), SIGNET_DAEMON_BIN: rustBinary };
 	const replaced = [rustBinary];
+	const child = originalSpawn(replaced, { ...options, env });
 	if (evidenceFile && evidenceNonce) {
 		appendFileSync(
 			evidenceFile,
 			`${JSON.stringify({ backend: "rust-daemon", binary: rustBinary, nonce: evidenceNonce, pid: process.pid, replaced: argv })}\n`,
 		);
 	}
-	return originalSpawn(replaced, { ...options, env });
+	return child;
 }) as typeof Bun.spawn;

@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
 import {
 	discoverPaths,
 	parseJUnitReport,
@@ -177,5 +180,65 @@ describe("shared corpus admission", () => {
 			0,
 		);
 		expect(result.nativeEvidence).toBe(true);
+	});
+
+	test("adapter rejects a forged pinned manifest before launching tests", () => {
+		const protectedCorpus = Array.from({ length: 497 }, (_, index) => ({
+			path: `forged-${index}.test.ts`,
+			sha256: "0".repeat(64),
+		}));
+		const result = spawnSync(
+			process.execPath,
+			[
+				resolve(import.meta.dir, "rust-shared-corpus-adapter.ts"),
+				"--artifact",
+				"/nonexistent/signet-daemon",
+				"--core-driver",
+				"/nonexistent/signet-core-test-driver",
+				"--manifest",
+				JSON.stringify({ baselineSha: "11e4720c07107caf7fdd57a685eca24e8a82e654", protectedCorpus }),
+				"--paths",
+				JSON.stringify(["forged-0.test.ts"]),
+				"--report",
+				`/mnt/work/hermes-scratch/forged-manifest-${process.pid}.xml`,
+			],
+			{ cwd: process.cwd(), encoding: "utf8" },
+		);
+		expect(result.status).toBe(2);
+		expect(result.stderr).toMatch(/pinned baseline manifest/i);
+	});
+
+	test("daemon evidence is emitted only after replacement spawn succeeds", () => {
+		const directory = `/mnt/work/hermes-scratch/daemon-preload-test-${process.pid}`;
+		const evidence = `${directory}.evidence`;
+		rmSync(directory, { recursive: true, force: true });
+		rmSync(evidence, { force: true });
+		mkdirSync(directory, { recursive: true });
+		try {
+			const result = spawnSync(
+				process.execPath,
+				[
+					"--preload",
+					resolve(import.meta.dir, "rust-baseline-proof-daemon.preload.ts"),
+					"-e",
+					'Bun.spawn([process.execPath, "platform/daemon/src/daemon.ts"])',
+				],
+				{
+					cwd: process.cwd(),
+					env: {
+						...process.env,
+						SIGNET_RUST_DAEMON_BIN: directory,
+						SIGNET_RUST_DAEMON_EVIDENCE_FILE: evidence,
+						SIGNET_RUST_EVIDENCE_NONCE: "test-nonce",
+					},
+					encoding: "utf8",
+				},
+			);
+			expect(result.status).not.toBe(0);
+			expect(existsSync(evidence)).toBe(false);
+		} finally {
+			rmSync(directory, { recursive: true, force: true });
+			rmSync(evidence, { force: true });
+		}
 	});
 });
