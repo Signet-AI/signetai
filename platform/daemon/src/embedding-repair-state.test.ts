@@ -33,6 +33,12 @@ function asAccessor(db: Database): DbAccessor {
 		withReadDb<T>(fn: (rdb: ReadDb) => T): T {
 			return fn(db as unknown as ReadDb);
 		},
+		async withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
+			return this.withWriteTx(fn);
+		},
+		async withReadDbAsync<T>(fn: (rdb: ReadDb) => T | Promise<T>): Promise<T> {
+			return await fn(db as unknown as ReadDb);
+		},
 		close(): void {
 			db.close();
 		},
@@ -40,16 +46,16 @@ function asAccessor(db: Database): DbAccessor {
 }
 
 describe("embedding repair state", () => {
-	it("holds a durable lease before work and charges its slot only after an eligible completion", () => {
+	it("holds a durable lease before work and charges its slot only after an eligible completion", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
 		const now = Date.parse("2026-08-11T12:00:00.000Z");
 
-		const first = acquireEmbeddingRepairLease(accessor, 60_000, 2, now);
+		const first = await acquireEmbeddingRepairLease(accessor, 60_000, 2, now);
 		expect(first.allowed).toBe(true);
 		// A second worker cannot claim the active batch.
-		expect(acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 1_000)).toMatchObject({
+		expect(await acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 1_000)).toMatchObject({
 			allowed: false,
 			reason: "embedding repair already in progress",
 		});
@@ -57,20 +63,20 @@ describe("embedding repair state", () => {
 		// A restart remains blocked for the full hourly accounting window. Once
 		// it expires, a fresh process can begin the next hourly window without
 		// charging the crashed work as a completed repair.
-		expect(acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 30 * 60_000)).toMatchObject({
+		expect(await acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 30 * 60_000)).toMatchObject({
 			allowed: false,
 			reason: "embedding repair already in progress",
 		});
-		const resumed = acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 60 * 60_000 + 1);
+		const resumed = await acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 60 * 60_000 + 1);
 		expect(resumed.allowed).toBe(true);
-		expect(acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 60 * 60_000 + 2)).toMatchObject({
+		expect(await acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 60 * 60_000 + 2)).toMatchObject({
 			allowed: false,
 			reason: "embedding repair already in progress",
 		});
-		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0 });
+		expect(await readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0 });
 		if (resumed.lease === undefined) throw new Error("expected resumed lease");
-		expect(
-			finishEmbeddingRepairLease(
+		await expect(
+			await finishEmbeddingRepairLease(
 				accessor,
 				resumed.lease,
 				{
@@ -83,21 +89,21 @@ describe("embedding repair state", () => {
 				now + 60 * 60_000 + 2,
 			),
 		).toBe(true);
-		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 1, lastAffected: 1 });
+		expect(await readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 1, lastAffected: 1 });
 		db.close();
 	});
 
-	it("does not charge durable budget when pressure aborts a batch before any embedding persists", () => {
+	it("does not charge durable budget when pressure aborts a batch before any embedding persists", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
 		const now = Date.parse("2026-08-11T12:00:00.000Z");
 		const failedKey = { id: "memory-1", contentHash: "hash-1" };
-		const lease = acquireEmbeddingRepairLease(accessor, 0, 1, now).lease;
+		const lease = (await acquireEmbeddingRepairLease(accessor, 0, 1, now)).lease;
 		if (lease === undefined) throw new Error("expected repair lease");
 
 		expect(
-			finishEmbeddingRepairLease(
+			await finishEmbeddingRepairLease(
 				accessor,
 				lease,
 				{
@@ -111,13 +117,55 @@ describe("embedding repair state", () => {
 				now + 1,
 			),
 		).toBe(true);
-		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0, lastAffected: 0 });
-		expect(loadEmbeddingRepairFailures(accessor, [failedKey], "test-model")).toHaveLength(1);
-		expect(acquireEmbeddingRepairLease(accessor, 0, 1, now + 2).allowed).toBe(true);
+		expect(await readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0, lastAffected: 0 });
+		expect(await loadEmbeddingRepairFailures(accessor, [failedKey], "test-model")).toHaveLength(1);
+		expect((await acquireEmbeddingRepairLease(accessor, 0, 1, now + 2)).allowed).toBe(true);
 		db.close();
 	});
 
-	it("removes backoff rows after a memory is deleted or receives a new content hash", () => {
+	it("releases its lease when finish accounting fails", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = Date.parse("2026-08-11T12:00:00.000Z");
+		const lease = (await acquireEmbeddingRepairLease(accessor, 0, 5, now)).lease;
+		if (lease === undefined) throw new Error("expected repair lease");
+		let failOnce = true;
+		const flakyAccessor: DbAccessor = {
+			...accessor,
+			withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
+				if (failOnce) {
+					failOnce = false;
+					throw new Error("simulated finish failure");
+				}
+				return accessor.withWriteTx(fn);
+			},
+			async withWriteTxAsync<T>(fn: (wdb: WriteDb) => T): Promise<T> {
+				if (failOnce) {
+					failOnce = false;
+					throw new Error("simulated finish failure");
+				}
+				return await accessor.withWriteTxAsync(fn);
+			},
+		};
+
+		expect(
+			finishEmbeddingRepairLease(
+				flakyAccessor,
+				lease,
+				{ successful: [], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
+				now + 1,
+			),
+		).rejects.toThrow("simulated finish failure");
+		expect(await readEmbeddingRepairState(accessor)).toMatchObject({
+			leaseExpiresAt: null,
+			lastError: "simulated finish failure",
+		});
+		expect((await acquireEmbeddingRepairLease(accessor, 0, 5, now + 2)).allowed).toBe(true);
+		db.close();
+	});
+
+	it("removes backoff rows after a memory is deleted or receives a new content hash", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
@@ -129,42 +177,42 @@ describe("embedding repair state", () => {
 			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
 		).run(original.id, "original", original.contentHash, new Date(now).toISOString(), new Date(now).toISOString());
 
-		const firstLease = acquireEmbeddingRepairLease(accessor, 0, 5, now).lease;
+		const firstLease = (await acquireEmbeddingRepairLease(accessor, 0, 5, now)).lease;
 		if (firstLease === undefined) throw new Error("expected first repair lease");
-		finishEmbeddingRepairLease(
+		await finishEmbeddingRepairLease(
 			accessor,
 			firstLease,
 			{ successful: [], failed: [original], model: "test-model", pollMs: 1_000, eligibility: true },
 			now + 1,
 		);
-		expect(loadEmbeddingRepairFailures(accessor, [original], "test-model")).toHaveLength(1);
+		expect(await loadEmbeddingRepairFailures(accessor, [original], "test-model")).toHaveLength(1);
 
 		db.prepare("UPDATE memories SET content_hash = ? WHERE id = ?").run(replacement.contentHash, replacement.id);
-		expect(loadEmbeddingRepairFailures(accessor, [original], "test-model")).toHaveLength(0);
+		expect(await loadEmbeddingRepairFailures(accessor, [original], "test-model")).toHaveLength(0);
 
-		const secondLease = acquireEmbeddingRepairLease(accessor, 0, 5, now + 2).lease;
+		const secondLease = (await acquireEmbeddingRepairLease(accessor, 0, 5, now + 2)).lease;
 		if (secondLease === undefined) throw new Error("expected second repair lease");
-		finishEmbeddingRepairLease(
+		await finishEmbeddingRepairLease(
 			accessor,
 			secondLease,
 			{ successful: [], failed: [replacement], model: "test-model", pollMs: 1_000, eligibility: true },
 			now + 3,
 		);
-		expect(loadEmbeddingRepairFailures(accessor, [replacement], "test-model")).toHaveLength(1);
+		expect(await loadEmbeddingRepairFailures(accessor, [replacement], "test-model")).toHaveLength(1);
 
 		db.prepare("DELETE FROM memories WHERE id = ?").run(replacement.id);
-		expect(loadEmbeddingRepairFailures(accessor, [replacement], "test-model")).toHaveLength(0);
+		expect(await loadEmbeddingRepairFailures(accessor, [replacement], "test-model")).toHaveLength(0);
 		db.close();
 	});
 
-	it("resets a corrupted future budget window instead of extending its quota", () => {
+	it("resets a corrupted future budget window instead of extending its quota", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
 		const now = Date.parse("2026-08-11T12:00:00.000Z");
-		const initialLease = acquireEmbeddingRepairLease(accessor, 0, 5, now).lease;
+		const initialLease = (await acquireEmbeddingRepairLease(accessor, 0, 5, now)).lease;
 		if (initialLease === undefined) throw new Error("expected initial lease");
-		finishEmbeddingRepairLease(
+		await finishEmbeddingRepairLease(
 			accessor,
 			initialLease,
 			{
@@ -180,10 +228,10 @@ describe("embedding repair state", () => {
 			new Date(now + 30 * 60_000).toISOString(),
 		);
 
-		const admission = acquireEmbeddingRepairLease(accessor, 0, 5, now + 1);
+		const admission = await acquireEmbeddingRepairLease(accessor, 0, 5, now + 1);
 		expect(admission.allowed).toBe(true);
 		if (admission.lease === undefined) throw new Error("expected repaired-window lease");
-		finishEmbeddingRepairLease(
+		await finishEmbeddingRepairLease(
 			accessor,
 			admission.lease,
 			{
@@ -195,7 +243,7 @@ describe("embedding repair state", () => {
 			},
 			now + 1,
 		);
-		expect(readEmbeddingRepairState(accessor)).toMatchObject({
+		expect(await readEmbeddingRepairState(accessor)).toMatchObject({
 			windowStartedAt: new Date(now + 1).toISOString(),
 			batchesStarted: 1,
 		});
@@ -208,34 +256,34 @@ describe("embedding repair state", () => {
 		const accessor = asAccessor(db);
 		const now = Date.parse("2026-08-11T12:00:00.000Z");
 		const key = { id: "memory-1", contentHash: "hash-1" };
-		const lease = acquireEmbeddingRepairLease(accessor, 60_000, 5, now).lease;
+		const lease = (await acquireEmbeddingRepairLease(accessor, 60_000, 5, now)).lease;
 		expect(lease).toBeDefined();
 		if (lease === undefined) throw new Error("expected repair lease");
 
-		finishEmbeddingRepairLease(
+		await finishEmbeddingRepairLease(
 			accessor,
 			lease,
 			{ successful: [], failed: [key], model: "test-model", pollMs: 1_000, eligibility: true },
 			now + 1,
 		);
-		const persisted = loadEmbeddingRepairFailures(accessor, [key], "test-model");
+		const persisted = await loadEmbeddingRepairFailures(accessor, [key], "test-model");
 		expect(persisted.get("memory-1:hash-1:test-model")).toMatchObject({ attempts: 1, retryAt: now + 60_001 });
 
-		const resumedLease = acquireEmbeddingRepairLease(accessor, 60_000, 5, now + 60_001).lease;
+		const resumedLease = (await acquireEmbeddingRepairLease(accessor, 60_000, 5, now + 60_001)).lease;
 		expect(resumedLease).toBeDefined();
 		if (resumedLease === undefined) throw new Error("expected resumed lease");
-		finishEmbeddingRepairLease(
+		await finishEmbeddingRepairLease(
 			accessor,
 			resumedLease,
 			{ successful: [key], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
 			now + 60_002,
 		);
-		const remaining = loadEmbeddingRepairFailures(accessor, [key], "test-model");
+		const remaining = await loadEmbeddingRepairFailures(accessor, [key], "test-model");
 		expect(remaining).toEqual(new Map());
 		db.close();
 	});
 
-	it("does not let ten superseded-profile batches consume the promoted profile's ten-slot budget", () => {
+	it("does not let ten superseded-profile batches consume the promoted profile's ten-slot budget", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
@@ -259,10 +307,10 @@ describe("embedding repair state", () => {
 
 		for (let index = 0; index < 10; index++) {
 			const at = now + index;
-			const lease = acquireEmbeddingRepairLease(accessor, 0, 10, at).lease;
+			const lease = (await acquireEmbeddingRepairLease(accessor, 0, 10, at)).lease;
 			if (lease === undefined) throw new Error("expected superseded-profile lease");
 			expect(
-				finishEmbeddingRepairLease(
+				await finishEmbeddingRepairLease(
 					accessor,
 					lease,
 					{
@@ -276,15 +324,15 @@ describe("embedding repair state", () => {
 				),
 			).toBe(false);
 		}
-		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0 });
+		expect(await readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 0 });
 		expect(db.prepare("SELECT COUNT(*) AS n FROM embedding_repair_backoff").get() as { n: number }).toEqual({ n: 0 });
 
 		for (let index = 0; index < 10; index++) {
 			const at = now + 100 + index;
-			const lease = acquireEmbeddingRepairLease(accessor, 0, 10, at).lease;
+			const lease = (await acquireEmbeddingRepairLease(accessor, 0, 10, at)).lease;
 			if (lease === undefined) throw new Error("expected promoted-profile lease");
 			expect(
-				finishEmbeddingRepairLease(
+				await finishEmbeddingRepairLease(
 					accessor,
 					lease,
 					{
@@ -298,15 +346,15 @@ describe("embedding repair state", () => {
 				),
 			).toBe(true);
 		}
-		expect(readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 10 });
-		expect(acquireEmbeddingRepairLease(accessor, 0, 10, now + 200)).toMatchObject({
+		expect(await readEmbeddingRepairState(accessor)).toMatchObject({ batchesStarted: 10 });
+		expect(await acquireEmbeddingRepairLease(accessor, 0, 10, now + 200)).toMatchObject({
 			allowed: false,
 			reason: "embedding repair hourly budget exhausted (10 batches/hr)",
 		});
 		db.close();
 	});
 
-	it("skips a persisted-backoff row so it cannot starve newer eligible repair work", () => {
+	it("skips a persisted-backoff row so it cannot starve newer eligible repair work", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		const accessor = asAccessor(db);
@@ -322,9 +370,9 @@ describe("embedding repair state", () => {
 			 VALUES (?, ?, ?, 'fact', ?, ?, 'test')`,
 		).run("deferred", "deferred", "hash-deferred", newer, newer);
 
-		const lease = acquireEmbeddingRepairLease(accessor, 60_000, 5, now).lease;
+		const lease = (await acquireEmbeddingRepairLease(accessor, 60_000, 5, now)).lease;
 		if (lease === undefined) throw new Error("expected repair lease");
-		finishEmbeddingRepairLease(
+		await finishEmbeddingRepairLease(
 			accessor,
 			lease,
 			{
@@ -341,6 +389,39 @@ describe("embedding repair state", () => {
 			listStaleEmbeddingRows(db, "test-model", 1, new Date(now + 2).toISOString()),
 		);
 		expect(selected.map((row) => row.id)).toEqual(["eligible"]);
+		db.close();
+	});
+
+	it("keeps completion diagnostics scoped to the repaired agent", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = Date.parse("2026-08-11T12:00:00.000Z");
+		const lease = (await acquireEmbeddingRepairLease(accessor, 0, 5, now)).lease;
+		if (lease === undefined) throw new Error("expected repair lease");
+
+		await finishEmbeddingRepairLease(
+			accessor,
+			lease,
+			{
+				agentId: "agent-a",
+				successful: [{ id: "memory-a", contentHash: "hash-a" }],
+				failed: [],
+				model: "test-model",
+				pollMs: 1_000,
+				eligibility: true,
+			},
+			now + 1,
+		);
+
+		expect(await readEmbeddingRepairState(accessor, "agent-a")).toMatchObject({
+			lastAffected: 1,
+			lastError: null,
+		});
+		expect(await readEmbeddingRepairState(accessor, "agent-b")).toMatchObject({
+			lastAffected: 0,
+			lastError: null,
+		});
 		db.close();
 	});
 });

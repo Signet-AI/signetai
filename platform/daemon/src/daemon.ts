@@ -1987,6 +1987,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			memoryCfg.pipelineV2.repair,
 			fetchEmbedding,
 			checkEmbeddingProvider,
+			defaultAgentId,
 		);
 		setEmbeddingTrackerHandle(embeddingTrackerHandle);
 	}

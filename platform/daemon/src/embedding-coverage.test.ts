@@ -18,6 +18,17 @@ function insertEmbedding(db: Database, args: { id: string; sourceId: string; con
 	).run(args.id, args.contentHash, Buffer.from(new Float32Array([0.1, 0.2, 0.3]).buffer), args.sourceId);
 }
 
+function insertRepairBackoff(
+	db: Database,
+	args: { memoryId: string; contentHash: string; model: string; retryAt: string },
+): void {
+	db.prepare(
+		`INSERT INTO embedding_repair_backoff
+		 (memory_id, content_hash, model, attempts, retry_at, updated_at)
+		 VALUES (?, ?, ?, 1, ?, ?)`,
+	).run(args.memoryId, args.contentHash, args.model, args.retryAt, args.retryAt);
+}
+
 describe("embedding coverage queries", () => {
 	let db: Database;
 
@@ -62,5 +73,29 @@ describe("embedding coverage queries", () => {
 		const rows = listStaleEmbeddingRows(db, "text-embedding-3-small", 10);
 		expect(rows).toHaveLength(1);
 		expect(rows[0]?.id).toBe("mem-stale");
+	});
+
+	it("does not let an expired NULL-hash failure bypass an active failure", () => {
+		const now = "2025-01-01T00:00:00.000Z";
+		db.prepare(
+			`INSERT INTO memories (id, content, agent_id, scope, type, created_at, updated_at, updated_by)
+			 VALUES ('mem-null-hash', 'legacy content', 'agent-a', 'scope-a', 'fact', ?, ?, 'test')`,
+		).run(now, now);
+		insertRepairBackoff(db, {
+			memoryId: "mem-null-hash",
+			contentHash: "old-content-hash",
+			model: "model-a",
+			retryAt: "2020-01-01T00:00:00.000Z",
+		});
+		insertRepairBackoff(db, {
+			memoryId: "mem-null-hash",
+			contentHash: "current-content-hash",
+			model: "model-a",
+			retryAt: "2999-01-01T00:00:00.000Z",
+		});
+
+		const readDb = db as unknown as ReadDb;
+		expect(listUnembeddedMemories(readDb, 10, "agent-a", "model-a", now)).toHaveLength(0);
+		expect(listAllUnembeddedMemories(readDb, 10, "model-a", now)).toHaveLength(0);
 	});
 });
