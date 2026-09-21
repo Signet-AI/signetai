@@ -1,6 +1,6 @@
 use crate::{execute, routes::auth, ApiError, AppState};
 use axum::{
-    extract::{Path, Query, State},
+    extract::{rejection::JsonRejection, Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
@@ -366,9 +366,10 @@ fn run(argv: Vec<String>, env: HashMap<String, String>, timeout: u64, cap: usize
 async fn exec(
     State(s): State<AppState>,
     h: HeaderMap,
-    Json(b): Json<ExecBody>,
+    body: Result<Json<ExecBody>, JsonRejection>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let (a, w) = authority(&s, &h, "secrets:exec").await?;
+    let Json(b) = body.map_err(|_| ApiError::bad_request("invalid JSON request body"))?;
     let av = argv(&b.command)?;
     if b.secrets.is_empty() {
         return Err(ApiError::bad_request(
