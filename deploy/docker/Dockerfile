@@ -7,6 +7,7 @@ COPY scripts ./scripts
 COPY surfaces/cli ./surfaces/cli
 COPY dist/signetai ./dist/signetai
 RUN bun install --frozen-lockfile
+RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
 RUN bun run build:native-bun
 ARG TARGETOS=linux
 ARG TARGETARCH

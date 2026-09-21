@@ -53,13 +53,17 @@ function revision(): string {
 	return process.env.GITHUB_SHA ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 }
 
-if (process.env.SIGNET_SKIP_NATIVE_BUILD === "1") process.exit(0);
+if (process.env.SIGNET_SKIP_NATIVE_BUILD === "1") {
+	console.log("[signet] skipping native build (SIGNET_SKIP_NATIVE_BUILD=1)");
+	process.exit(0);
+}
 if (!existsSync(nativeDir) || !existsSync(manifest)) fail("native Rust build inputs are missing");
 if (!existsSync(join(dashboard, "index.html"))) fail(`dashboard build is missing: ${join(dashboard, "index.html")}`);
 try {
-	execFileSync("cargo", ["--version"], { stdio: "ignore" });
+	const locator = platform() === "win32" ? "where" : "which";
+	execFileSync(locator, ["cargo"], { stdio: "ignore", windowsHide: true });
 } catch {
-	fail("cargo is required");
+	fail("cargo is required (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
 }
 
 const staging = mkdtempSync(join(root, ".signet-native-stage-"));
@@ -111,5 +115,6 @@ try {
 } catch (error) {
 	rmSync(staging, { recursive: true, force: true });
 	console.error(error instanceof Error ? error.message : error);
+	console.error("[signet] native build failed (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
 	process.exit(1);
 }
