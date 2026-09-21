@@ -1,3 +1,4 @@
+use crate::routes::auth;
 use crate::{agent, execute, AgentQuery, ApiError, AppState};
 use axum::{
     extract::{Path, Query, State},
@@ -376,6 +377,28 @@ fn workspace_nav(headers: &HeaderMap, q: &NavigationQuery) -> Result<String, Api
     Ok(header.or(query).unwrap_or("default").to_owned())
 }
 
+async fn pin_authority(
+    state: &AppState,
+    headers: &HeaderMap,
+    q: &EntityQuery,
+) -> Result<(String, String), ApiError> {
+    let agent_id = agent(headers, Some(&q.agent), None)?;
+    let workspace_id = workspace(headers, q)?;
+    let claims = auth::gate(state, headers).await?;
+    let requested_scope = serde_json::json!({"agent": agent_id, "workspace": workspace_id});
+    if !auth::authority_allows(&claims, "agent", &requested_scope, &["modify".to_owned()]) {
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message: "modify permission required for pin mutations".into(),
+        });
+    }
+    Ok((
+        requested_scope["agent"].as_str().unwrap().to_owned(),
+        requested_scope["workspace"].as_str().unwrap().to_owned(),
+    ))
+}
+
 async fn pinned_entities(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -398,12 +421,13 @@ async fn pin_entity(
     Path(id): Path<String>,
     Query(q): Query<EntityQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let (agent_id, workspace_id) = pin_authority(&state, &headers, &q).await?;
     Ok(Json(
         execute(
             &state,
             Operation::KnowledgeEntityPin {
-                agent_id: agent(&headers, Some(&q.agent), None)?,
-                workspace_id: workspace(&headers, &q)?,
+                agent_id,
+                workspace_id,
                 entity_id: id,
                 actor: headers
                     .get("x-signet-actor")
@@ -421,12 +445,13 @@ async fn unpin_entity(
     Path(id): Path<String>,
     Query(q): Query<EntityQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    let (agent_id, workspace_id) = pin_authority(&state, &headers, &q).await?;
     Ok(Json(
         execute(
             &state,
             Operation::KnowledgeEntityUnpin {
-                agent_id: agent(&headers, Some(&q.agent), None)?,
-                workspace_id: workspace(&headers, &q)?,
+                agent_id,
+                workspace_id,
                 entity_id: id,
                 actor: headers
                     .get("x-signet-actor")
