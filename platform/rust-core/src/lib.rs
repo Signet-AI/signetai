@@ -2040,18 +2040,47 @@ fn execute_operation(
             row.map(|value| json!({"value": value}))
                 .ok_or_else(|| CoreError::InvalidInput("secret not found".into()))
         }
-        Operation::ConnectorUpsert { agent_id, workspace_id, provider, display_name, settings } => {
-            let agent_id = required_agent(&agent_id)?; let workspace_id = canonical_workspace(&workspace_id)?;
-            if !["filesystem", "github-docs", "gdrive"].contains(&provider.as_str()) { return Err(CoreError::InvalidInput("provider must be filesystem, github-docs, or gdrive".into())); }
-            let id = uuid::Uuid::new_v4().to_string(); let config = json!({"id":id,"provider":provider,"displayName":display_name,"settings":settings,"enabled":true});
+        Operation::ConnectorUpsert {
+            agent_id,
+            workspace_id,
+            provider,
+            display_name,
+            settings,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            if !["filesystem", "github-docs", "gdrive"].contains(&provider.as_str()) {
+                return Err(CoreError::InvalidInput(
+                    "provider must be filesystem, github-docs, or gdrive".into(),
+                ));
+            }
+            let id = uuid::Uuid::new_v4().to_string();
+            let config = json!({"id":id,"provider":provider,"displayName":display_name,"settings":settings,"enabled":true});
             connection.execute("INSERT INTO connectors(id,agent_id,workspace_id,provider,display_name,config_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?, 'idle',datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,provider,display_name,config.to_string()])?;
             Ok(json!({"id":id}))
         }
-        Operation::ConnectorList { agent_id, workspace_id } => {
-            let agent_id = required_agent(&agent_id)?; let workspace_id = canonical_workspace(&workspace_id)?;
+        Operation::ConnectorList {
+            agent_id,
+            workspace_id,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let mut stmt = connection.prepare("SELECT id,provider,display_name,config_json,status,last_sync_at,last_error,created_at,updated_at FROM connectors WHERE agent_id=? AND workspace_id=? ORDER BY rowid DESC")?;
-            let rows = stmt.query_map(params![agent_id,workspace_id], |r| { let config:String=r.get(3)?; let mut v:Value=serde_json::from_str(&config).unwrap_or_else(|_| json!({})); if let Value::Object(ref mut o)=v { o.insert("id".into(),json!(r.get::<_,String>(0)?)); o.insert("provider".into(),json!(r.get::<_,String>(1)?)); o.insert("displayName".into(),json!(r.get::<_,Option<String>>(2)?)); o.insert("status".into(),json!(r.get::<_,String>(4)?)); o.insert("configured".into(),json!(true)); o.insert("probed".into(),json!(false)); } Ok(v) })?;
-            let connectors=rows.collect::<Result<Vec<_>,_>>()?; Ok(json!({"connectors":connectors,"count":connectors.len()}))
+            let rows = stmt.query_map(params![agent_id, workspace_id], |r| {
+                let config: String = r.get(3)?;
+                let mut v: Value = serde_json::from_str(&config).unwrap_or_else(|_| json!({}));
+                if let Value::Object(ref mut o) = v {
+                    o.insert("id".into(), json!(r.get::<_, String>(0)?));
+                    o.insert("provider".into(), json!(r.get::<_, String>(1)?));
+                    o.insert("displayName".into(), json!(r.get::<_, Option<String>>(2)?));
+                    o.insert("status".into(), json!(r.get::<_, String>(4)?));
+                    o.insert("configured".into(), json!(true));
+                    o.insert("probed".into(), json!(false));
+                }
+                Ok(v)
+            })?;
+            let connectors = rows.collect::<Result<Vec<_>, _>>()?;
+            Ok(json!({"connectors":connectors,"count":connectors.len()}))
         }
         Operation::Health => {
             let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
@@ -3945,8 +3974,17 @@ pub enum Operation {
         fault: Option<String>,
     },
     Health,
-    ConnectorUpsert { agent_id: String, workspace_id: String, provider: String, display_name: String, settings: Value },
-    ConnectorList { agent_id: String, workspace_id: String },
+    ConnectorUpsert {
+        agent_id: String,
+        workspace_id: String,
+        provider: String,
+        display_name: String,
+        settings: Value,
+    },
+    ConnectorList {
+        agent_id: String,
+        workspace_id: String,
+    },
     ReflectionList {
         agent_id: String,
         limit: usize,
