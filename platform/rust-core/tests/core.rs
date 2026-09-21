@@ -2217,3 +2217,59 @@ fn current_schema_navigation_matches_spaced_keys_from_canonical_requests() {
     assert_eq!(attrs["items"].as_array().unwrap().len(), 1);
     assert_eq!(attrs["items"][0]["content"], "Active meal");
 }
+
+#[test]
+fn current_schema_navigation_canonical_names_and_tree_group_equivalence() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("canonical-navigation.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, entity_type TEXT NOT NULL DEFAULT 'person', description TEXT, mentions INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0, pinned_at TEXT, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, weight REAL NOT NULL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, aspect_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT, group_key TEXT, claim_key TEXT, confidence REAL DEFAULT 0.5, importance REAL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO entities VALUES ('e1','a','w','Display Person','person canonical','person',NULL,1,0,NULL,'active','2026-01-01','2026-01-02'), ('e2','other','w','Display Person','person canonical','person',NULL,1,0,NULL,'active','2026-01-01','2026-01-02'), ('ed','a','w','Deleted Person','deleted canonical','person',NULL,1,0,NULL,'deleted','2026-01-01','2026-01-02'); INSERT INTO entity_aspects VALUES ('p1','e1','a','w','Display Aspect','aspect canonical',1.0,'active','2026-01-01','2026-01-02'), ('pd','e1','a','w','Deleted Aspect','deleted aspect',2.0,'deleted','2026-01-01','2026-01-02'), ('p2','e2','other','w','Display Aspect','aspect canonical',1.0,'active','2026-01-01','2026-01-02'); INSERT INTO entity_attributes VALUES ('x1','p1','a','w',NULL,'attribute','One','one','dietary constraints','first claim',1,1,'active','2026-01-01','2026-01-02'), ('x2','p1','a','w',NULL,'constraint','Two','two','dietary_constraints','second claim',1,1,'active','2026-01-01','2026-01-02'), ('x3','p1','a','w',NULL,'attribute','Deleted','deleted','dietary_constraints','deleted claim',1,1,'deleted','2026-01-01','2026-01-02'), ('x4','p2','other','w',NULL,'attribute','Other','other','dietary constraints','other claim',1,1,'active','2026-01-01','2026-01-02');");
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let groups = c
+        .submit(Operation::KnowledgeNavigationGroups {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity: "person canonical".into(),
+            aspect: "aspect canonical".into(),
+        })
+        .unwrap();
+    assert_eq!(groups["entity"]["id"], "e1");
+    assert_eq!(groups["aspect"]["id"], "p1");
+    assert_eq!(groups["items"].as_array().unwrap().len(), 1);
+    assert_eq!(groups["items"][0]["groupKey"], "dietary constraints");
+    let claims = c
+        .submit(Operation::KnowledgeNavigationClaims {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity: "person canonical".into(),
+            aspect: "aspect canonical".into(),
+            group: "dietary_constraints".into(),
+        })
+        .unwrap();
+    assert_eq!(claims["items"].as_array().unwrap().len(), 2);
+    let tree = c
+        .submit(Operation::KnowledgeTree {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: "person canonical".into(),
+            depth: 3,
+            max_aspects: 10,
+            max_groups: 1,
+            max_claims: 10,
+            max_attributes: 10,
+        })
+        .unwrap();
+    assert_eq!(tree["items"][0]["groups"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        tree["items"][0]["groups"][0]["groupKey"],
+        "dietary constraints"
+    );
+    assert_eq!(
+        tree["items"][0]["groups"][0]["claims"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
