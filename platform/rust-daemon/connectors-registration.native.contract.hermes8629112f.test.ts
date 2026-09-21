@@ -41,7 +41,21 @@ async function start() {
 	const origin = `http://127.0.0.1:${p}`;
 	for (let i = 0; i < 120; i++) {
 		try {
-			if ((await fetch(`${origin}/health/ready`)).ok) return { origin };
+			if ((await fetch(`${origin}/health/ready`)).ok) {
+				const tokenResponse = await fetch(`${origin}/api/auth/token`, {
+					method: "POST",
+					headers: { authorization: "Bearer connector-test-key", "content-type": "application/json" },
+					body: JSON.stringify({
+						role: "admin",
+						permissions: [],
+						scope: { agent: "agent-a", workspace: "workspace-a" },
+					}),
+				});
+				expect(tokenResponse.status).toBe(200);
+				const token = (await tokenResponse.json()) as { token?: string };
+				expect(token.token).toEqual(expect.any(String));
+				return { origin, token: token.token as string };
+			}
 		} catch {}
 		await Bun.sleep(50);
 	}
@@ -54,14 +68,14 @@ afterEach(async () => {
 	}
 	for (const w of workspaces.splice(0)) rmSync(w, { recursive: true, force: true });
 });
-const headers = (agent: string) => ({
-	authorization: "Bearer connector-test-key",
+const headers = (agent: string, token = "connector-test-key") => ({
+	authorization: `Bearer ${token}`,
 	"x-signet-agent-id": agent,
 	"x-signet-workspace-id": "workspace-a",
 	"content-type": "application/json",
 });
 it("registers scoped connectors with TS validation and readback semantics", async () => {
-	const { origin } = await start();
+	const { origin, token } = await start();
 	expect(
 		(
 			await fetch(`${origin}/api/connectors`, {
@@ -74,6 +88,12 @@ it("registers scoped connectors with TS validation and readback semantics", asyn
 	expect(
 		(await fetch(`${origin}/api/connectors`, { method: "POST", headers: headers("agent-a"), body: "{" })).status,
 	).toBe(400);
+	const tokenAttempt = await fetch(`${origin}/api/connectors`, {
+		method: "POST",
+		headers: headers("agent-a", token),
+		body: JSON.stringify({ provider: "filesystem", displayName: "Token denied", settings: {} }),
+	});
+	expect(tokenAttempt.status).toBe(403);
 	const body = { provider: "filesystem", displayName: "Docs", settings: { rootPath: "/tmp/docs" } };
 	const first = await fetch(`${origin}/api/connectors`, {
 		method: "POST",

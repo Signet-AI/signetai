@@ -144,7 +144,15 @@ async fn register_connector(
     body: Result<Json<ConnectorRegistration>, axum::extract::rejection::JsonRejection>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     let claims = crate::routes::auth::gate(&state, &headers).await?;
-    if claims.get("role").and_then(Value::as_str) != Some("admin") {
+    if claims.get("role").and_then(Value::as_str) != Some("admin")
+        || claims.get("permissions").is_some_and(|permissions| {
+            !permissions.as_array().is_some_and(|permissions| {
+                permissions
+                    .iter()
+                    .any(|permission| permission.as_str() == Some("admin"))
+            })
+        })
+    {
         return Err(ApiError::forbidden("admin authority is required"));
     }
     let Json(request) = body.map_err(|_| ApiError::bad_request("Invalid JSON body"))?;
