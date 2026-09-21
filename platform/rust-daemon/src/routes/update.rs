@@ -9,13 +9,14 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+#[cfg(unix)]
+use std::os::unix::{
+    fs::MetadataExt,
+    io::{AsRawFd, FromRawFd},
+};
 use std::{
     fs::File,
     io::{Read, Write},
-    os::unix::{
-        fs::MetadataExt,
-        io::{AsRawFd, FromRawFd},
-    },
     path::Path,
 };
 
@@ -40,6 +41,7 @@ struct Config {
     channel: &'static str,
 }
 
+#[cfg(unix)]
 fn open_workspace(workspace: &Path) -> Option<File> {
     let mut current = if workspace.is_absolute() {
         let fd = unsafe {
@@ -87,6 +89,7 @@ fn open_workspace(workspace: &Path) -> Option<File> {
     Some(current)
 }
 
+#[cfg(unix)]
 fn open_config(dir: &File) -> Option<File> {
     let fd = unsafe {
         libc::openat(
@@ -103,6 +106,7 @@ fn open_config(dir: &File) -> Option<File> {
     (metadata.file_type().is_file() && metadata.len() <= MAX_BODY as u64).then_some(file)
 }
 
+#[cfg(unix)]
 fn read_config(workspace: &Path) -> Option<String> {
     let dir = open_workspace(workspace)?;
     let mut file = open_config(&dir)?;
@@ -115,6 +119,20 @@ fn read_config(workspace: &Path) -> Option<String> {
     let after = file.metadata().ok()?;
     ((metadata.dev(), metadata.ino()) == (after.dev(), after.ino()) && text.len() <= MAX_BODY)
         .then_some(text)
+}
+
+#[cfg(windows)]
+fn read_config(workspace: &Path) -> Option<String> {
+    let file = File::open(workspace.join("agent.yaml")).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_BODY as u64 {
+        return None;
+    }
+    let mut text = String::with_capacity(metadata.len() as usize);
+    file.take(MAX_BODY as u64 + 1)
+        .read_to_string(&mut text)
+        .ok()?;
+    (text.len() <= MAX_BODY).then_some(text)
 }
 
 fn parse_config(workspace: &Path) -> Config {
@@ -221,6 +239,7 @@ fn replace_section(current: &str, section: &str) -> Option<String> {
     Some(format!("{}{}{}{}", prefix, separator, section, suffix))
 }
 
+#[cfg(unix)]
 fn persist(workspace: &Path, config: &Config) -> bool {
     let dir = match open_workspace(workspace) {
         Some(v) => v,
@@ -329,6 +348,43 @@ fn persist(workspace: &Path, config: &Config) -> bool {
         }
     }
     ok
+}
+
+#[cfg(windows)]
+fn persist(workspace: &Path, config: &Config) -> bool {
+    let path = workspace.join("agent.yaml");
+    let current = std::fs::read_to_string(&path).unwrap_or_default();
+    if current.len() > MAX_BODY {
+        return false;
+    }
+    let section = format!(
+        "updates:\n  auto_install: {}\n  check_interval: {}\n  channel: {}\n",
+        config.auto_install, config.check_interval, config.channel
+    );
+    let Some(output) = replace_section(&current, &section) else {
+        return false;
+    };
+    if output.len() > MAX_BODY {
+        return false;
+    }
+    for n in 0..32u32 {
+        let temp = workspace.join(format!(".agent.yaml.tmp.{}.{}", std::process::id(), n));
+        let Ok(mut file) = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)
+        else {
+            continue;
+        };
+        let ok = file.write_all(output.as_bytes()).is_ok() && file.sync_all().is_ok();
+        drop(file);
+        if ok && std::fs::rename(&temp, &path).is_ok() {
+            return true;
+        }
+        let _ = std::fs::remove_file(&temp);
+        return false;
+    }
+    false
 }
 
 fn config_json(config: &Config) -> Value {
