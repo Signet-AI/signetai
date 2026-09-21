@@ -124,6 +124,13 @@ fn owner_process_start_time(pid: u32) -> Option<u64> {
     }
 }
 
+fn owner_marker_start_time_matches(expected: Option<u64>, actual: Option<u64>) -> bool {
+    match expected {
+        Some(expected) => actual == Some(expected),
+        None => true,
+    }
+}
+
 fn owner_marker_is_live(path: &FsPath) -> bool {
     let Ok(raw) = std::fs::read_to_string(path) else {
         return false;
@@ -140,13 +147,11 @@ fn owner_marker_is_live(path: &FsPath) -> bool {
         if pid == 0 || pid == 1 || pid > libc::pid_t::MAX as u64 {
             return false;
         }
-        if let (Some(expected), Some(actual)) = (
+        if !owner_marker_start_time_matches(
             expected_start_time,
             owner_process_start_time(pid as u32),
         ) {
-            if expected != actual {
-                return false;
-            }
+            return false;
         }
         let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
         result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
@@ -156,13 +161,11 @@ fn owner_marker_is_live(path: &FsPath) -> bool {
         if pid > u32::MAX as u64 {
             return false;
         }
-        if let (Some(expected), Some(actual)) = (
+        if !owner_marker_start_time_matches(
             expected_start_time,
             owner_process_start_time(pid as u32),
         ) {
-            if expected != actual {
-                return false;
-            }
+            return false;
         }
         let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32) };
         if handle.is_null() {
@@ -669,6 +672,15 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
             Err(CoreError::UnsupportedMigrationHistory(message))
                 if message == "version 153 is newer than 2"
         ));
+    }
+
+    #[test]
+    fn marker_start_time_requires_observation_when_present() {
+        assert!(super::owner_marker_start_time_matches(None, None));
+        assert!(super::owner_marker_start_time_matches(None, Some(42)));
+        assert!(super::owner_marker_start_time_matches(Some(42), Some(42)));
+        assert!(!super::owner_marker_start_time_matches(Some(42), Some(43)));
+        assert!(!super::owner_marker_start_time_matches(Some(42), None));
     }
 
     #[test]
