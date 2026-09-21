@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { resolve, basename, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 const BASELINE = "11e4720c07107caf7fdd57a685eca24e8a82e654";
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
@@ -85,7 +86,10 @@ const selected = [...new Set(paths as string[])].sort();
 for (const path of selected) if (!entries.has(path)) fail(`requested path is outside the pinned corpus: ${path}`);
 mkdirSync(dirname(report), { recursive: true });
 const evidenceFile = `${report}.native-evidence`;
+const daemonEvidenceFile = `${report}.daemon-evidence`;
+const evidenceNonce = randomUUID();
 if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
+if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
 const stdoutPath = `${report}.stdout`;
 const stderrPath = `${report}.stderr`;
 for (const path of [stdoutPath, stderrPath]) if (existsSync(path)) unlinkSync(path);
@@ -143,6 +147,8 @@ try {
 			env: {
 				...process.env,
 				SIGNET_RUST_DAEMON_BIN: artifact,
+				SIGNET_RUST_DAEMON_EVIDENCE_FILE: daemonEvidenceFile,
+				SIGNET_RUST_EVIDENCE_NONCE: evidenceNonce,
 				SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,
 				SIGNET_RUST_CORE_EVIDENCE_FILE: evidenceFile,
 			},
@@ -161,7 +167,18 @@ if (!child) {
 }
 const stderr = existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "";
 const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf8") : "";
-const daemonEvidence = /"backend"\s*:\s*"rust-daemon"/.test(stderr);
+const daemonEvidence =
+	existsSync(daemonEvidenceFile) &&
+	readFileSync(daemonEvidenceFile, "utf8")
+		.split(/\r?\n/)
+		.some((line) => {
+			try {
+				const value = JSON.parse(line) as { backend?: string; binary?: string; nonce?: string };
+				return value.backend === "rust-daemon" && value.binary === artifact && value.nonce === evidenceNonce;
+			} catch {
+				return false;
+			}
+		});
 const coreEvidence =
 	existsSync(evidenceFile) &&
 	/backend=fresh-rust artifact=signet-core-test-driver process=transport/.test(readFileSync(evidenceFile, "utf8"));
@@ -197,6 +214,7 @@ writeFileSync(
 	`<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" nativeEvidence="${nativeEvidence}" tests="${cases.length}" failures="${failures}" errors="0" skipped="0">${cases.join("")}</testsuite>`,
 );
 if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
+if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
 console.error(
 	JSON.stringify({
 		backend: "fresh-rust",

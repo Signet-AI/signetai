@@ -1,4 +1,11 @@
+import { appendFileSync } from "node:fs";
+
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
 const rustBinary = process.env.SIGNET_RUST_DAEMON_BIN;
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: adapter evidence sidecar
+const evidenceFile = process.env.SIGNET_RUST_DAEMON_EVIDENCE_FILE;
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: adapter evidence nonce
+const evidenceNonce = process.env.SIGNET_RUST_EVIDENCE_NONCE;
 if (!rustBinary) throw new Error("SIGNET_RUST_DAEMON_BIN is required; refusing TypeScript daemon fallback");
 if (!Bun.file(rustBinary).exists()) throw new Error(`SIGNET_RUST_DAEMON_BIN does not exist: ${rustBinary}`);
 
@@ -11,13 +18,11 @@ Bun.spawn = ((command: string[] | string, options?: Parameters<typeof Bun.spawn>
 	if (!isBaselineDaemonLaunch) return originalSpawn(command as never, options);
 	const env = { ...(options?.env ?? process.env), SIGNET_DAEMON_BIN: rustBinary };
 	const replaced = [rustBinary];
-	process.stderr.write(
-		JSON.stringify({
-			backend: "rust-daemon",
-			binary: rustBinary,
-			pid: process.pid,
-			replaced: argv,
-		}) + "\n",
-	);
+	if (evidenceFile && evidenceNonce) {
+		appendFileSync(
+			evidenceFile,
+			`${JSON.stringify({ backend: "rust-daemon", binary: rustBinary, nonce: evidenceNonce, pid: process.pid, replaced: argv })}\n`,
+		);
+	}
 	return originalSpawn(replaced, { ...options, env });
 }) as typeof Bun.spawn;
