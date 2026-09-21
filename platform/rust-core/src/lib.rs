@@ -25,6 +25,7 @@ pub enum CoreError {
     OwnerStopped,
     #[error("record not found")]
     NotFound,
+
     #[error("invalid input: {0}")]
     InvalidInput(String),
     #[error("unsupported migration history: {0}")]
@@ -882,7 +883,7 @@ fn execute_operation(
             let tx = connection.transaction()?;
             let changed = tx.execute("UPDATE daily_reflections SET answer=?, answer_memory_id=?, answered_at=? WHERE id=? AND agent_id=? AND answer IS NULL", params![answer.trim(), memory_id, answered_at, id, agent_id])?;
             if changed == 0 { let exists: i64 = tx.query_row("SELECT count(*) FROM daily_reflections WHERE id=? AND agent_id=?", params![id, agent_id], |r| r.get(0))?; if exists == 0 { return Err(CoreError::NotFound); } return Err(CoreError::InvalidInput("Already answered".into())); }
-            let metadata = serde_json::to_string(&json!({"type":"reflection","sourceType":"reflection-answer","sourceId":id,"why":"daily-reflection-answer"}))?;
+            let metadata = serde_json::to_string(&json!({"type":"reflection","sourceType":"reflection-answer","sourceId":id,"contentHash":format!("reflection-a-{id}"),"why":"daily-reflection-answer"}))?;
             tx.execute("INSERT INTO memories(id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,memory_kind) VALUES(?,?,?, ?,0,datetime('now'),datetime('now'),?,?,?)", params![memory_id, agent_id, answer.trim(), metadata, id, "reflection-answer", "episodic"])?;
             record_history(&tx, &memory_id, &agent_id, "remember", None)?; tx.commit()?;
             Ok(json!({"success":true,"memoryId":memory_id}))

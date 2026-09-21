@@ -1,4 +1,6 @@
+use crate::routes::auth;
 use crate::{agent, execute, ApiError, AppState};
+use axum::http::StatusCode;
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
@@ -6,6 +8,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
+use serde_json::json;
 use serde_json::Value;
 use signet_core_native::Operation;
 use time::OffsetDateTime;
@@ -17,7 +20,9 @@ pub(crate) struct ReflectionQuery {
 }
 
 #[derive(Debug, Deserialize)]
-struct AnswerBody { answer: Option<String> }
+struct AnswerBody {
+    answer: Option<String>,
+}
 
 fn limit(query: &ReflectionQuery) -> usize {
     query.limit.unwrap_or(30).clamp(1, 100)
@@ -65,16 +70,84 @@ async fn today(
     ))
 }
 
-async fn generate(State(_state): State<AppState>, _headers: HeaderMap, Query(_query): Query<ReflectionQuery>) -> Result<Json<Value>, ApiError> {
-    Err(ApiError::bad_request("Reflections are disabled in pipeline config"))
+async fn generate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<ReflectionQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let claims = auth::gate(&state, &headers).await?;
+    if !auth::authority_allows(
+        &claims,
+        "agent",
+        &json!({"agent": agent(&headers, None, None)?}),
+        &["admin".into()],
+    ) {
+        return Err(ApiError::forbidden("admin permission required"));
+    }
+    let _ = query;
+    let workspace = std::env::var_os("SIGNET_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let config = std::fs::read_to_string(workspace.join("agent.yaml")).unwrap_or_default();
+    let enabled = config.lines().any(|line| line.trim() == "enabled: true");
+    if !enabled {
+        return Err(ApiError::bad_request(
+            "Reflections are disabled in pipeline config",
+        ));
+    }
+    Err(ApiError {
+        status: StatusCode::NOT_IMPLEMENTED,
+        code: "unsupported",
+        message: "LLM generation is unavailable in the native provider".into(),
+    })
 }
 
-async fn answer(State(state): State<AppState>, headers: HeaderMap, Path(id): Path<String>, body: Result<Json<AnswerBody>, axum::extract::rejection::JsonRejection>) -> Result<Json<Value>, ApiError> {
+async fn answer(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    body: Result<Json<AnswerBody>, axum::extract::rejection::JsonRejection>,
+) -> Result<Json<Value>, ApiError> {
+    let claims = auth::gate(&state, &headers).await?;
+    let agent_id = agent(&headers, None, None)?;
+    if !auth::authority_allows(
+        &claims,
+        "agent",
+        &json!({"agent": agent_id}),
+        &["modify".into()],
+    ) {
+        return Err(ApiError::forbidden("modify permission required"));
+    }
     let Json(body) = body.map_err(|_| ApiError::bad_request("Invalid JSON body"))?;
-    let answer = body.answer.ok_or_else(|| ApiError::bad_request("answer is required"))?;
-    if answer.trim().is_empty() { return Err(ApiError::bad_request("answer is required")); }
-    if answer.trim().chars().count() > 10_000 { return Err(ApiError::bad_request("answer exceeds 10000 characters")); }
-    Ok(Json(execute(&state, Operation::ReflectionAnswer { agent_id: agent(&headers, None, None)?, id, answer, memory_id: Uuid::new_v4().to_string(), answered_at: OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc3339).unwrap_or_default() }).await?))
+    let answer = body
+        .answer
+        .ok_or_else(|| ApiError::bad_request("answer is required"))?;
+    let answer = answer.trim().to_owned();
+    if answer.is_empty() {
+        return Err(ApiError::bad_request("answer is required"));
+    }
+    if answer.chars().count() > 10_000 {
+        return Err(ApiError {
+            status: StatusCode::PAYLOAD_TOO_LARGE,
+            code: "payload_too_large",
+            message: "answer exceeds 10000 characters".into(),
+        });
+    }
+    Ok(Json(
+        execute(
+            &state,
+            Operation::ReflectionAnswer {
+                agent_id,
+                id,
+                answer,
+                memory_id: Uuid::new_v4().to_string(),
+                answered_at: OffsetDateTime::now_utc()
+                    .format(&time::format_description::well_known::Rfc3339)
+                    .unwrap_or_default(),
+            },
+        )
+        .await?,
+    ))
 }
 
 pub(crate) fn router() -> Router<AppState> {
