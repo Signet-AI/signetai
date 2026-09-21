@@ -204,11 +204,19 @@ async fn expand_session(
     let workspace_id = workspace(&headers, &scope_query)?;
     let claims = auth::gate(&state, &headers).await?;
     let mut requested_scope = json!({"agent": agent_id, "workspace": workspace_id});
-    if let Some(project) = headers.get("x-signet-project-id").and_then(|v| v.to_str().ok()).filter(|v| !v.trim().is_empty()) {
+    if let Some(project) = headers
+        .get("x-signet-project-id")
+        .and_then(|v| v.to_str().ok())
+        .filter(|v| !v.trim().is_empty())
+    {
         requested_scope["project"] = json!(project);
     }
     if !auth::authority_allows(&claims, "agent", &requested_scope, &["recall".to_owned()]) {
-        return Err(ApiError { status: StatusCode::FORBIDDEN, code: "forbidden", message: "recall permission required for session expansion".into() });
+        return Err(ApiError {
+            status: StatusCode::FORBIDDEN,
+            code: "forbidden",
+            message: "recall permission required for session expansion".into(),
+        });
     }
     Ok(Json(
         execute(

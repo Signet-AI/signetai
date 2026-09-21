@@ -4487,7 +4487,9 @@ pub fn summary_ledger_allows(has_safety: bool, row: Option<(String, i64)>) -> bo
 
 pub fn memory_content_context_eligible(content: &str) -> bool {
     let invisible = content.chars().any(|c| matches!(c, '\u{034f}' | '\u{00ad}' | '\u{061c}' | '\u{070f}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}' | '\u{2066}'..='\u{206f}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}'));
-    if invisible { return false; }
+    if invisible {
+        return false;
+    }
     let text: String = content.nfkc().collect::<String>().to_lowercase();
     let patterns = [
         r"ignore\s+(?:previous|prior|above|earlier)\s+instructions?",
@@ -4502,22 +4504,40 @@ pub fn memory_content_context_eligible(content: &str) -> bool {
         r"rm\s+-rf\s+(?:/|~|\.ssh)",
         r"cat\s+~/?\.ssh/",
     ];
-    let defensive = regex::Regex::new(r"(?i)\b(?:security\s+(?:guidance|discussion|analysis)|threat\s+model|defensive)\b").unwrap();
+    let defensive = regex::Regex::new(
+        r"(?i)\b(?:security\s+(?:guidance|discussion|analysis)|threat\s+model|defensive)\b",
+    )
+    .unwrap();
     let reporting_before = regex::Regex::new(r"(?i)\b(?:example|illustrat\w*|sample|quote|quoted|detector|scanner|classif\w*)\b[\s\S]{0,80}\b(?:say\w*|read\w*|show\w*|flag\w*|detect\w*|describ\w*|demonstrat\w*|contain\w*|match\w*|pattern)\b").unwrap();
     let reporting_after = regex::Regex::new(r"(?i)\b(?:detector|scanner|classif\w*|flag\w*|pattern|dangerous|unsafe|malicious|hostile|should|would|must|never|do not|don't|avoid|quoted)\b").unwrap();
-    let report_word = regex::Regex::new(r"(?i)\b(?:example|illustrat\w*|sample|quote|quoted|detector|scanner|classif\w*)\b").unwrap();
+    let report_word = regex::Regex::new(
+        r"(?i)\b(?:example|illustrat\w*|sample|quote|quoted|detector|scanner|classif\w*)\b",
+    )
+    .unwrap();
     let negated = regex::Regex::new(r"(?i)\b(?:never|do not|don't|should not|must not|cannot|can't|avoid|prevent|detect|mitigat\w*)\b[\s\S]{0,80}$").unwrap();
     for source in patterns {
         let re = regex::Regex::new(&format!("(?i){source}")).unwrap();
         for m in re.find_iter(&text) {
-            let start = text[..m.start()].char_indices().rev().nth(119).map(|(i, _)| i).unwrap_or(0);
-            let end = text[m.end()..].char_indices().nth(160).map(|(i, _)| m.end() + i).unwrap_or(text.len());
+            let start = text[..m.start()]
+                .char_indices()
+                .rev()
+                .nth(119)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            let end = text[m.end()..]
+                .char_indices()
+                .nth(160)
+                .map(|(i, _)| m.end() + i)
+                .unwrap_or(text.len());
             let before = &text[start..m.start()];
             let after = &text[m.end()..end];
-            let contextual = defensive.is_match(before) || defensive.is_match(after)
+            let contextual = defensive.is_match(before)
+                || defensive.is_match(after)
                 || reporting_before.is_match(before)
                 || (report_word.is_match(before) && reporting_after.is_match(after));
-            if !(negated.is_match(before) || contextual) { return false; }
+            if !(negated.is_match(before) || contextual) {
+                return false;
+            }
         }
     }
     true
