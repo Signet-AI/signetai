@@ -21,8 +21,10 @@ const child = spawnSync(
 		maxBuffer: 128 * 1024 * 1024,
 	},
 );
-const stdout = child.stdout ?? "";
-const stderr = child.stderr ?? "";
+const decodeOutput = (output: string | Uint8Array | null): string =>
+	typeof output === "string" ? output : output ? new TextDecoder().decode(output) : "";
+const stdout = decodeOutput(child.stdout);
+const stderr = decodeOutput(child.stderr);
 process.stdout.write(stdout);
 process.stderr.write(stderr);
 if (!existsSync(report)) {
