@@ -378,8 +378,8 @@ export async function showLogs(options: LogOptions, deps: Deps): Promise<void> {
 export async function doStart(options: StartOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
-	const runtime = undefined;
-	const daemonPath = undefined;
+	const runtime = readNativeRuntime(options.runtime);
+	const daemonPath = readNativeDaemonPath(options.daemonJsPath);
 	let running = await deps.isDaemonRunning();
 	if ((runtime !== undefined || daemonPath !== undefined) && running) {
 		const status = await deps.getDaemonStatus();
@@ -444,8 +444,8 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 export async function doRestart(options: RestartOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
-	const runtime = undefined;
-	const daemonPath = undefined;
+	const runtime = readNativeRuntime(options.runtime);
+	const daemonPath = readNativeDaemonPath(options.daemonJsPath);
 	const spinner = ora("Restarting daemon...").start();
 	const running = await deps.isDaemonRunning();
 	const stale = running ? false : await deps.hasDaemonProcess(basePath);
@@ -501,6 +501,17 @@ export async function doResume(options: PathOptions, deps: Deps): Promise<void> 
 
 function readPath(options: PathOptions, deps: Deps): string {
 	return deps.normalizeAgentPath(deps.extractPathOption(options) ?? deps.agentsDir);
+}
+
+function readNativeRuntime(value: string | undefined): DaemonRuntime | undefined {
+	if (value === undefined) return undefined;
+	if (value !== "compiled") throw new Error("Only the native compiled daemon is supported.");
+	return "compiled";
+}
+
+function readNativeDaemonPath(value: string | undefined): undefined {
+	if (value !== undefined) throw new Error("--daemon-js-path is not supported by the native compiled daemon.");
+	return undefined;
 }
 
 interface PipelinePauseApiResponse {

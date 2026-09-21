@@ -115,93 +115,61 @@ function parseConsoleCases(output: string, batchIndex: number): { cases: string[
 				: status === "skip" || status === "todo"
 					? "<skipped/>"
 					: "";
-		cases.push(`<testcase classname="${escapeXml(currentFile)}" name="${escapeXml(name)}">${body}</testcase>`);
+		cases.push(
+			`<testcase classname="${escapeXml(currentFile)}" name="${escapeXml(name)}" file="${escapeXml(currentFile)}">${body}</testcase>`,
+		);
 	}
 	return { cases, observed };
 }
-const chunkSize = 64;
-const chunks: string[][] = [];
-for (let offset = 0; offset < selected.length; offset += chunkSize)
-	chunks.push(selected.slice(offset, offset + chunkSize));
-const cases: string[] = [];
-const observedFiles = new Set<string>();
-let combinedStdout = "";
-let combinedStderr = "";
-let nativeEvidence = false;
-let infrastructureFailure = false;
-const childStatuses: Array<number | null> = [];
-for (const [batchIndex, batch] of chunks.entries()) {
-	const junitPath = `${report}.batch-${batchIndex}.bun.xml`;
-	const batchStdoutPath = `${report}.batch-${batchIndex}.stdout`;
-	const batchStderrPath = `${report}.batch-${batchIndex}.stderr`;
-	for (const path of [junitPath, batchStdoutPath, batchStderrPath]) if (existsSync(path)) unlinkSync(path);
-	const stdoutFd = openSync(batchStdoutPath, "w");
-	const stderrFd = openSync(batchStderrPath, "w");
-	let child: ReturnType<typeof spawnSync> | null = null;
-	try {
-		child = spawnSync(
-			"bun",
-			[
-				"test",
-				"--preload",
-				resolve(import.meta.dir, "rust-shared-corpus-combined.preload.ts"),
-				"--reporter=junit",
-				`--reporter-outfile=${junitPath}`,
-				...batch,
-			],
-			{
-				cwd: process.cwd(),
-				env: {
-					...process.env,
-					SIGNET_RUST_DAEMON_BIN: artifact,
-					SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,
-					SIGNET_RUST_CORE_EVIDENCE_FILE: evidenceFile,
-				},
-				stdio: ["ignore", stdoutFd, stderrFd],
+const junitPath = `${report}.bun.xml`;
+if (existsSync(junitPath)) unlinkSync(junitPath);
+const stdoutFd = openSync(stdoutPath, "w");
+const stderrFd = openSync(stderrPath, "w");
+let child: ReturnType<typeof spawnSync>;
+try {
+	child = spawnSync(
+		"bun",
+		[
+			"test",
+			"--preload",
+			resolve(import.meta.dir, "rust-shared-corpus-combined.preload.ts"),
+			"--reporter=junit",
+			`--reporter-outfile=${junitPath}`,
+			...selected,
+		],
+		{
+			cwd: process.cwd(),
+			env: {
+				...process.env,
+				SIGNET_RUST_DAEMON_BIN: artifact,
+				SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,
+				SIGNET_RUST_CORE_EVIDENCE_FILE: evidenceFile,
 			},
-		);
-	} catch (error) {
-		infrastructureFailure = true;
-		combinedStderr += `adapter spawn failure: ${error instanceof Error ? error.message : String(error)}\n`;
-	} finally {
-		closeSync(stdoutFd);
-		closeSync(stderrFd);
-	}
-	const batchStderr = existsSync(batchStderrPath) ? readFileSync(batchStderrPath, "utf8") : "";
-	const batchStdout = existsSync(batchStdoutPath) ? readFileSync(batchStdoutPath, "utf8") : "";
-	combinedStdout += batchStdout;
-	combinedStderr += batchStderr;
-	if (child === null) {
-		infrastructureFailure = true;
-		continue;
-	}
-	childStatuses.push(child.status);
-	if (child.signal || child.error) infrastructureFailure = true;
-	let batchCases: string[] = [];
-	if (existsSync(junitPath)) {
-		const reportXml = readFileSync(junitPath, "utf8");
-		batchCases = reportXml.match(/<testcase\b[\s\S]*?<\/testcase>|<testcase\b[^>]*\/>/g) ?? [];
-		for (const testcase of batchCases) {
-			for (const path of batch) if (testcase.includes(path)) observedFiles.add(path);
-		}
-	} else {
-		infrastructureFailure = true;
-		const recovered = parseConsoleCases(batchStderr || batchStdout, batchIndex);
-		batchCases = recovered.cases;
-		for (const path of recovered.observed) observedFiles.add(path);
-	}
-	cases.push(...batchCases);
-	if (existsSync(evidenceFile)) {
-		const evidence = readFileSync(evidenceFile, "utf8");
-		if (/backend=fresh-rust artifact=signet-core-test-driver process=transport/.test(evidence)) nativeEvidence = true;
-		if (/"backend"\s*:\s*"rust-daemon"/.test(evidence)) nativeEvidence = true;
-	}
-	for (const path of [junitPath, batchStdoutPath, batchStderrPath]) if (existsSync(path)) unlinkSync(path);
+			stdio: ["ignore", stdoutFd, stderrFd],
+		},
+	);
+} finally {
+	closeSync(stdoutFd);
+	closeSync(stderrFd);
 }
-writeFileSync(stdoutPath, combinedStdout);
-writeFileSync(stderrPath, combinedStderr);
-if (!cases.length) fail(`Rust child produced no real testcase identities: ${combinedStderr || combinedStdout}`);
-if (!nativeEvidence) fail(`Rust child produced no native boundary evidence: ${combinedStderr || combinedStdout}`);
+const stderr = existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "";
+const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf8") : "";
+const daemonEvidence = /"backend"\s*:\s*"rust-daemon"/.test(stderr);
+const coreEvidence =
+	existsSync(evidenceFile) &&
+	/backend=fresh-rust artifact=signet-core-test-driver process=transport/.test(readFileSync(evidenceFile, "utf8"));
+const nativeEvidence = daemonEvidence || coreEvidence;
+let cases: string[] = [];
+if (existsSync(junitPath)) {
+	const reportXml = readFileSync(junitPath, "utf8");
+	cases = reportXml.match(/<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g) ?? [];
+}
+const infrastructureFailure = child.signal !== null || child.error !== undefined || !cases.length;
+if (!cases.length) cases = parseConsoleCases(`${stderr}\n${stdout}`, 0).cases;
+const evidence =
+	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
+if (!cases.length) fail(`Rust child produced no real testcase identities: ${evidence}`);
+if (!nativeEvidence) fail(`Rust child produced no native boundary evidence: ${evidence}`);
 const failures = cases.filter((testcase) => /<(?:failure|error)\b/.test(testcase)).length;
 writeFileSync(
 	report,
@@ -212,14 +180,16 @@ console.error(
 	JSON.stringify({
 		backend: "fresh-rust",
 		artifact,
-		selected: selected.length,
+		selected,
 		executed: selected,
-		observedFiles: observedFiles.size,
 		nativeEvidence,
-		childStatuses,
+		childStatus: child.status,
+		childSignal: child.signal,
 		infrastructureFailure,
-		stderrBytes: Buffer.byteLength(combinedStderr),
-		stdoutBytes: Buffer.byteLength(combinedStdout),
+		stderr: stderr.slice(-8192),
+		stdout: stdout.slice(-8192),
+		stderrBytes: Buffer.byteLength(stderr),
+		stdoutBytes: Buffer.byteLength(stdout),
 	}),
 );
-process.exit(infrastructureFailure ? 2 : 0);
+process.exit(infrastructureFailure ? 2 : (child.status ?? 1));

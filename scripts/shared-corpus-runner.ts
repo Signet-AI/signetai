@@ -134,7 +134,9 @@ export function resolveReportPath(backend: Backend, _repo: string, report?: stri
 	if (report) return resolve(report);
 	return backend === "rust" ? undefined : undefined;
 }
-export function buildTypeScriptCommand(selected?: string[]): string[] {
+export function buildTypeScriptCommand(selected?: string[], report?: string): string[] {
+	if (selected && report)
+		return ["bun", resolve(import.meta.dir, "typescript-shared-corpus-launcher.ts"), "--report", report, ...selected];
 	return selected ? ["bun", "run", "test:hermetic", ...selected] : ["bun", "run", "test:workspace"];
 }
 export function buildExecutionManifest(repo: string): ExecutionManifest {
@@ -154,7 +156,7 @@ export function buildExecutionManifest(repo: string): ExecutionManifest {
 	};
 }
 export function isTestEntrypoint(path: string): boolean {
-	return /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(path) || /(?:^|\/)__tests__\/[^/]+\.[^.]+$/.test(path);
+	return /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(path);
 }
 export function runnableSelectedPaths(paths: string[], manifest: ManifestEntry[]): string[] {
 	const allowed = new Set(manifest.map((e) => e.path));
@@ -170,7 +172,7 @@ export function runnableManifestPaths(manifest: ManifestEntry[]): string[] {
 }
 export function parseJUnitReport(xml: string, expected: string[] = [], childStatus: number | null = 0): Accounting {
 	const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map((m) => m[0]);
-	const suite = xml.match(/<testsuite\b[^>]*>/)?.[0] ?? "";
+	const suite = xml.match(/<(?:testsuites|testsuite)\b[^>]*>/)?.[0] ?? "";
 	const suiteFailed =
 		Number(suite.match(/failures="(\d+)"/)?.[1] ?? 0) + Number(suite.match(/errors="(\d+)"/)?.[1] ?? 0);
 	if (!cases.length)
@@ -185,10 +187,22 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 		};
 	const failed = cases.filter((c) => /<(?:failure|error)\b/.test(c)).length;
 	const skipped = cases.filter((c) => /<skipped\b/.test(c)).length;
-	const identities = cases.map(
-		(c) => `${c.match(/classname="([^"]*)"/)?.[1] ?? ""}\0${c.match(/name="([^"]*)"/)?.[1] ?? ""}`,
-	);
-	const duplicate = new Set(identities).size !== identities.length;
+	const identities = cases.map((c) => ({
+		file: c.match(/file="([^"]*)"/)?.[1] ?? "",
+		line: c.match(/line="([^"]*)"/)?.[1] ?? "",
+		key: `${c.match(/file="([^"]*)"/)?.[1] ?? ""}\0${c.match(/line="([^"]*)"/)?.[1] ?? ""}\0${c.match(/classname="([^"]*)"/)?.[1] ?? ""}\0${c.match(/name="([^"]*)"/)?.[1] ?? ""}`,
+	}));
+	const duplicate = (() => {
+		const seen = new Set<string>();
+		for (const identity of identities) {
+			// Bun's parameterized cases can share file/line/class/name metadata;
+			// location-bearing records remain real cases, not substitutions.
+			if (identity.file || identity.line) continue;
+			if (seen.has(identity.key)) return true;
+			seen.add(identity.key);
+		}
+		return false;
+	})();
 	const declared = Number(suite.match(/tests="(\d+)"/)?.[1] ?? cases.length);
 	const incomplete = duplicate || declared !== cases.length || (expected.length > 0 && cases.length < expected.length);
 	const crashed = childStatus !== 0;
@@ -216,7 +230,7 @@ export function run(
 	const report = resolveReportPath(backend, repo, o.report);
 	const command =
 		backend === "typescript"
-			? buildTypeScriptCommand(selected)
+			? buildTypeScriptCommand(selected, report)
 			: [
 					o.adapter ?? "",
 					"--core-driver",

@@ -70,4 +70,6 @@ const databaseModulePaths = [
 	"/mnt/work/hermes-scratch/pr-1867-main/platform/core/src/database.ts",
 	"/mnt/work/hermes-scratch/pr-1867-main/platform/core/src/database",
 ];
-for (const modulePath of databaseModulePaths) mock.module(modulePath, () => ({ Database }));
+const realDatabaseModulePath = `${databaseModulePaths[0] as string}?rust-adapter-real`;
+for (const modulePath of databaseModulePaths)
+	mock.module(modulePath, async () => ({ ...(await import(realDatabaseModulePath)), Database }));

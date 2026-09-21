@@ -6,6 +6,7 @@ export interface PathOptions {
 
 export interface RuntimeOptions {
 	runtime?: string;
+	daemonJsPath?: string;
 }
 
 export interface StartOptions extends PathOptions, RuntimeOptions {}
@@ -31,7 +32,9 @@ export function withPath(cmd: Command): Command {
 }
 
 export function withRuntime(cmd: Command): Command {
-	return cmd;
+	return cmd
+		.option("--runtime <runtime>", "Daemon runtime (compiled only)")
+		.option("--daemon-js-path <path>", "Unsupported JavaScript daemon path");
 }
 
 export function withJson(cmd: Command): Command {
