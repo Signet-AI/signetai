@@ -59,11 +59,26 @@ if (process.env.SIGNET_SKIP_NATIVE_BUILD === "1") {
 }
 if (!existsSync(nativeDir) || !existsSync(manifest)) fail("native Rust build inputs are missing");
 if (!existsSync(join(dashboard, "index.html"))) fail(`dashboard build is missing: ${join(dashboard, "index.html")}`);
+const locator = platform() === "win32" ? "where" : "which";
+let cargoLocated = false;
 try {
-	const locator = platform() === "win32" ? "where" : "which";
 	execFileSync(locator, ["cargo"], { stdio: "ignore", windowsHide: true });
+	cargoLocated = true;
 } catch {
-	fail("cargo is required (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
+	// Some minimal images do not ship which/where; direct probing remains authoritative.
+}
+if (cargoLocated) {
+	try {
+		execFileSync("cargo", ["--version"], { stdio: "ignore", windowsHide: true });
+	} catch {
+		fail("native build failed (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
+	}
+} else {
+	try {
+		execFileSync("cargo", ["--version"], { stdio: "ignore", windowsHide: true });
+	} catch {
+		fail("cargo is required (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
+	}
 }
 
 const staging = mkdtempSync(join(root, ".signet-native-stage-"));
