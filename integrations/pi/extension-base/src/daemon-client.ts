@@ -53,6 +53,14 @@ function logWarning(config: DaemonClientConfig, message: string): void {
 	console.warn(message);
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+	try {
+		await response.body?.cancel();
+	} catch {
+		// Response cleanup is best-effort after the status is already known.
+	}
+}
+
 async function daemonFetchResult<T>(
 	daemonUrl: string,
 	path: string,
@@ -79,16 +87,13 @@ async function daemonFetchResult<T>(
 
 		const response = await fetch(`${daemonUrl}${path}`, init);
 		if (!response.ok) {
+			await cancelResponseBody(response);
 			logWarning(config, `[${config.logPrefix}] ${method} ${path} failed: ${response.status}`);
 			return { ok: false, reason: "http", status: response.status };
 		}
 
 		if (!parseJson) {
-			try {
-				await response.body?.cancel();
-			} catch {
-				// Status-only callers intentionally ignore response body failures.
-			}
+			await cancelResponseBody(response);
 			return { ok: true, data: undefined as T };
 		}
 

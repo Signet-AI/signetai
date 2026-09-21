@@ -101,6 +101,30 @@ describe("createDaemonClient (extension-base)", () => {
 		expect(warnings.some((w) => w.includes("0 chars") && w.includes("empty body"))).toBe(true);
 	});
 
+	test("cancels HTTP error bodies before returning unavailable", async () => {
+		let canceled = false;
+		globalThis.fetch = Object.assign(
+			async () => {
+				const body = new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode("error body"));
+					},
+					cancel() {
+						canceled = true;
+					},
+				});
+				return new Response(body, { status: 503 });
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		const client = createDaemonClient("http://daemon.test", testConfig);
+		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
+
+		expect(result).toEqual({ ok: false, reason: "http", status: 503 });
+		expect(canceled).toBe(true);
+	});
+
 	test("postStatus accepts a successful empty body without parsing JSON", async () => {
 		globalThis.fetch = Object.assign(async () => new Response(null, { status: 200 }), {
 			preconnect: originalFetch.preconnect,
