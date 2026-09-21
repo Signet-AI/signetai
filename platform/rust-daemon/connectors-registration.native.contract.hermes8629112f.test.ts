@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import { join } from "node:path";
 
 const root = join(import.meta.dir, "../..");
@@ -10,12 +11,20 @@ const binary =
 	join(root, "platform/rust-daemon/target/debug/signet-daemon");
 const children: ReturnType<typeof Bun.spawn>[] = [];
 const workspaces: string[] = [];
-let port = 39_450;
+async function freePort() {
+	const server = createServer();
+	await new Promise<void>((resolve, reject) => server.once("error", reject).listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	if (!address || typeof address === "string") throw new Error("failed to reserve free port");
+	const p = address.port;
+	await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+	return p;
+}
 async function start() {
 	expect(existsSync(binary)).toBe(true);
 	const workspace = mkdtempSync(join(tmpdir(), "signet-connectors-"));
 	workspaces.push(workspace);
-	const p = port++;
+	const p = await freePort();
 	const child = Bun.spawn([binary], {
 		cwd: root,
 		env: {
@@ -82,6 +91,12 @@ it("registers scoped connectors with TS validation and readback semantics", asyn
 	expect((await duplicate.json()).id).not.toBe(created.id);
 	expect((await (await fetch(`${origin}/api/connectors`, { headers: headers("agent-a") })).json()).count).toBe(2);
 	expect((await (await fetch(`${origin}/api/connectors`, { headers: headers("agent-b") })).json()).count).toBe(0);
+	const conflict = await fetch(`${origin}/api/connectors`, {
+		method: "POST",
+		headers: { ...headers("agent-a"), "x-workspace-id": "workspace-b" },
+		body: JSON.stringify(body),
+	});
+	expect(conflict.status).toBe(400);
 	const read = await fetch(`${origin}/api/connectors`, { headers: headers("agent-a") });
 	const listed = (await read.json()).connectors as Array<Record<string, unknown>>;
 	expect(listed.find((entry) => entry.id === created.id)).toMatchObject({
@@ -92,4 +107,25 @@ it("registers scoped connectors with TS validation and readback semantics", asyn
 		configured: true,
 		probed: false,
 	});
+});
+
+it("matches TypeScript display-name and settings compatibility", async () => {
+	const { origin } = await start();
+	const base = { provider: "gdrive", settings: ["scope"] };
+	const fallback = await fetch(`${origin}/api/connectors`, {
+		method: "POST",
+		headers: headers("agent-a"),
+		body: JSON.stringify({ ...base, display_name: "Wrong" }),
+	});
+	expect(fallback.status).toBe(201);
+	const explicit = await fetch(`${origin}/api/connectors`, {
+		method: "POST",
+		headers: headers("agent-a"),
+		body: JSON.stringify({ ...base, displayName: "Right" }),
+	});
+	expect(explicit.status).toBe(201);
+	const listed = (await (await fetch(`${origin}/api/connectors`, { headers: headers("agent-a") })).json())
+		.connectors as Array<Record<string, unknown>>;
+	expect(listed.map((entry) => entry.displayName)).toEqual(["Right", "gdrive"]);
+	expect(listed[0].settings).toEqual(["scope"]);
 });

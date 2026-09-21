@@ -4815,8 +4815,20 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         )));
     }
 
-    // Legacy TypeScript-era knowledge tables may predate scope and query columns.
-    // Add/backfill them before creating dependent indexes or serving queries.
+    // Legacy TypeScript connector tables predate owner scope columns.
+    ensure_column(
+        &transaction,
+        "connectors",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(
+        &transaction,
+        "connectors",
+        "workspace_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+
     ensure_column(
         &transaction,
         "entities",

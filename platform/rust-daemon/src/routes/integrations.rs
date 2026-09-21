@@ -132,7 +132,7 @@ async fn write_config(
 #[derive(Debug, Deserialize)]
 struct ConnectorRegistration {
     provider: Option<String>,
-    #[serde(default, alias = "displayName")]
+    #[serde(default, rename = "displayName")]
     display_name: Option<String>,
     #[serde(default)]
     settings: Value,
@@ -157,7 +157,7 @@ async fn register_connector(
         ));
     }
     let agent_id = crate::agent(&headers, None, None)?;
-    let workspace_id = crate::workspace_id(&headers, None);
+    let workspace_id = crate::source_workspace(&headers, None)?;
     let value = execute(
         &state,
         Operation::ConnectorUpsert {
@@ -165,11 +165,7 @@ async fn register_connector(
             workspace_id,
             provider: provider.clone(),
             display_name: request.display_name.unwrap_or(provider),
-            settings: if request.settings.is_object() {
-                request.settings
-            } else {
-                json!({})
-            },
+            settings: request.settings,
         },
     )
     .await?;
@@ -257,7 +253,7 @@ async fn connectors(
     headers: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     let agent_id = crate::agent(&headers, None, None)?;
-    let workspace_id = crate::workspace_id(&headers, None);
+    let workspace_id = crate::source_workspace(&headers, None)?;
     let value = execute(
         &state,
         Operation::ConnectorList {

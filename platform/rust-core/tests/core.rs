@@ -124,6 +124,31 @@ fn core() -> Core {
 }
 
 #[test]
+fn connector_operations_upgrade_legacy_typescript_table() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("legacy-connectors.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE connectors (id TEXT PRIMARY KEY, provider TEXT NOT NULL, display_name TEXT, config_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle', last_sync_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);").unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    c.submit(Operation::ConnectorUpsert {
+        agent_id: "agent".into(),
+        workspace_id: "workspace".into(),
+        provider: "filesystem".into(),
+        display_name: "Docs".into(),
+        settings: serde_json::json!({"rootPath":"/tmp/docs"}),
+    })
+    .unwrap();
+    let listed = c
+        .submit(Operation::ConnectorList {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+        })
+        .unwrap();
+    assert_eq!(listed["count"], 1);
+}
+
+#[test]
 fn fresh_db_and_idempotent_init() {
     let c = core();
     assert!(c.ready().unwrap());
