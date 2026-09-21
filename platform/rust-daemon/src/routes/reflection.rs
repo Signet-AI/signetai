@@ -101,11 +101,33 @@ fn parse_reflection_entries(content: &str) -> Vec<Value> {
         .collect()
 }
 
+fn reflection_timezone(timezone: Option<&str>) -> Result<String, ApiError> {
+    if let Some(timezone) = timezone {
+        return Ok(timezone.to_owned());
+    }
+    if let Some(timezone) = std::env::var_os("TZ").and_then(|value| value.into_string().ok()) {
+        let path = std::path::Path::new("/usr/share/zoneinfo").join(&timezone);
+        if timezone == "UTC" || path.is_file() {
+            return Ok(timezone);
+        }
+    }
+    if let Ok(path) = std::fs::canonicalize("/etc/localtime") {
+        let marker = std::path::Path::new("/usr/share/zoneinfo");
+        if let Ok(relative) = path.strip_prefix(marker) {
+            let timezone = relative.to_string_lossy().into_owned();
+            if !timezone.is_empty() {
+                return Ok(timezone);
+            }
+        }
+    }
+    Ok("UTC".to_owned())
+}
+
 fn reflection_date(timezone: Option<&str>) -> Result<String, ApiError> {
-    let timezone = timezone.unwrap_or("UTC");
+    let timezone = reflection_timezone(timezone)?;
     if timezone != "UTC"
         && !std::path::Path::new("/usr/share/zoneinfo")
-            .join(timezone)
+            .join(&timezone)
             .exists()
     {
         return Err(ApiError::bad_request("invalid reflection timezone"));
@@ -380,6 +402,20 @@ mod tests {
         assert_eq!(config.count, 3);
         assert_eq!(config.timeout_ms, 120_000);
         assert_eq!(config.max_tokens, 4_000);
+    }
+
+    #[test]
+    fn omitted_timezone_uses_runtime_local_timezone_instead_of_forcing_utc() {
+        let previous = std::env::var_os("TZ");
+        std::env::set_var("TZ", "America/Denver");
+        assert_eq!(
+            reflection_timezone(None).unwrap_or_default(),
+            "America/Denver"
+        );
+        match previous {
+            Some(value) => std::env::set_var("TZ", value),
+            None => std::env::remove_var("TZ"),
+        }
     }
 
     #[test]
