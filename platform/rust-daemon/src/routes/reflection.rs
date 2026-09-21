@@ -27,9 +27,11 @@ struct ReflectionConfig {
 
 fn reflection_config(text: &str) -> ReflectionConfig {
     let mut config = ReflectionConfig {
-        count: 1,
-        timeout_ms: 30_000,
-        max_tokens: 4096,
+        enabled: true,
+        count: 3,
+        model: Some("qwen3:4b".to_owned()),
+        timeout_ms: 120_000,
+        max_tokens: 4_000,
         ..Default::default()
     };
     let mut active = false;
@@ -110,7 +112,7 @@ fn reflection_date(timezone: Option<&str>) -> Result<String, ApiError> {
     }
     let output = std::process::Command::new("date")
         .env("TZ", timezone)
-        .args(["-u", "+%Y-%m-%d"])
+        .args(["+%Y-%m-%d"])
         .output()
         .map_err(|_| ApiError::bad_request("invalid reflection timezone"))?;
     if !output.status.success() {
@@ -368,6 +370,27 @@ mod tests {
         assert_eq!(config.timeout_ms, 1234);
         assert_eq!(config.max_tokens, 77);
         assert_eq!(config.timezone.as_deref(), Some("America/Denver"));
+    }
+
+    #[test]
+    fn omitted_reflections_use_current_typescript_defaults() {
+        let config = reflection_config("memory:\n  pipelineV2:\n    enabled: true\n");
+        assert!(config.enabled);
+        assert_eq!(config.model.as_deref(), Some("qwen3:4b"));
+        assert_eq!(config.count, 3);
+        assert_eq!(config.timeout_ms, 120_000);
+        assert_eq!(config.max_tokens, 4_000);
+    }
+
+    #[test]
+    fn configured_timezone_uses_local_calendar_date_at_utc_boundary() {
+        let output = std::process::Command::new("date")
+            .env("TZ", "America/Denver")
+            .args(["-d", "@1704067200", "+%Y-%m-%d"])
+            .output()
+            .expect("date command");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "2023-12-31");
     }
 
     #[test]
