@@ -34,13 +34,23 @@ fn reflection_config(text: &str) -> ReflectionConfig {
     };
     let mut active = false;
     let mut parent_indent = 0usize;
+    let mut pipeline_indent = 0usize;
+    let mut memory_indent = 0usize;
     for line in text.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
             continue;
         }
         let indent = line.len() - line.trim_start().len();
-        if trimmed == "reflections:" {
+        if trimmed == "memory:" {
+            memory_indent = indent;
+            continue;
+        }
+        if trimmed == "pipelineV2:" && indent > memory_indent {
+            pipeline_indent = indent;
+            continue;
+        }
+        if trimmed == "reflections:" && pipeline_indent > 0 && indent > pipeline_indent {
             active = true;
             parent_indent = indent;
             continue;
@@ -69,6 +79,45 @@ fn reflection_config(text: &str) -> ReflectionConfig {
     config
 }
 
+fn parse_reflection_entries(content: &str) -> Vec<Value> {
+    if let Ok(parsed) = serde_json::from_str::<Value>(content) {
+        return parsed
+            .get("entries")
+            .and_then(Value::as_array)
+            .cloned()
+            .or_else(|| parsed.get("insights").and_then(Value::as_array).cloned())
+            .unwrap_or_default();
+    }
+    content
+        .lines()
+        .filter_map(|line| {
+            let (_, value) = line.split_once(':')?;
+            let value = value.trim();
+            (!value.is_empty())
+                .then(|| json!({"summary": value, "question": value, "patterns": []}))
+        })
+        .collect()
+}
+
+fn reflection_date(timezone: Option<&str>) -> Result<String, ApiError> {
+    let timezone = timezone.unwrap_or("UTC");
+    if timezone != "UTC"
+        && !std::path::Path::new("/usr/share/zoneinfo")
+            .join(timezone)
+            .exists()
+    {
+        return Err(ApiError::bad_request("invalid reflection timezone"));
+    }
+    let output = std::process::Command::new("date")
+        .env("TZ", timezone)
+        .args(["-u", "+%Y-%m-%d"])
+        .output()
+        .map_err(|_| ApiError::bad_request("invalid reflection timezone"))?;
+    if !output.status.success() {
+        return Err(ApiError::bad_request("invalid reflection timezone"));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+}
 #[derive(Debug, Deserialize)]
 pub(crate) struct ReflectionQuery {
     pub limit: Option<usize>,
@@ -116,13 +165,11 @@ async fn today(
     headers: HeaderMap,
     Query(query): Query<ReflectionQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let now = OffsetDateTime::now_utc();
-    let date = format!(
-        "{:04}-{:02}-{:02}",
-        now.year(),
-        u8::from(now.month()),
-        now.day()
-    );
+    let workspace = std::env::var_os("SIGNET_PATH")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let config = std::fs::read_to_string(workspace.join("agent.yaml")).unwrap_or_default();
+    let date = reflection_date(reflection_config(&config).timezone.as_deref())?;
     Ok(Json(
         execute(
             &state,
@@ -172,6 +219,7 @@ async fn generate(
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let config = std::fs::read_to_string(workspace.join("agent.yaml")).unwrap_or_default();
     let reflection = reflection_config(&config);
+    let date = reflection_date(reflection.timezone.as_deref())?;
     if !reflection.enabled {
         return Err(ApiError::bad_request(
             "Reflections are disabled in pipeline config",
@@ -201,22 +249,18 @@ async fn generate(
         ),
     )
     .await
-    .map_err(|_| ApiError::upstream("provider request timed out"))?
-    .map_err(|e| ApiError::upstream(format!("provider request failed: {e:?}")))?;
+    .map_err(|_| ApiError { status: StatusCode::INTERNAL_SERVER_ERROR, code: "internal_error", message: "LLM generation failed".into() })?
+    .map_err(|_| ApiError { status: StatusCode::INTERNAL_SERVER_ERROR, code: "internal_error", message: "LLM generation failed".into() })?;
     let content = response
         .pointer("/choices/0/message/content")
         .and_then(Value::as_str)
-        .ok_or_else(|| ApiError::upstream("provider response missing content"))?;
-    let parsed: Value = serde_json::from_str(content)
-        .map_err(|_| ApiError::upstream("provider returned malformed reflection JSON"))?;
-    let entries = parsed
-        .get("entries")
-        .and_then(Value::as_array)
-        .cloned()
-        .or_else(|| parsed.get("insights").and_then(Value::as_array).cloned())
-        .unwrap_or_default();
-    let date = OffsetDateTime::now_utc().date().to_string();
-    execute(
+        .ok_or_else(|| ApiError {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            code: "internal_error",
+            message: "LLM generation failed".into(),
+        })?;
+    let entries = parse_reflection_entries(content);
+    let inserted = execute(
         &state,
         Operation::ReflectionInsert {
             agent_id: agent_id.clone(),
@@ -226,6 +270,10 @@ async fn generate(
         },
     )
     .await?;
+    let inserted_count = inserted
+        .get("inserted")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
     let reflections = execute(
         &state,
         Operation::ReflectionToday {
@@ -236,7 +284,7 @@ async fn generate(
     )
     .await?;
     Ok(Json(
-        json!({"reflection": reflections.get("reflection").cloned().unwrap_or(Value::Null), "reflections": reflections.get("reflections").cloned().unwrap_or(json!([])), "generated": true}),
+        json!({"reflection": reflections.get("reflection").cloned().unwrap_or(Value::Null), "reflections": reflections.get("reflections").cloned().unwrap_or(json!([])), "generated": inserted_count}),
     ))
 }
 
@@ -304,6 +352,33 @@ async fn answer(
             })
         }
         other => other.map(Json),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_reads_only_nested_memory_pipeline_reflections() {
+        let config = reflection_config("reflections:\n  enabled: true\nmemory:\n  pipelineV2:\n    reflections:\n      enabled: true\n      count: 9\n      model: nested\n      timeout: 1234\n      maxTokens: 77\n      timezone: America/Denver\n");
+        assert!(config.enabled);
+        assert_eq!(config.count, 9);
+        assert_eq!(config.model.as_deref(), Some("nested"));
+        assert_eq!(config.timeout_ms, 1234);
+        assert_eq!(config.max_tokens, 77);
+        assert_eq!(config.timezone.as_deref(), Some("America/Denver"));
+    }
+
+    #[test]
+    fn parses_json_and_labeled_provider_entries() {
+        let json_entries = parse_reflection_entries(
+            r#"{"entries":[{"question":"one?"}],"insights":[{"question":"two?"}]}"#,
+        );
+        assert_eq!(json_entries.len(), 1);
+        let labeled = parse_reflection_entries("BRIEF: notice\nQUESTION: ask?\nINSIGHT: another");
+        assert_eq!(labeled.len(), 3);
+        assert_eq!(labeled[0]["question"], "notice");
     }
 }
 
