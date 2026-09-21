@@ -878,9 +878,29 @@ fn execute_operation(
         }
         Operation::ReflectionMemories { agent_id, limit } => {
             let agent_id = required_agent(&agent_id)?;
-            let mut statement = connection.prepare("SELECT id,content,created_at,source_id,source_type FROM memories WHERE agent_id=? AND deleted=0 AND COALESCE(source_type,'') NOT IN ('reflection','reflection-answer') ORDER BY created_at DESC LIMIT ?")?;
-            let rows = statement.query_map(params![agent_id, limit.clamp(1, 100) as i64], |r| Ok(json!({"id":r.get::<_,String>(0)?,"content":r.get::<_,String>(1)?,"createdAt":r.get::<_,Option<String>>(2)?,"sourceId":r.get::<_,Option<String>>(3)?,"sourceType":r.get::<_,Option<String>>(4)?})))?;
-            Ok(Value::Array(rows.collect::<Result<Vec<_>, _>>()?))
+            let mut statement = connection.prepare("SELECT id,content,created_at,source_id,source_type FROM memories WHERE agent_id=? AND deleted=0 AND COALESCE(source_type,'') NOT IN ('reflection','reflection-answer') ORDER BY created_at DESC LIMIT 1000")?;
+            let mut values = Vec::new();
+            let limit = limit.clamp(1, 100);
+            let rows = statement.query_map(params![agent_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                ))
+            })?;
+            for row in rows {
+                let (id, content, created_at, source_id, source_type) = row?;
+                if !memory_content_context_eligible(&content) {
+                    continue;
+                }
+                values.push(json!({"id":id,"content":content,"createdAt":created_at,"sourceId":source_id,"sourceType":source_type}));
+                if values.len() >= limit {
+                    break;
+                }
+            }
+            Ok(Value::Array(values))
         }
         Operation::ReflectionInsert {
             agent_id,
@@ -925,7 +945,8 @@ fn execute_operation(
                 inserted.push(id);
             }
             tx.commit()?;
-            Ok(json!({"inserted": inserted}))
+            let inserted_count = inserted.len();
+            Ok(json!({"inserted": inserted, "insertedCount": inserted_count}))
         }
         Operation::ReflectionAnswer {
             agent_id,
@@ -5284,6 +5305,42 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "UPDATE kg_relations SET deleted=0 WHERE deleted IS NULL",
         [],
     )?;
+    ensure_column(&transaction, "daily_reflections", "content_key", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "daily_reflections",
+        "memory_ids",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        &transaction,
+        "daily_reflections",
+        "provenance",
+        "TEXT NOT NULL DEFAULT '{}'",
+    )?;
+    ensure_column(&transaction, "daily_reflections", "model", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "daily_reflections",
+        "answer_memory_id",
+        "TEXT",
+    )?;
+    ensure_column(&transaction, "daily_reflections", "answered_at", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "daily_reflections",
+        "patterns",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(&transaction, "daily_reflections", "question", "TEXT")?;
+    ensure_column(&transaction, "daily_reflections", "answer", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "daily_reflections",
+        "summary",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    transaction.execute("UPDATE daily_reflections SET memory_ids=COALESCE(memory_ids,'[]'), provenance=COALESCE(provenance,'{}')", [])?;
     ensure_column(&transaction, "memories", "source_id", "TEXT")?;
     ensure_column(&transaction, "memories", "source_type", "TEXT")?;
     ensure_column(&transaction, "memories", "source_path", "TEXT")?;
