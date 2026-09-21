@@ -1,5 +1,6 @@
-use signet_core_native::{Core, Operation};
+use rusqlite::Connection;
 use serde_json::json;
+use signet_core_native::{Core, Operation};
 use tempfile::tempdir;
 
 #[test]
@@ -39,5 +40,74 @@ fn session_candidates_preserve_ts_fields_and_budget_zero_is_empty() {
     assert_eq!(item["ftsHitCount"], json!(2));
     assert_eq!(item["entitySlot"], json!(1));
     assert_eq!(item["isConstraint"], json!(1));
+}
+
+#[test]
+fn session_candidates_exclude_all_lifecycle_invalid_rows() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("memory.db");
+    let core = Core::open(&path, 32).unwrap();
+    core.initialize().unwrap();
+
+    let remember = |content: &str, metadata: serde_json::Value| {
+        core.submit(Operation::Remember {
+            agent_id: "agent-a".into(),
+            content: content.into(),
+            metadata,
+        })
+        .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let live = remember("live memory", json!({}));
+    let deleted = remember("deleted memory", json!({}));
+    let stale = remember("stale memory", json!({"staleAt": "2025-01-01T00:00:00Z"}));
+    let superseded = remember("superseded memory", json!({"supersededBy": "replacement"}));
+    let aggregate = remember("aggregate projection", json!({"sourceType": "aggregate-recall"}));
+
+    let candidates = [
+        live.clone(),
+        deleted.clone(),
+        stale.clone(),
+        superseded.clone(),
+        aggregate.clone(),
+    ]
+        .into_iter()
+        .map(|id| json!({"id": id, "source": "effective", "effScore": 0.9}))
+        .collect();
+    core.submit(Operation::SessionCandidatesRecord {
+        agent_id: "agent-a".into(),
+        workspace_id: "ws-a".into(),
+        session_key: "session-lifecycle".into(),
+        candidates,
+        injected_ids: vec![
+            live.clone(),
+            deleted.clone(),
+            stale.clone(),
+            superseded.clone(),
+            aggregate.clone(),
+        ],
+    })
+    .unwrap();
+    drop(core);
+
+    let db = Connection::open(&path).unwrap();
+    db.execute("UPDATE memories SET deleted = 1 WHERE id = ?", [&deleted])
+        .unwrap();
+    drop(db);
+
+    let core = Core::open(&path, 32).unwrap();
+    let assembled = core
+        .submit(Operation::SessionCandidatesAssemble {
+            agent_id: "agent-a".into(),
+            workspace_id: "ws-a".into(),
+            session_key: "session-lifecycle".into(),
+            token_budget: 100,
+        })
+        .unwrap();
+    let items = assembled["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["memoryId"], json!(live));
 }
 
