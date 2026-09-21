@@ -1416,7 +1416,18 @@ fn execute_operation(
                 }
                 format!("{:x}", hasher.finalize())
             };
-            connection.execute("CREATE TABLE IF NOT EXISTS integrity_checkpoints (agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', visibility TEXT NOT NULL, schema_hash TEXT NOT NULL, next_table TEXT, completed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(agent_id,workspace_id,project_id,visibility))", [])?;
+            connection.execute("CREATE TABLE IF NOT EXISTS integrity_checkpoints (agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', visibility TEXT NOT NULL, schema_hash TEXT NOT NULL, next_table TEXT, completed INTEGER NOT NULL DEFAULT 0, skipped_objects TEXT NOT NULL DEFAULT '[]', schema_version INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL, PRIMARY KEY(agent_id,workspace_id,project_id,visibility))", [])?;
+            for column in [
+                "ALTER TABLE integrity_checkpoints ADD COLUMN skipped_objects TEXT NOT NULL DEFAULT '[]'",
+                "ALTER TABLE integrity_checkpoints ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1",
+            ] {
+                let _ = connection.execute(column, []);
+            }
+            let skipped_objects: Vec<String> = {
+                let mut statement = connection.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'memories_fts%' ORDER BY name")?;
+                let rows = statement.query_map([], |row| row.get(0))?;
+                rows.collect::<Result<Vec<String>, _>>()?
+            };
             // The first version allowed NULL project IDs. Normalize that legacy
             // representation before using the scope as an upsert key; otherwise
             // SQLite's NULL primary-key semantics permit duplicate default scopes.
@@ -1454,9 +1465,9 @@ fn execute_operation(
             } else {
                 Some(tables[end].to_owned())
             };
-            connection.execute("INSERT INTO integrity_checkpoints(agent_id,workspace_id,project_id,visibility,schema_hash,next_table,completed,updated_at) VALUES(?,?,?,?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,project_id,visibility) DO UPDATE SET schema_hash=excluded.schema_hash,next_table=excluded.next_table,completed=excluded.completed,updated_at=excluded.updated_at", params![agent_id,workspace_id,project_key,visibility,schema_hash,next,completed as i64])?;
+            connection.execute("INSERT INTO integrity_checkpoints(agent_id,workspace_id,project_id,visibility,schema_hash,next_table,completed,skipped_objects,schema_version,updated_at) VALUES(?,?,?,?,?,?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,project_id,visibility) DO UPDATE SET schema_hash=excluded.schema_hash,next_table=excluded.next_table,completed=excluded.completed,skipped_objects=excluded.skipped_objects,schema_version=excluded.schema_version,updated_at=excluded.updated_at", params![agent_id,workspace_id,project_key,visibility,schema_hash,next,completed as i64,serde_json::to_string(&skipped_objects).unwrap_or_else(|_| "[]".into()),1i64])?;
             Ok(
-                json!({"status":"verified","agentId":agent_id,"workspaceId":workspace_id,"projectId":project_id,"visibility":visibility,"fts":"skipped","integrityCheck":integrity_check,"checkedTables":checked_tables,"checkpoint":{"nextTable":next,"completed":completed,"schemaHash":schema_hash}}),
+                json!({"status":"verified","agentId":agent_id,"workspaceId":workspace_id,"projectId":project_id,"visibility":visibility,"fts":"skipped","skippedObjects":skipped_objects,"integrityCheck":integrity_check,"checkedTables":checked_tables,"checkpoint":{"nextTable":next,"completed":completed,"schemaHash":schema_hash,"schemaVersion":1}}),
             )
         }
         Operation::RepairRequeueRunning {
