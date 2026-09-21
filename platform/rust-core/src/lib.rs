@@ -3157,7 +3157,7 @@ fn execute_operation(
             max_aspects,
             max_groups,
             max_claims,
-            max_attributes,
+            max_attributes: _,
         } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;

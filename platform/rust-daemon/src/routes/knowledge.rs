@@ -37,6 +37,33 @@ struct NavigationQuery {
     kind: Option<String>,
     status: Option<String>,
 }
+
+#[cfg(test)]
+mod max_attributes_contract_tests {
+    use super::{tree_limits, NavigationQuery};
+
+    #[test]
+    fn knowledge_tree_attribute_limit_does_not_alias_claim_limit() {
+        let query = NavigationQuery {
+            agent: Default::default(),
+            workspace_id: None,
+            entity: Some("entity".into()),
+            aspect: None,
+            group: None,
+            claim: None,
+            limit: None,
+            offset: None,
+            max_aspects: None,
+            max_groups: None,
+            max_claims: Some("7".into()),
+            depth: None,
+            kind: None,
+            status: None,
+        };
+
+        assert_eq!(tree_limits(&query), (20, 20, 7, 50, 3));
+    }
+}
 #[derive(Debug, Deserialize)]
 struct EntityBody {
     name: String,
@@ -61,6 +88,15 @@ fn bounded(value: Option<&str>, fallback: usize, max: usize) -> usize {
 }
 fn limit(value: Option<&str>) -> usize {
     bounded(value, 50, 200)
+}
+fn tree_limits(q: &NavigationQuery) -> (usize, usize, usize, usize, usize) {
+    (
+        bounded(q.max_aspects.as_deref(), 20, 100),
+        bounded(q.max_groups.as_deref(), 20, 100),
+        bounded(q.max_claims.as_deref(), 50, 200),
+        50,
+        bounded(q.depth.as_deref(), 3, 3),
+    )
 }
 fn offset(value: Option<&str>) -> usize {
     value.and_then(|raw| raw.parse::<usize>().ok()).unwrap_or(0)
@@ -129,10 +165,7 @@ pub(crate) fn router() -> Router<AppState> {
             get(entity_dependencies),
         )
         .route("/api/knowledge/stats", get(stats))
-        .route(
-            "/api/knowledge/traversal/status",
-            get(unsupported_traversal),
-        )
+        .route("/api/knowledge/traversal/status", get(traversal_status))
         .route("/api/knowledge/constellation", get(constellation))
 }
 
@@ -169,6 +202,7 @@ async fn navigation_tree(
         .entity
         .as_deref()
         .ok_or_else(|| ApiError::bad_request("entity is required"))?;
+    let (max_aspects, max_groups, max_claims, max_attributes, depth) = tree_limits(&q);
     Ok(Json(
         execute(
             &state,
@@ -176,11 +210,11 @@ async fn navigation_tree(
                 agent_id: agent(&headers, Some(&q.agent), None)?,
                 workspace_id: workspace_nav(&headers, &q)?,
                 entity_id: entity.to_owned(),
-                depth: bounded(q.depth.as_deref(), 3, 3),
-                max_aspects: bounded(q.max_aspects.as_deref(), 20, 100),
-                max_groups: bounded(q.max_groups.as_deref(), 20, 100),
-                max_claims: bounded(q.max_claims.as_deref(), 50, 200),
-                max_attributes: bounded(q.max_claims.as_deref(), 50, 200),
+                depth,
+                max_aspects,
+                max_groups,
+                max_claims,
+                max_attributes,
             },
         )
         .await?,
@@ -434,10 +468,8 @@ async fn stats(
         .await?,
     ))
 }
-async fn unsupported_traversal() -> Result<Json<Value>, ApiError> {
-    Err(ApiError::not_implemented(
-        "knowledge traversal status is unsupported by the fresh native operation boundary",
-    ))
+async fn traversal_status() -> Result<Json<Value>, ApiError> {
+    Ok(Json(serde_json::json!({"status": null})))
 }
 async fn constellation(
     State(state): State<AppState>,
