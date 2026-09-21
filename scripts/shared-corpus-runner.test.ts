@@ -114,4 +114,17 @@ describe("shared corpus admission", () => {
 		expect(result.incomplete).toBe(false);
 		expect(result.status).toBe("failed");
 	});
+
+	test("rejects complete counts whose testcase files do not match the selected paths", () => {
+		const result = parseJUnitReport(
+			'<testsuite tests="2"><testcase file="wrong-a.test.ts" line="1" classname="x" name="a"/><testcase file="wrong-b.test.ts" line="2" classname="x" name="b"/></testsuite>',
+			["a.test.ts", "b.test.ts"],
+			0,
+		);
+		expect(result.tests).toBe(2);
+		expect(result.passed).toBe(2);
+		expect(result.incomplete).toBe(true);
+		expect(result.missingFiles).toEqual(["a.test.ts", "b.test.ts"]);
+		expect(result.unexpectedFiles).toEqual(["wrong-a.test.ts", "wrong-b.test.ts"]);
+	});
 });

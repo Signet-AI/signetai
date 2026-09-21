@@ -20,6 +20,8 @@ export type Accounting = {
 	passed: number;
 	failed: number;
 	skipped: number;
+	missingFiles: string[];
+	unexpectedFiles: string[];
 	crash: boolean;
 	incomplete: boolean;
 	status?: "passed" | "failed";
@@ -181,6 +183,8 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 			passed: 0,
 			failed: Math.max(1, suiteFailed),
 			skipped: 0,
+			missingFiles: [...expected],
+			unexpectedFiles: [],
 			crash: true,
 			incomplete: true,
 			status: "failed",
@@ -203,8 +207,19 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 		}
 		return false;
 	})();
+	const expectedFiles = new Set(expected);
+	const observedFiles = new Set(identities.map((identity) => identity.file).filter(Boolean));
+	const missingFiles = expected.length > 0 ? expected.filter((file) => !observedFiles.has(file)) : [];
+	const unexpectedFiles = expected.length > 0 ? [...observedFiles].filter((file) => !expectedFiles.has(file)) : [];
+	const missingIdentity = expected.length > 0 && identities.some((identity) => !identity.file);
 	const declared = Number(suite.match(/tests="(\d+)"/)?.[1] ?? cases.length);
-	const incomplete = duplicate || declared !== cases.length || (expected.length > 0 && cases.length < expected.length);
+	const incomplete =
+		duplicate ||
+		declared !== cases.length ||
+		(expected.length > 0 && cases.length < expected.length) ||
+		missingFiles.length > 0 ||
+		unexpectedFiles.length > 0 ||
+		missingIdentity;
 	// Bun exits nonzero when assertions fail. A complete report with recorded
 	// failures is a failed test run, not a crashed runner. Preserve crash
 	// classification for nonzero exits that produced no reported test failure.
@@ -214,6 +229,8 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 		passed: cases.length - failed - skipped,
 		failed: failed + Math.max(0, suiteFailed - failed) + (duplicate ? 1 : 0),
 		skipped,
+		missingFiles,
+		unexpectedFiles,
 		crash: crashed || duplicate,
 		incomplete: incomplete || crashed,
 		status: crashed || duplicate || failed > 0 || incomplete ? "failed" : "passed",
