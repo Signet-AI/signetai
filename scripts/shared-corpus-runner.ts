@@ -175,58 +175,65 @@ export function runnableManifestPaths(manifest: ManifestEntry[]): string[] {
 }
 export function parseJUnitReport(xml: string, expected: string[] = [], childStatus: number | null = 0): Accounting {
 	const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map((m) => m[0]);
-	const nativeEvidence = /<testsuite\b[^>]*nativeEvidence="true"/.test(xml);
+	const attribute = (source: string, name: string): string => {
+		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+		return source.match(new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(["'])(.*?)\\1`))?.[2] ?? "";
+	};
+	const nativeEvidence = [...xml.matchAll(/<testsuite\b[^>]*>/g)].some(
+		(match) => attribute(match[0], "nativeEvidence") === "true",
+	);
 	const suiteStats = (() => {
 		type Stats = { tests?: number; failures?: number; errors?: number };
-		const roots: Array<{ kind: "testsuites" | "testsuite"; stats: Stats }> = [];
-		const directSuites: Stats[] = [];
-		const stack: Array<"testsuites" | "testsuite"> = [];
+		type SuiteNode = { kind: "testsuites" | "testsuite"; stats: Stats; childSuites: number };
+		const suites: SuiteNode[] = [];
+		const roots: SuiteNode[] = [];
+		const stack: SuiteNode[] = [];
 		const number = (attrs: string, name: string): number | undefined => {
-			const value = attrs.match(new RegExp(`${name}="(\\d+)"`))?.[1];
-			return value === undefined ? undefined : Number(value);
+			const value = attribute(attrs, name);
+			return value === "" ? undefined : Number(value);
 		};
 		const tags = /<(testsuites|testsuite)\b([^>]*?)(\/?)>|<\/(testsuites|testsuite)\s*>/g;
 		for (const match of xml.matchAll(tags)) {
 			const opening = match[1] as "testsuites" | "testsuite" | undefined;
 			if (opening) {
-				const stats: Stats = {
-					tests: number(match[2] ?? "", "tests"),
-					failures: number(match[2] ?? "", "failures"),
-					errors: number(match[2] ?? "", "errors"),
+				const node: SuiteNode = {
+					kind: opening,
+					stats: {
+						tests: number(match[2] ?? "", "tests"),
+						failures: number(match[2] ?? "", "failures"),
+						errors: number(match[2] ?? "", "errors"),
+					},
+					childSuites: 0,
 				};
-				if (!stack.length) roots.push({ kind: opening, stats });
-				else if (stack.length === 1 && stack[0] === "testsuites" && opening === "testsuite") directSuites.push(stats);
-				if (match[3] !== "/") stack.push(opening);
+				const parent = stack.at(-1);
+				if (parent) parent.childSuites += 1;
+				else roots.push(node);
+				suites.push(node);
+				if (match[3] !== "/") stack.push(node);
 				continue;
 			}
 			const closing = match[4] as "testsuites" | "testsuite" | undefined;
 			if (closing) {
-				const index = stack.lastIndexOf(closing);
+				const index = stack.map((node) => node.kind).lastIndexOf(closing);
 				if (index >= 0) stack.splice(index, 1);
 			}
 		}
+		const leaves = suites.filter((suite) => suite.kind === "testsuite" && suite.childSuites === 0);
 		const sum = (values: Array<number | undefined>): number | undefined => {
 			const present = values.filter((value): value is number => value !== undefined);
 			return present.length ? present.reduce((total, value) => total + value, 0) : undefined;
 		};
-		const childTests = sum(directSuites.map((stats) => stats.tests));
-		const childFailures = sum(directSuites.map((stats) => (stats.failures ?? 0) + (stats.errors ?? 0))) ?? 0;
-		const root = roots.length === 1 ? roots[0] : undefined;
-		if (root?.kind === "testsuites") {
-			return {
-				declared: root.stats.tests ?? childTests,
-				failed: Math.max((root.stats.failures ?? 0) + (root.stats.errors ?? 0), childFailures),
-			};
-		}
-		if (root?.kind === "testsuite") {
-			return {
-				declared: root.stats.tests,
-				failed: (root.stats.failures ?? 0) + (root.stats.errors ?? 0),
-			};
-		}
+		const failureCount = (stats: Stats): number | undefined =>
+			stats.failures === undefined && stats.errors === undefined
+				? undefined
+				: (stats.failures ?? 0) + (stats.errors ?? 0);
+		const rootStats = sum(roots.map((suite) => suite.stats.tests));
+		const rootFailures = sum(roots.map((suite) => failureCount(suite.stats)));
+		const leafTests = sum(leaves.map((suite) => suite.stats.tests));
+		const leafFailures = sum(leaves.map((suite) => failureCount(suite.stats)));
 		return {
-			declared: sum(roots.map((entry) => entry.stats.tests)),
-			failed: roots.reduce((total, entry) => total + (entry.stats.failures ?? 0) + (entry.stats.errors ?? 0), 0),
+			declared: leafTests ?? rootStats,
+			failed: leafFailures ?? rootFailures ?? 0,
 		};
 	})();
 	const suiteFailed = suiteStats.failed;
@@ -245,8 +252,6 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 		};
 	const failed = cases.filter((c) => /<(?:failure|error)\b/.test(c)).length;
 	const skipped = cases.filter((c) => /<skipped\b/.test(c)).length;
-	const attribute = (source: string, name: string): string =>
-		source.match(new RegExp(`(?:^|\\s)${name}="([^"]*)"`))?.[1] ?? "";
 	const identities = cases.map((c) => {
 		const file = attribute(c, "file");
 		const line = attribute(c, "line");

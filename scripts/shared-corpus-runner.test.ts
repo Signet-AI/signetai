@@ -157,4 +157,25 @@ describe("shared corpus admission", () => {
 		expect(result.incomplete).toBe(false);
 		expect(result.status).toBe("failed");
 	});
+
+	test("preserves errors from a nested suite under a testsuite root", () => {
+		const result = parseJUnitReport(
+			'<testsuite tests="1" failures="0"><testsuite tests="1" errors="1"><testcase file="a.test.ts" line="1" classname="x" name="a"/></testsuite></testsuite>',
+			["a.test.ts"],
+			0,
+		);
+		expect(result.tests).toBe(1);
+		expect(result.failed).toBe(1);
+		expect(result.incomplete).toBe(false);
+		expect(result.status).toBe("failed");
+	});
+
+	test("accepts equivalent native evidence attribute serialization", () => {
+		const result = parseJUnitReport(
+			'<testsuite name="rust" errors="0" nativeEvidence = \'true\' tests="1"><testcase file="a.test.ts" line="1" classname="x" name="a"/></testsuite>',
+			["a.test.ts"],
+			0,
+		);
+		expect(result.nativeEvidence).toBe(true);
+	});
 });
