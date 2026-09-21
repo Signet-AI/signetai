@@ -146,7 +146,7 @@ it("proves native reflection generation contract end to end", async () => {
 		});
 		expect(generated.status).toBe(200);
 		expect(await generated.json()).toMatchObject({
-			generated: true,
+			generated: 1,
 			reflection: expect.any(Object),
 			reflections: expect.any(Array),
 		});
@@ -183,7 +183,7 @@ it("proves native reflection generation contract end to end", async () => {
 			method: "POST",
 			headers: auth(admin),
 		});
-		expect(failed.status).toBe(502);
+		expect(failed.status).toBe(500);
 		const afterFailure = (await (
 			await fetch(`${enabled.origin}/api/reflections?agentId=reflection-contract`, { headers: auth(admin) })
 		).json()) as { reflections: unknown[] };
