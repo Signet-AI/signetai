@@ -560,13 +560,13 @@ fn execute_memory_search(
             .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
             .collect::<Vec<_>>()
             .join(" ");
-        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,m.source_id,m.source_type,m.source_path,m.runtime_path,m.idempotency_key,m.memory_kind,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
+        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,m.source_id,m.source_type,m.source_path,m.runtime_path,m.idempotency_key,m.memory_kind,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND COALESCE(json_extract(m.metadata,'$.staleAt'),json_extract(m.metadata,'$.stale_at')) IS NULL AND COALESCE(json_extract(m.metadata,'$.supersededBy'),json_extract(m.metadata,'$.superseded_by')) IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND COALESCE(json_extract(m.metadata,'$.staleAt'),json_extract(m.metadata,'$.stale_at')) IS NULL AND COALESCE(json_extract(m.metadata,'$.supersededBy'),json_extract(m.metadata,'$.superseded_by')) IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
         let mapped = stmt.query_map(params![match_query, agent_id, limit], memory_search_row)?;
         rows = mapped.collect::<Result<Vec<_>, _>>()?;
     } else {
         // Compatibility fallback is deliberately token-aware and marked partial;
         // it is not presented as an FTS result.
-        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL ORDER BY rowid DESC LIMIT 1000")?;
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL AND COALESCE(source_type,'') != 'aggregate-recall' AND COALESCE(json_extract(metadata,'$.staleAt'),json_extract(metadata,'$.stale_at')) IS NULL AND COALESCE(json_extract(metadata,'$.supersededBy'),json_extract(metadata,'$.superseded_by')) IS NULL ORDER BY rowid DESC LIMIT 1000")?;
         let candidates = stmt.query_map(params![agent_id], memory_row)?;
         for memory in candidates {
             let memory = memory?;
@@ -583,7 +583,7 @@ fn execute_memory_search(
     let mut graph_ids = Vec::new();
     for token in &tokens {
         let pattern = format!("%{}%", token);
-        let mut stmt = connection.prepare("SELECT DISTINCT a.memory_id FROM kg_attributes a JOIN memories m ON m.id=a.memory_id WHERE a.agent_id=? AND a.status='active' AND a.memory_id IS NOT NULL AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND (a.normalized_content LIKE ? OR a.content LIKE ?) ORDER BY a.updated_at DESC LIMIT ?")?;
+        let mut stmt = connection.prepare("SELECT DISTINCT a.memory_id FROM kg_attributes a JOIN memories m ON m.id=a.memory_id WHERE a.agent_id=? AND a.status='active' AND a.memory_id IS NOT NULL AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND COALESCE(json_extract(m.metadata,'$.staleAt'),json_extract(m.metadata,'$.stale_at')) IS NULL AND COALESCE(json_extract(m.metadata,'$.supersededBy'),json_extract(m.metadata,'$.superseded_by')) IS NULL AND (a.normalized_content LIKE ? OR a.content LIKE ?) ORDER BY a.updated_at DESC LIMIT ?")?;
         let ids = stmt.query_map(
             params![agent_id, agent_id, pattern, pattern, limit],
             |row| row.get::<_, String>(0),
@@ -2411,8 +2411,16 @@ fn execute_operation(
                 let source = candidate.get("source").and_then(Value::as_str).unwrap_or("effective");
                 let effective = candidate.get("effScore").or_else(|| candidate.get("effectiveScore")).and_then(Value::as_f64).unwrap_or(0.0);
                 let final_score = candidate.get("finalScore").and_then(Value::as_f64).unwrap_or(effective);
+                let relevance_score = candidate.get("relevanceScore").and_then(Value::as_f64);
+                let fts_hit_count = candidate.get("ftsHitCount").and_then(Value::as_i64).unwrap_or(0);
+                let entity_slot = candidate.get("entitySlot").and_then(Value::as_i64);
+                let aspect_slot = candidate.get("aspectSlot").and_then(Value::as_i64);
+                let is_constraint = candidate.get("isConstraint").and_then(Value::as_bool).unwrap_or(false);
+                let structural_density = candidate.get("structuralDensity").and_then(Value::as_i64);
+                let predictor_score = candidate.get("predictorScore").and_then(Value::as_f64);
+                let agent_preference = candidate.get("agentPreference").and_then(Value::as_str);
                 let path_json = candidate.get("pathJson").and_then(|v| if v.is_null() { None } else { Some(v.to_string()) });
-                tx.execute("INSERT OR IGNORE INTO session_memories (id,session_key,agent_id,workspace_id,memory_id,source,effective_score,final_score,rank,was_injected,created_at,path_json) VALUES (lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,datetime('now'),?)", params![session_key, agent_id, workspace_id, memory_id, source, effective, final_score, rank as i64, if injected.contains(memory_id) {1} else {0}, path_json])?;
+                tx.execute("INSERT OR IGNORE INTO session_memories (id,session_key,agent_id,workspace_id,memory_id,source,effective_score,predictor_score,final_score,rank,was_injected,relevance_score,fts_hit_count,entity_slot,aspect_slot,is_constraint,structural_density,agent_preference,created_at,path_json) VALUES (lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),?)", params![session_key, agent_id, workspace_id, memory_id, source, effective, predictor_score, final_score, rank as i64, if injected.contains(memory_id) {1} else {0}, relevance_score, fts_hit_count, entity_slot, aspect_slot, if is_constraint {1} else {0}, structural_density, agent_preference, path_json])?;
             }
             tx.commit()?;
             Ok(json!({"recorded": true, "count": count}))
@@ -2422,15 +2430,15 @@ fn execute_operation(
             let workspace_id = canonical_workspace(&workspace_id)?;
             let session_key = required_id(&session_key)?;
             let budget = token_budget.clamp(1, 100_000) as i64;
-            let mut stmt = connection.prepare("SELECT sm.memory_id,m.content,sm.source,sm.effective_score,sm.final_score,sm.rank,sm.was_injected,sm.path_json FROM session_memories sm JOIN memories m ON m.id=sm.memory_id AND COALESCE(m.agent_id,'default')=sm.agent_id WHERE sm.session_key=? AND sm.agent_id=? AND sm.workspace_id=? AND sm.was_injected=1 AND COALESCE(m.deleted,0)=0 AND COALESCE(json_extract(m.metadata,'$.supersededBy'),'')='' AND COALESCE(json_extract(m.metadata,'$.tombstoned'),0)=0 AND COALESCE(json_extract(m.metadata,'$.stale'),0)=0 ORDER BY sm.rank ASC")?;
+            let mut stmt = connection.prepare("SELECT sm.memory_id,m.content,sm.source,sm.effective_score,sm.final_score,sm.rank,sm.was_injected,sm.path_json,sm.relevance_score,sm.fts_hit_count,sm.entity_slot,sm.aspect_slot,sm.is_constraint,sm.structural_density,sm.predictor_score,sm.agent_preference FROM session_memories sm JOIN memories m ON m.id=sm.memory_id AND COALESCE(m.agent_id,'default')=sm.agent_id WHERE sm.session_key=? AND sm.agent_id=? AND sm.workspace_id=? AND sm.was_injected=1 AND COALESCE(m.is_deleted,m.deleted,0)=0 AND m.superseded_by IS NULL AND m.stale_at IS NULL ORDER BY sm.rank ASC")?;
             let mut used = 0i64;
             let mut items = Vec::new();
-            for row in stmt.query_map(params![session_key,agent_id,workspace_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<f64>>(3)?,r.get::<_,f64>(4)?,r.get::<_,i64>(5)?,r.get::<_,i64>(6)?,r.get::<_,Option<String>>(7)?)))? {
-                let (id, content, source, effective, final_score, rank, was_injected, path_json) = row?;
+            for row in stmt.query_map(params![session_key,agent_id,workspace_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<f64>>(3)?,r.get::<_,f64>(4)?,r.get::<_,i64>(5)?,r.get::<_,i64>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<f64>>(8)?,r.get::<_,i64>(9)?,r.get::<_,Option<i64>>(10)?,r.get::<_,Option<i64>>(11)?,r.get::<_,i64>(12)?,r.get::<_,Option<i64>>(13)?,r.get::<_,Option<f64>>(14)?,r.get::<_,Option<String>>(15)?)))? {
+                let (id, content, source, effective, final_score, rank, was_injected, path_json, relevance, fts, entity, aspect, constraint, density, predictor, preference) = row?;
                 let tokens = content.split_whitespace().count() as i64;
                 if used + tokens > budget { break; }
                 used += tokens;
-                items.push(json!({"memoryId":id,"content":content,"source":source,"effectiveScore":effective,"finalScore":final_score,"rank":rank,"wasInjected":was_injected,"pathJson":path_json}));
+                items.push(json!({"memoryId":id,"content":content,"source":source,"effectiveScore":effective,"finalScore":final_score,"rank":rank,"wasInjected":was_injected,"pathJson":path_json,"relevanceScore":relevance,"ftsHitCount":fts,"entitySlot":entity,"aspectSlot":aspect,"isConstraint":constraint,"structuralDensity":density,"predictorScore":predictor,"agentPreference":preference}));
             }
             Ok(json!({"items":items,"tokens":used,"tokenBudget":budget}))
         }
@@ -5091,19 +5099,25 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,name));
          SELECT 1;",
     )?;
+    ensure_column(&transaction, "memories", "is_deleted", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&transaction, "memories", "superseded_by", "TEXT")?;
+    ensure_column(&transaction, "memories", "stale_at", "TEXT")?;
     ensure_column(&transaction, "session_memories", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
     ensure_column(&transaction, "session_memories", "path_json", "TEXT")?;
+    ensure_column(&transaction, "session_memories", "predictor_score", "REAL")?;
+    ensure_column(&transaction, "session_memories", "relevance_score", "REAL")?;
+    ensure_column(&transaction, "session_memories", "fts_hit_count", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&transaction, "session_memories", "entity_slot", "INTEGER")?;
+    ensure_column(&transaction, "session_memories", "aspect_slot", "INTEGER")?;
+    ensure_column(&transaction, "session_memories", "is_constraint", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(&transaction, "session_memories", "structural_density", "INTEGER")?;
+    ensure_column(&transaction, "session_memories", "agent_preference", "TEXT")?;
     transaction.execute("CREATE UNIQUE INDEX IF NOT EXISTS session_memories_scope_unique ON session_memories(session_key,agent_id,workspace_id,memory_id)", [])?;
-    let max_schema_version: Option<i64> =
+    let _max_schema_version: Option<i64> =
         transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
         })?;
-    if max_schema_version.unwrap_or(0) > 2 {
-        return Err(CoreError::UnsupportedMigrationHistory(format!(
-            "schema_migrations version {} is newer than Rust core compatibility (2)",
-            max_schema_version.unwrap()
-        )));
-    }
+    // Migration numbering is owned by TypeScript; native owner performs additive reconciliation.
 
     // Legacy TypeScript connector tables predate owner scope columns.
     ensure_column(
@@ -5705,16 +5719,11 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE INDEX IF NOT EXISTS memory_history_scope_idx ON memory_history(memory_id, agent_id, id);
          CREATE INDEX IF NOT EXISTS queue_created_idx ON queue(created_at);",
     )?;
-    let max_schema_version: Option<i64> =
+    let _max_schema_version: Option<i64> =
         transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
         })?;
-    if max_schema_version.unwrap_or(0) > 2 {
-        return Err(CoreError::UnsupportedMigrationHistory(format!(
-            "schema_migrations version {} is newer than Rust core compatibility (2)",
-            max_schema_version.unwrap()
-        )));
-    }
+    // Migration numbering is owned by TypeScript; native owner performs additive reconciliation.
     transaction.execute(
         "INSERT OR IGNORE INTO schema_migrations(version, applied_at, checksum) VALUES (1, datetime('now'), 'fresh-rust-core-v1')",
         [],
