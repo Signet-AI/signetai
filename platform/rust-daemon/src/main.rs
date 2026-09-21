@@ -35,6 +35,7 @@ use tokio::sync::Semaphore;
 use uuid::Uuid;
 
 const MAX_OWNER_REQUEST_LINE_BYTES: usize = 40 * 1024 * 1024;
+const MAX_OWNER_MARKER_BYTES: u64 = 4096;
 const MAX_HEALTH_RECOVERY_ATTEMPTS: usize = 1;
 
 fn should_recover_health(attempts: usize) -> bool {
@@ -131,8 +132,21 @@ fn owner_marker_start_time_matches(expected: Option<u64>, actual: Option<u64>) -
     }
 }
 
+fn read_owner_marker(path: &FsPath) -> Option<String> {
+    let file = File::open(path).ok()?;
+    let metadata = file.metadata().ok()?;
+    if !metadata.is_file() || metadata.len() > MAX_OWNER_MARKER_BYTES {
+        return None;
+    }
+    let mut raw = String::new();
+    file.take(MAX_OWNER_MARKER_BYTES + 1)
+        .read_to_string(&mut raw)
+        .ok()?;
+    (raw.len() as u64 <= MAX_OWNER_MARKER_BYTES).then_some(raw)
+}
+
 fn owner_marker_is_live(path: &FsPath) -> bool {
-    let Ok(raw) = std::fs::read_to_string(path) else {
+    let Some(raw) = read_owner_marker(path) else {
         return false;
     };
     let Ok(value) = serde_json::from_str::<Value>(&raw) else {
@@ -684,6 +698,16 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
     }
 
     #[test]
+    fn oversized_owner_marker_is_rejected_before_json_parsing() {
+        let directory = env::temp_dir().join(format!("signet-owner-marker-size-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let marker = directory.join("db-owner.json");
+        std::fs::write(&marker, vec![b' '; super::MAX_OWNER_MARKER_BYTES as usize + 1]).unwrap();
+        assert!(super::read_owner_marker(&marker).is_none());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
     fn startup_marker_is_removed_on_failed_start_and_preserved_after_ready() {
         let directory = env::temp_dir().join(format!("signet-owner-marker-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
@@ -704,6 +728,34 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
             let _cleanup = StartupMarkerGuard::new(marker.clone());
         }
         assert!(marker.exists());
+        if let Some(start_time) = super::owner_process_start_time(std::process::id()) {
+            std::fs::write(
+                &marker,
+                format!(
+                    r#"{{"pid":{},"pidStartTime":{}}}"#,
+                    std::process::id(),
+                    start_time
+                ),
+            )
+            .unwrap();
+            {
+                let _cleanup = StartupMarkerGuard::new(marker.clone());
+            }
+            assert!(marker.exists());
+            std::fs::write(
+                &marker,
+                format!(
+                    r#"{{"pid":{},"pidStartTime":{}}}"#,
+                    std::process::id(),
+                    start_time ^ 1
+                ),
+            )
+            .unwrap();
+            {
+                let _cleanup = StartupMarkerGuard::new(marker.clone());
+            }
+            assert!(!marker.exists());
+        }
         std::fs::write(&marker, format!(r#"{{"pid":{}}}"#, u64::MAX)).unwrap();
         {
             let _cleanup = StartupMarkerGuard::new(marker.clone());
