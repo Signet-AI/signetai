@@ -264,7 +264,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `153-vector-repair-checkpoints.ts`.
+`schema_migrations_audit`. The latest migration is `155-source-sync-failures.ts`.
 
 ### Evidence and semantic state
 
@@ -293,6 +293,13 @@ addition to session, harness, project, agent, content, and timestamps.
 **`memory_artifacts`** indexes canonical Markdown history, including source path,
 content hash, artifact kind, session identity, project, harness, timing, and
 memory-sentence metadata. It is rebuildable from the Markdown artifacts.
+
+**`source_sync_checkpoints`** stores bounded traversal cursors and frontiers for
+native memory sources. **`source_sync_failures`** records deterministic per-item
+failures with their source, path, fingerprint, code, observation count, and
+resolution state. A rejected item advances the checkpoint atomically with its
+failure record, reports degraded sync status, and becomes eligible for indexing
+again when its fingerprint changes.
 
 **`memory_artifact_tombstones`** prevents removed canonical artifact sessions
 from being reintroduced during re-indexing.

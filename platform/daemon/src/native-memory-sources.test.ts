@@ -193,6 +193,91 @@ describe("native memory sources", () => {
 		});
 	});
 
+	it("persists oversized item rejection, advances the checkpoint, and clears it after the file changes", async () => {
+		const root = join(dir, ".codex-rejected");
+		const summaries = join(root, "memories", "rollout_summaries");
+		const rejectedPath = join(summaries, "a-huge.md");
+		const acceptedPath = join(summaries, "b-ok.md");
+		mkdirSync(summaries, { recursive: true });
+		writeFileSync(rejectedPath, "x".repeat(4 * 1024 * 1024 + 1024));
+		writeFileSync(acceptedPath, "accepted source item");
+
+		const agentId = "agent-source-rejection";
+		const source = codexNativeMemorySource(root);
+		const sourceKey = `${agentId}:codex:${root.replace(/\\/g, "/")}`;
+		const handle = startNativeMemoryBridge([source], { agentId, pollIntervalMs: 0 });
+		try {
+			expect(await handle.syncExisting()).toBe(1);
+			expect(handle.getLastSyncResult()).toMatchObject({
+				status: "degraded",
+				scanned: 2,
+				indexed: 1,
+				rejected: 1,
+			});
+			const active = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							`SELECT failure_code, fingerprint, attempt_count, resolved_at
+							 FROM source_sync_failures
+							 WHERE agent_id = ? AND source_key = ? AND item_path = ?`,
+						)
+						.get(agentId, sourceKey, rejectedPath) as {
+						failure_code: string;
+						fingerprint: string;
+						attempt_count: number;
+						resolved_at: string | null;
+					},
+			);
+			expect(active).toMatchObject({
+				failure_code: "source_item_too_large",
+				attempt_count: 1,
+				resolved_at: null,
+			});
+			const checkpoint = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT complete FROM source_sync_checkpoints WHERE agent_id = ? AND source_key = ? AND phase = 'content'",
+						)
+						.get(agentId, sourceKey) as { complete: number },
+			);
+			expect(checkpoint.complete).toBe(1);
+
+			rmSync(rejectedPath);
+			expect(await handle.syncExisting()).toBe(0);
+			expect(handle.getLastSyncResult()).toMatchObject({ status: "complete", rejected: 0 });
+			const resolvedAfterRemoval = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT resolved_at FROM source_sync_failures WHERE agent_id = ? AND source_key = ? AND item_path = ?",
+						)
+						.get(agentId, sourceKey, rejectedPath) as { resolved_at: string | null },
+			);
+			expect(resolvedAfterRemoval.resolved_at).not.toBeNull();
+
+			writeFileSync(rejectedPath, "x".repeat(4 * 1024 * 1024 + 1024));
+			expect(await handle.syncExisting()).toBe(0);
+			expect(handle.getLastSyncResult()).toMatchObject({ status: "degraded", rejected: 1 });
+
+			writeFileSync(rejectedPath, "now small enough to index");
+			expect(await handle.syncExisting()).toBe(1);
+			expect(handle.getLastSyncResult()).toMatchObject({ status: "complete", rejected: 0 });
+			const resolved = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT resolved_at FROM source_sync_failures WHERE agent_id = ? AND source_key = ? AND item_path = ?",
+						)
+						.get(agentId, sourceKey, rejectedPath) as { resolved_at: string | null },
+			);
+			expect(resolved.resolved_at).not.toBeNull();
+		} finally {
+			await handle.close();
+		}
+	});
+
 	it("indexes Codex rollout jsonl files and extracts rollout IDs", async () => {
 		const root = join(dir, ".codex");
 		const rollout = join(root, "memories", "rollout_summaries", "2026-05-24-run.jsonl");

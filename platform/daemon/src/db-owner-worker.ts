@@ -865,6 +865,14 @@ export function runDbOwnerWorker(): void {
 		db.exec("BEGIN IMMEDIATE");
 		try {
 			upsertMemoryArtifactInTx(db as unknown as BunDatabase, nativeMemoryArtifactFields(input));
+			if (checkpoint !== undefined) {
+				db.prepare(
+					`UPDATE source_sync_failures
+					 SET resolved_at = datetime('now'), last_observed_at = datetime('now')
+					 WHERE agent_id = ? AND source_key = ? AND phase = 'content'
+					   AND item_path = ? AND resolved_at IS NULL`,
+				).run(input.agentId, checkpoint.sourceKey, sourcePath);
+			}
 			if (input.graph !== undefined) {
 				applyObsidianSourceStructureInTx(db as unknown as import("./db-accessor").WriteDb, {
 					agentId: input.agentId,

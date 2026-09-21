@@ -45,6 +45,7 @@ import { type ObsidianMarkdownPathIndex, sourceIdForObsidianRoot } from "./obsid
 import {
 	createNativeSourceWorker,
 	type NativeSourceWorkerPage,
+	type NativeSourceWorkerRejection,
 	type NativeSourceWorkerSource,
 } from "./native-memory-source-worker";
 
@@ -73,17 +74,19 @@ export interface NativeMemoryFilePattern {
 export interface NativeMemorySyncSourceResult {
 	readonly sourceKey: string;
 	readonly sourceId?: string;
-	readonly status: "complete" | "paused";
+	readonly status: "complete" | "degraded" | "paused";
 	readonly scanned: number;
 	readonly indexed: number;
+	readonly rejected: number;
 	readonly resumeFrontier: string | null;
 	readonly pauseReason?: string;
 }
 
 export interface NativeMemorySyncResult {
-	readonly status: "complete" | "paused";
+	readonly status: "complete" | "degraded" | "paused";
 	readonly scanned: number;
 	readonly indexed: number;
+	readonly rejected: number;
 	readonly pausedSources: readonly NativeMemorySyncSourceResult[];
 }
 
@@ -836,6 +839,87 @@ async function writeNativeSourceSyncCheckpoint(
 	);
 }
 
+async function persistNativeSourceRejection(
+	agentId: string,
+	sourceKey: string,
+	rejection: NativeSourceWorkerRejection,
+	checkpoint: NativeSourceSyncCheckpoint,
+	scanned: number,
+	signal?: AbortSignal,
+): Promise<void> {
+	const fingerprint = `${Math.trunc(rejection.mtimeMs)}:${rejection.sizeBytes}:${rejection.contentHash}`;
+	await dbOwnerBatch(
+		[
+			ownerStatement(
+				`INSERT INTO source_sync_failures
+				 (agent_id, source_key, phase, item_path, fingerprint, failure_code, terminal,
+				  diagnostic, attempt_count, first_observed_at, last_observed_at, resolved_at)
+				 VALUES (?, ?, 'content', ?, ?, ?, 1, ?, 1, datetime('now'), datetime('now'), NULL)
+				 ON CONFLICT(agent_id, source_key, phase, item_path) DO UPDATE SET
+				 fingerprint = excluded.fingerprint,
+				 failure_code = excluded.failure_code,
+				 terminal = excluded.terminal,
+				 diagnostic = excluded.diagnostic,
+				 attempt_count = CASE
+				   WHEN source_sync_failures.fingerprint = excluded.fingerprint
+				   THEN source_sync_failures.attempt_count
+				   ELSE source_sync_failures.attempt_count + 1
+				 END,
+				 last_observed_at = excluded.last_observed_at,
+				 resolved_at = NULL`,
+				[agentId, sourceKey, rejection.path, fingerprint, rejection.code, rejection.message],
+			),
+			ownerStatement(
+				`INSERT INTO source_sync_checkpoints
+				 (agent_id, source_key, phase, cursor, frontier, scanned, complete, updated_at)
+				 VALUES (?, ?, 'content', ?, ?, ?, ?, datetime('now'))
+				 ON CONFLICT(agent_id, source_key, phase) DO UPDATE SET
+				 cursor = excluded.cursor,
+				 frontier = excluded.frontier,
+				 scanned = excluded.scanned,
+				 complete = excluded.complete,
+				 updated_at = excluded.updated_at`,
+				[
+					agentId,
+					sourceKey,
+					checkpoint.cursor,
+					checkpoint.frontier === null ? null : JSON.stringify(checkpoint.frontier),
+					scanned,
+					checkpoint.complete ? 1 : 0,
+				],
+			),
+		],
+		{
+			operation: "sources.sync-rejection.persist",
+			lane: "write",
+			workloadClass: "maintenance",
+			estimatedWorkUnits: 2,
+			signal,
+		},
+	);
+}
+
+async function resolveNativeSourceFailures(agentId: string, sourceKey: string, signal?: AbortSignal): Promise<void> {
+	await dbOwnerBatch(
+		[
+			ownerStatement(
+				`UPDATE source_sync_failures
+				 SET resolved_at = COALESCE(resolved_at, datetime('now')),
+				     last_observed_at = datetime('now')
+				 WHERE agent_id = ? AND source_key = ? AND phase = 'content' AND resolved_at IS NULL`,
+				[agentId, sourceKey],
+			),
+		],
+		{
+			operation: "sources.sync-rejection.resolve",
+			lane: "write",
+			workloadClass: "maintenance",
+			estimatedWorkUnits: 1,
+			signal,
+		},
+	);
+}
+
 async function activeNativeArtifactPaths(
 	source: NativeMemorySource,
 	agentId: string,
@@ -1344,13 +1428,20 @@ export function startNativeMemoryBridge(
 	});
 	const workerOwnedProviderFailures = new Set<string>();
 	let cancelRequested = false;
-	let lastSyncResult: NativeMemorySyncResult = { status: "complete", scanned: 0, indexed: 0, pausedSources: [] };
+	let lastSyncResult: NativeMemorySyncResult = {
+		status: "complete",
+		scanned: 0,
+		indexed: 0,
+		rejected: 0,
+		pausedSources: [],
+	};
 
 	const runScan = async (signal: AbortSignal): Promise<number> => {
 		signal.throwIfAborted();
 		let count = 0;
 		let totalScanned = 0;
 		let totalIndexed = 0;
+		let totalRejected = 0;
 		const pausedSources: NativeMemorySyncSourceResult[] = [];
 		const yielder = yieldEvery(options.yieldEveryFiles ?? 20);
 		for (const source of activeBridgeSources(sources, options)) {
@@ -1362,6 +1453,7 @@ export function startNativeMemoryBridge(
 				count += joined.indexed;
 				totalScanned += joined.scanned;
 				totalIndexed += joined.indexed;
+				totalRejected += joined.rejected;
 				if (joined.status === "paused") pausedSources.push(joined);
 				continue;
 			}
@@ -1382,6 +1474,7 @@ export function startNativeMemoryBridge(
 			try {
 				let changedCount = 0;
 				let scanned = 0;
+				let rejectedCount = 0;
 				const key = sourceStateKey(source, agentId);
 				const durableKey = nativeSourceSyncKey(source);
 				const rootExists = await pathExists(source.root, source, agentId);
@@ -1409,6 +1502,7 @@ export function startNativeMemoryBridge(
 							status: "paused",
 							scanned: 0,
 							indexed: 0,
+							rejected: 0,
 							resumeFrontier: syncState?.checkpointPath ?? null,
 							pauseReason: "provider_unavailable",
 						};
@@ -1433,6 +1527,7 @@ export function startNativeMemoryBridge(
 							status: "paused",
 							scanned: 0,
 							indexed: 0,
+							rejected: 0,
 							resumeFrontier: syncState?.checkpointPath ?? null,
 							pauseReason: "provider_unavailable",
 						});
@@ -1468,7 +1563,7 @@ export function startNativeMemoryBridge(
 							recordNativeMemoryPermissionDenied(source, path, agentId);
 						}
 						if (cancelRequested) throw new Error("native source sync cancelled");
-						if (page.files.length === 0 && page.complete) {
+						if (page.files.length === 0 && page.rejected.length === 0 && page.complete) {
 							pageComplete = true;
 							cursor = null;
 							if (dbAvailable) {
@@ -1484,6 +1579,42 @@ export function startNativeMemoryBridge(
 							break;
 						}
 						const pageScannedBefore = scanned;
+						for (const rejection of page.rejected) {
+							if (cancelRequested) throw new Error("native source sync cancelled");
+							if (resumePath && rejection.path.replace(/\\/g, "/") <= resumePath.replace(/\\/g, "/")) {
+								current.add(rejection.path);
+								continue;
+							}
+							if (scanned >= maxFilesPerScan) break;
+							scanned++;
+							rejectedCount++;
+							current.add(rejection.path);
+							if (dbAvailable) {
+								await persistNativeSourceRejection(
+									agentId,
+									key,
+									rejection,
+									{
+										cursor: rejection.path.replace(/\\/g, "/"),
+										frontier: page.complete ? null : page.frontier,
+										complete: page.complete,
+									},
+									scanned,
+									signal,
+								);
+							}
+							options.onFileIndexed?.({
+								source,
+								filePath: rejection.path,
+								indexed: false,
+								scanned,
+								total: page.total,
+								changed: changedCount,
+								status: rejection.code,
+							});
+							await yielder();
+							await sleep(fileDelayMs);
+						}
 						for (const [fileIndex, file] of page.files.entries()) {
 							if (cancelRequested) throw new Error("native source sync cancelled");
 							if (resumePath && file.path.replace(/\\/g, "/") <= resumePath.replace(/\\/g, "/")) {
@@ -1612,6 +1743,10 @@ export function startNativeMemoryBridge(
 				}
 				totalScanned += scanned;
 				totalIndexed += changedCount;
+				totalRejected += rejectedCount;
+				if (dbAvailable && scanComplete && rejectedCount === 0) {
+					await resolveNativeSourceFailures(agentId, key, signal);
+				}
 				if (sourcePaused) {
 					sourceResult = {
 						sourceKey: durableKey,
@@ -1619,6 +1754,7 @@ export function startNativeMemoryBridge(
 						status: "paused",
 						scanned,
 						indexed: changedCount,
+						rejected: rejectedCount,
 						resumeFrontier: resumeCheckpointPath,
 						pauseReason: "provider_unavailable",
 					};
@@ -1630,15 +1766,17 @@ export function startNativeMemoryBridge(
 					sourceResult = {
 						sourceKey: durableKey,
 						sourceId: source.sourceId,
-						status: "complete",
+						status: rejectedCount > 0 ? "degraded" : "complete",
 						scanned,
 						indexed: changedCount,
+						rejected: rejectedCount,
 						resumeFrontier: null,
 					};
 				}
 				const cleanupAllowed =
 					sourceCleanupEnabledFor(source, options) &&
 					(!rootExists || scanComplete) &&
+					rejectedCount === 0 &&
 					nativeMemorySourcePermissionHealth(source, agentId).status !== "denied";
 				if (cleanupAllowed) {
 					const currentPaths = new Set([...current].map((file) => file.replace(/\\/g, "/")));
@@ -1657,6 +1795,7 @@ export function startNativeMemoryBridge(
 				if (
 					rootExists &&
 					scanComplete &&
+					rejectedCount === 0 &&
 					source.sourceId &&
 					(!options.shouldContinue || options.shouldContinue(source))
 				) {
@@ -1672,9 +1811,10 @@ export function startNativeMemoryBridge(
 			}
 		}
 		lastSyncResult = {
-			status: pausedSources.length > 0 ? "paused" : "complete",
+			status: pausedSources.length > 0 ? "paused" : totalRejected > 0 ? "degraded" : "complete",
 			scanned: totalScanned,
 			indexed: totalIndexed,
+			rejected: totalRejected,
 			pausedSources,
 		};
 		return count;

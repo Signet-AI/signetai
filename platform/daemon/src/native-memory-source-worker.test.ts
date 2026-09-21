@@ -1,9 +1,13 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
-import { createNativeSourceWorker, NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES } from "./native-memory-source-worker";
+import {
+	createNativeSourceWorker,
+	NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES,
+	NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES,
+} from "./native-memory-source-worker";
 
 async function fixture(): Promise<{
 	readonly root: string;
@@ -136,35 +140,87 @@ describe("native source worker", () => {
 		expect(page.files[0]?.sourceId).toMatch(/^codex_native_memory:[0-9a-f]{16}$/);
 	});
 
-	it(`rejects a descriptor larger than the ${NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES}-byte IPC bound`, async () => {
+	it(`returns a bounded item rejection for a descriptor larger than the ${NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES}-byte IPC bound`, async () => {
 		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-bound-"));
-		await writeFile(join(root, "huge.md"), "x".repeat(NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES + 1024));
+		const path = join(root, "huge.md");
+		await writeFile(path, "x".repeat(NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES + 1024));
 		const worker = createNativeSourceWorker();
-		await expect(
-			worker.scan({
+		try {
+			const page = await worker.scan({
 				source: { root, files: [{ glob: "**/*.md", kind: "markdown" }] },
 				cursor: null,
 				pageSize: 1,
-			}),
-		).rejects.toThrow(/IPC limit/);
-		await worker.close();
+			});
+			expect(page.files).toEqual([]);
+			expect(page.rejected).toEqual([
+				expect.objectContaining({
+					path,
+					code: "source_item_too_large",
+					sizeBytes: NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES + 1024,
+				}),
+			]);
+			expect(page.nextCursor).toBe(path);
+			expect(page.complete).toBe(true);
+		} finally {
+			await worker.close();
+		}
 	});
 
-	it("reuses the worker after a bounded oversized-file rejection", async () => {
+	it("reuses the worker after returning an oversized-file rejection", async () => {
 		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-reuse-"));
 		await writeFile(join(root, "huge.md"), "x".repeat(NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES + 1024));
 		await writeFile(join(root, "ok.md"), "ok");
 		const worker = createNativeSourceWorker();
 		try {
-			await expect(
-				worker.scan({ source: { root, files: [{ glob: "huge.md", kind: "markdown" }] }, cursor: null, pageSize: 1 }),
-			).rejects.toThrow(/IPC limit/);
+			const rejected = await worker.scan({
+				source: { root, files: [{ glob: "huge.md", kind: "markdown" }] },
+				cursor: null,
+				pageSize: 1,
+			});
+			expect(rejected.rejected).toHaveLength(1);
 			const page = await worker.scan({
 				source: { root, files: [{ glob: "ok.md", kind: "markdown" }] },
 				cursor: null,
 				pageSize: 1,
 			});
 			expect(page.files[0]?.content).toBe("ok");
+		} finally {
+			await worker.close();
+		}
+	});
+
+	it("opens a circuit instead of replacing workers forever at one failed checkpoint", async () => {
+		const root = await mkdtemp(join(tmpdir(), "signet-native-source-worker-circuit-"));
+		const starts = join(root, "starts.log");
+		const entry = join(root, "crash-worker.mjs");
+		await writeFile(
+			entry,
+			`import { appendFileSync } from "node:fs";\nimport { parentPort } from "node:worker_threads";\nappendFileSync(${JSON.stringify(starts)}, "start\\n");\nparentPort.postMessage({ version: 1, type: "ready" });\nparentPort.on("message", () => process.exit(17));\n`,
+		);
+		const worker = createNativeSourceWorker({
+			resolveEmbeddedPath: () => entry,
+			circuitCooldownMs: 10,
+		});
+		const command = {
+			source: { root, files: [{ glob: "**/*.md" as const, kind: "markdown" as const }] },
+			cursor: null,
+			frontier: null,
+			pageSize: 1,
+		};
+
+		try {
+			for (let attempt = 0; attempt < NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES; attempt++) {
+				await expect(worker.scan(command)).rejects.toThrow("exited with code 17");
+			}
+			await expect(worker.scan(command)).rejects.toThrow("circuit is open");
+			expect((await readFile(starts, "utf8")).trim().split("\n")).toHaveLength(
+				NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES,
+			);
+			await Bun.sleep(20);
+			await expect(worker.scan(command)).rejects.toThrow("exited with code 17");
+			expect((await readFile(starts, "utf8")).trim().split("\n")).toHaveLength(
+				NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES + 1,
+			);
 		} finally {
 			await worker.close();
 		}
