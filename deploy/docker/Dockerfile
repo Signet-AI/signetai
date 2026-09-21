@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM oven/bun:1 AS build
+FROM oven/bun:1.4.2 AS build
 WORKDIR /app
 
 # The daemon image does not run the Electron desktop application. Skipping
@@ -61,7 +61,7 @@ RUN bun run build:dashboard
 RUN bun run build:signetai
 RUN bun run build:native-bun
 
-FROM oven/bun:1 AS runtime
+FROM oven/bun:1.4.2 AS runtime
 WORKDIR /app
 
 ENV NODE_ENV=production
