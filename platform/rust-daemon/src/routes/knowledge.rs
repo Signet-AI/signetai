@@ -155,6 +155,11 @@ pub(crate) fn router() -> Router<AppState> {
             get(navigation_attributes),
         )
         .route("/api/knowledge/entities/{id}", get(entity_detail))
+        .route("/api/knowledge/entities/pinned", get(pinned_entities))
+        .route(
+            "/api/knowledge/entities/{id}/pin",
+            post(pin_entity).delete(unpin_entity),
+        )
         .route("/api/knowledge/entities/{id}/aspects", get(entity_aspects))
         .route(
             "/api/knowledge/entities/{entity_id}/aspects/{aspect_id}/attributes",
@@ -369,6 +374,69 @@ fn workspace_nav(headers: &HeaderMap, q: &NavigationQuery) -> Result<String, Api
         return Err(ApiError::bad_request("conflicting workspace scope"));
     }
     Ok(header.or(query).unwrap_or("default").to_owned())
+}
+
+async fn pinned_entities(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgePinnedEntities {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&headers, &q)?,
+            },
+        )
+        .await?,
+    ))
+}
+async fn pin_entity(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeEntityPin {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&headers, &q)?,
+                entity_id: id,
+                actor: headers
+                    .get("x-signet-actor")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("operator")
+                    .to_owned(),
+            },
+        )
+        .await?,
+    ))
+}
+async fn unpin_entity(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeEntityUnpin {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&headers, &q)?,
+                entity_id: id,
+                actor: headers
+                    .get("x-signet-actor")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("operator")
+                    .to_owned(),
+            },
+        )
+        .await?,
+    ))
 }
 
 async fn entity_detail(

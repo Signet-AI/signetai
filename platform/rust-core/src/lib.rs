@@ -708,6 +708,45 @@ fn import_chunks(content: &str) -> impl Iterator<Item = &str> {
         })
 }
 
+fn pin_entity(
+    connection: &mut Connection,
+    agent: &str,
+    workspace: &str,
+    entity_id: &str,
+    actor: &str,
+    pinned: bool,
+) -> Result<Value, CoreError> {
+    let agent = required_agent(agent)?;
+    let workspace = canonical_workspace(workspace)?;
+    let entity_id = required_id(entity_id)?;
+    let actor = if actor.trim().is_empty() {
+        "operator"
+    } else {
+        actor.trim()
+    };
+    let tx = connection.transaction()?;
+    tx.execute_batch("CREATE TABLE IF NOT EXISTS ontology_proposals (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', operation TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', payload TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0.0, rationale TEXT NOT NULL DEFAULT '', evidence TEXT NOT NULL DEFAULT '[]', risk TEXT, source_kind TEXT, source_id TEXT, source_path TEXT, source_root TEXT, created_by TEXT NOT NULL DEFAULT 'ontology-proposal', applied_by TEXT, rejected_by TEXT, result TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now')), applied_at TEXT, rejected_at TEXT)")?;
+    let exists: i64 = tx.query_row("SELECT count(*) FROM entities WHERE id=? AND agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active'", params![entity_id, agent, workspace], |r| r.get(0))?;
+    if exists != 1 {
+        return Err(CoreError::NotFound);
+    }
+    let proposal_id = uuid::Uuid::new_v4().to_string();
+    let payload = json!({"id": entity_id});
+    let evidence = json!([]);
+    let now = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|e| CoreError::InvalidInput(e.to_string()))?;
+    tx.execute("INSERT INTO ontology_proposals (id,agent_id,operation,status,payload,rationale,evidence,created_by,applied_by,result,created_at,updated_at,applied_at) VALUES (?,?,?,'applied',?,?,? ,?,?,?, ?,?,?)", params![proposal_id, agent, if pinned {"pin_entity"} else {"unpin_entity"}, payload.to_string(), "", evidence.to_string(), actor, actor, json!({"entityId":entity_id,"pinned":pinned}).to_string(), now, now, now])?;
+    let pinned_at: Option<String> = if pinned { Some(now.clone()) } else { None };
+    tx.execute("UPDATE entities SET pinned=?, pinned_at=?, proposal_id=?, proposal_evidence=?, updated_at=? WHERE id=? AND agent_id=? AND workspace_id=?", params![pinned as i64, pinned_at, proposal_id, evidence.to_string(), now, entity_id, agent, workspace])?;
+    tx.commit()?;
+    let mut result = json!({"entityId":entity_id,"pinned":pinned});
+    if pinned {
+        result["pinnedAt"] = json!(now);
+    }
+    Ok(result)
+}
+
 fn execute_operation(
     connection: &mut Connection,
     operation: Operation,
@@ -2704,6 +2743,42 @@ fn execute_operation(
             tx.commit()?;
             Ok(json!({"id":id,"agentId":agent_id,"name":name,"type":entity_type}))
         }
+        Operation::KnowledgePinnedEntities {
+            agent_id,
+            workspace_id,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let mut statement = connection.prepare("SELECT id,name,pinned_at FROM entities WHERE agent_id=? AND workspace_id=? AND pinned=1 AND COALESCE(status,'active')='active' ORDER BY pinned_at DESC, updated_at DESC, name ASC")?;
+            let rows = statement.query_map(params![agent_id, workspace_id], |r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"pinnedAt":r.get::<_,Option<String>>(2)?.unwrap_or_default()})))?;
+            Ok(json!(rows.collect::<Result<Vec<_>, _>>()?))
+        }
+        Operation::KnowledgeEntityPin {
+            agent_id,
+            workspace_id,
+            entity_id,
+            actor,
+        } => pin_entity(
+            connection,
+            &agent_id,
+            &workspace_id,
+            &entity_id,
+            &actor,
+            true,
+        ),
+        Operation::KnowledgeEntityUnpin {
+            agent_id,
+            workspace_id,
+            entity_id,
+            actor,
+        } => pin_entity(
+            connection,
+            &agent_id,
+            &workspace_id,
+            &entity_id,
+            &actor,
+            false,
+        ),
         Operation::KnowledgeEntityList {
             agent_id,
             workspace_id,
@@ -4082,6 +4157,22 @@ pub enum Operation {
         name: String,
         entity_type: String,
         metadata: Value,
+    },
+    KnowledgePinnedEntities {
+        agent_id: String,
+        workspace_id: String,
+    },
+    KnowledgeEntityPin {
+        agent_id: String,
+        workspace_id: String,
+        entity_id: String,
+        actor: String,
+    },
+    KnowledgeEntityUnpin {
+        agent_id: String,
+        workspace_id: String,
+        entity_id: String,
+        actor: String,
     },
     KnowledgeEntityList {
         agent_id: String,

@@ -4,6 +4,61 @@ use signet_core_native::{
 };
 use tempfile::tempdir;
 
+#[test]
+fn entity_pinning_is_scoped_idempotent_and_audited() {
+    let c = core();
+    let entity = c
+        .submit(Operation::KnowledgeEntityCreate {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            name: "Pinned".into(),
+            entity_type: "person".into(),
+            metadata: serde_json::json!({}),
+        })
+        .unwrap();
+    let id = entity["id"].as_str().unwrap().to_owned();
+    let pinned = c
+        .submit(Operation::KnowledgeEntityPin {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: id.clone(),
+            actor: "tester".into(),
+        })
+        .unwrap();
+    assert_eq!(pinned["pinned"], true);
+    assert!(pinned["pinnedAt"].is_string());
+    assert_eq!(
+        c.submit(Operation::KnowledgePinnedEntities {
+            agent_id: "a".into(),
+            workspace_id: "w".into()
+        })
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len(),
+        1
+    );
+    assert!(matches!(
+        c.submit(Operation::KnowledgeEntityUnpin {
+            agent_id: "a".into(),
+            workspace_id: "other".into(),
+            entity_id: id.clone(),
+            actor: "tester".into()
+        }),
+        Err(CoreError::NotFound)
+    ));
+    assert_eq!(
+        c.submit(Operation::KnowledgeEntityUnpin {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: id,
+            actor: "tester".into()
+        })
+        .unwrap()["pinned"],
+        false
+    );
+}
+
 fn core() -> Core {
     let d = tempdir().unwrap();
     let p = d.path().join("db.sqlite");
