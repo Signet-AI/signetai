@@ -418,8 +418,8 @@ fn run(argv: Vec<String>, env: HashMap<String, String>, timeout: u64, cap: usize
     let vals = env.values().cloned().collect::<Vec<_>>();
     let mut stdout = redact(String::from_utf8_lossy(&out).into_owned(), &vals);
     let mut stderr = redact(String::from_utf8_lossy(&err).into_owned(), &vals);
-    let mut out_truncated = out_truncated || stdout.len() > cap;
-    let mut err_truncated = err_truncated || stderr.len() > cap;
+    let out_truncated = out_truncated || stdout.len() > cap;
+    let err_truncated = err_truncated || stderr.len() > cap;
     if stdout.len() > cap {
         stdout.truncate(cap);
     }
