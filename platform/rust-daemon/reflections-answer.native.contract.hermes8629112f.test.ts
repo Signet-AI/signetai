@@ -71,6 +71,7 @@ it("exercises native reflection answer auth, persistence, scope, and generation 
 	const dir = mkdtempSync(join(tmpdir(), "signet-reflection-answer-"));
 	dirs.push(dir);
 	const port = reserve();
+	await Bun.write(join(dir, "agent.yaml"), "memory:\n  pipelineV2:\n    reflections:\n      enabled: false\n");
 	const first = await start(dir, port);
 	const admin = { "content-type": "application/json", "x-signet-api-key": "reflection-key" };
 	const issue = async (role: string, scope: object, permissions: string[] = []) => {
@@ -193,11 +194,33 @@ it("exercises native reflection answer auth, persistence, scope, and generation 
 	});
 	expect(disabled.status).toBe(400);
 	await stop(running.child);
-	await Bun.write(join(dir, "agent.yaml"), "memory:\n  pipelineV2:\n    reflections:\n      enabled: true\n");
-	const enabled = await start(dir, port);
-	const generated = await fetch(`${enabled.origin}/api/reflections/generate?agentId=${agent}`, {
-		method: "POST",
-		headers: headers(adminToken),
-	});
-	expect(generated.status).toBe(400);
+	const provider = Bun.serve({ port: 0, fetch: () => new Response("provider unavailable", { status: 503 }) });
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: native contract provider override
+	const previousBaseUrl = process.env.SIGNET_OPENAI_BASE_URL;
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: native contract provider override
+	const previousModel = process.env.SIGNET_OPENAI_MODEL;
+	process.env.SIGNET_OPENAI_BASE_URL = `http://127.0.0.1:${provider.port}`;
+	process.env.SIGNET_OPENAI_MODEL = "contract-model";
+	try {
+		await Bun.write(join(dir, "agent.yaml"), "memory:\n  pipelineV2:\n    reflections:\n      enabled: true\n");
+		const enabled = await start(dir, port);
+		const generated = await fetch(`${enabled.origin}/api/reflections/generate?agentId=${agent}`, {
+			method: "POST",
+			headers: headers(adminToken),
+		});
+		expect(generated.status).toBe(500);
+		const afterFailure = await fetch(`${enabled.origin}/api/reflections?agentId=${agent}`, {
+			headers: headers(adminToken),
+		});
+		expect(afterFailure.status).toBe(200);
+		expect((await afterFailure.json()).reflections).toHaveLength(1);
+	} finally {
+		provider.stop();
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: native contract provider override
+		if (previousBaseUrl === undefined) delete process.env.SIGNET_OPENAI_BASE_URL;
+		else process.env.SIGNET_OPENAI_BASE_URL = previousBaseUrl;
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: native contract provider override
+		if (previousModel === undefined) delete process.env.SIGNET_OPENAI_MODEL;
+		else process.env.SIGNET_OPENAI_MODEL = previousModel;
+	}
 });
