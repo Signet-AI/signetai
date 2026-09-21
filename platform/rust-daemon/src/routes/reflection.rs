@@ -155,14 +155,37 @@ struct AnswerBody {
     answer: Option<String>,
 }
 
+fn parse_reflection_integer(raw: &str) -> Option<(bool, u64)> {
+    let trimmed = raw.trim_start();
+    let (negative, digits) = match trimmed.as_bytes().first() {
+        Some(b'-') => (true, &trimmed[1..]),
+        Some(b'+') => (false, &trimmed[1..]),
+        _ => (false, trimmed),
+    };
+    let mut value = 0u64;
+    let mut found = false;
+    for byte in digits.bytes() {
+        if !byte.is_ascii_digit() {
+            break;
+        }
+        found = true;
+        value = value.saturating_mul(10).saturating_add((byte - b'0') as u64);
+    }
+    found.then_some((negative, value))
+}
+
 fn limit(query: &ReflectionQuery) -> usize {
-    query
+    let Some((negative, value)) = query
         .limit
         .as_deref()
-        .and_then(|raw| raw.trim().parse::<i64>().ok())
-        .filter(|value| *value > 0)
-        .map(|value| (value as usize).min(100))
-        .unwrap_or(30)
+        .and_then(parse_reflection_integer)
+    else {
+        return 30;
+    };
+    if negative || value == 0 {
+        return 30;
+    }
+    value.min(100) as usize
 }
 
 async fn authorize_reflection_read(
@@ -432,6 +455,30 @@ mod tests {
                 count: None,
             }),
             100
+        );
+        assert_eq!(
+            limit(&ReflectionQuery {
+                limit: Some("10foo".into()),
+                agent_id: None,
+                count: None,
+            }),
+            10
+        );
+        assert_eq!(
+            limit(&ReflectionQuery {
+                limit: Some("10.5".into()),
+                agent_id: None,
+                count: None,
+            }),
+            10
+        );
+        assert_eq!(
+            limit(&ReflectionQuery {
+                limit: Some("1e2".into()),
+                agent_id: None,
+                count: None,
+            }),
+            1
         );
     }
 
