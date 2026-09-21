@@ -18,6 +18,8 @@ jobs:
           fetch-depth: 0
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
 
       - name: Verify bun.lock matches manifests
         shell: bash
