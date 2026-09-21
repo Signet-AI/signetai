@@ -372,6 +372,36 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).toContain("second session");
 	});
 
+	test("preserves a completed session when a replacement snapshot is shorter or divergent", async () => {
+		const root = makeRoot("preserve-divergent-snapshot");
+		const jsonlPath = canonicalTranscriptPath(root, "codex");
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "normalized",
+			sourcePath: join(root, "stale-source.jsonl"),
+			transcript: "User: A\nAssistant: B\nUser: C",
+		});
+
+		const replaced = await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "default",
+			harness: "codex",
+			sessionKey: "session-1",
+			sourceFormat: "normalized",
+			sourcePath: join(root, "stale-source.jsonl"),
+			transcript: "User: A\nAssistant: X",
+		});
+
+		expect(replaced).toBe(false);
+		const content = readFileSync(jsonlPath, "utf8");
+		expect(content).toContain('"content":"B"');
+		expect(content).toContain('"content":"C"');
+		expect(content).not.toContain('"content":"X"');
+	});
+
 	test("writeCanonicalTranscriptSnapshot handles large files without excessive memory (OOM guard)", async () => {
 		const root = makeRoot("snapshot-oom-guard");
 		const jsonlPath = canonicalTranscriptPath(root, "opencode");

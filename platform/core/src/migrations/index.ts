@@ -1,5 +1,6 @@
 import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
 import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
+import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
 /**
  * Migration runner for Signet's SQLite database
  *
@@ -1413,6 +1414,21 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "vector-repair-checkpoints",
 		up: vectorRepairCheckpoints,
 		artifacts: { tables: ["vector_repair_checkpoints"] },
+	},
+	{
+		version: 154,
+		name: "transcript-capture-source-identity",
+		up: transcriptCaptureSourceIdentity,
+		artifacts: {
+			columns: [
+				{ table: "transcript_capture_jobs", column: "source_identity" },
+				{ table: "transcript_capture_jobs", column: "source_sha256" },
+				{ table: "transcript_capture_jobs", column: "source_size_bytes" },
+				{ table: "transcript_capture_jobs", column: "source_mtime_ms" },
+				{ table: "transcript_capture_jobs", column: "source_format" },
+				{ table: "transcript_capture_jobs", column: "audit_path" },
+			],
+		},
 	},
 ];
 

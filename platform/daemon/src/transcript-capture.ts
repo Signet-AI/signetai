@@ -17,9 +17,10 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 	readonly transcript: string;
 	readonly capturedAt?: string;
 	readonly transcriptPath?: string;
-}): Promise<void> {
-	await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
-	await writeCanonicalTranscriptSnapshot({
+	readonly preserveExistingSession?: boolean;
+}): Promise<boolean> {
+	if (!params.transcriptPath) await ensureCanonicalTranscriptHistory(params.basePath, params.agentId);
+	return writeCanonicalTranscriptSnapshot({
 		basePath: params.basePath,
 		agentId: params.agentId,
 		harness: params.harness,
@@ -29,6 +30,7 @@ export async function writeCanonicalTranscriptFromSnapshot(params: {
 		capturedAt: params.capturedAt,
 		sourceFormat: params.rawTranscript ? inferTranscriptSourceFormat(params.rawTranscript) : "normalized",
 		sourcePath: params.transcriptPath,
+		preserveExistingSession: params.preserveExistingSession,
 		transcript: stripInternalMemoryContext(params.transcript),
 	});
 }

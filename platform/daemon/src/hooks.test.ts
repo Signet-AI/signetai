@@ -8,7 +8,16 @@
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createPromptContext } from "@signet/core";
@@ -1642,6 +1651,28 @@ describe("direct transcript regressions", () => {
 		expect(result.memories.some((memory) => memory.content === "Project B shardaware rollout memory")).toBe(false);
 	});
 
+	test.serial("does not read or queue the growing source on an ordinary stop", async () => {
+		createMemoryDb([]);
+		const transcriptPath = join(TEST_DIR, "ordinary-stop.jsonl");
+		writeFileSync(transcriptPath, "User: this source must not be read by Stop\\n".repeat(10_000));
+
+		const result = await handleSessionEnd({
+			harness: "codex",
+			transcriptPath,
+			sessionKey: "ordinary-stop-session",
+			sessionId: "ordinary-stop-session",
+			cwd: "/home/user/signetai",
+		});
+		expect(result.queued).toBe(false);
+		const db = openTestDb();
+		try {
+			expect(db.prepare("SELECT COUNT(*) AS count FROM transcript_capture_jobs").get()).toEqual({ count: 0 });
+			expect(existsSync(join(TEST_DIR, "memory", "codex", "transcripts", "transcript.jsonl"))).toBe(false);
+		} finally {
+			db.close();
+		}
+	});
+
 	test.serial("writes full canonical transcript content without a summary input copy", async () => {
 		createMemoryDb([]);
 		const transcriptPath = join(TEST_DIR, "long-transcript.txt");
@@ -1655,6 +1686,7 @@ describe("direct transcript regressions", () => {
 			sessionKey: "sess-long-retention",
 			sessionId: "sess-long-retention",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 		expect(result.queued).toBe(true);
 		await flushSessionEndDeferredWork();
@@ -1702,6 +1734,7 @@ describe("direct transcript regressions", () => {
 			sessionKey: "claude-resumed-session",
 			sessionId: "reused-claude-uuid",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 		await handleSessionEnd({
 			harness: "claude-code",
@@ -1709,6 +1742,7 @@ describe("direct transcript regressions", () => {
 			sessionKey: "claude-resumed-session",
 			sessionId: "reused-claude-uuid",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 		await flushSessionEndDeferredWork();
 
@@ -1756,12 +1790,14 @@ describe("direct transcript regressions", () => {
 			transcriptPath: transcriptAPath,
 			sessionKey: "agent:main:main",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 		const second = await handleSessionEnd({
 			harness: "test",
 			transcriptPath: transcriptBPath,
 			sessionKey: "agent:main:main",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 		expect(first.queued).toBe(true);
 		expect(second.queued).toBe(true);
@@ -1998,6 +2034,7 @@ describe("handleSessionEnd", () => {
 			sessionKey: "sess-ledger",
 			sessionId: "sess-ledger",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 
 		expect(result.queued).toBe(true);
@@ -2043,7 +2080,9 @@ describe("handleSessionEnd", () => {
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
 			transcript: firstTranscript,
+			reason: "session_shutdown",
 		});
+		await flushSessionEndDeferredWork();
 		const firstDb = openTestDb();
 		const first = firstDb
 			.prepare(
@@ -2059,7 +2098,9 @@ describe("handleSessionEnd", () => {
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
 			transcript: firstTranscript,
+			reason: "session_shutdown",
 		});
+		await flushSessionEndDeferredWork();
 		const secondDb = openTestDb();
 		const second = secondDb
 			.prepare(
@@ -2081,7 +2122,9 @@ describe("handleSessionEnd", () => {
 			sessionKey: "hash-session",
 			sessionId: "hash-session",
 			transcript: changedTranscript,
+			reason: "session_shutdown",
 		});
+		await flushSessionEndDeferredWork();
 		const changedDb = openTestDb();
 		const changed = changedDb
 			.prepare(
@@ -2109,6 +2152,7 @@ describe("handleSessionEnd", () => {
 			agentId: "memorybench",
 			cwd: "memorybench",
 			capturedAt,
+			reason: "session_shutdown",
 		});
 
 		expect(result.transcriptCaptureJobId).toBeString();
@@ -2153,6 +2197,7 @@ describe("handleSessionEnd", () => {
 			sessionKey: "sess-deferred-canonical",
 			sessionId: "sess-deferred-canonical",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 
 		expect(result.queued).toBe(true);
@@ -2235,6 +2280,7 @@ memory:
 			sessionKey: "sess-pipeline-disabled",
 			sessionId: "sess-pipeline-disabled",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 
 		expect(result.queued).toBe(true);
@@ -2286,6 +2332,7 @@ memory:
 			sessionKey: "sess-live-fallback",
 			sessionId: "sess-live-fallback",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 
 		expect(result.queued).toBe(true);
@@ -2358,7 +2405,7 @@ memory:
 		expect(row?.content).toContain("latest short answer");
 	});
 
-	test.serial("writes raw audit logs while keeping the canonical transcript conversation-only", async () => {
+	test.serial("writes source audit references while keeping the canonical transcript conversation-only", async () => {
 		createMemoryDb([]);
 		const transcriptPath = join(TEST_DIR, "codex-transcript.jsonl");
 		writeFileSync(
@@ -2380,6 +2427,7 @@ memory:
 			sessionKey: "sess-audit",
 			sessionId: "sess-audit",
 			cwd: "/home/user/signetai",
+			reason: "session_shutdown",
 		});
 
 		expect(result.queued).toBe(true);
@@ -2392,59 +2440,87 @@ memory:
 		expect(transcript).not.toContain("README.md");
 
 		const auditDir = join(TEST_DIR, ".daemon", "logs", "transcripts");
-		const auditFiles = readdirSync(auditDir).sort();
-		expect(auditFiles.some((name) => name.endsWith("--raw-transcript.log"))).toBe(true);
-		const finalAudit = auditFiles.find((name) => name.endsWith("--raw-transcript.log"));
-		const audit = readFileSync(join(auditDir, finalAudit ?? ""), "utf-8");
-		expect(audit).toContain('"type":"function_call"');
-		expect(audit).toContain("README.md");
+		const auditFiles = readdirSync(auditDir).filter((name) => name.endsWith(".json"));
+		expect(auditFiles).toHaveLength(1);
+		const audit = JSON.parse(readFileSync(join(auditDir, auditFiles[0] ?? ""), "utf-8")) as {
+			schema: string;
+			source_path: string;
+			source_sha256: string;
+			preview: string | null;
+		};
+		expect(audit.schema).toBe("signet.transcript-audit.v2");
+		expect(audit.source_path).toBe(transcriptPath);
+		expect(audit.source_sha256).toMatch(/^[a-f0-9]{64}$/);
+		expect(audit.preview).toBeNull();
 	});
 
 	test.serial("sanitizes transcript audit filenames to stay within the audit directory", async () => {
 		const result = await writeTranscriptAudit({
 			basePath: TEST_DIR,
 			agentId: "default",
+			sourceIdentity: "../../../../tmp/evil",
+			sourcePath: "/tmp/evil",
+			sourceSha256: null,
+			sourceSizeBytes: 10,
+			sourceFormat: "jsonl",
 			sessionId: "sess-audit-safe",
 			sessionKey: "sess-audit-safe",
-			rawTranscript: "raw transcript",
-			capturedAt: "../../../../tmp/evil",
+			capturedAt: "2026-09-20T00:00:00.000Z",
 		});
 
 		expect(result).not.toBeNull();
-		const finalPath = result?.finalPath;
-		expect(finalPath).toBeDefined();
+		const latestPath = result?.latestPath;
+		expect(latestPath).toBeDefined();
 		const auditDir = join(TEST_DIR, ".daemon", "logs", "transcripts");
-		const auditName = finalPath ? finalPath.slice(auditDir.length + 1) : "";
-		expect(finalPath?.startsWith(auditDir)).toBe(true);
-		expect(auditName).toMatch(/^[A-Za-z0-9._-]+$/);
-		expect(finalPath).not.toContain("/tmp/evil");
+		const auditName = latestPath ? latestPath.slice(auditDir.length + 1) : "";
+		expect(latestPath?.startsWith(auditDir)).toBe(true);
+		expect(auditName).toMatch(/^[A-Za-z0-9._-]+\.json$/);
+		expect(latestPath).not.toContain("/tmp/evil");
 	});
 
-	test.serial("uses the full raw transcript hash when audit ids are missing", async () => {
-		const rawTranscript = "User: audit me\nAssistant: on it";
+	test.serial("uses the stable source identity when the source hash is missing", async () => {
 		const result = await writeTranscriptAudit({
 			basePath: TEST_DIR,
 			agentId: "agent-a",
-			sessionId: "",
+			sourceIdentity: "session:agent-a:session-a",
+			sourcePath: null,
+			sourceSha256: null,
+			sourceSizeBytes: null,
+			sourceFormat: "live",
+			sessionId: "session-a",
 			sessionKey: null,
-			rawTranscript,
 		});
 
 		expect(result).not.toBeNull();
-		const latestPath = result?.latestPath ?? "";
-		const latestName = latestPath.split("/").pop() ?? "";
-		const scoped = createHash("sha256").update(rawTranscript, "utf8").digest("hex");
-		const expectedToken = createHash("sha256").update(`agent-a:${scoped}`, "utf8").digest("hex").slice(0, 16);
-		expect(latestName).toBe(`${expectedToken}--latest.log`);
+		const latestName = result.latestPath.split("/").pop() ?? "";
+		const expectedToken = createHash("sha256")
+			.update(["agent-a", "session:agent-a:session-a", ""].join(String.fromCharCode(0)), "utf8")
+			.digest("hex")
+			.slice(0, 24);
+		expect(latestName).toBe(`${expectedToken}.json`);
 	});
 
-	test("adds a random suffix when transcript context is unavailable", () => {
+	test("uses a stable fallback identity when transcript context is unavailable", () => {
 		const first = deriveSessionEndFallbackId("agent:main:main", undefined, "");
 		const second = deriveSessionEndFallbackId("agent:main:main", undefined, "");
 
-		expect(first).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
-		expect(second).toMatch(/^session-end:agent:main:main:[0-9a-f-]{36}$/);
-		expect(first).not.toBe(second);
+		expect(first).toBe("session-end:agent:main:main");
+		expect(second).toBe(first);
+	});
+
+	test("canonicalizes symlinked transcript fallback identities", () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-session-id-"));
+		const realPath = join(root, "real.jsonl");
+		const symlinkPath = join(root, "link.jsonl");
+		try {
+			writeFileSync(realPath, "{}\n", "utf8");
+			symlinkSync(realPath, symlinkPath);
+			expect(deriveSessionEndFallbackId("session-a", realPath, "")).toBe(
+				deriveSessionEndFallbackId("session-a", symlinkPath, ""),
+			);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 
 	// ------------------------------------------------------------------
@@ -2721,6 +2797,7 @@ describe("handleSynthesisRequest", () => {
 				sessionKey: "sess-pr390",
 				sessionId: "sess-pr390",
 				cwd: "/home/user/signetai",
+				reason: "session_shutdown",
 			});
 			await flushSessionEndDeferredWork();
 

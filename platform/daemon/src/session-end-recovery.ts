@@ -1,5 +1,6 @@
-import { createHash, randomUUID } from "node:crypto";
 import { type ReadDb, type WriteDb, getDbAccessor } from "./db-accessor";
+import { realpathSync } from "node:fs";
+import { resolve } from "node:path";
 import { logger } from "./logger";
 import { markSessionTranscriptCompletedInTx } from "./session-transcripts";
 
@@ -12,6 +13,14 @@ export interface ClearSessionStartRequest {
 // Session keys can be shared across distinct harness runs (for example
 // recurring heartbeat sessions), so artifact lineage needs a more specific
 // fallback identifier when the harness does not supply sessionId.
+function canonicalTranscriptPath(path: string): string {
+	try {
+		return realpathSync(path);
+	} catch {
+		return resolve(path);
+	}
+}
+
 export function deriveSessionEndFallbackId(
 	sessionKey: string | undefined,
 	transcriptPath: string | undefined,
@@ -19,30 +28,12 @@ export function deriveSessionEndFallbackId(
 ): string {
 	const scopedKey = sessionKey?.trim() || "anonymous";
 	const path = transcriptPath?.trim();
-	const body = transcript.trim();
-	if (path) {
-		// Include a content digest so rotating log files that reuse the same
-		// path across distinct sessions produce different IDs.
-		// Note: sessions with identical path AND identical content will
-		// intentionally deduplicate — writeImmutableArtifact returns the
-		// existing artifact path when the content hash matches, so this is
-		// a graceful no-op rather than an error.
-		if (body.length > 0) {
-			const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
-			return `session-end:path:${path}:${digest}`;
-		}
-		// Intentionally non-idempotent: without transcript content there is no
-		// stable material to hash, so each call produces a unique ID.  This
-		// prevents two empty-body session-end calls from colliding but means
-		// retries will create distinct artifacts rather than deduplicating.
-		return `session-end:path:${path}:${randomUUID()}`;
-	}
-	if (body.length > 0) {
-		const digest = createHash("sha256").update(body).digest("hex").slice(0, 16);
-		return `session-end:${scopedKey}:${digest}`;
-	}
-	// See comment above: non-idempotent for the same reason.
-	return `session-end:${scopedKey}:${randomUUID()}`;
+	// The source generation belongs to capture admission, not artifact identity.
+	// Keeping this key stable lets a newer source generation replace the one
+	// transcript artifact instead of appending a new artifact for every turn.
+	if (path) return `session-end:path:${canonicalTranscriptPath(path)}`;
+	if (sessionKey?.trim()) return `session-end:${scopedKey}`;
+	return `session-end:anonymous:${transcript.trim().length > 0 ? "inline" : "empty"}`;
 }
 
 function tableColumns(db: ReadDb | WriteDb, table: string): Set<string> {
@@ -110,7 +101,7 @@ export async function recoverMissingSessionEndOnClearStart(
 				}
 				return { recoveredSessionKey: target.sessionKey, transcriptChars: target.transcript.length };
 			},
-			{ siteToken: "session-end-recovery.ts:103", operation: "session-end.clear-recovery" },
+			{ siteToken: "db:session-end.recovery.clear", operation: "session-end.clear-recovery" },
 		);
 
 		if ("transcriptChars" in result) {

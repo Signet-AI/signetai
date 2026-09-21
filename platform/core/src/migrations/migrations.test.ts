@@ -31,6 +31,7 @@ import { up as dreamingSurprisalAttention } from "./126-dreaming-surprisal-atten
 import { up as sourceTranscriptImport } from "./146-source-transcript-import";
 import { up as sourceImportReplayFileSlots } from "./147-source-import-replay-file-slots";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
+import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
 import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 
 function createFreshDb(): Database {
@@ -422,7 +423,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(153);
+			expect(applied.version).toBe(154);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2817,6 +2818,67 @@ describe("migration 122: Dreaming evidence retry", () => {
 			expect.arrayContaining(["failure_class", "source_fingerprint", "retry_count", "last_requeued_at"]),
 		);
 		expect(db.prepare("SELECT retry_count, failure_class FROM dreaming_evidence_exclusions").all()).toEqual([]);
+		db.close();
+	});
+});
+
+describe("migration 154: transcript capture source identity", () => {
+	test("adds metadata without copying or deleting legacy payloads", () => {
+		const db = createFreshDb();
+		db.exec(`
+			CREATE TABLE transcript_capture_jobs (
+				id TEXT PRIMARY KEY,
+				agent_id TEXT NOT NULL,
+				harness TEXT NOT NULL,
+				session_key TEXT,
+				session_id TEXT NOT NULL,
+				project TEXT,
+				transcript TEXT NOT NULL,
+				raw_transcript TEXT,
+				transcript_path TEXT,
+				captured_at TEXT NOT NULL,
+				ended_at TEXT,
+				summary_status TEXT NOT NULL,
+				status TEXT NOT NULL,
+				attempts INTEGER NOT NULL,
+				max_attempts INTEGER NOT NULL,
+				created_at TEXT NOT NULL,
+				updated_at TEXT NOT NULL,
+				completed_at TEXT,
+				error TEXT
+			);
+		`);
+		db.prepare(
+			"INSERT INTO transcript_capture_jobs (id, agent_id, harness, session_id, transcript, captured_at, summary_status, status, attempts, max_attempts, created_at, updated_at) VALUES ('legacy', 'ant', 'codex', 's', 'payload', 'now', 'not_requested', 'completed', 0, 5, 'now', 'now')",
+		).run();
+		transcriptCaptureSourceIdentity(db);
+		transcriptCaptureSourceIdentity(db);
+		const columns = db.query("PRAGMA table_info(transcript_capture_jobs)").all() as Array<{ name: string }>;
+		expect(columns.map((column) => column.name)).toEqual(
+			expect.arrayContaining([
+				"source_identity",
+				"source_sha256",
+				"source_size_bytes",
+				"source_mtime_ms",
+				"source_format",
+				"audit_path",
+			]),
+		);
+		expect(
+			db.query("SELECT transcript, raw_transcript FROM transcript_capture_jobs WHERE id = 'legacy'").get(),
+		).toEqual({
+			transcript: "payload",
+			raw_transcript: null,
+		});
+		expect(
+			db
+				.query(
+					"SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_transcript_capture_jobs_source_identity'",
+				)
+				.get(),
+		).toEqual({
+			name: "idx_transcript_capture_jobs_source_identity",
+		});
 		db.close();
 	});
 });

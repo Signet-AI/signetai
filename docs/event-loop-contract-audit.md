@@ -4,18 +4,18 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 812 sites
+- Exact ledger inventory: 806 sites
 - Synchronous `withWriteTx()` sites: 62
 - Synchronous `withReadDb()` sites: 97
 - Async-named DB sites: 159
 - Async-named ON-PARENT DB sites: 157
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 494
+- Synchronous filesystem/process sites: 488
 - Compile-visible legacy DB sites remaining: 159
   - `withWriteTx`: 62
   - `withReadDb`: 97
 
-The 812-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 62 synchronous writes, 97 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 159 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 806-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 62 synchronous writes, 97 synchronous reads, and 159 async-named DB sites are the complete database-call inventory; 159 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
@@ -291,7 +291,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `session-claims.ts:113` (withWriteTx)
 - `session-claims.ts:140` (withWriteTx)
 - `session-claims.ts:152` (withReadDb)
-- `session-end-recovery.ts:103` (withWriteTxAsync)
+- `db:session-end.recovery.clear` (withWriteTxAsync)
 - `session-memories.ts:149` (withWriteTx)
 - `session-memories.ts:264` (withWriteTx)
 - `session-recall-dedupe.ts:149` (withWriteTx)
@@ -328,19 +328,19 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `temporal-fallback.ts:153` (withReadDb)
 - `temporal-fallback.ts:209` (withReadDb)
 - `temporal-recall.ts:442` (withReadDb)
-- `transcript-capture-worker.ts:463` (withReadDbAsync)
-- `transcript-capture-worker.ts:503` (withReadDbAsync)
+- `db:transcript.capture.current` (withReadDbAsync)
+- `db:transcript.capture.cleanup` (withReadDbAsync)
+- `db:transcript.capture.status` (withReadDbAsync)
+- `db:transcript.capture.receipt` (withReadDbAsync)
 - `transcript-health.ts:96` (withReadDbAsync)
 - `transcript-health.ts:114` (withReadDbAsync)
-- `transcript-recovery-worker.ts:221` (withReadDbAsync)
-- `transcript-recovery-worker.ts:330` (withReadDbAsync)
-- `transcript-recovery-worker.ts:348` (withWriteTxAsync)
-- `transcript-recovery-worker.ts:368` (withWriteTxAsync)
-- `transcript-recovery-worker.ts:491` (withWriteTxAsync)
-- `transcript-recovery-worker.ts:505` (withReadDbAsync)
-- `transcript-recovery-worker.ts:514` (withWriteTxAsync)
-- `transcript-recovery-worker.ts:544` (withWriteTxAsync)
-- `transcript-recovery-worker.ts:602` (withWriteTxAsync)
+- `db:transcript-recovery.scan.load-frontiers` (withReadDbAsync)
+- `db:transcript-recovery.scan.load-fingerprints` (withReadDbAsync)
+- `db:transcript-recovery.scan.save-frontier` (withWriteTxAsync)
+- `db:transcript-recovery.scan.clear-frontiers` (withWriteTxAsync)
+- `db:transcript-recovery.scan.mark-invalid` (withWriteTxAsync)
+- `db:transcript-recovery.scan.capture-receipt` (withReadDbAsync)
+- `db:transcript-recovery.scan.mark-enqueued` (withWriteTxAsync)
 - `yielding-writes.ts:112` (withWriteTxAsync)
 - `yielding-writes.ts:119` (withWriteTx)
 - `yielding-writes.ts:159` (withReadDb)

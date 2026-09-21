@@ -1,17 +1,13 @@
 import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
 import { createHash } from "node:crypto";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { open, readdir, realpath, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
+import type { DbAccessor, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
-import { deriveSessionToken } from "./memory-lineage";
 import { deriveSessionEndFallbackId } from "./session-end-recovery";
-import { getStoredSessionTranscriptInfoAsync, upsertSessionTranscriptAsync } from "./session-transcripts";
 import { enqueueTranscriptCaptureJob } from "./transcript-capture-worker";
-import { canonicalTranscriptRelativePath } from "./transcript-jsonl";
-import { normalizeSessionTranscript } from "./transcript-normalization";
 
 export const TRANSCRIPT_RECOVERY_INTERVAL_MS = 5 * 60_000;
 export const TRANSCRIPT_RECOVERY_SETTLE_MS = 60_000;
@@ -48,8 +44,6 @@ export interface TranscriptRecoveryScanOptions {
 	readonly maxFiles?: number;
 	readonly maxDiscoveredFiles?: number;
 	readonly signal?: AbortSignal;
-	/** Production scans run in a killable child; in-process is reserved for direct tests/helpers. */
-	readonly execution?: "child" | "in-process";
 }
 
 export interface TranscriptRecoveryScanResult {
@@ -97,6 +91,8 @@ export interface TranscriptRecoveryWorkerHandle {
 
 type TranscriptRecoveryWorkerOptions = TranscriptRecoveryScanOptions & {
 	readonly intervalMs?: number;
+	/** Production scans run in a killable child; in-process is reserved for worker tests. */
+	readonly execution?: "child" | "in-process";
 	/** Test-only child entrypoint used to exercise the stdio/close protocol deterministically. */
 	readonly childPath?: string;
 	/** Test-only supervisor entrypoint; production uses the bundled supervisor. */
@@ -142,11 +138,13 @@ async function discoverFiles(
 				pending.push(path);
 				continue;
 			}
-			if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+			if (!entry.name.endsWith(".jsonl")) continue;
 			if (harness === "codex" && !entry.name.startsWith("rollout-")) continue;
 			try {
-				const metadata = await stat(path);
-				output.push({ harness, rootPath: root, path, size: metadata.size, mtimeMs: metadata.mtimeMs });
+				const resolvedPath = await realpath(path);
+				const metadata = await stat(resolvedPath);
+				if (!metadata.isFile()) continue;
+				output.push({ harness, rootPath: root, path: resolvedPath, size: metadata.size, mtimeMs: metadata.mtimeMs });
 			} catch {
 				// A harness may rotate a file between directory enumeration and stat.
 			}
@@ -199,92 +197,33 @@ function readMetadata(candidate: RecoveryCandidate, raw: string): TranscriptMeta
 	};
 }
 
-const RECOVERY_FINGERPRINT_BATCH_SIZE = 400;
+const RECOVERY_METADATA_MAX_BYTES = 256 * 1024;
 
-interface RecoveryFingerprint {
-	readonly sizeBytes: number;
-	readonly mtimeMs: number;
-	readonly hasDeadCaptureJob: boolean;
-}
-
-async function loadRecoveryFingerprints(
-	dbAccessor: DbAccessor,
-	agentId: string,
-	candidates: readonly RecoveryCandidate[],
-	signal?: AbortSignal,
-): Promise<Map<string, RecoveryFingerprint>> {
-	const fingerprints = new Map<string, RecoveryFingerprint>();
-	for (let offset = 0; offset < candidates.length; offset += RECOVERY_FINGERPRINT_BATCH_SIZE) {
-		throwIfAborted(signal);
-		const paths = candidates.slice(offset, offset + RECOVERY_FINGERPRINT_BATCH_SIZE).map((candidate) => candidate.path);
-		const placeholders = paths.map(() => "?").join(", ");
-		const rows = await dbAccessor.withReadDbAsync(
-			(db) =>
-				db
-					.prepare(
-						`SELECT f.source_path, f.size_bytes, f.mtime_ms,
-								EXISTS(
-									SELECT 1 FROM transcript_capture_jobs AS j
-									 WHERE j.agent_id = f.agent_id AND j.session_id = f.session_id AND j.status = 'dead'
-								) AS has_dead_capture_job
-						 FROM transcript_recovery_files AS f
-						 WHERE f.agent_id = ? AND f.source_path IN (${placeholders})`,
-					)
-					.all(agentId, ...paths) as Array<{
-					source_path?: unknown;
-					size_bytes?: unknown;
-					mtime_ms?: unknown;
-					has_dead_capture_job?: unknown;
-				}>,
-			{
-				siteToken: "transcript-recovery-worker.ts:221",
-				operation: "transcript-recovery.load-fingerprints",
-				signal,
-			},
-		);
-		for (const row of rows) {
-			if (typeof row.source_path !== "string" || typeof row.size_bytes !== "number" || typeof row.mtime_ms !== "number")
-				continue;
-			fingerprints.set(row.source_path, {
-				sizeBytes: row.size_bytes,
-				mtimeMs: row.mtime_ms,
-				hasDeadCaptureJob: row.has_dead_capture_job === 1 || row.has_dead_capture_job === true,
-			});
-		}
-	}
-	return fingerprints;
-}
-
-function snapshotAlreadyCaptured(
-	db: ReadDb,
-	agentId: string,
+async function readMetadataFromSource(
 	candidate: RecoveryCandidate,
-	sessionId: string,
-	transcript: string,
-): boolean {
-	const job = db
-		.prepare(
-			`SELECT id
-			 FROM transcript_capture_jobs
-			 WHERE agent_id = ? AND session_id = ? AND transcript = ?
-			   AND status <> 'dead'
-			 LIMIT 1`,
-		)
-		.get(agentId, sessionId, transcript);
-	if (job) return true;
+	signal?: AbortSignal,
+): Promise<TranscriptMetadata | null> {
+	throwIfAborted(signal);
+	if (candidate.size <= 0) return null;
+	const handle = await open(candidate.path, "r");
+	try {
+		const buffer = Buffer.alloc(Math.min(candidate.size, RECOVERY_METADATA_MAX_BYTES));
+		const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+		throwIfAborted(signal);
+		return readMetadata(candidate, buffer.subarray(0, bytesRead).toString("utf8"));
+	} finally {
+		await handle.close().catch(() => undefined);
+	}
+}
 
-	const sessionToken = deriveSessionToken(agentId, sessionId);
-	const sourcePath = `${canonicalTranscriptRelativePath(candidate.harness)}#${sessionToken}`;
-	return Boolean(
-		db
-			.prepare(
-				`SELECT 1
-				 FROM memory_artifacts
-				 WHERE agent_id = ? AND source_path = ? AND deleted_at IS NULL
-				 LIMIT 1`,
-			)
-			.get(agentId, sourcePath),
-	);
+// Recovery only needs a bounded generation marker; the capture worker computes the
+// authoritative content digest after it reads the source.
+function sourceMetadataFingerprint(candidate: RecoveryCandidate): string {
+	return createHash("sha256")
+		.update(String(candidate.size))
+		.update("\0")
+		.update(String(Math.trunc(candidate.mtimeMs)))
+		.digest("hex");
 }
 
 function markScanned(
@@ -334,7 +273,41 @@ async function loadFrontiers(
 				.all(agentId) as Array<{ harness: string; root_path: string; cursor_path?: string | null }>;
 			return new Map(rows.map((row) => [`${row.harness}\\0${row.root_path}`, row.cursor_path ?? null]));
 		},
-		{ siteToken: "transcript-recovery-worker.ts:330", operation: "transcript-recovery.load-frontiers", signal },
+		{
+			siteToken: "db:transcript-recovery.scan.load-frontiers",
+			operation: "transcript-recovery.load-frontiers",
+			signal,
+		},
+	);
+}
+
+async function loadRecoveryFingerprints(
+	dbAccessor: DbAccessor,
+	agentId: string,
+	candidates: readonly RecoveryCandidate[],
+	signal?: AbortSignal,
+): Promise<Map<string, string>> {
+	if (candidates.length === 0) return new Map();
+	return dbAccessor.withReadDbAsync(
+		(db) => {
+			const placeholders = candidates.map(() => "?").join(", ");
+			const rows = db
+				.prepare(
+					`SELECT source_path, content_sha256
+					 FROM transcript_recovery_files
+					 WHERE agent_id = ? AND source_path IN (${placeholders})`,
+				)
+				.all(agentId, ...candidates.map((candidate) => candidate.path)) as Array<{
+				source_path: string;
+				content_sha256: string;
+			}>;
+			return new Map(rows.map((row) => [row.source_path, row.content_sha256]));
+		},
+		{
+			siteToken: "db:transcript-recovery.scan.load-fingerprints",
+			operation: "transcript-recovery.load-fingerprints",
+			signal,
+		},
 	);
 }
 
@@ -355,7 +328,7 @@ async function saveFrontier(
 					updated_at = excluded.updated_at`,
 			).run(agentId, candidate.harness, candidate.rootPath, cursorPath, new Date().toISOString());
 		},
-		{ siteToken: "transcript-recovery-worker.ts:348", operation: "transcript-recovery.save-frontier", signal },
+		{ siteToken: "db:transcript-recovery.scan.save-frontier", operation: "transcript-recovery.save-frontier", signal },
 	);
 }
 
@@ -373,17 +346,16 @@ async function clearFrontiers(
 				roots.codex,
 			);
 		},
-		{ siteToken: "transcript-recovery-worker.ts:368", operation: "transcript-recovery.clear-frontiers", signal },
+		{
+			siteToken: "db:transcript-recovery.scan.clear-frontiers",
+			operation: "transcript-recovery.clear-frontiers",
+			signal,
+		},
 	);
 }
 
 function throwIfAborted(signal: AbortSignal | undefined): void {
 	if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("Transcript recovery aborted");
-}
-
-function isFatalDbOwnerError(error: unknown): boolean {
-	const code = error instanceof Error && "code" in error ? (error as Error & { code?: unknown }).code : undefined;
-	return typeof code === "string" && code.startsWith("DB_OWNER_");
 }
 
 export async function runTranscriptRecoveryScan(
@@ -392,51 +364,50 @@ export async function runTranscriptRecoveryScan(
 	agentId: string,
 	options: TranscriptRecoveryScanOptions = {},
 ): Promise<TranscriptRecoveryScanResult> {
-	void basePath;
 	const roots = { ...defaultRoots(), ...options.roots };
 	const nowMs = options.nowMs ?? Date.now();
 	const settleMs = options.settleMs ?? TRANSCRIPT_RECOVERY_SETTLE_MS;
 	const maxBytes = options.maxBytes ?? TRANSCRIPT_RECOVERY_MAX_BYTES;
 	const maxFiles = options.maxFiles ?? TRANSCRIPT_RECOVERY_MAX_FILES_PER_SCAN;
 	const maxDiscoveredFiles = options.maxDiscoveredFiles ?? TRANSCRIPT_RECOVERY_MAX_DISCOVERED_FILES;
-	const candidates: RecoveryCandidate[] = [];
+	const discoveredCandidates: RecoveryCandidate[] = [];
 	const claudeDiscoveryLimit = Math.max(1, Math.floor(maxDiscoveredFiles / 2));
 	const claudeDiscoveryComplete = await discoverFiles(
 		roots.claudeCode,
 		"claude-code",
 		claudeDiscoveryLimit,
-		candidates,
+		discoveredCandidates,
 		options.signal,
 	);
 	const codexDiscoveryComplete = await discoverFiles(
 		roots.codex,
 		"codex",
 		maxDiscoveredFiles,
-		candidates,
+		discoveredCandidates,
 		options.signal,
 	);
 	const discoveryComplete = claudeDiscoveryComplete && codexDiscoveryComplete;
+	const candidates = Array.from(
+		new Map(discoveredCandidates.map((candidate) => [`${candidate.harness}\0${candidate.path}`, candidate])).values(),
+	);
 	candidates.sort((a, b) => a.path.localeCompare(b.path));
 	const frontiers = await loadFrontiers(dbAccessor, agentId, options.signal);
-	const fingerprints = await loadRecoveryFingerprints(dbAccessor, agentId, candidates, options.signal);
+	const recoveryFingerprints = await loadRecoveryFingerprints(dbAccessor, agentId, candidates, options.signal);
+	// Stat fingerprints only avoid rescanning the same frontier entry twice. They
+	// never decide source identity: the capture worker re-reads and hashes each
+	// admitted generation, and a full frontier cycle rechecks unchanged stats.
 	const resumableCandidates = candidates.filter((candidate) => {
 		const cursor = frontiers.get(frontierKey(candidate));
 		if (cursor === undefined || cursor === null || candidate.path > cursor) return true;
-		const fingerprint = fingerprints.get(candidate.path);
-		return (
-			fingerprint === undefined ||
-			fingerprint.hasDeadCaptureJob ||
-			fingerprint.sizeBytes !== candidate.size ||
-			fingerprint.mtimeMs !== Math.trunc(candidate.mtimeMs)
-		);
+		return recoveryFingerprints.get(candidate.path) !== sourceMetadataFingerprint(candidate);
 	});
+	const skippedUnchanged = candidates.length - resumableCandidates.length;
 
 	let examined = 0;
 	let enqueued = 0;
 	let deduplicated = 0;
 	let skippedRecent = 0;
 	let skippedOversized = 0;
-	let skippedUnchanged = 0;
 	let skippedInvalid = 0;
 
 	for (const candidate of resumableCandidates) {
@@ -451,26 +422,15 @@ export async function runTranscriptRecoveryScan(
 			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
-		const fingerprint = fingerprints.get(candidate.path);
-		if (
-			fingerprint !== undefined &&
-			!fingerprint.hasDeadCaptureJob &&
-			fingerprint.sizeBytes === candidate.size &&
-			fingerprint.mtimeMs === Math.trunc(candidate.mtimeMs)
-		) {
-			skippedUnchanged++;
-			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
-			continue;
-		}
 		if (examined >= maxFiles) break;
 		examined++;
 
-		let raw: string;
+		let metadata: TranscriptMetadata | null;
 		try {
-			raw = await readFile(candidate.path, { encoding: "utf8", signal: options.signal });
+			metadata = await readMetadataFromSource(candidate, options.signal);
 		} catch (error) {
 			throwIfAborted(options.signal);
-			logger.debug("transcripts", "Transcript recovery read failed", {
+			logger.debug("transcripts", "Transcript recovery metadata read failed", {
 				path: candidate.path,
 				error: error instanceof Error ? error.message : String(error),
 			});
@@ -478,20 +438,18 @@ export async function runTranscriptRecoveryScan(
 			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
-		const metadata = readMetadata(candidate, raw);
-		const transcript = normalizeSessionTranscript(candidate.harness, raw);
-		if (!metadata || (transcript.trim().length === 0 && raw.trim().length === 0)) {
-			const contentSha256 = createHash("sha256").update(raw).digest("hex");
+		const sourceFingerprint = sourceMetadataFingerprint(candidate);
+		if (!metadata) {
 			const skippedSessionId = `recovery-skip:${createHash("sha256")
 				.update(candidate.path)
 				.update("\0")
-				.update(contentSha256)
+				.update(sourceFingerprint)
 				.digest("hex")
 				.slice(0, 24)}`;
 			await dbAccessor.withWriteTxAsync(
-				(db) => markScanned(db, agentId, candidate, contentSha256, skippedSessionId, new Date(nowMs).toISOString()),
+				(db) => markScanned(db, agentId, candidate, sourceFingerprint, skippedSessionId, new Date(nowMs).toISOString()),
 				{
-					siteToken: "transcript-recovery-worker.ts:491",
+					siteToken: "db:transcript-recovery.scan.mark-invalid",
 					operation: "transcript-recovery.mark-scanned",
 					signal: options.signal,
 				},
@@ -500,83 +458,23 @@ export async function runTranscriptRecoveryScan(
 			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
 			continue;
 		}
-		const sessionId = deriveSessionEndFallbackId(metadata.sessionKey, candidate.path, transcript);
-		const contentSha256 = createHash("sha256").update(raw).digest("hex");
-		const alreadyCaptured = await dbAccessor.withReadDbAsync(
-			(db) => snapshotAlreadyCaptured(db, agentId, candidate, sessionId, transcript),
+
+		const sessionId = deriveSessionEndFallbackId(metadata.sessionKey, candidate.path, "");
+		const existingCapture = await dbAccessor.withReadDbAsync(
+			(db) =>
+				db
+					.prepare(
+						"SELECT source_size_bytes, source_mtime_ms FROM transcript_capture_jobs WHERE agent_id = ? AND transcript_path = ? ORDER BY updated_at DESC, created_at DESC, id DESC LIMIT 1",
+					)
+					.get(agentId, candidate.path) as
+					| { source_size_bytes: number | null; source_mtime_ms: number | null }
+					| undefined,
 			{
-				siteToken: "transcript-recovery-worker.ts:505",
-				operation: "transcript-recovery.snapshot-check",
+				siteToken: "db:transcript-recovery.scan.capture-receipt",
+				operation: "transcript-recovery.lookup-capture-receipt",
 				signal: options.signal,
 			},
 		);
-		if (alreadyCaptured) {
-			await dbAccessor.withWriteTxAsync(
-				(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
-				{
-					siteToken: "transcript-recovery-worker.ts:514",
-					operation: "transcript-recovery.mark-scanned",
-					signal: options.signal,
-				},
-			);
-			deduplicated++;
-			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
-			continue;
-		}
-
-		const existingTranscript = await getStoredSessionTranscriptInfoAsync(
-			metadata.sessionKey,
-			agentId,
-			dbAccessor,
-			options.signal,
-		);
-		// A completed canonical row is authoritative. Recovery files are legacy
-		// snapshots and may be older or partial. A later settled snapshot is
-		// allowed through only when it strictly extends the retained content;
-		// otherwise it would clobber lossless content and regress the Dreaming
-		// watermark.
-		const completedSnapshotExtendsCanonical =
-			existingTranscript?.completedAt !== null &&
-			existingTranscript?.completedAt !== undefined &&
-			transcript.length > existingTranscript.content.length &&
-			transcript.includes(existingTranscript.content);
-		if (existingTranscript?.completedAt && !completedSnapshotExtendsCanonical && !fingerprint?.hasDeadCaptureJob) {
-			await dbAccessor.withWriteTxAsync(
-				(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
-				{
-					siteToken: "transcript-recovery-worker.ts:544",
-					operation: "transcript-recovery.mark-scanned",
-					signal: options.signal,
-				},
-			);
-			deduplicated++;
-			await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
-			continue;
-		}
-
-		try {
-			const retained = await upsertSessionTranscriptAsync(
-				metadata.sessionKey,
-				transcript,
-				candidate.harness,
-				metadata.project,
-				agentId,
-				metadata.capturedAt,
-				dbAccessor,
-				{ completedAt: metadata.capturedAt, preserveExistingContent: true, signal: options.signal },
-			);
-			if (!retained)
-				logger.warn("transcripts", "Recovered transcript retention or completion failed", {
-					sessionKey: metadata.sessionKey,
-				});
-		} catch (error) {
-			throwIfAborted(options.signal);
-			if (isFatalDbOwnerError(error)) throw error;
-			logger.warn("transcripts", "Recovered transcript retention failed", {
-				error: error instanceof Error ? error.message : String(error),
-				sessionKey: metadata.sessionKey,
-			});
-		}
 		const jobId = await enqueueTranscriptCaptureJob(
 			dbAccessor,
 			{
@@ -585,12 +483,11 @@ export async function runTranscriptRecoveryScan(
 				sessionKey: metadata.sessionKey,
 				sessionId,
 				project: metadata.project,
-				transcript,
-				rawTranscript: raw,
+				transcript: "",
 				transcriptPath: candidate.path,
+				basePath,
 				capturedAt: metadata.capturedAt,
 				endedAt: metadata.capturedAt,
-				summaryStatus: "not_requested",
 			},
 			options.signal,
 		);
@@ -600,17 +497,23 @@ export async function runTranscriptRecoveryScan(
 			continue;
 		}
 		await dbAccessor.withWriteTxAsync(
-			(db) => markScanned(db, agentId, candidate, contentSha256, sessionId, new Date(nowMs).toISOString()),
+			(db) => markScanned(db, agentId, candidate, sourceFingerprint, sessionId, new Date(nowMs).toISOString()),
 			{
-				siteToken: "transcript-recovery-worker.ts:602",
+				siteToken: "db:transcript-recovery.scan.mark-enqueued",
 				operation: "transcript-recovery.mark-scanned",
 				signal: options.signal,
 			},
 		);
 		await saveFrontier(dbAccessor, agentId, candidate, candidate.path, options.signal);
-		enqueued++;
+		if (
+			existingCapture &&
+			existingCapture.source_size_bytes === candidate.size &&
+			existingCapture.source_mtime_ms === Math.trunc(candidate.mtimeMs)
+		) {
+			deduplicated++;
+		} else enqueued++;
 	}
-	if (!options.signal?.aborted && discoveryComplete && examined < maxFiles) {
+	if (!options.signal?.aborted && discoveryComplete && resumableCandidates.length === 0) {
 		await clearFrontiers(dbAccessor, agentId, roots, options.signal);
 	}
 
