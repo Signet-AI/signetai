@@ -75,6 +75,18 @@ test("fresh daemon pin HTTP contract enforces modify auth and durable scope", as
 		).status,
 	).toBe(200);
 	const auth = { ...scope, "x-signet-api-key": "pin-test-key" };
+	const missingPost = await fetch(`${daemon.origin}/api/knowledge/entities/missing-entity/pin`, {
+		method: "POST",
+		headers: auth,
+	});
+	expect(missingPost.status).toBe(404);
+	expect(await missingPost.json()).toEqual({ error: "Entity not found" });
+	const missingDelete = await fetch(`${daemon.origin}/api/knowledge/entities/missing-entity/pin`, {
+		method: "DELETE",
+		headers: auth,
+	});
+	expect(missingDelete.status).toBe(200);
+	expect(await missingDelete.json()).toEqual({ pinned: false });
 	expect(
 		(await fetch(`${daemon.origin}/api/knowledge/entities/${entity}/pin`, { method: "POST", headers: auth })).status,
 	).toBe(200);

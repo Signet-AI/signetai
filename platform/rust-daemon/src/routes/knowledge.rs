@@ -1,5 +1,6 @@
 use crate::routes::auth;
 use crate::{agent, execute, AgentQuery, ApiError, AppState};
+use axum::response::{IntoResponse, Response};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
@@ -7,7 +8,7 @@ use axum::{
     Json, Router,
 };
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{json, Value};
 use signet_core_native::Operation;
 
 #[derive(Debug, Deserialize, Default)]
@@ -420,48 +421,60 @@ async fn pin_entity(
     headers: HeaderMap,
     Path(id): Path<String>,
     Query(q): Query<EntityQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let (agent_id, workspace_id) = pin_authority(&state, &headers, &q).await?;
-    Ok(Json(
-        execute(
-            &state,
-            Operation::KnowledgeEntityPin {
-                agent_id,
-                workspace_id,
-                entity_id: id,
-                actor: headers
-                    .get("x-signet-actor")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("operator")
-                    .to_owned(),
-            },
+    let result = execute(
+        &state,
+        Operation::KnowledgeEntityPin {
+            agent_id,
+            workspace_id,
+            entity_id: id,
+            actor: headers
+                .get("x-signet-actor")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("operator")
+                .to_owned(),
+        },
+    )
+    .await;
+    match result {
+        Ok(value) => Ok(Json(value).into_response()),
+        Err(error) if error.status == StatusCode::NOT_FOUND => Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({"error": "Entity not found"})),
         )
-        .await?,
-    ))
+            .into_response()),
+        Err(error) => Err(error.into()),
+    }
 }
 async fn unpin_entity(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
     Query(q): Query<EntityQuery>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     let (agent_id, workspace_id) = pin_authority(&state, &headers, &q).await?;
-    Ok(Json(
-        execute(
-            &state,
-            Operation::KnowledgeEntityUnpin {
-                agent_id,
-                workspace_id,
-                entity_id: id,
-                actor: headers
-                    .get("x-signet-actor")
-                    .and_then(|v| v.to_str().ok())
-                    .unwrap_or("operator")
-                    .to_owned(),
-            },
-        )
-        .await?,
-    ))
+    let result = execute(
+        &state,
+        Operation::KnowledgeEntityUnpin {
+            agent_id,
+            workspace_id,
+            entity_id: id,
+            actor: headers
+                .get("x-signet-actor")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("operator")
+                .to_owned(),
+        },
+    )
+    .await;
+    match result {
+        Ok(value) => Ok(Json(value).into_response()),
+        Err(error) if error.status == StatusCode::NOT_FOUND => {
+            Ok(Json(json!({"pinned": false})).into_response())
+        }
+        Err(error) => Err(error.into()),
+    }
 }
 
 async fn entity_detail(
