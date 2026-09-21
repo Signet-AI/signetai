@@ -131,18 +131,25 @@ export function listUnembeddedMemories(
 	model?: string,
 	now = new Date().toISOString(),
 ): ReadonlyArray<UnembeddedRow> {
-	const backoffJoin =
+	// A NULL content hash cannot identify the current failure row in SQL.
+	// Suppress any active failure here; the repair action filters the exact
+	// content hash after selection before provider work begins.
+	const backoffFilter =
 		model === undefined
 			? ""
-			: "LEFT JOIN embedding_repair_backoff b ON b.memory_id = m.id AND b.model = ? AND (b.content_hash = m.content_hash OR m.content_hash IS NULL)";
-	const backoffFilter = model === undefined ? "" : "AND (b.retry_at IS NULL OR b.retry_at <= ?)";
-	const params = model === undefined ? [agentId, limit] : [model, agentId, now, limit];
+			: `AND NOT EXISTS (
+			     SELECT 1 FROM embedding_repair_backoff b
+			     WHERE b.memory_id = m.id
+			       AND b.model = ?
+			       AND (m.content_hash IS NULL OR b.content_hash = m.content_hash)
+			       AND b.retry_at > ?
+			   )`;
+	const params = model === undefined ? [agentId, limit] : [agentId, model, now, limit];
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
 				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
 			 FROM memories m
-			 ${backoffJoin}
 			 WHERE m.is_deleted = 0
 			   AND COALESCE(NULLIF(m.agent_id, ''), 'default') = ?
 			   ${backoffFilter}
@@ -186,18 +193,25 @@ export function listAllUnembeddedMemories(
 	model?: string,
 	now = new Date().toISOString(),
 ): ReadonlyArray<UnembeddedRow> {
-	const backoffJoin =
+	// A NULL content hash cannot identify the current failure row in SQL.
+	// Suppress any active failure here; the repair action filters the exact
+	// content hash after selection before provider work begins.
+	const backoffFilter =
 		model === undefined
 			? ""
-			: "LEFT JOIN embedding_repair_backoff b ON b.memory_id = m.id AND b.model = ? AND (b.content_hash = m.content_hash OR m.content_hash IS NULL)";
-	const backoffFilter = model === undefined ? "" : "AND (b.retry_at IS NULL OR b.retry_at <= ?)";
+			: `AND NOT EXISTS (
+			     SELECT 1 FROM embedding_repair_backoff b
+			     WHERE b.memory_id = m.id
+			       AND b.model = ?
+			       AND (m.content_hash IS NULL OR b.content_hash = m.content_hash)
+			       AND b.retry_at > ?
+			   )`;
 	const params = model === undefined ? [limit] : [model, now, limit];
 	return db
 		.prepare(
 			`SELECT m.id, m.content, m.content_hash AS contentHash, m.agent_id AS agentId,
 				CASE WHEN ${crossAgentHashConflict} THEN 1 ELSE 0 END AS knownCrossAgentHashConflict
 			 FROM memories m
-			 ${backoffJoin}
 			 WHERE m.is_deleted = 0
 			   ${backoffFilter}
 			   AND NOT EXISTS (
