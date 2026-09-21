@@ -133,21 +133,31 @@ async fn answer(
             message: "answer exceeds 10000 characters".into(),
         });
     }
-    Ok(Json(
-        execute(
-            &state,
-            Operation::ReflectionAnswer {
-                agent_id,
-                id,
-                answer,
-                memory_id: Uuid::new_v4().to_string(),
-                answered_at: OffsetDateTime::now_utc()
-                    .format(&time::format_description::well_known::Rfc3339)
-                    .unwrap_or_default(),
-            },
-        )
-        .await?,
-    ))
+    let result = execute(
+        &state,
+        Operation::ReflectionAnswer {
+            agent_id,
+            id,
+            answer,
+            memory_id: Uuid::new_v4().to_string(),
+            answered_at: OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap_or_default(),
+        },
+    )
+    .await;
+    match result {
+        Err(error)
+            if error.message == "already answered" || error.message == "Already answered" =>
+        {
+            Err(ApiError {
+                status: StatusCode::CONFLICT,
+                code: "conflict",
+                message: error.message,
+            })
+        }
+        other => other.map(Json),
+    }
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -155,5 +165,5 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/reflections", get(list))
         .route("/api/reflections/today", get(today))
         .route("/api/reflections/generate", post(generate))
-        .route("/api/reflections/:id/answer", post(answer))
+        .route("/api/reflections/{id}/answer", post(answer))
 }
