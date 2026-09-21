@@ -2,7 +2,7 @@ use crate::{agent, execute, AgentQuery, ApiError, AppState};
 use axum::{
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
-    routing::{get, post},
+    routing::post,
     Json, Router,
 };
 use serde::Deserialize;
@@ -32,17 +32,6 @@ struct Attribute {
     importance: Option<f64>,
     memory_id: Option<String>,
 }
-#[derive(Debug, Deserialize)]
-struct Tree {
-    #[serde(flatten)]
-    scope: Scope,
-    entity_id: String,
-    depth: Option<usize>,
-    max_aspects: Option<usize>,
-    max_groups: Option<usize>,
-    max_claims: Option<usize>,
-    max_attributes: Option<usize>,
-}
 fn ws(q: &Scope) -> Result<String, ApiError> {
     Ok(q.workspace_id
         .as_deref()
@@ -55,7 +44,6 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/knowledge/aspects", post(create_aspect))
         .route("/api/knowledge/attributes", post(create_attribute))
-        .route("/api/knowledge/navigation/tree", get(tree))
 }
 async fn create_aspect(
     State(s): State<AppState>,
@@ -99,26 +87,4 @@ async fn create_attribute(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(r)))
-}
-async fn tree(
-    State(s): State<AppState>,
-    h: HeaderMap,
-    Query(q): Query<Tree>,
-) -> Result<Json<Value>, ApiError> {
-    Ok(Json(
-        execute(
-            &s,
-            Operation::KnowledgeTree {
-                agent_id: agent(&h, Some(&q.scope.agent), None)?,
-                workspace_id: ws(&q.scope)?,
-                entity_id: q.entity_id,
-                depth: q.depth.unwrap_or(3),
-                max_aspects: q.max_aspects.unwrap_or(20),
-                max_groups: q.max_groups.unwrap_or(20),
-                max_claims: q.max_claims.unwrap_or(50),
-                max_attributes: q.max_attributes.unwrap_or(50),
-            },
-        )
-        .await?,
-    ))
 }
