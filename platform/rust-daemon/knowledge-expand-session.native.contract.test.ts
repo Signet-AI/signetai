@@ -244,9 +244,19 @@ test("real daemon session expansion enforces HTTP auth, selection, bounds, safet
 	expect(
 		(await request(daemon.origin, { entityName: "Session Subject" }, { agent: "wrong-agent" })).response.status,
 	).toBe(403);
-	expect(
-		(await request(daemon.origin, { entityName: "Session Subject" }, { workspace: "wrong-workspace" })).body.summaries,
-	).toEqual([]);
+	const wrongWorkspace = await request(
+		daemon.origin,
+		{ entityName: "Session Subject" },
+		{ workspace: "wrong-workspace" },
+	);
+	expect(wrongWorkspace.response.status).toBe(403);
+	expect(wrongWorkspace.body).toEqual({
+		error: "recall permission required for session expansion",
+		code: "forbidden",
+	});
+	const unchanged = await request(daemon.origin, { entityName: "Session Subject" });
+	expect(unchanged.response.status).toBe(200);
+	expect(unchanged.body.summaries.map((s: any) => s.id)).toEqual(["sum-safe-new", "sum-safe-old"]);
 	const conflict = await fetch(`${daemon.origin}/api/knowledge/expand/session?workspace_id=${workspace}`, {
 		method: "POST",
 		headers: { ...headers(true, agent, workspace, recallToken), "x-signet-workspace-id": "wrong-workspace" },
