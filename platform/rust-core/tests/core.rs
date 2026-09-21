@@ -2273,3 +2273,45 @@ fn current_schema_navigation_canonical_names_and_tree_group_equivalence() {
         2
     );
 }
+
+#[test]
+fn knowledge_navigation_attributes_preserves_current_schema_metadata() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("navigation-attributes.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, entity_type TEXT NOT NULL, description TEXT, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, weight REAL NOT NULL, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, aspect_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT, group_key TEXT, claim_key TEXT, confidence REAL, importance REAL, status TEXT, superseded_by TEXT, version INTEGER, version_root_id TEXT, previous_attribute_id TEXT, archived_at TEXT, archived_by TEXT, archive_reason TEXT, source_kind TEXT, source_id TEXT, source_path TEXT, source_root TEXT, proposal_id TEXT, proposal_evidence TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO entities VALUES ('e1','a','w','Person','person','person',NULL,'active','2026-01-01','2026-01-02'); INSERT INTO entity_aspects VALUES ('p1','e1','a','w','Facts','facts',1.0,'active','2026-01-01','2026-01-02'); INSERT INTO entity_attributes VALUES ('x1','p1','a','w',NULL,'attribute','Content','normalized','group','claim',0.8,0.9,'active',NULL,3,'root','prev','2026-01-03','agent','reason','import','source','file.md','/root','proposal','[{\"quote\":\"evidence\"}]','2026-01-01','2026-01-02');")
+        .unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let got = c
+        .submit(Operation::KnowledgeNavigationAttributes {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity: "Person".into(),
+            aspect: "Facts".into(),
+            group: "group".into(),
+            claim: "claim".into(),
+            limit: 10,
+            offset: 0,
+            kind: None,
+            status: None,
+        })
+        .unwrap();
+    let item = &got["items"][0];
+    assert_eq!(item["normalizedContent"], "normalized");
+    assert_eq!(item["version"], 3);
+    assert_eq!(item["versionRootId"], "root");
+    assert_eq!(item["previousAttributeId"], "prev");
+    assert_eq!(item["archivedAt"], "2026-01-03");
+    assert_eq!(item["archivedBy"], "agent");
+    assert_eq!(item["archiveReason"], "reason");
+    assert_eq!(item["sourceKind"], "import");
+    assert_eq!(item["sourceId"], "source");
+    assert_eq!(item["sourcePath"], "file.md");
+    assert_eq!(item["sourceRoot"], "/root");
+    assert_eq!(item["proposalId"], "proposal");
+    assert_eq!(
+        item["proposalEvidence"],
+        serde_json::json!([{"quote":"evidence"}])
+    );
+}

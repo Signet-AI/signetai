@@ -3100,12 +3100,13 @@ fn execute_operation(
             } else {
                 "active"
             };
+            let projection = attribute_projection(connection)?;
             let sql = if status_clause.is_empty() {
-                "SELECT id,kind,content,status,confidence,importance,memory_id,created_at,updated_at FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND (replace(lower(trim(coalesce(group_key,'general'))),' ','_')=? OR replace(lower(trim(coalesce(group_key,'general'))),' ','_')=?) AND (replace(lower(trim(claim_key)),' ','_')=? OR replace(lower(trim(claim_key)),' ','_')=?) AND status!='deleted' AND (? IS NULL OR kind=?) ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?"
+                format!("SELECT {projection} FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND (replace(lower(trim(coalesce(group_key,'general'))),' ','_')=? OR replace(lower(trim(coalesce(group_key,'general'))),' ','_')=?) AND (replace(lower(trim(claim_key)),' ','_')=? OR replace(lower(trim(claim_key)),' ','_')=?) AND status!='deleted' AND (? IS NULL OR kind=?) ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?")
             } else {
-                "SELECT id,kind,content,status,confidence,importance,memory_id,created_at,updated_at FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND (replace(lower(trim(coalesce(group_key,'general'))),' ','_')=? OR replace(lower(trim(coalesce(group_key,'general'))),' ','_')=?) AND (replace(lower(trim(claim_key)),' ','_')=? OR replace(lower(trim(claim_key)),' ','_')=?) AND status=? AND (? IS NULL OR kind=?) ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?"
+                format!("SELECT {projection} FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND (replace(lower(trim(coalesce(group_key,'general'))),' ','_')=? OR replace(lower(trim(coalesce(group_key,'general'))),' ','_')=?) AND (replace(lower(trim(claim_key)),' ','_')=? OR replace(lower(trim(claim_key)),' ','_')=?) AND status=? AND (? IS NULL OR kind=?) ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?")
             };
-            let mut q = connection.prepare(sql)?;
+            let mut q = connection.prepare(&sql)?;
             let items = if status_clause.is_empty() {
                 q.query_map(
                     params![
@@ -3662,10 +3663,59 @@ fn bounded_offset(value: usize) -> Result<usize, CoreError> {
         Ok(value)
     }
 }
+fn attribute_projection(connection: &rusqlite::Connection) -> rusqlite::Result<String> {
+    let mut stmt = connection.prepare("PRAGMA table_info(entity_attributes)")?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<std::collections::HashSet<_>, _>>()?;
+    let optional = [
+        "normalized_content",
+        "group_key",
+        "claim_key",
+        "superseded_by",
+        "version",
+        "version_root_id",
+        "previous_attribute_id",
+        "archived_at",
+        "archived_by",
+        "archive_reason",
+        "source_kind",
+        "source_id",
+        "source_path",
+        "source_root",
+        "proposal_id",
+        "proposal_evidence",
+    ];
+    let mut projection =
+        "id,kind,content,status,confidence,importance,memory_id,created_at,updated_at".to_string();
+    for column in optional {
+        projection.push_str(", ");
+        if columns.contains(column) {
+            projection.push_str(column);
+        } else {
+            projection.push_str("NULL");
+        }
+        projection.push_str(" AS ");
+        projection.push_str(column);
+    }
+    Ok(projection)
+}
+
 fn attr_json(r: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
-    Ok(
-        json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?,"confidence":r.get::<_,f64>(4)?,"importance":r.get::<_,f64>(5)?,"memoryId":r.get::<_,Option<String>>(6)?,"createdAt":r.get::<_,String>(7)?,"updatedAt":r.get::<_,String>(8)?}),
-    )
+    let text = |index| r.get::<_, Option<String>>(index);
+    let evidence = text(24)?
+        .and_then(|value| serde_json::from_str(&value).ok())
+        .unwrap_or_else(|| json!([]));
+    Ok(json!({
+        "id": r.get::<_, String>(0)?, "kind": r.get::<_, String>(1)?, "content": r.get::<_, String>(2)?,
+        "status": r.get::<_, String>(3)?, "confidence": r.get::<_, f64>(4)?, "importance": r.get::<_, f64>(5)?,
+        "memoryId": r.get::<_, Option<String>>(6)?, "createdAt": r.get::<_, String>(7)?, "updatedAt": r.get::<_, String>(8)?,
+        "normalizedContent": text(9)?, "groupKey": text(10)?, "claimKey": text(11)?, "supersededBy": text(12)?,
+        "version": r.get::<_, Option<i64>>(13)?.unwrap_or(1), "versionRootId": text(14)?.unwrap_or_else(|| r.get::<_, String>(0).unwrap()),
+        "previousAttributeId": text(15)?, "archivedAt": text(16)?, "archivedBy": text(17)?, "archiveReason": text(18)?,
+        "sourceKind": text(19)?, "sourceId": text(20)?, "sourcePath": text(21)?, "sourceRoot": text(22)?,
+        "proposalId": text(23)?, "proposalEvidence": evidence
+    }))
 }
 
 fn bounded_page_limit(limit: Option<usize>) -> Result<usize, CoreError> {
