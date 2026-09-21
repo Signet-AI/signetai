@@ -14,6 +14,8 @@ use std::os::unix::{
     fs::MetadataExt,
     io::{AsRawFd, FromRawFd},
 };
+#[cfg(windows)]
+use std::os::windows::ffi::OsStrExt;
 use std::{
     fs::File,
     io::{Read, Write},
@@ -351,6 +353,31 @@ fn persist(workspace: &Path, config: &Config) -> bool {
 }
 
 #[cfg(windows)]
+fn replace_existing_file(source: &Path, destination: &Path) -> bool {
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let source_wide: Vec<u16> = source
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    let destination_wide: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    unsafe {
+        MoveFileExW(
+            source_wide.as_ptr(),
+            destination_wide.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        ) != 0
+    }
+}
+
+#[cfg(windows)]
 fn persist(workspace: &Path, config: &Config) -> bool {
     let path = workspace.join("agent.yaml");
     let current = std::fs::read_to_string(&path).unwrap_or_default();
@@ -378,7 +405,7 @@ fn persist(workspace: &Path, config: &Config) -> bool {
         };
         let ok = file.write_all(output.as_bytes()).is_ok() && file.sync_all().is_ok();
         drop(file);
-        if ok && std::fs::rename(&temp, &path).is_ok() {
+        if ok && replace_existing_file(&temp, &path) {
             return true;
         }
         let _ = std::fs::remove_file(&temp);
@@ -511,4 +538,27 @@ async fn run(State(state): State<AppState>, headers: HeaderMap) -> Response {
         return error.into_response();
     }
     unsupported("package update").into_response()
+}
+
+#[cfg(windows)]
+#[test]
+fn windows_replacement_overwrites_existing_destination() {
+    let directory = std::env::temp_dir().join(format!(
+        "signet-update-replace-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("agent.yaml.tmp");
+    let destination = directory.join("agent.yaml");
+    std::fs::write(&source, b"new").unwrap();
+    std::fs::write(&destination, b"old").unwrap();
+
+    assert!(replace_existing_file(&source, &destination));
+    assert_eq!(std::fs::read(&destination).unwrap(), b"new");
+    assert!(!source.exists());
+    let _ = std::fs::remove_dir_all(&directory);
 }
