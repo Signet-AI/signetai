@@ -158,3 +158,60 @@ test("fresh daemon navigation tree enforces bounds, aliases, and isolation", asy
 		).status,
 	).toBe(404);
 });
+
+test("fresh daemon navigation paths round-trip group and claim keys", async () => {
+	const daemon = await start("navigation-path-owner", "workspace-a");
+	const owner = headers("navigation-path-owner", "workspace-a");
+	const create = async (path: string, body: unknown) =>
+		fetch(`${daemon.origin}${path}?workspace_id=workspace-a`, {
+			method: "POST",
+			headers: owner,
+			body: JSON.stringify(body),
+		});
+	const entityResponse = await create("/api/knowledge/entities", {
+		name: "Group subject",
+		type: "person",
+		metadata: {},
+	});
+	expect(entityResponse.status).toBe(201);
+	const entity = await json(entityResponse);
+	const aspectResponse = await create("/api/knowledge/aspects", { entity_id: entity.id, name: "facts", weight: 0.8 });
+	expect(aspectResponse.status).toBe(201);
+	const aspect = await json(aspectResponse);
+	const attributeResponse = await create("/api/knowledge/attributes", {
+		aspect_id: aspect.id,
+		kind: "attribute",
+		group_key: "dietary constraints",
+		claim_key: "favorite meal",
+		content: "pizza",
+		confidence: 0.9,
+		importance: 0.7,
+	});
+	expect(attributeResponse.status).toBe(201);
+	const encoded = encodeURIComponent;
+	const groupsResponse = await fetch(
+		`${daemon.origin}/api/knowledge/navigation/groups?entity=${encoded("Group subject")}&aspect=facts&workspace_id=workspace-a`,
+		{ headers: owner },
+	);
+	expect(groupsResponse.status).toBe(200);
+	const groupsPayload = await json(groupsResponse);
+	expect(Array.isArray(groupsPayload.items) ? groupsPayload.items : []).toHaveLength(1);
+	const group = Array.isArray(groupsPayload.items) ? groupsPayload.items[0] : null;
+	expect(group && typeof group === "object" ? Reflect.get(group, "groupKey") : null).toBe("dietary constraints");
+	const claimsResponse = await fetch(
+		`${daemon.origin}/api/knowledge/navigation/claims?entity=${encoded("Group subject")}&aspect=facts&group=${encoded("dietary constraints")}&workspace_id=workspace-a`,
+		{ headers: owner },
+	);
+	expect(claimsResponse.status).toBe(200);
+	expect(
+		await json(claimsResponse).then((payload) => (Array.isArray(payload.items) ? payload.items : [])),
+	).toHaveLength(1);
+	const attributesResponse = await fetch(
+		`${daemon.origin}/api/knowledge/navigation/attributes?entity=${encoded("Group subject")}&aspect=facts&group=${encoded("dietary constraints")}&claim=${encoded("favorite meal")}&workspace_id=workspace-a`,
+		{ headers: owner },
+	);
+	expect(attributesResponse.status).toBe(200);
+	expect(
+		await json(attributesResponse).then((payload) => (Array.isArray(payload.items) ? payload.items : [])),
+	).toHaveLength(1);
+});
