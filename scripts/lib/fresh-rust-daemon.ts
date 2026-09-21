@@ -28,10 +28,20 @@ export function resolveFreshRustDaemon(repoRoot: string, env: NodeJS.ProcessEnv 
 	const target = `${process.platform}-${process.arch}`;
 	const packagedRoot = join(repoRoot, "dist", "signetai", "runtime", "rust-daemon");
 	const packaged = join(packagedRoot, target, executableName);
-	if (!existsSync(packaged)) {
+	const dashboard = join(packagedRoot, "dashboard", "index.html");
+	if (existsSync(packaged)) {
+		if (!existsSync(dashboard)) throw new Error(`dashboard runtime asset missing: ${dashboard}`);
+		return requireExecutable(packaged);
+	}
+	if (existsSync(dashboard)) {
 		throw new Error(`fresh Rust daemon binary missing (packaged Rust daemon binary missing): ${packaged}`);
 	}
-	const dashboard = join(packagedRoot, "dashboard", "index.html");
-	if (!existsSync(dashboard)) throw new Error(`dashboard runtime asset missing: ${dashboard}`);
-	return requireExecutable(packaged);
+
+	// A native checkout binary is valid for development, but never substitutes for
+	// the staged artifact once an installed package provides one.
+	for (const profile of ["debug", "release"]) {
+		const checkout = join(repoRoot, "platform", "rust-daemon", "target", profile, executableName);
+		if (existsSync(checkout)) return requireExecutable(checkout);
+	}
+	throw new Error(`fresh Rust daemon binary missing (packaged Rust daemon binary missing): ${packaged}`);
 }
