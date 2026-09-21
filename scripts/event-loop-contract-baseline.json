@@ -1103,63 +1103,63 @@
       "path": "embedding-repair-state.ts",
       "line": 173,
       "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync((db: ReadDb) => {",
+      "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.checkpoint.read"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 186,
+      "line": 189,
       "api": "withWriteTxAsync",
-      "source": "return await accessor.withWriteTxAsync((db: WriteDb) => {",
+      "source": "return await accessor.withWriteTxAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.checkpoint.ensure"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 209,
+      "line": 215,
       "api": "withWriteTxAsync",
-      "source": "return await accessor.withWriteTxAsync((db: WriteDb) => {",
+      "source": "return await accessor.withWriteTxAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.checkpoint.update"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 249,
+      "line": 258,
       "api": "withWriteTxAsync",
-      "source": "return await accessor.withWriteTxAsync((db: import(\"./db-accessor\").WriteDb) => {",
+      "source": "return await accessor.withWriteTxAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.lease.acquire"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 286,
+      "line": 298,
       "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync((db: import(\"./db-accessor\").ReadDb) => {",
+      "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.state.read"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 312,
+      "line": 327,
       "api": "withReadDbAsync",
-      "source": "return await accessor.withReadDbAsync((db: import(\"./db-accessor\").ReadDb) => {",
+      "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.backoff.read"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 343,
+      "line": 361,
       "api": "withWriteTxAsync",
-      "source": "return await accessor.withWriteTxAsync((db: import(\"./db-accessor\").WriteDb) => {",
+      "source": "return await accessor.withWriteTxAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.lease.finish"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 406,
+      "line": 427,
       "api": "withWriteTxAsync",
-      "source": "await accessor.withWriteTxAsync((db: import(\"./db-accessor\").WriteDb) => {",
+      "source": "await accessor.withWriteTxAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.lease.release-after-error"
     },
@@ -1167,15 +1167,15 @@
       "path": "embedding-tracker.ts",
       "line": 187,
       "api": "withReadDbAsync",
-      "source": "const staleRows: StaleRow[] = await accessor.withReadDbAsync((db: import(\"./db-accessor\").ReadDb) => {",
+      "source": "const staleRows: StaleRow[] = await accessor.withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:embedding-tracker.stale-rows.read"
     },
     {
       "path": "embedding-tracker.ts",
-      "line": 271,
+      "line": 274,
       "api": "withWriteTxAsync",
-      "source": "applied = await accessor.withWriteTxAsync((db: import(\"./db-accessor\").WriteDb) => {",
+      "source": "applied = await accessor.withWriteTxAsync(",
       "category": "hot-path",
       "siteToken": "db:embedding-tracker.persist.write"
     },
