@@ -1,89 +1,148 @@
 /* biome-ignore-all lint/suspicious/noUndeclaredEnvVars: native contract harness */
-import { describe, expect, it } from "bun:test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { expect, test } from "bun:test";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
-const bin = process.env.SIGNET_RUST_DAEMON_BIN;
-if (!bin) throw new Error("SIGNET_RUST_DAEMON_BIN is required; native contract must not be skipped");
-const key = process.env.SIGNET_API_KEY ?? "test-native-api-key";
-let root = "";
-let child: ChildProcess | undefined;
-let origin = "";
-let stdoutPath = "";
-let stderrPath = "";
-const headers = () => ({
-	authorization: `Bearer ${key}`,
-	"content-type": "application/json",
-	"x-signet-agent-id": "native-contract",
-	"x-signet-workspace-id": "native-contract",
-});
-async function waitReady() {
-	for (let i = 0; i < 100; i++) {
-		try {
-			if ((await fetch(`${origin}/health/ready`)).ok) return;
-		} catch {}
-		await Bun.sleep(50);
+
+const binary = process.env.SIGNET_RUST_DAEMON_BIN;
+if (!binary) throw new Error("SIGNET_RUST_DAEMON_BIN is required; native contract must not be skipped");
+const apiKey = "native-secret-contract-key";
+type Json = Record<string, unknown>;
+const iso = (v: unknown) => expect(typeof v === "string" && !Number.isNaN(Date.parse(v))).toBe(true);
+async function json(response: Response): Promise<Json> {
+	const text = await response.text();
+	try {
+		return JSON.parse(text) as Json;
+	} catch {
+		throw new Error(`non-JSON response (${response.status}): ${text}`);
 	}
-	throw new Error("native daemon did not become ready");
 }
-async function request(path: string, init?: RequestInit) {
-	const r = await fetch(`${origin}${path}`, init);
-	return { r, body: (await r.json()) as Record<string, unknown> };
+async function stop(child: Bun.Subprocess) {
+	child.kill("SIGTERM");
+	await Promise.race([child.exited, Bun.sleep(1000)]);
+	if (!child.killed) child.kill("SIGKILL");
+	await child.exited;
 }
-describe("native secrets exec HTTP contract", () => {
-	it("launches the exact binary and enforces the HTTP contract", async () => {
-		root = await mkdtemp(join(tmpdir(), "signet-native-secrets-"));
-		const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {}, open() {}, close() {} } });
-		const port = probe.port;
-		probe.stop();
-		origin = `http://127.0.0.1:${port}`;
-		child = spawn(bin, ["--host", "127.0.0.1", "--port", String(port)], {
-			env: {
-				...process.env,
-				SIGNET_PATH: root,
-				SIGNET_BIND: "127.0.0.1",
-				SIGNET_MODE: "test",
-				SIGNET_PORT: String(port),
-				SIGNET_API_KEY: key,
-			},
-			stdio: ["ignore", "pipe", "pipe"],
-		});
-		stdoutPath = join(root, "daemon.stdout.log");
-		stderrPath = join(root, "daemon.stderr.log");
-		child.stdout?.on("data", (chunk) => Bun.write(stdoutPath, chunk, { createPath: true }));
-		child.stderr?.on("data", (chunk) => Bun.write(stderrPath, chunk, { createPath: true }));
-		await waitReady();
-		expect((await fetch(`${origin}/api/secrets/exec`, { method: "POST", body: "{}" })).status).toBe(401);
-		const put = await request("/api/secrets", {
+
+test("fresh exact daemon implements the supplementary secrets exec HTTP contract", async () => {
+	const workspace = await mkdtemp(join(tmpdir(), "signet-native-secrets-"));
+	const reservation = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {}, open() {}, close() {} } });
+	const port = reservation.port;
+	reservation.stop();
+	const stdout = Bun.file(join(workspace, "daemon.stdout.log"));
+	const stderr = Bun.file(join(workspace, "daemon.stderr.log"));
+	const child = Bun.spawn([binary], {
+		cwd: process.cwd(),
+		env: {
+			...process.env,
+			SIGNET_PATH: workspace,
+			SIGNET_BIND: "127.0.0.1",
+			SIGNET_MODE: "test",
+			SIGNET_PORT: String(port),
+			SIGNET_API_KEY: apiKey,
+		},
+		stdout,
+		stderr,
+	});
+	const origin = `http://127.0.0.1:${port}`;
+	const headers = (agent = "native-contract", scope = "native-contract") => ({
+		authorization: `Bearer ${apiKey}`,
+		"content-type": "application/json",
+		"x-signet-agent-id": agent,
+		"x-signet-workspace-id": scope,
+	});
+	const request = (path: string, init?: RequestInit) => fetch(`${origin}${path}`, init);
+	const post = (body: unknown, h = headers()) =>
+		request("/api/secrets/exec", { method: "POST", headers: h, body: JSON.stringify(body) });
+	try {
+		for (let i = 0; i < 240; i++) {
+			try {
+				if ((await request("/health/ready")).ok) break;
+			} catch {}
+			if (i === 239) throw new Error("daemon readiness timeout");
+			await Bun.sleep(25);
+		}
+		const owner = headers();
+		const created = await request("/api/secrets", {
 			method: "POST",
-			headers: headers(),
+			headers: owner,
 			body: JSON.stringify({ name: "contract-secret", value: "native-secret-value" }),
 		});
-		expect(put.r.status).toBe(201);
-		const bad = await request("/api/secrets/exec", {
-			method: "POST",
-			headers: headers(),
-			body: JSON.stringify({ command: "echo hi; id", secrets: {} }),
-		});
-		expect(bad.r.status).toBe(400);
-		const made = await request("/api/secrets/exec", {
-			method: "POST",
-			headers: headers(),
-			body: JSON.stringify({ command: "printf %s", secrets: { VALUE: "contract-secret" }, timeoutMs: 1000 }),
-		});
-		expect(made.r.status).toBe(202);
-		expect(made.body).toMatchObject({ status: "queued", timeoutMs: 1000 });
-		let done = made.body;
-		for (let i = 0; i < 100 && done.status === "queued"; i++) {
-			await Bun.sleep(25);
-			done = (await request(`/api/secrets/exec/${made.body.id as string}`, { headers: headers() })).body;
+		expect(created.status).toBe(201);
+		expect((await request("/api/secrets/exec", { method: "POST", body: "{}" })).status).toBe(401);
+		for (const body of [
+			{ command: "", secrets: { VALUE: "contract-secret" } },
+			{ command: "   ", secrets: { VALUE: "contract-secret" } },
+			{ command: "printf ok", secrets: {} },
+			{ command: "printf ok", secrets: [] },
+			{ command: "printf ok", secrets: "contract-secret" },
+			{ command: "echo hi; id", secrets: { VALUE: "contract-secret" } },
+			{ command: "echo $VALUE", secrets: { VALUE: "contract-secret" } },
+		])
+			expect((await post(body)).status).toBe(400);
+		async function poll(id: string, h = owner) {
+			for (let i = 0; i < 120; i++) {
+				const r = await request(`/api/secrets/exec/${id}`, { headers: h });
+				const b = await json(r);
+				if (b.status === "completed" || b.status === "failed") return b;
+				await Bun.sleep(25);
+			}
+			throw new Error(`job ${id} remained pending`);
 		}
+		const queued = await post({ command: "printenv VALUE", secrets: { VALUE: "contract-secret" }, timeoutMs: 1000 });
+		expect(queued.status).toBe(202);
+		const q = await json(queued);
+		expect(q).toMatchObject({ status: "queued", timeoutMs: 1000 });
+		expect(typeof q.id).toBe("string");
+		iso(q.createdAt);
+		expect(JSON.stringify(q)).not.toContain("native-secret-value");
+		const done = await poll(q.id);
 		expect(["completed", "failed"]).toContain(done.status);
+		iso(done.createdAt);
+		iso(done.startedAt);
+		iso(done.completedAt);
+		expect(done.result.code).toBe(0);
+		expect(done.result.stdout).toBe("[REDACTED]");
+		expect(typeof done.result.stderr).toBe("string");
 		expect(JSON.stringify(done)).not.toContain("native-secret-value");
-		expect((await fetch(`${origin}/api/secrets/exec/missing`, { headers: headers() })).status).toBe(404);
-		child.kill("SIGTERM");
-		await new Promise((resolve) => child?.once("exit", resolve));
-		await rm(root, { recursive: true, force: true });
-	});
+		expect((await request("/api/secrets/exec/does-not-exist", { headers: owner })).status).toBe(404);
+		const missing = await post({
+			command: "printenv VALUE",
+			secrets: { VALUE: "missing-secret-name" },
+			timeoutMs: 1000,
+		});
+		const missingDone = await poll((await json(missing)).id);
+		expect(missingDone.status).toBe("failed");
+		expect(missingDone.error).toBe("secret resolution failed");
+		expect(JSON.stringify(missingDone)).not.toContain("missing-secret-name");
+		const wrong = headers("other-agent", "other-workspace");
+		const denied = await post(
+			{ command: "printenv VALUE", secrets: { VALUE: "contract-secret" }, timeoutMs: 1000 },
+			wrong,
+		);
+		expect(denied.status).toBe(202);
+		const deniedDone = await poll((await json(denied)).id, wrong);
+		expect(deniedDone.status).toBe("failed");
+		expect(JSON.stringify(deniedDone)).not.toContain("native-secret-value");
+		const timeout = await post({ command: "sleep 2", secrets: { VALUE: "contract-secret" }, timeoutMs: 1000 });
+		const timed = await poll((await json(timeout)).id);
+		expect(timed.status).toBe("failed");
+		expect(timed.result.timedOut).toBe(true);
+		expect(timed.result.stderr).toContain("timed out");
+		const large = await post({
+			command: "head -c 1100000 /dev/zero",
+			secrets: { VALUE: "contract-secret" },
+			timeoutMs: 1000,
+		});
+		const capped = await poll((await json(large)).id);
+		expect(capped.result.truncated).toBe(true);
+		expect(capped.result.stdout.length).toBeLessThanOrEqual(1_048_576 + 64);
+		expect(capped.result.stdout).toContain("[signet secret exec: stdout truncated]");
+	} catch (error) {
+		const logs = `\n--- stdout ---\n${await readFile(stdout, "utf8").catch(() => "")}\n--- stderr ---\n${await readFile(stderr, "utf8").catch(() => "")}`;
+		throw new Error(`${error instanceof Error ? error.message : String(error)}${logs}`);
+	} finally {
+		await stop(child).catch(() => undefined);
+		await rm(workspace, { recursive: true, force: true });
+	}
 });
