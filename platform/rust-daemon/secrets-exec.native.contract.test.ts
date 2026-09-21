@@ -66,18 +66,18 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 		const created = await request("/api/secrets", {
 			method: "POST",
 			headers: owner,
-			body: JSON.stringify({ name: "contract-secret", value: "native-secret-value" }),
+			body: JSON.stringify({ name: "contract_secret", value: "native-secret-value" }),
 		});
 		expect(created.status).toBe(201);
 		expect((await request("/api/secrets/exec", { method: "POST", body: "{}" })).status).toBe(401);
 		for (const body of [
-			{ command: "", secrets: { VALUE: "contract-secret" } },
-			{ command: "   ", secrets: { VALUE: "contract-secret" } },
+			{ command: "", secrets: { VALUE: "contract_secret" } },
+			{ command: "   ", secrets: { VALUE: "contract_secret" } },
 			{ command: "printf ok", secrets: {} },
 			{ command: "printf ok", secrets: [] },
-			{ command: "printf ok", secrets: "contract-secret" },
-			{ command: "echo hi; id", secrets: { VALUE: "contract-secret" } },
-			{ command: "echo $VALUE", secrets: { VALUE: "contract-secret" } },
+			{ command: "printf ok", secrets: "contract_secret" },
+			{ command: "echo hi; id", secrets: { VALUE: "contract_secret" } },
+			{ command: "echo $VALUE", secrets: { VALUE: "contract_secret" } },
 		])
 			expect((await post(body)).status).toBe(400);
 		async function poll(id: string, h = owner) {
@@ -89,7 +89,7 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 			}
 			throw new Error(`job ${id} remained pending`);
 		}
-		const queued = await post({ command: "printenv VALUE", secrets: { VALUE: "contract-secret" }, timeoutMs: 1000 });
+		const queued = await post({ command: "printenv VALUE", secrets: { VALUE: "contract_secret" }, timeoutMs: 1000 });
 		expect(queued.status).toBe(202);
 		const q = await json(queued);
 		expect(q).toMatchObject({ status: "queued", timeoutMs: 1000 });
@@ -105,6 +105,22 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 		expect(done.result.stdout).toBe("[REDACTED]\n");
 		expect(typeof done.result.stderr).toBe("string");
 		expect(JSON.stringify(done)).not.toContain("native-secret-value");
+		const boundary = await post({
+			command: `python3 -c 'import os; print("X"+os.environ["VALUE"], end="")'`,
+			secrets: { VALUE: "contract_secret" },
+			timeoutMs: 1000,
+			maxOutputBytes: 8,
+		});
+		expect(boundary.status).toBe(202);
+		const boundaryJob = await json(boundary);
+		expect(typeof boundaryJob.id).toBe("string");
+		const boundaryDone = await poll(boundaryJob.id as string);
+		expect(boundaryDone.status).toBe("completed");
+		const boundaryResult = boundaryDone.result as { stdout?: unknown; truncated?: unknown };
+		expect(boundaryResult.truncated).toBe(true);
+		expect(String(boundaryResult.stdout)).not.toContain("native-");
+		expect(String(boundaryResult.stdout)).not.toContain("secret-value");
+		expect(JSON.stringify(boundaryDone)).not.toContain("native-secret-value");
 		expect((await request("/api/secrets/exec/does-not-exist", { headers: owner })).status).toBe(404);
 		const missing = await post({
 			command: "printenv VALUE",
@@ -116,22 +132,34 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 		expect(missingDone.error).toBe("secret resolution failed");
 		expect(JSON.stringify(missingDone)).not.toContain("missing_secret_name");
 		const wrong = headers("other-agent", "other-workspace");
+		const ownedJob = await post({
+			command: "printenv VALUE",
+			secrets: { VALUE: "contract_secret" },
+			timeoutMs: 1000,
+		});
+		expect(ownedJob.status).toBe(202);
+		const ownedJobBody = await json(ownedJob);
+		expect(typeof ownedJobBody.id).toBe("string");
+		const crossScope = await request(`/api/secrets/exec/${ownedJobBody.id as string}`, { headers: wrong });
+		expect(crossScope.status).toBe(403);
+		const ownedJobDone = await poll(ownedJobBody.id as string, owner);
+		expect(ownedJobDone.status).toBe("completed");
 		const denied = await post(
-			{ command: "printenv VALUE", secrets: { VALUE: "contract-secret" }, timeoutMs: 1000 },
+			{ command: "printenv VALUE", secrets: { VALUE: "contract_secret" }, timeoutMs: 1000 },
 			wrong,
 		);
 		expect(denied.status).toBe(202);
 		const deniedDone = await poll((await json(denied)).id, wrong);
 		expect(deniedDone.status).toBe("failed");
 		expect(JSON.stringify(deniedDone)).not.toContain("native-secret-value");
-		const timeout = await post({ command: "sleep 2", secrets: { VALUE: "contract-secret" }, timeoutMs: 1000 });
+		const timeout = await post({ command: "sleep 2", secrets: { VALUE: "contract_secret" }, timeoutMs: 1000 });
 		const timed = await poll((await json(timeout)).id);
 		expect(timed.status).toBe("failed");
 		expect(timed.result.timedOut).toBe(true);
 		expect(timed.result.stderr).toContain("timed out");
 		const large = await post({
 			command: "head -c 1100000 /dev/zero",
-			secrets: { VALUE: "contract-secret" },
+			secrets: { VALUE: "contract_secret" },
 			timeoutMs: 1000,
 		});
 		const capped = await poll((await json(large)).id);
