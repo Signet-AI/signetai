@@ -133,6 +133,16 @@ function resolveDaemonLaunchCommand(daemonPath: string): string[] {
 	return [daemonPath];
 }
 
+function assertInstalledServiceUsesDaemon(servicePath: string, daemonPath: string, marker: string): void {
+	if (!existsSync(servicePath)) return;
+	const service = readFileSync(servicePath, "utf-8");
+	if (!service.includes(marker) || !service.includes(daemonPath)) {
+		throw new Error(
+			`Installed Signet service does not point to the packaged native daemon at ${daemonPath}. Reinstall the service.`,
+		);
+	}
+}
+
 // ============================================================================
 // macOS (launchd)
 // ============================================================================
@@ -402,11 +412,14 @@ export async function uninstallService(): Promise<void> {
  */
 export async function startDaemon(port: number = 3850): Promise<void> {
 	assertWorkspaceStartable();
+	const daemonPath = getDaemonPath();
 	const os = platform();
 
 	if (os === "darwin" && existsSync(LAUNCHD_PLIST)) {
+		assertInstalledServiceUsesDaemon(LAUNCHD_PLIST, daemonPath, "<key>ProgramArguments</key>");
 		execSync(`launchctl load "${LAUNCHD_PLIST}"`);
 	} else if (os === "linux" && existsSync(SYSTEMD_UNIT)) {
+		assertInstalledServiceUsesDaemon(SYSTEMD_UNIT, daemonPath, "ExecStart=");
 		execSync("systemctl --user start signet.service");
 	} else {
 		await startDirect(port);
