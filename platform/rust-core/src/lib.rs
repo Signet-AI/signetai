@@ -876,6 +876,32 @@ fn execute_operation(
                 json!({"reflection": reflections.first().cloned().unwrap_or(Value::Null), "reflections": reflections}),
             )
         }
+        Operation::ReflectionMemories { agent_id, limit } => {
+            let agent_id = required_agent(&agent_id)?;
+            let mut statement = connection.prepare("SELECT id,content,created_at,source_id,source_type FROM memories WHERE agent_id=? AND deleted=0 AND COALESCE(source_type,'') NOT IN ('reflection','reflection-answer') ORDER BY created_at DESC LIMIT ?")?;
+            let rows = statement.query_map(params![agent_id, limit.clamp(1, 100) as i64], |r| Ok(json!({"id":r.get::<_,String>(0)?,"content":r.get::<_,String>(1)?,"createdAt":r.get::<_,Option<String>>(2)?,"sourceId":r.get::<_,Option<String>>(3)?,"sourceType":r.get::<_,Option<String>>(4)?})))?;
+            Ok(Value::Array(rows.collect::<Result<Vec<_>, _>>()?))
+        }
+        Operation::ReflectionInsert { agent_id, date, model, entries } => {
+            let agent_id = required_agent(&agent_id)?;
+            let tx = connection.transaction()?;
+            let mut inserted = Vec::new();
+            for entry in entries.into_iter().take(6) {
+                let question = entry.get("question").and_then(Value::as_str).unwrap_or("").trim().chars().take(236).collect::<String>();
+                if question.is_empty() { continue; }
+                let key = entry.get("contentKey").and_then(Value::as_str).unwrap_or(&question);
+                let exists: Option<String> = tx.query_row("SELECT id FROM daily_reflections WHERE agent_id=? AND date=? AND content_key=?", params![agent_id, date, key], |r| r.get(0)).optional()?;
+                if exists.is_some() { continue; }
+                let id = uuid::Uuid::new_v4().to_string();
+                let summary = entry.get("summary").and_then(Value::as_str).unwrap_or("");
+                let patterns = serde_json::to_string(entry.get("patterns").unwrap_or(&json!([])))?;
+                let memory_ids = serde_json::to_string(entry.get("memoryIds").unwrap_or(&json!([])))?;
+                tx.execute("INSERT INTO daily_reflections (id,agent_id,date,summary,patterns,question,memory_ids,model,created_at,content_key) VALUES (?,?,?,?,?,?,?,?,datetime('now'),?)", params![id,agent_id,date,summary,patterns,question,memory_ids,model,key])?;
+                inserted.push(id);
+            }
+            tx.commit()?;
+            Ok(json!({"inserted": inserted}))
+        }
         Operation::ReflectionAnswer {
             agent_id,
             id,
@@ -4141,6 +4167,8 @@ pub enum Operation {
         memory_id: String,
         answered_at: String,
     },
+    ReflectionMemories { agent_id: String, limit: usize },
+    ReflectionInsert { agent_id: String, date: String, model: String, entries: Vec<Value> },
     SecretList {
         agent_id: String,
         workspace_id: String,

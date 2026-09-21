@@ -17,6 +17,9 @@ use uuid::Uuid;
 #[derive(Debug, Deserialize)]
 pub(crate) struct ReflectionQuery {
     pub limit: Option<usize>,
+    #[serde(alias = "agentId")]
+    pub agent_id: Option<String>,
+    pub count: Option<usize>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,17 +92,81 @@ async fn generate(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let config = std::fs::read_to_string(workspace.join("agent.yaml")).unwrap_or_default();
-    let enabled = config.lines().any(|line| line.trim() == "enabled: true");
+    let section = config
+        .split("pipelineV2:")
+        .nth(1)
+        .and_then(|s| s.split("reflections:").nth(1));
+    let section = section.unwrap_or("");
+    let enabled = section
+        .lines()
+        .take(12)
+        .any(|line| line.trim() == "enabled: true");
     if !enabled {
         return Err(ApiError::bad_request(
             "Reflections are disabled in pipeline config",
         ));
     }
-    Err(ApiError {
-        status: StatusCode::NOT_IMPLEMENTED,
-        code: "unsupported",
-        message: "LLM generation is unavailable in the native provider".into(),
-    })
+    let count = query.count.unwrap_or(1).clamp(1, 6);
+    let model = section
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("model:"))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .or_else(|| std::env::var("SIGNET_OPENAI_MODEL").ok())
+        .ok_or_else(|| ApiError::bad_request("model is required"))?;
+    let memories = execute(
+        &state,
+        Operation::ReflectionMemories {
+            agent_id: agent(&headers, None, None)?,
+            limit: 50,
+        },
+    )
+    .await?;
+    let prompt = format!("Review these memories and return JSON with an entries array containing up to {count} reflective questions. Memories: {}", serde_json::to_string(&memories).unwrap_or_default());
+    let response = super::inference::call_openai(
+        &std::env::var("SIGNET_OPENAI_BASE_URL")
+            .map_err(|_| ApiError::upstream("provider is not configured"))?,
+        std::env::var("SIGNET_OPENAI_API_KEY").ok(),
+        json!({"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":4096}),
+    )
+    .await
+    .map_err(|e| ApiError::upstream(format!("provider request failed: {e:?}")))?;
+    let content = response
+        .pointer("/choices/0/message/content")
+        .and_then(Value::as_str)
+        .ok_or_else(|| ApiError::upstream("provider response missing content"))?;
+    let parsed: Value = serde_json::from_str(content)
+        .map_err(|_| ApiError::upstream("provider returned malformed reflection JSON"))?;
+    let entries = parsed
+        .get("entries")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let agent_id = agent(&headers, None, None)?;
+    let date = OffsetDateTime::now_utc().date().to_string();
+    execute(
+        &state,
+        Operation::ReflectionInsert {
+            agent_id,
+            date: date.clone(),
+            model,
+            entries,
+        },
+    )
+    .await?;
+    let reflections = execute(
+        &state,
+        Operation::ReflectionToday {
+            agent_id: agent(&headers, None, None)?,
+            date,
+            limit: 6,
+        },
+    )
+    .await?;
+    Ok(Json(
+        json!({"reflection": reflections.get("reflection").cloned().unwrap_or(Value::Null), "reflections": reflections.get("reflections").cloned().unwrap_or(json!([])), "generated": true}),
+    ))
 }
 
 async fn answer(

@@ -398,7 +398,7 @@ async fn execute(
 }
 
 #[derive(Debug)]
-enum ProviderError {
+pub(crate) enum ProviderError {
     Transport(String),
     Upstream { status: u16, message: String },
     InvalidResponse(String),
@@ -693,7 +693,11 @@ async fn call_openai_stream(
     Ok((status, Body::from_stream(stream)))
 }
 
-async fn call_openai(base: &str, key: Option<String>, body: Value) -> Result<Value, ProviderError> {
+pub(crate) async fn call_openai(
+    base: &str,
+    key: Option<String>,
+    body: Value,
+) -> Result<Value, ProviderError> {
     let base = base.trim_end_matches('/');
     let url = if base.ends_with("/v1") {
         format!("{base}/chat/completions")
