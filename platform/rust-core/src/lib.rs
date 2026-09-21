@@ -2652,14 +2652,32 @@ fn execute_operation(
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
             let name = bounded_text(&name, "entity name", 256)?;
-            connection
+            let canonical = name
+                .trim()
+                .to_lowercase()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if canonical.is_empty() {
+                return Err(CoreError::InvalidInput("entity name is required".into()));
+            }
+            let escaped = canonical
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let starts = format!("{escaped}%");
+            let contains = format!("%{escaped}%");
+            let row: Option<Value> = connection
                 .query_row(
-                    "SELECT id,name,entity_type FROM entities WHERE agent_id=? AND workspace_id=? AND name=? AND status='active' LIMIT 1",
-                    params![agent_id, workspace_id, name],
-                    |r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?})),
+                    "SELECT id,name,canonical_name,entity_type,description,mentions,pinned,pinned_at,status,archived_at,archived_by,archive_reason,proposal_id,proposal_evidence,created_at,updated_at FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND (COALESCE(canonical_name,LOWER(name))=? OR LOWER(name)=? OR COALESCE(canonical_name,LOWER(name)) LIKE ? ESCAPE '\\\\' OR LOWER(name) LIKE ? ESCAPE '\\\\' OR COALESCE(canonical_name,LOWER(name)) LIKE ? ESCAPE '\\\\' OR LOWER(name) LIKE ? ESCAPE '\\\\') ORDER BY CASE WHEN COALESCE(canonical_name,LOWER(name))=? THEN 0 WHEN LOWER(name)=? THEN 1 WHEN COALESCE(canonical_name,LOWER(name)) LIKE ? ESCAPE '\\\\' THEN 2 WHEN LOWER(name) LIKE ? ESCAPE '\\\\' THEN 3 WHEN COALESCE(canonical_name,LOWER(name)) LIKE ? ESCAPE '\\\\' THEN 4 ELSE 5 END, mentions DESC, updated_at DESC, name ASC LIMIT 1",
+                    params![agent_id, workspace_id, canonical, canonical, starts, starts, contains, contains, canonical, canonical, starts, starts, contains],
+                    |r| {
+                        let evidence: String = r.get(13)?;
+                        Ok(json!({"entity":{"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"canonicalName":r.get::<_,Option<String>>(2)?,"entityType":r.get::<_,String>(3)?,"description":r.get::<_,Option<String>>(4)?,"mentions":r.get::<_,Option<i64>>(5)?,"pinned":r.get::<_,i64>(6)? != 0,"pinnedAt":r.get::<_,Option<String>>(7)?,"status":r.get::<_,Option<String>>(8)?.unwrap_or_else(|| "active".into()),"archivedAt":r.get::<_,Option<String>>(9)?,"archivedBy":r.get::<_,Option<String>>(10)?,"archiveReason":r.get::<_,Option<String>>(11)?,"proposalId":r.get::<_,Option<String>>(12)?,"proposalEvidence":serde_json::from_str::<Value>(&evidence).unwrap_or(json!([])),"agentId":agent_id,"createdAt":r.get::<_,String>(14)?,"updatedAt":r.get::<_,String>(15)?},"aspectCount":0,"attributeCount":0,"constraintCount":0,"dependencyCount":0,"structuralDensity":0,"incomingDependencyCount":0,"outgoingDependencyCount":0}))
+                    },
                 )
-                .optional()?
-                .ok_or(CoreError::NotFound)
+                .optional()?;
+            row.ok_or(CoreError::NotFound)
         }
         Operation::KnowledgeEntityCreate {
             agent_id,
@@ -4186,6 +4204,49 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "entities",
         "status",
         "TEXT NOT NULL DEFAULT 'active'",
+    )?;
+    ensure_column(&transaction, "entities", "canonical_name", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "entities",
+        "entity_type",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(&transaction, "entities", "description", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "entities",
+        "mentions",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &transaction,
+        "entities",
+        "pinned",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(&transaction, "entities", "pinned_at", "TEXT")?;
+    ensure_column(&transaction, "entities", "archived_at", "TEXT")?;
+    ensure_column(&transaction, "entities", "archived_by", "TEXT")?;
+    ensure_column(&transaction, "entities", "archive_reason", "TEXT")?;
+    ensure_column(&transaction, "entities", "proposal_id", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "entities",
+        "proposal_evidence",
+        "TEXT NOT NULL DEFAULT '[]'",
+    )?;
+    ensure_column(
+        &transaction,
+        "entities",
+        "created_at",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &transaction,
+        "entities",
+        "updated_at",
+        "TEXT NOT NULL DEFAULT ''",
     )?;
     ensure_column(
         &transaction,

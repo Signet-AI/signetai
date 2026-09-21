@@ -1819,3 +1819,23 @@ fn current_typescript_migration_history_fails_closed() {
     };
     assert!(format!("{error:?}").contains("UnsupportedMigrationHistory"));
 }
+
+#[test]
+fn navigation_entity_resolves_current_schema_and_returns_detail_envelope() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("navigation.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, status TEXT); INSERT INTO entities VALUES ('entity-1','agent-a','workspace-a','Signet',NULL);").unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let got = c
+        .submit(Operation::KnowledgeNavigationEntity {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            name: " signet ".into(),
+        })
+        .unwrap();
+    assert_eq!(got["entity"]["id"], "entity-1");
+    assert_eq!(got["entity"]["name"], "Signet");
+    assert!(got.get("aspectCount").is_some());
+}
