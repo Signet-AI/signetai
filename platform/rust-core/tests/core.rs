@@ -2748,6 +2748,37 @@ fn knowledge_navigation_attributes_preserves_current_schema_metadata() {
 }
 
 #[test]
+fn memory_search_excludes_stale_and_derived_lifecycle_rows() {
+    let c = core();
+    for (id, metadata, source_type, superseded_by) in [
+        ("live", serde_json::json!({}), "manual", None),
+        ("stale", serde_json::json!({"staleAt":"2025-01-01T00:00:00Z"}), "manual", None),
+        ("aggregate", serde_json::json!({}), "aggregate-recall", None),
+        ("pinned-old", serde_json::json!({"pinned":true}), "manual", Some("live")),
+    ] {
+        c.submit(Operation::Remember {
+            agent_id: "a".into(),
+            content: format!("lifecycle needle {id}"),
+            metadata: serde_json::json!({
+                "sourceType": source_type,
+                "supersededBy": superseded_by,
+                "staleAt": metadata.get("staleAt").cloned().unwrap_or(serde_json::Value::Null),
+                "pinned": metadata.get("pinned").cloned().unwrap_or(serde_json::Value::Bool(false)),
+            }),
+        }).unwrap();
+    }
+    let result = c.submit(Operation::MemorySearch {
+        agent_id: "a".into(),
+        query: "lifecycle needle".into(),
+        limit: 10,
+    }).unwrap();
+    let ids: Vec<&str> = result["results"].as_array().unwrap().iter()
+        .filter_map(|row| row["id"].as_str()).collect();
+    assert_eq!(ids.len(), 1);
+    assert!(result["results"][0]["content"].as_str().unwrap().ends_with(" live"));
+}
+
+#[test]
 fn session_safety_ledger_allows_unrecorded_summaries_when_table_exists() {
     assert!(signet_core_native::summary_ledger_allows(true, None));
     assert!(signet_core_native::summary_ledger_allows(
