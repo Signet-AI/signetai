@@ -2737,7 +2737,10 @@ fn execute_operation(
             args.push(max_results.into());
             let mut stmt = connection.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(args), |r| Ok(json!({"id":r.get::<_,String>(0)?,"sessionKey":r.get::<_,Option<String>>(2)?,"harness":r.get::<_,Option<String>>(3)?,"earliestAt":r.get::<_,String>(4)?,"latestAt":r.get::<_,String>(5)?,"content":r.get::<_,String>(1)?})))?;
-            let summaries: Vec<Value> = rows.collect::<Result<Vec<_>, _>>()?;
+            let summaries: Vec<Value> = rows
+                .filter_map(|row| row.ok())
+                .filter(|summary| summary.get("content").and_then(Value::as_str).is_none_or(memory_content_context_eligible))
+                .collect();
             Ok(
                 json!({"entityName": resolved_name, "summaries": summaries, "total": summaries.len()}),
             )
@@ -4458,6 +4461,26 @@ fn owner_loop(
     for request in rx {
         let _ = request.reply.send((request.job)(&mut connection));
     }
+}
+
+pub fn memory_content_context_eligible(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    let invisible = content.chars().any(|c| matches!(c, '\u{034f}' | '\u{00ad}' | '\u{061c}' | '\u{070f}' | '\u{180e}' | '\u{200b}'..='\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2060}' | '\u{2066}'..='\u{206f}' | '\u{feff}' | '\u{e0000}'..='\u{e007f}'));
+    if invisible { return false; }
+    let defensive = ["security guidance", "security analysis", "threat model", "defensive", "example", "quoted", "detector", "scanner", "classification"]
+        .iter().any(|marker| lower.contains(marker));
+    let blocked = lower.contains("ignore previous instructions")
+        || lower.contains("disregard prior instructions")
+        || lower.contains("<system>")
+        || lower.contains("<tool_call")
+        || lower.contains("call the ") && lower.contains(" tool")
+        || lower.contains("reveal the system prompt")
+        || lower.contains("send the password")
+        || lower.contains("paste your api key")
+        || lower.contains("curl ") && lower.contains("| sh")
+        || lower.contains("rm -rf /")
+        || lower.contains("cat ~/.ssh/");
+    !blocked || defensive
 }
 
 fn required_agent(agent: &str) -> Result<String, CoreError> {

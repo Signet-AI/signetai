@@ -200,11 +200,16 @@ async fn expand_session(
         return Err(ApiError::bad_request("entityName is required"));
     }
     let agent_id = agent(&headers, None, body.agent_id.as_deref())?;
-    let workspace_id = headers
-        .get("x-workspace-id")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("default")
-        .to_owned();
+    let scope_query = EntityQuery::default();
+    let workspace_id = workspace(&headers, &scope_query)?;
+    let claims = auth::gate(&state, &headers).await?;
+    let mut requested_scope = json!({"agent": agent_id, "workspace": workspace_id});
+    if let Some(project) = headers.get("x-signet-project-id").and_then(|v| v.to_str().ok()).filter(|v| !v.trim().is_empty()) {
+        requested_scope["project"] = json!(project);
+    }
+    if !auth::authority_allows(&claims, "agent", &requested_scope, &["recall".to_owned()]) {
+        return Err(ApiError { status: StatusCode::FORBIDDEN, code: "forbidden", message: "recall permission required for session expansion".into() });
+    }
     Ok(Json(
         execute(
             &state,
