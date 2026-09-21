@@ -12,6 +12,7 @@ const agent = "session-expand-agent";
 const workspace = "session-expand-workspace";
 const children: Bun.Subprocess[] = [];
 const dirs: string[] = [];
+let recallToken: string | undefined;
 
 async function start(dir: string) {
 	const reservation = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {}, open() {}, close() {} } });
@@ -53,10 +54,10 @@ async function stop(child: Bun.Subprocess) {
 	if (child.exitCode === null) child.kill("SIGKILL");
 	await child.exited;
 }
-function headers(auth = true, agentId = agent, workspaceId?: string): HeadersInit {
+function headers(auth = true, agentId = agent, workspaceId?: string, token?: string): HeadersInit {
 	return {
 		"content-type": "application/json",
-		...(auth ? { "x-signet-api-key": apiKey } : {}),
+		...(token ? { authorization: "Bearer " + token } : auth ? { "x-signet-api-key": apiKey } : {}),
 		"x-signet-agent": agentId,
 		...(workspaceId === undefined ? {} : { "x-workspace-id": workspaceId }),
 	};
@@ -75,12 +76,18 @@ async function request(
 		session?: string;
 		time?: string;
 		max?: number;
+		token?: string;
 	} = {},
 ) {
 	const response = await fetch(`${origin}/api/knowledge/expand/session`, {
 		method: "POST",
 		headers: {
-			...headers(options.auth !== false, options.agent, options.workspace ?? workspace),
+			...headers(
+				options.auth !== false,
+				options.agent,
+				options.workspace ?? workspace,
+				options.auth === false ? undefined : (options.token ?? recallToken),
+			),
 			...(options.project ? { "x-signet-project-id": options.project } : {}),
 		},
 		body: JSON.stringify({
@@ -190,6 +197,20 @@ test("real daemon session expansion enforces HTTP auth, selection, bounds, safet
 	);
 	fixture.close();
 	daemon = await start(dir);
+	const tokenResponse = await fetch(`${daemon.origin}/api/auth/token`, {
+		method: "POST",
+		headers: headers(true),
+		body: JSON.stringify({
+			role: "agent",
+			scope: { agent, workspace },
+			permissions: ["recall"],
+			ttlSeconds: 300,
+		}),
+	});
+	expect(tokenResponse.status).toBe(200);
+	const issued = await json(tokenResponse);
+	recallToken = issued.token;
+	expect(recallToken).toMatch(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
 	const noCredential = await request(daemon.origin, { entityName: "Session Subject" }, { auth: false });
 	expect(noCredential.response.status).toBe(401);
 	const expanded = await request(daemon.origin, { entityName: "Session Subject" }, { max: 50 });
@@ -228,7 +249,7 @@ test("real daemon session expansion enforces HTTP auth, selection, bounds, safet
 	).toEqual([]);
 	const conflict = await fetch(`${daemon.origin}/api/knowledge/expand/session?workspace_id=${workspace}`, {
 		method: "POST",
-		headers: { ...headers(true), "x-signet-workspace-id": "wrong-workspace" },
+		headers: { ...headers(true, agent, workspace, recallToken), "x-signet-workspace-id": "wrong-workspace" },
 		body: JSON.stringify({ entityName: "Session Subject" }),
 	});
 	expect(conflict.status).toBe(400);
