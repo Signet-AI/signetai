@@ -2752,24 +2752,25 @@ fn knowledge_navigation_attributes_preserves_current_schema_metadata() {
 
 #[test]
 fn memory_search_excludes_stale_and_derived_lifecycle_rows() {
-    let c = core();
-    for (id, metadata, source_type, superseded_by) in [
-        ("live", serde_json::json!({}), "manual", None),
-        ("stale", serde_json::json!({"staleAt":"2025-01-01T00:00:00Z"}), "manual", None),
-        ("aggregate", serde_json::json!({}), "aggregate-recall", None),
-        ("pinned-old", serde_json::json!({"pinned":true}), "manual", Some("live")),
-    ] {
-        c.submit(Operation::Remember {
-            agent_id: "a".into(),
-            content: format!("lifecycle needle {id}"),
-            metadata: serde_json::json!({
-                "sourceType": source_type,
-                "supersededBy": superseded_by,
-                "staleAt": metadata.get("staleAt").cloned().unwrap_or(serde_json::Value::Null),
-                "pinned": metadata.get("pinned").cloned().unwrap_or(serde_json::Value::Bool(false)),
-            }),
-        }).unwrap();
-    }
+    let d = tempdir().unwrap();
+    let p = d.path().join("lifecycle.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch(
+        "CREATE TABLE memories (
+            id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, content TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0,
+            is_deleted INTEGER NOT NULL DEFAULT 0, superseded_by TEXT, stale_at TEXT,
+            source_type TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        INSERT INTO memories(id, agent_id, content, metadata, deleted, is_deleted, superseded_by, stale_at, source_type, created_at, updated_at) VALUES
+          ('live','a','lifecycle needle live','{}',0,0,NULL,NULL,'manual','2026-01-01','2026-01-01'),
+          ('stale','a','lifecycle needle stale','{\"staleAt\":\"2025-01-01T00:00:00Z\"}',0,0,NULL,'2025-01-01T00:00:00Z','manual','2026-01-01','2026-01-01'),
+          ('aggregate','a','lifecycle needle aggregate','{\"sourceType\":\"aggregate-recall\"}',0,0,NULL,NULL,'aggregate-recall','2026-01-01','2026-01-01'),
+          ('superseded','a','lifecycle needle superseded','{\"supersededBy\":\"live\"}',0,0,'live',NULL,'manual','2026-01-01','2026-01-01'),
+          ('deleted','a','lifecycle needle deleted','{}',1,1,NULL,NULL,'manual','2026-01-01','2026-01-01');",
+    ).unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
     let result = c.submit(Operation::MemorySearch {
         agent_id: "a".into(),
         query: "lifecycle needle".into(),
@@ -2777,8 +2778,7 @@ fn memory_search_excludes_stale_and_derived_lifecycle_rows() {
     }).unwrap();
     let ids: Vec<&str> = result["results"].as_array().unwrap().iter()
         .filter_map(|row| row["id"].as_str()).collect();
-    assert_eq!(ids.len(), 1);
-    assert!(result["results"][0]["content"].as_str().unwrap().ends_with(" live"));
+    assert_eq!(ids, vec!["live"]);
 }
 
 #[test]
