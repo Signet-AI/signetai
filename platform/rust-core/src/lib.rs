@@ -2027,13 +2027,18 @@ fn execute_operation(
             let changed = connection.execute("UPDATE secrets SET deleted=1,updated_at=datetime('now') WHERE agent_id=? AND workspace_id=? AND name=? AND deleted=0", params![bounded_text(&agent_id,"agent id",256)?,canonical_workspace(&workspace_id)?,bounded_text(&name,"secret name",256)?])?;
             Ok(json!({"deleted": changed > 0}))
         }
-        Operation::SecretGet { agent_id, workspace_id, name } => {
+        Operation::SecretGet {
+            agent_id,
+            workspace_id,
+            name,
+        } => {
             let row = connection.query_row(
                 "SELECT value FROM secrets WHERE agent_id=? AND workspace_id=? AND name=? AND deleted=0",
                 params![bounded_text(&agent_id,"agent id",256)?, canonical_workspace(&workspace_id)?, bounded_text(&name,"secret name",256)?],
                 |r| r.get::<_, String>(0),
             ).optional()?;
-            row.map(|value| json!({"value": value})).ok_or_else(|| CoreError::InvalidInput("secret not found".into()))
+            row.map(|value| json!({"value": value}))
+                .ok_or_else(|| CoreError::InvalidInput("secret not found".into()))
         }
         Operation::Health => {
             let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
