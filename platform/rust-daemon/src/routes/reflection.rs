@@ -155,8 +155,25 @@ struct AnswerBody {
     answer: Option<String>,
 }
 
+fn is_ecmascript_whitespace(character: char) -> bool {
+    matches!(
+        character,
+        '\u{0009}'..='\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{1680}'
+            | '\u{2000}'..='\u{200A}'
+            | '\u{2028}'
+            | '\u{2029}'
+            | '\u{202F}'
+            | '\u{205F}'
+            | '\u{3000}'
+            | '\u{FEFF}'
+    )
+}
+
 fn parse_reflection_integer(raw: &str) -> Option<(bool, u64)> {
-    let trimmed = raw.trim_start();
+    let trimmed = raw.trim_start_matches(is_ecmascript_whitespace);
     let (negative, digits) = match trimmed.as_bytes().first() {
         Some(b'-') => (true, &trimmed[1..]),
         Some(b'+') => (false, &trimmed[1..]),
@@ -480,6 +497,21 @@ mod tests {
             }),
             1
         );
+    }
+
+    #[test]
+    fn reflection_limit_uses_ecmascript_whitespace() {
+        for (raw, expected) in [("\u{feff}10", 10), ("\u{0085}10", 30), ("\u{00a0}10", 10)] {
+            assert_eq!(
+                limit(&ReflectionQuery {
+                    limit: Some(raw.into()),
+                    agent_id: None,
+                    count: None,
+                }),
+                expected,
+                "raw input should follow Number.parseInt whitespace semantics: {raw:?}",
+            );
+        }
     }
 
     #[test]
