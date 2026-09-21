@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-21
-- Bug fixes: simplify transcript capture ownership.
+- Bug fixes: qualify Bun 1.4.0; isolate native keyring; persist source item failures; bound source worker frames; simplify transcript capture ownership.
 
 ### 2026-09-20
 - Bug fixes: avoid duplicate telemetry sweep; continue integrity past FTS; capture UNC DB attribution; harden Windows DB attribution paths; preserve runtime DB attribution; accept absolute-path stack tokens in bundled runtime (#1764 regression); use kernel-owned instance lock.
@@ -32,6 +32,18 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Features: polish landing page experience; refresh Signet landing page.
 
 ## Release Ledger
+
+## [0.226.12] - 2026-09-21
+
+Release summary: 4 bug fixes.
+Tag range: `v0.226.11..v0.226.12`.
+
+### Bug Fixes
+
+- **runtime**: qualify Bun 1.4.0
+- **core**: isolate native keyring
+- **daemon**: persist source item failures
+- bound source worker frames
 
 ## [0.226.11] - 2026-09-21
 
