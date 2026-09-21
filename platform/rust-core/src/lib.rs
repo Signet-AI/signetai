@@ -3052,9 +3052,10 @@ fn execute_operation(
                 },
             )?;
             let aid = base["aspect"]["id"].as_str().unwrap().to_string();
+            let group_raw = group.trim().to_lowercase();
             let group = canonical_key(&group);
-            let mut q=connection.prepare("SELECT a.claim_key,lower(coalesce(a.group_key,'general')),count(CASE WHEN a.kind='attribute' THEN 1 END),count(CASE WHEN a.kind='constraint' THEN 1 END),count(CASE WHEN a.status='active' THEN 1 END),count(CASE WHEN a.status='superseded' THEN 1 END),max(a.updated_at),(SELECT x.content FROM entity_attributes x WHERE x.aspect_id=a.aspect_id AND x.agent_id=a.agent_id AND x.workspace_id=a.workspace_id AND coalesce(x.group_key,'general')=coalesce(a.group_key,'general') AND x.claim_key=a.claim_key AND x.status='active' ORDER BY x.importance DESC,x.updated_at DESC LIMIT 1) FROM entity_attributes a WHERE a.aspect_id=? AND a.agent_id=? AND a.workspace_id=? AND lower(coalesce(a.group_key,'general'))=? AND a.claim_key IS NOT NULL AND a.status!='deleted' GROUP BY a.claim_key,coalesce(a.group_key,'general') ORDER BY 5 DESC,7 DESC,1 ASC")?;
-            let items=q.query_map(params![&aid,&agent_id,&workspace_id,&group],|r|Ok(json!({"claimKey":r.get::<_,String>(0)?,"groupKey":r.get::<_,String>(1)?,"attributeCount":r.get::<_,i64>(2)?,"constraintCount":r.get::<_,i64>(3)?,"activeCount":r.get::<_,i64>(4)?,"supersededCount":r.get::<_,i64>(5)?,"latestUpdatedAt":r.get::<_,Option<String>>(6)?,"preview":r.get::<_,Option<String>>(7)?})))?.collect::<Result<Vec<_>,_>>()?;
+            let mut q=connection.prepare("SELECT a.claim_key,lower(coalesce(a.group_key,'general')),count(CASE WHEN a.kind='attribute' THEN 1 END),count(CASE WHEN a.kind='constraint' THEN 1 END),count(CASE WHEN a.status='active' THEN 1 END),count(CASE WHEN a.status='superseded' THEN 1 END),max(a.updated_at),(SELECT x.content FROM entity_attributes x WHERE x.aspect_id=a.aspect_id AND x.agent_id=a.agent_id AND x.workspace_id=a.workspace_id AND (replace(lower(trim(coalesce(x.group_key,'general'))),' ','_')=? OR replace(lower(trim(coalesce(x.group_key,'general'))),' ','_')=?) AND x.claim_key=a.claim_key AND x.status='active' ORDER BY x.importance DESC,x.updated_at DESC LIMIT 1) FROM entity_attributes a WHERE a.aspect_id=? AND a.agent_id=? AND a.workspace_id=? AND (replace(lower(trim(coalesce(a.group_key,'general'))),' ','_')=? OR replace(lower(trim(coalesce(a.group_key,'general'))),' ','_')=?) AND a.claim_key IS NOT NULL AND a.status!='deleted' GROUP BY a.claim_key,coalesce(a.group_key,'general') ORDER BY 5 DESC,7 DESC,1 ASC")?;
+            let items=q.query_map(params![&group,&group_raw,&aid,&agent_id,&workspace_id,&group,&group_raw],|r|Ok(json!({"claimKey":r.get::<_,String>(0)?,"groupKey":r.get::<_,String>(1)?,"attributeCount":r.get::<_,i64>(2)?,"constraintCount":r.get::<_,i64>(3)?,"activeCount":r.get::<_,i64>(4)?,"supersededCount":r.get::<_,i64>(5)?,"latestUpdatedAt":r.get::<_,Option<String>>(6)?,"preview":r.get::<_,Option<String>>(7)?})))?.collect::<Result<Vec<_>,_>>()?;
             Ok(
                 json!({"entity":base["entity"].clone(),"aspect":base["aspect"].clone(),"items":items}),
             )
@@ -3083,6 +3084,8 @@ fn execute_operation(
                 },
             )?;
             let aid = base["aspect"]["id"].as_str().unwrap().to_string();
+            let group_raw = group.trim().to_lowercase();
+            let claim_raw = claim.trim().to_lowercase();
             let group = canonical_key(&group);
             let claim = canonical_key(&claim);
             if claim.is_empty() {
@@ -3098,9 +3101,9 @@ fn execute_operation(
                 "active"
             };
             let sql = if status_clause.is_empty() {
-                "SELECT id,kind,content,status,confidence,importance,memory_id,created_at,updated_at FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND lower(coalesce(group_key,'general'))=? AND lower(claim_key)=? AND status!='deleted' AND (? IS NULL OR kind=?) ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?"
+                "SELECT id,kind,content,status,confidence,importance,memory_id,created_at,updated_at FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND (replace(lower(trim(coalesce(group_key,'general'))),' ','_')=? OR replace(lower(trim(coalesce(group_key,'general'))),' ','_')=?) AND (replace(lower(trim(claim_key)),' ','_')=? OR replace(lower(trim(claim_key)),' ','_')=?) AND status!='deleted' AND (? IS NULL OR kind=?) ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?"
             } else {
-                "SELECT id,kind,content,status,confidence,importance,memory_id,created_at,updated_at FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND lower(coalesce(group_key,'general'))=? AND lower(claim_key)=? AND status=? AND (? IS NULL OR kind=?) ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?"
+                "SELECT id,kind,content,status,confidence,importance,memory_id,created_at,updated_at FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND (replace(lower(trim(coalesce(group_key,'general'))),' ','_')=? OR replace(lower(trim(coalesce(group_key,'general'))),' ','_')=?) AND (replace(lower(trim(claim_key)),' ','_')=? OR replace(lower(trim(claim_key)),' ','_')=?) AND status=? AND (? IS NULL OR kind=?) ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?"
             };
             let mut q = connection.prepare(sql)?;
             let items = if status_clause.is_empty() {
@@ -3110,7 +3113,9 @@ fn execute_operation(
                         &agent_id,
                         &workspace_id,
                         &group,
+                        &group_raw,
                         &claim,
+                        &claim_raw,
                         &kind,
                         &kind,
                         limit,
@@ -3126,7 +3131,9 @@ fn execute_operation(
                         &agent_id,
                         &workspace_id,
                         &group,
+                        &group_raw,
                         &claim,
+                        &claim_raw,
                         status_clause,
                         &kind,
                         &kind,

@@ -2147,3 +2147,50 @@ fn current_schema_navigation_uses_scoped_live_tables_and_rejects_bad_bounds() {
         Err(CoreError::InvalidInput(_))
     ));
 }
+
+#[test]
+fn current_schema_navigation_matches_spaced_keys_from_canonical_requests() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("spaced-navigation.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, entity_type TEXT NOT NULL DEFAULT 'person', description TEXT, mentions INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0, pinned_at TEXT, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, weight REAL NOT NULL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, aspect_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT, group_key TEXT, claim_key TEXT, confidence REAL DEFAULT 0.5, importance REAL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO entities VALUES ('e1','a1','w1','Signet','signet','person',NULL,1,0,NULL,'active','2026-01-01','2026-01-01'); INSERT INTO entity_aspects VALUES ('p1','e1','a1','w1','Food','food',0.8,'active','2026-01-01','2026-01-01'); INSERT INTO entity_attributes VALUES ('x1','p1','a1','w1',NULL,'attribute','Active meal','active meal','dietary constraints','favorite meal',0.9,0.9,'active','2026-01-01','2026-01-03'), ('x2','p1','a2','w1',NULL,'attribute','Other agent','other agent','dietary constraints','favorite meal',0.9,0.9,'active','2026-01-01','2026-01-03'), ('x3','p1','a1','w2',NULL,'attribute','Other workspace','other workspace','dietary constraints','favorite meal',0.9,0.9,'active','2026-01-01','2026-01-03'), ('x4','p1','a1','w1',NULL,'attribute','Deleted','deleted','dietary constraints','favorite meal',0.9,0.9,'deleted','2026-01-01','2026-01-03');");
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let groups = c
+        .submit(Operation::KnowledgeNavigationGroups {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+            aspect: "food".into(),
+        })
+        .unwrap();
+    assert_eq!(groups["items"].as_array().unwrap().len(), 1);
+    assert_eq!(groups["items"][0]["groupKey"], "dietary constraints");
+    let claims = c
+        .submit(Operation::KnowledgeNavigationClaims {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+            aspect: "food".into(),
+            group: "dietary_constraints".into(),
+        })
+        .unwrap();
+    assert_eq!(claims["items"].as_array().unwrap().len(), 1);
+    assert_eq!(claims["items"][0]["claimKey"], "favorite meal");
+    let attrs = c
+        .submit(Operation::KnowledgeNavigationAttributes {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+            aspect: "food".into(),
+            group: "dietary_constraints".into(),
+            claim: "favorite_meal".into(),
+            limit: 10,
+            offset: 0,
+            kind: None,
+            status: None,
+        })
+        .unwrap();
+    assert_eq!(attrs["items"].as_array().unwrap().len(), 1);
+    assert_eq!(attrs["items"][0]["content"], "Active meal");
+}
