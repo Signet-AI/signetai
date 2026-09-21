@@ -4821,21 +4821,19 @@ fn owner_loop(
     rx: mpsc::Receiver<Request>,
     ready: mpsc::Sender<Result<(), CoreError>>,
 ) {
-    let result = Connection::open(path).and_then(|mut connection| {
+    let result: Result<Connection, CoreError> = (|| {
+        let mut connection = Connection::open(path)?;
         connection.execute_batch("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 5000;")?;
-        migrate(&mut connection).map_err(|error| match error {
-            CoreError::Sql(sql) => sql,
-            other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
-        })?;
+        migrate(&mut connection)?;
         Ok(connection)
-    });
+    })();
     let mut connection = match result {
         Ok(connection) => {
             let _ = ready.send(Ok(()));
             connection
         }
         Err(error) => {
-            let _ = ready.send(Err(CoreError::Sql(error)));
+            let _ = ready.send(Err(error));
             return;
         }
     };

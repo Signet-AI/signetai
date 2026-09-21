@@ -2248,7 +2248,10 @@ fn current_typescript_migration_history_fails_closed() {
         Ok(_) => panic!("current TypeScript migration history must fail closed"),
         Err(error) => error,
     };
-    assert!(format!("{error:?}").contains("UnsupportedMigrationHistory"));
+    assert!(
+        matches!(error, CoreError::UnsupportedMigrationHistory(_)),
+        "migration history error must preserve its typed contract: {error:?}"
+    );
 }
 
 #[test]
