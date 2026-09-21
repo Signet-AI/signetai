@@ -162,6 +162,7 @@ export function isTestEntrypoint(path: string): boolean {
 	return /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(path);
 }
 export function runnableSelectedPaths(paths: string[], manifest: ManifestEntry[]): string[] {
+	if (new Set(paths).size !== paths.length) throw new Error("selected paths contain duplicates");
 	const allowed = new Set(manifest.map((e) => e.path));
 	const out = paths.filter((p) => allowed.has(p) && isTestEntrypoint(p));
 	if (!out.length) throw new Error("selected mode requires valid test entrypoints");

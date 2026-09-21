@@ -14,7 +14,7 @@ import {
 import { resolve, basename, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { buildExecutionManifest } from "./shared-corpus-runner";
+import { buildExecutionManifest, currentManifest } from "./shared-corpus-runner";
 
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
 type Manifest = {
@@ -66,6 +66,8 @@ function validatePinnedManifest(manifest: Manifest): void {
 				entry?.path === expected.protectedCorpus[index]?.path &&
 				entry?.sha256 === expected.protectedCorpus[index]?.sha256,
 		);
+	const current = currentManifest(process.cwd(), expected.protectedCorpus);
+	const currentMatches = expected.protectedCorpus.every((entry) => current.get(entry.path) === entry.sha256);
 	if (
 		manifest.baselineSha !== expected.baselineSha ||
 		manifest.packageJsonSha256 !== expected.packageJsonSha256 ||
@@ -75,6 +77,7 @@ function validatePinnedManifest(manifest: Manifest): void {
 		!corpusMatches
 	)
 		fail("manifest does not match the pinned baseline manifest");
+	if (!currentMatches) fail("current worktree does not match the pinned baseline corpus");
 }
 const manifestValue = required("--manifest");
 const pathsValue = required("--paths");
@@ -113,7 +116,9 @@ try {
 }
 if (!Array.isArray(paths) || paths.length === 0 || paths.some((path) => typeof path !== "string"))
 	fail("--paths must be a non-empty JSON string array");
-const selected = [...new Set(paths as string[])].sort();
+const rawPaths = paths as string[];
+if (new Set(rawPaths).size !== rawPaths.length) fail("--paths contains duplicate selected paths");
+const selected = [...rawPaths].sort();
 for (const path of selected) if (!entries.has(path)) fail(`requested path is outside the pinned corpus: ${path}`);
 mkdirSync(dirname(report), { recursive: true });
 const evidenceFile = `${report}.native-evidence`;

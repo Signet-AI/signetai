@@ -65,6 +65,11 @@ describe("shared corpus admission", () => {
 		expect(runnableSelectedPaths(["fixtures/input.json", "a.test.ts"], manifest)).toEqual(["a.test.ts"]);
 	});
 
+	test("rejects duplicate selected paths", () => {
+		const manifest = [{ path: "a.test.ts", sha256: "a" }];
+		expect(() => runnableSelectedPaths(["a.test.ts", "a.test.ts"], manifest)).toThrow(/duplicate/i);
+	});
+
 	test("TypeScript accepts its CLI's default report contract", () => {
 		expect(() => validateLaneOptions("typescript", { worktree: "/tmp/not-a-worktree" })).toThrow(/pinned/i);
 		expect(resolveReportPath("typescript", "/repo")).toBeUndefined();
