@@ -298,6 +298,15 @@ jobs:
         shell: bash
         run: test -s ./dist/native/"$RELEASE_ASSET"
 
+      - name: Verify embedded Bun runtime
+        shell: bash
+        env:
+          SIGNET_RUNTIME_VERSION_SMOKE: "1"
+        run: |
+          actual="$(./dist/native/"$RELEASE_ASSET" | bun -e 'const value = JSON.parse(await Bun.stdin.text()); process.stdout.write(value.bun)')"
+          expected="$(bun -e 'const value = JSON.parse(await Bun.file("package.json").text()); process.stdout.write(value.packageManager.replace(/^bun@/, ""))')"
+          test "$actual" = "$expected"
+
       - name: Native release runtime smoke
         shell: bash
         env:

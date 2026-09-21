@@ -446,6 +446,8 @@ if (process.env.SIGNET_INSPECTOR_PROXY_PUBLIC || process.env.SIGNET_INSPECTOR_PR
 	} finally {
 		cache.stop();
 	}
+} else if (process.env.SIGNET_RUNTIME_VERSION_SMOKE) {
+	process.stdout.write(JSON.stringify({ type: "runtime-version", bun: Bun.version }) + "\\n");
 } else if (process.env.SIGNET_NATIVE_WORKER_THREAD_SMOKE) {
 	const { resolveEmbeddedWorkerPath } = await import("../platform/daemon/src/native-runtime-assets");
 	const workerPath = resolveEmbeddedWorkerPath("worker-thread-smoke");
