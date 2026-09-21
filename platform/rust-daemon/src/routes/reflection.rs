@@ -165,14 +165,13 @@ async fn authorize_reflection_read(
     agent_id: &str,
 ) -> Result<(), ApiError> {
     let claims = auth::gate(state, headers).await?;
-    let workspace = source_workspace(headers, None)?;
-    let mut scope = json!({"agent": agent_id});
-    if claims
+    let workspace_scoped = claims
         .get("scope")
         .and_then(Value::as_object)
-        .is_some_and(|authority_scope| authority_scope.contains_key("workspace"))
-    {
-        scope["workspace"] = json!(workspace);
+        .is_some_and(|authority_scope| authority_scope.contains_key("workspace"));
+    let mut scope = json!({"agent": agent_id});
+    if workspace_scoped {
+        scope["workspace"] = json!(source_workspace(headers, None)?);
     }
     if !auth::authority_allows(&claims, "agent", &scope, &["recall".to_owned()]) {
         return Err(ApiError::forbidden("recall permission required"));

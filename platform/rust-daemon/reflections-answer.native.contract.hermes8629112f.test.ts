@@ -224,3 +224,34 @@ it("exercises native reflection answer auth, persistence, scope, and generation 
 		else process.env.SIGNET_OPENAI_MODEL = previousModel;
 	}
 });
+
+it("does not require workspace agreement for an agent-only recall token", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "signet-reflection-agent-only-"));
+	dirs.push(dir);
+	// biome-ignore lint/suspicious/noUndeclaredEnvVars: native contract workspace override
+	const previousWorkspace = process.env.SIGNET_WORKSPACE_ID;
+	process.env.SIGNET_WORKSPACE_ID = "one";
+	try {
+		const first = await start(dir, reserve());
+		const admin = { "content-type": "application/json", "x-signet-api-key": "reflection-key" };
+		const issued = await fetch(`${first.origin}/api/auth/token`, {
+			method: "POST",
+			headers: admin,
+			body: JSON.stringify({ role: "agent", scope: { agent: "agent-only" }, permissions: ["recall"] }),
+		});
+		expect(issued.status).toBe(200);
+		const { token } = (await issued.json()) as { token: string };
+		const response = await fetch(`${first.origin}/api/reflections?agentId=agent-only`, {
+			headers: {
+				authorization: `Bearer ${token}`,
+				"x-signet-agent-id": "agent-only",
+				"x-workspace-id": "two",
+			},
+		});
+		expect(response.status).toBe(200);
+	} finally {
+		// biome-ignore lint/suspicious/noUndeclaredEnvVars: native contract workspace override
+		if (previousWorkspace === undefined) delete process.env.SIGNET_WORKSPACE_ID;
+		else process.env.SIGNET_WORKSPACE_ID = previousWorkspace;
+	}
+});
