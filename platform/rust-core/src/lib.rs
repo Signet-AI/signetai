@@ -2852,6 +2852,40 @@ fn execute_operation(
                 .optional()?;
             row.ok_or(CoreError::NotFound)
         }
+        Operation::OntologyProposalConflicts {
+            agent_id,
+            workspace_id,
+            limit,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let limit = bounded_page_limit(limit)?;
+            let mut stmt = connection.prepare(
+                "SELECT id,payload,confidence,rationale,evidence FROM ontology_proposals WHERE agent_id=? AND status='pending' AND operation='add_claim_value' AND (json_extract(payload,'$.workspace_id')=? OR json_extract(payload,'$._workspaceId')=? OR (json_extract(payload,'$.workspace_id') IS NULL AND json_extract(payload,'$._workspaceId') IS NULL)) ORDER BY updated_at DESC LIMIT ?"
+            )?;
+            let mut rows = stmt.query(params![agent_id, workspace_id, workspace_id, limit])?;
+            let mut items = Vec::new();
+            while let Some(row) = rows.next()? {
+                let payload: Value =
+                    serde_json::from_str(&row.get::<_, String>(1)?).unwrap_or(json!({}));
+                let entity = payload.get("entity").and_then(Value::as_str).unwrap_or("");
+                let aspect = payload.get("aspect").and_then(Value::as_str).unwrap_or("");
+                let claim_key = payload
+                    .get("claim_key")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let value = payload.get("value").and_then(Value::as_str).unwrap_or("");
+                if entity.is_empty()
+                    || aspect.is_empty()
+                    || claim_key.is_empty()
+                    || value.is_empty()
+                {
+                    continue;
+                }
+                items.push(json!({"entity":entity,"aspect":aspect,"groupKey":payload.get("group_key").and_then(Value::as_str).unwrap_or("general"),"claimKey":claim_key,"values":[{"proposalId":row.get::<_,String>(0)?,"value":value,"confidence":row.get::<_,f64>(2)?,"rationale":row.get::<_,String>(3)?,"evidenceCount":serde_json::from_str::<Value>(&row.get::<_,String>(4)?).ok().and_then(|v| v.as_array().map(|a| a.len())).unwrap_or(0)}],"proposalIds":[row.get::<_,String>(0)?],"count":1}));
+            }
+            Ok(json!({"items":items,"count":items.len()}))
+        }
         Operation::KnowledgeEntityCreate {
             agent_id,
             workspace_id,
@@ -4300,6 +4334,11 @@ pub enum Operation {
         workspace_id: String,
         kind: String,
         id: String,
+    },
+    OntologyProposalConflicts {
+        agent_id: String,
+        workspace_id: String,
+        limit: Option<usize>,
     },
     KnowledgeEntityCreate {
         agent_id: String,

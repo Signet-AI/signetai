@@ -74,7 +74,7 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/ontology/proposals/{id}/reject",
             axum::routing::post(unsupported),
         )
-        .route("/api/ontology/proposals/conflicts", get(unsupported))
+        .route("/api/ontology/proposals/conflicts", get(list_conflicts))
         .route(
             "/api/ontology/proposals/repair/duplicates",
             axum::routing::post(unsupported),
@@ -105,6 +105,23 @@ async fn unsupported() -> Result<Json<Value>, ApiError> {
     Err(ApiError::not_implemented(
         "ontology operation is unsupported by the fresh Rust boundary",
     ))
+}
+
+async fn list_conflicts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    q: Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let result = execute(
+        &state,
+        Operation::OntologyProposalConflicts {
+            agent_id: agent(&headers, Some(&q.agent), None)?,
+            workspace_id: workspace(&q)?,
+            limit: q.limit,
+        },
+    )
+    .await?;
+    Ok(Json(result))
 }
 
 async fn list_proposals(

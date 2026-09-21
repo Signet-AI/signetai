@@ -65,7 +65,10 @@ it("supports scoped proposal/claim/constraint CRUD and truthful unsupported onto
 	expect(
 		(await req(d, "/api/ontology/proposals/p-1/apply?workspace_id=ws-a", { method: "POST", body: "{}" })).r.status,
 	).toBe(501);
-	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a")).r.status).toBe(501);
+	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a")).r.status).toBe(200);
+	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a")).body).toEqual({ items: [], count: 0 });
+	expect((await req(d, "/api/ontology/proposals/conflicts")).r.status).toBe(400);
+	expect((await fetch(`${d.base}/api/ontology/proposals/conflicts?workspace_id=ws-a`)).status).toBe(401);
 	expect((await req(d, "/api/ontology/proposals/p-1?workspace_id=ws-a", { method: "DELETE" })).r.status).toBe(200);
 	expect((await req(d, "/api/ontology/proposals/p-1?workspace_id=ws-a")).r.status).toBe(404);
 	await stop(d);
