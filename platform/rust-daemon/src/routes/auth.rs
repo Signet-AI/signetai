@@ -71,6 +71,7 @@ fn issue_token(
     subject: String,
     role: &str,
     scope: Value,
+    permissions: Vec<String>,
     ttl_seconds: u64,
 ) -> Result<(String, String), ApiError> {
     let now = now_seconds();
@@ -79,6 +80,7 @@ fn issue_token(
         "sub": subject,
         "role": role,
         "scope": scope,
+        "permissions": permissions,
         "iat": now,
         "exp": expires,
     });
@@ -125,9 +127,35 @@ struct TokenRequest {
     scope: Value,
     #[serde(default, alias = "ttlSeconds")]
     ttl_seconds: Option<u64>,
+    #[serde(default)]
+    permissions: Vec<String>,
 }
 fn empty_object() -> Value {
     json!({})
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn issued_token_preserves_requested_permissions() {
+        let (token, _) = issue_token(
+            &[b'a'; 32],
+            "subject".to_owned(),
+            "agent",
+            json!({"agent": "agent-1"}),
+            vec!["recall".to_owned()],
+            3600,
+        )
+        .unwrap_or_else(|_| panic!("token issuance"));
+        let payload = token.split('.').next().expect("payload");
+        let claims: Value = serde_json::from_slice(
+            &URL_SAFE_NO_PAD.decode(payload).expect("payload encoding"),
+        )
+        .expect("claims");
+        assert_eq!(claims["permissions"], json!(["recall"]));
+    }
 }
 
 pub(crate) fn router() -> Router<AppState> {
@@ -337,7 +365,7 @@ async fn token(
             ));
         }
     }
-    if !authority_allows(&claims, &req.role, &req.scope, &[]) {
+    if !authority_allows(&claims, &req.role, &req.scope, &req.permissions) {
         return Err(ApiError {
             status: StatusCode::FORBIDDEN,
             code: "forbidden",
@@ -358,6 +386,7 @@ async fn token(
         subject,
         &req.role,
         req.scope,
+        req.permissions,
         req.ttl_seconds.unwrap_or(3_600),
     )?;
     Ok(Json(json!({"token":token,"expiresAt":expires_at})))
