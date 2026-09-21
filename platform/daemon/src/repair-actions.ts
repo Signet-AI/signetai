@@ -737,7 +737,7 @@ function countOrphanedEmbeddings(db: ReadDb, agentId?: string): number {
 }
 
 export async function getEmbeddingGapStats(accessor: DbAccessor, agentId: string): Promise<EmbeddingGapStats> {
-	const repair = readEmbeddingRepairState(accessor);
+	const repair = await readEmbeddingRepairState(accessor);
 	return await accessor.withReadDbAsync(
 		async (db) => {
 			const totalRow = db
@@ -1148,8 +1148,8 @@ export async function reembedMissingMemories(
 	if (checkpointId !== undefined) {
 		checkpoint =
 			operationId === undefined
-				? ensureEmbeddingRepairCheckpoint(accessor, checkpointId, normalizedAgentId, resolvedEmbeddingCfg.model)
-				: readEmbeddingRepairCheckpoint(accessor, checkpointId);
+				? await ensureEmbeddingRepairCheckpoint(accessor, checkpointId, normalizedAgentId, resolvedEmbeddingCfg.model)
+				: await readEmbeddingRepairCheckpoint(accessor, checkpointId);
 		if (checkpoint === null) {
 			return {
 				action,
@@ -1189,7 +1189,7 @@ export async function reembedMissingMemories(
 	const initialStats = await getEmbeddingGapStats(accessor, normalizedAgentId);
 	if (initialStats.unembedded === 0) {
 		if (checkpointId !== undefined) {
-			checkpoint = updateEmbeddingRepairCheckpoint(accessor, checkpointId, { batches: 0, status: "complete" });
+			checkpoint = await updateEmbeddingRepairCheckpoint(accessor, checkpointId, { batches: 0, status: "complete" });
 		}
 		return {
 			action,
@@ -1206,7 +1206,7 @@ export async function reembedMissingMemories(
 
 	const admission =
 		existingLease === undefined
-			? acquireEmbeddingRepairLease(accessor, effectiveCooldownMs, cfg.repair.reembedHourlyBudget)
+			? await acquireEmbeddingRepairLease(accessor, effectiveCooldownMs, cfg.repair.reembedHourlyBudget)
 			: { allowed: true, lease: existingLease };
 	if (!admission.allowed || admission.lease === undefined) {
 		return {
@@ -1236,7 +1236,7 @@ export async function reembedMissingMemories(
 
 	let finishError: unknown = null;
 	try {
-		finishEmbeddingRepairLease(accessor, lease, {
+		await finishEmbeddingRepairLease(accessor, lease, {
 			successful: outcome?.successful ?? [],
 			failed: outcome?.failedKeys ?? [],
 			affected: outcome?.written ?? 0,
@@ -1251,7 +1251,7 @@ export async function reembedMissingMemories(
 
 	if (thrown !== null || finishError !== null) {
 		if (checkpointId !== undefined) {
-			updateEmbeddingRepairCheckpoint(accessor, checkpointId, {
+			await updateEmbeddingRepairCheckpoint(accessor, checkpointId, {
 				status: "failed",
 				lastError:
 					thrown instanceof Error
@@ -1266,7 +1266,7 @@ export async function reembedMissingMemories(
 
 	if (outcome === null || outcome.selected === 0) {
 		if (checkpointId !== undefined) {
-			checkpoint = updateEmbeddingRepairCheckpoint(accessor, checkpointId, { batches: 0, status: "complete" });
+			checkpoint = await updateEmbeddingRepairCheckpoint(accessor, checkpointId, { batches: 0, status: "complete" });
 		}
 		return {
 			action,
@@ -1317,7 +1317,7 @@ export async function reembedMissingMemories(
 	const resultMessage = conflictMessage.length > 0 ? `${progressMessage}; ${conflictMessage}` : progressMessage;
 
 	if (checkpointId !== undefined) {
-		checkpoint = updateEmbeddingRepairCheckpoint(accessor, checkpointId, {
+		checkpoint = await updateEmbeddingRepairCheckpoint(accessor, checkpointId, {
 			status: operationStatus,
 			selected: attempted,
 			written,

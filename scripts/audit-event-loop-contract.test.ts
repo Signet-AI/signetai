@@ -379,17 +379,17 @@ test("the production TypeScript project cannot import the compatibility module",
 
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	const report = renderReport(baseline, { total: 169, withWriteTx: 65, withReadDb: 104 });
+	const report = renderReport(baseline, { total: 153, withWriteTx: 59, withReadDb: 94 });
 	expect(report).toContain(`Exact ledger inventory: ${baseline.length} sites`);
-	expect(report).toContain("62 synchronous writes, 97 synchronous reads, and 159 async-named DB sites");
-	expect(report).toContain("Async-named ON-PARENT DB sites: 157");
+	expect(report).toContain("59 synchronous writes, 94 synchronous reads, and 169 async-named DB sites");
+	expect(report).toContain("Async-named ON-PARENT DB sites: 167");
 	expect(report).toContain("Async-named OFF-PARENT DB sites: 2");
 	expect(report).not.toContain("async-named parent DB sites");
 	expect(report).toContain(
-		"The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
+		"The async-named DB counts above separate the 167 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
 	);
-	expect(report).toContain("Database accessor sites classified: 318");
-	expect(report).toContain("ON-PARENT callback execution: 316");
+	expect(report).toContain("Database accessor sites classified: 322");
+	expect(report).toContain("ON-PARENT callback execution: 320");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
 	expect(report).toContain("- `db:recall.embedding.config.read` (withReadDbAsync)");
 	expect(report).toContain("- `db:recall.vector.search.read` (withReadDbAsync)");

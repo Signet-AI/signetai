@@ -2,8 +2,8 @@
 	"version": 1,
 	"generatedFrom": "bun scripts/legacy-sync-db-baseline.ts",
 	"markedCallsites": {
-		"total": 159,
-		"withReadDb": 97,
-		"withWriteTx": 62
+		"total": 153,
+		"withReadDb": 94,
+		"withWriteTx": 59
 	}
 }

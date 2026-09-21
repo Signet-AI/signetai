@@ -184,16 +184,18 @@ export function startEmbeddingTracker(
 			// failure backoff so restarting the daemon cannot immediately replay a
 			// poison row against the provider.
 			const now = Date.now();
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-			const staleRows: StaleRow[] = accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
-				return listStaleEmbeddingRows(
-					db,
-					embeddingCfg.model,
-					trackerCfg.batchSize,
-					new Date(now).toISOString(),
-				) as StaleRow[];
-			}, "embedding-tracker.ts:188");
-			const persistedFailures = loadEmbeddingRepairFailures(
+			const staleRows: StaleRow[] = await accessor.withReadDbAsync(
+				(db: import("./db-accessor").ReadDb) => {
+					return listStaleEmbeddingRows(
+						db,
+						embeddingCfg.model,
+						trackerCfg.batchSize,
+						new Date(now).toISOString(),
+					) as StaleRow[];
+				},
+				{ siteToken: "db:embedding-tracker.stale-rows.read" },
+			);
+			const persistedFailures = await loadEmbeddingRepairFailures(
 				accessor,
 				staleRows.map((row) => ({ id: row.id, contentHash: row.contentHash })),
 				embeddingCfg.model,
@@ -226,7 +228,7 @@ export function startEmbeddingTracker(
 			// The durable lease serializes provider calls before they begin. The
 			// hourly budget is charged only after at least one active-profile
 			// embedding persists, so an abort cannot spend a repair slot.
-			const admission = acquireEmbeddingRepairLease(
+			const admission = await acquireEmbeddingRepairLease(
 				accessor,
 				repairCfg.reembedCooldownMs,
 				repairCfg.reembedHourlyBudget,
@@ -253,7 +255,7 @@ export function startEmbeddingTracker(
 				// another process cannot pick up the same batch concurrently.
 				if (isSystemPressureHigh()) {
 					skippedCycles++;
-					finishEmbeddingRepairLease(accessor, admission.lease, {
+					await finishEmbeddingRepairLease(accessor, admission.lease, {
 						successful: [],
 						failed: cycle.failedRows,
 						model: embeddingCfg.model,
@@ -269,14 +271,14 @@ export function startEmbeddingTracker(
 					// Batch write in a single write transaction. A promotion may commit
 					// while this batch is encoding, so never let a tracker closed over
 					// the previous generation overwrite its vectors.
-					// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-					applied = accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
-						if (!isActiveEmbeddingConfig(db, embeddingCfg)) return false;
-						for (const { row, vector, contentHash } of cycle.results) {
-							syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);
-							const embId = randomUUID();
-							db.prepare(
-								`INSERT INTO embeddings
+					applied = await accessor.withWriteTxAsync(
+						(db: import("./db-accessor").WriteDb) => {
+							if (!isActiveEmbeddingConfig(db, embeddingCfg)) return false;
+							for (const { row, vector, contentHash } of cycle.results) {
+								syncVecDeleteBySourceExceptHash(db, "memory", row.id, contentHash);
+								const embId = randomUUID();
+								db.prepare(
+									`INSERT INTO embeddings
 								   (id, source_type, source_id, content_hash, vector, dimensions, chunk_text, created_at)
 								 VALUES (?, 'memory', ?, ?, ?, ?, ?, datetime('now'))
 								 ON CONFLICT(content_hash) DO UPDATE SET
@@ -284,19 +286,21 @@ export function startEmbeddingTracker(
 								   dimensions = excluded.dimensions,
 								   chunk_text = excluded.chunk_text,
 								   created_at = excluded.created_at`,
-							).run(embId, row.id, contentHash, vectorToBlob(vector), vector.length, row.content);
-							const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
-								| { id: string }
-								| undefined;
-							if (actualRow) syncVecInsert(db, actualRow.id, vector);
-							db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
-							processed++;
-						}
-						return true;
-					}, "embedding-tracker.ts:273");
+								).run(embId, row.id, contentHash, vectorToBlob(vector), vector.length, row.content);
+								const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
+									| { id: string }
+									| undefined;
+								if (actualRow) syncVecInsert(db, actualRow.id, vector);
+								db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(embeddingCfg.model, row.id);
+								processed++;
+							}
+							return true;
+						},
+						{ siteToken: "db:embedding-tracker.persist.write" },
+					);
 				}
 
-				finishEmbeddingRepairLease(accessor, admission.lease, {
+				await finishEmbeddingRepairLease(accessor, admission.lease, {
 					successful: applied ? cycle.results.map(({ row }) => ({ id: row.id, contentHash: row.contentHash })) : [],
 					failed: cycle.failedRows.map((row) => ({ id: row.id, contentHash: row.contentHash })),
 					model: embeddingCfg.model,
@@ -306,7 +310,7 @@ export function startEmbeddingTracker(
 				});
 				logger.debug("embedding-tracker", `Refreshed ${applied ? cycle.results.length : 0} embeddings`);
 			} catch (error) {
-				finishEmbeddingRepairLease(accessor, admission.lease, {
+				await finishEmbeddingRepairLease(accessor, admission.lease, {
 					successful: [],
 					failed: [],
 					model: embeddingCfg.model,

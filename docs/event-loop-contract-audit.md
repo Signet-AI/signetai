@@ -19,8 +19,8 @@ The 806-site inventory excludes test, benchmark, generated, and `__tests__` fixt
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 318
-- ON-PARENT callback execution: 316
+- Database accessor sites classified: 322
+- ON-PARENT callback execution: 320
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -80,12 +80,16 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `embedding-index-migration.ts:928` (withReadDbAsync)
 - `embedding-index-migration.ts:1011` (withReadDbAsync)
 - `embedding-index-migration.ts:1254` (incrementalVacuumAsync)
-- `embedding-repair-state.ts:101` (withWriteTx)
-- `embedding-repair-state.ts:139` (withReadDb)
-- `embedding-repair-state.ts:160` (withReadDb)
-- `embedding-repair-state.ts:191` (withWriteTx)
-- `embedding-tracker.ts:188` (withReadDb)
-- `embedding-tracker.ts:273` (withWriteTx)
+- `db:repair.checkpoint.read` (withReadDbAsync)
+- `db:repair.checkpoint.ensure` (withWriteTxAsync)
+- `db:repair.checkpoint.update` (withWriteTxAsync)
+- `db:repair.lease.acquire` (withWriteTxAsync)
+- `db:repair.state.read` (withReadDbAsync)
+- `db:repair.backoff.read` (withReadDbAsync)
+- `db:repair.lease.finish` (withWriteTxAsync)
+- `db:repair.lease.release-after-error` (withWriteTxAsync)
+- `db:embedding-tracker.stale-rows.read` (withReadDbAsync)
+- `db:embedding-tracker.persist.write` (withWriteTxAsync)
 - `embedding-usage.ts:90` (withWriteTxAsync)
 - `embedding-usage.ts:133` (withReadDbAsync)
 - `github-source-provider.ts:460` (withReadDbAsync)
@@ -175,7 +179,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/dreaming-worker.ts:278` (withReadDbAsync)
 - `pipeline/graph-traversal.ts:103` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
-- `pipeline/maintenance-worker.ts:348` (withReadDbAsync)
+- `pipeline/maintenance-worker.ts:350` (withReadDbAsync)
 - `db:maintenance.dead-memory-count.read` (withReadDbAsync)
 - `pipeline/reflection-worker.ts:368` (withReadDb)
 - `pipeline/reflection-worker.ts:401` (withReadDb)
@@ -194,7 +198,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/synthesis-worker.ts:151` (withReadDb)
 - `prompt-entity-context.ts:671` (withReadDb)
 - `prompt-entity-context.ts:698` (withReadDb)
-- `repair-actions.ts:230` (withWriteTxAsync)
+- `repair-actions.ts:242` (withWriteTxAsync)
 - `db:repair.fts-consistency.read` (withReadDbAsync)
 - `db:repair.embedding-gap.read` (withReadDbAsync)
 - `db:repair.embedding-migration.read` (withReadDbAsync)
@@ -365,4 +369,4 @@ The converted async sites are distributed as follows: document-worker (18), drea
 
 The structural boundary makes statically-resolved imports from the production source tree impossible: TypeScript reports TS6059 before aliases or computed member calls can use the compatibility type. The production bundle also only starts from source entrypoints, so this compatibility module is not a shipped production artifact.
 
-A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 159 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 62 write and 97 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
+A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 153 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 59 write and 94 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.

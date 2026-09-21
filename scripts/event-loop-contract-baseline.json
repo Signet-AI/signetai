@@ -1101,45 +1101,83 @@
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 101,
-      "api": "withWriteTx",
-      "source": "return accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "line": 173,
+      "api": "withReadDbAsync",
+      "source": "return await accessor.withReadDbAsync((db: ReadDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:repair.checkpoint.read"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 139,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "line": 186,
+      "api": "withWriteTxAsync",
+      "source": "return await accessor.withWriteTxAsync((db: WriteDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:repair.checkpoint.ensure"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 160,
-      "api": "withReadDb",
-      "source": "return accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "line": 209,
+      "api": "withWriteTxAsync",
+      "source": "return await accessor.withWriteTxAsync((db: WriteDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:repair.checkpoint.update"
     },
     {
       "path": "embedding-repair-state.ts",
-      "line": 191,
-      "api": "withWriteTx",
-      "source": "return accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "line": 249,
+      "api": "withWriteTxAsync",
+      "source": "return await accessor.withWriteTxAsync((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:repair.lease.acquire"
+    },
+    {
+      "path": "embedding-repair-state.ts",
+      "line": 286,
+      "api": "withReadDbAsync",
+      "source": "return await accessor.withReadDbAsync((db: import(\"./db-accessor\").ReadDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:repair.state.read"
+    },
+    {
+      "path": "embedding-repair-state.ts",
+      "line": 312,
+      "api": "withReadDbAsync",
+      "source": "return await accessor.withReadDbAsync((db: import(\"./db-accessor\").ReadDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:repair.backoff.read"
+    },
+    {
+      "path": "embedding-repair-state.ts",
+      "line": 343,
+      "api": "withWriteTxAsync",
+      "source": "return await accessor.withWriteTxAsync((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:repair.lease.finish"
+    },
+    {
+      "path": "embedding-repair-state.ts",
+      "line": 406,
+      "api": "withWriteTxAsync",
+      "source": "await accessor.withWriteTxAsync((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:repair.lease.release-after-error"
     },
     {
       "path": "embedding-tracker.ts",
-      "line": 188,
-      "api": "withReadDb",
-      "source": "const staleRows: StaleRow[] = accessor.withReadDb((db: import(\"./db-accessor\").ReadDb) => {",
-      "category": "hot-path"
+      "line": 187,
+      "api": "withReadDbAsync",
+      "source": "const staleRows: StaleRow[] = await accessor.withReadDbAsync((db: import(\"./db-accessor\").ReadDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:embedding-tracker.stale-rows.read"
     },
     {
       "path": "embedding-tracker.ts",
-      "line": 273,
-      "api": "withWriteTx",
-      "source": "applied = accessor.withWriteTx((db: import(\"./db-accessor\").WriteDb) => {",
-      "category": "hot-path"
+      "line": 271,
+      "api": "withWriteTxAsync",
+      "source": "applied = await accessor.withWriteTxAsync((db: import(\"./db-accessor\").WriteDb) => {",
+      "category": "hot-path",
+      "siteToken": "db:embedding-tracker.persist.write"
     },
     {
       "path": "embedding-usage.ts",
@@ -2660,14 +2698,14 @@
     },
     {
       "path": "pipeline/maintenance-worker.ts",
-      "line": 348,
+      "line": 350,
       "api": "withReadDbAsync",
       "source": "await accessor.withReadDbAsync(async (db) => getDiagnostics(db, tracker), { siteToken });",
       "category": "hot-path"
     },
     {
       "path": "pipeline/maintenance-worker.ts",
-      "line": 487,
+      "line": 489,
       "api": "withReadDbAsync",
       "source": ": await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2934,14 +2972,14 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 230,
+      "line": 242,
       "api": "withWriteTxAsync",
       "source": "return accessor.withWriteTxAsync(fn, { siteToken: operationId, operation: operationId });",
       "category": "hot-path"
     },
     {
       "path": "repair-actions.ts",
-      "line": 449,
+      "line": 461,
       "api": "withReadDbAsync",
       "source": "const { memCount, ftsCount, ftsMissing, tokenizerDrift } = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2949,7 +2987,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 729,
+      "line": 741,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2957,7 +2995,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 771,
+      "line": 783,
       "api": "withReadDbAsync",
       "source": "const migration = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2965,7 +3003,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 775,
+      "line": 787,
       "api": "withReadDbAsync",
       "source": "const orphaned = await accessor.withReadDbAsync(async (db) => countOrphanedEmbeddings(db, agentId), {",
       "category": "hot-path",
@@ -2973,7 +3011,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 845,
+      "line": 862,
       "api": "withReadDbAsync",
       "source": "const unembedded = await accessor.withReadDbAsync(async (db) => select(db, batchSize), {",
       "category": "hot-path",
@@ -2981,7 +3019,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1072,
+      "line": 1131,
       "api": "withReadDbAsync",
       "source": "const resolvedEmbeddingCfg = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2989,7 +3027,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1243,
+      "line": 1391,
       "api": "withReadDbAsync",
       "source": "const { rows, totalMatching, sources, liveVecDimensions } = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2997,7 +3035,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1607,
+      "line": 1755,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3005,7 +3043,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1795,
+      "line": 1943,
       "api": "withReadDbAsync",
       "source": "const hashClusters = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3013,7 +3051,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1937,
+      "line": 2085,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3021,7 +3059,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 1957,
+      "line": 2105,
       "api": "withReadDbAsync",
       "source": "const neighbors = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3029,7 +3067,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2029,
+      "line": 2177,
       "api": "withReadDbAsync",
       "source": "const total = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3037,7 +3075,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2090,
+      "line": 2238,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3045,7 +3083,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2222,
+      "line": 2370,
       "api": "withReadDbAsync",
       "source": "const candidates = await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3053,7 +3091,7 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2428,
+      "line": 2576,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3855,7 +3893,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 432,
+      "line": 435,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -3863,7 +3901,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 482,
+      "line": 485,
       "api": "withWriteTx",
       "source": "const result = getDbAccessor().withWriteTx(",
       "category": "hot-path",
@@ -3871,7 +3909,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 516,
+      "line": 519,
       "api": "withReadDb",
       "source": "const unlinked = accessor.withReadDb(",
       "category": "hot-path",
@@ -3879,7 +3917,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 547,
+      "line": 550,
       "api": "withReadDb",
       "source": "const preview = accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path",
@@ -3887,7 +3925,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 598,
+      "line": 601,
       "api": "withWriteTx",
       "source": "const result = accessor.withWriteTx(",
       "category": "hot-path",
@@ -3895,7 +3933,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 609,
+      "line": 612,
       "api": "withReadDb",
       "source": "const remaining = accessor.withReadDb(",
       "category": "hot-path",
@@ -3903,7 +3941,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 653,
+      "line": 656,
       "api": "withReadDb",
       "source": "const unhinted = accessor.withReadDb(",
       "category": "hot-path",
@@ -3911,7 +3949,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 679,
+      "line": 682,
       "api": "withWriteTx",
       "source": "accessor.withWriteTx((db: import(\"../db-accessor\").WriteDb) => {",
       "category": "hot-path",
@@ -3919,7 +3957,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 687,
+      "line": 690,
       "api": "withReadDb",
       "source": "const remaining = accessor.withReadDb(",
       "category": "hot-path",
@@ -3927,7 +3965,7 @@
     },
     {
       "path": "routes/repair-routes.ts",
-      "line": 728,
+      "line": 731,
       "api": "withReadDb",
       "source": "const dead = getDbAccessor().withReadDb(",
       "category": "hot-path",

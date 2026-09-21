@@ -198,7 +198,7 @@ async function executeRecommendation(
 		case "repairEmbeddingIndex": {
 			if (deps.embedding === null) return null;
 			const embedding = deps.embedding;
-			const admission = acquireEmbeddingRepairLease(
+			const admission = await acquireEmbeddingRepairLease(
 				deps.accessor,
 				deps.cfg.repair.reembedCooldownMs,
 				deps.cfg.repair.reembedHourlyBudget,
@@ -213,8 +213,8 @@ async function executeRecommendation(
 			}
 			const lease = admission.lease;
 
-			const finish = (affected: number, error?: string): void => {
-				finishEmbeddingRepairLease(deps.accessor, lease, {
+			const finish = async (affected: number, error?: string): Promise<void> => {
+				await finishEmbeddingRepairLease(deps.accessor, lease, {
 					successful: [],
 					affected,
 					failed: [],
@@ -262,7 +262,7 @@ async function executeRecommendation(
 									embedding.agentId,
 									batchSize,
 								);
-				finish(result.affected, result.success ? undefined : result.message);
+				await finish(result.affected, result.success ? undefined : result.message);
 				return {
 					action: rec.action,
 					success: result.success,
@@ -272,7 +272,7 @@ async function executeRecommendation(
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
-				finish(0, message);
+				await finish(0, message);
 				return { action: rec.action, success: false, affected: 0, message };
 			}
 		}

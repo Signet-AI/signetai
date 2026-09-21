@@ -166,55 +166,59 @@ function readCheckpoint(db: ReadDb, checkpointId: string): CheckpointRow | null 
 	);
 }
 
-export function readEmbeddingRepairCheckpoint(
+export async function readEmbeddingRepairCheckpoint(
 	accessor: DbAccessor,
 	checkpointId: string,
-): EmbeddingRepairCheckpoint | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: ReadDb) => {
-		const row = readCheckpoint(db, checkpointId);
-		return row === null ? null : checkpointFromRow(row);
-	}, "embedding-repair-state.ts:read-checkpoint");
+): Promise<EmbeddingRepairCheckpoint | null> {
+	return await accessor.withReadDbAsync(
+		(db: ReadDb) => {
+			const row = readCheckpoint(db, checkpointId);
+			return row === null ? null : checkpointFromRow(row);
+		},
+		{ siteToken: "db:repair.checkpoint.read" },
+	);
 }
 
-export function ensureEmbeddingRepairCheckpoint(
+export async function ensureEmbeddingRepairCheckpoint(
 	accessor: DbAccessor,
 	checkpointId: string,
 	agentId: string,
 	model: string,
 	now = Date.now(),
-): EmbeddingRepairCheckpoint {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: WriteDb) => {
-		const nowIso = iso(now);
-		db.prepare(
-			`INSERT OR IGNORE INTO embedding_repair_checkpoints
+): Promise<EmbeddingRepairCheckpoint> {
+	return await accessor.withWriteTxAsync(
+		(db: WriteDb) => {
+			const nowIso = iso(now);
+			db.prepare(
+				`INSERT OR IGNORE INTO embedding_repair_checkpoints
 				(checkpoint_id, agent_id, model, status, batches, selected, written, failed,
 				 stale, cross_agent_hash_conflicts, last_error, created_at, updated_at)
 			 VALUES (?, ?, ?, 'running', 0, 0, 0, 0, 0, 0, NULL, ?, ?)`,
-		).run(checkpointId, agentId, model, nowIso, nowIso);
-		const row = readCheckpoint(db, checkpointId);
-		if (row === null) throw new Error(`embedding repair checkpoint ${checkpointId} was not initialized`);
-		if (row.agent_id !== agentId || row.model !== model) {
-			throw new Error(`embedding repair checkpoint ${checkpointId} does not match the requested agent or model`);
-		}
-		return checkpointFromRow(row);
-	}, "embedding-repair-state.ts:ensure-checkpoint");
+			).run(checkpointId, agentId, model, nowIso, nowIso);
+			const row = readCheckpoint(db, checkpointId);
+			if (row === null) throw new Error(`embedding repair checkpoint ${checkpointId} was not initialized`);
+			if (row.agent_id !== agentId || row.model !== model) {
+				throw new Error(`embedding repair checkpoint ${checkpointId} does not match the requested agent or model`);
+			}
+			return checkpointFromRow(row);
+		},
+		{ siteToken: "db:repair.checkpoint.ensure" },
+	);
 }
 
-export function updateEmbeddingRepairCheckpoint(
+export async function updateEmbeddingRepairCheckpoint(
 	accessor: DbAccessor,
 	checkpointId: string,
 	update: EmbeddingRepairCheckpointUpdate,
 	now = Date.now(),
-): EmbeddingRepairCheckpoint {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: WriteDb) => {
-		const current = readCheckpoint(db, checkpointId);
-		if (current === null) throw new Error(`embedding repair checkpoint ${checkpointId} was not found`);
-		const nowIso = iso(now);
-		db.prepare(
-			`UPDATE embedding_repair_checkpoints
+): Promise<EmbeddingRepairCheckpoint> {
+	return await accessor.withWriteTxAsync(
+		(db: WriteDb) => {
+			const current = readCheckpoint(db, checkpointId);
+			if (current === null) throw new Error(`embedding repair checkpoint ${checkpointId} was not found`);
+			const nowIso = iso(now);
+			db.prepare(
+				`UPDATE embedding_repair_checkpoints
 			 SET status = COALESCE(?, status),
 			batches = batches + ?,
 			     selected = selected + ?,
@@ -225,81 +229,87 @@ export function updateEmbeddingRepairCheckpoint(
 			     last_error = ?,
 			     updated_at = ?
 			 WHERE checkpoint_id = ?`,
-		).run(
-			update.status ?? null,
-			update.batches ?? 1,
-			update.selected ?? 0,
-			update.written ?? 0,
-			update.failed ?? 0,
-			update.stale ?? 0,
-			update.crossAgentHashConflicts ?? 0,
-			update.lastError === undefined ? current.last_error : update.lastError,
-			nowIso,
-			checkpointId,
-		);
-		const row = readCheckpoint(db, checkpointId);
-		if (row === null) throw new Error(`embedding repair checkpoint ${checkpointId} disappeared`);
-		return checkpointFromRow(row);
-	}, "embedding-repair-state.ts:update-checkpoint");
+			).run(
+				update.status ?? null,
+				update.batches ?? 1,
+				update.selected ?? 0,
+				update.written ?? 0,
+				update.failed ?? 0,
+				update.stale ?? 0,
+				update.crossAgentHashConflicts ?? 0,
+				update.lastError === undefined ? current.last_error : update.lastError,
+				nowIso,
+				checkpointId,
+			);
+			const row = readCheckpoint(db, checkpointId);
+			if (row === null) throw new Error(`embedding repair checkpoint ${checkpointId} disappeared`);
+			return checkpointFromRow(row);
+		},
+		{ siteToken: "db:repair.checkpoint.update" },
+	);
 }
 
-export function acquireEmbeddingRepairLease(
+export async function acquireEmbeddingRepairLease(
 	accessor: DbAccessor,
 	cooldownMs: number,
 	hourlyBudget: number,
 	now = Date.now(),
-): EmbeddingRepairAdmission {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
-		const row = ensureBudget(db, now);
-		const leaseExpiry = parseMs(row.lease_expires_at);
-		if (row.lease_id !== null && leaseExpiry !== null && leaseExpiry > now) {
-			return { allowed: false, reason: "embedding repair already in progress" };
-		}
+): Promise<EmbeddingRepairAdmission> {
+	return await accessor.withWriteTxAsync(
+		(db: import("./db-accessor").WriteDb) => {
+			const row = ensureBudget(db, now);
+			const leaseExpiry = parseMs(row.lease_expires_at);
+			if (row.lease_id !== null && leaseExpiry !== null && leaseExpiry > now) {
+				return { allowed: false, reason: "embedding repair already in progress" };
+			}
 
-		const lastCompletedAt = parseMs(row.last_completed_at);
-		if (lastCompletedAt !== null && now - lastCompletedAt < cooldownMs) {
-			return {
-				allowed: false,
-				reason: `embedding repair cooldown active, ${cooldownMs - (now - lastCompletedAt)}ms remaining`,
-			};
-		}
+			const lastCompletedAt = parseMs(row.last_completed_at);
+			if (lastCompletedAt !== null && now - lastCompletedAt < cooldownMs) {
+				return {
+					allowed: false,
+					reason: `embedding repair cooldown active, ${cooldownMs - (now - lastCompletedAt)}ms remaining`,
+				};
+			}
 
-		const windowStartedAt = validWindowStart(row.window_started_at, now);
-		const inWindow = windowStartedAt !== null && now - windowStartedAt < HOUR_MS;
-		const batchesStarted = inWindow ? row.batches_started : 0;
-		if (batchesStarted >= hourlyBudget) {
-			return { allowed: false, reason: `embedding repair hourly budget exhausted (${hourlyBudget} batches/hr)` };
-		}
+			const windowStartedAt = validWindowStart(row.window_started_at, now);
+			const inWindow = windowStartedAt !== null && now - windowStartedAt < HOUR_MS;
+			const batchesStarted = inWindow ? row.batches_started : 0;
+			if (batchesStarted >= hourlyBudget) {
+				return { allowed: false, reason: `embedding repair hourly budget exhausted (${hourlyBudget} batches/hr)` };
+			}
 
-		// A lease serializes provider work. The hourly slot is charged only when
-		// finishEmbeddingRepairLease can persist an outcome for the active profile.
-		const lease: EmbeddingRepairLease = { id: crypto.randomUUID() };
-		const windowStart = inWindow ? row.window_started_at : iso(now);
-		const leaseMs = Math.max(MIN_LEASE_MS, cooldownMs);
-		db.prepare(
-			`UPDATE embedding_repair_budget
+			// A lease serializes provider work. The hourly slot is charged only when
+			// finishEmbeddingRepairLease can persist an outcome for the active profile.
+			const lease: EmbeddingRepairLease = { id: crypto.randomUUID() };
+			const windowStart = inWindow ? row.window_started_at : iso(now);
+			const leaseMs = Math.max(MIN_LEASE_MS, cooldownMs);
+			db.prepare(
+				`UPDATE embedding_repair_budget
 			 SET window_started_at = ?, batches_started = ?, lease_id = ?, lease_expires_at = ?, last_error = NULL, updated_at = ?
 			 WHERE id = 1`,
-		).run(windowStart, batchesStarted, lease.id, iso(now + leaseMs), iso(now));
-		return { allowed: true, lease };
-	}, "embedding-repair-state.ts:101");
+			).run(windowStart, batchesStarted, lease.id, iso(now + leaseMs), iso(now));
+			return { allowed: true, lease };
+		},
+		{ siteToken: "db:repair.lease.acquire" },
+	);
 }
 
-export function readEmbeddingRepairState(accessor: DbAccessor): EmbeddingRepairState | null {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
-		const row = readBudget(db);
-		if (row == null) return null;
-		return {
-			windowStartedAt: row.window_started_at,
-			batchesStarted: row.batches_started,
-			lastCompletedAt: row.last_completed_at,
-			lastAffected: row.last_affected,
-			leaseExpiresAt: row.lease_expires_at,
-			lastError: row.last_error,
-		};
-	}, "embedding-repair-state.ts:139");
+export async function readEmbeddingRepairState(accessor: DbAccessor): Promise<EmbeddingRepairState | null> {
+	return await accessor.withReadDbAsync(
+		(db: import("./db-accessor").ReadDb) => {
+			const row = readBudget(db);
+			if (row == null) return null;
+			return {
+				windowStartedAt: row.window_started_at,
+				batchesStarted: row.batches_started,
+				lastCompletedAt: row.last_completed_at,
+				lastAffected: row.last_affected,
+				leaseExpiresAt: row.lease_expires_at,
+				lastError: row.last_error,
+			};
+		},
+		{ siteToken: "db:repair.state.read" },
+	);
 }
 
 export function isEmbeddingRepairLeaseActive(db: ReadDb, lease: EmbeddingRepairLease, now = Date.now()): boolean {
@@ -308,29 +318,31 @@ export function isEmbeddingRepairLeaseActive(db: ReadDb, lease: EmbeddingRepairL
 	return row?.lease_id === lease.id && expiresAt !== null && expiresAt > now;
 }
 
-export function loadEmbeddingRepairFailures(
+export async function loadEmbeddingRepairFailures(
 	accessor: DbAccessor,
 	keys: readonly EmbeddingRepairKey[],
 	model: string,
-): ReadonlyMap<string, EmbeddingRepairFailure> {
+): Promise<ReadonlyMap<string, EmbeddingRepairFailure>> {
 	if (keys.length === 0) return new Map();
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return accessor.withReadDb((db: import("./db-accessor").ReadDb) => {
-		const failures = new Map<string, EmbeddingRepairFailure>();
-		const query = db.prepare(
-			"SELECT memory_id, content_hash, attempts, retry_at FROM embedding_repair_backoff WHERE memory_id = ? AND content_hash = ? AND model = ?",
-		);
-		for (const key of keys) {
-			const row = query.get(key.id, key.contentHash, model) as unknown as FailureRow | null;
-			const retryAt = row == null ? null : parseMs(row.retry_at);
-			if (row != null && retryAt !== null)
-				failures.set(`${key.id}:${key.contentHash}:${model}`, { attempts: row.attempts, retryAt });
-		}
-		return failures;
-	}, "embedding-repair-state.ts:160");
+	return await accessor.withReadDbAsync(
+		(db: import("./db-accessor").ReadDb) => {
+			const failures = new Map<string, EmbeddingRepairFailure>();
+			const query = db.prepare(
+				"SELECT memory_id, content_hash, attempts, retry_at FROM embedding_repair_backoff WHERE memory_id = ? AND content_hash = ? AND model = ?",
+			);
+			for (const key of keys) {
+				const row = query.get(key.id, key.contentHash, model) as unknown as FailureRow | null;
+				const retryAt = row == null ? null : parseMs(row.retry_at);
+				if (row != null && retryAt !== null)
+					failures.set(`${key.id}:${key.contentHash}:${model}`, { attempts: row.attempts, retryAt });
+			}
+			return failures;
+		},
+		{ siteToken: "db:repair.backoff.read" },
+	);
 }
 
-export function finishEmbeddingRepairLease(
+export async function finishEmbeddingRepairLease(
 	accessor: DbAccessor,
 	lease: EmbeddingRepairLease,
 	outcome: {
@@ -344,80 +356,84 @@ export function finishEmbeddingRepairLease(
 		readonly error?: string;
 	},
 	now = Date.now(),
-): boolean {
+): Promise<boolean> {
 	try {
-		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-		return accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
-			const current = readBudget(db);
-			if (current == null || current.lease_id !== lease.id) return false;
-			const eligible = typeof outcome.eligibility === "function" ? outcome.eligibility(db) : outcome.eligibility;
-			if (!eligible) {
-				db.prepare(
-					`UPDATE embedding_repair_budget
+		return await accessor.withWriteTxAsync(
+			(db: import("./db-accessor").WriteDb) => {
+				const current = readBudget(db);
+				if (current == null || current.lease_id !== lease.id) return false;
+				const eligible = typeof outcome.eligibility === "function" ? outcome.eligibility(db) : outcome.eligibility;
+				if (!eligible) {
+					db.prepare(
+						`UPDATE embedding_repair_budget
 				 SET lease_id = NULL, lease_expires_at = NULL, updated_at = ?
 				 WHERE id = 1 AND lease_id = ?`,
-				).run(iso(now), lease.id);
-				return false;
-			}
+					).run(iso(now), lease.id);
+					return false;
+				}
 
-			const deleteFailure = db.prepare(
-				"DELETE FROM embedding_repair_backoff WHERE memory_id = ? AND content_hash = ? AND model = ?",
-			);
-			const readFailure = db.prepare(
-				"SELECT attempts FROM embedding_repair_backoff WHERE memory_id = ? AND content_hash = ? AND model = ?",
-			);
-			const writeFailure = db.prepare(
-				`INSERT INTO embedding_repair_backoff (memory_id, content_hash, model, attempts, retry_at, updated_at)
+				const deleteFailure = db.prepare(
+					"DELETE FROM embedding_repair_backoff WHERE memory_id = ? AND content_hash = ? AND model = ?",
+				);
+				const readFailure = db.prepare(
+					"SELECT attempts FROM embedding_repair_backoff WHERE memory_id = ? AND content_hash = ? AND model = ?",
+				);
+				const writeFailure = db.prepare(
+					`INSERT INTO embedding_repair_backoff (memory_id, content_hash, model, attempts, retry_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(memory_id, content_hash, model) DO UPDATE SET
 			   attempts = excluded.attempts, retry_at = excluded.retry_at, updated_at = excluded.updated_at`,
-			);
+				);
 
-			for (const key of outcome.successful) deleteFailure.run(key.id, key.contentHash, outcome.model);
-			for (const key of outcome.failed) {
-				const previous = readFailure.get(key.id, key.contentHash, outcome.model) as { attempts: number } | null;
-				const attempts = (previous?.attempts ?? 0) + 1;
-				const retryMs = computeRetryBackoffMs(attempts, outcome.pollMs);
-				writeFailure.run(key.id, key.contentHash, outcome.model, attempts, iso(now + retryMs), iso(now));
-			}
+				for (const key of outcome.successful) deleteFailure.run(key.id, key.contentHash, outcome.model);
+				for (const key of outcome.failed) {
+					const previous = readFailure.get(key.id, key.contentHash, outcome.model) as { attempts: number } | null;
+					const attempts = (previous?.attempts ?? 0) + 1;
+					const retryMs = computeRetryBackoffMs(attempts, outcome.pollMs);
+					writeFailure.run(key.id, key.contentHash, outcome.model, attempts, iso(now + retryMs), iso(now));
+				}
 
-			const windowStartedAt = validWindowStart(current.window_started_at, now);
-			const inWindow = windowStartedAt !== null && now - windowStartedAt < HOUR_MS;
-			const batchesStarted = inWindow ? current.batches_started : 0;
-			// A lease serializes attempted work, but the hourly budget represents
-			// completed repair work. A pressure abort can still persist failure
-			// backoff while releasing its lease without spending a batch slot.
-			const charged = outcome.successful.length > 0 || (outcome.affected ?? 0) > 0;
-			const error = outcome.error ?? (outcome.failed.length > 0 ? "embedding provider returned no vector" : null);
-			db.prepare(
-				`UPDATE embedding_repair_budget
+				const windowStartedAt = validWindowStart(current.window_started_at, now);
+				const inWindow = windowStartedAt !== null && now - windowStartedAt < HOUR_MS;
+				const batchesStarted = inWindow ? current.batches_started : 0;
+				// A lease serializes attempted work, but the hourly budget represents
+				// completed repair work. A pressure abort can still persist failure
+				// backoff while releasing its lease without spending a batch slot.
+				const charged = outcome.successful.length > 0 || (outcome.affected ?? 0) > 0;
+				const error = outcome.error ?? (outcome.failed.length > 0 ? "embedding provider returned no vector" : null);
+				db.prepare(
+					`UPDATE embedding_repair_budget
 			 SET window_started_at = ?, batches_started = ?, last_completed_at = ?, last_affected = ?,
 			     lease_id = NULL, lease_expires_at = NULL, last_error = ?, updated_at = ?
 			 WHERE id = 1 AND lease_id = ?`,
-			).run(
-				inWindow ? current.window_started_at : iso(now),
-				batchesStarted + (charged ? 1 : 0),
-				iso(now),
-				outcome.affected ?? outcome.successful.length,
-				error,
-				iso(now),
-				lease.id,
-			);
-			return true;
-		}, "embedding-repair-state.ts:191");
+				).run(
+					inWindow ? current.window_started_at : iso(now),
+					batchesStarted + (charged ? 1 : 0),
+					iso(now),
+					outcome.affected ?? outcome.successful.length,
+					error,
+					iso(now),
+					lease.id,
+				);
+				return true;
+			},
+			{ siteToken: "db:repair.lease.finish" },
+		);
 	} catch (error) {
 		// A failure while persisting provider/backoff accounting must not strand
 		// the durable lease until its expiry. Best-effort release preserves the
 		// original error while allowing the next repair request to proceed.
 		try {
-			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-			accessor.withWriteTx((db: import("./db-accessor").WriteDb) => {
-				db.prepare(
-					`UPDATE embedding_repair_budget
+			await accessor.withWriteTxAsync(
+				(db: import("./db-accessor").WriteDb) => {
+					db.prepare(
+						`UPDATE embedding_repair_budget
 					 SET lease_id = NULL, lease_expires_at = NULL, last_error = ?, updated_at = ?
 					 WHERE id = 1 AND lease_id = ?`,
-				).run(error instanceof Error ? error.message : String(error), iso(now), lease.id);
-			}, "embedding-repair-state.ts:release-after-finish-error");
+					).run(error instanceof Error ? error.message : String(error), iso(now), lease.id);
+				},
+				{ siteToken: "db:repair.lease.release-after-error" },
+			);
 		} catch {
 			// Preserve the original failure; a later lease-expiry recovery can
 			// still reclaim the row if the fallback transaction also fails.
