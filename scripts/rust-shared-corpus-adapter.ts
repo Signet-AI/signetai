@@ -21,14 +21,6 @@ function required(name: string): string {
 	if (!value) fail(`missing ${name}`);
 	return value;
 }
-function esc(value: string): string {
-	return value
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&apos;");
-}
 function readManifest(value: string): Manifest {
 	try {
 		return JSON.parse(value) as Manifest;
@@ -123,23 +115,11 @@ if (existsSync(junitPath)) {
 const observedFiles = new Set(cases.flatMap((testcase) => selected.filter((path) => testcase.includes(path))));
 const evidence =
 	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
-if (!existsSync(junitPath) || !cases.length)
-	cases.push(
-		`<testcase classname="rust-shared-corpus-adapter" name="adapter-execution"><error message="missing JUnit report or testcases">${esc(evidence)}</error></testcase>`,
-	);
-if (!nativeEvidence)
-	cases.push(
-		`<testcase classname="rust-shared-corpus-adapter" name="native-boundary-evidence"><failure message="no observed Rust daemon launch evidence">${esc(evidence)}</failure></testcase>`,
-	);
-for (const path of selected)
-	if (!observedFiles.has(path))
-		cases.push(
-			`<testcase classname="rust-shared-corpus-adapter" name="${esc(path)}"><failure message="selected source produced no observed testcase identity or runtime evidence">${esc(evidence)}</failure></testcase>`,
-		);
-if (child.status !== 0 || child.signal)
-	cases.push(
-		`<testcase classname="rust-shared-corpus-adapter" name="child-process"><failure message="child status=${esc(String(child.status))} signal=${esc(String(child.signal ?? "none"))}">${esc(evidence)}</failure></testcase>`,
-	);
+if (!existsSync(junitPath) || !cases.length) fail(`Rust child produced no real JUnit testcase identities: ${evidence}`);
+if (!nativeEvidence) fail(`Rust child produced no native boundary evidence: ${evidence}`);
+if (child.status !== 0 || child.signal) fail(`Rust child failed: ${evidence}`);
+if (selected.some((path) => !observedFiles.has(path)))
+	fail("selected source produced no observed testcase identity or runtime evidence");
 const failures = cases.filter((testcase) => /<(?:failure|error)\b/.test(testcase)).length;
 writeFileSync(
 	report,

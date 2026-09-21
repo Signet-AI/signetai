@@ -153,16 +153,23 @@ export function buildExecutionManifest(repo: string): ExecutionManifest {
 		protectedCorpus: discoverBaseline(repo),
 	};
 }
+export function isTestEntrypoint(path: string): boolean {
+	return (
+		/(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(path) ||
+		/(?:^|\/)__tests__\/[^/]+\.[^.]+$/.test(path) ||
+		path === "scripts/load-test-daemon.ts"
+	);
+}
 export function runnableSelectedPaths(paths: string[], manifest: ManifestEntry[]): string[] {
 	const allowed = new Set(manifest.map((e) => e.path));
-	const out = paths.filter((p) => allowed.has(p) && /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(p));
+	const out = paths.filter((p) => allowed.has(p) && isTestEntrypoint(p));
 	if (!out.length) throw new Error("selected mode requires valid test entrypoints");
 	return [...new Set(out)].sort();
 }
 export function runnableManifestPaths(manifest: ManifestEntry[]): string[] {
 	return manifest
 		.map((e) => e.path)
-		.filter((p) => /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(p))
+		.filter(isTestEntrypoint)
 		.sort();
 }
 export function parseJUnitReport(xml: string, expected: string[] = [], childStatus: number | null = 0): Accounting {
