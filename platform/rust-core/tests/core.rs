@@ -227,6 +227,56 @@ fn ontology_proposal_conflicts_group_distinct_values_and_respect_scope_and_limit
     );
 }
 
+#[test]
+fn ontology_proposal_conflicts_match_typescript_value_canonicalization_and_limit_before_grouping() {
+    let d = tempdir().unwrap();
+    let path = d.path().join("conflicts-canonical.sqlite");
+    let c = Core::open(&path, 2).unwrap();
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch("CREATE TABLE ontology_proposals (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, operation TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0.0, rationale TEXT NOT NULL DEFAULT '', evidence TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);").unwrap();
+    let insert = |id: &str, value: &str, updated: &str, claim_key: &str| {
+        let payload = serde_json::json!({"entity":"Entity","aspect":"Profile","claim_key":claim_key,"value":value});
+        db.execute("INSERT INTO ontology_proposals (id,agent_id,operation,status,payload,confidence,rationale,evidence,created_at,updated_at) VALUES (?,?,?,'pending',?,?,?,?,'2025-01-01',?)", rusqlite::params![id,"agent","add_claim_value",payload.to_string(),0.8,"why","[]",updated]).unwrap();
+    };
+    insert("p-b", "B", "2025-01-02", "Name");
+    insert("p-a2", "a", "2025-01-04", "Name");
+    insert("p-a1", " A ", "2025-01-03", "Name");
+    insert("p-new-york", "New York", "2024-12-31", "City");
+    insert("p-new_york", "new_york", "2024-12-30", "City");
+    db.execute("INSERT INTO ontology_proposals (id,agent_id,operation,status,payload,created_at,updated_at) VALUES ('broken','agent','add_claim_value','pending','not-json','2025-01-01','2025-01-04')", []).unwrap();
+    let all = c
+        .submit(Operation::OntologyProposalConflicts {
+            agent_id: "agent".into(),
+            workspace_id: "default".into(),
+            limit: None,
+        })
+        .unwrap();
+    assert_eq!(all["count"], 2);
+    let york = all["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["proposalIds"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("p-new-york"))
+        })
+        .unwrap();
+    assert_eq!(york["count"], 2);
+    let limited = c
+        .submit(Operation::OntologyProposalConflicts {
+            agent_id: "agent".into(),
+            workspace_id: "default".into(),
+            limit: Some(2),
+        })
+        .unwrap();
+    assert_eq!(
+        limited["count"], 0,
+        "row limit must apply before grouping, matching TypeScript"
+    );
+}
+
 fn core() -> Core {
     let d = tempdir().unwrap();
     let p = d.path().join("db.sqlite");

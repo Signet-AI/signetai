@@ -2861,7 +2861,7 @@ fn execute_operation(
             let workspace_id = canonical_workspace(&workspace_id)?;
             let limit = bounded_page_limit(limit)?;
             let mut stmt = connection.prepare(
-                "SELECT id,payload,confidence,rationale,evidence FROM ontology_proposals WHERE agent_id=? AND status='pending' AND operation='add_claim_value' AND (json_extract(payload,'$.workspace_id')=? OR json_extract(payload,'$._workspaceId')=? OR (json_extract(payload,'$.workspace_id') IS NULL AND json_extract(payload,'$._workspaceId') IS NULL)) ORDER BY updated_at DESC LIMIT ?"
+                "SELECT id,payload,confidence,rationale,evidence FROM ontology_proposals WHERE agent_id=? AND status='pending' AND operation='add_claim_value' AND json_valid(payload)=1 AND (json_extract(payload,'$.workspace_id')=? OR json_extract(payload,'$._workspaceId')=? OR (json_extract(payload,'$.workspace_id') IS NULL AND json_extract(payload,'$._workspaceId') IS NULL)) ORDER BY updated_at DESC LIMIT ?"
             )?;
             let mut rows = stmt.query(params![agent_id, workspace_id, workspace_id, limit])?;
             let mut groups: Vec<(String, Value, std::collections::HashSet<String>)> = Vec::new();
@@ -2893,7 +2893,7 @@ fn execute_operation(
                     .unwrap_or("general");
                 let key = [entity, aspect, group_key, claim_key]
                     .into_iter()
-                    .map(canonical_key)
+                    .map(proposal_conflict_canonical)
                     .collect::<Vec<_>>()
                     .join("\u{1f}");
                 let proposal_id: String = row.get(0)?;
@@ -2929,7 +2929,7 @@ fn execute_operation(
                     }
                 };
                 let (_, item, distinct_values) = &mut groups[index];
-                distinct_values.insert(canonical_key(value));
+                distinct_values.insert(proposal_conflict_canonical(value));
                 item["values"].as_array_mut().unwrap().push(entry);
                 item["proposalIds"]
                     .as_array_mut()
@@ -3957,6 +3957,15 @@ fn canonical_key(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join("_")
+}
+
+fn proposal_conflict_canonical(value: &str) -> String {
+    value
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 fn bounded_offset(value: usize) -> Result<usize, CoreError> {
     if value > 100_000 {
