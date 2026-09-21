@@ -43,6 +43,46 @@ fn session_candidates_preserve_ts_fields_and_budget_zero_is_empty() {
 }
 
 #[test]
+fn session_candidates_zero_budget_excludes_one_token_memory() {
+    let dir = tempdir().unwrap();
+    let core = Core::open(&dir.path().join("memory.db"), 32).unwrap();
+    core.initialize().unwrap();
+    let id = core.submit(Operation::Remember { agent_id: "agent-a".into(), content: "one".into(), metadata: json!({}) }).unwrap()["id"].as_str().unwrap().to_owned();
+    core.submit(Operation::SessionCandidatesRecord {
+        agent_id: "agent-a".into(), workspace_id: "ws-a".into(), session_key: "zero-budget".into(),
+        candidates: vec![json!({"id": id})], injected_ids: vec![id],
+    }).unwrap();
+    let assembled = core.submit(Operation::SessionCandidatesAssemble {
+        agent_id: "agent-a".into(), workspace_id: "ws-a".into(), session_key: "zero-budget".into(), token_budget: 0,
+    }).unwrap();
+    assert!(assembled["items"].as_array().unwrap().is_empty());
+    assert_eq!(assembled["tokens"], json!(0));
+    assert_eq!(assembled["tokenBudget"], json!(0));
+}
+
+#[test]
+fn session_candidates_ignore_malformed_legacy_metadata() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("memory.db");
+    let core = Core::open(&path, 32).unwrap();
+    core.initialize().unwrap();
+    let id = core.submit(Operation::Remember { agent_id: "agent-a".into(), content: "legacy row".into(), metadata: json!({}) }).unwrap()["id"].as_str().unwrap().to_owned();
+    core.submit(Operation::SessionCandidatesRecord {
+        agent_id: "agent-a".into(), workspace_id: "ws-a".into(), session_key: "malformed-metadata".into(),
+        candidates: vec![json!({"id": id})], injected_ids: vec![id.clone()],
+    }).unwrap();
+    drop(core);
+    let db = Connection::open(&path).unwrap();
+    db.execute("UPDATE memories SET metadata = ? WHERE id = ?", ["not-json", id.as_str()]).unwrap();
+    drop(db);
+    let core = Core::open(&path, 32).unwrap();
+    let assembled = core.submit(Operation::SessionCandidatesAssemble {
+        agent_id: "agent-a".into(), workspace_id: "ws-a".into(), session_key: "malformed-metadata".into(), token_budget: 100,
+    }).unwrap();
+    assert!(assembled["items"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn session_candidates_exclude_all_lifecycle_invalid_rows() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("memory.db");
