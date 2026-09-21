@@ -295,9 +295,20 @@ async fn navigation_attributes(
     ))
 }
 fn workspace_nav(headers: &HeaderMap, q: &NavigationQuery) -> Result<String, ApiError> {
-    let values=headers.get("x-workspace-id").or_else(||headers.get("x-signet-workspace-id")).map(|v|v.to_str().map(str::trim)).transpose().map_err(|_|ApiError::bad_request("workspace header must be valid UTF-8"))?;
-    let query=q.workspace_id.as_deref().map(str::trim).filter(|v|!v.is_empty());
-    if values.is_some() && query.is_some() && values!=query { return Err(ApiError::bad_request("conflicting workspace scope")); }
+    let values = headers
+        .get("x-workspace-id")
+        .or_else(|| headers.get("x-signet-workspace-id"))
+        .map(|v| v.to_str().map(str::trim))
+        .transpose()
+        .map_err(|_| ApiError::bad_request("workspace header must be valid UTF-8"))?;
+    let query = q
+        .workspace_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    if values.is_some() && query.is_some() && values != query {
+        return Err(ApiError::bad_request("conflicting workspace scope"));
+    }
     Ok(values.or(query).unwrap_or("default").to_owned())
 }
 
