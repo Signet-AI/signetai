@@ -857,7 +857,7 @@ fn execute_operation(
         Operation::ReflectionList { agent_id, limit } => {
             let agent_id = required_agent(&agent_id)?;
             let limit = limit.clamp(1, 100);
-            let mut statement = connection.prepare("SELECT id,date,summary,patterns,question,answer,answer_memory_id,created_at,answered_at,model,content_key,memory_ids FROM daily_reflections WHERE agent_id=? ORDER BY created_at DESC LIMIT ?")?;
+            let mut statement = connection.prepare("SELECT id,date,summary,patterns,question,answer,answer_memory_id,created_at,answered_at,model,content_key,memory_ids,provenance FROM daily_reflections WHERE agent_id=? ORDER BY created_at DESC LIMIT ?")?;
             let rows = statement.query_map(params![agent_id, limit as i64], reflection_row)?;
             Ok(json!({"reflections": rows.collect::<Result<Vec<_>, _>>()?}))
         }
@@ -868,7 +868,7 @@ fn execute_operation(
         } => {
             let agent_id = required_agent(&agent_id)?;
             let limit = limit.clamp(1, 100);
-            let mut statement = connection.prepare("SELECT id,date,summary,patterns,question,answer,answer_memory_id,created_at,answered_at,model,content_key,memory_ids FROM daily_reflections WHERE agent_id=? AND date=? ORDER BY created_at DESC LIMIT ?")?;
+            let mut statement = connection.prepare("SELECT id,date,summary,patterns,question,answer,answer_memory_id,created_at,answered_at,model,content_key,memory_ids,provenance FROM daily_reflections WHERE agent_id=? AND date=? ORDER BY created_at DESC LIMIT ?")?;
             let rows =
                 statement.query_map(params![agent_id, date, limit as i64], reflection_row)?;
             let reflections = rows.collect::<Result<Vec<_>, _>>()?;
@@ -916,7 +916,12 @@ fn execute_operation(
                 let patterns = serde_json::to_string(entry.get("patterns").unwrap_or(&json!([])))?;
                 let memory_ids =
                     serde_json::to_string(entry.get("memoryIds").unwrap_or(&json!([])))?;
-                tx.execute("INSERT INTO daily_reflections (id,agent_id,date,summary,patterns,question,memory_ids,model,created_at,content_key) VALUES (?,?,?,?,?,?,?,?,datetime('now'),?)", params![id,agent_id,date,summary,patterns,question,memory_ids,model,key])?;
+                let provenance = serde_json::to_string(
+                    entry
+                        .get("provenance")
+                        .unwrap_or(&json!({"source":"reflection-generator"})),
+                )?;
+                tx.execute("INSERT INTO daily_reflections (id,agent_id,date,summary,patterns,question,memory_ids,model,created_at,content_key,provenance) VALUES (?,?,?,?,?,?,?, ?,datetime('now'),?,?)", params![id,agent_id,date,summary,patterns,question,memory_ids,model,key,provenance])?;
                 inserted.push(id);
             }
             tx.commit()?;
@@ -4959,6 +4964,7 @@ fn reflection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
         "model": row.get::<_, Option<String>>(9)?,
         "contentKey": row.get::<_, Option<String>>(10)?,
         "memoryIds": serde_json::from_str::<Value>(&row.get::<_, String>(11).unwrap_or_else(|_| "[]".into())).unwrap_or_else(|_| json!([])),
+        "provenance": serde_json::from_str::<Value>(&row.get::<_, String>(12).unwrap_or_else(|_| "{}".into())).unwrap_or_else(|_| json!({})),
     }))
 }
 
@@ -5007,7 +5013,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS hook_receipts (id INTEGER PRIMARY KEY AUTOINCREMENT, receipt_id TEXT NOT NULL, agent_id TEXT NOT NULL, session_key TEXT, hook TEXT NOT NULL, checkpoint TEXT, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL, UNIQUE(agent_id, receipt_id));
          CREATE INDEX IF NOT EXISTS hook_receipts_scope ON hook_receipts(agent_id, session_key, id);
          CREATE TABLE IF NOT EXISTS cross_agent_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, workspace_id TEXT NOT NULL, sender_agent_id TEXT NOT NULL, recipient_agent_id TEXT NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
-         CREATE TABLE IF NOT EXISTS daily_reflections (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', date TEXT NOT NULL, summary TEXT NOT NULL, patterns TEXT NOT NULL DEFAULT '[]', question TEXT, answer TEXT, answer_memory_id TEXT, memory_ids TEXT NOT NULL DEFAULT '[]', summary_ids TEXT NOT NULL DEFAULT '[]', model TEXT, created_at TEXT NOT NULL, answered_at TEXT, content_key TEXT);
+         CREATE TABLE IF NOT EXISTS daily_reflections (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', date TEXT NOT NULL, summary TEXT NOT NULL, patterns TEXT NOT NULL DEFAULT '[]', question TEXT, answer TEXT, answer_memory_id TEXT, memory_ids TEXT NOT NULL DEFAULT '[]', summary_ids TEXT NOT NULL DEFAULT '[]', model TEXT, created_at TEXT NOT NULL, answered_at TEXT, content_key TEXT, provenance TEXT NOT NULL DEFAULT '{}');
          CREATE INDEX IF NOT EXISTS daily_reflections_agent_created ON daily_reflections(agent_id, created_at DESC);
          CREATE INDEX IF NOT EXISTS daily_reflections_agent_date ON daily_reflections(agent_id, date, created_at DESC);
 

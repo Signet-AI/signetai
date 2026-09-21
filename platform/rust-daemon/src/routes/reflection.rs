@@ -11,8 +11,63 @@ use serde::Deserialize;
 use serde_json::json;
 use serde_json::Value;
 use signet_core_native::Operation;
+use std::time::Duration;
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+#[derive(Debug, Default)]
+struct ReflectionConfig {
+    enabled: bool,
+    count: usize,
+    model: Option<String>,
+    timeout_ms: u64,
+    max_tokens: u64,
+    timezone: Option<String>,
+}
+
+fn reflection_config(text: &str) -> ReflectionConfig {
+    let mut config = ReflectionConfig {
+        count: 1,
+        timeout_ms: 30_000,
+        max_tokens: 4096,
+        ..Default::default()
+    };
+    let mut active = false;
+    let mut parent_indent = 0usize;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - line.trim_start().len();
+        if trimmed == "reflections:" {
+            active = true;
+            parent_indent = indent;
+            continue;
+        }
+        if !active {
+            continue;
+        }
+        if indent <= parent_indent {
+            active = false;
+            continue;
+        }
+        let Some((key, raw)) = trimmed.split_once(':') else {
+            continue;
+        };
+        let value = raw.trim().trim_matches(['\"', '\'']);
+        match key.trim() {
+            "enabled" => config.enabled = value.eq_ignore_ascii_case("true"),
+            "count" => config.count = value.parse().unwrap_or(1),
+            "model" if !value.is_empty() => config.model = Some(value.to_owned()),
+            "timeout" | "timeoutMs" => config.timeout_ms = value.parse().unwrap_or(30_000),
+            "maxTokens" | "max_tokens" => config.max_tokens = value.parse().unwrap_or(4096),
+            "timezone" if !value.is_empty() => config.timezone = Some(value.to_owned()),
+            _ => {}
+        }
+    }
+    config
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct ReflectionQuery {
@@ -116,33 +171,15 @@ async fn generate(
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let config = std::fs::read_to_string(workspace.join("agent.yaml")).unwrap_or_default();
-    let section = config.split("reflections:").nth(1).unwrap_or("");
-    let enabled = section
-        .lines()
-        .take_while(|line| {
-            line.trim().is_empty() || line.chars().take_while(|c| c.is_whitespace()).count() > 4
-        })
-        .any(|line| line.trim() == "enabled: true");
-    if !enabled {
+    let reflection = reflection_config(&config);
+    if !reflection.enabled {
         return Err(ApiError::bad_request(
             "Reflections are disabled in pipeline config",
         ));
     }
-    let configured_count = section
-        .lines()
-        .find_map(|l| {
-            l.trim()
-                .strip_prefix("count:")
-                .and_then(|v| v.trim().parse::<usize>().ok())
-        })
-        .unwrap_or(1);
-    let count = query.count.unwrap_or(configured_count).clamp(1, 6);
-    let model = section
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("model:"))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(str::to_owned)
+    let count = query.count.unwrap_or(reflection.count).clamp(1, 6);
+    let model = reflection
+        .model
         .or_else(|| std::env::var("SIGNET_OPENAI_MODEL").ok())
         .ok_or_else(|| ApiError::bad_request("model is required"))?;
     let memories = execute(
@@ -154,13 +191,17 @@ async fn generate(
     )
     .await?;
     let prompt = format!("Review these memories and return JSON with an entries array containing up to {count} reflective questions. Memories: {}", serde_json::to_string(&memories).unwrap_or_default());
-    let response = super::inference::call_openai(
-        &std::env::var("SIGNET_OPENAI_BASE_URL")
-            .map_err(|_| ApiError::upstream("provider is not configured"))?,
-        std::env::var("SIGNET_OPENAI_API_KEY").ok(),
-        json!({"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":4096}),
+    let response = tokio::time::timeout(
+        Duration::from_millis(reflection.timeout_ms.clamp(1, 120_000)),
+        super::inference::call_openai(
+            &std::env::var("SIGNET_OPENAI_BASE_URL")
+                .map_err(|_| ApiError::upstream("provider is not configured"))?,
+            std::env::var("SIGNET_OPENAI_API_KEY").ok(),
+            json!({"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":reflection.max_tokens.clamp(1, 16_384)}),
+        ),
     )
     .await
+    .map_err(|_| ApiError::upstream("provider request timed out"))?
     .map_err(|e| ApiError::upstream(format!("provider request failed: {e:?}")))?;
     let content = response
         .pointer("/choices/0/message/content")
