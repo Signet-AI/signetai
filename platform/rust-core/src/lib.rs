@@ -3004,8 +3004,8 @@ fn execute_operation(
             let workspace_id = canonical_workspace(&workspace_id)?;
             let entity = bounded_text(&entity, "entity", 256)?;
             let (eid,ename):(String,String)=connection.query_row("SELECT id,name FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND (COALESCE(canonical_name,lower(name))=lower(?) OR lower(name)=lower(?)) ORDER BY name LIMIT 1",params![&agent_id,&workspace_id,&entity,&entity],|r|Ok((r.get(0)?,r.get(1)?))).optional()?.ok_or(CoreError::NotFound)?;
-            let q=connection.prepare("SELECT p.id,p.name,p.canonical_name,p.weight,p.created_at,p.updated_at, count(DISTINCT CASE WHEN a.kind='attribute' AND a.status='active' THEN a.id END), count(DISTINCT CASE WHEN a.kind='constraint' AND a.status='active' THEN a.id END) FROM entity_aspects p LEFT JOIN entity_attributes a ON a.aspect_id=p.id AND a.agent_id=p.agent_id AND a.workspace_id=p.workspace_id WHERE p.entity_id=? AND p.agent_id=? AND p.workspace_id=? AND COALESCE(p.status,'active')='active' GROUP BY p.id ORDER BY p.weight DESC,p.name ASC")?;
-            let items=q?.query_map(params![&eid,&agent_id,&workspace_id],|r|Ok(json!({"aspect":{"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"canonicalName":r.get::<_,Option<String>>(2)?,"weight":r.get::<_,f64>(3)?,"createdAt":r.get::<_,String>(4)?,"updatedAt":r.get::<_,String>(5)?},"attributeCount":r.get::<_,i64>(6)?,"constraintCount":r.get::<_,i64>(7)?})))?.collect::<Result<Vec<_>,_>>()?;
+            let mut q=connection.prepare("SELECT p.id,p.name,p.canonical_name,p.weight,p.created_at,p.updated_at, count(DISTINCT CASE WHEN a.kind='attribute' AND a.status='active' THEN a.id END), count(DISTINCT CASE WHEN a.kind='constraint' AND a.status='active' THEN a.id END) FROM entity_aspects p LEFT JOIN entity_attributes a ON a.aspect_id=p.id AND a.agent_id=p.agent_id AND a.workspace_id=p.workspace_id WHERE p.entity_id=? AND p.agent_id=? AND p.workspace_id=? AND COALESCE(p.status,'active')='active' GROUP BY p.id ORDER BY p.weight DESC,p.name ASC")?;
+            let items=q.query_map(params![&eid,&agent_id,&workspace_id],|r|Ok(json!({"aspect":{"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"canonicalName":r.get::<_,Option<String>>(2)?,"weight":r.get::<_,f64>(3)?,"createdAt":r.get::<_,String>(4)?,"updatedAt":r.get::<_,String>(5)?},"attributeCount":r.get::<_,i64>(6)?,"constraintCount":r.get::<_,i64>(7)?})))?.collect::<Result<Vec<_>,_>>()?;
             Ok(json!({"entity":{"id":eid,"name":ename},"items":items}))
         }
         Operation::KnowledgeNavigationGroups {
@@ -3142,19 +3142,48 @@ fn execute_operation(
         } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
-            let entity_id = required_id(&entity_id)?;
-            let mut s=connection.prepare("SELECT id,name,weight FROM kg_aspects WHERE agent_id=? AND workspace_id=? AND entity_id=? ORDER BY weight DESC LIMIT ?")?;
-            let aspects=s.query_map(params![agent_id,workspace_id,entity_id,max_aspects.clamp(1,100) as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"weight":r.get::<_,f64>(2)?})))?;
-            let mut out = Vec::new();
-            for a in aspects {
-                let mut v = a?;
-                let aid = v["id"].as_str().unwrap_or_default().to_string();
-                let mut q=connection.prepare("SELECT id,kind,content,status FROM kg_attributes WHERE agent_id=? AND workspace_id=? AND aspect_id=? AND status='active' ORDER BY importance DESC LIMIT ?")?;
-                let rows=q.query_map(params![agent_id,workspace_id,aid,max_attributes.clamp(1,200) as i64],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?;
-                v["attributes"] = json!(rows.collect::<Result<Vec<_>, _>>()?);
-                out.push(v);
+            let name = bounded_text(&entity_id, "entity", 256)?;
+            let key = name.to_lowercase();
+            let like = format!("%{}%", key);
+            let entity=connection.query_row("SELECT id,name,canonical_name,entity_type,description,created_at,updated_at FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND (id=? OR lower(COALESCE(canonical_name,lower(name)))=? OR lower(name)=? OR lower(COALESCE(canonical_name,lower(name))) LIKE ? OR lower(name) LIKE ?) ORDER BY CASE WHEN id=? THEN 0 WHEN lower(COALESCE(canonical_name,lower(name)))=? THEN 1 WHEN lower(name)=? THEN 2 WHEN lower(COALESCE(canonical_name,lower(name))) LIKE ? THEN 3 ELSE 4 END,updated_at DESC,name ASC LIMIT 1",params![&agent_id,&workspace_id,&name,&key,&key,&like,&like,&name,&key,&key,&like],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"canonicalName":r.get::<_,Option<String>>(2)?,"entityType":r.get::<_,String>(3)?,"description":r.get::<_,Option<String>>(4)?,"createdAt":r.get::<_,String>(5)?,"updatedAt":r.get::<_,String>(6)?}))).optional()?.ok_or(CoreError::NotFound)?;
+            let eid = entity["id"].as_str().unwrap().to_string();
+            let lim = max_attributes.clamp(1, 200) as i64;
+            let mut items = Vec::new();
+            let mut q=connection.prepare("SELECT id,name,canonical_name,weight,created_at,updated_at FROM entity_aspects WHERE entity_id=? AND agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' ORDER BY weight DESC,name ASC LIMIT ?")?;
+            for r in q.query_map(
+                params![
+                    &eid,
+                    &agent_id,
+                    &workspace_id,
+                    max_aspects.clamp(1, 100) as i64
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                        r.get::<_, f64>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, String>(5)?,
+                    ))
+                },
+            )? {
+                let (aid, aname, canon, weight, created, updated) = r?;
+                let mut v = json!({"aspect":{"id":aid,"name":aname,"canonicalName":canon,"weight":weight,"createdAt":created,"updatedAt":updated},"attributeCount":0,"constraintCount":0,"groupCount":0,"claimCount":0,"groups":[]});
+                let mut gq=connection.prepare("SELECT COALESCE(group_key,'general'),count(CASE WHEN kind='attribute' AND status='active' THEN 1 END),count(CASE WHEN kind='constraint' AND status='active' THEN 1 END),count(DISTINCT claim_key),max(updated_at) FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND status!='deleted' GROUP BY COALESCE(group_key,'general') ORDER BY 2 DESC,3 DESC,4 DESC,1 ASC")?;
+                let mut gs = Vec::new();
+                for g in gq.query_map(params![&aid,&agent_id,&workspace_id],|r|Ok(json!({"groupKey":r.get::<_,String>(0)?,"attributeCount":r.get::<_,i64>(1)?,"constraintCount":r.get::<_,i64>(2)?,"claimCount":r.get::<_,i64>(3)?,"latestUpdatedAt":r.get::<_,Option<String>>(4)?,"claims":[]})))? { gs.push(g?); }
+                let group_count = gs.len();
+                gs.truncate(lim as usize);
+                v["groupCount"] = json!(group_count);
+                if depth.min(3) >= 2 {
+                    v["groups"] = json!(gs);
+                }
+                items.push(v);
             }
-            Ok(json!({"entityId":entity_id,"aspects":out,"depth":depth.min(3)}))
+            Ok(
+                json!({"entity":entity,"limits":{"maxAspects":max_aspects,"maxGroups":lim,"maxClaims":lim,"depth":depth.min(3)},"items":items}),
+            )
         }
         Operation::SessionStart {
             agent_id,

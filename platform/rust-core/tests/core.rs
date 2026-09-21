@@ -1841,6 +1841,31 @@ fn navigation_entity_resolves_current_schema_and_returns_detail_envelope() {
 }
 
 #[test]
+fn current_schema_knowledge_tree_is_scoped_bounded_and_status_aware() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("current-tree.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, entity_type TEXT NOT NULL DEFAULT 'person', description TEXT, mentions INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0, pinned_at TEXT, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, weight REAL NOT NULL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, aspect_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT, group_key TEXT, claim_key TEXT, confidence REAL DEFAULT 0.5, importance REAL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO entities VALUES ('e1','a1','w1','Signet','signet','person',NULL,5,0,NULL,'active','2026-01-01','2026-01-05'), ('e2','a2','w1','Signet','signet','person',NULL,9,0,NULL,'active','2026-01-01','2026-01-06'), ('e3','a1','w1','Deleted','deleted','person',NULL,9,0,NULL,'deleted','2026-01-01','2026-01-06'); INSERT INTO entity_aspects VALUES ('p1','e1','a1','w1','Food','food',0.9,'active','2026-01-01','2026-01-05'), ('p2','e1','a1','w1','Work','work',0.8,'active','2026-01-01','2026-01-04'), ('p3','e1','a1','w1','Old','old',1.0,'superseded','2026-01-01','2026-01-06'); INSERT INTO entity_attributes VALUES ('x1','p1','a1','w1',NULL,'attribute','Active food','active food','restaurants','favorite',0.9,0.9,'active','2026-01-01','2026-01-05'), ('x2','p1','a1','w1',NULL,'attribute','Old food','old food','restaurants','favorite',0.9,0.8,'superseded','2026-01-01','2026-01-04'), ('x3','p1','a1','w1',NULL,'constraint','Deleted food','deleted food','secret','deleted',0.9,0.7,'deleted','2026-01-01','2026-01-06'), ('x4','p1','a2','w1',NULL,'attribute','Other agent','other agent','restaurants','foreign',0.9,0.9,'active','2026-01-01','2026-01-06'), ('x5','p2','a1','w1',NULL,'attribute','Work fact','work fact','job','role',0.9,0.9,'active','2026-01-01','2026-01-03');").unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let tree = c
+        .submit(Operation::KnowledgeTree {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity_id: "signet".into(),
+            depth: 3,
+            max_aspects: 1,
+            max_attributes: 1,
+        })
+        .unwrap();
+    assert_eq!(tree["entity"]["id"], "e1");
+    assert_eq!(tree["limits"]["maxClaims"], 1);
+    assert_eq!(tree["items"].as_array().unwrap().len(), 1);
+    assert_eq!(tree["items"][0]["groupCount"], 1);
+    assert_eq!(tree["items"][0]["groups"].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn current_schema_navigation_uses_scoped_live_tables_and_rejects_bad_bounds() {
     let d = tempdir().unwrap();
     let p = d.path().join("current-navigation.sqlite");
