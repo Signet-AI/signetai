@@ -13,7 +13,7 @@ const selected = args.filter((value, index) => value !== "--report" && index !==
 if (existsSync(report)) unlinkSync(report);
 const child = spawnSync(
 	"bun",
-	["run", "test:hermetic", ...selected, "--reporter=junit", `--reporter-outfile=${report}`],
+	["run", "test:hermetic", "--", ...selected, "--reporter=junit", `--reporter-outfile=${report}`],
 	{
 		cwd: process.cwd(),
 		env: { ...process.env },
