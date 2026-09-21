@@ -128,6 +128,16 @@ describe("shared corpus admission", () => {
 		expect(result.unexpectedFiles).toEqual(["wrong-a.test.ts", "wrong-b.test.ts"]);
 	});
 
+	test("preserves a native evidence marker without treating it as a testcase", () => {
+		const result = parseJUnitReport(
+			'<testsuite tests="1" nativeEvidence="true"><testcase file="a.test.ts" line="1" classname="x" name="a"/></testsuite>',
+			["a.test.ts"],
+			0,
+		);
+		expect(result.tests).toBe(1);
+		expect(result.nativeEvidence).toBe(true);
+	});
+
 	test("preserves nested JUnit suite errors", () => {
 		const result = parseJUnitReport(
 			'<testsuites><testsuite tests="1" errors="1"><testcase file="a.test.ts" line="1" classname="x" name="a"/></testsuite></testsuites>',

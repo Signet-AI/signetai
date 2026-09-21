@@ -22,6 +22,7 @@ export type Accounting = {
 	skipped: number;
 	missingFiles: string[];
 	unexpectedFiles: string[];
+	nativeEvidence: boolean;
 	crash: boolean;
 	incomplete: boolean;
 	status?: "passed" | "failed";
@@ -174,6 +175,7 @@ export function runnableManifestPaths(manifest: ManifestEntry[]): string[] {
 }
 export function parseJUnitReport(xml: string, expected: string[] = [], childStatus: number | null = 0): Accounting {
 	const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map((m) => m[0]);
+	const nativeEvidence = /<testsuite\b[^>]*nativeEvidence="true"/.test(xml);
 	const suiteStats = (() => {
 		type Stats = { tests?: number; failures?: number; errors?: number };
 		const roots: Array<{ kind: "testsuites" | "testsuite"; stats: Stats }> = [];
@@ -236,6 +238,7 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 			skipped: 0,
 			missingFiles: [...expected],
 			unexpectedFiles: [],
+			nativeEvidence,
 			crash: true,
 			incomplete: true,
 			status: "failed",
@@ -285,6 +288,7 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 		skipped,
 		missingFiles,
 		unexpectedFiles,
+		nativeEvidence,
 		crash: crashed || duplicate,
 		incomplete: incomplete || crashed,
 		status: crashed || totalFailed > 0 || incomplete ? "failed" : "passed",
@@ -349,8 +353,9 @@ export function run(
 	}
 	const accounting = parseJUnitReport(readFileSync(report, "utf8"), selected ?? [], child.status);
 	const infrastructureCrash = child.signal !== null || child.error !== undefined;
+	const nativeEvidenceGap = backend === "rust" && selected === undefined && !accounting.nativeEvidence;
 	const crash = infrastructureCrash || accounting.crash;
-	const incomplete = accounting.incomplete || accounting.tests === 0 || infrastructureCrash;
+	const incomplete = accounting.incomplete || accounting.tests === 0 || infrastructureCrash || nativeEvidenceGap;
 	return {
 		baselineSha: BASELINE_SHA,
 		backend,
