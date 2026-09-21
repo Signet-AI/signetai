@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-21
+- Bug fixes: simplify transcript capture ownership.
+
 ### 2026-09-20
 - Bug fixes: avoid duplicate telemetry sweep; continue integrity past FTS; capture UNC DB attribution; harden Windows DB attribution paths; preserve runtime DB attribution; accept absolute-path stack tokens in bundled runtime (#1764 regression); use kernel-owned instance lock.
 - Refactoring: trim integrity cleanup.
@@ -28,11 +31,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-09-12
 - Features: polish landing page experience; refresh Signet landing page.
 
-### 2026-09-10
-- Features: add dynamic connector health dashboard; add daemon JS bundle path flag; add selectable Bun JS runtime.
-- Bug fixes: enforce connector deadlines across native I/O; bound connector inspection and avoid unverified healthy status; harden Bun daemon runtime and installer.
-
 ## Release Ledger
+
+## [0.226.11] - 2026-09-21
+
+Release summary: 1 bug fix.
+Tag range: `v0.226.10..v0.226.11`.
+
+### Bug Fixes
+
+- **daemon**: simplify transcript capture ownership
 
 ## [0.226.10] - 2026-09-20
 
