@@ -243,6 +243,14 @@ it("matches the TypeScript conflict envelope, grouping, limits, isolation, and a
 		count: 1,
 	};
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a")).body).toEqual(expected);
+	expect((await req(d, "/api/ontology/proposals/conflicts")).body).toEqual({ items: [], count: 0 });
+	expect(
+		(
+			await req(d, "/api/ontology/proposals/conflicts", {
+				headers: { "x-signet-workspace-id": "ws-a" },
+			})
+		).body,
+	).toEqual(expected);
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a&limit=2")).body).toEqual(expected);
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-b")).body).toEqual({ items: [], count: 0 });
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a", {}, "agent-b")).body).toEqual({
@@ -250,7 +258,13 @@ it("matches the TypeScript conflict envelope, grouping, limits, isolation, and a
 		count: 0,
 	});
 	expect((await fetch(`${d.base}/api/ontology/proposals/conflicts?workspace_id=ws-a`)).status).toBe(401);
-	expect((await req(d, "/api/ontology/proposals/conflicts")).r.status).toBe(400);
+	expect(
+		(
+			await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-b", {
+				headers: { "x-signet-workspace-id": "ws-a" },
+			})
+		).r.status,
+	).toBe(400);
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a&limit=0")).r.status).toBe(400);
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a&limit=nope")).r.status).toBe(400);
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a&limit=1001")).r.status).toBe(400);

@@ -1,4 +1,4 @@
-use crate::{agent, execute, AgentQuery, ApiError, AppState};
+use crate::{agent, execute, source_workspace, AgentQuery, ApiError, AppState};
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
@@ -116,7 +116,7 @@ async fn list_conflicts(
         &state,
         Operation::OntologyProposalConflicts {
             agent_id: agent(&headers, Some(&q.agent), None)?,
-            workspace_id: workspace(&q)?,
+            workspace_id: source_workspace(&headers, q.workspace_id.as_deref())?,
             limit: q.limit,
         },
     )
