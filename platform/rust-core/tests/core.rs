@@ -1855,14 +1855,37 @@ fn current_schema_knowledge_tree_is_scoped_bounded_and_status_aware() {
             entity_id: "signet".into(),
             depth: 3,
             max_aspects: 1,
-            max_attributes: 1,
+            max_groups: 1,
+            max_claims: 1,
         })
         .unwrap();
     assert_eq!(tree["entity"]["id"], "e1");
+    assert_eq!(tree["limits"]["maxGroups"], 1);
     assert_eq!(tree["limits"]["maxClaims"], 1);
     assert_eq!(tree["items"].as_array().unwrap().len(), 1);
     assert_eq!(tree["items"][0]["groupCount"], 1);
     assert_eq!(tree["items"][0]["groups"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        tree["items"][0]["groups"][0]["claims"][0]["claimKey"],
+        "favorite"
+    );
+    assert_eq!(
+        tree["items"][0]["groups"][0]["claims"][0]["attributeCount"],
+        2
+    );
+    assert_eq!(
+        tree["items"][0]["groups"][0]["claims"][0]["constraintCount"],
+        0
+    );
+    assert_eq!(tree["items"][0]["groups"][0]["claims"][0]["activeCount"], 1);
+    assert_eq!(
+        tree["items"][0]["groups"][0]["claims"][0]["supersededCount"],
+        1
+    );
+    assert_eq!(
+        tree["items"][0]["groups"][0]["claims"][0]["preview"],
+        "Active food"
+    );
 }
 
 #[test]

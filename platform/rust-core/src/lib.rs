@@ -3138,6 +3138,8 @@ fn execute_operation(
             entity_id,
             depth,
             max_aspects,
+            max_groups,
+            max_claims,
             max_attributes,
         } => {
             let agent_id = required_agent(&agent_id)?;
@@ -3147,7 +3149,8 @@ fn execute_operation(
             let like = format!("%{}%", key);
             let entity=connection.query_row("SELECT id,name,canonical_name,entity_type,description,created_at,updated_at FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND (id=? OR lower(COALESCE(canonical_name,lower(name)))=? OR lower(name)=? OR lower(COALESCE(canonical_name,lower(name))) LIKE ? OR lower(name) LIKE ?) ORDER BY CASE WHEN id=? THEN 0 WHEN lower(COALESCE(canonical_name,lower(name)))=? THEN 1 WHEN lower(name)=? THEN 2 WHEN lower(COALESCE(canonical_name,lower(name))) LIKE ? THEN 3 ELSE 4 END,updated_at DESC,name ASC LIMIT 1",params![&agent_id,&workspace_id,&name,&key,&key,&like,&like,&name,&key,&key,&like],|r|Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"canonicalName":r.get::<_,Option<String>>(2)?,"entityType":r.get::<_,String>(3)?,"description":r.get::<_,Option<String>>(4)?,"createdAt":r.get::<_,String>(5)?,"updatedAt":r.get::<_,String>(6)?}))).optional()?.ok_or(CoreError::NotFound)?;
             let eid = entity["id"].as_str().unwrap().to_string();
-            let lim = max_attributes.clamp(1, 200) as i64;
+            let group_lim = max_groups.clamp(1, 200) as i64;
+            let claim_lim = max_claims.clamp(1, 200) as i64;
             let mut items = Vec::new();
             let mut q=connection.prepare("SELECT id,name,canonical_name,weight,created_at,updated_at FROM entity_aspects WHERE entity_id=? AND agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' ORDER BY weight DESC,name ASC LIMIT ?")?;
             for r in q.query_map(
@@ -3172,9 +3175,18 @@ fn execute_operation(
                 let mut v = json!({"aspect":{"id":aid,"name":aname,"canonicalName":canon,"weight":weight,"createdAt":created,"updatedAt":updated},"attributeCount":0,"constraintCount":0,"groupCount":0,"claimCount":0,"groups":[]});
                 let mut gq=connection.prepare("SELECT COALESCE(group_key,'general'),count(CASE WHEN kind='attribute' AND status='active' THEN 1 END),count(CASE WHEN kind='constraint' AND status='active' THEN 1 END),count(DISTINCT claim_key),max(updated_at) FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND status!='deleted' GROUP BY COALESCE(group_key,'general') ORDER BY 2 DESC,3 DESC,4 DESC,1 ASC")?;
                 let mut gs = Vec::new();
-                for g in gq.query_map(params![&aid,&agent_id,&workspace_id],|r|Ok(json!({"groupKey":r.get::<_,String>(0)?,"attributeCount":r.get::<_,i64>(1)?,"constraintCount":r.get::<_,i64>(2)?,"claimCount":r.get::<_,i64>(3)?,"latestUpdatedAt":r.get::<_,Option<String>>(4)?,"claims":[]})))? { gs.push(g?); }
+                for g in gq.query_map(params![&aid,&agent_id,&workspace_id],|r|Ok(json!({"groupKey":r.get::<_,String>(0)?,"attributeCount":r.get::<_,i64>(1)?,"constraintCount":r.get::<_,i64>(2)?,"claimCount":r.get::<_,i64>(3)?,"latestUpdatedAt":r.get::<_,Option<String>>(4)?,"claims":[]})))? {
+                    let mut group = g?;
+                    if depth.min(3) >= 3 {
+                        let group_key = group["groupKey"].as_str().unwrap_or("general").to_string();
+                        let mut cq = connection.prepare("SELECT claim_key,count(CASE WHEN kind='attribute' THEN 1 END),count(CASE WHEN kind='constraint' THEN 1 END),count(CASE WHEN status='active' THEN 1 END),count(CASE WHEN status='superseded' THEN 1 END),max(updated_at),(SELECT content FROM entity_attributes z WHERE z.aspect_id=? AND z.agent_id=? AND z.workspace_id=? AND COALESCE(z.group_key,'general')=? AND z.claim_key=ea.claim_key AND z.status='active' ORDER BY z.importance DESC,z.updated_at DESC LIMIT 1) FROM entity_attributes ea WHERE ea.aspect_id=? AND ea.agent_id=? AND ea.workspace_id=? AND COALESCE(ea.group_key,'general')=? AND ea.claim_key IS NOT NULL AND ea.status!='deleted' GROUP BY claim_key ORDER BY 4 DESC,6 DESC,1 ASC LIMIT ?")?;
+                        let claims: Vec<Value> = cq.query_map(params![&aid,&agent_id,&workspace_id,&group_key,&aid,&agent_id,&workspace_id,&group_key,claim_lim], |r| Ok(json!({"claimKey":r.get::<_,String>(0)?,"attributeCount":r.get::<_,i64>(1)?,"constraintCount":r.get::<_,i64>(2)?,"activeCount":r.get::<_,i64>(3)?,"supersededCount":r.get::<_,i64>(4)?,"latestUpdatedAt":r.get::<_,Option<String>>(5)?,"preview":r.get::<_,Option<String>>(6)?})))?.collect::<Result<_,_>>()?;
+                        group["claims"] = json!(claims);
+                    }
+                    gs.push(group);
+                }
                 let group_count = gs.len();
-                gs.truncate(lim as usize);
+                gs.truncate(group_lim as usize);
                 v["groupCount"] = json!(group_count);
                 if depth.min(3) >= 2 {
                     v["groups"] = json!(gs);
@@ -3182,7 +3194,7 @@ fn execute_operation(
                 items.push(v);
             }
             Ok(
-                json!({"entity":entity,"limits":{"maxAspects":max_aspects,"maxGroups":lim,"maxClaims":lim,"depth":depth.min(3)},"items":items}),
+                json!({"entity":entity,"limits":{"maxAspects":max_aspects,"maxGroups":max_groups,"maxClaims":max_claims,"depth":depth.min(3)},"items":items}),
             )
         }
         Operation::SessionStart {
@@ -4083,6 +4095,8 @@ pub enum Operation {
         entity_id: String,
         depth: usize,
         max_aspects: usize,
+        max_groups: usize,
+        max_claims: usize,
         max_attributes: usize,
     },
     KnowledgeNavigationAspects {
