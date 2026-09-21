@@ -102,7 +102,7 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 		iso(done.startedAt);
 		iso(done.completedAt);
 		expect(done.result.code).toBe(0);
-		expect(done.result.stdout).toBe("[REDACTED]");
+		expect(done.result.stdout).toBe("[REDACTED]\n");
 		expect(typeof done.result.stderr).toBe("string");
 		expect(JSON.stringify(done)).not.toContain("native-secret-value");
 		expect((await request("/api/secrets/exec/does-not-exist", { headers: owner })).status).toBe(404);
