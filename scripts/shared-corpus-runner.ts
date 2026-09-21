@@ -302,12 +302,17 @@ export function run(
 	validateLaneOptions(backend, o);
 	const manifest = buildExecutionManifest(repo);
 	validateManifest(manifest.protectedCorpus, currentManifest(repo, manifest.protectedCorpus), manifest.protectedCorpus);
-	if (backend === "typescript" && o.worktree)
+	if (backend === "typescript" && o.worktree) {
+		const packageJsonPath = resolve(o.worktree, "package.json");
+		if (!existsSync(packageJsonPath)) throw new Error("pinned baseline worktree is missing package.json");
+		if (sha256(readFileSync(packageJsonPath)) !== manifest.packageJsonSha256)
+			throw new Error("pinned baseline worktree package.json does not match the pinned baseline");
 		validateManifest(
 			manifest.protectedCorpus,
 			currentManifest(o.worktree, manifest.protectedCorpus),
 			manifest.protectedCorpus,
 		);
+	}
 	const selected = o.paths ? runnableSelectedPaths(o.paths, manifest.protectedCorpus) : undefined;
 	const expected = selected ?? runnableManifestPaths(manifest.protectedCorpus);
 	const report = resolveReportPath(backend, repo, o.report);

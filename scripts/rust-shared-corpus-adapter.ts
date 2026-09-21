@@ -188,21 +188,26 @@ if (!existsSync(junitPath)) fail(`Rust child did not produce a JUnit report: ${e
 const reportXml = readFileSync(junitPath, "utf8");
 const cases = reportXml.match(/<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g) ?? [];
 if (!cases.length) fail(`Rust child produced no real testcase identities: ${evidence}`);
-const observedFiles = new Set(
-	cases.map((testcase) => testcase.match(/file="([^"]*)"/)?.[1]).filter((file): file is string => Boolean(file)),
-);
+const attribute = (source: string, name: string): string => {
+	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return source.match(new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(["'])(.*?)\\1`))?.[2] ?? "";
+};
+const observedFiles = new Set(cases.map((testcase) => attribute(testcase, "file")).filter(Boolean));
+const missingIdentity = cases.some((testcase) => !attribute(testcase, "file"));
 const missingSelected = selected.filter((path) => !observedFiles.has(path));
 const unexpectedFiles = [...observedFiles].filter((path) => !selected.includes(path));
 const infrastructureFailure =
 	child.signal !== null ||
 	child.error !== undefined ||
 	!cases.length ||
+	missingIdentity ||
 	missingSelected.length > 0 ||
 	unexpectedFiles.length > 0;
-const failures = cases.filter((testcase) => /<(?:failure|error)\b/.test(testcase)).length;
+const failures = cases.filter((testcase) => /<failure\b/.test(testcase)).length;
+const errors = cases.filter((testcase) => /<error\b/.test(testcase)).length;
 writeFileSync(
 	report,
-	`<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" nativeEvidence="${nativeEvidence}" tests="${cases.length}" failures="${failures}" errors="0" skipped="0">${cases.join("")}</testsuite>`,
+	`<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" nativeEvidence="${nativeEvidence}" tests="${cases.length}" failures="${failures}" errors="${errors}" skipped="0">${cases.join("")}</testsuite>`,
 );
 if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
 if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
