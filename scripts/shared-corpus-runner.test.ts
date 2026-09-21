@@ -100,4 +100,18 @@ describe("shared corpus admission", () => {
 		expect(result.crash).toBe(true);
 		expect(result.status).toBe("failed");
 	});
+
+	test("complete JUnit output with assertion failures is not misreported as a crash", () => {
+		const result = parseJUnitReport(
+			'<testsuite tests="2" failures="1"><testcase file="a.test.ts" line="1" classname="x" name="passes"/><testcase file="a.test.ts" line="2" classname="x" name="fails"><failure/></testcase></testsuite>',
+			["a.test.ts"],
+			1,
+		);
+		expect(result.tests).toBe(2);
+		expect(result.passed).toBe(1);
+		expect(result.failed).toBe(1);
+		expect(result.crash).toBe(false);
+		expect(result.incomplete).toBe(false);
+		expect(result.status).toBe("failed");
+	});
 });

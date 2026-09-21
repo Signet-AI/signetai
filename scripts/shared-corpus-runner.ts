@@ -205,7 +205,10 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 	})();
 	const declared = Number(suite.match(/tests="(\d+)"/)?.[1] ?? cases.length);
 	const incomplete = duplicate || declared !== cases.length || (expected.length > 0 && cases.length < expected.length);
-	const crashed = childStatus !== 0;
+	// Bun exits nonzero when assertions fail. A complete report with recorded
+	// failures is a failed test run, not a crashed runner. Preserve crash
+	// classification for nonzero exits that produced no reported test failure.
+	const crashed = childStatus !== 0 && failed === 0;
 	return {
 		tests: cases.length,
 		passed: cases.length - failed - skipped,
@@ -274,8 +277,9 @@ export function run(
 		};
 	}
 	const accounting = parseJUnitReport(readFileSync(report, "utf8"), selected ?? [], child.status);
-	const crash = child.status !== 0 || child.signal !== null;
-	const incomplete = accounting.incomplete || accounting.tests === 0;
+	const infrastructureCrash = child.signal !== null || child.error !== undefined;
+	const crash = infrastructureCrash || accounting.crash;
+	const incomplete = accounting.incomplete || accounting.tests === 0 || infrastructureCrash;
 	return {
 		baselineSha: BASELINE_SHA,
 		backend,
