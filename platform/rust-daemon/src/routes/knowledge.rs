@@ -17,6 +17,7 @@ struct EntityQuery {
     offset: Option<usize>,
     workspace_id: Option<String>,
     direction: Option<String>,
+    name: Option<String>,
 }
 #[derive(Debug, Deserialize)]
 struct EntityBody {
@@ -82,6 +83,7 @@ pub(crate) fn router() -> Router<AppState> {
         )
         .route("/api/knowledge/relations", post(create_relation))
         .route("/api/knowledge/navigation/entities", get(list_entities))
+        .route("/api/knowledge/navigation/entity", get(navigation_entity))
         .route("/api/knowledge/entities/{id}", get(entity_detail))
         .route("/api/knowledge/entities/{id}/aspects", get(entity_aspects))
         .route(
@@ -98,6 +100,20 @@ pub(crate) fn router() -> Router<AppState> {
             get(unsupported_traversal),
         )
         .route("/api/knowledge/constellation", get(constellation))
+}
+
+async fn navigation_entity(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<EntityQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let name = q.name.as_deref().map(str::trim).filter(|v| !v.is_empty())
+        .ok_or_else(|| ApiError::bad_request("name is required"))?;
+    Ok(Json(execute(&state, Operation::KnowledgeNavigationEntity {
+        agent_id: agent(&headers, Some(&q.agent), None)?,
+        workspace_id: workspace(&headers, &q)?,
+        name: name.to_owned(),
+    }).await?))
 }
 
 async fn entity_detail(

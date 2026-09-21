@@ -2644,6 +2644,23 @@ fn execute_operation(
             tx.commit()?;
             Ok(json!({"deleted":true,"id":id}))
         }
+        Operation::KnowledgeNavigationEntity {
+            agent_id,
+            workspace_id,
+            name,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let name = bounded_text(&name, "entity name", 256)?;
+            connection
+                .query_row(
+                    "SELECT id,name,entity_type FROM entities WHERE agent_id=? AND workspace_id=? AND name=? AND status='active' LIMIT 1",
+                    params![agent_id, workspace_id, name],
+                    |r| Ok(json!({"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"type":r.get::<_,String>(2)?})),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)
+        }
         Operation::KnowledgeEntityCreate {
             agent_id,
             workspace_id,
@@ -3780,6 +3797,11 @@ pub enum Operation {
         workspace_id: String,
         limit: usize,
         offset: usize,
+    },
+    KnowledgeNavigationEntity {
+        agent_id: String,
+        workspace_id: String,
+        name: String,
     },
     KnowledgeRelationCreate {
         agent_id: String,
