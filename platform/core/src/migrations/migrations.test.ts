@@ -428,6 +428,9 @@ describe("migration framework", () => {
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
 			expect(
+				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'embedding_repair_checkpoints'").get(),
+			).toEqual({ name: "embedding_repair_checkpoints" });
+			expect(
 				(db.query("PRAGMA table_info(memory_jobs)").all() as Array<{ name: string }>).some(
 					(column) => column.name === "lease_token",
 				),

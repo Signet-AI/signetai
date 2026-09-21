@@ -1202,9 +1202,44 @@ describe("reembedMissingMemories", () => {
 		);
 
 		expect(providerInputs).toEqual(["content for mem-repairable"]);
-		expect(result.success).toBe(false);
+		expect(result.success).toBe(true);
 		expect(result.affected).toBe(1);
-		expect(result.details).toEqual({ selected: 2, failed: 0, stale: 0, crossAgentHashConflicts: 1 });
+		expect(result.details).toMatchObject({
+			selected: 1,
+			failed: 0,
+			stale: 0,
+			crossAgentHashConflicts: 0,
+			status: "running",
+			remaining: 1,
+		});
+		const operationId = result.details?.operationId;
+		expect(typeof operationId).toBe("string");
+
+		const conflict = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_AGENT,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"agent-b",
+			1,
+			false,
+			true,
+			0,
+			operationId as string,
+		);
+
+		expect(conflict.success).toBe(false);
+		expect(conflict.affected).toBe(0);
+		expect(conflict.details).toMatchObject({
+			selected: 1,
+			failed: 0,
+			stale: 0,
+			crossAgentHashConflicts: 1,
+			status: "failed",
+		});
+		expect(conflict.message).toContain("1 selected memory(s) could not be persisted");
 		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-repairable'").get()).toBeTruthy();
 		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-conflict'").get()).toBeNull();
 		expect(db.prepare("SELECT source_id FROM embeddings WHERE content_hash = ?").all(sharedHash)).toEqual([
@@ -1293,6 +1328,47 @@ describe("reembedMissingMemories", () => {
 		expect(result.affected).toBe(0);
 		expect(result.message).toMatch(/changed during provider work/);
 		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-agent-race")).toBeNull();
+	});
+
+	it("does not persist a batch after durable lease ownership changes", async () => {
+		insertMemory(db, "mem-lease-race");
+		let providerStarted!: () => void;
+		const providerReady = new Promise<void>((resolve) => {
+			providerStarted = resolve;
+		});
+		let releaseProvider!: () => void;
+		const providerReleased = new Promise<void>((resolve) => {
+			releaseProvider = resolve;
+		});
+
+		const repair = reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerStarted();
+				await providerReleased;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+		);
+
+		await providerReady;
+		db.prepare("UPDATE embedding_repair_budget SET lease_id = ?, lease_expires_at = ? WHERE id = 1").run(
+			"replacement-lease",
+			new Date(Date.now() + 60 * 60_000).toISOString(),
+		);
+		releaseProvider();
+
+		const result = await repair;
+		expect(result.success).toBe(false);
+		expect(result.affected).toBe(0);
+		expect(result.message).toMatch(/lease was lost before persistence/);
+		expect(result.details).toMatchObject({ leaseLost: true });
+		expect(db.prepare("SELECT id FROM embeddings WHERE source_id = ?").get("mem-lease-race")).toBeNull();
 	});
 
 	it("normalizes an empty memory agent_id on missing-memory repair", async () => {
@@ -1720,7 +1796,7 @@ describe("reembedMissingMemories", () => {
 		expect(secondPass.message).toMatch(/no unembedded memories found/);
 	});
 
-	it("can sweep all missing embeddings across multiple batches in one run", async () => {
+	it("resumes a bounded full sweep through its durable operation checkpoint", async () => {
 		const now = new Date().toISOString();
 		for (let i = 0; i < 5; i++) {
 			db.prepare(
@@ -1730,7 +1806,7 @@ describe("reembedMissingMemories", () => {
 		}
 
 		const limiter = createRateLimiter();
-		const result = await reembedMissingMemories(
+		const first = await reembedMissingMemories(
 			accessor,
 			TEST_CFG,
 			CTX_OPERATOR,
@@ -1743,9 +1819,49 @@ describe("reembedMissingMemories", () => {
 			true,
 		);
 
-		expect(result.success).toBe(true);
-		expect(result.affected).toBe(5);
-		expect(result.message).toMatch(/across 3 batch/);
+		expect(first.success).toBe(true);
+		expect(first.affected).toBe(2);
+		expect(first.details).toMatchObject({ status: "running", remaining: 3, batches: 1 });
+		const operationId = first.details?.operationId;
+		expect(typeof operationId).toBe("string");
+
+		const second = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"default",
+			2,
+			false,
+			true,
+			0,
+			operationId as string,
+		);
+
+		expect(second.success).toBe(true);
+		expect(second.affected).toBe(2);
+		expect(second.details).toMatchObject({ status: "running", remaining: 1, batches: 2 });
+
+		const third = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			limiter,
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"default",
+			2,
+			false,
+			true,
+			0,
+			operationId as string,
+		);
+
+		expect(third.success).toBe(true);
+		expect(third.affected).toBe(1);
+		expect(third.details).toMatchObject({ status: "complete", remaining: 0, batches: 3 });
 
 		const remaining = db
 			.prepare(
@@ -1756,6 +1872,38 @@ describe("reembedMissingMemories", () => {
 			)
 			.get() as { n: number };
 		expect(remaining.n).toBe(0);
+	});
+
+	it("clamps an oversized request before selecting provider work", async () => {
+		const now = new Date().toISOString();
+		for (let i = 0; i < 25; i++) {
+			db.prepare(
+				"INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by) VALUES (?, ?, ?, 'fact', ?, ?, 'test')",
+			).run(`mem-cap-${i}`, `content cap ${i}`, `hash-cap-${i}`, now, now);
+		}
+		let providerCalls = 0;
+		const result = await reembedMissingMemories(
+			accessor,
+			TEST_CFG,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerCalls++;
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			999,
+		);
+		expect(result.success).toBe(true);
+		expect(result.affected).toBe(20);
+		expect(providerCalls).toBe(20);
+		const remaining = db
+			.prepare(
+				"SELECT COUNT(*) AS n FROM memories m WHERE NOT EXISTS (SELECT 1 FROM embeddings e WHERE e.source_id = m.id)",
+			)
+			.get() as { n: number };
+		expect(remaining.n).toBe(5);
 	});
 });
 

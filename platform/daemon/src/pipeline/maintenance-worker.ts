@@ -249,6 +249,8 @@ async function executeRecommendation(
 									false,
 									false,
 									undefined,
+									undefined,
+									lease,
 								)
 							: await reembedModelMigration(
 									deps.accessor,

@@ -163,6 +163,7 @@ import { up as sourceImportAttemptProvenance } from "./148-source-import-attempt
 import { up as transcriptImportStateMachine } from "./149-transcript-import-state-machine";
 import { up as memoryHeadFreshness } from "./150-memory-head-freshness";
 import { up as vectorRepairCheckpoints } from "./153-vector-repair-checkpoints";
+import { up as embeddingRepairCheckpoints } from "./156-embedding-repair-checkpoints";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -1436,6 +1437,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		name: "source-sync-failures",
 		up: sourceSyncFailures,
 		artifacts: { tables: ["source_sync_failures"], indexes: ["idx_source_sync_failures_active"] },
+	},
+	{
+		version: 156,
+		name: "embedding-repair-checkpoints",
+		up: embeddingRepairCheckpoints,
+		artifacts: { tables: ["embedding_repair_checkpoints"] },
 	},
 ];
 

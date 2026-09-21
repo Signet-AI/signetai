@@ -44,7 +44,19 @@ import {
 	readEmbeddingIndexState,
 	resolveActiveEmbeddingConfig,
 } from "./embedding-index-state";
-import { type EmbeddingRepairState, readEmbeddingRepairState } from "./embedding-repair-state";
+import {
+	acquireEmbeddingRepairLease,
+	finishEmbeddingRepairLease,
+	isEmbeddingRepairLeaseActive,
+	type EmbeddingRepairCheckpoint,
+	type EmbeddingRepairKey,
+	type EmbeddingRepairLease,
+	type EmbeddingRepairState,
+	ensureEmbeddingRepairCheckpoint,
+	readEmbeddingRepairCheckpoint,
+	readEmbeddingRepairState,
+	updateEmbeddingRepairCheckpoint,
+} from "./embedding-repair-state";
 import { classifyEntityQuality } from "./entity-quality";
 import { logger } from "./logger";
 import type { EmbeddingConfig, PipelineV2Config } from "./memory-config";
@@ -783,6 +795,7 @@ export async function getEmbeddingRepairStats(
 // ---------------------------------------------------------------------------
 
 const DEFAULT_REEMBED_BATCH = 50;
+const MAX_REEMBED_BATCH = 20;
 
 function normalizeRepairAgentId(agentId: string | null | undefined): string {
 	const trimmed = agentId?.trim();
@@ -796,9 +809,10 @@ interface ReembedBatchOutcome {
 	readonly stale: number;
 	readonly crossAgentHashConflicts: number;
 	readonly profileChanged: boolean;
+	readonly leaseLost: boolean;
+	readonly successful: readonly EmbeddingRepairKey[];
+	readonly failedKeys: readonly EmbeddingRepairKey[];
 }
-
-let reembedInProgress = false;
 
 type MissingMemorySelector = (db: ReadDb, limit: number) => ReadonlyArray<UnembeddedRow>;
 
@@ -808,6 +822,7 @@ async function reembedMissingMemoriesBatch(
 	embeddingCfg: EmbeddingConfig,
 	batchSize: number,
 	agentId: string,
+	repairLease?: EmbeddingRepairLease,
 ): Promise<ReembedBatchOutcome> {
 	return reembedMissingMemoriesBatchWithSelector(
 		accessor,
@@ -816,6 +831,7 @@ async function reembedMissingMemoriesBatch(
 		batchSize,
 		(db, limit) => listUnembeddedMemories(db, limit, agentId),
 		agentId,
+		repairLease,
 	);
 }
 
@@ -841,11 +857,12 @@ async function reembedMissingMemoriesBatchWithSelector(
 	batchSize: number,
 	select: MissingMemorySelector,
 	agentId?: string,
+	repairLease?: EmbeddingRepairLease,
 ): Promise<ReembedBatchOutcome> {
 	const unembedded = await accessor.withReadDbAsync(async (db) => select(db, batchSize), {
 		siteToken: "db:repair.missing-memory-selection.read",
 	});
-	return reembedMissingMemoriesBatchForRows(accessor, embeddingFn, embeddingCfg, unembedded, agentId);
+	return reembedMissingMemoriesBatchForRows(accessor, embeddingFn, embeddingCfg, unembedded, agentId, repairLease);
 }
 
 async function reembedMissingMemoriesBatchForRows(
@@ -854,6 +871,7 @@ async function reembedMissingMemoriesBatchForRows(
 	embeddingCfg: EmbeddingConfig,
 	unembedded: ReadonlyArray<UnembeddedRow>,
 	agentId?: string,
+	repairLease?: EmbeddingRepairLease,
 ): Promise<ReembedBatchOutcome> {
 	if (unembedded.length === 0) {
 		return {
@@ -863,11 +881,19 @@ async function reembedMissingMemoriesBatchForRows(
 			stale: 0,
 			crossAgentHashConflicts: 0,
 			profileChanged: false,
+			leaseLost: false,
+			successful: [],
+			failedKeys: [],
 		};
 	}
 
 	const repairable = unembedded.filter((memory) => memory.knownCrossAgentHashConflict !== 1);
 	const knownCrossAgentHashConflicts = unembedded.length - repairable.length;
+	const failedKeys: EmbeddingRepairKey[] = [];
+	const failureKey = (memory: UnembeddedRow): EmbeddingRepairKey => ({
+		id: memory.id,
+		contentHash: memory.contentHash ?? normalizeAndHashContent(memory.content).contentHash,
+	});
 	const results: Array<{
 		memory: UnembeddedRow;
 		vector: readonly number[];
@@ -878,8 +904,11 @@ async function reembedMissingMemoriesBatchForRows(
 			const vec = await embeddingFn(mem.content, embeddingCfg);
 			if (vec) {
 				results.push({ memory: mem, vector: vec });
+			} else {
+				failedKeys.push(failureKey(mem));
 			}
 		} catch (err) {
+			failedKeys.push(failureKey(mem));
 			logger.warn("pipeline", "re-embed: embedding failed", {
 				memoryId: mem.id,
 				error: (err as Error).message,
@@ -895,6 +924,9 @@ async function reembedMissingMemoriesBatchForRows(
 			stale: 0,
 			crossAgentHashConflicts: knownCrossAgentHashConflicts,
 			profileChanged: false,
+			leaseLost: false,
+			successful: [],
+			failedKeys,
 		};
 	}
 
@@ -904,13 +936,31 @@ async function reembedMissingMemoriesBatchForRows(
 			// Provider work happens outside the transaction. Promotion can therefore
 			// change the active vector space while this batch is being encoded.
 			// Never commit vectors from the superseded profile.
+			if (repairLease !== undefined && !isEmbeddingRepairLeaseActive(db, repairLease)) {
+				return {
+					count: 0,
+					stale: 0,
+					crossAgentHashConflicts: 0,
+					profileChanged: false,
+					leaseLost: true,
+					successful: [],
+				};
+			}
 			if (!isActiveEmbeddingConfig(db, embeddingCfg)) {
-				return { count: 0, stale: 0, crossAgentHashConflicts: 0, profileChanged: true };
+				return {
+					count: 0,
+					stale: 0,
+					crossAgentHashConflicts: 0,
+					profileChanged: true,
+					leaseLost: false,
+					successful: [],
+				};
 			}
 			const now = new Date().toISOString();
 			let count = 0;
 			let stale = 0;
 			let crossAgentHashConflicts = 0;
+			const successful: EmbeddingRepairKey[] = [];
 			// Hoisted outside loop (pattern: db.prepare inside a loop is flagged)
 			const readCurrentMemory = db.prepare(
 				"SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0",
@@ -1003,10 +1053,11 @@ async function reembedMissingMemoriesBatchForRows(
 				if (actualRow) {
 					syncVecInsert(db, actualRow.id, vector);
 					count++;
+					successful.push({ id: memory.id, contentHash });
 				}
 			}
 
-			return { count, stale, crossAgentHashConflicts, profileChanged: false };
+			return { count, stale, crossAgentHashConflicts, profileChanged: false, leaseLost: false, successful };
 		},
 		"db:repair.reembed-missing.write",
 	);
@@ -1018,6 +1069,9 @@ async function reembedMissingMemoriesBatchForRows(
 		stale: writeOutcome.stale,
 		crossAgentHashConflicts: knownCrossAgentHashConflicts + writeOutcome.crossAgentHashConflicts,
 		profileChanged: writeOutcome.profileChanged,
+		leaseLost: writeOutcome.leaseLost,
+		successful: writeOutcome.successful,
+		failedKeys,
 	};
 }
 
@@ -1039,8 +1093,11 @@ export async function reembedMissingMemories(
 	dryRun = false,
 	runToCompletion = false,
 	cooldownMsOverride?: number,
+	operationId?: string,
+	existingLease?: EmbeddingRepairLease,
 ): Promise<RepairResult> {
 	const action = "reembedMissingMemories";
+	const normalizedAgentId = normalizeRepairAgentId(agentId);
 	const effectiveCooldownMs =
 		typeof cooldownMsOverride === "number" && Number.isFinite(cooldownMsOverride)
 			? Math.max(0, Math.floor(cooldownMsOverride))
@@ -1057,7 +1114,9 @@ export async function reembedMissingMemories(
 	}
 
 	const normalizedBatchSize =
-		Number.isFinite(batchSize) && batchSize > 0 ? Math.max(1, Math.floor(batchSize)) : DEFAULT_REEMBED_BATCH;
+		Number.isFinite(batchSize) && batchSize > 0
+			? Math.min(MAX_REEMBED_BATCH, Math.max(1, Math.floor(batchSize)))
+			: DEFAULT_REEMBED_BATCH;
 
 	// `embeddingCfg` is the raw configured value (e.g. from agent.yaml), which
 	// carries no `profile`. The durable active generation may have been
@@ -1074,17 +1133,8 @@ export async function reembedMissingMemories(
 		{ siteToken: "db:repair.active-embedding-config.read" },
 	);
 
-	const initialStats = await getEmbeddingGapStats(accessor, agentId);
-	if (initialStats.unembedded === 0) {
-		return {
-			action,
-			success: true,
-			affected: 0,
-			message: "no unembedded memories found",
-		};
-	}
-
 	if (dryRun) {
+		const initialStats = await getEmbeddingGapStats(accessor, normalizedAgentId);
 		return {
 			action,
 			success: true,
@@ -1093,101 +1143,192 @@ export async function reembedMissingMemories(
 		};
 	}
 
-	if (reembedInProgress) {
+	const checkpointId = runToCompletion ? (operationId ?? `embedding-repair-${crypto.randomUUID()}`) : undefined;
+	let checkpoint: EmbeddingRepairCheckpoint | null = null;
+	if (checkpointId !== undefined) {
+		checkpoint =
+			operationId === undefined
+				? ensureEmbeddingRepairCheckpoint(accessor, checkpointId, normalizedAgentId, resolvedEmbeddingCfg.model)
+				: readEmbeddingRepairCheckpoint(accessor, checkpointId);
+		if (checkpoint === null) {
+			return {
+				action,
+				success: false,
+				affected: 0,
+				message: `embedding repair operation ${checkpointId} was not found`,
+			};
+		}
+		if (checkpoint.agentId !== normalizedAgentId || checkpoint.model !== resolvedEmbeddingCfg.model) {
+			return {
+				action,
+				success: false,
+				affected: 0,
+				message: `embedding repair operation ${checkpointId} does not match the requested agent or model`,
+			};
+		}
+		if (checkpoint.status === "complete") {
+			return {
+				action,
+				success: true,
+				affected: checkpoint.written,
+				message: `embedding repair operation ${checkpointId} is already complete`,
+				details: { operationId: checkpointId, status: checkpoint.status, remaining: 0, batches: checkpoint.batches },
+			};
+		}
+		if (checkpoint.status === "failed") {
+			return {
+				action,
+				success: false,
+				affected: checkpoint.written,
+				message: checkpoint.lastError ?? `embedding repair operation ${checkpointId} failed`,
+				details: { operationId: checkpointId, status: checkpoint.status, batches: checkpoint.batches },
+			};
+		}
+	}
+
+	const initialStats = await getEmbeddingGapStats(accessor, normalizedAgentId);
+	if (initialStats.unembedded === 0) {
+		if (checkpointId !== undefined) {
+			checkpoint = updateEmbeddingRepairCheckpoint(accessor, checkpointId, { batches: 0, status: "complete" });
+		}
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: "no unembedded memories found",
+			...(checkpointId === undefined
+				? {}
+				: {
+						details: { operationId: checkpointId, status: "complete", remaining: 0, batches: checkpoint?.batches ?? 0 },
+					}),
+		};
+	}
+
+	const admission =
+		existingLease === undefined
+			? acquireEmbeddingRepairLease(accessor, effectiveCooldownMs, cfg.repair.reembedHourlyBudget)
+			: { allowed: true, lease: existingLease };
+	if (!admission.allowed || admission.lease === undefined) {
 		return {
 			action,
 			success: false,
 			affected: 0,
-			message: "re-embed already in progress",
+			message: admission.reason ?? "embedding repair admission denied",
+			...(checkpointId === undefined ? {} : { details: { operationId: checkpointId, status: "running" } }),
 		};
 	}
 
-	reembedInProgress = true;
+	const lease = admission.lease;
+	let outcome: ReembedBatchOutcome | null = null;
+	let thrown: unknown = null;
 	try {
-		let attempted = 0;
-		let written = 0;
-		let failed = 0;
-		let stale = 0;
-		let crossAgentHashConflicts = 0;
-		let batches = 0;
-		let profileChanged = false;
+		outcome = await reembedMissingMemoriesBatch(
+			accessor,
+			embeddingFn,
+			resolvedEmbeddingCfg,
+			normalizedBatchSize,
+			normalizedAgentId,
+			lease,
+		);
+	} catch (error) {
+		thrown = error;
+	}
 
-		while (true) {
-			const outcome = await reembedMissingMemoriesBatch(
-				accessor,
-				embeddingFn,
-				resolvedEmbeddingCfg,
-				normalizedBatchSize,
-				agentId,
-			);
+	let finishError: unknown = null;
+	try {
+		finishEmbeddingRepairLease(accessor, lease, {
+			successful: outcome?.successful ?? [],
+			failed: outcome?.failedKeys ?? [],
+			affected: outcome?.written ?? 0,
+			model: resolvedEmbeddingCfg.model,
+			pollMs: cfg.embeddingTracker.pollMs,
+			eligibility: outcome?.profileChanged === true ? false : (db) => isActiveEmbeddingConfig(db, resolvedEmbeddingCfg),
+			...(thrown instanceof Error ? { error: thrown.message } : {}),
+		});
+	} catch (error) {
+		finishError = error;
+	}
 
-			if (outcome.selected === 0) break;
-
-			attempted += outcome.selected;
-			written += outcome.written;
-			failed += outcome.failed;
-			stale += outcome.stale;
-			crossAgentHashConflicts += outcome.crossAgentHashConflicts;
-			batches++;
-			profileChanged ||= outcome.profileChanged;
-			if (outcome.profileChanged) break;
-
-			if (!runToCompletion) break;
-			if (outcome.selected < normalizedBatchSize) break;
-			if (outcome.written === 0) break;
+	if (thrown !== null || finishError !== null) {
+		if (checkpointId !== undefined) {
+			updateEmbeddingRepairCheckpoint(accessor, checkpointId, {
+				status: "failed",
+				lastError:
+					thrown instanceof Error
+						? thrown.message
+						: finishError instanceof Error
+							? finishError.message
+							: String(thrown ?? finishError),
+			});
 		}
+		throw thrown ?? finishError;
+	}
 
-		if (attempted === 0) {
-			return {
-				action,
-				success: true,
-				affected: 0,
-				message: "no unembedded memories found",
-			};
+	if (outcome === null || outcome.selected === 0) {
+		if (checkpointId !== undefined) {
+			checkpoint = updateEmbeddingRepairCheckpoint(accessor, checkpointId, { batches: 0, status: "complete" });
 		}
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: "no unembedded memories found",
+			...(checkpointId === undefined
+				? {}
+				: {
+						details: { operationId: checkpointId, status: "complete", remaining: 0, batches: checkpoint?.batches ?? 0 },
+					}),
+		};
+	}
 
-		if (profileChanged) {
-			return {
-				action,
-				success: false,
-				affected: written,
-				message: "embedding profile changed during provider work; skipped stale vectors",
-			};
-		}
-
-		if (written === 0) {
-			if (crossAgentHashConflicts > 0) {
-				return {
-					action,
-					success: false,
-					affected: 0,
-					message: `${crossAgentHashConflicts} selected memory(s) could not be persisted under the current global uniqueness constraint because their content hash is owned by another agent`,
-					details: { selected: attempted, failed, stale, crossAgentHashConflicts },
-				};
-			}
-			return {
-				action,
-				success: false,
-				affected: 0,
-				message:
-					stale > 0
+	const attempted = outcome.selected;
+	const written = outcome.written;
+	const failed = outcome.failed;
+	const stale = outcome.stale;
+	const crossAgentHashConflicts = outcome.crossAgentHashConflicts;
+	const remaining = (await getEmbeddingGapStats(accessor, normalizedAgentId)).unembedded;
+	const noProgress = written === 0;
+	const operationStatus: "running" | "complete" | "failed" =
+		outcome.leaseLost ||
+		outcome.profileChanged ||
+		crossAgentHashConflicts > 0 ||
+		(noProgress && (failed > 0 || stale > 0))
+			? "failed"
+			: remaining === 0
+				? "complete"
+				: "running";
+	const conflictMessage =
+		crossAgentHashConflicts > 0
+			? `${crossAgentHashConflicts} selected memory(s) could not be persisted because their content hash is owned by another agent under the current global uniqueness constraint`
+			: "";
+	const progressMessage = outcome.leaseLost
+		? "embedding repair lease was lost before persistence"
+		: outcome.profileChanged
+			? "embedding profile changed during provider work; skipped stale vectors"
+			: written === 0
+				? crossAgentHashConflicts > 0
+					? conflictMessage
+					: stale > 0
 						? `re-embedded 0 of ${attempted} memories because ${stale} changed during provider work`
-						: `embedding provider returned no vectors for ${attempted} memories`,
-			};
-		}
+						: `embedding provider returned no vectors for ${attempted} memories`
+				: failed > 0
+					? `re-embedded ${written} of ${attempted} memories in one bounded batch (${failed} failed, ${remaining} still missing)`
+					: `re-embedded ${written} of ${attempted} memories in one bounded batch (${remaining} still missing)`;
+	const resultMessage = conflictMessage.length > 0 ? `${progressMessage}; ${conflictMessage}` : progressMessage;
 
-		const remaining = (await getEmbeddingGapStats(accessor, agentId)).unembedded;
-		const scope = runToCompletion ? `across ${batches} batch(es)` : "in one batch";
-		const msg =
-			failed > 0
-				? `re-embedded ${written} of ${attempted} memories ${scope} (${failed} failed, ${remaining} still missing)`
-				: `re-embedded ${written} of ${attempted} memories ${scope} (${remaining} still missing)`;
-		const conflictMessage =
-			crossAgentHashConflicts > 0
-				? `${crossAgentHashConflicts} selected memory(s) could not be persisted because their content hash is owned by another agent under the current global uniqueness constraint`
-				: "";
-		const resultMessage = conflictMessage.length > 0 ? `${msg}; ${conflictMessage}` : msg;
+	if (checkpointId !== undefined) {
+		checkpoint = updateEmbeddingRepairCheckpoint(accessor, checkpointId, {
+			status: operationStatus,
+			selected: attempted,
+			written,
+			failed,
+			stale,
+			crossAgentHashConflicts,
+			lastError: operationStatus === "failed" ? resultMessage : null,
+		});
+	}
 
+	if (written > 0) {
 		await withRepairWriteTx(
 			accessor,
 			(db) => {
@@ -1195,31 +1336,38 @@ export async function reembedMissingMemories(
 			},
 			"db:repair.reembed-missing.audit",
 		);
-
 		limiter.record(action);
-		logger.info("pipeline", "repair: re-embedded missing memories", {
-			affected: written,
-			attempted,
-			failed,
-			remaining,
-			batches,
-			runToCompletion,
-			actor: ctx.actor,
-			reason: ctx.reason,
-		});
-
-		return {
-			action,
-			success: crossAgentHashConflicts === 0,
-			affected: written,
-			message: resultMessage,
-			...(crossAgentHashConflicts > 0
-				? { details: { selected: attempted, failed, stale, crossAgentHashConflicts } }
-				: {}),
-		};
-	} finally {
-		reembedInProgress = false;
 	}
+
+	logger.info("pipeline", "repair: re-embedded missing memories", {
+		affected: written,
+		attempted,
+		failed,
+		remaining,
+		batches: 1,
+		runToCompletion,
+		operationId: checkpointId,
+		actor: ctx.actor,
+		reason: ctx.reason,
+	});
+
+	return {
+		action,
+		success: operationStatus !== "failed" && crossAgentHashConflicts === 0,
+		affected: written,
+		message:
+			checkpointId === undefined ? resultMessage : `${resultMessage}; operation ${checkpointId} is ${operationStatus}`,
+		details: {
+			selected: attempted,
+			failed,
+			stale,
+			crossAgentHashConflicts,
+			...(outcome.leaseLost ? { leaseLost: true } : {}),
+			...(checkpointId === undefined
+				? {}
+				: { operationId: checkpointId, status: operationStatus, remaining, batches: checkpoint?.batches ?? 1 }),
+		},
+	};
 }
 
 export async function reembedModelMigration(

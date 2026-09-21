@@ -117,6 +117,41 @@ describe("embedding repair state", () => {
 		db.close();
 	});
 
+	it("releases its lease when finish accounting fails", () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const now = Date.parse("2026-08-11T12:00:00.000Z");
+		const lease = acquireEmbeddingRepairLease(accessor, 0, 5, now).lease;
+		if (lease === undefined) throw new Error("expected repair lease");
+		let failOnce = true;
+		const flakyAccessor: DbAccessor = {
+			...accessor,
+			withWriteTx<T>(fn: (wdb: WriteDb) => T): T {
+				if (failOnce) {
+					failOnce = false;
+					throw new Error("simulated finish failure");
+				}
+				return accessor.withWriteTx(fn);
+			},
+		};
+
+		expect(() =>
+			finishEmbeddingRepairLease(
+				flakyAccessor,
+				lease,
+				{ successful: [], failed: [], model: "test-model", pollMs: 1_000, eligibility: true },
+				now + 1,
+			),
+		).toThrow("simulated finish failure");
+		expect(readEmbeddingRepairState(accessor)).toMatchObject({
+			leaseExpiresAt: null,
+			lastError: "simulated finish failure",
+		});
+		expect(acquireEmbeddingRepairLease(accessor, 0, 5, now + 2).allowed).toBe(true);
+		db.close();
+	});
+
 	it("removes backoff rows after a memory is deleted or receives a new content hash", () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);

@@ -183,6 +183,7 @@ export function registerRepairRoutes(
 		let batchSize = 50;
 		let dryRun = false;
 		let fullSweep = false;
+		let operationId: string | undefined;
 
 		let body: Record<string, unknown> = {};
 		try {
@@ -190,6 +191,7 @@ export function registerRepairRoutes(
 			if (typeof body.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
+			operationId = readString(body, "operationId") ?? readString(body, "operation_id");
 		} catch {
 			// no body or invalid JSON — use defaults
 		}
@@ -217,6 +219,7 @@ export function registerRepairRoutes(
 			dryRun,
 			fullSweep,
 			fullSweep && ctx.actorType === "operator" ? 0 : undefined,
+			operationId ?? c.req.query("operationId") ?? c.req.query("operation_id") ?? undefined,
 		);
 
 		return c.json(result, repairHttpStatus(result));
