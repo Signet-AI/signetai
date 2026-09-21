@@ -33,6 +33,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Audit type boundary and migration ledger

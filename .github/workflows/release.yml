@@ -95,6 +95,8 @@ jobs:
           fi
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
         if: steps.changes.outputs.skip != 'true'
 
       - name: Install dependencies
@@ -277,6 +279,8 @@ jobs:
           ref: v${{ needs.release.outputs.version }}
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install
@@ -366,6 +370,8 @@ jobs:
           ref: v${{ needs.release.outputs.version }}
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
 
       - name: Install dependencies
         run: bun install

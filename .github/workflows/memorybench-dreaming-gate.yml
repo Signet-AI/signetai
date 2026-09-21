@@ -45,6 +45,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
       - name: Install dependencies
         env:
           # This daemon-only job does not run Electron's desktop application.
