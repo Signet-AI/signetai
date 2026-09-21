@@ -2399,6 +2399,41 @@ fn execute_operation(
             query,
             limit,
         } => execute_memory_search(connection, agent_id, query, limit),
+        Operation::SessionCandidatesRecord { agent_id, workspace_id, session_key, candidates, injected_ids } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let session_key = required_id(&session_key)?;
+            let count = candidates.len();
+            let injected: std::collections::HashSet<String> = injected_ids.into_iter().collect();
+            let tx = connection.transaction()?;
+            for (rank, candidate) in candidates.into_iter().enumerate() {
+                let memory_id = candidate.get("id").and_then(Value::as_str).ok_or_else(|| CoreError::InvalidInput("candidate id is required".into()))?;
+                let source = candidate.get("source").and_then(Value::as_str).unwrap_or("effective");
+                let effective = candidate.get("effScore").or_else(|| candidate.get("effectiveScore")).and_then(Value::as_f64).unwrap_or(0.0);
+                let final_score = candidate.get("finalScore").and_then(Value::as_f64).unwrap_or(effective);
+                let path_json = candidate.get("pathJson").and_then(|v| if v.is_null() { None } else { Some(v.to_string()) });
+                tx.execute("INSERT OR IGNORE INTO session_memories (id,session_key,agent_id,workspace_id,memory_id,source,effective_score,final_score,rank,was_injected,created_at,path_json) VALUES (lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,datetime('now'),?)", params![session_key, agent_id, workspace_id, memory_id, source, effective, final_score, rank as i64, if injected.contains(memory_id) {1} else {0}, path_json])?;
+            }
+            tx.commit()?;
+            Ok(json!({"recorded": true, "count": count}))
+        }
+        Operation::SessionCandidatesAssemble { agent_id, workspace_id, session_key, token_budget } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let session_key = required_id(&session_key)?;
+            let budget = token_budget.clamp(1, 100_000) as i64;
+            let mut stmt = connection.prepare("SELECT sm.memory_id,m.content,sm.source,sm.effective_score,sm.final_score,sm.rank,sm.was_injected,sm.path_json FROM session_memories sm JOIN memories m ON m.id=sm.memory_id AND COALESCE(m.agent_id,'default')=sm.agent_id WHERE sm.session_key=? AND sm.agent_id=? AND sm.workspace_id=? AND sm.was_injected=1 AND COALESCE(m.deleted,0)=0 AND COALESCE(json_extract(m.metadata,'$.supersededBy'),'')='' AND COALESCE(json_extract(m.metadata,'$.tombstoned'),0)=0 AND COALESCE(json_extract(m.metadata,'$.stale'),0)=0 ORDER BY sm.rank ASC")?;
+            let mut used = 0i64;
+            let mut items = Vec::new();
+            for row in stmt.query_map(params![session_key,agent_id,workspace_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<f64>>(3)?,r.get::<_,f64>(4)?,r.get::<_,i64>(5)?,r.get::<_,i64>(6)?,r.get::<_,Option<String>>(7)?)))? {
+                let (id, content, source, effective, final_score, rank, was_injected, path_json) = row?;
+                let tokens = content.split_whitespace().count() as i64;
+                if used + tokens > budget { break; }
+                used += tokens;
+                items.push(json!({"memoryId":id,"content":content,"source":source,"effectiveScore":effective,"finalScore":final_score,"rank":rank,"wasInjected":was_injected,"pathJson":path_json}));
+            }
+            Ok(json!({"items":items,"tokens":used,"tokenBudget":budget}))
+        }
         Operation::CreateSource {
             agent_id,
             workspace_id,
@@ -4313,6 +4348,19 @@ pub enum Operation {
         query: String,
         limit: usize,
     },
+    SessionCandidatesRecord {
+        agent_id: String,
+        workspace_id: String,
+        session_key: String,
+        candidates: Vec<Value>,
+        injected_ids: Vec<String>,
+    },
+    SessionCandidatesAssemble {
+        agent_id: String,
+        workspace_id: String,
+        session_key: String,
+        token_budget: usize,
+    },
     CreateSource {
         agent_id: String,
         workspace_id: String,
@@ -5021,6 +5069,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS job_events (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, event TEXT NOT NULL, data TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS pipeline_state (agent_id TEXT PRIMARY KEY, state TEXT NOT NULL DEFAULT 'idle', paused INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS sessions (key TEXT NOT NULL, agent_id TEXT NOT NULL, harness TEXT NOT NULL, runtime_path TEXT, project TEXT, status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, PRIMARY KEY(key, agent_id));
+         CREATE TABLE IF NOT EXISTS session_memories (id TEXT PRIMARY KEY, session_key TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', memory_id TEXT NOT NULL, source TEXT NOT NULL, effective_score REAL, final_score REAL NOT NULL, rank INTEGER NOT NULL, was_injected INTEGER NOT NULL, created_at TEXT NOT NULL, path_json TEXT, UNIQUE(session_key, agent_id, workspace_id, memory_id));
          CREATE TABLE IF NOT EXISTS event_records (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, session_key TEXT, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS telemetry_events (id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, event TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS transcript_import_jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', schema_id TEXT NOT NULL, duplicate_mode TEXT NOT NULL, state TEXT NOT NULL, files TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -5042,6 +5091,9 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,name));
          SELECT 1;",
     )?;
+    ensure_column(&transaction, "session_memories", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
+    ensure_column(&transaction, "session_memories", "path_json", "TEXT")?;
+    transaction.execute("CREATE UNIQUE INDEX IF NOT EXISTS session_memories_scope_unique ON session_memories(session_key,agent_id,workspace_id,memory_id)", [])?;
     let max_schema_version: Option<i64> =
         transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
