@@ -18,9 +18,11 @@ import SignetPiExtension, {
 
 const tempDirs: string[] = [];
 const servers: Array<{ stop: () => void }> = [];
+const originalWarn = console.warn;
 let savedEnv: Record<string, string | undefined> = {};
 
 afterEach(() => {
+	console.warn = originalWarn;
 	for (const dir of tempDirs.splice(0)) {
 		rmSync(dir, { recursive: true, force: true });
 	}
@@ -359,6 +361,33 @@ describe("Signet search helpers", () => {
 			limit: 2,
 		});
 		expect(result).toEqual({ results: [{ sessionKey: "session-pi" }] });
+	});
+});
+
+// ============================================================================
+// Daemon-unavailable helper behavior
+// ============================================================================
+
+describe("daemon-unavailable helper behavior", () => {
+	it("rejects direct requests with concise unavailable errors and no console warnings", async () => {
+		const warnings: string[] = [];
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.map(String).join(" "));
+		};
+
+		const offlineServer = Bun.serve({
+			port: 0,
+			fetch: () => new Response(),
+		});
+		const offlinePort = offlineServer.port;
+		offlineServer.stop();
+		const daemonUrl = `http://127.0.0.1:${offlinePort}`;
+
+		await expect(recallMemories(daemonUrl, "query")).rejects.toThrow("Recall failed: offline");
+		await expect(rememberContent(daemonUrl, "memory")).rejects.toThrow("Remember failed: offline");
+		await expect(searchSourceArtifacts(daemonUrl, "query")).rejects.toThrow("Source search failed: offline");
+		await expect(searchSessions(daemonUrl, "query")).rejects.toThrow("Session search failed: offline");
+		expect(warnings).toEqual([]);
 	});
 });
 

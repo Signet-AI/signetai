@@ -101,6 +101,17 @@ describe("createDaemonClient (extension-base)", () => {
 		expect(warnings.some((w) => w.includes("0 chars") && w.includes("empty body"))).toBe(true);
 	});
 
+	test("postStatus accepts a successful empty body without parsing JSON", async () => {
+		globalThis.fetch = Object.assign(async () => new Response(null, { status: 200 }), {
+			preconnect: originalFetch.preconnect,
+		});
+
+		const client = createDaemonClient("http://daemon.test", testConfig);
+		const result = await client.postStatus("/api/hooks/remember", {});
+
+		expect(result).toEqual({ ok: true, data: undefined });
+	});
+
 	test("postResult parses valid JSON through text-first path", async () => {
 		globalThis.fetch = Object.assign(async () => Response.json({ inject: "memory-context", memoryCount: 3 }), {
 			preconnect: originalFetch.preconnect,

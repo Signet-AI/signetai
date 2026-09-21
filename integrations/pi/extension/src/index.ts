@@ -118,6 +118,37 @@ async function checkDaemonHealth(daemonUrl: string): Promise<boolean> {
 	}
 }
 
+function daemonFailure(
+	operation: string,
+	result: { readonly ok: false; readonly reason: string; readonly status?: number },
+): Error {
+	const detail = result.reason === "http" && result.status !== undefined ? `HTTP ${result.status}` : result.reason;
+	return new Error(`${operation} failed: ${detail}`);
+}
+
+async function postJson<T>(
+	daemonUrl: string,
+	path: string,
+	body: unknown,
+	timeout: number,
+	operation: string,
+): Promise<T> {
+	const result = await createDaemonClient(daemonUrl).postResult<T>(path, body, timeout);
+	if (!result.ok) throw daemonFailure(operation, result);
+	return result.data;
+}
+
+async function postStatus(
+	daemonUrl: string,
+	path: string,
+	body: unknown,
+	timeout: number,
+	operation: string,
+): Promise<void> {
+	const result = await createDaemonClient(daemonUrl).postStatus(path, body, timeout);
+	if (!result.ok) throw daemonFailure(operation, result);
+}
+
 // ============================================================================
 // Memory Operations
 // ============================================================================
@@ -136,24 +167,16 @@ export async function recallMemories(
 		saveAggregate?: boolean;
 	} = {},
 ): Promise<RecallPayload> {
-	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
-		method: "POST",
-		headers: daemonHeaders({ "Content-Type": "application/json" }),
-		body: JSON.stringify(
-			buildRecallRequestBody(query, {
-				...options,
-				recallSurface: "tool_call",
-			}),
-		),
-		signal: AbortSignal.timeout(options.aggregate ? Math.max(READ_TIMEOUT * 6, 30_000) : READ_TIMEOUT),
-	});
-
-	if (!response.ok) {
-		const error = await response.text();
-		throw new Error(`Recall failed: ${error}`);
-	}
-
-	return (await response.json()) as RecallPayload;
+	return postJson<RecallPayload>(
+		daemonUrl,
+		"/api/memory/recall",
+		buildRecallRequestBody(query, {
+			...options,
+			recallSurface: "tool_call",
+		}),
+		options.aggregate ? Math.max(READ_TIMEOUT * 6, 30_000) : READ_TIMEOUT,
+		"Recall",
+	);
 }
 export async function rememberContent(
 	daemonUrl: string,
@@ -167,27 +190,21 @@ export async function rememberContent(
 ): Promise<void> {
 	const { critical = false, tags = [], agentId, reviewAfter } = options;
 
-	const response = await fetch(`${daemonUrl}/api/hooks/remember`, {
-		method: "POST",
-		headers: daemonHeaders({ "Content-Type": "application/json" }),
-		body: JSON.stringify(
-			buildRememberRequestBody(content, {
-				harness: HARNESS,
-				pinned: critical,
-				tags,
-				agentId,
-				reviewAfter,
-				source: "pi-extension",
-				runtimePath: RUNTIME_PATH,
-			}),
-		),
-		signal: AbortSignal.timeout(WRITE_TIMEOUT),
-	});
-
-	if (!response.ok) {
-		const error = await response.text();
-		throw new Error(`Remember failed: ${error}`);
-	}
+	await postStatus(
+		daemonUrl,
+		"/api/hooks/remember",
+		buildRememberRequestBody(content, {
+			harness: HARNESS,
+			pinned: critical,
+			tags,
+			agentId,
+			reviewAfter,
+			source: "pi-extension",
+			runtimePath: RUNTIME_PATH,
+		}),
+		WRITE_TIMEOUT,
+		"Remember",
+	);
 }
 export async function searchSourceArtifacts(
 	daemonUrl: string,
@@ -202,10 +219,10 @@ export async function searchSourceArtifacts(
 ): Promise<RecallPayload> {
 	const { limit, agentId, sessionKey, includeRecalled, project } = options;
 
-	const response = await fetch(`${daemonUrl}/api/memory/recall`, {
-		method: "POST",
-		headers: daemonHeaders({ "Content-Type": "application/json" }),
-		body: JSON.stringify({
+	return postJson<RecallPayload>(
+		daemonUrl,
+		"/api/memory/recall",
+		{
 			...buildRecallRequestBody(query, {
 				limit,
 				agentId,
@@ -215,16 +232,10 @@ export async function searchSourceArtifacts(
 				recallSurface: "tool_call",
 			}),
 			sourceOnly: true,
-		}),
-		signal: AbortSignal.timeout(READ_TIMEOUT),
-	});
-
-	if (!response.ok) {
-		const error = await response.text();
-		throw new Error(`Source search failed: ${error}`);
-	}
-
-	return (await response.json()) as RecallPayload;
+		},
+		READ_TIMEOUT,
+		"Source search",
+	);
 }
 
 export async function searchSessions(
@@ -238,26 +249,20 @@ export async function searchSessions(
 		limit?: number;
 	} = {},
 ): Promise<unknown> {
-	const response = await fetch(`${daemonUrl}/api/sessions/search`, {
-		method: "POST",
-		headers: daemonHeaders({ "Content-Type": "application/json" }),
-		body: JSON.stringify({
+	return postJson<unknown>(
+		daemonUrl,
+		"/api/sessions/search",
+		{
 			query,
 			sessionKey: options.sessionKey,
 			currentSessionKey: options.currentSessionKey,
 			agentId: options.agentId,
 			project: options.project,
 			limit: options.limit,
-		}),
-		signal: AbortSignal.timeout(READ_TIMEOUT),
-	});
-
-	if (!response.ok) {
-		const error = await response.text();
-		throw new Error(`Session search failed: ${error}`);
-	}
-
-	return await response.json();
+		},
+		READ_TIMEOUT,
+		"Session search",
+	);
 }
 
 function updateStatus(ctx: PiExtensionContext): void {

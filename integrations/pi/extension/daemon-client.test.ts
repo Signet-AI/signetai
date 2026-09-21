@@ -3,9 +3,11 @@ import { createDaemonClient } from "./src/daemon-client.js";
 import { PROMPT_SUBMIT_TIMEOUT } from "./src/types.js";
 
 const servers: Array<{ stop: () => void }> = [];
+const originalFetch = globalThis.fetch;
 const originalWarn = console.warn;
 
 afterEach(() => {
+	globalThis.fetch = originalFetch;
 	console.warn = originalWarn;
 	for (const server of servers.splice(0)) {
 		server.stop();
@@ -91,6 +93,51 @@ describe("createDaemonClient", () => {
 		const result = await client.postResult("/api/hooks/notifications", { harness: "pi" }, 100);
 
 		expect(result).toEqual({ ok: false, reason: "http", status: 503 });
+		expect(warnings).toEqual([]);
+	});
+
+	it("treats invalid JSON as unavailable without writing to the TUI console", async () => {
+		const warnings: string[] = [];
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.map(String).join(" "));
+		};
+
+		const server = Bun.serve({
+			port: 0,
+			fetch: () => new Response("not json", { status: 200 }),
+		});
+		servers.push(server);
+
+		const client = createDaemonClient(`http://127.0.0.1:${server.port}`);
+		const result = await client.postResult("/api/hooks/notifications", { harness: "pi" }, 100);
+
+		expect(result).toEqual({ ok: false, reason: "invalid-json", status: 200 });
+		expect(warnings).toEqual([]);
+	});
+
+	it("treats response body failures as unavailable without writing to the TUI console", async () => {
+		const warnings: string[] = [];
+		console.warn = (...args: unknown[]) => {
+			warnings.push(args.map(String).join(" "));
+		};
+
+		globalThis.fetch = Object.assign(
+			async () => {
+				const body = new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode('{"inject"'));
+						setTimeout(() => controller.error(new Error("stream reset")), 5);
+					},
+				});
+				return new Response(body, { status: 200 });
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		const client = createDaemonClient("http://daemon.test");
+		const result = await client.postResult("/api/hooks/notifications", { harness: "pi" }, 100);
+
+		expect(result).toEqual({ ok: false, reason: "body-read" });
 		expect(warnings).toEqual([]);
 	});
 });
