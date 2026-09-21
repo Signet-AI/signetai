@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 /** Run the narrow supplementary Rust proofs against the immutable baseline checkout. */
-import { existsSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 const repo = resolve(import.meta.dir, "..");
@@ -47,11 +48,24 @@ function runProof(label: string, command: string[], cwd: string, env: Record<str
 			account: "supplementary-baseline-proof",
 		}),
 	);
-	const result = Bun.spawnSync(command, { cwd, env: { ...process.env, ...env }, stdout: "inherit", stderr: "pipe" });
-	const stderr = new TextDecoder().decode(result.stderr);
-	if (stderr) process.stderr.write(`[${label} child stderr]\n${stderr}`);
-	console.error(JSON.stringify({ label, exitCode: result.exitCode }));
-	if (result.exitCode !== 0) fail(status, `${label} proof failed with exit ${result.exitCode ?? "unknown"}`);
+	const evidenceDir = label === "core-database" ? mkdtempSync(`${tmpdir()}/signet-rust-core-evidence-`) : undefined;
+	let failure: string | undefined;
+	try {
+		const childEnv = evidenceDir ? { ...env, SIGNET_RUST_CORE_EVIDENCE_FILE: `${evidenceDir}/evidence.log` } : env;
+		const result = Bun.spawnSync(command, {
+			cwd,
+			env: { ...process.env, ...childEnv },
+			stdout: "inherit",
+			stderr: "pipe",
+		});
+		const stderr = new TextDecoder().decode(result.stderr);
+		if (stderr) process.stderr.write(`[${label} child stderr]\n${stderr}`);
+		console.error(JSON.stringify({ label, exitCode: result.exitCode }));
+		if (result.exitCode !== 0) failure = `${label} proof failed with exit ${result.exitCode ?? "unknown"}`;
+	} finally {
+		if (evidenceDir) rmSync(evidenceDir, { recursive: true, force: true });
+	}
+	if (failure) fail(status, failure);
 }
 
 runProof(
