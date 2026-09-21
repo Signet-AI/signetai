@@ -1962,6 +1962,77 @@ fn current_schema_knowledge_tree_is_scoped_bounded_and_status_aware() {
 }
 
 #[test]
+fn current_schema_tree_reports_live_attribute_and_constraint_counts() {
+    let c = core();
+    let entity = c
+        .submit(Operation::KnowledgeEntityCreate {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            name: "Counts".into(),
+            entity_type: "project".into(),
+            metadata: serde_json::json!({}),
+        })
+        .unwrap();
+    let eid = entity["id"].as_str().unwrap().to_owned();
+    let aspect = c
+        .submit(Operation::KnowledgeAspectCreate {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            entity_id: eid.clone(),
+            name: "Facts".into(),
+            weight: 1.0,
+        })
+        .unwrap();
+    let aid = aspect["id"].as_str().unwrap().to_owned();
+    for (kind, content) in [
+        ("attribute", "one"),
+        ("attribute", "two"),
+        ("constraint", "three"),
+    ] {
+        c.submit(Operation::KnowledgeAttributeCreate {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            aspect_id: aid.clone(),
+            kind: kind.into(),
+            content: content.into(),
+            claim_key: Some("claim".into()),
+            group_key: Some("group".into()),
+            confidence: 1.0,
+            importance: 1.0,
+            memory_id: None,
+        })
+        .unwrap();
+    }
+    let detail = c
+        .submit(Operation::KnowledgeNavigationEntity {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            name: "Counts".into(),
+        })
+        .unwrap();
+    assert_eq!(detail["attributeCount"], 2);
+    assert_eq!(detail["constraintCount"], 1);
+}
+
+#[test]
+fn current_schema_navigation_treats_like_wildcards_as_literal() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("wildcards.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, entity_type TEXT NOT NULL DEFAULT 'person', description TEXT, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO entities VALUES ('literal','a','w','100% real','100% real','person',NULL,'active','2026-01-01','2026-01-02'), ('arbitrary','a','w','100 percent real','100 percent real','person',NULL,'active','2026-01-01','2026-01-03');") .unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let got = c
+        .submit(Operation::KnowledgeNavigationEntity {
+            agent_id: "a".into(),
+            workspace_id: "w".into(),
+            name: "100%".into(),
+        })
+        .unwrap();
+    assert_eq!(got["entity"]["id"], "literal");
+}
+
+#[test]
 fn current_schema_navigation_uses_scoped_live_tables_and_rejects_bad_bounds() {
     let d = tempdir().unwrap();
     let p = d.path().join("current-navigation.sqlite");
