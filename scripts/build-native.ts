@@ -53,6 +53,12 @@ function revision(): string {
 	return process.env.GITHUB_SHA ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 }
 
+function commandNotFound(error: unknown): boolean {
+	return (
+		typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT"
+	);
+}
+
 if (process.env.SIGNET_SKIP_NATIVE_BUILD === "1") {
 	console.log("[signet] skipping native build (SIGNET_SKIP_NATIVE_BUILD=1)");
 	process.exit(0);
@@ -61,23 +67,22 @@ if (!existsSync(nativeDir) || !existsSync(manifest)) fail("native Rust build inp
 if (!existsSync(join(dashboard, "index.html"))) fail(`dashboard build is missing: ${join(dashboard, "index.html")}`);
 const locator = platform() === "win32" ? "where" : "which";
 let cargoLocated = false;
+let locatedCargoPath = "";
 try {
-	execFileSync(locator, ["cargo"], { stdio: "ignore", windowsHide: true });
+	locatedCargoPath = execFileSync(locator, ["cargo"], { encoding: "utf8", windowsHide: true }).trim();
 	cargoLocated = true;
 } catch {
 	// Some minimal images do not ship which/where; direct probing remains authoritative.
 }
-if (cargoLocated) {
-	try {
-		execFileSync("cargo", ["--version"], { stdio: "ignore", windowsHide: true });
-	} catch {
-		fail("native build failed (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
-	}
-} else {
-	try {
-		execFileSync("cargo", ["--version"], { stdio: "ignore", windowsHide: true });
-	} catch {
+try {
+	execFileSync("cargo", ["--version"], { stdio: "ignore", windowsHide: true });
+} catch (error) {
+	if (!cargoLocated && commandNotFound(error)) {
 		fail("cargo is required (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
+	}
+	const locatorWasNonAuthoritative = cargoLocated && commandNotFound(error) && locatedCargoPath.length === 0;
+	if (!locatorWasNonAuthoritative) {
+		fail("cargo toolchain is not runnable (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
 	}
 }
 
