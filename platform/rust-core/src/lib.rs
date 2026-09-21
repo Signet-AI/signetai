@@ -2040,6 +2040,19 @@ fn execute_operation(
             row.map(|value| json!({"value": value}))
                 .ok_or_else(|| CoreError::InvalidInput("secret not found".into()))
         }
+        Operation::ConnectorUpsert { agent_id, workspace_id, provider, display_name, settings } => {
+            let agent_id = required_agent(&agent_id)?; let workspace_id = canonical_workspace(&workspace_id)?;
+            if !["filesystem", "github-docs", "gdrive"].contains(&provider.as_str()) { return Err(CoreError::InvalidInput("provider must be filesystem, github-docs, or gdrive".into())); }
+            let id = uuid::Uuid::new_v4().to_string(); let config = json!({"id":id,"provider":provider,"displayName":display_name,"settings":settings,"enabled":true});
+            connection.execute("INSERT INTO connectors(id,agent_id,workspace_id,provider,display_name,config_json,status,created_at,updated_at) VALUES(?,?,?,?,?,?, 'idle',datetime('now'),datetime('now'))", params![id,agent_id,workspace_id,provider,display_name,config.to_string()])?;
+            Ok(json!({"id":id}))
+        }
+        Operation::ConnectorList { agent_id, workspace_id } => {
+            let agent_id = required_agent(&agent_id)?; let workspace_id = canonical_workspace(&workspace_id)?;
+            let mut stmt = connection.prepare("SELECT id,provider,display_name,config_json,status,last_sync_at,last_error,created_at,updated_at FROM connectors WHERE agent_id=? AND workspace_id=? ORDER BY rowid DESC")?;
+            let rows = stmt.query_map(params![agent_id,workspace_id], |r| { let config:String=r.get(3)?; let mut v:Value=serde_json::from_str(&config).unwrap_or_else(|_| json!({})); if let Value::Object(ref mut o)=v { o.insert("id".into(),json!(r.get::<_,String>(0)?)); o.insert("provider".into(),json!(r.get::<_,String>(1)?)); o.insert("displayName".into(),json!(r.get::<_,Option<String>>(2)?)); o.insert("status".into(),json!(r.get::<_,String>(4)?)); o.insert("configured".into(),json!(true)); o.insert("probed".into(),json!(false)); } Ok(v) })?;
+            let connectors=rows.collect::<Result<Vec<_>,_>>()?; Ok(json!({"connectors":connectors,"count":connectors.len()}))
+        }
         Operation::Health => {
             let value: i64 = connection.query_row("SELECT 1", [], |row| row.get(0))?;
             let migrations: i64 = connection.query_row(
@@ -3932,6 +3945,8 @@ pub enum Operation {
         fault: Option<String>,
     },
     Health,
+    ConnectorUpsert { agent_id: String, workspace_id: String, provider: String, display_name: String, settings: Value },
+    ConnectorList { agent_id: String, workspace_id: String },
     ReflectionList {
         agent_id: String,
         limit: usize,
@@ -4723,6 +4738,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE INDEX IF NOT EXISTS kg_entities_scope ON kg_entities(agent_id, name);
          CREATE INDEX IF NOT EXISTS kg_relations_scope ON kg_relations(agent_id, from_id, to_id);
 
+         CREATE TABLE IF NOT EXISTS connectors (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', provider TEXT NOT NULL, display_name TEXT, config_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'idle', last_sync_at TEXT, last_error TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, state TEXT NOT NULL, payload TEXT NOT NULL DEFAULT '{}', result TEXT, error TEXT, deadline_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
          CREATE INDEX IF NOT EXISTS jobs_agent_state ON jobs(agent_id, state, created_at);
          CREATE TABLE IF NOT EXISTS job_cancellations (id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT NOT NULL, agent_id TEXT NOT NULL, actor TEXT NOT NULL, reason TEXT NOT NULL, provenance TEXT NOT NULL, created_at TEXT NOT NULL);

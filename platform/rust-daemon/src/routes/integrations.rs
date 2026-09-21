@@ -6,7 +6,7 @@
 
 use axum::{
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     routing::{get, post},
     Json, Router,
 };
@@ -37,10 +37,7 @@ pub(crate) fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/features", get(features))
         .route("/api/config", get(config).post(write_config))
-        .route(
-            "/api/connectors",
-            get(connectors).post(unsupported_connector_registration),
-        )
+        .route("/api/connectors", get(connectors).post(register_connector))
         .route("/api/integrations", get(integrations))
         .route(
             "/api/harnesses/regenerate",
@@ -132,17 +129,51 @@ async fn write_config(
     ))
 }
 
-async fn unsupported_connector_registration() -> (StatusCode, Json<Value>) {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "status": "unsupported",
-            "operation": "connector-registration",
-            "implemented": false,
-            "probed": false,
-            "reason": "Native connector registration requires provider-specific storage and authorization"
-        })),
+#[derive(Debug, Deserialize)]
+struct ConnectorRegistration {
+    provider: Option<String>,
+    #[serde(default, alias = "displayName")]
+    display_name: Option<String>,
+    #[serde(default)]
+    settings: Value,
+}
+
+async fn register_connector(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Result<Json<ConnectorRegistration>, axum::extract::rejection::JsonRejection>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let claims = crate::routes::auth::gate(&state, &headers).await?;
+    if claims.get("role").and_then(Value::as_str) != Some("admin") {
+        return Err(ApiError::forbidden("admin authority is required"));
+    }
+    let Json(request) = body.map_err(|_| ApiError::bad_request("Invalid JSON body"))?;
+    let provider = request.provider.ok_or_else(|| {
+        ApiError::bad_request("provider must be filesystem, github-docs, or gdrive")
+    })?;
+    if !["filesystem", "github-docs", "gdrive"].contains(&provider.as_str()) {
+        return Err(ApiError::bad_request(
+            "provider must be filesystem, github-docs, or gdrive",
+        ));
+    }
+    let agent_id = crate::agent(&headers, None, None)?;
+    let workspace_id = crate::workspace_id(&headers, None);
+    let value = execute(
+        &state,
+        Operation::ConnectorUpsert {
+            agent_id,
+            workspace_id,
+            provider: provider.clone(),
+            display_name: request.display_name.unwrap_or(provider),
+            settings: if request.settings.is_object() {
+                request.settings
+            } else {
+                json!({})
+            },
+        },
     )
+    .await?;
+    Ok((StatusCode::CREATED, Json(value)))
 }
 
 async fn unsupported_harness_regeneration() -> (StatusCode, Json<Value>) {
@@ -221,22 +252,21 @@ fn parse_harnesses(content: &str) -> Vec<String> {
     values
 }
 
-async fn connectors() -> Json<Value> {
-    Json(json!({
-        "connectors": [{
-            "name": "native",
-            "implemented": false,
-            "configured": "unknown",
-            "detected": "unknown",
-            "probed": false,
-            "status": "unsupported",
-            "reason": "No native connector provider is implemented at this boundary"
-        }],
-        "count": 1,
-        "status": "unknown",
-        "probed": false,
-        "note": "Provider health is not asserted without an implemented probe."
-    }))
+async fn connectors(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let agent_id = crate::agent(&headers, None, None)?;
+    let workspace_id = crate::workspace_id(&headers, None);
+    let value = execute(
+        &state,
+        Operation::ConnectorList {
+            agent_id,
+            workspace_id,
+        },
+    )
+    .await?;
+    Ok(Json(value))
 }
 
 async fn integrations() -> Json<Value> {
