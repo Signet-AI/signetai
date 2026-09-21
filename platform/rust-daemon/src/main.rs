@@ -87,6 +87,27 @@ impl Drop for OwnerPipe {
     }
 }
 
+fn failed_owner_start(mut child: Child, error: CoreError) -> Result<OwnerSession, CoreError> {
+    let _ = child.kill();
+    let _ = child.wait();
+    Err(error)
+}
+
+fn owner_startup_generation(response: &Value) -> Result<String, CoreError> {
+    if response.get("ready").and_then(Value::as_bool) == Some(false) {
+        return Err(remote_core_error(response));
+    }
+    if response.get("ready").and_then(Value::as_bool) != Some(true) {
+        return Err(CoreError::OwnerStopped);
+    }
+    response
+        .get("generation")
+        .and_then(Value::as_str)
+        .filter(|generation| !generation.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or(CoreError::OwnerStopped)
+}
+
 impl ExternalOwner {
     fn start_session(workspace: &FsPath) -> Result<OwnerSession, CoreError> {
         let exe = env::var_os("SIGNET_DAEMON_BIN")
@@ -101,19 +122,40 @@ impl ExternalOwner {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|_| CoreError::OwnerStopped)?;
-        let stdin = child.stdin.take().ok_or(CoreError::OwnerStopped)?;
-        let stdout = child.stdout.take().ok_or(CoreError::OwnerStopped)?;
-        let mut stdout = BufReader::new(stdout);
+        let stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => return failed_owner_start(child, CoreError::OwnerStopped),
+        };
+        let stdout_pipe = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                drop(stdin);
+                return failed_owner_start(child, CoreError::OwnerStopped);
+            }
+        };
+        let mut stdout = BufReader::new(stdout_pipe);
         let mut line = String::new();
-        stdout
-            .read_line(&mut line)
-            .map_err(|_| CoreError::OwnerStopped)?;
-        let ready: Value = serde_json::from_str(&line).map_err(|_| CoreError::OwnerStopped)?;
-        let generation = ready
-            .get("generation")
-            .and_then(Value::as_str)
-            .ok_or(CoreError::OwnerStopped)?
-            .to_owned();
+        if stdout.read_line(&mut line).is_err() {
+            drop(stdin);
+            drop(stdout);
+            return failed_owner_start(child, CoreError::OwnerStopped);
+        }
+        let ready: Value = match serde_json::from_str(&line) {
+            Ok(ready) => ready,
+            Err(_) => {
+                drop(stdin);
+                drop(stdout);
+                return failed_owner_start(child, CoreError::OwnerStopped);
+            }
+        };
+        let generation = match owner_startup_generation(&ready) {
+            Ok(generation) => generation,
+            Err(error) => {
+                drop(stdin);
+                drop(stdout);
+                return failed_owner_start(child, error);
+            }
+        };
         Ok(OwnerSession {
             child,
             stdin,
@@ -478,6 +520,45 @@ mod owner_health_recovery_tests {
 #[cfg(test)]
 mod migration_error_tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(unix)]
+    #[test]
+    fn owner_startup_preserves_typed_migration_error() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        let directory = env::temp_dir().join(format!("signet-owner-startup-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let executable = directory.join("owner-stub");
+        std::fs::write(
+            &executable,
+            r#"#!/bin/sh
+printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error":"version 153 is newer than 2"}'
+"#,
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&executable).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&executable, permissions).unwrap();
+
+        let previous = env::var_os("SIGNET_DAEMON_BIN");
+        env::set_var("SIGNET_DAEMON_BIN", &executable);
+        let result = ExternalOwner::start_session(&directory);
+        match previous {
+            Some(value) => env::set_var("SIGNET_DAEMON_BIN", value),
+            None => env::remove_var("SIGNET_DAEMON_BIN"),
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+
+        assert!(matches!(
+            result,
+            Err(CoreError::UnsupportedMigrationHistory(message))
+                if message == "version 153 is newer than 2"
+        ));
+    }
 
     #[test]
     fn unsupported_migration_history_has_stable_owner_wire_envelope() {
@@ -1533,10 +1614,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         secret.extend_from_slice(Uuid::new_v4().as_bytes());
         std::fs::write(auth_path, secret)?;
     }
-    let owner = Arc::new(
-        ExternalOwner::spawn(&workspace)
-            .map_err(|error| format!("database owner startup: {error}"))?,
-    );
+    let owner = Arc::new(match ExternalOwner::spawn(&workspace) {
+        Ok(owner) => owner,
+        Err(error) => {
+            let mut envelope = wire_core_error(&error);
+            envelope["startup"] = json!(true);
+            eprintln!(
+                "database owner startup: {}",
+                serde_json::to_string(&envelope)?
+            );
+            return Err(error.into());
+        }
+    });
     start_runtime_config_watcher(&workspace);
     let config_dir = routes::git_sync::admit_config_dir(&workspace);
     let state = AppState {
@@ -1886,13 +1975,33 @@ fn read_owner_request_line<R: BufRead>(reader: &mut R) -> std::io::Result<Option
     }
 }
 
+fn write_owner_startup_failure<W: Write>(out: &mut W, error: &CoreError) -> Result<(), Box<dyn std::error::Error>> {
+    let mut response = wire_core_error(error);
+    response["ready"] = json!(false);
+    serde_json::to_writer(&mut *out, &response)?;
+    writeln!(out)?;
+    out.flush()?;
+    Ok(())
+}
+
 fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
     let workspace = workspace_path();
     let path = database_path(&workspace);
     let lock_path = workspace.join(".daemon").join("db-owner.lock");
     let _lock = acquire_owner_lock(&lock_path)?;
-    let owner = WorkspaceOwner::open(&path, 256)?;
-    owner.initialize()?;
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::new(stdout.lock());
+    let owner = match WorkspaceOwner::open(&path, 256) {
+        Ok(owner) => owner,
+        Err(error) => {
+            write_owner_startup_failure(&mut out, &error)?;
+            return Ok(());
+        }
+    };
+    if let Err(error) = owner.initialize() {
+        write_owner_startup_failure(&mut out, &error)?;
+        return Ok(());
+    }
     let generation = Uuid::new_v4().to_string();
     let marker_path = workspace.join(".daemon").join("db-owner.json");
     std::fs::write(
@@ -1903,7 +2012,6 @@ fn db_owner_process() -> Result<(), Box<dyn std::error::Error>> {
             "database": path,
         }))?,
     )?;
-    let mut out = std::io::BufWriter::new(std::io::stdout().lock());
     writeln!(
         out,
         "{{\"ready\":true,\"pid\":{},\"generation\":\"{}\"}}",
