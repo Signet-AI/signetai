@@ -875,6 +875,18 @@ fn execute_operation(
                 json!({"reflection": reflections.first().cloned().unwrap_or(Value::Null), "reflections": reflections}),
             )
         }
+        Operation::ReflectionAnswer { agent_id, id, answer, memory_id, answered_at } => {
+            let agent_id = required_agent(&agent_id)?;
+            if answer.trim().is_empty() { return Err(CoreError::InvalidInput("answer is required".into())); }
+            if answer.trim().chars().count() > 10_000 { return Err(CoreError::InvalidInput("answer exceeds 10000 characters".into())); }
+            let tx = connection.transaction()?;
+            let changed = tx.execute("UPDATE daily_reflections SET answer=?, answer_memory_id=?, answered_at=? WHERE id=? AND agent_id=? AND answer IS NULL", params![answer.trim(), memory_id, answered_at, id, agent_id])?;
+            if changed == 0 { let exists: i64 = tx.query_row("SELECT count(*) FROM daily_reflections WHERE id=? AND agent_id=?", params![id, agent_id], |r| r.get(0))?; if exists == 0 { return Err(CoreError::NotFound); } return Err(CoreError::InvalidInput("Already answered".into())); }
+            let metadata = serde_json::to_string(&json!({"type":"reflection","sourceType":"reflection-answer","sourceId":id,"why":"daily-reflection-answer"}))?;
+            tx.execute("INSERT INTO memories(id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,memory_kind) VALUES(?,?,?, ?,0,datetime('now'),datetime('now'),?,?,?)", params![memory_id, agent_id, answer.trim(), metadata, id, "reflection-answer", "episodic"])?;
+            record_history(&tx, &memory_id, &agent_id, "remember", None)?; tx.commit()?;
+            Ok(json!({"success":true,"memoryId":memory_id}))
+        }
         Operation::TranscriptImportCreate {
             agent_id,
             workspace_id,
@@ -4096,6 +4108,7 @@ pub enum Operation {
         date: String,
         limit: usize,
     },
+    ReflectionAnswer { agent_id: String, id: String, answer: String, memory_id: String, answered_at: String },
     SecretList {
         agent_id: String,
         workspace_id: String,
