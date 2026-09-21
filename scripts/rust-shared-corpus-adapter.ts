@@ -189,7 +189,33 @@ const coreEvidence =
 const nativeEvidence = daemonEvidence || coreEvidence;
 const evidence =
 	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
-if (!existsSync(junitPath)) fail(`Rust child did not produce a JUnit report: ${evidence}`);
+if (!existsSync(junitPath)) {
+	// Preserve an auditable, fail-closed report when the unchanged child cannot
+	// produce JUnit (for example, a spawn failure or infrastructure signal).
+	// Do not synthesize testcase identities: zero cases remains incomplete.
+	writeFileSync(
+		report,
+		`<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" nativeEvidence="${nativeEvidence}" tests="0" failures="0" errors="1" skipped="0"/>`,
+	);
+	if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
+	if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
+	console.error(
+		JSON.stringify({
+			backend: "fresh-rust",
+			artifact,
+			selected,
+			executed: [],
+			nativeEvidence,
+			childStatus: child.status,
+			childSignal: child.signal,
+			infrastructureFailure: true,
+			missingSelected: selected,
+			unexpectedFiles: [],
+			reason: evidence.slice(-8192),
+		}),
+	);
+	process.exit(2);
+}
 const reportXml = readFileSync(junitPath, "utf8");
 const cases = reportXml.match(/<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g) ?? [];
 if (!cases.length) fail(`Rust child produced no real testcase identities: ${evidence}`);
