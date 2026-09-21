@@ -13,8 +13,8 @@ use signet_core_native::Operation;
 struct EntityQuery {
     #[serde(flatten)]
     agent: AgentQuery,
-    limit: Option<usize>,
-    offset: Option<usize>,
+    limit: Option<String>,
+    offset: Option<String>,
     workspace_id: Option<String>,
     direction: Option<String>,
     name: Option<String>,
@@ -28,12 +28,12 @@ struct NavigationQuery {
     aspect: Option<String>,
     group: Option<String>,
     claim: Option<String>,
-    limit: Option<usize>,
-    offset: Option<usize>,
-    max_aspects: Option<usize>,
-    max_groups: Option<usize>,
-    max_claims: Option<usize>,
-    depth: Option<usize>,
+    limit: Option<String>,
+    offset: Option<String>,
+    max_aspects: Option<String>,
+    max_groups: Option<String>,
+    max_claims: Option<String>,
+    depth: Option<String>,
     kind: Option<String>,
     status: Option<String>,
 }
@@ -54,8 +54,16 @@ struct RelationBody {
     metadata: Value,
 }
 
-fn limit(value: Option<usize>) -> usize {
-    value.unwrap_or(50).clamp(1, 200)
+fn bounded(value: Option<&str>, fallback: usize, max: usize) -> usize {
+    value
+        .and_then(|raw| raw.parse::<usize>().ok())
+        .map_or(fallback, |parsed| parsed.clamp(1, max))
+}
+fn limit(value: Option<&str>) -> usize {
+    bounded(value, 50, 200)
+}
+fn offset(value: Option<&str>) -> usize {
+    value.and_then(|raw| raw.parse::<usize>().ok()).unwrap_or(0)
 }
 fn workspace(headers: &HeaderMap, q: &EntityQuery) -> Result<String, ApiError> {
     let aliases = ["x-workspace-id", "x-signet-workspace-id"];
@@ -168,9 +176,11 @@ async fn navigation_tree(
                 agent_id: agent(&headers, Some(&q.agent), None)?,
                 workspace_id: workspace_nav(&headers, &q)?,
                 entity_id: entity.to_owned(),
-                depth: q.depth.unwrap_or(3).min(3),
-                max_aspects: q.max_aspects.unwrap_or(20).clamp(1, 100),
-                max_attributes: q.max_claims.unwrap_or(50).clamp(1, 200),
+                depth: bounded(q.depth.as_deref(), 3, 3),
+                max_aspects: bounded(q.max_aspects.as_deref(), 20, 100),
+                max_groups: bounded(q.max_groups.as_deref(), 20, 100),
+                max_claims: bounded(q.max_claims.as_deref(), 50, 200),
+                max_attributes: bounded(q.max_claims.as_deref(), 50, 200),
             },
         )
         .await?,
@@ -275,6 +285,16 @@ async fn navigation_attributes(
         .claim
         .clone()
         .ok_or_else(|| ApiError::bad_request("claim is required"))?;
+    let kind = q
+        .kind
+        .as_deref()
+        .filter(|v| matches!(*v, "attribute" | "constraint"))
+        .map(str::to_owned);
+    let status = q
+        .status
+        .as_deref()
+        .filter(|v| matches!(*v, "active" | "superseded" | "deleted" | "all"))
+        .map(str::to_owned);
     Ok(Json(
         execute(
             &state,
@@ -285,31 +305,36 @@ async fn navigation_attributes(
                 aspect,
                 group,
                 claim,
-                limit: limit(q.limit),
-                offset: q.offset.unwrap_or(0),
-                kind: q.kind,
-                status: q.status,
+                limit: limit(q.limit.as_deref()),
+                offset: offset(q.offset.as_deref()),
+                kind,
+                status,
             },
         )
         .await?,
     ))
 }
 fn workspace_nav(headers: &HeaderMap, q: &NavigationQuery) -> Result<String, ApiError> {
-    let values = headers
-        .get("x-workspace-id")
-        .or_else(|| headers.get("x-signet-workspace-id"))
+    let aliases = ["x-workspace-id", "x-signet-workspace-id"];
+    let values = aliases
+        .iter()
+        .filter_map(|name| headers.get(*name))
         .map(|v| v.to_str().map(str::trim))
-        .transpose()
+        .collect::<Result<Vec<_>, _>>()
         .map_err(|_| ApiError::bad_request("workspace header must be valid UTF-8"))?;
+    if values.windows(2).any(|pair| pair[0] != pair[1]) {
+        return Err(ApiError::bad_request("conflicting workspace aliases"));
+    }
+    let header = values.first().copied();
     let query = q
         .workspace_id
         .as_deref()
         .map(str::trim)
         .filter(|v| !v.is_empty());
-    if values.is_some() && query.is_some() && values != query {
+    if header.is_some() && query.is_some() && header != query {
         return Err(ApiError::bad_request("conflicting workspace scope"));
     }
-    Ok(values.or(query).unwrap_or("default").to_owned())
+    Ok(header.or(query).unwrap_or("default").to_owned())
 }
 
 async fn entity_detail(
@@ -362,8 +387,8 @@ async fn aspect_attributes(
                 workspace_id: workspace(&headers, &q)?,
                 entity_id,
                 aspect_id,
-                limit: limit(q.limit),
-                offset: q.offset.unwrap_or(0),
+                limit: limit(q.limit.as_deref()),
+                offset: offset(q.offset.as_deref()),
                 kind: None,
                 status: None,
             },
@@ -386,7 +411,7 @@ async fn entity_dependencies(
                 agent_id: agent(&headers, Some(&q.agent), None)?,
                 workspace_id: workspace(&headers, &q)?,
                 entity_id: id,
-                limit: limit(q.limit),
+                limit: limit(q.limit.as_deref()),
                 direction: direction.to_owned(),
             },
         )
@@ -425,7 +450,7 @@ async fn constellation(
             Operation::KnowledgeConstellation {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
                 workspace_id: workspace(&headers, &q)?,
-                limit: limit(q.limit),
+                limit: limit(q.limit.as_deref()),
             },
         )
         .await?,
@@ -443,8 +468,8 @@ async fn list_entities(
             Operation::KnowledgeEntityList {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
                 workspace_id: workspace(&headers, &q)?,
-                limit: limit(q.limit),
-                offset: q.offset.unwrap_or(0),
+                limit: limit(q.limit.as_deref()),
+                offset: offset(q.offset.as_deref()),
             },
         )
         .await?,
@@ -489,6 +514,42 @@ async fn create_relation(
     .await?;
     Ok((StatusCode::CREATED, Json(result)))
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn navigation_scope_rejects_conflicting_workspace_aliases() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-workspace-id", "one".parse().unwrap());
+        headers.insert("x-signet-workspace-id", "two".parse().unwrap());
+        let query = NavigationQuery {
+            agent: AgentQuery::default(),
+            workspace_id: None,
+            entity: None,
+            aspect: None,
+            group: None,
+            claim: None,
+            limit: None,
+            offset: None,
+            max_aspects: None,
+            max_groups: None,
+            max_claims: None,
+            depth: None,
+            kind: None,
+            status: None,
+        };
+        assert!(workspace_nav(&headers, &query).is_err());
+    }
+
+    #[test]
+    fn navigation_limits_keep_independent_group_and_claim_bounds() {
+        assert_eq!(bounded(Some("7"), 20, 100), 7);
+        assert_eq!(bounded(Some("11"), 50, 200), 11);
+        assert_eq!(bounded(Some("not-a-number"), 20, 100), 20);
+    }
+}
+
 async fn list_relations(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -502,7 +563,7 @@ async fn list_relations(
                 agent_id: agent(&headers, Some(&q.agent), None)?,
                 workspace_id: workspace(&headers, &q)?,
                 entity_id: id,
-                limit: limit(q.limit),
+                limit: limit(q.limit.as_deref()),
             },
         )
         .await?,

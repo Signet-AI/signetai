@@ -39,6 +39,8 @@ struct Tree {
     entity_id: String,
     depth: Option<usize>,
     max_aspects: Option<usize>,
+    max_groups: Option<usize>,
+    max_claims: Option<usize>,
     max_attributes: Option<usize>,
 }
 fn ws(q: &Scope) -> Result<String, ApiError> {
@@ -112,6 +114,8 @@ async fn tree(
                 entity_id: q.entity_id,
                 depth: q.depth.unwrap_or(3),
                 max_aspects: q.max_aspects.unwrap_or(20),
+                max_groups: q.max_groups.unwrap_or(20),
+                max_claims: q.max_claims.unwrap_or(50),
                 max_attributes: q.max_attributes.unwrap_or(50),
             },
         )
