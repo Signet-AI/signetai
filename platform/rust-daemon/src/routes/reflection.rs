@@ -1,5 +1,5 @@
 use crate::routes::auth;
-use crate::{agent, execute, ApiError, AppState};
+use crate::{agent, execute, AgentQuery, ApiError, AppState};
 use axum::http::StatusCode;
 use axum::{
     extract::{Path, Query, State},
@@ -40,7 +40,15 @@ async fn list(
         execute(
             &state,
             Operation::ReflectionList {
-                agent_id: agent(&headers, None, None)?,
+                agent_id: agent(
+                    &headers,
+                    Some(&AgentQuery {
+                        agent_id: query.agent_id.clone(),
+                        agent_id_camel: None,
+                        ..Default::default()
+                    }),
+                    None,
+                )?,
                 limit: limit(&query),
             },
         )
@@ -64,7 +72,15 @@ async fn today(
         execute(
             &state,
             Operation::ReflectionToday {
-                agent_id: agent(&headers, None, None)?,
+                agent_id: agent(
+                    &headers,
+                    Some(&AgentQuery {
+                        agent_id: query.agent_id.clone(),
+                        agent_id_camel: None,
+                        ..Default::default()
+                    }),
+                    None,
+                )?,
                 date,
                 limit: limit(&query),
             },
@@ -87,26 +103,40 @@ async fn generate(
     ) {
         return Err(ApiError::forbidden("admin permission required"));
     }
-    let _ = query;
+    let agent_id = agent(
+        &headers,
+        Some(&AgentQuery {
+            agent_id: query.agent_id.clone(),
+            agent_id_camel: None,
+            ..Default::default()
+        }),
+        None,
+    )?;
     let workspace = std::env::var_os("SIGNET_PATH")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::path::PathBuf::from("."));
     let config = std::fs::read_to_string(workspace.join("agent.yaml")).unwrap_or_default();
-    let section = config
-        .split("pipelineV2:")
-        .nth(1)
-        .and_then(|s| s.split("reflections:").nth(1));
-    let section = section.unwrap_or("");
+    let section = config.split("reflections:").nth(1).unwrap_or("");
     let enabled = section
         .lines()
-        .take(12)
+        .take_while(|line| {
+            line.trim().is_empty() || line.chars().take_while(|c| c.is_whitespace()).count() > 4
+        })
         .any(|line| line.trim() == "enabled: true");
     if !enabled {
         return Err(ApiError::bad_request(
             "Reflections are disabled in pipeline config",
         ));
     }
-    let count = query.count.unwrap_or(1).clamp(1, 6);
+    let configured_count = section
+        .lines()
+        .find_map(|l| {
+            l.trim()
+                .strip_prefix("count:")
+                .and_then(|v| v.trim().parse::<usize>().ok())
+        })
+        .unwrap_or(1);
+    let count = query.count.unwrap_or(configured_count).clamp(1, 6);
     let model = section
         .lines()
         .find_map(|l| l.trim().strip_prefix("model:"))
@@ -118,7 +148,7 @@ async fn generate(
     let memories = execute(
         &state,
         Operation::ReflectionMemories {
-            agent_id: agent(&headers, None, None)?,
+            agent_id: agent_id.clone(),
             limit: 50,
         },
     )
@@ -142,13 +172,13 @@ async fn generate(
         .get("entries")
         .and_then(Value::as_array)
         .cloned()
+        .or_else(|| parsed.get("insights").and_then(Value::as_array).cloned())
         .unwrap_or_default();
-    let agent_id = agent(&headers, None, None)?;
     let date = OffsetDateTime::now_utc().date().to_string();
     execute(
         &state,
         Operation::ReflectionInsert {
-            agent_id,
+            agent_id: agent_id.clone(),
             date: date.clone(),
             model,
             entries,
@@ -158,7 +188,7 @@ async fn generate(
     let reflections = execute(
         &state,
         Operation::ReflectionToday {
-            agent_id: agent(&headers, None, None)?,
+            agent_id,
             date,
             limit: 6,
         },
@@ -172,11 +202,20 @@ async fn generate(
 async fn answer(
     State(state): State<AppState>,
     headers: HeaderMap,
+    Query(query): Query<ReflectionQuery>,
     Path(id): Path<String>,
     body: Result<Json<AnswerBody>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Json<Value>, ApiError> {
     let claims = auth::gate(&state, &headers).await?;
-    let agent_id = agent(&headers, None, None)?;
+    let agent_id = agent(
+        &headers,
+        Some(&AgentQuery {
+            agent_id: query.agent_id.clone(),
+            agent_id_camel: None,
+            ..Default::default()
+        }),
+        None,
+    )?;
     if !auth::authority_allows(
         &claims,
         "agent",

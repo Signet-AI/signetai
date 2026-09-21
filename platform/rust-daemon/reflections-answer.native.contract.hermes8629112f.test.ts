@@ -199,5 +199,5 @@ it("exercises native reflection answer auth, persistence, scope, and generation 
 		method: "POST",
 		headers: headers(adminToken),
 	});
-	expect(generated.status).toBe(501);
+	expect(generated.status).toBe(400);
 });
