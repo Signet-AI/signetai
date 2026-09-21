@@ -2388,7 +2388,7 @@ fn execute_operation(
             let mut statement = connection.prepare(
                 "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                  FROM memories
-                 WHERE COALESCE(agent_id, 'default') = ? AND deleted = 0 AND content LIKE ?
+                 WHERE COALESCE(agent_id, 'default') = ? AND deleted = 0 AND superseded_by IS NULL AND content LIKE ?
                  ORDER BY rowid DESC LIMIT 1000",
             )?;
             let rows = statement.query_map(params![agent_id, format!("%{query}%")], memory_row)?;
