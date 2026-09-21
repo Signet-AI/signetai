@@ -5,13 +5,13 @@
   "type": "module",
   "bin": {
     "signet": "bin/signet.js",
-    "signet-mcp": "bin/signet-mcp.js"
+    "signet-mcp": "dist/mcp-stdio.js"
   },
   "files": [
     "bin/launch.js",
     "bin/native-platforms.js",
     "bin/signet.js",
-    "bin/signet-mcp.js",
+    "dist/mcp-stdio.js",
     "runtime",
     "native-manifest.json",
     "scripts",
@@ -21,7 +21,7 @@
   "scripts": {
     "// prebuild": "Release-only: stages the native signet-mcp resolver launcher and native binaries. Runs on `bun run build:signetai` during the release pipeline, NOT on install — consumers receive whatever the publisher shipped.",
     "copy:scripts": "mkdir -p scripts && cp ../../scripts/install-graphiq.sh scripts/install-graphiq.sh",
-    "prebuild": "bun run copy:scripts && bun ../../scripts/build-signet-mcp.ts && bun ../../scripts/build-native.ts",
+    "prebuild": "bun run copy:scripts && bun ../../scripts/build-signet-mcp.ts",
     "build": "node scripts/verify-wrapper.js",
     "postinstall": "node scripts/install-native.js"
   },

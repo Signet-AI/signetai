@@ -14,18 +14,26 @@
  * adapter itself is plain JavaScript and has no Bun-specific imports.
  */
 
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 const root = join(import.meta.dir, "..");
-const outfile = join(root, "dist", "signetai", "bin", "signet-mcp.js");
-const entry = join(root, "scripts", "signet-mcp-launcher.js");
-
-mkdirSync(dirname(outfile), { recursive: true });
-await Bun.write(outfile, await Bun.file(entry).text());
-chmodSync(outfile, 0o755);
+const outfile = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
+const entry = join(root, "platform", "daemon", "src", "mcp-stdio.ts");
+const result = await Bun.build({
+	entrypoints: [entry],
+	outdir: dirname(outfile),
+	target: "node",
+	format: "esm",
+	external: ["better-sqlite3", "@1password/sdk", "onnxruntime-node", "@huggingface/transformers"],
+	naming: "mcp-stdio.js",
+});
+if (!result.success) {
+	for (const log of result.logs) console.error(log);
+	process.exit(1);
+}
 if (!existsSync(outfile)) {
 	console.error(`build-signet-mcp: expected ${outfile} was not produced`);
 	process.exit(1);
 }
-console.log(`Staged native signet-mcp launcher: ${outfile}`);
+console.log(`Built signet-mcp stdio bundle: ${outfile}`);
