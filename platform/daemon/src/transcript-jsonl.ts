@@ -59,6 +59,7 @@ export interface TranscriptIdentity {
 	readonly capturedAt?: string;
 	readonly sourceFormat: TranscriptSourceFormat;
 	readonly sourcePath?: string;
+	readonly preserveExistingSession?: boolean;
 }
 
 const LOCK_DEAD_OWNER_STALE_MS = 30_000;
@@ -149,24 +150,6 @@ export function transcriptTextToTurns(transcript: string): TranscriptTurn[] {
 	return turns;
 }
 
-function readRecords(path: string): CanonicalTranscriptRecord[] {
-	if (!existsSync(path)) return [];
-	const records: CanonicalTranscriptRecord[] = [];
-	for (const line of readFileSync(path, "utf8").split(/\r?\n/)) {
-		const trimmed = line.trim();
-		if (trimmed.length === 0) continue;
-		try {
-			const parsed = JSON.parse(trimmed) as Partial<CanonicalTranscriptRecord>;
-			if (parsed.schema === "signet.transcript.v1" && typeof parsed.content === "string") {
-				records.push(parsed as CanonicalTranscriptRecord);
-			}
-		} catch {
-			// Ignore malformed historical lines rather than blocking capture.
-		}
-	}
-	return records;
-}
-
 function parseRecords(text: string): CanonicalTranscriptRecord[] {
 	const records: CanonicalTranscriptRecord[] = [];
 	for (const line of text.split(/\r?\n/)) {
@@ -199,14 +182,6 @@ function readTailRecords(path: string): CanonicalTranscriptRecord[] {
 	} finally {
 		closeSync(fd);
 	}
-}
-
-function writeRecords(path: string, records: readonly CanonicalTranscriptRecord[]): void {
-	mkdirSync(dirname(path), { recursive: true });
-	const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;
-	const body = records.map((record) => JSON.stringify(record)).join("\n");
-	writeFileSync(tmp, body.length > 0 ? `${body}\n` : "", "utf8");
-	renameSync(tmp, path);
 }
 
 function appendRecords(path: string, records: readonly CanonicalTranscriptRecord[]): void {
@@ -300,7 +275,7 @@ function releaseTranscriptFileLock(lockPath: string, token: string): void {
 	rmSync(lockPath, { recursive: true, force: true });
 }
 
-async function withTranscriptFileLock<T>(path: string, write: () => T | Promise<T>): Promise<T> {
+export async function withTranscriptFileLock<T>(path: string, write: () => T | Promise<T>): Promise<T> {
 	mkdirSync(dirname(path), { recursive: true });
 	const lock = await acquireTranscriptFileLock(path);
 
@@ -432,15 +407,15 @@ async function hasSessionRecord(path: string, input: TranscriptIdentity): Promis
 
 export function writeCanonicalTranscriptSnapshot(
 	input: TranscriptIdentity & { readonly transcript: string },
-): Promise<string | null> {
+): Promise<boolean> {
 	const turns = transcriptTextToTurns(input.transcript);
-	if (turns.length === 0) return Promise.resolve(null);
+	if (turns.length === 0) return Promise.resolve(false);
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	return withTranscriptFileLock(path, async () => {
 		const next = turns
 			.map((turn, index) => makeRecord(input, turn, index + 1))
 			.filter((record): record is CanonicalTranscriptRecord => record !== null);
-		if (next.length === 0) return null;
+		if (next.length === 0) return false;
 
 		if (!existsSync(path)) {
 			mkdirSync(dirname(path), { recursive: true });
@@ -450,13 +425,15 @@ export function writeCanonicalTranscriptSnapshot(
 				sessionSeqCacheKey(input),
 				next.reduce((max, record) => Math.max(max, record.seq), 0),
 			);
-			return path;
+			return true;
 		}
 
 		const tmpPath = `${path}.snapshot-tmp`;
 		let fd: number | null = null;
 		try {
 			fd = openSync(tmpPath, "w");
+			const existingSessionTurns: Array<Pick<CanonicalTranscriptRecord, "role" | "content">> = [];
+			let existingSessionLiveOnly = true;
 			const lines = createInterface({
 				input: createReadStream(path, { encoding: "utf8" }),
 				crlfDelay: Number.POSITIVE_INFINITY,
@@ -472,6 +449,11 @@ export function writeCanonicalTranscriptSnapshot(
 							continue;
 						}
 						if (sameSession(parsed as CanonicalTranscriptRecord, input)) {
+							if (parsed.source_format !== "live") existingSessionLiveOnly = false;
+							existingSessionTurns.push({
+								role: parsed.role as CanonicalTranscriptRecord["role"],
+								content: cleanTurnContent(parsed.content),
+							});
 							continue; // Skip — will be replaced by `next` records at end
 						}
 						writeSync(fd, `${line}\n`);
@@ -482,6 +464,23 @@ export function writeCanonicalTranscriptSnapshot(
 				}
 			} finally {
 				lines.close();
+			}
+			const incomingExtendsExisting =
+				existingSessionTurns.length < next.length &&
+				existingSessionTurns.every(
+					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
+				);
+			if (
+				(input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly)) &&
+				!incomingExtendsExisting
+			) {
+				// A completed source-backed session is append-only. Recovery can rediscover
+				// a stale, shorter, or divergent source, but it must not erase canonical
+				// turns that have already been retained.
+				closeSync(fd);
+				fd = null;
+				rmSync(tmpPath, { force: true });
+				return false;
 			}
 			// Append new canonical records for this session
 			for (const r of next) {
@@ -495,7 +494,7 @@ export function writeCanonicalTranscriptSnapshot(
 				sessionSeqCacheKey(input),
 				next.reduce((max, record) => Math.max(max, record.seq), 0),
 			);
-			return path;
+			return true;
 		} catch (error) {
 			if (fd !== null) closeSync(fd);
 			rmSync(tmpPath, { force: true });

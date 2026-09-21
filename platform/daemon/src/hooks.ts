@@ -149,8 +149,6 @@ import { getExpiryWarning } from "./session-tracker";
 import {
 	findStaleLiveSessions,
 	getStoredSessionTranscriptInfoAsync,
-	markSessionTranscriptCompleted,
-	upsertSessionTranscript,
 	upsertSessionTranscriptAsync,
 } from "./session-transcripts";
 import { type StructuralCandidateSource, type StructuralFeatures, getStructuralFeatures } from "./structural-features";
@@ -1660,8 +1658,7 @@ type UserPromptSubmitDeps = {
 	readonly consumeState: typeof consumeState;
 	readonly queueCheckpointWrite: typeof queueCheckpointWrite;
 	readonly formatPeriodicDigest: typeof formatPeriodicDigest;
-	readonly upsertSessionTranscript: typeof upsertSessionTranscript;
-	readonly upsertSessionTranscriptAsync?: typeof upsertSessionTranscriptAsync;
+	readonly upsertSessionTranscriptAsync: typeof upsertSessionTranscriptAsync;
 	readonly getExpiryWarning: typeof getExpiryWarning;
 	readonly hybridRecall: typeof hybridRecall;
 	readonly fetchEmbedding: typeof fetchEmbedding;
@@ -1683,7 +1680,6 @@ const DEFAULT_USER_PROMPT_SUBMIT_DEPS: UserPromptSubmitDeps = {
 	consumeState,
 	queueCheckpointWrite,
 	formatPeriodicDigest,
-	upsertSessionTranscript,
 	upsertSessionTranscriptAsync,
 	getExpiryWarning,
 	hybridRecall,
@@ -1698,10 +1694,6 @@ export async function handleUserPromptSubmit(
 	overrides?: Partial<UserPromptSubmitDeps>,
 ): Promise<UserPromptSubmitResponse> {
 	const deps = { ...DEFAULT_USER_PROMPT_SUBMIT_DEPS, ...overrides };
-	const upsertTranscriptAsync =
-		deps.upsertSessionTranscriptAsync ??
-		(async (...args: Parameters<typeof upsertSessionTranscript>): Promise<boolean> =>
-			deps.upsertSessionTranscript(...args));
 	const start = deps.now();
 	const clockContext = formatPromptClockContext(new Date(start));
 	const submitCfg = loadHooksConfigForHarness(req.harness).userPromptSubmit ?? {};
@@ -1765,72 +1757,32 @@ export async function handleUserPromptSubmit(
 		}
 	}
 
-	if (req.sessionKey) {
-		let rawTranscript = "";
-		let transcript = "";
-		if (req.transcriptPath && existsSync(req.transcriptPath)) {
-			try {
-				rawTranscript = readFileSync(req.transcriptPath, "utf-8");
-				transcript = normalizeSessionTranscript(req.harness, rawTranscript);
-			} catch {
-				deps.logger.warn("hooks", "Could not read prompt transcript", {
-					path: req.transcriptPath,
-				});
-			}
-		} else if (req.transcript) {
-			rawTranscript = req.transcript;
-			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
-		}
-
-		if (transcript) {
-			try {
-				const prevInfo = await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId);
-				const prev = prevInfo?.content;
-				if (!prev || transcript.length >= prev.length) {
-					await upsertTranscriptAsync(req.sessionKey, transcript, req.harness, req.project ?? null, agentId);
-				}
-				await transcriptCapture.writeCanonicalTranscriptFromSnapshot({
-					basePath: getAgentsDir(),
-					agentId,
-					harness: req.harness,
-					sessionKey: req.sessionKey,
-					project: req.project ?? null,
-					rawTranscript,
-					transcript,
-					transcriptPath: req.transcriptPath,
-				});
-			} catch (error) {
-				deps.logger.warn("hooks", "Prompt transcript write failed", {
-					error: error instanceof Error ? error.message : String(error),
-				});
-			}
-		} else if (userMessage.trim().length > 0) {
-			try {
-				const liveTranscript = transcriptCapture.formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
-				const prevInfo = await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId);
-				const prev = prevInfo?.content;
-				await upsertTranscriptAsync(
-					req.sessionKey,
-					transcriptCapture.appendLivePromptTranscript(prev, liveTranscript),
-					req.harness,
-					req.project ?? null,
-					agentId,
-				);
-				await transcriptCapture.appendCanonicalLiveTranscriptTurns({
-					basePath: getAgentsDir(),
-					agentId,
-					harness: req.harness,
-					sessionKey: req.sessionKey,
-					project: req.project ?? null,
-					userMessage,
-					lastAssistantMessage: req.lastAssistantMessage,
-				});
-			} catch (error) {
-				deps.logger.warn("hooks", "Prompt JSONL transcript append failed", {
-					error: error instanceof Error ? error.message : String(error),
-					sessionKey: req.sessionKey,
-				});
-			}
+	if (req.sessionKey && userMessage.trim().length > 0) {
+		try {
+			const liveTranscript = transcriptCapture.formatLivePromptTranscript(userMessage, req.lastAssistantMessage);
+			const prevInfo = await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId);
+			const prev = prevInfo?.content;
+			await deps.upsertSessionTranscriptAsync(
+				req.sessionKey,
+				transcriptCapture.appendLivePromptTranscript(prev, liveTranscript),
+				req.harness,
+				req.project ?? null,
+				agentId,
+			);
+			await transcriptCapture.appendCanonicalLiveTranscriptTurns({
+				basePath: getAgentsDir(),
+				agentId,
+				harness: req.harness,
+				sessionKey: req.sessionKey,
+				project: req.project ?? null,
+				userMessage,
+				lastAssistantMessage: req.lastAssistantMessage,
+			});
+		} catch (error) {
+			logger.warn("hooks", "Prompt transcript append failed", {
+				error: error instanceof Error ? error.message : String(error),
+				sessionKey: req.sessionKey,
+			});
 		}
 	}
 
@@ -2174,81 +2126,26 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	clearContinuity(sessionKey);
 
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
-
-	// Read transcript: prefer file path, fall back to inline body
-	let rawTranscript = "";
-	let transcript = "";
-	if (req.transcriptPath && existsSync(req.transcriptPath)) {
-		try {
-			rawTranscript = readFileSync(req.transcriptPath, "utf-8");
-			transcript = normalizeSessionTranscript(req.harness, rawTranscript);
-		} catch {
-			logger.warn("hooks", "Could not read transcript", {
-				path: req.transcriptPath,
-			});
-		}
-	} else if (req.transcript) {
-		rawTranscript = req.transcript;
-		transcript = normalizeSessionTranscript(req.harness, rawTranscript);
-	}
-
-	let storedTranscript = "";
-	if (sessionKey) {
-		try {
-			storedTranscript = (await getStoredSessionTranscriptInfoAsync(sessionKey, agentId))?.content ?? "";
-		} catch (error) {
-			logger.warn("hooks", "Failed to read stored transcript for fallback", {
-				error: error instanceof Error ? error.message : String(error),
-				sessionKey,
-			});
-		}
-	}
-	if (storedTranscript.length > 0 && (transcript.length === 0 || storedTranscript.length > transcript.length)) {
-		logger.info("hooks", "Session end using stored transcript snapshot", {
+	if (boundaryReason === null) {
+		// Stop/session.idle is a per-turn hook. PromptSubmit already appended the
+		// live turn; reading the growing source here only creates another full-file
+		// observation, so ordinary turns never enter durable capture.
+		scheduleDeferredSessionEndWork({
 			sessionKey,
-			liveChars: storedTranscript.length,
-			finalChars: transcript.length,
+			agentId,
+			memoryCfg,
 		});
-		transcript = storedTranscript;
+		return { memoriesSaved: 0, queued: false };
 	}
 
-	// Retain the complete transcript first. Dreaming reads this row directly;
-	// no derived summary job is inserted or required for completion.
-	const retainedTranscript = transcript;
-	const sessionId = deriveSessionEndFallbackId(
-		req.sessionId?.trim() || sessionKey,
-		req.transcriptPath,
-		retainedTranscript,
-	);
-	let transcriptRetained = false;
-	if (retainedTranscript && sessionKey) {
-		try {
-			transcriptRetained = await upsertSessionTranscriptAsync(
-				sessionKey,
-				retainedTranscript,
-				req.harness,
-				req.cwd ?? null,
-				agentId,
-				endedAt,
-			);
-		} catch (e) {
-			logger.warn("hooks", "Live transcript retention failed (non-fatal)", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-		}
-	}
-	if (transcriptRetained && sessionKey) {
-		const completed = await markSessionTranscriptCompleted(sessionKey, agentId, endedAt);
-		if (!completed) {
-			logger.warn("hooks", "Session-end transcript completion marker was not written", {
-				sessionKey,
-				agentId,
-			});
-		}
-	}
+	// Boundary capture is source-addressable. Leave the source file unread here;
+	// the worker reads the exact generation under its source lock and owns canonical retention.
+	const rawTranscript = req.transcriptPath ? "" : (req.transcript ?? "");
+	const transcript = rawTranscript ? normalizeSessionTranscript(req.harness, rawTranscript) : "";
+	const sessionId = deriveSessionEndFallbackId(req.sessionId?.trim() || sessionKey, req.transcriptPath, transcript);
 
 	let transcriptCaptureJobId: string | null = null;
-	if (retainedTranscript.trim().length > 0 || rawTranscript.trim().length > 0) {
+	if (req.transcriptPath || transcript.trim().length > 0 || sessionKey !== null) {
 		try {
 			transcriptCaptureJobId = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 				agentId,
@@ -2256,12 +2153,11 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 				sessionKey: sessionKey ?? null,
 				sessionId,
 				project: req.cwd ?? null,
-				transcript: retainedTranscript,
-				rawTranscript,
+				transcript: req.transcriptPath ? "" : transcript,
 				transcriptPath: req.transcriptPath ?? null,
+				basePath: getAgentsDir(),
 				capturedAt: endedAt,
 				endedAt,
-				summaryStatus: "not_requested",
 			});
 		} catch (error) {
 			logger.warn("hooks", "Transcript capture enqueue failed", {

@@ -88,6 +88,7 @@ interface ArtifactSeed {
 	readonly sourceNodeId: string | null;
 	readonly memorySentence: MemorySentence;
 	readonly body: string;
+	readonly replaceExisting?: boolean;
 }
 
 interface ManifestState {
@@ -515,9 +516,10 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 		if (declaredHash && declaredHash !== existingBodyHash) {
 			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (checksum mismatch)`);
 		}
-		if (existingBodyHash !== frontmatter.content_sha256) {
+		if (existingBodyHash !== frontmatter.content_sha256 && !seed.replaceExisting) {
 			throw new Error(`${IMMUTABLE_ARTIFACT_ERROR_PREFIX} ${path} (content mismatch)`);
 		}
+		if (existingBodyHash !== frontmatter.content_sha256 && seed.replaceExisting) writeAtomic(path, content);
 		return path;
 	}
 
@@ -1564,6 +1566,7 @@ export async function writeTranscriptArtifact(params: {
 	readonly endedAt: string | null;
 	readonly transcript: string;
 	readonly summaryStatus?: "pending" | "skipped" | "not_requested";
+	readonly replaceExisting?: boolean;
 }): Promise<{ readonly manifestPath: string; readonly transcriptPath: string }> {
 	const manifest = await ensureCanonicalManifest(params);
 	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
@@ -1588,6 +1591,7 @@ export async function writeTranscriptArtifact(params: {
 		sourceNodeId: null,
 		memorySentence: sentence,
 		body,
+		replaceExisting: params.replaceExisting,
 	});
 	const parsed = parseFrontmatterDocument(readFileSync(fullPath, "utf8"));
 	await upsertArtifactRow(fullPath, parsed.frontmatter, normalizeMarkdownBody(parsed.body));

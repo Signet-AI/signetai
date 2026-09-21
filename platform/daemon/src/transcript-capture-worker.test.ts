@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	statSync,
+	utimesSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
@@ -9,6 +18,7 @@ import {
 	enqueueTranscriptCaptureJob,
 	getTranscriptCaptureJobStatus,
 	getTranscriptCaptureStatus,
+	cleanupTranscriptCaptureStorage,
 	runTranscriptCaptureOnce,
 	startTranscriptCaptureWorker,
 } from "./transcript-capture-worker";
@@ -38,6 +48,198 @@ describe("transcript capture worker", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	it("coalesces source generations without storing transcript payloads", async () => {
+		const sourcePath = join(dir, "session.jsonl");
+		writeFileSync(sourcePath, "User: first\nAssistant: reply\n", "utf8");
+		const input = {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "source-session",
+			sessionId: "source-session",
+			project: "/repo",
+			transcript: "inline snapshot should never win ".repeat(200_000),
+			rawTranscript: "raw inline snapshot should never be stored ".repeat(200_000),
+			transcriptPath: sourcePath,
+			basePath: dir,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		} as const;
+
+		const first = await enqueueTranscriptCaptureJob(getDbAccessor(), input);
+		if (!first) throw new Error("expected source capture job");
+		const stored = getDbAccessor().withReadDb((db) =>
+			db
+				.prepare(
+					"SELECT transcript, raw_transcript, source_identity, source_sha256 FROM transcript_capture_jobs WHERE id = ?",
+				)
+				.get(first),
+		) as {
+			transcript: string;
+			raw_transcript: string | null;
+			source_identity: string | null;
+			source_sha256: string | null;
+		};
+		expect(stored.transcript).toBe("");
+		expect(stored.raw_transcript).toBeNull();
+		expect(stored.source_identity).toBeTruthy();
+		expect(stored.source_sha256).toBeNull();
+
+		expect(
+			await enqueueTranscriptCaptureJob(getDbAccessor(), { ...input, capturedAt: "2026-06-20T10:01:00.000Z" }),
+		).toBe(first);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM transcript_capture_jobs").get()),
+		).toEqual({ count: 1 });
+
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1 });
+		const canonical = readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8");
+		expect(canonical).toContain("first");
+		expect(canonical).not.toContain("inline snapshot should never win");
+
+		writeFileSync(sourcePath, "User: first\nAssistant: reply\nUser: second\n", "utf8");
+		const second = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...input,
+			capturedAt: "2026-06-20T10:02:00.000Z",
+		});
+		expect(second).toBe(first);
+		expect(
+			getDbAccessor().withReadDb((db) => db.prepare("SELECT COUNT(*) AS count FROM transcript_capture_jobs").get()),
+		).toEqual({ count: 1 });
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8")).toContain("second");
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT content FROM memory_artifacts WHERE source_kind = 'transcript' LIMIT 1").get(),
+			),
+		).toMatchObject({ content: expect.stringContaining("second") });
+
+		writeFileSync(sourcePath, "User: first\nAssistant: reply\n", "utf8");
+		const shorterGeneration = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...input,
+			capturedAt: "2026-06-20T10:03:00.000Z",
+		});
+		expect(shorterGeneration).toBe(first);
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8")).toContain("second");
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT content FROM memory_artifacts WHERE source_kind = 'transcript' LIMIT 1").get(),
+			),
+		).toMatchObject({ content: expect.stringContaining("second") });
+	});
+
+	it("revalidates a completed source when bytes change without changing stat metadata", async () => {
+		const sourcePath = join(dir, "same-stat.jsonl");
+		const replacement = "User: first\nUser: x\n";
+		const initial = `User: first${" ".repeat(replacement.length - "User: first".length - 1)}\n`;
+		expect(Buffer.byteLength(initial)).toBe(Buffer.byteLength(replacement));
+		writeFileSync(sourcePath, initial, "utf8");
+		const initialStat = statSync(sourcePath);
+		utimesSync(sourcePath, initialStat.atime, new Date(Math.trunc(initialStat.mtimeMs)));
+		const input = {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "same-stat-session",
+			sessionId: "same-stat-session",
+			project: "/repo",
+			transcript: "",
+			rawTranscript: "",
+			transcriptPath: sourcePath,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		} as const;
+
+		const first = await enqueueTranscriptCaptureJob(getDbAccessor(), input);
+		if (!first) throw new Error("expected initial source capture job");
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		const originalStat = statSync(sourcePath);
+		expect(readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8")).not.toContain("User: x");
+
+		writeFileSync(sourcePath, replacement, "utf8");
+		utimesSync(sourcePath, originalStat.atime, originalStat.mtime);
+		const rewrittenStat = statSync(sourcePath);
+		expect(rewrittenStat.size).toBe(originalStat.size);
+		expect(rewrittenStat.mtimeMs).toBe(Math.trunc(originalStat.mtimeMs));
+
+		expect(
+			await enqueueTranscriptCaptureJob(getDbAccessor(), { ...input, capturedAt: "2026-06-20T10:01:00.000Z" }),
+		).toBe(first);
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8")).toContain(
+			'"content":"x"',
+		);
+	});
+
+	it("does not mutate completed session state for a divergent stale source", async () => {
+		const sourcePath = join(dir, "stale-session.jsonl");
+		const input = {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "stale-session",
+			sessionId: "stale-session",
+			project: "/repo",
+			transcript: "",
+			rawTranscript: "",
+			transcriptPath: sourcePath,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		} as const;
+		writeFileSync(sourcePath, "User: first\nUser: second\n", "utf8");
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), input);
+		if (!id) throw new Error("expected initial source capture job");
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+
+		writeFileSync(sourcePath, "User: stale\n", "utf8");
+		expect(
+			await enqueueTranscriptCaptureJob(getDbAccessor(), { ...input, capturedAt: "2026-06-20T10:01:00.000Z" }),
+		).toBe(id);
+		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+
+		const stored = await getDbAccessor().withReadDbAsync(
+			(db) =>
+				db
+					.prepare("SELECT content FROM session_transcripts WHERE agent_id = ? AND session_key = ?")
+					.get("agent-a", "stale-session") as { content: string } | undefined,
+		);
+		expect(stored?.content).toContain("second");
+		expect(stored?.content).not.toContain("stale");
+		expect(readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8")).toContain(
+			'"content":"second"',
+		);
+		expect(readdirSync(join(dir, ".daemon", "logs", "transcripts"))).toHaveLength(1);
+	});
+
+	it("clears recoverable legacy payloads without deleting the job", async () => {
+		const sourcePath = join(dir, "legacy.jsonl");
+		writeFileSync(sourcePath, "User: recoverable\n", "utf8");
+		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "legacy-session",
+			sessionId: "legacy-session",
+			project: null,
+			transcript: "User: recoverable",
+			rawTranscript: "raw duplicate",
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		});
+		if (!id) throw new Error("expected legacy payload job");
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare("UPDATE transcript_capture_jobs SET status = 'completed', transcript_path = ? WHERE id = ?").run(
+				sourcePath,
+				id,
+			);
+		});
+
+		expect(await cleanupTranscriptCaptureStorage(getDbAccessor(), dir)).toMatchObject({ clearedRows: 1 });
+		expect(
+			getDbAccessor().withReadDb((db) =>
+				db.prepare("SELECT transcript, raw_transcript FROM transcript_capture_jobs WHERE id = ?").get(id),
+			),
+		).toEqual({ transcript: "", raw_transcript: null });
+	});
+
 	it("writes canonical and per-session artifacts from a durable job", async () => {
 		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
@@ -47,10 +249,9 @@ describe("transcript capture worker", () => {
 			project: "/repo",
 			transcript: "User: hello\nAssistant: hi",
 			rawTranscript: '{"role":"user","content":"hello"}\n',
-			transcriptPath: "/tmp/session.jsonl",
+
 			capturedAt: "2026-06-20T10:00:00.000Z",
 			endedAt: "2026-06-20T10:00:00.000Z",
-			summaryStatus: "not_requested",
 		});
 		expect(id).toBeTruthy();
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
@@ -77,7 +278,7 @@ describe("transcript capture worker", () => {
 		expect(manifestValue(manifestPath, "summary_status")).toBe("not_requested");
 	});
 
-	it("keeps raw audit logs when normalized transcript has no conversation turns", async () => {
+	it("keeps a bounded audit reference when normalized transcript has no conversation turns", async () => {
 		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "pi",
@@ -94,10 +295,13 @@ describe("transcript capture worker", () => {
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
 		expect((await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).completed).toBe(1);
 		const auditFiles = readdirSync(join(dir, ".daemon", "logs", "transcripts"));
-		// #1163: the capture archives the rolling latest by renaming it to the
-		// dated raw-transcript file, so the same content is never written twice.
-		expect(auditFiles.some((name) => name.endsWith("--raw-transcript.log"))).toBe(true);
-		expect(auditFiles.some((name) => name.endsWith("--latest.log"))).toBe(false);
+		expect(auditFiles).toHaveLength(1);
+		expect(auditFiles[0]).toEndWith(".json");
+		const audit = JSON.parse(
+			readFileSync(join(dir, ".daemon", "logs", "transcripts", auditFiles[0]), "utf8"),
+		) as Record<string, unknown>;
+		expect(audit.schema).toBe("signet.transcript-audit.v2");
+		expect(String(audit.preview)).toContain("tool_call");
 		expect(existsSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"))).toBe(false);
 	});
 
@@ -159,7 +363,7 @@ describe("transcript capture worker", () => {
 			project: "/repo",
 			transcript: "User: stable\nAssistant: snapshot",
 			rawTranscript: '{"sessionId":"session-stable"}',
-			transcriptPath: "/tmp/session-stable.jsonl",
+
 			endedAt: "2026-06-20T10:00:00.000Z",
 		} as const;
 		const first = await enqueueTranscriptCaptureJob(getDbAccessor(), {
@@ -177,52 +381,61 @@ describe("transcript capture worker", () => {
 		).toEqual({ count: 1 });
 	});
 
-	it("leases same-session evidence by enqueue time, not capture time", async () => {
+	it("replaces a changed generation instead of appending a second session row", async () => {
 		const base = {
 			agentId: "agent-a",
 			harness: "claude-code",
 			sessionKey: "session-ordered",
+			sessionId: "snapshot-ordered",
 			project: "/repo",
-			rawTranscript: "snapshot",
+			rawTranscript: null,
 			endedAt: "2026-06-20T10:00:00.000Z",
 		} as const;
-		const newerCapture = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+		const first = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			...base,
-			sessionId: "snapshot-ordered-newer",
-			transcript: "User: later turn arrived first",
-			capturedAt: "2026-06-20T10:01:00.000Z",
-		});
-		const olderCapture = await enqueueTranscriptCaptureJob(getDbAccessor(), {
-			...base,
-			sessionId: "snapshot-ordered-older",
-			transcript: "User: earlier turn arrived later",
+			transcript: "User: first generation",
 			capturedAt: "2026-06-20T10:00:00.000Z",
 		});
-		if (!newerCapture || !olderCapture) throw new Error("expected ordered capture jobs");
-
-		getDbAccessor().withWriteTx((db) => {
-			db.prepare("UPDATE transcript_capture_jobs SET created_at = ? WHERE id = ?").run(
-				"2026-06-20T10:00:00.000Z",
-				newerCapture,
-			);
-			db.prepare("UPDATE transcript_capture_jobs SET created_at = ? WHERE id = ?").run(
-				"2026-06-20T10:01:00.000Z",
-				olderCapture,
-			);
+		const second = await enqueueTranscriptCaptureJob(getDbAccessor(), {
+			...base,
+			transcript: "User: second generation",
+			capturedAt: "2026-06-20T10:01:00.000Z",
 		});
-
-		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		if (!first || !second) throw new Error("expected source generation jobs");
+		expect(second).toBe(first);
 		expect(
 			getDbAccessor().withReadDb((db) =>
-				db.prepare("SELECT id, status, attempts FROM transcript_capture_jobs ORDER BY created_at").all(),
+				db.prepare("SELECT id, status, transcript FROM transcript_capture_jobs").all(),
 			),
-		).toEqual([
-			{ id: newerCapture, status: "completed", attempts: 1 },
-			{ id: olderCapture, status: "pending", attempts: 0 },
-		]);
-
+		).toEqual([{ id: first, status: "pending", transcript: "User: second generation" }]);
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
-		expect(await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 2, pending: 0 });
+		expect(await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).toMatchObject({ completed: 1, pending: 0 });
+	});
+
+	it("coalesces concurrent admissions through the database transaction", async () => {
+		const sourcePath = join(dir, "concurrent-admission.jsonl");
+		writeFileSync(sourcePath, "User: one source\n", "utf8");
+		const input = {
+			agentId: "agent-a",
+			harness: "pi",
+			sessionKey: "concurrent-admission",
+			sessionId: "concurrent-admission",
+			project: "/repo",
+			transcript: "",
+			rawTranscript: "",
+			transcriptPath: sourcePath,
+			basePath: dir,
+			capturedAt: "2026-06-20T10:00:00.000Z",
+			endedAt: "2026-06-20T10:00:00.000Z",
+		} as const;
+
+		const ids = await Promise.all(Array.from({ length: 4 }, () => enqueueTranscriptCaptureJob(getDbAccessor(), input)));
+		expect(ids.every((id) => id === ids[0] && id !== null)).toBe(true);
+		expect(
+			await getDbAccessor().withReadDbAsync((db) =>
+				db.prepare("SELECT COUNT(*) AS count FROM transcript_capture_jobs").get(),
+			),
+		).toEqual({ count: 1 });
 	});
 
 	it("concurrent workers claim one snapshot once", async () => {
