@@ -1839,3 +1839,98 @@ fn navigation_entity_resolves_current_schema_and_returns_detail_envelope() {
     assert_eq!(got["entity"]["name"], "Signet");
     assert!(got.get("aspectCount").is_some());
 }
+
+#[test]
+fn current_schema_navigation_uses_scoped_live_tables_and_rejects_bad_bounds() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("current-navigation.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch("CREATE TABLE entities (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, entity_type TEXT NOT NULL DEFAULT 'person', description TEXT, mentions INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0, pinned_at TEXT, status TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_aspects (id TEXT PRIMARY KEY, entity_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, canonical_name TEXT, weight REAL NOT NULL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, aspect_id TEXT NOT NULL, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, memory_id TEXT, kind TEXT NOT NULL, content TEXT NOT NULL, normalized_content TEXT, group_key TEXT, claim_key TEXT, confidence REAL DEFAULT 0.5, importance REAL DEFAULT 0.5, status TEXT DEFAULT 'active', created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO entities VALUES ('e1','a1','w1','Signet','signet','person',NULL,1,0,NULL,'active','2026-01-01','2026-01-01'); INSERT INTO entity_aspects VALUES ('p1','e1','a1','w1','Food','food',0.8,'active','2026-01-01','2026-01-01'); INSERT INTO entity_attributes VALUES ('x1','p1','a1','w1',NULL,'attribute','Active claim','active claim','restaurants','favorite_place',0.9,0.9,'active','2026-01-01','2026-01-03'), ('x2','p1','a1','w1',NULL,'attribute','Old claim','old claim','restaurants','favorite_place',0.9,0.8,'superseded','2026-01-01','2026-01-02'), ('x3','p1','a1','w1',NULL,'constraint','Deleted claim','deleted claim','Restaurants','Other Claim',0.9,0.7,'deleted','2026-01-01','2026-01-04'), ('x4','p1','a2','w1',NULL,'attribute','Other agent','other agent','restaurants','favorite_place',0.9,0.9,'active','2026-01-01','2026-01-01'), ('x5','p1','a1','w2',NULL,'attribute','Other workspace','other workspace','restaurants','favorite_place',0.9,0.9,'active','2026-01-01','2026-01-01');");
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let detail = c
+        .submit(Operation::KnowledgeNavigationEntity {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            name: "signet".into(),
+        })
+        .unwrap();
+    assert_eq!(detail["aspectCount"], 1);
+    assert_eq!(detail["attributeCount"], 1);
+    let aspects = c
+        .submit(Operation::KnowledgeNavigationAspects {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+        })
+        .unwrap();
+    assert_eq!(aspects["items"][0]["attributeCount"], 1);
+    let groups = c
+        .submit(Operation::KnowledgeNavigationGroups {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+            aspect: "food".into(),
+        })
+        .unwrap();
+    assert_eq!(groups["items"][0]["groupKey"], "restaurants");
+    assert_eq!(groups["items"][0]["attributeCount"], 1);
+    let claims = c
+        .submit(Operation::KnowledgeNavigationClaims {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+            aspect: "food".into(),
+            group: "Restaurants".into(),
+        })
+        .unwrap();
+    assert_eq!(claims["items"][0]["activeCount"], 1);
+    assert_eq!(claims["items"][0]["supersededCount"], 1);
+    assert_eq!(claims["items"][0]["preview"], "Active claim");
+    let active = c
+        .submit(Operation::KnowledgeNavigationAttributes {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+            aspect: "food".into(),
+            group: "Restaurants".into(),
+            claim: "Favorite Place".into(),
+            limit: 1,
+            offset: 0,
+            kind: None,
+            status: None,
+        })
+        .unwrap();
+    assert_eq!(active["items"].as_array().unwrap().len(), 1);
+    assert_eq!(active["items"][0]["content"], "Active claim");
+    let all = c
+        .submit(Operation::KnowledgeNavigationAttributes {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+            aspect: "food".into(),
+            group: "restaurants".into(),
+            claim: "favorite_place".into(),
+            limit: 1,
+            offset: 0,
+            kind: None,
+            status: Some("all".into()),
+        })
+        .unwrap();
+    assert_eq!(all["items"].as_array().unwrap().len(), 1);
+    assert!(matches!(
+        c.submit(Operation::KnowledgeNavigationAttributes {
+            agent_id: "a1".into(),
+            workspace_id: "w1".into(),
+            entity: "signet".into(),
+            aspect: "food".into(),
+            group: "restaurants".into(),
+            claim: "favorite_place".into(),
+            limit: 0,
+            offset: 0,
+            kind: None,
+            status: None
+        }),
+        Err(CoreError::InvalidInput(_))
+    ));
+}
