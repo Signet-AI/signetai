@@ -28,26 +28,10 @@ export function resolveFreshRustDaemon(repoRoot: string, env: NodeJS.ProcessEnv 
 	const target = `${process.platform}-${process.arch}`;
 	const packagedRoot = join(repoRoot, "dist", "signetai", "runtime", "rust-daemon");
 	const packaged = join(packagedRoot, target, executableName);
-	const candidates = [
-		packaged,
-		join(repoRoot, "platform", "rust-daemon", "target", "debug", executableName),
-		join(repoRoot, "platform", "rust-daemon", "target", "release", executableName),
-	];
-	if (existsSync(packaged)) {
-		const dashboard = join(packagedRoot, "dashboard", "index.html");
-		if (!existsSync(dashboard)) throw new Error(`dashboard runtime asset missing: ${dashboard}`);
+	if (!existsSync(packaged)) {
+		throw new Error(`fresh Rust daemon binary missing (packaged Rust daemon binary missing): ${packaged}`);
 	}
-	const binary = candidates.find((path) => {
-		try {
-			accessSync(path, constants.X_OK);
-			return existsSync(path);
-		} catch {
-			return false;
-		}
-	});
-	if (!binary)
-		throw new Error(
-			`fresh Rust daemon binary missing; set SIGNET_RUST_DAEMON_BIN or build platform/rust-daemon (${candidates.join(", ")})`,
-		);
-	return binary;
+	const dashboard = join(packagedRoot, "dashboard", "index.html");
+	if (!existsSync(dashboard)) throw new Error(`dashboard runtime asset missing: ${dashboard}`);
+	return requireExecutable(packaged);
 }
