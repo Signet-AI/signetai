@@ -54,6 +54,7 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 	const request = (path: string, init?: RequestInit) => fetch(`${origin}${path}`, init);
 	const post = (body: unknown, h = headers()) =>
 		request("/api/secrets/exec", { method: "POST", headers: h, body: JSON.stringify(body) });
+	let descendantPidFile = "";
 	try {
 		for (let i = 0; i < 240; i++) {
 			try {
@@ -89,6 +90,16 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 			}
 			throw new Error(`job ${id} remained pending`);
 		}
+		const local = await post({
+			command: "printenv VALUE",
+			secrets: { VALUE: "local://contract_secret" },
+			timeoutMs: 1000,
+		});
+		expect(local.status).toBe(202);
+		const localDone = await poll((await json(local)).id as string);
+		expect(localDone.status).toBe("completed");
+		expect((localDone.result as Json).stdout).toBe("[REDACTED]\n");
+		expect(JSON.stringify(localDone)).not.toContain("contract_secret");
 		const queued = await post({ command: "printenv VALUE", secrets: { VALUE: "contract_secret" }, timeoutMs: 1000 });
 		expect(queued.status).toBe(202);
 		const q = await json(queued);
@@ -157,6 +168,19 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 		expect(timed.status).toBe("failed");
 		expect(timed.result.timedOut).toBe(true);
 		expect(timed.result.stderr).toContain("timed out");
+		descendantPidFile = join(workspace, "descendant.pid");
+		const descendant = await post({
+			command: `python3 -c 'import subprocess,time; p=subprocess.Popen(["sleep","30"]); open("${descendantPidFile}","w").write(str(p.pid)); time.sleep(30)'`,
+			secrets: { VALUE: "contract_secret" },
+			timeoutMs: 1000,
+		});
+		const descendantStarted = Date.now();
+		const descendantDone = await poll((await json(descendant)).id as string);
+		expect(Date.now() - descendantStarted).toBeLessThan(2500);
+		expect(descendantDone.status).toBe("failed");
+		expect((descendantDone.result as Json).timedOut).toBe(true);
+		const descendantPid = (await readFile(descendantPidFile, "utf8")).trim();
+		expect(Bun.spawnSync(["kill", "-0", descendantPid]).exitCode).not.toBe(0);
 		const large = await post({
 			command: "head -c 1100000 /dev/zero",
 			secrets: { VALUE: "contract_secret" },

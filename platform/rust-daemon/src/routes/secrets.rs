@@ -401,6 +401,25 @@ fn run(argv: Vec<String>, env: HashMap<String, String>, timeout: u64, cap: usize
                 {
                     let _ = child.kill();
                 }
+                let grace_deadline = Instant::now() + Duration::from_millis(250);
+                loop {
+                    match child.try_wait() {
+                        Ok(Some(_)) => break,
+                        Ok(None) if Instant::now() >= grace_deadline => {
+                            #[cfg(unix)]
+                            unsafe {
+                                let _ = libc::kill(-(child.id() as i32), libc::SIGKILL);
+                            }
+                            #[cfg(windows)]
+                            {
+                                let _ = child.kill();
+                            }
+                            break;
+                        }
+                        Ok(None) => thread::sleep(Duration::from_millis(10)),
+                        Err(_) => break,
+                    }
+                }
                 let _ = child.wait();
                 code = 124;
                 break;
@@ -493,7 +512,16 @@ async fn exec(
         }
         store.jobs.insert(id.clone(), JobEntry { json: serde_json::json!({"id":id,"status":"queued","createdAt":created,"startedAt":Value::Null,"completedAt":Value::Null,"timeoutMs":timeout,"result":Value::Null,"error":Value::Null}), created: Instant::now(), agent_id: a.clone(), workspace_id: w.clone() });
     }
-    let refs = b.secrets;
+    let refs = b
+        .secrets
+        .into_iter()
+        .map(|(key, name)| {
+            (
+                key,
+                name.strip_prefix("local://").unwrap_or(&name).to_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
     let jid = id.clone();
     tokio::spawn(async move {
         loop {
