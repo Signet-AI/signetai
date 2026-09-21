@@ -953,6 +953,7 @@ async function reembedMissingMemoriesBatchForRows(
 		return failure === undefined || failure.retryAt <= now;
 	});
 	const knownCrossAgentHashConflicts = unembedded.filter((memory) => memory.knownCrossAgentHashConflict === 1).length;
+	const selectedEligible = repairable.length + knownCrossAgentHashConflicts;
 	const failedKeys: EmbeddingRepairKey[] = [];
 	const results: Array<{
 		memory: UnembeddedRow;
@@ -1021,7 +1022,7 @@ async function reembedMissingMemoriesBatchForRows(
 
 	if (cancelled || timedOut) {
 		return {
-			selected: unembedded.length,
+			selected: selectedEligible,
 			written: 0,
 			failed: 0,
 			stale: 0,
@@ -1038,7 +1039,7 @@ async function reembedMissingMemoriesBatchForRows(
 
 	if (results.length === 0) {
 		return {
-			selected: unembedded.length,
+			selected: selectedEligible,
 			written: 0,
 			failed: failedKeys.length,
 			stale: 0,
@@ -1186,7 +1187,7 @@ async function reembedMissingMemoriesBatchForRows(
 	);
 
 	return {
-		selected: unembedded.length,
+		selected: selectedEligible,
 		written: writeOutcome.count,
 		failed: failedKeys.length,
 		stale: writeOutcome.stale,

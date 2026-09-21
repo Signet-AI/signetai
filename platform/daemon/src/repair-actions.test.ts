@@ -1972,6 +1972,53 @@ describe("reembedMissingMemories", () => {
 		expect(db.prepare("SELECT source_id FROM embeddings WHERE source_id = 'mem-provider-retry'").get()).toBeTruthy();
 	});
 
+	it("suppresses backoff for a failed NULL-hash memory", async () => {
+		insertMemory(db, "mem-null-backoff", "default");
+		insertMemory(db, "mem-null-next", "default");
+		const cfg = { ...TEST_CFG, repair: { ...TEST_CFG.repair, reembedCooldownMs: 0, reembedHourlyBudget: 5 } };
+		let providerCalls = 0;
+		const first = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => {
+				providerCalls++;
+				return null;
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+		);
+		expect(first.success).toBe(false);
+		expect(providerCalls).toBe(1);
+
+		const secondInputs: string[] = [];
+		const second = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async (content) => {
+				providerCalls++;
+				secondInputs.push(content);
+				return [0.1, 0.2, 0.3];
+			},
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+		);
+		expect(second.success).toBe(true);
+		expect(secondInputs).toEqual(["content for mem-null-next"]);
+		expect(providerCalls).toBe(2);
+		expect(db.prepare("SELECT COUNT(*) AS n FROM embeddings WHERE source_id = 'mem-null-backoff'").get()).toEqual({
+			n: 0,
+		});
+		expect(db.prepare("SELECT COUNT(*) AS n FROM embeddings WHERE source_id = 'mem-null-next'").get()).toEqual({
+			n: 1,
+		});
+	});
+
 	it("records a terminal checkpoint when the active profile changes before resume", async () => {
 		insertMemory(db, "mem-profile-retry", "default", "hash-profile-retry");
 		insertMemory(db, "mem-profile-retry-2", "default", "hash-profile-retry-2");
@@ -2059,6 +2106,38 @@ describe("reembedMissingMemories", () => {
 
 		expect(second.success).toBe(false);
 		expect(second.message).toMatch(/cooldown active/);
+	});
+
+	it("reports when every selected memory is deferred by provider backoff", async () => {
+		insertMemory(db, "mem-only-backoff", "default");
+		const cfg = { ...TEST_CFG, repair: { ...TEST_CFG.repair, reembedCooldownMs: 0, reembedHourlyBudget: 5 } };
+		const first = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => null,
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+		);
+		expect(first.success).toBe(false);
+
+		const second = await reembedMissingMemories(
+			accessor,
+			cfg,
+			CTX_OPERATOR,
+			createRateLimiter(),
+			async () => [0.1, 0.2, 0.3],
+			TEST_EMBEDDING_CFG,
+			"default",
+			1,
+		);
+		expect(second.success).toBe(false);
+		expect(second.message).toContain("retry backoff");
+		expect(db.prepare("SELECT COUNT(*) AS n FROM embeddings WHERE source_id = 'mem-only-backoff'").get()).toEqual({
+			n: 0,
+		});
 	});
 
 	it("rejects an invalid batch size before selecting provider work", async () => {

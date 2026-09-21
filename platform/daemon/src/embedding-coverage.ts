@@ -134,7 +134,7 @@ export function listUnembeddedMemories(
 	const backoffJoin =
 		model === undefined
 			? ""
-			: "LEFT JOIN embedding_repair_backoff b ON b.memory_id = m.id AND b.content_hash = m.content_hash AND b.model = ?";
+			: "LEFT JOIN embedding_repair_backoff b ON b.memory_id = m.id AND b.model = ? AND (b.content_hash = m.content_hash OR m.content_hash IS NULL)";
 	const backoffFilter = model === undefined ? "" : "AND (b.retry_at IS NULL OR b.retry_at <= ?)";
 	const params = model === undefined ? [agentId, limit] : [model, agentId, now, limit];
 	return db
@@ -189,7 +189,7 @@ export function listAllUnembeddedMemories(
 	const backoffJoin =
 		model === undefined
 			? ""
-			: "LEFT JOIN embedding_repair_backoff b ON b.memory_id = m.id AND b.content_hash = m.content_hash AND b.model = ?";
+			: "LEFT JOIN embedding_repair_backoff b ON b.memory_id = m.id AND b.model = ? AND (b.content_hash = m.content_hash OR m.content_hash IS NULL)";
 	const backoffFilter = model === undefined ? "" : "AND (b.retry_at IS NULL OR b.retry_at <= ?)";
 	const params = model === undefined ? [limit] : [model, now, limit];
 	return db
