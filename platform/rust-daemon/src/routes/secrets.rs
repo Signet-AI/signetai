@@ -7,6 +7,8 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::Value;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 use std::{
     collections::HashMap,
     io::Read,
@@ -49,6 +51,8 @@ struct SecretBody {
 struct JobEntry {
     json: Value,
     created: Instant,
+    agent_id: String,
+    workspace_id: String,
 }
 struct JobStore {
     jobs: HashMap<String, JobEntry>,
@@ -263,17 +267,67 @@ async fn remove(
 }
 
 fn argv(command: &str) -> Result<Vec<String>, ApiError> {
-    if command.trim().is_empty() || command.chars().any(|c| ";|&`$(){}[]<>!\\\"'".contains(c)) {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut quote = None;
+    let mut esc = false;
+    for c in command.chars() {
+        if esc {
+            cur.push(c);
+            esc = false;
+            continue;
+        }
+        if c == '\\' {
+            esc = true;
+            continue;
+        }
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            } else {
+                cur.push(c);
+            }
+            continue;
+        }
+        if c == '\'' || c == '"' {
+            quote = Some(c);
+            continue;
+        }
+        if ";|&`$(){}[]<>!".contains(c) {
+            return Err(ApiError::bad_request("command is invalid"));
+        }
+        if c.is_whitespace() {
+            if !cur.is_empty() {
+                out.push(std::mem::take(&mut cur));
+            }
+        } else {
+            cur.push(c);
+        }
+    }
+    if esc || quote.is_some() {
         return Err(ApiError::bad_request("command is invalid"));
     }
-    let a = command
-        .split_whitespace()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    if a.is_empty() {
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    if out.is_empty() {
         Err(ApiError::bad_request("command is invalid"))
     } else {
-        Ok(a)
+        Ok(out)
+    }
+}
+fn valid_identifier(v: &str) -> bool {
+    let mut it = v.chars();
+    matches!(it.next(), Some(c) if c == '_' || c.is_ascii_alphabetic())
+        && it.all(|c| c == '_' || c.is_ascii_alphanumeric())
+}
+fn validate_identifier(v: &str, label: &str) -> Result<(), ApiError> {
+    if valid_identifier(v) {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request(format!(
+            "{label} must be a valid identifier"
+        )))
     }
 }
 fn redact(mut s: String, vals: &[String]) -> String {
@@ -304,19 +358,30 @@ fn collect(mut r: impl Read, cap: usize) -> (Vec<u8>, bool) {
     (out, truncated)
 }
 fn run(argv: Vec<String>, env: HashMap<String, String>, timeout: u64, cap: usize) -> Value {
+    let capture_cap = cap.saturating_add(env.values().map(|v| v.len()).max().unwrap_or(0));
     let mut c = Command::new(&argv[0]);
     c.args(&argv[1..])
         .envs(&env)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(unix)]
+    unsafe {
+        c.pre_exec(|| {
+            if libc::setpgid(0, 0) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
     let mut child: Child = match c.spawn() {
         Ok(c) => c,
         Err(_) => return serde_json::json!({"status":"failed","error":"process failed"}),
     };
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
-    let out_thread = thread::spawn(move || collect(stdout, cap));
-    let err_thread = thread::spawn(move || collect(stderr, cap));
+    let out_thread = thread::spawn(move || collect(stdout, capture_cap));
+    let err_thread = thread::spawn(move || collect(stderr, capture_cap));
     let start = Instant::now();
     let mut timed_out = false;
     let code;
@@ -328,7 +393,14 @@ fn run(argv: Vec<String>, env: HashMap<String, String>, timeout: u64, cap: usize
             }
             Ok(None) if start.elapsed() >= Duration::from_millis(timeout) => {
                 timed_out = true;
-                let _ = child.kill();
+                #[cfg(unix)]
+                unsafe {
+                    let _ = libc::kill(-(child.id() as i32), libc::SIGTERM);
+                }
+                #[cfg(windows)]
+                {
+                    let _ = child.kill();
+                }
                 let _ = child.wait();
                 code = 124;
                 break;
@@ -346,6 +418,14 @@ fn run(argv: Vec<String>, env: HashMap<String, String>, timeout: u64, cap: usize
     let vals = env.values().cloned().collect::<Vec<_>>();
     let mut stdout = redact(String::from_utf8_lossy(&out).into_owned(), &vals);
     let mut stderr = redact(String::from_utf8_lossy(&err).into_owned(), &vals);
+    let mut out_truncated = out_truncated || stdout.len() > cap;
+    let mut err_truncated = err_truncated || stderr.len() > cap;
+    if stdout.len() > cap {
+        stdout.truncate(cap);
+    }
+    if stderr.len() > cap {
+        stderr.truncate(cap);
+    }
     if out_truncated {
         stdout.push_str("\n");
         stdout.push_str(STDOUT_MARKER);
@@ -375,6 +455,10 @@ async fn exec(
         return Err(ApiError::bad_request(
             "secrets must be a non-empty string map",
         ));
+    }
+    for (key, name) in &b.secrets {
+        validate_identifier(key, "environment key")?;
+        validate_identifier(name.strip_prefix("local://").unwrap_or(name), "secret name")?;
     }
     let timeout = b
         .timeout_ms
@@ -407,7 +491,7 @@ async fn exec(
                 message: "execution queue is full".into(),
             });
         }
-        store.jobs.insert(id.clone(), JobEntry { json: serde_json::json!({"id":id,"status":"queued","createdAt":created,"startedAt":Value::Null,"completedAt":Value::Null,"timeoutMs":timeout,"result":Value::Null,"error":Value::Null}), created: Instant::now() });
+        store.jobs.insert(id.clone(), JobEntry { json: serde_json::json!({"id":id,"status":"queued","createdAt":created,"startedAt":Value::Null,"completedAt":Value::Null,"timeoutMs":timeout,"result":Value::Null,"error":Value::Null}), created: Instant::now(), agent_id: a.clone(), workspace_id: w.clone() });
     }
     let refs = b.secrets;
     let jid = id.clone();
@@ -505,7 +589,7 @@ async fn exec_status(
     h: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let _ = authority(&s, &h, "secrets:exec").await?;
+    let (a, w) = authority(&s, &h, "secrets:exec").await?;
     let mut store = jobs().lock().unwrap();
     store.jobs.retain(|_, e| {
         e.created.elapsed() < RETENTION
@@ -517,8 +601,18 @@ async fn exec_status(
     store
         .jobs
         .get(&id)
-        .map(|e| Json(e.json.clone()))
         .ok_or_else(|| ApiError::not_found("job not found"))
+        .and_then(|e| {
+            if e.agent_id == a && e.workspace_id == w {
+                Ok(Json(e.json.clone()))
+            } else {
+                Err(ApiError {
+                    status: StatusCode::FORBIDDEN,
+                    code: "forbidden",
+                    message: "job is outside authenticated scope".into(),
+                })
+            }
+        })
 }
 async fn unsupported_exec(
     State(s): State<AppState>,
