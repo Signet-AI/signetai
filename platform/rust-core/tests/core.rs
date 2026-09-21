@@ -1857,6 +1857,7 @@ fn current_schema_knowledge_tree_is_scoped_bounded_and_status_aware() {
             max_aspects: 1,
             max_groups: 1,
             max_claims: 1,
+            max_attributes: 50,
         })
         .unwrap();
     assert_eq!(tree["entity"]["id"], "e1");
