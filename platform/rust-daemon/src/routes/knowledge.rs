@@ -20,6 +20,24 @@ struct EntityQuery {
     name: Option<String>,
 }
 #[derive(Debug, Deserialize)]
+struct NavigationQuery {
+    #[serde(flatten)]
+    agent: AgentQuery,
+    workspace_id: Option<String>,
+    entity: Option<String>,
+    aspect: Option<String>,
+    group: Option<String>,
+    claim: Option<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+    max_aspects: Option<usize>,
+    max_groups: Option<usize>,
+    max_claims: Option<usize>,
+    depth: Option<usize>,
+    kind: Option<String>,
+    status: Option<String>,
+}
+#[derive(Debug, Deserialize)]
 struct EntityBody {
     name: String,
     #[serde(rename = "type")]
@@ -84,6 +102,14 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/api/knowledge/relations", post(create_relation))
         .route("/api/knowledge/navigation/entities", get(list_entities))
         .route("/api/knowledge/navigation/entity", get(navigation_entity))
+        .route("/api/knowledge/navigation/tree", get(navigation_tree))
+        .route("/api/knowledge/navigation/aspects", get(navigation_aspects))
+        .route("/api/knowledge/navigation/groups", get(navigation_groups))
+        .route("/api/knowledge/navigation/claims", get(navigation_claims))
+        .route(
+            "/api/knowledge/navigation/attributes",
+            get(navigation_attributes),
+        )
         .route("/api/knowledge/entities/{id}", get(entity_detail))
         .route("/api/knowledge/entities/{id}/aspects", get(entity_aspects))
         .route(
@@ -107,13 +133,172 @@ async fn navigation_entity(
     headers: HeaderMap,
     Query(q): Query<EntityQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let name = q.name.as_deref().map(str::trim).filter(|v| !v.is_empty())
+    let name = q
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
         .ok_or_else(|| ApiError::bad_request("name is required"))?;
-    Ok(Json(execute(&state, Operation::KnowledgeNavigationEntity {
-        agent_id: agent(&headers, Some(&q.agent), None)?,
-        workspace_id: workspace(&headers, &q)?,
-        name: name.to_owned(),
-    }).await?))
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeNavigationEntity {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace(&headers, &q)?,
+                name: name.to_owned(),
+            },
+        )
+        .await?,
+    ))
+}
+
+async fn navigation_tree(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<NavigationQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let entity = q
+        .entity
+        .as_deref()
+        .ok_or_else(|| ApiError::bad_request("entity is required"))?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeTree {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace_nav(&headers, &q)?,
+                entity_id: entity.to_owned(),
+                depth: q.depth.unwrap_or(3).min(3),
+                max_aspects: q.max_aspects.unwrap_or(20).clamp(1, 100),
+                max_attributes: q.max_claims.unwrap_or(50).clamp(1, 200),
+            },
+        )
+        .await?,
+    ))
+}
+async fn navigation_aspects(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<NavigationQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let entity = q
+        .entity
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("entity is required"))?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeNavigationAspects {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace_nav(&headers, &q)?,
+                entity,
+            },
+        )
+        .await?,
+    ))
+}
+async fn navigation_groups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<NavigationQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let entity = q
+        .entity
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("entity is required"))?;
+    let aspect = q
+        .aspect
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("aspect is required"))?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeNavigationGroups {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace_nav(&headers, &q)?,
+                entity,
+                aspect,
+            },
+        )
+        .await?,
+    ))
+}
+async fn navigation_claims(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<NavigationQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let entity = q
+        .entity
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("entity is required"))?;
+    let aspect = q
+        .aspect
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("aspect is required"))?;
+    let group = q
+        .group
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("group is required"))?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeNavigationClaims {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace_nav(&headers, &q)?,
+                entity,
+                aspect,
+                group,
+            },
+        )
+        .await?,
+    ))
+}
+async fn navigation_attributes(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<NavigationQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let entity = q
+        .entity
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("entity is required"))?;
+    let aspect = q
+        .aspect
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("aspect is required"))?;
+    let group = q
+        .group
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("group is required"))?;
+    let claim = q
+        .claim
+        .clone()
+        .ok_or_else(|| ApiError::bad_request("claim is required"))?;
+    Ok(Json(
+        execute(
+            &state,
+            Operation::KnowledgeNavigationAttributes {
+                agent_id: agent(&headers, Some(&q.agent), None)?,
+                workspace_id: workspace_nav(&headers, &q)?,
+                entity,
+                aspect,
+                group,
+                claim,
+                limit: limit(q.limit),
+                offset: q.offset.unwrap_or(0),
+                kind: q.kind,
+                status: q.status,
+            },
+        )
+        .await?,
+    ))
+}
+fn workspace_nav(headers: &HeaderMap, q: &NavigationQuery) -> Result<String, ApiError> {
+    let values=headers.get("x-workspace-id").or_else(||headers.get("x-signet-workspace-id")).map(|v|v.to_str().map(str::trim)).transpose().map_err(|_|ApiError::bad_request("workspace header must be valid UTF-8"))?;
+    let query=q.workspace_id.as_deref().map(str::trim).filter(|v|!v.is_empty());
+    if values.is_some() && query.is_some() && values!=query { return Err(ApiError::bad_request("conflicting workspace scope")); }
+    Ok(values.or(query).unwrap_or("default").to_owned())
 }
 
 async fn entity_detail(

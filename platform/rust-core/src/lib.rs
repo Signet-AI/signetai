@@ -2995,6 +2995,73 @@ fn execute_operation(
             let rows=s.query_map(params![agent_id,workspace_id,entity_id,aspect_id,status,status,kind,kind,status,limit,offset],|r| Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?})))?;
             Ok(json!({"items":rows.collect::<Result<Vec<_>,_>>()?,"limit":limit,"offset":offset}))
         }
+        Operation::KnowledgeNavigationAspects {
+            agent_id,
+            workspace_id,
+            entity,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let entity = bounded_text(&entity, "entity", 256)?;
+            let eid: String=connection.query_row("SELECT id FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND (name=? OR lower(name)=lower(?)) ORDER BY name LIMIT 1",params![&agent_id,&workspace_id,&entity,&entity],|r|r.get(0)).optional()?.ok_or(CoreError::NotFound)?;
+            let mut s=connection.prepare("SELECT p.id,p.name,0.5 FROM kg_aspects p WHERE p.agent_id=? AND p.workspace_id=? AND p.entity_id=? AND p.deleted=0 ORDER BY p.weight DESC,p.name ASC")?;
+            let items=s.query_map(params![&agent_id,&workspace_id,&eid],|r|Ok(json!({"aspect":{"id":r.get::<_,String>(0)?,"name":r.get::<_,String>(1)?,"weight":r.get::<_,f64>(2)?},"attributeCount":0,"constraintCount":0})))?.collect::<Result<Vec<_>,_>>()?;
+            Ok(json!({"entity":{"id":eid,"name":entity},"items":items}))
+        }
+        Operation::KnowledgeNavigationGroups {
+            agent_id,
+            workspace_id,
+            entity,
+            aspect,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let eid: String=connection.query_row("SELECT id FROM entities WHERE agent_id=? AND workspace_id=? AND COALESCE(status,'active')='active' AND lower(name)=lower(?)",params![&agent_id,&workspace_id,&entity],|r|r.get(0)).optional()?.ok_or(CoreError::NotFound)?;
+            let aid: String=connection.query_row("SELECT id FROM kg_aspects WHERE entity_id=? AND agent_id=? AND workspace_id=? AND lower(name)=lower(?) AND deleted=0",params![&eid,&agent_id,&workspace_id,&aspect],|r|r.get(0)).optional()?.ok_or(CoreError::NotFound)?;
+            let mut s=connection.prepare("SELECT coalesce(group_key,'general'),count(*) FROM kg_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND status!='deleted' GROUP BY coalesce(group_key,'general') ORDER BY count(*) DESC,1")?;
+            let items=s.query_map(params![&aid,&agent_id,&workspace_id],|r|Ok(json!({"groupKey":r.get::<_,String>(0)?,"attributeCount":r.get::<_,i64>(1)?,"constraintCount":0,"claimCount":0,"latestUpdatedAt":null})))?.collect::<Result<Vec<_>,_>>()?;
+            Ok(
+                json!({"entity":{"id":eid,"name":entity},"aspect":{"id":aid,"name":aspect},"items":items}),
+            )
+        }
+        Operation::KnowledgeNavigationClaims {
+            agent_id,
+            workspace_id,
+            entity,
+            aspect,
+            group,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let aid: String=connection.query_row("SELECT p.id FROM kg_aspects p JOIN entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id WHERE e.agent_id=? AND e.workspace_id=? AND lower(e.name)=lower(?) AND lower(p.name)=lower(?) AND p.deleted=0",params![&agent_id,&workspace_id,&entity,&aspect],|r|r.get(0)).optional()?.ok_or(CoreError::NotFound)?;
+            let group = group.to_lowercase().replace(' ', "_");
+            let mut s=connection.prepare("SELECT claim_key,count(*) FROM kg_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND coalesce(group_key,'general')=? AND claim_key IS NOT NULL AND status!='deleted' GROUP BY claim_key ORDER BY count(*) DESC,claim_key")?;
+            let items=s.query_map(params![&aid,&agent_id,&workspace_id,&group],|r|Ok(json!({"claimKey":r.get::<_,String>(0)?,"groupKey":group,"attributeCount":r.get::<_,i64>(1)?,"constraintCount":0,"activeCount":r.get::<_,i64>(1)?,"supersededCount":0,"latestUpdatedAt":null,"preview":null})))?.collect::<Result<Vec<_>,_>>()?;
+            Ok(json!({"entity":{"name":entity},"aspect":{"name":aspect,"id":aid},"items":items}))
+        }
+        Operation::KnowledgeNavigationAttributes {
+            agent_id,
+            workspace_id,
+            entity,
+            aspect,
+            group,
+            claim,
+            limit,
+            offset,
+            kind,
+            status,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
+            let limit = limit.clamp(1, 200) as i64;
+            let offset = offset.min(100000) as i64;
+            let aid: String=connection.query_row("SELECT p.id FROM kg_aspects p JOIN entities e ON e.id=p.entity_id AND e.agent_id=p.agent_id AND e.workspace_id=p.workspace_id WHERE e.agent_id=? AND e.workspace_id=? AND lower(e.name)=lower(?) AND lower(p.name)=lower(?) AND p.deleted=0",params![&agent_id,&workspace_id,&entity,&aspect],|r|r.get(0)).optional()?.ok_or(CoreError::NotFound)?;
+            let mut s=connection.prepare("SELECT id,kind,content,status,confidence,importance,memory_id,created_at,updated_at FROM kg_attributes WHERE aspect_id=? AND agent_id=? AND workspace_id=? AND coalesce(group_key,'general')=? AND claim_key=? AND status!='deleted' AND (? IS NULL OR kind=?) AND (? IS NULL OR status=?) ORDER BY importance DESC,updated_at DESC LIMIT ? OFFSET ?")?;
+            let items=s.query_map(params![&aid,&agent_id,&workspace_id,group.to_lowercase().replace(' ', "_"),&claim,&kind,&kind,&status,&status,limit,offset],|r|Ok(json!({"id":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"content":r.get::<_,String>(2)?,"status":r.get::<_,String>(3)?,"confidence":r.get::<_,f64>(4)?,"importance":r.get::<_,f64>(5)?,"memoryId":r.get::<_,Option<String>>(6)?,"createdAt":r.get::<_,String>(7)?,"updatedAt":r.get::<_,String>(8)?})))?.collect::<Result<Vec<_>,_>>()?;
+            Ok(
+                json!({"entity":{"name":entity},"aspect":{"name":aspect,"id":aid},"groupKey":group,"claimKey":claim,"items":items,"limit":limit,"offset":offset}),
+            )
+        }
         Operation::KnowledgeTree {
             agent_id,
             workspace_id,
@@ -3897,6 +3964,36 @@ pub enum Operation {
         depth: usize,
         max_aspects: usize,
         max_attributes: usize,
+    },
+    KnowledgeNavigationAspects {
+        agent_id: String,
+        workspace_id: String,
+        entity: String,
+    },
+    KnowledgeNavigationGroups {
+        agent_id: String,
+        workspace_id: String,
+        entity: String,
+        aspect: String,
+    },
+    KnowledgeNavigationClaims {
+        agent_id: String,
+        workspace_id: String,
+        entity: String,
+        aspect: String,
+        group: String,
+    },
+    KnowledgeNavigationAttributes {
+        agent_id: String,
+        workspace_id: String,
+        entity: String,
+        aspect: String,
+        group: String,
+        claim: String,
+        limit: usize,
+        offset: usize,
+        kind: Option<String>,
+        status: Option<String>,
     },
     SessionStart {
         agent_id: String,
