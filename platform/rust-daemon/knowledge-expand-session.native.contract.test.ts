@@ -151,8 +151,10 @@ function seed(dbPath: string, entityId: string) {
 	] as const;
 	for (const [id, project, content, session, at, memory, status, eligible] of rows) {
 		summary.run(id, project, 0, "session", content, 4, at, at, session, "bun", agent, "summary", id, null, now);
-		link.run(id, memory);
-		mention.run(memory, entityId);
+		if (id !== "sum-other-project") {
+			link.run(id, memory);
+			mention.run(memory, entityId);
+		}
 		safety.run(agent, "summary", id, status, eligible, "{}", "contract", now);
 	}
 	db.close();
