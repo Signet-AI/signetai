@@ -133,7 +133,7 @@ fn session_candidates_exclude_all_lifecycle_invalid_rows() {
     drop(core);
 
     let db = Connection::open(&path).unwrap();
-    db.execute("UPDATE memories SET deleted = 1 WHERE id = ?", [&deleted])
+    db.execute("UPDATE memories SET deleted = 1, is_deleted = 1 WHERE id = ?", [&deleted])
         .unwrap();
     drop(db);
 

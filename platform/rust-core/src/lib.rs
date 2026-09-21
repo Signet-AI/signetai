@@ -206,7 +206,7 @@ impl Core {
             let mut statement = connection.prepare(
                 "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                  FROM memories
-                 WHERE COALESCE(agent_id, 'default') = ? AND (? OR deleted = 0)
+                 WHERE COALESCE(agent_id, 'default') = ? AND (? OR is_deleted = 0)
                  ORDER BY rowid DESC LIMIT 10000",
             )?;
             let rows = statement.query_map(params![agent, include_deleted as i64], memory_row)?;
@@ -222,7 +222,7 @@ impl Core {
                 .query_row(
                     "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                      FROM memories
-                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
                     params![id, agent],
                     memory_row,
                 )
@@ -241,7 +241,7 @@ impl Core {
             let mut statement = connection.prepare(
                 "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                  FROM memories
-                 WHERE COALESCE(agent_id, 'default') = ? AND deleted = 0 AND content LIKE ?
+                 WHERE COALESCE(agent_id, 'default') = ? AND is_deleted = 0 AND content LIKE ?
                  ORDER BY rowid DESC LIMIT 1000",
             )?;
             let rows = statement.query_map(params![agent, format!("%{query}%")], memory_row)?;
@@ -260,7 +260,7 @@ impl Core {
             let transaction = connection.transaction()?;
             let changed = transaction.execute(
                 "UPDATE memories SET content = ?, metadata = ?, updated_at = datetime('now')
-                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
                 params![memory.content, metadata, id, agent],
             )?;
             if changed == 0 {
@@ -278,8 +278,8 @@ impl Core {
         self.call(move |connection| {
             let transaction = connection.transaction()?;
             let changed = transaction.execute(
-                "UPDATE memories SET deleted = 1, updated_at = datetime('now')
-                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                "UPDATE memories SET deleted = 1, is_deleted = 1, updated_at = datetime('now')
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
                 params![id, agent],
             )?;
             if changed == 0 {
@@ -297,8 +297,8 @@ impl Core {
         self.call(move |connection| {
             let transaction = connection.transaction()?;
             let changed = transaction.execute(
-                "UPDATE memories SET deleted = 0, updated_at = datetime('now')
-                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 1",
+                "UPDATE memories SET deleted = 0, is_deleted = 0, updated_at = datetime('now')
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 1",
                 params![id, agent],
             )?;
             if changed == 0 {
@@ -560,13 +560,13 @@ fn execute_memory_search(
             .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
             .collect::<Vec<_>>()
             .join(" ");
-        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,m.source_id,m.source_type,m.source_path,m.runtime_path,m.idempotency_key,m.memory_kind,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND m.stale_at IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
+        let mut stmt = connection.prepare("SELECT m.id,m.agent_id,m.content,m.metadata,m.deleted,m.created_at,m.updated_at,m.source_id,m.source_type,m.source_path,m.runtime_path,m.idempotency_key,m.memory_kind,bm25(memories_fts) FROM memories_fts JOIN memories m ON memories_fts.rowid=m.rowid WHERE memories_fts MATCH ? AND m.agent_id=? AND m.is_deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND m.stale_at IS NULL ORDER BY bm25(memories_fts), m.rowid DESC LIMIT ?")?;
         let mapped = stmt.query_map(params![match_query, agent_id, limit], memory_search_row)?;
         rows = mapped.collect::<Result<Vec<_>, _>>()?;
     } else {
         // Compatibility fallback is deliberately token-aware and marked partial;
         // it is not presented as an FTS result.
-        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE agent_id=? AND deleted=0 AND superseded_by IS NULL AND COALESCE(source_type,'') != 'aggregate-recall' AND stale_at IS NULL ORDER BY rowid DESC LIMIT 1000")?;
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE agent_id=? AND is_deleted=0 AND superseded_by IS NULL AND COALESCE(source_type,'') != 'aggregate-recall' AND stale_at IS NULL ORDER BY rowid DESC LIMIT 1000")?;
         let candidates = stmt.query_map(params![agent_id], memory_row)?;
         for memory in candidates {
             let memory = memory?;
@@ -583,7 +583,7 @@ fn execute_memory_search(
     let mut graph_ids = Vec::new();
     for token in &tokens {
         let pattern = format!("%{}%", token);
-        let mut stmt = connection.prepare("SELECT DISTINCT a.memory_id FROM kg_attributes a JOIN memories m ON m.id=a.memory_id WHERE a.agent_id=? AND a.status='active' AND a.memory_id IS NOT NULL AND m.agent_id=? AND m.deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND m.stale_at IS NULL AND (a.normalized_content LIKE ? OR a.content LIKE ?) ORDER BY a.updated_at DESC LIMIT ?")?;
+        let mut stmt = connection.prepare("SELECT DISTINCT a.memory_id FROM kg_attributes a JOIN memories m ON m.id=a.memory_id WHERE a.agent_id=? AND a.status='active' AND a.memory_id IS NOT NULL AND m.agent_id=? AND m.is_deleted=0 AND m.superseded_by IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' AND m.stale_at IS NULL AND (a.normalized_content LIKE ? OR a.content LIKE ?) ORDER BY a.updated_at DESC LIMIT ?")?;
         let ids = stmt.query_map(
             params![agent_id, agent_id, pattern, pattern, limit],
             |row| row.get::<_, String>(0),
@@ -602,7 +602,7 @@ fn execute_memory_search(
         if rows.len() >= limit as usize {
             break;
         }
-        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE id=? AND agent_id=? AND deleted=0 AND superseded_by IS NULL AND stale_at IS NULL")?;
+        let mut stmt = connection.prepare("SELECT id,agent_id,content,metadata,deleted,created_at,updated_at,source_id,source_type,source_path,runtime_path,idempotency_key,memory_kind FROM memories WHERE id=? AND agent_id=? AND is_deleted=0 AND superseded_by IS NULL AND stale_at IS NULL")?;
         if let Ok(memory) = stmt.query_row(params![id, agent_id], memory_row) {
             rows.push(json!({"id":memory.id,"agentId":memory.agent_id,"content":memory.content,"metadata":memory.metadata,"deleted":memory.deleted,"createdAt":memory.created_at,"updatedAt":memory.updated_at,"score":0.5,"source":"graph"}));
         }
@@ -2258,7 +2258,7 @@ fn execute_operation(
             let mut statement = connection.prepare(
                 "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind, rowid
                  FROM memories
-                 WHERE COALESCE(agent_id, 'default') = ? AND (? OR deleted = 0) AND (? IS NULL OR rowid < ?)
+                 WHERE COALESCE(agent_id, 'default') = ? AND (? OR is_deleted = 0) AND (? IS NULL OR rowid < ?)
                  ORDER BY rowid DESC LIMIT ?",
             )?;
             let mut rows = statement.query(params![
@@ -2292,7 +2292,7 @@ fn execute_operation(
                 .query_row(
                     "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                      FROM memories
-                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
                     params![id, agent_id],
                     memory_row,
                 )
@@ -2317,7 +2317,7 @@ fn execute_operation(
             let transaction = connection.transaction()?;
             let changed = transaction.execute(
                 "UPDATE memories SET content = ?, metadata = ?, source_id = ?, source_type = ?, source_path = ?, runtime_path = ?, idempotency_key = ?, memory_kind = ?, updated_at = datetime('now')
-                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
                 params![content, metadata, metadata_value.get("sourceId").and_then(Value::as_str), metadata_value.get("sourceType").and_then(Value::as_str), metadata_value.get("sourcePath").and_then(Value::as_str), metadata_value.get("runtimePath").and_then(Value::as_str), metadata_value.get("idempotencyKey").and_then(Value::as_str), memory_kind, id, agent_id],
             )?;
             if changed == 0 {
@@ -2332,8 +2332,8 @@ fn execute_operation(
             let id = required_id(&id)?;
             let transaction = connection.transaction()?;
             let changed = transaction.execute(
-                "UPDATE memories SET deleted = 1, updated_at = datetime('now')
-                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 0",
+                "UPDATE memories SET deleted = 1, is_deleted = 1, updated_at = datetime('now')
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
                 params![id, agent_id],
             )?;
             if changed == 0 {
@@ -2348,8 +2348,8 @@ fn execute_operation(
             let id = required_id(&id)?;
             let transaction = connection.transaction()?;
             let changed = transaction.execute(
-                "UPDATE memories SET deleted = 0, updated_at = datetime('now')
-                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND deleted = 1",
+                "UPDATE memories SET deleted = 0, is_deleted = 0, updated_at = datetime('now')
+                 WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 1",
                 params![id, agent_id],
             )?;
             if changed == 0 {
@@ -2388,7 +2388,7 @@ fn execute_operation(
             let mut statement = connection.prepare(
                 "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                  FROM memories
-                 WHERE COALESCE(agent_id, 'default') = ? AND deleted = 0 AND superseded_by IS NULL AND content LIKE ?
+                 WHERE COALESCE(agent_id, 'default') = ? AND is_deleted = 0 AND superseded_by IS NULL AND content LIKE ?
                  ORDER BY rowid DESC LIMIT 1000",
             )?;
             let rows = statement.query_map(params![agent_id, format!("%{query}%")], memory_row)?;
@@ -5739,7 +5739,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     ensure_column(&transaction, "queue", "created_at", "TEXT")?;
     if has_column(&transaction, "memories", "is_deleted")? {
         transaction.execute(
-            "UPDATE memories SET deleted = COALESCE(is_deleted, 0) WHERE deleted = 0",
+            "UPDATE memories SET deleted = COALESCE(is_deleted, 0) WHERE is_deleted = 0",
             [],
         )?;
     }

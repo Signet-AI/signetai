@@ -2790,6 +2790,34 @@ fn knowledge_navigation_attributes_preserves_current_schema_metadata() {
 }
 
 #[test]
+fn memory_search_reconciles_mismatched_legacy_and_current_deletion_flags() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("mismatched-deletion.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch(
+        "CREATE TABLE memories (
+            id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, content TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}', deleted INTEGER NOT NULL DEFAULT 0,
+            is_deleted INTEGER NOT NULL DEFAULT 0, superseded_by TEXT, stale_at TEXT,
+            source_type TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+        );
+        INSERT INTO memories(id, agent_id, content, deleted, is_deleted, created_at, updated_at) VALUES
+          ('legacy-tombstone','a','mismatched needle legacy',1,0,'2026-01-01','2026-01-01'),
+          ('current-tombstone','a','mismatched needle current',0,1,'2026-01-01','2026-01-01'),
+          ('live','a','mismatched needle live',0,0,'2026-01-01','2026-01-01');",
+    ).unwrap();
+    drop(db);
+    let c = Core::open(&p, 2).unwrap();
+    let result = c.submit(Operation::MemorySearch {
+        agent_id: "a".into(), query: "mismatched needle".into(), limit: 10,
+    }).unwrap();
+    let mut ids: Vec<&str> = result["results"].as_array().unwrap().iter()
+        .filter_map(|row| row["id"].as_str()).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["legacy-tombstone", "live"]);
+}
+
+#[test]
 fn memory_search_excludes_stale_and_derived_lifecycle_rows() {
     let d = tempdir().unwrap();
     let p = d.path().join("lifecycle.sqlite");
