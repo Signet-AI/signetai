@@ -154,11 +154,7 @@ export function buildExecutionManifest(repo: string): ExecutionManifest {
 	};
 }
 export function isTestEntrypoint(path: string): boolean {
-	return (
-		/(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(path) ||
-		/(?:^|\/)__tests__\/[^/]+\.[^.]+$/.test(path) ||
-		path === "scripts/load-test-daemon.ts"
-	);
+	return /(?:^|\/)[^/]+\.(?:test|spec)\.[^.]+$/.test(path) || /(?:^|\/)__tests__\/[^/]+\.[^.]+$/.test(path);
 }
 export function runnableSelectedPaths(paths: string[], manifest: ManifestEntry[]): string[] {
 	const allowed = new Set(manifest.map((e) => e.path));
