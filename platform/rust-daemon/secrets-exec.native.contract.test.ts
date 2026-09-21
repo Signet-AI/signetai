@@ -108,13 +108,13 @@ test("fresh exact daemon implements the supplementary secrets exec HTTP contract
 		expect((await request("/api/secrets/exec/does-not-exist", { headers: owner })).status).toBe(404);
 		const missing = await post({
 			command: "printenv VALUE",
-			secrets: { VALUE: "missing-secret-name" },
+			secrets: { VALUE: "missing_secret_name" },
 			timeoutMs: 1000,
 		});
 		const missingDone = await poll((await json(missing)).id);
 		expect(missingDone.status).toBe("failed");
 		expect(missingDone.error).toBe("secret resolution failed");
-		expect(JSON.stringify(missingDone)).not.toContain("missing-secret-name");
+		expect(JSON.stringify(missingDone)).not.toContain("missing_secret_name");
 		const wrong = headers("other-agent", "other-workspace");
 		const denied = await post(
 			{ command: "printenv VALUE", secrets: { VALUE: "contract-secret" }, timeoutMs: 1000 },
