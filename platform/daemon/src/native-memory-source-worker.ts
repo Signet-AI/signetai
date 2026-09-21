@@ -35,8 +35,18 @@ export interface NativeSourceWorkerFile {
 	readonly chunks?: readonly ObsidianSourceChunk[];
 }
 
+export interface NativeSourceWorkerRejection {
+	readonly path: string;
+	readonly mtimeMs: number;
+	readonly sizeBytes: number;
+	readonly contentHash: string;
+	readonly code: "source_item_too_large";
+	readonly message: string;
+}
+
 export interface NativeSourceWorkerPage {
 	readonly files: readonly NativeSourceWorkerFile[];
+	readonly rejected: readonly NativeSourceWorkerRejection[];
 	readonly nextCursor: string | null;
 	readonly scanned: number;
 	readonly total: number;
@@ -69,23 +79,37 @@ type WorkerEvent =
 const NATIVE_SOURCE_WORKER_PROTOCOL_VERSION = 1;
 const NATIVE_SOURCE_WORKER_ERROR_BYTES = 16 * 1024;
 
+type WorkerPayload = WorkerEvent | ScanCommand;
+type WorkerFrame = WorkerPayload & { readonly version: number };
+
+function boundedWorkerPayload(payload: WorkerPayload): WorkerPayload {
+	if (payload.type !== "error" || payload.message.length <= NATIVE_SOURCE_WORKER_ERROR_BYTES) return payload;
+	return { ...payload, message: payload.message.slice(0, NATIVE_SOURCE_WORKER_ERROR_BYTES) };
+}
+
+function workerFrame(payload: WorkerPayload): WorkerFrame {
+	return {
+		version: NATIVE_SOURCE_WORKER_PROTOCOL_VERSION,
+		...boundedWorkerPayload(payload),
+	} as WorkerFrame;
+}
+
+function workerFrameBytes(payload: WorkerPayload): number {
+	return Buffer.byteLength(JSON.stringify(workerFrame(payload)), "utf8");
+}
+
+function postWorkerFrame(port: Pick<MessagePort | Worker, "postMessage">, payload: WorkerPayload): void {
+	port.postMessage(workerFrame(payload));
+}
+
 /** The only size/accounting boundary used by both worker directions. */
-function encodeWorkerFrame(event: WorkerEvent): WorkerEvent & { readonly version: number } {
-	const bounded =
-		event.type === "error" && event.message.length > NATIVE_SOURCE_WORKER_ERROR_BYTES
-			? { ...event, message: event.message.slice(0, NATIVE_SOURCE_WORKER_ERROR_BYTES) }
-			: event;
-	const frame = { version: NATIVE_SOURCE_WORKER_PROTOCOL_VERSION, ...bounded } as WorkerEvent & {
-		readonly version: number;
+function boundedWorkerEvent(event: WorkerEvent): WorkerEvent {
+	if (workerFrameBytes(event) <= NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES) return event;
+	return {
+		type: "error",
+		id: "id" in event ? event.id : "worker",
+		message: "native source worker frame exceeds IPC limit",
 	};
-	if (Buffer.byteLength(JSON.stringify(frame), "utf8") > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES)
-		return {
-			version: NATIVE_SOURCE_WORKER_PROTOCOL_VERSION,
-			type: "error",
-			id: "id" in event ? event.id : "worker",
-			message: "native source worker frame exceeds IPC limit",
-		};
-	return frame;
 }
 
 function decodeWorkerFrame(value: unknown): WorkerEvent | null {
@@ -102,10 +126,13 @@ function decodeWorkerFrame(value: unknown): WorkerEvent | null {
 interface PendingScan {
 	readonly resolve: (page: NativeSourceWorkerPage) => void;
 	readonly reject: (error: Error) => void;
+	readonly checkpoint: string;
 	timer?: ReturnType<typeof setTimeout>;
 }
 
 const NATIVE_SOURCE_WORKER_SCAN_DEADLINE_MS = 30_000;
+/** Repeated transport failures at one checkpoint pause replacement until the source changes. */
+export const NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES = 3;
 /** Maximum UTF-8 JSON size for either side of the worker IPC channel. */
 export const NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 
@@ -174,8 +201,10 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 	const pageSize = Math.max(1, Math.min(100, Math.trunc(command.pageSize)));
 	const frontier = [...(command.frontier ?? [command.source.root])];
 	const files: NativeSourceWorkerFile[] = [];
+	const rejected: NativeSourceWorkerRejection[] = [];
 	const permissionDeniedPaths: string[] = [];
-	while (frontier.length > 0 && files.length < pageSize) {
+	let nextCursor = command.cursor;
+	while (frontier.length > 0 && files.length + rejected.length < pageSize) {
 		const path = frontier.pop();
 		if (path === undefined) break;
 		try {
@@ -217,28 +246,34 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 			};
 			const candidate = {
 				files: [...files, descriptor],
+				rejected,
 				nextCursor: descriptor.path,
-				scanned: files.length + 1,
-				total: files.length + 1,
+				scanned: files.length + rejected.length + 1,
+				total: files.length + rejected.length + 1,
 				complete: frontier.length === 0,
 				frontier,
 				permissionDeniedPaths,
 			};
-			const candidateBytes = Buffer.byteLength(
-				JSON.stringify(encodeWorkerFrame({ type: "result", id: command.id, result: candidate })),
-				"utf8",
-			);
-			if (files.length > 0 && candidateBytes > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES) {
+			const candidateBytes = workerFrameBytes({ type: "result", id: command.id, result: candidate });
+			if (files.length + rejected.length > 0 && candidateBytes > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES) {
 				frontier.push(path);
 				break;
 			}
-			if (candidateBytes > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES)
-				throw new Error(
-					`native source worker descriptor exceeds the ${NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES}-byte IPC limit`,
-				);
+			if (candidateBytes > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES) {
+				rejected.push({
+					path,
+					mtimeMs: info.mtimeMs,
+					sizeBytes: info.size,
+					contentHash: descriptor.contentHash,
+					code: "source_item_too_large",
+					message: `Source item cannot fit within the ${NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES}-byte IPC frame`,
+				});
+				nextCursor = path;
+				break;
+			}
 			files.push(descriptor);
+			nextCursor = path;
 		} catch (error) {
-			if (error instanceof Error && error.message.includes("IPC limit")) throw error;
 			if (
 				typeof error === "object" &&
 				error !== null &&
@@ -251,9 +286,10 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 	}
 	return {
 		files,
-		nextCursor: files[files.length - 1]?.path ?? command.cursor,
-		scanned: files.length,
-		total: files.length,
+		rejected,
+		nextCursor,
+		scanned: files.length + rejected.length,
+		total: files.length + rejected.length,
 		complete: frontier.length === 0,
 		frontier,
 		permissionDeniedPaths,
@@ -265,17 +301,15 @@ export function runNativeSourceWorker(): void {
 	if (port === null) throw new Error("native source worker requires a parent port");
 	const send = (event: WorkerEvent): void => {
 		try {
-			port.postMessage(encodeWorkerFrame(event));
+			postWorkerFrame(port, boundedWorkerEvent(event));
 		} catch (error) {
 			if (event.type !== "error") {
 				try {
-					port.postMessage(
-						encodeWorkerFrame({
-							type: "error",
-							id: "id" in event ? event.id : "worker",
-							message: error instanceof Error ? error.message : String(error),
-						}),
-					);
+					postWorkerFrame(port, {
+						type: "error",
+						id: "id" in event ? event.id : "worker",
+						message: error instanceof Error ? error.message : String(error),
+					});
 				} catch {
 					/* channel is gone */
 				}
@@ -321,6 +355,10 @@ export function createNativeSourceWorker(
 		readonly onScanStarted?: () => void;
 		/** Test-only hook fired when the worker has delivered a scan result. */
 		readonly onScanResult?: () => void;
+		/** Test-only worker entry override. */
+		readonly resolveEmbeddedPath?: () => string;
+		/** Test-only override for the production circuit probe interval. */
+		readonly circuitCooldownMs?: number;
 	} = {},
 ): NativeSourceWorkerHandle {
 	let worker: Worker | null = null;
@@ -328,10 +366,23 @@ export function createNativeSourceWorker(
 	let rejectStart: ((error: Error) => void) | null = null;
 	let terminationPromise: Promise<void> | null = null;
 	let sequence = 0;
+	let failedCheckpoint: string | null = null;
+	let sameCheckpointFailures = 0;
+	let circuitOpenedAt = 0;
+	const circuitCooldownMs = options.circuitCooldownMs ?? 30_000;
 	const pending = new Map<string, PendingScan>();
+	const recordFailure = (checkpoint: string): void => {
+		if (failedCheckpoint === checkpoint) sameCheckpointFailures++;
+		else {
+			failedCheckpoint = checkpoint;
+			sameCheckpointFailures = 1;
+		}
+		if (sameCheckpointFailures >= NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES) circuitOpenedAt = Date.now();
+	};
 	const rejectPending = (error: Error): void => {
 		for (const job of pending.values()) {
 			if (job.timer) clearTimeout(job.timer);
+			recordFailure(job.checkpoint);
 			job.reject(error);
 		}
 		pending.clear();
@@ -363,7 +414,7 @@ export function createNativeSourceWorker(
 		if (startPromise !== null) return await startPromise;
 		startPromise = new Promise<void>((resolve, reject) => {
 			rejectStart = reject;
-			const current = new Worker(workerPath());
+			const current = new Worker(options.resolveEmbeddedPath?.() ?? workerPath());
 			worker = current;
 			let ready = false;
 			const fail = (error: Error): void => {
@@ -376,6 +427,7 @@ export function createNativeSourceWorker(
 				}
 			};
 			current.on("message", (raw: unknown) => {
+				if (worker !== current) return;
 				const event = decodeWorkerFrame(raw);
 				if (event === null) return;
 				if (event.type === "ready") {
@@ -392,9 +444,17 @@ export function createNativeSourceWorker(
 				pending.delete(event.id);
 				if (job.timer) clearTimeout(job.timer);
 				if (event.type === "result") {
+					if (failedCheckpoint === job.checkpoint) {
+						failedCheckpoint = null;
+						sameCheckpointFailures = 0;
+						circuitOpenedAt = 0;
+					}
 					options.onScanResult?.();
 					job.resolve(event.result);
-				} else job.reject(new Error(event.message));
+				} else {
+					recordFailure(job.checkpoint);
+					job.reject(new Error(event.message));
+				}
 			});
 			current.once("error", (error: Error) => fail(error));
 			current.once("exit", (code: number) => {
@@ -414,6 +474,24 @@ export function createNativeSourceWorker(
 		readonly frontier?: readonly string[] | null;
 		readonly pageSize: number;
 	}): Promise<NativeSourceWorkerPage> => {
+		const checkpoint = JSON.stringify({
+			root: inputValue.source.root,
+			cursor: inputValue.cursor,
+			frontier: inputValue.frontier ?? null,
+		});
+		if (
+			failedCheckpoint === checkpoint &&
+			sameCheckpointFailures >= NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES
+		) {
+			if (Date.now() - circuitOpenedAt < circuitCooldownMs) {
+				throw new Error(
+					`native source worker circuit is open after ${sameCheckpointFailures} failures at the same checkpoint`,
+				);
+			}
+			failedCheckpoint = null;
+			sameCheckpointFailures = 0;
+			circuitOpenedAt = 0;
+		}
 		await start();
 		const current = worker;
 		if (current === null) throw new Error("native source worker is unavailable");
@@ -425,10 +503,11 @@ export function createNativeSourceWorker(
 			timer = setTimeout(() => {
 				if (!pending.delete(id)) return;
 				const error = new Error(`native source worker scan exceeded ${NATIVE_SOURCE_WORKER_SCAN_DEADLINE_MS}ms`);
+				recordFailure(checkpoint);
 				reject(error);
 				void terminateWorker(current, error);
 			}, NATIVE_SOURCE_WORKER_SCAN_DEADLINE_MS);
-			pending.set(id, { resolve, reject, timer });
+			pending.set(id, { resolve, reject, checkpoint, timer });
 		});
 		const command: ScanCommand = {
 			type: "scan",
@@ -438,7 +517,7 @@ export function createNativeSourceWorker(
 			...(inputValue.frontier === undefined || inputValue.frontier === null ? {} : { frontier: inputValue.frontier }),
 			pageSize: inputValue.pageSize,
 		};
-		const commandBytes = Buffer.byteLength(JSON.stringify(command), "utf8");
+		const commandBytes = workerFrameBytes(command);
 		if (commandBytes > NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES) {
 			pending.delete(id);
 			clearTimeout(timer);
@@ -448,10 +527,11 @@ export function createNativeSourceWorker(
 			return await result;
 		}
 		try {
-			current.postMessage({ version: NATIVE_SOURCE_WORKER_PROTOCOL_VERSION, ...command });
+			postWorkerFrame(current, command);
 		} catch (error: unknown) {
 			if (pending.delete(id)) {
 				clearTimeout(timer);
+				recordFailure(checkpoint);
 				rejectResult(error instanceof Error ? error : new Error(String(error)));
 			}
 		}

@@ -1,6 +1,7 @@
 import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
 import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
 import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
+import { up as sourceSyncFailures } from "./155-source-sync-failures";
 /**
  * Migration runner for Signet's SQLite database
  *
@@ -1429,6 +1430,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				{ table: "transcript_capture_jobs", column: "audit_path" },
 			],
 		},
+	},
+	{
+		version: 155,
+		name: "source-sync-failures",
+		up: sourceSyncFailures,
+		artifacts: { tables: ["source_sync_failures"], indexes: ["idx_source_sync_failures_active"] },
 	},
 ];
 
