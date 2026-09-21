@@ -29,10 +29,17 @@ fn proposal_auth_error() -> ApiError {
     }
 }
 
-async fn require_proposal_auth(state: &AppState, headers: &HeaderMap, query: &OntologyQuery, permission: &str) -> Result<(), ApiError> {
+async fn require_ontology_auth(state: &AppState, headers: &HeaderMap, query: &OntologyQuery, permission: &str) -> Result<(), ApiError> {
     let claims = auth::gate(state, headers).await.map_err(|_| proposal_auth_error())?;
-    let scope = json!({"agent": agent(headers, Some(&query.agent), None)?, "workspace": workspace(query)?});
+    let scope = json!({
+        "agent": agent(headers, Some(&query.agent), None)?,
+        "workspace": source_workspace(headers, query.workspace_id.as_deref())?,
+    });
     if auth::authority_allows(&claims, "agent", &scope, &[permission.to_owned()]) { Ok(()) } else { Err(proposal_auth_error()) }
+}
+
+async fn require_proposal_auth(state: &AppState, headers: &HeaderMap, query: &OntologyQuery, permission: &str) -> Result<(), ApiError> {
+    require_ontology_auth(state, headers, query, permission).await
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -44,14 +51,6 @@ pub(crate) struct OntologyQuery {
     pub cursor: Option<String>,
 }
 
-fn workspace(q: &OntologyQuery) -> Result<String, ApiError> {
-    q.workspace_id
-        .as_deref()
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| ApiError::bad_request("workspace_id is required"))
-}
 fn validated_kind(kind: &str) -> Result<String, ApiError> {
     let value = kind.trim();
     (!value.is_empty() && value.len() <= 64)
@@ -94,32 +93,32 @@ pub(crate) fn router() -> Router<AppState> {
         )
         .route(
             "/api/ontology/proposals/{id}/apply",
-            axum::routing::post(unsupported),
+            axum::routing::post(unsupported_write),
         )
         .route(
             "/api/ontology/proposals/{id}/reject",
-            axum::routing::post(unsupported),
+            axum::routing::post(unsupported_write),
         )
         .route("/api/ontology/proposals/conflicts", get(list_conflicts))
         .route(
             "/api/ontology/proposals/repair/duplicates",
-            axum::routing::post(unsupported),
+            axum::routing::post(unsupported_write),
         )
         .route(
             "/api/ontology/proposals/repair/merge-plan",
-            axum::routing::post(unsupported),
+            axum::routing::post(unsupported_write),
         )
-        .route("/api/ontology/proposals/{id}/evidence", get(unsupported))
-        .route("/api/ontology/claims/evidence", get(unsupported))
-        .route("/api/ontology/claims/versions", get(unsupported))
-        .route("/api/ontology/claims/version", get(unsupported))
-        .route("/api/ontology/claims/explain", get(unsupported))
-        .route("/api/ontology/extract", axum::routing::post(unsupported))
+        .route("/api/ontology/proposals/{id}/evidence", get(unsupported_read))
+        .route("/api/ontology/claims/evidence", get(unsupported_read))
+        .route("/api/ontology/claims/versions", get(unsupported_read))
+        .route("/api/ontology/claims/version", get(unsupported_read))
+        .route("/api/ontology/claims/explain", get(unsupported_read))
+        .route("/api/ontology/extract", axum::routing::post(unsupported_write))
         .route(
             "/api/ontology/consolidate",
-            axum::routing::post(unsupported),
+            axum::routing::post(unsupported_write),
         )
-        .route("/api/ontology/contradictions", get(unsupported))
+        .route("/api/ontology/contradictions", get(unsupported_read))
         .route("/api/claims", get(list_claims).post(create_claim))
         .route(
             "/api/constraints",
@@ -127,7 +126,23 @@ pub(crate) fn router() -> Router<AppState> {
         )
 }
 
-async fn unsupported() -> Result<Json<Value>, ApiError> {
+async fn unsupported_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_ontology_auth(&state, &headers, &q, "recall").await?;
+    Err(ApiError::not_implemented(
+        "ontology operation is unsupported by the fresh Rust boundary",
+    ))
+}
+
+async fn unsupported_write(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_ontology_auth(&state, &headers, &q, "modify").await?;
     Err(ApiError::not_implemented(
         "ontology operation is unsupported by the fresh Rust boundary",
     ))
@@ -254,8 +269,9 @@ async fn list(
     Path(kind): Path<String>,
     Query(q): Query<OntologyQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    require_ontology_auth(&state, &headers, &q, "recall").await?;
     let agent_id = agent(&headers, Some(&q.agent), None)?;
-    let workspace_id = workspace(&q)?;
+    let workspace_id = source_workspace(&headers, q.workspace_id.as_deref())?;
     let result = execute(
         &state,
         Operation::OntologyList {
@@ -277,11 +293,12 @@ async fn get_one(
     Path((kind, id)): Path<(String, String)>,
     Query(q): Query<OntologyQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    require_ontology_auth(&state, &headers, &q, "recall").await?;
     let result = execute(
         &state,
         Operation::OntologyGet {
             agent_id: agent(&headers, Some(&q.agent), None)?,
-            workspace_id: workspace(&q)?,
+            workspace_id: source_workspace(&headers, q.workspace_id.as_deref())?,
             kind: validated_kind(&kind)?,
             id,
         },
@@ -299,11 +316,12 @@ async fn upsert(
     Query(q): Query<OntologyQuery>,
     Json(value): Json<Value>,
 ) -> Result<Json<Value>, ApiError> {
+    require_ontology_auth(&state, &headers, &q, "modify").await?;
     let result = execute(
         &state,
         Operation::OntologyUpsert {
             agent_id: agent(&headers, Some(&q.agent), None)?,
-            workspace_id: workspace(&q)?,
+            workspace_id: source_workspace(&headers, q.workspace_id.as_deref())?,
             kind: validated_kind(&kind)?,
             id: value.get("id").and_then(Value::as_str).map(str::to_owned),
             value,
@@ -318,12 +336,13 @@ async fn remove(
     Path((kind, id)): Path<(String, String)>,
     Query(q): Query<OntologyQuery>,
 ) -> Result<Json<Value>, ApiError> {
+    require_ontology_auth(&state, &headers, &q, "modify").await?;
     Ok(Json(
         execute(
             &state,
             Operation::OntologyDelete {
                 agent_id: agent(&headers, Some(&q.agent), None)?,
-                workspace_id: workspace(&q)?,
+                workspace_id: source_workspace(&headers, q.workspace_id.as_deref())?,
                 kind: validated_kind(&kind)?,
                 id,
             },
