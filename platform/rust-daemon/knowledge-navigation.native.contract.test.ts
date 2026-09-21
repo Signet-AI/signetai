@@ -13,7 +13,9 @@ const logs: string[] = [];
 async function start(agent: string, workspace: string) {
 	const dir = mkdtempSync(join(tmpdir(), "signet-navigation-"));
 	dirs.push(dir);
-	const port = 38000 + Math.floor(Math.random() * 2000);
+	const reservation = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {}, open() {}, close() {} } });
+	const port = reservation.port;
+	reservation.stop();
 	const stdout = Bun.file(join(dir, "stdout.log"));
 	const stderr = Bun.file(join(dir, "stderr.log"));
 	const child = Bun.spawn([binary], {
@@ -22,6 +24,7 @@ async function start(agent: string, workspace: string) {
 			...process.env,
 			SIGNET_PATH: dir,
 			SIGNET_BIND: "127.0.0.1",
+			SIGNET_MODE: "local",
 			SIGNET_PORT: String(port),
 			SIGNET_AGENT_ID: agent,
 			SIGNET_API_KEY: "",
@@ -86,16 +89,17 @@ test("fresh daemon navigation tree enforces bounds, aliases, and isolation", asy
 	expect(aspectResponse.status).toBe(201);
 	const aspect = await json(aspectResponse);
 	for (const item of [
-		{ group_key: "identity", claim_key: "name", content: "subject" },
-		{ group_key: "identity", claim_key: "role", content: "owner" },
-		{ group_key: "history", claim_key: "origin", content: "contract" },
+		{ group_key: "identity", claim_key: "name", content: "subject", kind: "attribute" },
+		{ group_key: "identity", claim_key: "role", content: "owner", kind: "attribute" },
+		{ group_key: "history", claim_key: "origin", content: "contract", kind: "constraint" },
 	]) {
+		const { kind, ...fields } = item;
 		const response = await create("/api/knowledge/attributes", {
 			aspect_id: aspect.id,
-			kind: "fact",
+			kind,
 			confidence: 0.9,
 			importance: 0.7,
-			...item,
+			...fields,
 		});
 		expect(response.status).toBe(201);
 	}
@@ -106,11 +110,32 @@ test("fresh daemon navigation tree enforces bounds, aliases, and isolation", asy
 				{ headers: { ...owner, ...extra } },
 			),
 		);
-	expect((await tree("max_groups=1&max_claims=1")).groups).toHaveLength(1);
-	expect((await tree("max_groups=99&max_claims=99")).groups).toHaveLength(2);
-	expect((await tree("max_groups=0&max_claims=-4")).groups.length).toBeGreaterThan(0);
-	expect((await tree("max_groups=nope&max_claims=wat")).groups.length).toBe(2);
-	expect((await tree("max_groups=1&max_claims=1", { "x-signet-workspace-id": "workspace-a" })).groups).toHaveLength(1);
+	const firstTree = await tree("max_groups=1&max_claims=1");
+	const groups = (payload: Record<string, unknown>): unknown[] => {
+		if (!Array.isArray(payload.items) || payload.items.length === 0) return [];
+		const first = payload.items[0];
+		if (typeof first !== "object" || first === null) return [];
+		const values = Reflect.get(first, "groups");
+		return Array.isArray(values) ? values : [];
+	};
+	const claims = (group: unknown): unknown[] => {
+		if (typeof group !== "object" || group === null) return [];
+		const values = Reflect.get(group, "claims");
+		return Array.isArray(values) ? values : [];
+	};
+	const boundedGroups = groups(firstTree);
+	expect(boundedGroups).toHaveLength(1);
+	expect(claims(boundedGroups[0])).toHaveLength(1);
+	const fullTree = await tree("max_groups=99&max_claims=99");
+	const fullGroups = groups(fullTree);
+	expect(fullGroups).toHaveLength(2);
+	expect(claims(fullGroups[0])).toHaveLength(2);
+	const firstItem = Array.isArray(fullTree.items) ? fullTree.items[0] : null;
+	expect(firstItem && typeof firstItem === "object" ? Reflect.get(firstItem, "attributeCount") : null).toBe(2);
+	expect(firstItem && typeof firstItem === "object" ? Reflect.get(firstItem, "constraintCount") : null).toBe(1);
+	expect(groups(await tree("max_groups=0&max_claims=-4")).length).toBeGreaterThan(0);
+	expect(groups(await tree("max_groups=nope&max_claims=wat"))).toHaveLength(2);
+	expect(groups(await tree("max_groups=1&max_claims=1", { "x-signet-workspace-id": "workspace-a" }))).toHaveLength(1);
 	expect(
 		(
 			await fetch(`${daemon.origin}/api/knowledge/navigation/tree?entity=${entity.id}&workspace_id=workspace-a`, {
@@ -121,21 +146,15 @@ test("fresh daemon navigation tree enforces bounds, aliases, and isolation", asy
 	expect(
 		(
 			await fetch(`${daemon.origin}/api/knowledge/navigation/tree?entity=${entity.id}&workspace_id=workspace-a`, {
-				headers: headers("wrong-agent", "workspace-a"),
+				headers: headers("other-agent", "workspace-a"),
 			})
 		).status,
-	).toBe(200);
-	const isolated = await json(
-		await fetch(`${daemon.origin}/api/knowledge/navigation/tree?entity=${entity.id}&workspace_id=workspace-a`, {
-			headers: headers("wrong-agent", "workspace-a"),
-		}),
-	);
-	expect(isolated.groups ?? []).toHaveLength(0);
+	).toBe(404);
 	expect(
 		(
-			await fetch(`${daemon.origin}/api/knowledge/navigation/tree?entity=${entity.id}&workspace_id=workspace-a`, {
+			await fetch(`${daemon.origin}/api/knowledge/navigation/tree?entity=${entity.id}&workspace_id=workspace-b`, {
 				headers: headers("navigation-owner", "workspace-b"),
 			})
 		).status,
-	).toBe(200);
+	).toBe(404);
 });
