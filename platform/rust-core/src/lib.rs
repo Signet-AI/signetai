@@ -5047,6 +5047,19 @@ fn reflection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 
 fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     let transaction = connection.transaction()?;
+    const NATIVE_SCHEMA_COMPATIBILITY_VERSION: i64 = 2;
+    if has_table(&transaction, "schema_migrations")? {
+        let max_schema_version: Option<i64> = transaction.query_row(
+            "SELECT MAX(version) FROM schema_migrations",
+            [],
+            |row| row.get(0),
+        )?;
+        if let Some(version) = max_schema_version.filter(|version| *version > NATIVE_SCHEMA_COMPATIBILITY_VERSION) {
+            return Err(CoreError::UnsupportedMigrationHistory(format!(
+                "version {version} exceeds native compatibility version {NATIVE_SCHEMA_COMPATIBILITY_VERSION}"
+            )));
+        }
+    }
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT);
          CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');
