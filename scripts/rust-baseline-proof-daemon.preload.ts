@@ -5,7 +5,9 @@ if (!Bun.file(rustBinary).exists()) throw new Error(`SIGNET_RUST_DAEMON_BIN does
 const originalSpawn = Bun.spawn.bind(Bun);
 Bun.spawn = ((command: string[] | string, options?: Parameters<typeof Bun.spawn>[1]) => {
 	const argv = Array.isArray(command) ? command : [command];
-	const isBaselineDaemonLaunch = argv.some((value) => value.endsWith("platform/daemon/src/daemon.ts"));
+	const isBaselineDaemonLaunch = argv.some(
+		(value) => typeof value === "string" && value.endsWith("platform/daemon/src/daemon.ts"),
+	);
 	if (!isBaselineDaemonLaunch) return originalSpawn(command as never, options);
 	const env = { ...(options?.env ?? process.env), SIGNET_DAEMON_BIN: rustBinary };
 	const replaced = [rustBinary];
