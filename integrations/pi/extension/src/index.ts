@@ -126,27 +126,33 @@ function daemonFailure(
 	return new Error(`${operation} failed: ${detail}`);
 }
 
-async function postJson<T>(
+function postDaemon<T>(daemonUrl: string, path: string, body: unknown, timeout: number, operation: string): Promise<T>;
+function postDaemon(
 	daemonUrl: string,
 	path: string,
 	body: unknown,
 	timeout: number,
 	operation: string,
-): Promise<T> {
-	const result = await createDaemonClient(daemonUrl).postResult<T>(path, body, timeout);
+	mode: "status",
+): Promise<void>;
+async function postDaemon<T>(
+	daemonUrl: string,
+	path: string,
+	body: unknown,
+	timeout: number,
+	operation: string,
+	mode: "json" | "status" = "json",
+): Promise<T | undefined> {
+	const client = createDaemonClient(daemonUrl);
+	if (mode === "status") {
+		const result = await client.postStatus(path, body, timeout);
+		if (!result.ok) throw daemonFailure(operation, result);
+		return;
+	}
+
+	const result = await client.postResult<T>(path, body, timeout);
 	if (!result.ok) throw daemonFailure(operation, result);
 	return result.data;
-}
-
-async function postStatus(
-	daemonUrl: string,
-	path: string,
-	body: unknown,
-	timeout: number,
-	operation: string,
-): Promise<void> {
-	const result = await createDaemonClient(daemonUrl).postStatus(path, body, timeout);
-	if (!result.ok) throw daemonFailure(operation, result);
 }
 
 // ============================================================================
@@ -167,7 +173,7 @@ export async function recallMemories(
 		saveAggregate?: boolean;
 	} = {},
 ): Promise<RecallPayload> {
-	return postJson<RecallPayload>(
+	return postDaemon<RecallPayload>(
 		daemonUrl,
 		"/api/memory/recall",
 		buildRecallRequestBody(query, {
@@ -190,7 +196,7 @@ export async function rememberContent(
 ): Promise<void> {
 	const { critical = false, tags = [], agentId, reviewAfter } = options;
 
-	await postStatus(
+	await postDaemon(
 		daemonUrl,
 		"/api/hooks/remember",
 		buildRememberRequestBody(content, {
@@ -204,6 +210,7 @@ export async function rememberContent(
 		}),
 		WRITE_TIMEOUT,
 		"Remember",
+		"status",
 	);
 }
 export async function searchSourceArtifacts(
@@ -219,7 +226,7 @@ export async function searchSourceArtifacts(
 ): Promise<RecallPayload> {
 	const { limit, agentId, sessionKey, includeRecalled, project } = options;
 
-	return postJson<RecallPayload>(
+	return postDaemon<RecallPayload>(
 		daemonUrl,
 		"/api/memory/recall",
 		{
@@ -249,7 +256,7 @@ export async function searchSessions(
 		limit?: number;
 	} = {},
 ): Promise<unknown> {
-	return postJson<unknown>(
+	return postDaemon<unknown>(
 		daemonUrl,
 		"/api/sessions/search",
 		{
