@@ -20,7 +20,7 @@ services:
     expose:
       - "3850"
     healthcheck:
-      test: ["CMD", "bun", "/app/deploy/docker/scripts/healthcheck.mjs"]
+      test: ["CMD", "/app/bin/signet-healthcheck"]
       interval: 30s
       timeout: 5s
       retries: 5

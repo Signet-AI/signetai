@@ -20,7 +20,8 @@ COPY platform/rust-daemon/Cargo.toml platform/rust-daemon/Cargo.lock ./platform/
 COPY platform/rust-daemon/src ./platform/rust-daemon/src
 RUN cargo build --release --manifest-path platform/rust-daemon/Cargo.toml \
 	&& test -x platform/rust-daemon/target/release/signet-daemon \
-	&& test -x platform/rust-daemon/target/release/signet-mcp
+	&& test -x platform/rust-daemon/target/release/signet-mcp \
+	&& test -x platform/rust-daemon/target/release/signet-healthcheck
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
@@ -34,14 +35,15 @@ COPY --from=build /app/dist/native/signet ./bin/signet
 COPY --from=build /app/dist/docker-sqlite-vec ./sqlite-vec
 COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-daemon ./bin/signet-daemon
 COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-mcp ./bin/signet-mcp
+COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-healthcheck ./bin/signet-healthcheck
 COPY surfaces/dashboard/build ./dist/signetai/runtime/rust-daemon/dashboard
 COPY dist/signetai/templates ./dist/signetai/templates
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
-COPY deploy/docker/scripts ./deploy/docker/scripts
-RUN chmod +x ./bin/signet ./bin/signet-mcp ./deploy/docker/entrypoint.sh \
-	./deploy/docker/scripts/create-token.mjs ./deploy/docker/scripts/healthcheck.mjs \
+COPY deploy/docker/scripts/create-token.mjs ./deploy/docker/scripts/create-token.mjs
+RUN chmod +x ./bin/signet ./bin/signet-mcp ./bin/signet-healthcheck ./deploy/docker/entrypoint.sh \
+	./deploy/docker/scripts/create-token.mjs \
 	&& mkdir -p /data/agents && chown -R signet:signet /app /data/agents
 USER signet
 EXPOSE 3850
-HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=5 CMD /app/deploy/docker/scripts/healthcheck.mjs
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=5 CMD /app/bin/signet-healthcheck
 ENTRYPOINT ["/app/deploy/docker/entrypoint.sh"]

@@ -13,6 +13,10 @@ path = "src/main.rs"
 name = "signet-mcp"
 path = "src/bin/signet-mcp.rs"
 
+[[bin]]
+name = "signet-healthcheck"
+path = "src/bin/signet-healthcheck.rs"
+
 [dependencies]
 signet-core-native = { path = "../rust-core" }
 axum = { version = "0.8", features = ["json", "query"] }
