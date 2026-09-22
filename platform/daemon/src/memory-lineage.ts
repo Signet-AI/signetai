@@ -778,7 +778,7 @@ export async function indexCanonicalTranscriptJsonl(input: {
 	readonly startedAt: string | null;
 	readonly endedAt: string | null;
 	readonly transcript: string;
-	readonly manifestPath: string;
+	readonly manifestPath: string | null;
 }): Promise<void> {
 	const transcriptPath = canonicalTranscriptRelativePath(input.harness);
 	const sessionToken = deriveSessionToken(input.agentId, input.sessionId);

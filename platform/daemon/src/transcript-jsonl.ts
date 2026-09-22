@@ -90,7 +90,7 @@ function normalizeLf(text: string): string {
 }
 
 function cleanTurnContent(text: string): string {
-	return normalizeLf(text).replace(/\s+/g, " ").trim();
+	return normalizeLf(text);
 }
 
 function sha256(text: string): string {
@@ -136,16 +136,21 @@ function makeRecord(input: TranscriptIdentity, turn: TranscriptTurn, seq: number
 
 export function transcriptTextToTurns(transcript: string): TranscriptTurn[] {
 	const turns: TranscriptTurn[] = [];
-	for (const line of normalizeLf(transcript).split("\n")) {
-		const trimmed = line.trim();
-		if (trimmed.length === 0) continue;
-		const match = trimmed.match(/^(User|Human|Assistant)\s*:\s*(.*)$/i);
+	for (const [index, line] of normalizeLf(transcript).split("\n").entries()) {
+		if (index === normalizeLf(transcript).split("\n").length - 1 && line.length === 0) continue;
+		const match = line.match(/^(User|Human|Assistant)\s*:(.*)$/i);
 		if (match) {
 			const role = match[1]?.toLowerCase() === "assistant" ? "assistant" : "user";
-			turns.push({ role, content: match[2] ?? "" });
+			const content = match[2] ?? "";
+			turns.push({ role, content: content.startsWith(" ") ? content.slice(1) : content });
 			continue;
 		}
-		turns.push({ role: "unknown", content: trimmed });
+		const previous = turns.at(-1);
+		if (previous) {
+			turns[turns.length - 1] = { ...previous, content: `${previous.content}\n${line}` };
+		} else if (line.length > 0) {
+			turns.push({ role: "unknown", content: line });
+		}
 	}
 	return turns;
 }
@@ -193,6 +198,15 @@ function appendRecords(path: string, records: readonly CanonicalTranscriptRecord
 			.concat("\n"),
 		"utf8",
 	);
+}
+
+function fsyncDirectory(path: string): void {
+	const fd = openSync(dirname(path), "r");
+	try {
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
 }
 
 function sleep(ms: number): Promise<void> {
@@ -414,7 +428,14 @@ export function writeCanonicalTranscriptSnapshot(
 		if (!existsSync(path)) {
 			mkdirSync(dirname(path), { recursive: true });
 			const body = next.map((r) => JSON.stringify(r)).join("\n");
-			writeFileSync(path, `${body}\n`, "utf8");
+			const fd = openSync(path, "w");
+			try {
+				writeSync(fd, `${body}\n`, undefined, "utf8");
+				fsyncSync(fd);
+			} finally {
+				closeSync(fd);
+			}
+			fsyncDirectory(path);
 			sessionSeqCache.set(
 				sessionSeqCacheKey(input),
 				next.reduce((max, record) => Math.max(max, record.seq), 0),
@@ -479,6 +500,7 @@ export function writeCanonicalTranscriptSnapshot(
 			closeSync(fd);
 			fd = null;
 			renameSync(tmpPath, path);
+			fsyncDirectory(path);
 			sessionSeqCache.set(
 				sessionSeqCacheKey(input),
 				next.reduce((max, record) => Math.max(max, record.seq), 0),

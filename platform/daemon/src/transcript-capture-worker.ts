@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
 import { logger } from "./logger";
-import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
+import { indexCanonicalTranscriptJsonl } from "./memory-lineage";
 import { isNoiseSession } from "./session-noise";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
 import { getStoredSessionTranscriptInfoAsync, upsertSessionTranscriptAsync } from "./session-transcripts";
@@ -572,19 +572,6 @@ async function processTranscriptCaptureJob(
 			{ completedAt: job.endedAt ?? job.capturedAt, preserveExistingContent: true },
 		);
 	}
-	const transcriptArtifact = await writeTranscriptArtifact({
-		agentId: job.agentId,
-		sessionId: job.sessionId,
-		sessionKey: job.sessionKey,
-		project: job.project,
-		harness: job.harness,
-		capturedAt: job.capturedAt,
-		startedAt: null,
-		endedAt: job.endedAt,
-		transcript: resolved.transcript,
-		summaryStatus: "not_requested",
-		replaceExisting: job.sourceIdentity !== null,
-	});
 	await indexCanonicalTranscriptJsonl({
 		agentId: job.agentId,
 		sessionId: job.sessionId,
@@ -595,7 +582,7 @@ async function processTranscriptCaptureJob(
 		startedAt: null,
 		endedAt: job.endedAt,
 		transcript: resolved.transcript,
-		manifestPath: transcriptArtifact.manifestPath,
+		manifestPath: canonicalTranscriptRelativePath(job.harness),
 	});
 	const auditPath = await writeCaptureAudit(basePath, job, resolved);
 	logger.debug("transcripts", "Transcript capture job completed", {
@@ -603,7 +590,7 @@ async function processTranscriptCaptureJob(
 		harness: job.harness,
 		sessionKey: job.sessionKey,
 		path: canonicalTranscriptRelativePath(job.harness),
-		transcriptPath: transcriptArtifact.transcriptPath,
+		transcriptPath: canonicalTranscriptRelativePath(job.harness),
 	});
 	return captureResult(auditPath, resolved);
 }

@@ -31,6 +31,37 @@ afterEach(() => {
 });
 
 describe("canonical transcript JSONL", () => {
+	test("preserves multiline and whitespace-sensitive content in completed snapshots", async () => {
+		const root = makeRoot("fidelity");
+		const transcript = "User:  leading  spaces\nline two\nAssistant: answer\n\nwith  spacing  ";
+		await writeCanonicalTranscriptSnapshot({
+			basePath: root,
+			agentId: "agent-fidelity",
+			harness: "codex",
+			sessionKey: "fidelity-session",
+			sessionId: "fidelity-id",
+			project: "project",
+			sourceFormat: "markdown",
+			capturedAt: "2026-09-22T00:00:00.000Z",
+			transcript,
+		});
+
+		const records = readFileSync(canonicalTranscriptPath(root, "codex"), "utf8")
+			.trimEnd()
+			.split("\n")
+			.map((line) => {
+				const { role, content, captured_at } = JSON.parse(line) as {
+					role: string;
+					content: string;
+					captured_at: string;
+				};
+				return { role, content, captured_at };
+			});
+		expect(records).toEqual([
+			{ role: "user", content: " leading  spaces\nline two", captured_at: "2026-09-22T00:00:00.000Z" },
+			{ role: "assistant", content: "answer\n\nwith  spacing  ", captured_at: "2026-09-22T00:00:00.000Z" },
+		]);
+	});
 	test("waits for the transcript file lock before writing live turns", async () => {
 		const root = makeRoot("lock");
 		const path = canonicalTranscriptPath(root, "codex");
