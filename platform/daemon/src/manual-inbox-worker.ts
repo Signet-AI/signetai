@@ -6,8 +6,14 @@ export type ManualInboxRow = {
 	key: string;
 	fileName: string;
 	originalPath: string;
-	status: "processing" | "imported" | "failed" | "quarantined";
+	bytes?: Uint8Array;
+	status: "processing" | "imported" | "duplicate" | "failed" | "quarantined";
+	sourceId?: string;
 	error?: string;
+};
+export type ManualInboxDispatchResult = {
+	readonly status: "imported" | "duplicate";
+	readonly sourceId: string;
 };
 export interface ManualInboxAdmission {
 	isEnabled(): Promise<boolean>;
@@ -23,9 +29,10 @@ export interface ManualInboxAdmission {
 }
 export interface ManualInboxWorkerOptions {
 	root: string;
+	inboxPath?: string;
 	admission: ManualInboxAdmission;
-	dispatchTranscript?: (row: ManualInboxRow) => Promise<void>;
-	dispatchDocument?: (row: ManualInboxRow) => Promise<void>;
+	dispatchTranscript?: (row: ManualInboxRow) => Promise<ManualInboxDispatchResult>;
+	dispatchDocument?: (row: ManualInboxRow) => Promise<ManualInboxDispatchResult>;
 	pollMs?: number;
 	settleMs?: number;
 	maxFiles?: number;
@@ -63,7 +70,7 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 			};
 		});
 	const tick = async () => {
-		const inbox = join(resolve(options.root), "files");
+		const inbox = resolve(options.inboxPath ?? join(resolve(options.root), "files"));
 		await mkdir(inbox, { recursive: true });
 		const names = (await readdir(inbox)).filter((name) => !temporary(name)).slice(0, options.maxFiles ?? 10);
 		const enabled = await options.admission.isEnabled();
@@ -105,9 +112,9 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 			try {
 				const dispatch = fileName.endsWith(".jsonl") ? options.dispatchTranscript : options.dispatchDocument;
 				if (!dispatch) throw new Error("no dispatcher configured");
-				await dispatch(claimed);
+				const result = await dispatch(claimed);
 				await unlink(path);
-				await options.admission.record({ ...claimed, status: "imported" });
+				await options.admission.record({ ...claimed, status: result.status, sourceId: result.sourceId });
 				counts.imported++;
 			} catch (error) {
 				await options.admission.record({

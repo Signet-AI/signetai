@@ -27,7 +27,13 @@ export interface ImportLedger {
 	find(key: string): Promise<ImportRow | undefined> | ImportRow | undefined;
 	/** Durable lifecycle operations are implemented by the database owner. */
 	appendEvent?(key: string, event: string): Promise<void> | void;
-	transition?(key: string, from: ImportStatus | ImportStatus[], to: ImportStatus, error?: string): Promise<ImportRow>;
+	transition?(
+		key: string,
+		from: ImportStatus | ImportStatus[],
+		to: ImportStatus,
+		error?: string,
+		options?: { readonly sourceId?: string },
+	): Promise<ImportRow>;
 	list?(status?: ImportStatus): Promise<ImportRow[]>;
 }
 export interface InboxOptions {
@@ -58,6 +64,13 @@ export interface DurableImportAdmission {
 		readonly contentType?: string;
 		readonly idempotencyKey?: string;
 	}): Promise<{ readonly key: string; readonly originalPath: string; readonly sha256: string; readonly size: number }>;
+	begin(key: string): Promise<void>;
+	complete(input: {
+		readonly key: string;
+		readonly status: "imported" | "duplicate" | "failed" | "quarantined";
+		readonly sourceId?: string;
+		readonly error?: string;
+	}): Promise<void>;
 }
 
 const DEFAULT_MAX = 25 * 1024 * 1024;

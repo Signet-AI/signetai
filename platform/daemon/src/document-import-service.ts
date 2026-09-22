@@ -1,0 +1,288 @@
+import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
+import { resolveDaemonAgentId } from "./agent-id";
+import { getDbAccessor, runWriteTxAsync } from "./db-accessor";
+import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILE_BYTES, normalizeImportedFile } from "./import-normalizer";
+import { markImportedSourceUnsupported } from "./imported-source-lifecycle";
+import {
+	type ImportExtractionOutcome,
+	persistImportedSourceOutcomeInTx,
+	readImportedSourceOutcome,
+} from "./imported-source-outcome";
+import { logger } from "./logger";
+import { indexExternalMemoryArtifact } from "./memory-lineage";
+import { enqueueDreamingAttentionInTx } from "./pipeline/dreaming-attention";
+import { indexSourceArtifactStructureInTx } from "./source-artifact-graph";
+import { purgeSourceOwnedRowsInTx } from "./source-purge";
+
+export type ImportDuplicateMode = "skip" | "replace" | "reimport";
+
+export type DocumentImportStatus =
+	| {
+			readonly fileName: string;
+			readonly status: "imported";
+			readonly sourceId: string;
+			readonly format: string;
+			readonly duplicate: boolean;
+			readonly extraction: ImportExtractionOutcome;
+	  }
+	| {
+			readonly fileName: string;
+			readonly status: "duplicate";
+			readonly sourceId: string;
+			readonly extraction?: ImportExtractionOutcome;
+	  }
+	| { readonly fileName: string; readonly status: "failed"; readonly error: string };
+
+export interface DocumentImportInput {
+	readonly fileName: string;
+	readonly bytes: Uint8Array;
+	readonly contentType?: string;
+	readonly duplicateMode?: ImportDuplicateMode;
+	readonly maxPersistedBytes?: number;
+	readonly agentId?: string;
+	readonly workspaceRoot?: string;
+}
+
+export interface DocumentImportResult {
+	readonly status: DocumentImportStatus;
+	readonly persistedBytes: number;
+}
+
+/**
+ * Shared document importer for HTTP uploads and manual inbox drops.
+ * Exact originals must already be durably admitted before this function runs.
+ */
+export async function importDocument(input: DocumentImportInput): Promise<DocumentImportResult> {
+	if (input.bytes.byteLength === 0)
+		return { status: { fileName: input.fileName, status: "failed", error: "File is empty" }, persistedBytes: 0 };
+	if (input.bytes.byteLength > IMPORT_MAX_FILE_BYTES)
+		return {
+			status: {
+				fileName: input.fileName,
+				status: "failed",
+				error: `File exceeds the ${IMPORT_MAX_FILE_BYTES} byte limit`,
+			},
+			persistedBytes: 0,
+		};
+	if (/\.jsonl$/i.test(input.fileName))
+		return {
+			status: {
+				fileName: input.fileName,
+				status: "failed",
+				error: "Transcript JSONL must use the canonical transcript importer",
+			},
+			persistedBytes: 0,
+		};
+
+	const normalized = await normalizeImportedFile(input.fileName, input.bytes, input.contentType ?? "");
+	if (normalized.ok === false)
+		return { status: { fileName: input.fileName, status: "failed", error: normalized.error }, persistedBytes: 0 };
+	const persistedBytes = persistedImportBytes(normalized.value);
+	if (persistedBytes > (input.maxPersistedBytes ?? IMPORT_MAX_BATCH_BYTES))
+		return {
+			status: {
+				fileName: input.fileName,
+				status: "failed",
+				error: `Normalized import batch exceeds the ${IMPORT_MAX_BATCH_BYTES} byte limit`,
+			},
+			persistedBytes: 0,
+		};
+
+	const agentsDir = input.workspaceRoot ?? process.env.SIGNET_PATH;
+	const agentId = input.agentId ?? resolveDaemonAgentId();
+	const duplicateMode = input.duplicateMode ?? "skip";
+	const replacedSource =
+		duplicateMode === "replace"
+			? loadSourcesConfig(agentsDir).sources.find(
+					(source) =>
+						source.kind === "import" &&
+						source.providerSettings?.contentHash === normalized.value.contentHash &&
+						source.providerSettings?.agentId === agentId,
+				)
+			: undefined;
+	const added = addImportedSource(
+		{
+			fileName: normalized.value.fileName,
+			contentHash: normalized.value.contentHash,
+			format: normalized.value.format,
+			agentId,
+			duplicateMode: replacedSource === undefined ? duplicateMode : "reimport",
+		},
+		agentsDir,
+	);
+	if (added.ok === false)
+		return { status: { fileName: input.fileName, status: "failed", error: added.error }, persistedBytes };
+	if (
+		added.duplicate &&
+		duplicateMode === "skip" &&
+		added.source.lastIndexedAt !== undefined &&
+		hasIndexedSource(added.source.id, agentId)
+	)
+		return {
+			status: {
+				fileName: input.fileName,
+				status: "duplicate",
+				sourceId: added.source.id,
+				extraction: readImportedSourceOutcome(added.source.id, agentId),
+			},
+			persistedBytes,
+		};
+
+	try {
+		const sourcePath = `imports/${added.source.id}/${normalized.value.fileName}`;
+		const sourceKind = `source_import_${normalized.value.format}`;
+		const now = new Date().toISOString();
+		await indexExternalMemoryArtifact({
+			agentId,
+			sourcePath,
+			sourceKind: normalized.value.format === "json" ? "source_import_json_projection" : sourceKind,
+			harness: "dashboard-import",
+			content: normalized.value.content,
+			sourceMtimeMs: Date.now(),
+			capturedAt: now,
+			sourceId: added.source.id,
+			sourceRoot: normalized.value.fileName,
+			sourceExternalId: normalized.value.contentHash,
+			sourceMeta: normalized.value.sourceMeta,
+		});
+		if (normalized.value.format === "json")
+			await indexExternalMemoryArtifact({
+				agentId,
+				sourcePath: `${sourcePath}#canonical`,
+				sourceKind: "source_import_json_canonical",
+				harness: "dashboard-import",
+				content: normalized.value.canonicalContent ?? normalized.value.content,
+				sourceMtimeMs: Date.now(),
+				capturedAt: now,
+				sourceId: added.source.id,
+				sourceRoot: normalized.value.fileName,
+				sourceExternalId: normalized.value.contentHash,
+				sourceMeta: { ...normalized.value.sourceMeta, representation: "structured-json-canonical" },
+			});
+		const extraction = await runWriteTxAsync(getDbAccessor(), (db) => {
+			const result = indexSourceArtifactStructureInTx(db, {
+				agentId,
+				sourceId: added.source.id,
+				sourceKind,
+				sourceRoot: normalized.value.fileName,
+				sourcePath,
+				displayName: normalized.value.fileName,
+				content: normalized.value.content,
+			});
+			persistImportedSourceOutcomeInTx(db, {
+				agentId,
+				sourceId: added.source.id,
+				sourcePath,
+				outcome: {
+					documentEntityId: result.documentEntityId,
+					aspectsCreated: result.aspectsCreated,
+					attributesCreated: result.attributesCreated,
+				},
+			});
+			return result;
+		});
+		for (const chunk of normalized.value.searchChunks) {
+			const rowStart = typeof chunk.sourceMeta.rowStart === "number" ? chunk.sourceMeta.rowStart : 0;
+			const rowEnd = typeof chunk.sourceMeta.rowEnd === "number" ? chunk.sourceMeta.rowEnd : rowStart;
+			await indexExternalMemoryArtifact({
+				agentId,
+				sourcePath: `${sourcePath}#rows-${rowStart}-${rowEnd}`,
+				sourceKind: "source_import_csv_chunk",
+				harness: "dashboard-import",
+				content: chunk.content,
+				sourceMtimeMs: Date.now(),
+				capturedAt: now,
+				sourceId: added.source.id,
+				sourceRoot: normalized.value.fileName,
+				sourceExternalId: normalized.value.contentHash,
+				sourceMeta: { ...normalized.value.sourceMeta, ...chunk.sourceMeta },
+			});
+		}
+		await runWriteTxAsync(getDbAccessor(), (db) => {
+			enqueueDreamingAttentionInTx(db, {
+				agentId,
+				kind: "hygiene",
+				subjectRef: `source:${added.source.id}`,
+				details: { sourceId: added.source.id, sourceKind, reason: "import-completed" },
+				priority: 40,
+			});
+		});
+		if (replacedSource !== undefined) {
+			await markImportedSourceUnsupported({
+				sourceId: replacedSource.id,
+				agentId,
+				reason: "imported source replaced",
+			});
+			const removed = removeSourceIfGeneration(replacedSource.id, replacedSource.generation, agentsDir);
+			if (removed.ok === false) throw new Error(`Replaced dashboard import config cleanup failed: ${removed.error}`);
+		}
+		markSourceIndexed(added.source.id, now, agentsDir);
+		return {
+			status: {
+				fileName: input.fileName,
+				status: "imported",
+				sourceId: added.source.id,
+				format: normalized.value.format,
+				duplicate: added.duplicate,
+				extraction: {
+					documentEntityId: extraction.documentEntityId,
+					aspectsCreated: extraction.aspectsCreated,
+					attributesCreated: extraction.attributesCreated,
+				},
+			},
+			persistedBytes,
+		};
+	} catch (error) {
+		const primaryError = error instanceof Error ? error.message : String(error);
+		let failure = primaryError;
+		if (added.created)
+			try {
+				await runWriteTxAsync(getDbAccessor(), (db) =>
+					purgeSourceOwnedRowsInTx(db, { sourceId: added.source.id, agentId }),
+				);
+				const removed = removeSourceIfGeneration(added.source.id, added.source.generation, agentsDir);
+				if (removed.ok === false) throw new Error(removed.error);
+			} catch (cleanupError) {
+				const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+				failure = `${primaryError}; cleanup failed: ${cleanupMessage}`;
+				logger.warn("documents", "Dashboard import cleanup failed", {
+					sourceId: added.source.id,
+					error: cleanupMessage,
+					primaryError,
+				});
+			}
+		logger.warn("documents", "Dashboard import failed after source registration", {
+			sourceId: added.source.id,
+			error: failure,
+		});
+		return { status: { fileName: input.fileName, status: "failed", error: failure }, persistedBytes };
+	}
+}
+
+function hasIndexedSource(sourceId: string, agentId: string): boolean {
+	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
+	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
+		const row = db
+			.prepare(
+				`SELECT 1 AS present
+				 FROM memory_artifacts
+				 WHERE agent_id = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0
+				 LIMIT 1`,
+			)
+			.get(agentId, sourceId) as { present: number } | null | undefined;
+		return row != null;
+	}, "document-import-service.ts:264");
+}
+
+function persistedImportBytes(value: {
+	readonly content: string;
+	readonly canonicalContent?: string;
+	readonly format: string;
+	readonly searchChunks: readonly { readonly content: string }[];
+}): number {
+	const encoder = new TextEncoder();
+	const contentBytes = encoder.encode(value.content).byteLength;
+	const canonicalBytes = value.format === "json" ? encoder.encode(value.canonicalContent ?? "").byteLength : 0;
+	const chunkBytes = value.searchChunks.reduce((total, chunk) => total + encoder.encode(chunk.content).byteLength, 0);
+	return contentBytes + canonicalBytes + chunkBytes;
+}

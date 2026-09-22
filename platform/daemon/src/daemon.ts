@@ -4,7 +4,7 @@ import { requestMemoryHead } from "./memory-head";
 import "./bun-socket-polyfill";
 import { spawnHidden as spawn } from "@signet/core";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { opendir, readFile as readFileAsync, stat as statAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -266,6 +266,8 @@ import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
 import { admitImport } from "./import-inbox";
 import { startManualInboxWorker, type ManualInboxAdmission, type ManualInboxWorkerHandle } from "./manual-inbox-worker";
+import { importDocument } from "./document-import-service";
+import { stageTranscriptImport } from "./transcript-import-admission";
 
 import { resolveDaemonRestartMode } from "./daemon-restart";
 import {
@@ -545,6 +547,14 @@ registerImportRoutes(app, {
 				ledger: new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() }),
 			});
 			return { key: row.key, originalPath: row.originalPath, sha256: row.sha256, size: row.size };
+		},
+		begin: async (key) => {
+			const ledger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() });
+			await ledger.lease(key);
+		},
+		complete: async ({ key, status, sourceId, error }) => {
+			const ledger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() });
+			await ledger.transition(key, "processing", status, error, { sourceId });
 		},
 	},
 });
@@ -2803,32 +2813,37 @@ async function main() {
 			});
 		}
 		if (!manualInboxWorkerHandle) {
-			const importLedger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() });
-			let manualInboxEnabled = false;
+			const agentId = resolveDaemonAgentId();
+			const layout = resolveWorkspaceLayout(AGENTS_DIR);
+			const importLedger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId });
+			const enabledMarker = join(layout.imports, ".manual-inbox-enabled");
 			const manualInboxAdmission: ManualInboxAdmission = {
-				isEnabled: async () => manualInboxEnabled,
+				isEnabled: async () => existsSync(enabledMarker),
 				enable: async () => {
-					manualInboxEnabled = true;
+					mkdirSync(layout.imports, { recursive: true });
+					const tmp = `${enabledMarker}.tmp-${process.pid}`;
+					writeFileSync(tmp, "enabled\n", { mode: 0o600 });
+					renameSync(tmp, enabledMarker);
 				},
-				claim: async ({ key, fileName, originalPath, bytes }) => {
+				claim: async ({ key, fileName, bytes }) => {
 					const row = await importLedger.find(key);
 					if (row?.status === "imported" || row?.status === "duplicate") return null;
-					if (!row) {
-						await admitImport({
+					const admitted =
+						row ??
+						(await admitImport({
 							root: AGENTS_DIR,
-							layout: resolveWorkspaceLayout(AGENTS_DIR),
+							layout,
 							fileName,
 							bytes,
 							idempotencyKey: key,
 							ledger: importLedger,
-						});
-					}
-					const claimed = await importLedger.lease(key);
-					void claimed;
-					return { key, fileName, originalPath, status: "processing" };
+						}));
+					await importLedger.lease(key);
+					const retainedBytes = new Uint8Array(await Bun.file(admitted.originalPath).arrayBuffer());
+					return { key, fileName, originalPath: admitted.originalPath, bytes: retainedBytes, status: "processing" };
 				},
 				record: async (row) => {
-					await importLedger.transition(row.key, "processing", row.status, row.error);
+					await importLedger.transition(row.key, "processing", row.status, row.error, { sourceId: row.sourceId });
 				},
 				reconcile: async () => {
 					await importLedger.recoverExpiredLeases();
@@ -2836,16 +2851,28 @@ async function main() {
 			};
 			manualInboxWorkerHandle = startManualInboxWorker({
 				root: AGENTS_DIR,
+				inboxPath: layout.files,
 				admission: manualInboxAdmission,
 				dispatchDocument: async (row) => {
-					logger.warn("documents", "Manual inbox document dispatch requires the shared document importer", {
+					if (!row.bytes) throw new Error("managed import original is unavailable");
+					const result = await importDocument({
 						fileName: row.fileName,
+						bytes: row.bytes,
+						agentId,
+						workspaceRoot: layout.root,
 					});
+					if (result.status.status === "failed") throw new Error(result.status.error);
+					return { status: result.status.status, sourceId: result.status.sourceId };
 				},
 				dispatchTranscript: async (row) => {
-					logger.warn("transcripts", "Manual inbox transcript dispatch requires the canonical transcript worker", {
+					if (!row.bytes) throw new Error("managed transcript original is unavailable");
+					const staged = await stageTranscriptImport({
+						agentId,
 						fileName: row.fileName,
+						bytes: row.bytes,
+						workspaceRoot: layout.root,
 					});
+					return { status: "imported", sourceId: staged.sourceId };
 				},
 			});
 		}

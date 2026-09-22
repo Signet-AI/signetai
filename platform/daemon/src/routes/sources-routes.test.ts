@@ -1744,7 +1744,18 @@ describe("Sources routes", () => {
 		const agentId = "import-health-agent";
 		process.env.SIGNET_AGENT_ID = agentId;
 		const app = makeApp();
-		registerImportRoutes(app);
+		registerImportRoutes(app, {
+			durableImportAdmission: {
+				admit: async ({ fileName, bytes }) => ({
+					key: `test:${fileName}`,
+					originalPath: join(dir, "retained", fileName),
+					sha256: "test",
+					size: bytes.byteLength,
+				}),
+				begin: async () => {},
+				complete: async () => {},
+			},
+		});
 		const file = new File(["# Imported outcome\n\n## Result\n\nThe import produced a durable result."], "outcome.md", {
 			type: "text/markdown",
 		});

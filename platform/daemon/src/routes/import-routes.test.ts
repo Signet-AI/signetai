@@ -44,7 +44,18 @@ describe("import routes", () => {
 
 	function app(): Hono {
 		const instance = new Hono();
-		registerImportRoutes(instance);
+		registerImportRoutes(instance, {
+			durableImportAdmission: {
+				admit: async ({ fileName, bytes }) => ({
+					key: `test:${fileName}:${bytes.byteLength}`,
+					originalPath: join(dir, "retained", fileName),
+					sha256: "test",
+					size: bytes.byteLength,
+				}),
+				begin: async () => {},
+				complete: async () => {},
+			},
+		});
 		return instance;
 	}
 
@@ -55,6 +66,8 @@ describe("import routes", () => {
 				seen.push(bytes);
 				return { key: `k:${fileName}`, originalPath: `/durable/${fileName}`, sha256: "hash", size: bytes.byteLength };
 			},
+			begin: async () => {},
+			complete: async () => {},
 		};
 		const instance = new Hono();
 		registerImportRoutes(instance, { durableImportAdmission: admission });
@@ -407,12 +420,13 @@ describe("import routes", () => {
 	});
 
 	it("does not convert generation-guarded cleanup failure into replacement success", () => {
-		const source = readFileSync(new URL("./import-routes.ts", import.meta.url), "utf8");
+		const source = readFileSync(new URL("../document-import-service.ts", import.meta.url), "utf8");
 		const cleanupFailure = source.indexOf("const removed = removeSourceIfGeneration(replacedSource.id");
-		const successAccounting = source.indexOf("imported += 1", cleanupFailure);
+		const successResult = source.indexOf('status: "imported"', cleanupFailure);
 		expect(cleanupFailure).toBeGreaterThanOrEqual(0);
-		expect(source.slice(cleanupFailure, successAccounting)).toContain("throw new Error");
-		expect(source.slice(cleanupFailure, successAccounting)).not.toContain("logger.warn");
+		expect(successResult).toBeGreaterThan(cleanupFailure);
+		expect(source.slice(cleanupFailure, successResult)).toContain("throw new Error");
+		expect(source.slice(cleanupFailure, successResult)).not.toContain("logger.warn");
 	});
 
 	it("rejects a batch that exceeds the file-count boundary", async () => {

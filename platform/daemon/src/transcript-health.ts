@@ -110,7 +110,7 @@ export async function getTranscriptHealthReport(
 				newestUpdatedAt: asStringOrNull(row?.newest_updated_at),
 			};
 		},
-		{ siteToken: "transcript-health.ts:96" },
+		{ siteToken: "transcript-health.ts:97" },
 	);
 	const artifacts = await dbAccessor.withReadDbAsync(
 		async (db) => {
@@ -157,7 +157,7 @@ export async function getTranscriptHealthReport(
 				missingSummaryArtifacts,
 			};
 		},
-		{ siteToken: "transcript-health.ts:114" },
+		{ siteToken: "transcript-health.ts:115" },
 	);
 	const ok = capture.failed === 0 && capture.dead === 0 && artifacts.missingTranscriptArtifacts === 0;
 	return {

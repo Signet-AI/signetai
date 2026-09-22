@@ -152,6 +152,7 @@ export class DbOwnedImportAdmissionLedger implements ImportLedger {
 		from: ImportStatus | ImportStatus[],
 		to: ImportStatus,
 		error?: string,
+		options?: { readonly sourceId?: string },
 	): Promise<ImportRow> {
 		const allowed = Array.isArray(from) ? from : [from];
 		const timestamp = now();
@@ -162,8 +163,17 @@ export class DbOwnedImportAdmissionLedger implements ImportLedger {
 					statements: [
 						{
 							...statement(
-								`UPDATE import_admission_ledger SET status = ?, error = ?, updated_at = ? WHERE key = ? AND agent_id = ? AND workspace_id = ? AND status IN (${allowed.map(() => "?").join(",")})`,
-								[to, error ?? null, timestamp, key, this.scope.agentId, this.scope.workspaceId ?? "", ...allowed],
+								`UPDATE import_admission_ledger SET status = ?, error = ?, source_id = COALESCE(?, source_id), updated_at = ? WHERE key = ? AND agent_id = ? AND workspace_id = ? AND status IN (${allowed.map(() => "?").join(",")})`,
+								[
+									to,
+									error ?? null,
+									options?.sourceId ?? null,
+									timestamp,
+									key,
+									this.scope.agentId,
+									this.scope.workspaceId ?? "",
+									...allowed,
+								],
 								"run",
 							),
 							requireChanges: true,

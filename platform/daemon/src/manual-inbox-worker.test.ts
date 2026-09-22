@@ -13,7 +13,7 @@ async function root() {
 	roots.push(r);
 	return r;
 }
-function admission(): ManualInboxAdmission & { rows: Map<string, ManualInboxRow>; calls: string[] } {
+function admission(): ManualInboxAdmission & { rows: Map<string, ManualInboxRow>; calls: string[]; enabled: boolean } {
 	const rows = new Map();
 	const calls: string[] = [];
 	return {
@@ -28,7 +28,13 @@ function admission(): ManualInboxAdmission & { rows: Map<string, ManualInboxRow>
 		},
 		async claim(input) {
 			calls.push(`claim:${input.fileName}`);
-			const row = { key: input.key, fileName: input.fileName, originalPath: input.originalPath, status: "processing" };
+			const row = {
+				key: input.key,
+				fileName: input.fileName,
+				originalPath: input.originalPath,
+				bytes: input.bytes,
+				status: "processing" as const,
+			};
 			this.rows.set(input.key, row);
 			return row;
 		},
@@ -61,6 +67,9 @@ describe("manual inbox worker", () => {
 			settleMs: 0,
 			dispatchDocument: async (row) => {
 				dispatched.push(row.fileName);
+				if (!row.bytes) throw new Error("expected retained bytes");
+				expect(new TextDecoder().decode(row.bytes)).toBe("hello");
+				return { status: "imported", sourceId: "import:note" };
 			},
 		});
 		await new Promise((x) => setTimeout(x, 20));
@@ -71,6 +80,27 @@ describe("manual inbox worker", () => {
 		expect(dispatched).toEqual(["note.md"]);
 		expect(a.calls).toEqual(["claim:note.md"]);
 		expect(await Bun.file(join(r, "files", "note.md")).exists()).toBe(false);
+		expect([...a.rows.values()][0]).toMatchObject({ status: "imported", sourceId: "import:note" });
+	});
+	test("keeps a claimed inbox file retryable when document dispatch fails", async () => {
+		const r = await root();
+		const a = admission();
+		const w = startManualInboxWorker({
+			root: r,
+			admission: a,
+			pollMs: 1000,
+			settleMs: 0,
+			dispatchDocument: async () => {
+				throw new Error("index unavailable");
+			},
+		});
+		await new Promise((x) => setTimeout(x, 20));
+		await Bun.write(join(r, "files", "retry.md"), "retry");
+		w.nudge();
+		await new Promise((x) => setTimeout(x, 40));
+		await w.stop();
+		expect(await Bun.file(join(r, "files", "retry.md")).exists()).toBe(true);
+		expect([...a.rows.values()][0]).toMatchObject({ status: "failed", error: "index unavailable" });
 	});
 	test("keeps incomplete temporary files untouched", async () => {
 		const r = await root();
