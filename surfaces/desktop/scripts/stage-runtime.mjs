@@ -45,7 +45,7 @@ function targetArch() {
 }
 
 function probeBunRuntime(runtimePath) {
-	const result = spawnSync(runtimePath, ["--print", "JSON.stringify({ platform: process.platform, arch: process.arch })"], { encoding: "utf8" });
+	const result = spawnSync(runtimePath, ["--print", "JSON.stringify({ platform: process.platform, arch: process.arch, bun: process.versions.bun })"], { encoding: "utf8" });
 	if (result.status !== 0) throw new Error("Bun runtime probe failed");
 	try {
 		return JSON.parse(result.stdout.trim());
@@ -77,6 +77,8 @@ export function assertBunRuntime(
 		throw new Error(`Bun runtime platform mismatch: expected ${platform}, got ${runtime.platform} (${runtimePath})`);
 	if (runtime.arch !== arch)
 		throw new Error(`Bun runtime architecture mismatch: expected ${arch}, got ${runtime.arch} (${runtimePath})`);
+	if (typeof runtime.bun !== "string" || runtime.bun.length === 0)
+		throw new Error(`Runtime is not Bun: ${runtimePath}`);
 	return runtime;
 }
 

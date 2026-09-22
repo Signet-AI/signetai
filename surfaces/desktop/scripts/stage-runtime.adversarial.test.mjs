@@ -17,7 +17,7 @@ describe("default Bun runtime probe contract", () => {
 		try {
 			writeFileSync(runtime, "fake");
 			chmodSync(runtime, 0o755);
-			expect(() => assertBunRuntime(runtime, "arm64", "linux", () => ({ platform: "linux", arch: "x64" }))).toThrow("architecture mismatch");
+			expect(() => assertBunRuntime(runtime, "arm64", "linux", () => ({ platform: "linux", arch: "x64", bun: "1.0.0" }))).toThrow("architecture mismatch");
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}
