@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { tmpdir } from "node:os";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 export interface ProtectionReceipt {
@@ -60,6 +62,10 @@ function safePath(root: string, candidate: string): string | null {
 	if (rel === ".." || rel.startsWith(`..${sep}`)) return null;
 	try {
 		if (lstatSync(resolved).isSymbolicLink()) return null;
+		const realRoot = realpathSync(root);
+		const realResolved = realpathSync(resolved);
+		const realRelative = relative(realRoot, realResolved);
+		if (realRelative === ".." || realRelative.startsWith(`..${sep}`)) return null;
 	} catch {
 		return resolved;
 	}
@@ -87,7 +93,13 @@ export async function verifyRestore(input: RestoreVerificationInput): Promise<Re
 			continue;
 		}
 		if (!existsSync(path)) failures.push(failure("files", `missing ${file}`));
-		else fileDigests[file] = digest(path);
+		else {
+			try {
+				fileDigests[file] = digest(path);
+			} catch {
+				failures.push(failure("files", `unreadable ${file}`));
+			}
+		}
 	}
 	if (!input.database.snapshotConsistent) failures.push(failure("database", "snapshot is inconsistent"));
 	if (!input.daemon.ready) failures.push(failure("daemon", "daemon is not ready"));
@@ -144,6 +156,93 @@ export async function verifyRestore(input: RestoreVerificationInput): Promise<Re
 		protection,
 	};
 	return { ok: receipt.ok, failures, receipt };
+}
+
+export interface DisposableRestoreInput {
+	readonly snapshotRoot: string;
+	readonly expected: RestoreExpectation;
+	readonly daemon: { readonly binary: string; readonly args?: readonly string[] };
+	readonly probe: (
+		root: string,
+		port: number,
+	) => Promise<{
+		readonly database: { snapshotConsistent: boolean };
+		readonly observed: RestoreVerificationInput["observed"];
+		readonly protection?: ProtectionReceipt;
+	}>;
+}
+
+export interface DisposableRestoreResult extends RestoreVerificationResult {
+	readonly cleaned: boolean;
+	readonly workspace: string;
+}
+
+/** Execute recovery in an isolated copy; callers cannot assert readiness or semantics. */
+export async function executeDisposableRestore(input: DisposableRestoreInput): Promise<DisposableRestoreResult> {
+	if (
+		!isAbsolute(input.snapshotRoot) ||
+		!existsSync(input.snapshotRoot) ||
+		lstatSync(input.snapshotRoot).isSymbolicLink() ||
+		!lstatSync(input.snapshotRoot).isDirectory()
+	)
+		throw new Error("restore snapshot must be an existing real directory");
+	const root = mkdtempSync(join(tmpdir(), "signet-restore-run-"));
+	let child: ReturnType<typeof spawn> | undefined;
+	let cleaned = false;
+	let result: RestoreVerificationResult;
+	try {
+		cpSync(input.snapshotRoot, root, { recursive: true, dereference: false, force: false });
+		const server = await new Promise<{ child: ReturnType<typeof spawn>; port: number }>((resolveServer, reject) => {
+			const port = 30000 + Math.floor(Math.random() * 20000);
+			const proc = spawn(input.daemon.binary, [...(input.daemon.args ?? [])], {
+				env: { ...process.env, SIGNET_PATH: root, SIGNET_RESTORE_PORT: String(port) },
+				stdio: "ignore",
+			});
+			child = proc;
+			const timer = setTimeout(() => resolveServer({ child: proc, port }), 150);
+			proc.once("error", (error) => {
+				clearTimeout(timer);
+				reject(error);
+			});
+			proc.once("exit", (code, signal) => {
+				if (code !== null || signal !== null) {
+					clearTimeout(timer);
+					reject(new Error(`daemon exited before readiness (${code ?? signal})`));
+				}
+			});
+		});
+		child = server.child;
+		const observed = await input.probe(root, server.port);
+		result = await verifyRestore({
+			root,
+			expected: input.expected,
+			daemon: { ready: true },
+			database: observed.database,
+			observed: observed.observed,
+			protection: observed.protection,
+		});
+	} catch (_error) {
+		result = await verifyRestore({
+			root,
+			expected: input.expected,
+			daemon: { ready: false },
+			database: { snapshotConsistent: false },
+		});
+	} finally {
+		if (child && !child.killed) {
+			child.kill("SIGTERM");
+			await new Promise<void>((resolve) => {
+				const timer = setTimeout(resolve, 500);
+				child?.once("close", () => {
+					clearTimeout(timer);
+					resolve();
+				});
+			});
+		}
+		rmSync(root, { recursive: true, force: true });
+		cleaned = true;
+	}
+	return { ...result, cleaned, workspace: "disposable" };
 }
 
 export function restoreReceiptPath(root: string): string {

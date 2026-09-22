@@ -1,8 +1,8 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { verifyRestore } from "./restore-verification";
+import { executeDisposableRestore, verifyRestore } from "./restore-verification";
 
 function workspace(): string {
 	const root = mkdtempSync(join(tmpdir(), "signet-restore-"));
@@ -55,6 +55,36 @@ describe("verifyRestore", () => {
 		expect(result.receipt.schema).toBe("signet.restore.v1");
 		expect(result.receipt).not.toHaveProperty("content");
 		expect(result.receipt.components).toContain("transcripts");
+	});
+
+	it("executes the real daemon binary in a disposable copy and cleans it up", async () => {
+		const snapshot = workspace();
+		const daemon = join(snapshot, "fake-daemon.ts");
+		writeFileSync(daemon, "setInterval(() => {}, 1000);\n");
+		const result = await executeDisposableRestore({
+			snapshotRoot: snapshot,
+			expected,
+			daemon: { binary: process.execPath, args: [daemon] },
+			probe: async (root, port) => {
+				expect(port).toBeGreaterThan(0);
+				expect(existsSync(join(root, "MEMORY.md"))).toBe(true);
+				return {
+					database: { snapshotConsistent: true },
+					observed: {
+						sources: expected.sources,
+						recall: expected.recall,
+						dreaming: expected.dreaming,
+						ontology: expected.ontology,
+						harness: expected.harness,
+					},
+					protection: { encryptedProvider: "available" },
+				};
+			},
+		});
+		expect(result.ok).toBe(true);
+		expect(result.cleaned).toBe(true);
+		expect(result.receipt.protection).toBe("available");
+		expect(result.receipt.fileDigests["MEMORY.md"]).toMatch(/^[a-f0-9]{64}$/);
 	});
 
 	it("fails closed when transcript ordering or provenance changes", async () => {
