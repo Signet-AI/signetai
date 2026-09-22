@@ -64,7 +64,6 @@ import { registerSourcesCommands } from "./commands/sources.js";
 import { registerUpdateCommands } from "./commands/update.js";
 import { registerVectorCommands } from "./commands/vector.js";
 import { registerWorkspaceCommands } from "./commands/workspace.js";
-import { registerMigrationCommands } from "./commands/migration.js";
 import {
 	doPause,
 	doRestart,
@@ -1061,7 +1060,6 @@ registerPortableCommands(program, {
 registerWorkspaceCommands(program, {
 	signetLogo,
 });
-registerMigrationCommands(program);
 
 registerHookCommands(program, {
 	AGENTS_DIR,

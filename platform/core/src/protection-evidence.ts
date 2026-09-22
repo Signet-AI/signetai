@@ -1,149 +1,106 @@
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { resolveWorkspaceLayout } from "./workspace-layout";
-import type { ProtectionComponent, ProtectionComponentId, ProtectionState } from "./protection";
+import type { ProtectionComponent, ProtectionComponentId } from "./protection";
 
 export interface ProtectionEvidence {
 	readonly components: readonly ProtectionComponent[];
 }
-
 export interface ProtectionEvidenceOptions {
 	readonly now?: Date;
 	readonly externalKeyringAvailable?: boolean;
-	readonly restoreVerifiedAt?: string;
-	readonly verifiedScope?: string;
 }
-
-const required = new Set<ProtectionComponentId>([
-	"root-authored",
-	"skills",
-	"managed-originals",
-	"sqlite",
-	"transcripts",
-	"external-sources",
-	"secrets",
-]);
-
-const mechanism: Record<ProtectionComponentId, string> = {
-	"root-authored": "git-or-versioned-backup",
-	skills: "independent-git",
-	"managed-originals": "component-backup",
-	sqlite: "sqlite-snapshot",
-	transcripts: "file-backup",
-	"external-sources": "external-owner",
-	runtime: "recreate",
-	"filesystem-cache": "rebuild",
-	secrets: "encrypted-provider",
-};
-
 function component(
 	id: ProtectionComponentId,
-	state: ProtectionState,
-	reason: string,
-	options: ProtectionEvidenceOptions,
-	backupAt?: string,
+	status: ProtectionComponent["status"],
+	detail: string,
 ): ProtectionComponent {
-	const excluded = id === "runtime" || id === "filesystem-cache";
-	return {
-		id,
-		type: id,
-		authority:
-			id === "external-sources" || id === "secrets"
-				? "external"
-				: id === "root-authored" || id === "skills"
-					? "user"
-					: "daemon",
-		location: "[redacted]",
-		mechanism: mechanism[id],
-		state,
-		required: required.has(id),
-		intentionallyExcluded: excluded,
-		backupAt,
-		restoreVerifiedAt: state === "protected" ? options.restoreVerifiedAt : undefined,
-		verifiedScope: state === "protected" ? options.verifiedScope : undefined,
-		reason,
-	};
+	return { id, status, detail };
 }
-
-function populated(path: string): boolean {
-	try {
-		return readdirSync(path).length > 0;
-	} catch {
-		return false;
+function present(path: string): boolean {
+	return existsSync(path);
+}
+function hasVerifiedBackup(root: string, names: readonly string[]): boolean {
+	for (const name of names) {
+		const candidate = join(root, name);
+		const receipt = join(candidate, ".signet-receipt.json");
+		try {
+			if (!statSync(candidate).isDirectory()) continue;
+			const parsed = JSON.parse(readFileSync(receipt, "utf8")) as {
+				workspace?: unknown;
+				checksum?: unknown;
+				components?: unknown;
+			};
+			if (parsed.workspace === root && typeof parsed.checksum === "string" && Array.isArray(parsed.components))
+				return true;
+		} catch {
+			// Unverified directories are not protection evidence.
+		}
 	}
+	return false;
 }
 
 export function buildProtectionEvidence(rootPath: string, options: ProtectionEvidenceOptions = {}): ProtectionEvidence {
 	const layout = resolveWorkspaceLayout(rootPath);
-	const rootGit = existsSync(join(layout.root, ".git"));
-	const skillsGit = existsSync(join(layout.skills, ".git"));
-	const importsPresent = populated(layout.imports);
-	const snapshots = join(layout.data, "snapshots");
-	const snapshotEvidence = populated(snapshots);
-	const transcriptsPresent = populated(layout.transcripts);
-	const transcriptBackupEvidence = populated(join(layout.data, "transcript-backups"));
-	const externalOwnerRecorded = existsSync(join(layout.root, "sources.json"));
-	const keyring = options.externalKeyringAvailable === true || process.env.SIGNET_KEYRING_AVAILABLE === "1";
-	const restoreAt = options.restoreVerifiedAt;
-
+	const rootAuthored = present(layout.files) && present(layout.layoutFile);
+	const skills = present(layout.skills);
+	const originals = hasVerifiedBackup(rootPath, ["backup", ".backup", "originals", "managed-originals"]);
+	const sqlite = present(layout.database) && hasVerifiedBackup(rootPath, ["backup", ".backup", "snapshots"]);
+	const transcripts =
+		present(layout.transcripts) && hasVerifiedBackup(rootPath, ["backup", ".backup", "transcript-backup", "snapshots"]);
+	const sourceOwner = present(join(layout.files, "sources.json"));
+	const runtime = present(layout.runtime) && present(join(layout.runtime, ".recreate-proof"));
+	const keyring =
+		options.externalKeyringAvailable === true ||
+		process.env.SIGNET_KEYRING_AVAILABLE === "1" ||
+		process.env.SIGNET_EXTERNAL_KEYRING === "1";
 	return {
 		components: [
 			component(
 				"root-authored",
-				rootGit ? "protected" : "missing",
-				rootGit ? "root repository is present" : "root authored backup is missing",
-				options,
+				rootAuthored ? "protected" : "missing",
+				rootAuthored ? "workspace layout and authored files present" : "authored workspace state is incomplete",
 			),
 			component(
 				"skills",
-				skillsGit ? "protected" : "missing",
-				skillsGit ? "independent skills repository is present" : "independent skills repository is missing",
-				options,
+				skills ? "protected" : "missing",
+				skills ? "independent skills repository present" : "independent skills repository is missing",
 			),
 			component(
 				"managed-originals",
-				importsPresent ? (snapshotEvidence ? "protected" : "missing") : "protected",
-				importsPresent
-					? snapshotEvidence
-						? "managed originals backup evidence is present"
-						: "managed originals are not backed up"
-					: "no managed originals require protection",
-				options,
+				originals ? "protected" : "missing",
+				originals ? "managed originals retention is present" : "managed originals retention is missing",
 			),
 			component(
 				"sqlite",
-				snapshotEvidence ? "protected" : "missing",
-				snapshotEvidence ? "database snapshot evidence is present" : "database snapshot evidence is missing",
-				options,
+				sqlite ? "protected" : "missing",
+				sqlite ? "database snapshot evidence is present" : "database snapshot evidence is missing",
 			),
 			component(
 				"transcripts",
-				transcriptsPresent ? (transcriptBackupEvidence ? "protected" : "missing") : "protected",
-				transcriptsPresent
-					? transcriptBackupEvidence
-						? "transcript backup evidence is present"
-						: "transcripts are not backed up"
-					: "no transcripts require protection",
-				options,
+				transcripts ? "protected" : "missing",
+				transcripts ? "transcript backup evidence is present" : "transcript backup evidence is missing",
 			),
 			component(
 				"external-sources",
-				externalOwnerRecorded ? "protected" : "unknown",
-				externalOwnerRecorded ? "external source ownership is recorded" : "external source protection is unknown",
-				options,
+				sourceOwner ? "protected" : "missing",
+				sourceOwner ? "external source owner is recorded" : "external source owner is missing",
 			),
-			component("runtime", "protected", "runtime is intentionally recreated", options),
-			component("filesystem-cache", "protected", "filesystem cache is intentionally rebuildable", options),
+			component(
+				"runtime",
+				runtime ? "protected" : "unverified",
+				runtime ? "runtime recreation was proven" : "runtime recreation proof is missing",
+			),
+			component("filesystem-cache", "excluded-rebuildable", "filesystem cache is rebuildable from authoritative state"),
 			component(
 				"secrets",
-				keyring ? "protected" : "unknown",
-				keyring ? "external keyring availability was verified" : "secret provider continuity is unverified",
-				options,
+				keyring || present(layout.secrets) ? "protected" : "unverified",
+				keyring
+					? "external keyring is available"
+					: present(layout.secrets)
+						? "encrypted file provider is present"
+						: "encrypted provider is unavailable",
 			),
-		].map((entry) =>
-			entry.state === "protected" && restoreAt
-				? { ...entry, restoreVerifiedAt: restoreAt, verifiedScope: options.verifiedScope ?? "component" }
-				: entry,
-		),
+		],
 	};
 }

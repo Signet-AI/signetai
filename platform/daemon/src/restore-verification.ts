@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
+import { setTimeout as sleep } from "node:timers/promises";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 export interface ProtectionReceipt {
@@ -177,6 +178,25 @@ export interface DisposableRestoreResult extends RestoreVerificationResult {
 	readonly workspace: string;
 }
 
+async function waitForDaemonReady(child: ReturnType<typeof spawn>, port: number): Promise<void> {
+	const deadline = Date.now() + 5000;
+	let lastError: unknown;
+	while (Date.now() < deadline) {
+		if (child.exitCode !== null || child.signalCode !== null) throw new Error("daemon exited before readiness");
+		try {
+			const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+			if (response.ok) {
+				const body = (await response.json()) as { status?: unknown; ok?: unknown };
+				if (body.ok === true || body.status === "ok" || body.status === "healthy") return;
+			}
+		} catch (error) {
+			lastError = error;
+		}
+		await sleep(50);
+	}
+	throw new Error(`daemon did not become ready on dynamic port${lastError ? `: ${String(lastError)}` : ""}`);
+}
+
 /** Execute recovery in an isolated copy; callers cannot assert readiness or semantics. */
 export async function executeDisposableRestore(input: DisposableRestoreInput): Promise<DisposableRestoreResult> {
 	if (
@@ -199,14 +219,12 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 				stdio: "ignore",
 			});
 			child = proc;
-			const timer = setTimeout(() => resolveServer({ child: proc, port }), 150);
+			void waitForDaemonReady(proc, port).then(() => resolveServer({ child: proc, port }), reject);
 			proc.once("error", (error) => {
-				clearTimeout(timer);
 				reject(error);
 			});
 			proc.once("exit", (code, signal) => {
 				if (code !== null || signal !== null) {
-					clearTimeout(timer);
 					reject(new Error(`daemon exited before readiness (${code ?? signal})`));
 				}
 			});

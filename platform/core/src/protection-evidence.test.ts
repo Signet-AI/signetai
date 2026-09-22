@@ -12,10 +12,8 @@ describe("protection evidence", () => {
 				mkdirSync(join(root, dir), { recursive: true });
 			writeFileSync(join(root, "data", "signet.db"), "db");
 			const result = buildProtectionEvidence(root, { now: new Date("2026-09-22T00:00:00.000Z") });
-			expect(
-				result.components.every((c) => c.state !== "unknown" || c.id === "external-sources" || c.id === "secrets"),
-			).toBe(true);
-			expect(result.components.find((c) => c.id === "filesystem-cache")?.intentionallyExcluded).toBe(true);
+			expect(result.components.every((c) => c.status !== "unknown")).toBe(true);
+			expect(result.components.find((c) => c.id === "filesystem-cache")?.status).toBe("excluded-rebuildable");
 			expect(JSON.stringify(result)).not.toContain(root);
 		} finally {
 			rmSync(root, { recursive: true, force: true });

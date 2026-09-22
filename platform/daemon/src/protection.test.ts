@@ -9,27 +9,12 @@ describe("protection API", () => {
 	it("projects the shared protection status without exposing paths or secrets", async () => {
 		const app = new Hono();
 		mountProtectionRoutes(app, {
-			components: [
-				{
-					id: "secrets",
-					type: "secrets",
-					authority: "external",
-					location: "/home/user/.secrets",
-					mechanism: "encrypted-provider",
-					state: "protected",
-					required: true,
-					intentionallyExcluded: false,
-					backupAt: "2026-09-22T00:00:00.000Z",
-					restoreVerifiedAt: "2026-09-22T00:00:00.000Z",
-				},
-			],
+			components: [{ id: "secrets", status: "protected", detail: "keyring available", label: "/home/user/.secrets" }],
 		});
 		const response = await app.request("/api/protection");
 		const body = await response.json();
 		expect(response.status).toBe(200);
-		expect(body.components[0].id).toBe("secrets");
-		expect(body.components[0].state).toBe("protected");
-		expect(body.components[0].location).toBe("[redacted]");
+		expect(body.components[0]).toEqual({ id: "secrets", status: "protected", detail: "keyring available" });
 		expect(JSON.stringify(body)).not.toContain("/home/user");
 	});
 

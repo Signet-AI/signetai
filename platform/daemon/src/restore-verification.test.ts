@@ -60,7 +60,10 @@ describe("verifyRestore", () => {
 	it("executes the real daemon binary in a disposable copy and cleans it up", async () => {
 		const snapshot = workspace();
 		const daemon = join(snapshot, "fake-daemon.ts");
-		writeFileSync(daemon, "setInterval(() => {}, 1000);\n");
+		writeFileSync(
+			daemon,
+			'import { createServer } from "node:http"; createServer((_req, res) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }).listen(Number(process.env.SIGNET_RESTORE_PORT), "127.0.0.1");',
+		);
 		const result = await executeDisposableRestore({
 			snapshotRoot: snapshot,
 			expected,
