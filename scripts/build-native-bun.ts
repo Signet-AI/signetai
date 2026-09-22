@@ -33,6 +33,7 @@ const result = await Bun.build({
 		target: target as "bun-linux-x64" | "bun-linux-arm64" | "bun-darwin-x64" | "bun-darwin-arm64" | "bun-windows-x64",
 		outfile,
 	},
+	external: ["better-sqlite3"],
 });
 if (!result.success) {
 	for (const log of result.logs) console.error(log);

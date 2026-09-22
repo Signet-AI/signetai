@@ -12,9 +12,9 @@ COPY platform/native ./platform/native
 COPY surfaces ./surfaces
 COPY web ./web
 COPY dist ./dist
-RUN bun install --no-frozen-lockfile
+RUN bun install --no-frozen-lockfile --force
 RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
-RUN bun run build:native-bun
+RUN bun run --filter '@signet/core' build && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:native-bun
 ARG TARGETOS=linux
 ARG TARGETARCH
 RUN set -eux; arch="${TARGETARCH:-$(uname -m)}"; pkg="sqlite-vec-${TARGETOS}-${arch}"; mkdir -p dist/docker-sqlite-vec; touch dist/docker-sqlite-vec/vec0.so; test -n "$pkg"
