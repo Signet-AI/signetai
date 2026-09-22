@@ -41,6 +41,42 @@ function targetArch() {
 	return normalizeArch(process.env.ELECTRON_BUILDER_ARCH ?? process.env.npm_config_arch ?? process.arch);
 }
 
+function probeBunRuntime(runtimePath) {
+	const result = Bun.spawnSync([runtimePath, "--version"], { stdout: "pipe", stderr: "pipe" });
+	if (result.exitCode !== 0) throw new Error("Bun runtime probe failed");
+	try {
+		return JSON.parse(new TextDecoder().decode(result.stdout));
+	} catch {
+		throw new Error("Bun runtime probe returned an invalid result");
+	}
+}
+
+export function assertBunRuntime(
+	runtimePath,
+	expectedArch,
+	expectedPlatform = process.platform,
+	probe = probeBunRuntime,
+) {
+	const arch = normalizeArch(expectedArch);
+	const platform = normalizePlatform(expectedPlatform);
+	if (!existsSync(runtimePath) || !statSync(runtimePath).isFile())
+		throw new Error(`Bun runtime is not a regular file: ${runtimePath}`);
+	if (platform !== "win32" && (statSync(runtimePath).mode & 0o111) === 0)
+		throw new Error(`Bun runtime is not executable: ${runtimePath}`);
+	let runtime;
+	try {
+		runtime = probe(runtimePath);
+	} catch (error) {
+		const detail = error instanceof Error ? error.message : String(error);
+		throw new Error(`Unable to execute Bun runtime at ${runtimePath}: ${detail}`);
+	}
+	if (runtime.platform !== platform)
+		throw new Error(`Bun runtime platform mismatch: expected ${platform}, got ${runtime.platform} (${runtimePath})`);
+	if (runtime.arch !== arch)
+		throw new Error(`Bun runtime architecture mismatch: expected ${arch}, got ${runtime.arch} (${runtimePath})`);
+	return runtime;
+}
+
 function targetPlatform() {
 	return normalizePlatform(process.env.ELECTRON_BUILDER_PLATFORM ?? process.platform);
 }
@@ -198,6 +234,13 @@ export function replaceResources(target, staged, rename = renameSync, remove = r
 export function stageRuntime() {
 	const arch = targetArch();
 	const target = targetPlatform();
+	const hostPlatform = normalizePlatform(process.platform);
+	const hostArch = normalizeArch(process.arch);
+	if (target !== hostPlatform || arch !== hostArch) {
+		throw new Error(
+			`Desktop runtime staging requires a native ${target}/${arch} build runner; host is ${hostPlatform}/${hostArch}.`,
+		);
+	}
 	const stagedResources = mkdtempSync(join(desktopRoot, ".resources-stage-"));
 	const executable = target === "win32" ? "signet-daemon.exe" : "signet-daemon";
 	const daemonSource = nativeDaemonPath(target, arch);
