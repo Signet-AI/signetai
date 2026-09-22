@@ -85,14 +85,7 @@ interface SourceDeletionTombstone {
 
 const execFileAsync = promisify(execFile);
 
-interface AddObsidianSourceBody {
-	readonly path?: string;
-	readonly root?: string;
-	readonly name?: string;
-	readonly excludeGlobs?: readonly string[];
-}
-
-interface AddLocalFilesSourceBody {
+interface AddDirectorySourceBody {
 	readonly path?: string;
 	readonly root?: string;
 	readonly name?: string;
@@ -252,80 +245,54 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ paths: result.paths });
 	});
 
-	app.post("/api/sources/obsidian", async (c) => {
-		let body: AddObsidianSourceBody = {};
-		try {
-			body = (await c.req.json()) as AddObsidianSourceBody;
-		} catch {
-			recordSourceConnectionFailure("obsidian", "invalid configuration");
-			return c.json({ error: "Invalid JSON body" }, 400);
-		}
+	const directorySourceHandler =
+		(kind: "local-files" | "obsidian", addSource: typeof addObsidianSource) => async (c: Context) => {
+			let parsed: unknown;
+			try {
+				parsed = await c.req.json();
+			} catch {
+				recordSourceConnectionFailure(kind, "invalid configuration");
+				return c.json({ error: "Invalid JSON body" }, 400);
+			}
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+				recordSourceConnectionFailure(kind, "invalid configuration");
+				return c.json({ error: `Invalid ${kind} configuration` }, 400);
+			}
+			const body = parsed as AddDirectorySourceBody;
+			const invalidFields =
+				(body.root !== undefined && typeof body.root !== "string") ||
+				(body.path !== undefined && typeof body.path !== "string") ||
+				(body.name !== undefined && typeof body.name !== "string") ||
+				(body.excludeGlobs !== undefined &&
+					(!Array.isArray(body.excludeGlobs) || body.excludeGlobs.some((entry) => typeof entry !== "string")));
+			if (invalidFields) {
+				recordSourceConnectionFailure(kind, "invalid configuration");
+				return c.json({ error: `Invalid ${kind} configuration` }, 400);
+			}
 
-		const root = body.root ?? body.path ?? "";
-		const excludeGlobs = Array.isArray(body.excludeGlobs)
-			? body.excludeGlobs.filter((entry) => typeof entry === "string")
-			: undefined;
-		const result = addObsidianSource({ root, name: body.name, excludeGlobs }, agentsDir);
-		if (result.ok === false) {
-			recordSourceConnectionFailure("obsidian", result.error);
-			return c.json({ error: result.error }, 400);
-		}
-		await recordSourceConnected(result.source, resolveDaemonAgentId());
+			const result = addSource(
+				{ root: body.root ?? body.path ?? "", name: body.name, excludeGlobs: body.excludeGlobs },
+				agentsDir,
+			);
+			if (result.ok === false) {
+				recordSourceConnectionFailure(kind, result.error);
+				return c.json({ error: result.error }, 400);
+			}
+			await recordSourceConnected(result.source, resolveDaemonAgentId());
 
-		const job = enqueueSourceIndexJob({
-			source: result.source,
-			agentsDir,
-			startBridge,
-			purgeNativeSource,
-			recordIndexOperation,
-		});
+			const job = enqueueSourceIndexJob({
+				source: result.source,
+				agentsDir,
+				startBridge,
+				purgeNativeSource,
+				recordIndexOperation,
+			});
 
-		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
-	});
+			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+		};
 
-	app.post("/api/sources/local-files", async (c) => {
-		let parsed: unknown;
-		try {
-			parsed = await c.req.json();
-		} catch {
-			recordSourceConnectionFailure("local-files", "invalid configuration");
-			return c.json({ error: "Invalid JSON body" }, 400);
-		}
-		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-			recordSourceConnectionFailure("local-files", "invalid configuration");
-			return c.json({ error: "Invalid local-files configuration" }, 400);
-		}
-		const body = parsed as AddLocalFilesSourceBody;
-		const invalidFields =
-			(body.root !== undefined && typeof body.root !== "string") ||
-			(body.path !== undefined && typeof body.path !== "string") ||
-			(body.name !== undefined && typeof body.name !== "string") ||
-			(body.excludeGlobs !== undefined &&
-				(!Array.isArray(body.excludeGlobs) || body.excludeGlobs.some((entry) => typeof entry !== "string")));
-		if (invalidFields) {
-			recordSourceConnectionFailure("local-files", "invalid configuration");
-			return c.json({ error: "Invalid local-files configuration" }, 400);
-		}
-
-		const root = body.root ?? body.path ?? "";
-		const excludeGlobs = body.excludeGlobs;
-		const result = addLocalFilesSource({ root, name: body.name, excludeGlobs }, agentsDir);
-		if (result.ok === false) {
-			recordSourceConnectionFailure("local-files", result.error);
-			return c.json({ error: result.error }, 400);
-		}
-		await recordSourceConnected(result.source, resolveDaemonAgentId());
-
-		const job = enqueueSourceIndexJob({
-			source: result.source,
-			agentsDir,
-			startBridge,
-			purgeNativeSource,
-			recordIndexOperation,
-		});
-
-		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
-	});
+	app.post("/api/sources/obsidian", directorySourceHandler("obsidian", addObsidianSource));
+	app.post("/api/sources/local-files", directorySourceHandler("local-files", addLocalFilesSource));
 
 	app.post("/api/sources/discord", async (c) => {
 		let body: AddDiscordSourceBody = {};

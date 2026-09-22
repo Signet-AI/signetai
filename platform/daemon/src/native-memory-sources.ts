@@ -7,6 +7,7 @@ import {
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 	LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE,
 	SOURCE_CHUNK_SOURCE_TYPE,
+	type SignetSourceEntry,
 	loadSourcesConfig,
 	markSourceIndexed,
 	resolveHermesHomePath,
@@ -61,6 +62,7 @@ export interface NativeMemorySource {
 	/** Root used for stable provenance paths when the scan root is a subdirectory. */
 	readonly sourceRoot?: string;
 	readonly sourceId?: string;
+	readonly provenance?: { readonly kind: "filesystem"; readonly provider: string };
 	readonly files: readonly NativeMemoryFilePattern[];
 }
 
@@ -399,46 +401,68 @@ export function hermesNativeMemorySource(root = resolveHermesHomePath()): Native
 	};
 }
 
+interface FilesystemNativeMemorySourceInput {
+	readonly harness: string;
+	readonly provider: string;
+	readonly displayName: string;
+	readonly root: string;
+	readonly sourceId: string;
+	readonly excludeGlobs: readonly string[];
+	readonly files: readonly { readonly glob: string; readonly kind: string }[];
+}
+
+const FILESYSTEM_SOURCE_FILES = {
+	obsidian: [{ glob: "**/*.md", kind: "source_obsidian_markdown" }],
+	"local-files": [
+		{ glob: "**/*.md", kind: "source_local_files_markdown" },
+		{ glob: "**/*.txt", kind: "source_local_files_text" },
+		{ glob: "**/*.jsonl", kind: "source_local_files_jsonl" },
+	],
+} as const;
+
+function filesystemNativeMemorySource(input: FilesystemNativeMemorySourceInput): NativeMemorySource {
+	const include = (_path: string, rel: string): boolean => !isExcludedByGlobs(rel, input.excludeGlobs);
+	return {
+		harness: input.harness,
+		displayName: input.displayName,
+		root: input.root,
+		sourceId: input.sourceId,
+		provenance: { kind: "filesystem", provider: input.provider },
+		files: input.files.map((file) => ({ ...file, include, excludeGlobs: input.excludeGlobs })),
+	};
+}
+
 export function obsidianNativeMemorySource(
 	root: string,
 	displayName = "Obsidian",
 	sourceId = sourceIdForObsidianRoot(root),
 	excludeGlobs: readonly string[] = DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 ): NativeMemorySource {
-	return {
+	return filesystemNativeMemorySource({
 		harness: "obsidian",
+		provider: "obsidian",
 		displayName,
 		root,
 		sourceId,
-		files: [
-			{
-				glob: "**/*.md",
-				kind: "source_obsidian_markdown",
-				include: (_path, rel) => !isExcludedByGlobs(rel, excludeGlobs),
-				excludeGlobs,
-			},
-		],
-	};
+		excludeGlobs,
+		files: FILESYSTEM_SOURCE_FILES.obsidian,
+	});
 }
 
-export function localFilesNativeMemorySource(
-	root: string,
-	sourceId: string,
-	displayName = "Local files",
-	excludeGlobs: readonly string[] = DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS,
-): NativeMemorySource {
-	const include = (_path: string, rel: string): boolean => !isExcludedByGlobs(rel, excludeGlobs);
-	return {
-		harness: "local-files",
-		displayName,
-		root,
-		sourceId,
-		files: [
-			{ glob: "**/*.md", kind: "source_local_files_markdown", include, excludeGlobs },
-			{ glob: "**/*.txt", kind: "source_local_files_text", include, excludeGlobs },
-			{ glob: "**/*.jsonl", kind: "source_local_files_jsonl", include, excludeGlobs },
-		],
-	};
+export function configuredFilesystemNativeMemorySource(source: SignetSourceEntry): NativeMemorySource {
+	const kind: "obsidian" | "local-files" | null =
+		source.kind === "obsidian" ? "obsidian" : source.kind === "local-files" ? "local-files" : null;
+	if (kind === null) throw new Error(`Source ${source.id} is not a filesystem source`);
+	return filesystemNativeMemorySource({
+		harness: kind,
+		provider: kind,
+		displayName: source.name,
+		root: source.root,
+		sourceId: source.id,
+		excludeGlobs:
+			source.excludeGlobs ?? (kind === "obsidian" ? DEFAULT_OBSIDIAN_EXCLUDE_GLOBS : DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS),
+		files: FILESYSTEM_SOURCE_FILES[kind],
+	});
 }
 
 export function configuredNativeMemorySources(agentsDir?: string): NativeMemorySource[] {
@@ -453,11 +477,7 @@ export function configuredNativeMemorySources(agentsDir?: string): NativeMemoryS
 function configuredFileSources(agentsDir?: string): NativeMemorySource[] {
 	return loadSourcesConfig(agentsDir)
 		.sources.filter((source) => source.enabled && (source.kind === "obsidian" || source.kind === "local-files"))
-		.map((source) =>
-			source.kind === "local-files"
-				? localFilesNativeMemorySource(source.root, source.id, source.name, source.excludeGlobs)
-				: obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs),
-		);
+		.map(configuredFilesystemNativeMemorySource);
 }
 
 function matchesPattern(source: NativeMemorySource, filePath: string): NativeMemoryFilePattern | null {
@@ -1125,13 +1145,10 @@ export async function indexNativeMemoryFile(
 			return false;
 		}
 	}
+	const filesystem = source.provenance?.kind === "filesystem";
 	const obsidian = source.harness === "obsidian" && pattern.kind === "source_obsidian_markdown";
-	const localFiles = source.harness === "local-files" && pattern.kind.startsWith("source_local_files_");
-	const fileSource = obsidian || localFiles;
 	const hermes = source.harness === "hermes-agent";
-	const sourceId = obsidian
-		? (options.sourceId ?? source.sourceId ?? sourceIdForObsidianRoot(source.root))
-		: (options.sourceId ?? source.sourceId ?? null);
+	const sourceId = options.sourceId ?? source.sourceId ?? (obsidian ? sourceIdForObsidianRoot(source.root) : null);
 	const graphRequested = obsidian && (options.sourceGraphEnabled ?? true);
 	const embeddingRequested =
 		obsidian &&
@@ -1175,25 +1192,20 @@ export async function indexNativeMemoryFile(
 	try {
 		const provenanceRoot = source.sourceRoot ?? source.root;
 		const externalId =
-			fileSource || source.harness === "codex" || hermes ? sourceRelativePath(provenanceRoot, filePath) : null;
-		const sourceMeta = obsidian
+			filesystem || source.harness === "codex" || hermes ? sourceRelativePath(provenanceRoot, filePath) : null;
+		const sourceMeta = filesystem
 			? {
-					provider: "obsidian",
+					provider: source.provenance.provider,
 					displayName: source.displayName,
 				}
-			: localFiles
-				? {
-						provider: "local-files",
-						displayName: source.displayName,
-					}
-				: (codexSourceMeta(source, filePath, {
-						lineCount: options.lineCount ?? sourceLineCount(content),
-						rolloutId: options.rolloutId,
-					}) ??
-					hermesSourceMeta(source, filePath, {
-						lineCount: options.lineCount ?? sourceLineCount(content),
-						contentHash: hash,
-					}));
+			: (codexSourceMeta(source, filePath, {
+					lineCount: options.lineCount ?? sourceLineCount(content),
+					rolloutId: options.rolloutId,
+				}) ??
+				hermesSourceMeta(source, filePath, {
+					lineCount: options.lineCount ?? sourceLineCount(content),
+					contentHash: hash,
+				}));
 		const ownerResult = await dbOwnerSourceNativeMemoryIndex(
 			{
 				agentId,
@@ -1204,7 +1216,7 @@ export async function indexNativeMemoryFile(
 				content,
 				sourceMtimeMs: mtimeMs,
 				sourceId,
-				sourceRoot: fileSource || source.harness === "codex" || hermes ? normalizedRoot(provenanceRoot) : null,
+				sourceRoot: filesystem || source.harness === "codex" || hermes ? normalizedRoot(provenanceRoot) : null,
 				sourceExternalId: externalId,
 				sourceParentPath: externalId ? dirname(externalId).replace(/^\.$/, "") : null,
 				sourceMetaJson: sourceMeta === undefined ? null : JSON.stringify(sourceMeta),

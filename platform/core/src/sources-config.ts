@@ -59,19 +59,16 @@ export interface SignetSourcesConfig {
 	readonly sources: readonly SignetSourceEntry[];
 }
 
-export interface AddObsidianSourceInput {
+interface AddDirectorySourceInput {
 	readonly root: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
 	readonly now?: string;
 }
 
-export interface AddLocalFilesSourceInput {
-	readonly root: string;
-	readonly name?: string;
-	readonly excludeGlobs?: readonly string[];
-	readonly now?: string;
-}
+export interface AddObsidianSourceInput extends AddDirectorySourceInput {}
+
+export interface AddLocalFilesSourceInput extends AddDirectorySourceInput {}
 
 export interface WebSourceSettings {
 	readonly url: string;
@@ -248,11 +245,11 @@ function normalizeSourceEntry(source: SignetSourceEntry): SignetSourceEntry {
 }
 
 export function addObsidianSource(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
-	return withSourcesConfigLock(agentsDir, () => addObsidianSourceUnlocked(input, agentsDir));
+	return withSourcesConfigLock(agentsDir, () => addDirectorySourceUnlocked(input, OBSIDIAN_SOURCE, agentsDir));
 }
 
 export function addLocalFilesSource(input: AddLocalFilesSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
-	return withSourcesConfigLock(agentsDir, () => addLocalFilesSourceUnlocked(input, agentsDir));
+	return withSourcesConfigLock(agentsDir, () => addDirectorySourceUnlocked(input, LOCAL_FILES_SOURCE, agentsDir));
 }
 
 export function addWebSource(input: AddWebSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
@@ -728,89 +725,84 @@ function githubSettingsProviderSettings(settings: GitHubSourceSettings): SignetS
 	};
 }
 
-function addObsidianSourceUnlocked(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
-	try {
-		return addObsidianSourceChecked(input, agentsDir);
-	} catch (err) {
-		const detail = err instanceof Error ? err.message : String(err);
-		return { ok: false, error: detail };
-	}
+type DirectoryRootResult =
+	| { readonly ok: true; readonly root: string }
+	| { readonly ok: false; readonly error: string };
+
+interface DirectorySourceDefinition {
+	readonly kind: "local-files" | "obsidian";
+	readonly defaultName: string;
+	readonly defaultExcludeGlobs: readonly string[];
+	readonly normalizeRoot: (inputRoot: string) => DirectoryRootResult;
+	readonly sourceId: (root: string) => string;
 }
 
-function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
-	const trimmedRoot = input.root.trim();
+const OBSIDIAN_SOURCE: DirectorySourceDefinition = {
+	kind: "obsidian",
+	defaultName: "Obsidian Vault",
+	defaultExcludeGlobs: DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
+	normalizeRoot: normalizeObsidianRoot,
+	sourceId: (root) => `obsidian:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`,
+};
+
+const LOCAL_FILES_SOURCE: DirectorySourceDefinition = {
+	kind: "local-files",
+	defaultName: "Local files",
+	defaultExcludeGlobs: DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS,
+	normalizeRoot: normalizeLocalFilesRoot,
+	sourceId: () => `local-files:${randomUUID()}`,
+};
+
+function normalizeObsidianRoot(inputRoot: string): DirectoryRootResult {
+	const trimmedRoot = inputRoot.trim();
 	if (!trimmedRoot) return { ok: false, error: "Obsidian vault path is required" };
 	const root = resolve(trimmedRoot);
 	if (!existsSync(root)) return { ok: false, error: `Obsidian vault path does not exist: ${root}` };
 	try {
-		if (!statSync(root).isDirectory()) return { ok: false, error: `Obsidian vault path must be a directory: ${root}` };
+		return statSync(root).isDirectory()
+			? { ok: true, root }
+			: { ok: false, error: `Obsidian vault path must be a directory: ${root}` };
 	} catch {
 		return { ok: false, error: `Obsidian vault path is not accessible: ${root}` };
 	}
-
-	const now = input.now ?? new Date().toISOString();
-	const cfg = loadSourcesConfigForWrite(agentsDir);
-	const existing = cfg.sources.find((source) => source.kind === "obsidian" && source.root === root);
-	if (existing) {
-		const updated = {
-			...existing,
-			name: cleanName(input.name) ?? existing.name,
-			excludeGlobs: input.excludeGlobs
-				? mergeDefaultObsidianExcludeGlobs(input.excludeGlobs)
-				: (existing.excludeGlobs ?? [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS]),
-			enabled: true,
-			updatedAt: now,
-		};
-		saveSourcesConfig(
-			{
-				version: SOURCES_CONFIG_VERSION,
-				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
-			},
-			agentsDir,
-		);
-		return { ok: true, source: updated, created: false };
-	}
-
-	const source: SignetSourceEntry = {
-		id: `obsidian:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`,
-		generation: newSourceGeneration(),
-		kind: "obsidian",
-		name: cleanName(input.name) ?? "Obsidian Vault",
-		root,
-		enabled: true,
-		mode: "read-only",
-		createdAt: now,
-		updatedAt: now,
-		excludeGlobs: mergeDefaultObsidianExcludeGlobs(input.excludeGlobs),
-	};
-	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
-	return { ok: true, source, created: true };
 }
 
-function addLocalFilesSourceUnlocked(input: AddLocalFilesSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+function normalizeLocalFilesRoot(inputRoot: string): DirectoryRootResult {
+	const trimmedRoot = inputRoot.trim();
+	if (!trimmedRoot) return { ok: false, error: "Local files path is required" };
+	const requestedRoot = resolve(trimmedRoot);
+	if (!existsSync(requestedRoot)) return { ok: false, error: "Local files path is not a directory" };
 	try {
-		const trimmedRoot = input.root.trim();
-		if (!trimmedRoot) return { ok: false, error: "Local files path is required" };
-		const requestedRoot = resolve(trimmedRoot);
-		if (!existsSync(requestedRoot)) return { ok: false, error: "Local files path is not a directory" };
-		let root: string;
-		try {
-			root = realpathSync(requestedRoot);
-			if (!statSync(root).isDirectory()) return { ok: false, error: "Local files path is not a directory" };
-		} catch {
-			return { ok: false, error: "Local files path is not accessible" };
-		}
+		const root = realpathSync(requestedRoot);
+		return statSync(root).isDirectory()
+			? { ok: true, root }
+			: { ok: false, error: "Local files path is not a directory" };
+	} catch {
+		return { ok: false, error: "Local files path is not accessible" };
+	}
+}
 
+function addDirectorySourceUnlocked(
+	input: AddDirectorySourceInput,
+	definition: DirectorySourceDefinition,
+	agentsDir = getAgentsDir(),
+): AddSourceResult {
+	try {
+		const normalized = definition.normalizeRoot(input.root);
+		if (normalized.ok === false) return normalized;
 		const now = input.now ?? new Date().toISOString();
 		const config = loadSourcesConfigForWrite(agentsDir);
-		const existing = config.sources.find((source) => source.kind === "local-files" && source.root === root);
+		const existing = config.sources.find(
+			(source) => source.kind === definition.kind && source.root === normalized.root,
+		);
+		const excludeGlobs = input.excludeGlobs
+			? mergeExcludeGlobs(definition.defaultExcludeGlobs, input.excludeGlobs)
+			: (existing?.excludeGlobs ?? [...definition.defaultExcludeGlobs]);
 		if (existing) {
 			const updated: SignetSourceEntry = {
 				...existing,
 				name: cleanName(input.name) ?? existing.name,
-				excludeGlobs: input.excludeGlobs
-					? mergeExcludeGlobs(DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS, input.excludeGlobs)
-					: (existing.excludeGlobs ?? [...DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS]),
+				excludeGlobs,
 				enabled: true,
 				updatedAt: now,
 			};
@@ -825,16 +817,16 @@ function addLocalFilesSourceUnlocked(input: AddLocalFilesSourceInput, agentsDir 
 		}
 
 		const source: SignetSourceEntry = {
-			id: `local-files:${randomUUID()}`,
+			id: definition.sourceId(normalized.root),
 			generation: newSourceGeneration(),
-			kind: "local-files",
-			name: cleanName(input.name) ?? "Local files",
-			root,
+			kind: definition.kind,
+			name: cleanName(input.name) ?? definition.defaultName,
+			root: normalized.root,
 			enabled: true,
 			mode: "read-only",
 			createdAt: now,
 			updatedAt: now,
-			excludeGlobs: mergeExcludeGlobs(DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS, input.excludeGlobs),
+			excludeGlobs,
 		};
 		saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...config.sources, source] }, agentsDir);
 		return { ok: true, source, created: true };
@@ -1261,10 +1253,6 @@ function isSafeGitHubDocPath(value: string): boolean {
 	if (path.startsWith("/") || path.includes("\\") || path.includes("?") || path.includes("#")) return false;
 	if (path.split("/").some((segment) => segment === "" || segment === "." || segment === "..")) return false;
 	return isMarkdownDocPath(path) || isMarkdownDocGlob(path);
-}
-
-function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {
-	return mergeExcludeGlobs(DEFAULT_OBSIDIAN_EXCLUDE_GLOBS, values);
 }
 
 function mergeExcludeGlobs(defaults: readonly string[], values: readonly string[] | undefined): readonly string[] {

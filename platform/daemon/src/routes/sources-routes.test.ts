@@ -490,34 +490,44 @@ describe("Sources routes", () => {
 		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
 	});
 
-	it("rejects a non-object local-files request body", async () => {
-		const response = await makeApp({ expectedSourcePrefix: "local-files:" }).request("/api/sources/local-files", {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: "null",
-		});
-
-		expect(response.status).toBe(400);
-		expect(await response.json()).toEqual({ error: "Invalid local-files configuration" });
-	});
-
-	it("rejects invalid optional local-files fields", async () => {
-		const root = join(dir, "invalid-local-files-fields");
-		mkdirSync(root, { recursive: true });
-		for (const fields of [
-			{ name: 123 },
-			{ excludeGlobs: "private/**" },
-			{ excludeGlobs: ["private/**", 123] },
-			{ root: 123 },
-		]) {
-			const response = await makeApp({ expectedSourcePrefix: "local-files:" }).request("/api/sources/local-files", {
+	it("rejects non-object directory source request bodies", async () => {
+		for (const route of [
+			{ path: "/api/sources/obsidian", kind: "obsidian", prefix: "obsidian:" },
+			{ path: "/api/sources/local-files", kind: "local-files", prefix: "local-files:" },
+		] as const) {
+			const response = await makeApp({ expectedSourcePrefix: route.prefix }).request(route.path, {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
-				body: JSON.stringify({ root, ...fields }),
+				body: "null",
 			});
 
 			expect(response.status).toBe(400);
-			expect(await response.json()).toEqual({ error: "Invalid local-files configuration" });
+			expect(await response.json()).toEqual({ error: `Invalid ${route.kind} configuration` });
+		}
+	});
+
+	it("rejects invalid optional directory source fields", async () => {
+		const root = join(dir, "invalid-directory-source-fields");
+		mkdirSync(root, { recursive: true });
+		for (const route of [
+			{ path: "/api/sources/obsidian", kind: "obsidian", prefix: "obsidian:" },
+			{ path: "/api/sources/local-files", kind: "local-files", prefix: "local-files:" },
+		] as const) {
+			for (const fields of [
+				{ name: 123 },
+				{ excludeGlobs: "private/**" },
+				{ excludeGlobs: ["private/**", 123] },
+				{ root: 123 },
+			]) {
+				const response = await makeApp({ expectedSourcePrefix: route.prefix }).request(route.path, {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ root, ...fields }),
+				});
+
+				expect(response.status).toBe(400);
+				expect(await response.json()).toEqual({ error: `Invalid ${route.kind} configuration` });
+			}
 		}
 	});
 

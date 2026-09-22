@@ -4,9 +4,8 @@ import { githubSourceProvider } from "./github-source-provider";
 import { webSourceProvider } from "./web-source-provider";
 import { markImportedSourceUnsupported } from "./imported-source-lifecycle";
 import {
+	configuredFilesystemNativeMemorySource,
 	type NativeMemorySource,
-	localFilesNativeMemorySource,
-	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 } from "./native-memory-sources";
 
@@ -41,25 +40,18 @@ export interface SourceProviderAdapter {
 
 const additionalProviders = new Map<SignetSourceKind, SourceProviderAdapter>();
 
-export const obsidianSourceProvider: SourceProviderAdapter = {
-	kind: "obsidian",
-	toNativeSource: (source) => obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs),
-	purge: (source, agentId) =>
-		purgeNativeMemorySourceArtifacts(
-			obsidianNativeMemorySource(source.root, source.name, source.id, source.excludeGlobs),
-			agentId,
-		),
-};
+function nativeFilesystemSourceProvider(kind: "local-files" | "obsidian"): SourceProviderAdapter {
+	return {
+		kind,
+		toNativeSource: configuredFilesystemNativeMemorySource,
+		purge: (source, agentId) =>
+			purgeNativeMemorySourceArtifacts(configuredFilesystemNativeMemorySource(source), agentId),
+	};
+}
 
-export const localFilesSourceProvider: SourceProviderAdapter = {
-	kind: "local-files",
-	toNativeSource: (source) => localFilesNativeMemorySource(source.root, source.id, source.name, source.excludeGlobs),
-	purge: (source, agentId) =>
-		purgeNativeMemorySourceArtifacts(
-			localFilesNativeMemorySource(source.root, source.id, source.name, source.excludeGlobs),
-			agentId,
-		),
-};
+export const obsidianSourceProvider = nativeFilesystemSourceProvider("obsidian");
+
+export const localFilesSourceProvider = nativeFilesystemSourceProvider("local-files");
 
 export const importedSourceProvider: SourceProviderAdapter = {
 	kind: "import",
@@ -70,28 +62,25 @@ export const importedSourceProvider: SourceProviderAdapter = {
 		}).artifacts,
 };
 
-export function registerSourceProvider(provider: SourceProviderAdapter): void {
-	additionalProviders.set(provider.kind, provider);
-}
-
-export function getSourceProvider(kind: SignetSourceKind): SourceProviderAdapter | undefined {
-	if (kind === localFilesSourceProvider.kind) return localFilesSourceProvider;
-	if (kind === obsidianSourceProvider.kind) return obsidianSourceProvider;
-	if (kind === discordSourceProvider.kind) return discordSourceProvider;
-	if (kind === githubSourceProvider.kind) return githubSourceProvider;
-	if (kind === webSourceProvider.kind) return webSourceProvider;
-	if (kind === importedSourceProvider.kind) return importedSourceProvider;
-	return additionalProviders.get(kind);
-}
-
-export function configuredSourceProviders(): readonly SourceProviderAdapter[] {
-	return [
+const builtInProviders = new Map<SignetSourceKind, SourceProviderAdapter>(
+	[
 		localFilesSourceProvider,
 		obsidianSourceProvider,
 		discordSourceProvider,
 		githubSourceProvider,
 		webSourceProvider,
 		importedSourceProvider,
-		...additionalProviders.values(),
-	];
+	].map((provider) => [provider.kind, provider]),
+);
+
+export function registerSourceProvider(provider: SourceProviderAdapter): void {
+	additionalProviders.set(provider.kind, provider);
+}
+
+export function getSourceProvider(kind: SignetSourceKind): SourceProviderAdapter | undefined {
+	return builtInProviders.get(kind) ?? additionalProviders.get(kind);
+}
+
+export function configuredSourceProviders(): readonly SourceProviderAdapter[] {
+	return [...builtInProviders.values(), ...additionalProviders.values()];
 }
