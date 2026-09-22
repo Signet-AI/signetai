@@ -17,6 +17,7 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
@@ -181,8 +182,19 @@ export function assertNativeDaemon(path) {
 }
 
 export function platformVecPackage(platform, arch) {
-	const os = platform === "win32" ? "windows" : platform;
-	return `sqlite-vec-${os}-${arch}`;
+	const normalizedPlatform = normalizePlatform(platform);
+	const normalizedArch = normalizeArch(arch);
+	const supported =
+		(normalizedPlatform === "darwin" || normalizedPlatform === "linux") &&
+		(normalizedArch === "x64" || normalizedArch === "arm64");
+	if (normalizedPlatform === "win32" && normalizedArch !== "x64") {
+		throw new Error(`Unsupported sqlite-vec target: ${normalizedPlatform}/${normalizedArch}`);
+	}
+	if (!supported && normalizedPlatform !== "win32") {
+		throw new Error(`Unsupported sqlite-vec target: ${normalizedPlatform}/${normalizedArch}`);
+	}
+	const os = normalizedPlatform === "win32" ? "windows" : normalizedPlatform;
+	return `sqlite-vec-${os}-${normalizedArch}`;
 }
 
 export function replaceResources(target, staged, rename = renameSync, remove = rmSync) {
@@ -242,6 +254,7 @@ export function replaceResources(target, staged, rename = renameSync, remove = r
 export function stageRuntime() {
 	const arch = targetArch();
 	const target = targetPlatform();
+	const vecPackage = platformVecPackage(target, arch);
 	const hostPlatform = normalizePlatform(process.platform);
 	const hostArch = normalizeArch(process.arch);
 	if (target !== hostPlatform || arch !== hostArch) {
@@ -283,7 +296,7 @@ export function stageRuntime() {
 		const requireFromDaemon = createRequire(resolve(repoRoot, "platform/daemon/package.json"));
 		const packageSources = [
 			["tiktoken", requireFromDaemon.resolve("tiktoken/package.json")],
-			[platformVecPackage(target, arch), requireFromDaemon.resolve(`${platformVecPackage(target, arch)}/package.json`)],
+			[vecPackage, requireFromDaemon.resolve(`${vecPackage}/package.json`)],
 		];
 		for (const [name, packageManifest] of packageSources) {
 			const source = dirname(packageManifest);
