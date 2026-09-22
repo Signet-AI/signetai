@@ -1233,6 +1233,27 @@ describe("ontology proposals", () => {
 		expect(evidence.items[0]?.excerpt).toBe("This quote still explains the proposal.");
 	});
 
+	it("falls back to an embedded quote when a referenced ontology proposal is missing", async () => {
+		const proposal = await createOntologyProposal(getDbAccessor(), {
+			agentId: "default",
+			operation: "create_entity",
+			payload: { name: "Missing Proposal Evidence" },
+			evidence: [{ proposal_id: "missing-proposal", quote: "The embedded proposal quote." }],
+		});
+
+		const evidence = await getOntologyProposalEvidence(getDbAccessor(), proposal.id, "default");
+
+		expect(evidence.items).toEqual([
+			expect.objectContaining({
+				kind: "provided_quote",
+				found: true,
+				sourceKind: "ontology_proposal",
+				sourceId: "missing-proposal",
+				excerpt: "The embedded proposal quote.",
+			}),
+		]);
+	});
+
 	it("applies supersede_claim_value by preserving old values and adding replacements", async () => {
 		const initial = await createOntologyProposal(getDbAccessor(), {
 			agentId: "ant",

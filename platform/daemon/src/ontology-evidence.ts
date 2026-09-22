@@ -200,8 +200,8 @@ function readOntologyProposalEvidence(
 			 WHERE id = ? AND agent_id = ?
 			 LIMIT 1`,
 		)
-		.get(proposalId, agentId) as OntologyProposalEvidenceRow | undefined;
-	const content = row === undefined ? "" : [row.operation, row.rationale, row.evidence].join("\n");
+		.get(proposalId, agentId) as OntologyProposalEvidenceRow | null | undefined;
+	const content = row == null ? "" : [row.operation, row.rationale, row.evidence].join("\n");
 	return row &&
 		isMemoryContentContextEligible(db, {
 			agentId,
