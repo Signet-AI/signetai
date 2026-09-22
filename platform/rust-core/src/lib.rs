@@ -1401,7 +1401,7 @@ fn execute_operation(
             let project_key = project_id.clone().unwrap_or_default();
             let budget = budget.clamp(1, 32);
             let schema_hash = {
-                let mut s = connection.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'memories_fts%' AND name != 'integrity_checkpoints' ORDER BY type,name")?;
+                let mut s = connection.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name != 'integrity_checkpoints' AND NOT (type='table' AND lower(sql) LIKE '%using fts5%') ORDER BY type,name")?;
                 let rows = s.query_map([], |r| {
                     Ok(format!(
                         "{}:{}:{}\n",
@@ -1421,10 +1421,14 @@ fn execute_operation(
                 "ALTER TABLE integrity_checkpoints ADD COLUMN skipped_objects TEXT NOT NULL DEFAULT '[]'",
                 "ALTER TABLE integrity_checkpoints ADD COLUMN schema_version INTEGER NOT NULL DEFAULT 1",
             ] {
-                let _ = connection.execute(column, []);
+                if let Err(error) = connection.execute(column, []) {
+                    if !error.to_string().contains("duplicate column name") {
+                        return Err(error.into());
+                    }
+                }
             }
             let skipped_objects: Vec<String> = {
-                let mut statement = connection.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'memories_fts%' ORDER BY name")?;
+                let mut statement = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND sql IS NOT NULL AND lower(sql) LIKE '%using fts5%' ORDER BY name")?;
                 let rows = statement.query_map([], |row| row.get(0))?;
                 rows.collect::<Result<Vec<String>, _>>()?
             };
@@ -1436,8 +1440,9 @@ fn execute_operation(
                 "UPDATE integrity_checkpoints SET project_id='' WHERE project_id IS NULL",
                 [],
             )?;
-            let old: Option<(String, i64)> = connection.query_row("SELECT schema_hash,completed FROM integrity_checkpoints WHERE agent_id=? AND workspace_id=? AND project_id=? AND visibility=?", params![agent_id, workspace_id, project_key, visibility], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
-            let reset = old.as_ref().is_none_or(|(hash, _)| hash != &schema_hash);
+            let schema_version: i64 = connection.query_row("PRAGMA schema_version", [], |r| r.get(0))?;
+            let old: Option<(String, i64, i64)> = connection.query_row("SELECT schema_hash,completed,schema_version FROM integrity_checkpoints WHERE agent_id=? AND workspace_id=? AND project_id=? AND visibility=?", params![agent_id, workspace_id, project_key, visibility], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+            let reset = old.as_ref().is_none_or(|(hash, _, version)| hash != &schema_hash || *version != schema_version);
             let tables = ["documents", "memories", "jobs"];
             let start = if reset {
                 0
@@ -1465,9 +1470,9 @@ fn execute_operation(
             } else {
                 Some(tables[end].to_owned())
             };
-            connection.execute("INSERT INTO integrity_checkpoints(agent_id,workspace_id,project_id,visibility,schema_hash,next_table,completed,skipped_objects,schema_version,updated_at) VALUES(?,?,?,?,?,?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,project_id,visibility) DO UPDATE SET schema_hash=excluded.schema_hash,next_table=excluded.next_table,completed=excluded.completed,skipped_objects=excluded.skipped_objects,schema_version=excluded.schema_version,updated_at=excluded.updated_at", params![agent_id,workspace_id,project_key,visibility,schema_hash,next,completed as i64,serde_json::to_string(&skipped_objects).unwrap_or_else(|_| "[]".into()),1i64])?;
+            connection.execute("INSERT INTO integrity_checkpoints(agent_id,workspace_id,project_id,visibility,schema_hash,next_table,completed,skipped_objects,schema_version,updated_at) VALUES(?,?,?,?,?,?,?,?,?,datetime('now')) ON CONFLICT(agent_id,workspace_id,project_id,visibility) DO UPDATE SET schema_hash=excluded.schema_hash,next_table=excluded.next_table,completed=excluded.completed,skipped_objects=excluded.skipped_objects,schema_version=excluded.schema_version,updated_at=excluded.updated_at", params![agent_id,workspace_id,project_key,visibility,schema_hash,next,completed as i64,serde_json::to_string(&skipped_objects).unwrap_or_else(|_| "[]".into()),schema_version])?;
             Ok(
-                json!({"status":"verified","agentId":agent_id,"workspaceId":workspace_id,"projectId":project_id,"visibility":visibility,"fts":"skipped","skippedObjects":skipped_objects,"integrityCheck":integrity_check,"checkedTables":checked_tables,"checkpoint":{"nextTable":next,"completed":completed,"schemaHash":schema_hash,"schemaVersion":1}}),
+                json!({"status":"verified","agentId":agent_id,"workspaceId":workspace_id,"projectId":project_id,"visibility":visibility,"fts":"skipped","skippedObjects":skipped_objects,"integrityCheck":integrity_check,"checkedTables":checked_tables,"checkpoint":{"nextTable":next,"completed":completed,"schemaHash":schema_hash,"schemaVersion":schema_version}}),
             )
         }
         Operation::RepairRequeueRunning {
