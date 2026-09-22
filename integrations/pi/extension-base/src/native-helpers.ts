@@ -166,7 +166,10 @@ export function readStaticIdentity(
 export function transcriptText(value: unknown): string | undefined {
 	if (typeof value === "string") {
 		const text = stripInternalMemoryContext(value)
-			.replace(/\s*\r?\n\s*/g, " ")
+			.split(/\r?\n/)
+			.map((line) => line.trim())
+			.filter(Boolean)
+			.join(" ")
 			.trim();
 		return text || undefined;
 	}

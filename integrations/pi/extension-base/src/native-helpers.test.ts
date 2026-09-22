@@ -5,6 +5,7 @@ import {
 	escapeMemoryContextForFence,
 	parseRecallPayload,
 	stripInternalMemoryContext,
+	transcriptText,
 } from "./native-helpers.js";
 
 describe("native connector helpers", () => {
@@ -26,6 +27,15 @@ describe("native connector helpers", () => {
 		const payload = parseRecallPayload({ results: [{ content: "remember this", source: "test" }] });
 		expect(payload.results).toHaveLength(1);
 	});
+	it("normalizes transcript line boundaries without changing content whitespace", () => {
+		expect(transcriptText("plain text")).toBe("plain text");
+		expect(transcriptText("  before 	\n	 after  ")).toBe("before after");
+		expect(transcriptText("first\n\n 	\nsecond")).toBe("first second");
+		expect(transcriptText("first\r\nsecond")).toBe("first second");
+		expect(transcriptText("internal   whitespace")).toBe("internal   whitespace");
+		expect(transcriptText("before <signet-memory>secret</signet-memory> after")).toBe("before  after");
+	});
+
 	it("scrubs adversarial malformed fences within a bounded time", () => {
 		const adversarial = `${"<signet-memory>".repeat(9)}${"x".repeat(50_000)}${"</signet-memory>".repeat(9)}${"<signet-memory ".repeat(2_000)}${"x".repeat(50_000)}>${"</signet-memory ".repeat(2_000)}${"x".repeat(50_000)}>`;
 		const started = performance.now();
