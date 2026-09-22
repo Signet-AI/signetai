@@ -185,9 +185,15 @@ function sourceLines(source: string): readonly SourceLine[] {
 	return lines;
 }
 
-function yamlBlockScalarSpans(source: string): readonly Span[] {
+interface HashRegions {
+	readonly protectedSpans: readonly Span[];
+	readonly shellSpans: readonly Span[];
+}
+
+function yamlHashRegions(source: string): HashRegions {
 	const lines = sourceLines(source);
-	const spans: Span[] = [];
+	const protectedSpans: Span[] = [];
+	const shellSpans: Span[] = [];
 	const header = /^([ ]*)(?:-\s+)?(?:[^#\r\n]*?:\s*)?[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?$/;
 	for (let index = 0; index < lines.length; index += 1) {
 		const headerLine = lines[index];
@@ -211,15 +217,16 @@ function yamlBlockScalarSpans(source: string): readonly Span[] {
 			const payloadStop = payloadLines.at(-1)?.end;
 			if (payloadStart !== undefined && payloadStop !== undefined && Number.isFinite(contentIndent)) {
 				for (const span of shellHeredocSpans(source.slice(payloadStart, payloadStop), contentIndent)) {
-					spans.push({ start: payloadStart + span.start, end: payloadStart + span.end });
+					protectedSpans.push({ start: payloadStart + span.start, end: payloadStart + span.end });
 				}
+				shellSpans.push({ start: payloadStart, end: payloadStop });
 			}
 		} else {
-			for (const line of payloadLines) spans.push({ start: line.start, end: line.end });
+			for (const line of payloadLines) protectedSpans.push({ start: line.start, end: line.end });
 		}
 		index = payloadEnd - 1;
 	}
-	return spans;
+	return { protectedSpans, shellSpans };
 }
 
 interface Heredoc {
@@ -301,24 +308,33 @@ function hashCommentSpans(source: string, path: string): readonly Span[] {
 	let quote: '"' | "'" | '"""' | "'''" | "`" | undefined;
 	const python = /\.py$/i.test(path);
 	const name = path.slice(path.lastIndexOf("/") + 1);
-	const protectedSpans =
+	const shellLike = /\.sh$/i.test(path) || /^(?:Caddyfile|Dockerfile)$/i.test(name) || /^\.githooks\//.test(path);
+	const regions =
 		/\.(?:ya?ml)$/i.test(path) || path.endsWith("/agent.yaml.template")
-			? yamlBlockScalarSpans(source)
-			: /\.sh$/i.test(path) || /^(?:Caddyfile|Dockerfile)$/i.test(name) || /^\.githooks\//.test(path)
-				? shellHeredocSpans(source)
-				: [];
+			? yamlHashRegions(source)
+			: shellLike
+				? { protectedSpans: shellHeredocSpans(source), shellSpans: [{ start: 0, end: source.length }] }
+				: { protectedSpans: [], shellSpans: [] };
 	let protectedIndex = 0;
+	let shellIndex = 0;
 	for (let index = 0; index < source.length; index += 1) {
 		while (true) {
-			const candidate = protectedSpans[protectedIndex];
+			const candidate = regions.protectedSpans[protectedIndex];
 			if (candidate === undefined || candidate.end > index) break;
 			protectedIndex += 1;
 		}
-		const protectedSpan = protectedSpans[protectedIndex];
+		const protectedSpan = regions.protectedSpans[protectedIndex];
 		if (protectedSpan !== undefined && protectedSpan.start <= index) {
 			index = protectedSpan.end - 1;
 			continue;
 		}
+		while (true) {
+			const candidate = regions.shellSpans[shellIndex];
+			if (candidate === undefined || candidate.end > index) break;
+			shellIndex += 1;
+		}
+		const shellSpan = regions.shellSpans[shellIndex];
+		const shell = shellSpan !== undefined && shellSpan.start <= index;
 		if (quote !== undefined) {
 			if (quote.length === 3 && source.startsWith(quote, index)) {
 				index += 2;
@@ -344,7 +360,7 @@ function hashCommentSpans(source: string, path: string): readonly Span[] {
 		}
 		if (character !== "#") continue;
 		const previous = source[index - 1] ?? "\n";
-		if (!python && !/\s/.test(previous)) continue;
+		if (!python && !/\s/.test(previous) && !(shell && /[;&|()]/.test(previous))) continue;
 		let end = index;
 		while (end < source.length && source[end] !== "\n" && source[end] !== "\r") end += 1;
 		spans.push({ start: index, end });
