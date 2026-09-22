@@ -103,18 +103,35 @@ fn integrity_migrates_legacy_checkpoint_columns() {
     drop(core);
     let db = Connection::open(&path).unwrap();
     db.execute("CREATE TABLE integrity_checkpoints (agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, project_id TEXT NOT NULL DEFAULT '', visibility TEXT NOT NULL, schema_hash TEXT NOT NULL, next_table TEXT, completed INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY(agent_id,workspace_id,project_id,visibility))", []).unwrap();
+    db.execute("INSERT INTO integrity_checkpoints(agent_id,workspace_id,project_id,visibility,schema_hash,next_table,completed,updated_at) VALUES('legacy-agent','legacy-workspace','legacy-project','shared','legacy-hash','memories',1,'2000-01-02T03:04:05Z')", []).unwrap();
     drop(db);
     let core = Core::open(&path, 2).unwrap();
     let result = verify(&core, "agent", "workspace", None, "private", 1);
     assert!(result["checkpoint"]["schemaVersion"].is_number());
     let db = Connection::open(&path).unwrap();
-    assert!(db
-        .query_row(
-            "SELECT skipped_objects FROM integrity_checkpoints",
-            [],
-            |r| r.get::<_, String>(0)
+    let legacy: (String, String, i64, String, String, i64) = db.query_row(
+        "SELECT schema_hash,next_table,completed,updated_at,skipped_objects,schema_version FROM integrity_checkpoints WHERE agent_id='legacy-agent'",
+        [], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?))) .unwrap();
+    assert_eq!(
+        legacy,
+        (
+            "legacy-hash".into(),
+            "memories".into(),
+            1,
+            "2000-01-02T03:04:05Z".into(),
+            "[]".into(),
+            1
         )
-        .is_ok());
+    );
+    let columns: Vec<String> = db
+        .prepare("PRAGMA table_info(integrity_checkpoints)")
+        .unwrap()
+        .query_map([], |r| r.get(1))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(columns.contains(&"skipped_objects".into()));
+    assert!(columns.contains(&"schema_version".into()));
 }
 
 #[test]
@@ -133,6 +150,66 @@ fn integrity_budget_advances_frontier_and_is_idempotent_after_completion() {
     let repeat = verify(&core, "agent", "workspace", None, "private", 1);
     assert!(repeat["checkedTables"].as_array().unwrap().is_empty());
     assert_eq!(repeat["checkpoint"]["completed"], true);
+    let db = Connection::open(&path).unwrap();
+    let persisted: (Option<String>, i64, String, i64, String) = db.query_row(
+        "SELECT next_table,completed,skipped_objects,schema_version,schema_hash FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='' AND visibility='private'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap();
+    assert_eq!(persisted.0, None);
+    assert_eq!(persisted.1, 1);
+    assert_eq!(persisted.2, "[]");
+    assert!(persisted.3 > 0);
+    assert!(!persisted.4.is_empty());
+}
+
+#[test]
+fn integrity_failure_does_not_overwrite_prior_checkpoint() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("corrupt.sqlite");
+    let core = Core::open(&path, 2).unwrap();
+    let before = verify(&core, "agent", "workspace", None, "private", 1);
+    drop(core);
+    let db = Connection::open(&path).unwrap();
+    db.execute("CREATE TABLE corruption_probe (value INTEGER)", [])
+        .unwrap();
+    db.execute(
+        "CREATE INDEX corruption_probe_index ON corruption_probe(value)",
+        [],
+    )
+    .unwrap();
+    db.execute("PRAGMA writable_schema=ON", []).unwrap();
+    db.execute(
+        "UPDATE sqlite_master SET rootpage=2 WHERE name='corruption_probe_index'",
+        [],
+    )
+    .unwrap();
+    drop(db);
+    let core = Core::open(&path, 2).unwrap();
+    let error = core
+        .submit(Operation::IntegrityVerify {
+            agent_id: "agent".into(),
+            workspace_id: "workspace".into(),
+            project_id: None,
+            visibility: "private".into(),
+            budget: 1,
+        })
+        .unwrap_err();
+    assert!(error.to_string().contains("integrity") || error.to_string().contains("malformed"));
+    let db = Connection::open(&path).unwrap();
+    let after: (Option<String>, i64, String, i64) = db.query_row(
+        "SELECT next_table,completed,skipped_objects,schema_version FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='' AND visibility='private'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
+    assert_eq!(
+        after.0,
+        before["checkpoint"]["nextTable"]
+            .as_str()
+            .map(str::to_owned)
+    );
+    assert_eq!(
+        after.1,
+        i64::from(before["checkpoint"]["completed"].as_bool().unwrap())
+    );
+    assert_eq!(after.2, "[]");
+    assert!(after.3 > 0);
 }
 
 #[test]
@@ -146,4 +223,23 @@ fn integrity_checkpoint_scopes_are_isolated() {
     assert_eq!(shared["checkedTables"][0]["table"], "documents");
     let other = verify(&core, "agent", "workspace", Some("two"), "private", 1);
     assert_eq!(other["checkedTables"][0]["table"], "documents");
+    let other_agent = verify(&core, "other-agent", "workspace", Some("one"), "private", 1);
+    let other_workspace = verify(&core, "agent", "other-workspace", Some("one"), "private", 1);
+    assert_eq!(other_agent["checkedTables"][0]["table"], "documents");
+    assert_eq!(other_workspace["checkedTables"][0]["table"], "documents");
+    let db = Connection::open(&path).unwrap();
+    let rows: i64 = db
+        .query_row("SELECT count(*) FROM integrity_checkpoints", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(rows, 5);
+    let private_next: Option<String> = db.query_row(
+        "SELECT next_table FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='one' AND visibility='private'",
+        [], |r| r.get(0)).unwrap();
+    let shared_next: Option<String> = db.query_row(
+        "SELECT next_table FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='one' AND visibility='shared'",
+        [], |r| r.get(0)).unwrap();
+    assert_eq!(private_next.as_deref(), Some("memories"));
+    assert_eq!(shared_next.as_deref(), Some("memories"));
 }
