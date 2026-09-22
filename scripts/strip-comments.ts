@@ -13,10 +13,16 @@ interface Span {
 	readonly end: number;
 	readonly replacement?: string;
 	readonly start: number;
+	readonly wholeLine?: boolean;
 }
 
-const SEMANTIC_DIRECTIVE =
-	/(?:^#!|^#\s*(?:check|escape|requires|syntax)\b|<reference\s|[@#]__(?:NO_SIDE_EFFECTS|PURE)__|@(?:jest|vitest)-environment|@license\b|@preserve\b|@ts-(?:check|expect-error|ignore|nocheck)|actionlint|biome-ignore|c8\s+ignore|clang-format|coding[:=]|deno-lint-ignore|eslint-(?:disable|enable)|fmt:|istanbul\s+ignore|mypy:|NOLINT|noqa|pragma:\s*no cover|prettier-ignore|pylint|pyright|ruff:|shellcheck|sourceMappingURL|sourceURL|type:\s*ignore|webpack(?:Ignore|ChunkName)|vite-ignore|yaml-language-server|yamllint|@jsx(?:ImportSource)?\b)/i;
+const TOOL_DIRECTIVE = /(?:@license\b|@preserve\b|biome-ignore|prettier-ignore)/i;
+const TYPESCRIPT_DIRECTIVE =
+	/(?:<reference\s|[@#]__(?:NO_SIDE_EFFECTS|PURE)__|@(?:jest|vitest)-environment|@ts-(?:check|expect-error|ignore|nocheck)|c8\s+ignore|deno-lint-ignore|eslint-(?:disable|enable)|istanbul\s+ignore|sourceMappingURL|sourceURL|webpack(?:Ignore|ChunkName)|vite-ignore|@jsx(?:ImportSource)?\b)/i;
+const PYTHON_DIRECTIVE =
+	/(?:coding[:=][^\S\r\n]*[-\w.]+|fmt:\s*(?:off|on|skip)|mypy:|noqa|pragma:\s*no cover|pylint:|pyright:|ruff:|type:\s*ignore)/i;
+const YAML_DIRECTIVE = /(?:actionlint|yaml-language-server|yamllint)/i;
+const C_DIRECTIVE = /(?:clang-format|NOLINT)/i;
 const LEGAL_NOTICE = /(?:SPDX-License-Identifier:|Copyright(?:\s+\(c\)|\s+©)?\s+\d{4})/i;
 const SUPPORTED_EXTENSION =
 	/\.(?:astro|c|cc|cjs|cpp|cs|css|cts|h|hh|hpp|html|ini|js|jsx|jsonc|mjs|mts|plist|ps1|py|rs|sh|sql|toml|ts|tsx|ya?ml)$/i;
@@ -35,9 +41,23 @@ export function isCommentPurgePath(input: string): boolean {
 	return /^\.githooks\/(?:commit-msg|pre-commit)$/.test(path);
 }
 
-function isPreservedComment(source: string, span: Span): boolean {
+function isPreservedComment(source: string, span: Span, path: string): boolean {
 	const comment = source.slice(span.start, span.end);
-	return SEMANTIC_DIRECTIVE.test(comment) || LEGAL_NOTICE.test(comment);
+	if ((span.start === 0 && comment.startsWith("#!")) || LEGAL_NOTICE.test(comment) || TOOL_DIRECTIVE.test(comment))
+		return true;
+	const name = path.slice(path.lastIndexOf("/") + 1);
+	if (/\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/i.test(path) || /\.(?:astro|html)$/i.test(path)) {
+		if (TYPESCRIPT_DIRECTIVE.test(comment)) return true;
+	}
+	if (/\.py$/i.test(path) && PYTHON_DIRECTIVE.test(comment)) return true;
+	if (/\.(?:ya?ml)$/i.test(path) || path.endsWith("/agent.yaml.template")) {
+		if (YAML_DIRECTIVE.test(comment)) return true;
+	}
+	if (/\.(?:c|cc|cpp|cs|h|hh|hpp)$/i.test(path) && C_DIRECTIVE.test(comment)) return true;
+	if (/\.sh$/i.test(path) && /shellcheck/i.test(comment)) return true;
+	if (/\.ps1$/i.test(path) && /^#requires\b/i.test(comment)) return true;
+	if (/^Dockerfile$/i.test(name) && /^#\s*(?:check|escape|syntax)=/i.test(comment)) return true;
+	return /^<!--\[if\b/i.test(comment);
 }
 
 function replacementFor(source: string, span: Span): string {
@@ -57,7 +77,7 @@ function normalizeCommentSpan(source: string, span: Span): Span {
 	const before = source.slice(lineStart, span.start);
 	const after = source.slice(span.end, lineEnd);
 	if (before.trim().length === 0 && after.trim().length === 0) {
-		return { start: lineStart, end: newline < 0 ? lineEnd : lineEnd + 1, replacement: "" };
+		return { start: lineStart, end: newline < 0 ? lineEnd : lineEnd + 1, replacement: "", wholeLine: true };
 	}
 	if (after.trim().length !== 0) return span;
 	let start = span.start;
@@ -65,6 +85,37 @@ function normalizeCommentSpan(source: string, span: Span): Span {
 	let end = span.end;
 	while (end < lineEnd && (source[end] === " " || source[end] === "	")) end += 1;
 	return { start, end, replacement: "" };
+}
+
+function mergeWholeLineSpans(spans: readonly Span[]): readonly Span[] {
+	const merged: Span[] = [];
+	for (const span of [...spans].sort((left, right) => left.start - right.start)) {
+		const previous = merged.at(-1);
+		if (previous?.wholeLine === true && span.wholeLine === true && span.start <= previous.end) {
+			merged[merged.length - 1] = {
+				start: previous.start,
+				end: Math.max(previous.end, span.end),
+				replacement: "",
+				wholeLine: true,
+			};
+			continue;
+		}
+		merged.push(span);
+	}
+	return merged;
+}
+
+function trimAdjacentBlankLine(source: string, span: Span): Span {
+	if (span.wholeLine !== true) return span;
+	if (span.start > 0) {
+		const previousStart = source.lastIndexOf("\n", span.start - 2) + 1;
+		const previousLine = source.slice(previousStart, span.start - 1).replace(/\r$/, "");
+		if (previousLine.trim().length === 0) return { ...span, start: previousStart };
+	}
+	if (span.start !== 0) return span;
+	if (source.startsWith("\r\n", span.end)) return { ...span, end: span.end + 2 };
+	if (source[span.end] === "\n") return { ...span, end: span.end + 1 };
+	return span;
 }
 
 function typeScriptCommentSpans(source: string, path: string): readonly Span[] {
@@ -299,8 +350,11 @@ export function stripComments(source: string, path: string): StripResult {
 	else if (/\.ps1$/i.test(path)) spans = powerShellCommentSpans(source, path);
 	else if (isCommentPurgePath(path)) spans = hashCommentSpans(source, path);
 	else throw new Error(`Unsupported comment syntax: ${path}`);
-	spans = spans.filter((span) => !isPreservedComment(source, span)).map((span) => normalizeCommentSpan(source, span));
-	return { content: applySpans(source, spans), removed: spans.length };
+	const removable = spans.filter((span) => !isPreservedComment(source, span, path));
+	spans = mergeWholeLineSpans(removable.map((span) => normalizeCommentSpan(source, span))).map((span) =>
+		trimAdjacentBlankLine(source, span),
+	);
+	return { content: applySpans(source, spans), removed: removable.length };
 }
 
 type Mode = "check" | "write";
