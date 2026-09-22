@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -24,7 +24,7 @@ describe("canonical workspace layout resolver", () => {
 			expect(layout.version).toBe(1);
 			expect(layout.database).toBe(join(root, "memory", "memories.db"));
 			expect(layout.transcripts).toBe(join(root, "memory"));
-			expect(layout.runtime).toBe(join(root, "memory"));
+			expect(layout.runtime).toBe(join(root, ".daemon"));
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
@@ -68,6 +68,19 @@ describe("canonical workspace layout resolver", () => {
 			}
 			expect(existsSync(join(root, "files", "sources.json"))).toBe(false);
 			expect(JSON.parse(readFileSync(join(root, "workspace-layout.json"), "utf8")).version).toBe(2);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("does not delete a pre-existing manual inbox entry", () => {
+		const root = mkdtempSync(join(tmpdir(), "layout-existing-inbox-"));
+		try {
+			const files = join(root, "files");
+			mkdirSync(files);
+			writeFileSync(join(files, "sources.json"), "manual");
+			createFreshWorkspaceV2(root, { env: env(join(root, "config")) });
+			expect(readFileSync(join(files, "sources.json"), "utf8")).toBe("manual");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

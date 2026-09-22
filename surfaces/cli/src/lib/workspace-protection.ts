@@ -1,4 +1,4 @@
-import { spawnSyncHidden as spawnSync } from "@signet/core";
+import { resolveWorkspaceLayout, spawnSyncHidden as spawnSync } from "@signet/core";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";

@@ -79,13 +79,20 @@ export function sanitizeHarnessPath(harness: string): string {
 
 export function canonicalTranscriptRelativePath(harness: string): string {
 	const root = resolveBasePath();
-	const transcriptRoot = resolveWorkspaceLayout(root).transcripts;
-	return `${transcriptRoot.slice(root.length + 1)}/${sanitizeHarnessPath(harness)}/transcript.jsonl`;
+	const layout = resolveWorkspaceLayout(root);
+	const path = canonicalTranscriptPath(root, harness);
+	return path.slice(layout.root.length + 1);
 }
 
 export function canonicalTranscriptPath(basePath: string | undefined, harness: string): string {
 	const root = resolveBasePath(basePath);
-	return join(resolveWorkspaceLayout(root).transcripts, sanitizeHarnessPath(harness), "transcript.jsonl");
+	const layout = resolveWorkspaceLayout(root);
+	return join(
+		layout.transcripts,
+		sanitizeHarnessPath(harness),
+		...(layout.version === 1 ? ["transcripts"] : []),
+		"transcript.jsonl",
+	);
 }
 
 function normalizeLf(text: string): string {

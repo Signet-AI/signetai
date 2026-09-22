@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export const WORKSPACE_LAYOUT_V1 = 1 as const;
@@ -89,7 +89,7 @@ export function resolveWorkspaceLayout(rootPath: string, _options: { env?: NodeJ
 		version,
 		database: custom.database ? absolute(root, custom.database) : join(data, v2 ? "signet.db" : "memories.db"),
 		transcripts: custom.transcripts ? absolute(root, custom.transcripts) : join(root, v2 ? "transcripts" : "memory"),
-		runtime: custom.runtime ? absolute(root, custom.runtime) : join(root, v2 ? "runtime" : "memory"),
+		runtime: custom.runtime ? absolute(root, custom.runtime) : join(root, v2 ? "runtime" : ".daemon"),
 		cache: custom.cache ? absolute(root, custom.cache) : join(root, v2 ? "cache" : "memory", "cache"),
 		files: custom.files ? absolute(root, custom.files) : join(root, "files"),
 		imports: custom.imports ? absolute(root, custom.imports) : join(data, "imports"),
@@ -118,7 +118,5 @@ export function createFreshWorkspaceV2(
 		layout.imports,
 	])
 		mkdirSync(directory, { recursive: true });
-	// Keep the inbox empty and unregistered: admission belongs to the importer.
-	rmSync(join(layout.files, "sources.json"), { force: true });
 	return { ...layout, layoutFile: file };
 }

@@ -75,6 +75,10 @@ interface TranscriptCaptureResult {
 	readonly sourceMtimeMs: number | null;
 }
 
+class CanonicalTranscriptMismatchError extends Error {
+	readonly name = "CanonicalTranscriptMismatchError";
+}
+
 export interface TranscriptCaptureWorkerHandle {
 	stop(): void;
 	nudge(): void;
@@ -541,7 +545,7 @@ async function processTranscriptCaptureJob(
 		preserveExistingSession: resolved.sessionCompleted || job.previouslyCompleted,
 	});
 	if (!canonicalWasWritten) {
-		throw new Error(
+		throw new CanonicalTranscriptMismatchError(
 			`canonical transcript mismatch: retained JSONL is richer or divergent for session ${job.sessionKey ?? job.sessionId}`,
 		);
 	}
@@ -703,6 +707,7 @@ async function runTranscriptCaptureOnceInternal(dbAccessor: DbAccessor, basePath
 			await markDone(dbAccessor, job, result);
 		} catch (error) {
 			await markFailed(dbAccessor, job, error);
+			if (error instanceof CanonicalTranscriptMismatchError) return true;
 			throw error;
 		}
 		return true;
