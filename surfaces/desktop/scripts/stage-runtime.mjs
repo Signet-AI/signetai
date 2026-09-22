@@ -263,17 +263,28 @@ export function stageRuntime() {
 		cpSync(dashboardBuild, resolve(stagedResources, "rust-daemon", "dashboard"), { recursive: true });
 		// Preserve the complete daemon distribution and its native dependency assets
 		// for compatibility consumers; production launch remains the Rust binary.
+		const daemonRootOut = resolve(stagedResources, "rust-daemon");
 		const daemonDist = resolve(repoRoot, "platform/daemon/dist");
-		const daemonDistOut = resolve(stagedResources, "rust-daemon", "dist");
-		if (existsSync(daemonDist)) {
-			mkdirSync(daemonDistOut, { recursive: true });
-			for (const entry of readdirSync(daemonDist)) {
-				if (/\.(js|node|wasm)$/.test(entry)) cpSync(join(daemonDist, entry), resolve(daemonDistOut, entry));
-			}
+		if (!existsSync(daemonDist)) throw new Error(`Daemon distribution not found: ${daemonDist}`);
+		// The build output is authoritative: worker entrypoints and nested assets
+		// are loaded by name at runtime, so do not reduce it to a file extension list.
+		for (const entry of readdirSync(daemonDist)) {
+			if (!entry) throw new Error(`Invalid daemon distribution entry: ${daemonDist}`);
 		}
-		// tiktoken/native package assets are staged by the daemon build when present.
-		const tiktoken = resolve(repoRoot, "platform/daemon/node_modules/tiktoken");
-		if (existsSync(tiktoken)) cpSync(tiktoken, resolve(stagedResources, "rust-daemon", "node_modules", "tiktoken"), { recursive: true });
+		cpSync(daemonDist, resolve(daemonRootOut, "dist"), { recursive: true });
+
+		const daemonSkills = resolve(repoRoot, "platform/daemon/skills");
+		if (existsSync(daemonSkills)) cpSync(daemonSkills, resolve(daemonRootOut, "skills"), { recursive: true });
+
+		// Stage the exact external packages whose files are resolved at runtime.
+		const packageSources = [
+			["tiktoken", resolve(repoRoot, "node_modules/tiktoken")],
+			[platformVecPackage(target, arch), resolve(repoRoot, "node_modules", platformVecPackage(target, arch))],
+		];
+		for (const [name, source] of packageSources) {
+			if (!existsSync(source)) throw new Error(`Required daemon package not found: ${source}`);
+			cpSync(source, resolve(daemonRootOut, "node_modules", name), { recursive: true });
+		}
 
 		// The native runtime still needs the hermes-agent Python plugin during harness install.
 		const connectorsOut = resolve(stagedResources, "rust-daemon", "connectors");
