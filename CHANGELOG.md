@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-22
+- Bug fixes: close failed daemon responses; harden all daemon requests; silence daemon failures in TUI; close prepared SQLite statements on Windows.
+- Refactoring: simplify daemon request handling.
+
 ### 2026-09-21
 - Bug fixes: make HTTP embedding repair durable and bounded; qualify Bun 1.4.0; isolate native keyring; persist source item failures; bound source worker frames; simplify transcript capture ownership.
 
@@ -28,10 +32,23 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-09-13
 - Bug fixes: scope event provenance; normalize owner transport errors; fence dispatching owner jobs; close owner metrics fences; fence expired owner jobs.
 
-### 2026-09-12
-- Features: polish landing page experience; refresh Signet landing page.
-
 ## Release Ledger
+
+## [0.226.14] - 2026-09-22
+
+Release summary: 4 bug fixes and 1 refactor.
+Tag range: `v0.226.13..v0.226.14`.
+
+### Bug Fixes
+
+- **pi**: close failed daemon responses
+- **pi**: harden all daemon requests
+- **pi**: silence daemon failures in TUI
+- close prepared SQLite statements on Windows (#1934)
+
+### Refactoring
+
+- **pi**: simplify daemon request handling
 
 ## [0.226.13] - 2026-09-21
 
