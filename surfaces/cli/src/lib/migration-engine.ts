@@ -56,6 +56,14 @@ export type MigrationPlan = {
 	fingerprints?: Fingerprint[];
 };
 export type MigrationResult = { status: "completed"; destination: string; receipt: string };
+export type MigrationStatus = {
+	phase: string;
+	rollbackEligible: boolean;
+	destinationWrites: boolean;
+	copied: number;
+	blocked: string[];
+	journal?: string;
+};
 export interface MigrationDeps {
 	resolver: { resolve(): Layout; cutover?: (layout: Layout) => Promise<void> };
 	writers: { drain(): Promise<{ owners: string[] }> };
@@ -181,6 +189,32 @@ export class MigrationEngine {
 	async resume(): Promise<MigrationResult> {
 		return this.run();
 	}
+	async status(): Promise<MigrationStatus> {
+		const journal = readJournal(this.journalPath);
+		if (!journal)
+			return {
+				phase: "not-started",
+				rollbackEligible: false,
+				destinationWrites: false,
+				copied: 0,
+				blocked: [],
+				journal: this.journalPath,
+			};
+		return {
+			phase: journal.phase,
+			rollbackEligible: journal.rollbackEligible,
+			destinationWrites: journal.destinationWrites,
+			copied: journal.copied.length,
+			blocked: journal.error ? [redactBlocker(journal.error)] : [],
+			journal: this.journalPath,
+		};
+	}
+	async cleanup(accepted: boolean): Promise<void> {
+		if (!accepted) throw new Error("cleanup requires explicit acceptance (--accept)");
+		const journal = readJournal(this.journalPath);
+		if (journal?.phase !== "completed") throw new Error("cleanup requires a completed migration");
+		unlinkSync(this.journalPath);
+	}
 	async rollback(): Promise<void> {
 		const j = readJournal(this.journalPath);
 		if (!j?.rollbackEligible || j.destinationWrites || j.phase === "completed")
@@ -199,7 +233,15 @@ function validateLayout(l: Layout) {
 		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
 	}
 }
-function workspaceId(root: string) {
+
+function redactBlocker(message: string): string {
+	if (message.startsWith("migration drain blocked by:")) return "migration is blocked by active writers";
+	if (message.includes("escaping symlink")) return "migration is blocked by an unsafe symlink";
+	if (message.includes("integrity verification")) return "migration is blocked by database verification";
+	return "migration failed; run status details are intentionally redacted";
+}
+
+function workspaceId(root: string): string {
 	return createHash("sha256").update(resolve(root)).digest("hex").slice(0, 32);
 }
 function identity(p: string) {
