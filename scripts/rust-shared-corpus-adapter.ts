@@ -11,13 +11,25 @@ import {
 	openSync,
 	closeSync,
 } from "node:fs";
-import { resolve, basename, dirname } from "node:path";
+import { resolve, basename, dirname, isAbsolute, relative, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { buildExecutionManifest, currentManifest } from "./shared-corpus-runner";
 import { validateRustDaemonArtifact } from "./rust-shared-corpus-artifact";
 
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
+const isForbiddenPath = (path: string) => FORBIDDEN.test(path.replaceAll("\\", "/"));
+const isFreshTargetArtifact = (path: string, crate: string) => {
+	const checkout = realpathSync(process.cwd());
+	const artifact = realpathSync(path);
+	const relativeArtifact = relative(checkout, artifact);
+	const targetPrefix = ["platform", crate, "target"].join(sep) + sep;
+	return (
+		!isAbsolute(relativeArtifact) &&
+		!relativeArtifact.startsWith(`..${sep}`) &&
+		relativeArtifact.startsWith(targetPrefix)
+	);
+};
 type Manifest = {
 	baselineSha?: string;
 	packageJsonSha256?: string;
@@ -97,7 +109,7 @@ function validateElf(value: string, identity: string, label: string): void {
 }
 validateElf(artifact, "signet-daemon", "daemon artifact");
 validateElf(coreDriver, "signet-core-test-driver", "core driver artifact");
-if (!realpathSync(coreDriver).includes("/platform/rust-core/target/"))
+if (!isFreshTargetArtifact(coreDriver, "rust-core"))
 	fail("core driver artifact is stale or outside the fresh Rust core target");
 try {
 	validateRustDaemonArtifact({
@@ -108,7 +120,7 @@ try {
 } catch (error) {
 	fail(error instanceof Error ? error.message : String(error));
 }
-if (FORBIDDEN.test(coreDriver) || FORBIDDEN.test(artifact))
+if (isForbiddenPath(coreDriver) || isForbiddenPath(artifact))
 	fail("forbidden archived daemon/source path in execution boundary");
 /* Keep the daemon checks explicit and unchanged in meaning. */
 if (!existsSync(artifact) || !statSync(artifact).isFile() || (statSync(artifact).mode & 0o111) === 0)

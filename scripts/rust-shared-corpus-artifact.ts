@@ -30,6 +30,21 @@ function currentRevision(checkout: string): string {
 	return execFileSync("git", ["rev-parse", "HEAD"], { cwd: checkout, encoding: "utf8" }).trim();
 }
 
+function currentRustToolchain(): string {
+	return execFileSync("rustc", ["--version"], { encoding: "utf8" }).trim();
+}
+
+function currentRustTarget(): string {
+	const details = execFileSync("rustc", ["-vV"], { encoding: "utf8" });
+	const host = details
+		.split(/\r?\n/)
+		.find((line) => line.startsWith("host:"))
+		?.slice("host:".length)
+		.trim();
+	if (!host) throw new Error("unable to determine the current Rust target");
+	return host;
+}
+
 function sha256(path: string): string {
 	return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
@@ -72,6 +87,12 @@ function validateStagedArtifact(
 		throw new Error("staged daemon provenance source revision does not match the current checkout");
 	if (!provenance.target || !provenance.rustToolchain || !provenance.cargoLockSha256 || !provenance.executableIdentity)
 		throw new Error("staged daemon provenance is incomplete");
+	if (provenance.target !== currentRustTarget()) throw new Error("staged daemon provenance target mismatch");
+	if (provenance.rustToolchain !== currentRustToolchain())
+		throw new Error("staged daemon provenance Rust toolchain mismatch");
+	const cargoLock = resolve(checkout, "platform/rust-daemon/Cargo.lock");
+	if (!existsSync(cargoLock) || provenance.cargoLockSha256 !== sha256(cargoLock))
+		throw new Error("staged daemon provenance Cargo.lock mismatch");
 	if (provenance.sha256 !== sha256(artifact)) throw new Error("staged daemon provenance checksum mismatch");
 	if (!Number.isSafeInteger(provenance.size) || provenance.size <= 0 || provenance.size !== statSync(artifact).size)
 		throw new Error("staged daemon provenance size mismatch");

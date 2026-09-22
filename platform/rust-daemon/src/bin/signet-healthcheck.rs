@@ -43,9 +43,25 @@ fn ready(address: SocketAddr) -> bool {
         Err(_) => return false,
     };
     let response = String::from_utf8_lossy(&response[..bytes_read]);
-    response
-        .strip_prefix("HTTP/")
-        .and_then(|response| response.split_whitespace().next())
-        .and_then(|status| status.parse::<u16>().ok())
-        .is_some_and(|status| (200..300).contains(&status))
+    parse_http_status(&response).is_some_and(|status| (200..300).contains(&status))
+}
+
+fn parse_http_status(response: &str) -> Option<u16> {
+    let mut fields = response.lines().next()?.split_whitespace();
+    if !fields.next()?.starts_with("HTTP/") {
+        return None;
+    }
+    fields.next()?.parse::<u16>().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn parses_http_status_from_versioned_response() {
+        assert_eq!(super::parse_http_status("HTTP/1.1 200 OK\r\n"), Some(200));
+        assert_eq!(
+            super::parse_http_status("HTTP/1.1 503 Service Unavailable\r\n"),
+            Some(503)
+        );
+    }
 }
