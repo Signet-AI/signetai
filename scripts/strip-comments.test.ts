@@ -193,6 +193,22 @@ test("preserves hashes inside shell and Dockerfile heredoc payloads", () => {
 	expect(dockerResult.content).toContain("	# literal payload");
 });
 
+test("recognizes shell operator comment boundaries without changing parameter expansion", () => {
+	const parameterExpansion = 'echo "${' + 'value#prefix}"';
+	const source = ["echo ok;# explanation", "echo ok &&# explanation", `${parameterExpansion} # explanation`].join("\n");
+	const result = stripComments(source, "scripts/example.sh");
+	expect(result.removed).toBe(3);
+	expect(result.content).toBe(["echo ok;", "echo ok &&", parameterExpansion].join("\n"));
+});
+
+test("limits shell operator comment boundaries to YAML run blocks", () => {
+	const source = ["value: foo;# literal", "run: |", "  echo ok;# explanation"].join("\n");
+	const result = stripComments(source, ".github/workflows/example.yml");
+	expect(result.removed).toBe(1);
+	expect(result.content).toContain("value: foo;# literal");
+	expect(result.content).toContain("  echo ok;");
+});
+
 test("strips C-family, CSS, JSONC, and SQL comments without changing literals", () => {
 	const rust = [
 		'let url = "https://example.com"; // explanation',
