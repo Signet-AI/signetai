@@ -1,4 +1,3 @@
-import { join } from "node:path";
 import { diagnoseHermesIntegration } from "@signet/connector-hermes-agent";
 import { OpenClawConnector, type OpenClawRuntimeState } from "@signet/connector-openclaw";
 import {
@@ -9,6 +8,7 @@ import {
 	hasValidIdentity,
 	inactivePackageManagerInstallations,
 	loadIdentityMode,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";

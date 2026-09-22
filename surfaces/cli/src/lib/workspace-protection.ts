@@ -1,7 +1,7 @@
 import { resolveWorkspaceLayout, spawnSyncHidden as spawnSync } from "@signet/core";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import Database from "../sqlite.js";
 
@@ -52,15 +52,11 @@ function isWithin(root: string, path: string): boolean {
 
 function hasSnapshotContents(source: string, snapshot: string): boolean {
 	const root = resolve(snapshot);
-	const required = [
-		"AGENTS.md",
-		"agent.yaml",
-		"SOUL.md",
-		"IDENTITY.md",
-		"USER.md",
-		"MEMORY.md",
-		join("memory", "memories.db"),
-	];
+	const database = relative(root, resolveWorkspaceLayout(root).database);
+	if (database.length === 0 || isAbsolute(database) || database === ".." || database.startsWith(`..${sep}`)) {
+		return false;
+	}
+	const required = ["AGENTS.md", "agent.yaml", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", database];
 	for (const file of required) {
 		if (!existsSync(join(root, file))) {
 			return false;
@@ -176,7 +172,14 @@ export function createWorkspaceSnapshot(basePath: string, backupRoot?: string): 
 
 	const sourceDb = resolveWorkspaceLayout(source).database;
 	if (existsSync(sourceDb)) {
+		if (!isWithin(source, sourceDb)) {
+			throw new Error(`Workspace database is externally managed and cannot be included in this snapshot: ${sourceDb}`);
+		}
 		const targetDb = resolveWorkspaceLayout(target).database;
+		if (!isWithin(target, targetDb)) {
+			throw new Error(`Snapshot database path escapes the snapshot workspace: ${targetDb}`);
+		}
+		mkdirSync(dirname(targetDb), { recursive: true });
 		rmSync(targetDb, { force: true });
 		rmSync(`${targetDb}-wal`, { force: true });
 		rmSync(`${targetDb}-shm`, { force: true });
