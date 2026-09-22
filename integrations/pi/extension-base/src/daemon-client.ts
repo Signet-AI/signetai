@@ -110,6 +110,7 @@ async function daemonFetchResult<T>(
 				return { ok: false, reason: "invalid-json", status: response.status };
 			}
 		} catch (e) {
+			await cancelResponseBody(response);
 			// Body read failed — typically a timeout firing after headers arrived
 			if (isTimeoutError(e)) {
 				logWarning(config, `[${config.logPrefix}] ${method} ${path} body read timed out after ${timeout}ms`);

@@ -58,15 +58,23 @@ describe("createDaemonClient (extension-base)", () => {
 	});
 
 	test("postResult classifies non-timeout body read failures separately from timeout", async () => {
+		let canceled = false;
 		globalThis.fetch = Object.assign(
 			async () => {
-				const body = new ReadableStream({
-					start(controller) {
-						controller.enqueue(new TextEncoder().encode('{"inje'));
-						setTimeout(() => controller.error(new Error("stream reset")), 5);
+				const response = new Response(null, { status: 200, headers: { "Content-Type": "application/json" } });
+				Object.defineProperty(response, "text", {
+					value: async () => {
+						throw new Error("stream reset");
 					},
 				});
-				return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
+				Object.defineProperty(response, "body", {
+					value: {
+						cancel: async () => {
+							canceled = true;
+						},
+					},
+				});
+				return response;
 			},
 			{ preconnect: originalFetch.preconnect },
 		);
@@ -78,6 +86,7 @@ describe("createDaemonClient (extension-base)", () => {
 		if (!result.ok) {
 			expect(result.reason).toBe("body-read");
 		}
+		expect(canceled).toBe(true);
 	});
 
 	test("postResult returns invalid-json with diagnostic info for empty body", async () => {
