@@ -2,8 +2,8 @@ use signet_core_native::{Core, NewMemory, Operation};
 use tempfile::{tempdir, TempDir};
 
 struct TestCore {
-    _dir: TempDir,
     core: Core,
+    _dir: TempDir,
 }
 
 impl TestCore {
@@ -11,7 +11,7 @@ impl TestCore {
         let dir = tempdir().unwrap();
         let path = dir.path().join("recall.sqlite");
         let core = Core::open(&path, 2).unwrap();
-        Self { _dir: dir, core }
+        Self { core, _dir: dir }
     }
 }
 
