@@ -45,6 +45,19 @@ test("removes complete comment lines and adjacent trailing whitespace", () => {
 	expect(result.content.split("\n").some((line: string) => /\s+$/.test(line))).toBeFalse();
 });
 
+test("does not leave extra blank lines at file boundaries or around removed sections", () => {
+	const cases = [
+		{ source: "[test]\n\n# explanation\n", path: "bunfig.toml", expected: "[test]\n" },
+		{ source: "// explanation\n\nconst value = 1;\n", path: "src/example.ts", expected: "const value = 1;\n" },
+		{
+			source: "const before = 1;\n\n// explanation\n\nconst after = 2;\n",
+			path: "src/example.ts",
+			expected: "const before = 1;\n\nconst after = 2;\n",
+		},
+	] as const;
+	for (const sample of cases) expect(stripComments(sample.source, sample.path).content).toBe(sample.expected);
+});
+
 test("preserves semantic directives, shebangs, and legal notices", () => {
 	const source = [
 		"#!/usr/bin/env bun",
@@ -250,6 +263,10 @@ test("preserves compiler, bundler, coverage, and language-server directives", ()
 	expect(stripComments(python, "plugin.py")).toEqual({ content: python, removed: 0 });
 	const yaml = "# yaml-language-server: $schema=https://example.com/schema.json";
 	expect(stripComments(yaml, "config.yml")).toEqual({ content: yaml, removed: 0 });
+	const yamlHuman = ["# coding:", "# fmt: prose"].join("\n");
+	expect(stripComments(yamlHuman, "config.yml")).toEqual({ content: "", removed: 2 });
+	const pythonEncoding = "# -*- coding: utf-8 -*-";
+	expect(stripComments(pythonEncoding, "plugin.py")).toEqual({ content: pythonEncoding, removed: 0 });
 	const docker = "# check=error=true";
 	expect(stripComments(docker, "Dockerfile")).toEqual({ content: docker, removed: 0 });
 });
