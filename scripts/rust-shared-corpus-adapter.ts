@@ -125,7 +125,7 @@ if (isForbiddenPath(coreDriver) || isForbiddenPath(artifact))
 /* Keep the daemon checks explicit and unchanged in meaning. */
 if (!existsSync(artifact) || !statSync(artifact).isFile() || (statSync(artifact).mode & 0o111) === 0)
 	fail("artifact must be an executable file");
-if (FORBIDDEN.test(artifact) || FORBIDDEN.test(process.cwd()))
+if (isForbiddenPath(artifact) || isForbiddenPath(process.cwd()))
 	fail("forbidden daemon/source path in execution boundary");
 const entries = new Map(manifest.protectedCorpus?.map((entry) => [entry.path, entry.sha256]) ?? []);
 let paths: unknown;
