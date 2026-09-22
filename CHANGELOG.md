@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-22
-- Bug fixes: close failed daemon responses; harden all daemon requests; silence daemon failures in TUI; close prepared SQLite statements on Windows.
+- Bug fixes: refresh route site tokens; prevent label collisions; bound semantic hover work; track provenance roots; expose ontology semantics; show source claims in graph; close failed daemon responses; harden all daemon requests; silence daemon failures in TUI; close prepared SQLite statements on Windows.
 - Refactoring: simplify daemon request handling.
 
 ### 2026-09-21
@@ -33,6 +33,20 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: scope event provenance; normalize owner transport errors; fence dispatching owner jobs; close owner metrics fences; fence expired owner jobs.
 
 ## Release Ledger
+
+## [0.226.15] - 2026-09-22
+
+Release summary: 6 bug fixes.
+Tag range: `v0.226.14..v0.226.15`.
+
+### Bug Fixes
+
+- **db**: refresh route site tokens
+- **graph**: prevent label collisions
+- **graph**: bound semantic hover work
+- **graph**: track provenance roots
+- **graph**: expose ontology semantics
+- **ontology**: show source claims in graph
 
 ## [0.226.14] - 2026-09-22
 
