@@ -147,18 +147,17 @@ fn integrity_budget_advances_frontier_and_is_idempotent_after_completion() {
     let third = verify(&core, "agent", "workspace", None, "private", 1);
     assert_eq!(third["checkedTables"][0]["table"], "jobs");
     assert_eq!(third["checkpoint"]["completed"], true);
+    let db = Connection::open(&path).unwrap();
+    let final_before_repeat: (Option<String>, i64, String, i64, String, String) = db.query_row(
+        "SELECT next_table,completed,skipped_objects,schema_version,schema_hash,updated_at FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='' AND visibility='private'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap();
     let repeat = verify(&core, "agent", "workspace", None, "private", 1);
     assert!(repeat["checkedTables"].as_array().unwrap().is_empty());
     assert_eq!(repeat["checkpoint"]["completed"], true);
-    let db = Connection::open(&path).unwrap();
-    let persisted: (Option<String>, i64, String, i64, String) = db.query_row(
-        "SELECT next_table,completed,skipped_objects,schema_version,schema_hash FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='' AND visibility='private'",
-        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))).unwrap();
-    assert_eq!(persisted.0, None);
-    assert_eq!(persisted.1, 1);
-    assert_eq!(persisted.2, "[]");
-    assert!(persisted.3 > 0);
-    assert!(!persisted.4.is_empty());
+    let final_after_repeat: (Option<String>, i64, String, i64, String, String) = db.query_row(
+        "SELECT next_table,completed,skipped_objects,schema_version,schema_hash,updated_at FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='' AND visibility='private'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap();
+    assert_eq!(final_after_repeat, final_before_repeat);
 }
 
 #[test]
@@ -166,7 +165,10 @@ fn integrity_failure_does_not_overwrite_prior_checkpoint() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("corrupt.sqlite");
     let core = Core::open(&path, 2).unwrap();
-    let before = verify(&core, "agent", "workspace", None, "private", 1);
+    verify(&core, "agent", "workspace", None, "private", 1);
+    let before_row: (Option<String>, i64, String, i64, String, String) = Connection::open(&path).unwrap().query_row(
+        "SELECT next_table,completed,skipped_objects,schema_version,schema_hash,updated_at FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='' AND visibility='private'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap();
     drop(core);
     let db = Connection::open(&path).unwrap();
     db.execute("CREATE TABLE corruption_probe (value INTEGER)", [])
@@ -176,12 +178,31 @@ fn integrity_failure_does_not_overwrite_prior_checkpoint() {
         [],
     )
     .unwrap();
+    let original_rootpage: i64 = db
+        .query_row(
+            "SELECT rootpage FROM sqlite_master WHERE name='corruption_probe_index'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let conflicting_rootpage: i64 = db
+        .query_row(
+            "SELECT rootpage FROM sqlite_master WHERE name='corruption_probe'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(original_rootpage, conflicting_rootpage);
     db.execute("PRAGMA writable_schema=ON", []).unwrap();
     db.execute(
-        "UPDATE sqlite_master SET rootpage=2 WHERE name='corruption_probe_index'",
-        [],
+        "UPDATE sqlite_master SET rootpage=?1 WHERE name='corruption_probe_index'",
+        [conflicting_rootpage],
     )
     .unwrap();
+    drop(db);
+    let db = Connection::open(&path).unwrap();
+    let integrity = db.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0));
+    assert!(integrity.as_ref().map(|result| result != "ok").unwrap_or(true));
     drop(db);
     let core = Core::open(&path, 2).unwrap();
     let error = core
@@ -195,21 +216,10 @@ fn integrity_failure_does_not_overwrite_prior_checkpoint() {
         .unwrap_err();
     assert!(error.to_string().contains("integrity") || error.to_string().contains("malformed"));
     let db = Connection::open(&path).unwrap();
-    let after: (Option<String>, i64, String, i64) = db.query_row(
-        "SELECT next_table,completed,skipped_objects,schema_version FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='' AND visibility='private'",
-        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))).unwrap();
-    assert_eq!(
-        after.0,
-        before["checkpoint"]["nextTable"]
-            .as_str()
-            .map(str::to_owned)
-    );
-    assert_eq!(
-        after.1,
-        i64::from(before["checkpoint"]["completed"].as_bool().unwrap())
-    );
-    assert_eq!(after.2, "[]");
-    assert!(after.3 > 0);
+    let after: (Option<String>, i64, String, i64, String, String) = db.query_row(
+        "SELECT next_table,completed,skipped_objects,schema_version,schema_hash,updated_at FROM integrity_checkpoints WHERE agent_id='agent' AND workspace_id='workspace' AND project_id='' AND visibility='private'",
+        [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?))).unwrap();
+    assert_eq!(after, before_row);
 }
 
 #[test]
