@@ -1,0 +1,57 @@
+name: PR Baseline
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-baseline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+  PUPPETEER_SKIP_DOWNLOAD: "1"
+
+jobs:
+  architecture:
+    name: Architecture guardrails
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Reject new production comments
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bun run check:production-comments --base "$BASE_SHA" --head "$HEAD_SHA"
+      - name: Enforce database ownership
+        run: bun run audit:database-ownership
+      - name: Enforce agent identity provenance
+        run: bun run audit:agent-identity
+      - name: Test architecture guardrails
+        run: bun test scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts
+
+  build:
+    name: Production build and workspace typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build maintained workspaces
+        run: bun run build
+      - name: Typecheck workspaces
+        run: bun run typecheck
