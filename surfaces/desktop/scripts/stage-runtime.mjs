@@ -45,7 +45,11 @@ function targetArch() {
 }
 
 function probeBunRuntime(runtimePath) {
-	const result = spawnSync(runtimePath, ["--print", "JSON.stringify({ platform: process.platform, arch: process.arch, bun: process.versions.bun })"], { encoding: "utf8" });
+	const result = spawnSync(
+		runtimePath,
+		["--print", "JSON.stringify({ platform: process.platform, arch: process.arch, bun: process.versions.bun })"],
+		{ encoding: "utf8" },
+	);
 	if (result.status !== 0) throw new Error("Bun runtime probe failed");
 	try {
 		return JSON.parse(result.stdout.trim());
@@ -179,8 +183,10 @@ export function nativeDaemonPath(platform, arch) {
 }
 
 export function assertNativeDaemon(path) {
-	if (!existsSync(path) || !statSync(path).isFile()) throw new Error(`Rust daemon artifact not found: ${path}. Run build:native first.`);
-	if (process.platform !== "win32" && (statSync(path).mode & 0o111) === 0) throw new Error(`Rust daemon artifact is not executable: ${path}`);
+	if (!existsSync(path) || !statSync(path).isFile())
+		throw new Error(`Rust daemon artifact not found: ${path}. Run build:native first.`);
+	if (process.platform !== "win32" && (statSync(path).mode & 0o111) === 0)
+		throw new Error(`Rust daemon artifact is not executable: ${path}`);
 }
 
 export function platformVecPackage(platform, arch) {
@@ -289,7 +295,8 @@ export function stageRuntime() {
 		cpSync(daemonDist, resolve(daemonRootOut, "dist"), { recursive: true });
 
 		const daemonSkills = resolve(repoRoot, "platform/daemon/skills");
-		if (!existsSync(daemonSkills)) throw new Error(`Daemon skills not found: ${daemonSkills}. Run the daemon prebuild first.`);
+		if (!existsSync(daemonSkills))
+			throw new Error(`Daemon skills not found: ${daemonSkills}. Run the daemon prebuild first.`);
 		cpSync(daemonSkills, resolve(daemonRootOut, "skills"), { recursive: true });
 
 		// Resolve from the daemon package's actual Bun/Node resolution root. The

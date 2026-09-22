@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { assertBunRuntime } from "./stage-runtime.mjs";
@@ -17,7 +17,9 @@ describe("default Bun runtime probe contract", () => {
 		try {
 			writeFileSync(runtime, "fake");
 			chmodSync(runtime, 0o755);
-			expect(() => assertBunRuntime(runtime, "arm64", "linux", () => ({ platform: "linux", arch: "x64", bun: "1.0.0" }))).toThrow("architecture mismatch");
+			expect(() =>
+				assertBunRuntime(runtime, "arm64", "linux", () => ({ platform: "linux", arch: "x64", bun: "1.0.0" })),
+			).toThrow("architecture mismatch");
 		} finally {
 			rmSync(directory, { recursive: true, force: true });
 		}

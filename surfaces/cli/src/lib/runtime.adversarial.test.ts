@@ -2,11 +2,38 @@ import { describe, expect, it } from "bun:test";
 import { buildLaunchdDaemonPlist, buildSystemdDaemonStartArgs, resolveDaemonLaunchCommand } from "./runtime.js";
 
 describe("native production launch remains fail-closed", () => {
-	it("does not infer Bun-JS from an omitted runtime and JavaScript path", () => {
+	it("keeps explicit compiled production launch fail-closed for JavaScript paths", () => {
 		const daemonPath = "/opt/signet/runtime/daemon-js/daemon.js";
-		expect(() => resolveDaemonLaunchCommand(daemonPath, {})).toThrow("Native Signet daemon executable is required");
-		expect(buildSystemdDaemonStartArgs({ daemonPath, agentsDir: "/tmp/agents", port: 3850, host: "127.0.0.1", bind: "127.0.0.1", startupLogPath: "/tmp/daemon.log" })).not.toContain("--setenv=SIGNET_DAEMON_RUNTIME=bun-js");
-		expect(() => buildLaunchdDaemonPlist({ daemonPath, agentsDir: "/tmp/agents", port: 3850, host: "127.0.0.1", bind: "127.0.0.1", startupLogPath: "/tmp/daemon.log" })).toThrow("Native Signet daemon executable is required");
+		expect(() => resolveDaemonLaunchCommand(daemonPath, {}, "compiled")).toThrow(
+			"Native Signet daemon executable is required",
+		);
+		expect(() =>
+			buildSystemdDaemonStartArgs({
+				daemonPath,
+				runtime: "compiled",
+				agentsDir: "/tmp/agents",
+				port: 3850,
+				host: "127.0.0.1",
+				bind: "127.0.0.1",
+				startupLogPath: "/tmp/daemon.log",
+			}),
+		).toThrow("Native Signet daemon executable is required");
+		expect(() =>
+			buildLaunchdDaemonPlist({
+				daemonPath,
+				runtime: "compiled",
+				agentsDir: "/tmp/agents",
+				port: 3850,
+				host: "127.0.0.1",
+				bind: "127.0.0.1",
+				startupLogPath: "/tmp/daemon.log",
+			}),
+		).toThrow("Native Signet daemon executable is required");
+	});
+
+	it("preserves omitted-runtime helper compatibility for JavaScript paths", () => {
+		const daemonPath = "/opt/signet/runtime/daemon-js/daemon.js";
+		expect(resolveDaemonLaunchCommand(daemonPath, {})).toHaveLength(2);
 	});
 
 	it("keeps explicit compiled selection native", () => {

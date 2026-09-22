@@ -1228,9 +1228,17 @@ function appendNodePath(nodePath: string, existing: string | undefined): string 
 	return existing?.trim() ? `${nodePath}${delimiter}${existing}` : nodePath;
 }
 
+function resolveCompatibilityDaemonRuntime(
+	daemonPath: string,
+	runtime: DaemonRuntime | "bun-js" | undefined,
+): DaemonRuntime | "bun-js" {
+	if (runtime !== undefined) return runtime;
+	return /[.]js$/i.test(daemonPath) ? "bun-js" : selectNativeDaemonRuntime(undefined);
+}
+
 export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput): string[] {
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
-	const runtime = input.runtime ?? selectNativeDaemonRuntime(undefined);
+	const runtime = resolveCompatibilityDaemonRuntime(input.daemonPath, input.runtime);
 	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
 	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
 	return [
@@ -1372,7 +1380,7 @@ export function resolveDaemonLaunchCommand(
 	_env: NodeJS.ProcessEnv = process.env,
 	runtime?: DaemonRuntime | "bun-js",
 ): string[] {
-	const selectedRuntime = runtime ?? selectNativeDaemonRuntime(undefined);
+	const selectedRuntime = resolveCompatibilityDaemonRuntime(daemonPath, runtime);
 	if (selectedRuntime === "bun-js") {
 		if (!/[.]js$/i.test(daemonPath)) throw new Error("The bun-js daemon runtime requires a JavaScript daemon bundle.");
 		return [resolveDaemonRuntimeCommand(_env, process.execPath, _env.PATH, "bun-js"), daemonPath];
@@ -1528,7 +1536,7 @@ export function resolveLaunchdDaemonMigration(
 export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
 	const label = input.label ?? launchdDaemonLabel(input.agentsDir);
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
-	const runtime = input.runtime ?? selectNativeDaemonRuntime(undefined);
+	const runtime = resolveCompatibilityDaemonRuntime(input.daemonPath, input.runtime);
 	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
 	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
 	const environment = buildLaunchdEnvironment({
