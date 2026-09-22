@@ -29,6 +29,8 @@ jobs:
           bun-version-file: package.json
       - name: Install dependencies
         run: bun install --frozen-lockfile
+      - name: Enforce repository comment policy
+        run: bun run comments:check
       - name: Reject new production comments
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
@@ -39,7 +41,7 @@ jobs:
       - name: Enforce agent identity provenance
         run: bun run audit:agent-identity
       - name: Test architecture guardrails
-        run: bun test scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts
+        run: bun test scripts/strip-comments.test.ts scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts
 
   build:
     name: Production build and workspace typecheck

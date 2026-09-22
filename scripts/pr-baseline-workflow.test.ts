@@ -25,10 +25,11 @@ test("PR baseline is always on and uses the pinned hermetic install", async () =
 test("PR baseline runs architecture audits, their fixtures, workspace typecheck, and the production build", async () => {
 	const source = await workflow();
 	for (const command of [
+		"bun run comments:check",
 		'bun run check:production-comments --base "$BASE_SHA" --head "$HEAD_SHA"',
 		"bun run audit:database-ownership",
 		"bun run audit:agent-identity",
-		"bun test scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts",
+		"bun test scripts/strip-comments.test.ts scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts",
 		"bun run typecheck",
 		"bun run build",
 	]) {

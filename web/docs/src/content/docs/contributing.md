@@ -42,6 +42,7 @@ Before submitting changes, run the full check suite:
 bun run typecheck   # Workspace typecheck (includes the daemon backlog tracked in #969)
 bun run lint        # Biome static analysis
 bun run format      # Biome auto-format
+bun run comments:check # Maintained source, test, script, and config comment policy
 bun run build       # Production packages and staged runtime artifacts
 bun test            # All maintained repository tests (excludes vendored references/)
 ```
@@ -219,11 +220,14 @@ e.g. `feat(daemon): add rate limiting to auth middleware`.
 **File size:** Aim to keep files under ~700 LOC. Split or refactor when
 a file grows unwieldy, especially if it improves testability.
 
-**Comments:** Do not add comments to production TypeScript or JavaScript.
-Express invariants through names, types, structure, and tests. CI checks only
-newly added lines, so existing comments are grandfathered. The only source
-exceptions are exact SPDX and copyright headers; tests, fixtures, generated
-output, and documentation are outside this gate.
+**Comments:** Maintained source, tests, scripts, and configuration stay
+comment-free. Express invariants through names, types, structure, and tests.
+Run `bun run comments:write` after rebasing a branch, then verify with
+`bun run comments:check`. The deterministic rewrite excludes documentation,
+asset trees, generated output, vendored/reference trees, lockfiles, and license
+artifacts; it preserves shebangs, legal notices, and compiler, linter, coverage,
+bundler, and language-server directives whose comment syntax changes tool
+behavior.
 
 ### Naming
 

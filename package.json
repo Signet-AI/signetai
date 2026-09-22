@@ -72,6 +72,8 @@
 		"lint:fix": "biome check --write .",
 		"format": "biome format --write .",
 		"format:check": "biome format .",
+		"comments:check": "bun scripts/strip-comments.ts --check",
+		"comments:write": "bun scripts/strip-comments.ts --write",
 		"check:production-comments": "bun scripts/check-production-comments.ts",
 		"audit:database-ownership": "bun scripts/audit-database-ownership.ts",
 		"audit:agent-identity": "bun scripts/audit-agent-identity.ts",
