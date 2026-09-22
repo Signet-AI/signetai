@@ -43,10 +43,21 @@ describe("TypeScript comment scanning", () => {
 		]);
 	});
 
+	test("does not classify template content or contextual regular expressions as comments", () => {
+		const interpolation = "${" + "repo}";
+		const source = [
+			`const error = \`Invalid ${interpolation} owner/*\`;`,
+			"const hook = /^\\.githooks\\//.test(path);",
+		].join("\n");
+		expect(scanTypeScriptComments("sample.ts", source)).toEqual([]);
+	});
+
 	test("allows narrow legal headers and rejects API documentation comments", () => {
 		const source = [
 			"// SPDX-License-Identifier: Apache-2.0",
 			"// Copyright (c) 2026 Signet AI",
+			"// DYNAMIC_SITE_TOKEN",
+			"// DYNAMIC_SITE_TOKEN explanation",
 			"// Copyright workaround",
 			"/* SPDX-License-Identifier: MIT\n * workaround\n */",
 			"/** @param value input */",
@@ -55,7 +66,7 @@ describe("TypeScript comment scanning", () => {
 			"export function explanatory(): void {}",
 		].join("\n");
 		const comments = scanTypeScriptComments("sample.ts", source);
-		expect(comments.map(({ allowed }) => allowed)).toEqual([true, true, false, false, false, false]);
+		expect(comments.map(({ allowed }) => allowed)).toEqual([true, true, true, false, false, false, false, false]);
 	});
 });
 
