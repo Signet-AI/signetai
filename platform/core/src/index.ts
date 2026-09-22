@@ -217,6 +217,16 @@ export {
 	wrapMemoryContext,
 } from "./memory-context";
 export {
+	createFreshWorkspaceV2,
+	persistWorkspaceLayout,
+	resolveWorkspaceLayout,
+	WORKSPACE_LAYOUT_V1,
+	WORKSPACE_LAYOUT_V2,
+	type WorkspaceLayout,
+	type WorkspaceLayoutOverrides,
+	type WorkspaceLayoutVersion,
+} from "./workspace-layout";
+export {
 	type WorkspaceSource,
 	type WorkspaceResolution,
 	type ResolveWorkspacePathOptions,

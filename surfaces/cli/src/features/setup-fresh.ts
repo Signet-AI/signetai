@@ -10,6 +10,7 @@ import {
 	formatYaml,
 	resolvePrimaryPackageManager,
 	runMigrations,
+	createFreshWorkspaceV2,
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
@@ -48,6 +49,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		const templatesDir = deps.getTemplatesDir();
 		mkdirSync(context.basePath, { recursive: true });
+		const workspaceLayout = createFreshWorkspaceV2(context.basePath);
 
 		const gitignoreSource = join(templatesDir, "gitignore.template");
 		if (existsSync(gitignoreSource)) {
@@ -126,7 +128,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				source: packageManager.source,
 			},
 			memory: {
-				database: "memory/memories.db",
+				database: "data/signet.db",
 				session_budget: plan.memorySessionBudget,
 				decay_rate: plan.memoryDecayRate,
 			},
@@ -247,7 +249,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		}
 
 		spinner.text = "Initializing database...";
-		const dbPath = join(context.basePath, "memory", "memories.db");
+		const dbPath = workspaceLayout.database;
 		const db = Database(dbPath);
 		try {
 			ensureUnifiedSchema(db);
