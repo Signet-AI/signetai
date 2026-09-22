@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSyncHidden as spawnSync } from "@signet/core";
+import { spawnHidden as spawn, spawnSyncHidden as spawnSync } from "@signet/core";
 import {
 	existsSync,
 	lstatSync,
@@ -115,8 +115,12 @@ if (process.env.SIGNET_DAEMON_ENTRYPOINT === "1") {
 		console.error("Native daemon executable not found; refusing to fall back to a script runtime.");
 		process.exit(1);
 	}
-	const result = spawnSync(daemonPath, [], { stdio: "inherit" });
-	process.exit(result.status ?? 1);
+	const child = spawn(daemonPath, [], { stdio: "inherit" });
+	const forwardSignal = (signal: NodeJS.Signals) => child.kill(signal);
+	process.once("SIGTERM", () => forwardSignal("SIGTERM"));
+	process.once("SIGINT", () => forwardSignal("SIGINT"));
+	child.once("error", () => process.exit(1));
+	child.once("close", (code) => process.exit(code ?? 1));
 }
 
 // Template directory location (relative to built CLI)

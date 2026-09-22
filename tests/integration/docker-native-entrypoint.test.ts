@@ -28,4 +28,26 @@ describe("compiled native Docker entrypoint", () => {
 		expect(missing.status).not.toBe(0);
 		expect(missing.stderr).toContain("Native daemon");
 	});
+
+	it("forwards container termination to the native daemon and exits with its status", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-native-entrypoint-signal-"));
+		const marker = join(dir, "term-marker");
+		const daemon = join(dir, "signet-daemon");
+		writeFileSync(
+			daemon,
+			`#!/bin/sh\ntrap 'printf terminated > ${marker}; exit 0' TERM INT\nwhile :; do sleep 1; done\n`,
+		);
+		chmodSync(daemon, 0o755);
+
+		const cli = join(import.meta.dir, "../../surfaces/cli/dist/cli.js");
+		const child = Bun.spawn(["node", cli], {
+			env: { ...process.env, SIGNET_DAEMON_ENTRYPOINT: "1", SIGNET_DAEMON_PATH: daemon },
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		await Bun.sleep(1_000);
+		child.kill("SIGTERM");
+		expect(await child.exited).toBe(0);
+		expect(await Bun.file(marker).text()).toBe("terminated");
+	});
 });
