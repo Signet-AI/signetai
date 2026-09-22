@@ -1456,7 +1456,15 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 160,
 		name: "import-admission-ledger",
 		up: importAdmissionLedger,
-		artifacts: { tables: ["import_admission_ledger"], indexes: ["idx_import_admission_status"] },
+		artifacts: {
+			tables: ["import_admission_ledger", "import_admission_events"],
+			indexes: ["idx_import_admission_status", "idx_import_admission_events_key"],
+			columns: [
+				...["workspace_id", "request_fingerprint", "source_id", "lease_token", "lease_expires_at", "attempt_count"].map(
+					(column) => ({ table: "import_admission_ledger", column }),
+				),
+			],
+		},
 	},
 ];
 function checksum(m: Migration): string {

@@ -2,7 +2,14 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, rename, stat, lstat, unlink } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
-export type ImportStatus = "pending" | "processing" | "imported" | "duplicate" | "failed" | "quarantined";
+export type ImportStatus =
+	| "pending"
+	| "processing"
+	| "imported"
+	| "duplicate"
+	| "failed"
+	| "quarantined"
+	| "original_unavailable";
 export interface ImportRow {
 	key: string;
 	fileName: string;
@@ -10,13 +17,16 @@ export interface ImportRow {
 	originalPath: string;
 	sha256: string;
 	size: number;
+	sourceId?: string;
 	error?: string;
 }
 export interface ImportLedger {
-	upsert(row: ImportRow): ImportRow;
-	find(key: string): ImportRow | undefined;
-	/** Optional durable event hook owned by the daemon database adapter. */
-	appendEvent?(key: string, event: string): void;
+	upsert(row: ImportRow): Promise<ImportRow> | ImportRow;
+	find(key: string): Promise<ImportRow | undefined> | ImportRow | undefined;
+	/** Durable lifecycle operations are implemented by the database owner. */
+	appendEvent?(key: string, event: string): Promise<void> | void;
+	transition?(key: string, from: ImportStatus | ImportStatus[], to: ImportStatus, error?: string): Promise<ImportRow>;
+	list?(status?: ImportStatus): Promise<ImportRow[]>;
 }
 export interface InboxOptions {
 	root: string;
@@ -51,7 +61,7 @@ export async function admitImport(input: Admission): Promise<ImportRow> {
 	if (input.bytes.byteLength === 0) throw new Error("file is empty");
 	if (input.bytes.byteLength > max) throw new Error(`file exceeds ${max} bytes`);
 	const key = keyFor(input.bytes, input.fileName, input.idempotencyKey);
-	const prior = input.ledger.find(key);
+	const prior = await input.ledger.find(key);
 	if (prior) return prior;
 	const target = paths(input.root, key);
 	await mkdir(target.managed, { recursive: true });
@@ -73,8 +83,7 @@ export async function admitImport(input: Admission): Promise<ImportRow> {
 		sha256: digest(input.bytes),
 		size: input.bytes.byteLength,
 	};
-	const committed = input.ledger.upsert(row);
-	input.ledger.appendEvent?.(key, "admitted");
+	const committed = await input.ledger.upsert(row);
 	return committed;
 }
 
@@ -98,7 +107,7 @@ export async function scanInbox(input: InboxOptions): Promise<ImportRow[]> {
 		}
 		if (!info.isFile() || info.isSymbolicLink()) {
 			out.push(
-				input.ledger.upsert({
+				await input.ledger.upsert({
 					key: `quarantine:${entry.name}`,
 					fileName: entry.name,
 					status: "quarantined",
@@ -112,7 +121,7 @@ export async function scanInbox(input: InboxOptions): Promise<ImportRow[]> {
 		}
 		if (info.size > (input.maxFileBytes ?? DEFAULT_MAX)) {
 			out.push(
-				input.ledger.upsert({
+				await input.ledger.upsert({
 					key: `quarantine:${entry.name}`,
 					fileName: entry.name,
 					status: "quarantined",
@@ -128,7 +137,7 @@ export async function scanInbox(input: InboxOptions): Promise<ImportRow[]> {
 		const after = await stat(source);
 		if (after.size !== info.size || after.mtimeMs !== info.mtimeMs) {
 			out.push(
-				input.ledger.upsert({
+				await input.ledger.upsert({
 					key: `quarantine:${entry.name}`,
 					fileName: entry.name,
 					status: "quarantined",
