@@ -1,12 +1,18 @@
 # syntax=docker/dockerfile:1.7
 
-FROM oven/bun:1 AS build
+FROM oven/bun:1.3.11 AS build
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml tsconfig.json ./
 COPY scripts ./scripts
-COPY surfaces/cli ./surfaces/cli
-COPY dist/signetai ./dist/signetai
-RUN bun install --frozen-lockfile
+COPY integrations ./integrations
+COPY libs ./libs
+COPY memorybench ./memorybench
+COPY platform/core ./platform/core
+COPY platform/native ./platform/native
+COPY surfaces ./surfaces
+COPY web ./web
+COPY dist ./dist
+RUN bun install --no-frozen-lockfile
 RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
 RUN bun run build:native-bun
 ARG TARGETOS=linux

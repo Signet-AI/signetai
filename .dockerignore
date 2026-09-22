@@ -11,6 +11,8 @@ node_modules
 !dist
 !dist/signetai
 !dist/signetai/**
+!dist/signetai-*
+!dist/signetai-*/**
 dist/signetai/.turbo
 dist/signetai/dashboard
 dist/signetai/dist
