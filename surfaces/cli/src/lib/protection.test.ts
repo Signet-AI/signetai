@@ -1,19 +1,15 @@
 import { describe, expect, it } from "bun:test";
 import { formatProtectionLine, projectProtectionStatus } from "./protection";
-
+const payload = {
+	overall: "partial" as const,
+	components: [],
+	missing: [],
+	degraded: ["sqlite" as const],
+	privacy: { pathsRedacted: true as const, secretsRedacted: true as const },
+};
 describe("CLI protection projection", () => {
-	it("uses the daemon schema without exposing receipt or paths", () => {
-		const projected = projectProtectionStatus({
-			status: "unverified",
-			protected: false,
-			components: [{ id: "sqlite", status: "protected", detail: "present" }],
-			restoreReceipt: null,
-		});
-		expect(projected).toEqual({
-			status: "unverified",
-			protected: false,
-			components: [{ id: "sqlite", status: "protected", detail: "present" }],
-		});
-		expect(formatProtectionLine(projected)).toBe("Protection: unverified");
+	it("passes the shared daemon schema through", () => {
+		expect(projectProtectionStatus(payload)).toEqual(payload);
+		expect(formatProtectionLine(payload)).toBe("Protection: partial");
 	});
 });

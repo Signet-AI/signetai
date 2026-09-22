@@ -504,19 +504,7 @@ export interface SourceImportsResponse {
 	readonly imports: readonly SourceImportJob[];
 }
 
-export interface DashboardProtectionReport {
-	readonly overall: "protected" | "partial" | "none";
-	readonly restoreTestedAt?: string | null;
-	readonly restoreTestedScope?: string | null;
-	readonly components: readonly {
-		readonly group: string;
-		readonly name: string;
-		readonly state: "protected" | "degraded" | "missing" | "unknown";
-		readonly reason?: string;
-		readonly remediation?: string;
-	}[];
-}
-
+export type { ProtectionStatus as DashboardProtectionReport } from "@signet/core";
 export interface SourcesResponse {
 	version: number;
 	sources: SignetSource[];

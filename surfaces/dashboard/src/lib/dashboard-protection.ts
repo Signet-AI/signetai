@@ -1,34 +1,13 @@
-export type ProtectionOverall = "protected" | "partial" | "none";
-export type ProtectionState = "protected" | "degraded" | "missing" | "unknown";
-
-/** Temporary dashboard-compatible contract until the shared API export lands. */
-export interface ProtectionComponent {
-	readonly group: string;
-	readonly name: string;
-	readonly state: ProtectionState;
-	readonly reason?: string;
-	readonly remediation?: string;
-}
-export interface ProtectionReport {
-	readonly overall: ProtectionOverall;
-	readonly restoreTestedAt?: string | null;
-	readonly restoreTestedScope?: string | null;
-	readonly components: readonly ProtectionComponent[];
-}
+import type { ProtectionStatus, ProtectionComponent as CoreProtectionComponent } from "@signet/core";
+export type ProtectionReport = ProtectionStatus;
+export type ProtectionComponent = CoreProtectionComponent;
 export interface ProtectionSummary {
 	readonly overallLabel: string;
-	readonly groups: readonly { name: string; components: readonly Omit<ProtectionComponent, "group">[] }[];
-	readonly restore: { testedAt?: string | null; scope?: string | null };
+	readonly components: readonly ProtectionComponent[];
+	readonly missing: readonly string[];
+	readonly degraded: readonly string[];
 }
-
 export function protectionSummary(report: ProtectionReport): ProtectionSummary {
-	const groups = new Map<string, Omit<ProtectionComponent, "group">[]>();
-	for (const component of report.components) {
-		const entries = groups.get(component.group) ?? [];
-		const { group: _group, ...withoutGroup } = component;
-		entries.push(withoutGroup);
-		groups.set(component.group, entries);
-	}
 	return {
 		overallLabel:
 			report.overall === "protected"
@@ -36,11 +15,11 @@ export function protectionSummary(report: ProtectionReport): ProtectionSummary {
 				: report.overall === "partial"
 					? "Partially protected"
 					: "Not protected",
-		groups: [...groups].map(([name, components]) => ({ name, components })),
-		restore: { testedAt: report.restoreTestedAt, scope: report.restoreTestedScope },
+		components: report.components,
+		missing: report.missing,
+		degraded: report.degraded,
 	};
 }
-
 export function redactSensitiveText(value: string): string {
 	return value
 		.replace(/\b(?:token|secret|password|api[_-]?key)\s*[:=]\s*[^\s]+/gi, "[redacted]")

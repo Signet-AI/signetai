@@ -5,9 +5,10 @@ export { aggregateProtection, PROTECTION_COMPONENT_IDS } from "./protection";
 export type {
 	ProtectionComponent,
 	ProtectionComponentId,
-	ProtectionComponentStatus,
+	ProtectionState,
+	ProtectionOverall,
 	ProtectionStatus,
-	RestoreReceipt,
+	ProtectionAggregateOptions,
 } from "./protection";
 export {
 	execFileHidden,
