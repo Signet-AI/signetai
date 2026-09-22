@@ -16,7 +16,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
@@ -274,14 +274,19 @@ export function stageRuntime() {
 		cpSync(daemonDist, resolve(daemonRootOut, "dist"), { recursive: true });
 
 		const daemonSkills = resolve(repoRoot, "platform/daemon/skills");
-		if (existsSync(daemonSkills)) cpSync(daemonSkills, resolve(daemonRootOut, "skills"), { recursive: true });
+		if (!existsSync(daemonSkills)) throw new Error(`Daemon skills not found: ${daemonSkills}. Run the daemon prebuild first.`);
+		cpSync(daemonSkills, resolve(daemonRootOut, "skills"), { recursive: true });
 
-		// Stage the exact external packages whose files are resolved at runtime.
+		// Resolve from the daemon package's actual Bun/Node resolution root. The
+		// daemon is intentionally excluded from root workspaces, so these packages
+		// are not guaranteed to be under repoRoot/node_modules.
+		const requireFromDaemon = createRequire(resolve(repoRoot, "platform/daemon/package.json"));
 		const packageSources = [
-			["tiktoken", resolve(repoRoot, "node_modules/tiktoken")],
-			[platformVecPackage(target, arch), resolve(repoRoot, "node_modules", platformVecPackage(target, arch))],
+			["tiktoken", requireFromDaemon.resolve("tiktoken/package.json")],
+			[platformVecPackage(target, arch), requireFromDaemon.resolve(`${platformVecPackage(target, arch)}/package.json`)],
 		];
-		for (const [name, source] of packageSources) {
+		for (const [name, packageManifest] of packageSources) {
+			const source = dirname(packageManifest);
 			if (!existsSync(source)) throw new Error(`Required daemon package not found: ${source}`);
 			cpSync(source, resolve(daemonRootOut, "node_modules", name), { recursive: true });
 		}
