@@ -31,7 +31,7 @@ RUN cargo build --release --manifest-path platform/rust-daemon/Cargo.toml \
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-ENV NODE_ENV=production SIGNET_PATH=/data/agents SIGNET_BIND=0.0.0.0 SIGNET_PORT=3850
+ENV NODE_ENV=production SIGNET_PATH=/data/agents SIGNET_BIND=0.0.0.0 SIGNET_PORT=3850 SIGNET_DAEMON_ENTRYPOINT=1 SIGNET_DAEMON_PATH=/app/bin/signet-daemon
 ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates \

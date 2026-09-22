@@ -100,6 +100,7 @@ import {
 	getDaemonStatus,
 	getReachableDaemonUrls,
 	hasDaemonProcess,
+	resolveDaemonPathForRuntime,
 	isDaemonRunning,
 	isLaunchdDaemonLoaded,
 	sleep,
@@ -107,6 +108,16 @@ import {
 	stopDaemon,
 } from "./lib/runtime.js";
 import "./sqlite.js";
+
+if (process.env.SIGNET_DAEMON_ENTRYPOINT === "1") {
+	const daemonPath = resolveDaemonPathForRuntime("compiled");
+	if (!daemonPath) {
+		console.error("Native daemon executable not found; refusing to fall back to a script runtime.");
+		process.exit(1);
+	}
+	const result = spawnSync(daemonPath, [], { stdio: "inherit" });
+	process.exit(result.status ?? 1);
+}
 
 // Template directory location (relative to built CLI)
 function getTemplatesDir() {

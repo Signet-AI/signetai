@@ -31,4 +31,4 @@ if [ -d "$tpl/skills" ] && [ ! -d "$root/skills" ]; then
 	cp -R "$tpl/skills/." "$root/skills/"
 fi
 
-exec /app/bin/signet-daemon
+exec /app/bin/signet
