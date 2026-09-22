@@ -1230,7 +1230,7 @@ function appendNodePath(nodePath: string, existing: string | undefined): string 
 
 export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput): string[] {
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
-	const runtime = input.runtime ?? (/[.]js$/i.test(input.daemonPath) ? "bun-js" : selectNativeDaemonRuntime(undefined));
+	const runtime = input.runtime ?? selectNativeDaemonRuntime(undefined);
 	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
 	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
 	return [
@@ -1372,7 +1372,7 @@ export function resolveDaemonLaunchCommand(
 	_env: NodeJS.ProcessEnv = process.env,
 	runtime?: DaemonRuntime | "bun-js",
 ): string[] {
-	const selectedRuntime = runtime ?? (/[.]js$/i.test(daemonPath) ? "bun-js" : selectNativeDaemonRuntime(undefined));
+	const selectedRuntime = runtime ?? selectNativeDaemonRuntime(undefined);
 	if (selectedRuntime === "bun-js") {
 		if (!/[.]js$/i.test(daemonPath)) throw new Error("The bun-js daemon runtime requires a JavaScript daemon bundle.");
 		return [resolveDaemonRuntimeCommand(_env, process.execPath, _env.PATH, "bun-js"), daemonPath];
@@ -1528,7 +1528,7 @@ export function resolveLaunchdDaemonMigration(
 export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
 	const label = input.label ?? launchdDaemonLabel(input.agentsDir);
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
-	const runtime = input.runtime ?? (/[.]js$/i.test(input.daemonPath) ? "bun-js" : selectNativeDaemonRuntime(undefined));
+	const runtime = input.runtime ?? selectNativeDaemonRuntime(undefined);
 	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
 	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
 	const environment = buildLaunchdEnvironment({

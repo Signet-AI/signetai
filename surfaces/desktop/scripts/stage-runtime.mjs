@@ -8,6 +8,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	renameSync,
 	statSync,
@@ -15,6 +16,7 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { spawnSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
@@ -42,10 +44,10 @@ function targetArch() {
 }
 
 function probeBunRuntime(runtimePath) {
-	const result = Bun.spawnSync([runtimePath, "--version"], { stdout: "pipe", stderr: "pipe" });
-	if (result.exitCode !== 0) throw new Error("Bun runtime probe failed");
+	const result = spawnSync(runtimePath, ["--print", "JSON.stringify({ platform: process.platform, arch: process.arch })"], { encoding: "utf8" });
+	if (result.status !== 0) throw new Error("Bun runtime probe failed");
 	try {
-		return JSON.parse(new TextDecoder().decode(result.stdout));
+		return JSON.parse(result.stdout.trim());
 	} catch {
 		throw new Error("Bun runtime probe returned an invalid result");
 	}
@@ -174,7 +176,13 @@ export function nativeDaemonPath(platform, arch) {
 }
 
 export function assertNativeDaemon(path) {
-	if (!existsSync(path)) throw new Error(`Rust daemon artifact not found: ${path}. Run build:native first.`);
+	if (!existsSync(path) || !statSync(path).isFile()) throw new Error(`Rust daemon artifact not found: ${path}. Run build:native first.`);
+	if (process.platform !== "win32" && (statSync(path).mode & 0o111) === 0) throw new Error(`Rust daemon artifact is not executable: ${path}`);
+}
+
+export function platformVecPackage(platform, arch) {
+	const os = platform === "win32" ? "windows" : platform;
+	return `sqlite-vec-${os}-${arch}`;
 }
 
 export function replaceResources(target, staged, rename = renameSync, remove = rmSync) {
@@ -253,6 +261,19 @@ export function stageRuntime() {
 		cpSync(daemonSource, resolve(daemonOut, executable));
 		if (target !== "win32") chmodSync(resolve(daemonOut, executable), 0o755);
 		cpSync(dashboardBuild, resolve(stagedResources, "rust-daemon", "dashboard"), { recursive: true });
+		// Preserve the complete daemon distribution and its native dependency assets
+		// for compatibility consumers; production launch remains the Rust binary.
+		const daemonDist = resolve(repoRoot, "platform/daemon/dist");
+		const daemonDistOut = resolve(stagedResources, "rust-daemon", "dist");
+		if (existsSync(daemonDist)) {
+			mkdirSync(daemonDistOut, { recursive: true });
+			for (const entry of readdirSync(daemonDist)) {
+				if (/\.(js|node|wasm)$/.test(entry)) cpSync(join(daemonDist, entry), resolve(daemonDistOut, entry));
+			}
+		}
+		// tiktoken/native package assets are staged by the daemon build when present.
+		const tiktoken = resolve(repoRoot, "platform/daemon/node_modules/tiktoken");
+		if (existsSync(tiktoken)) cpSync(tiktoken, resolve(stagedResources, "rust-daemon", "node_modules", "tiktoken"), { recursive: true });
 
 		// The native runtime still needs the hermes-agent Python plugin during harness install.
 		const connectorsOut = resolve(stagedResources, "rust-daemon", "connectors");
