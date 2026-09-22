@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { isAbsolute, join, relative, sep } from "node:path";
 
 export interface ProtectionReceipt {
 	readonly encryptedProvider?: "available" | "unavailable" | "unverified";
@@ -53,6 +53,19 @@ function digest(path: string): string {
 	return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+function safePath(root: string, candidate: string): string | null {
+	if (!candidate || isAbsolute(candidate)) return null;
+	const resolved = join(root, candidate);
+	const rel = relative(root, resolved);
+	if (rel === ".." || rel.startsWith(`..${sep}`)) return null;
+	try {
+		if (lstatSync(resolved).isSymbolicLink()) return null;
+	} catch {
+		return resolved;
+	}
+	return resolved;
+}
+
 export async function verifyRestore(input: RestoreVerificationInput): Promise<RestoreVerificationResult> {
 	const failures: RestoreFailure[] = [];
 	const components = [
@@ -68,16 +81,25 @@ export async function verifyRestore(input: RestoreVerificationInput): Promise<Re
 	];
 	const fileDigests: Record<string, string> = {};
 	for (const file of input.expected.files) {
-		const path = join(input.root, file);
+		const path = safePath(input.root, file);
+		if (!path) {
+			failures.push(failure("files", `unsafe path ${file}`));
+			continue;
+		}
 		if (!existsSync(path)) failures.push(failure("files", `missing ${file}`));
 		else fileDigests[file] = digest(path);
 	}
 	if (!input.database.snapshotConsistent) failures.push(failure("database", "snapshot is inconsistent"));
 	if (!input.daemon.ready) failures.push(failure("daemon", "daemon is not ready"));
-	if (input.observed?.sources && !sameJson(input.observed.sources, input.expected.sources))
+	if (!input.observed?.sources) failures.push(failure("sources", "source identity was not observed"));
+	else if (!sameJson(input.observed.sources, input.expected.sources))
 		failures.push(failure("sources", "source id or generation mismatch"));
 	for (const transcript of input.expected.transcripts) {
-		const path = join(input.root, transcript.path);
+		const path = safePath(input.root, transcript.path);
+		if (!path) {
+			failures.push(failure("transcripts", `unsafe path ${transcript.path}`));
+			continue;
+		}
 		try {
 			const rows = readFileSync(path, "utf8")
 				.trim()
@@ -100,13 +122,17 @@ export async function verifyRestore(input: RestoreVerificationInput): Promise<Re
 			failures.push(failure("transcripts", `unreadable ${transcript.path}`));
 		}
 	}
-	if (input.observed?.recall && !sameJson(input.observed.recall, input.expected.recall))
+	if (!input.observed?.recall) failures.push(failure("recall", "recall was not observed"));
+	else if (!sameJson(input.observed.recall, input.expected.recall))
 		failures.push(failure("recall", "currentness or scope mismatch"));
-	if (input.observed?.dreaming && !sameJson(input.observed.dreaming, input.expected.dreaming))
+	if (!input.observed?.dreaming) failures.push(failure("dreaming", "dreaming frontier was not observed"));
+	else if (!sameJson(input.observed.dreaming, input.expected.dreaming))
 		failures.push(failure("dreaming", "frontier or consumption mismatch"));
-	if (input.observed?.ontology && !sameJson(input.observed.ontology, input.expected.ontology))
+	if (!input.observed?.ontology) failures.push(failure("ontology", "ontology provenance was not observed"));
+	else if (!sameJson(input.observed.ontology, input.expected.ontology))
 		failures.push(failure("ontology", "history or evidence links mismatch"));
-	if (input.observed?.harness && !sameJson(input.observed.harness, input.expected.harness))
+	if (!input.observed?.harness) failures.push(failure("harness", "harness identity was not observed"));
+	else if (!sameJson(input.observed.harness, input.expected.harness))
 		failures.push(failure("harness", "identity or skills discovery mismatch"));
 	const protection = input.protection?.encryptedProvider ?? "unverified";
 	const receipt: RestoreReceipt = {

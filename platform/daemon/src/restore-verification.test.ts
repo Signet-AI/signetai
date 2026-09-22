@@ -43,6 +43,13 @@ describe("verifyRestore", () => {
 			database: { snapshotConsistent: true },
 			daemon: { ready: true },
 			protection: { encryptedProvider: "available" },
+			observed: {
+				sources: expected.sources,
+				recall: expected.recall,
+				dreaming: expected.dreaming,
+				ontology: expected.ontology,
+				harness: expected.harness,
+			},
 		});
 		expect(result.ok).toBe(true);
 		expect(result.receipt.schema).toBe("signet.restore.v1");

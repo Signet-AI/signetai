@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import {
 	aggregateProtection,
@@ -20,7 +20,9 @@ const receiptFile = (workspacePath: string): string =>
 export function saveRestoreReceipt(workspacePath: string, receipt: RestoreReceipt): void {
 	const dir = join(workspacePath, ".daemon");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
-	writeFileSync(receiptFile(workspacePath), `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
+	const tmp = join(dir, `.protection-restore-receipt.${process.pid}.tmp`);
+	writeFileSync(tmp, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
+	renameSync(tmp, receiptFile(workspacePath));
 }
 
 export function readRestoreReceipt(workspacePath: string): RestoreReceipt | null {
