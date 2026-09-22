@@ -36,10 +36,13 @@ describe("production build graph", () => {
 		expect(release).not.toContain("@signet/daemon");
 		expect(deploy).not.toContain("@signet/core");
 		expect(codex).not.toContain('"@signet/core"');
-		for (const name of ["boot-wedge.yml", "memorybench-dreaming-gate.yml", "transcript-import-platform.yml"]) {
-			const parity = workflow(name);
-			expect(parity).toContain("continue-on-error: true");
-			expect(parity).toContain("TypeScript parity");
+		for (const name of ["boot-wedge.yml", "memorybench-dreaming-gate.yml"]) {
+			const nativeGate = workflow(name);
+			expect(nativeGate).not.toContain("continue-on-error: true");
+			expect(nativeGate).toContain("Native Rust");
 		}
+		const transcriptParity = workflow("transcript-import-platform.yml");
+		expect(transcriptParity).toContain("continue-on-error: true");
+		expect(transcriptParity).toContain("TypeScript parity");
 	});
 });
