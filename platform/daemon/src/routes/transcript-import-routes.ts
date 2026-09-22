@@ -49,15 +49,27 @@ export function resolveTranscriptImportAgent(
 	requestedAgentId: string | undefined,
 	fallbackAgentId: string,
 ): string | null {
-	const scoped = resolveScopedAgent(claims, authMode, requestedAgentId, fallbackAgentId);
+	const scoped = resolveScopedAgent(
+		claims,
+		authMode,
+		claims === null && authMode === "local" ? undefined : requestedAgentId,
+		fallbackAgentId,
+	);
 	return scoped.error ? null : scoped.agentId;
 }
 
 function agent(c: Context): string | null {
+	const requested = [
+		...(c.req.queries("agentId") ?? []),
+		...(c.req.queries("agent_id") ?? []),
+		c.req.header("x-signet-agent-id"),
+	].filter((value): value is string => value !== undefined && value.trim().length > 0);
+	const distinct = [...new Set(requested.map((value) => value.trim()))];
+	if (distinct.length > 1) return null;
 	return resolveTranscriptImportAgent(
 		c.get("auth")?.claims ?? null,
 		authConfig.mode,
-		c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
+		distinct[0],
 		resolveDaemonAgentId(),
 	);
 }
