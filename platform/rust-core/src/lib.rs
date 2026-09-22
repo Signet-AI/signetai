@@ -241,10 +241,11 @@ impl Core {
             let mut statement = connection.prepare(
                 "SELECT id, agent_id, content, metadata, deleted, created_at, updated_at, source_id, source_type, source_path, runtime_path, idempotency_key, memory_kind
                  FROM memories
-                 WHERE COALESCE(agent_id, 'default') = ? AND is_deleted = 0 AND content LIKE ?
+                 WHERE COALESCE(agent_id, 'default') = ? AND is_deleted = 0 AND content LIKE ? ESCAPE '\\'
                  ORDER BY rowid DESC LIMIT 1000",
             )?;
-            let rows = statement.query_map(params![agent, format!("%{query}%")], memory_row)?;
+            let escaped_query = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+            let rows = statement.query_map(params![agent, format!("%{escaped_query}%")], memory_row)?;
             Ok(rows.collect::<Result<Vec<_>, _>>()?)
         })
     }
