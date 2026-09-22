@@ -32,10 +32,7 @@ export function ProtectionRecoveryPanel({ report }: { report?: DashboardProtecti
 										{component.name}
 										{component.reason && <span className="ml-2 text-muted-foreground">— {component.reason}</span>}
 									</span>
-									<span className="font-mono text-[10px]">
-										{component.state}
-										{component.remediation && <span className="ml-2 underline">{component.remediation}</span>}
-									</span>
+									<span className="font-mono text-[10px]">{component.state}</span>
 								</li>
 							))}
 						</ul>

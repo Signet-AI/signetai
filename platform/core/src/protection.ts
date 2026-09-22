@@ -43,9 +43,17 @@ export interface RestoreReceipt {
 
 export interface ProtectionStatus {
 	readonly status: "protected" | "degraded" | "unverified" | "unknown" | "none";
+	readonly overall: "protected" | "partial" | "none";
 	readonly protected: boolean;
 	readonly components: readonly ProtectionComponent[];
+	readonly missing: readonly ProtectionComponentId[];
+	readonly degraded: readonly ProtectionComponentId[];
 	readonly restoreReceipt: RestoreReceipt | null;
+	readonly privacy: {
+		readonly pathsRedacted: true;
+		readonly secretsRedacted: true;
+		readonly contentIncluded: false;
+	};
 }
 
 const ORDER = new Map(PROTECTION_COMPONENT_IDS.map((id, index) => [id, index]));
@@ -70,6 +78,10 @@ export function aggregateProtection(
 		(receipt.expiresAt === undefined || Date.parse(receipt.expiresAt) > Date.now());
 	const protectedNow = allProtected && receiptUsable;
 	const hasRequired = ordered.some((component) => component.status !== "excluded-rebuildable");
+	const missing = ordered.filter((component) => component.status === "missing").map((component) => component.id);
+	const degraded = ordered
+		.filter((component) => component.status !== "protected" && component.status !== "excluded-rebuildable")
+		.map((component) => component.id);
 	const status = !hasRequired
 		? "none"
 		: protectedNow
@@ -79,5 +91,14 @@ export function aggregateProtection(
 				: hasUnknown
 					? "unknown"
 					: "unverified";
-	return { status, protected: protectedNow, components: ordered, restoreReceipt: receipt };
+	return {
+		status,
+		overall: !hasRequired ? "none" : protectedNow ? "protected" : "partial",
+		protected: protectedNow,
+		components: ordered,
+		missing,
+		degraded,
+		restoreReceipt: receipt,
+		privacy: { pathsRedacted: true, secretsRedacted: true, contentIncluded: false },
+	};
 }

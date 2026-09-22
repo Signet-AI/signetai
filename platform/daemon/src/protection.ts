@@ -36,8 +36,8 @@ export function readRestoreReceipt(workspacePath: string): RestoreReceipt | null
 	}
 }
 
-function safeComponent(component: ProtectionComponent): Omit<ProtectionComponent, "label" | "reason" | "remediation"> {
-	const { label: _label, reason: _reason, remediation: _remediation, ...safe } = component;
+function safeComponent(component: ProtectionComponent): Omit<ProtectionComponent, "label"> {
+	const { label: _label, ...safe } = component;
 	return safe;
 }
 

@@ -1,11 +1,14 @@
 import { expect, test } from "bun:test";
 import { protectionSummary, redactSensitiveText, type ProtectionReport } from "./dashboard-protection";
 const report: ProtectionReport = {
+	status: "degraded",
+	protected: false,
 	overall: "partial",
 	components: [],
 	missing: [],
 	degraded: ["sqlite"],
-	privacy: { pathsRedacted: true, secretsRedacted: true },
+	restoreReceipt: null,
+	privacy: { pathsRedacted: true, secretsRedacted: true, contentIncluded: false },
 };
 test("summarizes the shared protection contract", () => {
 	const summary = protectionSummary(report);

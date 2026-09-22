@@ -6,8 +6,22 @@ export interface ProtectionSummary {
 	readonly components: readonly ProtectionComponent[];
 	readonly missing: readonly string[];
 	readonly degraded: readonly string[];
+	readonly restore: { readonly testedAt: string | null; readonly scope: string | null };
+	readonly groups: readonly {
+		readonly name: string;
+		readonly components: readonly {
+			readonly name: string;
+			readonly state: ProtectionComponent["status"];
+			readonly reason?: string;
+		}[];
+	}[];
 }
 export function protectionSummary(report: ProtectionReport): ProtectionSummary {
+	const components = report.components.map((component) => ({
+		name: component.id,
+		state: component.status,
+		reason: component.detail,
+	}));
 	return {
 		overallLabel:
 			report.overall === "protected"
@@ -18,6 +32,11 @@ export function protectionSummary(report: ProtectionReport): ProtectionSummary {
 		components: report.components,
 		missing: report.missing,
 		degraded: report.degraded,
+		restore: {
+			testedAt: report.restoreReceipt?.at ?? null,
+			scope: report.restoreReceipt?.components?.join(", ") ?? null,
+		},
+		groups: [{ name: "Components", components }],
 	};
 }
 export function redactSensitiveText(value: string): string {

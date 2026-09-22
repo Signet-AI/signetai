@@ -7,7 +7,12 @@ describe("protection contract", () => {
 			{ id: "root-authored", status: "protected", detail: "present" },
 			{ id: "sqlite", status: "protected", detail: "present" },
 		];
-		expect(aggregateProtection(components)).toMatchObject({ status: "unverified", protected: false });
+		expect(aggregateProtection(components)).toMatchObject({
+			status: "unverified",
+			overall: "partial",
+			protected: false,
+			missing: [],
+		});
 	});
 
 	it("never treats git sync as protection and preserves deterministic component order", () => {
@@ -32,6 +37,16 @@ describe("protection contract", () => {
 			{ restoreReceipt: { at: "2026-01-01T00:00:00.000Z", valid: true } },
 		);
 		expect(result.status).toBe("degraded");
+		expect(result.overall).toBe("partial");
+		expect(result.degraded).toEqual(["sqlite"]);
 		expect(result.protected).toBe(false);
+	});
+
+	it("reports none when only intentionally rebuildable components exist", () => {
+		const result = aggregateProtection([
+			{ id: "runtime", status: "excluded-rebuildable", detail: "recreated" },
+			{ id: "filesystem-cache", status: "excluded-rebuildable", detail: "rebuildable" },
+		]);
+		expect(result).toMatchObject({ status: "none", overall: "none", protected: false });
 	});
 });

@@ -505,7 +505,7 @@ export interface SourceImportsResponse {
 	readonly imports: readonly SourceImportJob[];
 }
 
-export type { ProtectionStatus as DashboardProtectionReport } from "@signet/core";
+export type DashboardProtectionReport = import("@signet/core").ProtectionStatus;
 export interface SourcesResponse {
 	version: number;
 	sources: SignetSource[];
