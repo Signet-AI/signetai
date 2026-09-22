@@ -67,6 +67,13 @@ export function discoverPaths(paths: string[]): string[] {
 	].sort();
 }
 export function discoverBaseline(repo: string): ManifestEntry[] {
+	const paths = discoverBaselinePaths(repo);
+	return paths.map((path) => ({
+		path,
+		sha256: sha256(git(repo, ["show", `${BASELINE_SHA}:${path}`], true) as Buffer),
+	}));
+}
+export function discoverBaselinePaths(repo: string): string[] {
 	const paths = discoverPaths(
 		String(git(repo, ["ls-tree", "-r", "--name-only", BASELINE_SHA]))
 			.split("\n")
@@ -74,10 +81,7 @@ export function discoverBaseline(repo: string): ManifestEntry[] {
 	);
 	if (paths.length !== CORPUS_SIZE)
 		throw new Error(`baseline corpus has ${paths.length} paths; expected ${CORPUS_SIZE}`);
-	return paths.map((path) => ({
-		path,
-		sha256: sha256(git(repo, ["show", `${BASELINE_SHA}:${path}`], true) as Buffer),
-	}));
+	return paths;
 }
 export function validateManifest(
 	entries: ManifestEntry[],

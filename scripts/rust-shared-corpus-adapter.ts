@@ -14,7 +14,16 @@ import {
 import { resolve, basename, dirname, isAbsolute, relative, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { buildExecutionManifest, currentManifest } from "./shared-corpus-runner";
+import {
+	BASELINE_FILTERS,
+	BASELINE_ROOTS,
+	BASELINE_SHA,
+	CORPUS_SIZE,
+	PREEXISTING_DISABLED_CASES,
+	buildExecutionManifest,
+	currentManifest,
+	discoverBaselinePaths,
+} from "./shared-corpus-runner";
 import { validateRustDaemonArtifact } from "./rust-shared-corpus-artifact";
 import { wrapRustJUnitReport } from "./rust-shared-corpus-report";
 
@@ -66,11 +75,33 @@ function readManifest(value: string): Manifest {
 	}
 }
 function validatePinnedManifest(manifest: Manifest): void {
-	const expected = buildExecutionManifest(process.cwd());
+	// Reject obviously forged manifests before hashing all 497 baseline files.
 	const equalStrings = (actual: unknown, expectedValues: string[]): boolean =>
 		Array.isArray(actual) &&
 		actual.length === expectedValues.length &&
 		actual.every((value, index) => value === expectedValues[index]);
+	if (
+		manifest.baselineSha !== BASELINE_SHA ||
+		!equalStrings(manifest.roots, BASELINE_ROOTS) ||
+		!equalStrings(manifest.filters, BASELINE_FILTERS) ||
+		!equalStrings(manifest.excludedDisabledCases, PREEXISTING_DISABLED_CASES) ||
+		!Array.isArray(manifest.protectedCorpus) ||
+		manifest.protectedCorpus.length !== CORPUS_SIZE
+	)
+		fail("manifest does not match the pinned baseline manifest");
+	const baselinePaths = discoverBaselinePaths(process.cwd());
+	if (
+		manifest.protectedCorpus.some(
+			(entry, index) =>
+				!entry ||
+				typeof entry.path !== "string" ||
+				typeof entry.sha256 !== "string" ||
+				!/^[0-9a-f]{64}$/.test(entry.sha256) ||
+				entry.path !== baselinePaths[index],
+		)
+	)
+		fail("manifest does not match the pinned baseline manifest");
+	const expected = buildExecutionManifest(process.cwd());
 	const actualCorpus = manifest.protectedCorpus;
 	const corpusMatches =
 		Array.isArray(actualCorpus) &&
