@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { addObsidianSource, loadSourcesConfig } from "@signet/core";
+import { addLocalFilesSource, addObsidianSource, loadSourcesConfig } from "@signet/core";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { resetEmbeddingCircuitBreakers } from "./embedding-circuit-breaker";
@@ -12,6 +12,7 @@ import { indexExternalMemoryArtifact } from "./memory-lineage";
 import type { NativeMemoryBridgeOptions } from "./native-memory-sources";
 import {
 	claudeCodeNativeMemorySource,
+	configuredNativeMemorySources,
 	codexNativeMemorySource,
 	hermesNativeMemorySource,
 	indexNativeMemoryFile,
@@ -77,6 +78,114 @@ describe("native memory sources", () => {
 		expect(row.source_kind).toBe("native_rollout_summary");
 		expect(row.harness).toBe("codex");
 		expect(row.content).toContain("Hermes bridge decision");
+	});
+
+	it("indexes supported local files with stable source provenance", async () => {
+		const root = join(dir, "files");
+		mkdirSync(join(root, "nested"), { recursive: true });
+		const added = addLocalFilesSource({ root, name: "Project files" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+		const source = configuredNativeMemorySources(dir).find((entry) => entry.sourceId === added.source.id);
+		expect(source).toMatchObject({
+			harness: "local-files",
+			displayName: "Project files",
+			root,
+			sourceId: added.source.id,
+			files: [
+				{ glob: "**/*.md", kind: "source_local_files_markdown" },
+				{ glob: "**/*.txt", kind: "source_local_files_text" },
+				{ glob: "**/*.jsonl", kind: "source_local_files_jsonl" },
+			],
+		});
+		if (!source) throw new Error("local-files source missing");
+
+		const markdown = join(root, "notes.md");
+		const text = join(root, "nested", "notes.txt");
+		const jsonl = join(root, "events.jsonl");
+		const hidden = join(root, ".private.md");
+		const unsupported = join(root, "image.png");
+		writeFileSync(markdown, "# Notes\n\nLocal Markdown evidence.\n");
+		writeFileSync(text, "Local plain text evidence.\n");
+		writeFileSync(jsonl, '{"event":"local JSONL evidence"}\n');
+		writeFileSync(hidden, "Hidden evidence must stay excluded.\n");
+		writeFileSync(unsupported, "Unsupported evidence must stay excluded.\n");
+
+		for (const path of [markdown, text, jsonl])
+			expect(await indexNativeMemoryFile(source, path, "agent-local-files")).toBe(true);
+		expect(await indexNativeMemoryFile(source, hidden, "agent-local-files")).toBe(false);
+		expect(await indexNativeMemoryFile(source, unsupported, "agent-local-files")).toBe(false);
+
+		const rows = getDbAccessor().withReadDb(
+			(db) =>
+				db
+					.prepare(
+						`SELECT source_path AS sourcePath, source_kind AS sourceKind, harness, source_id AS sourceId,
+						        source_root AS sourceRoot, source_external_id AS sourceExternalId
+						   FROM memory_artifacts
+						  WHERE agent_id = ?
+						  ORDER BY source_path`,
+					)
+					.all("agent-local-files") as Array<Record<string, string>>,
+		);
+		expect(rows).toHaveLength(3);
+		expect(rows.map((row) => row.sourceKind)).toEqual([
+			"source_local_files_jsonl",
+			"source_local_files_text",
+			"source_local_files_markdown",
+		]);
+		for (const row of rows) {
+			expect(row.harness).toBe("local-files");
+			expect(row.sourceId).toBe(added.source.id);
+			expect(row.sourceRoot).toBe(root);
+			expect(row.sourceExternalId).toBe(row.sourcePath?.slice(root.length + 1));
+		}
+	});
+
+	it("rescans configured local files and reconciles updates and deletes", async () => {
+		const root = join(dir, "files-watch");
+		mkdirSync(root, { recursive: true });
+		const file = join(root, "notes.txt");
+		writeFileSync(file, "Initial local evidence.\n");
+		const added = addLocalFilesSource({ root, name: "Watched files" }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const handle = startNativeMemoryBridge([], {
+			agentId: "agent-local-files-watch",
+			agentsDir: dir,
+			includeConfiguredSources: true,
+			pollIntervalMs: 0,
+			sourceCleanupEnabled: true,
+		});
+		try {
+			expect(await handle.syncExisting()).toBe(1);
+			writeFileSync(file, "Updated local evidence.\n");
+			expect(await handle.syncExisting()).toBe(1);
+			const updated = getDbAccessor().withReadDb(
+				(db) =>
+					db
+						.prepare(
+							"SELECT content, is_deleted AS isDeleted FROM memory_artifacts WHERE agent_id = ? AND source_id = ?",
+						)
+						.get("agent-local-files-watch", added.source.id) as { content: string; isDeleted: number },
+			);
+			expect(updated).toEqual({ content: "Updated local evidence.\n", isDeleted: 0 });
+
+			rmSync(file);
+			expect(await handle.syncExisting()).toBe(0);
+			const deleted = getDbAccessor().withReadDb(
+				(db) =>
+					(
+						db
+							.prepare("SELECT is_deleted AS isDeleted FROM memory_artifacts WHERE agent_id = ? AND source_id = ?")
+							.get("agent-local-files-watch", added.source.id) as { isDeleted: number }
+					).isDeleted,
+			);
+			expect(deleted).toBe(1);
+		} finally {
+			await handle.close();
+		}
 	});
 
 	it("does not flatten owner read failures into legacy indexing", () => {

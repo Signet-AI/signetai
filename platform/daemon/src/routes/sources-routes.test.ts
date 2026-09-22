@@ -92,6 +92,7 @@ describe("Sources routes", () => {
 			) => Promise<{ readonly stdout: string; readonly stderr: string }>;
 			pickerPlatform?: NodeJS.Platform;
 			platform?: NodeJS.Platform;
+			expectedSourcePrefix?: string;
 		} = {},
 	): Hono {
 		const app = new Hono();
@@ -99,7 +100,7 @@ describe("Sources routes", () => {
 			agentsDir: dir,
 			startBridge: (sources: readonly NativeMemorySource[], bridgeOptions: NativeMemoryBridgeOptions) => {
 				expect(sources).toHaveLength(1);
-				expect(sources[0]?.sourceId).toStartWith("obsidian:");
+				expect(sources[0]?.sourceId).toStartWith(options.expectedSourcePrefix ?? "obsidian:");
 				expect(bridgeOptions.yieldEveryFiles).toBe(1);
 				expect(bridgeOptions.embeddingConfig).toBeDefined();
 				expect(bridgeOptions.embeddingConfig?.provider).toBe("native");
@@ -148,7 +149,7 @@ describe("Sources routes", () => {
 				} satisfies NativeMemoryBridgeHandle;
 			},
 			purgeNativeSource: (source, agentId) => {
-				expect(source.sourceId).toStartWith("obsidian:");
+				expect(source.sourceId).toStartWith(options.expectedSourcePrefix ?? "obsidian:");
 				expect(agentId).toBe(process.env.SIGNET_AGENT_ID?.trim() || "default");
 				options.onPurge?.();
 				return options.purged ?? 7;
@@ -456,6 +457,68 @@ describe("Sources routes", () => {
 
 		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
 		expect(loadSourcesConfig(dir).sources[0]?.id).toBe(body.source.id);
+	});
+
+	it("connects a local-files source with a stable provider id and queues indexing", async () => {
+		const root = join(dir, "files");
+		mkdirSync(root, { recursive: true });
+		writeFileSync(join(root, "note.txt"), "Local route evidence.\n");
+		const app = makeApp({ expectedSourcePrefix: "local-files:", purged: 3 });
+		const response = await app.request("/api/sources/local-files", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ root, name: "Route files", excludeGlobs: ["private/**"] }),
+		});
+
+		expect(response.status).toBe(202);
+		const body = (await response.json()) as {
+			created: boolean;
+			queued: boolean;
+			source: { id: string; kind: string; root: string; excludeGlobs: string[] };
+		};
+		expect(body.created).toBe(true);
+		expect(body.queued).toBe(true);
+		expect(body.source).toMatchObject({ kind: "local-files", root });
+		expect(body.source.id).toStartWith("local-files:");
+		expect(body.source.excludeGlobs).toContain("private/**");
+		await waitFor(() => !!loadSourcesConfig(dir).sources[0]?.lastIndexedAt);
+		expect(loadSourcesConfig(dir).sources[0]?.id).toBe(body.source.id);
+
+		const deleted = await app.request(`/api/sources/${encodeURIComponent(body.source.id)}`, { method: "DELETE" });
+		expect(deleted.status).toBe(200);
+		expect(await deleted.json()).toMatchObject({ purged: 3, source: { id: body.source.id } });
+		expect(loadSourcesConfig(dir).sources).toHaveLength(0);
+	});
+
+	it("rejects a non-object local-files request body", async () => {
+		const response = await makeApp({ expectedSourcePrefix: "local-files:" }).request("/api/sources/local-files", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: "null",
+		});
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({ error: "Invalid local-files configuration" });
+	});
+
+	it("rejects invalid optional local-files fields", async () => {
+		const root = join(dir, "invalid-local-files-fields");
+		mkdirSync(root, { recursive: true });
+		for (const fields of [
+			{ name: 123 },
+			{ excludeGlobs: "private/**" },
+			{ excludeGlobs: ["private/**", 123] },
+			{ root: 123 },
+		]) {
+			const response = await makeApp({ expectedSourcePrefix: "local-files:" }).request("/api/sources/local-files", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ root, ...fields }),
+			});
+
+			expect(response.status).toBe(400);
+			expect(await response.json()).toEqual({ error: "Invalid local-files configuration" });
+		}
 	});
 
 	it("reports a provider outage as paused partial progress without stamping freshness", async () => {

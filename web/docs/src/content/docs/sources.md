@@ -221,6 +221,25 @@ projections use them. The raw artifact and provenance remain unchanged when a
 record is `tainted` or `blocked`; inspect the record and the bounded
 `/api/diagnostics/memory-content-safety` ledger for the decision.
 
+## Local files v1
+
+`POST /api/sources/local-files` connects an existing local directory as a
+read-only Source. Signet indexes Markdown (`.md`), text (`.txt`), and JSONL
+(`.jsonl`) files as source artifacts. It never writes to the selected files.
+
+Local-file Sources use a persisted `local-files:<uuid>` identity that is not
+derived from the directory path. Signet resolves a selected root to its canonical
+physical directory before persisting it. Reconnecting the same configured root updates
+the existing Source without changing its ID or lifecycle generation.
+
+The source bridge performs bounded scans, refreshes changed content, and marks
+removed files deleted in Signet's derived index. Hidden files and directories,
+plus common temporary and backup suffixes, are excluded by default. Additional
+`excludeGlobs` are merged with those defaults.
+
+This first version exposes whole-file source artifacts. Source-native graph
+projection and semantic source chunks remain specific to Obsidian Sources.
+
 ## Obsidian v1
 
 Obsidian Sources v1 indexes Markdown files below a vault root:
@@ -373,6 +392,7 @@ The daemon exposes the Sources lifecycle under `/api/sources`:
 |--------|------|-------------|
 | `GET` | `/api/sources` | List configured sources. |
 | `POST` | `/api/sources/import` | Import bounded file batches as durable source artifacts. |
+| `POST` | `/api/sources/local-files` | Connect a read-only local directory and queue indexing. |
 | `POST` | `/api/sources/obsidian` | Add/update an Obsidian vault source and index it. |
 | `POST` | `/api/sources/discord` | Add/update a Discord source and queue a shared source index job. |
 | `POST` | `/api/sources/github` | Add/update a GitHub source and queue a shared source index job. |

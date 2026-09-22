@@ -415,6 +415,43 @@ through `POST /api/sources/import` instead.
 }
 ```
 
+### POST /api/sources/local-files
+
+Connect an existing local directory as a read-only Source and queue a bounded
+source index job. V1 indexes `.md`, `.txt`, and `.jsonl` files. Hidden files and
+directories, temporary files, and backup files are excluded by default.
+
+**Request body**
+
+```json
+{
+  "root": "/home/user/Documents/project",
+  "name": "Project files",
+  "excludeGlobs": ["private/**"]
+}
+```
+
+`path` is also accepted as an alias for `root`. The root must be an existing
+directory. Signet resolves symlinked roots to their canonical physical directory
+before persistence. Signet persists a provider-generated `local-files:<uuid>` source ID,
+so the Source identity is not derived from the absolute path.
+
+**Response**
+
+```json
+{
+  "source": { "id": "local-files:01234567-89ab-cdef-0123-456789abcdef", "kind": "local-files" },
+  "created": true,
+  "indexed": 0,
+  "queued": true,
+  "job": { "status": "queued", "sourceId": "local-files:01234567-89ab-cdef-0123-456789abcdef" }
+}
+```
+
+Signet stores indexed content and provenance in its own database and does not
+modify source files. Reconnecting the same configured root preserves its Source
+ID and generation.
+
 ### POST /api/sources/obsidian
 
 

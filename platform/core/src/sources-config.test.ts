@@ -1,15 +1,17 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
 	DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
 	DEFAULT_GITHUB_RESOURCE_TYPES_NO_TOKEN,
+	DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS,
 	DEFAULT_OBSIDIAN_EXCLUDE_GLOBS,
 	addDiscordSource,
 	addGitHubSource,
 	addImportedSource,
+	addLocalFilesSource,
 	addObsidianSource,
 	addWebSource,
 	getSourcesConfigPath,
@@ -178,6 +180,74 @@ describe("sources-config", () => {
 		expect(second.ok).toBe(true);
 		if (second.ok === false) throw new Error(second.error);
 		expect(second.source.generation).toBe(first.source.generation);
+	});
+
+	it("adds a local-files source with a path-independent persisted id", () => {
+		const agentsDir = tmp();
+		const root = join(agentsDir, "files");
+		mkdirSync(root, { recursive: true });
+
+		const result = addLocalFilesSource({ root, name: "Local files", now: "2026-01-01T00:00:00.000Z" }, agentsDir);
+
+		expect(result.ok).toBe(true);
+		if (result.ok === false) throw new Error(result.error);
+		expect(result.created).toBe(true);
+		expect(result.source).toMatchObject({
+			kind: "local-files",
+			mode: "read-only",
+			enabled: true,
+			name: "Local files",
+			root,
+		});
+		expect(result.source.id).toMatch(/^local-files:[0-9a-f]{8}-[0-9a-f-]{27}$/);
+		expect(result.source.id).not.toContain(root);
+		expect(result.source.excludeGlobs).toEqual(DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS);
+		expect(loadSourcesConfig(agentsDir).sources).toEqual([result.source]);
+	});
+
+	it("updates a local-files source without changing its id or generation", () => {
+		const agentsDir = tmp();
+		const root = join(agentsDir, "files");
+		mkdirSync(root, { recursive: true });
+		const first = addLocalFilesSource({ root, now: "2026-01-01T00:00:00.000Z" }, agentsDir);
+		expect(first.ok).toBe(true);
+		if (first.ok === false) throw new Error(first.error);
+
+		const second = addLocalFilesSource(
+			{ root, name: "Renamed files", excludeGlobs: ["private/**"], now: "2026-01-02T00:00:00.000Z" },
+			agentsDir,
+		);
+
+		expect(second.ok).toBe(true);
+		if (second.ok === false) throw new Error(second.error);
+		expect(second.created).toBe(false);
+		expect(second.source.id).toBe(first.source.id);
+		expect(second.source.generation).toBe(first.source.generation);
+		expect(second.source.excludeGlobs).toEqual([...DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS, "private/**"]);
+		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
+	});
+
+	it("pins a symlinked local-files root to its canonical directory", () => {
+		const agentsDir = tmp();
+		const target = join(agentsDir, "target");
+		const link = join(agentsDir, "selected-link");
+		mkdirSync(target, { recursive: true });
+		symlinkSync(target, link, "dir");
+
+		const result = addLocalFilesSource({ root: link }, agentsDir);
+
+		expect(result.ok).toBe(true);
+		if (result.ok === false) throw new Error(result.error);
+		expect(result.source.root).toBe(realpathSync(target));
+		expect(result.source.root).not.toBe(link);
+	});
+
+	it("rejects a local-files root that is not an existing directory", () => {
+		const agentsDir = tmp();
+		expect(addLocalFilesSource({ root: join(agentsDir, "missing") }, agentsDir)).toEqual({
+			ok: false,
+			error: "Local files path is not a directory",
+		});
 	});
 
 	it("adds a Discord source with validated provider settings", () => {

@@ -52,6 +52,7 @@ silently disappear from the API reference.
 | GET | `/api/sources` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/pick-directory` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/pick-files` | platform/daemon/src/routes/sources-routes.ts (loopback-only; returns local paths for a subsequent paths-based import) |
+| POST | `/api/sources/local-files` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/obsidian` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/discord` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/import` | platform/daemon/src/routes/import-routes.ts |

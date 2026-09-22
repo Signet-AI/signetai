@@ -1,10 +1,19 @@
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	rmSync,
+	statSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir, platform } from "node:os";
 import { basename, dirname, resolve } from "node:path";
 import { resolveDefaultBasePath } from "./constants";
 
-export type SignetSourceKind = "obsidian" | "web" | (string & {});
+export type SignetSourceKind = "local-files" | "obsidian" | "web" | (string & {});
 export type SignetSourceMode = "read-only";
 export type SignetSourceProviderSettings = Readonly<Record<string, unknown>>;
 
@@ -32,12 +41,32 @@ export const DEFAULT_OBSIDIAN_EXCLUDE_GLOBS = [
 	"**/.*",
 ] as const;
 
+export const DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS = [
+	"**/.*/**",
+	"**/.*",
+	"**/*.tmp",
+	"**/*.temp",
+	"**/*.bak",
+	"**/*.orig",
+	"**/*.rej",
+	"**/*.swp",
+	"**/*.swo",
+	"**/*~",
+] as const;
+
 export interface SignetSourcesConfig {
 	readonly version: 1;
 	readonly sources: readonly SignetSourceEntry[];
 }
 
 export interface AddObsidianSourceInput {
+	readonly root: string;
+	readonly name?: string;
+	readonly excludeGlobs?: readonly string[];
+	readonly now?: string;
+}
+
+export interface AddLocalFilesSourceInput {
 	readonly root: string;
 	readonly name?: string;
 	readonly excludeGlobs?: readonly string[];
@@ -220,6 +249,10 @@ function normalizeSourceEntry(source: SignetSourceEntry): SignetSourceEntry {
 
 export function addObsidianSource(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
 	return withSourcesConfigLock(agentsDir, () => addObsidianSourceUnlocked(input, agentsDir));
+}
+
+export function addLocalFilesSource(input: AddLocalFilesSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	return withSourcesConfigLock(agentsDir, () => addLocalFilesSourceUnlocked(input, agentsDir));
 }
 
 export function addWebSource(input: AddWebSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
@@ -754,6 +787,63 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 	return { ok: true, source, created: true };
 }
 
+function addLocalFilesSourceUnlocked(input: AddLocalFilesSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	try {
+		const trimmedRoot = input.root.trim();
+		if (!trimmedRoot) return { ok: false, error: "Local files path is required" };
+		const requestedRoot = resolve(trimmedRoot);
+		if (!existsSync(requestedRoot)) return { ok: false, error: "Local files path is not a directory" };
+		let root: string;
+		try {
+			root = realpathSync(requestedRoot);
+			if (!statSync(root).isDirectory()) return { ok: false, error: "Local files path is not a directory" };
+		} catch {
+			return { ok: false, error: "Local files path is not accessible" };
+		}
+
+		const now = input.now ?? new Date().toISOString();
+		const config = loadSourcesConfigForWrite(agentsDir);
+		const existing = config.sources.find((source) => source.kind === "local-files" && source.root === root);
+		if (existing) {
+			const updated: SignetSourceEntry = {
+				...existing,
+				name: cleanName(input.name) ?? existing.name,
+				excludeGlobs: input.excludeGlobs
+					? mergeExcludeGlobs(DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS, input.excludeGlobs)
+					: (existing.excludeGlobs ?? [...DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS]),
+				enabled: true,
+				updatedAt: now,
+			};
+			saveSourcesConfig(
+				{
+					version: SOURCES_CONFIG_VERSION,
+					sources: config.sources.map((source) => (source.id === existing.id ? updated : source)),
+				},
+				agentsDir,
+			);
+			return { ok: true, source: updated, created: false };
+		}
+
+		const source: SignetSourceEntry = {
+			id: `local-files:${randomUUID()}`,
+			generation: newSourceGeneration(),
+			kind: "local-files",
+			name: cleanName(input.name) ?? "Local files",
+			root,
+			enabled: true,
+			mode: "read-only",
+			createdAt: now,
+			updatedAt: now,
+			excludeGlobs: mergeExcludeGlobs(DEFAULT_LOCAL_FILES_EXCLUDE_GLOBS, input.excludeGlobs),
+		};
+		saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...config.sources, source] }, agentsDir);
+		return { ok: true, source, created: true };
+	} catch (err) {
+		const detail = err instanceof Error ? err.message : String(err);
+		return { ok: false, error: detail };
+	}
+}
+
 export function markSourceIndexed(
 	sourceId: string,
 	indexedAt = new Date().toISOString(),
@@ -1174,7 +1264,11 @@ function isSafeGitHubDocPath(value: string): boolean {
 }
 
 function mergeDefaultObsidianExcludeGlobs(values: readonly string[] | undefined): readonly string[] {
-	return [...DEFAULT_OBSIDIAN_EXCLUDE_GLOBS, ...(cleanExcludeGlobs(values) ?? [])].filter(
+	return mergeExcludeGlobs(DEFAULT_OBSIDIAN_EXCLUDE_GLOBS, values);
+}
+
+function mergeExcludeGlobs(defaults: readonly string[], values: readonly string[] | undefined): readonly string[] {
+	return [...defaults, ...(cleanExcludeGlobs(values) ?? [])].filter(
 		(value, index, all) => all.indexOf(value) === index,
 	);
 }

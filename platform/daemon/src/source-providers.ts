@@ -5,6 +5,7 @@ import { webSourceProvider } from "./web-source-provider";
 import { markImportedSourceUnsupported } from "./imported-source-lifecycle";
 import {
 	type NativeMemorySource,
+	localFilesNativeMemorySource,
 	obsidianNativeMemorySource,
 	purgeNativeMemorySourceArtifacts,
 } from "./native-memory-sources";
@@ -50,6 +51,16 @@ export const obsidianSourceProvider: SourceProviderAdapter = {
 		),
 };
 
+export const localFilesSourceProvider: SourceProviderAdapter = {
+	kind: "local-files",
+	toNativeSource: (source) => localFilesNativeMemorySource(source.root, source.id, source.name, source.excludeGlobs),
+	purge: (source, agentId) =>
+		purgeNativeMemorySourceArtifacts(
+			localFilesNativeMemorySource(source.root, source.id, source.name, source.excludeGlobs),
+			agentId,
+		),
+};
+
 export const importedSourceProvider: SourceProviderAdapter = {
 	kind: "import",
 	purge: (source, agentId) =>
@@ -64,6 +75,7 @@ export function registerSourceProvider(provider: SourceProviderAdapter): void {
 }
 
 export function getSourceProvider(kind: SignetSourceKind): SourceProviderAdapter | undefined {
+	if (kind === localFilesSourceProvider.kind) return localFilesSourceProvider;
 	if (kind === obsidianSourceProvider.kind) return obsidianSourceProvider;
 	if (kind === discordSourceProvider.kind) return discordSourceProvider;
 	if (kind === githubSourceProvider.kind) return githubSourceProvider;
@@ -74,6 +86,7 @@ export function getSourceProvider(kind: SignetSourceKind): SourceProviderAdapter
 
 export function configuredSourceProviders(): readonly SourceProviderAdapter[] {
 	return [
+		localFilesSourceProvider,
 		obsidianSourceProvider,
 		discordSourceProvider,
 		githubSourceProvider,
