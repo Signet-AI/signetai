@@ -16,5 +16,12 @@ export function up(db: MigrationDb): void {
 			updated_at TEXT NOT NULL
 		);
 		CREATE INDEX IF NOT EXISTS idx_import_admission_status ON import_admission_ledger(agent_id, status, updated_at);
+		CREATE TABLE IF NOT EXISTS import_admission_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			admission_key TEXT NOT NULL,
+			event TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		);
+		CREATE INDEX IF NOT EXISTS idx_import_admission_events_key ON import_admission_events(admission_key, id);
 	`);
 }

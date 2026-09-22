@@ -15,6 +15,8 @@ export interface ImportRow {
 export interface ImportLedger {
 	upsert(row: ImportRow): ImportRow;
 	find(key: string): ImportRow | undefined;
+	/** Optional durable event hook owned by the daemon database adapter. */
+	appendEvent?(key: string, event: string): void;
 }
 export interface InboxOptions {
 	root: string;
@@ -60,15 +62,20 @@ export async function admitImport(input: Admission): Promise<ImportRow> {
 		await unlink(tmp).catch(() => {});
 		throw new Error("original verification failed");
 	}
+	// Publish retained bytes before the durable row. A crash here leaves an
+	// inspectable orphan for reconciliation; the reverse ordering loses bytes.
 	await rename(tmp, target.original);
-	return input.ledger.upsert({
+	const row: ImportRow = {
 		key,
 		fileName: input.fileName,
 		status: "pending",
 		originalPath: target.original,
 		sha256: digest(input.bytes),
 		size: input.bytes.byteLength,
-	});
+	};
+	const committed = input.ledger.upsert(row);
+	input.ledger.appendEvent?.(key, "admitted");
+	return committed;
 }
 
 /** Inventory only the configured inbox; never follows links or scans parents. */
@@ -77,8 +84,11 @@ export async function scanInbox(input: InboxOptions): Promise<ImportRow[]> {
 	await mkdir(inbox, { recursive: true });
 	const entries = await readdir(inbox, { withFileTypes: true });
 	const out: ImportRow[] = [];
-	for (const entry of entries.slice(0, input.maxFiles ?? 25)) {
-		if (entry.name.startsWith(".") || entry.name.endsWith(".tmp") || entry.name.endsWith(".part")) continue;
+	// Filter first, then bound work; temp files must not starve valid entries.
+	const candidates = entries.filter(
+		(entry) => !entry.name.startsWith(".") && !entry.name.endsWith(".tmp") && !entry.name.endsWith(".part"),
+	);
+	for (const entry of candidates.slice(0, input.maxFiles ?? 25)) {
 		const source = join(inbox, entry.name);
 		let info: Awaited<ReturnType<typeof lstat>>;
 		try {

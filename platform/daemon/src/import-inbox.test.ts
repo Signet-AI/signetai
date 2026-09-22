@@ -47,4 +47,14 @@ describe("durable import inbox admission", () => {
 		expect(result.map((x) => x.status).sort()).toEqual(["pending", "quarantined"].sort());
 		expect(result.find((x) => x.status === "pending")?.fileName).toBe("ok.txt");
 	});
+
+	test("temp entries do not consume the bounded scan budget", async () => {
+		const root = await fixture();
+		const inbox = join(root, "files");
+		await Bun.write(join(inbox, ".hidden"), "x");
+		await Bun.write(join(inbox, "valid.txt"), "ok");
+		const result = await scanInbox({ root, ledger: ledger(), maxFiles: 1 });
+		expect(result).toHaveLength(1);
+		expect(result[0]?.fileName).toBe("valid.txt");
+	});
 });
