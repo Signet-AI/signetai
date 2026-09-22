@@ -160,6 +160,7 @@ import { up as vectorRepairCheckpoints } from "./153-vector-repair-checkpoints";
 import { up as embeddingRepairCheckpoints } from "./156-embedding-repair-checkpoints";
 import { up as embeddingRepairProgress } from "./157-embedding-repair-progress";
 import { up as dreamingCandidateScanIndex } from "./158-dreaming-candidate-scan-index";
+import { up as importAdmissionLedger } from "./160-import-admission-ledger";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1450,6 +1451,12 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 159,
 		name: "retire-obsolete-invocation-ledger",
 		up: retireObsoleteInvocationLedger,
+	},
+	{
+		version: 160,
+		name: "import-admission-ledger",
+		up: importAdmissionLedger,
+		artifacts: { tables: ["import_admission_ledger"], indexes: ["idx_import_admission_status"] },
 	},
 ];
 function checksum(m: Migration): string {
