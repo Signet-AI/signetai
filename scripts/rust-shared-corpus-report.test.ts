@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { parseJUnitReport } from "./shared-corpus-runner";
 import { wrapRustJUnitReport } from "./rust-shared-corpus-report";
 
 test("preserves child-declared JUnit totals when wrapping native evidence", () => {
@@ -38,4 +39,30 @@ test("uses aggregate counters from a testsuites root", () => {
 	expect(wrapped.caseCount).toBe(1);
 	expect(wrapped.xml).toContain('tests="2"');
 	expect(wrapped.xml).toContain('failures="1"');
+});
+
+test("preserves leaf suite failures when aggregate counters are absent", () => {
+	const child =
+		'<testsuites><testsuite name="a" tests="1" failures="1">' +
+		'<testcase file="a.test.ts" name="one"/></testsuite></testsuites>';
+	const wrapped = wrapRustJUnitReport(child, false);
+	const accounting = parseJUnitReport(wrapped.xml, ["a.test.ts"]);
+
+	expect(wrapped.xml).toContain('failures="1"');
+	expect(accounting.failed).toBe(1);
+	expect(accounting.status).toBe("failed");
+	expect(accounting.incomplete).toBe(false);
+});
+
+test("preserves nested suite errors when aggregate counters are absent", () => {
+	const child =
+		'<testsuite><testsuite name="a" tests="1" errors="1">' +
+		'<testcase file="a.test.ts" name="one"/></testsuite></testsuite>';
+	const wrapped = wrapRustJUnitReport(child, false);
+	const accounting = parseJUnitReport(wrapped.xml, ["a.test.ts"]);
+
+	expect(wrapped.xml).toContain('errors="1"');
+	expect(accounting.failed).toBe(1);
+	expect(accounting.status).toBe("failed");
+	expect(accounting.incomplete).toBe(false);
 });
