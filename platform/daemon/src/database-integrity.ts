@@ -584,7 +584,7 @@ try {
   process.stderr.write(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;
 } finally {
-  database.close();
+  database.close(true);
 }
 `;
 

@@ -58,6 +58,21 @@ afterEach(() => {
 	for (const directory of tempDirs.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
+test("force-closes prepared SQLite handles before temporary workspace cleanup (#1932)", () => {
+	const directory = mkdtempSync(join(tmpdir(), "signet-native-dreaming-finalize-cleanup-"));
+	tempDirs.push(directory);
+	const database = new Database(join(directory, "memory.db"));
+	const prepared = database.prepare("CREATE TABLE prepared_fixture (value TEXT NOT NULL)");
+	prepared.run();
+
+	// Bun keeps prepare() statements alive after close() until they are
+	// finalized or collected. Windows cannot remove the workspace while that
+	// SQLite handle is still open, so native smoke fixtures must force-close.
+	database.close(true);
+
+	expect(() => rmSync(directory, { recursive: true, force: true })).not.toThrow();
+});
+
 describe("compiled native Dreaming finalization", () => {
 	const smoke = enabled ? test : test.skip;
 
@@ -73,10 +88,9 @@ describe("compiled native Dreaming finalization", () => {
 			const dbPath = join(directory, "memory.db");
 			const database = new Database(dbPath);
 			runMigrations(database as unknown as Parameters<typeof runMigrations>[0]);
-			database
-				.prepare("INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES (?, ?, ?, ?)")
-				.run("native-dreaming-finalize-pass", "native-smoke", "incremental", "running");
-			database.close();
+			const prepared = database.prepare("INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES (?, ?, ?, ?)");
+			prepared.run("native-dreaming-finalize-pass", "native-smoke", "incremental", "running");
+			database.close(true);
 
 			const child = spawn(binary, [], {
 				env: { ...process.env, SIGNET_DB_OWNER_DB_PATH: dbPath, SIGNET_TELEMETRY_OPTOUT: "1" },

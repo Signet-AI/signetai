@@ -98,7 +98,7 @@ describe("DbAccessor", () => {
 			.prepare("INSERT INTO migration_large_fixture (payload) VALUES (zeroblob(?))")
 			.run(3 * MIGRATION_BACKUP_CHUNK_BYTES + 1);
 		fixture.exec("DELETE FROM schema_migrations WHERE version = 128");
-		fixture.close();
+		fixture.close(true);
 		const sourceSizeBeforeInit = statSync(dbPath).size;
 
 		const owner = createDbOwnerClient({ dbPath });
@@ -149,7 +149,7 @@ describe("DbAccessor", () => {
 		db.exec("DROP TRIGGER memories_ad");
 		db.exec("DROP TRIGGER memories_au");
 		db.exec("DROP TABLE memories_fts");
-		db.close();
+		db.close(true);
 
 		const started = performance.now();
 		initDbAccessor(dbPath);
@@ -181,7 +181,7 @@ describe("DbAccessor", () => {
 
 		const db = new Database(dbPath);
 		db.exec("DELETE FROM memories_fts");
-		db.close();
+		db.close(true);
 
 		initDbAccessor(dbPath);
 		expect(isFtsIndexIncomplete()).toBe(true);
@@ -202,7 +202,7 @@ describe("DbAccessor", () => {
 			db.exec("CREATE TABLE memory_jobs (id TEXT PRIMARY KEY)");
 			db.exec("DROP TABLE memory_jobs_original");
 		} finally {
-			db.close();
+			db.close(true);
 		}
 
 		expect(() => initDbAccessor(dbPath)).not.toThrow();
@@ -234,7 +234,7 @@ describe("DbAccessor", () => {
 			db.exec("CREATE TABLE memory_jobs (id TEXT PRIMARY KEY)");
 			db.exec("DROP TABLE memory_jobs_original");
 		} finally {
-			db.close();
+			db.close(true);
 		}
 
 		const backupPath = join(dbPath, "..", initialBackup);
@@ -1659,7 +1659,7 @@ describe("vec_embeddings schema repair", () => {
 		);
 
 		expect((db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get() as { n: number }).n).toBe(1);
-		db.close();
+		db.close(true);
 	});
 
 	test("backfills missing embeddings in bounded keyset batches", () => {
@@ -1687,7 +1687,7 @@ describe("vec_embeddings schema repair", () => {
 
 		expect(batchQueries).toBeGreaterThan(1);
 		expect((db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get() as { n: number }).n).toBe(10_001);
-		db.close();
+		db.close(true);
 	});
 
 	test("quarantines malformed rows and continues backfill around them", () => {
@@ -1728,7 +1728,7 @@ describe("vec_embeddings schema repair", () => {
 			2,
 		);
 		expect((db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get() as { n: number }).n).toBe(2);
-		db.close();
+		db.close(true);
 	});
 
 	test("quarantines NULL and non-blob legacy vectors and continues backfill", () => {
@@ -1755,7 +1755,7 @@ describe("vec_embeddings schema repair", () => {
 			{ rowid: "null-row", dimensions: 2, reason: "embedding blob is NULL" },
 			{ rowid: "text-row", dimensions: 2, reason: "embedding blob is not a binary buffer" },
 		]);
-		db.close();
+		db.close(true);
 	});
 
 	test("rethrows operational vector insert failures instead of quarantining rows", () => {
@@ -1783,6 +1783,6 @@ describe("vec_embeddings schema repair", () => {
 
 		expect((db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings").get() as { n: number }).n).toBe(0);
 		expect((db.prepare("SELECT COUNT(*) AS n FROM vec_embeddings_quarantine").get() as { n: number }).n).toBe(0);
-		db.close();
+		db.close(true);
 	});
 });

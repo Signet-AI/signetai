@@ -108,7 +108,7 @@ export function prepareTypedStatement<Row extends object>(
 type SqliteDatabase = {
 	prepare(sql: string): SqliteStatement;
 	exec(sql: string): void;
-	close(): void;
+	close(throwOnError?: boolean): void;
 	loadExtension?(path: string): void;
 };
 
@@ -2542,7 +2542,7 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			return;
 		}
 		if (readPool.length < READ_POOL_SIZE) readPool.push(conn);
-		else conn.close();
+		else conn.close(true);
 		updateQueueTelemetry();
 	}
 
@@ -2999,9 +2999,9 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 		close(): void {
 			if (closed) return;
 			closed = true;
-			writeConn.close();
-			for (const conn of readPool) conn.close();
-			for (const conn of readInUse) conn.close();
+			writeConn.close(true);
+			for (const conn of readPool) conn.close(true);
+			for (const conn of readInUse) conn.close(true);
 			for (const waiter of readWaiters) {
 				clearTimeout(waiter.timer);
 				waiter.signal?.removeEventListener("abort", waiter.onAbort);
