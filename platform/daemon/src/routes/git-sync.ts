@@ -11,6 +11,7 @@ import {
 import { logger } from "../logger";
 import { SecretKeyringError, getSecret, hasSecret } from "../secrets.js";
 import { AGENTS_DIR } from "./state";
+import { WorkspaceMigrationRetryableError, type MigrationControlBoundary } from "../workspace-writer-barrier";
 
 import { clampGitSyncIntervalSeconds, gitConfig } from "./git-config";
 export { gitConfig };
@@ -20,6 +21,13 @@ let lastGitSync: Date | null = null;
 let gitSyncInProgress = false;
 let gitSyncPromise: Promise<unknown> | null = null;
 let gitSyncQueued = false;
+let migrationControl: MigrationControlBoundary | null = null;
+
+/** Attach the daemon migration fence to Git's durable writer. */
+export function setGitMigrationControl(control: MigrationControlBoundary | null): void {
+	migrationControl = control;
+	if (control && control.state !== "open") stopGitSyncTimer();
+}
 
 const DEFAULT_GIT_TIMEOUT_MS = 10_000;
 const FETCH_GIT_TIMEOUT_MS = 45_000;
@@ -605,8 +613,15 @@ export async function gitSync(): Promise<{
 	if (gitSyncInProgress) {
 		return { success: false, message: "Sync already in progress" };
 	}
+	if (migrationControl && migrationControl.state !== "open") {
+		return {
+			success: false,
+			message: new WorkspaceMigrationRetryableError("git-sync", migrationControl.generation).message,
+		};
+	}
 
 	gitSyncInProgress = true;
+	const lease = migrationControl?.acquireWriter("git-sync");
 
 	try {
 		const pullResult = await gitPull();
@@ -614,6 +629,7 @@ export async function gitSync(): Promise<{
 			return { success: false, message: pullResult.message };
 		}
 
+		lease?.assertCurrent();
 		const pushResult = await gitPush();
 		if (!pushResult.success) {
 			return {
@@ -631,6 +647,7 @@ export async function gitSync(): Promise<{
 			pushed: pushResult.changes,
 		};
 	} finally {
+		lease?.release();
 		gitSyncInProgress = false;
 	}
 }

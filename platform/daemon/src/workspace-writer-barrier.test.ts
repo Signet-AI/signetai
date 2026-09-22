@@ -66,6 +66,15 @@ describe("workspace writer barrier", () => {
 		expect(registry.owners()).toEqual([]);
 	});
 
+	it("fences a writer before publication after the generation changes", async () => {
+		const control = new MigrationControlBoundary("generation-a", 1);
+		const lease = control.acquireWriter("memory-publication");
+		control.beginDrain();
+		lease.release();
+		await expect(control.close()).resolves.toMatchObject({ closed: true });
+		control.reopen("generation-b");
+		expect(() => lease.assertCurrent()).toThrow(WorkspaceMigrationRetryableError);
+	});
 	it("uses an exclusive OS lease and releases ownership on shutdown", async () => {
 		const path = join(tempDir(), "migration.lock");
 		const first = await MigrationLease.acquire(path, { workspace: "/workspace/a", generation: "generation-a" });

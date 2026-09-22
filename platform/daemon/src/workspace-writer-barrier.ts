@@ -98,6 +98,23 @@ export class WorkspaceAdmissionBarrier {
 	}
 }
 
+export class WriterLease {
+	private released = false;
+	constructor(
+		private readonly control: MigrationControlBoundary,
+		readonly generation: string,
+		private readonly releaseAdmission: () => void,
+	) {}
+	assertCurrent(): void {
+		this.control.assertCurrent(this.generation);
+	}
+	release(): void {
+		if (this.released) return;
+		this.released = true;
+		this.releaseAdmission();
+	}
+}
+
 export interface MigrationControlSnapshot {
 	readonly generation: string;
 	readonly state: AdmissionState;
@@ -120,6 +137,16 @@ export class MigrationControlBoundary {
 	}
 	admit(owner: string, generation = this.generation): () => void {
 		return this.barrier.admit(owner, generation);
+	}
+	/** Admit one durable operation and return a generation-fenced lease. */
+	acquireWriter(owner: string, generation = this.generation): WriterLease {
+		const release = this.admit(owner, generation);
+		return new WriterLease(this, generation, release);
+	}
+	assertCurrent(generation: string): void {
+		if (generation !== this.generation || this.state !== "open") {
+			throw new WorkspaceMigrationRetryableError("stale-writer", this.generation);
+		}
 	}
 	beginDrain(): MigrationControlSnapshot {
 		this.barrier.beginDrain();

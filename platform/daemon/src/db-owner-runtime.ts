@@ -39,6 +39,7 @@ import type {
 	DbOwnerWorkloadClass,
 } from "./db-owner-protocol";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
+import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
 let isolatedTestAccessor: DbAccessor | null = null;
 export function registerDbOwnerIsolatedTestAccessor(accessor: DbAccessor): void {
@@ -223,6 +224,7 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 }
 
 function inlineOwner(accessor: DbAccessor): DbOwnerClient {
+	const migrationControl = new MigrationControlBoundary(`inline-db-owner:${process.pid}`);
 	const submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
 		const now = Date.now();
 		const job: DbOwnerJob = {
@@ -261,6 +263,7 @@ function inlineOwner(accessor: DbAccessor): DbOwnerClient {
 			lastError: null,
 		}),
 		close: async () => undefined,
+		migrationControl: () => migrationControl,
 	};
 }
 
@@ -391,6 +394,7 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 			owner.cancel(jobId);
 		},
 		health: (): ReturnType<DbOwnerClient["health"]> => currentOwner().health(),
+		migrationControl: () => currentOwner().migrationControl(),
 		close: async (): Promise<void> => {
 			const maintenance = getDbOwnerMaintenance();
 			if (maintenance === null || maintenance.owner !== owner) throw registeredOwnerError();
