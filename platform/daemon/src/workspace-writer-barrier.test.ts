@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import {
+	MigrationControlBoundary,
 	MigrationLease,
 	MigrationWriterRegistry,
 	WorkspaceAdmissionBarrier,
@@ -20,6 +21,18 @@ function tempDir() {
 }
 
 describe("workspace writer barrier", () => {
+	it("controls drain, reports blockers, and reopens only as a new generation", async () => {
+		const control = new MigrationControlBoundary("generation-a", 5);
+		const release = control.admit("db-owner");
+		expect(control.beginDrain()).toMatchObject({ generation: "generation-a", state: "draining" });
+		expect(control.blockers()).toEqual([{ owner: "db-owner", active: 1, queued: 0 }]);
+		release();
+		await expect(control.close()).resolves.toMatchObject({ closed: true, blockers: [] });
+		control.reopen("generation-b");
+		expect(control.generation).toBe("generation-b");
+		expect(() => control.admit("old", "generation-a")).toThrow(WorkspaceMigrationRetryableError);
+	});
+
 	it("admits open work and rejects new work after draining begins", async () => {
 		const barrier = new WorkspaceAdmissionBarrier("generation-a", 1);
 		const release = barrier.admit("database-owner");

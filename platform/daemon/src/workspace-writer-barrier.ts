@@ -80,6 +80,48 @@ export class WorkspaceAdmissionBarrier {
 	}
 }
 
+export interface MigrationControlSnapshot {
+	readonly generation: string;
+	readonly state: AdmissionState;
+	readonly blockers: DrainBlockerReceipt[];
+}
+
+/** Control-plane facade used by IPC/HTTP migration commands. */
+export class MigrationControlBoundary {
+	private barrier: WorkspaceAdmissionBarrier;
+	private readonly timeoutMs: number;
+	constructor(generation: string, timeoutMs = 30_000) {
+		this.timeoutMs = timeoutMs;
+		this.barrier = new WorkspaceAdmissionBarrier(generation, timeoutMs);
+	}
+	get generation(): string {
+		return this.barrier.generation;
+	}
+	get state(): AdmissionState {
+		return this.barrier.state;
+	}
+	admit(owner: string, generation = this.generation): () => void {
+		return this.barrier.admit(owner, generation);
+	}
+	beginDrain(): MigrationControlSnapshot {
+		this.barrier.beginDrain();
+		return { generation: this.generation, state: this.state, blockers: this.blockers() };
+	}
+	blockers(): DrainBlockerReceipt[] {
+		return this.barrier.receipts();
+	}
+	async close(): Promise<{ readonly closed: boolean; readonly blockers: DrainBlockerReceipt[] }> {
+		const result = await this.barrier.waitForDrain(this.timeoutMs);
+		return { closed: !result.timedOut, blockers: result.blockers };
+	}
+	reopen(generation: string): MigrationControlSnapshot {
+		if (!generation || generation === this.generation) throw new Error("reopen requires a new generation");
+		if (this.state !== "closed") throw new Error("migration control must be closed before reopening");
+		this.barrier = new WorkspaceAdmissionBarrier(generation, this.timeoutMs);
+		return { generation, state: this.state, blockers: [] };
+	}
+}
+
 export class MigrationWriterRegistry {
 	private readonly entries = new Map<string, WorkspaceAdmissionBarrier>();
 	register(owner: string, barrier: WorkspaceAdmissionBarrier): () => void {

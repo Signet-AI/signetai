@@ -1,4 +1,5 @@
 export {
+	MigrationControlBoundary,
 	WorkspaceAdmissionBarrier,
 	WorkspaceMigrationRetryableError,
 } from "./workspace-writer-barrier";
