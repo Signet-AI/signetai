@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, rename, stat, lstat, unlink } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { withMigrationAdmission, type MigrationAdmission } from "./workspace-writer-barrier";
 
 export type ImportStatus =
 	| "pending"
@@ -33,6 +34,7 @@ export interface InboxOptions {
 	ledger: ImportLedger;
 	maxFiles?: number;
 	maxFileBytes?: number;
+	migration?: MigrationAdmission;
 }
 export interface Admission {
 	root: string;
@@ -41,6 +43,7 @@ export interface Admission {
 	ledger: ImportLedger;
 	idempotencyKey?: string;
 	maxFileBytes?: number;
+	migration?: MigrationAdmission;
 }
 
 /** Durable boundary used by HTTP upload routes before normalization. */
@@ -65,6 +68,10 @@ function paths(root: string, key: string) {
 
 /** The sole admission boundary shared by uploads and inbox drops. */
 export async function admitImport(input: Admission): Promise<ImportRow> {
+	return withMigrationAdmission(input.migration, "import-admission", () => admitImportInGeneration(input));
+}
+
+async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	if (!input.fileName.trim() || input.fileName !== basename(input.fileName))
 		throw new Error("file name must be a leaf name");
 	const max = input.maxFileBytes ?? DEFAULT_MAX;
@@ -99,6 +106,10 @@ export async function admitImport(input: Admission): Promise<ImportRow> {
 
 /** Inventory only the configured inbox; never follows links or scans parents. */
 export async function scanInbox(input: InboxOptions): Promise<ImportRow[]> {
+	return withMigrationAdmission(input.migration, "import-inbox", () => scanInboxInGeneration(input));
+}
+
+async function scanInboxInGeneration(input: InboxOptions): Promise<ImportRow[]> {
 	const inbox = join(resolve(input.root), "files");
 	await mkdir(inbox, { recursive: true });
 	const entries = await readdir(inbox, { withFileTypes: true });

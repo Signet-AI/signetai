@@ -1,4 +1,5 @@
 export type SourceIndexJobStatus = "queued" | "running" | "complete" | "paused" | "error";
+import type { MigrationAdmission } from "./workspace-writer-barrier";
 
 export interface SourceIndexJob {
 	readonly id: string;
@@ -64,9 +65,17 @@ export function getSourceIndexJob(sourceId: string): SourceIndexJob | undefined 
 	return sourceIndexJobs.get(sourceId);
 }
 
-export function beginSourceIndexJob(sourceId: string, prefix = "source-index"): SourceIndexJob {
+export function beginSourceIndexJob(
+	sourceId: string,
+	prefix = "source-index",
+	migration?: MigrationAdmission,
+): SourceIndexJob {
+	const release = migration?.admit("source-index", migration.generation);
 	const existing = sourceIndexJobs.get(sourceId);
-	if (existing && (existing.status === "queued" || existing.status === "running")) return existing;
+	if (existing && (existing.status === "queued" || existing.status === "running")) {
+		release?.();
+		return existing;
+	}
 	const job: SourceIndexJob = {
 		id: `${prefix}:${sourceId}:${Date.now()}`,
 		sourceId,
@@ -74,6 +83,7 @@ export function beginSourceIndexJob(sourceId: string, prefix = "source-index"): 
 		queuedAt: new Date().toISOString(),
 	};
 	sourceIndexJobs.set(sourceId, job);
+	release?.();
 	return job;
 }
 

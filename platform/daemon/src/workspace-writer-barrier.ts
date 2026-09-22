@@ -3,6 +3,24 @@ import { dirname } from "node:path";
 
 export type AdmissionState = "open" | "draining" | "closed";
 
+export interface MigrationAdmission {
+	readonly generation: string;
+	admit(owner: string, generation?: string): () => void;
+}
+
+export async function withMigrationAdmission<T>(
+	admission: MigrationAdmission | undefined,
+	owner: string,
+	work: () => Promise<T> | T,
+): Promise<T> {
+	const release = admission?.admit(owner, admission.generation);
+	try {
+		return await work();
+	} finally {
+		release?.();
+	}
+}
+
 export class WorkspaceMigrationRetryableError extends Error {
 	readonly code = "WORKSPACE_MIGRATION_IN_PROGRESS" as const;
 	readonly retryable = true as const;
