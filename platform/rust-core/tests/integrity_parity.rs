@@ -9,8 +9,11 @@ fn integrity_only_skips_actual_fts5_objects() {
     let core = Core::open(&path, 2).unwrap();
     drop(core);
     let db = Connection::open(&path).unwrap();
-    db.execute("CREATE TABLE memories_fts_shadow (id INTEGER)", [])
-        .unwrap();
+    db.execute(
+        "CREATE TABLE ordinary_phrase (value TEXT CHECK(value <> 'using fts5'))",
+        [],
+    )
+    .unwrap();
     db.execute("CREATE VIRTUAL TABLE custom_search USING fts5(content)", [])
         .unwrap();
     let core = Core::open(&path, 2).unwrap();
@@ -25,7 +28,7 @@ fn integrity_only_skips_actual_fts5_objects() {
         .unwrap();
     let skipped = result["skippedObjects"].as_array().unwrap();
     assert!(skipped.iter().any(|object| object == "custom_search"));
-    assert!(!skipped.iter().any(|object| object == "memories_fts_shadow"));
+    assert!(!skipped.iter().any(|object| object == "ordinary_phrase"));
 }
 
 #[test]

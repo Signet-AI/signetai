@@ -1401,7 +1401,7 @@ fn execute_operation(
             let project_key = project_id.clone().unwrap_or_default();
             let budget = budget.clamp(1, 32);
             let schema_hash = {
-                let mut s = connection.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name != 'integrity_checkpoints' AND NOT (type='table' AND lower(sql) LIKE '%using fts5%') ORDER BY type,name")?;
+                let mut s = connection.prepare("SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name != 'integrity_checkpoints' AND NOT EXISTS (SELECT 1 FROM pragma_table_list AS tl WHERE tl.name = sqlite_master.name AND tl.type = 'virtual' AND lower(sqlite_master.sql) LIKE '%using fts5%') ORDER BY type,name")?;
                 let rows = s.query_map([], |r| {
                     Ok(format!(
                         "{}:{}:{}\n",
@@ -1428,7 +1428,7 @@ fn execute_operation(
                 }
             }
             let skipped_objects: Vec<String> = {
-                let mut statement = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND sql IS NOT NULL AND lower(sql) LIKE '%using fts5%' ORDER BY name")?;
+                let mut statement = connection.prepare("SELECT name FROM sqlite_master WHERE type='table' AND sql IS NOT NULL AND EXISTS (SELECT 1 FROM pragma_table_list AS tl WHERE tl.name = sqlite_master.name AND tl.type = 'virtual' AND lower(sqlite_master.sql) LIKE '%using fts5%') ORDER BY name")?;
                 let rows = statement.query_map([], |row| row.get(0))?;
                 rows.collect::<Result<Vec<String>, _>>()?
             };
