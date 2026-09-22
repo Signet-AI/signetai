@@ -35,6 +35,7 @@ Before submitting changes, run the full check suite:
 bun run typecheck   # Workspace typecheck (includes the daemon backlog tracked in #969)
 bun run lint        # Biome static analysis
 bun run format      # Biome auto-format
+bun run build       # Production packages and staged runtime artifacts
 bun test            # All maintained repository tests (excludes vendored references/)
 ```
 
@@ -193,6 +194,15 @@ call to `withReadDbAsync`/`withWriteTxAsync` (thread an async wrapper up to the
 nearest await boundary), delete the marker, and when the count drops, re-run
 `bun scripts/legacy-sync-db-baseline.ts` in the same PR.
 
+**Database ownership:** Runtime packages may import SQLite implementations only
+from the exact owner modules listed by `bun run audit:database-ownership`.
+Type-only SQLite imports remain valid. New runtime owners require an explicit
+architecture change rather than a directory-wide exception.
+
+**Agent identity:** Harness names describe provenance; they are not fallback
+agent IDs. `bun run audit:agent-identity` rejects implicit `hermes-agent`
+fallbacks while preserving explicit harness labels and comparisons.
+
 **Commit messages:** Conventional commits with a 50-character subject
 line and 72-character body width. Use imperative mood. Types: `feat`,
 `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`,
@@ -202,8 +212,11 @@ e.g. `feat(daemon): add rate limiting to auth middleware`.
 **File size:** Aim to keep files under ~700 LOC. Split or refactor when
 a file grows unwieldy, especially if it improves testability.
 
-**Comments:** Explain why, not what. Self-explanatory code needs no
-inline narration; non-obvious logic or workarounds deserve a brief note.
+**Comments:** Do not add comments to production TypeScript or JavaScript.
+Express invariants through names, types, structure, and tests. CI checks only
+newly added lines, so existing comments are grandfathered. The only source
+exceptions are exact SPDX and copyright headers; tests, fixtures, generated
+output, and documentation are outside this gate.
 
 ### Naming
 
