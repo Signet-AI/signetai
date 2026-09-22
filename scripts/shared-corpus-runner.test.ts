@@ -109,6 +109,11 @@ describe("shared corpus admission", () => {
 		expect(result.missingFiles).toEqual(["a.test.ts"]);
 	});
 
+	test("rejects testcase identities without a source file in full-run mode", () => {
+		const result = parseJUnitReport('<testsuite tests="1"><testcase classname="x" name="a"/></testsuite>');
+		expect(result.incomplete).toBe(true);
+	});
+
 	test("nonzero child status cannot be represented as passed", () => {
 		const result = parseJUnitReport(
 			'<testsuite tests="1"><testcase classname="x" name="a"/></testsuite>',

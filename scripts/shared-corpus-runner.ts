@@ -271,7 +271,7 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 	const observedFiles = new Set(identities.map((identity) => identity.file).filter(Boolean));
 	const missingFiles = expected.length > 0 ? expected.filter((file) => !observedFiles.has(file)) : [];
 	const unexpectedFiles = expected.length > 0 ? [...observedFiles].filter((file) => !expectedFiles.has(file)) : [];
-	const missingIdentity = expected.length > 0 && identities.some((identity) => !identity.file);
+	const missingIdentity = identities.some((identity) => !identity.file);
 	const declared = suiteStats.declared ?? cases.length;
 	const incomplete =
 		declared !== cases.length ||
@@ -367,7 +367,7 @@ export function run(
 			status: "incomplete",
 		};
 	}
-	const accounting = parseJUnitReport(readFileSync(report, "utf8"), selected ?? [], child.status);
+	const accounting = parseJUnitReport(readFileSync(report, "utf8"), expected, child.status);
 	const infrastructureCrash = child.signal !== null || child.error !== undefined;
 	const nativeEvidenceGap = backend === "rust" && selected === undefined && !accounting.nativeEvidence;
 	const crash = infrastructureCrash || accounting.crash;
