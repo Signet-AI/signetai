@@ -477,6 +477,7 @@ export async function runExistingSetupWizard(
 			let coreDb: CoreDatabase | null = null;
 			try {
 				coreDb = new CoreDatabase(dbPath);
+				await coreDb.init();
 				importResult = importMemoryLogs(basePath, coreDb);
 			} catch (err) {
 				console.warn(`\n  ⚠ Memory import warning: ${readErr(err)}`);

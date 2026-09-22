@@ -67,4 +67,69 @@ describe("Database memory CRUD", () => {
 			raw.close(true);
 		}
 	});
+
+	it("returns null when a memory id does not exist", async () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-core-db-missing-"));
+		db = new Database(join(dir, "memories.db"));
+		await db.init();
+
+		expect(db.getMemoryById("missing-memory-id")).toBeNull();
+	});
+
+	it("handles missing jobs without throwing under Bun SQLite", async () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-core-db-missing-job-"));
+		db = new Database(join(dir, "memories.db"));
+		await db.init();
+
+		expect(db.leaseJob("missing-job-type")).toBeNull();
+		expect(() => db.failJob("missing-job-id", "missing")).not.toThrow();
+	});
+
+	it("atomically skips a duplicate idempotency key across connections", async () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-core-db-idempotency-"));
+		db = new Database(join(dir, "memories.db"));
+		await db.init();
+		const other = new Database(join(dir, "memories.db"));
+		await other.init();
+
+		try {
+			const memory = {
+				type: "fact" as const,
+				content: "Atomic idempotency test.",
+				confidence: 1,
+				idempotencyKey: "atomic-idempotency-key",
+				tags: [],
+				updatedBy: "database.test",
+				vectorClock: {},
+				manualOverride: false,
+			};
+			const first = db.addMemoryIfAbsent(memory);
+			const second = other.addMemoryIfAbsent(memory);
+
+			expect(typeof first).toBe("string");
+			expect(second).toBeNull();
+		} finally {
+			other.close();
+		}
+	});
+
+	it("does not hide invalid idempotent memory writes", async () => {
+		dir = mkdtempSync(join(tmpdir(), "signet-core-db-invalid-idempotency-"));
+		db = new Database(join(dir, "memories.db"));
+		await db.init();
+
+		const memory = {
+			type: "fact" as const,
+			content: "Invalid idempotency test.",
+			confidence: 1,
+			idempotencyKey: "invalid-idempotency-key",
+			tags: [],
+			updatedBy: "database.test",
+			vectorClock: {},
+			manualOverride: false,
+		};
+		Object.defineProperty(memory, "type", { value: null });
+
+		expect(() => db.addMemoryIfAbsent(memory)).toThrow();
+	});
 });

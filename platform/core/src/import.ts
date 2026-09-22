@@ -5,6 +5,7 @@
  * for search and sync capabilities.
  */
 
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Database } from "./database";
@@ -43,7 +44,7 @@ export interface HierarchicalChunk {
 export interface ImportResult {
 	/** Number of memories successfully imported */
 	imported: number;
-	/** Number of files skipped (e.g., already imported, invalid) */
+	/** Number of files or chunks skipped (e.g., already imported, invalid) */
 	skipped: number;
 	/** Error messages encountered during import */
 	errors: string[];
@@ -71,86 +72,94 @@ function estimateTokens(text: string): number {
 	return Math.ceil(text.length / 4);
 }
 
+function isValidCalendarDate(value: string): boolean {
+	const year = Number(value.slice(0, 4));
+	const month = Number(value.slice(5, 7));
+	const day = Number(value.slice(8, 10));
+	if (month < 1 || month > 12 || day < 1) return false;
+
+	const daysInMonth = [
+		31,
+		28 + (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 1 : 0),
+		31,
+		30,
+		31,
+		30,
+		31,
+		31,
+		30,
+		31,
+		30,
+		31,
+	];
+	return day <= daysInMonth[month - 1];
+}
+
+function validateMaxTokens(maxTokens: number): void {
+	if (!Number.isSafeInteger(maxTokens) || maxTokens <= 0) {
+		throw new RangeError("maxTokens must be a positive safe integer");
+	}
+}
+
+function importChunkKey(file: string, chunkIndex: number, text: string): string {
+	const hash = createHash("sha256").update(text).digest("hex");
+	return `signet-import:${file}:${chunkIndex}:${hash}`;
+}
+
 /**
  * Split content into chunks of approximately the specified token size.
  * Attempts to split on paragraph boundaries when possible.
  */
 export function chunkContent(content: string, options: ChunkOptions): ChunkResult[] {
+	validateMaxTokens(options.maxTokens);
 	const { maxTokens } = options;
+	if (!content.trim()) return [];
 	const results: ChunkResult[] = [];
 
-	// Split into paragraphs (double newline)
-	const paragraphs = content.split(/\n\n+/);
-
+	// Keep paragraph separators attached to the preceding paragraph.
+	const paragraphs = content.match(/[\s\S]+?(?:\n\n+|$)/g) ?? [];
 	let currentChunk: string[] = [];
-	let currentTokens = 0;
+
+	const flush = (): void => {
+		const text = currentChunk.join("");
+		if (text) results.push({ text, tokenCount: estimateTokens(text) });
+		currentChunk = [];
+	};
 
 	for (const paragraph of paragraphs) {
-		const paragraphTokens = estimateTokens(paragraph);
-
 		// If a single paragraph exceeds max tokens, split it further
-		if (paragraphTokens > maxTokens) {
-			// Flush current chunk first
-			if (currentChunk.length > 0) {
-				const text = currentChunk.join("\n\n").trim();
-				if (text) {
-					results.push({ text, tokenCount: currentTokens });
-				}
-				currentChunk = [];
-				currentTokens = 0;
-			}
+		if (estimateTokens(paragraph) > maxTokens) {
+			flush();
 
-			// Split large paragraph by sentences
-			const sentences = paragraph.split(/(?<=[.!?])\s+/);
-
+			// Keep sentence separators in the following sentence.
+			const sentences = paragraph.split(/(?<=[.!?])(?=\s+)/);
 			for (const sentence of sentences) {
-				const sentenceTokens = estimateTokens(sentence);
+				if (estimateTokens(sentence) > maxTokens) {
+					// Flush earlier sentences so direct chunks stay in document order.
+					flush();
 
-				if (sentenceTokens > maxTokens) {
 					// Extremely long sentence - split by character limit
 					const charLimit = maxTokens * 4;
 					for (let i = 0; i < sentence.length; i += charLimit) {
-						const chunk = sentence.slice(i, i + charLimit).trim();
-						if (chunk) {
-							results.push({ text: chunk, tokenCount: estimateTokens(chunk) });
-						}
+						const text = sentence.slice(i, i + charLimit);
+						if (text) results.push({ text, tokenCount: estimateTokens(text) });
 					}
-				} else if (currentTokens + sentenceTokens > maxTokens) {
-					// Start new chunk
-					const text = currentChunk.join(" ").trim();
-					if (text) {
-						results.push({ text, tokenCount: currentTokens });
-					}
-					currentChunk = [sentence];
-					currentTokens = sentenceTokens;
-				} else {
-					currentChunk.push(sentence);
-					currentTokens += sentenceTokens;
+					continue;
 				}
+
+				const candidate = `${currentChunk.join("")}${sentence}`;
+				if (currentChunk.length > 0 && estimateTokens(candidate) > maxTokens) flush();
+				currentChunk.push(sentence);
 			}
-		} else if (currentTokens + paragraphTokens > maxTokens) {
-			// Start new chunk with this paragraph
-			const text = currentChunk.join("\n\n").trim();
-			if (text) {
-				results.push({ text, tokenCount: currentTokens });
-			}
-			currentChunk = [paragraph];
-			currentTokens = paragraphTokens;
-		} else {
-			// Add to current chunk
-			currentChunk.push(paragraph);
-			currentTokens += paragraphTokens;
+			continue;
 		}
+
+		const candidate = `${currentChunk.join("")}${paragraph}`;
+		if (currentChunk.length > 0 && estimateTokens(candidate) > maxTokens) flush();
+		currentChunk.push(paragraph);
 	}
 
-	// Don't forget the last chunk
-	if (currentChunk.length > 0) {
-		const text = currentChunk.join("\n\n").trim();
-		if (text) {
-			results.push({ text, tokenCount: currentTokens });
-		}
-	}
-
+	flush();
 	return results;
 }
 
@@ -174,6 +183,7 @@ export function chunkMarkdownHierarchically(
 	content: string,
 	options: ChunkOptions = { maxTokens: 512 },
 ): HierarchicalChunk[] {
+	validateMaxTokens(options.maxTokens);
 	const results: HierarchicalChunk[] = [];
 	const lines = content.split("\n");
 
@@ -190,11 +200,11 @@ export function chunkMarkdownHierarchically(
 		const sectionText = currentContent.join("\n").trim();
 		if (!sectionText) return;
 
-		const sectionTokens = estimateTokens(sectionText);
+		const textWithHeader = currentHeader ? `${currentHeader}\n\n${sectionText}` : sectionText;
+		const sectionTokens = estimateTokens(textWithHeader);
 
 		if (sectionTokens <= options.maxTokens) {
 			// Section fits in one chunk - include header for context
-			const textWithHeader = currentHeader ? `${currentHeader}\n\n${sectionText}` : sectionText;
 			results.push({
 				text: textWithHeader,
 				tokenCount: estimateTokens(textWithHeader),
@@ -203,71 +213,52 @@ export function chunkMarkdownHierarchically(
 				chunkIndex: chunkIndex++,
 			});
 		} else {
-			// Split section into paragraph chunks with header context
+			// Split section into paragraph chunks with header context.
 			const paragraphs = sectionText.split(/\n\n+/);
-			let chunkParas: string[] = [];
-			let chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
-
-			for (const para of paragraphs) {
-				const paraTokens = estimateTokens(para);
-
-				// If single paragraph exceeds max, it needs to stand alone
-				if (paraTokens > options.maxTokens) {
-					// Flush current chunk first
-					if (chunkParas.length > 0) {
-						const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
-						results.push({
-							text,
-							tokenCount: chunkTokens,
-							header: currentHeader,
-							level: "paragraph",
-							chunkIndex: chunkIndex++,
-						});
-						chunkParas = [];
-						chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
-					}
-
-					// Add large paragraph as its own chunk (with header context)
-					const text = currentHeader ? `${currentHeader}\n\n${para}` : para;
-					results.push({
-						text,
-						tokenCount: estimateTokens(text),
-						header: currentHeader,
-						level: "paragraph",
-						chunkIndex: chunkIndex++,
-					});
-					continue;
-				}
-
-				if (chunkTokens + paraTokens + 2 > options.maxTokens && chunkParas.length > 0) {
-					// Flush current chunk
-					const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
-					results.push({
-						text,
-						tokenCount: chunkTokens,
-						header: currentHeader,
-						level: "paragraph",
-						chunkIndex: chunkIndex++,
-					});
-					chunkParas = [];
-					chunkTokens = currentHeader ? estimateTokens(currentHeader) : 0;
-				}
-
-				chunkParas.push(para);
-				chunkTokens += paraTokens + 2; // +2 for paragraph break
-			}
-
-			// Final chunk for this section
-			if (chunkParas.length > 0) {
-				const text = currentHeader ? `${currentHeader}\n\n${chunkParas.join("\n\n")}` : chunkParas.join("\n\n");
+			const fullPrefix = currentHeader ? `${currentHeader}\n\n` : "";
+			const headerTokens = estimateTokens(fullPrefix);
+			const includeHeader = currentHeader !== "" && headerTokens < options.maxTokens;
+			const prefix = includeHeader ? fullPrefix : "";
+			const bodyMaxTokens = includeHeader ? options.maxTokens - headerTokens : options.maxTokens;
+			const push = (body: string): void => {
+				const text = prefix ? `${prefix}${body}` : body;
 				results.push({
 					text,
-					tokenCount: chunkTokens,
+					tokenCount: estimateTokens(text),
 					header: currentHeader,
 					level: "paragraph",
 					chunkIndex: chunkIndex++,
 				});
+			};
+			const split = (body: string): void => {
+				for (const chunk of chunkContent(body, { maxTokens: bodyMaxTokens })) {
+					push(chunk.text);
+				}
+			};
+			let chunkParas: string[] = [];
+			const flush = (): void => {
+				if (chunkParas.length === 0) return;
+				push(chunkParas.join("\n\n"));
+				chunkParas = [];
+			};
+
+			for (const para of paragraphs) {
+				const singleText = prefix ? `${prefix}${para}` : para;
+				if (estimateTokens(singleText) > options.maxTokens) {
+					flush();
+					split(para);
+					continue;
+				}
+
+				const combinedBody = chunkParas.length > 0 ? `${chunkParas.join("\n\n")}\n\n${para}` : para;
+				const combinedText = prefix ? `${prefix}${combinedBody}` : combinedBody;
+				if (chunkParas.length > 0 && estimateTokens(combinedText) > options.maxTokens) {
+					flush();
+				}
+				chunkParas.push(para);
 			}
+
+			flush();
 		}
 
 		currentContent = [];
@@ -287,14 +278,15 @@ export function chunkMarkdownHierarchically(
 
 	// Handle content with no headers at all
 	if (results.length === 0 && content.trim()) {
-		const text = content.trim();
-		results.push({
-			text,
-			tokenCount: estimateTokens(text),
-			header: "",
-			level: "section",
-			chunkIndex: 0,
-		});
+		for (const chunk of chunkContent(content, options)) {
+			results.push({
+				text: chunk.text,
+				tokenCount: chunk.tokenCount,
+				header: "",
+				level: "section",
+				chunkIndex: chunkIndex++,
+			});
+		}
 	}
 
 	return results;
@@ -306,7 +298,7 @@ export function chunkMarkdownHierarchically(
  */
 function extractDateFromFilename(filename: string): string | null {
 	const match = filename.match(DATE_FILENAME_PATTERN);
-	return match ? match[1] : null;
+	return match && isValidCalendarDate(match[1]) ? match[1] : null;
 }
 
 /**
@@ -376,21 +368,28 @@ export function importMemoryLogs(basePath: string, db: Database): ImportResult {
 		// Chunk content into ~512 token pieces
 		const chunks = chunkContent(content, { maxTokens: 512 });
 
-		// Insert each chunk as a memory
-		for (const chunk of chunks) {
+		// Insert each chunk as a memory. The database applies the scoped unique
+		// index atomically, so concurrent imports report duplicates as skipped.
+		for (const [chunkIndex, chunk] of chunks.entries()) {
 			try {
-				db.addMemory({
+				const idempotencyKey = importChunkKey(file, chunkIndex, chunk.text);
+				const id = db.addMemoryIfAbsent({
 					type: "daily-log",
 					category: date,
 					content: chunk.text,
 					confidence: 1.0,
 					sourceType: "import",
 					sourceId: file,
+					idempotencyKey,
 					tags: ["imported", "daily-log"],
 					updatedBy: "signet-import",
 					vectorClock: {},
 					manualOverride: false,
 				});
+				if (id === null) {
+					result.skipped++;
+					continue;
+				}
 				result.imported++;
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
