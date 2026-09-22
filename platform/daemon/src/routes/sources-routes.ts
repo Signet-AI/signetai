@@ -92,6 +92,26 @@ interface AddDirectorySourceBody {
 	readonly excludeGlobs?: readonly string[];
 }
 
+const DIRECTORY_SOURCE_ADDERS = {
+	obsidian: addObsidianSource,
+	"local-files": addLocalFilesSource,
+} as const;
+
+function parseDirectorySourceBody(value: unknown): AddDirectorySourceBody | null {
+	const body = asJsonObject(value);
+	if (!body) return null;
+	const { root, path, name, excludeGlobs } = body;
+	if (
+		(root !== undefined && typeof root !== "string") ||
+		(path !== undefined && typeof path !== "string") ||
+		(name !== undefined && typeof name !== "string") ||
+		(excludeGlobs !== undefined &&
+			(!Array.isArray(excludeGlobs) || excludeGlobs.some((entry) => typeof entry !== "string")))
+	)
+		return null;
+	return body as AddDirectorySourceBody;
+}
+
 interface AddDiscordSourceBody {
 	readonly guildIds?: readonly string[];
 	readonly guildId?: string;
@@ -245,54 +265,43 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		return c.json({ paths: result.paths });
 	});
 
-	const directorySourceHandler =
-		(kind: "local-files" | "obsidian", addSource: typeof addObsidianSource) => async (c: Context) => {
-			let parsed: unknown;
-			try {
-				parsed = await c.req.json();
-			} catch {
-				recordSourceConnectionFailure(kind, "invalid configuration");
-				return c.json({ error: "Invalid JSON body" }, 400);
-			}
-			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-				recordSourceConnectionFailure(kind, "invalid configuration");
-				return c.json({ error: `Invalid ${kind} configuration` }, 400);
-			}
-			const body = parsed as AddDirectorySourceBody;
-			const invalidFields =
-				(body.root !== undefined && typeof body.root !== "string") ||
-				(body.path !== undefined && typeof body.path !== "string") ||
-				(body.name !== undefined && typeof body.name !== "string") ||
-				(body.excludeGlobs !== undefined &&
-					(!Array.isArray(body.excludeGlobs) || body.excludeGlobs.some((entry) => typeof entry !== "string")));
-			if (invalidFields) {
-				recordSourceConnectionFailure(kind, "invalid configuration");
-				return c.json({ error: `Invalid ${kind} configuration` }, 400);
-			}
+	const directorySourceHandler = (kind: keyof typeof DIRECTORY_SOURCE_ADDERS) => async (c: Context) => {
+		let parsed: unknown;
+		try {
+			parsed = await c.req.json();
+		} catch {
+			recordSourceConnectionFailure(kind, "invalid configuration");
+			return c.json({ error: "Invalid JSON body" }, 400);
+		}
+		const body = parseDirectorySourceBody(parsed);
+		if (!body) {
+			recordSourceConnectionFailure(kind, "invalid configuration");
+			return c.json({ error: `Invalid ${kind} configuration` }, 400);
+		}
 
-			const result = addSource(
-				{ root: body.root ?? body.path ?? "", name: body.name, excludeGlobs: body.excludeGlobs },
-				agentsDir,
-			);
-			if (result.ok === false) {
-				recordSourceConnectionFailure(kind, result.error);
-				return c.json({ error: result.error }, 400);
-			}
-			await recordSourceConnected(result.source, resolveDaemonAgentId());
+		const result = DIRECTORY_SOURCE_ADDERS[kind](
+			{ root: body.root ?? body.path ?? "", name: body.name, excludeGlobs: body.excludeGlobs },
+			agentsDir,
+		);
+		if (result.ok === false) {
+			recordSourceConnectionFailure(kind, result.error);
+			return c.json({ error: result.error }, 400);
+		}
+		await recordSourceConnected(result.source, resolveDaemonAgentId());
 
-			const job = enqueueSourceIndexJob({
-				source: result.source,
-				agentsDir,
-				startBridge,
-				purgeNativeSource,
-				recordIndexOperation,
-			});
+		const job = enqueueSourceIndexJob({
+			source: result.source,
+			agentsDir,
+			startBridge,
+			purgeNativeSource,
+			recordIndexOperation,
+		});
 
-			return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
-		};
+		return c.json({ source: result.source, created: result.created, indexed: 0, queued: true, job }, 202);
+	};
 
-	app.post("/api/sources/obsidian", directorySourceHandler("obsidian", addObsidianSource));
-	app.post("/api/sources/local-files", directorySourceHandler("local-files", addLocalFilesSource));
+	app.post("/api/sources/obsidian", directorySourceHandler("obsidian"));
+	app.post("/api/sources/local-files", directorySourceHandler("local-files"));
 
 	app.post("/api/sources/discord", async (c) => {
 		let body: AddDiscordSourceBody = {};
@@ -1370,13 +1379,16 @@ interface DiscordHealthRow {
 	readonly updated_at: string | null;
 }
 
+function asJsonObject(value: unknown): Readonly<Record<string, unknown>> | null {
+	return value && typeof value === "object" && !Array.isArray(value)
+		? (value as Readonly<Record<string, unknown>>)
+		: null;
+}
+
 function parseJsonObject(value: string | null): Readonly<Record<string, unknown>> | null {
 	if (!value) return null;
 	try {
-		const parsed = JSON.parse(value) as unknown;
-		return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-			? (parsed as Readonly<Record<string, unknown>>)
-			: null;
+		return asJsonObject(JSON.parse(value) as unknown);
 	} catch {
 		return null;
 	}
