@@ -47,6 +47,20 @@ describe("import routes", () => {
 		return instance;
 	}
 
+	it("routes JSONL uploads to the transcript importer instead of generic import", async () => {
+		const response = await app().request("/api/sources/import", {
+			method: "POST",
+			body: formWithFile(
+				new File(['{"session_id":"s","messages":[]}\\n'], "conversation.jsonl", { type: "application/x-ndjson" }),
+			),
+		});
+
+		expect(response.status).toBe(400);
+		expect(await response.json()).toEqual({
+			error: "Transcript JSONL must be uploaded through /api/sources/imports",
+		});
+	});
+
 	it("imports a JSON file and records durable source metadata", async () => {
 		const response = await app().request("/api/sources/import", {
 			method: "POST",

@@ -77,6 +77,11 @@ export function registerImportRoutes(app: Hono): void {
 			return c.json({ error: "Filesystem path imports are only available on a local daemon" }, 400);
 		if (uploadedEntries.length + pathEntries.length === 0)
 			return c.json({ error: "At least one file is required" }, 400);
+		// Transcript JSONL has a separate durable importer with byte-offset
+		// checkpoints and transcript-specific duplicate semantics. Never let the
+		// generic document normalizer create a second transcript path.
+		if ([...uploadedEntries.map((file) => file.name), ...pathEntries].some((name) => /\.jsonl$/i.test(name)))
+			return c.json({ error: "Transcript JSONL must be uploaded through /api/sources/imports" }, 400);
 		if (uploadedEntries.length + pathEntries.length > IMPORT_MAX_FILES)
 			return c.json({ error: `Import accepts at most ${IMPORT_MAX_FILES} files` }, 413);
 
