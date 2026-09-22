@@ -59,6 +59,16 @@ curl -fsS http://127.0.0.1:3850/api/diagnostics
 
 Then test the feature you depend on: a bounded recall, a provider route, or a remote connector authentication check. A green version command does not prove the daemon's workspace, migration, inference route, or connector are healthy.
 
+## Workspace layout migration
+
+After updating, use the explicit lifecycle in [Workspace v2](/workspace-v2/) rather
+than copying or deleting workspace directories manually. Run
+`signet migration preflight` before `run`; use `resume` after interruption;
+use `status` to inspect rollback eligibility; and use `cleanup --accept` only
+after destination verification. Automatic rollback ends when the destination
+accepts its first durable write. Older binaries that do not understand the
+persisted layout version are unsupported downgrade targets after cutover.
+
 ## Rollback and incident handling
 
 If a release fails after a verified backup, stop the daemon, preserve logs and the workspace, and follow the deployment mechanism's rollback procedure. Restore private state only from a known-good backup. File deletion is not a migration strategy.

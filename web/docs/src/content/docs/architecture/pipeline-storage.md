@@ -6,9 +6,12 @@ description: "How Signet preserves evidence, runs Dreaming, indexes documents, a
 Signet separates canonical evidence from the derived structures used for
 retrieval and maintenance.
 
-Conversation transcripts, memory rows, imported documents, and canonical
-Markdown artifacts are evidence. Embeddings, FTS indexes, graph projections,
+Conversation transcripts, memory rows, imported documents, and canonical JSONL
+transcripts are evidence. Embeddings, FTS indexes, graph projections,
 content-safety decisions, and `MEMORY.md` are derived or rebuildable surfaces.
+Normal capture does not create Markdown transcript copies; Markdown is an
+explicit export or view. See [Workspace v2](/workspace-v2/) for storage
+ownership and migration.
 Semantic changes must retain provenance back to the evidence that justified
 them.
 
@@ -109,19 +112,13 @@ performed outside write locks; the resulting index update is applied separately.
 
 ## Session transcripts and lineage
 
-As hooks run, Signet writes a canonical retained conversation transcript as
-JSONL under:
+As of workspace v2, canonical transcript files live under
+`$SIGNET_WORKSPACE/transcripts/{harness}/transcript.jsonl`. The resolver maps
+v1's `$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl` during
+migration. The indexed `session_transcripts` table remains available to
+episodic evidence and Dreaming; it does not make Markdown a competing
+authority.
 
-```text
-$SIGNET_WORKSPACE/memory/{harness}/transcripts/transcript.jsonl
-```
-
-The path is normalized by harness name. The transcript artifact contains the
-conversation turns needed for memory use. Raw tool traces may remain in daemon
-logs for audit, but are not silently treated as semantic evidence in the same
-projection.
-
-`session_transcripts` is the canonical database index for retained transcripts.
 Session-end, recovery, and TTL paths mark rows complete directly. They do not
 create a summary job or wait for a summary worker. Completed transcript rows are
 the direct episodic input for the Dreaming content pass.
@@ -264,7 +261,8 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `159-retire-obsolete-invocation-ledger.ts`.
+`schema_migrations_audit`. The latest migration is `160-import-admission-ledger.ts`.
+
 ### Evidence and semantic state
 
 **`memories`** is the central durable memory table. It stores content, type,
