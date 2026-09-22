@@ -1,110 +1,130 @@
-import { mkdir, readdir, unlink } from "node:fs/promises";
-import { resolveWorkspaceLayout } from "@signet/core";
-import { scanInbox, type ImportLedger, type ImportRow } from "./import-inbox";
+import { lstat, mkdir, readdir, unlink } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { createHash } from "node:crypto";
 
+export type ManualInboxRow = {
+	key: string;
+	fileName: string;
+	originalPath: string;
+	status: "processing" | "imported" | "failed" | "quarantined";
+	error?: string;
+};
+export interface ManualInboxAdmission {
+	isEnabled(): Promise<boolean>;
+	enable(): Promise<void>;
+	claim(input: {
+		key: string;
+		fileName: string;
+		originalPath: string;
+		bytes: Uint8Array;
+	}): Promise<ManualInboxRow | null>;
+	record(row: ManualInboxRow): Promise<void>;
+	reconcile?(): Promise<void>;
+}
 export interface ManualInboxWorkerOptions {
-	readonly root: string;
-	readonly ledger?: ImportLedger;
-	/** Compatibility adapter for callers that own admission but not lifecycle. */
-	readonly admission?: { admit(input: { fileName: string; bytes: Uint8Array }): Promise<ImportRow> };
-	readonly dispatchDocument?: (row: ImportRow) => Promise<void>;
-	readonly dispatchTranscript?: (row: ImportRow) => Promise<void>;
-	readonly pollMs?: number;
-	readonly maxFiles?: number;
-	readonly settleMs?: number;
-	/** Existing visible files are inert unless the operator explicitly opts in. */
-	readonly enableExisting?: boolean;
+	root: string;
+	admission: ManualInboxAdmission;
+	dispatchTranscript?: (row: ManualInboxRow) => Promise<void>;
+	dispatchDocument?: (row: ManualInboxRow) => Promise<void>;
+	pollMs?: number;
+	settleMs?: number;
+	maxFiles?: number;
 }
 export interface ManualInboxWorkerHandle {
 	readonly running: boolean;
 	stop(): Promise<void>;
 	nudge(): void;
+	status(): { scanned: number; imported: number; failed: number; quarantined: number };
 }
 
-/**
- * Production owner of the manual `files/` ingress. Admission, retention, and
- * lifecycle state remain owned by the durable import ledger; this worker only
- * inventories a bounded batch and dispatches admitted records.
- */
+const hash = (bytes: Uint8Array, name: string) =>
+	createHash("sha256").update(bytes).update("\0").update(name).digest("hex");
+const temporary = (name: string) =>
+	name.startsWith(".") || name.endsWith(".part") || name.endsWith(".tmp") || name.endsWith(".crdownload");
+
 export function startManualInboxWorker(options: ManualInboxWorkerOptions): ManualInboxWorkerHandle {
 	let active = true;
 	let wake: (() => void) | undefined;
 	let loop: Promise<void>;
-	let enabled = false;
-	const layout = resolveWorkspaceLayout(options.root);
+	const counts = { scanned: 0, imported: 0, failed: 0, quarantined: 0 };
 	const wait = () =>
-		new Promise<void>((resolve) => {
+		new Promise<void>((resolveWait) => {
 			const timer = setTimeout(
 				() => {
 					wake = undefined;
-					resolve();
+					resolveWait();
 				},
-				Math.max(10, options.pollMs ?? 250),
+				Math.max(10, options.pollMs ?? 1000),
 			);
 			wake = () => {
 				clearTimeout(timer);
 				wake = undefined;
-				resolve();
+				resolveWait();
 			};
 		});
-	const dispatch = async (row: ImportRow): Promise<void> => {
-		const handler = row.fileName.toLowerCase().endsWith(".jsonl")
-			? options.dispatchTranscript
-			: options.dispatchDocument;
-		if (!handler) throw new Error(`no importer configured for ${row.fileName}`);
-		await handler(row);
-		await options.ledger?.transition?.(row.key, "processing", "imported");
-	};
-	const tick = async (): Promise<void> => {
+	const tick = async () => {
+		const inbox = join(resolve(options.root), "files");
+		await mkdir(inbox, { recursive: true });
+		const names = (await readdir(inbox)).filter((name) => !temporary(name)).slice(0, options.maxFiles ?? 10);
+		const enabled = await options.admission.isEnabled();
+		// An existing inbox is inert by default. Only an empty inbox establishes the opt-in marker.
 		if (!enabled) {
-			await mkdir(layout.files, { recursive: true });
-			const entries = await readdir(layout.files, { withFileTypes: true });
-			const visible = entries.some(
-				(entry) => !entry.name.startsWith(".") && !entry.name.endsWith(".part") && !entry.name.endsWith(".tmp"),
-			);
-			if (visible && !options.enableExisting) return;
-			enabled = true;
+			if (names.length === 0) await options.admission.enable();
+			else return;
 		}
-		if (!options.ledger && options.admission) {
-			for (const entry of await readdir(layout.files, { withFileTypes: true })) {
-				if (!entry.isFile() || entry.name.endsWith(".part") || entry.name.endsWith(".tmp")) continue;
-				const path = `${layout.files}/${entry.name}`;
-				const row = await options.admission.admit({
-					fileName: entry.name,
-					bytes: new Uint8Array(await Bun.file(path).arrayBuffer()),
-				});
-				await dispatch(row);
-				await unlink(path);
-			}
-			return;
-		}
-		if (!options.ledger) return;
-		const rows = await scanInbox({
-			root: layout.root,
-			layout,
-			ledger: options.ledger,
-			maxFiles: options.maxFiles ?? 10,
-			maxFileBytes: 25 * 1024 * 1024,
-		});
-		for (const row of rows) {
+		for (const fileName of names) {
 			if (!active) return;
-			if (row.status !== "pending") continue;
-			await options.ledger.transition?.(row.key, "pending", "processing");
+			counts.scanned++;
+			const path = join(inbox, fileName);
+			const before = await lstat(path).catch(() => null);
+			if (!before) continue;
+			if ((options.settleMs ?? 50) > 0)
+				await new Promise((resolveWait) => setTimeout(resolveWait, options.settleMs ?? 50));
+			if (!active) return;
+			if (!before.isFile()) {
+				counts.quarantined++;
+				await options.admission.record({
+					key: `quarantine:${fileName}`,
+					fileName,
+					originalPath: path,
+					status: "quarantined",
+					error: "not a regular file",
+				});
+				continue;
+			}
+			const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+			const after = await lstat(path).catch(() => null);
+			if (!after || after.size !== before.size || after.mtimeMs !== before.mtimeMs) continue;
+			const claimed = await options.admission.claim({
+				key: hash(bytes, fileName),
+				fileName,
+				originalPath: path,
+				bytes,
+			});
+			if (!claimed) continue;
 			try {
-				await dispatch({ ...row, status: "processing" });
+				const dispatch = fileName.endsWith(".jsonl") ? options.dispatchTranscript : options.dispatchDocument;
+				if (!dispatch) throw new Error("no dispatcher configured");
+				await dispatch(claimed);
+				await unlink(path);
+				await options.admission.record({ ...claimed, status: "imported" });
+				counts.imported++;
 			} catch (error) {
-				await options.ledger.transition?.(
-					row.key,
-					"processing",
-					"failed",
-					error instanceof Error ? error.message : String(error),
-				);
+				await options.admission.record({
+					...claimed,
+					status: "failed",
+					error: error instanceof Error ? error.message : String(error),
+				});
+				counts.failed++;
 			}
 		}
 	};
 	const run = async () => {
+		await options.admission.reconcile?.();
 		while (active) {
-			await tick();
+			try {
+				await tick();
+			} catch {}
 			if (active) await wait();
 		}
 	};
@@ -119,5 +139,6 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 			wake?.();
 			await loop;
 		},
+		status: () => ({ ...counts }),
 	};
 }

@@ -265,7 +265,7 @@ import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "
 import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
 import { admitImport } from "./import-inbox";
-import { startManualInboxWorker, type ManualInboxWorkerHandle } from "./manual-inbox-worker";
+import { startManualInboxWorker, type ManualInboxAdmission, type ManualInboxWorkerHandle } from "./manual-inbox-worker";
 
 import { resolveDaemonRestartMode } from "./daemon-restart";
 import {
@@ -2803,14 +2803,49 @@ async function main() {
 			});
 		}
 		if (!manualInboxWorkerHandle) {
+			const importLedger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() });
+			let manualInboxEnabled = false;
+			const manualInboxAdmission: ManualInboxAdmission = {
+				isEnabled: async () => manualInboxEnabled,
+				enable: async () => {
+					manualInboxEnabled = true;
+				},
+				claim: async ({ key, fileName, originalPath, bytes }) => {
+					const row = await importLedger.find(key);
+					if (row?.status === "imported" || row?.status === "duplicate") return null;
+					if (!row) {
+						await admitImport({
+							root: AGENTS_DIR,
+							layout: resolveWorkspaceLayout(AGENTS_DIR),
+							fileName,
+							bytes,
+							idempotencyKey: key,
+							ledger: importLedger,
+						});
+					}
+					const claimed = await importLedger.lease(key);
+					void claimed;
+					return { key, fileName, originalPath, status: "processing" };
+				},
+				record: async (row) => {
+					await importLedger.transition(row.key, "processing", row.status, row.error);
+				},
+				reconcile: async () => {
+					await importLedger.recoverExpiredLeases();
+				},
+			};
 			manualInboxWorkerHandle = startManualInboxWorker({
 				root: AGENTS_DIR,
-				ledger: new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() }),
+				admission: manualInboxAdmission,
 				dispatchDocument: async (row) => {
-					throw new Error(`manual document importer is not configured: ${row.fileName}`);
+					logger.warn("documents", "Manual inbox document dispatch requires the shared document importer", {
+						fileName: row.fileName,
+					});
 				},
 				dispatchTranscript: async (row) => {
-					throw new Error(`manual transcript importer is not configured: ${row.fileName}`);
+					logger.warn("transcripts", "Manual inbox transcript dispatch requires the canonical transcript worker", {
+						fileName: row.fileName,
+					});
 				},
 			});
 		}
