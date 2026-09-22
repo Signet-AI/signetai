@@ -479,6 +479,17 @@ export function writeCanonicalTranscriptSnapshot(
 			} finally {
 				lines.close();
 			}
+			const incomingMatchesExisting =
+				existingSessionTurns.length === next.length &&
+				existingSessionTurns.every(
+					(record, index) => record.role === next[index]?.role && record.content === next[index]?.content,
+				);
+			if (incomingMatchesExisting) {
+				closeSync(fd);
+				fd = null;
+				rmSync(tmpPath, { force: true });
+				return true;
+			}
 			const incomingExtendsExisting =
 				existingSessionTurns.length < next.length &&
 				existingSessionTurns.every(

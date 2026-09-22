@@ -195,6 +195,10 @@ describe("transcript capture worker", () => {
 			await enqueueTranscriptCaptureJob(getDbAccessor(), { ...input, capturedAt: "2026-06-20T10:01:00.000Z" }),
 		).toBe(id);
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(await getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id)).toMatchObject({
+			status: "failed",
+			error: expect.stringContaining("canonical transcript mismatch"),
+		});
 
 		const stored = await getDbAccessor().withReadDbAsync(
 			(db) =>

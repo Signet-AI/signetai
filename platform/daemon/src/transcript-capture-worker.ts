@@ -524,28 +524,8 @@ async function processTranscriptCaptureJob(
 		return captureResult(await writeCaptureAudit(basePath, job, resolved), resolved);
 	}
 	const sourceBacked = Boolean(job.transcriptPath);
-	if (!sourceBacked && job.sessionKey) {
-		await upsertSessionTranscriptAsync(
-			job.sessionKey,
-			resolved.transcript,
-			job.harness,
-			job.project,
-			job.agentId,
-			job.endedAt ?? job.capturedAt,
-			dbAccessor,
-			{ completedAt: job.endedAt ?? job.capturedAt, preserveExistingContent: true },
-		);
-	}
-	if (
-		isNoiseSession({
-			project: job.project,
-			sessionKey: job.sessionKey,
-			sessionId: job.sessionId,
-			harness: job.harness,
-		})
-	) {
-		return captureResult(await writeCaptureAudit(basePath, job, resolved), resolved);
-	}
+	// Canonical JSONL is the durable completion boundary. No database evidence,
+	// indexing, or audit may be committed before this succeeds.
 	const canonicalWasWritten = await writeCanonicalTranscriptFromSnapshot({
 		basePath,
 		agentId: job.agentId,
@@ -559,7 +539,33 @@ async function processTranscriptCaptureJob(
 		transcriptPath: job.transcriptPath ?? undefined,
 		preserveExistingSession: resolved.sessionCompleted || job.previouslyCompleted,
 	});
-	if (!canonicalWasWritten) return captureResult(null, resolved);
+	if (!canonicalWasWritten) {
+		throw new Error(
+			`canonical transcript mismatch: retained JSONL is richer or divergent for session ${job.sessionKey ?? job.sessionId}`,
+		);
+	}
+	if (
+		isNoiseSession({
+			project: job.project,
+			sessionKey: job.sessionKey,
+			sessionId: job.sessionId,
+			harness: job.harness,
+		})
+	) {
+		return captureResult(await writeCaptureAudit(basePath, job, resolved), resolved);
+	}
+	if (!sourceBacked && job.sessionKey) {
+		await upsertSessionTranscriptAsync(
+			job.sessionKey,
+			resolved.transcript,
+			job.harness,
+			job.project,
+			job.agentId,
+			job.endedAt ?? job.capturedAt,
+			dbAccessor,
+			{ completedAt: job.endedAt ?? job.capturedAt, preserveExistingContent: true },
+		);
+	}
 	if (sourceBacked && job.sessionKey && (!resolved.sessionCompleted || job.previouslyCompleted)) {
 		await upsertSessionTranscriptAsync(
 			job.sessionKey,
