@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, readdirSync, readFileSync, statSync, unlink
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveEmbeddedWorkerPath } from "./native-runtime-assets";
+import { MigrationControlBoundary } from "./workspace-writer-barrier";
 import type {
 	DbOwnerCommand,
 	DbOwnerEvent,
@@ -103,6 +104,8 @@ export interface DbOwnerClient {
 	cancel(jobId: string): void;
 	health(): DbOwnerHealth;
 	close(): Promise<void>;
+	/** Migration control for the same process/descriptor owner. */
+	migrationControl(): MigrationControlBoundary;
 }
 
 export class DbOwnerError extends Error {
@@ -261,6 +264,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let input = "";
 	let stderr = "";
 	let writeBlocked = false;
+	const migrationControl = new MigrationControlBoundary(`db-owner:${options.dbPath}:${process.pid}`);
 	sweepStaleCancellationRegistries(dirname(options.dbPath));
 	const cancellationRegistryPath = join(
 		dirname(options.dbPath),
@@ -690,6 +694,13 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				`DB owner ${workloadClass} admission queue is full at ${maxClassJobs} admitted jobs`,
 			);
 		}
+		const releaseAdmission = migrationControl.admit("db-owner");
+		let admissionReleased = false;
+		const release = (): void => {
+			if (admissionReleased) return;
+			admissionReleased = true;
+			releaseAdmission();
+		};
 		const now = dbOwnerWallClockNow();
 		const job: DbOwnerJob = {
 			id: `db-owner-${process.pid}-${++sequence}`,
@@ -743,6 +754,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				dispatching: false,
 			};
 			pending.set(job.id, pendingJob as PendingJob<unknown>);
+			void metrics.then(release, release);
 			if (request.kind === "initialize") initialization = "running";
 			dispatch(job.id);
 		});
@@ -808,8 +820,10 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		});
 	}
 
-	function close(): Promise<void> {
+	async function close(): Promise<void> {
 		if (closePromise !== null) return closePromise;
+		migrationControl.beginDrain();
+		await migrationControl.close();
 		const owner = child;
 		const ownerClose = activeChildClose;
 		const retiredClose = retiredChildClose;
@@ -879,5 +893,15 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		return await awaitResult<DbOwnerInitializationResult>(handle, 60_000);
 	}
 
-	return { start, initialize, submit, setWriteBlocked, awaitResult, cancel, health: currentHealth, close };
+	return {
+		start,
+		initialize,
+		submit,
+		setWriteBlocked,
+		awaitResult,
+		cancel,
+		health: currentHealth,
+		close,
+		migrationControl: () => migrationControl,
+	};
 }
