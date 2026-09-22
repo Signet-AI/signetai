@@ -15,6 +15,7 @@ import { resolve, basename, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { buildExecutionManifest, currentManifest } from "./shared-corpus-runner";
+import { validateRustDaemonArtifact } from "./rust-shared-corpus-artifact";
 
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
 type Manifest = {
@@ -98,8 +99,15 @@ validateElf(artifact, "signet-daemon", "daemon artifact");
 validateElf(coreDriver, "signet-core-test-driver", "core driver artifact");
 if (!realpathSync(coreDriver).includes("/platform/rust-core/target/"))
 	fail("core driver artifact is stale or outside the fresh Rust core target");
-if (!realpathSync(artifact).includes("/platform/rust-daemon/target/"))
-	fail("daemon artifact is stale or outside the fresh Rust daemon target");
+try {
+	validateRustDaemonArtifact({
+		artifact,
+		checkout: process.cwd(),
+		provenance: arg("--provenance"),
+	});
+} catch (error) {
+	fail(error instanceof Error ? error.message : String(error));
+}
 if (FORBIDDEN.test(coreDriver) || FORBIDDEN.test(artifact))
 	fail("forbidden archived daemon/source path in execution boundary");
 /* Keep the daemon checks explicit and unchanged in meaning. */
