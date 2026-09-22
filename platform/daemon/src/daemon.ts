@@ -290,6 +290,7 @@ import {
 } from "./routes/git-sync.js";
 import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
 import { mountHealthRoutes } from "./routes/health.js";
+import { mountProtectionRoutes } from "./protection.js";
 import { registerHooksRoutes } from "./routes/hooks-routes.js";
 import { registerImportRoutes } from "./routes/import-routes.js";
 import { registerTranscriptImportRoutes } from "./routes/transcript-import-routes.js";
@@ -510,6 +511,7 @@ registerGlobalMiddleware(app);
 getOrCreateInferenceRouter(resolveDefaultBasePath());
 
 mountHealthRoutes(app);
+mountProtectionRoutes(app, { workspacePath: process.env.SIGNET_PATH });
 mountMcpRoute(app);
 registerAuthRoutes(app);
 

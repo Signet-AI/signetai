@@ -1,6 +1,14 @@
 export { Signet } from "./signet";
 export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
 export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
+export { aggregateProtection, PROTECTION_COMPONENT_IDS } from "./protection";
+export type {
+	ProtectionComponent,
+	ProtectionComponentId,
+	ProtectionComponentStatus,
+	ProtectionStatus,
+	RestoreReceipt,
+} from "./protection";
 export {
 	execFileHidden,
 	execFileSyncHidden,
