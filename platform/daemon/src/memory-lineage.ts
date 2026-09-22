@@ -7,6 +7,7 @@ import {
 	type LlmProvider,
 	MEMORY_CONTENT_WITHHELD_NOTICE,
 	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
 	scanMemoryContent,
 } from "@signet/core";
 import { getAgentScope } from "./agent-id";
@@ -39,7 +40,11 @@ function getAgentsDir(): string {
 }
 
 function getMemoryDir(): string {
-	return join(getAgentsDir(), "memory");
+	return resolveWorkspaceLayout(getAgentsDir()).transcripts;
+}
+
+function memoryRelativePrefix(): string {
+	return resolveWorkspaceLayout(getAgentsDir()).version === 2 ? "transcripts/" : "memory/";
 }
 const HASH_SCOPE = "body-normalized-v1";
 const SANITIZER_VERSION = "sanitize_transcript_v1";
@@ -269,7 +274,7 @@ function artifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKi
 }
 
 function relativeArtifactPath(capturedAt: string, sessionToken: string, kind: ArtifactKind): string {
-	return `memory/${artifactFileName(capturedAt, sessionToken, kind)}`;
+	return `${memoryRelativePrefix()}${artifactFileName(capturedAt, sessionToken, kind)}`;
 }
 
 function wikilink(path: string, label?: string): string {
@@ -1197,11 +1202,11 @@ function isValidArtifact(path: string, frontmatter: Record<string, unknown>, bod
 
 	if (kind !== "manifest") {
 		const manifestPath = readString(frontmatter, "manifest_path");
-		if (!manifestPath?.startsWith("memory/")) return false;
+		if (!manifestPath?.startsWith(memoryRelativePrefix())) return false;
 	}
 
 	const rel = relativePath(path);
-	return rel.startsWith("memory/") && rel.endsWith(`--${kind}.md`);
+	return rel.startsWith(memoryRelativePrefix()) && rel.endsWith(`--${kind}.md`);
 }
 
 async function ensureManifestRecord(seed: {

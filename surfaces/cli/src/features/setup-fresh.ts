@@ -67,19 +67,12 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			await deps.gitAddAndCommit(context.basePath, `${date}_pre-signet-backup`);
 		}
 
-		mkdirSync(join(context.basePath, "memory", "scripts"), { recursive: true });
+		// v2 workspaces must not recreate the v1 `memory/` tree. Legacy memory
+		// scripts and requirements are migration-only assets and are deliberately
+		// not installed by fresh setup.
 		mkdirSync(join(context.basePath, "harnesses"), { recursive: true });
 
 		spinner.text = "Installing memory system...";
-		const scriptsSource = join(templatesDir, "memory", "scripts");
-		if (existsSync(scriptsSource)) {
-			deps.copyDirRecursive(scriptsSource, join(context.basePath, "memory", "scripts"));
-		}
-
-		const requirementsSource = join(templatesDir, "memory", "requirements.txt");
-		if (existsSync(requirementsSource)) {
-			copyFileSync(requirementsSource, join(context.basePath, "memory", "requirements.txt"));
-		}
 
 		const utilScriptsSource = join(templatesDir, "scripts");
 		if (existsSync(utilScriptsSource)) {
