@@ -2,7 +2,6 @@ import {
 	SIGNET_GIT_PROTECTED_PATHS,
 	isSignetGitProtectedPath,
 	isSignetGitTrackedPath,
-	managedGitignoreUpdate,
 	resolveLaunchdExecutable,
 } from "@signet/core";
 import { existsSync } from "node:fs";
@@ -33,8 +32,6 @@ export async function initializeSkillsRepository(agentsDir: string): Promise<boo
 }
 
 export async function gitAddAndCommit(dir: string, message: string): Promise<boolean> {
-	const ignore = managedGitignoreUpdate(dir);
-	if (ignore.status === "refused") return false;
 	const stagedBefore = await listStagedPaths(dir);
 	if (stagedBefore === null) return false;
 	await gitUntrackProtectedFiles(dir);

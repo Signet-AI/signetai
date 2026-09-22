@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { mergeSignetGitignoreEntries } from "./gitignore";
@@ -6,6 +6,13 @@ import { mergeSignetGitignoreEntries } from "./gitignore";
 export type RootGitMode = "absent" | "shell" | "unmanaged";
 export interface RootGitInventory {
 	readonly mode: RootGitMode;
+	readonly root: string;
+	readonly isRootRepository: boolean;
+	readonly head: string | null;
+	readonly indexChanged: boolean;
+	readonly worktreeChanged: boolean;
+	readonly hooks: readonly string[];
+	readonly localConfig: boolean;
 	readonly isRepository: boolean;
 	readonly branch: string | null;
 	readonly remotes: readonly string[];
@@ -23,10 +30,19 @@ function git(root: string, args: string[]): string {
 }
 
 export function inspectRootGit(root: string): RootGitInventory {
-	const isRepository = git(root, ["rev-parse", "--is-inside-work-tree"]) === "true";
-	if (!isRepository)
+	const resolvedRoot = git(root, ["rev-parse", "--show-toplevel"]);
+	const isRepository = resolvedRoot.length > 0;
+	const isRootRepository = isRepository && resolvedRoot === root;
+	if (!isRepository || !isRootRepository)
 		return {
-			mode: "absent",
+			mode: isRepository ? "unmanaged" : "absent",
+			root,
+			isRootRepository: false,
+			head: null,
+			indexChanged: false,
+			worktreeChanged: false,
+			hooks: [],
+			localConfig: false,
 			isRepository: false,
 			branch: null,
 			remotes: [],
@@ -44,6 +60,15 @@ export function inspectRootGit(root: string): RootGitInventory {
 	const mode: RootGitMode = ignore.includes("# BEGIN Signet lightweight workspace") ? "shell" : "unmanaged";
 	return {
 		mode,
+		root,
+		isRootRepository: true,
+		head: git(root, ["rev-parse", "HEAD"]) || null,
+		indexChanged: staged,
+		worktreeChanged: dirty && !staged,
+		hooks: existsSync(join(root, ".git", "hooks"))
+			? readdirSync(join(root, ".git", "hooks")).filter((name) => !name.endsWith(".sample"))
+			: [],
+		localConfig: existsSync(join(root, ".git", "config")),
 		isRepository: true,
 		branch: git(root, ["branch", "--show-current"]) || null,
 		remotes,
