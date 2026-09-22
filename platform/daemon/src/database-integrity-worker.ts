@@ -29,7 +29,7 @@ function quickCheck(dbPath: string): IntegrityCheckStatus {
 		const messages = rows.map((row) => String(row.quick_check ?? ""));
 		return messages.length === 1 && messages[0] === "ok" ? { ok: true, messages: [] } : { ok: false, messages };
 	} finally {
-		db.close();
+		db.close(true);
 	}
 }
 

@@ -60,7 +60,7 @@ interface SqliteDatabase {
 	prepare(sql: string): SqliteStatement;
 	exec(sql: string): void;
 	loadExtension?(path: string): void;
-	close(): void;
+	close(throwOnError?: boolean): void;
 }
 
 interface SqliteDatabaseConstructor {
@@ -137,7 +137,7 @@ export function runDbOwnerWorker(): void {
 	const closeAndExit = (code: number): never => {
 		if (parentWatch !== undefined) clearInterval(parentWatch);
 		try {
-			if (db !== undefined) db.close();
+			if (db !== undefined) db.close(true);
 		} finally {
 			process.exit(code);
 		}
@@ -314,7 +314,7 @@ export function runDbOwnerWorker(): void {
 				? enforceResultLimit(statement, prepared.all(...params))
 				: enforceResultLimit(statement, prepared.get(...params));
 		} finally {
-			readonlyDb.close();
+			readonlyDb.close(true);
 		}
 	}
 

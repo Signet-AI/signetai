@@ -219,7 +219,7 @@ interface SQLiteDatabase {
 		get(...args: unknown[]): Record<string, unknown> | undefined;
 		all(...args: unknown[]): Record<string, unknown>[];
 	};
-	close(): void;
+	close(throwOnError?: boolean): void;
 }
 
 export class Database {
@@ -635,7 +635,7 @@ export class Database {
 
 	close(): void {
 		if (this.db) {
-			this.db.close();
+			this.db.close(true);
 		}
 	}
 }
