@@ -1,5 +1,3 @@
-/** Shared types for the Signet browser extension */
-
 export interface Memory {
 	readonly id: string;
 	readonly content: string;

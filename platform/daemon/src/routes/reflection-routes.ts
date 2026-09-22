@@ -87,8 +87,6 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 
 	app.get("/api/reflections/today", (c) => {
 		const agentId = c.req.query("agentId") ?? "default";
-		// Calendar day in the configured brief timezone so rows written at 6am
-		// local show up as "today" rather than under the UTC day.
 		const pipelineCfg = loadMemoryConfig(deps.agentsDir ?? getAgentsDir()).pipelineV2;
 		const date = todayDateInTimeZone(pipelineCfg.reflections.timezone);
 		const limit = parseReflectionLimit(c.req.query("limit"));
@@ -99,7 +97,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 				return db
 					.prepare("SELECT * FROM daily_reflections WHERE agent_id = ? AND date = ? ORDER BY created_at DESC LIMIT ?")
 					.all(agentId, date, limit) as ReflectionRow[];
-			}, "routes/reflection-routes.ts:98");
+			}, "routes/reflection-routes.ts:96");
 
 			const reflections = rows.map(formatReflection);
 			return c.json({ reflection: reflections[0] ?? null, reflections });
@@ -126,7 +124,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
                  LIMIT ?`,
 					)
 					.all(agentId, limit) as ReflectionRow[];
-			}, "routes/reflection-routes.ts:118");
+			}, "routes/reflection-routes.ts:116");
 
 			return c.json({ reflections: rows.map(formatReflection) });
 		} catch (e) {
@@ -144,8 +142,6 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 		if (!cfg?.enabled) {
 			return c.json({ error: "Reflections are disabled in pipeline config" }, 400);
 		}
-		// Omitted count falls back to the configured daily brief count so the
-		// dashboard's auto-fill and the scheduled run generate the same set.
 		const count = parseGenerateCount(c.req.query("count"), cfg.count);
 
 		let ids: string[];
@@ -175,7 +171,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 					`SELECT * FROM daily_reflections WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at DESC`,
 				)
 				.all(...ids) as ReflectionRow[];
-		}, "routes/reflection-routes.ts:172");
+		}, "routes/reflection-routes.ts:168");
 
 		logger.info("reflections", "Generated daily brief questions", { agentId, date, count: rows.length });
 		const reflections = rows.map(formatReflection);
@@ -208,7 +204,7 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 				return db.prepare("SELECT * FROM daily_reflections WHERE id = ? AND agent_id = ?").get(id, agentId) as
 					| ReflectionRow
 					| undefined;
-			}, "routes/reflection-routes.ts:207");
+			}, "routes/reflection-routes.ts:203");
 
 			if (!existing) {
 				return c.json({ error: "Reflection not found" }, 404);
@@ -245,18 +241,13 @@ export function registerReflectionRoutes(app: Hono, deps: ReflectionRouteDeps = 
 					type: "reflection",
 					tags: "reflection,answered",
 					pinned: 0,
-					// Reflection answers are primary episodic evidence (input),
-					// matching migration 094's classification of `reflection-answer`
-					// source_type as episodic. Daemon-derived rows (extract,
-					// aggregate-recall, session_end, checkpoint) remain non-episodic
-					// by omitting memoryKind.
 					memoryKind: "episodic",
 					sourceType: "reflection-answer",
 					sourceId: id,
 					agentId,
 					createdAt: now,
 				});
-			}, "routes/reflection-routes.ts:225");
+			}, "routes/reflection-routes.ts:221");
 
 			if (!claimed) {
 				return c.json({ error: "Already answered" }, 409);

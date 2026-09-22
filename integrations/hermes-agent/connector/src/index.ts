@@ -8,28 +8,16 @@ import { BaseConnector, type InstallResult, type UninstallResult, resolveSignetA
 import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// ---------------------------------------------------------------------------
-// Plugin file management
-// ---------------------------------------------------------------------------
-
-/** Path to the bundled hermes-plugin directory shipped alongside this connector. */
 function getPluginSourceDir(): string {
-	// In the built package, hermes-plugin/ is sibling to dist/
 	const fromDist = join(__dirname, "..", "hermes-plugin");
 	if (existsSync(fromDist)) return fromDist;
-	// In development, hermes-plugin/ is at package root
 	const fromSrc = join(__dirname, "..", "..", "hermes-plugin");
 	if (existsSync(fromSrc)) return fromSrc;
-	// Native binaries materialize embedded connector assets into a stable,
-	// content-addressed tree before loading the CLI.
 	const connectorAssetsDir = process.env.SIGNET_CONNECTOR_ASSETS_DIR?.trim();
 	if (connectorAssetsDir) {
 		const fromEmbeddedAssets = join(connectorAssetsDir, "hermes-agent", "hermes-plugin");
 		if (existsSync(fromEmbeddedAssets)) return fromEmbeddedAssets;
 	}
-	// In the native bundle (SIGNET_DIR), hermes-plugin/ lives inside the
-	// connectors directory alongside the connector JS output.
 	const signetDir = process.env.SIGNET_DIR?.trim();
 	if (signetDir) {
 		const fromConnectors = join(signetDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
@@ -48,9 +36,6 @@ const REQUIRED_TOOL_NAMES = [
 	"memory_list",
 	"memory_modify",
 	"memory_forget",
-	// `session_search` shadows Hermes's built-in core tool of the same
-	// name and gets dropped at registration time, so the Signet provider
-	// surfaces it under the namespace instead.
 	"signet_session_search",
 	"recall",
 	"remember",
@@ -148,8 +133,6 @@ function getUserPluginTargetDir(hermesHome: string): string {
 function getProviderBackupPath(hermesHome: string): string {
 	return join(hermesHome, PROVIDER_BACKUP_FILE);
 }
-
-/** Copy the Signet memory plugin into a Hermes plugin directory. */
 function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot?: string): string[] {
 	const writeDir = targetRoot ? resolveContainedWritePath(targetDir, targetRoot) : targetDir;
 	const sourceDir = getPluginSourceDir();
@@ -170,8 +153,6 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 
 	return written;
 }
-
-/** Remove the Signet memory plugin from the Hermes plugins directory. */
 function uninstallPlugin(targetDir: string, targetRoot?: string): string[] {
 	if (!existsSync(targetDir)) return [];
 	const safeTargetDir = targetRoot ? resolveContainedWritePath(targetDir, targetRoot) : targetDir;
@@ -183,10 +164,6 @@ function uninstallPlugin(targetDir: string, targetRoot?: string): string[] {
 	rmSync(safeTargetDir, { recursive: true, force: true });
 	return [targetDir];
 }
-
-// ---------------------------------------------------------------------------
-// Config patching
-// ---------------------------------------------------------------------------
 
 function getConfigCandidates(hermesHome: string, targetRoot?: string): string[] {
 	const candidates = [join(hermesHome, "config.yaml"), join(hermesHome, "cli-config.yaml")];
@@ -720,16 +697,6 @@ function configuredAgentReadPolicy(warnings: string[], options: HermesConnectorO
 	warnings.push(`Ignoring unsupported SIGNET_AGENT_READ_POLICY '${raw}'. Expected one of: isolated, shared, group.`);
 	return "shared";
 }
-
-/**
- * Resolve the daemon's configured agent id from `/api/status`.
- *
- * The daemon resolves its agent id from its own `SIGNET_AGENT_ID`, falling
- * back to `default` (see `platform/daemon/src/agent-id.ts`). This is the
- * workspace's real agent scope, which is what the plugin inherits when no
- * explicit agent id is set. Returns null when the daemon is unreachable or
- * reports none, so callers fall back to `default`.
- */
 async function resolveDaemonAgentId(daemonUrl: string): Promise<string | null> {
 	try {
 		const baseUrl = trimTrailingSlashes(daemonUrl);
@@ -747,7 +714,6 @@ async function resolveDaemonAgentId(daemonUrl: string): Promise<string | null> {
 		const agentId = typeof body.agentId === "string" ? body.agentId.trim() : "";
 		return agentId || null;
 	} catch {
-		// Daemon offline or still starting — caller falls back to "default".
 		return null;
 	}
 }
@@ -780,9 +746,7 @@ async function ensureNamedAgentRegistered(
 			);
 			return null;
 		}
-	} catch {
-		// Daemon may be offline; the POST below will produce the user-facing warning.
-	}
+	} catch {}
 
 	const readPolicy = configuredAgentReadPolicy(warnings, options);
 	const policyGroup =
@@ -817,10 +781,6 @@ async function ensureNamedAgentRegistered(
 	}
 	return null;
 }
-
-// ---------------------------------------------------------------------------
-// Connector
-// ---------------------------------------------------------------------------
 
 export class HermesAgentConnector extends BaseConnector {
 	readonly name = "Hermes Agent";
@@ -872,8 +832,6 @@ export class HermesAgentConnector extends BaseConnector {
 		const hermesRepo = this.getHermesRepo();
 		let userPluginInstalled = false;
 		let repoPluginInstalled = false;
-
-		// 1. Install the Python plugin into the current user-plugin location.
 		try {
 			const pluginFiles = installPlugin(
 				getUserPluginTargetDir(hermesHome),
@@ -886,10 +844,6 @@ export class HermesAgentConnector extends BaseConnector {
 			const msg = e instanceof Error ? e.message : String(e);
 			warnings.push(`Failed to install Hermes user plugin files: ${msg}`);
 		}
-
-		// Bundled repo providers take precedence over user plugins in Hermes.
-		// Refresh that copy too when the repo is discoverable so stale schemas
-		// cannot shadow the fixed Signet provider.
 		if (hermesRepo) {
 			try {
 				const pluginFiles = installPlugin(getRepoPluginTargetDir(hermesRepo), "repo");
@@ -935,11 +889,6 @@ export class HermesAgentConnector extends BaseConnector {
 			if (process.env.SIGNET_TRUSTED_DAEMON_ORIGINS) {
 				signetVars.SIGNET_TRUSTED_DAEMON_ORIGINS = sanitizedEnv("SIGNET_TRUSTED_DAEMON_ORIGINS");
 			}
-			// Always write SIGNET_AGENT_ID. Resolution order: explicit env, then
-			// the daemon's configured agent (its own SIGNET_AGENT_ID or "default"),
-			// then "default" for the default workspace. The harness name
-			// ("hermes-agent") is provenance, never an agent id — a stale value
-			// from an older install is healed instead of honored.
 			let signetAgentId = sanitizedEnv("SIGNET_AGENT_ID");
 			if (signetAgentId === "hermes-agent") {
 				warnings.push(
@@ -962,9 +911,6 @@ export class HermesAgentConnector extends BaseConnector {
 					signetVars.SIGNET_AGENT_WORKSPACE = agentWorkspace;
 				}
 			}
-
-			// Persist auth token so Hermes can reach a non-localhost daemon.
-			// Warn if absent and SIGNET_DAEMON_URL points to a remote host.
 			const authToken = sanitizedAuthTokenEnv();
 			if (authToken) {
 				signetVars.SIGNET_API_KEY = authToken;
@@ -1019,8 +965,6 @@ export class HermesAgentConnector extends BaseConnector {
 		if (registrationError) {
 			return { success: false, message: registrationError, filesWritten, configsPatched, warnings };
 		}
-
-		// 3. Activate Signet as the external Hermes memory provider.
 		const providerConfig = configureProvider(hermesHome, warnings, options.profile ? hermesHome : undefined);
 		if (providerConfig.configPath) {
 			configsPatched.push(providerConfig.configPath);
@@ -1115,7 +1059,6 @@ export class HermesAgentConnector extends BaseConnector {
 					configsPatched.push(envPath);
 				}
 			} catch (e) {
-				// Best effort — log but don't fail the uninstall
 				console.warn(`[hermes-agent] Failed to clean up .env: ${e instanceof Error ? e.message : String(e)}`);
 			}
 		}

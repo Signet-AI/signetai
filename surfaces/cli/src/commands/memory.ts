@@ -169,8 +169,6 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			}
 
 			spinner.stop();
-			// Score thresholds trim ranked matches, but intentionally keep
-			// unscored supporting context in-band.
 			const filtered = applyRecallScoreThreshold(data, options.minScore);
 			const parsed = parseRecallPayload(filtered);
 
@@ -255,11 +253,6 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 		.option("--json", "Output as JSON")
 		.action(async (options) => {
 			if (!(await deps.ensureDaemonForSecrets())) return;
-
-			// Guard the bulk operation: --all re-embeds every active memory for the
-			// agent, so require an explicit migration (--model-mismatch) or a
-			// preview (--dry-run). Without this, a stray `--all` silently spends
-			// embedding-provider budget and overwrites every vector.
 			if (options.all === true && options.dryRun !== true && options.modelMismatch !== true) {
 				console.error(
 					"--all re-embeds every active memory; pass --dry-run to preview or --model-mismatch to confirm a migration.",
@@ -290,10 +283,6 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 			const dataObj = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
 			const err = typeof dataObj.error === "string" ? dataObj.error : undefined;
 			const failureMessage = typeof dataObj.message === "string" ? dataObj.message : undefined;
-			// Failure when the request did not succeed, or a legacy `error` field is
-			// present even on a 2xx. Surface `message` (e.g. "restart the daemon")
-			// when no dedicated `error` text is set, so structured refusals and
-			// partial-failure results reach the user instead of "Backfill failed".
 			if (!ok || err !== undefined) {
 				spinner.fail(err ?? failureMessage ?? "Backfill failed");
 				process.exit(1);

@@ -1,6 +1,3 @@
-/**
- * Tests for the DB accessor (singleton read/write transaction wrapper).
- */
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import {
@@ -311,7 +308,6 @@ describe("DbAccessor", () => {
 			resetDbObservability();
 			establishEventLoopHeartbeatBaseline(1_000, 2_000);
 			getDbAccessor().withWriteTx((db) => {
-				// Keep this synchronous on purpose: this is the parent-isolate wedge seam.
 				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
 				now = 5_000;
 				db.prepare("SELECT 1").get();
@@ -346,7 +342,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:190" },
+				{ siteToken: "db-accessor.test.ts:337" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -370,13 +366,12 @@ describe("DbAccessor", () => {
 			resetDbObservability();
 			establishEventLoopHeartbeatBaseline(1_000, 2_000);
 			getSyncDbAccessor().withWriteTx((db) => {
-				// Hold the real accessor call in flight while the latch inspects it.
 				Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
 				now = 5_000;
 				recordEventLoopHeartbeat(5_000, 2_000);
 				state.latched = getEventLoopLiveness(5_000);
 				db.prepare("SELECT 1").get();
-			}, "db-accessor.test.ts:201");
+			}, "db-accessor.test.ts:368");
 		} finally {
 			Date.now = realNow;
 		}
@@ -406,7 +401,7 @@ describe("DbAccessor", () => {
 					state.latched = getEventLoopLiveness(5_000);
 					db.prepare("SELECT 1").get();
 				},
-				{ siteToken: "db-accessor.test.ts:222" },
+				{ siteToken: "db-accessor.test.ts:396" },
 			);
 		} finally {
 			Date.now = realNow;
@@ -494,9 +489,7 @@ describe("DbAccessor", () => {
 				db.prepare("INSERT INTO rollback_test (id, val) VALUES (?, ?)").run(2, "should-rollback");
 				throw new Error("intentional failure");
 			});
-		} catch {
-			// expected
-		}
+		} catch {}
 
 		const rows = acc.withReadDb((db) => {
 			return db.prepare("SELECT id FROM rollback_test ORDER BY id").all() as Array<Record<string, unknown>>;
@@ -643,8 +636,6 @@ describe("DbAccessor", () => {
 		const dbPath = tmpDbPath();
 		cleanupDirs.push(join(dbPath, ".."));
 		initDbAccessor(dbPath);
-
-		// Should not throw
 		closeDbAccessor();
 	});
 
@@ -678,9 +669,6 @@ describe("DbAccessor", () => {
 			now: () => 6000,
 			log: () => {},
 		});
-
-		// Cursorless generated-name backups are legacy rollback points and remain
-		// protected until their own verification pass classifies them.
 		expect(operations).toEqual([operations[0]]);
 		expect(Array.from(files.keys()).sort()).toEqual([
 			"test.db.bak-v58-1000",
@@ -763,8 +751,6 @@ describe("DbAccessor", () => {
 				readVerificationCheckpoint: () => "complete",
 			}),
 		).toThrow(DbSpacePreflightError);
-		// Admission refusal must preserve the only completed-unverified rollback
-		// point; freeing it before a replacement exists would destroy recovery.
 		expect(operations).toEqual([]);
 		expect(Array.from(files.keys())).toEqual(["test.db.bak-v62-5000"]);
 	});
@@ -1719,7 +1705,6 @@ describe("vec_embeddings schema repair", () => {
 				reason: "embedding blob has 3 bytes; expected 8 for 2 dimensions",
 			},
 		]);
-		// A follow-up probe sees no eligible pending row for the quarantined ID.
 		backfillVecEmbeddings(
 			{
 				exec: (sql: string) => db.exec(sql),

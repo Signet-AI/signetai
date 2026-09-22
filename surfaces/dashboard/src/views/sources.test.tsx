@@ -1,4 +1,3 @@
-/** Regression coverage for the unified Sources entry point and modal state paths. */
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "bun:test";
 import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog";
 import { type SignetSource, api } from "@/lib/api";

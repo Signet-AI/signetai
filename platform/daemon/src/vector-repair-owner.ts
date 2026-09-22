@@ -47,8 +47,6 @@ interface BatchCounters {
 	batchFailed: number;
 	batchAffected: number;
 }
-
-/** Raised by an inline test owner when the request signal is already aborted. */
 export class VectorRepairAbortError extends Error {
 	constructor(message = "vector repair owner job was cancelled") {
 		super(message);
@@ -573,12 +571,6 @@ function processOrphanEmbeddings(
 	);
 	return { row: next, counters };
 }
-
-/**
- * Execute one bounded vector-repair batch inside an already-open transaction.
- * The caller owns BEGIN/COMMIT/ROLLBACK so the durable cursor and mutations
- * share one commit boundary.
- */
 export function applyVectorRepairBatch(
 	db: VectorRepairDb,
 	input: DbOwnerVectorRepairInput,
@@ -633,8 +625,6 @@ export function applyVectorRepairBatch(
 	row = result.row;
 	return checkpointResult(row, operationId(input.operation, row.phase), result.counters, row.last_error ?? undefined);
 }
-
-/** Read the durable checkpoint without changing it. Used after a timed-out request. */
 export function readVectorRepairCheckpoint(
 	db: VectorRepairDb,
 	operation: DbOwnerVectorRepairOperation,

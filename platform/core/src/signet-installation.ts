@@ -34,7 +34,6 @@ export type SignetUpdateTarget =
 
 export interface SignetInstallationReport {
 	readonly target: SignetUpdateTarget;
-	/** Whether the active target can be resolved as `signet` from the current PATH. */
 	readonly targetPathResolvable?: boolean;
 	readonly installations: readonly SignetInstallation[];
 	readonly inactive: readonly SignetInstallation[];

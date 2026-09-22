@@ -1,11 +1,3 @@
-/**
- * Deterministic evaluation for the Web page source importer.
- *
- * Run with: bun scripts/evals/web-source-import.ts
- * The fixed HTML fixture proves source config, bounded fetch, Defuddle
- * Markdown extraction, metadata/provenance, and source graph indexing without
- * reaching the public network.
- */
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

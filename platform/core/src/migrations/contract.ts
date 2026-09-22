@@ -1,4 +1,3 @@
-/** Minimal database surface available to every schema migration. */
 export interface MigrationDb {
 	exec(sql: string): void;
 	prepare(sql: string): {
@@ -8,21 +7,15 @@ export interface MigrationDb {
 		finalize?: () => void;
 	};
 }
-
-/** Schema artifacts used to detect migrations recorded without their effects. */
 export interface MigrationArtifacts {
 	readonly tables?: readonly string[];
-	/** Index names whose absence should cause the migration to be repaired. */
 	readonly indexes?: readonly string[];
 	readonly columns?: readonly {
 		readonly table: string;
 		readonly column: string;
-		/** Skip verification when the table itself does not exist. */
 		readonly optional?: boolean;
 	}[];
 }
-
-/** One ordered, append-only schema migration. */
 export interface Migration {
 	readonly version: number;
 	readonly name: string;

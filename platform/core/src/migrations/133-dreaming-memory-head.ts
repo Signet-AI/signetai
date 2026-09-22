@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Migration 133: immutable, scoped Dreaming-curated MEMORY.md revisions. */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_head_revisions (

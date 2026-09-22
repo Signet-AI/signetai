@@ -2,14 +2,6 @@ import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readMemoriesFtsSql } from "../fts-schema";
-
-/**
- * Tests for the migration framework.
- *
- * NOTE: The migration runner is being created concurrently by the schema-agent.
- * These tests document expected behavior. If the import fails, the migration
- * module hasn't been created yet — the integration pass will finalize.
- */
 import { up as sessionSummaryUniqueness } from "./046-session-summary-uniqueness";
 import { up as agentScopedTemporalUniqueness } from "./047-agent-scoped-temporal-uniqueness";
 import { up as threadHeadsMigration } from "./048-thread-heads";
@@ -37,8 +29,6 @@ import { MIGRATIONS, hasPendingMigrations, runMigrations } from "./index";
 function createFreshDb(): Database {
 	return new Database(":memory:");
 }
-
-/** Rewind a fully migrated fixture to exercise an upgrade from a shipped version. */
 function rewindToMigration(db: Database, version: 138 | 139): void {
 	db.exec("PRAGMA foreign_keys = OFF");
 	db.exec("DROP TABLE IF EXISTS source_sync_checkpoints");
@@ -90,8 +80,6 @@ describe("migration framework", () => {
 	test("fresh DB gets all migrations applied", () => {
 		db = createFreshDb();
 		runMigrations(db);
-
-		// schema_migrations table should exist with version as PK
 		const migrations = db.query("SELECT version, applied_at FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 			applied_at: string;
@@ -185,13 +173,11 @@ describe("migration framework", () => {
 	test("re-running migrations is idempotent", () => {
 		db = createFreshDb();
 		runMigrations(db);
-		// running again should not throw
 		runMigrations(db);
 
 		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 		}>;
-		// same number of migration records (no duplicates)
 		const uniqueVersions = new Set(migrations.map((m) => m.version));
 		expect(uniqueVersions.size).toBe(migrations.length);
 	});
@@ -618,14 +604,10 @@ describe("migration framework", () => {
 			name: string;
 		}>;
 		const tableNames = tables.map((t) => t.name);
-
-		// v1 tables
 		expect(tableNames).toContain("memories");
 		expect(tableNames).toContain("conversations");
 		expect(tableNames).toContain("embeddings");
 		expect(tableNames).toContain("schema_migrations");
-
-		// v2 tables
 		expect(tableNames).toContain("memory_history");
 		expect(tableNames).toContain("memory_jobs");
 		expect(tableNames).toContain("entities");
@@ -633,41 +615,19 @@ describe("migration framework", () => {
 		expect(tableNames).toContain("memory_entity_mentions");
 		expect(tableNames).toContain("schema_migrations_audit");
 		expect(tableNames).toContain("memory_content_safety");
-
-		// v7 tables
 		expect(tableNames).toContain("documents");
 		expect(tableNames).toContain("document_memories");
 		expect(tableNames).toContain("connectors");
-
-		// v9 tables
 		expect(tableNames).toContain("summary_jobs");
-
-		// v10 tables
 		expect(tableNames).toContain("umap_cache");
-
-		// v11 tables
 		expect(tableNames).toContain("session_scores");
-
-		// v12 tables
 		expect(tableNames).toContain("scheduled_tasks");
 		expect(tableNames).toContain("task_runs");
-
-		// v96 retires the unscoped legacy ingestion ledger.
 		expect(tableNames).not.toContain("ingestion_jobs");
-
-		// v99 keeps Pi Dreaming capability traces local and pass-scoped.
 		expect(tableNames).toContain("dreaming_tool_calls");
-
-		// v131 records successful source-fragment delivery independently of the time watermark.
 		expect(tableNames).toContain("dreaming_evidence_consumption");
-
-		// v145 records terminal reviewed dispositions for immutable evidence revisions.
 		expect(tableNames).toContain("dreaming_evidence_reviews");
-
-		// v14 tables
 		expect(tableNames).toContain("telemetry_events");
-
-		// v19 tables (knowledge architecture)
 		expect(tableNames).toContain("entity_aspects");
 		expect(tableNames).toContain("entity_attributes");
 		expect(tableNames).toContain("entity_dependencies");
@@ -676,14 +636,8 @@ describe("migration framework", () => {
 		const attributeColumns = db.query("PRAGMA table_info(entity_attributes)").all() as Array<{ name: string }>;
 		expect(attributeColumns.map((col) => col.name)).toContain("claim_key");
 		expect(attributeColumns.map((col) => col.name)).toContain("group_key");
-
-		// v50 tables (dependency audit)
 		expect(tableNames).toContain("entity_dependency_history");
-
-		// v66 tables (ontology proposal loop)
 		expect(tableNames).toContain("ontology_proposals");
-
-		// v77 tables (entity aliases)
 		expect(tableNames).toContain("entity_aliases");
 		const aliasIndexes = db.query("PRAGMA index_list(entity_aliases)").all() as Array<{ name: string }>;
 		expect(aliasIndexes.map((index) => index.name)).toContain("idx_entity_aliases_active_unique");
@@ -697,14 +651,10 @@ describe("migration framework", () => {
 			name: string;
 		}>;
 		const colNames = columns.map((c) => c.name);
-
-		// v1 columns
 		expect(colNames).toContain("id");
 		expect(colNames).toContain("content");
 		expect(colNames).toContain("type");
 		expect(colNames).toContain("confidence");
-
-		// v2 columns
 		expect(colNames).toContain("content_hash");
 		expect(colNames).toContain("normalized_content");
 		expect(colNames).toContain("is_deleted");
@@ -1388,8 +1338,6 @@ describe("migration framework", () => {
 			createdAt,
 		);
 		insert.run("active-extract", "memory-extract", "extract", "pending", null, 0, 3, null, null, createdAt, createdAt);
-
-		// Simulate an upgrade from the immediately preceding schema version.
 		db.prepare("DELETE FROM schema_migrations WHERE version = 129").run();
 		runMigrations(db);
 
@@ -1588,15 +1536,8 @@ describe("migration framework", () => {
 				 VALUES (?, ?, ?, 'skill', ?, 'd', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
 			).run(id, name, name.toLowerCase(), agentId);
 		};
-
-		// A skill under 'default' and an extracted entity under another agent
-		// may now share a name. Pre-fix the global UNIQUE on entities.name
-		// rejected the second insert, which made the skill reconciler retry
-		// forever (#1086).
 		insert("skill:default:dreaming", "dreaming", "default");
 		insert("entity:hermes-agent:dreaming", "dreaming", "hermes-agent");
-
-		// Same agent + same name is still rejected.
 		expect(() => insert("skill:default:dreaming-2", "dreaming", "default")).toThrow(/UNIQUE/i);
 	});
 
@@ -1640,8 +1581,6 @@ describe("migration framework", () => {
 		`);
 
 		agentScopedEntityName(db);
-
-		// Data survives the rebuild.
 		const row = db.query("SELECT id, name, agent_id FROM entities WHERE id = 'entity:hermes-agent:dreaming'").get() as {
 			id: string;
 			name: string;
@@ -1649,15 +1588,11 @@ describe("migration framework", () => {
 		};
 		expect(row.agent_id).toBe("hermes-agent");
 		expect(row.name).toBe("dreaming");
-
-		// The constraint is now agent-scoped: a second agent may use the name.
 		db.query(
 			`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, description, created_at, updated_at)
 			 VALUES ('skill:default:dreaming', 'dreaming', 'dreaming', 'skill', 'default',
 				'd', '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')`,
 		).run();
-
-		// The full index set is restored.
 		const indexes = db.query("PRAGMA index_list(entities)").all() as Array<{ name: string }>;
 		const indexNames = indexes.map((i) => i.name);
 		for (const expected of [
@@ -1672,8 +1607,6 @@ describe("migration framework", () => {
 		]) {
 			expect(indexNames).toContain(expected);
 		}
-
-		// The FTS triggers are restored and the index repopulated.
 		const triggers = db
 			.query("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name LIKE 'entities_fts_%'")
 			.all() as Array<{ name: string }>;
@@ -1780,8 +1713,6 @@ describe("migration framework", () => {
 			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run("a", "hello", "hash1", "fact", "default", null, now, now, "test");
-
-		// Same content_hash in the same agent/scope tuple should fail.
 		expect(() =>
 			db
 				.prepare(
@@ -1790,32 +1721,22 @@ describe("migration framework", () => {
 				)
 				.run("b", "hello again", "hash1", "fact", "default", null, now, now, "test"),
 		).toThrow();
-
-		// A different agent may persist the same content hash.
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run("c", "hello from agent a", "hash1", "fact", "agent-a", null, now, now, "test");
-
-		// A different project may also persist the same content hash.
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, agent_id, project, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run("d", "hello from project scope", "hash1", "fact", "default", "/repo/other", null, now, now, "test");
-
-		// A different benchmark scope may also persist the same content hash.
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, agent_id, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		).run("g", "hello from bench scope", "hash1", "fact", "default", "bench:run-1", now, now, "test");
-
-		// NULL content_hash should not conflict.
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, NULL, ?, ?, ?, ?)`,
 		).run("e", "no hash", "fact", now, now, "test");
-
-		// Soft-deleted row with the same hash should not conflict.
 		db.prepare(
 			`INSERT INTO memories (id, content, content_hash, is_deleted, type, agent_id, scope, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?)`,
@@ -1884,11 +1805,7 @@ describe("migration framework", () => {
 
 	test("migration 003 deduplicates existing content hashes", () => {
 		db = createFreshDb();
-
-		// Run all migrations to get full schema
 		runMigrations(db);
-
-		// Simulate pre-v3 state: remove v3+, drop unique index, add non-unique
 		db.prepare("DELETE FROM schema_migrations WHERE version >= 3").run();
 		db.run("DROP INDEX IF EXISTS idx_memories_content_hash_unique");
 		db.run("CREATE INDEX IF NOT EXISTS idx_memories_content_hash ON memories(content_hash)");
@@ -1903,11 +1820,7 @@ describe("migration framework", () => {
 			`INSERT INTO memories (id, content, content_hash, type, is_deleted, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, 0, ?, ?, ?)`,
 		).run("new1", "new content", "duphash", "fact", now, now, "test");
-
-		// Re-run migrations — v3 should deduplicate and create unique index
 		runMigrations(db);
-
-		// The newer row should keep its hash, the older one should be nulled
 		const rows = db
 			.query("SELECT id, content_hash FROM memories WHERE id IN ('old1', 'new1') ORDER BY id")
 			.all() as Array<{ id: string; content_hash: string | null }>;
@@ -2113,9 +2026,6 @@ describe("migration framework", () => {
 
 	test("repairs version 2 stamped by CLI without running migrations", () => {
 		db = createFreshDb();
-
-		// Simulate v0.1.64-era schema: run only baseline migration
-		// then stamp version 2 the way the buggy CLI did
 		db.exec(`
 			CREATE TABLE IF NOT EXISTS schema_migrations (
 				version INTEGER PRIMARY KEY,
@@ -2174,24 +2084,16 @@ describe("migration framework", () => {
 			INSERT OR REPLACE INTO schema_migrations (version, applied_at, checksum)
 			VALUES (2, '2025-01-01T00:00:00.000Z', 'quick-setup');
 		`);
-
-		// This is the crash scenario from issue #22
 		runMigrations(db);
-
-		// Verify v2 columns exist on memories
 		const cols = db.query("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
 		const colNames = cols.map((c) => c.name);
 		expect(colNames).toContain("content_hash");
 		expect(colNames).toContain("is_deleted");
-
-		// Verify v2 tables exist
 		const tables = db.query("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{ name: string }>;
 		const tableNames = tables.map((t) => t.name);
 		expect(tableNames).toContain("memory_history");
 		expect(tableNames).toContain("memory_jobs");
 		expect(tableNames).toContain("entities");
-
-		// All migrations should now be recorded
 		const migrations = db.query("SELECT version FROM schema_migrations ORDER BY version").all() as Array<{
 			version: number;
 		}>;
@@ -2200,8 +2102,6 @@ describe("migration framework", () => {
 
 	test("version 1 stamped by old inline migrate upgrades cleanly", () => {
 		db = createFreshDb();
-
-		// Simulate v0.1.64 DB: baseline schema + version 1 stamped
 		db.exec(`
 			CREATE TABLE IF NOT EXISTS schema_migrations (
 				version INTEGER PRIMARY KEY,
@@ -2224,8 +2124,6 @@ describe("migration framework", () => {
 			INSERT INTO schema_migrations (version, applied_at, checksum)
 			VALUES (1, '2025-01-01T00:00:00.000Z', 'inline-migrate');
 		`);
-
-		// Should not crash — v1 is legitimate, runs 002+
 		runMigrations(db);
 
 		const cols = db.query("PRAGMA table_info(memories)").all() as Array<{ name: string }>;
@@ -2241,14 +2139,10 @@ describe("migration framework", () => {
 
 	test("DB with existing v1 schema only gets v2 migration", () => {
 		db = createFreshDb();
-
-		// Apply migrations once to get full schema
 		runMigrations(db);
 
 		const countBefore = (db.query("SELECT COUNT(*) as count FROM schema_migrations_audit").get() as { count: number })
 			.count;
-
-		// Run again — should not add new audit records
 		runMigrations(db);
 
 		const countAfter = (db.query("SELECT COUNT(*) as count FROM schema_migrations_audit").get() as { count: number })
@@ -2260,35 +2154,20 @@ describe("migration framework", () => {
 	test("phantom migration repair: dropped table triggers re-run", () => {
 		db = createFreshDb();
 		runMigrations(db);
-
-		// Record audit count before repair (v14 should have 1 entry)
 		const auditBefore = db
 			.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14")
 			.get();
 		expect(auditBefore?.count).toBe(1);
-
-		// Drop a table that v14 created, simulating a phantom migration
 		db.run("DROP TABLE telemetry_events");
-
-		// Verify it's gone
 		const before = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'").all();
 		expect(before.length).toBe(0);
-
-		// Re-run — phantom repair should detect the missing table,
-		// remove the v14 record, and re-run it
 		runMigrations(db);
-
-		// Table should be recreated
 		const after = db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='telemetry_events'").all();
 		expect(after.length).toBe(1);
-
-		// All versions should be recorded
 		const migrations = db
 			.query<{ version: number }, []>("SELECT version FROM schema_migrations ORDER BY version")
 			.all();
 		expect(migrations.length).toBe(MIGRATIONS.length);
-
-		// Audit history preserved: original entry plus new re-run entry
 		const auditAfter = db
 			.query<{ count: number }, []>("SELECT COUNT(*) AS count FROM schema_migrations_audit WHERE version = 14")
 			.get();
@@ -2298,22 +2177,10 @@ describe("migration framework", () => {
 	test("set-based skip handles gaps from phantom repair", () => {
 		db = createFreshDb();
 		runMigrations(db);
-
-		// Simulate phantom state: keep schema_migrations rows but drop the
-		// tables those migrations created. Dropping session_memories also
-		// cascades to v20, v23, and v25 (they declare columns on that table),
-		// so repairPhantomMigrations removes records for v14, v15, v16, v20,
-		// v23, and v25. The set-based runner then re-executes all six in order;
-		// v15 re-creates session_memories before v20's addColumnIfMissing runs.
 		db.run("DROP TABLE IF EXISTS telemetry_events");
 		db.run("DROP TABLE IF EXISTS session_memories");
 		db.run("DROP TABLE IF EXISTS session_checkpoints");
-
-		// Re-run — phantom repair removes stale records, set-based runner
-		// fills all gaps in version order
 		runMigrations(db);
-
-		// All tables restored
 		const tables = db
 			.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
 			.all();
@@ -2321,8 +2188,6 @@ describe("migration framework", () => {
 		expect(tableNames).toContain("telemetry_events");
 		expect(tableNames).toContain("session_memories");
 		expect(tableNames).toContain("session_checkpoints");
-
-		// All versions present
 		const migrations = db
 			.query<{ version: number }, []>("SELECT version FROM schema_migrations ORDER BY version")
 			.all();
@@ -2355,10 +2220,6 @@ describe("migration framework", () => {
 
 	test("post-DDL verification: all declared artifacts exist after migration", () => {
 		db = createFreshDb();
-
-		// We can't easily inject a broken migration into the real list,
-		// so we verify the mechanism by checking that after a successful
-		// run, all declared artifacts actually exist
 		runMigrations(db);
 
 		const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'").all();
@@ -2472,7 +2333,6 @@ describe("migration framework", () => {
 				is_deleted INTEGER DEFAULT 0
 			);
 		`);
-		// Real user/tool/plugin input — various client sourceTypes, all episodic.
 		db.prepare("INSERT INTO memories (id, content, source_type) VALUES (?, ?, ?)").run(
 			"mem-manual",
 			"manual evidence",
@@ -2503,14 +2363,12 @@ describe("migration framework", () => {
 			"pre-pipeline row",
 			null,
 		);
-		// Deleted evidence is still backfilled so kind survives recovery.
 		db.prepare("INSERT INTO memories (id, content, source_type) VALUES (?, ?, ?)").run(
 			"mem-deleted",
 			"deleted manual",
 			"manual",
 		);
 		db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = ?").run("mem-deleted");
-		// Daemon-derived rows — NOT episodic.
 		db.prepare("INSERT INTO memories (id, content, source_type) VALUES (?, ?, ?)").run(
 			"mem-extract",
 			"derived fact",
@@ -2539,7 +2397,6 @@ describe("migration framework", () => {
 			.query<{ id: string; memory_kind: string | null }, []>("SELECT id, memory_kind FROM memories ORDER BY id")
 			.all();
 		const byId = new Map(rows.map((r) => [r.id, r.memory_kind]));
-		// Real input classified episodic.
 		expect(byId.get("mem-manual")).toBe("episodic");
 		expect(byId.get("mem-chunk")).toBe("episodic");
 		expect(byId.get("mem-codex")).toBe("episodic");
@@ -2547,7 +2404,6 @@ describe("migration framework", () => {
 		expect(byId.get("mem-custom")).toBe("episodic");
 		expect(byId.get("mem-null")).toBe("episodic");
 		expect(byId.get("mem-deleted")).toBe("episodic");
-		// Daemon-derived left NULL.
 		expect(byId.get("mem-extract")).toBeNull();
 		expect(byId.get("mem-aggregate")).toBeNull();
 		expect(byId.get("mem-session-end")).toBeNull();
@@ -2664,8 +2520,6 @@ describe("migration framework", () => {
 
 		const indexes = db.query("PRAGMA index_list(memory_entity_mentions)").all() as Array<{ name: string }>;
 		expect(indexes.map((row) => row.name)).toContain("idx_memory_entity_mentions_entity_memory");
-
-		// The composite drives entity-side joins and covers both columns.
 		const columns = db.query("PRAGMA index_info(idx_memory_entity_mentions_entity_memory)").all() as Array<{
 			name: string;
 		}>;
@@ -2888,7 +2742,6 @@ describe("migration 154: transcript capture source identity", () => {
 
 describe("migration 152: memory artifact sha index", () => {
 	test("the artifact dedup subquery seeks the covering index instead of rescanning the table", () => {
-		// The correlated dedup subquery on source_sha256 must seek the covering index (#1894).
 		const db = createFreshDb();
 		runMigrations(db);
 		const plan = db

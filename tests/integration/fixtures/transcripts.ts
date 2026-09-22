@@ -1,14 +1,3 @@
-/**
- * Sample conversation transcripts for LLM pipeline integration tests.
- *
- * Realistic coding session transcripts that exercise the extraction,
- * decision, and summary prompts. Sized to stay well within qwen3:4b's
- * 32k context window even after prompt framing.
- */
-
-// ---------------------------------------------------------------------------
-// Small transcript (~150 words) -- quick preference + decision
-// ---------------------------------------------------------------------------
 
 export const SMALL_TRANSCRIPT = [
 	"User: I've decided to switch the auth service from MongoDB to PostgreSQL.",
@@ -23,10 +12,6 @@ export const SMALL_TRANSCRIPT = [
 	"User: Yes, set up pgBouncer. Also, I prefer dark mode for all editor",
 	"and terminal interfaces, and I use vim keybindings everywhere.",
 ].join("\n");
-
-// ---------------------------------------------------------------------------
-// Medium transcript (~500 words) -- multi-topic session
-// ---------------------------------------------------------------------------
 
 export const MEDIUM_TRANSCRIPT = [
 	"User: Let's work on the dashboard component today. The EmbeddingCanvas2D",
@@ -66,10 +51,6 @@ export const MEDIUM_TRANSCRIPT = [
 	"hitting the npm registry too often. It should check at most once every",
 	"24 hours, not every hour. Update the default interval in update-system.ts.",
 ].join("\n");
-
-// ---------------------------------------------------------------------------
-// Large transcript (~1000 words) -- deep architecture discussion
-// ---------------------------------------------------------------------------
 
 export const LARGE_TRANSCRIPT = [
 	"User: I want to redesign the memory pipeline's retry mechanism.",
@@ -140,15 +121,7 @@ export const LARGE_TRANSCRIPT = [
 	"writes that would trigger watchers.",
 ].join("\n");
 
-// ---------------------------------------------------------------------------
-// Edge case: empty-ish transcript
-// ---------------------------------------------------------------------------
-
 export const MINIMAL_TRANSCRIPT = "User: hi\nAssistant: hello";
-
-// ---------------------------------------------------------------------------
-// Edge case: unicode-heavy transcript
-// ---------------------------------------------------------------------------
 
 export const UNICODE_TRANSCRIPT = [
 	"User: The error message shows \u201cUnicode\u2019s tricky \u2014 especially with CJK characters\u201d.",

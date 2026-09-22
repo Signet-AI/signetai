@@ -30,20 +30,14 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
     async fetch(req, server) {
       const url = new URL(req.url)
-
-      // Handle CORS preflight
       if (req.method === "OPTIONS") {
         return new Response(null, { headers: CORS_HEADERS })
       }
-
-      // WebSocket upgrade
       if (url.pathname === "/ws") {
         const upgraded = server.upgrade(req)
         if (upgraded) return undefined
         return new Response("WebSocket upgrade failed", { status: 400 })
       }
-
-      // API routes
       try {
         let response: Response | null = null
 
@@ -63,7 +57,6 @@ export async function startServer(options: ServerOptions): Promise<void> {
         }
 
         if (response) {
-          // Add CORS headers to response
           const headers = new Headers(response.headers)
           Object.entries(CORS_HEADERS).forEach(([key, value]) => {
             headers.set(key, value)
@@ -74,8 +67,6 @@ export async function startServer(options: ServerOptions): Promise<void> {
             headers,
           })
         }
-
-        // 404 for unknown routes
         return new Response(JSON.stringify({ error: "Not found" }), {
           status: 404,
           headers: { ...CORS_HEADERS, "Content-Type": "application/json" },
@@ -104,8 +95,6 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
   logger.success(`MemoryBench API server running at http://localhost:${port}`)
   logger.info(`WebSocket available at ws://localhost:${port}/ws`)
-
-  // Start UI dev server (capture output to detect port)
   const uiDir = join(process.cwd(), "ui")
 
   uiProcess = Bun.spawn(["bun", "run", "dev"], {
@@ -117,8 +106,6 @@ export async function startServer(options: ServerOptions): Promise<void> {
       NEXT_PUBLIC_API_URL: `http://localhost:${port}`,
     },
   })
-
-  // Handle cleanup on exit
   const cleanup = () => {
     if (uiProcess) {
       logger.info("Shutting down UI server...")
@@ -130,8 +117,6 @@ export async function startServer(options: ServerOptions): Promise<void> {
 
   process.on("SIGINT", cleanup)
   process.on("SIGTERM", cleanup)
-
-  // Read stdout to detect the actual port Next.js uses
   if (uiProcess.stdout && typeof uiProcess.stdout !== "number") {
     const reader = (uiProcess.stdout as ReadableStream<Uint8Array>).getReader()
     const decoder = new TextDecoder()
@@ -143,8 +128,6 @@ export async function startServer(options: ServerOptions): Promise<void> {
         if (done) break
 
         const text = decoder.decode(value)
-
-        // Look for the port in Next.js output (e.g., "Local: http://localhost:3000")
         const portMatch = text.match(/localhost:(\d+)/)
         if (portMatch && !foundPort) {
           foundPort = true

@@ -7,7 +7,6 @@ import { tokenizerWasmPath } from "./tokenizer";
 
 export interface DreamingBacklogTokenEntry {
 	readonly key: string;
-	/** Must change whenever the canonical rendered evidence changes. */
 	readonly revision: string;
 	readonly text: string;
 }
@@ -65,21 +64,7 @@ function requestKey(
 ): string {
 	return JSON.stringify([kind, agentId, entries.map((entry) => [entry.key, entry.revision]), stopAt]);
 }
-
-/**
- * Status is intentionally non-blocking, so a completed exact measurement is
- * usable for a short window but must not become an unbounded stale claim.
- */
 const DREAMING_BACKLOG_CACHE_MAX_AGE_MS = 60_000;
-
-/**
- * Memoized exact backlog counts. The cache key includes the source and its
- * delivered offset, while the source revision catches in-place updates without
- * retaining the complete evidence text. Entries are nested by agent ID, so an
- * agent ID containing ":" cannot collide with a source key or aggregate.
- * Partial batches only add per-entry memoization; exact refreshes alone own
- * the aggregate value and remove entries absent from their complete snapshot.
- */
 export class DreamingBacklogTokenCache {
 	private readonly values = new Map<string, CachedTotal>();
 	private readonly entries = new Map<string, Map<string, CachedTokenEntry>>();
@@ -268,13 +253,9 @@ export class DreamingBacklogTokenCache {
 				});
 			});
 		} finally {
-			// Complete teardown before the next queued request can start another
-			// worker; overlapping compiled worker shutdown can hang Windows.
 			try {
 				await worker.terminate();
-			} catch {
-				// The worker already exited; the request result carries the causal error.
-			}
+			} catch {}
 			this.workers.delete(worker);
 		}
 	}
@@ -343,7 +324,6 @@ export function beginDreamingEpisodicTokenBacklogMeasurement(agentId: string): D
 export function invalidateDreamingEpisodicTokenBacklog(agentId: string): void {
 	dreamingBacklogTokenCache.invalidate(agentId);
 }
-/** Record only a complete, measured backlog total in the aggregate cache. */
 export function recordDreamingEpisodicTokenBacklog(
 	agentId: string,
 	count: number,

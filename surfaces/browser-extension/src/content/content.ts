@@ -1,25 +1,13 @@
-/**
- * Signet content script
- * Handles: text selection → save panel (shadow DOM isolated)
- * Receives messages from background service worker
- */
-
 import { getConfig } from "../shared/config.js";
 import { applyTheme, resolveTheme } from "../shared/theme.js";
 import type { ThemeMode } from "../shared/types.js";
-
-// --- Extension presence marker (for dashboard detection) ---
 document.documentElement.dataset.signetExtension = "true";
-
-// --- State ---
 
 let panelHost: HTMLElement | null = null;
 let shadowRoot: ShadowRoot | null = null;
 let currentSelection = "";
 let currentPageUrl = "";
 let currentPageTitle = "";
-
-// --- Shadow DOM Panel ---
 
 const PANEL_STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -282,12 +270,8 @@ function createPanel(theme: "dark" | "light"): void {
 	const panel = document.createElement("div");
 	panel.className = "panel";
 	panel.setAttribute("data-theme", theme);
-
-	// Position near mouse / center of viewport
 	panel.style.top = "80px";
 	panel.style.right = "20px";
-
-	// Header
 	const header = document.createElement("div");
 	header.className = "panel-header";
 
@@ -303,18 +287,12 @@ function createPanel(theme: "dark" | "light"): void {
 	header.appendChild(closeBtn);
 
 	panel.appendChild(header);
-
-	// Body
 	const body = document.createElement("div");
 	body.className = "panel-body";
-
-	// Preview
 	const preview = document.createElement("div");
 	preview.className = "preview";
 	preview.textContent = currentSelection;
 	body.appendChild(preview);
-
-	// Tags
 	const tagsLabel = document.createElement("div");
 	tagsLabel.className = "field-label";
 	tagsLabel.textContent = "Tags (comma-separated)";
@@ -325,8 +303,6 @@ function createPanel(theme: "dark" | "light"): void {
 	tagsInput.type = "text";
 	tagsInput.placeholder = "web, research, notes...";
 	body.appendChild(tagsInput);
-
-	// Importance
 	const impLabel = document.createElement("div");
 	impLabel.className = "field-label";
 	impLabel.textContent = "Importance";
@@ -353,8 +329,6 @@ function createPanel(theme: "dark" | "light"): void {
 	sliderRow.appendChild(slider);
 	sliderRow.appendChild(sliderValue);
 	body.appendChild(sliderRow);
-
-	// Source meta
 	const sourceMeta = document.createElement("div");
 	sourceMeta.className = "source-meta";
 	sourceMeta.textContent = `Source: ${currentPageTitle || currentPageUrl}`;
@@ -362,8 +336,6 @@ function createPanel(theme: "dark" | "light"): void {
 	body.appendChild(sourceMeta);
 
 	panel.appendChild(body);
-
-	// Footer
 	const footer = document.createElement("div");
 	footer.className = "panel-footer";
 
@@ -382,8 +354,6 @@ function createPanel(theme: "dark" | "light"): void {
 
 		const tags = tagsInput.value.trim();
 		const importance = Number(slider.value) / 100;
-
-		// Build content with source metadata
 		const sourceNote = currentPageUrl ? `\n\nSource: ${currentPageTitle} (${currentPageUrl})` : "";
 		const content = currentSelection + sourceNote;
 
@@ -429,11 +399,7 @@ function createPanel(theme: "dark" | "light"): void {
 	panel.appendChild(footer);
 
 	shadowRoot.appendChild(panel);
-
-	// Focus tags input
 	tagsInput.focus();
-
-	// Close on Escape
 	const handleEscape = (e: KeyboardEvent): void => {
 		if (e.key === "Escape") {
 			destroyPanel();
@@ -475,8 +441,6 @@ function showToast(theme: "dark" | "light", message: string): void {
 		setTimeout(() => host.remove(), 300);
 	}, 2000);
 }
-
-// --- Message handling ---
 
 chrome.runtime.onMessage.addListener((message, _sender, _sendResponse) => {
 	if (message.action === "show-save-panel" || message.action === "trigger-save-shortcut") {

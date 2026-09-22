@@ -217,13 +217,6 @@ interface DefaultActionDeps {
 	readonly signetBanner: () => string;
 	readonly statusDeps: unknown;
 }
-
-/**
- * Registers the top-level default action (bare `signet` invocation).
- *
- * Commander routes unmatched operands (unknown commands) to this action; reject
- * them with a non-zero exit instead of silently rendering the status banner.
- */
 export function registerDefaultAction(program: Command, deps: DefaultActionDeps): void {
 	program.action(async (_options: unknown, command: Command) => {
 		if (command.args.length > 0) {

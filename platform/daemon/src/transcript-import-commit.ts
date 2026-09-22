@@ -22,7 +22,6 @@ export interface CompletedTranscriptEvidence {
 	}[];
 	readonly contentHash: string;
 	readonly sourceMetaJson: string | null;
-	/** Managed relative path of the staged import file, when imported. */
 	readonly sourcePath: string | null;
 }
 
@@ -38,8 +37,6 @@ export interface TranscriptCommitResult {
 	readonly canonicalId: string;
 	readonly sessionKey: string;
 }
-
-/** Evidence and its ledger outcome share the caller's owner transaction. */
 export function commitTranscriptImportBatchInTx(
 	db: WriteDb,
 	input: import("./db-owner-protocol").DbOwnerTranscriptBulkCommit,
@@ -219,8 +216,6 @@ export function buildCompletedTranscriptCommit(
 		canonicalKey: identity.canonicalKey,
 	};
 }
-
-/** Lossless storage representation. It deliberately does not normalize whitespace or prefix roles. */
 export function serializeCompletedTranscriptMessages(messages: CompletedTranscriptEvidence["messages"]): string {
 	return JSON.stringify(messages);
 }
@@ -243,12 +238,9 @@ export function canonicalTranscriptLine(commit: CompletedTranscriptCommit): stri
 		messages: commit.messages,
 	})}\n`;
 }
-
-/** Bound the payload crossing the owner protocol. */
 export function transcriptCommitBatchBytes(commits: readonly CompletedTranscriptCommit[]): number {
 	return Buffer.byteLength(JSON.stringify(commits), "utf8");
 }
-/** Insert the durable transcript exactly once when recovering a committing claim. */
 function insertSessionTranscriptIfMissing(db: WriteDb, commit: CompletedTranscriptCommit): void {
 	const existing = db
 		.prepare("SELECT 1 FROM session_transcripts WHERE session_key = ? AND agent_id = ? LIMIT 1")
@@ -320,7 +312,6 @@ function updateSessionTranscriptOwnership(db: WriteDb, commit: CompletedTranscri
 		...values,
 	);
 }
-/** Owner-side atomic DB prepare/finalize operation. Filesystem finalization is separate and replay-safe by recordId. */
 export function commitCompletedTranscriptBatchInTx(
 	db: WriteDb,
 	commits: readonly CompletedTranscriptCommit[],

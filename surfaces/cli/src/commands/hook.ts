@@ -84,7 +84,6 @@ export function buildSessionStartFallback(
 	if (reason === "timeout") {
 		return readStaticIdentity(agentsDir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS);
 	}
-	// offline, http error, invalid-json — all degrade to static identity
 	return readStaticIdentity(agentsDir);
 }
 
@@ -130,15 +129,6 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			process.exit(0);
 		}
 	});
-
-	// Hook subcommands read stdin via async iteration in readJson(), which
-	// registers a persistent listener on process.stdin. If the harness keeps
-	// its end of the stdin pipe open (rather than closing it or killing us),
-	// that listener keeps the event loop alive indefinitely — Node never exits
-	// on its own. Most action handlers only call process.exit() on error/fallback
-	// paths, not on success, so the happy path relied on natural event-loop drain
-	// and could hang. Force a clean exit once every action settles so these
-	// one-shot IPC processes can never outlive their single request/response.
 	hookCmd.hook("postAction", () => {
 		process.exit(0);
 	});
@@ -335,10 +325,6 @@ export function registerHookCommands(program: Command, deps: HookDeps): void {
 			const input = await readJson();
 			const sessionKey = pickSessionKey(input);
 			const sessionContext = pickString(input?.session_context, input?.sessionContext);
-			// Forward the transcript path so the daemon can run its skill scan at
-			// compaction as a crash-resilient checkpoint (SessionEnd does the same).
-			// Re-scanning the same transcript is deduped on (agent_id, harness,
-			// session_id, tool_use_id), so the checkpoint can't double-count.
 			const transcriptPath = pickString(input?.transcript_path, input?.transcriptPath);
 			const nativeAgentId = options.harness === "claude-code" ? pickString(input?.agent_id) : "";
 			const agentId = pickString(
@@ -479,9 +465,6 @@ export async function readJson(input: HookInput = process.stdin): Promise<Record
 	} catch {
 		return null;
 	} finally {
-		// The stdin iterator survives a timeout unless the stream is explicitly
-		// closed. Hook processes are one-shot, so destroy it after consuming the
-		// available input and before waiting for the daemon.
 		input.pause();
 		input.destroy();
 		await stdinDone.catch(() => undefined);

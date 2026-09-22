@@ -1,14 +1,3 @@
-/**
- * Job worker for the document ingest pipeline.
- *
- * Polls memory_jobs for document_ingest jobs, processes documents
- * through extracting → chunking → embedding → indexing → done states.
- * Each chunk becomes a memory linked via document_memories.
- *
- * Same transaction discipline as the extraction worker: no provider
- * calls inside write locks.
- */
-
 import { type ConcurrencyAdmission, createConcurrencyAdmission } from "../concurrency-admission";
 import { normalizeAndHashContent } from "../content-normalization";
 import type { DbAccessor, WriteDb } from "../db-accessor";
@@ -32,25 +21,18 @@ async function writeTx<T>(accessor: DbAccessor, fn: (db: WriteDb) => T): Promise
 	return writer(fn);
 }
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface DocumentWorkerHandle {
 	stop(): Promise<void>;
 	readonly running: boolean;
 	readonly inFlight: number;
 	readonly maxInFlight: number;
 }
-
-/** Keep URL, chunking, and embedding work bounded before leasing another job. */
 export const DOCUMENT_WORK_MAX_IN_FLIGHT = 2;
 
 const sharedDocumentAdmission = createConcurrencyAdmission(DOCUMENT_WORK_MAX_IN_FLIGHT);
 
 export interface DocumentWorkerDeps {
 	readonly accessor: DbAccessor;
-	/** Shared by all document workers in a daemon; injectable for isolated tests. */
 	readonly admission?: ConcurrencyAdmission;
 	readonly embeddingCfg: EmbeddingConfig;
 	readonly fetchEmbedding: (
@@ -60,7 +42,6 @@ export interface DocumentWorkerDeps {
 		opts?: EmbeddingFetchOptions,
 	) => Promise<number[] | null>;
 	readonly pipelineCfg: PipelineV2Config;
-	/** All production reads use the registered database owner when present. */
 	readonly ownerMaintenance?: DbOwnerMaintenance;
 }
 
@@ -111,10 +92,6 @@ function readDocumentScope(doc: DocumentRow): { agentId: string; project: string
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Chunking
-// ---------------------------------------------------------------------------
-
 function chunkText(text: string, chunkSize: number, overlap: number): readonly string[] {
 	if (text.length <= chunkSize) return [text];
 
@@ -125,17 +102,12 @@ function chunkText(text: string, chunkSize: number, overlap: number): readonly s
 		const end = Math.min(start + chunkSize, text.length);
 		chunks.push(text.slice(start, end));
 		const next = end - overlap;
-		// Avoid infinite loop if overlap >= chunkSize
 		if (next <= start) break;
 		start = next;
 	}
 
 	return chunks;
 }
-
-// ---------------------------------------------------------------------------
-// Job leasing (document_ingest specific)
-// ---------------------------------------------------------------------------
 
 function leaseDocumentJob(db: WriteDb, maxAttempts: number): DocumentJobRow | null {
 	const now = new Date().toISOString();
@@ -184,10 +156,6 @@ function failJob(db: WriteDb, jobId: string, error: string, attempts: number, ma
 	).run(nextStatus, error, now, now, jobId);
 }
 
-// ---------------------------------------------------------------------------
-// Document status updates
-// ---------------------------------------------------------------------------
-
 function isDocumentDeleted(db: WriteDb, docId: string): boolean {
 	const row = db.prepare("SELECT status FROM documents WHERE id = ?").get(docId) as { status: string } | undefined;
 	return row?.status === "deleted";
@@ -220,10 +188,6 @@ function completeDocument(db: WriteDb, docId: string, chunkCount: number, memory
 	).run(chunkCount, memoryCount, now, now, docId);
 }
 
-// ---------------------------------------------------------------------------
-// Enqueue helper (called by document API endpoints)
-// ---------------------------------------------------------------------------
-
 export async function enqueueDocumentIngestJob(accessor: DbAccessor, documentId: string): Promise<string | null> {
 	return writeTx(accessor, (db) => {
 		const existing = db
@@ -249,10 +213,6 @@ export async function enqueueDocumentIngestJob(accessor: DbAccessor, documentId:
 	});
 }
 
-// ---------------------------------------------------------------------------
-// Core processing logic
-// ---------------------------------------------------------------------------
-
 async function processDocument(
 	deps: DocumentWorkerDeps,
 	job: DocumentJobRow,
@@ -276,7 +236,7 @@ async function processDocument(
 				async (db) => {
 					return db.prepare("SELECT * FROM documents WHERE id = ?").get(docId) as DocumentRow | undefined;
 				},
-				{ siteToken: "pipeline/document-worker.ts:275" },
+				{ siteToken: "pipeline/document-worker.ts:235" },
 			);
 
 	if (!doc) {
@@ -289,8 +249,6 @@ async function processDocument(
 		return { accepted: 0, skipped: 1, failed: 0 };
 	}
 	const documentScope = readDocumentScope(doc);
-
-	// -- Step 1: Extract content --
 	await writeTx(accessor, (db) => updateDocumentStatus(db, docId, "extracting"));
 
 	let content: string;
@@ -348,9 +306,6 @@ async function processDocument(
 				causeFamily: operation.causeFamily,
 			};
 		}
-		// A retry is still one logical invalid-input operation. Defer its
-		// summary counters until the terminal attempt so retries are represented
-		// only by `retried`, not by duplicate failures or skips.
 		if (job.attempts >= job.max_attempts) {
 			operation.skipped++;
 			operation.failed++;
@@ -363,8 +318,6 @@ async function processDocument(
 			causeFamily: "invalid_input",
 		};
 	}
-
-	// Update title if discovered
 	if (title && title !== doc.title) {
 		await writeTx(accessor, (db) => {
 			db.prepare("UPDATE documents SET title = ?, updated_at = ? WHERE id = ? AND status != 'deleted'").run(
@@ -374,8 +327,6 @@ async function processDocument(
 			);
 		});
 	}
-
-	// -- Step 2: Chunk --
 	await writeTx(accessor, (db) => updateDocumentStatus(db, docId, "chunking"));
 
 	const chunks = chunkText(content, pipelineCfg.documents.chunkSize, pipelineCfg.documents.chunkOverlap);
@@ -387,8 +338,6 @@ async function processDocument(
 			docId,
 		);
 	});
-
-	// -- Step 3: Embed + index each chunk --
 	await writeTx(accessor, (db) => updateDocumentStatus(db, docId, "embedding"));
 
 	let memoriesCreated = 0;
@@ -400,8 +349,6 @@ async function processDocument(
 			operation.skipped++;
 			continue;
 		}
-
-		// Embedding call is outside write lock
 		const vector = await fetchEmbedding(chunkText, embeddingCfg, "document", {
 			usage: { source: "artifact-index", agentId: documentScope.agentId },
 			onFailure: (causeFamily) => {
@@ -409,8 +356,6 @@ async function processDocument(
 				operation.causeFamily ??= causeFamily;
 			},
 		});
-
-		// Each chunk's memory creation in its own transaction
 		await writeTx(accessor, (db) => {
 			if (isDocumentDeleted(db, docId)) {
 				completeJob(db, job.id);
@@ -420,8 +365,6 @@ async function processDocument(
 			}
 			const normalized = normalizeAndHashContent(chunkText);
 			const canStoreVector = vector !== null && isActiveEmbeddingConfig(db, embeddingCfg);
-
-			// Dedup: skip if exact content already linked to this document
 			const existingLink = db
 				.prepare(
 					`SELECT dm.memory_id FROM document_memories dm
@@ -471,9 +414,6 @@ async function processDocument(
 					embeddingModel: canStoreVector ? embeddingCfg.model : null,
 					extractionModel: null,
 					updatedBy: "document-worker",
-					// Ingested document source material is primary episodic evidence
-					// (input), matching migration 094's classification of `document`
-					// source_type as episodic.
 					memoryKind: "episodic",
 					sourceType: "document",
 					sourceId: docId,
@@ -482,15 +422,11 @@ async function processDocument(
 					createdAt: now,
 				});
 			}
-
-			// Link via document_memories
 			db.prepare(
 				`INSERT OR IGNORE INTO document_memories
 				 (document_id, memory_id, chunk_index)
 				 VALUES (?, ?, ?)`,
 			).run(docId, memId, i);
-
-			// Store embedding if we got one (with dimension validation)
 			if (canStoreVector && vector) {
 				if (vector.length !== embeddingCfg.dimensions) {
 					logger.warn("document-worker", "Embedding dimension mismatch, skipping vector insert", {
@@ -511,7 +447,6 @@ async function processDocument(
 						   vector = excluded.vector,
 						   dimensions = excluded.dimensions`,
 					).run(embId, embeddingHash, blob, vector.length, memId, chunkText, now, documentScope.agentId);
-					// Resolve actual embedding ID (may differ from embId on conflict)
 					const actualEmbRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embeddingHash) as
 						| { id: string }
 						| undefined;
@@ -534,8 +469,6 @@ async function processDocument(
 			};
 		}
 	}
-
-	// -- Step 4: Finalize --
 	await writeTx(accessor, (db) => {
 		updateDocumentStatus(db, docId, "indexing");
 	});
@@ -574,10 +507,6 @@ async function processDocument(
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Worker loop
-// ---------------------------------------------------------------------------
-
 export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHandle {
 	let running = true;
 	let timer: ReturnType<typeof setInterval> | null = null;
@@ -604,7 +533,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 					| undefined;
 				return row?.status ?? null;
 			},
-			{ siteToken: "pipeline/document-worker.ts:600" },
+			{ siteToken: "pipeline/document-worker.ts:529" },
 		);
 	}
 
@@ -630,7 +559,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 							db.prepare("SELECT chunk_count, memory_count FROM documents WHERE id = ?").get(job.document_id) as
 								| { chunk_count?: number | null; memory_count?: number | null }
 								| undefined,
-						{ siteToken: "pipeline/document-worker.ts:628" },
+						{ siteToken: "pipeline/document-worker.ts:557" },
 					);
 			const durableLinks = deps.ownerMaintenance
 				? await ownerQueryOne<{ count?: number | null }>(
@@ -644,7 +573,7 @@ export function startDocumentWorker(deps: DocumentWorkerDeps): DocumentWorkerHan
 							db
 								.prepare("SELECT COUNT(*) AS count FROM document_memories WHERE document_id = ?")
 								.get(job.document_id) as { count?: number | null } | undefined,
-						{ siteToken: "pipeline/document-worker.ts:642" },
+						{ siteToken: "pipeline/document-worker.ts:571" },
 					);
 			if (durable) {
 				const accepted =

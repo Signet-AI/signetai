@@ -1,56 +1,17 @@
-/**
- * Bounded write-batch drain with cooperative event-loop yielding.
- *
- * **Why this exists (#1059).** SQLite's synchronous API (`bun:sqlite`) blocks
- * the JavaScript event loop for the duration of each call. A background loop
- * that runs thousands of writes inside one {@link DbAccessor.withWriteTx}
- * freezes the entire thread — no HTTP handler (including `/health`) can
- * execute — until the watchdog SIGKILLs the process. The death spiral:
- * background work blocks → /health starves → kill → crash recovery resets
- * in-flight jobs → restart → same backlog → repeat.
- *
- * **The fix.** Background write loops use this primitive instead of raw
- * `withWriteTx`. Each batch runs in its own short transaction (bounded by
- * `maxPerTx`), and between batches the primitive yields a macrotask so the
- * event loop can service HTTP. It also checks {@link isSystemPressureHigh}
- * and pauses when the event loop is degraded — active backpressure, not just
- * passive yielding.
- *
- * Each batch's transaction is short enough (tens of milliseconds for typical
- * batch sizes) that the event loop is never blocked long enough to trip the
- * health watchdog. The guarantee is structural: any loop using this primitive
- * cannot monopolize the thread, regardless of total work volume.
- */
-
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
-
-/** Yield a macrotask so pending HTTP handlers (and the event-loop monitor) can run. */
 const yieldToEventLoop = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
 
 export interface DrainOptions {
-	/** Caller-facing label for pressure-pause logging. */
 	readonly label: string;
-	/** Maximum items processed per write transaction. Default 50. */
 	readonly maxPerTx?: number;
-	/** Maximum rows/items in one checkpoint. Defaults to maxPerTx. */
 	readonly maxRows?: number;
-	/** Maximum estimated bytes in one checkpoint. The first item is always admitted. */
 	readonly maxBytes?: number;
-	/** Estimate an item's contribution to the checkpoint byte budget. */
 	readonly estimateBytes?: (item: unknown) => number;
-	/**
-	 * Yield after every N batches even when pressure is normal, so long
-	 * drains don't starve lower-priority work. Default 1 (yield every batch).
-	 */
 	readonly yieldEvery?: number;
-	/** Hard cap on total items processed in one drain call. Default 10_000. */
 	readonly maxTotal?: number;
-	/** Skip pressure checks entirely (for startup recovery where no workers
-	 *  or HTTP handlers are running to compete with). Default false. */
 	readonly skipPressure?: boolean;
-	/** Called after each committed checkpoint. */
 	readonly checkpoint?: (state: BatchCheckpoint) => void;
 }
 
@@ -70,25 +31,15 @@ export interface DrainResult {
 }
 
 export interface RunWriteOptions {
-	/** Caller-facing label for pressure-pause and cap logging. */
 	readonly label: string;
-	/** Maximum items processed per write transaction. Default 50. */
 	readonly maxPerTx?: number;
-	/** Maximum rows/items in one checkpoint. Defaults to maxPerTx. */
 	readonly maxRows?: number;
-	/** Maximum estimated bytes in one checkpoint. The first item is always admitted. */
 	readonly maxBytes?: number;
-	/** Estimate an item's contribution to the checkpoint byte budget. */
 	readonly estimateBytes?: (item: unknown) => number;
-	/** Stop adding items to a transaction after this processing budget. */
 	readonly maxTxDurationMs?: number;
-	/** Yield after every N transactions. Default 1. */
 	readonly yieldEvery?: number;
-	/** Hard cap on total items processed in one run. Default all items. */
 	readonly maxTotal?: number;
-	/** Skip pressure checks entirely. Default false. */
 	readonly skipPressure?: boolean;
-	/** Called after each committed checkpoint. */
 	readonly checkpoint?: (state: BatchCheckpoint) => void;
 }
 
@@ -98,7 +49,6 @@ export interface RunWriteResult<Result> {
 	readonly batches: number;
 	readonly paused: number;
 	readonly stopped: "exhausted" | "capped" | "failed";
-	/** The batch transaction failed after earlier batches had committed. */
 	readonly error?: string;
 }
 
@@ -110,30 +60,14 @@ async function writeBatch<Result>(
 ): Promise<Result> {
 	if (accessor.withWriteTxAsync) {
 		return accessor.withWriteTxAsync(processBatch, {
-			siteToken: "yielding-writes.ts:112",
+			siteToken: "yielding-writes.ts:62",
 			operation: `db.batch.${label}`,
 			estimatedWorkUnits,
 		});
 	}
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx(processBatch, "yielding-writes.ts:119");
+	return accessor.withWriteTx(processBatch, "yielding-writes.ts:69");
 }
-
-/**
- * Drain write work in bounded, yielding transactions.
- *
- * Each iteration:
- * 1. Fetch the next batch (read-only, up to `maxPerTx` items).
- * 2. If empty, the drain is exhausted — return.
- * 3. If pressure is high, wait for it to clear (bounded by timeout).
- * 4. Process the batch in one short `withWriteTx`.
- * 5. Yield a macrotask so HTTP handlers run.
- *
- * The fetch function receives a read-only DB handle and a limit; it returns
- * the items that need processing, or `null`/`[]` when there is no more work.
- * The process function receives a write DB handle and the batch; it does the
- * writes in one transaction.
- */
 export async function drainWriteBatches<Item>(
 	accessor: DbAccessor,
 	fetchBatch: (db: ReadDb, limit: number) => readonly Item[] | null,
@@ -152,13 +86,12 @@ export async function drainWriteBatches<Item>(
 	const startedAt = performance.now();
 
 	while (processed < maxTotal) {
-		// 1. Fetch next batch (read-only, non-blocking for WAL readers).
 		const remaining = maxTotal - processed;
 		const limit = Math.min(maxPerTx, maxRows, remaining);
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const batch = accessor.withReadDb(
 			(db: import("./db-accessor").ReadDb) => fetchBatch(db, limit),
-			"yielding-writes.ts:159",
+			"yielding-writes.ts:92",
 		);
 		if (!batch || batch.length === 0) {
 			return { processed, batches, paused, stopped: "exhausted" };
@@ -173,14 +106,10 @@ export async function drainWriteBatches<Item>(
 			checkpointBytes += bytes;
 		}
 		if (checkpointBatch.length === 0) checkpointBatch.push(batch[0] as Item);
-
-		// 2. Check pressure — pause background work if the event loop is degraded.
 		if (!options.skipPressure && isSystemPressureHigh()) {
 			paused++;
 			await awaitPressureClear();
 		}
-
-		// 3. Process in one short transaction through bounded writer admission.
 		await writeBatch(accessor, (db) => processBatch(db, checkpointBatch), options.label, checkpointBatch.length);
 
 		processed += checkpointBatch.length;
@@ -192,8 +121,6 @@ export async function drainWriteBatches<Item>(
 			bytes: checkpointBytes,
 			elapsedMs: performance.now() - startedAt,
 		});
-
-		// 4. Yield between batches so HTTP handlers and the event-loop monitor run.
 		if (batches % yieldEvery === 0) {
 			await yieldToEventLoop();
 		}
@@ -202,17 +129,6 @@ export async function drainWriteBatches<Item>(
 	logger.debug("yielding-writes", `${options.label}: hit maxTotal cap (${maxTotal})`, { processed, batches });
 	return { processed, batches, paused, stopped: "capped" };
 }
-
-/**
- * Apply an in-memory sequence through bounded, yielding write transactions.
- *
- * Unlike {@link drainWriteBatches}, callers already have the work items and
- * need to retain one result per item. The callback runs in array order and
- * may use savepoints to turn an item-level failure into a result. The
- * transaction is closed after either `maxPerTx` items or `maxTxDurationMs`
- * of callback processing. A single synchronous SQLite statement cannot be
- * interrupted, so the duration is a cooperative upper bound between items.
- */
 export async function runWriteBatches<Item, Result>(
 	accessor: DbAccessor,
 	items: readonly Item[],

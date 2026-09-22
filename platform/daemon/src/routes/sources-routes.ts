@@ -157,8 +157,6 @@ const sourceIndexRuns = new Set<{ readonly sourceId: string; readonly jobId: str
 const sourceIndexTimers = new Set<ReturnType<typeof setTimeout>>();
 const routeSourceJobs = new Map<string, { readonly job: SourceIndexJob; readonly input: SourceIndexJobInput }>();
 let sourceIndexStopping = false;
-
-/** Stop route-owned source work before the daemon closes telemetry and SQLite. */
 export async function stopSourceIndexJobs(): Promise<void> {
 	sourceIndexStopping = true;
 	for (const timer of sourceIndexTimers) clearTimeout(timer);
@@ -512,9 +510,6 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		const sourceAgentId = resolveDaemonAgentId();
 		if (source.kind === "import" && source.providerSettings?.agentId !== sourceAgentId)
 			return c.json({ error: "Source not found" }, 404);
-		// Keep the configured source until lifecycle state and provider artifacts
-		// are gone. The config is the durable retry handle when an owner or purge
-		// operation fails partway through deletion.
 		cancelSourceIndexJob(source.id);
 		recordSourceDeletionTombstone(source, sourceAgentId, agentsDir);
 		await removeSourceLifecycleState(source, sourceAgentId);
@@ -772,17 +767,6 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
 	sourceIndexTimers.add(timer);
 	timer.unref?.();
 }
-
-/**
- * Purge artifacts of sources deleted while the daemon was down and drop their
- * tombstones. Runs in the post-ready deferred lane AFTER the DB accessor is
- * initialized (#1143): route registration executes before DB init, so it must
- * not trigger this — the old placement crashed the daemon with "DbAccessor not
- * initialised" whenever a tombstone existed at boot.
- *
- * A failed lifecycle cleanup or purge is logged and its tombstone is kept for
- * the next boot: tombstone processing must never brick startup.
- */
 export async function cleanupSourceDeletionTombstones(
 	agentsDir = resolveDefaultBasePath(),
 	purgeNativeSource: typeof purgeNativeMemorySourceArtifacts = purgeNativeMemorySourceArtifacts,
@@ -794,10 +778,6 @@ export async function cleanupSourceDeletionTombstones(
 	for (const tombstone of tombstones) {
 		const configured = configuredSources.find((source: SignetSourceEntry) => source.id === tombstone.source.id);
 		if (configured !== undefined && configured.generation !== tombstone.source.generation) {
-			// Artifact purge is keyed by source id rather than generation. Retain
-			// every tombstone while that id is configured: this avoids deleting a
-			// deliberately re-added source, while generation-specific route
-			// filtering leaves a newer source generation visible.
 			remaining.push(tombstone);
 			continue;
 		}
@@ -851,9 +831,6 @@ function recordSourceDeletionTombstone(source: SignetSourceEntry, agentId: strin
 }
 
 function clearSourceDeletionTombstone(source: SignetSourceEntry, agentId: string, agentsDir: string): void {
-	// The canceled-index cleanup path can run after a failed config write. Keep
-	// the marker for the same source generation, but allow a deliberate
-	// reconnect to replace that generation and become live again.
 	const configured = loadSourcesConfig(agentsDir).sources.find((entry) => entry.id === source.id);
 	if (configured?.generation === source.generation) return;
 	const tombstones = loadSourceDeletionTombstones(agentsDir);
@@ -906,7 +883,6 @@ interface SourceStats {
 	readonly artifacts: number;
 	readonly chunks: number;
 	readonly indexed: number;
-	/** Whether canonical visible source evidence still has an eligible undelivered fragment. */
 	readonly hasEligibleUnconsumedEvidence: boolean;
 }
 

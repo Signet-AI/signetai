@@ -75,8 +75,6 @@ export interface PaginatedResponse<T> {
     totalPages: number
   }
 }
-
-// Fetch wrapper with error handling
 async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${endpoint}`, {
     ...options,
@@ -93,8 +91,6 @@ async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> 
 
   return res.json()
 }
-
-// Runs
 export async function getRuns(): Promise<RunSummary[]> {
   return fetchApi("/api/runs")
 }
@@ -191,8 +187,6 @@ export async function getCompletedRuns(): Promise<RunSummary[]> {
   const runs = await getRuns()
   return runs.filter((r) => r.status === "completed")
 }
-
-// Providers & Benchmarks
 export async function getProviders(): Promise<{ providers: Provider[] }> {
   return fetchApi("/api/providers")
 }
@@ -226,8 +220,6 @@ export async function getModels(): Promise<{
 }> {
   return fetchApi("/api/models")
 }
-
-// Latency stats structure
 export interface LatencyStats {
   min: number
   max: number
@@ -247,8 +239,6 @@ export interface LatencyByPhase {
   evaluate: LatencyStats
   total: LatencyStats
 }
-
-// Evaluation result for individual questions
 export interface EvaluationResult {
   questionId: string
   questionType: string
@@ -263,8 +253,6 @@ export interface EvaluationResult {
   answerDurationMs?: number
   totalDurationMs?: number
 }
-
-// Leaderboard
 export interface LeaderboardEntry {
   id: number
   runId: string
@@ -307,8 +295,6 @@ export async function addToLeaderboard(
 export async function removeFromLeaderboard(id: number): Promise<void> {
   await fetchApi(`/api/leaderboard/${id}`, { method: "DELETE" })
 }
-
-// Downloads
 export interface ActiveDownload {
   benchmark: string
   displayName: string
@@ -323,8 +309,6 @@ export interface DownloadsResponse {
 export async function getActiveDownloads(): Promise<DownloadsResponse> {
   return fetchApi("/api/downloads")
 }
-
-// Compares
 export type CompareStatus = "pending" | "running" | "stopping" | "completed" | "failed" | "partial"
 
 export interface CompareRunInfo {
@@ -386,7 +370,6 @@ export interface BenchmarkResult {
   provider: string
   benchmark: string
   version?: string
-  // Fields can be at root level or nested in summary
   accuracy?: number
   totalQuestions?: number
   correctCount?: number

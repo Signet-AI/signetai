@@ -1,12 +1,4 @@
-// P2 domain types for the Signet daemon HTTP API.
-// These types cover Hooks, Connectors, Analytics, Knowledge Graph, Repair, Cross-Agent, and Predictor domains.
-
-// ============================================================================
-// Hooks types
-// ============================================================================
-
 export interface SessionStartResponse {
-	/** Deprecated compatibility field from the pre-hook response shape. */
 	readonly context?: string;
 	readonly sessionId?: string;
 	readonly identity?: {
@@ -22,7 +14,6 @@ export interface SessionStartResponse {
 	}[];
 	readonly stableSystemPrompt?: string;
 	readonly dynamicContext?: string;
-	/** Compatibility aggregate for clients predating the split contract. */
 	readonly inject?: string;
 	readonly contextHash?: string;
 	readonly contextVersion?: number;
@@ -32,12 +23,9 @@ export interface SessionStartResponse {
 }
 
 export interface UserPromptSubmitResponse {
-	/** Deprecated compatibility field from the pre-hook response shape. */
 	readonly context?: string;
 	readonly dynamicContext?: string;
-	/** Dynamic prompt-handling clock, excluded from contextHash. */
 	readonly clockContext?: string;
-	/** Compatibility aggregate for clients predating the split contract. */
 	readonly inject?: string;
 	readonly contextHash?: string;
 	readonly contextVersion?: number;
@@ -119,10 +107,6 @@ export interface SynthesisRequestResponse {
 	readonly triggered: boolean;
 }
 
-// ============================================================================
-// Connectors types
-// ============================================================================
-
 export interface ConnectorRecord {
 	readonly id: string;
 	readonly provider: string;
@@ -171,10 +155,6 @@ export interface ConnectorHealthResponse {
 	readonly memoriesCount?: number;
 	readonly error?: string;
 }
-
-// ============================================================================
-// Analytics types
-// ============================================================================
 
 export interface UsageCountersResponse {
 	readonly requests: Record<string, number>;
@@ -268,10 +248,6 @@ export interface ContinuityLatestScore {
 export interface ContinuityLatestResponse {
 	readonly scores: readonly ContinuityLatestScore[];
 }
-
-// ============================================================================
-// Knowledge Graph types
-// ============================================================================
 
 export interface KnowledgeEntity {
 	readonly id: string;
@@ -382,10 +358,6 @@ export interface ConstellationResponse {
 	readonly edges: readonly ConstellationEdge[];
 }
 
-// ============================================================================
-// Repair types
-// ============================================================================
-
 export interface RepairActionResponse {
 	readonly action: string;
 	readonly success: boolean;
@@ -411,7 +383,6 @@ export interface VectorRepairResponse extends RepairActionResponse {
 	readonly processed: number;
 	readonly skipped: number;
 	readonly failed: number;
-	/** 0 means no matching work remains; 1 means the bounded probe found some work. */
 	readonly remaining: number;
 	readonly remainingStatus: "none" | "some";
 	readonly batches: number;
@@ -434,10 +405,6 @@ export interface DedupStatsResponse {
 export interface DeduplicateResponse extends RepairActionResponse {
 	readonly duplicatesRemoved: number;
 }
-
-// ============================================================================
-// Cross-Agent types
-// ============================================================================
 
 export interface AgentPresence {
 	readonly agentId: string;
@@ -504,6 +471,3 @@ export interface AgentMessageAcknowledgeResponse {
 	readonly acknowledgedAt: string;
 	readonly alreadyAcknowledged: boolean;
 }
-
-// ============================================================================
-// Predictor types — deprecated

@@ -40,8 +40,6 @@ function stringRecord(value: unknown): Record<string, string> | null {
 	}
 	return result;
 }
-
-/** Use @signet/core directly for local secrets when the daemon is unavailable. */
 export function createOfflineSecretApiCall(): DaemonApiCall {
 	return async (method, path, body) => {
 		if (method === "GET" && path === "/api/secrets") {
@@ -107,13 +105,6 @@ function isLocalSecretOperation(method: string, path: string): boolean {
 function isUnavailableKeyring(result: SecretKeyringResult): boolean {
 	return result.state === "unavailable" || result.state === "unsupported";
 }
-
-/**
- * Prefer the daemon and its native keyring, but use the shared encrypted store
- * for local operations when the native keyring cannot exist in this session.
- * Locked, corrupt, and permission-denied keyrings stay on the daemon path so
- * they retain their existing fail-closed classifications.
- */
 export function createSecretCommandApiCall(options: SecretCommandApiOptions): DaemonApiCall {
 	const readKeyring = options.readKeyring ?? (() => getSecretKeyring(`workspace:${options.agentsDir}`).get());
 
@@ -124,10 +115,7 @@ export function createSecretCommandApiCall(options: SecretCommandApiOptions): Da
 		let keyring: SecretKeyringResult | null = null;
 		try {
 			keyring = await readKeyring();
-		} catch {
-			// Let the daemon preserve its established error classification if the
-			// local availability probe itself cannot complete.
-		}
+		} catch {}
 		if (keyring !== null && isUnavailableKeyring(keyring)) {
 			return options.offlineApiCall(method, path, body, timeoutMs);
 		}

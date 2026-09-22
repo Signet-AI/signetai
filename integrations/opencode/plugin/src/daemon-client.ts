@@ -1,11 +1,3 @@
-/**
- * Daemon HTTP client for the Signet OpenCode plugin.
- *
- * Mirrors the pattern from integrations/openclaw/memory-adapter/src/index.ts,
- * routing all requests through the "plugin" runtime path so the
- * daemon's session tracker can enforce dedup safety.
- */
-
 import { READ_TIMEOUT, RUNTIME_PATH, WRITE_TIMEOUT } from "./types.js";
 
 export type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
@@ -17,10 +9,6 @@ export type DaemonFetchResult<T> =
 			readonly reason: DaemonFetchFailure;
 			readonly status?: number;
 	  };
-
-// ============================================================================
-// Headers
-// ============================================================================
 
 function readRuntimeEnv(name: string): string | undefined {
 	const value = process.env[name];
@@ -42,10 +30,6 @@ function pluginHeaders(): Record<string, string> {
 	if (token) headers.Authorization = `Bearer ${token}`;
 	return headers;
 }
-
-// ============================================================================
-// Core fetch helper
-// ============================================================================
 
 function errorName(err: unknown): string {
 	if (typeof err !== "object" || err === null) return "";
@@ -101,7 +85,6 @@ async function daemonFetchResult<T>(
 				return { ok: false, reason: "invalid-json", status: res.status };
 			}
 		} catch (e) {
-			// Body read failed — typically a timeout firing after headers arrived
 			if (isTimeoutError(e)) {
 				console.warn(`[signet] ${method} ${path} body read timed out after ${timeout}ms`);
 				return { ok: false, reason: "timeout" };
@@ -133,10 +116,6 @@ async function daemonFetch<T>(
 	return res.data;
 }
 
-// ============================================================================
-// Health check
-// ============================================================================
-
 export async function isDaemonRunning(daemonUrl: string): Promise<boolean> {
 	try {
 		const res = await fetch(`${daemonUrl}/health`, {
@@ -148,10 +127,6 @@ export async function isDaemonRunning(daemonUrl: string): Promise<boolean> {
 		return false;
 	}
 }
-
-// ============================================================================
-// Client factory
-// ============================================================================
 
 export interface DaemonClient {
 	get<T>(path: string, timeout?: number): Promise<T | null>;

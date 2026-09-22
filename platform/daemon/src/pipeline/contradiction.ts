@@ -1,31 +1,12 @@
-/**
- * Semantic contradiction detection via LLM.
- *
- * The fast path (syntactic detection in worker.ts) catches negation
- * and antonym conflicts. This slow path uses an LLM to catch semantic
- * contradictions like "uses PostgreSQL" vs "migrated to MongoDB".
- *
- * Only called for update proposals with lexical overlap >= 3 tokens
- * where syntactic detection returned false.
- */
-
 import { logger } from "../logger";
 import { extractBalancedJsonObjects, stripFences, tryParseJson } from "./extraction";
 import type { LlmProvider } from "./provider";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface SemanticContradictionResult {
 	readonly detected: boolean;
 	readonly confidence: number;
 	readonly reasoning: string;
 }
-
-// ---------------------------------------------------------------------------
-// Prompt
-// ---------------------------------------------------------------------------
 
 function buildPrompt(factContent: string, targetContent: string): string {
 	return `Do these two statements contradict each other? Consider semantic contradictions (not just syntactic).
@@ -41,10 +22,6 @@ Examples of contradictions:
 - "Dark mode is enabled by default" vs "Light mode is the default theme" → contradicts
 - "The API uses REST" vs "The API endpoint returns JSON" → does NOT contradict (complementary info)`;
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 export async function detectSemanticContradiction(
 	factContent: string,

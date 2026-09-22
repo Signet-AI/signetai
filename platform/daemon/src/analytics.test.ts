@@ -1,7 +1,3 @@
-/**
- * Tests for the analytics collector and timeline builder.
- */
-
 import { describe, it, expect, beforeEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../../core/src/migrations";
@@ -9,10 +5,6 @@ import { createAnalyticsCollector, type AnalyticsCollector, type ErrorEntry } fr
 import { buildTimeline, type TimelineSources } from "./timeline";
 import type { ReadDb } from "./db-accessor";
 import type { LogEntry } from "./logger";
-
-// ---------------------------------------------------------------------------
-// Analytics Collector Tests
-// ---------------------------------------------------------------------------
 
 describe("AnalyticsCollector", () => {
 	let collector: AnalyticsCollector;
@@ -99,11 +91,8 @@ describe("AnalyticsCollector", () => {
 					message: `error ${i}`,
 				});
 			}
-
-			// Capacity is 10
 			const errors = collector.getErrors({ limit: 100 });
 			expect(errors).toHaveLength(10);
-			// Oldest should be evicted (0-4 gone, 5-14 remain)
 			expect(errors[0].message).toBe("error 5");
 			expect(errors[9].message).toBe("error 14");
 		});
@@ -174,7 +163,6 @@ describe("AnalyticsCollector", () => {
 
 	describe("latency histograms", () => {
 		it("computes p50/p95/p99 from known values", () => {
-			// Feed 100 values: 1, 2, 3, ..., 100
 			for (let i = 1; i <= 100; i++) {
 				collector.recordLatency("remember", i);
 			}
@@ -185,7 +173,7 @@ describe("AnalyticsCollector", () => {
 			expect(r.p50).toBe(50);
 			expect(r.p95).toBe(95);
 			expect(r.p99).toBe(99);
-			expect(r.mean).toBe(51); // (1+100)/2 = 50.5, rounded to 51
+			expect(r.mean).toBe(51);
 		});
 
 		it("returns zeros when empty", () => {
@@ -231,10 +219,6 @@ describe("AnalyticsCollector", () => {
 		});
 	});
 });
-
-// ---------------------------------------------------------------------------
-// Timeline Builder Tests
-// ---------------------------------------------------------------------------
 
 describe("buildTimeline", () => {
 	let db: Database;

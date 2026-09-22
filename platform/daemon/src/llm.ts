@@ -1,11 +1,3 @@
-/**
- * Daemon-wide inference provider access.
- *
- * The daemon has one LLM abstraction: the inference router. Legacy helper
- * names remain as narrow compatibility shims, but they all delegate to the
- * router-backed workload resolver.
- */
-
 import type { LlmProvider } from "@signet/core";
 
 export type InferenceWorkload =

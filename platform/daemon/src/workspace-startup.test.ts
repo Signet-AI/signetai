@@ -63,9 +63,6 @@ function startDaemon(env: NodeJS.ProcessEnv) {
 				clearTimeout(timer);
 			}
 			if (process.platform === "win32" && env.SIGNET_PATH) {
-				// Bun reports SIGTERM as a forced child exit on Windows, so the
-				// daemon cannot run its pid-file cleanup handler. The production
-				// CLI removes this artifact after taskkill tree cleanup.
 				rmSync(join(env.SIGNET_PATH, ".daemon", "pid"), { force: true });
 			}
 		},
@@ -165,8 +162,6 @@ describe("daemon workspace startup preflight", () => {
 		} finally {
 			await daemon.stop();
 		}
-		// Bun reports a SIGTERM-driven child exit as 143 on Windows; on POSIX
-		// the daemon's signal handler completes with a zero exit code.
 		expect([0, 143]).toContain(await daemon.child.exited);
 		expect(Bun.file(join(workspace, ".daemon", "pid")).exists()).resolves.toBe(false);
 	}, 60_000);
@@ -185,8 +180,6 @@ describe("daemon workspace startup preflight", () => {
 			join(configHome, "signet", "workspace.json"),
 			JSON.stringify({ version: 1, workspace, updatedAt: new Date().toISOString() }),
 		);
-		// Keep the established workspace intact under a different name. The
-		// startup path must not recreate the configured location.
 		renameSync(workspace, movedWorkspace);
 
 		const result = await runDaemon({

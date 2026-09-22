@@ -1,5 +1,3 @@
-/** Boot-wedge gate criteria. Keep the thresholds explicit and reviewable. */
-
 export const BOOT_TIMEOUT_MS = 60_000;
 export const OBSERVATION_MS = 30_000;
 export const LIVE_REQUEST_TIMEOUT_MS = 2_000;

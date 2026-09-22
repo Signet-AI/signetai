@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 071: Epistemic assertions.
- *
- * Records source-attributed assertions separately from current ontology truth.
- * Entity attributes remain the claim-value layer; assertions preserve who said
- * or believed what, when, and with what evidence.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS epistemic_assertions (

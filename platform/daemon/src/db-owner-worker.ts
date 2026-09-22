@@ -149,10 +149,6 @@ export function runDbOwnerWorker(): void {
 	function writeDiagnostic(message: string): void {
 		process.stderr.write(`${message}\n`);
 	}
-
-	// Readiness attests only that the protocol channel is available. Database
-	// construction, custom SQLite selection, and extension loading are startup
-	// work owned by this process and must not delay the parent handshake.
 	send({ type: "ready", pid: process.pid });
 
 	const startupStarted = process.env.SIGNET_DB_OWNER_TEST_STARTUP_STARTED;
@@ -179,8 +175,6 @@ export function runDbOwnerWorker(): void {
 	}
 	if (db === undefined) closeAndExit(1);
 	parentWatch = setInterval(() => {
-		// SIGKILL bypasses daemon cleanup. Close the owner database as soon as
-		// its control-process parent disappears, before exiting as an orphan.
 		if (process.ppid !== parentPid) closeAndExit(0);
 	}, 50);
 	parentWatch.unref();
@@ -215,9 +209,7 @@ export function runDbOwnerWorker(): void {
 			} catch (error) {
 				try {
 					db.exec("ROLLBACK");
-				} catch {
-					// Preserve the original SQLite error.
-				}
+				} catch {}
 				if (!isBusyError(error) || attempt >= BUSY_RETRIES) throw error;
 				wait(BUSY_BACKOFF_MS * 2 ** attempt);
 			}
@@ -368,9 +360,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// The original error is the actionable failure.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -392,9 +382,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				/* preserve original error */
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -411,9 +399,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// The original error is the actionable failure.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -437,9 +423,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// Preserve the original owner failure.
-			}
+			} catch {}
 			if (error instanceof VectorRepairAbortError) throw new DbOwnerCancellationRequested();
 			throw error;
 		}
@@ -467,9 +451,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// Preserve the original owner failure.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -505,9 +487,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// Preserve the original owner failure.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -515,8 +495,6 @@ export function runDbOwnerWorker(): void {
 	async function executeDreamingEpisodicBacklog(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog" }>,
 	): Promise<number> {
-		// Keep source selection, evidence rendering, and exact token counting out
-		// of the daemon process. The exact operation has no finite source cap.
 		const { getDreamingEpisodicTokenBacklogInDb } = await import("./pipeline/dreaming");
 		return await getDreamingEpisodicTokenBacklogInDb(db as never, request.input.agentId);
 	}
@@ -524,8 +502,6 @@ export function runDbOwnerWorker(): void {
 	async function executeDreamingEpisodicBacklogProbe(
 		request: Extract<DbOwnerJob["request"], { readonly kind: "dreaming_episodic_backlog_probe" }>,
 	): Promise<unknown> {
-		// The scheduled gate stays bounded and returns structured completeness
-		// instead of turning an incomplete source page into a token count.
 		const { probeDreamingEpisodicBacklogInDb } = await import("./pipeline/dreaming");
 		return await probeDreamingEpisodicBacklogInDb(
 			db as never,
@@ -599,9 +575,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// Preserve the original owner failure.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -627,9 +601,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// The original error is the actionable failure.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -667,9 +639,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// The original error is the actionable failure.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -912,9 +882,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// Preserve the original error.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -931,9 +899,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// Preserve the original error.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -950,9 +916,7 @@ export function runDbOwnerWorker(): void {
 		} catch (error) {
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// Preserve the original error.
-			}
+			} catch {}
 			throw error;
 		}
 	}
@@ -1127,9 +1091,7 @@ export function runDbOwnerWorker(): void {
 			} catch (error) {
 				try {
 					db.exec("ROLLBACK");
-				} catch {
-					/* preserve original error */
-				}
+				} catch {}
 				throw error;
 			}
 		}
@@ -1173,10 +1135,6 @@ export function runDbOwnerWorker(): void {
 					}
 				},
 			});
-			// Conversion is a non-transactional SQLite operation: once it returns,
-			// VACUUM and the durable marker have completed. An active cancellation
-			// that arrived during the conversion must therefore report completion,
-			// not cancellation after durable changes.
 			if (context !== undefined && converted) context.committed = true;
 			return {
 				converted,
@@ -1333,9 +1291,6 @@ export function runDbOwnerWorker(): void {
 		}
 	});
 	process.stdin.on("end", () => {
-		// The daemon owns this pipe. If it is killed before it can send the
-		// protocol shutdown command, close SQLite immediately rather than
-		// leaving an orphan owner holding the eval workspace database lock.
 		closeAndExit(0);
 	});
 

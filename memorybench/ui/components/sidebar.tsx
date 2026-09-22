@@ -68,7 +68,7 @@ export function Sidebar() {
 
   return (
     <aside className="fixed left-0 top-0 h-screen w-64 bg-bg-primary border-r border-[#333333] flex flex-col">
-      {/* Header */}
+      {}
       <div className="p-4 border-b border-[#333333]">
         <Link href="/">
           <span className="font-display text-2xl text-text-primary font-bold tracking-tight">
@@ -77,9 +77,9 @@ export function Sidebar() {
         </Link>
       </div>
 
-      {/* Navigation */}
+      {}
       <nav className="flex-1 p-3 space-y-1">
-        {/* New Run Button */}
+        {}
         <Link
           href="/runs/new"
           className="flex items-center justify-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium transition-all font-display tracking-tight text-white border border-transparent hover:border-white/30"
@@ -93,7 +93,7 @@ export function Sidebar() {
           <span>New Run</span>
         </Link>
 
-        {/* Compare Button */}
+        {}
         <Link
           href="/compare/new"
           className="flex items-center justify-center px-3 py-1.5 rounded text-sm font-medium transition-all font-display tracking-tight text-text-secondary hover:text-white border border-[#333333] hover:border-[#444444] bg-transparent"
@@ -101,7 +101,7 @@ export function Sidebar() {
           Compare
         </Link>
 
-        {/* Other nav items */}
+        {}
         {navigation.map((item) => {
           const isActive =
             pathname === item.href ||

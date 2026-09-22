@@ -214,12 +214,6 @@ describe("inference config + decision engine", () => {
 	});
 
 	it("honors an explicit privacy override on a loopback endpoint (no proxy-to-cloud leak)", () => {
-		// Regression for the safety valve: endpoint-based privacy is a default,
-		// not a forced classification. A user can explicitly mark a loopback
-		// target as `remote_ok` (e.g. a local reverse-proxy forwarding to a real
-		// cloud API). The privacy gate must honor that override and keep the
-		// target gated for `restricted_remote` tasks — it must NOT auto-relax to
-		// `local_only` just because the address is 127.0.0.1.
 		const parsed = parseRestrictedCompatibleRouting("http://127.0.0.1:1234/v1");
 		expect(parsed.ok).toBe(true);
 		if (!parsed.ok) return;
@@ -563,9 +557,6 @@ describe("inference config + decision engine", () => {
 	});
 
 	it("rejects ACPX targets for aggregate_recall (latency-sensitive, pi-ai-only)", () => {
-		// aggregate_recall must never route through a subprocess — spawn latency
-		// would dominate the synthesis call. Even when an acpx target is the only
-		// candidate bound to the workload, resolveRoutingDecision must filter it out.
 		const parsed = parseRoutingConfig({
 			inference: {
 				defaultPolicy: "acpx-only",
@@ -598,7 +589,6 @@ describe("inference config + decision engine", () => {
 				},
 			},
 		);
-		// The only candidate is acpx — it must be filtered out, leaving no candidates.
 		expect(decision.ok).toBe(false);
 		if (!("error" in decision)) return;
 		expect(decision.error.code).toBe("no-candidates");
@@ -829,8 +819,6 @@ it("ignores obsolete sessionSynthesis bindings and routes internal session work 
 });
 
 describe("routing reference validation (#1005)", () => {
-	// A complete, valid baseline: every reference resolves. Individual tests
-	// mutate one field to introduce exactly one broken reference.
 	function validConfig() {
 		const localRef = makeRoutingTargetRef("local", "default");
 		const remoteRef = makeRoutingTargetRef("remote", "sonnet");
@@ -888,7 +876,6 @@ describe("routing reference validation (#1005)", () => {
 	});
 
 	it("refuses to load when defaultPolicy points at a renamed/missing policy", () => {
-		// Reproduces #1005: defaultPolicy: background-acpx after rename to background.
 		const parsed = parseRoutingConfig({
 			inference: {
 				targets: {
@@ -999,8 +986,6 @@ describe("routing reference validation (#1005)", () => {
 	});
 
 	it("does NOT block config load for a stale workload pin (routes via fallback)", () => {
-		// Regression guard (#1005 review): a stale workloads.<name>.target must not
-		// refuse the whole config, since routing falls back to the policy chain.
 		const parsed = parseRoutingConfig({
 			inference: {
 				targets: {
@@ -1071,9 +1056,6 @@ describe("routing reference validation (#1005)", () => {
 	});
 
 	it("tolerates a dangling defaultPolicy when no policies are declared (CLI no-legacy path)", () => {
-		// Regression guard (#1005 review): the CLI `route pin`/`unpin` commands
-		// parse config with no legacy merge, so a mid-setup agent.yaml may set
-		// defaultPolicy before any policies block exists. This must not block load.
 		const parsed = parseRoutingConfig({
 			inference: {
 				defaultPolicy: "nonexistent",
@@ -1082,14 +1064,10 @@ describe("routing reference validation (#1005)", () => {
 		});
 		expect(parsed.ok).toBe(true);
 		if (!parsed.ok) return;
-		// And the validator must not flag it either.
 		expect(validateRoutingReferences(parsed.value).filter((i) => i.field === "defaultPolicy")).toEqual([]);
 	});
 
 	it("does not flag agents.<id>.pinnedTargets.default (engine fallback pin key)", () => {
-		// Regression guard (#1005 review): the CLI `route pin` writes
-		// pinnedTargets.default by default, and the engine reads it as a fallback
-		// pin, so it must not warn even when taskClasses.default is undeclared.
 		const parsed = parseRoutingConfig({
 			inference: {
 				targets: { primary: { executor: "ollama", models: { fast: { model: "x" } } } },
@@ -1102,10 +1080,6 @@ describe("routing reference validation (#1005)", () => {
 	});
 
 	it("synthesizes a default policy when targets exist but no policies are configured (#1072)", () => {
-		// Regression for #1072: the connect flow / aggregate-recall route emit
-		// targets + accounts + workloads but no policy, which previously dead-ended
-		// every routed generation path (dream trigger, daily brief, reflections,
-		// route explain) in "No routing policy is configured.".
 		const backgroundRef = makeRoutingTargetRef("background", "default");
 		const aggregationRef = makeRoutingTargetRef("aggregation", "default");
 		const parsed = parseRoutingConfig({
@@ -1125,8 +1099,6 @@ describe("routing reference validation (#1005)", () => {
 		expect(parsed.value.defaultPolicy).toBe("default");
 		expect(parsed.value.policies.default?.defaultTargets).toEqual([backgroundRef, aggregationRef]);
 		expect(validateRoutingReferences(parsed.value).filter((i) => i.severity === "error")).toEqual([]);
-
-		// session_synthesis (dreaming) must route instead of erroring.
 		const synthesis = resolveRoutingDecision(
 			parsed.value,
 			{ operation: "session_synthesis" },
@@ -1136,8 +1108,6 @@ describe("routing reference validation (#1005)", () => {
 		if (!synthesis.ok) return;
 		expect(synthesis.value.policyId).toBe("default");
 		expect(synthesis.value.targetRef).toBe(backgroundRef);
-
-		// `route explain --target <healthy ref>` must bypass the policy search too.
 		const explicit = resolveRoutingDecision(
 			parsed.value,
 			{ operation: "interactive", explicitTargets: [aggregationRef] },

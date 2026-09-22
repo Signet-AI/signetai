@@ -7,12 +7,10 @@ export interface JudgeConfig {
 
 export interface JudgeInput {
   question: string
-  /** Raw question type from benchmark (e.g., "1", "single-session-user", "user_evidence") */
   questionType: string
   groundTruth: string
   hypothesis: string
   context?: string
-  /** Optional provider-specific judge prompts */
   providerPrompts?: ProviderPrompts
 }
 

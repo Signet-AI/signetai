@@ -1,15 +1,3 @@
-/**
- * Regression tests for the anonymous PostHog telemetry collector.
- *
- * Names the bug they guard: the constant "signet-anonymous" distinct_id
- * collapsed every install into one PostHog user, making install and usage
- * analytics impossible. The remaining tests pin the send lifecycle
- * (batch shape, mark-sent, no-resend, backoff, retention pruning) and the
- * open JSONL telemetry log (lifecycle events, issue #1026 Phase 2) so a
- * future change can't silently stop events from reaching PostHog or the
- * audit log.
- */
-
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import {
 	chmodSync,
@@ -147,11 +135,6 @@ function delayAsyncWrites(gate: Promise<void>, started: () => void): DbAccessor 
 		},
 	};
 }
-
-/**
- * Minimal DbAccessor for JSONL-log tests: the collector only touches
- * withWriteTx/withReadDb there, and posthogHost is "" so nothing sends.
- */
 function fakeDbAccessor(): DbAccessor {
 	const stmt = { run: () => ({ changes: 1 }), get: () => undefined, all: () => [] };
 	return {
@@ -186,9 +169,6 @@ function installRowCount(): number {
 		return row.count;
 	});
 }
-
-// Shared harness for both suites below: fresh workspace per test, including
-// a clean .daemon dir so the JSONL log cannot leak between tests.
 beforeAll(async () => {
 	dir = createTestTempDir("signet-telemetry-");
 	installFetchMock();
@@ -237,8 +217,6 @@ describe("telemetry collector", () => {
 		first.record("daemon.heartbeat", { uptimeMs: 1 });
 		await first.flush();
 		const idA = lastBatchDistinctId();
-
-		// Second collector over the same database, like a daemon restart.
 		const second = makeCollector();
 		second.record("daemon.heartbeat", { uptimeMs: 2 });
 		await second.flush();
@@ -283,8 +261,6 @@ describe("telemetry collector", () => {
 		expect(captured).toHaveLength(1);
 		const body = captured[0]?.body;
 		expect(body?.api_key).toBe("phc_test_key");
-		// install.activated fires first on a fresh install, then the two
-		// recorded events.
 		expect(body?.batch).toHaveLength(3);
 		expect(body?.batch[0]?.event).toBe("install.activated");
 		expect(body?.batch[0]?.distinct_id).toBe(lastBatchDistinctId());
@@ -380,16 +356,11 @@ describe("telemetry collector", () => {
 	});
 
 	it("emits install.activated exactly once per install", async () => {
-		// Regression: the npm postinstall ping never fires for bun global or
-		// desktop installs, so the install counter missed them. The daemon
-		// emits install.activated on first run (new persisted install id).
 		const first = makeCollector();
 		first.record("daemon.heartbeat", { uptimeMs: 1 });
 		await first.flush();
 		expect(captured[0]?.body.batch[0]?.event).toBe("install.activated");
 		expect(captured[0]?.body.batch[0]?.properties.version).toBe("0.0.0-test");
-
-		// Restart over the same database: no second activation.
 		const second = makeCollector();
 		second.record("daemon.heartbeat", { uptimeMs: 2 });
 		await second.flush();
@@ -417,7 +388,7 @@ describe("telemetry collector", () => {
 			);
 			const a = collector.anonymizeAgentId("hermes-agent");
 			const b = collector.anonymizeAgentId("hermes-agent");
-			expect(a).toBe(b); // stable within an install
+			expect(a).toBe(b);
 			expect(a).not.toContain("hermes-agent");
 			expect(a).toMatch(/^[0-9a-f]{16}$/);
 			expect(collector.anonymizeAgentId("agent-a")).not.toBe(collector.anonymizeAgentId("agent-b"));
@@ -462,7 +433,7 @@ describe("telemetry collector", () => {
 				"0.0.0-test",
 			);
 			const hb = cb.anonymizeAgentId("default");
-			expect(ha).not.toBe(hb); // same agent id hashes differently per install
+			expect(ha).not.toBe(hb);
 		} finally {
 			await closeDbAccessor();
 			cleanupTestTempDir(dirA);
@@ -471,10 +442,6 @@ describe("telemetry collector", () => {
 	});
 
 	it("emits first.remember and first.recall exactly once per install", async () => {
-		// Regression (issue #1202): the activation funnel needs one-shot
-		// first-use milestones guarded by the persisted install id, or
-		// repeated remembers/recalls inflate the funnel and daemon restarts
-		// double-count an install that already used the product.
 		const first = makeCollector();
 		first.recordFirstUse("remember");
 		first.recordFirstUse("remember");
@@ -485,7 +452,6 @@ describe("telemetry collector", () => {
 		const recallEvent = captured.flatMap((c) => c.body.batch).find((e) => e.event === "first.recall");
 		expect(rememberEvent).toBeDefined();
 		expect(recallEvent).toBeDefined();
-		// No content: the event carries only the fact of first use.
 		expect(rememberEvent?.properties).toMatchObject({ version: "0.0.0-test", platform: process.platform });
 		expect(Object.keys(rememberEvent?.properties ?? {})).toEqual([
 			"version",
@@ -499,9 +465,6 @@ describe("telemetry collector", () => {
 		const firstBatch = captured.flatMap((c) => c.body.batch.map((e) => e.event));
 		expect(firstBatch.filter((e) => e === "first.remember")).toHaveLength(1);
 		expect(firstBatch.filter((e) => e === "first.recall")).toHaveLength(1);
-
-		// Restart over the same database: no second first-use, even though
-		// the new collector claims again.
 		const second = makeCollector();
 		second.recordFirstUse("remember");
 		second.recordFirstUse("recall");
@@ -512,10 +475,6 @@ describe("telemetry collector", () => {
 	});
 
 	it("recovers first-use events after termination before the normal flush", async () => {
-		// Regression (issue #1275): claiming first use in one transaction and
-		// buffering its event for a later transaction let a crash permanently
-		// consume the milestone. The event must already be in the durable queue
-		// before the process can terminate.
 		const first = createTelemetryCollector(getDbAccessor(), { ...TELEMETRY_CONFIG, posthogHost: "" }, "0.0.0-test");
 		first.recordFirstUse("remember");
 		first.recordFirstUse("remember");
@@ -544,10 +503,6 @@ describe("telemetry collector", () => {
 			{ event: "first.recall", sent_to_posthog: 0 },
 			{ event: "first.remember", sent_to_posthog: 0 },
 		]);
-
-		// Simulate a process crash: the in-memory buffer (including the
-		// activation event) disappears, but the atomically persisted
-		// first-use rows survive and are recoverable by the next daemon.
 		await closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
 		const restarted = makeCollector();
@@ -572,9 +527,6 @@ describe("telemetry collector", () => {
 	});
 
 	it("drains events recorded while a PostHog flush is in flight before shutdown", async () => {
-		// Regression: overlapping shutdown and timer/explicit flushes could let
-		// stop() return while an earlier PostHog request still owned a claimed
-		// batch. Events recorded during that request then escaped the final drain.
 		let releaseFetch: (() => void) | undefined;
 		let signalFetchStarted: (() => void) | undefined;
 		const fetchStarted = new Promise<void>((resolve) => {
@@ -755,8 +707,6 @@ describe("telemetry collector", () => {
 	});
 
 	it("honors SIGNET_TELEMETRY_OPTOUT as a runtime opt-out", () => {
-		// Regression: CI and test daemons boot with default config and the
-		// shipped key, so every smoke run became a fake PostHog install.
 		expect(telemetryDisabledByEnv({})).toBe(false);
 		expect(telemetryDisabledByEnv({ SIGNET_TELEMETRY_OPTOUT: "1" })).toBe(true);
 		expect(telemetryDisabledByEnv({ SIGNET_TELEMETRY_OPTOUT: "true" })).toBe(true);
@@ -905,12 +855,7 @@ describe("telemetry collector", () => {
 		collector.start();
 		await deliveryStateReadStarted;
 		await new Promise<void>((resolve) => setTimeout(resolve, 30));
-		// The timer has reached the delivery path, but the persisted state is
-		// still loading. It must not send with the in-memory zero-failure state.
 		expect(captured).toHaveLength(0);
-
-		// Make the loaded state represent a recent failure, so the post-load
-		// assertion also proves the backoff is re-checked after the await.
 		const loadedAt = new Date().toISOString();
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE telemetry_delivery_state SET last_attempt_at = ? WHERE id = 1").run(loadedAt);
@@ -1032,7 +977,6 @@ describe("telemetry collector", () => {
 
 		const collector = makeCollector();
 		collector.record("daemon.heartbeat", { uptimeMs: 1 });
-		// Pruning runs on every 10th flush.
 		for (let i = 0; i < 10; i++) {
 			await collector.flush();
 		}
@@ -1041,7 +985,6 @@ describe("telemetry collector", () => {
 			(db) => db.prepare("SELECT id FROM telemetry_events").all() as Array<{ readonly id: string }>,
 		);
 		expect(rows.map((r) => r.id)).not.toContain("old-1");
-		// install.activated (first run) + the freshly recorded heartbeat.
 		expect(rows.length).toBe(2);
 	});
 });

@@ -45,7 +45,7 @@ function formatDate(date: Date) {
         },
       }} />
 
-      {/* Featured post */}
+      {}
       {featured ? (
         <a class="blog-featured" href={`/blog/${featured.id}/`}>
           {featured.data.image ? (
@@ -61,7 +61,7 @@ function formatDate(date: Date) {
         </a>
       ) : null}
 
-      {/* Post grid */}
+      {}
       <div class="blog-grid">
         {rest.map((post) => (
           <a class="blog-grid-card" href={`/blog/${post.id}/`}>

@@ -1,11 +1,3 @@
-/**
- * OS Chat routes — natural language agent chat for the Signet OS tab.
- *
- * Receives user messages, interprets intent against available MCP tools
- * using the synthesis LLM provider, executes matching tools, and returns
- * agent responses with tool call results.
- */
-
 import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
 import { getInferenceRouterOrNull } from "../inference-router.js";
@@ -18,9 +10,7 @@ const DEFAULT_OS_CHAT_TIMEOUT_MS = 30_000;
 const MAX_OS_CHAT_TIMEOUT_MS = 10 * 60_000;
 
 export interface OsChatRouteOptions {
-	/** Optional bounded override for embedders; production uses the default. */
 	readonly timeoutMs?: number;
-	/** Optional tool fixture for isolated route consumers and tests. */
 	readonly tools?: readonly ToolSpec[];
 }
 
@@ -47,12 +37,6 @@ function resolveTimeoutMs(value: number | undefined): number {
 function abortReason(signal: AbortSignal, timeoutMs: number): Error {
 	return signal.reason instanceof Error ? signal.reason : new OsChatTimeoutError(timeoutMs);
 }
-
-/**
- * Bound the whole interactive request, not only the provider's implementation.
- * The abort signal lets current providers release their admission permit while
- * the race keeps a non-cooperative legacy provider from holding the HTTP route.
- */
 async function withOsChatDeadline<T>(
 	timeoutMs: number,
 	requestSignal: AbortSignal,
@@ -167,10 +151,6 @@ interface ToolSpec {
 	description: string;
 	inputSchema?: unknown;
 }
-
-/**
- * Gather all available tools from all installed MCP servers using probe results.
- */
 function gatherAvailableTools(): ToolSpec[] {
 	const { readInstalledServersPublic } = require("./marketplace-helpers.js");
 	const servers = readInstalledServersPublic();
@@ -194,14 +174,7 @@ function gatherAvailableTools(): ToolSpec[] {
 
 	return tools;
 }
-
-/**
- * Build a system prompt that tells the LLM what tools are available
- * and how to respond.
- */
 function buildSystemPrompt(tools: ToolSpec[]): string {
-	// Filter out view_* tools — they return HTML widgets, not data.
-	// The chat should use fetch_* tools for data retrieval.
 	const dataTools = tools.filter((t) => !t.toolName.startsWith("view_") && !t.toolName.startsWith("check_"));
 	const toolList = dataTools
 		.map((t) => {
@@ -248,10 +221,6 @@ Rules:
 
 Respond with ONLY the JSON object, no markdown fences.`;
 }
-
-/**
- * Parse the LLM response JSON, handling common formatting issues.
- */
 function parseLlmResponse(raw: string): {
 	thinking?: string;
 	useAgent?: boolean;
@@ -260,14 +229,10 @@ function parseLlmResponse(raw: string): {
 	response: string;
 } {
 	let cleaned = raw.trim();
-
-	// Strip markdown fences
 	if (cleaned.startsWith("```json")) cleaned = cleaned.slice(7);
 	else if (cleaned.startsWith("```")) cleaned = cleaned.slice(3);
 	if (cleaned.endsWith("```")) cleaned = cleaned.slice(0, -3);
 	cleaned = cleaned.trim();
-
-	// Try direct JSON parse
 	try {
 		const parsed = JSON.parse(cleaned);
 		return {
@@ -278,7 +243,6 @@ function parseLlmResponse(raw: string): {
 			response: typeof parsed.response === "string" ? parsed.response : cleaned,
 		};
 	} catch {
-		// Try to extract JSON from within the text (LLM might wrap it in explanation)
 		const jsonMatch = cleaned.match(/\{[\s\S]*"(?:toolCalls|useAgent)"[\s\S]*\}/);
 		if (jsonMatch) {
 			try {
@@ -290,18 +254,11 @@ function parseLlmResponse(raw: string): {
 					toolCalls: Array.isArray(parsed.toolCalls) ? parsed.toolCalls : [],
 					response: typeof parsed.response === "string" ? parsed.response : jsonMatch[0],
 				};
-			} catch {
-				// Fall through
-			}
+			} catch {}
 		}
-		// Last resort — treat entire response as plain text
 		return { toolCalls: [], response: cleaned };
 	}
 }
-
-/**
- * Mount OS chat routes on the Hono app.
- */
 export function mountOsChatRoutes(app: Hono, options: OsChatRouteOptions = {}): void {
 	const timeoutMs = resolveTimeoutMs(options.timeoutMs);
 
@@ -319,7 +276,6 @@ export function mountOsChatRoutes(app: Hono, options: OsChatRouteOptions = {}): 
 
 		try {
 			return await withOsChatDeadline(timeoutMs, c.req.raw.signal, async (signal) => {
-				// Gather available tools from all MCP servers
 				const tools = options.tools ? [...options.tools] : gatherAvailableTools();
 
 				if (tools.length === 0) {
@@ -328,8 +284,6 @@ export function mountOsChatRoutes(app: Hono, options: OsChatRouteOptions = {}): 
 						toolCalls: [],
 					});
 				}
-
-				// Build prompt and call the shared interactive LLM provider
 				const systemPrompt = buildSystemPrompt(tools);
 
 				logger.info("os-chat", "Processing chat message", {
@@ -346,9 +300,6 @@ export function mountOsChatRoutes(app: Hono, options: OsChatRouteOptions = {}): 
 				if (signal.aborted) throw abortReason(signal, timeoutMs);
 
 				const parsed = parseLlmResponse(rawResponse);
-
-				// If LLM decided this needs the visual agent, return immediately
-				// (no tool execution — the dashboard will handle it via agent executor)
 				if (parsed.useAgent && parsed.agentServerId) {
 					logger.info("os-chat", "Routing to visual agent", {
 						serverId: parsed.agentServerId,
@@ -362,20 +313,15 @@ export function mountOsChatRoutes(app: Hono, options: OsChatRouteOptions = {}): 
 						agentTask: body.message,
 					});
 				}
-
-				// Execute tool calls if any
 				const toolCallResults: ToolCallResult[] = [];
 
 				if (parsed.toolCalls.length > 0) {
 					for (const call of parsed.toolCalls.slice(0, 5)) {
 						if (signal.aborted) throw abortReason(signal, timeoutMs);
-						// Max 5 tool calls
 						try {
 							logger.info("os-chat", `Calling tool ${call.serverId}/${call.toolName}`, {
 								args: JSON.stringify(call.args || {}).slice(0, 500),
 							});
-
-							// Call the tool via the marketplace /mcp/call endpoint internally
 							const callRes = await fetchInternal(
 								`http://127.0.0.1:${process.env.SIGNET_PORT || 3850}/api/marketplace/mcp/call`,
 								{
@@ -416,8 +362,6 @@ export function mountOsChatRoutes(app: Hono, options: OsChatRouteOptions = {}): 
 							});
 						}
 					}
-
-					// If we got results, send them back to the LLM for a natural response
 					if (toolCallResults.some((r) => r.result)) {
 						if (signal.aborted) throw abortReason(signal, timeoutMs);
 						const resultsText = toolCallResults
@@ -451,7 +395,6 @@ Now give a concise, natural language summary of the results for the user. Be spe
 							});
 						} catch {
 							if (signal.aborted) throw abortReason(signal, timeoutMs);
-							// If summary fails, return raw response + results
 							return c.json({
 								response: parsed.response,
 								toolCalls: toolCallResults,

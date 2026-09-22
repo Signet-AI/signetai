@@ -1,4 +1,3 @@
-/** Migration 155: durable per-item outcomes for bounded source traversal. */
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

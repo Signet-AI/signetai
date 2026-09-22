@@ -1,10 +1,3 @@
-/**
- * OpenAI SDK adapter for Signet memory.
- *
- * Provides tool definitions compatible with OpenAI's function calling
- * format and a dispatcher for processing tool calls.
- */
-
 import { SignetError } from "./errors.js";
 import type { SignetClient } from "./index.js";
 

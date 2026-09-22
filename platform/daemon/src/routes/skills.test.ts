@@ -18,13 +18,8 @@ import {
 	withClawhubInstallLock,
 } from "./skills";
 
-// ---------------------------------------------------------------------------
-// Repo skills frontmatter validation (regression guard)
-// ---------------------------------------------------------------------------
-
 describe("repo skills frontmatter", () => {
 	const skillsRoot = join(__dirname, "..", "..", "..", "..", "skills");
-	// Only run if skills dir exists (dev environment)
 	const hasSkillsDir = existsSync(skillsRoot);
 
 	it.skipIf(!hasSkillsDir)("all skills have parseable SKILL.md with name and description", () => {
@@ -51,8 +46,6 @@ describe("repo skills frontmatter", () => {
 			const content = readFileSync(skillMd, "utf-8");
 			const fmMatch = content.match(/^---\n([\s\S]*?)\n---/);
 			if (!fmMatch) continue;
-
-			// last_verified should be under metadata:, not at top level
 			const lines = fmMatch[1].split("\n");
 			for (const line of lines) {
 				if (/^last_verified:/.test(line)) {
@@ -119,10 +112,6 @@ describe("repo skills frontmatter", () => {
 		}
 	});
 });
-
-// ---------------------------------------------------------------------------
-// parseSkillFrontmatter
-// ---------------------------------------------------------------------------
 
 describe("parseSkillFrontmatter", () => {
 	it("parses valid frontmatter with all fields", () => {
@@ -241,8 +230,6 @@ metadata:
 # Agent Architect`;
 
 		const meta = parseSkillFrontmatter(content);
-		// Regex-based parser only captures the first line of folded scalars
-		// but should still return a non-empty description
 		expect(meta.description.length).toBeGreaterThan(0);
 	});
 
@@ -257,14 +244,9 @@ metadata:
 
 		const meta = parseSkillFrontmatter(content);
 		expect(meta.description).toBe("A skill with nested metadata");
-		// metadata block shouldn't leak into top-level fields
 		expect(meta.version).toBeUndefined();
 	});
 });
-
-// ---------------------------------------------------------------------------
-// formatInstalls
-// ---------------------------------------------------------------------------
 
 describe("formatInstalls", () => {
 	it("returns raw number for values under 1000", () => {
@@ -284,10 +266,6 @@ describe("formatInstalls", () => {
 		expect(formatInstalls(1500000)).toBe("1.5M");
 	});
 });
-
-// ---------------------------------------------------------------------------
-// listInstalledSkills (with temp directory)
-// ---------------------------------------------------------------------------
 
 describe("listInstalledSkills", () => {
 	const tmpAgentsDir = join(tmpdir(), `signet-test-agents-${process.pid}`);
@@ -349,7 +327,6 @@ user_invocable: true
 	});
 
 	it("handles mix of valid and invalid skill dirs", () => {
-		// Valid skill
 		const validDir = join(tmpSkillsDir, "valid-skill");
 		mkdirSync(validDir, { recursive: true });
 		writeFileSync(
@@ -358,8 +335,6 @@ user_invocable: true
 description: Valid
 ---`,
 		);
-
-		// Dir without SKILL.md
 		mkdirSync(join(tmpSkillsDir, "empty-dir"), { recursive: true });
 
 		const result = listInstalledSkills();
@@ -367,10 +342,6 @@ description: Valid
 		expect(result[0].name).toBe("valid-skill");
 	});
 });
-
-// ---------------------------------------------------------------------------
-// Route integration tests (Hono test client, backed by temp fixture)
-// ---------------------------------------------------------------------------
 
 describe("skills routes", () => {
 	const tmpAgentsDir = join(tmpdir(), `signet-route-test-${process.pid}`);
@@ -383,8 +354,6 @@ describe("skills routes", () => {
 		process.env.SIGNET_PATH = tmpAgentsDir;
 
 		mkdirSync(skillsDir, { recursive: true });
-
-		// Create a test skill in the fixture
 		const testSkillDir = join(skillsDir, "test-skill");
 		mkdirSync(testSkillDir, { recursive: true });
 		writeFileSync(
@@ -458,8 +427,6 @@ This is a test skill.`,
 		const body = await res.json();
 		expect(body.success).toBe(true);
 		expect(body.name).toBe("test-skill");
-
-		// Verify it's actually gone
 		expect(existsSync(join(skillsDir, "test-skill"))).toBe(false);
 	});
 
@@ -661,14 +628,11 @@ This is a test skill.`,
 		const prevDisableInstall = process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL;
 		process.env.SIGNET_TEST_DISABLE_SKILLS_INSTALL = "1";
 		try {
-			// This will be short-circuited in test mode, but should get past validation
-			// and not return 400.
 			const res = await app.request("/api/skills/install", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
 				body: JSON.stringify({ name: "web-search", source: "Signet-AI/signetai" }),
 			});
-			// Should not fail at validation.
 			expect(res.status).not.toBe(400);
 		} finally {
 			if (prevDisableInstall === undefined) {
@@ -687,9 +651,6 @@ This is a test skill.`,
 		});
 		expect(res.status).toBe(400);
 	});
-
-	// Regression: signet skills should appear in browse results when the
-	// bundled skills dir is resolvable (dev environment)
 	it.skipIf(!existsSync(join(__dirname, "..", "..", "..", "..", "skills")))(
 		"GET /api/skills/browse includes signet provider skills",
 		async () => {
@@ -698,9 +659,6 @@ This is a test skill.`,
 			const body = await res.json();
 			const signetSkills = body.results.filter((s: { provider: string }) => s.provider === "signet");
 			expect(signetSkills.length).toBeGreaterThan(0);
-
-			// Verify signet skills keep repo path as the install source but expose
-			// per-skill catalog keys for keyed UI rendering and compare state.
 			const catalogKeys = new Set<string>();
 			for (const skill of signetSkills) {
 				expect(skill.fullName).toBe("Signet-AI/signetai");
@@ -709,17 +667,11 @@ This is a test skill.`,
 				catalogKeys.add(skill.catalogKey);
 				expect(skill.official).toBe(true);
 			}
-
-			// Builtin skills should be marked
 			const builtins = signetSkills.filter((s: { builtin: boolean }) => s.builtin);
 			expect(builtins.length).toBeGreaterThan(0);
 		},
 	);
 });
-
-// ---------------------------------------------------------------------------
-// Install command construction (behavioral contract)
-// ---------------------------------------------------------------------------
 
 describe("install command args", () => {
 	it("constructs --skill flag for repo sources", () => {

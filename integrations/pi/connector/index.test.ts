@@ -82,14 +82,8 @@ describe("PiConnector", () => {
 
 	it("writes a portable extension with no baked-in SIGNET_PATH for the default workspace (#1015)", async () => {
 		const connector = new PiConnector();
-		// An empty basePath resolves to the default workspace join(homedir(), ".agents").
 		await connector.install("");
 		const content = readFileSync(join(tmpRoot, "agent", "extensions", "signet-pi.js"), "utf8");
-
-		// The default workspace must not be baked in as an absolute path so a
-		// synced/cloned agents directory stays valid on a machine whose home
-		// directory differs from the install host. The extension derives
-		// join(homedir(), ".agents") at runtime when SIGNET_PATH is unset.
 		expect(content).not.toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_PATH"');
 		expect(content).not.toContain(tmpRoot);
 		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL"');
@@ -185,8 +179,6 @@ describe("root build pipeline", () => {
 });
 
 describe("EXTENSION_BUNDLE integrity", () => {
-	// Pi SDK uses different event names than Oh My Pi. These prevent accidental regression
-	// to Oh My Pi's event names, which the Pi daemon does not support.
 	it("uses Pi SDK session_fork event (not Oh My Pi's session_branch)", () => {
 		expect(EXTENSION_BUNDLE).toContain("session_fork");
 		expect(EXTENSION_BUNDLE).not.toContain("session_branch");
@@ -198,8 +190,6 @@ describe("EXTENSION_BUNDLE integrity", () => {
 	});
 
 	it("wires pi-mono compat events (session_before_fork/session_before_switch)", () => {
-		// pi-mono (older monorepo fork) only emits the before-variants; the bundle
-		// must register handlers for them so fork/switch tracking works under it.
 		expect(EXTENSION_BUNDLE).toContain("session_before_fork");
 		expect(EXTENSION_BUNDLE).toContain("session_before_switch");
 	});

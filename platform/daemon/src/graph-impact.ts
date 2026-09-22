@@ -1,17 +1,5 @@
-/**
- * Graph impact analysis — walks entity_dependencies to determine
- * blast radius from a given entity.
- *
- * Used by the /api/graph/impact endpoint to group affected entities
- * by depth: WILL BREAK (1), LIKELY AFFECTED (2), MAY NEED TESTING (3+).
- */
-
 import type { ReadDb } from "./db-accessor";
 import { tableExists } from "./db-helpers";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 const DEPTH_LABELS = {
 	1: "WILL BREAK",
@@ -37,24 +25,6 @@ interface ImpactResult {
 	readonly direction: "upstream" | "downstream";
 	readonly impact: readonly ImpactLayer[];
 }
-
-// ---------------------------------------------------------------------------
-// Table detection
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Walk
-// ---------------------------------------------------------------------------
-
-/**
- * BFS walk of entity_dependencies from the given entity.
- *
- * - downstream: source_entity_id = current → collect target_entity_id
- * - upstream:   target_entity_id = current → collect source_entity_id
- *
- * Groups results by depth with descriptive labels. Respects a wall-clock
- * timeout to prevent runaway walks on dense graphs.
- */
 export function walkImpact(
 	db: ReadDb,
 	params: {
@@ -67,8 +37,6 @@ export function walkImpact(
 	const { entityId, direction, maxDepth } = params;
 	const timeout = params.timeoutMs ?? 200;
 	const deadline = Date.now() + timeout;
-
-	// Resolve entity name for the root
 	const root = db.prepare("SELECT name, entity_type FROM entities WHERE id = ?").get(entityId) as
 		| { name: string; entity_type: string }
 		| undefined;
@@ -78,8 +46,6 @@ export function walkImpact(
 	if (!tableExists(db, "entity_dependencies")) {
 		return { entityId, entityName, direction, impact: [] };
 	}
-
-	// Prepare the directional query once
 	const sql =
 		direction === "downstream"
 			? `SELECT e.id, e.name, e.entity_type

@@ -1026,9 +1026,7 @@ function extractJSONValues(text: string): readonly unknown[] {
 		try {
 			const parsed = JSON.parse(trimmed) as unknown;
 			if (isRecord(parsed) || Array.isArray(parsed)) return [parsed];
-		} catch {
-			// Fall through to embedded object extraction.
-		}
+		} catch {}
 	}
 	return extractJSONObjectStrings(text).flatMap((candidate) => {
 		try {
@@ -1079,9 +1077,7 @@ function extractGzipPayloads(data: Buffer): readonly Buffer[] {
 		try {
 			const payload = gunzipSync(data.subarray(offset), { maxOutputLength: MAX_FILE_BYTES });
 			if (payload.length <= MAX_FILE_BYTES) out.push(payload);
-		} catch {
-			// Cache blobs often contain arbitrary binary sequences; ignore invalid gzip offsets.
-		}
+		} catch {}
 	}
 	return out;
 }

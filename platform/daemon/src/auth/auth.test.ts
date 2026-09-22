@@ -12,10 +12,6 @@ import { createAuthMiddleware, requirePermission, requireRateLimit } from "./mid
 import { parseAuthConfig } from "./config";
 import type { TokenClaims, TokenRole } from "./types";
 
-// =============================================================================
-// Tokens
-// =============================================================================
-
 describe("tokens", () => {
 	const secret = generateSecret();
 
@@ -54,7 +50,6 @@ describe("tokens", () => {
 
 	test("expired token is rejected", async () => {
 		const token = createToken(secret, { sub: "u1", scope: {}, role: "agent" }, 1);
-		// wait for the 1-second TTL to lapse
 		await new Promise((r) => setTimeout(r, 1100));
 		const result = verifyToken(secret, token);
 		expect(result.authenticated).toBe(false);
@@ -114,8 +109,6 @@ describe("tokens", () => {
 		beforeEach(() => {
 			tmpDir = mkdtempSync(join(tmpdir(), "signet-auth-test-"));
 		});
-
-		// cleanup is best-effort; test dirs are small and tmpdir is ephemeral
 		test("creates file when missing and returns a buffer", () => {
 			const path = join(tmpDir, "sub", "secret");
 			const buf = loadOrCreateSecret(path);
@@ -132,10 +125,6 @@ describe("tokens", () => {
 	});
 });
 
-// =============================================================================
-// Password login hashes
-// =============================================================================
-
 describe("password hashes", () => {
 	test("hashPassword creates a verifiable pbkdf2 hash", () => {
 		const hash = hashPassword("correct horse battery staple", 10_000);
@@ -149,10 +138,6 @@ describe("password hashes", () => {
 		expect(verifyPasswordHash("password", "pbkdf2-sha256$1$salt$hash")).toBe(false);
 	});
 });
-
-// =============================================================================
-// Policy
-// =============================================================================
 
 function makeClaims(role: TokenRole, scope = {}): TokenClaims {
 	const now = Math.floor(Date.now() / 1000);
@@ -244,10 +229,8 @@ describe("policy - checkPermission", () => {
 	});
 
 	test("hybrid mode with claims delegates same logic as team", () => {
-		// readonly should be denied 'remember' in hybrid, same as team
 		const d = checkPermission(makeClaims("readonly"), "remember", "hybrid");
 		expect(d.allowed).toBe(false);
-		// admin should be allowed everything
 		const a = checkPermission(makeClaims("admin"), "admin", "hybrid");
 		expect(a.allowed).toBe(true);
 	});
@@ -291,8 +274,6 @@ describe("policy - checkScope", () => {
 	test("empty scope on non-admin token is allowed with deprecation warning", () => {
 		const claims = makeClaims("agent", {});
 		const d = checkScope(claims, { project: "anything" }, "team");
-		// Currently allowed for backwards compatibility — will be denied
-		// in a future release after operators rotate tokens.
 		expect(d.allowed).toBe(true);
 	});
 
@@ -315,16 +296,11 @@ describe("policy - checkScope", () => {
 	});
 
 	test("scope check passes when target has no matching dimension", () => {
-		// token scoped to project-a, target has no project field
 		const claims = makeClaims("agent", { project: "proj-a" });
 		const d = checkScope(claims, {}, "team");
 		expect(d.allowed).toBe(true);
 	});
 });
-
-// =============================================================================
-// Rate Limiter
-// =============================================================================
 
 describe("AuthRateLimiter", () => {
 	let limiter: AuthRateLimiter;
@@ -392,19 +368,13 @@ describe("AuthRateLimiter", () => {
 		const shortLimiter = new AuthRateLimiter(50, 2);
 		shortLimiter.record("k");
 		shortLimiter.record("k");
-		// exhausted
 		expect(shortLimiter.check("k").allowed).toBe(false);
-		// wait for window to expire
 		await new Promise((r) => setTimeout(r, 80));
 		const result = shortLimiter.check("k");
 		expect(result.allowed).toBe(true);
 		expect(result.remaining).toBe(2);
 	});
 });
-
-// =============================================================================
-// Middleware integration tests
-// =============================================================================
 
 const testLoginConfig = {
 	password: { username: "admin", passwordHash: null },
@@ -471,8 +441,6 @@ describe("middleware - createAuthMiddleware", () => {
 		app.get("/", (c) => c.text("dashboard"));
 		app.get("/assets/app.js", (c) => c.text("asset"));
 		app.get("/api/auth/methods", (c) => c.json({ ok: true }));
-		// /api/mode is the unauthenticated environment probe the dashboard
-		// uses to detect a real daemon before any token exchange (issue #1001).
 		app.get("/api/mode", (c) => c.json({ mode: "team", requiresAuth: true }));
 		expect((await app.request(new Request("http://localhost/"))).status).toBe(200);
 		expect((await app.request(new Request("http://localhost/assets/app.js"))).status).toBe(200);
@@ -515,8 +483,6 @@ describe("middleware - createAuthMiddleware", () => {
 
 	test("hybrid mode: Host header alone does not bypass auth (fail closed)", async () => {
 		const app = makeTestApp(createAuthMiddleware(hybridConfig, secret));
-		// Host header is spoofable — isLocalhost must fail closed when
-		// TCP socket info is unavailable
 		const res = await app.request(
 			new Request("http://localhost/test", {
 				headers: { host: "localhost:3850" },
@@ -623,9 +589,7 @@ describe("middleware - requireRateLimit", () => {
 		const app = makeRateLimitApp(5000, 1);
 		const token = createToken(secret, { sub: "u2", scope: {}, role: "agent" }, 60);
 		const headers = bearerHeader(token);
-		// first request consumes the only slot
 		await app.request(new Request("http://localhost/test", { headers }));
-		// second should be rate limited
 		const res = await app.request(new Request("http://localhost/test", { headers }));
 		expect(res.status).toBe(429);
 		expect(res.headers.get("retry-after")).not.toBeNull();
@@ -637,18 +601,11 @@ describe("middleware - requireRateLimit", () => {
 		app.use("*", createAuthMiddleware(localConfig, null));
 		app.use("*", requireRateLimit("testOp", limiter, localConfig));
 		app.get("/test", (c) => c.json({ ok: true }));
-
-		// exhaust what would be the limit
 		await app.request(new Request("http://localhost/test"));
 		const res = await app.request(new Request("http://localhost/test"));
-		// local mode should still return 200
 		expect(res.status).toBe(200);
 	});
 });
-
-// =============================================================================
-// Config
-// =============================================================================
 
 describe("parseAuthConfig", () => {
 	const agentsDir = "/home/test/.agents";
@@ -726,10 +683,6 @@ describe("parseAuthConfig", () => {
 	});
 });
 
-// =============================================================================
-// Auth routes
-// =============================================================================
-
 describe("auth routes - password dashboard login", () => {
 	test("login is open in team mode and issues an admin session token", async () => {
 		const tmpDir = mkdtempSync(join(tmpdir(), "signet-auth-login-test-"));
@@ -776,16 +729,11 @@ describe("auth routes - password dashboard login", () => {
 	});
 });
 
-// =============================================================================
-// Security hardening
-// =============================================================================
-
 describe("security hardening", () => {
 	const secret = generateSecret();
 
 	describe("token claims validation", () => {
 		test("rejects token with non-string sub", () => {
-			// Craft a token with numeric sub by manually building payload
 			const payload = JSON.stringify({
 				sub: 12345,
 				scope: {},
@@ -887,16 +835,11 @@ describe("security hardening", () => {
 			app.get("/test", (c) => c.json({ ok: true }));
 
 			const token = createToken(secret, { sub: "u", scope: {}, role: "admin" }, 60);
-
-			// First request exhausts the limit for sub "u"
 			await app.request(
 				new Request("http://localhost/test", {
 					headers: { Authorization: `Bearer ${token}` },
 				}),
 			);
-
-			// Second request with different x-signet-actor should still be limited
-			// because rate key uses claims.sub, not the header
 			const res = await app.request(
 				new Request("http://localhost/test", {
 					headers: {

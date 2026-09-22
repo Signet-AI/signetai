@@ -1,5 +1,3 @@
-/** MCP Auto-Probe — discovers tools/resources and generates app tray entries. */
-
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -17,16 +15,9 @@ import { DEFAULT_APP_SIZE, resolveDefaultBasePath } from "@signet/core";
 import { createEvent, eventBus } from "./event-bus.js";
 import { logger } from "./logger.js";
 import { withMarketplaceMcpPermit, withMarketplaceMcpTimeout } from "./marketplace-client-budget.js";
-// Note: validatePublicHttpUrl from url-validation.ts is used by the install
-// endpoint (server-side fetch = real SSRF risk). Manifest ui/icon fields are
-// client-side (iframe/img) so they only need scheme validation, not address blocking.
 import type { InstalledMarketplaceMcpServer } from "./routes/marketplace.js";
 import { getSecret } from "./secrets.js";
 import { deleteCachedWidget, loadCachedWidget } from "./widget-gen.js";
-
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
 
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
@@ -46,10 +37,6 @@ function ensureManifestsDir(): void {
 		mkdirSync(dir, { recursive: true });
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Secret resolution (reuses marketplace pattern)
-// ---------------------------------------------------------------------------
 
 const SECRET_REF_PREFIX = "secret://";
 
@@ -71,10 +58,6 @@ async function resolveSecretReferences(values: Readonly<Record<string, string>>)
 	}
 	return resolved;
 }
-
-// ---------------------------------------------------------------------------
-// MCP Client connection (follows marketplace.ts pattern exactly)
-// ---------------------------------------------------------------------------
 
 async function withProbeClient<T>(
 	server: InstalledMarketplaceMcpServer,
@@ -131,22 +114,11 @@ async function withProbeClient<T>(
 	});
 }
 
-// ---------------------------------------------------------------------------
-// Manifest parsing
-// ---------------------------------------------------------------------------
-
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-
-/**
- * Extract a SignetAppManifest from server metadata's `signet` block.
- * Returns null if no valid signet block is found.
- */
 export function parseManifest(serverMetadata: unknown, serverName: string): SignetAppManifest | null {
 	if (!isRecord(serverMetadata)) return null;
-
-	// Look for `signet` or `signet.app` block
 	const signetBlock = isRecord(serverMetadata.signet)
 		? serverMetadata.signet
 		: isRecord(serverMetadata["signet.app"])
@@ -154,13 +126,8 @@ export function parseManifest(serverMetadata: unknown, serverName: string): Sign
 			: null;
 
 	if (!signetBlock) return null;
-
-	// Name is required per spec
 	const name =
 		typeof signetBlock.name === "string" && signetBlock.name.trim().length > 0 ? signetBlock.name.trim() : serverName;
-
-	// Validate icon URL scheme (http/https only).
-	// Icon loads client-side (<img src>), so private addresses are fine — MCP servers are typically local.
 	let validatedIcon: string | undefined;
 	if (typeof signetBlock.icon === "string" && signetBlock.icon.trim().length > 0) {
 		try {
@@ -178,10 +145,6 @@ export function parseManifest(serverMetadata: unknown, serverName: string): Sign
 	const manifest: SignetAppManifest = {
 		name,
 		...(validatedIcon ? { icon: validatedIcon } : {}),
-		// Validate ui URL scheme (http/https only).
-		// The ui field loads client-side (iframe src), so localhost/private addresses are
-		// expected and correct — MCP servers typically run locally (e.g. http://localhost:3461).
-		// Only block non-HTTP schemes (javascript:, data:, etc.) which are XSS vectors.
 		...(() => {
 			if (typeof signetBlock.ui === "string" && signetBlock.ui.trim().length > 0) {
 				try {
@@ -228,8 +191,6 @@ export function parseManifest(serverMetadata: unknown, serverName: string): Sign
 				}
 			: {}),
 		...(typeof signetBlock.dock === "boolean" ? { dock: signetBlock.dock } : {}),
-		// Pre-built HTML widget content (Signet schema).
-		// Validated: must be a string, no external script sources allowed.
 		...(() => {
 			if (typeof signetBlock.html === "string" && signetBlock.html.trim().length > 0) {
 				const raw = signetBlock.html.trim();
@@ -245,15 +206,6 @@ export function parseManifest(serverMetadata: unknown, serverName: string): Sign
 
 	return manifest;
 }
-
-// ---------------------------------------------------------------------------
-// Auto-card generation
-// ---------------------------------------------------------------------------
-
-/**
- * Generate a fallback auto-card manifest from discovered tools and resources.
- * This gives every MCP server dashboard presence on install.
- */
 export function generateAutoCard(
 	tools: readonly AutoCardToolAction[],
 	resources: readonly AutoCardResource[],
@@ -271,25 +223,11 @@ export function generateAutoCard(
 		defaultSize: DEFAULT_APP_SIZE,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Server probing
-// ---------------------------------------------------------------------------
-
-/**
- * Probe an installed MCP server to discover its tools, resources, and
- * any declared Signet manifest.
- *
- * This is called on install. If the server is unreachable, returns a
- * failed result with an auto-card containing zero tools — the server
- * can be re-probed when it comes online.
- */
 export async function probeServer(server: InstalledMarketplaceMcpServer): Promise<McpProbeResult> {
 	const now = new Date().toISOString();
 
 	try {
 		const probeData = await withProbeClient(server, async (client) => {
-			// 1. List tools
 			const toolsResult = (await client.listTools()) as {
 				tools?: Array<{
 					name: string;
@@ -299,8 +237,6 @@ export async function probeServer(server: InstalledMarketplaceMcpServer): Promis
 				}>;
 			};
 			const rawTools = toolsResult.tools ?? [];
-
-			// 2. List resources (may not be supported by all servers)
 			let rawResources: Array<{
 				uri: string;
 				name: string;
@@ -318,26 +254,17 @@ export async function probeServer(server: InstalledMarketplaceMcpServer): Promis
 				};
 				rawResources = resourcesResult.resources ?? [];
 			} catch {
-				// Resources not supported — that's fine
 				logger.debug("probe", `Server ${server.id} does not support listResources`);
 			}
-
-			// 3. Try to get server info/metadata for signet block
 			let serverMetadata: unknown = null;
 			try {
-				// The MCP SDK client may expose server info after connection
 				const serverInfo = (client as unknown as { getServerVersion?: () => unknown }).getServerVersion?.();
 				if (isRecord(serverInfo)) {
 					serverMetadata = serverInfo;
 				}
-			} catch {
-				// No server metadata available
-			}
-
-			// Also check if the server exposes metadata via a resource
+			} catch {}
 			if (!serverMetadata) {
 				try {
-					// Convention: some servers expose metadata at signet://manifest
 					const metaResource = rawResources.find(
 						(r) => r.uri === "signet://manifest" || r.uri === "signet://app" || r.name === "signet-manifest",
 					);
@@ -348,21 +275,15 @@ export async function probeServer(server: InstalledMarketplaceMcpServer): Promis
 							if (typeof firstContent?.text === "string") {
 								try {
 									serverMetadata = JSON.parse(firstContent.text);
-								} catch {
-									// Not valid JSON
-								}
+								} catch {}
 							}
 						}
 					}
-				} catch {
-					// Resource read failed — that's fine
-				}
+				} catch {}
 			}
 
 			return { rawTools, rawResources, serverMetadata };
 		});
-
-		// Parse tools into AutoCardToolAction format
 		const tools: AutoCardToolAction[] = probeData.rawTools
 			.filter((t) => typeof t.name === "string" && t.name.length > 0)
 			.map((t) => ({
@@ -371,8 +292,6 @@ export async function probeServer(server: InstalledMarketplaceMcpServer): Promis
 				readOnly: t.annotations?.readOnlyHint === true,
 				inputSchema: t.inputSchema ?? {},
 			}));
-
-		// Parse resources into AutoCardResource format
 		const resources: AutoCardResource[] = probeData.rawResources
 			.filter((r) => typeof r.uri === "string" && r.uri.length > 0)
 			.map((r) => ({
@@ -381,11 +300,7 @@ export async function probeServer(server: InstalledMarketplaceMcpServer): Promis
 				...(r.description ? { description: r.description } : {}),
 				...(r.mimeType ? { mimeType: r.mimeType } : {}),
 			}));
-
-		// Try to extract declared manifest
 		const declaredManifest = parseManifest(probeData.serverMetadata, server.name);
-
-		// Always generate auto-card (used as fallback or when no UI)
 		const autoCard = generateAutoCard(tools, resources, server.name);
 
 		const hasAppResources = resources.some((r) => r.uri.startsWith("app://"));
@@ -408,10 +323,6 @@ export async function probeServer(server: InstalledMarketplaceMcpServer): Promis
 	} catch (error) {
 		const msg = error instanceof Error ? error.message : String(error);
 		logger.warn("probe", `Failed to probe server ${server.id}: ${msg}`);
-
-		// Return a failed result with empty auto-card
-		// Per spec recommendation: install with auto-card only,
-		// show "reconnecting" state, auto-upgrade when server appears
 		return {
 			serverId: server.id,
 			ok: false,
@@ -424,29 +335,15 @@ export async function probeServer(server: InstalledMarketplaceMcpServer): Promis
 		};
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Persistence — probe results and app tray
-// ---------------------------------------------------------------------------
-
-/**
- * Store a probe result to disk and update the app tray index.
- */
 export function storeProbeResult(result: McpProbeResult): void {
 	ensureManifestsDir();
-
-	// Write per-server probe result
 	const manifestPath = join(getManifestsDir(), `${result.serverId}.json`);
 	writeFileSync(manifestPath, JSON.stringify(result, null, 2));
-
-	// Update app tray index
 	const tray = loadAppTray();
 	const now = new Date().toISOString();
 
 	const existingIndex = tray.findIndex((e) => e.id === result.serverId);
 	const oldEntry = existingIndex >= 0 ? tray[existingIndex] : null;
-
-	// Build the effective manifest (declared takes precedence, auto-card is fallback)
 	const effectiveManifest: SignetAppManifest = result.declaredManifest ?? {
 		name: result.autoCard.name,
 		...(result.autoCard.icon ? { icon: result.autoCard.icon } : {}),
@@ -478,8 +375,6 @@ export function storeProbeResult(result: McpProbeResult): void {
 		state: entry.state,
 		toolCount: result.toolCount,
 	});
-
-	// Invalidate cached widget if the tool set changed
 	if (oldEntry) {
 		const oldTools = new Set(oldEntry.autoCard.tools.map((t) => t.name));
 		const newTools = new Set(result.autoCard.tools.map((t) => t.name));
@@ -491,10 +386,6 @@ export function storeProbeResult(result: McpProbeResult): void {
 		}
 	}
 }
-
-/**
- * Load the app tray index from disk.
- */
 export function loadAppTray(): AppTrayEntry[] {
 	const path = getAppTrayPath();
 	if (!existsSync(path)) return [];
@@ -513,10 +404,6 @@ export function loadAppTray(): AppTrayEntry[] {
 		return [];
 	}
 }
-
-/**
- * Load a stored probe result for a specific server.
- */
 export function loadProbeResult(serverId: string): McpProbeResult | null {
 	const path = join(getManifestsDir(), `${serverId}.json`);
 	if (!existsSync(path)) return null;
@@ -529,13 +416,7 @@ export function loadProbeResult(serverId: string): McpProbeResult | null {
 		return null;
 	}
 }
-
-/**
- * Remove a server's probe result and app tray entry.
- * Called when a server is uninstalled.
- */
 export function removeProbeResult(serverId: string): void {
-	// Remove probe result file
 	const manifestPath = join(getManifestsDir(), `${serverId}.json`);
 	try {
 		if (existsSync(manifestPath)) {
@@ -544,18 +425,12 @@ export function removeProbeResult(serverId: string): void {
 	} catch {
 		logger.warn("probe", `Failed to remove probe result for ${serverId}`);
 	}
-
-	// Remove from app tray
 	const tray = loadAppTray();
 	const filtered = tray.filter((e) => e.id !== serverId);
 	if (filtered.length !== tray.length) {
 		writeFileSync(getAppTrayPath(), JSON.stringify(filtered, null, 2));
 	}
 }
-
-/**
- * Re-probe a server. Useful when a previously unreachable server comes online.
- */
 export async function reprobeServer(server: InstalledMarketplaceMcpServer): Promise<McpProbeResult> {
 	const result = await probeServer(server);
 	storeProbeResult(result);

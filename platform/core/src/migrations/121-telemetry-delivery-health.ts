@@ -1,12 +1,3 @@
-/**
- * Migration 121: durable telemetry delivery health (#1279).
- *
- * The event queue already survives daemon restarts, but delivery outcomes did
- * not. Keep the queue ownership columns intact and add only bounded metadata
- * needed to explain whether an empty remote feed means daemon silence or a
- * collector that is waiting to retry.
- */
-
 import type { MigrationDb } from "./contract";
 
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {

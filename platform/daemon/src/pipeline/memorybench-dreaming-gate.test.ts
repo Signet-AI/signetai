@@ -167,9 +167,7 @@ function resolveLocalImport(source: URL, specifier: string): URL | null {
 	for (const candidate of candidates) {
 		try {
 			if (statSync(candidate).isFile()) return candidate;
-		} catch {
-			// The import may target a package or a non-TypeScript asset.
-		}
+		} catch {}
 	}
 	return null;
 }
@@ -417,5 +415,5 @@ describe("MemoryBench Dreaming gate", () => {
 			else process.env.SIGNET_PATH = previousSignetPath;
 			rmSync(dir, { recursive: true, force: true });
 		}
-	}, 30_000); // Includes owner startup (15s deadline), capture, and awaited shutdown.
+	}, 30_000);
 });

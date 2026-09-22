@@ -16,8 +16,6 @@ const LEGEND = [
 	{ color: "#22d3ee", label: "evidence" },
 	{ color: "#38bdf8", label: "source" },
 ] as const;
-
-/** Matches the constellation route's entity limit clamp. */
 const ENTITY_LIMIT_MAX = 1000;
 
 interface EntityDetail {
@@ -62,13 +60,6 @@ function provenanceLabel(
 	if (sourceId) return `Source · ${shorten(sourceId, 30)}`;
 	return null;
 }
-
-/**
- * Walrus-style 3D knowledge constellation — the mockup's graph view, driven
- * by the live daemon constellation instead of static demo data. The scene
- * itself is framework-free (src/lib/graph-scene.ts) and lazily imported so
- * the three.js bundle only loads when this view is opened.
- */
 export function GraphView() {
 	const [entityLimit, setEntityLimit] = useState(48);
 	const graphQuery = useAsync(() => api.getKnowledgeConstellation(entityLimit, Math.min(2000, entityLimit * 4)), {
@@ -151,7 +142,6 @@ export function GraphView() {
 				label: entity.name,
 				kind: entityKind,
 				cluster: entity.id,
-				// sqrt-scaled mention weight — gates hub labels in dense scenes.
 				weight: Math.sqrt(entity.mentions / maxMentions),
 				metric: `${entityKind} · ${entity.entityType} · ${entity.mentions.toLocaleString()} mentions`,
 			});
@@ -294,10 +284,6 @@ export function GraphView() {
 		}
 		return { nodes, edges };
 	}, [graphQuery.data, sources]);
-
-	// Data signature: rebuild the scene only when the rendered set actually
-	// changes. Guarding on the limit alone races the async refetch (the
-	// effect would rebuild with stale data and then skip the fresh one).
 	const dataSig = useMemo(() => {
 		const entities = graphQuery.data?.entities ?? [];
 		let h = entityLimit * 31 + entities.length + (sources?.length ?? 0) * 7;
@@ -354,10 +340,6 @@ export function GraphView() {
 		}
 		return h;
 	}, [graphQuery.data, sources, entityLimit]);
-
-	// Mount the 3D scene once real data is available; rebuild when the
-	// rendered set changes (density slider, genuinely new entities).
-	// Identical polls keep the existing scene so the camera never jumps.
 	useEffect(() => {
 		const stage = stageRef.current;
 		if (!stage || sceneData.nodes.length === 0) return;
@@ -373,7 +355,6 @@ export function GraphView() {
 				if (cancelled || sceneRef.current || !stageRef.current) return;
 				sceneRef.current = createGraphScene(stageRef.current, sceneData);
 				builtSigRef.current = dataSig;
-				// Rebuilt: the label falls back to the measured percentage.
 				setSliderPct(null);
 			})
 			.catch((err: unknown) => {
@@ -384,8 +365,6 @@ export function GraphView() {
 			cancelled = true;
 		};
 	}, [sceneData, dataSig]);
-
-	// Dispose on unmount (view switch).
 	useEffect(
 		() => () => {
 			if (densityTimerRef.current) clearTimeout(densityTimerRef.current);
@@ -394,11 +373,6 @@ export function GraphView() {
 		},
 		[],
 	);
-
-	// Density slider: percent of total graph nodes shown. The slider follows
-	// the measured scene size; dragging debounces into a new entity limit.
-	// The endpoint caps at 300 entities, so the range ends at the percentage
-	// that many entities would actually occupy — no dead travel.
 	const totalNodes = stats
 		? stats.entityCount +
 			stats.aspectCount +
@@ -471,7 +445,7 @@ export function GraphView() {
 
 	return (
 		<div className="graph-view-root">
-			{/* floating HUD telemetry overlay */}
+			{}
 			<div className="graph-hud">
 				<span>
 					<b>{sceneData.nodes.length.toLocaleString()}</b> nodes
@@ -501,7 +475,7 @@ export function GraphView() {
 				</label>
 			</div>
 
-			{/* floating legend gear + popover */}
+			{}
 			<button
 				type="button"
 				className="graph-legend-btn"
@@ -532,7 +506,7 @@ export function GraphView() {
 				))}
 			</div>
 
-			{/* 3D stage — the scene appends its canvas here */}
+			{}
 			<div ref={stageRef} className="graph-stage" />
 			{graphQuery.loading && (
 				<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
@@ -550,7 +524,7 @@ export function GraphView() {
 				</span>
 			)}
 
-			{/* floating glass response drawer */}
+			{}
 			<div className={cn("graph-response", responded && "show")}>
 				<div className="gr-head">
 					<span className="gr-avatar">
@@ -683,7 +657,7 @@ export function GraphView() {
 				</div>
 			</div>
 
-			{/* authoritative glass command dock */}
+			{}
 			<form
 				className={cn("graph-dock", responded && "responded")}
 				onSubmit={(event) => {

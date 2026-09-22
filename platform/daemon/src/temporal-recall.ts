@@ -327,11 +327,6 @@ export function parseTemporalRecallIntent(params: {
 		facets: normalizeFacets(params.time?.facets),
 	};
 }
-
-// Date-range interpretation remains exclusively in resolveTemporalRecall.
-// This detector is intentionally limited to unambiguous recency language.
-// Bare "now" is excluded because it commonly appears in otherwise timeless
-// conversational queries without asking recall to prefer newer memories.
 const FRESHNESS_TERM_PATTERN = /\b(current|currently|latest|recent|recently|today|this week|this month)\b/i;
 
 export function hasFreshnessIntent(query: string): boolean {
@@ -763,7 +758,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		return rows;
-	}, "temporal-recall.ts:442");
+	}, "temporal-recall.ts:437");
 }
 
 export function resolveTemporalRecall(params: TemporalRecallParams): TemporalRecallResult {

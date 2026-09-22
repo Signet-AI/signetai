@@ -1,12 +1,3 @@
-/**
- * Bounded maintenance operations executed by the database owner.
- *
- * The daemon only submits serializable SQL jobs. Each FTS chunk is a separate
- * owner transaction and advances a durable keyset checkpoint in the same
- * transaction as the index writes. If the owner dies, the last committed
- * checkpoint is the resume point and a partially applied chunk is rolled back.
- */
-
 import { randomUUID } from "node:crypto";
 import {
 	DbOwnerDeadlineError,
@@ -44,27 +35,16 @@ import type { DreamingSurprisalSelection } from "./pipeline/dreaming-surprisal";
 export interface DbOwnerMaintenanceOptions {
 	readonly deadlineMs?: number;
 	readonly estimatedWorkUnits?: number;
-	/** Abort queued or active maintenance before its next owner commit. */
 	readonly signal?: AbortSignal;
-	/** Verification maintenance is admitted while application writes are blocked. */
 	readonly lane?: "maintenance" | "verify";
 	readonly onOwnerMetrics?: (metrics: DbOwnerMaintenanceMetrics) => void | Promise<void>;
-	/** Called when the owner worker has emitted its terminal result. */
 	readonly onOwnerJobSettled?: () => void | Promise<void>;
-	/**
-	 * Keep a deadline-abandoned synchronous job as the caller's completion fence.
-	 * Queued jobs resolve their metrics without running; dispatched jobs resolve
-	 * after the owner emits its terminal result.
-	 */
 	readonly waitForOwnerCompletionOnDeadline?: boolean;
-	/** Called when admission rejects before an owner job is created. */
 	readonly onOwnerJobAdmissionFailure?: (error: unknown) => void;
 }
 
 export interface DbOwnerMaintenanceMetrics {
-	/** Time admitted in the daemon queue before the owner child started work. */
 	readonly queueAdmissionMs: number;
-	/** Execution time measured inside the owner child process. */
 	readonly ownerExecutionMs: number;
 }
 
@@ -97,8 +77,6 @@ async function runOwnerJob<Result>(
 ): Promise<Result> {
 	let handle: DbOwnerJobHandle<Result>;
 	try {
-		// Integrity checks and their durable checkpoints are the recovery path
-		// that must remain usable while application writes are fail-closed.
 		const effectiveLane = options.lane ?? (operation.startsWith("integrity.") ? "verify" : lane);
 		handle = owner.submit<Result>(request, submitOptions(operation, effectiveLane, options));
 	} catch (error) {
@@ -109,17 +87,12 @@ async function runOwnerJob<Result>(
 	const notifySettled = (): void => {
 		if (notified) return;
 		notified = true;
-		void Promise.resolve(options.onOwnerJobSettled?.()).catch(() => {
-			// Completion notification is advisory and must not alter the owner result.
-		});
+		void Promise.resolve(options.onOwnerJobSettled?.()).catch(() => {});
 	};
 	void handle.metrics?.then(notifySettled, () => {
-		// A dead owner has no worker left to wait for.
 		notifySettled();
 	});
 	void handle.result.catch((error: unknown) => {
-		// Deadline rejection abandons the client promise but not a dispatched
-		// synchronous worker; its metrics promise remains the completion fence.
 		if (!(error instanceof DbOwnerDeadlineError)) notifySettled();
 	});
 	const onAbort = (): void => handle.cancel();
@@ -133,9 +106,7 @@ async function runOwnerJob<Result>(
 			result = await handle.result;
 		} catch (error) {
 			if (error instanceof DbOwnerDeadlineError && options.waitForOwnerCompletionOnDeadline === true) {
-				await handle.metrics?.catch(() => {
-					// Preserve the original deadline error if owner metrics fail too.
-				});
+				await handle.metrics?.catch(() => {});
 			}
 			throw error;
 		}
@@ -167,8 +138,6 @@ async function startOwnerWithinDeadline(owner: DbOwnerClient, deadlineAt: number
 		if (timer !== undefined) clearTimeout(timer);
 	}
 }
-
-/** Run an idempotent maintenance request once more after an owner crash. */
 export async function runOwnerMaintenanceWithRetry<Result>(
 	owner: DbOwnerClient,
 	request: DbOwnerRequest,
@@ -221,8 +190,6 @@ export async function ownerQueryOne<Row extends object>(
 	);
 	return result ?? undefined;
 }
-
-/** Run a returning statement on the owner's write connection. */
 export async function ownerWriteQueryOne<Row extends object>(
 	owner: DbOwnerClient,
 	operation: string,
@@ -252,8 +219,6 @@ export async function ownerTransaction(
 		options,
 	);
 }
-
-/** Execute a bounded write batch with optional compare-and-set preconditions. */
 export async function ownerBatch(
 	owner: DbOwnerClient,
 	operation: string,
@@ -268,8 +233,6 @@ export async function ownerBatch(
 		options,
 	);
 }
-
-/** Execute one autocommit write statement through the owner. */
 export async function ownerRun(
 	owner: DbOwnerClient,
 	operation: string,
@@ -406,13 +369,9 @@ export interface FtsBackfillOptions {
 	readonly checkpointKey?: string;
 	readonly chunkSize?: number;
 	readonly deadlineMs?: number;
-	/** Stop after this many chunks. Omit to drain within the run budget. */
 	readonly maxChunks?: number;
-	/** Maximum wall-clock time for the complete backfill invocation. */
 	readonly runBudgetMs?: number;
-	/** Maximum estimated owner work units for the complete invocation. */
 	readonly maxWorkUnits?: number;
-	/** Cooperatively stop before submitting another chunk. */
 	readonly signal?: AbortSignal;
 	readonly onChunk?: (progress: FtsBackfillProgress) => void | Promise<void>;
 	readonly audit?: FtsRepairAudit;
@@ -969,8 +928,6 @@ export function submitRegisteredDbOwnerJob<Result>(
 		throw error;
 	}
 }
-
-/** Clear the registry before awaiting close so no caller can use a retiring owner. */
 export async function closeRegisteredDbOwnerMaintenance(): Promise<void> {
 	const inFlight = registeredMaintenanceClose;
 	if (inFlight !== null) {

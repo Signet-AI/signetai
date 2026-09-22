@@ -162,7 +162,6 @@ test("sealing batches chunk reads across the owner boundary while preserving exa
 	try {
 		const sealed = await sealTranscriptUpload(scope);
 		expect(sealed.content_hash).toBe(expected.digest("hex"));
-		// Bounded batch reads, two metadata reads, one sealing transaction.
 		expect(calls.mock.calls.length).toBe(Math.ceil((bytes.length * count) / TRANSCRIPT_READ_BYTES) + 3);
 	} finally {
 		calls.mockRestore();
@@ -546,7 +545,6 @@ test("export preserves array messages, filters scope and streams records larger 
 		{ role: "tool", content: `  exact\n${"x".repeat(1100 * 1024)}` },
 		{ role: "unknown", content: "" },
 	];
-	// Fill the row in bounded owner writes, as live transcript capture does.
 	await dbOwnerTransaction(
 		[
 			{

@@ -17,11 +17,6 @@ import {
 } from "./hook";
 
 const prevLog = console.log;
-
-// process.exit mock: the postAction hook (hook.ts lines 136-138) calls
-// process.exit(0) after every hook subcommand. This mock prevents the real
-// process.exit from terminating the test runner during integration tests
-// that exercise program.parseAsync, while letting new tests verify exit codes.
 const hookExitCodes: number[] = [];
 const originalExit = process.exit;
 
@@ -787,9 +782,6 @@ describe("postAction exit behavior", () => {
 		});
 
 		await program.parseAsync(["node", "test", "hook", "session-end", "-H", "test-harness"]);
-
-		// preAction calls exit(0), then action runs and postAction also calls exit(0).
-		// With the mock all calls fire — but they're all code 0.
 		expect(hookExitCodes.length).toBeGreaterThanOrEqual(1);
 		for (const code of hookExitCodes) {
 			expect(code).toBe(0);
@@ -810,10 +802,6 @@ describe("postAction exit behavior", () => {
 		});
 
 		await program.parseAsync(["node", "test", "hook", "session-start", "-H", "test-harness"]);
-
-		// Handler calls exit(1) for data.error, then postAction fires exit(0).
-		// With the mock both land — the first call proves the handler's exit
-		// code is preserved and not preempted by postAction.
 		expect(hookExitCodes.length).toBeGreaterThanOrEqual(1);
 		expect(hookExitCodes[0]).toBe(1);
 	});

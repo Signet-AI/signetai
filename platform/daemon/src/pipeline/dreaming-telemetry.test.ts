@@ -1,9 +1,3 @@
-/**
- * Regression test: dreaming pass token usage must reach the telemetry
- * pipeline (dreaming.pass) so dreaming economics show up in PostHog — the
- * local dreaming_passes table alone was invisible to analytics.
- */
-
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";

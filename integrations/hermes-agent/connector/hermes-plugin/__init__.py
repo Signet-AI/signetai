@@ -58,10 +58,6 @@ def _strip_internal_memory_context(value: str) -> str:
     return _INTERNAL_MEMORY_CLOSE_RE.sub("", _INTERNAL_MEMORY_BLOCK_RE.sub("", value))
 
 
-# ---------------------------------------------------------------------------
-# Tool schemas
-# ---------------------------------------------------------------------------
-
 MEMORY_SEARCH_SCHEMA = {
     "name": "memory_search",
     "description": (
@@ -117,10 +113,6 @@ MEMORY_SEARCH_SCHEMA = {
 }
 
 SESSION_SEARCH_SCHEMA = {
-    # Hermes reserves `session_search` as a built-in core tool name;
-    # registering under that name would be silently dropped by
-    # `MemoryManager.add_provider`. The Signet provider exposes the
-    # transcript-search tool under the `signet_` namespace instead.
     "name": "signet_session_search",
     "description": "Search active or completed Signet session transcripts.",
     "parameters": {
@@ -336,23 +328,16 @@ def _resolve_agent_workspace(agent_id: str, kwargs: Dict[str, Any]) -> str:
     return str(Path(str(fallback)).expanduser())
 
 
-# ---------------------------------------------------------------------------
-# MemoryProvider implementation
-# ---------------------------------------------------------------------------
-
 class SignetMemoryProvider(MemoryProvider):
     """Signet persistent memory with hybrid search and knowledge graph."""
 
     def __init__(self):
-        self._client = None  # SignetClient
+        self._client = None
         self._agent_id = ""
         self._session_key = ""
         self._project = ""
         self._inject_cache = ""
         self._inject_lock = threading.Lock()
-        # Session-start dynamic context is kept separate from the ordinary
-        # per-turn result. queue_prefetch() clears the latter before starting
-        # a new recall, but must not erase the first API-only context block.
         self._session_prefetch_result = ""
         self._prefetch_result = ""
         self._notification_result = ""
@@ -367,13 +352,9 @@ class SignetMemoryProvider(MemoryProvider):
         self._identity: Optional[Dict[str, Any]] = None
         self._warnings: List[str] = []
         self._session_initialized = False
-        # Checkpoint: extract mid-session every N turns
         _CHECKPOINT_INTERVAL = 30
         self._checkpoint_interval = _CHECKPOINT_INTERVAL
         self._last_checkpoint_turn = 0
-        # Hermes calls on_memory_write once per committed operation, including
-        # once for each operation in an atomic batch. Keep one FIFO worker so
-        # replace/remove cannot overtake the add that established their target.
         self._mirror_queue: Queue = Queue()
         self._mirror_worker: Optional[threading.Thread] = None
         self._mirror_state_lock = threading.Lock()
@@ -435,24 +416,17 @@ class SignetMemoryProvider(MemoryProvider):
 
         agent_id = os.environ.get("SIGNET_AGENT_ID", "").strip()
         if agent_id == "hermes-agent":
-            # The harness name is provenance, never an agent scope. A stale
-            # value from an older connector install is healed by letting the
-            # daemon resolve the workspace's configured agent instead.
             logger.warning(
                 "SIGNET_AGENT_ID='hermes-agent' is the harness name, not an agent scope; "
                 "the daemon's configured agent will be used instead."
             )
             agent_id = ""
         if not agent_id:
-            # No explicit agent id: the daemon resolves its configured agent
-            # (its own SIGNET_AGENT_ID, or 'default' for the default workspace).
             logger.debug("SIGNET_AGENT_ID is not set; the daemon's configured agent scope applies.")
 
         self._agent_id = agent_id
         with self._mirror_state_lock:
             self._mirror_shutdown = False
-
-        # Skip for cron/flush contexts — no memory injection needed
         agent_context = kwargs.get("agent_context", "")
         platform = kwargs.get("platform", "cli")
         if agent_context in ("cron", "flush") or platform == "cron":
@@ -468,8 +442,6 @@ class SignetMemoryProvider(MemoryProvider):
 
         self._session_key = session_id or "hermes-default"
         self._project = _resolve_agent_workspace(agent_id, kwargs)
-
-        # Call session-start hook — get identity + memories + split context
         result = self._client.session_start(
             self._session_key,
             project=self._project,
@@ -486,7 +458,6 @@ class SignetMemoryProvider(MemoryProvider):
                 self._session_prefetch_result = dynamic_context if isinstance(dynamic_context, str) else ""
                 self._prefetch_result = ""
                 self._notification_result = ""
-            # Capture identity and warnings for downstream consumers
             self._identity = result.get("identity")
             self._warnings = result.get("warnings", [])
             self._session_initialized = True
@@ -511,12 +482,9 @@ class SignetMemoryProvider(MemoryProvider):
 
         with self._inject_lock:
             if self._inject_cache:
-                # First call — return the stable prefix and clear the cache.
                 block = self._inject_cache
                 self._inject_cache = ""
                 return block
-
-        # Subsequent calls — minimal header
         return (
             "# Signet Memory\n"
             "Active. Memories are auto-recalled each turn via hybrid search. "
@@ -566,14 +534,8 @@ class SignetMemoryProvider(MemoryProvider):
         """
         if not self._client or not query:
             return
-
-        # Accumulate transcript for checkpoint/session-end
         with self._transcript_lock:
             self._transcript_lines.append(f"user: {_strip_internal_memory_context(query)}")
-
-        # Capture mutable state before spawning the thread to avoid
-        # data races: sync_turn() can update _last_assistant_message
-        # concurrently, and shutdown() can null _client.
         client = self._client
         last_assistant = self._last_assistant_message
         with self._prefetch_lock:
@@ -593,15 +555,9 @@ class SignetMemoryProvider(MemoryProvider):
                     project=project,
                 )
                 if result:
-                    # Handle daemon restart detection by restoring only the runtime
-                    # claim. The initial system prompt is already part of this
-                    # conversation; injecting session-start context again would mutate
-                    # the cached prefix mid-conversation.
                     if not result.get("sessionKnown", True) and self._session_initialized:
                         logger.debug("Signet daemon restarted mid-session, restoring session claim")
                         with self._prefetch_lock:
-                            # Do not replay a pre-restart session-start block
-                            # into an already-running Hermes conversation.
                             self._session_prefetch_result = ""
                         reinit = client.session_start(
                             session_key, project=project, claim_only=True,
@@ -625,9 +581,6 @@ class SignetMemoryProvider(MemoryProvider):
                                 self._notification_result = notification_inject
             except Exception as e:
                 logger.debug("Signet prefetch failed: %s", e)
-
-        # Join the previous prefetch thread before starting a new one to prevent
-        # a stale turn-N result from overwriting a turn-N+1 cleared prefetch.
         prev_thread = self._prefetch_thread
         if prev_thread and prev_thread.is_alive():
             prev_thread.join(timeout=2.0)
@@ -641,8 +594,6 @@ class SignetMemoryProvider(MemoryProvider):
         """Track turn count and trigger periodic checkpoint extraction."""
         self._turn_count = turn_number
         self._last_user_message = message
-
-        # Periodic checkpoint extraction for long-running sessions
         if (
             self._client
             and self._turn_count > 0
@@ -657,7 +608,6 @@ class SignetMemoryProvider(MemoryProvider):
     ) -> None:
         """Track assistant response and accumulate transcript."""
         self._last_assistant_message = assistant_content
-        # Accumulate assistant side of transcript
         if assistant_content:
             with self._transcript_lock:
                 self._transcript_lines.append(f"assistant: {_strip_internal_memory_context(assistant_content)}")
@@ -789,10 +739,6 @@ class SignetMemoryProvider(MemoryProvider):
         )
         digest = hashlib.sha256(seed.encode("utf-8")).hexdigest()
         operation_key = f"hermes-memory-write:{digest}"
-
-        # Preserve Hermes's tool-call id as the source id for the common add
-        # path. Replacements get an operation-specific suffix because every
-        # operation in a Hermes batch shares one tool-call id.
         if tool_call_id and action == "add":
             source_id = tool_call_id
         elif tool_call_id:
@@ -909,10 +855,6 @@ class SignetMemoryProvider(MemoryProvider):
         )
         if not result or not isinstance(result, dict):
             return result
-
-        # A tool-call id is shared by every operation in a Hermes batch. If an
-        # earlier add claimed that source id, retry the new operation with its
-        # content-derived id rather than accepting a false dedupe.
         returned_content = str(result.get("content", "") or "").strip()
         if result.get("deduped") is True and returned_content and returned_content != content.strip():
             fallback_source_id = f"{source_id}:{operation_key[-16:]}"
@@ -976,10 +918,6 @@ class SignetMemoryProvider(MemoryProvider):
             if not content:
                 logger.warning("Signet Hermes replace mirror skipped: content was empty")
                 return
-
-            # A completed replace is found by its operation tag/source id. This
-            # makes a retry a no-op even though the old row is no longer in the
-            # current recall view.
             completed = self._find_mirrored_entries(
                 content,
                 target,
@@ -999,8 +937,6 @@ class SignetMemoryProvider(MemoryProvider):
                 )
                 return
             if not matches:
-                # The old row may already have been superseded by a prior
-                # delivery. No current stale row can be reintroduced.
                 logger.debug("Signet Hermes replace mirror found no active source row")
                 return
 
@@ -1023,10 +959,6 @@ class SignetMemoryProvider(MemoryProvider):
             if not result:
                 logger.warning("Signet Hermes replace mirror returned no response")
                 return
-
-            # A content/source dedupe can return an existing current row before
-            # the daemon sees `supersedes`. Link that row explicitly so the old
-            # Hermes entry still cannot remain current.
             if result.get("deduped") is True:
                 replacement_id = str(result.get("id", "") or "").strip()
                 if replacement_id and replacement_id != old_id and hasattr(client, "supersede_memory"):
@@ -1050,9 +982,6 @@ class SignetMemoryProvider(MemoryProvider):
                 )
                 return
             if not matches:
-                # Soft-delete is idempotent from the current-view perspective:
-                # a prior delivery already removed this row, or it was never
-                # mirrored. In neither case should a stale row be recreated.
                 return
             memory_id = str(matches[0].get("id", "") or "").strip()
             if not memory_id:
@@ -1152,9 +1081,6 @@ class SignetMemoryProvider(MemoryProvider):
             self._notification_result = ""
         if not self._client:
             return
-
-        # Prefer accumulated transcript (captures tool calls, etc.),
-        # fall back to rebuilding from messages argument
         with self._transcript_lock:
             transcript = "\n\n".join(self._transcript_lines)
 
@@ -1169,19 +1095,14 @@ class SignetMemoryProvider(MemoryProvider):
 
         if not transcript:
             return
-
-        # Truncate to ~100k chars, snapping to the nearest message boundary so
-        # the extraction pipeline never receives a partial user/assistant line.
         if len(transcript) > 100_000:
             cutoff = len(transcript) - 100_000
-            # Scan forward from the cutoff to the next message boundary
             boundary = transcript.find("\n\nuser: ", cutoff)
             if boundary == -1:
                 boundary = transcript.find("\n\nassistant: ", cutoff)
             if boundary != -1:
-                transcript = transcript[boundary + 2:]  # skip leading \n\n
+                transcript = transcript[boundary + 2:]
             else:
-                # No boundary found after cutoff; drop the leading fragment
                 transcript = transcript[cutoff:]
 
         try:
@@ -1502,10 +1423,6 @@ class SignetMemoryProvider(MemoryProvider):
         if self._prefetch_thread and self._prefetch_thread.is_alive():
             self._prefetch_thread.join(timeout=5.0)
 
-
-# ---------------------------------------------------------------------------
-# Plugin entry point
-# ---------------------------------------------------------------------------
 
 def register(ctx) -> None:
     """Register Signet as a memory provider plugin."""

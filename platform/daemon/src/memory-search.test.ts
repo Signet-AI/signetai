@@ -158,8 +158,6 @@ describe("hybridRecall", () => {
 
 	it("keeps both recall traversal branches on the owner boundary", () => {
 		const source = readFileSync(join(import.meta.dir, "memory-search.ts"), "utf-8");
-		// Match the exact generic symbol so a reintroduced import is caught even
-		// when it is aliased or the call is split across multiple lines.
 		expect(source).not.toMatch(/\btraverseKnowledgeGraph\b/);
 		expect(source.match(/traverseKnowledgeGraphViaOwner\(/g) ?? []).toHaveLength(2);
 	});
@@ -1798,8 +1796,6 @@ describe("hybridRecall", () => {
 				 VALUES (?, ?, ?, ?, ?)`,
 			);
 			stmt.run("hint-owner", "mem-hint-owner", "agent-owner", "hint-scope-marker", now);
-			// A legacy bad write with a different hint agent must not expose the
-			// owner's memory through any authorized-memory scope.
 			stmt.run("hint-mismatched", "mem-hint-owner", "default", "hint-scope-marker mismatched", now);
 		});
 

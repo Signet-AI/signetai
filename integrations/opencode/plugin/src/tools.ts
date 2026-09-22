@@ -1,10 +1,3 @@
-/**
- * Signet memory tools for OpenCode.
- *
- * 9 tools using tool() from @opencode-ai/plugin, mirroring the
- * tool surface of @signetai/adapter-openclaw.
- */
-
 import { tool } from "@opencode-ai/plugin";
 import {
 	applyRecallScoreThreshold,
@@ -110,10 +103,6 @@ async function storeMemory(
 
 	return result === null ? { offline: true } : { offline: false, ...result };
 }
-
-// ============================================================================
-// Tool factory
-// ============================================================================
 
 export function createTools(client: DaemonClient): Record<string, ReturnType<typeof tool>> {
 	return {
@@ -264,8 +253,6 @@ export function createTools(client: DaemonClient): Record<string, ReturnType<typ
 				return result.success ? "Memory forgotten." : "Delete failed.";
 			},
 		}),
-
-		// Legacy aliases kept for backwards compat with memory.mjs
 
 		remember: tool({
 			description: "Save to persistent memory (alias for memory_store)",

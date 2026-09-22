@@ -1,24 +1,3 @@
-/**
- * Demo-mode fixtures + installer for the dashboard.
- *
- * The marketing site embeds the REAL dashboard build (not screenshots) with
- * `VITE_DEMO=1`; this module swaps the live fetchers in `./api` for
- * fixture-backed implementations so the SPA renders fully without a daemon.
- *
- * Contracts:
- * - Compile-time only. `VITE_DEMO=1` is replaced with a literal by vite, so
- *   the `installDemoApi(api)` call is dead code — and this whole module is
- *   tree-shaken — from every non-demo build (daemon + Electron included).
- *   The dashboard can never serve fixtures at runtime.
- * - Synthetic data only. Nothing here is captured from a real workspace; the
- *   embedded demo is public on the marketing site, so every name, summary,
- *   and stat below is invented (and internally consistent: the KPI cards
- *   derive from the same timeline/stats the heatmap and graph render).
- * - Mutations are honest no-ops: demo builds report success for UI calmness
- *   only where a fake accept can't mislead (pin/unpin, reindex). Real work
- *   (dream triggers, source connects) fails with a friendly error instead.
- */
-
 import type {
 	AgentsResponse,
 	DashboardIdentity,
@@ -40,26 +19,14 @@ import type {
 	TelemetryHealth,
 	TodayReflectionResponse,
 } from "./api";
-
-// Demo builds render inside the dark-only marketing site. The dashboard's
-// ThemeProvider defaults to `system`, which would flip the embedded demo to
-// light on light-preference visitors; pin dark before React mounts
-// (next-themes reads localStorage.theme at init). Runs at module-eval time,
-// before createRoot().render(), and only in VITE_DEMO=1 builds — this module
-// is tree-shaken from every non-demo build.
 if (import.meta.env.VITE_DEMO === "1" && typeof window !== "undefined" && typeof localStorage !== "undefined") {
 	localStorage.setItem("theme", "dark");
 	document.documentElement.classList.add("dark");
-	// The embed is a fixed 1920x1080 stage scaled to the marketing frame; the
-	// app is designed to fit 1080p, but hide any residual document scrollbar
-	// so the frame never shows one. Internal view scroll areas are unaffected.
 	const demoStyle = document.createElement("style");
 	demoStyle.textContent =
 		"html, body { scrollbar-width: none; } html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }";
 	document.head.appendChild(demoStyle);
 }
-
-// ── Seeded RNG (deterministic builds; mulberry32) ──────────────────────────
 
 function mulberry32(seed: number): () => number {
 	let a = seed >>> 0;
@@ -70,8 +37,6 @@ function mulberry32(seed: number): () => number {
 		return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
 	};
 }
-
-// ── Home / status ───────────────────────────────────────────────────────────
 
 const DEMO_AGENT = "default";
 
@@ -124,8 +89,6 @@ const demoStats: KnowledgeStats = {
 	coveragePercent: 61.4,
 };
 
-// ── Timeline (heatmap + Memories KPI share these numbers) ──────────────────
-
 const TOTAL_MEMORIES = 2419;
 
 function demoDailyBuckets(): MemoryTimeline["dailyBuckets"] {
@@ -139,7 +102,7 @@ function demoDailyBuckets(): MemoryTimeline["dailyBuckets"] {
 		const weekend = dow === 0 || dow === 6;
 		let n = Math.round(4 + rng() * 14);
 		if (weekend) n = Math.round(n * 0.35);
-		if (i % 23 === 0) n = 0; // sparse weeks keep it believable
+		if (i % 23 === 0) n = 0;
 		days.push({ date: d.toISOString().slice(0, 10), memoriesAdded: n });
 	}
 	const sum = days.reduce((acc, d) => acc + d.memoriesAdded, 0);
@@ -157,8 +120,6 @@ const demoTimeline: MemoryTimeline = {
 	],
 	dailyBuckets: demoDailyBuckets(),
 };
-
-// ── Sources ─────────────────────────────────────────────────────────────────
 
 const demoSources: SourcesResponse = {
 	version: 1,
@@ -224,11 +185,6 @@ const demoSources: SourcesResponse = {
 		},
 	],
 };
-
-// The embedded dashboard is a product tour, so its System panel should show
-// the same kinds of configured integrations as the rest of the marketing
-// page. Keep these records synthetic, compact, and tied to real bundled logo
-// assets so the connector and agent panels never fall back to 404 states.
 const demoConnectorCheckedAt = new Date(Date.now() - 8 * 60_000).toISOString();
 const demoHarnessConnectors: HarnessConnector[] = [
 	{
@@ -316,8 +272,6 @@ const demoAgents: AgentsResponse = {
 	],
 };
 
-// ── Knowledge constellation (graph view) ───────────────────────────────────
-
 const ENTITY_NAMES = [
 	"Signet",
 	"Local-first",
@@ -371,12 +325,12 @@ function demoConstellation(): KnowledgeConstellation {
 	let aspectN = 0;
 	const entities = ENTITY_NAMES.map((name, i) => {
 		const aspects = [];
-		const aspectCount = 2 + Math.floor(rng() * 2); // 2-3
+		const aspectCount = 2 + Math.floor(rng() * 2);
 		for (let a = 0; a < aspectCount; a++) {
 			aspectN += 1;
 			const aspectName = ASPECT_NAMES[Math.floor(rng() * ASPECT_NAMES.length)];
 			const attributes = [];
-			const attrCount = 1 + Math.floor(rng() * 2); // 1-2
+			const attrCount = 1 + Math.floor(rng() * 2);
 			for (let b = 0; b < attrCount; b++) {
 				attrN += 1;
 				const kind = ATTR_KINDS[Math.floor(rng() * ATTR_KINDS.length)];
@@ -454,8 +408,6 @@ function demoConstellation(): KnowledgeConstellation {
 		metadata: { proposals: { pending: 1 } },
 	};
 }
-
-// ── Daily brief + memories ──────────────────────────────────────────────────
 
 const demoReflection: DailyReflection = {
 	id: "demo-reflection-1",
@@ -589,8 +541,6 @@ const demoEmbeddingHealth: EmbeddingHealthReport = {
 		{ name: "coverage", status: "ok" },
 	],
 };
-
-// ── Secrets, dreams, logs ───────────────────────────────────────────────────
 
 const demoSecrets: { secrets: string[]; provider: string } = {
 	secrets: [
@@ -741,11 +691,7 @@ const demoOnePassword: OnePasswordStatus = {
 	vaults: [],
 };
 
-// ── Installer ───────────────────────────────────────────────────────────────
-
 type ApiClient = typeof import("./api").api;
-
-/** Replace live fetchers with fixture-backed implementations (VITE_DEMO=1 builds only). */
 export function installDemoApi(target: ApiClient): void {
 	target.getHealth = async () => true;
 	target.getStatus = async () => demoStatus;

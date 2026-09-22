@@ -296,11 +296,6 @@ export function stageRuntime() {
 		const bunDest = resolve(runtimeOut, target === "win32" ? "bun.exe" : "bun");
 		cpSync(bunSrc, bunDest);
 		if (target !== "win32") chmodSync(bunDest, 0o755);
-
-		// Stage every built daemon entrypoint and native asset rather than a
-		// hardcoded subset. The daemon resolves its workers (db-owner, harness
-		// install, dreaming tokens, transcript recovery, ...) as siblings of
-		// daemon.js at runtime; missing files here break the packaged app at boot.
 		mkdirSync(resolve(daemonOut, "dist"), { recursive: true });
 		const daemonDist = resolve(repoRoot, "platform/daemon/dist");
 		for (const entry of readdirSync(daemonDist)) {
@@ -310,11 +305,6 @@ export function stageRuntime() {
 		}
 		cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
 		cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
-
-		// Connector assets that live on disk in the connector package (not bundled
-		// into dist JS). The hermes-agent connector copies its Python plugin from
-		// here during harness install; the desktop daemon points
-		// SIGNET_CONNECTOR_ASSETS_DIR at this tree.
 		const connectorsOut = resolve(daemonOut, "connectors");
 		const hermesPluginSrc = resolve(repoRoot, "integrations/hermes-agent/connector/hermes-plugin");
 		if (existsSync(hermesPluginSrc)) {

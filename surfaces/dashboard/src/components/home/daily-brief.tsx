@@ -1,20 +1,7 @@
 import { type DailyReflection, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ChevronLeft, ChevronRight, RotateCw } from "@/components/mingcute-icons";
-/**
- * Daily brief — daemon-generated plain-language briefs (up to 3/day at 6am in
- * the user's timezone, per pipeline.reflections config): load today's,
- * auto-generate the day's set when none exists, manual "one more" regenerate,
- * and the write-back answer flow (saved into the memory thread via
- * POST /api/reflections/:id/answer). Pager visual per the mockup.
- */
 import { useCallback, useEffect, useRef, useState } from "react";
-
-/**
- * Mockup-sized brief: the daemon caps generated briefs at 236 characters
- * (BRIEF_MAX_CHARS in reflection-worker.ts); this mirrors that budget so the
- * layout stays stable with generated content. Full text remains on hover.
- */
 const BRIEF_CHAR_BUDGET = 236;
 
 function budgetText(text: string, budget: number): string {
@@ -30,8 +17,6 @@ export function DailyBrief({
 	children,
 }: {
 	agentId?: string;
-	/** False until /api/status resolves — fetching/generating before the real
-	 *  agent id is known would hit the daemon's `default` agent (scoping leak). */
 	agentSettled?: boolean;
 	children?: React.ReactNode;
 }) {
@@ -46,9 +31,6 @@ export function DailyBrief({
 	const [answerText, setAnswerText] = useState("");
 	const [submitting, setSubmitting] = useState(false);
 	const generationToken = useRef(0);
-
-	// Every row has a summary (question is optional legacy metadata); the card
-	// shows all of today's briefs, question-shaped or not.
 	const items = reflections;
 	const clamped = items.length === 0 ? 0 : Math.min(i, items.length - 1);
 	const current = items[clamped] ?? null;
@@ -62,8 +44,6 @@ export function DailyBrief({
 			const slowTimer = setTimeout(() => {
 				if (generationToken.current === token) setSlow(true);
 			}, 10_000);
-			// Omitted count asks the daemon for its configured daily brief count;
-			// explicit counts (the manual button) add a single new brief.
 			const result = await api.generateReflections(agentId, count);
 			clearTimeout(slowTimer);
 			if (generationToken.current !== token) return;
@@ -79,7 +59,7 @@ export function DailyBrief({
 					const seen = new Set(existing.map((r) => r.id));
 					return [...next.filter((r) => !seen.has(r.id)), ...existing];
 				});
-				setI(0); // newest brief first
+				setI(0);
 				setEmptyMsg(null);
 			} else {
 				setEmptyMsg(result.message ?? "No new brief is available yet.");
@@ -87,8 +67,6 @@ export function DailyBrief({
 		},
 		[agentId],
 	);
-
-	// Svelte method: load today's reflections; auto-generate when none has a question.
 	useEffect(() => {
 		if (!agentSettled) return;
 		let active = true;
@@ -99,14 +77,10 @@ export function DailyBrief({
 			const items = today?.reflections ?? (today?.reflection ? [today.reflection] : []);
 			setReflections(items);
 			setLoading(false);
-			// Auto-fill the day's set only when nothing exists yet; the daemon's
-			// scheduled 6am run owns the normal daily generation.
 			if (items.length === 0) void generate();
 		})();
 		return () => {
 			active = false;
-			// Invalidate any in-flight generation owned by this effect run and
-			// release the flags so `generating` can never latch on.
 			generationToken.current += 1;
 			setGenerating(false);
 			setSlow(false);
@@ -181,8 +155,7 @@ export function DailyBrief({
 
 			{loading && current === null ? (
 				<>
-					{/* Height-exact mirror of the loaded layout (text ~74 / tag 15.8)
-					    so the section never moves on load. */}
+					{}
 					<div className="flex shrink-0 flex-col gap-2.25" aria-label="Loading daily brief">
 						<div>
 							{["100%", "100%", "55%"].map((w, idx) => (

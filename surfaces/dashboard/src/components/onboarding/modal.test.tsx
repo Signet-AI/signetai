@@ -13,8 +13,6 @@ let config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 let saveFails = false;
 let savedOAuth = false;
 const calls: string[] = [];
-// Radix detects the DOM at module load. Other suites import it for SSR;
-// run this browser fixture in its own process so test order cannot hide the modal.
 if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 	test("onboarding browser fixture", () => {
 		const result = spawnSync(process.execPath, ["test", import.meta.filename], {

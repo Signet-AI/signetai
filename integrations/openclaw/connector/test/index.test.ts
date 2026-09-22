@@ -133,7 +133,6 @@ describe("OpenClawConnector config patching", () => {
 		expect(result.configsPatched).toContain(configPath);
 
 		const patched = JSON.parse(readFileSync(configPath, "utf-8"));
-		// workspace unchanged since configureWorkspace is false
 		expect(patched.agents.defaults.workspace).toBe("/home/old/.agents");
 		expect(patched.hooks.internal.entries["signet-memory"].enabled).toBe(false);
 		expect(patched.plugins.entries["signet-memory-openclaw"].enabled).toBe(true);
@@ -195,8 +194,6 @@ describe("OpenClawConnector config patching", () => {
 	it("does not execute non-JSON expressions while parsing configs", async () => {
 		const configPath = join(tmpRoot, "openclaw.json");
 		const hookBasePath = join(tmpRoot, "agents");
-
-		// This is valid JavaScript expression syntax, but not valid JSON/JSON5.
 		writeFileSync(
 			configPath,
 			`({ agents: { defaults: { workspace: "/home/old/.agents" } }, hooks: { internal: { entries: {} } } })`,

@@ -1,12 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Deterministic Dreaming attach eval (#1601).
- *
- * Exercises the bounded daemon event bridge and the read-only CLI stream
- * consumer with fixed local inputs. It fails if replay cursors are not
- * monotonic, raw payloads escape their bound, the viewer cannot resume from a
- * cursor, or the concise/raw and detach controls are not isolated.
- */
 
 import {
 	DREAMING_LIVE_MAX_EVENTS,

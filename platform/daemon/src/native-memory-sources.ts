@@ -48,8 +48,6 @@ import {
 	type NativeSourceWorkerRejection,
 	type NativeSourceWorkerSource,
 } from "./native-memory-source-worker";
-
-/** Keep one owner-side source descriptor bounded without using the 5s default. */
 export const NATIVE_MEMORY_OWNER_DEADLINE_MS = 60_000;
 const EMBEDDING_PROVIDER_PROBE_TEXT = "Signet embedding provider health check.";
 
@@ -57,7 +55,6 @@ export interface NativeMemorySource {
 	readonly harness: string;
 	readonly displayName: string;
 	readonly root: string;
-	/** Root used for stable provenance paths when the scan root is a subdirectory. */
 	readonly sourceRoot?: string;
 	readonly sourceId?: string;
 	readonly files: readonly NativeMemoryFilePattern[];
@@ -93,7 +90,6 @@ export interface NativeMemorySyncResult {
 export interface NativeMemoryBridgeHandle {
 	readonly syncExisting: (options?: NativeMemoryBridgeSyncOptions) => Promise<number>;
 	readonly getLastSyncResult: () => NativeMemorySyncResult;
-	/** Kill the active source worker without taking down the parent or DB owner. */
 	readonly cancel: () => void;
 	readonly close: () => Promise<void>;
 }
@@ -115,22 +111,13 @@ export interface NativeMemoryBridgeOptions {
 	readonly sourceCleanupEnabled?: boolean;
 	readonly shouldCleanupSource?: (source: NativeMemorySource) => boolean;
 	readonly sourceGraphEnabled?: boolean;
-	/** Test and bounded-scan override. Production scans use the 50,000-file cap. */
 	readonly maxFilesPerScan?: number;
-	/** Production native scans route descriptors through the killable DB owner. */
 	readonly workerOwnedIndexing?: boolean;
-	/** Test-only event hook used to kill a source worker during traversal. */
 	readonly onSourceWorkerScanStarted?: () => void;
 	readonly shouldContinue?: (source: NativeMemorySource) => boolean;
 	readonly onEmbeddingStatus?: (status: string | undefined) => void;
 	readonly onFileIndexed?: (event: NativeMemoryFileIndexEvent) => void;
 }
-
-/**
- * Resolve the embeddingConfig/fetchEmbedding bridge options from a memory
- * config, so source providers actually get their content chunked and
- * embedded after sync instead of only writing memory_artifacts rows.
- */
 export function resolveEmbeddingBridgeOptions(
 	embeddingCfg: EmbeddingConfig,
 	fetchEmbedding: SourceEmbeddingFetch,
@@ -162,8 +149,6 @@ interface SharedNativeMemorySourceFlight {
 }
 
 const sharedNativeMemorySourceFlights = new Map<string, SharedNativeMemorySourceFlight>();
-
-/** Test-only: drop the in-process content-hash cache so scans behave like a fresh daemon. */
 export interface NativeMemorySourcePermissionIssue {
 	readonly path: string;
 	readonly guidance: string;
@@ -254,30 +239,15 @@ export function resetNativeMemoryIndexCache(): void {
 	resetObsidianSourceEmbeddingBackoff();
 }
 const DEFAULT_OBSIDIAN_SOURCE_FILE_DELAY_MS = 250;
-/** A scan keeps at most one discovered file awaiting indexing. */
 export const NATIVE_MEMORY_FILE_QUEUE_CAP = 1;
 
 const NATIVE_MEMORY_MAX_FILES_PER_SCAN = 50_000;
-
-// Read failures that are not permanent (ENOENT) enter a per-path cooldown so
-// a failing file cannot monopolize the scan loop. ENOENT drops the path from
-// the index entirely — the file is gone, retrying it is pointless (#1142).
 const READ_FAILURE_BACKOFF_MS = 60_000;
 const readFailureBackoffUntil = new Map<string, number>();
-
-// iCloud / sync-evicted (dataless) files fail every read until the OS
-// materializes them. Track them per harness so the daemon logs ONE
-// consolidated warning per window instead of one line per file per retry
-// (#1161).
 const DATALESS_WARN_INTERVAL_MS = 60_000;
 const datalessReadFailuresByHarness = new Map<string, { count: number; lastLoggedAt: number }>();
 
 export function isDatalessReadError(err: unknown): boolean {
-	// The errno code is authoritative. Message matching is only a fallback
-	// for errors that carry no code: node embeds the file path in the
-	// message, and a path containing "eio" (e.g. "veio", "deionized")
-	// would misclassify an ordinary EACCES as dataless and silently drop
-	// its per-file diagnostic.
 	if (typeof err === "object" && err !== null) {
 		const code = (err as NodeJS.ErrnoException).code;
 		if (code === "EDEADLK" || code === "EIO") return true;
@@ -377,12 +347,6 @@ export function claudeCodeNativeMemorySource(root = claudeCodeRoot()): NativeMem
 		],
 	};
 }
-
-/**
- * Hermes keeps curated, profile-local memory in two files under HERMES_HOME.
- * Scan only that declared memory directory; the profile root remains the
- * provenance boundary for source IDs and relative paths.
- */
 export function hermesNativeMemorySource(root = resolveHermesHomePath()): NativeMemorySource {
 	const profileRoot = hermesProfileRoot(root);
 	return {
@@ -629,14 +593,6 @@ async function nativeArtifactCapturedAt(
 		);
 	}
 }
-
-/**
- * One-shot heal for rows already stamped with a corrupt pre-epoch captured_at
- * (the DOS epoch 1980 sentinel): they are re-stamped with the index time so
- * they stop blocking backlog termination and get a normal lifecycle. New
- * indexes never mint sentinels (the memory-lineage clamp), so this only fires
- * once per legacy row (#1149).
- */
 async function healSentinelCapturedAt(
 	filePath: string,
 	agentId: string,
@@ -991,9 +947,6 @@ export async function indexNativeMemoryFile(
 	if (!safeRelativePath(source.root, filePath)) return false;
 	const pattern = matchesPattern(source, filePath);
 	if (!pattern) return false;
-	// Source-worker pages carry the complete descriptor. This fast path is the
-	// production bridge boundary: the parent forwards content/hash/mtime to the
-	// owner and does not perform file reads or preflight indexing queries.
 	const workerDescriptor = options.content !== undefined && options.contentHash !== undefined;
 
 	const key = fingerprintKey(source, filePath, agentId);
@@ -1009,17 +962,9 @@ export async function indexNativeMemoryFile(
 			const fileStat = await stat(filePath);
 			if (!fileStat.isFile()) return false;
 			mtimeMs = fileStat.mtimeMs;
-			// Async reads and stats run in the threadpool: a transiently locked
-			// file (EDEADLK from Obsidian or a sync service) or a stalled
-			// filesystem must not block the daemon event loop for seconds
-			// (#1135, #1142).
 			content = await readFile(filePath, "utf-8");
 		} catch (err) {
 			if (isEnoentError(err)) {
-				// The file vanished between the scan listing and the read — it is
-				// gone. Drop it from the index so later scans stop retrying the
-				// same ENOENT on every pass instead of accumulating stale
-				// artifact rows that desync the FTS index (#1142).
 				readFailureBackoffUntil.delete(key);
 				permissionDeniedPaths.delete(key);
 				await removeNativeMemoryFile(source, filePath, agentId);
@@ -1040,14 +985,9 @@ export async function indexNativeMemoryFile(
 				if (firstDenied) logger.warn("watcher", issue.guidance, { path: filePath });
 				return false;
 			}
-			// Transient failures (locks, permission flaps) back off instead of
-			// being re-attempted on every scan iteration.
 			readFailureBackoffUntil.set(key, Date.now() + READ_FAILURE_BACKOFF_MS);
 			const failureMessage = err instanceof Error ? err.message : String(err);
 			if (isDatalessReadError(err)) {
-				// Dataless/locked-file reads consolidate into a single warning
-				// per harness per window; the files are skipped (with backoff)
-				// until the OS materializes them.
 				const now = Date.now();
 				const prev = datalessReadFailuresByHarness.get(source.harness) ?? { count: 0, lastLoggedAt: 0 };
 				const next = { count: prev.count + 1, lastLoggedAt: prev.lastLoggedAt };
@@ -1128,9 +1068,6 @@ export async function indexNativeMemoryFile(
 		indexed.delete(key);
 	}
 	if (!workerDescriptor && persistedHash === hash && semanticComplete) {
-		// One-shot heal for legacy rows with a corrupt pre-epoch captured_at:
-		// they stay permanently pending otherwise (no watermark can reach
-		// 1980), keeping content passes from ever early-exiting (#1149).
 		const persistedCapturedAt = await nativeArtifactCapturedAt(filePath, agentId, options.signal);
 		if (persistedCapturedAt !== null) {
 			await healSentinelCapturedAt(filePath, agentId, source.harness, persistedCapturedAt, options.signal);

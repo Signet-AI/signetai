@@ -261,7 +261,7 @@ export default function NewRunPage() {
       if (form.selectionMode === "full") {
         sampling = { mode: "full" }
       } else if (form.selectionMode === "sample") {
-        const perCategoryValue = parseInt(form.perCategory) || 2 // Default to 2 if not set
+        const perCategoryValue = parseInt(form.perCategory) || 2
         sampling = {
           mode: "sample",
           sampleType: form.sampleType,
@@ -275,8 +275,6 @@ export default function NewRunPage() {
       }
     }
     console.log("Submitting with sampling config:", sampling)
-
-    // Only send concurrency if not all defaults (1)
     const hasNonDefaultConcurrency =
       (form.concurrency.default !== undefined && form.concurrency.default !== 1) ||
       form.concurrency.ingest !== undefined ||

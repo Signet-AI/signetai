@@ -1,20 +1,3 @@
-/**
- * Skill graph operations for procedural memory P1.
- *
- * Handles creating and removing skill nodes in the knowledge graph
- * when skills are installed or uninstalled. Each skill gets:
- * - An entity row (entity_type = 'skill') — source/native topology
- * - A skill_meta row with installation metadata
- * - An embedding from the authored frontmatter
- *
- * Skill nodes are source topology: the SKILL.md frontmatter is the
- * authoritative source, and this module writes the skill entity and its
- * metadata directly. It does NOT perform LLM-driven semantic extraction
- * from the SKILL.md body — semantic entity writes are owned by the
- * audited Dreaming apply path, so cross-skill relations are never
- * authored here (see #946 semantic-writer cutover).
- */
-
 import { createHash } from "node:crypto";
 import type { DbAccessor } from "../db-accessor";
 import { syncVecDeleteByEmbeddingIds, syncVecInsert, vectorToBlob } from "../db-helpers";
@@ -23,10 +6,6 @@ import { isActiveEmbeddingConfig, resolveActiveEmbeddingConfig } from "../embedd
 import type { EmbeddingRole } from "../embedding-profile";
 import { logger } from "../logger";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface SkillFrontmatter {
 	readonly name: string;
@@ -64,10 +43,6 @@ export interface SkillUninstallResult {
 	readonly entityId: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function skillEntityId(agentId: string, name: string): string {
 	return `skill:${agentId}:${name}`;
 }
@@ -95,7 +70,7 @@ async function findSkillEntityId(input: SkillUninstallInput, accessor: DbAccesso
 				.get(input.skillName, agentId) as { id: string } | undefined;
 			return adopted?.id ?? null;
 		},
-		{ siteToken: "pipeline/skill-graph.ts:79", operation: "pipeline.skill-graph.find" },
+		{ siteToken: "pipeline/skill-graph.ts:54", operation: "pipeline.skill-graph.find" },
 	);
 }
 
@@ -148,10 +123,6 @@ function contentHash(text: string): string {
 	return h.digest("hex").slice(0, 16);
 }
 
-// ---------------------------------------------------------------------------
-// Install: create entity + skill_meta + embedding
-// ---------------------------------------------------------------------------
-
 export async function installSkillNode(
 	input: SkillInstallInput,
 	accessor: DbAccessor,
@@ -170,8 +141,6 @@ export async function installSkillNode(
 	const procCfg = config.procedural;
 
 	const fm = input.frontmatter;
-
-	// Step 1: Create entity + skill_meta in a write transaction
 	await accessor.withWriteTxAsync(
 		(db: import("../db-accessor").WriteDb) => {
 			const existing = db
@@ -179,18 +148,14 @@ export async function installSkillNode(
 				.get(entityId, fm.name, agentId) as { id: string } | undefined;
 
 			if (existing) {
-				// If matched by name (collision), adopt that entity's id
 				if (existing.id !== entityId) {
 					entityId = existing.id;
 				}
-				// Update existing entity
 				db.prepare(`UPDATE entities SET entity_type = 'skill', description = ?, updated_at = ? WHERE id = ?`).run(
 					fm.description,
 					now,
 					entityId,
 				);
-
-				// Upsert skill_meta (may not exist if entity was from extraction)
 				db.prepare(
 					`INSERT INTO skill_meta
 				 (entity_id, agent_id, version, author, license, source,
@@ -223,7 +188,6 @@ export async function installSkillNode(
 					now,
 				);
 			} else {
-				// Insert new entity (catch name UNIQUE collision from extraction pipeline)
 				try {
 					db.prepare(
 						`INSERT INTO entities
@@ -233,9 +197,6 @@ export async function installSkillNode(
 				} catch (e) {
 					const msg = e instanceof Error ? e.message : String(e);
 					if (!msg.includes("UNIQUE constraint")) throw e;
-
-					// Name collision — an extracted entity already owns this name.
-					// Claim it as a skill entity and reuse its id.
 					const collision = db
 						.prepare("SELECT id FROM entities WHERE name = ? AND agent_id = ? LIMIT 1")
 						.get(fm.name, agentId) as { id: string } | undefined;
@@ -249,9 +210,6 @@ export async function installSkillNode(
 					);
 					entityId = collision.id;
 				}
-
-				// Upsert skill_meta. Reconciler startup, periodic passes, and watcher
-				// can overlap; avoid UNIQUE(entity_id) races under concurrent installs.
 				db.prepare(
 					`INSERT INTO skill_meta
 				 (entity_id, agent_id, version, author, license, source,
@@ -285,15 +243,13 @@ export async function installSkillNode(
 				);
 			}
 		},
-		{ siteToken: "pipeline/skill-graph.ts:175", operation: "pipeline.skill-graph.install-metadata" },
+		{ siteToken: "pipeline/skill-graph.ts:144", operation: "pipeline.skill-graph.install-metadata" },
 	);
-
-	// Step 2: Generate embedding from the authored frontmatter
 	let embeddingCreated = false;
 	const embeddingText = buildEmbeddingText(fm);
 	const writeConfig = await accessor.withReadDbAsync(
 		(db: import("../db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, embeddingCfg),
-		{ siteToken: "pipeline/skill-graph.ts:294", operation: "pipeline.skill-graph.install-embedding-config" },
+		{ siteToken: "pipeline/skill-graph.ts:250", operation: "pipeline.skill-graph.install-embedding-config" },
 	);
 	const embVec = await fetchEmbedding(embeddingText, writeConfig, "document", {
 		usage: { source: "artifact-index", agentId },
@@ -307,7 +263,6 @@ export async function installSkillNode(
 		embeddingCreated = await accessor.withWriteTxAsync(
 			(db: import("../db-accessor").WriteDb) => {
 				if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
-				// Remove any old skill embeddings
 				const oldEmbs = db
 					.prepare(`SELECT id FROM embeddings WHERE source_type = 'skill' AND source_id = ?`)
 					.all(entityId) as Array<{ id: string }>;
@@ -323,8 +278,6 @@ export async function installSkillNode(
 					}
 					db.prepare(`DELETE FROM embeddings WHERE source_type = 'skill' AND source_id = ?`).run(entityId);
 				}
-
-				// Insert new embedding (ON CONFLICT may keep the existing row id)
 				db.prepare(
 					`INSERT INTO embeddings
 				 (id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at)
@@ -335,14 +288,11 @@ export async function installSkillNode(
 				   source_id = excluded.source_id,
 				   chunk_text = excluded.chunk_text`,
 				).run(embId, embHash, blob, embVec.length, entityId, embeddingText, now);
-
-				// Query back the actual row id — on conflict SQLite keeps the
-				// existing id, not the one we generated above.
 				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(embHash) as { id: string };
 				syncVecInsert(db, actualRow.id, embVec);
 				return true;
 			},
-			{ siteToken: "pipeline/skill-graph.ts:307", operation: "pipeline.skill-graph.install-embedding" },
+			{ siteToken: "pipeline/skill-graph.ts:263", operation: "pipeline.skill-graph.install-embedding" },
 		);
 	}
 
@@ -354,10 +304,6 @@ export async function installSkillNode(
 
 	return { entityId, embeddingCreated };
 }
-
-// ---------------------------------------------------------------------------
-// Uninstall: remove entity + skill_meta + embeddings + relations
-// ---------------------------------------------------------------------------
 
 export async function uninstallSkillNode(
 	input: SkillUninstallInput,
@@ -377,23 +323,18 @@ export async function uninstallSkillNode(
 					).run(now, now, metaId, agentId);
 				}
 			},
-			{ siteToken: "pipeline/skill-graph.ts:372", operation: "pipeline.skill-graph.uninstall-metadata" },
+			{ siteToken: "pipeline/skill-graph.ts:318", operation: "pipeline.skill-graph.uninstall-metadata" },
 		);
 		return { removed: false, entityId: null };
 	}
 
 	await accessor.withWriteTxAsync(
 		(db: import("../db-accessor").WriteDb) => {
-			// 1. Remove skill relation edges
 			db.prepare(
 				`DELETE FROM relations
 			 WHERE source_entity_id = ? OR target_entity_id = ?`,
 			).run(entityId, entityId);
-
-			// 2. Remove skill mention links
 			db.prepare("DELETE FROM memory_entity_mentions WHERE entity_id = ?").run(entityId);
-
-			// 3. Remove embeddings + vec sync
 			const embRows = db
 				.prepare(`SELECT id FROM embeddings WHERE source_type = 'skill' AND source_id = ?`)
 				.all(entityId) as Array<{ id: string }>;
@@ -409,14 +350,12 @@ export async function uninstallSkillNode(
 				}
 				db.prepare(`DELETE FROM embeddings WHERE source_type = 'skill' AND source_id = ?`).run(entityId);
 			}
-
-			// 4. Hard-delete skill_meta + entity in same transaction
 			for (const metaId of metaIds) {
 				db.prepare("DELETE FROM skill_meta WHERE entity_id = ? AND agent_id = ?").run(metaId, agentId);
 			}
 			db.prepare("DELETE FROM entities WHERE id = ?").run(entityId);
 		},
-		{ siteToken: "pipeline/skill-graph.ts:385", operation: "pipeline.skill-graph.uninstall" },
+		{ siteToken: "pipeline/skill-graph.ts:331", operation: "pipeline.skill-graph.uninstall" },
 	);
 
 	logger.info("pipeline", "Skill node uninstalled", {

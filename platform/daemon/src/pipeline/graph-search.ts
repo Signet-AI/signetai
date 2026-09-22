@@ -1,30 +1,13 @@
-/**
- * Query-time graph boost for recall.
- *
- * Resolves entities mentioned in the query, expands one hop through
- * the relation graph, and collects linked memory IDs. Fully
- * synchronous — all bun:sqlite calls are sync, deadline checks
- * use Date.now().
- */
-
 import type { ReadDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
 import { FTS_STOP } from "./stop-words";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface GraphBoostResult {
 	readonly graphLinkedIds: Set<string>;
 	readonly entityHits: number;
 	readonly timedOut: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 export function tokenizeGraphQuery(query: string): string[] {
 	return query
@@ -33,15 +16,6 @@ export function tokenizeGraphQuery(query: string): string[] {
 		.split(/\s+/)
 		.filter((t) => t.length >= 3 && !FTS_STOP.has(t));
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
-/**
- * Find memory IDs linked to entities matching the query via the
- * knowledge graph. Returns an empty set on any error (no degradation).
- */
 export function getGraphBoostIds(query: string, db: ReadDb, timeoutMs: number, agentId?: string): GraphBoostResult {
 	const empty: GraphBoostResult = {
 		graphLinkedIds: new Set(),
@@ -53,8 +27,6 @@ export function getGraphBoostIds(query: string, db: ReadDb, timeoutMs: number, a
 		const deadline = Date.now() + timeoutMs;
 		const tokens = tokenizeGraphQuery(query);
 		if (tokens.length === 0) return empty;
-
-		// Step 1: Resolve entities matching query tokens via FTS5
 		let entityRows: Array<{ id: string }> = [];
 		const agentFilter = agentId ?? "default";
 		try {
@@ -70,7 +42,6 @@ export function getGraphBoostIds(query: string, db: ReadDb, timeoutMs: number, a
 				)
 				.all(fts, agentFilter) as Array<{ id: string }>;
 		} catch {
-			// FTS table doesn't exist — fall back to LIKE
 			const likePatterns = tokens.map((t) => `%${t}%`);
 			const likeClauses = likePatterns.map(() => "canonical_name LIKE ?").join(" OR ");
 			entityRows = db
@@ -88,8 +59,6 @@ export function getGraphBoostIds(query: string, db: ReadDb, timeoutMs: number, a
 		if (Date.now() > deadline) return { ...empty, timedOut: true };
 
 		const entityIds = new Set(entityRows.map((r) => r.id));
-
-		// Step 2: One-hop expansion through relations (both directions)
 		const placeholders = entityRows.map(() => "?").join(", ");
 		const ids = entityRows.map((r) => r.id);
 
@@ -109,8 +78,6 @@ export function getGraphBoostIds(query: string, db: ReadDb, timeoutMs: number, a
 		}
 
 		if (Date.now() > deadline) return { ...empty, entityHits: entityRows.length, timedOut: true };
-
-		// Step 3: Collect memory IDs linked to the expanded entity set
 		const expandedPlaceholders = [...entityIds].map(() => "?").join(", ");
 		const expandedIds = [...entityIds];
 
@@ -142,8 +109,6 @@ export function getGraphBoostIds(query: string, db: ReadDb, timeoutMs: number, a
 		return empty;
 	}
 }
-
-/** Owner-bound equivalent used by recall paths that must not touch parent SQLite. */
 export async function getGraphBoostIdsViaOwner(
 	query: string,
 	owner: DbOwnerClient,

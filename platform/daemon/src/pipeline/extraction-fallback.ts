@@ -6,14 +6,6 @@ export type LegacyExtractionRetirementTransaction = typeof dbOwnerTransaction;
 export interface LegacyExtractionRetirementOptions {
 	readonly reason: string;
 }
-
-/**
- * Promote every still-live legacy extraction input into the Dreaming cursor,
- * then retire its job. A cutover must never abandon pending work just because
- * the old worker disappeared: the source remains immutable episodic evidence
- * and Dreaming becomes its live consumer. Deleted or missing sources are
- * intentionally terminal because retention/forgetting already withdrew them.
- */
 export async function retireLegacyExtractionJobsAsync(
 	options: LegacyExtractionRetirementOptions,
 	transaction: LegacyExtractionRetirementTransaction = dbOwnerTransaction,

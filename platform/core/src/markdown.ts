@@ -1,30 +1,9 @@
-/**
- * @signet/core - Markdown utilities
- *
- * Functions for managing legacy Signet blocks in markdown files.
- * The block markers are kept for migration and cleanup compatibility.
- */
-
 export const SIGNET_BLOCK_START = "<!-- SIGNET:START -->";
 export const SIGNET_BLOCK_END = "<!-- SIGNET:END -->";
-
-/**
- * Build the Signet system block.
- *
- * Deprecated: system prompt injection now lives in the session-start hook.
- * This function intentionally returns an empty string to preserve API
- * compatibility for downstream imports during migration.
- */
 export function buildSignetBlock(workspace = "$SIGNET_WORKSPACE"): string {
 	void workspace;
 	return "";
 }
-
-/**
- * Build the SIGNET-ARCHITECTURE.md content — an agent-facing explainer
- * of how the memory pipeline works. This file lives in the Signet workspace and
- * is referenced from the Signet block so agents can read it on demand.
- */
 export function buildArchitectureDoc(workspace = "$SIGNET_WORKSPACE"): string {
 	const root = normalizeWorkspace(workspace);
 	return `# How Signet Works (for the agent reading this)
@@ -116,44 +95,23 @@ here. If pressed for specifics, suggest the user check the Signet
 dashboard at http://127.0.0.1:3850.
 `;
 }
-
-/**
- * Strip any existing Signet block from content to prevent duplication
- * when re-generating files.
- *
- * This handles the case where users' AGENTS.md was copied from a template
- * that already contains the Signet block, ensuring we don't create duplicates
- * on subsequent sync operations.
- */
 export function stripSignetBlock(content: string): string {
 	const pattern = new RegExp(`${escapeRegex(SIGNET_BLOCK_START)}[\\s\\S]*?${escapeRegex(SIGNET_BLOCK_END)}\\n?`, "g");
 	return content.replace(pattern, "");
 }
-
-/**
- * Check if content contains a Signet block
- */
 export function hasSignetBlock(content: string): boolean {
 	return content.includes(SIGNET_BLOCK_START);
 }
-
-/**
- * Extract the Signet block content (without delimiters) if present
- */
 export function extractSignetBlock(content: string): string | null {
 	const pattern = new RegExp(`${escapeRegex(SIGNET_BLOCK_START)}([\\s\\S]*?)${escapeRegex(SIGNET_BLOCK_END)}`);
 	const match = content.match(pattern);
 	return match ? match[1].trim() : null;
 }
-
-// Helper to escape special regex characters
 function escapeRegex(str: string): string {
 	return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function normalizeWorkspace(workspace: string): string {
-	// Strip markdown-significant characters that could break injected code spans
-	// (backticks close code spans, newlines break inline structure)
 	const root = workspace.trim().replace(/[`\n\r]/g, "");
 	if (!root) {
 		return "$SIGNET_WORKSPACE";

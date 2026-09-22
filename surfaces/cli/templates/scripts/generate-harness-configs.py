@@ -15,8 +15,6 @@ from datetime import datetime
 
 AGENTS_DIR = Path.home() / ".agents"
 AGENTS_MD = AGENTS_DIR / "AGENTS.md"
-
-# Additional identity files to compose (in order)
 IDENTITY_FILES = ["SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"]
 
 TARGETS = {
@@ -72,25 +70,16 @@ def main():
     print()
 
     for harness, target_path in TARGETS.items():
-        # Ensure parent directory exists
         target_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Remove symlink if it exists
         if target_path.is_symlink():
             target_path.unlink()
             print(f"  Removed symlink: {target_path}")
-
-        # Generate config
         config_content = generate_config(source_content, extras, harness)
-
-        # Check if content changed
         if target_path.exists():
             existing_content = target_path.read_text()
             if existing_content == config_content:
                 print(f"  {harness}: unchanged")
                 continue
-
-        # Write new config
         target_path.write_text(config_content)
         print(f"  {harness}: generated → {target_path}")
 

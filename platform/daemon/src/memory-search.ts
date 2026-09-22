@@ -1,17 +1,3 @@
-/**
- * Hybrid recall search orchestration.
- *
- * This module turns a user query into a bounded, authorized recall response.
- * The route handler in daemon.ts owns HTTP parsing and permissions; this file
- * owns retrieval mechanics, score shaping, fallback sources, and response
- * assembly.
- *
- * The critical invariant is ordering: broad candidate IDs may come from vector
- * search, graph traversal, or source rescue paths, but memory content must not
- * be loaded for reranking, dampening, summaries, expansion, or access tracking
- * until the shared scope/project/agent filter has authorized those IDs.
- */
-
 import { createHash } from "node:crypto";
 import {
 	type AccountingProvenance,
@@ -70,10 +56,6 @@ import { escapeLike } from "./sql-utils";
 import { getActiveTelemetry } from "./telemetry";
 import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
 
-// ---------------------------------------------------------------------------
-// Public interfaces
-// ---------------------------------------------------------------------------
-
 export interface RecallParams {
 	query: string;
 	keywordQuery?: string;
@@ -84,9 +66,7 @@ export interface RecallParams {
 	saveAggregate?: boolean;
 	save_aggregate?: boolean;
 	agentId?: string;
-	/** Agent read policy — 'isolated' | 'shared' | 'group'. When set with agentId, filters by visibility. */
 	readPolicy?: AgentRosterReadPolicy;
-	/** Policy group name (required when readPolicy is 'group'). */
 	policyGroup?: string | null;
 	type?: string;
 	tags?: string;
@@ -98,24 +78,15 @@ export interface RecallParams {
 	time?: TemporalTimeOptions;
 	scope?: string | null;
 	expand?: boolean;
-	/** When set, restricts results to memories belonging to this project (auth scope enforcement). */
 	project?: string;
-	/** Enables per-session context dedupe when present. Sessionless recall is unchanged. */
 	sessionKey?: string;
-	/** Return already-recalled rows and annotate them instead of suppressing them. */
 	includeRecalled?: boolean;
-	/** Restrict recall to source-backed artifacts/chunks instead of normal memory rows. */
 	sourceOnly?: boolean;
-	/** Internal ledger metadata for call-site attribution. */
 	recallSurface?: string;
 	recallMode?: string;
-	/** Internal escape hatch for hooks that must claim only injected rows. */
 	claimRecallResults?: boolean;
-	/** Internal aggregate-recall guard: derived aggregate memories may be returned by normal recall, but never as aggregate evidence. */
 	excludeAggregateRecallMemories?: boolean;
-	/** Internal escape hatch for hooks that must track only injected rows elsewhere. */
 	trackRecallAccess?: boolean;
-	/** Anonymous retrieval-outcome attribution; never carries caller text. */
 	telemetrySurface?: RecallSurface;
 }
 
@@ -150,26 +121,15 @@ export interface RecallResponse {
 		totalReturned: number;
 		hasSupplementary: boolean;
 		noHits: boolean;
-		/** Completeness of the semantic vector channel, when it ran. */
 		vectorCompleteness?: VectorSearchCompleteness;
-		/** Maximum canonical rows inspected by a bounded fallback scan. */
 		searchedWindow?: number;
-		/** True when graph traversal timed out or failed after bounded fallback. */
 		graphPartial?: boolean;
-		/** Operational graph failure, when one was observed. */
 		graphError?: {
 			channel: "graph_traversal";
 			code: string | number | null;
 			message: string;
 		};
-		/** Most specific known degradation reason for partial recall. */
 		degradation?: "fts_incomplete" | "graph_traversal_timeout" | "graph_traversal_failed";
-		/**
-		 * True when lexical coverage is known incomplete because FTS rows are
-		 * missing. The response remains successful and may contain bounded bridge
-		 * results. This is distinct from aggregate.partial, which describes
-		 * incomplete aggregate planning or synthesis.
-		 */
 		partial?: boolean;
 		timings: RecallTimings;
 		temporal?: RecallTemporalMeta;
@@ -183,7 +143,6 @@ export interface RecallResponse {
 		queries: readonly string[];
 		sourceMemoryIds: readonly string[];
 		stoppedReason: "complete" | "no_evidence" | "router_unavailable" | "synthesis_failed";
-		/** True when aggregate planning or synthesis stopped after partial evidence. */
 		partial?: boolean;
 		message?: string;
 		usage?: AggregateRecallUsage;
@@ -288,10 +247,6 @@ function createRecallTimingCollector(): {
 
 export { buildAgentScopeClause } from "./memory-access-scope";
 
-// ---------------------------------------------------------------------------
-// Filter clause builder (private)
-// ---------------------------------------------------------------------------
-
 interface FilterClause {
 	sql: string;
 	args: unknown[];
@@ -300,9 +255,6 @@ interface FilterClause {
 function buildFilterClause(params: RecallParams): FilterClause {
 	const parts: string[] = [];
 	const args: unknown[] = [];
-
-	// Scope isolation: explicit scope filters to that scope, undefined
-	// defaults to excluding all scoped memories from normal searches.
 	if (params.scope !== undefined) {
 		if (params.scope === null) {
 			parts.push("m.scope IS NULL");
@@ -349,7 +301,6 @@ function buildFilterClause(params: RecallParams): FilterClause {
 		parts.push("m.created_at <= ?");
 		args.push(params.until);
 	}
-	// Auth scope enforcement: restrict to token's project when present.
 	if (params.project) {
 		parts.push("m.project = ?");
 		args.push(params.project);
@@ -359,8 +310,6 @@ function buildFilterClause(params: RecallParams): FilterClause {
 		sql: parts.length ? ` AND ${parts.join(" AND ")}` : "",
 		args,
 	};
-
-	// Agent visibility filtering defaults to isolated when an agent is known.
 	if (params.agentId) {
 		const scope = buildAgentScopeClause(params.agentId, params.readPolicy ?? "isolated", params.policyGroup ?? null);
 		return { sql: base.sql + scope.sql, args: [...base.args, ...scope.args] };
@@ -460,10 +409,6 @@ function ontologyClaimToRecallResult(candidate: StructuredClaimCandidate, trunca
 		content: truncated ? `${content.slice(0, truncateChars)} [truncated]` : content,
 		content_length: content.length,
 		truncated,
-		// Source-provenanced active ontology claims represent Dreaming's current
-		// structured truth. Only high-overlap claims are admitted upstream; keep
-		// them prominent enough to beat stale synthesized memories without letting
-		// low-overlap entity context into the result set.
 		score: Math.round(Math.max(0.01, Math.min(1.45, 1 + candidate.score * 0.45)) * 100) / 100,
 		source: "ontology_claim",
 		source_id: candidate.id,
@@ -482,18 +427,6 @@ function normalizeRecallLimit(raw: number | undefined): number {
 	if (typeof raw !== "number" || !Number.isFinite(raw)) return 10;
 	return Math.max(1, Math.min(50, Math.floor(raw)));
 }
-
-// ---------------------------------------------------------------------------
-// FTS5 query sanitization
-// ---------------------------------------------------------------------------
-
-/**
- * Sanitize a query string for FTS5 MATCH.
- *
- * Strips FTS5 syntax characters, removes stop words, and quotes each
- * token as a literal. Short queries (<=3 tokens) use implicit AND for
- * precision; longer queries use OR so BM25 IDF ranks by term importance.
- */
 export function sanitizeFtsQuery(raw: string): string {
 	const tokens = raw
 		.replace(/'/g, " ")
@@ -510,8 +443,6 @@ export function sanitizeFtsQuery(raw: string): string {
 		.filter(Boolean) as string[];
 
 	if (tokens.length === 0) return "";
-	// Short queries (<=3 content tokens): implicit AND for precision.
-	// Longer queries: OR so BM25 IDF ranks by term importance.
 	if (tokens.length <= 3) return tokens.join(" ");
 	return tokens.join(" OR ");
 }
@@ -591,13 +522,6 @@ function normalizeExpansionToken(raw: string): string {
 	if (cleaned.endsWith("s") && cleaned.length > 3) return cleaned.slice(0, -1);
 	return cleaned;
 }
-
-/**
- * Add a small set of mechanical recall expansions for common class-to-instance
- * gaps. This intentionally stays conservative: it only fires for explicit
- * baking/recipe terms, and it feeds FTS/hints only. Semantic vector search and
- * answer generation still see the user's original query.
- */
 export function expandRecallKeywordQuery(raw: string): string {
 	const tokens = raw
 		.split(/\s+/)
@@ -623,10 +547,6 @@ export function expandRecallKeywordQuery(raw: string): string {
 	if (expansions.length === 0) return raw;
 	return `${raw} ${expansions.join(" ")}`;
 }
-
-// ---------------------------------------------------------------------------
-// Rehearsal boost (shared between traversal-primary and legacy paths)
-// ---------------------------------------------------------------------------
 
 async function applyRehearsalBoost(
 	scored: Array<{ id: string; score: number; source: string }>,
@@ -696,12 +616,6 @@ function mergeCandidate(
 		rows.set(row.id, row);
 	}
 }
-
-/**
- * Eligibility for ordinary memory delivery. All owner accessors run migrations
- * before querying, so these lifecycle columns are required. Lineage/history
- * callers do not use this predicate.
- */
 export function currentMemorySql(alias = "m"): string {
 	return ` AND ${alias}.is_deleted = 0 AND ${alias}.superseded_by IS NULL AND ${alias}.stale_at IS NULL`;
 }
@@ -716,8 +630,6 @@ function lexicalFallbackTerms(keywordQuery: string): string[] {
 		),
 	];
 }
-
-/** Keep synchronous lexical fallback within the DB-owner work budget. */
 export const MAX_LEXICAL_FALLBACK_SCAN_ROWS = DB_OWNER_MAX_WORK_UNITS;
 
 async function readLexicalFallbackThroughOwner(
@@ -760,9 +672,6 @@ async function authorizeScoredCandidates(
 	scored: ReadonlyArray<{ id: string; score: number; source: string }>,
 	filter: FilterClause,
 ): Promise<Array<{ id: string; score: number; source: string }>> {
-	// Candidate collectors intentionally cast a wide net. This is the single
-	// pre-content gate for database-backed memories: after this point the IDs
-	// are safe to use in stages that read content or mutate access metadata.
 	const ids = [...new Set(scored.map((row) => row.id))];
 	if (ids.length === 0) return [];
 	const owner = await getDbOwner(getDbAccessorPath());
@@ -1039,10 +948,6 @@ async function buildSourceChunkVectorHits(
 	project?: string,
 ): Promise<SourceChunkVectorHit[]> {
 	if (!queryVec || limit <= 0) return [];
-	// Source chunk embeddings only carry agent_id plus an embedding source_id.
-	// The live artifact table carries project, but not the source root/id needed
-	// to bind an embedding to that project without filename spoofing. Skip this
-	// rescue path for project-scoped recall until the index has that strong key.
 	if (project) return [];
 	try {
 		const owner = await getDbOwner(getDbAccessorPath());
@@ -1440,14 +1345,6 @@ function describeRecallGraphError(error: unknown): {
 function isRecallGraphDeadlineError(error: { readonly code: string | number | null }): boolean {
 	return error.code === "DB_OWNER_DEADLINE" || error.code === "DB_OWNER_CANCELLED";
 }
-
-// ---------------------------------------------------------------------------
-// Main search orchestration
-// ---------------------------------------------------------------------------
-
-// Hints are synthetic retrieval scouts. Pure hint matches should rescue recall,
-// not outrank directly grounded lexical/vector/structured evidence. A hint
-// supported by direct evidence can keep its score; only hint-only rows are capped.
 const HINT_ONLY_SCORE_CAP = 0.75;
 const TEMPORAL_TOPIC_SCORE_CAP = 0.85;
 
@@ -1465,22 +1362,6 @@ function scoreTemporalTopicEvidence(query: string, content: string): number {
 	const density = matched.length / Math.max(8, contentTokens.size);
 	return Math.min(TEMPORAL_TOPIC_SCORE_CAP, 0.35 + coverage * 0.4 + density * 0.1);
 }
-
-/**
- * Run the recall pipeline.
- *
- * The stages are deliberately split into two halves:
- *
- * 1. Candidate collection: FTS, hints, vector, structured path search, and
- *    graph traversal collect IDs and scores. These stages may over-fetch.
- * 2. Authorized content handling: after `authorize_candidates`, later stages
- *    may read content, call rerankers, apply dampening/currentness, hydrate
- *    results, and update access counts.
- *
- * Keep that boundary intact. It is what prevents high-recall channels such as
- * vector search and traversal from leaking out-of-scope content into model or
- * summary paths.
- */
 export async function hybridRecall(
 	params: RecallParams,
 	cfg: ResolvedMemoryConfig,
@@ -1669,9 +1550,6 @@ export async function hybridRecall(
 	const temporalCandidateMap = new Map<string, number>(
 		[...temporalCandidateSet].map((id) => [id, Math.max(minScore, 0.05)]),
 	);
-
-	// Date ranges are handled by resolveTemporalRecall above. The existing
-	// rehearsal stage gets only the distinct, keyword-based freshness signal.
 	const temporalNowMs = Date.now();
 	const freshnessIntent =
 		cfg.search.temporal_prior_enabled && !params.since && !params.until && hasFreshnessIntent(params.query);
@@ -1689,8 +1567,6 @@ export async function hybridRecall(
 		const timed = promise.finally(() => {
 			timings.record("query_embedding_total", embeddingStart);
 		});
-		// The actual error path is handled later at query_embedding_wait, but
-		// Bun can report a fast rejection before synchronous DB work reaches it.
 		timed.catch(() => undefined);
 		return timed;
 	})();
@@ -1714,8 +1590,6 @@ export async function hybridRecall(
 		focalCache = { agentId, value };
 		return value;
 	};
-
-	// --- BM25 keyword search via FTS5 ---
 	const bm25Map = new Map<string, number>();
 	const hintMap = new Map<string, number>();
 	const traversalEvidenceMap = new Map<string, number>();
@@ -1793,10 +1667,6 @@ export async function hybridRecall(
 			error: e instanceof Error ? e.message : String(e),
 		});
 	}
-
-	// --- Prospective hints FTS5 (bridges cue-trigger semantic gap) ---
-	// Hints are hypothetical queries generated at write time. A hint match
-	// elevates its parent memory via Math.max (not additive stacking).
 	if (cfg.pipelineV2.hints?.enabled) {
 		try {
 			await timings.timeAsync("hints_fts", async () => {
@@ -1832,18 +1702,11 @@ export async function hybridRecall(
 				}
 			});
 		} catch (e) {
-			// memory_hints_fts may not exist on pre-038 databases — silent fallback
 			logger.warn("memory", "Hints FTS query failed", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
 	}
-
-	// --- Query embedding (used by reranker even when vector search is skipped) ---
-	// Start embedding before the synchronous lexical/structured DB work above.
-	// Local embedding providers are often the slowest prompt-submit step, so
-	// overlapping that I/O with candidate lookup reduces wall-clock latency
-	// without changing the recall channels or final ranking math.
 	let queryVecF32: Float32Array | null = null;
 	try {
 		const queryVec = await timings.timeAsync("query_embedding_wait", () => queryVecPromise);
@@ -1851,12 +1714,6 @@ export async function hybridRecall(
 	} catch (e) {
 		logger.warn("memory", "Embedding failed", { error: String(e) });
 	}
-
-	// --- Vector search via sqlite-vec ---
-	// sqlite-vec cannot pre-filter by recall scope/project/agent policy, so
-	// constrained queries over-fetch and rely on candidate authorization.
-	// This keeps constrained queries eligible for vector similarity when graph
-	// traversal yields no focal entities.
 	const vectorMap = new Map<string, number>();
 	let vectorCompleteness: VectorSearchCompleteness | undefined;
 	let searchedWindow: number | undefined;
@@ -1889,12 +1746,6 @@ export async function hybridRecall(
 		}
 	}
 	const semanticEvidenceMap = new Map(vectorMap);
-
-	// --- Structured path candidate search ---
-	// SEC can only reshape memories that make it into the candidate pool.
-	// Query the navigable entity/aspect/group/claim path directly so structured
-	// memories can be recalled even when their raw prose does not share enough
-	// surface text with the question.
 	const structuredCandidateMap = new Map<string, number>();
 	let ontologyClaimCandidates: StructuredClaimCandidate[] = [];
 	if (cfg.pipelineV2.graph.enabled) {
@@ -1930,8 +1781,6 @@ export async function hybridRecall(
 			}
 		}
 	}
-
-	// --- Flat search: merge BM25 + vector + structured path candidate scores ---
 	const allIds = new Set([
 		...bm25Map.keys(),
 		...hintMap.keys(),
@@ -1991,8 +1840,6 @@ export async function hybridRecall(
 
 		flatScored.sort((a, b) => b.score - a.score);
 	});
-
-	// --- Score pipeline: traversal-primary vs legacy boost ---
 	const traversalPrimary =
 		cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled && cfg.pipelineV2.traversal?.primary !== false;
 
@@ -2000,7 +1847,6 @@ export async function hybridRecall(
 
 	if (traversalPrimary) {
 		await timings.timeAsync("traversal_primary", async () => {
-			// Channel A: graph traversal (primary retrieval path per DP-6)
 			const traversalScored: Array<{ id: string; score: number; source: string }> = [];
 
 			if (cfg.pipelineV2.traversal) {
@@ -2028,12 +1874,6 @@ export async function hybridRecall(
 								scope: params.scope,
 							});
 							recordGraphResult(traversal);
-
-							// Cosine re-scoring: when query embedding is available,
-							// blend structural importance with semantic similarity so
-							// traversal results rank by relevance, not just graph
-							// proximity. Without this, uniform importance (0.5/0.8)
-							// makes traversal ordering effectively random.
 							const cosineMap = new Map<string, number>();
 							if (queryVecF32 && traversal.memoryScores.size > 0) {
 								const ids = [...traversal.memoryScores.keys()];
@@ -2097,9 +1937,6 @@ export async function hybridRecall(
 					});
 				}
 			}
-
-			// Channel merge: max-fuse overlapping flat/traversal candidates so a
-			// weak graph score never discards stronger lexical/vector evidence.
 			traversalScored.sort((a, b) => b.score - a.score);
 			const candidateBudget = Math.max(limit, Math.min(cfg.search.top_k, limit * 4));
 			const flatIds = new Set(flatScored.map((row) => row.id));
@@ -2123,8 +1960,6 @@ export async function hybridRecall(
 		});
 	} else {
 		scored = flatScored;
-
-		// --- Graph boost: pull up memories linked via knowledge graph ---
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.graph.boostWeight > 0) {
 			try {
 				const graphResult = await timings.timeAsync("graph_boost", async () => {
@@ -2147,8 +1982,6 @@ export async function hybridRecall(
 				});
 			}
 		}
-
-		// --- KA traversal boost: structural one-hop retrieval via KA tables ---
 		if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
 			try {
 				await timings.timeAsync("traversal_boost", async () => {
@@ -2266,9 +2099,6 @@ export async function hybridRecall(
 	if (scored.length > 0) {
 		scored = await authorizeScoredCandidates(scored, filter);
 	}
-
-	// Everything below this point may assume `scored` only contains memory IDs
-	// visible to the caller. Keep new content-bearing stages below this line.
 	const structuredEvidenceMap = new Map(structuredCandidateMap);
 	const temporalTopicEvidenceMap = new Map<string, number>();
 	if (temporalCandidateSet.size > 0 && scored.length > 0) {
@@ -2308,11 +2138,6 @@ export async function hybridRecall(
 		}
 		scored.sort((a, b) => b.score - a.score);
 	}
-
-	// --- Structured Evidence Convolution (SEC-lite) ---
-	// Keep retrieval channels separate until after traversal/boosting. This
-	// prevents graph-only memories from outranking directly anchored evidence,
-	// while still letting prospective hints rescue class-to-instance matches.
 	if (scored.length > 0) {
 		const structuredEvidenceStart = performance.now();
 		try {
@@ -2386,11 +2211,7 @@ export async function hybridRecall(
 	await timings.timeAsync("rehearsal_boost", () =>
 		applyRehearsalBoost(scored, cfg.search, { enabled: freshnessIntent, nowMs: temporalNowMs }),
 	);
-
-	// --- Optional reranker hook ---
 	let recallSummary: string | undefined;
-	// Remaining timeout budget to use for LLM summary after reranking.
-	// Set inside the reranker block; consumed after final results are assembled.
 	let summarizeLeft = 0;
 	if (cfg.pipelineV2.reranker.enabled && scored.length > 0) {
 		const rerankerStageStart = performance.now();
@@ -2399,8 +2220,6 @@ export async function hybridRecall(
 			const topForRerank = scored.slice(0, cfg.pipelineV2.reranker.topN);
 			const rerankIds = topForRerank.map((s) => s.id);
 			const rerankPlaceholders = rerankIds.map(() => "?").join(", ");
-
-			// Fetch content for reranker — cross-encoders need document text
 			const contentRows = await getDbAccessor().withReadDbAsync(
 				async (db) =>
 					db
@@ -2432,8 +2251,6 @@ export async function hybridRecall(
 				model: cfg.pipelineV2.reranker.model,
 				throwOnError: cfg.pipelineV2.reranker.useExtractionModel,
 			});
-			// Update scores from reranked results without collapsing calibrated
-			// relevance into rank-position placeholders.
 			const rerankedMap = new Map(reranked.map((row) => [row.id, row.score]));
 			for (const s of scored) {
 				const score = rerankedMap.get(s.id);
@@ -2450,8 +2267,6 @@ export async function hybridRecall(
 						elapsedMs: elapsed,
 					});
 				} else {
-					// Store remaining budget; summary is generated after final
-					// results are assembled so it is grounded in the recalled set.
 					summarizeLeft = left;
 				}
 			}
@@ -2468,18 +2283,11 @@ export async function hybridRecall(
 			timings.record("reranker", rerankerStageStart);
 		}
 	}
-
-	// --- Post-fusion dampening (DP-16) ---
-	// Three corrections after all scoring but before the final slice:
-	// gravity (penalize zero-term-overlap semantic hits), hub (penalize
-	// high-degree entity dominance), resolution (boost actionable types).
 	if (scored.length > 0) {
 		const dampeningStart = performance.now();
 		try {
 			const dampenIds = scored.map((s) => s.id);
 			const dampenPh = dampenIds.map(() => "?").join(", ");
-
-			// Fetch content + type for dampening analysis
 			const dampenRows = await getDbAccessor().withReadDbAsync(
 				async (db) =>
 					db
@@ -2495,8 +2303,6 @@ export async function hybridRecall(
 				{ siteToken: "db:recall.dampening.metadata" },
 			);
 			const meta = new Map(dampenRows.map((r) => [r.id, r]));
-
-			// Build entity linkage: memory_id -> set of entity_ids
 			const entities = new Map<string, Set<string>>();
 			const degrees = new Map<string, number>();
 
@@ -2522,8 +2328,6 @@ export async function hybridRecall(
 					set.add(row.entity_id);
 					entityIds.add(row.entity_id);
 				}
-
-				// Fetch degree (total mention count) for each linked entity
 				if (entityIds.size > 0) {
 					const eidList = [...entityIds];
 					const eidPh = eidList.map(() => "?").join(", ");
@@ -2544,8 +2348,6 @@ export async function hybridRecall(
 					}
 				}
 			}
-
-			// Assemble ScoredRow array for dampening
 			const dampened = applyDampening(
 				scored
 					.map((s) => {
@@ -2565,8 +2367,6 @@ export async function hybridRecall(
 				entities,
 				degrees,
 			);
-
-			// Write dampened scores back into scored array
 			const dampenedMap = new Map(dampened.map((r) => [r.id, r.score]));
 			for (const s of scored) {
 				const ds = dampenedMap.get(s.id);
@@ -2630,10 +2430,6 @@ export async function hybridRecall(
 			return (bObserved ?? b.score) - (aObserved ?? a.score);
 		});
 	});
-
-	// Over-fetch before hydration for constrained searches. Broad candidate
-	// channels can include IDs that candidate authorization or hydration drops.
-	// 3x compensates for the expected discard rate.
 	const preHydrate = selectionDedupeEnabled
 		? Math.max(needsPostFilter ? limit * 3 : limit, Math.min(scored.length, Math.max(limit * 4, limit + 10)))
 		: needsPostFilter
@@ -2752,10 +2548,6 @@ export async function hybridRecall(
 			},
 		});
 	}
-
-	// --- Fetch full memory rows ---
-	// Hydration uses the same auth/scope/project filter as candidate
-	// authorization so no alternate path can widen access.
 	const placeholders = topIds.map(() => "?").join(", ");
 
 	const rows = await timings.timeAsync(
@@ -2801,8 +2593,6 @@ export async function hybridRecall(
 		{ siteToken: "db:recall.final-candidates.safety" },
 	);
 	const rowMap = new Map(safeRows.map((r) => [r.id, r]));
-	// No pre-decrement: always fetch `limit` memories. The summary card is
-	// injected after assembly and the array is capped to `limit` at that point.
 	let results: RecallResult[] = timings.time("assemble_results", () =>
 		suppressPreviouslyRecalledForSelection(
 			scored
@@ -2932,10 +2722,6 @@ export async function hybridRecall(
 			results.push(row);
 		}
 	}
-
-	// Generate LLM summary from the final recalled set (not pre-filter candidates).
-	// Skip when limit < 2: can't fit a summary card without evicting the only
-	// real memory, which would leave the caller with nothing to verify against.
 	if (summarizeLeft > 0 && results.length > 0 && limit >= 2) {
 		const llmSummaryStart = performance.now();
 		try {
@@ -2978,8 +2764,6 @@ export async function hybridRecall(
 			results.unshift(summary[0]);
 		}
 	}
-
-	// --- Decision-rationale linking: auto-fetch linked rationale memories ---
 	const decisionIds = results.filter((r) => r.type === "decision").map((r) => r.id);
 	const existingIds = new Set(results.map((r) => r.id));
 
@@ -3077,8 +2861,6 @@ export async function hybridRecall(
 			timings.record("rationale_linking", rationaleStart);
 		}
 	}
-
-	// --- Entity context + constructed memories (DP-7) ---
 	let entityContext: RecallResponse["entities"];
 	let focalEids: string[] = [];
 
@@ -3191,12 +2973,6 @@ export async function hybridRecall(
 			timings.record("entity_context", entityContextStart);
 		}
 	}
-
-	// --- Constructed memories: synthesize from graph paths (DP-7) ---
-	// Constructed cards use structural density as their score, which is
-	// query-independent. To prevent large entity cards from outranking
-	// actual memories that answer the query, cap their scores below the
-	// lowest real result score.
 	if (focalEids.length > 0) {
 		const constructedStart = performance.now();
 		try {

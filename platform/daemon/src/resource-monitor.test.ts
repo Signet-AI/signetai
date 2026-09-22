@@ -110,9 +110,9 @@ describe("getResourceSnapshot", () => {
 	it("parses macOS proc_pidinfo FD records without using Linux procfs", () => {
 		const raw = new Uint8Array(24);
 		const view = new DataView(raw.buffer);
-		view.setUint32(4, 2, true); // socket
-		view.setUint32(12, 6, true); // pipe
-		view.setUint32(20, 1, true); // vnode, path categories are unavailable
+		view.setUint32(4, 2, true);
+		view.setUint32(12, 6, true);
+		view.setUint32(20, 1, true);
 
 		expect(parseMacOsFdInfo(raw)).toEqual({
 			total: 3,

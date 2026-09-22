@@ -1,34 +1,9 @@
-/**
- * Event-loop occupancy probe loaded into the daemon process itself.
- *
- * The daemon is spawned with `bun --preload <this file>` so the probe shares
- * the exact event loop whose stalls we are judging. Sampling uses
- * perf_hooks.monitorEventLoopDelay with a 20ms resolution. Under Bun the
- * histogram reports NANOSECONDS (Node semantics); every value is converted
- * to milliseconds on read.
- *
- * The probe is passive by design and judge-safe:
- *  - it never imports daemon code and never touches the database;
- *  - it binds its own loopback HTTP listener on SIGNET_PHASE_D_PROBE_PORT
- *    (separate from the daemon port) exposing GET /probe and POST /phase;
- *  - its 1s drain timer only reads histogram aggregates, so the probe cannot
- *    itself produce a block remotely close to the 2000ms budget.
- *
- * Judged series: the per-drain-interval MAX event-loop delay. If the loop is
- * blocked for N ms inside a second, that second's max is >= N. A block that
- * spans a drain boundary is charged to the window where the drain finally
- * ran, so a single >= budget block is always recorded at least once.
- */
-
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import { createServer } from "node:http";
 
 interface LoopBlockEvent {
-	/** Wall-clock time the window was observed, ms since epoch. */
 	readonly at: number;
-	/** Measured delay of the window in ms. */
 	readonly ms: number;
-	/** Coarse phase marker: "startup" | "run" (set by the harness). */
 	phase: string;
 }
 
@@ -43,7 +18,6 @@ const histogram = monitorEventLoopDelay({ resolution: 20 });
 histogram.enable();
 
 const drain = setInterval(() => {
-	// The histogram API exposes aggregates, not per-window values.
 	const maxMs = histogram.max / 1e6;
 	if (Number.isFinite(maxMs) && maxMs > SAMPLE_FLOOR_MS) {
 		samples.push(maxMs);
@@ -108,7 +82,5 @@ if (Number.isInteger(port) && port > 0) {
 	server.listen(port, "127.0.0.1");
 	server.unref();
 } else {
-	// No port configured: samples are still recorded in-process; a local run
-	// can read them via the daemon process's globalThis if needed.
 	console.error("[phase-d-probe] SIGNET_PHASE_D_PROBE_PORT not set; probe server disabled");
 }

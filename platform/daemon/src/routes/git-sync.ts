@@ -88,9 +88,7 @@ function killProcessTree(proc: ChildProcessWithoutNullStreams, signal: NodeJS.Si
 			return;
 		}
 		proc.kill(signal);
-	} catch {
-		/* best-effort */
-	}
+	} catch {}
 }
 
 async function runBoundedCommand(cmd: string, args: string[], options?: CommandOptions): Promise<CommandResult> {
@@ -360,7 +358,6 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 					logger.warn("git", "Native secrets keyring unavailable; trying gh CLI credentials fallback");
 				}
 			}
-			/* ignore */
 		}
 
 		try {
@@ -372,9 +369,7 @@ async function resolveGitCredentials(dir: string, remote: string): Promise<GitCr
 					authUrl: buildAuthUrlFromToken(remoteUrl, ghToken),
 				};
 			}
-		} catch {
-			/* ignore */
-		}
+		} catch {}
 	}
 
 	if (keychainLocked) return { method: "keychain-locked" };
@@ -705,9 +700,7 @@ export async function stopGitSyncTimer(options?: { readonly shutdown?: boolean }
 	if (gitSyncPromise) {
 		try {
 			await gitSyncPromise;
-		} catch {
-			// best-effort
-		}
+		} catch {}
 		gitSyncPromise = null;
 	}
 }
@@ -895,9 +888,7 @@ function canonicalPathForContainment(path: string): string {
 		if (parent !== absolute && existsSync(parent)) {
 			try {
 				return join(realpathSync.native(parent), basename(absolute));
-			} catch {
-				// Fall through to the normalized absolute path.
-			}
+			} catch {}
 		}
 		return absolute;
 	}

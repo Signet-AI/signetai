@@ -1,10 +1,3 @@
-/**
- * Detect existing Signet workspaces and installed harnesses.
- *
- * Workspace identity files are shared core data. Harness installation paths are
- * integration policy, so their detection stays at the CLI boundary.
- */
-
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -13,29 +6,17 @@ import { hasPiSetup } from "@signet/connector-pi";
 import { IDENTITY_FILES, resolveHermesRepoPath, resolveKimiHomePath } from "@signet/core";
 
 export interface SetupDetection {
-	/** Base path checked */
 	basePath: string;
-	/** Whether the base directory exists */
 	agentsDir: boolean;
-	/** Whether agent.yaml exists */
 	agentYaml: boolean;
-	/** Whether AGENTS.md exists */
 	agentsMd: boolean;
-	/** Whether config.yaml exists */
 	configYaml: boolean;
-	/** Whether memories.db exists */
 	memoryDb: boolean;
-	/** Found identity files */
 	identityFiles: string[];
-	/** Whether memory directory exists with logs */
 	hasMemoryDir: boolean;
-	/** Number of memory log files */
 	memoryLogCount: number;
-	/** Whether .clawdhub/lock.json exists (OpenClaw skills registry) */
 	hasClawdhub: boolean;
-	/** Whether ~/.claude/skills/ exists */
 	hasClaudeSkills: boolean;
-	/** Detected installed harnesses */
 	harnesses: {
 		claudeCode: boolean;
 		openclaw: boolean;
@@ -56,13 +37,6 @@ function isBinaryOnPath(bin: string): boolean {
 		.split(separator)
 		.some((directory) => directory.length > 0 && existsSync(join(directory, bin)));
 }
-
-/**
- * Detect existing identity setup at a given path.
- *
- * This is a CLI/setup concern: the core package owns identity data and
- * primitives, while this boundary composes integration-specific detectors.
- */
 export function detectExistingSetup(basePath: string): SetupDetection {
 	const identityFileNames = Object.values(IDENTITY_FILES).map((spec) => spec.path);
 
@@ -81,9 +55,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 			memoryLogCount = files.filter(
 				(fileName: string) => fileName.endsWith(".md") && !fileName.startsWith("TEMPLATE"),
 			).length;
-		} catch {
-			// Ignore errors.
-		}
+		} catch {}
 	}
 
 	const home = process.env.HOME?.trim() || process.env.USERPROFILE?.trim() || homedir();

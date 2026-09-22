@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Attribute projections are semantic state, never primary evidence. Existing
- * v102 projections used NULL for the generic daemon-derived lane; give this
- * materialized semantic surface an explicit kind before later readers grow
- * beyond the episodic-only predicate.
- */
 export function up(db: MigrationDb): void {
 	const tables = db
 		.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('memories', 'entity_attributes')")

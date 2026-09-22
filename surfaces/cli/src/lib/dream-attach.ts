@@ -141,8 +141,6 @@ function formatElapsed(startedAt: string): string {
 		? `${hours}h${String(minutes).padStart(2, "0")}m`
 		: `${minutes}m${String(seconds).padStart(2, "0")}s`;
 }
-
-/** Read-only Pi TUI component used by dream attach. It intentionally has no editor/input child. */
 export class DreamingAttachView implements Component {
 	private snapshot: DreamingAttachSnapshot | undefined;
 	private readonly events: DreamingAttachEvent[] = [];
@@ -270,7 +268,6 @@ export class DreamingAttachView implements Component {
 			this.invalidateAndRender();
 			return;
 		}
-		// All other input is intentionally ignored: this is not a chat/editor UI.
 	}
 
 	render(width: number): string[] {
@@ -364,9 +361,7 @@ export async function readSseStream(
 		signal.removeEventListener("abort", cancelOnAbort);
 		try {
 			await reader.cancel();
-		} catch {
-			// The daemon may already have closed the response.
-		}
+		} catch {}
 		reader.releaseLock();
 	}
 }

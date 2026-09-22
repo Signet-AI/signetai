@@ -1,9 +1,6 @@
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 
 const HOUR_MS = 60 * 60 * 1000;
-// A batch can make sequential provider calls. Keep the owner lease alive for
-// the whole hourly accounting window so a slow but healthy batch cannot be
-// duplicated by a restarted daemon halfway through that work.
 const MIN_LEASE_MS = HOUR_MS;
 
 export interface EmbeddingRepairKey {
@@ -290,9 +287,6 @@ export async function acquireEmbeddingRepairLease(
 			if (batchesStarted >= hourlyBudget) {
 				return { allowed: false, reason: `embedding repair hourly budget exhausted (${hourlyBudget} batches/hr)` };
 			}
-
-			// A lease serializes provider work. The hourly slot is charged only when
-			// finishEmbeddingRepairLease can persist an outcome for the active profile.
 			const lease: EmbeddingRepairLease = { id: crypto.randomUUID() };
 			const windowStart = inWindow ? row.window_started_at : iso(now);
 			const leaseMs = Math.max(MIN_LEASE_MS, cooldownMs);
@@ -371,7 +365,6 @@ export async function finishEmbeddingRepairLease(
 	lease: EmbeddingRepairLease,
 	outcome: {
 		readonly successful: readonly EmbeddingRepairKey[];
-		/** Number of committed rows when the caller uses a bounded repair action. */
 		readonly affected?: number;
 		readonly failed: readonly EmbeddingRepairKey[];
 		readonly model: string;
@@ -421,9 +414,6 @@ export async function finishEmbeddingRepairLease(
 				const windowStartedAt = validWindowStart(current.window_started_at, now);
 				const inWindow = windowStartedAt !== null && now - windowStartedAt < HOUR_MS;
 				const batchesStarted = inWindow ? current.batches_started : 0;
-				// A lease serializes attempted work, but the hourly budget represents
-				// completed repair work. A pressure abort can still persist failure
-				// backoff while releasing its lease without spending a batch slot.
 				const charged = outcome.successful.length > 0 || (outcome.affected ?? 0) > 0;
 				const error = outcome.error ?? (outcome.failed.length > 0 ? "embedding provider returned no vector" : null);
 				db.prepare(
@@ -457,9 +447,6 @@ export async function finishEmbeddingRepairLease(
 			{ siteToken: "db:repair.lease.finish" },
 		);
 	} catch (error) {
-		// A failure while persisting provider/backoff accounting must not strand
-		// the durable lease until its expiry. Best-effort release preserves the
-		// original error while allowing the next repair request to proceed.
 		try {
 			await accessor.withWriteTxAsync(
 				(db: import("./db-accessor").WriteDb) => {
@@ -471,10 +458,7 @@ export async function finishEmbeddingRepairLease(
 				},
 				{ siteToken: "db:repair.lease.release-after-error" },
 			);
-		} catch {
-			// Preserve the original failure; a later lease-expiry recovery can
-			// still reclaim the row if the fallback transaction also fails.
-		}
+		} catch {}
 		throw error;
 	}
 }

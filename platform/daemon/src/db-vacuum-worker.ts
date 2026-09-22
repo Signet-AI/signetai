@@ -1,11 +1,3 @@
-/**
- * Post-readiness vacuum orchestration.
- *
- * This module may depend on the DB-owner runtime. Foundational vacuum state
- * and SQLite primitives live in db-vacuum.ts so the accessor never imports
- * this higher-level orchestration layer.
- */
-
 import type { DbAccessor } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
 import { ownerQueryOne, ownerRunStatement, ownerTransaction } from "./db-owner-maintenance";
@@ -31,8 +23,6 @@ export interface VacuumConversionHandle {
 	stop(): void;
 	run(): Promise<VacuumConversionStatus>;
 }
-
-/** Reclaim free pages in bounded batches with a real durable resume record. Conversion remains monolithic. */
 export async function reclaimIncrementalVacuum(
 	owner: DbOwnerClient,
 	opts: IncrementalReclaimOptions = {},
@@ -74,12 +64,6 @@ export async function reclaimIncrementalVacuum(
 	}
 	return { reclaimed, remaining };
 }
-
-/**
- * Start the post-ready one-shot conversion worker. The timer yields once so
- * the listening callback can return and readiness can be recorded before work
- * begins.
- */
 export function startVacuumConversionWorker(
 	accessor: DbAccessor,
 	opts: { readonly owner: DbOwnerClient; readonly startImmediately?: boolean },

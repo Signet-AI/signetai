@@ -1,8 +1,3 @@
-/**
- * Hono middleware for auth: token validation, permission checks,
- * scope enforcement, and rate limiting.
- */
-
 import type { Context, MiddlewareHandler } from "hono";
 import { isSignetApiKey } from "./api-keys";
 import type { AuthConfig } from "./config";
@@ -10,8 +5,6 @@ import { checkPermission, checkScope } from "./policy";
 import type { AuthRateLimiter } from "./rate-limiter";
 import { verifyToken } from "./tokens";
 import type { AuthResult, Permission, TokenScope } from "./types";
-
-// Augment Hono context variables
 declare module "hono" {
 	interface ContextVariableMap {
 		auth: AuthResult;
@@ -29,9 +22,6 @@ const LOOPBACK = new Set(["127.0.0.1", "::1", "::ffff:127.0.0.1"]);
 
 export function isAuthOpenPath(path: string): boolean {
 	if (path === "/health" || path === "/health/live" || path === "/health/ready") return true;
-	// Lightweight, unauthenticated environment probe so the dashboard can
-	// distinguish "talking to a real daemon" from the marketing site or
-	// cloud app without a token (issue #1001).
 	if (path === "/api/mode") return true;
 	if (path === "/api/auth/login" || path === "/api/auth/methods" || path === "/api/auth/whoami") return true;
 	if (path.startsWith("/api/auth/sso/") || path.startsWith("/api/auth/saml/")) return true;
@@ -47,10 +37,6 @@ function isDashboardRequest(c: Context): boolean {
 	if (path === "/" || path.includes(".")) return true;
 	return c.req.header("accept")?.includes("text/html") ?? false;
 }
-
-// Check actual TCP peer address (not spoofable). Returns false (fail closed)
-// when socket info is unavailable — never falls back to the Host header,
-// which can be spoofed behind reverse proxies.
 export function getPeerAddress(c: Context): string | null {
 	try {
 		const addr = (c.env as Record<string, unknown>)?.incoming as { socket?: { remoteAddress?: string } } | undefined;
@@ -88,23 +74,17 @@ export function createAuthMiddleware(
 			await next();
 			return;
 		}
-
-		// Local mode: no auth required at all
 		if (config.mode === "local") {
 			c.set("auth", { authenticated: false, claims: null });
 			await next();
 			return;
 		}
-
-		// Hybrid mode: localhost requests skip token requirement
 		if (config.mode === "hybrid" && isLocalhost(c)) {
 			const token = extractBearerToken(c.req.header("authorization"));
 			if (token && isSignetApiKey(token) && verifyApiKey) {
-				// If they send an API key anyway, validate it
 				const result = verifyApiKey(token);
 				c.set("auth", result);
 			} else if (token && secret) {
-				// If they send a token anyway, validate it
 				const result = verifyToken(secret, token);
 				c.set("auth", result);
 			} else {
@@ -113,8 +93,6 @@ export function createAuthMiddleware(
 			await next();
 			return;
 		}
-
-		// Team mode (or hybrid+remote): token required
 		const token = extractBearerToken(c.req.header("authorization"));
 		if (!token) {
 			c.status(401);
@@ -142,8 +120,6 @@ export function createAuthMiddleware(
 export function requirePermission(permission: Permission, config: AuthConfig): MiddlewareHandler {
 	return async (c, next) => {
 		const auth = c.get("auth");
-
-		// In hybrid mode, localhost without token gets full access
 		if (config.mode === "hybrid" && isLocalhost(c) && (!auth || !auth.claims)) {
 			await next();
 			return;
@@ -181,15 +157,12 @@ export function requireScope(getTarget: (c: Context) => TokenScope, config: Auth
 
 export function requireRateLimit(operation: string, limiter: AuthRateLimiter, config: AuthConfig): MiddlewareHandler {
 	return async (c, next) => {
-		// No rate limiting in local mode
 		if (config.mode === "local") {
 			await next();
 			return;
 		}
 
 		const auth = c.get("auth");
-		// Never derive rate limit keys from untrusted headers —
-		// unauthenticated requests share the "anonymous" bucket.
 		const actor = auth?.claims?.sub ?? "anonymous";
 		const key = `${actor}:${operation}`;
 

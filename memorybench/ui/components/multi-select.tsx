@@ -33,8 +33,6 @@ export function MultiSelect({
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
-
-  // Calculate dropdown position
   useEffect(() => {
     if (open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
@@ -45,15 +43,11 @@ export function MultiSelect({
       })
     }
   }, [open])
-
-  // Focus search input when opened
   useEffect(() => {
     if (open && searchable && inputRef.current) {
       setTimeout(() => inputRef.current?.focus(), 0)
     }
   }, [open, searchable])
-
-  // Click outside handler
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       const target = event.target as Node
@@ -73,8 +67,6 @@ export function MultiSelect({
     }
     return () => document.removeEventListener("mousedown", handleClickOutside)
   }, [open])
-
-  // Filter options based on search
   const filteredOptions = search
     ? options.filter((opt) => opt.label.toLowerCase().includes(search.toLowerCase()))
     : options
@@ -98,7 +90,7 @@ export function MultiSelect({
 
   return (
     <>
-      {/* Trigger button */}
+      {}
       <button
         ref={triggerRef}
         type="button"
@@ -124,7 +116,7 @@ export function MultiSelect({
         </svg>
       </button>
 
-      {/* Dropdown - rendered via portal */}
+      {}
       {open &&
         typeof document !== "undefined" &&
         createPortal(
@@ -138,7 +130,7 @@ export function MultiSelect({
               boxShadow: "0 4px 16px rgba(34, 34, 34, 0.5)",
             }}
           >
-            {/* Search input */}
+            {}
             {searchable && (
               <div className="p-2 border-b border-[#333333]">
                 <div className="relative">
@@ -167,7 +159,7 @@ export function MultiSelect({
               </div>
             )}
 
-            {/* Options list */}
+            {}
             <div className="max-h-64 overflow-y-auto">
               {filteredOptions.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-text-muted">No options found</div>
@@ -185,7 +177,7 @@ export function MultiSelect({
                       )}
                       onClick={() => toggleOption(option.value)}
                     >
-                      {/* Checkbox */}
+                      {}
                       <div
                         className={cn(
                           "w-4 h-4 rounded border flex items-center justify-center flex-shrink-0",
@@ -205,10 +197,10 @@ export function MultiSelect({
                         )}
                       </div>
 
-                      {/* Label */}
+                      {}
                       <span className="flex-1 truncate">{option.label}</span>
 
-                      {/* Count */}
+                      {}
                       {option.count !== undefined && (
                         <span className="text-text-muted text-xs">{option.count}</span>
                       )}

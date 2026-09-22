@@ -1,14 +1,3 @@
-/**
- * Shared message types and type guards for the synthesis render worker
- * thread protocol. Imported by both the worker script and the host
- * (hooks.ts, daemon.ts) so message shape changes produce compile errors
- * on both sides.
- */
-
-// ---------------------------------------------------------------------------
-// Request types (host → worker)
-// ---------------------------------------------------------------------------
-
 export type InitRequest = {
 	readonly type: "init";
 	readonly dbPath: string;
@@ -22,10 +11,6 @@ export type RenderRequest = {
 };
 
 export type WorkerRequest = InitRequest | RenderRequest;
-
-// ---------------------------------------------------------------------------
-// Response types (worker → host)
-// ---------------------------------------------------------------------------
 
 export type ReadyResponse = {
 	readonly type: "ready";
@@ -46,10 +31,6 @@ export type RenderError = {
 };
 
 export type WorkerResponse = ReadyResponse | RenderResult | RenderError;
-
-// ---------------------------------------------------------------------------
-// Type guards
-// ---------------------------------------------------------------------------
 
 export function isObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;

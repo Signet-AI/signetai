@@ -14,28 +14,20 @@ pstats() {
 echo "=== BASELINE FDs ==="
 curl -s $BASE/health | python3 -c "import json,sys; d=json.load(sys.stdin); r=d['resources']; print(f'  total={r[\"total\"]} memoryMd={r[\"memoryMd\"]} sockets={r[\"sockets\"]} db={r[\"db\"]} RSS={r[\"rss\"]}MB heap={r[\"heapUsed\"]}MB uptime={d[\"uptime\"]:.0f}s')"
 echo ""
-
-# 1) Health
 echo "=== /health (100 seq) ==="
 for i in $(seq 1 100); do
   curl -s $BASE/health -o /dev/null -w "%{time_total}\n"
 done | pstats
-
-# 2) Memory search
 echo "=== /memory/search (100 seq) ==="
 queries=("session summary" "pipeline extraction" "knowledge graph" "memory artifact" "daemon config" "file watcher" "chokidar ignore" "sqlite fts5" "identity soul" "agent yaml")
 for i in $(seq 1 100); do
   q="${queries[$((i % 10))]}"
   curl -s -X POST $BASE/memory/search -H 'Content-Type: application/json' -d "{\"query\":\"$q\",\"limit\":5}" -o /dev/null -w "%{time_total}\n"
 done | pstats
-
-# 3) Config
 echo "=== /api/config (100 seq) ==="
 for i in $(seq 1 100); do
   curl -s $BASE/api/config -o /dev/null -w "%{time_total}\n"
 done | pstats
-
-# 4) Session-start hook
 echo "=== /api/hooks/session-start (20 seq) ==="
 for i in $(seq 1 20); do
   curl -s -X POST $BASE/api/hooks/session-start \
@@ -44,8 +36,6 @@ for i in $(seq 1 20); do
     -d "{\"sessionKey\":\"stress-a-$i\",\"agentId\":\"default\",\"project\":\"/tmp/stress\",\"harness\":\"opencode\"}" \
     -o /dev/null -w "%{time_total}\n"
 done | pstats
-
-# 5) Checkpoint extract
 echo "=== /api/hooks/session-checkpoint-extract (30 seq) ==="
 for i in $(seq 1 30); do
   sid="stress-a-$((i % 20 + 1))"
@@ -55,8 +45,6 @@ for i in $(seq 1 30); do
     -d "{\"sessionKey\":\"$sid\",\"agentId\":\"default\",\"harness\":\"opencode\",\"messages\":[{\"role\":\"user\",\"content\":\"stress test extraction message $i with enough content to trigger pipeline processing and entity extraction\"},{\"role\":\"assistant\",\"content\":\"This is a synthetic response for stress testing the extraction pipeline under load with the FD fix applied.\"}]}" \
     -o /dev/null -w "%{time_total}\n"
 done | pstats
-
-# 6) Synthesis request
 echo "=== /api/hooks/synthesis (20 seq) ==="
 for i in $(seq 1 20); do
   curl -s -X POST $BASE/api/hooks/synthesis \
@@ -65,22 +53,16 @@ for i in $(seq 1 20); do
     -d '{"agentId":"default","sessionKey":"stress-synth-1"}' \
     -o /dev/null -w "%{time_total}\n"
 done | pstats
-
-# 7) Synthesis status
 echo "=== /api/synthesis/status (50 seq) ==="
 for i in $(seq 1 50); do
   curl -s $BASE/api/synthesis/status -o /dev/null -w "%{time_total}\n"
 done | pstats
-
-# 8) Synthesis trigger
 echo "=== /api/synthesis/trigger (5 seq) ==="
 for i in $(seq 1 5); do
   curl -s -X POST $BASE/api/synthesis/trigger \
     -H 'Content-Type: application/json' \
     -o /dev/null -w "%{time_total}\n"
 done | pstats
-
-# 9) Recall hook
 echo "=== /api/hooks/recall (30 seq) ==="
 for i in $(seq 1 30); do
   sid="stress-a-$((i % 20 + 1))"
@@ -122,8 +104,6 @@ for i in $(seq 1 100); do
   esac
 done
 wait
-
-# Per-endpoint breakdown from mixed
 for ep in health search config extract synthesis synth-status recall; do
   cnt=$(grep "^$ep " "$tmpfile" | wc -l)
   if [ "$cnt" -gt 0 ]; then

@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 055: Dreaming state tracking
- *
- * Tracks accumulated summary tokens and dreaming pass history
- * for the token-budget memory consolidation system.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_state (

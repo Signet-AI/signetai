@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Durable source-level pause and frontier for provider-gated native sync. */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS native_source_sync_state (

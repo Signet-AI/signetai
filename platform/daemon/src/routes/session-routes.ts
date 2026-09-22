@@ -84,8 +84,6 @@ export interface SessionRoutesDeps {
 
 export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void {
 	const { gitConfig: gc, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync } = deps;
-
-	// Permission guards
 	app.use("/api/sessions/summaries", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
@@ -176,7 +174,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 					project: scopedProject.project,
 					limit,
 				}),
-			"routes/session-routes.ts:168",
+			"routes/session-routes.ts:166",
 		);
 		return c.json({ query, hits, count: hits.length });
 	});
@@ -349,7 +347,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		const tableExists = accessor.withReadDb(
 			(db: import("../db-accessor").ReadDb) =>
 				db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_summaries'`).get(),
-			"routes/session-routes.ts:349",
+			"routes/session-routes.ts:347",
 		);
 		if (!tableExists) {
 			return c.json({ summaries: [], total: 0 });
@@ -400,7 +398,7 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 				summaries: enriched,
 				total: countRow?.cnt ?? 0,
 			});
-		}, "routes/session-routes.ts:359");
+		}, "routes/session-routes.ts:357");
 	});
 
 	app.post("/api/sessions/summaries/expand", async (c) => {
@@ -440,8 +438,6 @@ export function registerSessionRoutes(app: Hono, deps: SessionRoutesDeps): void 
 		}
 		return c.json(result);
 	});
-
-	// Git Sync API
 
 	app.get("/api/git/status", async (c) => {
 		try {

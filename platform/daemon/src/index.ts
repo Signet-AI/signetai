@@ -1,8 +1,3 @@
-/**
- * @signet/daemon
- * Background service for Signet
- */
-
 export { createDbOwnerClient } from "./db-owner-client";
 export type {
 	DbOwnerClient,

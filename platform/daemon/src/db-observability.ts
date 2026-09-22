@@ -1,11 +1,3 @@
-/**
- * Bounded, process-local observability for database-owner boundaries.
- *
- * The accessor owns SQLite execution. This module records only bounded numeric
- * samples and stable operation labels, so diagnostics never need to query the
- * database or retain user data while the event loop is under pressure.
- */
-
 import {
 	getSyncDbAttributionMetrics,
 	getSyncDbCallSitesForWindow,
@@ -79,9 +71,7 @@ export interface EventLoopLiveness {
 	readonly heartbeatIntervalMs: number;
 	readonly lagP95Ms: number | null;
 	readonly lagP99Ms: number | null;
-	/** Monotonic id for each newly latched wedge, used to avoid duplicate logs. */
 	readonly latchId: number;
-	/** Transitional synchronous DB sites that overlapped the latched stall. */
 	readonly syncDbCallSites: readonly string[];
 }
 
@@ -105,9 +95,6 @@ let failed = 0;
 let completed = 0;
 let eventLoopHeartbeatAtMs = Date.now();
 let eventLoopHeartbeatIntervalMs = DEFAULT_EVENT_LOOP_HEARTBEAT_INTERVAL_MS;
-// A late monitor fire is retained until the next on-time fire. The timer
-// callback updates eventLoopHeartbeatAtMs immediately, so the observed stall
-// must be kept separately for a queued liveness request to see it.
 let eventLoopLatchedStatus: EventLoopHealthStatus = "ok";
 let eventLoopLatchedStallMs = 0;
 let eventLoopLatchedSyncDbCallSites: readonly string[] = [];
@@ -150,12 +137,6 @@ export function recordEventLoopLag(lagMs: number): void {
 	if (!finite(lagMs)) return;
 	appendBounded(eventLoopLagSamples, lagMs);
 }
-
-/**
- * Classify time beyond the expected heartbeat interval without reading any
- * subsystem state. The interval itself is not a stall: a healthy heartbeat
- * may fire anywhere inside its interval window.
- */
 export function computeEventLoopStall(
 	lastHeartbeatAtMs: number,
 	nowMs: number,
@@ -169,8 +150,6 @@ export function computeEventLoopStall(
 		stallSeconds: stallMs / 1000,
 	};
 }
-
-/** Establish a monitor-era baseline without classifying the preceding gap. */
 export function establishEventLoopHeartbeatBaseline(firedAtMs: number, heartbeatIntervalMs: number): void {
 	eventLoopHeartbeatAtMs = firedAtMs;
 	eventLoopHeartbeatIntervalMs = heartbeatIntervalMs;
@@ -178,12 +157,9 @@ export function establishEventLoopHeartbeatBaseline(firedAtMs: number, heartbeat
 	eventLoopLatchedStallMs = 0;
 	eventLoopLatchedSyncDbCallSites = [];
 }
-
-/** Record a fire from the shared event-loop monitor interval. */
 export function recordEventLoopHeartbeat(firedAtMs: number, heartbeatIntervalMs: number): void {
 	const observed = computeEventLoopStall(eventLoopHeartbeatAtMs, firedAtMs, heartbeatIntervalMs);
 	if (observed.status === "ok") {
-		// One healthy, on-time fire is the explicit decay rule for a prior wedge.
 		eventLoopLatchedStatus = "ok";
 		eventLoopLatchedStallMs = 0;
 		eventLoopLatchedSyncDbCallSites = [];
@@ -233,8 +209,6 @@ export function getDbRuntimeMetrics(): DbRuntimeMetrics {
 		syncDb: getSyncDbAttributionMetrics(),
 	};
 }
-
-/** A cheap probe for liveness routes. It never reads database state. */
 export function getEventLoopLiveness(nowMs = Date.now()): EventLoopLiveness {
 	const lag = percentiles(eventLoopLagSamples);
 	const current = computeEventLoopStall(eventLoopHeartbeatAtMs, nowMs, eventLoopHeartbeatIntervalMs);
@@ -256,8 +230,6 @@ export function getEventLoopLiveness(nowMs = Date.now()): EventLoopLiveness {
 		syncDbCallSites: eventLoopLatchedSyncDbCallSites,
 	};
 }
-
-/** Reset bounded process-local state between daemon test cases. */
 export function resetDbObservability(): void {
 	operationSamples.length = 0;
 	eventLoopLagSamples.length = 0;

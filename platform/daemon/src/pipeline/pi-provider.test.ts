@@ -118,9 +118,7 @@ describe("pi provider catalog models", () => {
 			if (!streamWithUsage) throw new Error("expected Pi stream support");
 			const result = await streamWithUsage("non-interactive stream", { sessionId: "request-session" });
 			const reader = result.stream.getReader();
-			while (!(await reader.read()).done) {
-				// Drain the stream so the upstream request settles.
-			}
+			while (!(await reader.read()).done) {}
 
 			expect(requestHeaders).toHaveLength(3);
 			expect(requestHeaders[0]?.get("x-opencode-session")).toBeNull();

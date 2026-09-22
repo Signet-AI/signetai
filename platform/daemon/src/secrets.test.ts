@@ -328,8 +328,6 @@ describe("local secrets provider", () => {
 		if (process.platform !== "win32") {
 			expect(statSync(machineIdFile()).mode & 0o777).toBe(0o600);
 		}
-
-		// Re-derive the key as a fresh process would, after the platform resolver recovers.
 		setMachineIdResolverForTests(() => "ioreg-id-after-transient-failure");
 		expect(await getSecret("OPENAI_API_KEY")).toBe("«redacted:sk-…»");
 		expect(readFileSync(machineIdFile(), "utf-8")).toBe(persistedMachineId);

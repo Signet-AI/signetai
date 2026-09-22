@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-#
-# commit-msg hook: reject commits with default AI co-authored-by lines
-#
-# Blocks the boilerplate "Co-Authored-By: Claude" lines that Anthropic
-# injects into every Claude Code commit by default.
 
 COMMIT_MSG_FILE="$1"
 

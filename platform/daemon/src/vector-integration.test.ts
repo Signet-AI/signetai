@@ -1,21 +1,8 @@
-/**
- * Integration tests for native vector operations in the real data flow.
- *
- * Verifies that vectorToBlob (native when available) writes correct blobs
- * to SQLite, that cosineSimilarity (native when available) scores them
- * correctly on read-back, and that KNN edge building produces correct
- * graph topology.
- */
-
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { cosineSimilarity } from "@signet/core";
 import { runMigrations } from "../../core/src/migrations";
 import { vectorToBlob } from "./db-helpers";
-
-// ---------------------------------------------------------------------------
-// Helpers (same pattern as repair-actions.test.ts)
-// ---------------------------------------------------------------------------
 
 function insertMemory(db: Database, id: string, content: string): void {
 	const now = new Date().toISOString();
@@ -33,10 +20,6 @@ function insertEmbedding(db: Database, id: string, sourceId: string, vector: rea
 	).run(id, `hash-${id}`, vectorToBlob(vector), vector.length, sourceId, `chunk for ${sourceId}`, now);
 }
 
-// ---------------------------------------------------------------------------
-// Test setup
-// ---------------------------------------------------------------------------
-
 let db: Database;
 
 beforeEach(() => {
@@ -48,57 +31,44 @@ afterEach(() => {
 	db.close();
 });
 
-// ---------------------------------------------------------------------------
-// Integration: vectorToBlob -> DB -> read back -> cosineSimilarity
-// ---------------------------------------------------------------------------
-
 describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 	test("blob written by vectorToBlob is correctly read back for cosine similarity", () => {
 		const queryVec = [0.5, 0.3, -0.1, 0.8];
-		const similarVec = [0.5, 0.3, -0.1, 0.7]; // close to query
-		const dissimilarVec = [-0.5, -0.3, 0.1, -0.8]; // opposite
+		const similarVec = [0.5, 0.3, -0.1, 0.7];
+		const dissimilarVec = [-0.5, -0.3, 0.1, -0.8];
 
 		insertMemory(db, "mem-similar", "similar memory");
 		insertMemory(db, "mem-dissimilar", "dissimilar memory");
 		insertEmbedding(db, "emb-similar", "mem-similar", similarVec);
 		insertEmbedding(db, "emb-dissimilar", "mem-dissimilar", dissimilarVec);
-
-		// Read embeddings back from DB (same path as reranker-embedding.ts)
 		const rows = db.prepare(`SELECT source_id, vector FROM embeddings WHERE source_type = 'memory'`).all() as Array<{
 			source_id: string;
 			vector: Buffer;
 		}>;
 
 		expect(rows.length).toBe(2);
-
-		// Convert blobs to Float32Arrays (same as bufferToF32 in reranker)
 		const queryF32 = new Float32Array(queryVec);
 		const embMap = new Map<string, Float32Array>();
 		for (const row of rows) {
 			const f32 = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
 			embMap.set(row.source_id, f32);
 		}
-
-		// cosineSimilarity uses native when available, TS fallback otherwise
 		const similar = embMap.get("mem-similar");
 		const dissimilar = embMap.get("mem-dissimilar");
 		if (!similar || !dissimilar) throw new Error("expected both embedding rows");
 		const similarScore = cosineSimilarity(queryF32, similar);
 		const dissimilarScore = cosineSimilarity(queryF32, dissimilar);
-
-		// Similar vector should score much higher
 		expect(similarScore).toBeGreaterThan(0.9);
 		expect(dissimilarScore).toBeLessThan(-0.9);
 		expect(similarScore).toBeGreaterThan(dissimilarScore);
 	});
 
 	test("reranking with blended scores preserves correct ordering", () => {
-		// Simulate the reranker-embedding.ts flow
 		const queryVec = [1.0, 0.0, 0.0];
 		const candidates = [
 			{ id: "mem-a", vec: [0.9, 0.1, 0.0], originalScore: 0.5 },
-			{ id: "mem-b", vec: [0.1, 0.9, 0.0], originalScore: 0.8 }, // higher BM25 but lower cosine
-			{ id: "mem-c", vec: [0.95, 0.05, 0.0], originalScore: 0.3 }, // best cosine, worst BM25
+			{ id: "mem-b", vec: [0.1, 0.9, 0.0], originalScore: 0.8 },
+			{ id: "mem-c", vec: [0.95, 0.05, 0.0], originalScore: 0.3 },
 		];
 
 		for (const c of candidates) {
@@ -107,9 +77,7 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		}
 
 		const queryF32 = new Float32Array(queryVec);
-		const blendWeight = 0.3; // same as reranker-embedding.ts
-
-		// Read back from DB and compute blended scores
+		const blendWeight = 0.3;
 		const rows = db.prepare(`SELECT source_id, vector FROM embeddings WHERE source_type = 'memory'`).all() as Array<{
 			source_id: string;
 			vector: Buffer;
@@ -129,8 +97,6 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		});
 
 		reranked.sort((a, b) => b.score - a.score);
-
-		// mem-a should beat mem-b after blending (high cosine overcomes lower BM25)
 		const aIdx = reranked.findIndex((r) => r.id === "mem-a");
 		const bIdx = reranked.findIndex((r) => r.id === "mem-b");
 		expect(aIdx).toBeLessThan(bIdx);
@@ -145,8 +111,6 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		const row = db.prepare(`SELECT vector FROM embeddings WHERE id = 'emb-rt'`).get() as { vector: Buffer };
 
 		const fromDb = new Float32Array(row.vector.buffer, row.vector.byteOffset, row.vector.byteLength / 4);
-
-		// Compare against direct Float32Array construction (the TS fallback path)
 		const direct = new Float32Array(original);
 
 		expect(fromDb.length).toBe(direct.length);
@@ -155,10 +119,6 @@ describe("vectorToBlob -> DB -> cosineSimilarity integration", () => {
 		}
 	});
 });
-
-// ---------------------------------------------------------------------------
-// Integration: squaredDistance in UMAP-like edge building
-// ---------------------------------------------------------------------------
 
 describe("KNN edge building (same algorithm as umap-projection.ts)", () => {
 	test("KNN edges connect nearest points correctly", () => {
@@ -170,16 +130,12 @@ describe("KNN edge building (same algorithm as umap-projection.ts)", () => {
 			}
 			return distance;
 		}
-
-		// 4 points in 2D: a cluster of 3 close points and 1 outlier
 		const points = [
 			[0.0, 0.0],
 			[0.1, 0.1],
 			[0.0, 0.1],
-			[10.0, 10.0], // outlier
+			[10.0, 10.0],
 		];
-
-		// Build edges by finding k=2 nearest neighbors (same algorithm as umap-projection.ts)
 		const k = 2;
 		const edgeSet = new Set<string>();
 		const edges: [number, number][] = [];
@@ -201,14 +157,9 @@ describe("KNN edge building (same algorithm as umap-projection.ts)", () => {
 				}
 			}
 		}
-
-		// The cluster points (0,1,2) should all be connected to each other
 		expect(edgeSet.has("0-1")).toBe(true);
 		expect(edgeSet.has("0-2")).toBe(true);
 		expect(edgeSet.has("1-2")).toBe(true);
-
-		// The outlier (3) should connect to cluster but the cluster shouldn't
-		// preferentially connect to the outlier over each other
 		const outlierEdges = edges.filter(([a, b]) => a === 3 || b === 3);
 		expect(outlierEdges.length).toBeGreaterThan(0);
 	});

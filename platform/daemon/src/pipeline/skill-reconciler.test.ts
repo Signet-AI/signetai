@@ -15,8 +15,6 @@ import {
 	startReconciler,
 	withSkillReconciliationLock,
 } from "./skill-reconciler";
-
-/** Poll `cond` until it returns true or `timeoutMs` elapses. */
 async function waitFor(cond: () => boolean, timeoutMs = 3_000): Promise<void> {
 	const deadline = Date.now() + timeoutMs;
 	while (!cond()) {
@@ -246,9 +244,6 @@ this skill helps with reconciliation loop debugging.`,
 					  }
 					| undefined,
 		);
-
-		// The embedding is built from the authored frontmatter as-is; no
-		// enrichment pass rewrites it.
 		expect(row?.content_hash).toBe(skillEmbeddingHash(result.entityId, raw));
 		expect(row?.chunk_text).toBe(`${skill} — tiny`);
 
@@ -308,9 +303,6 @@ body`,
 		const startupPass = reconcileOnce(deps);
 		await firstCall;
 		const explicitInstall = reconcileSkillFile(skill, file, deps, { forceInstall: true, source: "installed" });
-
-		// The explicit post-install trigger is queued behind the startup pass,
-		// rather than reaching fetchEmbedding while the first call is pending.
 		expect(calls).toBe(1);
 		releaseEmbedding?.();
 
@@ -360,9 +352,6 @@ body`,
 		const install = reconcileSkillFile(skill, file, deps);
 		await embeddingCall;
 		const unlink = reconcileUnlinkedSkill(skill, deps);
-
-		// The watcher unlink must wait for the install to finish before removing
-		// the graph node that the install is about to write.
 		releaseEmbedding?.();
 		await expect(install).resolves.toBe("installed");
 		await expect(unlink).resolves.toBe("removed");
@@ -522,9 +511,6 @@ this skill helps verify metadata reconciliation.`,
 		initDbAccessor(db);
 
 		const now = new Date().toISOString();
-		// Another agent already owns an entity named like the skill. Pre-fix the
-		// global UNIQUE on entities.name rejected the default-agent insert on
-		// every pass, which is what drove the #1086 hot-loop.
 		getDbAccessor().withWriteTx((dbh) => {
 			dbh
 				.prepare(
@@ -576,10 +562,6 @@ body`,
 		root = paths.root;
 		db = paths.db;
 		initDbAccessor(db);
-
-		// SKILL.md as a directory makes readFileSync throw EISDIR on every
-		// pass: a permanent, deterministic failure like the pre-fix UNIQUE
-		// collision. The reconciler must not retry it forever.
 		const skill = "wedged-skill";
 		const dir = join(root, "skills", skill);
 		mkdirSync(dir, { recursive: true });
@@ -610,9 +592,6 @@ body`,
 		const backoffs = reconcilerEntries.filter(
 			(e) => e.message === "Skill reconcile failed repeatedly; entering backoff",
 		);
-
-		// Passes 1-3 fail but retry (below the backoff threshold); the fourth
-		// failure enters backoff; the fifth pass is skipped entirely.
 		expect(failures.length).toBe(4);
 		expect(backoffs.length).toBe(1);
 	});
@@ -656,9 +635,6 @@ body`,
 		const backoffs = reconcilerEntries.filter(
 			(e) => e.message === "Skill reconcile failed repeatedly; entering backoff",
 		);
-
-		// Four failures (backoff after the fourth), then the reset lets the
-		// fifth pass attempt the skill again (a fresh failure, not a skip).
 		expect(failures.length).toBe(5);
 		expect(backoffs.length).toBe(1);
 	});
@@ -670,9 +646,6 @@ describe("single-flight trigger overlap (#1354)", () => {
 		root = paths.root;
 		db = paths.db;
 		initDbAccessor(db);
-
-		// Two skills so a pre-fix second pass has installable work left after
-		// the startup pass parks on the first skill's embedding call.
 		for (const skill of ["alpha-skill", "beta-skill"]) {
 			const dir = join(root, "skills", skill);
 			mkdirSync(dir, { recursive: true });
@@ -706,12 +679,7 @@ describe("single-flight trigger overlap (#1354)", () => {
 
 		const handle = startReconciler(deps);
 		try {
-			// Startup backfill parks on the first skill's embedding call.
 			await firstCall;
-			// Hold the gate across several periodic intervals (~120ms at 25ms
-			// interval). A periodic tick must coalesce onto the active startup
-			// pass instead of starting a second full pass that reaches the
-			// embedding provider for the other skill.
 			await new Promise((resolve) => setTimeout(resolve, 120));
 			expect(calls).toBe(1);
 
@@ -761,14 +729,8 @@ describe("single-flight trigger overlap (#1354)", () => {
 			},
 			agentsDir: root,
 		};
-
-		// Watcher add/change handler body: forceInstall reconcile.
 		const watcherTrigger = reconcileSkillFile(skill, file, deps, { forceInstall: true });
 		await firstCall;
-
-		// Explicit post-install hook (routes onSkillInstalled) fires while the
-		// watcher install is parked at the embedding boundary. It must queue
-		// behind the same flight and observe the written embedding.
 		const explicitTrigger = reconcileSkillFile(skill, file, deps, { forceInstall: true, source: "installed" });
 		expect(calls).toBe(1);
 
@@ -781,9 +743,6 @@ describe("single-flight trigger overlap (#1354)", () => {
 	});
 
 	it("keys the single-flight lock by workspace so agent scoping is preserved", async () => {
-		// Two different agentsDirs with the same skill name must not serialize
-		// against each other: a lock held for one agent's workspace cannot
-		// block another agent's reconcile of the same-named skill.
 		const dirA = join(tmpdir(), `signet-lock-a-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		const dirB = join(tmpdir(), `signet-lock-b-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 		try {
@@ -799,15 +758,11 @@ describe("single-flight trigger overlap (#1354)", () => {
 			const b = withSkillReconciliationLock(dirB, "shared-skill", () => {
 				startedB++;
 			});
-
-			// B must run while A is still parked (different workspace key).
 			await Promise.race([
 				b,
 				new Promise((_, reject) => setTimeout(() => reject(new Error("B blocked behind A")), 500)),
 			]);
 			expect(startedB).toBe(1);
-
-			// Same workspace + same skill still serializes.
 			let startedA2 = 0;
 			const a2 = withSkillReconciliationLock(dirA, "shared-skill", () => {
 				startedA2++;
@@ -863,22 +818,14 @@ describe("single-flight trigger overlap (#1354)", () => {
 
 		const handle = startReconciler(deps);
 		try {
-			// Park the startup pass at the embedding boundary, then stop the
-			// reconciler mid-flight.
 			await firstCall;
 			handle.stop();
-
-			// The in-flight pass must complete exactly once.
 			releaseEmbedding?.();
 			await waitFor(() => calls === 1 && embeddingCount(skill) === 1);
 			expect(entityCount(skill)).toBe(1);
-
-			// No periodic tick after stop() may start new work.
 			const callsAfter = calls;
 			await new Promise((resolve) => setTimeout(resolve, 100));
 			expect(calls).toBe(callsAfter);
-
-			// A second stop() is safe.
 			handle.stop();
 		} finally {
 			handle.stop();

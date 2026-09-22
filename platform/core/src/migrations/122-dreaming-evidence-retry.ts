@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Add restart-safe repair-aware retry state to quarantined Dreaming evidence. */
 export function up(db: MigrationDb): void {
 	const columns = db.prepare("PRAGMA table_info(dreaming_evidence_exclusions)").all() as Array<{ name: string }>;
 	const names = new Set(columns.map((column) => column.name));

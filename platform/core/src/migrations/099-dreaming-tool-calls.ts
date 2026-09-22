@@ -1,10 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Auditable, scoped trace of the capability calls made during a Dreaming pass.
- * Tool arguments and results stay in the local database with the pass that
- * caused them; they are not written to daemon logs or a JSON sidecar.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_tool_calls (

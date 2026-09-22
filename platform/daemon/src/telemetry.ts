@@ -1,11 +1,3 @@
-/**
- * Anonymous, opt-in telemetry collector for the Signet daemon.
- *
- * Records events to an in-memory buffer, periodically flushing to
- * SQLite (always) and a self-hosted PostHog instance (when configured).
- * No memory content, user identity, or file paths are ever included.
- */
-
 import { createHash } from "node:crypto";
 import { appendFile, mkdir, readdir, rename, stat, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -24,21 +16,9 @@ import { getDbOwner, ownerStatement } from "./db-owner-runtime";
 import { ownerChanges, ownerTransaction } from "./db-owner-maintenance";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { logger } from "./logger";
-
-// ---------------------------------------------------------------------------
-// Open telemetry log (issue #1026 Phase 2)
-// ---------------------------------------------------------------------------
-
-/**
- * Default location of the open telemetry log: one JSON line per recorded
- * event, so users can inspect exactly what was sent. Configurable via
- * `telemetryLogPath` on the collector; derived from the agents base path.
- */
 export function defaultTelemetryLogPath(agentsDir: string): string {
 	return join(agentsDir, ".daemon", "telemetry", "events.jsonl");
 }
-
-/** Parse both ISO timestamps and SQLite's UTC `CURRENT_TIMESTAMP` format. */
 export function parseTelemetryTimestamp(timestamp: string): number {
 	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(timestamp)
 		? `${timestamp.replace(" ", "T")}Z`
@@ -85,18 +65,14 @@ async function cleanupTelemetryLog(logPath: string, options: TelemetryLogOptions
 				continue;
 			}
 			rotated.push({ path, mtimeMs: metadata.mtimeMs });
-		} catch {
-			// Another cleanup or operator action may remove a rotated file first.
-		}
+		} catch {}
 	}
 
 	rotated.sort((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
 	for (const entry of rotated.slice(Math.max(0, options.maxRotatedFiles))) {
 		try {
 			await unlink(entry.path);
-		} catch {
-			// Best effort retention cleanup.
-		}
+		} catch {}
 	}
 }
 
@@ -110,9 +86,6 @@ async function appendToTelemetryLog(
 	try {
 		await mkdir(dirname(logPath), { recursive: true });
 	} catch (error) {
-		// The whole batch is undeliverable when its parent cannot be prepared.
-		// Count it explicitly rather than silently losing the lines removed from
-		// the pending queue. Telemetry must never break the daemon.
 		logger.warn("telemetry", "Failed to prepare JSONL audit log", {
 			dropped: lines.length,
 			error: error instanceof Error ? error.message : String(error),
@@ -143,9 +116,6 @@ async function appendToTelemetryLog(
 			}
 			await appendFile(logPath, payload, "utf-8");
 		} catch (error) {
-			// Do not continue past a failed write or rotation. Writing a later line
-			// would make the JSONL appear reordered relative to this batch. The
-			// failed line and all following lines are dropped and reported together.
 			const remaining = lines.length - index;
 			dropped += remaining;
 			logger.warn("telemetry", "Dropped JSONL audit events after write failure", {
@@ -160,10 +130,6 @@ async function appendToTelemetryLog(
 	return dropped;
 }
 
-// ---------------------------------------------------------------------------
-// Event types
-// ---------------------------------------------------------------------------
-
 export const TELEMETRY_EVENTS = [
 	"llm.generate",
 	"pipeline.extraction",
@@ -176,42 +142,24 @@ export const TELEMETRY_EVENTS = [
 	"inference.stream",
 	"inference.fallback",
 	"session.start",
-	// Per non-boundary session-end hook call — a "turns persisted" counter
-	// (harness activity volume), distinct from the real session boundary event.
 	"session.turn",
-	// Fired only at actual session boundaries (recognized lifecycle reason or
-	// TTL eviction), dedup'd once per session lifetime (#1212/#1231).
 	"session.end",
 	"daemon.heartbeat",
 	"telemetry.health",
-	// Lifecycle events (issue #1026 Phase 2): fired when the user has opted
-	// into anonymous telemetry. No PII, no code, no memory content.
 	"daemon.started",
 	"daemon.previous_exit",
 	"install.activated",
-	// First-use milestones (issue #1202): fired exactly once per install,
-	// at the first successful remember / recall. Guards the activation
-	// funnel (install.activated -> first.remember/recall) so "activated"
-	// stops including installs that never did anything.
 	"first.remember",
 	"first.recall",
 	"dreaming.pass",
 	"command.invoked",
 	"error.occurred",
 	"version.upgraded",
-	// Observed at daemon start; unlike version.upgraded, this makes no claim
-	// about the mechanism that changed the installed version.
 	"version.observed",
-	// Cloud events (issue #1207): declared now so the future cloud-connect
-	// layer inherits the typed contract instead of retrofitting it. Nothing
-	// emits them until the Signet Cloud surface exists. Same anonymous
-	// contract — no credentials, account identifiers, or content.
 	"cloud.connect_attempt",
 	"cloud.sync",
 	"cloud.storage",
 	"recall.performed",
-	// Retrieval-outcome contract (#1277): attempt and delivery are separate
-	// boundaries so search execution cannot be mistaken for delivered context.
 	"recall.attempted",
 	"recall.outcome",
 	"source.lifecycle",
@@ -219,11 +167,6 @@ export const TELEMETRY_EVENTS = [
 ] as const;
 
 export type TelemetryEventType = (typeof TELEMETRY_EVENTS)[number];
-
-/**
- * Which first-use milestone to claim. Each fires at most once per
- * install, persisted on the telemetry_install row (migration 111).
- */
 export type FirstUseKind = "remember" | "recall";
 
 export type TelemetryProperties = Readonly<Record<string, string | number | boolean | null>>;
@@ -235,7 +178,6 @@ export interface TelemetryConfigSnapshot {
 	readonly semanticContradictionEnabled: boolean;
 	readonly embeddingProvider: string;
 	readonly embeddingModel: string;
-	/** Configuration-derived execution locality. Unknown is never coerced to local. */
 	readonly inferenceMode: "local" | "remote" | "unknown";
 	readonly harnesses: string;
 }
@@ -248,8 +190,6 @@ export interface TelemetryEvent {
 }
 
 export type TelemetryDeliveryStatus = "healthy" | "degraded" | "local-only";
-
-/** Aggregate collector state safe for local diagnostics and PostHog. */
 export interface TelemetryDeliveryHealth {
 	readonly status: TelemetryDeliveryStatus;
 	readonly deliveryConfigured: boolean;
@@ -341,32 +281,16 @@ function sessionCostProperties(cost: SessionCostAccumulator): TelemetryPropertie
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Collector interface
-// ---------------------------------------------------------------------------
-
 export interface TelemetryCollector {
 	record(event: TelemetryEventType, properties: TelemetryProperties): void;
-	/**
-	 * Record with a bounded asynchronous JSONL audit append while deferring
-	 * SQLite persistence. The local line is best effort and may be dropped
-	 * under pressure; drops are included in delivery health.
-	 */
 	recordDeferred?(event: TelemetryEventType, properties: TelemetryProperties): void;
 	reopenSession(sessionHash: string): void;
-
-	/**
-	 * Claim a one-shot first-use milestone (issue #1202). Emits
-	 * first.remember / first.recall only when this call wins the claim
-	 * for this install — later calls are silent no-ops.
-	 */
 	recordFirstUse(kind: FirstUseKind): void;
 
 	flush(): Promise<void>;
 	deliveryHealth(): TelemetryDeliveryHealth;
 	start(): void;
 	stop(): Promise<void>;
-	/** Discard buffered and unsent events when the user opts out. */
 	discardPending?(): Promise<void>;
 
 	query(opts?: {
@@ -377,28 +301,14 @@ export interface TelemetryCollector {
 	}): Promise<readonly TelemetryEvent[]>;
 
 	readonly enabled: boolean;
-
-	/**
-	 * Hash an agent id with the per-install id so inference telemetry never
-	 * carries the raw agent name: stable within an install, not joinable
-	 * across installs, not reversible. Returns "" when no install id exists.
-	 */
 	anonymizeAgentId(agentId: string): string;
 }
-
-// ---------------------------------------------------------------------------
-// Active collector reference
-// ---------------------------------------------------------------------------
-// Mirrored here by the daemon for pipeline and hooks layers, which are not
-// route modules and therefore don't read the route-layer ref in routes/state.
 
 let activeCollector: TelemetryCollector | undefined;
 
 export function setActiveTelemetry(collector: TelemetryCollector | undefined): void {
 	activeCollector = collector;
 }
-
-/** Stop recording immediately when the persisted telemetry opt-out changes. */
 export async function stopActiveTelemetry(): Promise<void> {
 	const collector = activeCollector;
 	activeCollector = undefined;
@@ -412,22 +322,11 @@ export async function stopActiveTelemetry(): Promise<void> {
 export function getActiveTelemetry(): TelemetryCollector | undefined {
 	return activeCollector;
 }
-
-/**
- * True when the process environment disables telemetry. The same
- * SIGNET_TELEMETRY_OPTOUT knob the install ping honors (issue #1026) so one
- * switch opts a whole machine or CI runner out — without touching config.
- */
 export function telemetryDisabledByEnv(env: NodeJS.ProcessEnv = process.env): boolean {
 	return env.SIGNET_TELEMETRY_OPTOUT === "1" || env.SIGNET_TELEMETRY_OPTOUT === "true";
 }
 
 export type TelemetryDeployment = "dev";
-
-/**
- * Resolve the optional deployment marker used to separate operator-owned
- * development checkouts from production installs in PostHog.
- */
 export function telemetryDeployment(env: NodeJS.ProcessEnv = process.env): TelemetryDeployment | undefined {
 	return env.SIGNET_TELEMETRY_ENV?.trim().toLowerCase() === "dev" ? "dev" : undefined;
 }
@@ -437,12 +336,6 @@ function validTelemetryValue<T extends string>(value: unknown, allowed: readonly
 		? (value.trim().toLowerCase() as T)
 		: undefined;
 }
-
-/**
- * Resolve a bounded deployment declaration. The dev marker remains a
- * compatible shorthand for the existing development-fleet behavior. No
- * paths, process names, repository names, or network data participate.
- */
 export function telemetryDeploymentRole(
 	configured: TelemetryDeploymentRole | undefined,
 	env: NodeJS.ProcessEnv = process.env,
@@ -454,8 +347,6 @@ export function telemetryDeploymentRole(
 		"unknown"
 	);
 }
-
-/** Resolve installation provenance only from an explicit config or env value. */
 export function telemetryInstallChannel(
 	configured: TelemetryInstallChannel | undefined,
 	env: NodeJS.ProcessEnv = process.env,
@@ -466,27 +357,10 @@ export function telemetryInstallChannel(
 		"unknown"
 	);
 }
-
-/**
- * Keep development builds visible in version breakdowns without changing the
- * daemon's operational version or update behavior.
- */
 export function telemetryReportedVersion(version: string, deployment: TelemetryDeployment | undefined): string {
 	if (deployment !== "dev" || version.endsWith("-dev")) return version;
 	return `${version}-dev`;
 }
-
-/**
- * Resolve the anonymous per-install identifier, creating and persisting it on
- * first use. Falls back to an in-memory id if the database is unusable.
- * A truthy guard is required here: bun:sqlite returns null for a missing row
- * while better-sqlite3 returns undefined (dual-DB daemon).
- *
- * `created` is true only when the id was actually inserted — the daemon uses
- * it to emit install.activated (the true first-run signal that covers bun,
- * desktop, and npm installs alike; the wrapper postinstall ping misses bun
- * and desktop entirely).
- */
 type InstallIdentity = { readonly id: string; readonly created: boolean; readonly previousVersion?: string };
 type DeferredInstallIdentity = InstallIdentity & { readonly ready?: Promise<InstallIdentity> };
 type InstallIdentityRow = { readonly id: string; readonly last_seen_version?: string | null };
@@ -615,28 +489,20 @@ function getOrCreateInstallId(db: DbAccessor, daemonVersion: string, owner?: DbO
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return db.withWriteTx(
 			(w: import("./db-accessor").WriteDb) => resolveInstallIdentity(w, daemonVersion),
-			"telemetry.ts:616",
+			"telemetry.ts:490",
 		);
 	} catch {
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			return db.withWriteTx(
 				(w: import("./db-accessor").WriteDb) => resolveLegacyInstallIdentity(w),
-				"telemetry.ts:623",
+				"telemetry.ts:497",
 			);
 		} catch {
 			return fallback;
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Crash diagnostics
-// ---------------------------------------------------------------------------
-// error.occurred reports are sanitized at the boundary: the message is
-// truncated and stripped of user paths, the stack keeps only the top frames
-// with home directories removed, and no memory content is ever captured.
-// Enough to reproduce and fix a crash remotely, nothing to leak.
 
 const MAX_CRASH_MESSAGE_CHARS = 400;
 const MAX_CRASH_STACK_FRAMES = 8;
@@ -668,12 +534,6 @@ function crashStackFrames(stack: string | undefined): string[] | undefined {
 		.map((line) => stripUserPaths(line))
 		.slice(0, MAX_CRASH_STACK_FRAMES);
 }
-
-/**
- * Build the sanitized error.occurred properties for a process-level crash.
- * Non-Error reasons (unhandledRejection with a primitive) degrade to a
- * truncated string.
- */
 export function sanitizeCrashError(error: unknown, uptimeMs: number): TelemetryProperties {
 	const uptime = Math.round(uptimeMs);
 	if (error instanceof Error) {
@@ -691,10 +551,6 @@ export function sanitizeCrashError(error: unknown, uptimeMs: number): TelemetryP
 		uptimeMs: uptime,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// PostHog batch sender
-// ---------------------------------------------------------------------------
 
 interface PostHogBatchEvent {
 	readonly event: string;
@@ -733,11 +589,6 @@ const TELEMETRY_CLAIM_TIMEOUT_MS = 10 * 60 * 1_000;
 const DELIVERY_HEALTH_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const MAX_HEALTH_FAILURE_CODE_LENGTH = 24;
 const MAX_PERSISTED_QUEUE_EVENTS = 20_000;
-
-/**
- * Interval used after `failures` consecutive PostHog failures. Pure so the
- * backoff behavior is testable without driving timers.
- */
 export function nextFlushIntervalMs(baseIntervalMs: number, consecutiveFailures: number): number {
 	return consecutiveFailures >= MAX_CONSECUTIVE_FAILURES ? baseIntervalMs * BACKOFF_MULTIPLIER : baseIntervalMs;
 }
@@ -777,16 +628,6 @@ async function sendToPostHog(
 		};
 	}
 }
-
-// ---------------------------------------------------------------------------
-// First-use milestones (issue #1202)
-// ---------------------------------------------------------------------------
-
-/**
- * telemetry_install column that records the first-use timestamp for each
- * kind. Fixed internal map — the column name is interpolated into SQL,
- * so it must never accept caller input.
- */
 const FIRST_USE_COLUMNS: Readonly<Record<FirstUseKind, string>> = {
 	remember: "first_remember_at",
 	recall: "first_recall_at",
@@ -796,10 +637,6 @@ const FIRST_USE_EVENTS: Readonly<Record<FirstUseKind, TelemetryEventType>> = {
 	remember: "first.remember",
 	recall: "first.recall",
 };
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 
 export function createTelemetryCollector(
 	db: DbAccessor,
@@ -812,9 +649,7 @@ export function createTelemetryCollector(
 		readonly telemetryLogRetentionDays?: number;
 		readonly configSnapshot?: TelemetryConfigSnapshot;
 		readonly env?: NodeJS.ProcessEnv;
-		/** Explicit DB owner used for all durable telemetry reads and writes. */
 		readonly owner?: DbOwnerClient;
-		/** Database path for tests or isolated collectors without a registered owner. */
 		readonly dbPath?: string;
 	} = {},
 ): TelemetryCollector {
@@ -915,7 +750,6 @@ export function createTelemetryCollector(
 				return row;
 			}
 		} catch {
-			// Test doubles and pre-migration workspaces fall back to in-memory state.
 			deliveryStatePersistenceFailed = true;
 		}
 		return {
@@ -952,9 +786,7 @@ export function createTelemetryCollector(
 			persistedQueueCount = queue.count ?? 0;
 			persistedOldestTimestamp = queue.oldestTimestamp ?? null;
 			lastDaemonEventTimestamp = queue.lastTimestamp ?? null;
-		} catch {
-			// Keep local in-memory health available when SQLite is unavailable.
-		}
+		} catch {}
 	}
 
 	function trackAsyncWrite(work: Promise<void>): void {
@@ -980,18 +812,6 @@ export function createTelemetryCollector(
 		if (Number.isFinite(lastAttemptMs)) nextAllowedFlushAt = lastAttemptMs + effectiveIntervalMs;
 	});
 	void refreshPersistedQueue();
-
-	/**
-	 * Claim and persist a first-use event in one transaction. Only the first
-	 * caller wins (changes === 1); every later call is a no-op, so concurrent
-	 * remembers cannot double-fire. Keeping the event in the same transaction
-	 * as the claim means a process can be terminated before the normal buffer
-	 * flush without losing the milestone.
-	 *
-	 * When the install id fell back to an in-memory value (broken DB), the
-	 * UPDATE matches no row and the milestone never fires. Telemetry is
-	 * degraded anyway.
-	 */
 	async function persistFirstUse(kind: FirstUseKind): Promise<TelemetryEvent | null> {
 		const event: TelemetryEvent = {
 			id: crypto.randomUUID(),
@@ -1024,8 +844,6 @@ export function createTelemetryCollector(
 			);
 			return ownerChanges(results[0]) > 0 ? event : null;
 		} catch {
-			// The transaction rolls back both the claim and event on any
-			// failure, allowing a later successful call to retry the milestone.
 			return null;
 		}
 	}
@@ -1161,8 +979,6 @@ export function createTelemetryCollector(
 			);
 			stateUpdated = ownerChanges(results[1]) > 0;
 		} catch {
-			// Older/partially migrated workspaces still need the event marked sent
-			// after PostHog accepted it; otherwise the claim would be retried.
 			try {
 				await ownerTransaction(
 					await owner(),
@@ -1175,9 +991,7 @@ export function createTelemetryCollector(
 					],
 					{ deadlineMs: 5_000, estimatedWorkUnits: 1 },
 				);
-			} catch {
-				// best effort
-			}
+			} catch {}
 		}
 		const windowExpired =
 			Date.now() - parseTelemetryTimestamp(deliveryState.windowStartedAt) >= DELIVERY_HEALTH_WINDOW_MS;
@@ -1245,9 +1059,7 @@ export function createTelemetryCollector(
 					],
 					{ deadlineMs: 5_000, estimatedWorkUnits: 1 },
 				);
-			} catch {
-				// Stale claims remain recoverable on a later flush.
-			}
+			} catch {}
 		}
 		const code = failureCode?.slice(0, MAX_HEALTH_FAILURE_CODE_LENGTH) ?? "unknown";
 		const windowExpired =
@@ -1336,9 +1148,7 @@ export function createTelemetryCollector(
 				],
 				{ deadlineMs: 5_000, estimatedWorkUnits: 1 },
 			);
-		} catch {
-			// best effort
-		}
+		} catch {}
 	}
 
 	function ageSec(timestamp: string | null): number | null {
@@ -1430,7 +1240,6 @@ export function createTelemetryCollector(
 			await refreshPersistedQueue();
 			return;
 		}
-		// Preserve events for a later attempt when SQLite is temporarily locked.
 		buffer.unshift(...pending);
 		if (buffer.length > MAX_BUFFER_EVENTS) {
 			const dropped = buffer.length - MAX_BUFFER_EVENTS;
@@ -1440,10 +1249,6 @@ export function createTelemetryCollector(
 	}
 
 	async function doFlush(emitHealth: boolean, allowRemote = true, force = false): Promise<void> {
-		// The persisted delivery state may still be loading when the first timer
-		// fires. Do not let that first delivery bypass a restart backoff, and
-		// re-check the gate after the state has been applied because the caller's
-		// initial check necessarily ran before this await.
 		await deliveryStateReady;
 		await installLifecycleReady;
 		if (allowRemote && !force && Date.now() < nextAllowedFlushAt) allowRemote = false;
@@ -1451,13 +1256,9 @@ export function createTelemetryCollector(
 		flushCount++;
 		await drainBuffer();
 		if (emitHealth) {
-			// Snapshot before adding this diagnostic event. Its local value must not
-			// depend on the success of the request that carries the snapshot.
 			appendBufferedEvent("telemetry.health", { ...deliveryHealth() });
 			await drainBuffer();
 		}
-
-		// Send to PostHog if configured
 		if (allowRemote && posthogConfigured) {
 			const claimed = await claimUnsent(config.flushBatchSize);
 			if (claimed) {
@@ -1487,8 +1288,6 @@ export function createTelemetryCollector(
 				}
 			}
 		}
-
-		// Occasional pruning (every 10th flush, deterministic for tests)
 		if (flushCount % PRUNE_EVERY_N_FLUSHES === 0) {
 			await pruneOldEvents();
 		}
@@ -1498,9 +1297,6 @@ export function createTelemetryCollector(
 	function flushInternal(emitHealth: boolean, force = false): Promise<void> {
 		if (flushPromise) return flushPromise;
 		if (!force && Date.now() < nextAllowedFlushAt) {
-			// Backoff suppresses network claims, not local durability. Persist the
-			// in-memory buffer so an outage cannot exhaust RAM or lose events;
-			// retain local health/pruning maintenance while skipping PostHog.
 			flushPromise = doFlush(emitHealth, false, force)
 				.catch(() => {})
 				.finally(() => {
@@ -1509,9 +1305,7 @@ export function createTelemetryCollector(
 			return flushPromise;
 		}
 		flushPromise = doFlush(emitHealth, true, force)
-			.catch(() => {
-				// Telemetry must never surface a flush failure to the daemon.
-			})
+			.catch(() => {})
 			.finally(() => {
 				flushPromise = null;
 			});
@@ -1617,8 +1411,6 @@ export function createTelemetryCollector(
 				.then(() => persistFirstUse(kind))
 				.then((event) => {
 					if (!event) return;
-					// The database row is durable before the open log mirror is written.
-					// A failed log write must not affect the claim or delivery queue.
 					queueLogLine(event);
 				})
 				.catch((error) => {
@@ -1663,9 +1455,6 @@ export function createTelemetryCollector(
 			}
 			await flushInternal(true, true);
 			await flushLog();
-			// Stop accepting new events only after the first drain completes,
-			// so events recorded while an outbound request was awaiting are
-			// included in this final serialized drain.
 			recordingStopped = true;
 			await flushInternal(true, true);
 			await flushLog();
@@ -1742,9 +1531,6 @@ export function createTelemetryCollector(
 	};
 
 	const emitInstallLifecycle = (): void => {
-		// First run of a new install: emit install.activated so daemon-running
-		// installs are countable regardless of how they were installed (the npm
-		// postinstall ping never fires for bun global or desktop installs).
 		if (installActivated) {
 			collector.record("install.activated", {
 				version: reportedVersion,

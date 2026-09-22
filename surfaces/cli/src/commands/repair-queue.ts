@@ -1,10 +1,3 @@
-/**
- * Issue #901 — register `signet repair queue {requeue|cancel|prune}`.
- *
- * All subcommands default to dry-run; --apply mutates. Mirrors
- * `POST /api/diagnostics/queue/repair` exactly.
- */
-
 import chalk from "chalk";
 import type { Command } from "commander";
 import { parseCsvFlag, parseDurationFlag, parseTablesFlag, runRepairQueue } from "../features/repair-queue.js";
@@ -17,12 +10,6 @@ export interface RepairQueueDeps {
 	) => Promise<{ readonly ok: boolean; readonly data: unknown }>;
 	readonly baseUrl: string;
 }
-
-/**
- * Parse the `--tables` enum list, routing an invalid value to a Commander
- * error (stderr + help + exit 1) instead of silently degrading into the
- * both-queue default (issue #1050).
- */
 function parseTablesOption(value: unknown, program: Command): ("memory" | "summary")[] | undefined {
 	try {
 		return parseTablesFlag(typeof value === "string" ? value : undefined);

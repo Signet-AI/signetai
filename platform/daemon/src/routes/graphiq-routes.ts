@@ -184,8 +184,6 @@ async function updateGraphiq(): Promise<{ success: boolean; message?: string; er
 	}
 
 	try {
-		// The vendored upstream script has no `update` command; reinstalling the
-		// pinned version is the update path.
 		const result = await runCommand("bash", [script, "install"], 120_000, {
 			GRAPHIQ_INSTALL_DIR: GRAPHIQ_DEFAULT_INSTALL_DIR,
 			GRAPHIQ_VERSION: GRAPHIQ_SYNCED_VERSION,
@@ -238,9 +236,7 @@ function discoverGraphiqProjects(
 				symbols: typeof raw.symbols === "number" ? raw.symbols : undefined,
 				edges: typeof raw.edges === "number" ? raw.edges : undefined,
 			});
-		} catch {
-			// skip unparseable entries
-		}
+		} catch {}
 	}
 	return results;
 }

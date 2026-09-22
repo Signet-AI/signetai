@@ -11,14 +11,12 @@ export interface SkillInvocationRecord {
 	readonly latencyMs: number;
 	readonly success: boolean;
 	readonly errorText?: string;
-	// Harness-emitted rows (source='agent'). Deduped on (agentId, harness, sessionId, toolUseId).
 	readonly harness?: string;
 	readonly sessionId?: string;
 	readonly toolUseId?: string;
 	readonly cwd?: string;
 	readonly origin?: string;
 	readonly args?: string;
-	// Override created_at (ISO) — backfill from historical transcripts.
 	readonly createdAt?: string;
 }
 
@@ -48,9 +46,6 @@ export function recordSkillInvocation(record: SkillInvocationRecord): void {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			// OR IGNORE lets the partial-unique idx_skill_inv_dedupe drop a repeated
-			// harness event (same agent/harness/session/tool_use_id). Internal rows have
-			// null ids, never match the partial index, and always insert.
 			db.prepare(
 				`INSERT OR IGNORE INTO skill_invocations
 					 (id, skill_name, agent_id, source, latency_ms, success, error_text, created_at,
@@ -72,10 +67,6 @@ export function recordSkillInvocation(record: SkillInvocationRecord): void {
 				optionalText(record.origin),
 				optionalText(record.args),
 			);
-
-			// Only bump use_count when a row was actually inserted. The dedupe index
-			// drops repeated harness events (e.g. a transcript re-scanned at both
-			// PreCompact and SessionEnd), and a dropped insert must not inflate the count.
 			const changed = countChanges(db.prepare("SELECT changes() AS changes").get());
 			if (changed > 0) {
 				db.prepare(
@@ -90,7 +81,7 @@ export function recordSkillInvocation(record: SkillInvocationRecord): void {
 					   )`,
 				).run(now, now, record.agentId, record.agentId, skill);
 			}
-		}, "skill-invocations.ts:50");
+		}, "skill-invocations.ts:48");
 	} catch (err) {
 		logger.warn("skills", "Failed to record skill invocation", err instanceof Error ? err : undefined);
 	}

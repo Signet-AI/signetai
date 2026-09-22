@@ -513,8 +513,6 @@ describe("ontology proposals", () => {
 			).c;
 			return { attributeCount, derivedCount };
 		});
-
-		// The dedupe early-return used to apply without revalidating evidence.
 		await expect(
 			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" }),
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:dedupe-gone", 409));
@@ -552,9 +550,6 @@ describe("ontology proposals", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = ? AND agent_id = ?").run("entity-gone", "ant");
 		});
-
-		// create_entity never materializes attribute memory, so apply-time
-		// revalidation has to happen at the shared seam, not the materializer.
 		await expect(
 			applyOntologyProposal(getDbAccessor(), { agentId: "ant", id: pending.id, actor: "test" }),
 		).rejects.toThrow(new OntologyProposalError("Evidence source_ref was not found: memory:entity-gone", 409));
@@ -2890,8 +2885,6 @@ describe("ontology proposals", () => {
 			}),
 		).rejects.toThrow("ambiguous");
 	});
-
-	// #1138: write-gate aspect/attribute caps that force supersession and consolidation
 	it("rejects add_claim_value past the attribute cap with a teaching error", async () => {
 		const cap = { maxAspectsPerEntity: 10, maxAttributesPerAspect: 2 };
 		const common = {
@@ -2956,8 +2949,6 @@ describe("ontology proposals", () => {
 
 	it("rejects create_aspect past the aspect cap with a teaching error", async () => {
 		const cap = { maxAspectsPerEntity: 2, maxAttributesPerAspect: 25 };
-
-		// create_entity first so create_aspect can resolve it
 		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
@@ -3003,8 +2994,6 @@ describe("ontology proposals", () => {
 			payload: { entity: "Single", entity_type: "project", name: "only_aspect" },
 			writeCaps: cap,
 		});
-
-		// Re-creating the same aspect should not trigger the cap
 		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
@@ -3030,8 +3019,6 @@ describe("ontology proposals", () => {
 			},
 			writeCaps: cap,
 		});
-
-		// Adding the exact same value+key should dedup, not hit the cap
 		const result = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
@@ -3047,8 +3034,6 @@ describe("ontology proposals", () => {
 		});
 		expect(result.result?.deduped).toBe(true);
 	});
-
-	// #1138: merge_aspects — consolidation must be possible regardless of caps
 	async function seedAspectClaims(entity: string, aspect: string, count: number): Promise<void> {
 		for (let i = 0; i < count; i++) {
 			await applyOntologyOperation(getDbAccessor(), {
@@ -3110,9 +3095,7 @@ describe("ontology proposals", () => {
 
 		expect(result.result?.targetAspect).toBe("timeline");
 		expect(result.result?.totalAttributesMoved).toBe(4);
-		// All 7 attributes now live on the merged target
 		expect(aspectRowCount("timeline")).toBe(7);
-		// Source aspect is archived
 		const sourceStatus = getDbAccessor().withReadDb((db) =>
 			db.prepare("SELECT status FROM entity_aspects WHERE agent_id = ? AND name = ?").get("ant", "changelog"),
 		);
@@ -3130,9 +3113,6 @@ describe("ontology proposals", () => {
 		});
 		await seedAspectClaims("FatEnt", "a", 5);
 		await seedAspectClaims("FatEnt", "b", 5);
-
-		// Two at-cap aspects merged into one: 10 attributes on the target, cap is 5.
-		// Merging is the consolidation remedy, so it must not be blocked.
 		const result = await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
@@ -3154,8 +3134,6 @@ describe("ontology proposals", () => {
 			}),
 		).rejects.toThrow(/sources is required/);
 	});
-
-	// #1147 adversarial review: cap bypasses via other write ops.
 	it("does not bypass the aspect cap via add_claim_value with a new aspect name (E1)", async () => {
 		const cap = { maxAspectsPerEntity: 2, maxAttributesPerAspect: 25 };
 		await applyOntologyOperation(getDbAccessor(), {
@@ -3173,7 +3151,6 @@ describe("ontology proposals", () => {
 				writeCaps: cap,
 			});
 		}
-		// add_claim_value with a THIRD new aspect name must hit the aspect cap.
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",
@@ -3244,9 +3221,6 @@ describe("ontology proposals", () => {
 			operation: "archive_aspect",
 			payload: { entity: "E3Ent", selector: aspect.id },
 		});
-		// Reactivating the archived aspect keeps the active count at 2 (cap)
-		// — the new helper only skips the cap when an ACTIVE row exists, and
-		// the count after reactivation is 2/2, so this is allowed.
 		await applyOntologyOperation(getDbAccessor(), {
 			agentId: "ant",
 			actor: "test",
@@ -3254,7 +3228,6 @@ describe("ontology proposals", () => {
 			payload: { entity: "E3Ent", name: "aspect_1" },
 			writeCaps: cap,
 		});
-		// But a genuinely new third aspect is still rejected at cap.
 		await expect(
 			applyOntologyOperation(getDbAccessor(), {
 				agentId: "ant",

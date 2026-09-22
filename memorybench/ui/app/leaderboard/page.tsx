@@ -12,8 +12,6 @@ export default function LeaderboardPage() {
   const [entries, setEntries] = useState<LeaderboardEntry[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-
-  // Filters
   const [search, setSearch] = useState("")
   const [selectedProviders, setSelectedProviders] = useState<string[]>([])
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>([])
@@ -45,8 +43,6 @@ export default function LeaderboardPage() {
       alert(e instanceof Error ? e.message : "Failed to remove entry")
     }
   }
-
-  // Get unique providers and benchmarks for filter options
   const providers = useMemo(() => {
     const counts: Record<string, number> = {}
     entries.forEach((e) => {
@@ -70,11 +66,8 @@ export default function LeaderboardPage() {
       count,
     }))
   }, [entries])
-
-  // Filter entries
   const filteredEntries = useMemo(() => {
     return entries.filter((e) => {
-      // Search filter
       if (search) {
         const searchLower = search.toLowerCase()
         const matchesSearch =
@@ -83,13 +76,9 @@ export default function LeaderboardPage() {
           e.provider.toLowerCase().includes(searchLower)
         if (!matchesSearch) return false
       }
-
-      // Provider filter
       if (selectedProviders.length > 0 && !selectedProviders.includes(e.provider)) {
         return false
       }
-
-      // Benchmark filter
       if (selectedBenchmarks.length > 0 && !selectedBenchmarks.includes(e.benchmark)) {
         return false
       }
@@ -97,8 +86,6 @@ export default function LeaderboardPage() {
       return true
     })
   }, [entries, search, selectedProviders, selectedBenchmarks])
-
-  // Get question types and registry - only when exactly one benchmark is selected
   const { visibleQuestionTypes, typeRegistry } = useMemo((): {
     visibleQuestionTypes: string[]
     typeRegistry: LeaderboardEntry["questionTypeRegistry"]
@@ -106,8 +93,6 @@ export default function LeaderboardPage() {
     if (selectedBenchmarks.length !== 1) {
       return { visibleQuestionTypes: [], typeRegistry: null }
     }
-
-    // Get all question types present in filtered entries for the selected benchmark
     const types = new Set<string>()
     let registry: LeaderboardEntry["questionTypeRegistry"] = null
 
@@ -123,8 +108,6 @@ export default function LeaderboardPage() {
       typeRegistry: registry,
     }
   }, [selectedBenchmarks, filteredEntries])
-
-  // Build columns
   const columns: Column<LeaderboardEntry>[] = useMemo(() => {
     const cols: Column<LeaderboardEntry>[] = [
       {
@@ -168,8 +151,6 @@ export default function LeaderboardPage() {
         },
       },
     ]
-
-    // Add question type columns only when single benchmark is selected
     visibleQuestionTypes.forEach((type) => {
       const alias = typeRegistry?.[type]?.alias || type.replace(/[-_]/g, " ")
       cols.push({
@@ -185,8 +166,6 @@ export default function LeaderboardPage() {
         },
       })
     })
-
-    // Accuracy column (always last)
     cols.push({
       key: "accuracy",
       header: "Accuracy",
@@ -197,8 +176,6 @@ export default function LeaderboardPage() {
         </span>
       ),
     })
-
-    // Actions column
     cols.push({
       key: "actions",
       header: "",
@@ -249,12 +226,12 @@ export default function LeaderboardPage() {
 
   return (
     <div className="animate-fade-in">
-      {/* Header */}
+      {}
       <div className="mb-6">
         <h1 className="text-2xl font-display font-semibold text-text-primary">Leaderboard</h1>
       </div>
 
-      {/* Filter Bar */}
+      {}
       {!loading && entries.length > 0 && (
         <div className="mb-0">
           <FilterBar
@@ -284,7 +261,7 @@ export default function LeaderboardPage() {
         </div>
       )}
 
-      {/* Table */}
+      {}
       {loading ? (
         <div className="py-12 text-center">
           <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />

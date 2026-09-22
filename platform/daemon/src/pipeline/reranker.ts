@@ -1,15 +1,3 @@
-/**
- * Optional reranker hook for recall results.
- *
- * Provider-agnostic — accepts a RerankProvider function that can
- * wrap any cross-encoder or reranking service. Includes timeout
- * guard and graceful fallback to original ordering.
- */
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface RerankCandidate {
 	readonly id: string;
 	readonly content: string;
@@ -20,7 +8,6 @@ export interface RerankConfig {
 	readonly topN: number;
 	readonly timeoutMs: number;
 	readonly model: string;
-	/** Fail closed when configured ranking is required by the caller. */
 	readonly throwOnError?: boolean;
 }
 
@@ -29,23 +16,7 @@ export type RerankProvider = (
 	candidates: RerankCandidate[],
 	cfg: RerankConfig,
 ) => Promise<RerankCandidate[]>;
-
-// ---------------------------------------------------------------------------
-// Providers
-// ---------------------------------------------------------------------------
-
-/** Pass-through provider — returns candidates unchanged. */
 export const noopReranker: RerankProvider = async (_query, candidates, _cfg) => candidates;
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
-
-/**
- * Rerank the top-N candidates using the given provider. Candidates
- * beyond topN are appended unchanged. On timeout or error, returns
- * original ordering.
- */
 export async function rerank(
 	query: string,
 	candidates: RerankCandidate[],
@@ -68,7 +39,6 @@ export async function rerank(
 		return [...reranked, ...tail];
 	} catch (error) {
 		if (cfg.throwOnError) throw error;
-		// Timeout or provider error: return original ordering
 		return candidates;
 	} finally {
 		if (timerId !== undefined) clearTimeout(timerId);

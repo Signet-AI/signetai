@@ -1,5 +1,4 @@
 export function parseSoul(markdown: string): Record<string, string> {
-	// Parse markdown sections
 	const sections: Record<string, string> = {};
 	const lines = markdown.split("\n");
 	let currentSection = "intro";

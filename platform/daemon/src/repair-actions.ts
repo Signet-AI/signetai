@@ -1,11 +1,3 @@
-/**
- * Policy-gated repair actions for the memory pipeline.
- *
- * Each action checks the policy gate and rate limiter before running.
- * Operators bypass the autonomousEnabled check; agents do not.
- * All actions respect autonomousFrozen regardless of actor type.
- */
-
 import {
 	memoriesFtsNeedsTokenizerRepair,
 	readMemoriesFtsIndexRowCount,
@@ -66,10 +58,6 @@ import { recoverStaleLeases } from "./pipeline/stale-leases";
 import { insertHistoryEvent } from "./transactions";
 import { runVectorRepair, type VectorRepairOptions, type VectorRepairResult } from "./vector-repair";
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 export interface RepairContext {
 	readonly reason: string;
 	readonly actor: string;
@@ -82,14 +70,10 @@ export interface RepairResult {
 	readonly success: boolean;
 	readonly affected: number;
 	readonly message: string;
-	/** Present on dry-run previews; ids the action *would* touch (capped). */
 	readonly preview?: readonly string[];
-	/** Count of rows that matched the filter (capped for log size). */
 	readonly totalMatching?: number;
 	readonly details?: Readonly<Record<string, unknown>>;
 }
-
-/** Filters accepted by `requeueDeadJobs` / `cancelObsoleteJobs` / `pruneTerminalJobs`. */
 export interface JobFilterOptions {
 	readonly dryRun?: boolean;
 	readonly ids?: readonly string[];
@@ -104,10 +88,6 @@ export interface RepairGateCheck {
 	readonly allowed: boolean;
 	readonly reason?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Rate limiter
-// ---------------------------------------------------------------------------
 
 interface RateLimiterEntry {
 	lastRunAt: number;
@@ -137,8 +117,6 @@ export function createRateLimiter(): RateLimiter {
 					reason: `cooldown active, ${remainingMs}ms remaining`,
 				};
 			}
-
-			// Reset hourly counter if the window has passed
 			const effectiveCount = now >= entry.hourResetAt ? 0 : entry.hourlyCount;
 			if (effectiveCount >= hourlyBudget) {
 				return {
@@ -162,8 +140,6 @@ export function createRateLimiter(): RateLimiter {
 				});
 				return;
 			}
-
-			// Reset hourly count if the window has passed
 			if (now >= entry.hourResetAt) {
 				entry.hourlyCount = 1;
 				entry.hourResetAt = now + 60 * 60 * 1000;
@@ -174,10 +150,6 @@ export function createRateLimiter(): RateLimiter {
 		},
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Policy gate
-// ---------------------------------------------------------------------------
 
 export function checkRepairGate(
 	cfg: PipelineV2Config,
@@ -190,26 +162,18 @@ export function checkRepairGate(
 	if (cfg.autonomous.frozen) {
 		return { allowed: false, reason: "autonomous.frozen is set" };
 	}
-
-	// Agents require autonomous.enabled; operators and daemon bypass this check
 	if (ctx.actorType === "agent" && !cfg.autonomous.enabled) {
 		return {
 			allowed: false,
 			reason: "autonomous.enabled is false; agents cannot trigger repairs",
 		};
 	}
-
-	// Operators and daemon bypass rate limiting — only agents are throttled
 	if (ctx.actorType === "operator" || ctx.actorType === "daemon") {
 		return { allowed: true };
 	}
 
 	return limiter.check(action, cooldownMs, hourlyBudget);
 }
-
-// ---------------------------------------------------------------------------
-// Audit helper
-// ---------------------------------------------------------------------------
 
 function writeRepairAudit(db: WriteDb, action: string, ctx: RepairContext, affected: number, message: string): void {
 	insertHistoryEvent(db, {
@@ -226,12 +190,7 @@ function writeRepairAudit(db: WriteDb, action: string, ctx: RepairContext, affec
 	});
 }
 
-// ---------------------------------------------------------------------------
-// Repair actions
-// ---------------------------------------------------------------------------
-
 const DEFAULT_REQUEUE_BATCH = 50;
-// FTS rebuilds are heavyweight; cap their hourly budget at 5
 const FTS_HOURLY_BUDGET = 5;
 
 async function withRepairWriteTx<T>(
@@ -245,23 +204,13 @@ async function withRepairWriteTx<T>(
 	}
 	throw new Error("async write API is unavailable");
 }
-
-// Hold an autonomous rebuild until the same mismatch is observed on a second
-// check, so a transient spike from in-flight artifact writes cannot trigger a
-// rebuild on every maintenance cycle (#1142).
 let ftsMismatchPendingRebuild = false;
 let ftsRebuildInFlight = false;
-
-/** Reset the FTS rebuild confirmation state (for tests). */
 export function resetFtsRebuildConfirmation(): void {
 	ftsMismatchPendingRebuild = false;
 	ftsRebuildInFlight = false;
 }
-
-// ---- Issue #901 shared constants ----
-/** Capped number of ids returned in dry-run previews. */
 const PREVIEW_CAP = 100;
-/** Hard cap on rows touched by a single apply/cancel/prune call. */
 const MAX_BATCH_HARD_CAP = 1000;
 const RETIRED_SUMMARY_REPAIR_MESSAGE =
 	"summary worker retired; session transcripts are completed at session end and delivered directly to Dreaming";
@@ -273,26 +222,6 @@ function rejectRetiredSummaryRepair(
 	if (!options.tables?.includes("summary")) return null;
 	return { action, success: false, affected: 0, message: RETIRED_SUMMARY_REPAIR_MESSAGE };
 }
-
-/**
- * Reset dead jobs to pending so the worker will retry them.
- *
- * Issue #901 — accepts an `options` parameter for selective requeue:
- * `dryRun` returns a preview without mutating data; `ids` targets a
- * specific set; `olderThanMs` and `errorPattern` narrow further. All
- * options compose, default behavior is preserved when `options` is
- * omitted (existing callers stay correct).
- */
-
-/**
- * Allocate the bounded requeue budget across selected queues so a default
- * both-queue repair makes progress in every non-empty queue (issue #1052).
- *
- * Each selected non-empty queue receives one reserved slot; the remaining
- * capacity is split, and capacity a queue cannot use (fewer matches than its
- * share) is refilled from the other queue. Single-table selections keep the
- * full cap.
- */
 export async function requeueDeadJobs(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -420,11 +349,6 @@ export async function releaseStaleLeases(
 		message: result.msg,
 	};
 }
-
-/**
- * Check FTS row count and tokenizer definition, optionally rebuilding.
- * Uses a longer cooldown since FTS recreation is expensive.
- */
 export async function checkFtsConsistency(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -463,16 +387,10 @@ export async function checkFtsConsistency(
 	const { memCount, ftsCount, ftsMissing, tokenizerDrift } = await accessor.withReadDbAsync(
 		async (db) => {
 			const memRow = db.prepare("SELECT COUNT(*) as n FROM memories").get() as { n: number };
-
-			// Guard against missing FTS index state (can happen on upgrades before
-			// self-heal). Count the physical docsize rows, not the external-content
-			// table, whose COUNT(*) resolves through memories and includes tombstones.
 			let ftsN: number | null = null;
 			try {
 				ftsN = readMemoriesFtsIndexRowCount(toFtsSchemaQueryDb(db));
-			} catch {
-				// Missing FTS shadow state.
-			}
+			} catch {}
 			const missing = ftsN === null;
 			const ftsSql = missing ? null : readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 			return {
@@ -484,9 +402,6 @@ export async function checkFtsConsistency(
 		},
 		{ siteToken: "db:repair.fts-consistency.read" },
 	);
-
-	// If FTS table is missing entirely, report it (startup self-heal
-	// via ensureFtsTable should have caught this, but handle gracefully)
 	if (ftsMissing) {
 		limiter.record(action);
 		const msg = repair
@@ -542,7 +457,6 @@ export async function checkFtsConsistency(
 			} finally {
 				ftsRebuildInFlight = false;
 			}
-			// The recreate is itself a full rebuild; any prior mismatch is moot.
 			ftsMismatchPendingRebuild = false;
 		}
 
@@ -563,17 +477,10 @@ export async function checkFtsConsistency(
 			message,
 		};
 	}
-
-	// The physical FTS index must contain one document for every canonical
-	// memory row, including tombstones. Async writer admission keeps a repair
-	// out of the request call stack while preserving the existing transaction.
 	const mismatch = memCount !== ftsCount;
 
 	let rebuilt = false;
 	if (mismatch && repair) {
-		// Operator-triggered repairs are explicit intent and rebuild at once;
-		// autonomous repair waits for a second observation so a transient
-		// mismatch cannot trigger a synchronous rebuild every cycle (#1142).
 		const confirmed = ctx.actorType === "operator" || ftsMismatchPendingRebuild;
 		if (confirmed) {
 			if (ftsRebuildInFlight) {
@@ -649,10 +556,6 @@ export async function checkFtsConsistency(
 		message,
 	};
 }
-
-/**
- * Trigger a retention sweep immediately via the retention worker handle.
- */
 export async function triggerRetentionSweep(
 	cfg: PipelineV2Config,
 	ctx: RepairContext,
@@ -687,10 +590,6 @@ export async function triggerRetentionSweep(
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Embedding gap diagnostics
-// ---------------------------------------------------------------------------
-
 export interface EmbeddingGapStats {
 	readonly unembedded: number;
 	readonly total: number;
@@ -698,7 +597,6 @@ export interface EmbeddingGapStats {
 	readonly complete: boolean;
 	readonly coverage: string;
 	readonly staging: EmbeddingMigrationCoverage | null;
-	/** Durable autonomous-tracker admission and completion state. */
 	readonly repair: EmbeddingRepairState | null;
 }
 
@@ -756,9 +654,6 @@ export async function getEmbeddingGapStats(accessor: DbAccessor, agentId: string
 					? stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint)
 					: null;
 			const complete = unembedded === 0 && (staging === null || staging.ready);
-			// Floor to one decimal so a near-complete store never rounds up to
-			// 100% while embeddings are still missing (issue #906). When the
-			// store is complete the ratio is exactly 100%.
 			const pct = total > 0 ? (embedded / total) * 100 : 100;
 			const displayed = complete ? pct : Math.floor(pct * 10) / 10;
 
@@ -791,10 +686,6 @@ export async function getEmbeddingRepairStats(
 	});
 	return { gap, migration, orphaned };
 }
-
-// ---------------------------------------------------------------------------
-// Re-embed missing memories
-// ---------------------------------------------------------------------------
 
 const MAX_REEMBED_BATCH = 20;
 const DEFAULT_REEMBED_BATCH = MAX_REEMBED_BATCH;
@@ -1057,9 +948,6 @@ async function reembedMissingMemoriesBatchForRows(
 	const writeOutcome = await withRepairWriteTx(
 		accessor,
 		(db) => {
-			// Provider work happens outside the transaction. Promotion can therefore
-			// change the active vector space while this batch is being encoded.
-			// Never commit vectors from the superseded profile.
 			if (repairLease !== undefined && !isEmbeddingRepairLeaseActive(db, repairLease)) {
 				return {
 					count: 0,
@@ -1085,16 +973,10 @@ async function reembedMissingMemoriesBatchForRows(
 			let stale = 0;
 			let crossAgentHashConflicts = 0;
 			const successful: EmbeddingRepairKey[] = [];
-			// Hoisted outside loop (pattern: db.prepare inside a loop is flagged)
 			const readCurrentMemory = db.prepare(
 				"SELECT content, content_hash, agent_id FROM memories WHERE id = ? AND is_deleted = 0",
 			);
 			const writeHash = db.prepare("UPDATE memories SET content_hash = ? WHERE id = ? AND content_hash IS NULL");
-			// Guard against unique constraint violation: idx_memories_content_hash_unique
-			// is a partial unique index on (content_hash) WHERE content_hash IS NOT NULL AND is_deleted = 0.
-			// If another non-deleted memory already owns the same hash, writing it back would throw
-			// and abort the entire batch. Skip the write-back in that case -- the dedup worker
-			// will soft-delete the duplicate in a later pass.
 			const checkHash = db.prepare(
 				"SELECT id FROM memories WHERE content_hash = ? AND is_deleted = 0 AND id <> ? LIMIT 1",
 			);
@@ -1109,10 +991,6 @@ async function reembedMissingMemoriesBatchForRows(
 					stale++;
 					continue;
 				}
-
-				// Provider work happened before this transaction. Re-read the memory
-				// so a concurrent content mutation cannot receive a vector for its old
-				// content or hash.
 				if (current.content !== memory.content || current.content_hash !== memory.contentHash) {
 					stale++;
 					continue;
@@ -1127,20 +1005,10 @@ async function reembedMissingMemoriesBatchForRows(
 						? current.content_hash
 						: normalizeAndHashContent(current.content).contentHash;
 				const memoryAgentId = normalizeRepairAgentId(current.agent_id ?? agentId);
-
-				// Write computed hash back to the memories row when it was NULL.
-				// Without this, the embedding-coverage queries can never use the
-				// content_hash match branch for these rows, so they keep showing up
-				// as unembedded and the backfill cycles indefinitely.
 				if (current.content_hash == null) {
 					const collision = checkHash.get(contentHash, memory.id) as { id: string } | undefined;
 					if (!collision) writeHash.run(contentHash, memory.id);
 				}
-
-				// content_hash is globally unique in the embeddings table, while the
-				// repair selection is agent-scoped. A hash peer owned by another agent
-				// must never be updated by this repair, or its vector and source fields
-				// become cross-agent data corruption.
 				const existing = readEmbeddingByHash.get(contentHash) as { id: string; agent_id: string | null } | undefined;
 				if (existing) {
 					const existingAgentId = normalizeRepairAgentId(existing.agent_id);
@@ -1170,7 +1038,6 @@ async function reembedMissingMemoriesBatchForRows(
 					   chunk_text = excluded.chunk_text,
 					   created_at = excluded.created_at`,
 				).run(embId, contentHash, blob, vector.length, memory.id, memory.content, now, memoryAgentId);
-				// Resolve actual embedding ID (may differ from embId on conflict)
 				const actualRow = db.prepare("SELECT id FROM embeddings WHERE content_hash = ?").get(contentHash) as
 					| { id: string }
 					| undefined;
@@ -1201,13 +1068,6 @@ async function reembedMissingMemoriesBatchForRows(
 		failedKeys,
 	};
 }
-
-/**
- * Backfill embeddings for memories that have no vector.
- *
- * Embedding fetches are async network calls so this function is async
- * and carefully avoids calling the provider inside a write transaction.
- */
 export async function reembedMissingMemories(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -1250,17 +1110,6 @@ export async function reembedMissingMemories(
 		Number.isFinite(batchSize) && batchSize > 0
 			? Math.min(MAX_REEMBED_BATCH, Math.max(1, Math.floor(batchSize)))
 			: DEFAULT_REEMBED_BATCH;
-
-	// `embeddingCfg` is the raw configured value (e.g. from agent.yaml), which
-	// carries no `profile`. The durable active generation may have been
-	// promoted with a named profile (e.g. by a prior --model-mismatch
-	// migration), so its persisted fingerprint includes that profile id.
-	// Comparing the raw config's identity fingerprint against that persisted
-	// fingerprint in isActiveEmbeddingConfig always mismatches — not a race,
-	// a permanent false positive that fails every batch with "embedding
-	// profile changed during provider work" (issue: reembed never resolves
-	// the active profile before writing). Resolve once, matching the same
-	// profile the durable index actually owns, before doing any work.
 	const resolvedEmbeddingCfg = await accessor.withReadDbAsync(
 		async (db) => resolveActiveEmbeddingConfig(db, embeddingCfg),
 		{ siteToken: "db:repair.active-embedding-config.read" },
@@ -1602,8 +1451,6 @@ export async function reembedModelMigration(
 		selected: totalMatching,
 		selectedThisBatch: rows.length,
 		agentId,
-		// Provider identity was not persisted by historical schemas. Report that
-		// explicitly rather than implying a provider mismatch can be inferred.
 		sources: sources.map((source) => ({ ...source, provider: "not-recorded" })),
 		target: { provider: embeddingCfg.provider, model: embeddingCfg.model, dimensions: embeddingCfg.dimensions },
 		estimatedBatches: Math.ceil(totalMatching / size),
@@ -1621,12 +1468,6 @@ export async function reembedModelMigration(
 			totalMatching,
 			details,
 		};
-	// Refuse a live run when the vec_embeddings virtual table is pinned to a
-	// different dimension than the configured target. syncVecInsert would
-	// otherwise throw a dimension mismatch that db-helpers silently swallows,
-	// leaving embeddings updated but vec_embeddings serving stale vectors until
-	// a daemon restart. The operator must restart the daemon (which rebuilds
-	// the vec table at the new dimension) and then re-run the migration.
 	if (vecDimensionMismatch) {
 		return {
 			action,
@@ -1671,9 +1512,6 @@ export async function reembedModelMigration(
 					ownershipChanged: boolean;
 					crossAgentConflict: boolean;
 				} => {
-					// Provider work happens outside the transaction. Promotion can therefore
-					// change the active vector space while this row is being encoded.
-					// Never commit a vector or model marker from the superseded profile.
 					if (!isActiveEmbeddingConfig(db, embeddingCfg))
 						return {
 							wrote: false,
@@ -1693,9 +1531,6 @@ export async function reembedModelMigration(
 							ownershipChanged: false,
 							crossAgentConflict: false,
 						};
-					// The provider encoded row.content before this transaction. If the
-					// memory changed while it awaited the provider, its vector belongs to
-					// the old row version and must not be committed under the new one.
 					if (current.content_hash !== row.contentHash || current.content !== row.content) {
 						return {
 							wrote: false,
@@ -1801,8 +1636,6 @@ export async function reembedModelMigration(
 				"db:repair.reembed-migration.audit",
 			);
 		} catch (error) {
-			// The repair work is already committed per-row; a failed audit write
-			// must not discard the partial-progress result the caller needs.
 			logger.warn("pipeline", "re-embed migration: audit write failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
@@ -1818,17 +1651,6 @@ export async function reembedModelMigration(
 		details: { ...details, failed, contentChanged, ownershipChanged, crossAgentConflict },
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Clean orphaned embeddings
-// ---------------------------------------------------------------------------
-
-/**
- * Remove embeddings whose source memory is deleted or missing, unless the
- * vector is still covering an active memory with the same content hash.
- * Remove the corresponding derived vector only when the canonical embedding
- * is owned by the requested scope; unknown-owner vector rows are untouched.
- */
 export async function cleanOrphanedEmbeddings(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -1882,16 +1704,6 @@ export async function cleanOrphanedEmbeddings(
 	});
 	return result;
 }
-
-// ---------------------------------------------------------------------------
-// Resync vec index
-// ---------------------------------------------------------------------------
-
-/**
- * Reconcile the agent-scoped embeddings whose vectors are missing from
- * vec_embeddings. Unknown-owner vector rows are retained because this
- * operation cannot safely attribute them to an agent.
- */
 export async function resyncVectorIndex(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -1941,10 +1753,6 @@ export async function resyncVectorIndex(
 	return result;
 }
 
-// ---------------------------------------------------------------------------
-// Deduplication stats (read-only)
-// ---------------------------------------------------------------------------
-
 export interface DedupStats {
 	readonly exactClusters: number;
 	readonly exactExcess: number;
@@ -1980,10 +1788,6 @@ export async function getDedupStats(accessor: DbAccessor): Promise<DedupStats> {
 	);
 }
 
-// ---------------------------------------------------------------------------
-// Deduplication action
-// ---------------------------------------------------------------------------
-
 interface DedupCandidate {
 	readonly id: string;
 	readonly content: string;
@@ -2005,9 +1809,8 @@ function scoreDedupCandidate(c: DedupCandidate): number {
 	let s = c.importance * 3;
 	s += Math.min(c.access_count, 50) / 50;
 	s += Math.min(c.update_count, 20) / 20;
-	// Recency tiebreaker — normalized to a small range
 	const updatedMs = new Date(c.updated_at).getTime();
-	s += updatedMs / 1e15; // tiny but deterministic
+	s += updatedMs / 1e15;
 	if (c.pinned) s += 100;
 	if (c.manual_override) s += 100;
 	return s;
@@ -2035,14 +1838,11 @@ function processCluster(
 	candidates: readonly DedupCandidate[],
 	ctx: RepairContext,
 ): { keeperId: string; removed: number } | null {
-	// Safety: skip if any member is protected
 	if (candidates.some((c) => c.pinned || c.manual_override)) {
 		return null;
 	}
 
 	if (candidates.length < 2) return null;
-
-	// Score and pick keeper
 	let bestIdx = 0;
 	let bestScore = Number.NEGATIVE_INFINITY;
 	for (let i = 0; i < candidates.length; i++) {
@@ -2056,8 +1856,6 @@ function processCluster(
 	const keeper = candidates[bestIdx];
 	const losers = candidates.filter((_, i) => i !== bestIdx);
 	const now = new Date().toISOString();
-
-	// Merge tags into keeper
 	let mergedTags = keeper.tags;
 	for (const loser of losers) {
 		mergedTags = mergeTags(mergedTags, loser.tags);
@@ -2066,8 +1864,6 @@ function processCluster(
 	if (mergedTags !== keeper.tags) {
 		db.prepare("UPDATE memories SET tags = ?, updated_at = ? WHERE id = ?").run(mergedTags, now, keeper.id);
 	}
-
-	// Audit keeper
 	insertHistoryEvent(db, {
 		memoryId: keeper.id,
 		event: "merged",
@@ -2083,8 +1879,6 @@ function processCluster(
 		actorType: ctx.actorType,
 		requestId: ctx.requestId,
 	});
-
-	// Soft-delete losers
 	for (const loser of losers) {
 		db.prepare("UPDATE memories SET is_deleted = 1, deleted_at = ?, updated_at = ? WHERE id = ?").run(
 			now,
@@ -2138,8 +1932,6 @@ export async function deduplicateMemories(
 	const semanticThreshold = options?.semanticThreshold ?? cfg.repair.dedupSemanticThreshold;
 	const dryRun = options?.dryRun ?? false;
 	const semanticEnabled = options?.semanticEnabled ?? false;
-
-	// Phase 1: Exact hash clusters
 	const hashClusters = await accessor.withReadDbAsync(
 		async (db) => {
 			return db
@@ -2181,8 +1973,6 @@ export async function deduplicateMemories(
 
 	let totalRemoved = 0;
 	let totalClusters = 0;
-
-	// Process exact hash clusters (scope-aware: only dedup within same scope)
 	for (const cluster of hashClusters) {
 		const removed = await withRepairWriteTx(
 			accessor,
@@ -2212,8 +2002,6 @@ export async function deduplicateMemories(
 			totalClusters++;
 		}
 	}
-
-	// Phase 2: Semantic clusters (only if exact phase didn't fill batch)
 	if (semanticEnabled && totalClusters < batchSize) {
 		const semanticClusters = await findSemanticDuplicates(accessor, semanticThreshold, batchSize - totalClusters);
 
@@ -2265,10 +2053,6 @@ export async function deduplicateMemories(
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Semantic duplicate finder
-// ---------------------------------------------------------------------------
-
 interface SemanticCandidate {
 	readonly id: string;
 	readonly embeddingId: string;
@@ -2304,7 +2088,6 @@ async function findSemanticDuplicates(
 
 		const neighbors = await accessor.withReadDbAsync(
 			async (db) => {
-				// Get the vector for this candidate's embedding
 				const vecRow = db.prepare("SELECT embedding FROM vec_embeddings WHERE id = ?").get(candidate.embedding_id) as
 					| { embedding: ArrayBuffer }
 					| undefined;
@@ -2312,7 +2095,6 @@ async function findSemanticDuplicates(
 				if (!vecRow) return [];
 
 				const queryVec = new Float32Array(vecRow.embedding);
-				// KNN search for nearby vectors
 				const rows = db
 					.prepare(
 						`SELECT e.source_id, v.distance
@@ -2324,8 +2106,6 @@ async function findSemanticDuplicates(
 					 ORDER BY v.distance`,
 					)
 					.all(queryVec) as Array<{ source_id: string; distance: number }>;
-
-				// Convert distance to cosine similarity and filter
 				return rows
 					.filter((r) => r.source_id !== candidate.id)
 					.filter((r) => {
@@ -2348,17 +2128,6 @@ async function findSemanticDuplicates(
 
 	return clusters;
 }
-
-// ---------------------------------------------------------------------------
-// pruneChunkGroupEntities
-// ---------------------------------------------------------------------------
-
-/**
- * Delete chunk_group entities — document-chunk indexing artifacts with no
- * semantic role in the knowledge graph. They have 0 mentions, no aspects,
- * no attributes, and no dependencies. FK cascades clean entity_aspects and
- * entity_dependencies automatically.
- */
 export async function pruneChunkGroupEntities(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -2408,17 +2177,6 @@ export async function pruneChunkGroupEntities(
 	logger.info("pipeline", "repair: pruned chunk_group entities", { affected, actor: ctx.actor });
 	return { action, success: true, affected, message: `deleted ${affected} chunk_group entities` };
 }
-
-// ---------------------------------------------------------------------------
-// pruneSingletonExtractedEntities
-// ---------------------------------------------------------------------------
-
-/**
- * Delete extracted entities with mention_count <= maxMentions that have no
- * entity_aspects or entity_attributes — transient extractions that never
- * became meaningful knowledge. Cleans memory_entity_mentions and relations
- * manually (no FK cascade on those tables).
- */
 export async function pruneSingletonExtractedEntities(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -2482,13 +2240,10 @@ export async function pruneSingletonExtractedEntities(
 		(db) => {
 			const ids = candidates.map((r) => r.id);
 			const placeholders = ids.map(() => "?").join(",");
-			// Clean mention links (no FK cascade)
 			db.prepare(`DELETE FROM memory_entity_mentions WHERE entity_id IN (${placeholders})`).run(...ids);
-			// Clean relations (no FK cascade)
 			db.prepare(
 				`DELETE FROM relations WHERE source_entity_id IN (${placeholders}) OR target_entity_id IN (${placeholders})`,
 			).run(...ids, ...ids);
-			// Delete entities — cascades entity_aspects and entity_dependencies
 			db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
 			writeRepairAudit(db, action, ctx, ids.length, `deleted ${ids.length} singleton extracted entities`);
 			return ids.length;
@@ -2508,10 +2263,6 @@ export async function pruneSingletonExtractedEntities(
 		message: `deleted ${affected} singleton extracted entities`,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// pruneGenericEntities
-// ---------------------------------------------------------------------------
 
 interface GenericEntityCandidate {
 	readonly id: string;
@@ -2546,12 +2297,6 @@ function deleteEntityGraphRows(db: WriteDb, ids: readonly string[]): void {
 	db.prepare(`DELETE FROM entity_aspects WHERE entity_id IN (${placeholders})`).run(...ids);
 	db.prepare(`DELETE FROM entities WHERE id IN (${placeholders})`).run(...ids);
 }
-
-/**
- * Delete concrete-ontology violations such as pronouns, metadata labels,
- * headings, discourse fragments, and non-concrete extraction types. Defaults
- * to dry-run at the route layer so operators can inspect candidates first.
- */
 export async function pruneGenericEntities(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -2643,10 +2388,6 @@ export async function pruneGenericEntities(
 	return { action, success: true, affected, message: `deleted ${affected} generic/non-concrete entities` };
 }
 
-// ---------------------------------------------------------------------------
-// Dead memory hygiene
-// ---------------------------------------------------------------------------
-
 export interface DeadMemory {
 	readonly id: string;
 	readonly content: string;
@@ -2660,22 +2401,10 @@ export const DEAD_MEMORY_DEFAULT_CONFIDENCE = 0.1;
 export const DEAD_MEMORY_DEFAULT_ACCESS_DAYS = 90;
 
 export interface DeadMemoryOpts {
-	/** Max confidence to flag as dead. Default: 0.10. */
 	readonly maxConfidence?: number;
-	/** Days since last access (or creation if never accessed) to flag as stale. Default: 90. */
 	readonly maxAccessDays?: number;
-	/** Max rows to return. Default: 200. */
 	readonly limit?: number;
 }
-
-/**
- * Find memories that are candidates for deletion:
- * - Low confidence (below threshold), OR
- * - Never accessed and old, OR
- * - Not accessed in maxAccessDays
- *
- * Never flags memories with importance > 0.8 regardless of other criteria.
- */
 export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMemory[] {
 	const maxConf = opts.maxConfidence ?? DEAD_MEMORY_DEFAULT_CONFIDENCE;
 	const maxDays = opts.maxAccessDays ?? DEAD_MEMORY_DEFAULT_ACCESS_DAYS;
@@ -2715,11 +2444,6 @@ export function findDeadMemories(db: ReadDb, opts: DeadMemoryOpts = {}): DeadMem
 		return { ...row, reason };
 	});
 }
-
-/**
- * Soft-delete a batch of memories by ID in a single transaction.
- * Returns the number actually deleted (skips already-deleted).
- */
 export async function forgetDeadMemories(accessor: DbAccessor, ids: readonly string[]): Promise<number> {
 	if (ids.length === 0) return 0;
 	const now = new Date().toISOString();
@@ -2749,10 +2473,6 @@ export async function forgetDeadMemories(accessor: DbAccessor, ids: readonly str
 	);
 }
 
-// ---------------------------------------------------------------------------
-// SQLite integrity check
-// ---------------------------------------------------------------------------
-
 export interface IntegrityCheckResult {
 	readonly ok: boolean;
 	readonly messages: readonly string[];
@@ -2767,11 +2487,6 @@ function readIntegrityCheck(db: ReadDb, pragma: "quick_check" | "integrity_check
 	if (messages.length === 1 && messages[0] === "ok") return { ok: true, messages: [] };
 	return { ok: false, messages };
 }
-
-/**
- * Run both SQLite integrity modes. quick_check is cheap and useful for
- * broad damage; integrity_check is the authoritative result for indexes.
- */
 export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityCheckResult> {
 	return await accessor.withReadDbAsync(
 		async (db) => {
@@ -2783,10 +2498,6 @@ export async function integrityCheck(accessor: DbAccessor): Promise<IntegrityChe
 	);
 }
 
-// ---------------------------------------------------------------------------
-// Rebuild derived search indexes
-// ---------------------------------------------------------------------------
-
 export interface RebuildIndexesResult {
 	readonly integrity: { ok: boolean; messages: readonly string[] };
 	readonly fts: { repaired: boolean; message: string };
@@ -2797,15 +2508,6 @@ export interface RebuildIndexesResult {
 	};
 	readonly summary: string;
 }
-
-/**
- * Run a coordinated repair of all derived search indexes in sequence:
- * 1. PRAGMA integrity_check — fail fast if DB is corrupt
- * 2. FTS consistency check + rebuild if needed
- * 3. Re-embed memories missing vector embeddings
- *
- * Intended for recovery after SQLite repair or schema migration.
- */
 export async function rebuildDerivedIndexes(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -2815,11 +2517,7 @@ export async function rebuildDerivedIndexes(
 	embeddingCfg: EmbeddingConfig,
 ): Promise<RebuildIndexesResult> {
 	const integrity = await integrityCheck(accessor);
-
-	// Step 1: FTS rebuild
 	const ftsResult = await checkFtsConsistency(accessor, cfg, ctx, limiter, true);
-
-	// Step 2: Re-embed missing memories (batch of 200, not full sweep)
 	const reembedResult = await reembedAllMissingMemoriesBatch(accessor, embeddingFn, embeddingCfg, 200);
 
 	const parts: string[] = [];
@@ -2851,10 +2549,6 @@ export async function rebuildDerivedIndexes(
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Internal helpers shared by selective repair actions (issue #901)
-// ---------------------------------------------------------------------------
-
 interface DeadMatchRow {
 	readonly id: string;
 }
@@ -2865,12 +2559,6 @@ interface BuiltSql {
 	readonly ids: readonly DeadMatchRow[];
 	readonly totalMatching: number;
 }
-
-/**
- * Build a parameterized SELECT that enumerates dead rows matching the
- * filter. The `placeholderIdColumn` arg identifies the column that
- * uniquely identifies the row inside the memory queue.
- */
 function buildDeadRequeueWhere(
 	db: ReadDb,
 	table: "memory_jobs",
@@ -2883,9 +2571,6 @@ function buildDeadRequeueWhere(
 	const where: string[] = ["status = 'dead'"];
 	const params: unknown[] = [];
 	if (table === "memory_jobs") {
-		// The extraction worker is gone. Startup already promoted each legacy
-		// extract source to Dreaming before terminalizing its job, so requeueing
-		// it would create work with no consumer.
 		where.push("job_type <> 'extract'");
 	}
 
@@ -2916,9 +2601,6 @@ function countDeadRequeueMatches(db: ReadDb, table: "memory_jobs", options: JobF
 }
 
 function buildDeadRequeueSql(db: ReadDb, table: "memory_jobs", limit: number, options: JobFilterOptions): BuiltSql {
-	// The match count is a property of the filter, not the selection budget:
-	// a zero budget must still report how many rows matched so dry-run totals
-	// never silently drop a backlog (issue #1052).
 	const totalMatching = countDeadRequeueMatches(db, table, options);
 	if (limit <= 0) {
 		return { sql: "", params: [], ids: [], totalMatching };
@@ -2942,13 +2624,6 @@ interface CancelPruneBuilt {
 	readonly rows: readonly CancelPruneMatchRow[];
 	readonly totalMatching: number;
 }
-
-/**
- * Build a parameterized SELECT for `cancelObsoleteJobs` and
- * `pruneTerminalJobs`. Captures the full row as JSON so the action can
- * copy it to the audit/archive table inside the same write tx. Unlike
- * requeue, terminal cleanup deliberately includes retired `extract` rows.
- */
 function buildCancelPruneSql(
 	db: ReadDb,
 	table: "memory_jobs",
@@ -2994,20 +2669,11 @@ function buildCancelPruneSql(
 	return { rows, totalMatching };
 }
 
-/** `cancelled` is the soft-cancel status #901 introduces; total prune is hard delete. */
-
 interface CancelResultMeta {
 	readonly affected: number;
 	readonly preview: readonly string[];
 	readonly totalMatching: number;
 }
-
-/**
- * Cancel obsolete jobs by copying them to `job_cancellations` and flipping
- * their source `status` to `cancelled`. Never hard-deletes the source
- * row. Default selection: rows where `status IN ('dead','completed')`
- * and `created_at < now - olderThanMs` (default 30 days).
- */
 export async function cancelObsoleteJobs(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -3050,7 +2716,6 @@ export async function cancelObsoleteJobs(
 				readonly rows: readonly CancelPruneMatchRow[];
 				readonly totalMatching: number;
 			}> = [];
-			// Keep the selected memory repair bounded by the hard cap.
 			const remaining = Math.min(selection.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
 			if (wantsMemory) {
 				const r = buildCancelPruneSql(db, "memory_jobs", ["dead", "completed"], {
@@ -3137,12 +2802,6 @@ interface PruneResultMeta {
 	readonly preview: readonly string[];
 	readonly totalMatching: number;
 }
-
-/**
- * Prune terminal jobs (cancelled / completed / dead) older than the
- * configured retention window. Before delete, copies the full row to
- * `job_archive` to preserve provenance. Hard cap is 1000 rows per call.
- */
 export async function pruneTerminalJobs(
 	accessor: DbAccessor,
 	cfg: PipelineV2Config,
@@ -3192,9 +2851,6 @@ export async function pruneTerminalJobs(
 				readonly totalMatching: number;
 			}> = [];
 			let totalMatching = 0;
-			// `--max-batch` is an aggregate cap across ALL selected tables; the
-			// remaining budget carries across tables so a both-queue prune can
-			// never exceed the requested blast radius (issue #1053).
 			let remaining = Math.min(options.maxBatch ?? MAX_BATCH_HARD_CAP, MAX_BATCH_HARD_CAP);
 			for (const t of targets) {
 				const selection: JobFilterOptions = {

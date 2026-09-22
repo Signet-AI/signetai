@@ -175,8 +175,6 @@ const { variant = "floating", landing = false } = Astro.props;
     bindNavBehavior();
   });
 </script>
-
-<!-- Keep the mobile control delegated so it remains interactive across view transitions. -->
 <script is:inline>
   (() => {
     if (window.__signetNavClickBound) return;

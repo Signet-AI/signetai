@@ -73,8 +73,6 @@ function configForProfile(profile: PersistedEmbeddingProfile, configured: Embedd
 		model: profile.model,
 		dimensions: profile.dimensions,
 		base_url: profile.baseUrl,
-		// `legacy-raw` is deliberately truthy so the migration can encode an
-		// unknown model without being redirected to the active generation.
 		profile: profile.profile ?? "legacy-raw",
 		indexGeneration: "staging",
 	};
@@ -128,8 +126,6 @@ function migrationFailureCount(db: ReadDb, targetFingerprint: string | undefined
 		)?.n ?? 0
 	);
 }
-
-/** Creates a dimension-safe inactive vec0 table without touching active recall. */
 export function resetStagingVectorIndex(db: WriteDb, dimensions: number, projectionSlot?: "active" | "staging"): void {
 	const projectionTable = vectorTableForSlot(projectionSlot);
 	db.exec(`DROP TABLE IF EXISTS ${projectionTable}`);
@@ -285,7 +281,7 @@ async function projectionCursorThroughAccessor(
 						: null,
 			};
 		},
-		{ siteToken: "embedding-index-migration.ts:271" },
+		{ siteToken: "embedding-index-migration.ts:267" },
 	);
 }
 
@@ -379,13 +375,6 @@ async function rebuildVectorIndexThroughOwner(
 		}
 	}
 }
-
-/**
- * Rebuild the inactive sqlite-vec projection from durable BLOB rows in bounded
- * transactions. The projection is allowed to lag while active writers run, so
- * duplicate ids are intentionally ignored. A failed chunk keeps its keyset
- * cursor and retries until the caller stops the migration.
- */
 async function rebuildVectorIndex(
 	accessor: DbAccessor,
 	projectionSlot: "active" | "staging" | undefined,
@@ -436,14 +425,11 @@ async function rebuildVectorIndex(
 						readonly vector: Uint8Array;
 					}>;
 				},
-				{ siteToken: "embedding-index-migration.ts:428" },
+				{ siteToken: "embedding-index-migration.ts:417" },
 			);
 			if (rows.length === 0) return;
 
 			await withQueuedWrite(accessor, (db) => {
-				// sqlite-vec does not implement SQLite's conflict algorithms for
-				// virtual tables. Keep the explicit OR IGNORE contract for normal
-				// SQLite projections, then swallow vec0's equivalent duplicate error.
 				const projectionTable = vectorTableForSlot(projectionSlot);
 				const insert = db.prepare(`INSERT OR IGNORE INTO ${projectionTable} (id, embedding) VALUES (?, ?)`);
 				const existing = db.prepare(`SELECT 1 FROM ${projectionTable} WHERE id = ?`);
@@ -456,9 +442,6 @@ async function rebuildVectorIndex(
 					);
 					if (vector.length !== dimensions)
 						throw new Error(`Embedding ${row.id} has ${vector.length} dimensions, expected ${dimensions}`);
-					// The read batch can outlive a concurrent purge. Re-check the
-					// durable row in this write transaction before creating its
-					// projection so a deleted embedding is never resurrected.
 					if (canonical.get(row.id) == null || existing.get(row.id) != null) continue;
 					try {
 						insert.run(row.id, vector);
@@ -471,8 +454,6 @@ async function rebuildVectorIndex(
 			if (lastId !== null) await persistCursor?.(lastId);
 			retries = 0;
 		} catch (error) {
-			// Dimension mismatches are durable data errors, not transient rebuild
-			// failures. Keep the existing fail-closed behavior for those rows.
 			if (error instanceof Error && error.message.startsWith("Embedding ")) throw error;
 			if (!isRunning()) throw error;
 			if (!canCancel && retries >= MAX_VECTOR_REBUILD_RETRIES_WITHOUT_CANCELLATION) throw error;
@@ -842,8 +823,6 @@ async function stageEmbeddingBatchThroughOwner(input: {
 	}
 	return { staged, coverage: await ownerStagingCoverage(input.owner, profile.dimensions, profile.fingerprint) };
 }
-
-/** Remove rows whose active source was deleted or changed while staging ran. */
 async function pruneStagingRows(accessor: DbAccessor): Promise<void> {
 	await withQueuedWrite(accessor, (db) => {
 		const state = readEmbeddingIndexState(db);
@@ -902,7 +881,6 @@ async function recordMigrationFailure(
 export async function stageEmbeddingBatch(input: {
 	readonly accessor: DbAccessor;
 	readonly configured: EmbeddingConfig;
-	/** Live re-read of the current config; falls back to `configured` when unset (#1160). */
 	readonly readConfigured?: () => EmbeddingConfig;
 	readonly fetchEmbedding: (
 		text: string,
@@ -915,15 +893,12 @@ export async function stageEmbeddingBatch(input: {
 }): Promise<{ staged: number; coverage: EmbeddingMigrationCoverage | null }> {
 	if (input.owner) return stageEmbeddingBatchThroughOwner({ ...input, owner: input.owner });
 	const state = await input.accessor.withReadDbAsync(async (db) => readEmbeddingIndexState(db), {
-		siteToken: "embedding-index-migration.ts:917",
+		siteToken: "embedding-index-migration.ts:895",
 	});
 	if (state?.state !== "building" || !state.staging) return { staged: 0, coverage: null };
 	const profile = state.staging;
 	const vectorTable = vectorTableForSlot(profile.projectionSlot);
 	const configured = input.readConfigured ? input.readConfigured() : input.configured;
-	// Writes and source purges continue against the active slot during a build.
-	// Without this cleanup, an obsolete staging row would keep the count-based
-	// readiness gate false forever after its active counterpart disappears.
 	await pruneStagingRows(input.accessor);
 	const rows = await input.accessor.withReadDbAsync(
 		async (db) => {
@@ -953,7 +928,7 @@ export async function stageEmbeddingBatch(input: {
 						: [profile.dimensions, input.batchSize]),
 				) as ActiveEmbeddingRow[];
 		},
-		{ siteToken: "embedding-index-migration.ts:928" },
+		{ siteToken: "embedding-index-migration.ts:903" },
 	);
 
 	let staged = 0;
@@ -1010,7 +985,7 @@ export async function stageEmbeddingBatch(input: {
 
 	const coverage = await input.accessor.withReadDbAsync(
 		async (db) => stagingCoverage(db, profile.dimensions, profile.fingerprint),
-		{ siteToken: "embedding-index-migration.ts:1011" },
+		{ siteToken: "embedding-index-migration.ts:986" },
 	);
 	return { staged, coverage };
 }
@@ -1052,8 +1027,6 @@ async function promoteStagingIndexThroughOwner(
 		{ sql: "ALTER TABLE embeddings_next RENAME TO embeddings" },
 	];
 	if (rebuildVectorIndex) {
-		// The old projection remains paired with embeddings_staging until the
-		// owner publishes the rebuilt projection in completeProjectionRebuild.
 	} else {
 		statements.push(
 			{
@@ -1109,11 +1082,6 @@ async function beginEmbeddingIndexBuildThroughOwner(
 			readonly requireChanges?: boolean;
 		}> = projectionRebuild
 			? [
-					// Promotion swaps the durable slots before rebuilding the new
-					// projection. Roll that swap back so the old projection remains
-					// paired with the old embeddings while abandoning an endpoint-only
-					// build; deleting embeddings_staging before this swap would delete
-					// the only durable copy used for active recall.
 					{ sql: "ALTER TABLE embeddings RENAME TO embeddings_next" },
 					{ sql: "ALTER TABLE embeddings_staging RENAME TO embeddings" },
 					{ sql: "ALTER TABLE embeddings_next RENAME TO embeddings_staging" },
@@ -1187,12 +1155,6 @@ function profileForStorageForOwner(cfg: EmbeddingConfig): PersistedEmbeddingProf
 function embeddingProfileFingerprintForOwner(cfg: EmbeddingConfig): string {
 	return embeddingProfileFingerprint(cfg);
 }
-
-/**
- * Promotion swaps durable embedding slots in one short transaction. A virtual
- * sqlite-vec projection is rebuilt in the inactive projection slot after that
- * transaction in bounded chunks, while search keeps serving the old slot.
- */
 export async function promoteStagingIndex(
 	accessor: DbAccessor,
 	options?: {
@@ -1212,15 +1174,9 @@ export async function promoteStagingIndex(
 		const nextProfile = { ...state.staging, projectionRebuild: true } as const;
 		const stagingVectorTable = vectorTableForSlot(state.staging.projectionSlot);
 		const activeVectorTable = vectorTableForSlot(state.active.projectionSlot);
-
-		// Keep exactly two durable slots: after the swap the former active slot
-		// becomes the inactive/rollback slot, ready to be cleared for the next build.
 		db.exec("ALTER TABLE embeddings_staging RENAME TO embeddings_next");
 		db.exec("ALTER TABLE embeddings RENAME TO embeddings_staging");
 		db.exec("ALTER TABLE embeddings_next RENAME TO embeddings");
-		// Keep the old projection in place while the new projection is rebuilt in
-		// the inactive table. Search pairs this old projection with the old durable
-		// slot until the final state transaction publishes the new projection.
 		if (isVecVirtualTable(db, activeVectorTable) && isVecVirtualTable(db, stagingVectorTable)) {
 			rebuildVectorIndex = true;
 			db.prepare(
@@ -1251,19 +1207,12 @@ export async function promoteStagingIndex(
 		await completeProjectionRebuild(accessor, plan.profile, options?.vectorBatchSize, options?.shouldContinue);
 	}
 	if (accessor.incrementalVacuumAsync)
-		await accessor.incrementalVacuumAsync({ siteToken: "embedding-index-migration.ts:1254" });
+		await accessor.incrementalVacuumAsync({ siteToken: "embedding-index-migration.ts:1210" });
 	return true;
 }
-
-/**
- * Rebuild the inactive slot without ever querying it. Active/staging coverage
- * is rechecked in the promotion transaction, so a write arriving during the
- * final batch simply postpones promotion until the next pass.
- */
 export async function startEmbeddingIndexMigration(input: {
 	readonly accessor: DbAccessor;
 	readonly configured: EmbeddingConfig;
-	/** Live re-read of the current config; falls back to `configured` when unset (#1160). */
 	readonly readConfigured?: () => EmbeddingConfig;
 	readonly fetchEmbedding: (
 		text: string,
@@ -1274,19 +1223,10 @@ export async function startEmbeddingIndexMigration(input: {
 	readonly checkProvider: (cfg: EmbeddingConfig) => Promise<{ available: boolean }>;
 	readonly pollMs: number;
 	readonly batchSize: number;
-	/** Recreate active-model workers after an atomic promotion. */
 	readonly onPromoted?: () => void;
-	/** The only SQL execution path for production embedding maintenance. */
 	readonly owner?: DbOwnerClient;
 }): Promise<EmbeddingIndexMigrationHandle | null> {
-	// Unknown models still need an isolated rebuild. They use the identity
-	// formatter rather than being rejected solely because Signet does not know
-	// a model-specific retrieval prefix.
 	if (input.configured.provider === "none") return null;
-
-	// Embedding migration owns a long-lived fetch/SQL loop. It must run in the
-	// killable DB owner; an async wrapper around the parent accessor is not a
-	// boundary and is forbidden because it can wedge the daemon isolate.
 	const migrationOwner = input.owner;
 	if (!migrationOwner) throw new Error("Embedding migration requires owner");
 
@@ -1295,9 +1235,6 @@ export async function startEmbeddingIndexMigration(input: {
 	let staged = 0;
 	let failed = 0;
 	let coverage: EmbeddingMigrationCoverage | null = null;
-	// Consecutive provider-unavailable checks drive exponential backoff and
-	// eventually fail the build (#1160) so a stale/stuck build cannot spin at
-	// ~100% CPU forever retrying an unreachable provider.
 	let consecutiveFailures = 0;
 	let noProgressTicks = 0;
 	let nextDelayMs = input.pollMs;
@@ -1370,18 +1307,9 @@ export async function startEmbeddingIndexMigration(input: {
 				}
 				return;
 			}
-			// The persisted staging profile can go stale when agent.yaml
-
-			// changes mid-build; the migration then spins failing the old
-			// provider forever (#1160). Re-begin against the LIVE config (re-read
-			// from disk each tick): a no-op when nothing changed, a restart when
-			// the config did.
 			const configured = input.readConfigured ? input.readConfigured() : input.configured;
 			const restarted = await beginEmbeddingIndexBuildThroughOwner(migrationOwner, configured);
 			if (restarted.state !== "building" || !restarted.staging) {
-				// The live config now matches the active generation, so begin
-				// abandoned the in-flight build; stop polling until a new build
-				// is wanted.
 				running = false;
 				return;
 			}

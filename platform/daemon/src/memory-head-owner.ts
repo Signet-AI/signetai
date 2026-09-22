@@ -46,8 +46,6 @@ function knownProjection(db: WriteDb, content: string): boolean {
 function isGenerated(db: WriteDb, content: string): boolean {
 	if (knownProjection(db, content)) return true;
 	const marker = revisionMarker.exec(content.trim());
-	// An edit to a known published revision becomes authored text. Unknown legacy
-	// markers remain unverified snapshots, including files left by an aborted commit.
 	if (
 		marker &&
 		db
@@ -57,12 +55,9 @@ function isGenerated(db: WriteDb, content: string): boolean {
 		return false;
 	return generatedMarker.test(content.trim());
 }
-
-/** Called only inside the owner's transaction. Files are projections, never read as the head. */
 function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 	if (head.is_current !== 1 || !head.content) return;
 	const target = agentId === "default" ? join(root, "MEMORY.md") : join(root, "agents", agentId, "MEMORY.md");
-	// A user edit takes custody of the file. Do not read an unbounded authored file.
 	let existing = "";
 	if (existsSync(target)) {
 		if (statSync(target).size > 262144)
@@ -164,7 +159,6 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 	if (!body || !safety.contextEligible || countTokens(body) > 1000)
 		return { ok: false, code: "INVALID_HEAD", error: "head must be nonempty, safe, and at most 1000 tokens" };
 	const contentHash = hash(body);
-	// Re-validating unchanged text after invalidation is a new publication, not a no-op.
 	if (head?.is_current === 1 && currentHash === contentHash)
 		return { ok: true, code: "NOOP", revision, hash: contentHash, changed: false, changedIds: [] };
 	const result = commitEntries(db, input, body, contentHash, revision, currentHash);

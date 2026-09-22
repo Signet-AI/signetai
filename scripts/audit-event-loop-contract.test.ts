@@ -106,7 +106,6 @@ test("the ledger rejects a replacement call at the same path and API", () => {
 		];
 		const result = runAudit({ sourceRoot: root, baselineSites: baseline });
 		const kinds = result.violations.map((violation) => violation.kind);
-		// The replacement call is both beyond the ledger and unmarked.
 		expect(kinds).toContain("new-legacy-db-access");
 		expect(kinds).toContain("unmarked-legacy-db-access");
 		expect(result.violations[0]?.path).toBe("legacy.ts");
@@ -191,7 +190,6 @@ test("the scanner detects literal bracket access to legacy DB APIs", () => {
 		const result = runAudit({ sourceRoot: root });
 		expect(result.sites).toHaveLength(1);
 		expect(result.sites[0]?.api).toBe("withReadDb");
-		// Bracket access without a marker is both beyond the ledger and unmarked.
 		expect(result.violations).toHaveLength(2);
 		expect(result.violations.map((violation) => violation.kind)).toContain("new-legacy-db-access");
 		expect(result.violations.map((violation) => violation.kind)).toContain("unmarked-legacy-db-access");
@@ -337,7 +335,6 @@ test("the production TypeScript project cannot import the compatibility module",
 	const productionSourceRoot = resolve("platform/daemon/src");
 	const compatibilityModule = resolve("platform/daemon/legacy-sync/db-accessor-sync.ts");
 	expect(relative(productionSourceRoot, compatibilityModule).startsWith("..")).toBe(true);
-	expect(readFileSync(compatibilityModule, "utf8")).toContain("outside");
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-type-boundary-"));
 	try {
 		mkdirSync(join(root, "src"));
@@ -470,9 +467,6 @@ test("a marker above the call line keeps the site marked, a distant marker does 
 		rmSync(root, { recursive: true, force: true });
 	}
 });
-
-// Keep the production/public type distinction visible in source review. The
-// daemon typecheck is the executable proof that DbAccessor has no sync keys.
 const productionAccessorType = readFileSync(resolve("platform/daemon/src/db-accessor.ts"), "utf8");
 const syncAccessorType = readFileSync(resolve("platform/daemon/legacy-sync/db-accessor-sync.ts"), "utf8");
 expect(productionAccessorType).toContain("export interface DbAccessor extends AsyncDbAccessor {}");

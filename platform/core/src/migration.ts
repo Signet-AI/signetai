@@ -1,8 +1,3 @@
-/**
- * Schema migration system for Signet
- * Detects and migrates between different memory database schemas
- */
-
 import { createMemoriesFts } from "./fts-schema";
 
 export type SchemaType = "python" | "cli-v1" | "core" | "unknown";
@@ -25,10 +20,6 @@ export interface MigrationResult {
 	memoriesMigrated: number;
 	errors: string[];
 }
-
-/**
- * Detect the current schema type by examining table structure
- */
 export function detectSchema(db: {
 	prepare(sql: string): {
 		get(...args: unknown[]): Record<string, unknown> | undefined;
@@ -44,15 +35,12 @@ export function detectSchema(db: {
 	let memoryCount = 0;
 
 	try {
-		// Check if memories table exists and get its columns
 		const tableInfo = db.prepare("PRAGMA table_info(memories)").all() as Array<{
 			name: string;
 			type: string;
 		}>;
 		hasMemories = tableInfo.length > 0;
 		columns = tableInfo.map((col) => col.name);
-
-		// Get memory count
 		if (hasMemories) {
 			const countResult = db.prepare("SELECT COUNT(*) as count FROM memories").get() as { count: number } | undefined;
 			memoryCount = countResult?.count || 0;
@@ -83,18 +71,11 @@ export function detectSchema(db: {
 	} catch {
 		hasFts = false;
 	}
-
-	// Detect schema type based on column patterns
 	let type: SchemaType = "unknown";
 
 	if (hasMemories) {
-		// Python schema: has 'who', 'why', 'project', 'session_id', INTEGER id
 		const hasPythonColumns = columns.includes("who") && columns.includes("why");
-
-		// CLI-v1 schema: has 'source', 'accessed_at', TEXT id
 		const hasCliV1Columns = columns.includes("source") && columns.includes("accessed_at");
-
-		// Core schema: has 'category', 'confidence', 'source_id', 'source_type', 'updated_by', 'vector_clock'
 		const hasCoreColumns =
 			columns.includes("category") &&
 			columns.includes("confidence") &&
@@ -109,8 +90,6 @@ export function detectSchema(db: {
 			type = "cli-v1";
 		}
 	}
-
-	// Get version from schema_migrations if it exists
 	let version = 0;
 	try {
 		const versionResult = db.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as
@@ -132,18 +111,12 @@ export function detectSchema(db: {
 		columns,
 	};
 }
-
-/**
- * Ensure schema_migrations table has all required columns
- * Handles migration from old schema that was missing checksum column
- */
 export function ensureMigrationsTableSchema(db: {
 	exec(sql: string): void;
 	prepare(sql: string): {
 		all(...args: unknown[]): Record<string, unknown>[];
 	};
 }): void {
-	// Create table if it doesn't exist
 	db.exec(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       version INTEGER PRIMARY KEY,
@@ -151,24 +124,15 @@ export function ensureMigrationsTableSchema(db: {
       checksum TEXT NOT NULL
     )
   `);
-
-	// Check if checksum column exists (migrate old schema)
 	try {
 		const columns = db.prepare("PRAGMA table_info(schema_migrations)").all() as Array<{ name: string }>;
 		const hasChecksum = columns.some((col) => col.name === "checksum");
 
 		if (!hasChecksum) {
-			// Old schema without checksum - add the column with a default
 			db.exec("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT 'migrated'");
 		}
-	} catch {
-		// Table doesn't exist or other error - the CREATE above should handle it
-	}
+	} catch {}
 }
-
-/**
- * The unified schema that all migrations target
- */
 export const UNIFIED_SCHEMA = `
   -- Schema version tracking
   CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -240,10 +204,6 @@ export const UNIFIED_SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_embeddings_source ON embeddings(source_type, source_id);
   CREATE INDEX IF NOT EXISTS idx_embeddings_hash ON embeddings(content_hash);
 `;
-
-/**
- * Migrate from Python schema to unified schema
- */
 function migrateFromPython(
 	db: {
 		exec(sql: string): void;
@@ -254,7 +214,6 @@ function migrateFromPython(
 	},
 	schemaInfo: SchemaInfo,
 ): number {
-	// Create backup of old data
 	const oldMemories = db
 		.prepare(`
     SELECT id, content, who, why, created_at, project, session_id,
@@ -262,8 +221,6 @@ function migrateFromPython(
     FROM memories
   `)
 		.all() as Array<Record<string, unknown>>;
-
-	// Drop old table and create new one
 	db.exec("DROP TABLE IF EXISTS memories");
 	db.exec("DROP TABLE IF EXISTS memories_fts");
 	db.exec(`
@@ -288,8 +245,6 @@ function migrateFromPython(
       pinned INTEGER DEFAULT 0
     )
   `);
-
-	// Migrate data
 	const insert = db.prepare(`
     INSERT INTO memories (id, type, category, content, confidence, importance,
                          source_id, source_type, tags, created_at, updated_at,
@@ -301,8 +256,6 @@ function migrateFromPython(
 	for (const row of oldMemories) {
 		const oldId = row.id;
 		const newId = `migrated_${oldId}`;
-
-		// Map fields
 		const content = String(row.content || "");
 		const type = String(row.type || "fact");
 		const category = row.project ? String(row.project) : null;
@@ -315,8 +268,6 @@ function migrateFromPython(
 		const accessCount = typeof row.access_count === "number" ? row.access_count : 0;
 		const pinned = row.pinned ? 1 : 0;
 		const createdAt = row.created_at ? String(row.created_at) : new Date().toISOString();
-
-		// Build tags including 'why' if present
 		let tags: string[] = [];
 		if (row.tags) {
 			try {
@@ -349,11 +300,7 @@ function migrateFromPython(
 		);
 		migrated++;
 	}
-
-	// Recreate FTS
 	createMemoriesFts(db);
-
-	// Populate FTS
 	if (migrated > 0) {
 		db.exec(`
       INSERT INTO memories_fts(rowid, content)
@@ -363,10 +310,6 @@ function migrateFromPython(
 
 	return migrated;
 }
-
-/**
- * Migrate from CLI-v1 schema to unified schema
- */
 function migrateFromCliV1(
 	db: {
 		exec(sql: string): void;
@@ -377,15 +320,12 @@ function migrateFromCliV1(
 	},
 	schemaInfo: SchemaInfo,
 ): number {
-	// Get old data
 	const oldMemories = db
 		.prepare(`
     SELECT id, content, type, source, importance, tags, created_at, updated_at, accessed_at, access_count
     FROM memories
   `)
 		.all() as Array<Record<string, unknown>>;
-
-	// Drop and recreate
 	db.exec("DROP TABLE IF EXISTS memories");
 	db.exec(`
     CREATE TABLE memories (
@@ -450,8 +390,6 @@ function migrateFromCliV1(
 		);
 		migrated++;
 	}
-
-	// Create FTS if not exists
 	createMemoriesFts(db);
 
 	if (migrated > 0) {
@@ -460,10 +398,6 @@ function migrateFromCliV1(
 
 	return migrated;
 }
-
-/**
- * Ensure database has the unified schema, migrating if necessary
- */
 export function ensureUnifiedSchema(db: {
 	exec(sql: string): void;
 	prepare(sql: string): {
@@ -483,29 +417,19 @@ export function ensureUnifiedSchema(db: {
 	try {
 		const schemaInfo = detectSchema(db);
 		result.fromSchema = schemaInfo.type;
-
-		// Already on core schema
 		if (schemaInfo.type === "core") {
-			// Just ensure all tables exist (idempotent)
 			db.exec(UNIFIED_SCHEMA);
-			// Ensure schema_migrations has checksum column (migrate old schema)
 			ensureMigrationsTableSchema(db);
 			return result;
 		}
-
-		// No memories table yet - just create schema
 		if (!schemaInfo.hasMemories) {
 			db.exec(UNIFIED_SCHEMA);
 			ensureMigrationsTableSchema(db);
 			return result;
 		}
-
-		// Migrate from Python schema
 		if (schemaInfo.type === "python") {
 			result.memoriesMigrated = migrateFromPython(db, schemaInfo);
 			result.migrated = true;
-
-			// Create remaining tables
 			db.exec(`
         CREATE TABLE IF NOT EXISTS conversations (
           id TEXT PRIMARY KEY,
@@ -542,13 +466,9 @@ export function ensureUnifiedSchema(db: {
       `);
 			return result;
 		}
-
-		// Migrate from CLI-v1 schema
 		if (schemaInfo.type === "cli-v1") {
 			result.memoriesMigrated = migrateFromCliV1(db, schemaInfo);
 			result.migrated = true;
-
-			// Create remaining tables
 			db.exec(`
         CREATE TABLE IF NOT EXISTS conversations (
           id TEXT PRIMARY KEY,
@@ -585,13 +505,9 @@ export function ensureUnifiedSchema(db: {
       `);
 			return result;
 		}
-
-		// Unknown schema with memories - attempt to preserve data
 		if (schemaInfo.hasMemories && schemaInfo.memoryCount > 0) {
 			result.errors.push(`Unknown schema with ${schemaInfo.memoryCount} memories - manual migration may be needed`);
 		}
-
-		// Create unified schema anyway
 		db.exec(UNIFIED_SCHEMA);
 	} catch (err) {
 		result.errors.push(err instanceof Error ? err.message : String(err));

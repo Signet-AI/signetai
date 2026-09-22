@@ -33,7 +33,7 @@ afterEach(() => {
 	}
 });
 
-process.env.SIGNET_TELEMETRY_OPTOUT = "1"; // keep CI/test daemons out of the PostHog project
+process.env.SIGNET_TELEMETRY_OPTOUT = "1";
 
 describe("native Hermes release smoke", () => {
 	const binary = process.env.SIGNET_NATIVE_SMOKE_BINARY?.trim();
@@ -132,9 +132,6 @@ describe("native Hermes release smoke", () => {
 			const toolNames = JSON.parse(providerProbe.stdout) as string[];
 			expect(toolNames).toContain("signet_session_search");
 			expect(toolNames).not.toContain("session_search");
-
-			// The package under test intentionally needs no Signet source checkout or
-			// sibling runtime directory: its only required release payload is the binary.
 			expect(basename(binary)).toMatch(/^signet(?:-|$)/);
 		},
 		120_000,

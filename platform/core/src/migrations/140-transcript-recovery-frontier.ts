@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Durable traversal cursor for the killable transcript recovery worker. */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS transcript_recovery_frontiers (

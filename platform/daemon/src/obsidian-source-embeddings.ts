@@ -51,7 +51,6 @@ export interface IndexObsidianSourceEmbeddingsInput {
 	readonly root: string;
 	readonly filePath: string;
 	readonly content: string;
-	/** Chunks prepared by the killable native-source worker. */
 	readonly chunks?: readonly ObsidianSourceChunk[];
 	readonly embeddingConfig: EmbeddingConfig;
 	readonly fetchEmbedding: SourceEmbeddingFetch;
@@ -448,12 +447,10 @@ function ownerSafetyStatement(agentId: string, sourceId: string, content: string
 export async function indexObsidianSourceEmbeddings(
 	input: IndexObsidianSourceEmbeddingsInput,
 ): Promise<IndexObsidianSourceEmbeddingsResult> {
-	// Source watchers outlive a config edit. Keep their writes compatible with
-	// active recall while the requested profile is built in the inactive slot.
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const embeddingConfig = getDbAccessor().withReadDb(
 		(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-		"obsidian-source-embeddings.ts:454",
+		"obsidian-source-embeddings.ts:451",
 	);
 	if (embeddingConfig.provider === "none") return { chunks: 0, embedded: 0, skipped: 0, providerUnavailable: false };
 	const chunks = buildObsidianSourceChunks(input);
@@ -495,7 +492,7 @@ export async function indexObsidianSourceEmbeddings(
 						sourceId: existingChunk.id,
 						content: chunk.chunkText,
 					}),
-				"obsidian-source-embeddings.ts:490",
+				"obsidian-source-embeddings.ts:487",
 			);
 			skipped++;
 			await yielder();
@@ -505,7 +502,7 @@ export async function indexObsidianSourceEmbeddings(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const writeConfig = getDbAccessor().withReadDb(
 			(db: import("./db-accessor").ReadDb) => resolveActiveEmbeddingConfig(db, input.embeddingConfig),
-			"obsidian-source-embeddings.ts:506",
+			"obsidian-source-embeddings.ts:503",
 		);
 		let failureCause: PipelineCauseFamily = "provider_unavailable";
 		const vector = await input.fetchEmbedding(chunk.chunkText, writeConfig, "document", {
@@ -524,9 +521,6 @@ export async function indexObsidianSourceEmbeddings(
 				retryAfterMs = computeRetryBackoffMs(attempts, SOURCE_EMBEDDING_POLL_MS);
 				sourceEmbeddingFailures.set(failureKey, { attempts, retryAt: Date.now() + retryAfterMs });
 				providerUnavailable = true;
-				// Do not probe the same dead provider once per chunk. The source
-				// artifact and graph work above remain committed, while all
-				// embeddings stay pending for the next backoff window.
 				skipped += chunks.length - chunkIndex;
 				break;
 			}
@@ -538,8 +532,6 @@ export async function indexObsidianSourceEmbeddings(
 		sourceEmbeddingFailures.delete(failureKey);
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		const stored = getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
-			// Recheck after the asynchronous provider call: promotion may have
-			// committed a new active space while this chunk was encoding.
 			if (!isActiveEmbeddingConfig(db, writeConfig)) return false;
 			const existingForId = db.prepare("SELECT content_hash FROM embeddings WHERE id = ?").get(embId) as
 				| { content_hash: string }
@@ -584,7 +576,7 @@ export async function indexObsidianSourceEmbeddings(
 				| undefined;
 			syncVecInsert(db, stored?.id ?? embId, vector);
 			return true;
-		}, "obsidian-source-embeddings.ts:540");
+		}, "obsidian-source-embeddings.ts:534");
 		if (!stored) {
 			skipped++;
 			await yielder();
@@ -622,7 +614,7 @@ export async function indexObsidianSourceEmbeddings(
 				const stmt = db.prepare("DELETE FROM embeddings WHERE id = ?");
 				for (const id of staleIds) stmt.run(id);
 			}
-		}, "obsidian-source-embeddings.ts:601");
+		}, "obsidian-source-embeddings.ts:593");
 
 	return {
 		chunks: chunks.length,
@@ -651,7 +643,7 @@ function existingChunkEmbedding(agentId: string, chunkId: string): { id: string;
 					"SELECT id, content_hash FROM embeddings WHERE source_type IN (?, ?) AND source_id = ? AND agent_id = ? LIMIT 1",
 				)
 				.get(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE, chunkId, agentId),
-		"obsidian-source-embeddings.ts:647",
+		"obsidian-source-embeddings.ts:639",
 	) as { id: string; content_hash: string } | undefined;
 	return row ?? null;
 }
@@ -676,8 +668,6 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 			const rows = db
 				.prepare(`SELECT id FROM embeddings WHERE source_type = ? AND source_id >= ? AND source_id < ?${agentWhere}`)
 				.all(...args) as Array<{ id: string }>;
-			// Derived vectors must be removed before their canonical embedding rows.
-			// Throwing rolls back the whole source purge and leaves it retryable.
 			if (
 				!syncVecDeleteByEmbeddingIds(
 					db,
@@ -692,7 +682,7 @@ function purgeEmbeddingsBySourceIdPrefix(prefix: string, agentId?: string): numb
 			changes += result.changes;
 		}
 		return changes;
-	}, "obsidian-source-embeddings.ts:670");
+	}, "obsidian-source-embeddings.ts:662");
 }
 
 function prefixUpperBound(prefix: string): string {

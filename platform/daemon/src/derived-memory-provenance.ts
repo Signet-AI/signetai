@@ -75,16 +75,12 @@ function validateSource(db: WriteDb, agentId: string, sourceKind: string, source
 		throw new Error(`Derived memory provenance source kind is not supported: ${sourceKind}`);
 	}
 }
-
-/** Validate one provenance source before a derived row or assertion is persisted. */
 export function validateDerivedMemorySourceInTx(
 	db: WriteDb,
 	input: { readonly agentId: string; readonly sourceKind: string; readonly sourceId: string },
 ): void {
 	validateSource(db, input.agentId, input.sourceKind, input.sourceId);
 }
-
-/** A canonical evidence record used to derive a semantic memory. */
 export interface DerivedMemorySource {
 	readonly sourceKind: string;
 	readonly sourceId: string;
@@ -96,14 +92,6 @@ function required(value: string, field: string): string {
 	if (!normalized) throw new Error(`Derived memory provenance ${field} is required`);
 	return normalized;
 }
-
-/**
- * Record the immutable evidence identities that a derived memory depends on.
- * Callers use episodic record identity (`memory`, `artifact`, `transcript`,
- * `summary`) or a same-agent semantic premise (`ontology_claim`). Semantic
- * premise rows are checked before the relation is persisted so fabricated and
- * cross-agent pointers fail closed.
- */
 export function linkDerivedMemorySourcesInTx(
 	db: WriteDb,
 	input: {
@@ -132,12 +120,6 @@ export function linkDerivedMemorySourcesInTx(
 		insert.run(derivedMemoryId, sourceKind, sourceId, source.sourcePath?.trim() || null, agentId, createdAt);
 	}
 }
-
-/**
- * Hide derived semantic rows immediately when one of their evidence records
- * changes. The relation is retained for audit and re-derivation; only the
- * derived row's currentness changes.
- */
 export function markDerivedMemoriesStaleForSourceInTx(
 	db: WriteDb,
 	input: {

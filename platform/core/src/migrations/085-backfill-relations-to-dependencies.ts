@@ -1,17 +1,3 @@
-/**
- * Migration 085: Backfill relations into entity_dependencies.
- *
- * The extraction pipeline writes extracted entity triples into the `relations`
- * table (legacy), while graph diagnostics and traversal read from
- * `entity_dependencies` (current). No code was bridging them, so extracted
- * relations were invisible to graph traversal: edgeCount was always 0.
- *
- * This migration copies every existing `relations` row into
- * `entity_dependencies`, mapping columns across the schema difference.
- * Idempotent — INSERT OR IGNORE skips rows that already exist (matched on
- * source_entity_id, target_entity_id, dependency_type, agent_id via the
- * idx_entity_deps_unique index).
- */
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {
@@ -35,47 +21,28 @@ export function up(db: MigrationDb): void {
 	const hasDepConfidence = dep.has("confidence");
 	const hasDepReason = dep.has("reason");
 	const hasDepStatus = dep.has("status");
-
-	// Build the SELECT expression list for INSERT INTO entity_dependencies.
-	// INSERT ... SELECT matches by position, so we use positional mapping.
 	const selectParts: string[] = ["id", "source_entity_id", "target_entity_id"];
 	const colParts: string[] = ["id", "source_entity_id", "target_entity_id"];
-
-	// dependency_type <- relation_type
-	selectParts.push("relation_type"); // value only, no alias needed
+	selectParts.push("relation_type");
 	colParts.push("dependency_type");
-
-	// strength, created_at
 	selectParts.push("strength", "created_at");
 	colParts.push("strength", "created_at");
-
-	// agent_id — relations has none, use 'default'
 	selectParts.push("'default'");
 	colParts.push("agent_id");
-
-	// aspect_id — always NULL for extracted relations
 	selectParts.push("NULL");
 	colParts.push("aspect_id");
-
-	// confidence (optional)
 	if (hasRelConfidence && hasDepConfidence) {
 		selectParts.push("confidence");
 		colParts.push("confidence");
 	}
-
-	// reason (optional)
 	if (hasDepReason) {
 		selectParts.push("'extracted'");
 		colParts.push("reason");
 	}
-
-	// status (optional)
 	if (hasDepStatus) {
 		selectParts.push("'active'");
 		colParts.push("status");
 	}
-
-	// updated_at (optional)
 	if (hasRelUpdated && dep.has("updated_at")) {
 		selectParts.push("updated_at");
 		colParts.push("updated_at");

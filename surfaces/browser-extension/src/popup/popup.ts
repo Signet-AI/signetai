@@ -1,8 +1,3 @@
-/**
- * Signet popup entry point
- * Orchestrates all popup components
- */
-
 import { checkHealth, getMemories } from "../shared/api.js";
 import { getConfig } from "../shared/config.js";
 import { applyTheme, watchSystemTheme } from "../shared/theme.js";
@@ -12,7 +7,6 @@ import { updateStats } from "./components/memory-stats.js";
 import { initSearch } from "./components/search-bar.js";
 
 async function init(): Promise<void> {
-	// Apply theme
 	const config = await getConfig();
 	applyTheme(document.documentElement, config.theme);
 	watchSystemTheme(() => {
@@ -20,8 +14,6 @@ async function init(): Promise<void> {
 			applyTheme(document.documentElement, "auto");
 		}
 	});
-
-	// DOM refs
 	const healthDot = document.getElementById("health-dot");
 	const versionEl = document.getElementById("version");
 	const memoriesStatEl = document.getElementById("stat-memories");
@@ -45,15 +37,9 @@ async function init(): Promise<void> {
 	) {
 		return;
 	}
-
-	// Loading state
 	renderLoading(memoryList);
-
-	// Check health first
 	const health = await checkHealth();
 	const isOnline = health !== null && (health.status === "ok" || health.status === "healthy");
-
-	// Health badge
 	const updateHealth = initHealthBadge(healthDot, versionEl);
 	await updateHealth();
 
@@ -64,18 +50,10 @@ async function init(): Promise<void> {
 		pipelineStatEl.textContent = "--";
 		return;
 	}
-
-	// Load data
 	let recentMemories = (await getMemories(10, 0)).memories;
 	const { stats } = await getMemories(1, 0);
-
-	// Update stats
 	await updateStats(stats, memoriesStatEl, embeddedStatEl, pipelineStatEl);
-
-	// Render recent memories
 	renderMemories(memoryList, recentMemories);
-
-	// Search
 	let isSearching = false;
 	initSearch(
 		searchInput,
@@ -92,8 +70,6 @@ async function init(): Promise<void> {
 			renderMemories(memoryList, recentMemories);
 		},
 	);
-
-	// Footer actions
 	openDashboard.addEventListener("click", async () => {
 		const cfg = await getConfig();
 		chrome.tabs.create({ url: cfg.daemonUrl });

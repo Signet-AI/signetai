@@ -1,19 +1,5 @@
-/**
- * Per-queue counters and thresholds for the diagnostics surface.
- *
- * The retired summary queue remains represented as an empty compatibility
- * field in the health envelope. The previous `getQueueHealth` helper only
- * read `memory_jobs`; this module splits the per-queue reads into their own type and exposes a single
- * threshold scorer that all surfaces (diagnostics, /api/status,
- * signet status, PR #932's /health/ready) can share.
- */
-
 import type { ReadDb } from "./db-accessor";
 import { tableExists } from "./db-helpers";
-
-// ---------------------------------------------------------------------------
-// Per-queue counts
-// ---------------------------------------------------------------------------
 
 export interface QueueCounts {
 	readonly pending: number;
@@ -21,13 +7,9 @@ export interface QueueCounts {
 	readonly completed: number;
 	readonly failed: number;
 	readonly dead: number;
-	/** Age (seconds) of the oldest non-terminal row. 0 when the queue is empty. */
 	readonly oldestAgeSec: number;
-	/** Age (seconds) of the oldest `dead` row. 0 when no dead rows. */
 	readonly oldestDeadAgeSec: number;
-	/** Most recent non-null `error` column value across `pending`/`leased`/`dead`. */
 	readonly lastError: string | null;
-	/** Whether the returned counters describe the whole queue or a bounded observation. */
 	readonly completeness: "exact" | "truncated" | "unknown";
 }
 
@@ -54,10 +36,6 @@ export interface OldestDeadJob {
 	readonly error: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Queue source identification
-// ---------------------------------------------------------------------------
-
 export type QueueSource = "memory" | "summary";
 
 interface QueueCountsQueryResult {
@@ -83,8 +61,6 @@ interface OldestDeadRow {
 
 function safeQueueRows(db: ReadDb, table: string, predicate = "1 = 1"): QueueCountsQueryResult | undefined {
 	if (!tableExists(db, table)) return undefined;
-	// Reject anything that isn't obviously a queue table — never feed
-	// user-controlled table names into a literal here.
 	if (!/^[a-z][a-z0-9_]*$/i.test(table)) return undefined;
 	if (table !== "memory_jobs") return undefined;
 	if (!hasColumn(db, table, "updated_at") || !hasColumn(db, table, "created_at")) return undefined;
@@ -177,13 +153,6 @@ function rowToCounts(row: QueueCountsQueryResult | undefined): QueueCounts {
 		completeness: row.completeness,
 	};
 }
-
-/**
- * Per-table counts for one queue source.
- *
- * `memory` reads live `memory_jobs` (excluding terminal legacy `extract`
- * jobs); the retired `summary` source is always empty.
- */
 export function getQueueCounts(db: ReadDb, source: QueueSource): QueueCounts {
 	if (source === "memory") {
 		if (!tableExists(db, "memory_jobs")) return { ...EMPTY_QUEUE_COUNTS, completeness: "unknown" };
@@ -191,8 +160,6 @@ export function getQueueCounts(db: ReadDb, source: QueueSource): QueueCounts {
 		return row === undefined ? { ...EMPTY_QUEUE_COUNTS, completeness: "unknown" } : rowToCounts(row);
 	}
 	if (source === "summary") return EMPTY_QUEUE_COUNTS;
-	// Defensive — TS narrowing treats any unrecognized value as `never`
-	// through exhaustive union discrimination.
 	return EMPTY_QUEUE_COUNTS;
 }
 
@@ -202,14 +169,6 @@ interface QueuePressureQueryResult {
 	readonly depth: number;
 	readonly oldestAt: string | null;
 }
-
-/**
- * Read only the bounded data needed by heartbeat pressure telemetry.
- *
- * The full diagnostics snapshot intentionally remains exact for operator
- * routes. Heartbeats use this separate path so a large terminal queue cannot
- * turn a liveness callback into an unbounded synchronous scan.
- */
 function getQueuePressureQueryResult(db: ReadDb, source: QueueSource): QueuePressureQueryResult | undefined {
 	const table = source === "memory" ? "memory_jobs" : "summary_jobs";
 	const statusIndex = source === "memory" ? "idx_memory_jobs_pressure_status" : "idx_summary_jobs_pressure_status";
@@ -238,25 +197,15 @@ function getQueuePressureQueryResult(db: ReadDb, source: QueueSource): QueuePres
 			.get() as { readonly oldestAt?: string | null } | undefined;
 		return { depth: rows.length, oldestAt: oldest?.oldestAt ?? null };
 	} catch {
-		// A partially repaired legacy schema must not break the heartbeat.
 		return undefined;
 	}
 }
 
 export interface QueuePressureSnapshot {
-	/** Capped at 1,001 because the next bucket is already `1001+`. */
 	readonly memoryQueueDepth: number | undefined;
-	/** Capped at 1,001 because the next bucket is already `1001+`. */
 	readonly summaryQueueDepth: number | undefined;
-	/** Undefined when neither queue has an active row or age is unavailable. */
 	readonly oldestJobAgeSec: number | undefined;
 }
-
-/**
- * Bounded queue observation for the daemon heartbeat and wedge context.
- *
- * This function is deliberately not used by the exact diagnostics routes.
- */
 export function getQueuePressureSnapshot(db: ReadDb): QueuePressureSnapshot {
 	const memory = getQueuePressureQueryResult(db, "memory");
 	const summary = getQueuePressureQueryResult(db, "summary");
@@ -270,11 +219,6 @@ export function getQueuePressureSnapshot(db: ReadDb): QueuePressureSnapshot {
 		oldestJobAgeSec: ages.length === 0 ? undefined : Math.max(...ages),
 	};
 }
-
-/**
- * Oldest `dead` row's identifying fields. `null` when no dead rows or
- * when the queue table is missing.
- */
 export function getOldestDeadJob(db: ReadDb, source: QueueSource): OldestDeadJob | null {
 	if (source === "summary") return null;
 	if (source === "memory") {
@@ -313,12 +257,6 @@ let queueSnapshotCache = new WeakMap<
 	ReadDb,
 	{ readonly expiresAt: number; readonly value: QueueDiagnosticsSnapshot }
 >();
-
-/**
- * Read the expanded queue diagnostics once and reuse them across status
- * surfaces for a short window. Dedicated diagnostics requests can bypass the
- * cache with `fresh: true`; repair routes invalidate it after mutations.
- */
 export function getQueueDiagnosticsSnapshot(
 	db: ReadDb,
 	options: { readonly fresh?: boolean } = {},
@@ -340,10 +278,6 @@ export function getQueueDiagnosticsSnapshot(
 export function invalidateQueueDiagnosticsCache(): void {
 	queueSnapshotCache = new WeakMap();
 }
-
-// ---------------------------------------------------------------------------
-// Thresholds
-// ---------------------------------------------------------------------------
 
 export interface QueueThresholds {
 	readonly summaryDeadWarn: number;
@@ -399,13 +333,6 @@ function ageScore(age: number, warn: number, fail: number): { penalty: number; s
 	const t = (age - warn) / Math.max(1, fail - warn);
 	return { penalty: 0.1 + 0.3 * t, status: "degraded" };
 }
-
-/**
- * Score a single queue's counts against the matching thresholds. The
- * returned status is the worst of the breached thresholds. Status is
- * `null` when no threshold was breached — caller treats that as
- * `healthy` for the queue.
- */
 export function scoreCountsWithThresholds(
 	counts: QueueCounts,
 	source: QueueSource,
@@ -453,12 +380,6 @@ export function scoreCountsWithThresholds(
 	}
 	return { score, status: statusForScore(score) };
 }
-
-/**
- * Combine per-queue scores with worst-of semantics. Used by both the
- * `QueueHealth` legacy aggregate status and the new
- * `/api/diagnostics/queue` envelope.
- */
 export function worstQueueScore(scores: readonly QueueScore[]): QueueScore {
 	if (scores.length === 0) return { score: 1, status: "healthy" };
 	let score = 1;

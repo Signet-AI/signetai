@@ -19,12 +19,6 @@ interface PortableDeps extends ExportTranscriptsDeps {}
 
 export function registerPortableCommands(program: Command, deps: PortableDeps): void {
 	const exportCmd = program.command("export").description("Export agent data (portable bundle or session transcripts)");
-
-	// The portable bundle is the default subcommand so `signet export` keeps
-	// its historical behavior. Keeping options off the parent command matters:
-	// commander parses subcommand arguments at the parent level first, so any
-	// option the parent defines would swallow the same-named option on a
-	// sibling subcommand (e.g. `signet export transcripts --output`).
 	const bundleCmd = new Command("bundle")
 		.description("Export agent identity, memories, and skills to a portable bundle")
 		.option("-o, --output <path>", "Output file path")
@@ -45,9 +39,7 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 				db = Database(dbPath, { readonly: true });
 				try {
 					loadSqliteVec(db);
-				} catch {
-					// Non-fatal
-				}
+				} catch {}
 
 				const data = collectExportData(agentsDir, db, {
 					includeEmbeddings: options.includeEmbeddings,
@@ -130,9 +122,7 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 				db = Database(dbPath);
 				try {
 					loadSqliteVec(db);
-				} catch {
-					// Non-fatal
-				}
+				} catch {}
 				runMigrations(db);
 
 				memResult = fileMap.has("memories.jsonl")
@@ -194,9 +184,7 @@ function loadDirRecursive(dir: string, prefix: string, out: Map<string, string>)
 		}
 		try {
 			out.set(relPath, readFileSync(fullPath, "utf-8"));
-		} catch {
-			// Skip binary files
-		}
+		} catch {}
 	}
 }
 

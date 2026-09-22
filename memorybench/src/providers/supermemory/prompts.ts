@@ -87,20 +87,6 @@ export function buildSupermemoryAnswerPrompt(
 ): string {
   const retrievedContext = buildSupermemoryContext(context)
 
-  // console.log(`\n=== DEBUG: Processing ${results.length} search results ===`)
-  // for (let i = 0; i < Math.min(results.length, 3); i++) {
-  //     const r = results[i]
-  //     console.log(`Result ${i + 1}:`)
-  //     console.log(`  - memory: ${r.memory?.substring(0, 80)}...`)
-  //     console.log(`  - chunk (singular): ${r.chunk ? r.chunk.substring(0, 80) + "..." : "EMPTY"}`)
-  //     console.log(`  - chunks (array): ${r.chunks?.length || 0} items`)
-  //     if (r.chunks && r.chunks.length > 0) {
-  //         console.log(`    First chunk: ${r.chunks[0].content?.substring(0, 80)}...`)
-  //     }
-  // }
-  // console.log(`\n=== Total chunks extracted: ${retrievedContext.includes("DEDUPLICATED CHUNKS") ? "YES" : "NO CHUNKS"} ===`)
-  // console.log("Retrieved context preview:", retrievedContext)
-
   return `You are a question-answering system. Based on the retrieved context below, answer the question.
 
 Question: ${question}

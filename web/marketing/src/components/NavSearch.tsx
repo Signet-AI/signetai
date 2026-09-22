@@ -72,8 +72,6 @@ export default function NavSearch() {
 			emitSearchState("unavailable", 0, 0);
 		}
 	}, [fuse]);
-
-	// Toggle with keyboard shortcut
 	useEffect(() => {
 		function onKey(e: KeyboardEvent) {
 			if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
@@ -84,16 +82,12 @@ export default function NavSearch() {
 		document.addEventListener("keydown", onKey);
 		return () => document.removeEventListener("keydown", onKey);
 	}, []);
-
-	// Focus input when opened
 	useEffect(() => {
 		if (!open) return;
 		void loadIndex();
 		const id = setTimeout(() => inputRef.current?.focus(), 80);
 		return () => clearTimeout(id);
 	}, [open, loadIndex]);
-
-	// Close on outside click
 	useEffect(() => {
 		if (!open) return;
 		const onClick = (e: MouseEvent) => {
@@ -111,8 +105,6 @@ export default function NavSearch() {
 			document.removeEventListener("keydown", onEscape);
 		};
 	}, [open]);
-
-	// Search on query change
 	useEffect(() => {
 		if (!fuse) {
 			setResults([]);

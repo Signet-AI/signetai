@@ -693,9 +693,7 @@ describe("transcript recovery worker", () => {
 		} finally {
 			try {
 				process.kill(targetPid, "SIGKILL");
-			} catch {
-				// The target should already be gone; keep cleanup idempotent.
-			}
+			} catch {}
 		}
 	}, 20_000);
 

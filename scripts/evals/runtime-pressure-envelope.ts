@@ -1,13 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Runtime-pressure liveness/load eval (#1282).
- *
- * Exercises the envelope builder and the heartbeat's bounded queue probe with
- * deterministic synthetic load. It fails if envelope construction or queue
- * observation becomes slow, queue depth escapes its bucket cap, the query plan
- * falls back to a table scan, or pressure data starts carrying forbidden
- * process/user data.
- */
 
 import { Database } from "bun:sqlite";
 import { performance } from "node:perf_hooks";

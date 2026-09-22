@@ -1,4 +1,3 @@
-/** Regression coverage for #1718: the Licenses modal must stay reachable and accurately scoped. */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { DASHBOARD_LICENSES } from "@/lib/dashboard-licenses";
 import { Window } from "happy-dom";
@@ -142,9 +141,6 @@ describe("dashboard Licenses modal layout", () => {
 			expect(mounted.container.dataset.viewportWidth).toBe(String(viewportWidth));
 			expect(cards).toHaveLength(DASHBOARD_LICENSES.length);
 			for (const card of cards) {
-				// This is the DOM contract that lets a one-column mobile grid item
-				// shrink below its long-content min-content width. Without it, the
-				// card expands past the modal's scroll body at 280/320px.
 				expect(card.classList.contains("min-w-0")).toBe(true);
 			}
 
@@ -155,7 +151,7 @@ describe("dashboard Licenses modal layout", () => {
 	test("pins mobile layout, navigation, safe links, and direct-only scope", async () => {
 		const source = await Bun.file(new URL("./settings.tsx", import.meta.url)).text();
 		const licensesStart = source.indexOf("function LicensesSection()");
-		const logsStart = source.indexOf("/* ── Logs ── */", licensesStart);
+		const logsStart = source.indexOf("function LogsSection()", licensesStart);
 		const licensesSource = source.slice(licensesStart, logsStart);
 		const normalizedLicensesSource = licensesSource.replace(/\s+/g, " ");
 

@@ -49,10 +49,6 @@ describe("install.sh shell compatibility", () => {
 			]) {
 				linkCommand(binDir, command);
 			}
-
-			// Keep the fixture aligned with the host that runs the shell test. The
-			// installer intentionally derives its asset key from uname, so a
-			// Linux-only manifest makes this otherwise portable test fail on macOS.
 			const hostOs = spawnSync("uname", ["-s"], { encoding: "utf8" }).stdout.trim().toLowerCase();
 			const hostArch = spawnSync("uname", ["-m"], { encoding: "utf8" }).stdout.trim();
 			const fixtureOs = hostOs === "darwin" ? "darwin" : hostOs === "linux" ? "linux" : hostOs;

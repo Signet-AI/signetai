@@ -17,12 +17,6 @@ import { resetDbObservability } from "../db-observability";
 import { startEventLoopMonitor, stopResourceMonitors } from "../resource-monitor";
 import { mountHealthRoutes } from "./health";
 
-/**
- * Regression tests for GitHub issue #905:
- * `/health` reports "healthy" based on process liveness alone, even when
- * db/migrations/embedding/inference/queue subsystems are down.
- */
-
 let dir = "";
 let savedSignetPath: string | undefined;
 
@@ -92,9 +86,6 @@ beforeEach(async () => {
 	resetDbObservability();
 	await closeDbAccessor();
 	dir = mkdtempSync(join(tmpdir(), "signet-health-routes-"));
-	// Point the daemon's base path at the bare temp workspace and disable the
-	// embedding provider: readiness must pass here without depending on
-	// whatever providers happen to run on the host machine.
 	savedSignetPath = process.env.SIGNET_PATH;
 	process.env.SIGNET_PATH = dir;
 	writeFileSync(join(dir, "agent.yaml"), "embedding:\n  provider: none\n");
@@ -261,8 +252,6 @@ describe("GET /health/live", () => {
 	});
 
 	test("stays 200 even when the database is unavailable", async () => {
-		// Tear down the singleton accessor so getDbAccessor() throws —
-		// liveness must not depend on any subsystem.
 		await closeDbAccessor();
 
 		const app = makeApp();
@@ -305,9 +294,7 @@ describe("GET /health/live", () => {
 		const app = makeApp();
 		app.get("/block-loop", (c) => {
 			const startedAt = Date.now();
-			while (Date.now() - startedAt < 2_100) {
-				// Deliberate synchronous block: this is the wedge signal integration proof.
-			}
+			while (Date.now() - startedAt < 2_100) {}
 			return c.json({ blocked: true });
 		});
 
@@ -372,8 +359,6 @@ describe("GET /health/ready", () => {
 		expect(body.checks).toBeDefined();
 		expect(body.checks.db).toBe(true);
 		expect(body.checks.migrations).toBe(true);
-		// Per-check fields must exist for every subsystem gate, even when the
-		// check cannot be fully exercised without implementation DI hooks.
 		expect("embedding" in body.checks).toBe(true);
 		expect("inference" in body.checks).toBe(true);
 		expect("queue" in body.checks).toBe(true);
@@ -422,10 +407,6 @@ describe("GET /health/ready", () => {
 	});
 
 	test("returns a structured 503 (not a 500) when loadMemoryConfig throws on a misconfigured agent.yaml", async () => {
-		// Regression guard: checkInference calls loadMemoryConfig on every probe.
-		// A retired command extraction configuration throws
-		// PipelineConfigValidationError; without a try/catch this turned
-		// /health/ready into an unhandled 500. It must stay a structured 503.
 		writeFileSync(
 			join(dir, "agent.yaml"),
 			"memory:\n  pipelineV2:\n    enabled: true\n    extraction:\n      provider: command\n",
@@ -442,9 +423,6 @@ describe("GET /health/ready", () => {
 		};
 		expect(body.status).toBe("not_ready");
 		expect(Array.isArray(body.reasons)).toBe(true);
-		// The misconfig is caught by whichever of checkEmbedding/checkInference runs
-		// first (both call loadMemoryConfig); either way the endpoint must return a
-		// structured 503 with a config-unavailable reason, never an unhandled 500.
 		expect(body.reasons.some((r) => /config unavailable/i.test(r))).toBe(true);
 		expect(body.checks.inference.status).toBe("unknown");
 	});

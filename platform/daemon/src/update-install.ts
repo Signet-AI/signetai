@@ -405,9 +405,6 @@ async function downloadBounded(
 }
 
 function verifyDownloadedSha256(content: Buffer, expectedSha256: string, label: string): void {
-	// This proves that the downloaded content matches the release manifest; it
-	// does not independently authenticate that manifest. Official updates trust
-	// GitHub Actions, repository release permissions, and HTTPS delivery.
 	const actual = createHash("sha256").update(content).digest("hex");
 	if (actual !== expectedSha256) {
 		throw new UpdateInstallFailure(

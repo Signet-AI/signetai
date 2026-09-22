@@ -1,4 +1,3 @@
-/** Regression guard for Dreaming MCP dispatch through the compiled native binary. */
 import { afterEach, describe, expect, test } from "bun:test";
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";

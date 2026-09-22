@@ -1,22 +1,9 @@
-/**
- * Widget HTML generation — uses an LLM to produce interactive HTML
- * widgets from MCP server probe results.
- *
- * Generated widgets render inside sandboxed iframes with Signet's
- * design tokens pre-injected. The LLM receives tool/resource metadata
- * and produces body-only HTML that uses the bridge API.
- */
-
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type McpProbeResult, resolveDefaultBasePath } from "@signet/core";
 import { createEvent, eventBus } from "./event-bus";
 import { getWidgetProvider } from "./llm";
 import { logger } from "./logger";
-
-// ---------------------------------------------------------------------------
-// Paths
-// ---------------------------------------------------------------------------
 
 function agentsDir(): string {
 	return resolveDefaultBasePath();
@@ -36,10 +23,6 @@ function ensureWidgetDir(): void {
 		mkdirSync(dir, { recursive: true });
 	}
 }
-
-// ---------------------------------------------------------------------------
-// System prompt
-// ---------------------------------------------------------------------------
 
 const WIDGET_SYSTEM_PROMPT = `Generate an interactive HTML widget for an MCP server. The widget renders inside a sandboxed iframe with Signet's design tokens pre-injected.
 
@@ -156,10 +139,6 @@ To make your widget work well with the agent cursor:
   }
 </script>`;
 
-// ---------------------------------------------------------------------------
-// User prompt builder
-// ---------------------------------------------------------------------------
-
 function buildUserPrompt(
 	name: string,
 	tools: ReadonlyArray<{ name: string; description: string; inputSchema: unknown }>,
@@ -189,39 +168,26 @@ function buildUserPrompt(
 	return parts.join("\n");
 }
 
-// ---------------------------------------------------------------------------
-// HTML extraction from LLM response
-// ---------------------------------------------------------------------------
-
 const HTML_FENCE_RE = /```html\s*([\s\S]*?)```/;
 const BODY_RE = /<body[^>]*>([\s\S]*?)<\/body>/i;
 const TAG_RE = /<[a-z][^>]*>/i;
 
 function extractHtml(raw: string): string | null {
-	// 1. Check for ```html fences
 	const fenced = raw.match(HTML_FENCE_RE);
 	if (fenced) {
 		const content = fenced[1].trim();
 		if (content.length > 0) return content;
 	}
-
-	// 2. Check for <html>...</html> — extract body
 	const body = raw.match(BODY_RE);
 	if (body) {
 		const content = body[1].trim();
 		if (content.length > 0) return content;
 	}
-
-	// 3. Use raw response if it contains at least one HTML tag
 	const trimmed = raw.trim();
 	if (TAG_RE.test(trimmed)) return trimmed;
 
 	return null;
 }
-
-// ---------------------------------------------------------------------------
-// Disk cache operations
-// ---------------------------------------------------------------------------
 
 export function loadCachedWidget(serverId: string): string | null {
 	const path = widgetPath(serverId);
@@ -248,10 +214,6 @@ export function deleteCachedWidget(serverId: string): boolean {
 		return false;
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Main generation
-// ---------------------------------------------------------------------------
 
 export async function generateWidgetHtml(serverId: string, probe: McpProbeResult | null): Promise<string> {
 	if (!probe) {
@@ -300,16 +262,12 @@ export async function generateWidgetHtml(serverId: string, probe: McpProbeResult
 	if (!html) {
 		throw new Error("LLM response did not contain valid HTML");
 	}
-
-	// Write to disk
 	ensureWidgetDir();
 	writeFileSync(widgetPath(serverId), html);
 
 	logger.info("widget", `Widget generated for ${serverId}`, {
 		size: html.length,
 	});
-
-	// Emit success event
 	eventBus.emit(
 		createEvent("system", "widget.generated", {
 			serverId,

@@ -55,9 +55,6 @@ function agent(c: Context): string | null {
 	);
 }
 function bodyStream(request: Request): AsyncIterable<Uint8Array> {
-	// Bun's server Request clone does not preserve the streamed upload body here:
-	// the clone's reader reaches EOF even though the original body is non-empty.
-	// Consume the one-shot server stream directly; staging remains byte-streamed.
 	const body = request.body;
 	if (body === null) return (async function* (): AsyncGenerator<Uint8Array> {})();
 	return (async function* (): AsyncGenerator<Uint8Array> {

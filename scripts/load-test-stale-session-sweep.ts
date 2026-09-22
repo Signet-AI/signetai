@@ -1,15 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Stale-session sweep liveness eval (#1254).
- *
- * This runs the production daemon hook modules against an isolated temporary
- * SIGNET_PATH. It seeds 50 live-retained stale sessions, runs the same sweep
- * used by the daemon, measures event-loop lag with a 10ms probe, and fails if
- * any session is classified as session.turn or the liveness budget is missed.
- *
- * Usage:
- *   bun scripts/load-test-stale-session-sweep.ts [--count 50] [--max-lag-ms 500]
- */
 
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

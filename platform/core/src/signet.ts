@@ -1,7 +1,3 @@
-/**
- * Main Signet class - entry point for the library
- */
-
 import { Database } from "./database";
 import { Agent, AgentConfig, AgentManifest } from "./types";
 import { parseManifest, generateManifest } from "./manifest";
@@ -23,10 +19,6 @@ export class Signet {
 			...config,
 		};
 	}
-
-	/**
-	 * Initialize Signet in a directory
-	 */
 	async init(name: string): Promise<Agent> {
 		const basePath = this.getBasePath();
 
@@ -46,13 +38,9 @@ export class Signet {
 				verification: "none",
 			},
 		};
-
-		// Write files
 		writeFileSync(join(basePath, "agent.yaml"), generateManifest(manifest));
 		writeFileSync(join(basePath, "soul.md"), generateSoul(name));
 		writeFileSync(join(basePath, "memory.md"), generateMemory());
-
-		// Initialize database
 		this.db = new Database(join(basePath, "agent.db"));
 		await this.db.init();
 
@@ -65,10 +53,6 @@ export class Signet {
 
 		return this.agent;
 	}
-
-	/**
-	 * Load an existing Signet agent
-	 */
 	async load(): Promise<Agent> {
 		const basePath = this.getBasePath();
 
@@ -91,17 +75,9 @@ export class Signet {
 
 		return this.agent;
 	}
-
-	/**
-	 * Get the current agent
-	 */
 	getAgent(): Agent | null {
 		return this.agent;
 	}
-
-	/**
-	 * Get the database instance
-	 */
 	getDatabase(): Database | null {
 		return this.db;
 	}
@@ -111,18 +87,10 @@ export class Signet {
 		if (!basePath) throw new Error("Signet base path is not configured");
 		return basePath;
 	}
-
-	/**
-	 * Detect if Signet is installed
-	 */
 	static detect(basePath?: string): boolean {
 		const path = basePath || resolveDefaultBasePath();
 		return existsSync(join(path, "agent.yaml"));
 	}
-
-	/**
-	 * Get the default base path
-	 */
 	static getDefaultPath(): string {
 		return resolveDefaultBasePath();
 	}

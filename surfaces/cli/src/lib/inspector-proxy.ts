@@ -61,21 +61,9 @@ export interface InspectorParentHandoff {
 	readonly publicInspector: string;
 	readonly environment: NodeJS.ProcessEnv;
 }
-
-/**
- * Bun compiled executables include their embedded entrypoint in argv[1]. It is
- * not a user argument and must not be passed again during the re-exec.
- */
 export function resolveInspectorHandoffArgs(argv: readonly string[] = process.argv): string[] {
 	return argv[1]?.includes("$bunfs") ? [...argv.slice(2)] : [...argv.slice(1)];
 }
-
-/**
- * Bun binds BUN_INSPECT before application code runs. A native CLI parent
- * cannot bind a discovery proxy on that same port, so hand the command to a
- * second process with Bun's automatic inspector disabled and retain the
- * requested public endpoint for the daemon-start proxy.
- */
 export function resolveInspectorParentHandoff(env: NodeJS.ProcessEnv = process.env): InspectorParentHandoff | null {
 	const publicInspector = env.BUN_INSPECT?.trim();
 	if (
@@ -96,8 +84,6 @@ export function resolveInspectorParentHandoff(env: NodeJS.ProcessEnv = process.e
 		},
 	};
 }
-
-/** Re-exec the native CLI after releasing its parent-owned inspector socket. */
 export function handoffInspectorParent(env: NodeJS.ProcessEnv = process.env): void {
 	const handoff = resolveInspectorParentHandoff(env);
 	if (!handoff) return;

@@ -5,7 +5,6 @@ export interface UnembeddedRow {
 	readonly content: string;
 	readonly contentHash: string | null;
 	readonly agentId: string | null;
-	/** SQLite boolean marker for a known global-hash ownership conflict. */
 	readonly knownCrossAgentHashConflict?: 0 | 1;
 }
 
@@ -103,9 +102,6 @@ const crossAgentHashConflict = `EXISTS (
 			   AND e.content_hash = m.content_hash
 			   AND COALESCE(NULLIF(e.agent_id, ''), 'default') <> COALESCE(NULLIF(m.agent_id, ''), 'default')
 		   )`;
-
-// A NULL content hash cannot identify the exact failure row, so suppress any
-// active same-model failure before the repair action rechecks the exact hash.
 function embeddingRepairBackoffFilter(
 	model: string | undefined,
 	now: string,

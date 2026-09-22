@@ -1,12 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Deterministic observer-scoped belief evaluation for #1317.
- *
- * Both agents ingest the same raw interleaved conversation. A deterministic
- * provider stand-in extracts the selected speaker's message through the
- * ontology extraction pipeline, and the eval proves that the resulting
- * directional assertions remain observer-scoped and queryable.
- */
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

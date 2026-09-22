@@ -28,8 +28,6 @@ const HEALTH_STYLES: Record<string, string> = {
 	unhealthy: "home-health-unhealthy",
 	empty: "home-health-empty",
 };
-
-/** Leading glyph in the root-path bar (mockup ROOT_ICONS). */
 function RootIcon({ kind }: { kind: string }) {
 	const cls = "size-[13px] shrink-0 text-muted-foreground";
 	if (kind === "github") return <GitBranch className={cls} aria-hidden="true" />;
@@ -37,11 +35,6 @@ function RootIcon({ kind }: { kind: string }) {
 	if (kind === "discord" || kind === "slack") return <Globe className={cls} aria-hidden="true" />;
 	return <Folder className={cls} aria-hidden="true" />;
 }
-
-/**
- * Home owns the source workflow. Keep the default view compact and defer
- * source-specific telemetry/actions to native disclosure rows.
- */
 export function HomeSourcesPanel({
 	sources,
 	loading,
@@ -270,9 +263,6 @@ export function SourcesView() {
 	};
 	const [connectOpen, setConnectOpen] = useState(false);
 	const { connectSourceRequested, clearConnectSource } = useView();
-
-	// Cross-view handoff: the memory view's "Ingest source" button sets this
-	// flag (via requestConnectSource) and we consume it on mount/update.
 	useEffect(() => {
 		if (!connectSourceRequested) return;
 		setConnectOpen(true);
@@ -812,8 +802,6 @@ function SourceCard({ source, onMutate }: { source: SignetSource; onMutate: () =
 		</Surface>
 	);
 }
-
-/** Pipeline telemetry strip — mockup `pipeHtml` logic: job status wins, health tints dot/fill. */
 function PipeStrip({
 	job,
 	health,

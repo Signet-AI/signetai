@@ -1,13 +1,6 @@
 import { forwardRef, type HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 import { useCursorGlow } from "@/lib/use-cursor-glow";
-
-/**
- * Surface card — the shared container for KPI cards, panels, the daily brief,
- * activity card, memory feed items, source cards. Applies the mockup's
- * `.sig-surface` treatment (mask-composite key-light border + cursor-tracking
- * radial glow). Use `glow` to enable the hover glow (default on).
- */
 export interface SurfaceProps extends HTMLAttributes<HTMLDivElement> {
 	glow?: boolean;
 }

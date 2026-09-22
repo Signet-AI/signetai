@@ -9,12 +9,6 @@ import { existsSync } from "node:fs";
 export type HarnessConnectorConstructor = new () => BaseConnector;
 export type HarnessConnectorLoader = () => Promise<HarnessConnectorConstructor>;
 export type HarnessAction = "connect" | "repair" | "reinitialize";
-
-/**
- * The daemon's canonical external-harness registry. Install, inspection, and
- * dashboard enumeration all consume this map so a registered connector is
- * visible without another dashboard-specific list.
- */
 export const HARNESS_INSTALLERS = {
 	"claude-code": () => import("@signet/connector-claude-code").then((module) => module.ClaudeCodeConnector),
 	codex: () => import("@signet/connector-codex").then((module) => module.CodexConnector),
@@ -181,9 +175,7 @@ export async function inspectRegisteredConnector(
 	let configPath: string | null = null;
 	try {
 		configPath = connector.getConfigPath();
-	} catch {
-		// A connector may not have a usable config path until it is installed.
-	}
+	} catch {}
 
 	let detected = false;
 	try {

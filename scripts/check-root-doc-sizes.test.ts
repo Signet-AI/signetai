@@ -2,28 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 
-/*
- * Budget ledger for the two root-level policy documents.
- *
- * These files describe what Signet is and how it is built. They age
- * badly when treated as append-only logs. The hard caps below make
- * growth expensive: a PR that adds to one of them has to delete
- * something else to land. The soft warn band is a budget indicator,
- * not a gate: it tells the author and reviewer that the file is
- * using 75%+ of its budget and a paired tighten belongs in the
- * same change.
- *
- * Budget tiers (in bytes):
- *   - 0 .. soft     : healthy
- *   - soft .. cap   : warn in test output, pass; reviewer should
- *                     ask "is this growth earned, or are we
- *                     accumulating?"
- *   - > cap         : hard fail. PR must delete to land.
- *
- * The cliff (cap exactly) is intentional. The ledger is not a
- * target to fill. Last reviewed and reset: 2026-06-09.
- */
-
 const ROOT = join(import.meta.dir, "..");
 
 interface Limit {
@@ -59,11 +37,6 @@ describe("root doc size budget", () => {
 			const size = byteSize(absolutePath);
 			const pct = (size / limit.capBytes) * 100;
 			const tier = size > limit.capBytes ? "OVER" : size > limit.softBytes ? "WARN" : "HEALTHY";
-
-			// Bun's test runner does not have a built-in warning tier,
-			// so surface the budget via a console message and pass
-			// unless the file is over the cap. The hard cap test
-			// above is the actual gate.
 			const line = `[budget] ${limit.label}: ${size}/${limit.capBytes} bytes (${pct.toFixed(1)}%) — ${tier}`;
 			if (tier === "WARN") {
 				console.warn(line);

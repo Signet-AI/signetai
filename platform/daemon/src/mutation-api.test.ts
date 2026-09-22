@@ -431,7 +431,6 @@ memory:
 					| { count: number }
 					| undefined,
 		);
-		// No chunk_group entity created — chunks are episodic evidence, not graph nodes.
 		expect(row?.count).toBe(0);
 	});
 
@@ -749,13 +748,10 @@ memory:
 		};
 
 		expect(res.status).toBe(200);
-		// Structured input is retained as evidence, not applied to the graph.
 		expect(json.structured).toBe(true);
 		expect(json.structured_applied).toBe(false);
 		expect(json.entities_linked).toBe(0);
 		expect(json.hints_written).toBe(1);
-
-		// No entities, aspects, attributes, or mentions written.
 		const graphCounts = getDbAccessor().withReadDb(
 			(db) =>
 				db
@@ -780,8 +776,6 @@ memory:
 		expect(graphCounts.attributes).toBe(0);
 		expect(graphCounts.mentions).toBe(0);
 		expect(graphCounts.extract_jobs).toBe(0);
-
-		// The evidence is immediately retrievable.
 		const evidence = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT content, memory_kind, is_deleted FROM memories WHERE id = ?").get(json.id) as {
@@ -839,15 +833,11 @@ memory:
 		expect(json.structured).toBe(true);
 		expect(json.structured_applied).toBe(false);
 		expect(json.entities_linked).toBe(0);
-
-		// No entities, aspects, or attributes created from the structured payload.
 		const entityCount = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT COUNT(*) as cnt FROM entities WHERE agent_id = ?").get("bench-agent") as { cnt: number },
 		);
 		expect(entityCount.cnt).toBe(0);
-
-		// Evidence is immediately retrievable.
 		const evidence = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT content, memory_kind FROM memories WHERE id = ?").get(json.id) as {
@@ -919,14 +909,10 @@ memory:
 			}),
 		});
 		expect(newRes.status).toBe(200);
-
-		// No entities or attributes created — no supersession from remember.
 		const attributeCount = getDbAccessor().withReadDb(
 			(db) => db.prepare("SELECT COUNT(*) as cnt FROM entity_attributes").get() as { cnt: number },
 		);
 		expect(attributeCount.cnt).toBe(0);
-
-		// Both memories are immediately retrievable as episodic evidence.
 		const memories = getDbAccessor().withReadDb(
 			(db) =>
 				db
@@ -982,14 +968,10 @@ memory:
 			});
 			expect(res.status).toBe(200);
 		}
-
-		// No entity_attributes written from remember.
 		const attributeCount = getDbAccessor().withReadDb(
 			(db) => db.prepare("SELECT COUNT(*) as cnt FROM entity_attributes").get() as { cnt: number },
 		);
 		expect(attributeCount.cnt).toBe(0);
-
-		// Both memories are retained as separate episodic evidence rows.
 		const memories = getDbAccessor().withReadDb(
 			(db) =>
 				db
@@ -1039,11 +1021,8 @@ memory:
 		const json = (await res.json()) as { id?: string; entities_linked?: number; hints_written?: number };
 
 		expect(res.status).toBe(200);
-		// No inline entity linking — entities_linked is always 0.
 		expect(json.entities_linked).toBe(0);
 		expect(json.hints_written).toBe(1);
-
-		// No new mentions written to the pre-existing entity.
 		const mentionCount = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT COUNT(*) as cnt FROM memory_entity_mentions WHERE memory_id = ?").get(json.id) as {
@@ -1105,8 +1084,6 @@ memory:
 				createdAt: now,
 			});
 		});
-
-		// Content change rejected.
 		const contentRes = await app.request("http://localhost/api/memory/mem-episodic", {
 			method: "PATCH",
 			headers: { "Content-Type": "application/json" },
@@ -1119,8 +1096,6 @@ memory:
 		expect(contentRes.status).toBe(409);
 		const contentJson = (await contentRes.json()) as { status?: string; error?: string };
 		expect(contentJson.status).toBe("episodic_content_immutable");
-
-		// Metadata change allowed.
 		const metaRes = await app.request("http://localhost/api/memory/mem-episodic", {
 			method: "PATCH",
 			headers: { "Content-Type": "application/json" },

@@ -1,10 +1,3 @@
-/**
- * Daemon secrets provider integration and asynchronous exec queue.
- *
- * Encrypted local storage and command execution live in @signet/core so the
- * CLI can use the same implementation when the daemon is offline.
- */
-
 import { randomUUID } from "node:crypto";
 import {
 	BITWARDEN_ACTIVE_PROVIDER_SECRET,
@@ -225,8 +218,6 @@ export async function getSecret(name: string): Promise<string> {
 
 	return getLocalSecretValue(localName);
 }
-
-// TTL cache for listSecrets — avoids Bitwarden round-trips on every session start.
 let cachedSecretNames: string[] | null = null;
 let cachedSecretAt = 0;
 const SECRET_CACHE_TTL_MS = 60_000;
@@ -266,7 +257,6 @@ export async function listSecrets(): Promise<string[]> {
 			providerId: "local",
 			degradedProviderId: "bitwarden",
 		});
-		// Don't cache degraded results — Bitwarden may recover
 		return visibleLocalNames;
 	}
 }

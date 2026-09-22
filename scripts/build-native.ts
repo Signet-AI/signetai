@@ -1,7 +1,3 @@
-/**
- * Cross-platform native build script.
- * Checks for cargo availability before attempting to build the Rust native module.
- */
 import { execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
@@ -17,8 +13,6 @@ if (!existsSync(nativeDir)) {
 	console.error("[signet] native build failed: platform/native was not found");
 	process.exit(1);
 }
-
-// Check if cargo is available
 try {
 	const locator = process.platform === "win32" ? "where" : "which";
 	execSync(`${locator} cargo`, { stdio: "ignore", windowsHide: true });
@@ -26,8 +20,6 @@ try {
 	console.error("[signet] native build failed: cargo is required (set SIGNET_SKIP_NATIVE_BUILD=1 to skip)");
 	process.exit(1);
 }
-
-// Build the native module
 try {
 	execSync("bun run build", { cwd: nativeDir, stdio: "inherit" });
 } catch {

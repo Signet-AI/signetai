@@ -22,9 +22,6 @@ import {
 	setSessionEvictionHandler,
 } from "./session-tracker";
 import { createTelemetryCollector, setActiveTelemetry } from "./telemetry";
-
-// Collector config for telemetry regression tests (#1212): empty posthogHost
-// means nothing is ever sent, and the buffer is queried directly.
 const TEST_TELEMETRY_CONFIG = {
 	posthogHost: "",
 	posthogApiKey: "",
@@ -38,13 +35,6 @@ afterEach(() => {
 	setSessionClaimStore(null);
 	resetSessions();
 });
-
-/**
- * Real in-memory telemetry DB: the collector writes the event buffer to
- * `telemetry_events` on flush, and `query()` reads it back — a fake that
- * returns [] for every SELECT would hide the events. Mirrors the real
- * schema (migration 109) so flush + query behave like production.
- */
 function telemetryTestDb(): DbAccessor {
 	const db = new Database(":memory:");
 	db.exec("CREATE TABLE telemetry_install (id TEXT PRIMARY KEY, created_at TEXT NOT NULL)");
@@ -303,7 +293,6 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 
 		resolveEviction("finalized");
 		await evictionFinished;
-		// The old finalizer must not remove or expire the replacement claim.
 		expect(hasSession("ttl-reused", "agent-reused")).toBe(true);
 		expect(getSessionPath("ttl-reused", "agent-reused")).toBe("legacy");
 		expect(persistedStates.get("agent-reused:ttl-reused")).toBe("active");
@@ -391,9 +380,6 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 				expect(ends[0]?.properties.reason).toBe("expired");
 				expect(ends[0]?.properties.harness).toBe("claude-code");
 				expect(typeof ends[0]?.properties.sessionHash).toBe("string");
-
-				// A re-claimed session that evicts again without a new session
-				// start is the same lifetime — no second event.
 				claimSession("sess-evict", "legacy", "default", "claude-code");
 				_expireSessionForTest("sess-evict");
 				runStaleCleanup();
@@ -425,8 +411,6 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 			const collector = createTelemetryCollector(telemetryTestDb(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
 			setActiveTelemetry(collector);
 			try {
-				// The session-start route must repair a claim created without a
-				// harness before TTL eviction emits its lifecycle event.
 				claimSession("sess-evict-harness", "plugin", "default");
 				claimSession("sess-evict-harness", "plugin", "default", "opencode");
 				_expireSessionForTest("sess-evict-harness");
@@ -445,15 +429,11 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 			const collector = createTelemetryCollector(telemetryTestDb(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
 			setActiveTelemetry(collector);
 			try {
-				// Simulate the explicit-clear path recording the end marker with
-				// the harness supplied by the termination request.
 				markSessionEndTelemetry({
 					agentId: "default",
 					harness: "opencode",
 					sessionKey: "sess-evict-dedup",
 				});
-				// The claim was created by a path that did not retain harness
-				// metadata. The TTL path must still find the same marker.
 				claimSession("sess-evict-dedup", "plugin", "default");
 				_expireSessionForTest("sess-evict-dedup");
 				runStaleCleanup();
@@ -469,10 +449,6 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 			const collector = createTelemetryCollector(telemetryTestDb(), TEST_TELEMETRY_CONFIG, "0.0.0-test");
 			setActiveTelemetry(collector);
 			try {
-				// Harnesses (openclaw) send "session:<uuid>" keys. The clear
-				// path and the tracker eviction path must agree on the same
-				// normalized identity, or the same lifetime emits session.end
-				// twice — once for clear, once for the eviction.
 				markSessionEndTelemetry({ agentId: "default", harness: "claude-code", sessionKey: "session:evict-prefixed" });
 				claimSession("session:evict-prefixed", "legacy", "default", "claude-code");
 				_expireSessionForTest("session:evict-prefixed");
@@ -480,8 +456,6 @@ describe("TTL eviction lifecycle handler (#902)", () => {
 				await collector.flush();
 
 				expect((await collector.query()).filter((e) => e.event === "session.end")).toHaveLength(0);
-
-				// And the anonymous hash is joinable across raw/normalized forms.
 				expect(hashSessionKey("session:abc")).toBe(hashSessionKey("abc"));
 			} finally {
 				setActiveTelemetry(undefined);

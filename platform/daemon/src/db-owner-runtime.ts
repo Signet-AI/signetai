@@ -42,12 +42,6 @@ import type {
 import { applyVectorRepairBatch } from "./vector-repair-owner";
 
 let isolatedTestAccessor: DbAccessor | null = null;
-
-/**
- * Tests that use an isolated in-memory accessor cannot start the process
- * owner. They may explicitly register that accessor so owner-routed helpers
- * retain their old test seam without creating a production fallback.
- */
 export function registerDbOwnerIsolatedTestAccessor(accessor: DbAccessor): void {
 	if (hasDbAccessor()) return;
 	isolatedTestAccessor = accessor;
@@ -332,15 +326,11 @@ export async function startDbOwnerWithRole(
 		if (currentEntry?.owner === owner && currentEntry.startPromise === pendingStart) currentEntry.startPromise = null;
 	}
 }
-
-/** Start the shared process DB owner for one database path. */
 export async function startDbOwner(
 	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
 ): Promise<DbOwnerClient> {
 	return await startDbOwnerWithRole(dbPath, "generic");
 }
-
-/** Compatibility entry point; recall shares the canonical owner. */
 export async function startDbRecallOwner(
 	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
 ): Promise<DbOwnerClient> {
@@ -409,8 +399,6 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 		},
 	};
 }
-
-/** Resolve the process owner, or the in-process adapter used inside an owner worker. */
 export async function getDbOwner(dbPath?: string): Promise<DbOwnerClient> {
 	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return await getCurrentProcessOwner();
 	const registered = getDbOwnerMaintenance()?.owner;
@@ -420,16 +408,9 @@ export async function getDbOwner(dbPath?: string): Promise<DbOwnerClient> {
 	if (isolatedTestAccessor !== null) return inlineOwner(isolatedTestAccessor);
 	return await startDbOwner(dbPath);
 }
-
-/** Recall requests use the same owner as writes and maintenance. */
 export async function getDbRecallOwner(dbPath?: string): Promise<DbOwnerClient> {
 	return getDbOwner(dbPath);
 }
-
-/**
- * Resolve the production owner, or an explicitly supplied isolated test
- * accessor without opening a second SQLite connection.
- */
 export async function getDbOwnerForAccessor(accessor: DbAccessor): Promise<DbOwnerClient> {
 	if (process.env.SIGNET_DB_OWNER_WORKER === "1") return inlineOwner(accessor);
 	if (hasDbAccessor()) return await getDbOwner(getDbAccessorPath());
@@ -443,7 +424,6 @@ export interface DbOwnerSqlOptions {
 	readonly workloadClass?: DbOwnerWorkloadClass;
 	readonly deadlineMs?: number;
 	readonly estimatedWorkUnits?: number;
-	/** Aborting abandons the queued/in-flight owner job and suppresses its result. */
 	readonly signal?: AbortSignal;
 }
 
@@ -477,9 +457,6 @@ async function submitWithAdmission<Result>(
 		try {
 			throwIfAborted();
 			const handle = owner.submit<Result>(request, submit);
-			// Cancellation may happen synchronously during bridge shutdown, before
-			// the async waiter gets its first turn. Keep the handle rejection
-			// observed while awaitResult still propagates it to the caller.
 			void handle.result.catch(() => {});
 			const onAbort = (): void => handle.cancel();
 			signal?.addEventListener("abort", onAbort, { once: true });
@@ -551,8 +528,6 @@ export async function dbOwnerIncrementalVacuum(
 		},
 	);
 }
-
-/** Execute read-modify-write statements atomically on the serialized owner. */
 export async function dbOwnerTransaction(
 	statements: readonly DbOwnerStatement[],
 	options: DbOwnerSqlOptions,

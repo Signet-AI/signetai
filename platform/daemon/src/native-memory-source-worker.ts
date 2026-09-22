@@ -28,7 +28,6 @@ export interface NativeSourceWorkerFile {
 	readonly mtimeMs: number;
 	readonly kind: string;
 	readonly contentHash: string;
-	/** Source identity is derived in the isolated worker, never in the parent. */
 	readonly sourceId?: string;
 	readonly lineCount: number;
 	readonly rolloutId?: string;
@@ -101,8 +100,6 @@ function workerFrameBytes(payload: WorkerPayload): number {
 function postWorkerFrame(port: Pick<MessagePort | Worker, "postMessage">, payload: WorkerPayload): void {
 	port.postMessage(workerFrame(payload));
 }
-
-/** The only size/accounting boundary used by both worker directions. */
 function boundedWorkerEvent(event: WorkerEvent): WorkerEvent {
 	if (workerFrameBytes(event) <= NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES) return event;
 	return {
@@ -131,9 +128,7 @@ interface PendingScan {
 }
 
 const NATIVE_SOURCE_WORKER_SCAN_DEADLINE_MS = 30_000;
-/** Repeated transport failures at one checkpoint pause replacement until the source changes. */
 export const NATIVE_SOURCE_WORKER_MAX_SAME_CHECKPOINT_FAILURES = 3;
-/** Maximum UTF-8 JSON size for either side of the worker IPC channel. */
 export const NATIVE_SOURCE_WORKER_MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 
 function nativeSourceId(source: NativeSourceWorkerSource): string | undefined {
@@ -281,7 +276,6 @@ async function scan(command: ScanCommand): Promise<NativeSourceWorkerPage> {
 			) {
 				permissionDeniedPaths.push(path);
 			}
-			// Files and directories can disappear while a source is being edited.
 		}
 	}
 	return {
@@ -310,9 +304,7 @@ export function runNativeSourceWorker(): void {
 						id: "id" in event ? event.id : "worker",
 						message: error instanceof Error ? error.message : String(error),
 					});
-				} catch {
-					/* channel is gone */
-				}
+				} catch {}
 			}
 		}
 	};
@@ -353,11 +345,8 @@ export interface NativeSourceWorkerHandle {
 export function createNativeSourceWorker(
 	options: {
 		readonly onScanStarted?: () => void;
-		/** Test-only hook fired when the worker has delivered a scan result. */
 		readonly onScanResult?: () => void;
-		/** Test-only worker entry override. */
 		readonly resolveEmbeddedPath?: () => string;
-		/** Test-only override for the production circuit probe interval. */
 		readonly circuitCooldownMs?: number;
 	} = {},
 ): NativeSourceWorkerHandle {

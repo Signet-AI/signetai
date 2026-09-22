@@ -1,16 +1,5 @@
 import { requestMemoryHead } from "./memory-head";
 import { budgetIdentityContent } from "./identity-context";
-/**
- * Signet Hooks System
- *
- * Lifecycle hooks for harness integration:
- * - onSessionStart: provide context/memories to inject
- * - onPreCompaction: provide summary instructions, receive summary
- * - onUserPromptSubmit: inject relevant memories per prompt
- * - onSessionEnd: retain and complete the transcript for Dreaming
- * - onRemember: explicit memory save
- * - onRecall: explicit memory query
- */
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -254,20 +243,14 @@ function identityBudgetFor(path: string): number {
 	return IDENTITY_BUDGET_BY_FILE[filename] ?? 4_000;
 }
 
-// ============================================================================
-// Types
-// ============================================================================
-
 export type { HooksConfig };
 
 export interface SessionStartRequest {
 	harness: string;
 	project?: string;
 	agentId?: string;
-	/** Re-establish the runtime claim without rebuilding startup context. */
 	claimOnly?: boolean;
 	source?: string;
-	/** Harness-native agent/sub-agent identifier. Not used for Signet data scoping. */
 	harnessAgentId?: string;
 	parentSessionKey?: string;
 	parentKey?: string;
@@ -296,11 +279,8 @@ export interface SessionStartResponse {
 		truncated: boolean;
 	}>;
 	recentContext?: string;
-	/** Deterministic prompt prefix. Harnesses should cache this separately. */
 	stableSystemPrompt: string;
-	/** State-dependent context delivered through the harness API-only channel. */
 	dynamicContext: string;
-	/** Compatibility aggregate for clients that do not understand the split. */
 	inject: string;
 	contextHash?: string;
 	contextVersion?: typeof PROMPT_CONTEXT_VERSION;
@@ -325,9 +305,7 @@ export interface UserPromptSubmitRequest {
 	harness: string;
 	project?: string;
 	agentId?: string;
-	/** Pre-cleaned user message (preferred — used as-is after metadata strip). */
 	userMessage?: string;
-	/** Raw user prompt (legacy — metadata stripped before use). */
 	userPrompt?: string;
 	lastAssistantMessage?: string;
 	sessionKey?: string;
@@ -338,11 +316,8 @@ export interface UserPromptSubmitRequest {
 }
 
 export interface UserPromptSubmitResponse {
-	/** State-dependent context delivered through the harness API-only channel. */
 	dynamicContext: string;
-	/** Compatibility alias for clients that still consume the aggregate field. */
 	inject: string;
-	/** Dynamic prompt-handling clock, deliberately excluded from memory context hashing. */
 	clockContext?: string;
 	contextHash?: string;
 	contextVersion?: typeof PROMPT_CONTEXT_VERSION;
@@ -351,18 +326,11 @@ export interface UserPromptSubmitResponse {
 	engine?: string;
 	warnings?: string[];
 }
-
-/**
- * Format the prompt-handling instant without putting it in the memory envelope.
- * Invalid or unavailable local timezone data falls back deterministically to UTC.
- */
 export function formatPromptClockContext(date: Date, requestedTimeZone?: string): string {
 	let localTimeZone = "UTC";
 	try {
 		localTimeZone = requestedTimeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
-	} catch {
-		// Use UTC when the host cannot resolve its local timezone.
-	}
+	} catch {}
 	for (const timeZone of [localTimeZone, "UTC"]) {
 		try {
 			const parts = new Intl.DateTimeFormat("en-CA", {
@@ -386,9 +354,7 @@ export function formatPromptClockContext(date: Date, requestedTimeZone?: string)
 			const datePart = `${values.get("year")}-${values.get("month")}-${values.get("day")}`;
 			const timePart = `${values.get("hour")}:${values.get("minute")}:${values.get("second")}`;
 			return `Current date/time: ${datePart}T${timePart}${normalizedOffset} (${timeZone})`;
-		} catch {
-			// Retry once with UTC so a malformed host timezone never breaks a hook.
-		}
+		} catch {}
 	}
 	const utc = date.toISOString();
 	return `Current date/time: ${utc.slice(0, 19)}+00:00 (UTC)`;
@@ -402,7 +368,6 @@ export interface SessionEndRequest {
 	sessionKey?: string;
 	agentId?: string;
 	cwd?: string;
-	/** Immutable capture time supplied by an importing harness. */
 	capturedAt?: string;
 	reason?: string;
 	runtimePath?: "plugin" | "legacy";
@@ -471,10 +436,6 @@ export interface RecallRequest {
 	runtimePath?: "plugin" | "legacy";
 }
 
-// ============================================================================
-// Shared Helpers
-// ============================================================================
-
 export { resetSessionStartDedupe };
 export { effectiveScore, inferType, isDuplicate };
 
@@ -502,8 +463,6 @@ function buildPluginPromptContributionSection(target: PluginPromptTargetV1, log:
 		return "";
 	}
 }
-
-/** Build a brief "since your last session" summary */
 async function getSessionGapSummary(): Promise<string | undefined> {
 	if (!existsSync(getMemoryDbPath())) return undefined;
 
@@ -541,12 +500,6 @@ async function getSessionGapSummary(): Promise<string | undefined> {
 async function fetchTraversalCandidates(memoryIds: ReadonlyArray<string>, agentId: string): Promise<ScoredMemory[]> {
 	return memoryCandidates.fetchTraversalCandidates(getMemoryDbPath(), memoryIds, agentId);
 }
-
-/**
- * Return all memories that pass the 0.2 effective score threshold,
- * sorted by project match + score. No budget applied — caller
- * handles truncation via selectWithBudget().
- */
 export async function getAllScoredCandidates(
 	project: string | undefined,
 	limit: number,
@@ -578,10 +531,6 @@ async function getPredictedContextMemories(
 	);
 }
 
-// ============================================================================
-// Config Loading
-// ============================================================================
-
 function loadHooksConfig(): HooksConfig {
 	return loadHooksConfigFromDisk(getAgentsDir());
 }
@@ -589,10 +538,6 @@ function loadHooksConfig(): HooksConfig {
 function loadHooksConfigForHarness(harness: string) {
 	return resolveHooksConfigForHarness(loadHooksConfig(), harness);
 }
-
-// ============================================================================
-// Memory Queries
-// ============================================================================
 
 async function getRecentMemories(
 	limit: number,
@@ -673,18 +618,11 @@ async function getRecentMemories(
 	}
 }
 
-// ============================================================================
-// Hook Handlers
-// ============================================================================
-
 function boundSessionStartAggregate(stableSystemPrompt: string, rawInject: string, maxTokens: number): string {
 	const boundedInject = applyTokenBudget(rawInject, maxTokens);
 	if (boundedInject === stableSystemPrompt || boundedInject.startsWith(`${stableSystemPrompt}\n`)) {
 		return boundedInject;
 	}
-	// Do not expose a partial capability declaration when the configured
-	// budget cannot carry the stable prefix. The split stable field remains
-	// available to clients that can negotiate it separately.
 	return "";
 }
 
@@ -725,8 +663,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		const sessionKey = req.sessionKey?.trim();
 		const recoveredSessionEnd = await recoverMissingSessionEndOnClearStart(req, agentId, new Date().toISOString());
 		clearSessionStartDedupe(req);
-		// A reset also opens a new session lifetime — any prior session.end
-		// marker must not suppress a termination event for the new one (#1212).
 		clearSessionEndTelemetry({
 			agentId,
 			harness: req.harness,
@@ -749,10 +685,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			recoveredSessionEnd,
 		});
 	}
-
-	// Dedup guard: if we already sent a full inject for this session, return
-	// a minimal stub. Identity files / MEMORY.md are already in the context.
-	// Must fire BEFORE initContinuity to avoid resetting accumulated state.
 	pruneSessionStartDedupe();
 	if (hasSessionStartDedupe(req)) {
 		const sessionHash = hashSessionKey(req.sessionKey);
@@ -780,11 +712,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			warnings: warnings?.length ? warnings : undefined,
 		});
 	}
-
-	// Anonymous usage telemetry: a real session start (dedup stubs and
-	// clear/reset paths above don't count as new sessions). A real start
-	// also opens a new session lifetime, so any prior session.end marker
-	// for this key must not suppress a later termination event (#1212).
 	pruneSessionEndTelemetry();
 	clearSessionEndTelemetry({
 		agentId,
@@ -795,8 +722,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		harness: req.harness,
 		sessionHash: hashSessionKey(req.sessionKey),
 	});
-
-	// Initialize continuity state for checkpoint accumulation (first call only)
 	if (req.sessionKey) {
 		initContinuity(req.sessionKey, req.harness, req.project);
 	}
@@ -812,8 +737,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		includeIdentity &&
 		resolvedHooksConfig.identity?.include !== false &&
 		resolvedHooksConfig.identity?.files !== undefined;
-
-	// Read AGENTS.md first so harness instructions precede synthesized memory.
 	const agentsMdContent =
 		includeIdentity && profileIdentitySections === null ? readAgentsMd(agentsDir, 12000, identityFiles) : undefined;
 	const startupIdentitySections =
@@ -831,8 +754,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					}))
 					.filter((section): section is { header: string; content: string } => Boolean(section.content))
 			: [];
-
-	// Apply freshness before the existing identity budget, including agent-local profile paths.
 	async function currentWorkingMemory(path: string, budget: Parameters<typeof budgetIdentityContent>[1]) {
 		try {
 			const inspected = await requestMemoryHead<{ content: string | null }>({
@@ -913,8 +834,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		boostWeight: traversalCfg?.boostWeight ?? 0.2,
 		constraintBudgetChars: traversalCfg?.constraintBudgetChars ?? 1000,
 	};
-
-	// Candidate pool fusion: traversal U effective (capped before budget truncation)
 	const recallLimit = Math.max(1, config.recallLimit ?? 50);
 	const candidatePoolLimit = Math.max(recallLimit, config.candidatePoolLimit ?? 100);
 	const _candidatesStart = Date.now();
@@ -1029,17 +948,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 					traversalMemoryCount: traversalMemories,
 				});
 			}
-		} catch {
-			// Traversal is best-effort; fall back silently
-		}
+		} catch {}
 		traversalMs = Date.now() - _traversalStart;
 	}
 
 	const mergedCandidates = allCandidates.slice(0, candidatePoolLimit);
-
-	// ---------------------------------------------------------------
-	// Baseline ranking
-	// ---------------------------------------------------------------
 	const dbAcc = loadDbAccessor();
 	const candidateIdsForFeatures = mergedCandidates.map((c) => c.id);
 	const structuralById = dbAcc
@@ -1059,15 +972,7 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			{ predictorScore: null as number | null, predictorRank: null as number | null, fusedScore: candidate.effScore },
 		]),
 	);
-
-	// Apply budget to select what we actually inject (on re-ranked order)
 	let memories = selectWithEstimatedTokenBudget(sortedCandidates.slice(0, recallLimit), tokenBudget);
-
-	// Predicted context from recent session analysis is additive on top of main
-	// recall: it surfaces topics the user is likely to need next regardless of how
-	// much of the token budget main recall consumed. Capping it by memories.length
-	// would starve it to zero whenever recall fills to recallLimit (default 50),
-	// silently dropping the predicted-context feature entirely.
 	const existingIds = new Set(memories.map((m) => m.id));
 	const predictedMemories = await getPredictedContextMemories(
 		req.project,
@@ -1079,8 +984,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		agentScope.policyGroup,
 	);
 	if (predictedMemories.length > 0) {
-		// Predicted context is deliberately first: the bounded continuity section
-		// must not silently discard the feature whenever the main pool fills it.
 		memories = [...predictedMemories, ...memories];
 	}
 
@@ -1108,23 +1011,10 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	let sessionContinuity = renderSessionContinuity(memories, sessionContinuityOptions);
 
 	const exploredId: string | null = null;
-
-	// Do NOT bump access_count/last_accessed for session-start injected memories.
-	// Those columns drive rehearsal boost and retention decay, which must reflect
-	// genuine recall operations (CLI, MCP, or harness prompt-submit recall via
-	// hybridRecall), not the ~50-60 memories injected into the system prompt at
-	// session start. Bumping them here permanently inflates the boost for the
-	// injection set and resets last_accessed so the half-life never decays it.
-	// Injected rows are still recorded for the predictive scorer below via
-	// session_memories, so no telemetry is lost. See #971.
-
-	// Record all candidates after the final rendered section determines which
-	// memories were actually delivered to the harness.
 	const allCandidateIdsForRecording = [
 		...mergedCandidates.map((c) => c.id),
 		...predictedMemories.filter((m) => !mergedCandidates.some((c) => c.id === m.id)).map((m) => m.id),
 	];
-	// Re-fetch structural features for any predicted memories not in the first batch
 	const fullStructuralById =
 		allCandidateIdsForRecording.length > candidateIdsForFeatures.length && dbAcc
 			? await getStructuralFeatures(dbAcc, allCandidateIdsForRecording, agentId, structuralCandidateSourceById)
@@ -1165,9 +1055,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 				};
 			}),
 	];
-
-	// Format the dynamic context separately from the deterministic system
-	// prefix. The aggregate `inject` field below remains for legacy clients.
 	const dynamicParts: string[] = [];
 	let recoverySection = "";
 
@@ -1176,8 +1063,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		dynamicParts.push(systemPluginContext);
 	}
 	dynamicParts.push("[memory active]");
-
-	// Inject session gap summary for temporal awareness
 	const gapSummary = await getSessionGapSummary();
 	if (gapSummary) {
 		dynamicParts.push(gapSummary);
@@ -1245,18 +1130,12 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 		constraintsForInject,
 		traversalRuntimeCfg.constraintBudgetChars,
 	);
-
-	// Inject session recovery context from recent checkpoints
 	const continuityCfg = memoryCfg.pipelineV2.continuity;
 	if (continuityCfg.enabled) {
 		try {
 			const dbAcc = getDbAccessor();
-			const withinMs = 4 * 60 * 60 * 1000; // 4 hours
-
-			// Priority 1: session key lineage (same or previous session)
+			const withinMs = 4 * 60 * 60 * 1000;
 			let checkpoint = req.sessionKey ? getLatestCheckpointBySession(dbAcc, req.sessionKey) : undefined;
-
-			// Priority 2: normalized project path
 			if (!checkpoint) {
 				let projNorm: string | undefined;
 				if (req.project) {
@@ -1271,7 +1150,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 			if (checkpoint) {
 				const recoveryText = formatRecoveryDigest(checkpoint, continuityCfg.recoveryBudgetChars);
-				// Store separately — appended after budget truncation to guarantee space
 				recoverySection = `\n## Session Recovery Context\n${recoveryText}`;
 			}
 		} catch (err) {
@@ -1294,10 +1172,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 
 	const duration = Date.now() - start;
 	const maxTokens = tokenBudget;
-	// Pre-reserve space for deterministic continuity sections so they are never
-	// truncated. Session Continuity reports the same conservative byte-based
-	// estimate used while admitting entries; the other existing sections retain
-	// their cheap character-based estimates to avoid blocking BPE encodes here.
 	const reservedTokens =
 		sessionContinuity.estimatedTokens +
 		estimateTokens(recoverySection) +
@@ -1350,17 +1224,11 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 	}
 	let boundedContext = buildBoundedContext(sessionContinuity.section);
 	if (sessionContinuity.section && !boundedContext.inject.includes(sessionContinuity.section)) {
-		// Overall maxInjectTokens is a hard cap for the complete aggregate. A
-		// partially emitted continuity section cannot be claimed as delivered.
 		sessionContinuity = renderSessionContinuity([], sessionContinuityOptions);
 		boundedContext = buildBoundedContext("");
 	}
 	let dynamicContext = boundedContext.dynamicContext;
 	let inject = boundedContext.inject;
-
-	// Claim only after the final rendered section has been assembled. If a
-	// concurrent request claimed an item between the read and this point,
-	// rebuild the section so delivery and claim state remain aligned.
 	const claimedMemories = await claimRecallItemsAsync({
 		sessionKey: sessionStartRecallSessionKey,
 		agentId,
@@ -1404,8 +1272,6 @@ export async function handleSessionStart(req: SessionStartRequest): Promise<Sess
 			inject: duration - candidatesMs - traversalMs,
 		},
 	});
-
-	// Mark this session as having received the full inject
 	markSessionStartDedupe(req);
 
 	return attachPromptContext({
@@ -1471,11 +1337,6 @@ ${guidelines}
 		messageCount: req.messageCount,
 		summaryPromptChars: summaryPrompt.length,
 	});
-
-	// Write pre-compaction checkpoint from accumulated continuity state.
-	// Direct write (not queued) since this is a one-shot critical capture.
-	// Wrapped in try/catch so a DB failure doesn't prevent the summary
-	// prompt from being returned to the harness.
 	const snap = consumeState(req.sessionKey);
 	if (snap) {
 		try {
@@ -1513,10 +1374,6 @@ ${guidelines}
 		guidelines,
 	};
 }
-
-// ============================================================================
-// User Prompt Submit
-// ============================================================================
 
 export { queryAnchorsMissingFromRecall };
 
@@ -1700,8 +1557,6 @@ export async function handleUserPromptSubmit(
 	const userMessage = resolveRecallUserMessage(req);
 	const agentId = deps.resolveAgentId(req);
 	const { keywordTerms } = buildRecallQueryShape(userMessage);
-
-	// -- Parse and accumulate incoming agent feedback (from previous prompt) --
 	const memoryCfg = deps.loadMemoryConfig(getAgentsDir());
 	const feedbackEnabled = memoryCfg.pipelineV2.feedback.enabled;
 	if (feedbackEnabled && req.memory_feedback !== undefined && req.sessionKey) {
@@ -1715,14 +1570,11 @@ export async function handleUserPromptSubmit(
 				});
 			}
 		} catch (e) {
-			// Fail-open: never break the hook for feedback errors
 			deps.logger.warn("hooks", "Failed to process memory_feedback", {
 				error: e instanceof Error ? e.message : String(e),
 			});
 		}
 	}
-
-	// Always record the prompt for continuity tracking, even if no FTS query
 	const snippet = userMessage.slice(0, 200).trim();
 	deps.recordPrompt(
 		req.sessionKey,
@@ -1785,10 +1637,6 @@ export async function handleUserPromptSubmit(
 			});
 		}
 	}
-
-	// Cache-stable per-prompt memory context must not contain a wall-clock value.
-	// Harnesses may replay the same response for title, primary, retry, and
-	// tool-loop calls; dynamic metadata belongs in the separate clock signal.
 	const metadataHeader = "";
 	const expiryWarning = req.sessionKey ? deps.getExpiryWarning(req.sessionKey, agentId) : null;
 	const warnings = expiryWarning ? [expiryWarning] : undefined;
@@ -1914,9 +1762,6 @@ export async function handleUserPromptSubmit(
 		}
 		if (!providerResult.ok) throw providerResult.error;
 		const entityContext = providerResult.context;
-		// This timestamp records the handoff to the provider. A timeout returns
-		// the prompt response before the provider settles, so it is independent
-		// of slow-provider completion.
 		emitLifecycleProvider({
 			startedAtMs: providerStartTime,
 			completedAtMs: providerResult.completedAtMs,
@@ -2012,10 +1857,6 @@ export async function handleUserPromptSubmit(
 	}
 }
 
-// ============================================================================
-// Session End
-// ============================================================================
-
 function isClearSessionStart(req: SessionStartRequest): boolean {
 	return req.source?.trim().toLowerCase() === "clear";
 }
@@ -2026,13 +1867,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	await ensureAgentRegistered(agentId);
 	const endedAt = req.capturedAt ?? new Date().toISOString();
 	const boundaryReason = normalizeSessionBoundaryReason(req.reason);
-
-	// Keep session-start dedup across normal Stop/session-end hooks. Codex can
-	// emit Stop between turns and then emit SessionStart again when an idle
-	// conversation is resumed with the same session key; clearing here would
-	// re-inject the full identity/memory block mid-conversation.
-
-	// Flush pending periodic checkpoints
 	try {
 		await flushPendingCheckpoints();
 	} catch (err) {
@@ -2042,7 +1876,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 	}
 
 	if (boundaryReason === "clear") {
-		// Caller intends to discard session context — skip checkpoint, just clean up
 		clearSessionStartDedupe(req);
 		clearRawSessionStartDedupeKey(sessionKey);
 		await advanceRecallContextEpochAsync({
@@ -2052,9 +1885,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 			sourceRef: sessionKey ?? null,
 		});
 		clearContinuity(sessionKey);
-		// Real session termination: the caller explicitly discards the
-		// session. Emit session.end once per session lifetime (#1212) so the
-		// counter stays comparable with the dedup'd session.start.
 		if (!hasSessionEndTelemetry({ agentId, harness: req.harness, sessionKey })) {
 			getActiveTelemetry()?.record("session.end", {
 				harness: req.harness,
@@ -2065,20 +1895,8 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		}
 		return { memoriesSaved: 0 };
 	}
-
-	// Capture final session-end checkpoint before clearing state.
-	// Uses totalPromptCount so this reflects the full session, not just
-	// the interval since the last periodic/pre-compaction consume.
 	const snap = consumeState(sessionKey);
-
-	// Anonymous usage telemetry for session-end hook calls. Harnesses call
-	// this hook per turn (Stop/session.idle) to persist messages, so this
-	// is a "turns persisted" volume counter — not a session boundary.
-	// Real session termination is emitted separately as session.end on
-	// explicit lifecycle reasons or TTL eviction (#1212/#1231).
 	if (boundaryReason !== null) {
-		// Explicit lifecycle signals are real session boundaries, unlike the
-		// per-turn Stop/session.idle calls that also use this hook (#1231).
 		if (!hasSessionEndTelemetry({ agentId, harness: req.harness, sessionKey })) {
 			getActiveTelemetry()?.record("session.end", {
 				harness: req.harness,
@@ -2127,9 +1945,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	if (boundaryReason === null) {
-		// Stop/session.idle is a per-turn hook. PromptSubmit already appended the
-		// live turn; reading the growing source here only creates another full-file
-		// observation, so ordinary turns never enter durable capture.
 		scheduleDeferredSessionEndWork({
 			sessionKey,
 			agentId,
@@ -2137,9 +1952,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		});
 		return { memoriesSaved: 0, queued: false };
 	}
-
-	// Boundary capture is source-addressable. Leave the source file unread here;
-	// the worker reads the exact generation under its source lock and owns canonical retention.
 	const rawTranscript = req.transcriptPath ? "" : (req.transcript ?? "");
 	const transcript = rawTranscript ? normalizeSessionTranscript(req.harness, rawTranscript) : "";
 	const sessionId = deriveSessionEndFallbackId(req.sessionId?.trim() || sessionKey, req.transcriptPath, transcript);
@@ -2179,16 +1991,6 @@ export async function handleSessionEnd(req: SessionEndRequest): Promise<SessionE
 		...(transcriptCaptureJobId ? { transcriptCaptureJobId } : {}),
 	};
 }
-
-/**
- * Daemon-side fallback for harnesses that never signal session-end (#1172).
- * Desktop chats that are closed or abandoned without an explicit
- * on_session_end stay in live retention forever (completed: false semantics),
- * so the dreaming content runbook defers their transcripts indefinitely.
- * Sweep the stale sessions and fire the deferred session-end with the stored
- * transcript snapshot, so the direct content pass can consume it instead of
- * deferring indefinitely.
- */
 type StaleSessionSweepResult = { closed: number; skipped: number; totalMatching: number };
 
 async function waitForCurrentDeferredSessionEndWork(): Promise<void> {
@@ -2241,8 +2043,6 @@ async function runStaleSessionSweep(options: {
 	for (const session of stale) {
 		if (isSystemPressureHigh()) await awaitPressureClear();
 		await yieldToEventLoop();
-		// findStaleLiveSessions only returns rows without a completion marker.
-		// Marking the row is the atomic dedup boundary for this sweep.
 
 		try {
 			await handleSessionEnd({
@@ -2314,26 +2114,14 @@ async function deferSessionEndWork(params: {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Mid-session checkpoint extraction (long-lived sessions)
-// ---------------------------------------------------------------------------
-
 export async function handleCheckpointExtract(req: CheckpointExtractRequest): Promise<CheckpointExtractResponse> {
 	const agentId = resolveAgentId({ agentId: req.agentId, sessionKey: req.sessionKey });
 	await ensureAgentRegistered(agentId);
-
-	// Respect the pipeline master switch
 	const memoryCfg = loadMemoryConfig(getAgentsDir());
 	if (!memoryCfg.pipelineV2.enabled && !memoryCfg.pipelineV2.shadowMode) {
 		logger.info("hooks", "Checkpoint extract skipped — pipeline disabled");
 		return { skipped: true };
 	}
-
-	// Read transcript: prefer inline body, then file path, then stored transcript.
-	// transcriptPath is trusted the same way as in handleSessionEnd and
-	// handleUserPromptSubmit — OpenClaw session files are written by the same
-	// user process as the daemon and may be anywhere (project dirs, /tmp,
-	// containers). Protection at the network level is the global auth middleware.
 	let transcript = "";
 	let fromStore = false;
 	if (req.transcript) {
@@ -2348,8 +2136,6 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 			});
 		}
 	}
-
-	// Fall back to stored transcript if nothing was provided inline
 	if (!transcript) {
 		transcript = (await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId))?.content ?? "";
 		fromStore = true;
@@ -2361,12 +2147,6 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 		});
 		return { skipped: true };
 	}
-
-	// Upsert transcript for lossless retention, but only when new content is
-	// provided (not merely re-reading the stored transcript) and only when it
-	// is at least as long as what is already stored. Upserting a shorter
-	// payload would discard valid canonical content before the final completion
-	// marker is written.
 	if (!fromStore) {
 		const prev = (await getStoredSessionTranscriptInfoAsync(req.sessionKey, agentId))?.content;
 		if (!prev || transcript.length >= prev.length) {
@@ -2379,19 +2159,6 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 			}
 		}
 	}
-
-	// Mid-session evidence remains live and is intentionally not delivered to Dreaming.
-	// The completed session transcript is the single canonical delivery path.
-
-	// Flush accumulated continuity data into a checkpoint, then re-init the
-	// tracking window so subsequent turns continue accumulating. Unlike
-	// session-end, we do NOT release the session claim.
-	//
-	// Note: consumeState/initContinuity are session-key-scoped (not agentId-
-	// scoped) — matching the same design in handleSessionEnd. In the OpenClaw
-	// multi-agent model each agent run always has a unique session key, so
-	// session-key scoping is sufficient in practice. agentId remains used for
-	// transcript retention and per-agent scope enforcement.
 	try {
 		const snap = consumeState(req.sessionKey);
 		if (snap && snap.totalPromptCount > 0) {
@@ -2425,9 +2192,7 @@ export async function handleCheckpointExtract(req: CheckpointExtractRequest): Pr
 
 	try {
 		initContinuity(req.sessionKey, req.harness, req.project);
-	} catch {
-		// Non-fatal — continuity will re-init on the next prompt
-	}
+	} catch {}
 
 	return { skipped: true };
 }
@@ -2442,10 +2207,6 @@ export function normalizeSessionTranscript(harness: string, raw: string): string
 }
 
 export { normalizeCodexTranscript, normalizeJsonConversationTranscript };
-
-// ============================================================================
-// Memory Synthesis
-// ============================================================================
 
 export { getSynthesisWorker, handleSynthesisRequest, setSynthesisWorker, writeMemoryMd };
 export type { SynthesisRequest, SynthesisResponse };

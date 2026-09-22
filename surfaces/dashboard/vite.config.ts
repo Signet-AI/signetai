@@ -7,15 +7,6 @@ import { defineConfig } from "vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const daemonProxyTarget = process.env.SIGNET_DAEMON_URL ?? `http://${LOOPBACK_HOST}:3850`;
-
-// Dashboard build contract (issue #948):
-// - Emits to `build/index.html` (+ hashed assets under build/assets).
-// - `base: "/"` resolves under both the daemon (http://host/) and the Electron
-//   privileged scheme (app://signet/) since both map root-relative paths to the
-//   dashboard root with SPA fallback to index.html.
-// - Do not change `build.outDir`; scripts/prepare-dashboard-bundle.ts,
-//   platform/daemon/src/routes/dashboard.ts and surfaces/desktop/src/main.ts
-//   all key off `surfaces/dashboard/build/index.html`.
 export default defineConfig({
 	plugins: [react(), tailwindcss()],
 	resolve: {

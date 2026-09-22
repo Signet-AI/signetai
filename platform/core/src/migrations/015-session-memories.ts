@@ -1,15 +1,4 @@
-/**
- * Migration 015: Session Memories
- *
- * Data pipeline prerequisites for the predictive memory scorer:
- *   - session_memories table: links memories to sessions with scoring metadata
- *   - confidence column on session_scores: LLM self-assessed quality gate
- *   - continuity_reasoning column on session_scores: full LLM reasoning for audit
- */
-
 import type { MigrationDb } from "./contract";
-
-/** Helper: add a column only if it doesn't already exist. */
 function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
 	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	if (!cols.some((c) => c.name === column)) {
@@ -18,9 +7,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 }
 
 export function up(db: MigrationDb): void {
-	// -----------------------------------------------------------------------
-	// session_memories — per-session memory candidate tracking
-	// -----------------------------------------------------------------------
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_memories (
 			id TEXT PRIMARY KEY,
@@ -44,10 +30,6 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_session_memories_memory
 			ON session_memories(memory_id);
 	`);
-
-	// -----------------------------------------------------------------------
-	// Extend session_scores with quality gate columns
-	// -----------------------------------------------------------------------
 	addColumnIfMissing(db, "session_scores", "confidence", "REAL");
 	addColumnIfMissing(db, "session_scores", "continuity_reasoning", "TEXT");
 }

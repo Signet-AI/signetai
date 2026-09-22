@@ -1,10 +1,3 @@
-/**
- * Migration 112: Telemetry Queue Ownership
- *
- * Separates daemon and CLI telemetry rows and gives flushers a short-lived
- * claim so concurrent processes cannot send the same batch simultaneously.
- */
-
 import type { MigrationDb } from "./contract";
 
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {

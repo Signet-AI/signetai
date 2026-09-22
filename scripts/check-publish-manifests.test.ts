@@ -377,10 +377,6 @@ describe("check-publish-manifests", () => {
 	});
 
 	test("wires the signet-mcp stdio bundle into the signetai build", () => {
-		// Guards against the dead-code pattern from PR #816: the meta-package
-		// prebuild must rebuild the stdio bundle, otherwise the npm tarball
-		// ships an empty/missing dist/mcp-stdio.js and the signet-mcp bin
-		// symlink points at nothing (issue #826).
 		const root = join(import.meta.dir, "..");
 		const wrapper = JSON.parse(readFileSync(join(root, "dist", "signetai", "package.json"), "utf-8")) as {
 			scripts?: Record<string, string>;
@@ -388,10 +384,6 @@ describe("check-publish-manifests", () => {
 		const buildScript = readFileSync(join(root, "scripts", "build-signet-mcp.ts"), "utf-8");
 
 		expect(wrapper.scripts?.prebuild).toContain("scripts/build-signet-mcp.ts");
-		// Build must target the same entry the bin ships. Asserting on the
-		// full join() call shape (rather than loose substrings) catches
-		// any drift in the path components — a TS file that just happens
-		// to mention "platform" or "mcp-stdio.ts" wouldn't satisfy these.
 		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"platform"\s*,\s*"daemon"\s*,\s*"src"\s*,\s*"mcp-stdio\.ts"\s*\)/);
 		expect(buildScript).toMatch(/join\(\s*root\s*,\s*"dist"\s*,\s*"signetai"\s*,\s*"dist"\s*,\s*"mcp-stdio\.js"\s*\)/);
 	});
@@ -418,10 +410,6 @@ describe("check-publish-manifests", () => {
 		expect(manifest.files).not.toContain("native/**");
 		expect(manifest.scripts?.postinstall).toContain("scripts/install-native.js");
 		expect(manifest.bin?.signet).toBe("bin/signet.js");
-		// signet-mcp must be the self-contained stdio JSON-RPC bundle
-		// (issue #826) — the previous `bin/signet-mcp.js` shim forwarded
-		// to the native binary's management CLI, which broke the MCP
-		// handshake for every harness using the default connector config.
 		expect(manifest.bin?.["signet-mcp"]).toBe("dist/mcp-stdio.js");
 		expect(manifest.files).toContain("dist/mcp-stdio.js");
 		expect(manifest.files).not.toContain("bin/signet-mcp.js");

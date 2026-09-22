@@ -57,7 +57,6 @@ describe("Oh My Pi lifecycle session-end handling", () => {
 		deps.state.setActiveSession("prev-session", sessionFile);
 
 		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
-		// Release call sent even without transcript (to free daemon claim)
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.path).toBe("/api/hooks/session-end");
 		expect((calls[0]?.body as Record<string, unknown> | undefined)?.transcript).toBeUndefined();

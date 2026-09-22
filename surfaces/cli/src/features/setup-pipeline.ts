@@ -4,13 +4,6 @@ import type { ExtractionProviderChoice, HarnessChoice } from "./setup-shared.js"
 export const EXTRACTION_SAFETY_WARNING =
 	"Extraction is intended for Claude Code (haiku), Codex CLI (gpt-5.4-mini) on a Pro/Max subscription, or local llama.cpp / Ollama with qwen3:4b or larger. Remote API extraction can rack up extreme usage fees fast. On a VPS, set the provider to none unless you explicitly want background extraction.";
 
-/**
- * Providers eligible for the distinct aggregate-recall workload are sourced
- * from pi-ai via aggregateRecallProviderIds() in setup-inference-connect
- * (pi-ai families + local servers; ACPX is excluded — aggregate recall is
- * latency-sensitive, and spawn latency would dominate).
- */
-
 export interface SetupPipelineConfig {
 	readonly enabled: boolean;
 	readonly semanticContradictionEnabled?: boolean;
@@ -41,9 +34,6 @@ export function buildSetupPipeline(provider: string, dreamingEnabled = false): S
 			reranker: { enabled: true },
 		};
 	}
-
-	// Provider/model selection is written to inference.workloads. The memory
-	// pipeline retains only operation tuning and worker enablement.
 	return {
 		enabled: true,
 		semanticContradictionEnabled: true,
@@ -257,20 +247,6 @@ function isGeneratedSetupWorkload(value: unknown, target: string): boolean {
 		(value as { target?: unknown }).target === target
 	);
 }
-
-/**
- * Build the modern routing-config fragment that binds a distinct provider to
- * the aggregate-recall workload. Merged into config.inference by the daemon
- * (parseRoutingConfig overlays inference.* atop the legacy pipeline.* base),
- * so extraction/session-synthesis keep working from the extraction provider.
- *
- * Mirrors the dashboard's InferenceSection writer: a target bound to
- * workloads.aggregateRecall (target only, no taskClass — the daemon validates
- * taskClasses and 'aggregate_recall' is not declared). For the openrouter
- * family we either reuse the connected extraction account or create the
- * established OPENROUTER_API_KEY-backed account. Both shapes ensure the daemon
- * can resolve the credential instead of hard-blocking the target as 'missing'.
- */
 export function buildSetupAggregateRecall(
 	provider: string,
 	model: string,
@@ -286,9 +262,6 @@ export function buildSetupAggregateRecall(
 	if (provider === "openai-compatible") {
 		target.endpoint = endpoint?.trim() || "http://127.0.0.1:1234/v1";
 	} else if (provider === "openrouter") {
-		// The interactive connect flow stores its API key as SIGNET_KEY_OPENROUTER
-		// on the extraction account. Reuse that account rather than creating an
-		// aggregation account that points at the unrelated legacy env variable.
 		if (reuseConnectedOpenRouterAccount) {
 			target.account = "openrouter";
 		} else {
@@ -302,9 +275,6 @@ export function buildSetupAggregateRecall(
 		workloads: { aggregateRecall: { target: "aggregation/default" } },
 	};
 }
-
-/** Merge an aggregate-recall fragment into config.inference (creating it if the
- * acpx route did not). */
 export function applyAggregateRecallRoute(
 	config: Record<string, unknown>,
 	aggregateRecall: {
@@ -320,10 +290,6 @@ export function applyAggregateRecallRoute(
 		? { ...((existing.accounts as Record<string, unknown>) ?? {}), ...aggregateRecall.accounts }
 		: (existing.accounts as Record<string, unknown> | undefined);
 	const policies = (existing.policies as Record<string, unknown> | undefined) ?? {};
-	// Targets/accounts/workloads without a policy dead-end every generation path
-	// in "No routing policy is configured." (#1072). When the merged config has
-	// targets but zero policies, emit a default policy over all of them; leave
-	// user-authored or acpx-generated policies alone.
 	const refs =
 		Object.keys(policies).length === 0 && Object.keys(targets).length > 0
 			? Object.entries(targets).flatMap(([targetId, target]) =>

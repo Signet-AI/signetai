@@ -1,4 +1,3 @@
-/** Migration 142: add filesystem frontiers to the per-scan checkpoint table from migration 141. */
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

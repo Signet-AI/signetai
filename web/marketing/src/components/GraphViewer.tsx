@@ -1,10 +1,3 @@
-/**
- * Interactive knowledge graph viewer, inspired by Quartz.
- *
- * Uses D3 force simulation rendered to Canvas.
- * Two modes: local (sidebar, depth-1 neighbors) and global (modal, all nodes).
- */
-
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	forceCenter,
@@ -19,8 +12,6 @@ import {
 import { select } from "d3-selection";
 import { zoom as d3zoom, type ZoomBehavior } from "d3-zoom";
 import { drag as d3drag } from "d3-drag";
-
-// ─── types ───────────────────────────────────────────────────────────
 
 interface ContentNode {
 	readonly title: string;
@@ -51,8 +42,6 @@ interface Props {
 	mode?: "local" | "global";
 }
 
-// ─── component ───────────────────────────────────────────────────────
-
 export default function GraphViewer({ currentSlug, collection, mode = "local" }: Props) {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -60,8 +49,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 	const [globalOpen, setGlobalOpen] = useState(false);
 	const [data, setData] = useState<ContentIndex | null>(null);
 	const [hovered, setHovered] = useState<string | null>(null);
-
-	// Fetch content index
 	useEffect(() => {
 		fetch("/contentIndex.json")
 			.then((r) => r.json())
@@ -71,8 +58,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 
 	const activeMode = globalOpen ? "global" : mode;
 	const fullSlug = `${collection}/${currentSlug}`;
-
-	// Build graph data from content index
 	const buildGraph = useCallback(
 		(index: ContentIndex, graphMode: "local" | "global") => {
 			const allNodes = new Map<string, GraphNode>();
@@ -118,8 +103,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 		},
 		[fullSlug],
 	);
-
-	// Render the graph
 	useEffect(() => {
 		if (!data || !canvasRef.current || !containerRef.current) return;
 
@@ -143,13 +126,9 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 
 		const { nodes, links } = buildGraph(data, activeMode);
 		if (nodes.length === 0) return;
-
-		// ─── Colors ──────────────────────────────────────────────
 		const isLocal = activeMode === "local";
 		const accentColor =
 			getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim() || "#4d7cfe";
-
-		// Node colors by role
 		const COL_CURRENT = accentColor;
 		const COL_DOC = "#8b8b94";
 		const COL_BLOG = "#a0a0aa";
@@ -158,8 +137,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 		const COL_LABEL = "#f0f0f2";
 		const COL_LABEL_MUTED = "#6b6b73";
 		const COL_GLOW = "rgba(77,124,254,0.08)";
-
-		// Build adjacency for hover highlighting
 		const adjacency = new Map<string, Set<string>>();
 		for (const link of links) {
 			const s = link.source.id;
@@ -169,8 +146,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 			adjacency.get(s)?.add(t);
 			adjacency.get(t)?.add(s);
 		}
-
-		// ─── Simulation ──────────────────────────────────────────
 		const sim = forceSimulation<GraphNode>(nodes)
 			.force(
 				"link",
@@ -183,8 +158,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 			.force("collide", forceCollide(isLocal ? 32 : 24));
 
 		simRef.current = sim;
-
-		// Track hover and transform state
 		let hoveredNode: string | null = null;
 		let transform = { x: 0, y: 0, k: 1 };
 
@@ -205,8 +178,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 			ctx.clearRect(0, 0, width, height);
 			ctx.translate(transform.x, transform.y);
 			ctx.scale(transform.k, transform.k);
-
-			// ─── Draw links ──────────────────────────────────
 			ctx.lineCap = "round";
 			for (const link of links) {
 				const s = link.source;
@@ -222,8 +193,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 				ctx.lineTo(t.x, t.y);
 				ctx.stroke();
 			}
-
-			// ─── Draw nodes ──────────────────────────────────
 			const baseRadius = isLocal ? 5 : 3.5;
 
 			for (const node of nodes) {
@@ -236,30 +205,22 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 				let radius = baseRadius;
 				if (node.isCurrent) radius = baseRadius + 3;
 				else if (isHovered) radius = baseRadius + 1.5;
-
-				// Glow behind current node
 				if (node.isCurrent || isHovered) {
 					ctx.beginPath();
 					ctx.arc(node.x, node.y, radius + 12, 0, Math.PI * 2);
 					ctx.fillStyle = node.isCurrent ? COL_GLOW : "rgba(255,255,255,0.03)";
 					ctx.fill();
 				}
-
-				// Node circle
 				ctx.beginPath();
 				ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
 				ctx.fillStyle = highlighted ? color : `${color}22`;
 				ctx.fill();
-
-				// Ring/Border
 				if (node.isCurrent || isHovered) {
 					ctx.strokeStyle = node.isCurrent ? COL_CURRENT : COL_LABEL;
 					ctx.lineWidth = 1.5;
 					ctx.stroke();
 				}
 			}
-
-			// ─── Draw labels ─────────────────────────────────
 			const fontSize = isLocal ? 10 : 9;
 			ctx.font = `600 ${fontSize}px "IBM Plex Mono", monospace`;
 			ctx.textAlign = "center";
@@ -290,8 +251,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 		}
 
 		sim.on("tick", draw);
-
-		// ─── Mouse interaction ───────────────────────────────────
 		function getNodeAtPoint(mx: number, my: number): GraphNode | undefined {
 			const tx = (mx - transform.x) / transform.k;
 			const ty = (my - transform.y) / transform.k;
@@ -336,8 +295,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 			canvas.style.cursor = "default";
 			draw();
 		});
-
-		// Zoom for global mode
 		let zoomBehavior: ZoomBehavior<HTMLCanvasElement, unknown> | null = null;
 		if (activeMode === "global") {
 			zoomBehavior = d3zoom<HTMLCanvasElement, unknown>()
@@ -349,8 +306,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 
 			select(canvas).call(zoomBehavior);
 		}
-
-		// Drag for nodes
 		const dragBehavior = d3drag<HTMLCanvasElement, unknown>()
 			.subject((event) => {
 				const rect = canvas.getBoundingClientRect();
@@ -384,8 +339,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 			canvas.removeEventListener("click", handleClick);
 		};
 	}, [data, activeMode, buildGraph]);
-
-	// Keyboard shortcut: Ctrl/Cmd+G toggles global
 	useEffect(() => {
 		function handleKeydown(e: KeyboardEvent) {
 			if ((e.metaKey || e.ctrlKey) && e.key === "g") {
@@ -402,8 +355,6 @@ export default function GraphViewer({ currentSlug, collection, mode = "local" }:
 	const nodeKey = `${collection}/${currentSlug}`;
 	const currentNode = data[nodeKey];
 	if (!currentNode && mode === "local") return null;
-
-	// Count connections for this node
 	let connectionCount = 0;
 	if (currentNode) {
 		const incoming = Object.values(data).filter((n) => n.links.includes(nodeKey));

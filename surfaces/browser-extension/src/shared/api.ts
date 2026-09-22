@@ -1,8 +1,3 @@
-/**
- * API client for Signet daemon
- * Mirrors the dashboard pattern — simple async functions with fetch()
- */
-
 import { getConfig } from "./config.js";
 import type {
 	DaemonStatus,
@@ -46,8 +41,6 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T | nul
 	}
 }
 
-// --- Health & Status ---
-
 export async function checkHealth(): Promise<HealthResponse | null> {
 	return fetchApi<HealthResponse>("/health");
 }
@@ -63,8 +56,6 @@ export async function getIdentity(): Promise<Identity | null> {
 export async function getPipelineStatus(): Promise<PipelineStatus | null> {
 	return fetchApi<PipelineStatus>("/api/pipeline/status");
 }
-
-// --- Memory ---
 
 export async function getMemories(
 	limit = 10,

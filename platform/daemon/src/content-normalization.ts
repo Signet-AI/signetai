@@ -7,15 +7,11 @@ export interface NormalizedMemoryContent {
 	readonly hashBasis: string;
 	readonly contentHash: string;
 }
-
-// Try to load native Rust implementation, fall back to pure TS
 let native: typeof import("@signet/native") | null = null;
 try {
 	const esmRequire = createRequire(import.meta.url);
 	native = esmRequire("@signet/native");
-} catch {
-	// Native addon not available — using TypeScript fallback
-}
+} catch {}
 
 const TRAILING_PUNCTUATION = /[.,!?;:]+$/;
 const CRLF = /\r\n?/g;

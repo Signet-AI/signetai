@@ -1,10 +1,3 @@
-/**
- * Tests for the diagnostics module.
- *
- * Uses an in-memory SQLite DB with real migrations so we get the full
- * schema without hitting disk.
- */
-
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
@@ -26,10 +19,6 @@ import {
 	getQueuePressureSnapshot,
 	scoreCountsWithThresholds,
 } from "./diagnostics-queue";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function makeDb(): Database {
 	const db = new Database(":memory:");
@@ -111,10 +100,6 @@ function insertHistory(raw: Database, id: string, memId: string, event: string, 
 		.run(id, memId, event, "test", createdAt);
 }
 
-// ---------------------------------------------------------------------------
-// Queue health
-// ---------------------------------------------------------------------------
-
 describe("getQueueHealth", () => {
 	test("empty DB returns healthy score", () => {
 		const result = getQueueHealth(asReadDb(db));
@@ -142,7 +127,6 @@ describe("getQueueHealth", () => {
 		for (let i = 0; i < 10; i++) {
 			const memId = `mem-dr-${i}`;
 			insertMemory(db, memId);
-			// 5 completed, 5 dead => 50% dead rate
 			const status = i < 5 ? "completed" : "dead";
 			insertJob(db, `job-dr-${i}`, memId, status);
 		}
@@ -268,10 +252,6 @@ describe("expanded queue diagnostics", () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// Storage health
-// ---------------------------------------------------------------------------
-
 describe("getStorageHealth", () => {
 	test("empty DB returns healthy score", () => {
 		const result = getStorageHealth(asReadDb(db));
@@ -282,7 +262,6 @@ describe("getStorageHealth", () => {
 	});
 
 	test("high tombstone ratio degrades storage health", () => {
-		// 3 active, 7 deleted => 70% tombstone ratio
 		for (let i = 0; i < 3; i++) insertMemory(db, `mem-active-${i}`);
 		for (let i = 0; i < 7; i++) insertMemory(db, `mem-del-${i}`, { isDeleted: 1 });
 
@@ -293,22 +272,15 @@ describe("getStorageHealth", () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// Index health
-// ---------------------------------------------------------------------------
-
 describe("getIndexHealth", () => {
 	test("empty DB returns healthy score with no mismatch", () => {
 		const result = getIndexHealth(asReadDb(db));
 		expect(result.status).toBe("healthy");
 		expect(result.ftsMismatch).toBe(false);
-		// no memories => coverage defaults to 1 (nothing to embed)
 		expect(result.embeddingCoverage).toBe(1);
 	});
 
 	test("tombstones remain searchable in the FTS index without degrading health", () => {
-		// memories_fts is an external-content table. Soft deletion changes the
-		// canonical row, but intentionally does not remove its indexed document.
 		for (let i = 0; i < 5; i++) {
 			insertMemory(db, `mem-active-fts-${i}`, { embeddingModel: "text-embedding-3" });
 		}
@@ -325,7 +297,6 @@ describe("getIndexHealth", () => {
 	});
 
 	test("low embedding coverage degrades index health", () => {
-		// 2 with embeddings, 8 without => 20% coverage
 		for (let i = 0; i < 2; i++) {
 			insertMemory(db, `mem-emb-${i}`, { embeddingModel: "text-embedding-3" });
 		}
@@ -338,10 +309,6 @@ describe("getIndexHealth", () => {
 		expect(result.score).toBeLessThan(0.8);
 	});
 });
-
-// ---------------------------------------------------------------------------
-// Graph health
-// ---------------------------------------------------------------------------
 
 describe("getGraphHealth", () => {
 	test("small or empty graph state stays healthy while it is still inconclusive", () => {
@@ -399,10 +366,6 @@ describe("getGraphHealth", () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// Provider tracker
-// ---------------------------------------------------------------------------
-
 describe("createProviderTracker", () => {
 	test("starts empty with no stats", () => {
 		const tracker = createProviderTracker();
@@ -425,11 +388,9 @@ describe("createProviderTracker", () => {
 
 	test("ring buffer wraps at capacity and evicts oldest", () => {
 		const tracker = createProviderTracker(3);
-		// Fill with failures
 		tracker.record("failure");
 		tracker.record("failure");
 		tracker.record("failure");
-		// Now overwrite with successes -- failures should drop out
 		tracker.record("success");
 		tracker.record("success");
 		tracker.record("success");
@@ -441,7 +402,6 @@ describe("createProviderTracker", () => {
 
 	test("getProviderHealth reflects tracker state", () => {
 		const tracker = createProviderTracker();
-		// 80% availability
 		for (let i = 0; i < 8; i++) tracker.record("success");
 		for (let i = 0; i < 2; i++) tracker.record("failure");
 
@@ -458,10 +418,6 @@ describe("createProviderTracker", () => {
 		expect(result.availabilityRate).toBe(1);
 	});
 });
-
-// ---------------------------------------------------------------------------
-// Mutation health
-// ---------------------------------------------------------------------------
 
 describe("getMutationHealth", () => {
 	test("empty DB returns healthy score", () => {
@@ -490,22 +446,15 @@ describe("getMutationHealth", () => {
 		}
 
 		const result = getMutationHealth(asReadDb(db));
-		// Outside the 7-day window => not counted
 		expect(result.recentRecovers).toBe(0);
 		expect(result.status).toBe("healthy");
 	});
 });
 
-// ---------------------------------------------------------------------------
-// Composite score
-// ---------------------------------------------------------------------------
-
 describe("getDiagnostics", () => {
 	test("composite score is weighted average of domain scores", () => {
 		const tracker = createProviderTracker();
 		const report = getDiagnostics(asReadDb(db), tracker);
-
-		// All domains healthy => composite close to 1
 		expect(report.composite.score).toBeCloseTo(1, 5);
 		expect(report.composite.status).toBe("healthy");
 		expect(typeof report.timestamp).toBe("string");

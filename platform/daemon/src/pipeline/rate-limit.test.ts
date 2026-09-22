@@ -75,11 +75,9 @@ describe("TokenBucketRateLimiter", () => {
 
 	it("tracks stats correctly", async () => {
 		const bucket = new TokenBucketRateLimiter(100, 10);
-		// Burst: consume 10
 		for (let i = 0; i < 10; i++) {
 			expect(await bucket.acquire(0)).toBe(true);
 		}
-		// 11th should fail immediately
 		expect(await bucket.acquire(0)).toBe(false);
 		expect(bucket.currentStats().totalConsumed).toBe(10);
 		expect(bucket.currentStats().totalThrottled).toBe(1);
@@ -88,7 +86,6 @@ describe("TokenBucketRateLimiter", () => {
 	it("respects waitTimeoutMs", async () => {
 		const bucket = new TokenBucketRateLimiter(1, 1);
 		await bucket.acquire(0);
-		// 1 token/hr = 1 token per 3600s. Even with wait, shouldn't get one in 10ms.
 		const result = await bucket.acquire(10);
 		expect(result).toBe(false);
 		expect(bucket.currentStats().totalThrottled).toBe(1);
@@ -131,10 +128,8 @@ describe("withRateLimit", () => {
 	it("throws RateLimitExceededError when limit is exceeded", async () => {
 		const provider = mockProvider("claude-code:haiku");
 		const wrapped = withRateLimit(provider, { maxCallsPerHour: 10, burstSize: 2, waitTimeoutMs: 0 });
-		// consume burst
 		await wrapped.generate("a");
 		await wrapped.generate("b");
-		// third should fail
 		await expect(wrapped.generate("c")).rejects.toThrow(RateLimitExceededError);
 	});
 
@@ -214,9 +209,7 @@ describe("withRateLimit", () => {
 			burstSize: 1,
 			waitTimeoutMs: 0,
 		});
-		// First call succeeds (burst)
 		await wrapped.generate("a");
-		// Second call should throw immediately
 		await expect(wrapped.generate("b")).rejects.toThrow(RateLimitExceededError);
 	});
 

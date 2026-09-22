@@ -23,8 +23,6 @@ export interface MemoryContentSafetyRow {
 export function memoryContentSafetyTableExists(db: ReadDb | WriteDb): boolean {
 	return tableExists(db, "memory_content_safety");
 }
-
-/** Record a derived assessment without changing the retained source content. */
 export function upsertMemoryContentSafetyInTx(
 	db: WriteDb,
 	input: {
@@ -78,13 +76,6 @@ export function readMemoryContentSafety(
 			.get(agentId, params.sourceKind, params.sourceId) as MemoryContentSafetyRow | undefined) ?? null
 	);
 }
-
-/**
- * Apply the persisted decision when present, while also scanning the exact
- * projection being returned. This catches direct edits and derived content
- * that differs from the source row, and keeps legacy fixtures safe when no
- * ledger row exists.
- */
 export function isMemoryContentContextEligible(
 	db: ReadDb,
 	params: {
@@ -111,8 +102,6 @@ const MEMORY_PROJECTION_CONTENT_KEYS = [
 	"preview",
 	"archiveReason",
 ] as const;
-
-/** Replace hostile text in structured prompt-facing projections without touching source rows. */
 export function redactUnsafeMemoryProjection<T>(value: T): T {
 	function redact(input: unknown): unknown {
 		if (Array.isArray(input)) return input.map(redact);

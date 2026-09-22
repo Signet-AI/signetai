@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Durable operation state for bounded, resumable embedding repairs.
- *
- * The embedding repair lease serializes provider work; this table keeps the
- * caller-visible operation state across daemon restarts so a full sweep can
- * resume without replaying an unbounded request.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_repair_checkpoints (

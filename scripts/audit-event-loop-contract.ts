@@ -2,8 +2,6 @@ import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 import ts from "typescript";
 import { isSemanticSyncDbSiteToken } from "../platform/daemon/src/sync-db-site-token";
-
-/** The synchronous APIs recorded in the migration ledger. */
 export const SYNC_APIS = [
 	"withWriteTx",
 	"withReadDb",
@@ -55,11 +53,8 @@ export interface AuditSite {
 	readonly api: SyncApi;
 	readonly source: string;
 	readonly category: SiteCategory;
-	/** Stable identity for migrated DB sites; path and line remain diagnostic metadata. */
 	readonly siteToken?: string;
 }
-
-/** A database site classified by the process that executes its callback. */
 export interface ExecutionHomeSite extends AuditSite {
 	readonly executionHome: ExecutionHome;
 }
@@ -99,16 +94,12 @@ export interface LegacyDbAccessCounts {
 	readonly withReadDb: number;
 	readonly withWriteTx: number;
 }
-
-/** A synchronous DB call site with no LEGACY_SYNC_DB_ACCESS marker above it. */
 export interface UnmarkedLegacyDbAccessViolation {
 	readonly kind: "unmarked-legacy-db-access";
 	readonly path: string;
 	readonly unmarked: number;
 	readonly message: string;
 }
-
-/** A marked legacy DB call without its static in-flight attribution token. */
 export interface MissingLegacyDbSiteTokenViolation {
 	readonly kind: "missing-legacy-db-site-token";
 	readonly path: string;
@@ -116,8 +107,6 @@ export interface MissingLegacyDbSiteTokenViolation {
 	readonly api: LegacyDbApi;
 	readonly message: string;
 }
-
-/** An async-named parent DB call without its static in-flight attribution token. */
 export interface MissingAsyncDbSiteTokenViolation {
 	readonly kind: "missing-async-db-site-token";
 	readonly path: string;
@@ -125,8 +114,6 @@ export interface MissingAsyncDbSiteTokenViolation {
 	readonly api: Exclude<AttributedDbApi, LegacyDbApi>;
 	readonly message: string;
 }
-
-/** A semantic attribution ID reused by more than one database call site. */
 export interface DuplicateDbSiteTokenViolation {
 	readonly kind: "duplicate-db-site-token";
 	readonly path: string;
@@ -134,8 +121,6 @@ export interface DuplicateDbSiteTokenViolation {
 	readonly token: string;
 	readonly message: string;
 }
-
-/** Committed marker-count snapshot; the ratchet fails when the live count grows past it. */
 export interface LegacyDbCountBaseline {
 	readonly version: 1;
 	readonly generatedFrom: string;
@@ -178,7 +163,6 @@ interface BaselineFile {
 interface AuditOptions {
 	readonly sourceRoot: string;
 	readonly baselineSites?: readonly AuditSite[];
-	/** Exact compatibility importers. An omitted entry is a violation. */
 	readonly allowedSyncCompatImporters?: readonly string[];
 }
 
@@ -188,11 +172,6 @@ const DEFAULT_COUNT_BASELINE = "scripts/legacy-sync-db-baseline.json";
 const DEFAULT_REPORT = "docs/event-loop-contract-audit.md";
 const SYNC_COMPAT_MODULE = "db-accessor-sync";
 const SOURCE_MODULE_EXTENSIONS = [".cjs", ".cts", ".js", ".mjs", ".mts", ".ts", ".jsx", ".tsx"] as const;
-/**
- * These are the only source entrypoints proven to run in the DB-owner process.
- * Shared modules stay ON-PARENT because they can also be called by the HTTP
- * daemon; an async name is not evidence of a process boundary.
- */
 const OFF_PARENT_ENTRYPOINTS = new Set(["db-owner-worker.ts"]);
 const LEGACY_MARKER = /@ts-expect-error LEGACY_SYNC_DB_ACCESS: (withReadDb|withWriteTx)/g;
 const MARKER_LINE = /LEGACY_SYNC_DB_ACCESS/;
@@ -547,13 +526,6 @@ function findLegacyDbAccessSites(sourceRoot: string): {
 	}
 	return { sites, unmarked, siteTokenViolations };
 }
-
-/**
- * Classify database accessor sites by the process that executes their callback.
- * Direct accessor calls are ON-PARENT unless the source is the explicit
- * DB-owner process entrypoint. Shared modules remain ON-PARENT when they can
- * also be reached from the HTTP daemon.
- */
 export function classifyExecutionHomes(sites: readonly AuditSite[]): readonly ExecutionHomeSite[] {
 	return sites.flatMap((site) => {
 		if (!ATTRIBUTED_DB_APIS.includes(site.api as AttributedDbApi)) return [];
@@ -570,8 +542,6 @@ export function countExecutionHomes(sites: readonly ExecutionHomeSite[]): Execut
 	const onParent = sites.filter((site) => site.executionHome === "on-parent").length;
 	return { total: sites.length, onParent, offParent: sites.length - onParent };
 }
-
-/** A synchronous DB call site with no LEGACY_SYNC_DB_ACCESS marker within the marker window. */
 export interface UnmarkedCallSite {
 	readonly path: string;
 	readonly line: number;
@@ -644,8 +614,6 @@ function findNewParentExecutionSiteViolations(
 	const seen = new Map<string, number>();
 	const violations: ParentExecutionSiteViolation[] = [];
 	for (const site of sites) {
-		// New synchronous calls already have their legacy-ledger violation. This
-		// rule is the additional guard for the fake-async class.
 		if (site.executionHome !== "on-parent" || LEGACY_DB_APIS.includes(site.api as LegacyDbApi)) continue;
 		const base = siteKey(site);
 		const occurrence = (seen.get(base) ?? 0) + 1;
@@ -742,8 +710,6 @@ export function writeCountBaseline(
 			withWriteTx: counts.withWriteTx,
 		},
 	};
-	// Tab indentation matches Biome's canonical JSON formatting so
-	// regenerated baselines never churn the tree.
 	writeFileSync(resolve(path), `${JSON.stringify(output, null, "	")}\n`);
 }
 

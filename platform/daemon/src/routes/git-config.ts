@@ -38,9 +38,7 @@ function detectGitBranch(remote: string, dir = resolveAgentsDirForModuleInit()):
 		if (ref.startsWith(prefix)) {
 			return ref.slice(prefix.length);
 		}
-	} catch {
-		// fall through
-	}
+	} catch {}
 
 	try {
 		const branch = execFileSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
@@ -52,9 +50,7 @@ function detectGitBranch(remote: string, dir = resolveAgentsDirForModuleInit()):
 		if (branch && branch !== "HEAD") {
 			return branch;
 		}
-	} catch {
-		// fall through
-	}
+	} catch {}
 
 	return "main";
 }
@@ -87,9 +83,7 @@ export function loadGitConfig(agentsDir = resolveAgentsDirForModuleInit()): GitC
 				if (git.branch) defaults.branch = git.branch as string;
 			}
 			break;
-		} catch {
-			// ignore parse errors
-		}
+		} catch {}
 	}
 
 	if (!defaults.branch) {

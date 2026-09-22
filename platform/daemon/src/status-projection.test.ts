@@ -1,13 +1,3 @@
-/**
- * Regression coverage for #1670 (wedge 1): /api/status transcript capture
- * status and diagnostics duplicate health must read bounded projections
- * (migration 138), never aggregate the payload tables on the HTTP isolate.
- *
- * Each test compares the projection-backed readers against the exact legacy
- * SQL so the response shape and values are provably unchanged, and one test
- * asserts the read path never touches the payload table at all.
- */
-
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,8 +13,6 @@ import {
 
 let dir = "";
 let prevSignetPath: string | undefined;
-
-/** The exact pre-#1670 status derivation, kept as the oracle for the projection. */
 async function legacyStatusOracle(agentId: string | null): Promise<TranscriptCaptureStatusSummary> {
 	return getDbAccessor().withReadDbAsync((db) => {
 		const where = agentId ? "WHERE agent_id = ?" : "";
@@ -62,8 +50,6 @@ async function legacyStatusOracle(agentId: string | null): Promise<TranscriptCap
 		return summary;
 	});
 }
-
-/** The exact pre-#1670 duplicate derivation. */
 async function legacyDuplicateOracle(): Promise<{
 	exactDuplicates: number;
 	exactClusters: number;
@@ -188,8 +174,6 @@ describe("transcript capture status projection (#1670)", () => {
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
-
-		// Terminal transition: agent-b's job exhausts its attempts.
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare(
 				"UPDATE transcript_capture_jobs SET status = 'failed', attempts = max_attempts, error = 'boom' WHERE agent_id = 'agent-b'",
@@ -222,8 +206,6 @@ describe("transcript capture status projection (#1670)", () => {
 		expect(projected).toEqual(await legacyStatusOracle("agent-a"));
 		expect(projected.lastError).toBe("later failure");
 		expect(projected.oldestPendingAt).toBeNull();
-
-		// Retention-style purge of terminal rows must decrement the projection.
 		await getDbAccessor().withWriteTxAsync((db) => {
 			db.prepare("DELETE FROM transcript_capture_jobs WHERE status = 'failed'").run();
 		});
@@ -238,8 +220,6 @@ describe("transcript capture status projection (#1670)", () => {
 		const projected = await getTranscriptCaptureStatus(getDbAccessor());
 		expect(projected).toEqual(await legacyStatusOracle(null));
 		expect(projected.pending).toBe(2);
-		// enqueue stamps created_at at delivery time; the daemon-wide summary
-		// must surface the earliest of those per-agent projection values.
 		const earliest = await getDbAccessor().withReadDbAsync((db) =>
 			db.prepare("SELECT MIN(created_at) AS oldest FROM transcript_capture_jobs WHERE status = 'pending'").get(),
 		);
@@ -266,7 +246,6 @@ describe("transcript capture status projection (#1670)", () => {
 			).run(id);
 		});
 		expect((await getTranscriptCaptureStatus(getDbAccessor(), "agent-a")).dead).toBe(1);
-		// The production revive path reuses the same INSERT ... ON CONFLICT.
 		expect(await enqueueTranscriptCaptureJob(getDbAccessor(), input)).toBe(id);
 		const revived = await getTranscriptCaptureStatus(getDbAccessor(), "agent-a");
 		expect(revived).toEqual(await legacyStatusOracle("agent-a"));
@@ -275,10 +254,6 @@ describe("transcript capture status projection (#1670)", () => {
 
 	it("reads no payload column on the status path", async () => {
 		await enqueue("agent-a", "s1", "2026-08-19T10:00:00.000Z");
-		// Proxy the ReadDb so every executed SQL string is observable. The
-		// bounded path must never touch transcript_capture_jobs. Implement both
-		// get() and all() so the reverted implementation fails the intentional
-		// table-access assertion rather than a mock-shape TypeError.
 		let touchedJobsTable = false;
 		const sqlRecorder = {
 			prepare(sql: string): {
@@ -354,12 +329,6 @@ describe("bounded status and diagnostics scale (#1670)", () => {
 			const value = await operation();
 			return { value, elapsed: performance.now() - started };
 		};
-
-		// Keep a calibrated copy of the pre-#1670 aggregate in this same
-		// payload-heavy database. A timing-only assertion is too weak on a warm
-		// CI runner: the legacy scan can happen to finish under 50ms at this
-		// scale. The ratio assertion below makes the red/green discriminator
-		// explicit while the hard budget still protects the route contract.
 		const legacyStatusLatencies: number[] = [];
 		const statusLatencies: number[] = [];
 		let status = await getTranscriptCaptureStatus(accessor, "scale-agent");
@@ -419,8 +388,6 @@ describe("bounded status and diagnostics scale (#1670)", () => {
 
 describe("duplicate health projection (#1670)", () => {
 	it("matches the legacy duplicate aggregate across pin/delete/rehash churn", async () => {
-		// Distinct (agent, scope, project) tuples so the unique content-hash
-		// index permits duplicate hashes across scope boundaries.
 		await seedMemories([
 			{ id: "m1", contentHash: "h1", project: "p1" },
 			{ id: "m2", contentHash: "h1", project: "p2" },
@@ -439,32 +406,22 @@ describe("duplicate health projection (#1670)", () => {
 
 		const baseline = await read();
 		expect(baseline).toMatchObject(await legacyDuplicateOracle());
-
-		// Pin one duplicate: h1 drops from 3 eligible to 2.
 		await accessor.withWriteTxAsync((db) => {
 			db.prepare("UPDATE memories SET pinned = 1 WHERE id = 'm2'").run();
 		});
 		expect(await read()).toMatchObject(await legacyDuplicateOracle());
-
-		// Soft-delete another: h1 leaves the duplicate set entirely.
 		await accessor.withWriteTxAsync((db) => {
 			db.prepare("UPDATE memories SET is_deleted = 1 WHERE id = 'm3'").run();
 		});
 		expect(await read()).toMatchObject(await legacyDuplicateOracle());
-
-		// Rehash: m1 moves from h1 to h9.
 		await accessor.withWriteTxAsync((db) => {
 			db.prepare("UPDATE memories SET content_hash = 'h9' WHERE id = 'm1'").run();
 		});
 		expect(await read()).toMatchObject(await legacyDuplicateOracle());
-
-		// Hard delete (retention purge).
 		await accessor.withWriteTxAsync((db) => {
 			db.prepare("DELETE FROM memories WHERE id = 'm4'").run();
 		});
 		expect(await read()).toMatchObject(await legacyDuplicateOracle());
-
-		// New duplicate pair on h5.
 		await seedMemories([
 			{ id: "m11", contentHash: "h5", project: "p1" },
 			{ id: "m12", contentHash: "h5", project: "p2" },
@@ -491,8 +448,6 @@ describe("duplicate health projection (#1670)", () => {
 				if (/FROM\s+memories\b/.test(sql) && !sql.includes("memories_")) {
 					touchedMemoriesTable = true;
 				}
-				// Keep both statement methods implemented so reverting the fix
-				// reports the forbidden payload-table read, not a fake TypeError.
 				return { get: () => ({ totalActive: 0, exactDuplicates: 0, exactClusters: 0 }), all: () => [] };
 			},
 		};

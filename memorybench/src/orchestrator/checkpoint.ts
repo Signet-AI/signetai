@@ -93,24 +93,19 @@ export class CheckpointManager {
     checkpoint.updatedAt = new Date().toISOString()
 
     let lastError: any
-
-    // Windows often locks files briefly (EPERM/EBUSY), so we retry a few times
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
         writeFileSync(tempPath, JSON.stringify(checkpoint, null, 2))
         renameSync(tempPath, path)
-        return // Success
+        return
       } catch (e: any) {
         lastError = e
         if (e.code !== "EPERM" && e.code !== "EBUSY") {
-          break // Don't retry other errors
+          break
         }
-        // Wait with exponential backoff: 50, 100, 200, 400, 800ms
         await new Promise((resolve) => setTimeout(resolve, 50 * Math.pow(2, attempt)))
       }
     }
-
-    // If we get here, all retries failed or it was a non-retriable error
     try {
       unlinkSync(tempPath)
     } catch {}
@@ -310,11 +305,6 @@ export class CheckpointManager {
         : {}),
     }
   }
-
-  /**
-   * Copy a checkpoint from sourceRunId to newRunId, resetting phases from fromPhase onwards.
-   * This allows creating a new run that reuses ingest/indexing data from an existing run.
-   */
   copyCheckpoint(
     sourceRunId: string,
     newRunId: string,
@@ -325,12 +315,8 @@ export class CheckpointManager {
     if (!source) {
       throw new Error(`Source checkpoint not found: ${sourceRunId}`)
     }
-
-    // Get the index of the phase to start from
     const fromIndex = PHASE_ORDER.indexOf(fromPhase)
     const phasesToReset = PHASE_ORDER.slice(fromIndex)
-
-    // Map phase IDs to question phase keys (excluding "report" which isn't a question phase)
     const questionPhaseKeys: (keyof QuestionCheckpoint["phases"])[] = [
       "ingest",
       "indexing",
@@ -338,13 +324,9 @@ export class CheckpointManager {
       "answer",
       "evaluate",
     ]
-
-    // Deep copy questions and reset phases from fromPhase onwards
     const newQuestions: Record<string, QuestionCheckpoint> = {}
     for (const [qId, q] of Object.entries(source.questions)) {
       const newQ: QuestionCheckpoint = JSON.parse(JSON.stringify(q))
-
-      // Reset phases that are at or after fromPhase
       for (const phaseKey of questionPhaseKeys) {
         if (phasesToReset.includes(phaseKey as PhaseId)) {
           if (phaseKey === "ingest") {
@@ -363,11 +345,9 @@ export class CheckpointManager {
 
       newQuestions[qId] = newQ
     }
-
-    // Create new checkpoint - use source's dataSourceRunId (or sourceRunId if source is also a copy)
     const newCheckpoint: RunCheckpoint = {
       runId: newRunId,
-      dataSourceRunId: source.dataSourceRunId || sourceRunId, // Keep original data source
+      dataSourceRunId: source.dataSourceRunId || sourceRunId,
       status: "running",
       provider: source.provider,
       benchmark: source.benchmark,
@@ -381,8 +361,6 @@ export class CheckpointManager {
       concurrency: source.concurrency,
       questions: newQuestions,
     }
-
-    // Create directories
     const newRunPath = this.getRunPath(newRunId)
     const newResultsDir = this.getResultsDir(newRunId)
     if (!existsSync(newRunPath)) {
@@ -391,11 +369,8 @@ export class CheckpointManager {
     if (!existsSync(newResultsDir)) {
       mkdirSync(newResultsDir, { recursive: true })
     }
-
-    // Copy results directory if we're keeping search results (fromPhase is after search)
     const sourceResultsDir = this.getResultsDir(sourceRunId)
     if (existsSync(sourceResultsDir) && fromIndex > PHASE_ORDER.indexOf("search")) {
-      // Copy search results files
       try {
         cpSync(sourceResultsDir, newResultsDir, { recursive: true })
         logger.info(`Copied results from ${sourceRunId} to ${newRunId}`)

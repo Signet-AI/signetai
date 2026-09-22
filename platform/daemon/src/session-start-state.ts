@@ -1,6 +1,4 @@
 import { resolveAgentId } from "./agent-id";
-
-// Hook dedup state is in-memory and intentionally fail-open on daemon restart.
 const sessionStartSeen = new Map<string, number>();
 const SESSION_START_SEEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 

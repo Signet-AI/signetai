@@ -19,8 +19,6 @@ export interface TranscriptCheckpoint {
 	readonly ordinal: number;
 	readonly lineNumber: number;
 }
-
-/** One bounded batch per invocation; even an oversized line never accumulates in memory. */
 export async function scanTranscriptBatch(
 	read: (offset: number) => Promise<Uint8Array>,
 	size: number,

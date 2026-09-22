@@ -479,9 +479,6 @@ describe("transcript capture worker", () => {
 		} as const;
 		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), capture);
 		if (!id) throw new Error("expected restart capture job");
-
-		// Model the real crash window after the canonical file, immutable artifact,
-		// and indexed provenance have committed but before markDone updates the job.
 		await writeCanonicalTranscriptFromSnapshot({ basePath: dir, ...capture });
 		const artifact = await writeTranscriptArtifact({ ...capture, startedAt: null, summaryStatus: "not_requested" });
 		await indexCanonicalTranscriptJsonl({ ...capture, startedAt: null, manifestPath: artifact.manifestPath });

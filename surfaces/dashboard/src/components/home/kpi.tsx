@@ -24,17 +24,10 @@ export function KpiFooter({ cards }: { cards: KpiData[] }) {
 	);
 }
 
-/* ── Activity heatmap (GitHub-style) ── */
-
 export interface DayBucket {
 	date: string;
 	count: number;
 }
-
-/**
- * Renders the last ~5 weeks as a 7-row × N-column heatmap. Levels bucket the
- * count into 5 bins; an empty cell is level 0. Mirrors the mockup's `.pc` grid.
- */
 export function ActivityHeatmap({ days }: { days: DayBucket[] }) {
 	const max = Math.max(1, ...days.map((d) => d.count));
 	const level = (n: number) => {
@@ -90,8 +83,6 @@ const HEATMAP_LEVELS = [
 	"bg-[color-mix(in_oklch,var(--success)_72%,transparent)]",
 	"bg-success",
 ];
-
-/** Client-side date string; avoids hydration mismatches in the static export. */
 export function useDateString(localeDate: string): string {
 	const [s, setS] = useState(localeDate);
 	useEffect(() => {

@@ -1,10 +1,3 @@
-/**
- * Shared FTS5 stop-word list.
- *
- * Used by both memory search (FTS query sanitization) and graph search
- * (entity resolution token filtering). Extracted to avoid duplication
- * and keep both paths consistent.
- */
 export const FTS_STOP = new Set([
 	"a",
 	"an",

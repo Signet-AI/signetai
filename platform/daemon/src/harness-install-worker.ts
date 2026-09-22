@@ -1,5 +1,3 @@
-/** Isolated adapter installation. Connector classes remain the installation authority. */
-
 import { resolveGlobalPackagePath, resolvePrimaryPackageManager } from "@signet/core";
 import type { InstallResult } from "@signet/connector-base";
 import { existsSync } from "node:fs";
@@ -27,8 +25,6 @@ async function installHarness(request: HarnessInstallWorkerRequest): Promise<Ins
 	const workspace = request.workspace;
 	if (!workspace) throw new Error("Missing resolved workspace");
 	const action = request.action ?? "connect";
-	// OpenClaw's package is installed by the existing CLI package owner. Never
-	// report a working plugin when only its config exists.
 	let pluginPath: string | null = null;
 	const runtimePath =
 		connector instanceof OpenClawConnector ? (connector.getConfiguredRuntimePath() ?? "plugin") : null;

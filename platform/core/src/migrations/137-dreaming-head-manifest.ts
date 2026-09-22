@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Pass-level audit manifest for content Dreaming MEMORY.md curation. */
 export function up(db: MigrationDb): void {
 	const cols = new Set(
 		(db.prepare("PRAGMA table_info(dreaming_passes)").all() as Array<{ name: string }>).map((r) => r.name),

@@ -1,14 +1,4 @@
-/**
- * Frozen daemon/DB-owner protocol.
- *
- * The daemon sends serializable jobs. The owner is the only process that
- * imports SQLite and executes synchronous statements. Read jobs run on an
- * independent reader owner while write and maintenance jobs share one serial
- * owner. `lane` selects that scheduling boundary.
- */
-
 export type DbOwnerLane = "read" | "write" | "maintenance" | "verify";
-/** Scheduling class inside an owner process. */
 export type DbOwnerWorkloadClass = "foreground" | "maintenance";
 export const DB_OWNER_MAX_QUEUE_DEPTH = 64;
 export const DB_OWNER_MAX_WORK_UNITS = 10_000;
@@ -16,7 +6,6 @@ export const DB_OWNER_MAX_DEADLINE_MS = 60_000;
 export const DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS = 15 * 60_000;
 export const DB_OWNER_MAX_RESULT_BYTES = 1_048_576;
 export const DB_OWNER_MAX_TRANSACTION_STATEMENTS = 128;
-/** Hard ceilings for one vector-repair owner job; request input may only lower these. */
 export const VECTOR_REPAIR_MAX_ROWS_PER_BATCH = 50;
 export const VECTOR_REPAIR_MAX_BYTES_PER_BATCH = 256 * 1024;
 export const VECTOR_REPAIR_MAX_BATCH_DEADLINE_MS = 2_000;
@@ -30,12 +19,9 @@ export interface DbOwnerStatement {
 	readonly sql: string;
 	readonly params?: readonly DbOwnerParameter[];
 	readonly result: "all" | "get" | "run";
-	/** Maximum UTF-8 JSON payload for this result. The owner rejects larger results. */
 	readonly maxResultBytes?: number;
 	readonly transactional?: boolean;
-	/** Execute this statement on a connection opened with readonly mode. */
 	readonly readonly?: boolean;
-	/** Abort a transaction when a run statement changes zero rows. */
 	readonly requireChanges?: boolean;
 }
 
@@ -120,12 +106,6 @@ export interface DbOwnerSourceArtifactIndex {
 	readonly displayName?: string;
 	readonly content: string;
 }
-
-/**
- * The source/index owner receives a descriptor produced by the killable source
- * worker. The parent never reads, hashes, or normalizes the file; this owner
- * performs the artifact upsert and optional graph projection in one boundary.
- */
 export interface DbOwnerNativeMemoryIndex {
 	readonly agentId: string;
 	readonly sourcePath: string;
@@ -140,7 +120,6 @@ export interface DbOwnerNativeMemoryIndex {
 	readonly sourceParentPath: string | null;
 	readonly sourceMetaJson: string | null;
 	readonly displayName: string;
-	/** Source-worker prepared chunks and configuration for owner-side embedding. */
 	readonly embedding?: {
 		readonly config: {
 			readonly provider: string;
@@ -158,19 +137,13 @@ export interface DbOwnerNativeMemoryIndex {
 			readonly chunkText: string;
 		}[];
 	};
-	/** Durable per-file frontier update committed with the artifact transaction. */
 	readonly checkpoint?: {
 		readonly sourceKey: string;
 		readonly scanned: number;
-		/** Traversal state immediately after this descriptor's file. */
 		readonly cursor: string | null;
 		readonly frontier: readonly string[] | null;
 		readonly complete: boolean;
 	};
-	/**
-	 * Retry frontier selected atomically when owner-side embedding reports that
-	 * the provider is unavailable partway through this descriptor.
-	 */
 	readonly checkpointOnProviderFailure?: {
 		readonly sourceKey: string;
 		readonly scanned: number;
@@ -249,17 +222,14 @@ export type DbOwnerRequest =
 	| {
 			readonly kind: "batch";
 			readonly statements: readonly DbOwnerStatement[];
-			/** Abort a transaction when a run statement changes zero rows. */
 			readonly requireChanges?: boolean;
 	  }
 	| {
 			readonly kind: "recall";
-			/** Serialized recall inputs. The owner reconstructs no daemon callbacks. */
 			readonly payload: DbOwnerRecallPayload;
 	  }
 	| {
 			readonly kind: "vector_search";
-			/** The owner performs the potentially expensive cosine scan. */
 			readonly payload: DbOwnerVectorSearchPayload;
 	  }
 	| { readonly kind: "vector_repair"; readonly input: DbOwnerVectorRepairInput }
@@ -302,11 +272,8 @@ export type DbOwnerRequest =
 export interface DbOwnerRecallPayload {
 	readonly params: unknown;
 	readonly config: unknown;
-	/** Resolved agent used for query-embedding usage attribution. */
 	readonly agentId?: string;
-	/** Original query used when the owner must compute its embedding. */
 	readonly query?: string;
-	/** Precomputed embedding for callers that already own the embedding boundary. */
 	readonly queryEmbedding?: readonly number[] | null;
 }
 
@@ -385,21 +352,14 @@ export interface DbOwnerDreamingSurprisalAttention {
 		readonly minScore: number;
 	};
 }
-
-/** Exact episodic backlog total used by status and diagnostic surfaces. */
 export interface DbOwnerDreamingEpisodicBacklog {
 	readonly agentId: string;
 }
-
-/** Bounded episodic backlog probe used by the scheduled Dreaming gate. */
 export interface DbOwnerDreamingEpisodicBacklogProbe {
 	readonly agentId: string;
 	readonly tokenThreshold: number;
-	/** Maximum number of source records to inspect before returning indeterminate. */
 	readonly maxSources: number;
 }
-
-/** Presence-only episodic backlog check; it never tokenizes the backlog. */
 export interface DbOwnerDreamingEpisodicBacklogExists {
 	readonly agentId: string;
 }
@@ -478,7 +438,6 @@ export interface DbOwnerJob {
 	readonly id: string;
 	readonly operation: string;
 	readonly lane: DbOwnerLane;
-	/** Verification jobs may run while application writes are fail-closed. */
 	readonly allowWriteBlocked?: boolean;
 	readonly workloadClass: DbOwnerWorkloadClass;
 	readonly enqueuedAt: number;
@@ -489,7 +448,6 @@ export interface DbOwnerJob {
 }
 
 export interface DbOwnerJobMetrics {
-	/** Wall-clock timestamps captured inside the owner child process. */
 	readonly startedAt: number;
 	readonly finishedAt: number;
 }

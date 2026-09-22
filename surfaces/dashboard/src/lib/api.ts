@@ -1,21 +1,6 @@
-/**
- * Typed Signet daemon API client. Covers the endpoints the redesigned
- * dashboard consumes (see surfaces/dashboard/DASHBOARD_API_MAP.md §3, §6). The
- * previous Svelte client had ~110 functions; only the surfaces the mockup
- * stages are implemented here. Gap-list items (§4) are intentionally absent,
- * but §6 documents which mockup surfaces already have daemon backing the Svelte
- * client never wired (review-queue, ontology proposals, os/chat, bitwarden).
- *
- * Base resolution mirrors the Electron + daemon contract: requests go to the
- * same origin (daemon in-browser; `app://signet/` proxies /api,/memory,/health
- * to the daemon in Electron).
- */
-
 import { installDemoApi } from "./demo";
 
 const API_BASE = "";
-
-/** Appends an optional API key/auth header if one is stored (dashboard auth). */
 function authHeaders(): HeadersInit {
 	const token = typeof localStorage !== "undefined" ? localStorage.getItem("signet-token") : null;
 	return token ? { Authorization: `Bearer ${token}` } : {};
@@ -71,9 +56,6 @@ async function postJSONResult<T>(path: string, body?: unknown, signal?: AbortSig
 		body: body ? JSON.stringify(body) : undefined,
 	});
 }
-
-/** POST/DELETE that preserves the daemon's `{error}` body on failure so
- *  forms can surface the real rejection reason. */
 async function mutateJSON<T extends { error?: string }>(
 	path: string,
 	method: "POST" | "DELETE",
@@ -124,8 +106,6 @@ async function postSourceImport(
 	}
 }
 
-// ── Types (derived from real daemon responses) ──────────────────────────────
-
 export interface ConfigFile {
 	name: string;
 	content: string;
@@ -159,8 +139,6 @@ export interface InferenceCatalog {
 	oauthProviders: readonly OAuthProviderStatus[];
 	acpxAgents: readonly string[];
 }
-
-/** Subset of the inference router status the settings screens consume. */
 export interface InferenceStatus {
 	enabled?: boolean;
 	source?: string;
@@ -257,8 +235,6 @@ export interface TelemetryHealth {
 }
 
 export type TelemetryHealthResponse = { enabled: false } | ({ enabled: true } & TelemetryHealth);
-
-// 1Password service-account integration (daemon routes/secrets-routes.ts).
 export interface OnePasswordVault {
 	id: string;
 	name: string;
@@ -400,7 +376,6 @@ export interface Memory {
 	created_at: string;
 	who: string;
 	importance: number;
-	/** Inconsistent in the wild: string (delimited) | string[] | null. */
 	tags: string | string[] | null;
 	source_type?: string | null;
 	pinned: 0 | 1;
@@ -471,15 +446,10 @@ export interface SignetSource {
 	lastIndexedAt?: string | null;
 	stats?: SourceStats;
 	health?: SourceHealth;
-	/** Present on daemons that track per-source index jobs. */
 	indexJob?: SourceIndexJob | null;
-	/** Top-level on the daemon entry (obsidian exclude globs). */
 	excludeGlobs?: string[];
-	/** Kind-specific config bag (github repos/tokenRef, discord guildIds/tokenRef) — mirrors core SignetSourceEntry. */
 	providerSettings?: Record<string, unknown> | null;
 }
-
-/** Mirrors daemon `source-index-progress.ts` SourceIndexJob. */
 export interface SourceIndexJob {
 	readonly id: string;
 	readonly sourceId: string;
@@ -630,8 +600,6 @@ export interface ImportSourcesResponse {
 		| { fileName: string; status: "failed"; error: string }
 	>;
 }
-
-/** Daily brief reflections — daemon `reflection-routes.ts` formatReflection. */
 export interface DailyReflection {
 	id: string;
 	date: string;
@@ -749,8 +717,6 @@ export interface DreamStatus {
 	exclusions: ReadonlyArray<{ sourceKind: string; sourceId: string; reason: string }>;
 }
 
-// ── Client ──────────────────────────────────────────────────────────────────
-
 export const api = {
 	getStatus: () => getJSON<DaemonStatus>("/api/status"),
 	getIdentity: () => getJSON<DashboardIdentity>("/api/identity"),
@@ -779,16 +745,12 @@ export const api = {
 			return false;
 		}
 	},
-
-	// Dreaming
 	getDreamStatus: () => getJSON<DreamStatus>("/api/dream/status"),
 	getDreamPassTools: (passId: string) =>
 		getJSON<{ agentId: string; passId: string; items: DreamToolCall[] }>(
 			`/api/dream/passes/${encodeURIComponent(passId)}/tools`,
 		),
 	getDreamQuality: () => getJSON<DreamQuality>("/api/dream/quality"),
-	/** POST /api/dream/trigger — starts a pass asynchronously. 409 while a pass
-	 *  is already running; 503 when the dreaming worker is not up. */
 	triggerDream: async (mode: "incremental" | "compact" = "incremental") => {
 		try {
 			const res = await fetch(`${API_BASE}/api/dream/trigger`, {
@@ -811,8 +773,6 @@ export const api = {
 			return { ok: false, status: 0, passId: null, error: "daemon unreachable" };
 		}
 	},
-
-	// Memory
 	getMemories: (opts: { limit?: number; offset?: number; type?: string } = {}) => {
 		const p = new URLSearchParams();
 		if (opts.limit) p.set("limit", String(opts.limit));
@@ -842,7 +802,6 @@ export const api = {
 		const result = await getJSON<{ results?: Memory[] }>(`/memory/search?${params}`);
 		return result ? { memories: result.results ?? [] } : null;
 	},
-	/** PATCH /api/memory/:id — daemon requires a non-empty `reason`. */
 	updateMemory: async (
 		id: string,
 		patch: { pinned?: boolean; content?: string; type?: string; tags?: string[] | null; importance?: number },
@@ -861,7 +820,6 @@ export const api = {
 			return { ok: false, error: "daemon unreachable" };
 		}
 	},
-	/** DELETE /api/memory/:id — soft delete; daemon requires a non-empty `reason`. */
 	deleteMemory: async (id: string, reason: string): Promise<{ ok: boolean; error?: string }> => {
 		try {
 			const res = await fetch(`${API_BASE}/api/memory/${encodeURIComponent(id)}`, {
@@ -876,14 +834,10 @@ export const api = {
 			return { ok: false, error: "daemon unreachable" };
 		}
 	},
-
-	/** GET /api/reflections/today — today's daily brief reflections (newest first). */
 	getTodayReflections: (agentId?: string) => {
 		const q = agentId && agentId !== "default" ? `?agentId=${encodeURIComponent(agentId)}` : "";
 		return getJSON<TodayReflectionResponse>(`/api/reflections/today${q}`);
 	},
-	/** POST /api/reflections/generate — LLM daily brief(s); slow by nature (up to ~2min).
-	 *  Omitted count falls back to the daemon's configured daily brief count. */
 	generateReflections: async (agentId: string | undefined, count?: number): Promise<TodayReflectionResponse> => {
 		const agentQ = agentId && agentId !== "default" ? `?agentId=${encodeURIComponent(agentId)}` : "";
 		const sep = agentQ ? "&" : "?";
@@ -902,7 +856,6 @@ export const api = {
 			return { reflection: null, reflections: [], error: "Failed to reach the daemon" };
 		}
 	},
-	/** POST /api/reflections/:id/answer — writes the answer back into the memory thread. */
 	answerReflection: async (
 		id: string,
 		answer: string,
@@ -922,8 +875,6 @@ export const api = {
 			return { success: false, error: "daemon unreachable" };
 		}
 	},
-
-	// Knowledge graph
 	getKnowledgeStats: () => getJSON<KnowledgeStats>("/api/knowledge/stats"),
 	getKnowledgeConstellation: (limit = 48, dependencyLimit = 160) =>
 		getJSON<KnowledgeConstellation>(
@@ -948,8 +899,6 @@ export const api = {
 		);
 		return { ok, error: ok ? undefined : (data?.error ?? "Failed to reject proposal") };
 	},
-
-	// Sources
 	getSources: () => getJSON<SourcesResponse>("/api/sources"),
 	getSourceImports: (agentId?: string) =>
 		getJSONResult<SourceImportsResponse>(`/api/sources/imports${agentQuery(agentId)}`),
@@ -1119,7 +1068,6 @@ export const api = {
 			return { ok: false, error: "daemon unreachable" };
 		}
 	},
-	/** POST /api/sources/pick-files — native multi-file picker for a local desktop daemon. */
 	pickFiles: async (): Promise<{ ok: boolean; paths?: string[]; unavailable?: boolean; error?: string }> => {
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/pick-files`, {
@@ -1134,7 +1082,6 @@ export const api = {
 			return { ok: false, error: "daemon unreachable" };
 		}
 	},
-	/** Re-index = re-POST the source's own config; the daemon upserts (created:false) and re-queues an index job. */
 	reindexSource: async (source: SignetSource): Promise<{ ok: boolean; error?: string }> => {
 		const ps = source.providerSettings ?? {};
 		const tokenRef = typeof ps.tokenRef === "string" && ps.tokenRef ? ps.tokenRef : undefined;
@@ -1162,7 +1109,6 @@ export const api = {
 			return { ok: false, error: "daemon unreachable" };
 		}
 	},
-	/** DELETE /api/sources/:id — removes config and purges indexed artifacts. */
 	removeSource: async (id: string): Promise<{ ok: boolean; error?: string }> => {
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(id)}`, {
@@ -1176,7 +1122,6 @@ export const api = {
 			return { ok: false, error: "daemon unreachable" };
 		}
 	},
-	/** POST /api/sources/:kind — connect a source; daemon upserts and queues an index job (202). */
 	addSource: async (kind: string, body: unknown): Promise<{ ok: boolean; error?: string }> => {
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/${kind}`, {
@@ -1192,7 +1137,6 @@ export const api = {
 			return { ok: false, error: "daemon unreachable" };
 		}
 	},
-	/** POST /api/sources/pick-directory — native folder picker (Electron only; 501 in a plain browser). */
 	pickDirectory: async (): Promise<{ ok: boolean; path?: string; unavailable?: boolean }> => {
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/pick-directory`, {
@@ -1208,7 +1152,6 @@ export const api = {
 			return { ok: false };
 		}
 	},
-	/** GET /api/sources/:id/snapshot — exported artifact payload (downloaded client-side). */
 	getSourceSnapshot: async (id: string): Promise<unknown | null> => {
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(id)}/snapshot`, {
@@ -1220,15 +1163,9 @@ export const api = {
 			return null;
 		}
 	},
-
-	// Home
 	getHomeGreeting: () => getJSON<HomeGreeting>("/api/home/greeting"),
 	getContinuityLatest: () => getJSON<{ scores: ContinuityScore[] }>("/api/analytics/continuity/latest"),
-
-	// Secrets (the unlock gate maps to dashboard auth; names list is plaintext)
 	getSecrets: () => getJSON<{ secrets?: string[]; provider?: string }>("/api/secrets"),
-
-	// 1Password service-account integration (secrets vault panel)
 	getOnePasswordStatus: async (): Promise<OnePasswordStatus> => {
 		const data = await getJSON<Partial<OnePasswordStatus>>("/api/secrets/1password/status");
 		return {
@@ -1264,10 +1201,6 @@ export const api = {
 		if (!ok) return { success: false, error: data?.error ?? "Failed to import from 1Password" };
 		return { ...data, success: true };
 	},
-
-	// Inference (settings modal) — the catalog drives the provider connect
-	// wall and the backend/model pickers. Defensive defaults mirror the old
-	// Svelte panel so a pre-#968 daemon just shows fewer cards.
 	getInferenceCatalog: async (): Promise<InferenceCatalog | null> => {
 		const c = await getJSON<Partial<InferenceCatalog>>("/api/inference/catalog");
 		if (!c) return null;
@@ -1300,8 +1233,6 @@ export const api = {
 		},
 		signal?: AbortSignal,
 	) => postJSON<InferenceProbeResult>("/api/inference/execute", body, signal ?? AbortSignal.timeout(30_000)),
-
-	// Config files (settings: agent.yaml read/write)
 	getConfigFiles: async (): Promise<ConfigFile[]> => {
 		const data = await getJSON<{ files?: ConfigFile[] }>("/api/config", { signal: AbortSignal.timeout(10_000) });
 		return data?.files ?? [];
@@ -1321,8 +1252,6 @@ export const api = {
 			return { ok: false, status: 0, error: "daemon unreachable" };
 		}
 	},
-
-	// Secrets vault (provider API keys — values are never read back)
 	putSecret: async (name: string, value: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> => {
 		const { ok, data } = await mutateJSON<{ error?: string }>(
 			`/api/secrets/${encodeURIComponent(name)}`,
@@ -1338,22 +1267,10 @@ export const api = {
 		const { ok, data } = await mutateJSON<{ error?: string }>(`/api/secrets/${encodeURIComponent(name)}`, "DELETE");
 		return { ok, error: ok ? undefined : (data?.error ?? "Failed to delete secret") };
 	},
-
-	// Daemon logs (settings → Logs section)
 	getLogs: (limit = 200) => getJSON<{ logs: LogEntry[]; count: number }>(`/api/logs?limit=${limit}`),
 	getTelemetryHealth: () => getJSON<TelemetryHealthResponse>("/api/telemetry/health"),
 };
-
-// postJSON is exported for future mutation surfaces (review-queue apply/reject,
-// ontology proposals, dream trigger). Not currently called from a built view.
 export { postJSON };
-
-/**
- * Start a daemon-side OAuth login and pump its SSE stream. Ported 1:1 from
- * the old Svelte client — the stream is consumed via fetch + reader (no
- * EventSource, since the login is a POST). The session id arrives either in
- * the X-Signet-OAuth-Session-Id response header or the first `session` event.
- */
 export function startOAuthLogin(providerId: string): OAuthLoginHandle {
 	const handlers: Array<(event: OAuthLoginEvent) => void> = [];
 	const errorHandlers: Array<(message: string) => void> = [];
@@ -1378,9 +1295,7 @@ export function startOAuthLogin(providerId: string): OAuthLoginHandle {
 				try {
 					const body = (await response.json()) as { error?: string };
 					if (body?.error) message = body.error;
-				} catch {
-					/* keep status message */
-				}
+				} catch {}
 				throw new Error(message);
 			}
 			capturedSessionId = response.headers.get("X-Signet-OAuth-Session-Id");
@@ -1450,11 +1365,6 @@ export async function disconnectOAuthProvider(providerId: string): Promise<boole
 	});
 	return res.ok;
 }
-
-// Demo build (VITE_DEMO=1): the marketing site embeds the real dashboard
-// with fixture data instead of screenshots. Vite replaces the flag with a
-// literal at build time, so this call is dead code — and the demo module is
-// tree-shaken — from every non-demo build (daemon + Electron).
 if (import.meta.env.VITE_DEMO === "1") {
 	installDemoApi(api);
 }

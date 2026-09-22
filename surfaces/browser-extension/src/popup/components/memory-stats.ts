@@ -1,5 +1,3 @@
-/** Stats bar component */
-
 import { getPipelineStatus } from "../../shared/api.js";
 import type { MemoryStats } from "../../shared/types.js";
 

@@ -1,16 +1,5 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Add unique constraint on entity_dependencies to prevent duplicate rows.
- *
- * The inline entity linker and graph transactions both insert with
- * ON CONFLICT DO NOTHING, but no unique index existed — so duplicates
- * accumulated freely. This migration adds the missing constraint and
- * removes existing duplicates (keeping the oldest row per group).
- */
 export function up(db: MigrationDb): void {
-	// Remove duplicates first — keep the earliest row per
-	// (source, target, type, agent_id) group.
 	db.exec(`
 		DELETE FROM entity_dependencies
 		WHERE id NOT IN (

@@ -462,9 +462,6 @@ export function upsertSessionTranscript(
 						.get(sessionKey, agentId) as { content?: string } | null | undefined)
 				: undefined;
 			const retainedTranscript = mergeTranscriptContent(existing?.content ?? "", transcript);
-
-			// Imported sessions retain their original event time. Live harnesses do
-			// not pass one and keep the existing wall-clock behavior.
 			const now = capturedAt ?? new Date().toISOString();
 			const cols = db.prepare("PRAGMA table_info(session_transcripts)").all() as ReadonlyArray<Record<string, unknown>>;
 			const hasUpdated = cols.some((col) => col.name === "updated_at");
@@ -604,7 +601,7 @@ export async function upsertSessionTranscriptAsync(
 				});
 				return true;
 			},
-			{ siteToken: "session-transcripts.ts:541", operation: "transcripts.upsert", signal: options?.signal },
+			{ siteToken: "session-transcripts.ts:538", operation: "transcripts.upsert", signal: options?.signal },
 		);
 	} catch (error) {
 		if (options?.signal?.aborted) throw error;
@@ -622,8 +619,6 @@ function mergeTranscriptContent(existing: string, incoming: string): string {
 	if (incoming.includes(existing)) return incoming;
 	return `${existing}\n${incoming}`;
 }
-
-/** Mark one retained transcript complete inside an existing write transaction. */
 export function markSessionTranscriptCompletedInTx(
 	db: WriteDb,
 	sessionKey: string,
@@ -638,12 +633,8 @@ export function markSessionTranscriptCompletedInTx(
 	const result = db
 		.prepare(`UPDATE session_transcripts SET ${set} WHERE session_key = ? AND agent_id = ? AND completed_at IS NULL`)
 		.run(...args);
-	// bun:sqlite includes FTS-trigger writes in changes; any direct row update
-	// is a successful completion marker even when the count is greater than one.
 	return result.changes > 0;
 }
-
-/** Mark one retained transcript complete at the session-end boundary. */
 export function markSessionTranscriptCompleted(
 	sessionKey: string,
 	agentId: string,
@@ -656,7 +647,7 @@ export function markSessionTranscriptCompleted(
 		return (accessor ?? getDbAccessor()).withWriteTx((db: import("./db-accessor").WriteDb) => {
 			if (!tableExistsInDatabase(db, "session_transcripts")) return false;
 			return markSessionTranscriptCompletedInTx(db, sessionKey, agentId, completedAt);
-		}, "session-transcripts.ts:656");
+		}, "session-transcripts.ts:647");
 	} catch (error) {
 		logger.warn("transcripts", "Transcript completion marker failed", {
 			error: error instanceof Error ? error.message : String(error),
@@ -672,8 +663,6 @@ function tableExistsInDatabase(
 ): boolean {
 	return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) != null;
 }
-
-/** Read the stored transcript content for a session. */
 export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: string): StoredTranscriptInfo | undefined {
 	if (!tableExists("session_transcripts")) return undefined;
 	const aliases = [...new Set([sessionKey, canonicalizeTranscriptLookup(sessionKey)])];
@@ -721,7 +710,7 @@ export function getStoredSessionTranscriptInfo(sessionKey: string, agentId: stri
 				completedAt: row.completed_at ?? null,
 				contentHash: row.content_hash ?? null,
 			};
-		}, "session-transcripts.ts:690");
+		}, "session-transcripts.ts:679");
 	} catch {
 		return undefined;
 	}
@@ -776,8 +765,6 @@ function readStoredSessionTranscriptInfo(
 		contentHash: row.content_hash ?? null,
 	};
 }
-
-/** Async transcript lookup for background recovery and maintenance paths. */
 export async function getStoredSessionTranscriptInfoAsync(
 	sessionKey: string,
 	agentId: string,
@@ -791,7 +778,7 @@ export async function getStoredSessionTranscriptInfoAsync(
 				if (!tableExistsInDatabase(db, "session_transcripts")) return undefined;
 				return readStoredSessionTranscriptInfo(db, sessionKey, agentId);
 			},
-			{ siteToken: "session-transcripts.ts:789", operation: "transcripts.lookup", signal },
+			{ siteToken: "session-transcripts.ts:776", operation: "transcripts.lookup", signal },
 		);
 	} catch (error) {
 		if (signal?.aborted) throw error;
@@ -815,7 +802,7 @@ export function getSessionTranscriptContent(sessionKey: string, agentId: string)
 				)
 				.get(agentId, ...aliases, sessionKey) as { content: string } | undefined;
 			return row?.content;
-		}, "session-transcripts.ts:808");
+		}, "session-transcripts.ts:795");
 	} catch {
 		return undefined;
 	}
@@ -829,14 +816,6 @@ export interface StaleLiveSession {
 	content: string;
 	lastActivityAt: string;
 }
-
-/**
- * Live-retained sessions whose last activity is older than `staleOlderThanMs`.
- *
- * Completion is owned by the transcript row itself. A stale session is a
- * session-end boundary, so it must not depend on a summary job or a minimum
- * transcript length to become eligible for Dreaming.
- */
 export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): StaleLiveSession[] {
 	if (staleOlderThanMs <= 0 || !tableExists("session_transcripts") || !sessionTranscriptsHasColumn("completed_at"))
 		return [];
@@ -871,7 +850,7 @@ export function findStaleLiveSessions(staleOlderThanMs: number, limit = 50): Sta
 				content: row.content,
 				lastActivityAt: row.last_activity,
 			}));
-		}, "session-transcripts.ts:847");
+		}, "session-transcripts.ts:826");
 	} catch {
 		return [];
 	}
@@ -919,7 +898,7 @@ export function searchTranscriptFallback(params: {
 					].join("\n"),
 				)
 				.all(...args) as unknown as TranscriptRow[];
-		}, "session-transcripts.ts:902");
+		}, "session-transcripts.ts:881");
 		if (exactRows.length > 0) {
 			return exactRows
 				.map((row) => ({
@@ -962,7 +941,7 @@ export function searchTranscriptFallback(params: {
 							parts.push(`ORDER BY rank ASC, ${seenExpr} DESC LIMIT ?`);
 							args.push(limit * 2);
 							return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-						}, "session-transcripts.ts:947");
+						}, "session-transcripts.ts:926");
 
 					const hits = rows
 						.map((row) => ({
@@ -1032,7 +1011,7 @@ export function searchTranscriptFallback(params: {
 				parts.push(`ORDER BY rank DESC, ${seenExpr} DESC LIMIT ?`);
 				args.push(limit);
 				return db.prepare(parts.join("\n")).all(...args) as unknown as TranscriptRow[];
-			}, "session-transcripts.ts:1011");
+			}, "session-transcripts.ts:990");
 
 		return rows
 			.map((row) => ({

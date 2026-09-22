@@ -1,30 +1,3 @@
-/**
- * Benchmark: hybrid recall search latency.
- *
- * Measures the shared hot path used by explicit recall and
- * user-prompt-submit. By default the benchmark uses a synthetic local
- * workspace so it can be run before and after search changes without touching
- * real memory data.
- *
- * Run:
- *   bun run build:core
- *   bun run platform/daemon/src/memory-search.bench.ts
- *
- * Synthetic knobs:
- *   SIGNET_RECALL_BENCH_MEMORIES=2000
- *   SIGNET_RECALL_BENCH_ITERS=60
- *   SIGNET_RECALL_BENCH_EMBED_MS=40
- *
- * Copied real-workspace mode:
- *   SIGNET_RECALL_BENCH_SOURCE_PATH=~/.agents
- *   SIGNET_RECALL_BENCH_QUERY="what do you remember about Signet recall slowness"
- *   SIGNET_RECALL_BENCH_EMBED=real
- *   bun run platform/daemon/src/memory-search.bench.ts
- *
- * The source workspace is copied into /tmp first. The benchmark never opens
- * the live memory database directly.
- */
-
 import { copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";

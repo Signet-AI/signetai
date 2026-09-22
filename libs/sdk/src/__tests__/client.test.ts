@@ -415,7 +415,6 @@ describe("SignetClient", () => {
 			reason: "correction",
 			if_version: 3,
 		});
-		// ifVersion should not appear as-is in the body
 		const bodyRecord = req.body as Record<string, unknown>;
 		expect(bodyRecord.ifVersion).toBeUndefined();
 	});

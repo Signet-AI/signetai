@@ -26,24 +26,18 @@ async function main(): Promise<void> {
 		} catch {
 			try {
 				child.kill("SIGKILL");
-			} catch {
-				// The target may have exited between the check and escalation.
-			}
+			} catch {}
 		}
 	};
 	const forward = (signal: NodeJS.Signals): void => {
 		if (process.platform !== "win32" && child.pid !== undefined) {
 			try {
 				process.kill(-child.pid, signal);
-			} catch {
-				// The target may have exited between the check and signal.
-			}
+			} catch {}
 		}
 		try {
 			child.kill(signal);
-		} catch {
-			// The target may have exited between the check and signal.
-		}
+		} catch {}
 		if (killTimer === undefined && (signal === "SIGTERM" || signal === "SIGINT")) {
 			killTimer = setTimeout(killTarget, TRANSCRIPT_RECOVERY_CHILD_GRACE_MS);
 		}
@@ -54,7 +48,6 @@ async function main(): Promise<void> {
 		process.exit(0);
 	};
 	parentWatch = setInterval(() => {
-		// SIGKILL bypasses daemon cleanup; the supervisor owns the detached child group.
 		if (process.ppid !== parentPid) closeAndExit();
 	}, 50);
 	parentWatch.unref();

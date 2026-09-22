@@ -2,8 +2,6 @@ import { describe, expect, test } from "bun:test";
 import { SignetError } from "../errors.js";
 import type { SignetClient } from "../index.js";
 import { executeMemoryTool, memoryToolDefinitions } from "../openai.js";
-
-// Lightweight mock that tracks calls to each method.
 interface MockCall {
 	readonly method: string;
 	readonly args: readonly unknown[];

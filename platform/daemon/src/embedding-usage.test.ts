@@ -1,11 +1,3 @@
-/**
- * Regression test for issue #1181: pipeline.embedding was declared in
- * TELEMETRY_EVENTS but never emitted, so embedding token spend was
- * invisible in PostHog and the telemetry stats endpoint. The event must
- * fire at the embedding fetch boundary (recordEmbeddingUsage) with
- * tokens/provider/sourceKind.
- */
-
 import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -18,7 +10,7 @@ let dir = "";
 let collector: TelemetryCollector;
 
 const TELEMETRY_CONFIG = {
-	posthogHost: "", // nothing sends; events stay local
+	posthogHost: "",
 	posthogApiKey: "",
 	flushIntervalMs: 60000,
 	flushBatchSize: 50,
@@ -63,8 +55,6 @@ describe("embedding telemetry (issue #1181)", () => {
 		expect(second?.properties.tokens).toBe(42);
 		expect(second?.properties.cost).toBe(0);
 		expect(second?.properties.sourceKind).toBe("dreaming");
-
-		// The DB accounting still lands too (shared boundary, #1154).
 		const row = getDbAccessor().withReadDb(
 			(db) => db.prepare("SELECT SUM(tokens) AS tokens FROM embedding_usage").get() as { tokens: number },
 		);

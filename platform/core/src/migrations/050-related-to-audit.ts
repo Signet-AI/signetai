@@ -67,9 +67,6 @@ export function up(db: MigrationDb): void {
 			SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason');
 		END;
 	`);
-
-	// DB-level audit triggers: capture all insert/update/delete events at the
-	// database layer, covering FK cascades, direct SQL, and application paths.
 	db.exec(`
 		CREATE TRIGGER trg_entity_dependencies_audit_insert
 		AFTER INSERT ON entity_dependencies
@@ -147,9 +144,6 @@ export function up(db: MigrationDb): void {
 			);
 		END;
 	`);
-
-	// Backfill existing edges with their original state BEFORE stamping legacy
-	// reasons so history accurately reflects what was in the DB pre-migration.
 	db.exec(`
 		INSERT INTO entity_dependency_history (
 			id, dependency_id, source_entity_id, target_entity_id, agent_id,
@@ -181,10 +175,6 @@ export function up(db: MigrationDb): void {
 			  AND h.event = 'backfill'
 		  )
 	`);
-
-	// Stamp a valid reason on unattributed related_to edges. The AFTER UPDATE
-	// trigger is now active, so this produces an 'updated' history row for each
-	// affected edge — completing the audit trail for this migration step.
 	db.exec(`
 		UPDATE entity_dependencies
 		SET reason = 'legacy-unattributed related_to edge'

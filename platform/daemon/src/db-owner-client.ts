@@ -27,10 +27,7 @@ export type { DbOwnerLane, DbOwnerRequest, DbOwnerWorkloadClass } from "./db-own
 
 export type DbOwnerHealthState = "starting" | "ready" | "dead" | "failed" | "closed";
 export type DbOwnerInitializationState = "not_started" | "running" | "ready" | "failed";
-
-/** Keep owner admission bounded like the Phase B async database queues. */
 export const MAX_DB_OWNER_PENDING_JOBS = DB_OWNER_MAX_QUEUE_DEPTH;
-/** Each scheduling class has its own bounded admission queue. */
 export const MAX_DB_OWNER_FOREGROUND_JOBS = DB_OWNER_MAX_QUEUE_DEPTH;
 export const MAX_DB_OWNER_MAINTENANCE_JOBS = DB_OWNER_MAX_QUEUE_DEPTH;
 export const MAX_DB_OWNER_WORK_UNITS = DB_OWNER_MAX_WORK_UNITS;
@@ -53,9 +50,7 @@ export interface DbOwnerLaneHealth {
 }
 
 export interface DbOwnerHealth {
-	/** Process/IPC state. `ready` means transport is usable, not schema-ready. */
 	readonly state: DbOwnerHealthState;
-	/** State of the explicit database initialization job. */
 	readonly initialization: DbOwnerInitializationState;
 	readonly databaseReady: boolean;
 	readonly pid: number | null;
@@ -67,7 +62,6 @@ export interface DbOwnerHealth {
 	readonly activeWorkloadClass: DbOwnerWorkloadClass | null;
 	readonly foregroundOldestAgeMs: number | null;
 	readonly maintenanceOldestAgeMs: number | null;
-	/** Per-owner-lane snapshot; present on the aggregate client health surface. */
 	readonly lanes?: {
 		readonly read: DbOwnerLaneHealth;
 		readonly write: DbOwnerLaneHealth;
@@ -79,7 +73,6 @@ export interface DbOwnerHealth {
 export interface DbOwnerSubmitOptions {
 	readonly operation: string;
 	readonly lane: DbOwnerLane;
-	/** Defaults to foreground for read/write and maintenance for maintenance lane. */
 	readonly workloadClass?: DbOwnerWorkloadClass;
 	readonly deadlineMs: number;
 	readonly estimatedWorkUnits?: number;
@@ -88,7 +81,6 @@ export interface DbOwnerSubmitOptions {
 export interface DbOwnerJobHandle<Result> {
 	readonly job: DbOwnerJob;
 	readonly result: Promise<Result>;
-	/** Resolves with owner-side execution timing when the job completes. */
 	readonly metrics?: Promise<DbOwnerJobMetrics | undefined>;
 	readonly cancel: () => void;
 }
@@ -96,7 +88,6 @@ export interface DbOwnerJobHandle<Result> {
 export interface DbOwnerInitializationResult {
 	readonly initialized: true;
 	readonly pendingVecBackfill: boolean;
-	/** sqlite-vec path resolved in the owner process, if available. */
 	readonly extensionPath?: string | null;
 	readonly deferredMigrationVerification?: boolean;
 }
@@ -105,7 +96,6 @@ export interface DbOwnerClient {
 	start(): Promise<void>;
 	initialize(agentsDir?: string): Promise<DbOwnerInitializationResult>;
 	submit<Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result>;
-	/** Fail closed on every non-read lane, including owners spawned later. */
 	setWriteBlocked(blocked: boolean): void;
 	awaitResult<Result>(handle: DbOwnerJobHandle<Result>, timeoutMs?: number): Promise<Result>;
 	cancel(jobId: string): void;
@@ -166,15 +156,6 @@ export class DbOwnerWritesBlockedError extends DbOwnerError {
 		this.name = "DbOwnerWritesBlockedError";
 	}
 }
-
-/**
- * DB owner error codes that are bounded availability degradations: the job is
- * cancelled or admission is rejected, the owner keeps serving, and retrying
- * later succeeds. Process-level handlers (unhandledRejection) may survive
- * these; every other code — dead owner, startup timeout, failed job, writes
- * blocked on integrity, closed client — means the database is unusable and
- * the process must fail instead of limping on.
- */
 export const DB_OWNER_SURVIVABLE_CODES: ReadonlySet<string> = new Set([
 	"DB_OWNER_DEADLINE",
 	"DB_OWNER_CANCELLED",
@@ -196,7 +177,6 @@ interface PendingJob<Result> {
 export interface DbOwnerClientOptions {
 	readonly dbPath: string;
 	readonly workerPath?: string;
-	/** SQLite runtime library to activate before the worker opens the database. */
 	readonly sqlitePath?: string;
 	readonly startupTimeoutMs?: number;
 	readonly workerRole?: "generic" | "recall";
@@ -219,9 +199,7 @@ function sweepStaleCancellationRegistries(directory: string): void {
 		const path = join(directory, entry);
 		try {
 			if (statSync(path).mtimeMs < cutoff) unlinkSync(path);
-		} catch {
-			// Another client may have removed the registry concurrently.
-		}
+		} catch {}
 	}
 }
 
@@ -240,9 +218,6 @@ function resolveStartupTimeoutMs(options: DbOwnerClientOptions): number {
 function workerArguments(workerPath: string | undefined): readonly string[] {
 	if (workerPath !== undefined) return [workerPath];
 	if (resolveEmbeddedWorkerPath("db-owner-worker") !== null) {
-		// Compiled native binaries dispatch embedded workers through cli-native.ts.
-		// Passing the materialized .mjs path would make the binary treat it as a
-		// CLI command instead of entering the worker dispatcher.
 		return [];
 	}
 	const directory = dirname(fileURLToPath(import.meta.url));
@@ -255,8 +230,6 @@ function ownerIsDead(owner: ChildProcess): boolean {
 	if (process.platform !== "linux" || owner.pid === undefined) return false;
 	try {
 		const status = readFileSync(`/proc/${owner.pid}/status`, "utf8");
-		// Linux keeps a SIGABRTing process in core-dump state until the dump
-		// completes. Its stdio can still accept writes during that interval.
 		return /^(?:State:\s+Z|CoreDumping:\s+1)/m.test(status);
 	} catch {
 		return false;
@@ -297,17 +270,13 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	function unlinkCancellationRegistry(): void {
 		try {
 			unlinkSync(cancellationRegistryPath);
-		} catch {
-			// The registry may not have been created or may already be gone.
-		}
+		} catch {}
 	}
 
 	function recordCancellation(jobId: string): void {
 		try {
 			appendFileSync(cancellationRegistryPath, `${jobId}\n`);
-		} catch {
-			// The protocol cancel command remains the fallback for queued jobs.
-		}
+		} catch {}
 	}
 
 	function diagnostic(message: string): string {
@@ -423,9 +392,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		if (retired !== null) {
 			try {
 				retired.kill("SIGKILL");
-			} catch {
-				// The owner may already have exited.
-			}
+			} catch {}
 		}
 	}
 
@@ -531,10 +498,6 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 
 	function handleTransportError(owner: ChildProcess, error: Error): void {
 		if (child !== owner || closed) return;
-		// Node can report the pipe error before the stderr readable has emitted
-		// its final queued chunk. Defer retirement until the current I/O turn has
-		// drained so transport diagnostics retain the same stderr context as the
-		// close and timeout paths.
 		setImmediate(() => {
 			if (child !== owner || closed) return;
 			const message = error.message;
@@ -581,9 +544,6 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				...(options.sqlitePath === undefined ? {} : { SIGNET_DB_OWNER_SQLITE_PATH: options.sqlitePath }),
 				SIGNET_DB_OWNER_CANCEL_REGISTRY: cancellationRegistryPath,
 			};
-			// A compiled daemon sets this marker so the native entrypoint dispatches
-			// into the daemon. It must not leak into the worker child: the worker
-			// marker is the authoritative dispatch selector for this process.
 			delete workerEnv.SIGNET_DAEMON_ENTRYPOINT;
 			const owner = spawn(process.execPath, workerArguments(options.workerPath), {
 				env: workerEnv,
@@ -755,7 +715,6 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 						abandonedMetrics.set(job.id, settledJob.resolveMetrics);
 						abandonedWorkloadClasses.set(job.id, settledJob.job.workloadClass);
 					} else {
-						// No owner worker exists for a queued job; close its completion fence.
 						settledJob.resolveMetrics(undefined);
 					}
 					if (!settledJob.settled) {
@@ -763,14 +722,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 						settledJob.reject(new DbOwnerDeadlineError(job.id));
 					}
 				});
-				// A job deadline abandons the work; it is not authority to kill the
-				// owner. Persist the cancellation before settling the caller so an
-				// in-flight transaction fences itself before COMMIT. The protocol
-				// cancel remains the fast path for work that is still queued.
 				if (dispatched && owner !== null && state === "ready") {
-					void write(owner, { type: "cancel", jobId: job.id }).catch(() => {
-						// A transport failure is handled by the owner exit path.
-					});
+					void write(owner, { type: "cancel", jobId: job.id }).catch(() => {});
 				}
 			}, submitOptions.deadlineMs);
 			pendingJob = {
@@ -796,10 +749,6 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		const active = activeJobId === jobId;
 		recordCancellation(jobId);
 		if (active) {
-			// Active jobs must finish in the owner so a cancellation that arrives
-			// during SQLite COMMIT can report the durable outcome accurately. The
-			// worker fences the transaction before COMMIT and reads this registry
-			// after COMMIT; queued jobs still use the protocol cancel command.
 			return;
 		}
 		const dispatched = entry.dispatched || entry.dispatching;
@@ -808,7 +757,6 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				abandonedMetrics.set(jobId, job.resolveMetrics);
 				abandonedWorkloadClasses.set(jobId, job.job.workloadClass);
 			} else {
-				// No owner worker exists for a queued job; close its completion fence.
 				job.resolveMetrics(undefined);
 			}
 			if (!job.settled) {
@@ -816,18 +764,12 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 				job.reject(new DbOwnerCancelledError(jobId));
 			}
 		});
-		if (state === "ready" && child !== null)
-			void write(child, { type: "cancel", jobId }).catch(() => {
-				// The exit handler reports a dead owner to other pending jobs.
-			});
+		if (state === "ready" && child !== null) void write(child, { type: "cancel", jobId }).catch(() => {});
 	}
 
 	function setWriteBlocked(blocked: boolean): void {
 		writeBlocked = blocked;
 		if (blocked) {
-			// Do not leave already-admitted application writes queued behind the
-			// control message. Read and verification jobs remain available for
-			// recovery/status surfaces.
 			for (const entry of [...pending.values()]) {
 				if (entry.job.lane !== "read" && entry.job.lane !== "verify") cancel(entry.job.id);
 			}
@@ -865,15 +807,11 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		const ownerClose = activeChildClose;
 		closed = true;
 		if (owner !== null) {
-			void write(owner, { type: "shutdown" }).catch(() => {
-				// The close path remains idempotent after an owner crash.
-			});
+			void write(owner, { type: "shutdown" }).catch(() => {});
 			const forceKillTimer = setTimeout(() => {
 				try {
 					owner.kill("SIGKILL");
-				} catch {
-					// The owner may already have exited.
-				}
+				} catch {}
 			}, 250);
 			if (ownerClose !== null) await ownerClose;
 			clearTimeout(forceKillTimer);
@@ -888,9 +826,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		abandonedWorkloadClasses.clear();
 		try {
 			unlinkSync(cancellationRegistryPath);
-		} catch {
-			// The registry may not have been created or may already be gone.
-		}
+		} catch {}
 	}
 
 	async function initialize(agentsDir?: string): Promise<DbOwnerInitializationResult> {

@@ -97,9 +97,7 @@ export function createAgentDir(config: AgentDirConfig): AgentDir {
 	const clearConfiguredAgentDir = (env: NodeJS.ProcessEnv = process.env): void => {
 		try {
 			rmSync(getConfigPath(env), { force: true });
-		} catch {
-			// Best-effort cleanup.
-		}
+		} catch {}
 	};
 
 	return {

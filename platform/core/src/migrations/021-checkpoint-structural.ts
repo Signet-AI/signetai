@@ -1,11 +1,3 @@
-/**
- * Migration 021: Structural checkpoint snapshot fields
- *
- * Adds optional structural snapshot columns to session_checkpoints so
- * recovery can prioritize focal entities, active aspects, and traversal
- * metadata from the prior session.
- */
-
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

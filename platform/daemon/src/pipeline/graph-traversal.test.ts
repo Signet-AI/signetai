@@ -1,10 +1,3 @@
-/**
- * Regression test for #1118: traverseKnowledgeGraph was fully synchronous and
- * blocked the daemon event loop for the whole walk (~1.7s per session start on
- * a 102k-memory graph), serializing concurrent session starts and tripping the
- * pressure gate. The walk must yield to the event loop between batches.
- */
-
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ReadDb } from "../db-accessor";
@@ -112,11 +105,7 @@ describe("traverseKnowledgeGraph event-loop yields (#1118)", () => {
 
 		const result = await traverseKnowledgeGraph(["e1"], db as unknown as ReadDb, "default", CONFIG);
 		done = true;
-
-		// The old synchronous walk resolved without a single macrotask
-		// opportunity — loopBreaths would be 0 and this test would fail.
 		expect(loopBreaths).toBeGreaterThan(0);
-		// Result identity: the seeded graph still resolves through both phases.
 		expect(result.memoryIds.has("m1")).toBe(true);
 		expect(result.memoryIds.has("m3")).toBe(true);
 		expect(result.entityCount).toBe(2);

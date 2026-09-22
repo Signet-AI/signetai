@@ -23,21 +23,11 @@ export function HomeView() {
 	const sources = fetchedSources ?? lastSources;
 	const timeline = useAsync(() => api.getMemoryTimeline(new Date().getTimezoneOffset())).data;
 	const today = useDateString(new Date().toLocaleDateString("en-US"));
-	// The setup link is an onboarding affordance: once a harness integration is
-	// connected, the dashboard is connected and the link is noise. Keep it while
-	// the check is pending so a fresh workspace still surfaces it. Gate on
-	// `configuredHarnesses` (the Signet-owned agent.yaml record written when a
-	// connection succeeds), not on `exists` — a harness home directory can be
-	// present long before Signet was ever connected, which would hide the only
-	// setup/repair link. Older daemons omit configuredHarnesses; treat that as
-	// unknown and keep the setup link visible rather than guessing from exists.
 	const harnessesQuery = useAsync(() => api.getHarnesses(), { intervalMs: 30000 });
 	const connected = (harnessesQuery.data?.data?.configuredHarnesses?.length ?? 0) > 0;
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories;
-		// The dashboard is scoped to the configured agent returned by the daemon.
-		// Do not present the old mockup's three-agent fixture as live state.
 		const agentCount = status.data?.agentId ? 1 : 0;
 		return [
 			{
@@ -58,9 +48,6 @@ export function HomeView() {
 			},
 		];
 	}, [status.data?.agentId, timeline, stats?.entityCount, sources]);
-
-	// The reference uses a full 36×7 contribution grid. Older daemons omit
-	// dailyBuckets, so retain the visual shape until they are upgraded.
 	const days: DayBucket[] = useMemo(() => {
 		if (timeline?.dailyBuckets?.length) {
 			return timeline.dailyBuckets.map((bucket) => ({ date: bucket.date, count: bucket.memoriesAdded }));

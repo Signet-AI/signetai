@@ -1,5 +1,3 @@
-// Copy-to-clipboard, parallax scroll, reveal observer, code tab switching.
-
 import { initReveal } from "./scroll-reveal";
 
 let ticking = false;

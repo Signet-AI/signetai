@@ -15,7 +15,6 @@ on:
       - "tests/integration/acceptance/**"
       - ".github/workflows/phase-d-acceptance.yml"
   schedule:
-    # Full variant nightly, 07:15 UTC — catches drift the 90s PR smoke can't see.
     - cron: "15 7 * * *"
   workflow_dispatch:
     inputs:

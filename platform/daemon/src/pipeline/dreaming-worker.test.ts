@@ -188,11 +188,9 @@ describe("dreaming worker agent scope", () => {
 			() => now,
 		);
 		expect(await scopes()).toEqual(["default", "new-scope"]);
-		// Within the refresh window the union query does not run again.
 		now = 999;
 		expect(await scopes()).toEqual(["default", "new-scope"]);
 		expect(resolves).toBe(1);
-		// Past the window the next read re-resolves the union.
 		now = 1_000;
 		expect(await scopes()).toEqual(["default", "new-scope"]);
 		expect(resolves).toBe(2);
@@ -423,13 +421,6 @@ describe("dreaming worker agent scope", () => {
 	});
 
 	it("keeps the check loop alive when a scheduled pass fails (#1198)", async () => {
-		// Regression for #1198: the periodic check loop awaited runPass
-		// without catching, so a provider 429 (or any executor rejection)
-		// escaped through the timer callback as an unhandled rejection. The
-		// daemon's unhandledRejection exit path (#1148) then shut down the
-		// whole process, and the sweep never re-armed. The check loop must
-		// record the failure (recordDreamingFailure + failDreamingPass), log
-		// it, and keep scheduling future checks.
 		db.prepare(
 			`INSERT INTO session_transcripts
 		 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
@@ -442,9 +433,6 @@ describe("dreaming worker agent scope", () => {
 				throw new Error("429 rate_limit_error: Token usage limit reached");
 			},
 		});
-
-		// The bug's observable signature is an unhandled rejection escaping
-		// the check loop; capture any that surface during the test window.
 		const unhandled: unknown[] = [];
 		const onUnhandledRejection = (reason: unknown) => {
 			unhandled.push(reason);
@@ -456,11 +444,6 @@ describe("dreaming worker agent scope", () => {
 			checkIntervalMs: 20,
 		});
 		try {
-			// Failures accumulate on the run agent ("default") while the
-			// per-scope backoff reads each scope's own state, so "alpha"'s
-			// fresh backlog re-triggers on the next tick. Two recorded
-			// failures prove the loop survived the first one and kept
-			// checking instead of dying with it.
 			await waitFor(() => {
 				const state = db
 					.prepare("SELECT consecutive_failures AS n FROM dreaming_state WHERE agent_id = 'default'")
@@ -487,11 +470,6 @@ describe("dreaming worker agent scope", () => {
 	});
 
 	it("alternates hygiene and content runbooks across sweep checks (#1098)", async () => {
-		// Regression for #1098: with the hygiene queue perpetually full, the
-		// sweep scheduled the combined runbook every cycle and content
-		// ingestion never got budget. When both hygiene and content work are
-		// pending, the sweep must alternate so content gets a guaranteed
-		// turn.
 		const now = new Date().toISOString();
 		db.prepare(
 			`INSERT INTO entities
@@ -534,9 +512,6 @@ describe("dreaming worker agent scope", () => {
 	});
 
 	it("seeds deterministic hygiene attention for legacy graph rows", async () => {
-		// Hygiene attention is enqueued during regular check() ticks, not at
-		// worker startup (startup scans block the event loop before the HTTP
-		// server binds). Exercise the enqueue contract directly.
 		db.prepare(
 			`INSERT INTO entities
 			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
@@ -550,16 +525,10 @@ describe("dreaming worker agent scope", () => {
 	});
 
 	it("runs one universe pass over every agent scope and keeps semantic rows agent-isolated (#946)", async () => {
-		// Behavioral regression: one Dreaming pass covers the whole install.
-		// The pass addresses each agent scope via the per-call agentId on its
-		// tools; every write is attributed to the agent named on the call, and
-		// no cross-agent evidence leaks into another scope's derived graph.
 		const ALPHA = "alpha";
 		const BETA = "beta";
 		const alphaEvidence = "Alpha is building the Apex platform.";
 		const betaEvidence = "Beta is building the Zenith platform.";
-
-		// Seed distinct episodic evidence for each agent.
 		db.prepare(
 			`INSERT INTO session_transcripts
 			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
@@ -570,10 +539,6 @@ describe("dreaming worker agent scope", () => {
 			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
 			 VALUES ('summary-beta', ?, ?, 'pi', datetime('now'), datetime('now'), datetime('now'))`,
 		).run(BETA, betaEvidence);
-
-		// Deterministic provider: one universe pass consolidates BOTH scopes
-		// in a single invocation, each apply batch carrying the agentId whose
-		// graph it maintains and citing that scope's own evidence.
 		const seenPrompts: string[] = [];
 		const executorFactory = (agentId: string) => ({
 			async run(input: {
@@ -633,23 +598,16 @@ describe("dreaming worker agent scope", () => {
 			{ executorFactory },
 		);
 		try {
-			// One trigger = one pass covering every discovered scope.
 			await worker.trigger("incremental", "default");
-
-			// A single pass row on the primary agent.
 			const passes = db
 				.prepare("SELECT agent_id, status, mode FROM dreaming_passes ORDER BY created_at")
 				.all() as Array<{ agent_id: string; status: string; mode: string }>;
 			expect(passes).toEqual([{ agent_id: "default", status: "completed", mode: "incremental" }]);
-
-			// One invocation, and the prompt names every scope in the install.
 			expect(seenPrompts).toHaveLength(1);
 			expect(seenPrompts[0]).toContain(DREAMING_AGENT_PROMPT);
 			expect(seenPrompts[0]).toContain("<agent_scopes>");
 			expect(seenPrompts[0]).toContain(ALPHA);
 			expect(seenPrompts[0]).toContain(BETA);
-
-			// Semantic rows are agent-isolated: each agent only owns its entity.
 			const alphaEntities = (
 				db
 					.prepare("SELECT canonical_name FROM entities WHERE agent_id = ? ORDER BY canonical_name")
@@ -666,8 +624,6 @@ describe("dreaming worker agent scope", () => {
 			).map((r) => r.canonical_name);
 			expect(alphaEntities).toEqual(["apex"]);
 			expect(betaEntities).toEqual(["zenith"]);
-
-			// No entity was written to the wrong agent.
 			expect(
 				(
 					db

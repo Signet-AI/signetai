@@ -132,7 +132,6 @@ async function uploadTranscriptFile(
 						)
 					)
 						throw new Error("upload changed while retrying; resume after verifying the retained prefix");
-					// Replay even after a lost acknowledgement; the daemon verifies identical bytes.
 				}
 			}
 			offset += size;

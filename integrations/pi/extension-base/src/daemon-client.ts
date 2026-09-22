@@ -15,7 +15,6 @@ export interface DaemonClientConfig {
 	readonly actorName: string;
 	readonly runtimePath: string;
 	readonly defaultTimeout: number;
-	/** Whether request failures should be written to the host console. */
 	readonly logFailures?: boolean;
 }
 
@@ -56,9 +55,7 @@ function logWarning(config: DaemonClientConfig, message: string): void {
 async function cancelResponseBody(response: Response): Promise<void> {
 	try {
 		await response.body?.cancel();
-	} catch {
-		// Response cleanup is best-effort after the status is already known.
-	}
+	} catch {}
 }
 
 async function daemonFetchResult<T>(
@@ -111,7 +108,6 @@ async function daemonFetchResult<T>(
 			}
 		} catch (e) {
 			await cancelResponseBody(response);
-			// Body read failed — typically a timeout firing after headers arrived
 			if (isTimeoutError(e)) {
 				logWarning(config, `[${config.logPrefix}] ${method} ${path} body read timed out after ${timeout}ms`);
 				return { ok: false, reason: "timeout" };

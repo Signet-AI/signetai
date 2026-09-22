@@ -131,8 +131,6 @@ const SignetOhMyPiExtension: OmpExtensionFactory = (pi): void => {
 	if (readRuntimeEnv("SIGNET_ENABLED") === "false") {
 		return;
 	}
-
-	// Per-session bypass: skip all automatic hooks (Oh My Pi has no commands/tools)
 	if (readRuntimeEnv("SIGNET_BYPASS") === "1") {
 		return;
 	}

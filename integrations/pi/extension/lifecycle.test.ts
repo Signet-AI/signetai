@@ -110,7 +110,6 @@ describe("pi lifecycle session-end handling", () => {
 
 		await endPreviousSession(deps, { previousSessionFile: newFile }, "session_switch");
 		await refreshSessionStart(deps, createTestContext("third-session") as never);
-		// The second deferred rotation must not replace the first one.
 		expect(deps.state.getPendingSessionSwitch()).toEqual({
 			fromSessionId: "old-session",
 			toSessionId: "new-session",
@@ -200,7 +199,6 @@ describe("pi lifecycle session-end handling", () => {
 		deps.state.setActiveSession("prev-session", sessionFile);
 
 		await endPreviousSession(deps, { previousSessionFile: sessionFile }, "session_switch");
-		// Release call sent even without transcript (to free daemon claim)
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.path).toBe("/api/hooks/session-end");
 		expect((calls[0]?.body as Record<string, unknown> | undefined)?.transcript).toBeUndefined();

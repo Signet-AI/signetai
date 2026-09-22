@@ -1,13 +1,3 @@
-/**
- * Regression tests for source snapshot import/export.
- *
- * These pin the artifact/provenance fields written by source snapshot restore
- * after the 24-column memory_artifacts upsert was consolidated into the shared
- * `upsertMemoryArtifactInTx` helper in memory-lineage.ts. The consolidation
- * must preserve the exact source-snapshot semantics, in particular the
- * `conflictGuardSourceId` ON CONFLICT guard that only overwrites a conflicting
- * path when it already belongs to the same source_id.
- */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -170,7 +160,6 @@ describe("source snapshot import", () => {
 		expect(row?.source_kind).toBe(artifact.sourceKind);
 		expect(row?.session_id).toBe(artifact.sessionId);
 		expect(row?.session_key).toBe(artifact.sessionKey);
-		// Explicit session_token must be preserved (not re-derived).
 		expect(row?.session_token).toBe(artifact.sessionToken);
 		expect(row?.project).toBe(artifact.project);
 		expect(row?.harness).toBe(artifact.harness);
@@ -210,7 +199,6 @@ describe("source snapshot import", () => {
 	test("re-importing an updated snapshot overwrites the same-source row", async () => {
 		const source = makeSourceEntry("src-1", "/tmp/vault");
 		const original = makeArtifact({ content: "first version content", updatedAt: "2026-01-02T01:00:00.000Z" });
-		// sha must match content; recompute to keep the snapshot valid.
 		const first = { ...original, sourceSha256: hashNormalizedBody(original.content) };
 		expect(await importSourceSnapshot({ source, agentId, snapshot: snapshotFor(source, [first]) })).toEqual({
 			ok: true,
@@ -305,14 +293,11 @@ describe("upsertMemoryArtifactInTx conflictGuardSourceId", () => {
 	}
 
 	test("with the guard, does not overwrite a row owned by a different source_id", () => {
-		// Seed a row owned by src-A (no guard, so it inserts unconditionally).
 		getDbAccessor().withWriteTx((db) => {
 			upsertMemoryArtifactInTx(db, baseFields("src-A", "owner content", "2026-01-02T01:00:00.000Z"), {
 				conflictGuardSourceId: false,
 			});
 		});
-
-		// Attempt to upsert the same path for src-B with the guard active.
 		getDbAccessor().withWriteTx((db) => {
 			upsertMemoryArtifactInTx(db, baseFields("src-B", "intruder content", "2026-01-02T02:00:00.000Z"), {
 				conflictGuardSourceId: true,
@@ -320,7 +305,6 @@ describe("upsertMemoryArtifactInTx conflictGuardSourceId", () => {
 		});
 
 		const row = readArtifact(agentId, "obsidian://vault/guarded.md");
-		// Guard prevents the cross-source overwrite: src-A data survives.
 		expect(row?.source_id).toBe("src-A");
 		expect(row?.content).toBe("owner content");
 		expect(row?.updated_at).toBe("2026-01-02T01:00:00.000Z");

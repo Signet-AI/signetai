@@ -247,9 +247,6 @@ describe("fetchEmbedding", () => {
 			capturedUrl = url.toString();
 			return Promise.resolve(Response.json({ embedding: [0.5, 0.6, 0.7] }));
 		}) as unknown as typeof fetch;
-
-		// No fallback provider cached yet: the kill-switch must fall through
-		// to the probe chain (ollama is probed), never initialize native.
 		setNativeFallbackProvider(null);
 		const result = await fetchEmbedding("test", {
 			provider: "native",

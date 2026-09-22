@@ -111,8 +111,6 @@ export function stampHarness(harness: string | undefined): void {
 		harnessLastSeen.set(harness, new Date().toISOString());
 	}
 }
-
-/** Provider outages are the 503-class cause and dominate compound hook degradation. */
 export function preferHookRecallCause(
 	current: PipelineCauseFamily | undefined,
 	candidate: PipelineCauseFamily,
@@ -166,19 +164,12 @@ async function recordHookRecallOperation(handler: () => Promise<Response>): Prom
 		throw error;
 	}
 }
-
-/** Read the runtime path from header or body, preferring header. */
 function resolveRuntimePath(c: Context, body?: { runtimePath?: string }): RuntimePath | undefined {
 	const header = c.req.header("x-signet-runtime-path");
 	const val = header || body?.runtimePath;
 	if (val === "plugin" || val === "legacy") return val;
 	return undefined;
 }
-
-/**
- * Check that a mid-session hook call is from the path that claimed the
- * session. Returns a 409 Response if there's a conflict, or null if ok.
- */
 function checkSessionClaim(
 	c: Context,
 	sessionKey: string | undefined,
@@ -279,13 +270,9 @@ function parseOptionalNonNegativeInt(value: unknown): number | undefined {
 	const parsed = Number(text);
 	return Number.isSafeInteger(parsed) ? parsed : undefined;
 }
-
-// Guard against recursive hook calls from spawned agent contexts
 function isInternalCall(c: Context): boolean {
 	return c.req.header("x-signet-no-hooks") === "1";
 }
-
-// Check whether the session is bypassed (hooks return no-op responses)
 function checkBypass(body?: { sessionKey?: string; sessionId?: string; agentId?: string }): boolean {
 	const key = body?.sessionKey ?? body?.sessionId;
 	if (!key) return false;
@@ -365,12 +352,6 @@ export function listLiveSessions(agentId: string): Array<{
 	}
 	return [...byKey.values()].sort((a, b) => b.claimedAt.localeCompare(a.claimedAt));
 }
-
-// ============================================================================
-// Hooks Routes
-// ============================================================================
-
-// Session start hook - provides context/memories for injection
 function registerSessionStart(app: Hono): void {
 	app.post("/api/hooks/session-start", async (c) => {
 		if (isInternalCall(c)) {
@@ -424,9 +405,7 @@ function registerSessionStart(app: Hono): void {
 
 			try {
 				autoConnectGraphiq(parseOptionalString(body.project));
-			} catch {
-				// auto-connect is best-effort; never block session-start
-			}
+			} catch {}
 
 			if (checkBypass(body)) {
 				return c.json({ inject: "", stableSystemPrompt: "", dynamicContext: "", memories: [], bypassed: true });
@@ -461,12 +440,6 @@ function registerSessionStart(app: Hono): void {
 		}
 	});
 }
-
-// Bound concurrent prompt-submit work. Subagent-heavy sessions fire many
-// user-prompt-submit hooks at once; without a cap the requests stack on the
-// single event loop, /health starves, and the watchdog kills the daemon
-// (#1059). Past the cap the hook rejects with 503 so callers retry instead
-// of queueing indefinitely.
 export const PROMPT_SUBMIT_MAX_IN_FLIGHT = 8;
 
 export type PromptSubmitAdmission = ConcurrencyAdmission;
@@ -476,13 +449,9 @@ export function createPromptSubmitAdmission(maxInFlight: number): PromptSubmitAd
 }
 
 let promptSubmitAdmission: PromptSubmitAdmission = createPromptSubmitAdmission(PROMPT_SUBMIT_MAX_IN_FLIGHT);
-
-/** Test seam; mirrors native-embedding's __*ForTests pattern. */
 export function __setPromptSubmitAdmissionForTests(admission: PromptSubmitAdmission | null): void {
 	promptSubmitAdmission = admission ?? createPromptSubmitAdmission(PROMPT_SUBMIT_MAX_IN_FLIGHT);
 }
-
-// User prompt submit hook - inject relevant memories per prompt
 function registerUserPromptSubmit(app: Hono): void {
 	app.post("/api/hooks/user-prompt-submit", async (c) => {
 		if (isInternalCall(c)) {
@@ -583,8 +552,6 @@ function registerUserPromptSubmit(app: Hono): void {
 		}
 	});
 }
-
-// Lightweight notification hook for high-frequency harness lifecycle events.
 function registerNotifications(app: Hono): void {
 	app.post("/api/hooks/notifications", async (c) => {
 		if (isInternalCall(c)) return c.json({ inject: "" });
@@ -641,8 +608,6 @@ function registerNotifications(app: Hono): void {
 		}
 	});
 }
-
-// Session end hook - extract memories from transcript
 function registerSessionEnd(app: Hono): void {
 	app.post("/api/hooks/session-end", async (c) => {
 		if (isInternalCall(c)) {
@@ -699,7 +664,6 @@ function registerSessionEnd(app: Hono): void {
 					removeAgentPresence(sessionKey);
 				}
 				if (transcriptPath) {
-					// recordSkillsFromTranscript is throw-proof by contract — safe in setImmediate.
 					setImmediate(() =>
 						recordSkillsFromTranscript({
 							transcriptPath,
@@ -737,10 +701,6 @@ function registerSessionEnd(app: Hono): void {
 		return c.json(job);
 	});
 }
-
-// Harness-emitted skill invocations (claude-code PostToolUse, opencode
-// tool.execute.after, ...). Records source='agent' rows deduped on
-// (agentId, harness, sessionId, toolUseId) so a re-fired hook records once.
 function registerSkillInvocation(app: Hono): void {
 	app.post("/api/hooks/skill-invocation", async (c) => {
 		if (isInternalCall(c)) {
@@ -806,8 +766,6 @@ function registerSkillInvocation(app: Hono): void {
 		}
 	});
 }
-
-// Mid-session checkpoint extraction (long-lived sessions)
 function registerCheckpointExtract(app: Hono): void {
 	app.post("/api/hooks/session-checkpoint-extract", async (c) => {
 		if (isInternalCall(c)) {
@@ -852,8 +810,6 @@ function registerCheckpointExtract(app: Hono): void {
 		}
 	});
 }
-
-// Remember hook - explicit memory save
 function registerRemember(app: Hono): void {
 	app.post("/api/hooks/remember", async (c) => {
 		if (isInternalCall(c)) {
@@ -897,8 +853,6 @@ function registerRemember(app: Hono): void {
 		}
 	});
 }
-
-// Recall hook - explicit memory query
 function registerRecall(app: Hono): void {
 	app.post("/api/hooks/recall", async (c) => {
 		if (isInternalCall(c)) {
@@ -948,8 +902,6 @@ function registerRecall(app: Hono): void {
 					agentId: body.agentId ?? c.req.header("x-signet-agent-id"),
 					sessionKey: body.sessionKey,
 				});
-
-				// When aggregate save is requested, enforce scope for non-admin tokens.
 				if (aggregateSaveRequested) {
 					const aggAuth = c.get("auth");
 					if (aggAuth?.claims && aggAuth.claims.role !== "admin") {
@@ -1058,8 +1010,6 @@ function registerRecall(app: Hono): void {
 		});
 	});
 }
-
-// Pre-compaction hook - provides summary instructions
 function registerPreCompaction(app: Hono): void {
 	app.post("/api/hooks/pre-compaction", async (c) => {
 		try {
@@ -1126,8 +1076,6 @@ function registerPreCompaction(app: Hono): void {
 		}
 	});
 }
-
-// Save compaction summary (convenience endpoint)
 function registerCompactionComplete(app: Hono): void {
 	app.post("/api/hooks/compaction-complete", async (c) => {
 		try {
@@ -1186,7 +1134,7 @@ function registerCompactionComplete(app: Hono): void {
 									 WHERE session_key = ? AND agent_id = ?`,
 								)
 								.get(body.sessionKey, agentId) as { project: string | null } | undefined,
-						"routes/hooks-routes.ts:1180",
+						"routes/hooks-routes.ts:1128",
 					)
 				: undefined;
 			const requestedProject = transcriptRow?.project ?? parseOptionalString(body.project);
@@ -1228,8 +1176,6 @@ function registerCompactionComplete(app: Hono): void {
 						now,
 						now,
 						"system",
-						// This is the keyword/vector-recall projection. The temporal-DAG
-						// compaction node below is the canonical episodic Dreaming input.
 						null,
 					);
 					upsertMemoryContentSafetyInTx(db, {
@@ -1283,7 +1229,7 @@ function registerCompactionComplete(app: Hono): void {
 						sourceRef: body.sessionKey ?? null,
 						harness: body.harness,
 					});
-				}, "routes/hooks-routes.ts:1209");
+				}, "routes/hooks-routes.ts:1157");
 
 				try {
 					await writeCompactionArtifact({
@@ -1345,7 +1291,7 @@ function registerCompactionComplete(app: Hono): void {
 								agentId,
 							);
 						}
-					}, "routes/hooks-routes.ts:1329");
+					}, "routes/hooks-routes.ts:1275");
 				} catch (err) {
 					logger.warn("hooks", "Failed to reset checkpoint state after compaction (non-fatal)", {
 						error: err instanceof Error ? err.message : String(err),
@@ -1384,10 +1330,6 @@ function registerCompactionComplete(app: Hono): void {
 		}
 	});
 }
-
-// ============================================================================
-// Cross-Agent Collaboration API
-// ============================================================================
 
 const AGENT_MESSAGE_TYPES: readonly AgentMessageType[] = ["assist_request", "decision_update", "info", "question"];
 const MAX_CROSS_AGENT_MESSAGE_CHARS = 65_536;
@@ -1848,18 +1790,11 @@ function registerCrossAgentStream(app: Hono): void {
 	});
 }
 
-// ============================================================================
-// Synthesis Routes
-// ============================================================================
-
 function registerSynthesis(app: Hono): void {
-	// Get synthesis config
 	app.get("/api/hooks/synthesis/config", (c) => {
 		const config = DEFAULT_SYNTHESIS_WORKER_CONFIG;
 		return c.json(config);
 	});
-
-	// Request MEMORY.md synthesis
 	app.post("/api/hooks/synthesis", async (c) => {
 		try {
 			const body = (await c.req.json()) as SynthesisRequest & { agentId?: string; sessionKey?: string };
@@ -1880,8 +1815,6 @@ function registerSynthesis(app: Hono): void {
 			return c.json({ error: "Synthesis request failed" }, 500);
 		}
 	});
-
-	// Retired: Dreaming's manifest-gated path is the sole MEMORY.md publisher.
 	app.post("/api/hooks/synthesis/complete", async (c) => {
 		return c.json(
 			{
@@ -1895,8 +1828,6 @@ function registerSynthesis(app: Hono): void {
 			410,
 		);
 	});
-
-	// Trigger immediate MEMORY.md synthesis
 	app.post("/api/synthesis/trigger", async (c) => {
 		try {
 			const worker = getSynthesisWorker();
@@ -1910,8 +1841,6 @@ function registerSynthesis(app: Hono): void {
 			return c.json({ error: "Synthesis trigger failed" }, 500);
 		}
 	});
-
-	// Synthesis worker status
 	app.get("/api/synthesis/status", (c) => {
 		const worker = getSynthesisWorker();
 		const config = DEFAULT_SYNTHESIS_WORKER_CONFIG;
@@ -1923,14 +1852,6 @@ function registerSynthesis(app: Hono): void {
 		});
 	});
 }
-
-/**
- * Wrap an embed function so embeddings produced during a recall hook are
- * attributed to the recall source. Query-role embeddings (the search query
- * vector) are "recall"; the document-role embed aggregateRecall performs on
- * the synthesized aggregate memory content is a memory write, so it records
- * as "memory-capture". Both carry the resolved agent id.
- */
 function recallAttributedEmbedFn(
 	embedFn: typeof fetchEmbedding,
 	agentId: string,

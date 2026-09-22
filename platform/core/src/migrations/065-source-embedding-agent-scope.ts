@@ -11,14 +11,6 @@ function hasColumn(db: MigrationDb, table: string, column: string): boolean {
 	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name?: unknown }>;
 	return rows.some((row) => row.name === column);
 }
-
-/**
- * Migration 065: agent-scoped source embeddings.
- *
- * Source chunks are retrieval views over external knowledge bases. They need an
- * explicit agent owner so vector recall and scoped disconnect cannot leak or
- * delete another agent's connected source chunks.
- */
 export function up(db: MigrationDb): void {
 	if (!hasTable(db, "embeddings")) return;
 

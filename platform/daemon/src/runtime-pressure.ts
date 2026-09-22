@@ -1,12 +1,3 @@
-/**
- * Bounded runtime context for daemon liveness telemetry.
- *
- * This module deliberately stores only the latest coarse observations. The
- * event-loop wedge path reads this context without doing database or provider
- * work while the event loop is recovering; the telemetry layer separately
- * handles its bounded local audit append.
- */
-
 export type PressureBucket =
 	| "unknown"
 	| "none"
@@ -211,8 +202,6 @@ export function getRuntimePressureEnvelope(now = Date.now()): RuntimePressureEnv
 		snapshotAgeBucket: latestEnvelopeAt === 0 ? "unknown" : snapshotAgeBucket(Math.max(0, now - latestEnvelopeAt)),
 	};
 }
-
-/** Test-only reset that also protects daemon tests from cross-case state. */
 export function resetRuntimePressureState(): void {
 	latestDbLatencyMs = null;
 	latestEmbeddingLatencyMs = null;

@@ -1,8 +1,3 @@
-/**
- * In-memory sliding window rate limiter for destructive operations.
- * Resets on daemon restart — acceptable for v1.
- */
-
 import type { RateLimitCheck } from "./types";
 
 interface WindowEntry {
@@ -72,7 +67,5 @@ export const DEFAULT_RATE_LIMITS: Readonly<Record<string, RateLimitConfig>> = {
 	inferenceExplain: { windowMs: 60_000, max: 120 },
 	inferenceExecute: { windowMs: 60_000, max: 20 },
 	inferenceGateway: { windowMs: 60_000, max: 30 },
-	// LLM-enabled recall (useExtractionModel: true) — separate bucket so
-	// operators can tune the cost-sensitive path independently of plain recall.
 	recallLlm: { windowMs: 60_000, max: 60 },
 };

@@ -1,8 +1,3 @@
-/**
- * SQLite journal settings for filesystems with and without reliable WAL
- * shared-memory and locking semantics.
- */
-
 import { statfsSync } from "node:fs";
 import { execFileSyncHidden } from "./child-process";
 
@@ -19,19 +14,10 @@ export interface SqliteJournalConfig {
 	readonly networkFilesystem: boolean;
 	readonly journalMode: SqliteJournalMode;
 }
-
-/** Return true for filesystem types where SQLite WAL sidecars are unsafe. */
 export function isNetworkFilesystem(filesystemType: string | null): boolean {
 	if (filesystemType === null) return false;
 	return NETWORK_FILESYSTEM_TYPES.has(filesystemType.trim().toLowerCase());
 }
-
-/**
- * Read the Darwin filesystem name for a directory. Node's statfs wrapper does
- * not expose f_fstypename on every runtime, so use macOS's stat utility as a
- * fallback. This intentionally detects filesystem type only. In particular,
- * iCloud paths on APFS are not classified as network filesystems here.
- */
 export function detectFilesystemType(
 	path: string,
 	opts?: {
@@ -48,9 +34,7 @@ export function detectFilesystemType(
 		if (typeof stats.f_fstypename === "string" && stats.f_fstypename.trim().length > 0) {
 			return stats.f_fstypename.trim();
 		}
-	} catch {
-		// The stat utility below provides the Darwin fallback.
-	}
+	} catch {}
 
 	try {
 		const output =

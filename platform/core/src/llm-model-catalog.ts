@@ -17,10 +17,6 @@ export type ModelCatalogProvider =
 	| "openrouter"
 	| "openai-compatible"
 	| "command";
-
-// Provider-backed entries are curated against @earendil-works/pi-ai 0.84.4.
-// Pi's complete provider catalogs remain the authority for connect/setup flows;
-// these are the small checked presets used by the legacy pipeline endpoints.
 export const PIPELINE_MODEL_CATALOG = {
 	none: [],
 	command: [],

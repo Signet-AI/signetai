@@ -178,9 +178,6 @@ describe("staging embedding coverage", () => {
 			ready: true,
 		});
 		expect(raw.prepare("SELECT COUNT(*) AS count FROM vec_embeddings_staging").get()).toEqual({ count: 2 });
-
-		// A source purge during an asynchronous build must not strand an orphan
-		// in staging and indefinitely block the count-based promotion gate.
 		raw.exec("DELETE FROM embeddings WHERE id = 'source-embedding'");
 		const second = await stageEmbeddingBatch({
 			accessor,

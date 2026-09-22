@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 115: durable cross-agent inbox and acknowledgements (#944).
- *
- * Messages remain available across daemon restarts until acknowledgement or
- * the bounded retention window expires. Receipts are agent-scoped so one
- * recipient cannot dismiss a broadcast for every other agent.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS cross_agent_messages (

@@ -156,10 +156,6 @@ describe("embedding index state", () => {
 			"CREATE TABLE embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, chunk_text TEXT, created_at TEXT, agent_id TEXT)",
 		);
 		const db = raw as unknown as WriteDb;
-		// Unknown models get the identity profile on both sides, so a config
-		// whose fingerprint equals the active generation's must NOT keep an
-		// in-flight build alive — that build would promote a generation the
-		// current config no longer wants.
 		const activeConfig: EmbeddingConfig = {
 			provider: "ollama",
 			model: "custom-a",
@@ -385,8 +381,6 @@ describe("embedding index state", () => {
 				"UPDATE embedding_index_state SET active_profile_json = ?, staging_profile_json = ?, state = 'building' WHERE id = 1",
 			)
 			.run(JSON.stringify(active), JSON.stringify(staging));
-		// Model the state after promotion's durable swap: the old active pair
-		// remains the only recall-safe projection while the new projection rebuilds.
 		raw.exec(`
 			INSERT INTO embeddings VALUES ('new');
 			INSERT INTO embeddings_staging VALUES ('old');

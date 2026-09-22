@@ -1,31 +1,3 @@
-/**
- * Phase D stability acceptance scenario runner (#1543).
- *
- * Boots the real daemon (spawned from source) against a production-shaped
- * database (~106k memories, ~11k full-size transcript jobs, telemetry, and a
- * multi-thousand-file source index — see build-db.ts), with an event-loop
- * occupancy probe preloaded INTO the daemon process. While the daemon runs:
- *
- *   (a) polls /health/live, /api/status, and the diagnostics report
- *       concurrently at realistic intervals;
- *   (b) simulates provider-down: the embedding provider endpoint refuses
- *       connections (a bound-then-closed port), while a configured source
- *       root keeps the source sync walking (#1671's trigger);
- *   (c) drives a concurrent foreground write load via the normal memory
- *       remember path.
- *
- * At the end it reads the probe results, evaluates #1543's acceptance
- * criteria (criteria.ts), prints a human summary, and writes a
- * machine-readable JSON artifact.
- *
- * This harness is a judge, not a fixer: it never patches daemon behavior. If
- * it fails on current main, that is the harness working — the numbers are the
- * baseline.
- *
- * Usage:
- *   bun tests/integration/acceptance/run.ts [--scale full|smoke] [--keep] [--out DIR]
- */
-
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
@@ -40,8 +12,6 @@ const daemonScript = join(repoRoot, "platform/daemon/src/daemon.ts");
 const probeScript = join(harnessDir, "loop-probe.ts");
 const activeFetchControllers = new Set<AbortController>();
 
-// -- CLI ---------------------------------------------------------------------
-
 function parseArgs(argv: readonly string[]): { scale: "full" | "smoke"; keep: boolean; out: string | null } {
 	const scaleIdx = argv.indexOf("--scale");
 	const scale = scaleIdx !== -1 && argv[scaleIdx + 1] === "smoke" ? "smoke" : "full";
@@ -53,8 +23,6 @@ function parseArgs(argv: readonly string[]): { scale: "full" | "smoke"; keep: bo
 }
 
 const args = parseArgs(process.argv.slice(2));
-
-/** Full = the real deployment profile. Smoke = same code paths, smaller db + shorter run for per-PR CI. */
 const SCALE =
 	args.scale === "smoke"
 		? {
@@ -77,8 +45,6 @@ const SCALE =
 				writeLoad: 300,
 				runSeconds: 180,
 			};
-
-// -- helpers -----------------------------------------------------------------
 
 interface TimedResponse {
 	readonly status: number;
@@ -131,8 +97,6 @@ function listenOnEphemeralPort(server: Server): Promise<number> {
 		});
 	});
 }
-
-/** Resolve when the interval elapses, or immediately when the poller stops. */
 function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
 	if (signal.aborted) return Promise.resolve();
 	return new Promise((resolveSleep) => {
@@ -145,8 +109,6 @@ function sleepAbortable(ms: number, signal: AbortSignal): Promise<void> {
 		signal.addEventListener("abort", done, { once: true });
 	});
 }
-
-/** Reserve an OS port and leave it CLOSED: connections are refused, never queued. */
 async function reserveDeadPort(): Promise<number> {
 	const holder = createServer();
 	const port = await listenOnEphemeralPort(holder);
@@ -164,8 +126,6 @@ function childExited(child: ChildProcess | null): {
 	}
 	return { exited: false, code: null, signal: null };
 }
-
-// -- synthetic source tree (keeps source sync walking like a real vault) ------
 
 function buildSourceTree(root: string, files: number, dirs: number): void {
 	const words = "source sync artifact capture transcript memory session index".split(" ");
@@ -185,8 +145,6 @@ function buildSourceTree(root: string, files: number, dirs: number): void {
 	}
 }
 
-// -- probe results ------------------------------------------------------------
-
 interface ProbeReport {
 	enabled: boolean;
 	phase: string;
@@ -204,8 +162,6 @@ async function fetchProbeReport(probeOrigin: string): Promise<ProbeReport | null
 		return null;
 	}
 }
-
-// -- main scenario ------------------------------------------------------------
 
 interface PhaseMark {
 	readonly at: number;
@@ -248,8 +204,6 @@ function writeEmergencyArtifact(kind: string, message: string): void {
 		console.error(`[phase-d] could not write failure artifact ${emergencyArtifactPath}: ${String(error)}`);
 	}
 }
-
-// Module-level daemon handle so the self-destruct timer can always reach it.
 let daemonRef: ChildProcess | null = null;
 
 async function main(): Promise<number> {
@@ -265,7 +219,6 @@ async function main(): Promise<number> {
 	const stderrChunks: string[] = [];
 
 	try {
-		// 1. Build the production-shaped database.
 		markPhase("build-db");
 		console.error(
 			`[phase-d] building ${args.scale} database: ${SCALE.memories} memories, ${SCALE.transcriptJobs} transcript jobs, ${SCALE.telemetryEvents} telemetry events, ${SCALE.sourceFiles} source index rows`,
@@ -280,15 +233,7 @@ async function main(): Promise<number> {
 		});
 		const dbMb = (statSync(dbResult.dbPath).size / (1024 * 1024)).toFixed(1);
 		console.error(`[phase-d] db built in ${Date.now() - buildStarted}ms (${dbMb} MB) at ${dbResult.dbPath}`);
-
-		// 2. Provider-down endpoint: a port that REFUSES connections. The
-		// daemon's embedding fetches fail fast at connect time — the same
-		// failure mode as a dead provider, not a sleep-based fake.
 		deadEmbeddingPort = await reserveDeadPort();
-
-		// 3. agent.yaml with a reachable-by-URL-but-dead embedding provider
-		//    (openai-compatible shape so base_url is honored) and the pipeline
-		//    surface active.
 		writeFileSync(
 			join(agentsDir, "agent.yaml"),
 			[
@@ -318,18 +263,11 @@ async function main(): Promise<number> {
 				"    significance:",
 				"      enabled: false",
 				"    telemetryEnabled: false",
-				// Dreaming passes need an LLM route; without one they fail
-				// (recorded noise). The harness judges stability surfaces, not
-				// dreaming — pin the threshold above the seeded backlog so the
-				// check loop stays quiet and deterministic.
 				"  dreaming:",
 				"    tokenThreshold: 1000000",
 				"",
 			].join("\n"),
 		);
-
-		// 4. Synthetic source root keeps the native source bridge walking
-		//    while the provider is down (#1671's trigger shape).
 		const sourceRoot = join(workspace, "source-tree");
 		mkdirSync(sourceRoot, { recursive: true });
 		buildSourceTree(sourceRoot, SCALE.sourceTreeFiles, SCALE.sourceTreeDirs);
@@ -357,12 +295,6 @@ async function main(): Promise<number> {
 				2,
 			)}\n`,
 		);
-
-		// 5. Spawn the daemon with the probe preloaded into its process. The
-		//    probe binds its own loopback listener so results stay readable
-		//    even if the daemon's HTTP surface wedges. The child env is
-		//    hermetic: HOME and harness-specific state point at the workspace
-		//    so built-in sources never index the invoking user's real home.
 		markPhase("daemon-startup");
 		const portHolder = createServer();
 		const daemonPort = await listenOnEphemeralPort(portHolder);
@@ -402,9 +334,6 @@ async function main(): Promise<number> {
 		daemonRef = daemon;
 		daemon.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk.toString()));
 		daemon.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk.toString()));
-
-		// 6. Wait for readiness (bounded). Startup counts toward the gate:
-		//    #1543 demands no unbounded synchronous startup work.
 		const readyDeadline = Date.now() + 120_000;
 		let ready = false;
 		while (Date.now() < readyDeadline) {
@@ -425,10 +354,7 @@ async function main(): Promise<number> {
 		const daemonStartupMark = phaseMarks[phaseMarks.length - 1];
 		const startupMs = daemonStartupMark ? Date.now() - daemonStartupMark.at : -1;
 		console.error(`[phase-d] daemon live after ${startupMs}ms (on ${SCALE.memories} memories)`);
-
-		// 7. Start the measurement phase pollers.
 		markPhase("run");
-		// Tell the probe the startup phase ended.
 		await fetch(`${probeOrigin}/phase`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
@@ -445,8 +371,6 @@ async function main(): Promise<number> {
 		let queueDepthUnavailableReason: string | null = null;
 		let stop = false;
 		const pollerAbort = new AbortController();
-
-		// (a) /health/live every 250ms — the hot liveness path.
 		const liveLoop = (async () => {
 			while (!stop) {
 				const r = await timedFetch(`${origin}/health/live`, 5_000);
@@ -455,8 +379,6 @@ async function main(): Promise<number> {
 				await sleepAbortable(250, pollerAbort.signal);
 			}
 		})();
-
-		// (a) /api/status every 2s — the dashboard status path.
 		const statusLoop = (async () => {
 			while (!stop) {
 				const r = await timedFetch(`${origin}/api/status`, 10_000);
@@ -465,10 +387,6 @@ async function main(): Promise<number> {
 				await sleepAbortable(2_000, pollerAbort.signal);
 			}
 		})();
-
-		// (a) diagnostics report every 5s (getDiagnostics equivalent). Queue
-		// depth is read from the daemon's dedicated observable route rather than
-		// guessing fields that are not present in /api/diagnostics.
 		const diagnosticsLoop = (async () => {
 			while (!stop) {
 				const [r, queueResponse] = await Promise.all([
@@ -504,10 +422,6 @@ async function main(): Promise<number> {
 				await sleepAbortable(5_000, pollerAbort.signal);
 			}
 		})();
-
-		// (c) Foreground write load through the normal remember path,
-		//     concurrent with the pollers. Modest concurrency, realistic body
-		//     sizes.
 		const writeLoop = (async () => {
 			const bodies = Array.from({ length: SCALE.writeLoad }, (_, i) => ({
 				content: `phase-d acceptance write ${i}: ${"observed system behavior under concurrent load ".repeat(3)}${i}`,
@@ -532,13 +446,6 @@ async function main(): Promise<number> {
 			});
 			await Promise.all(workers);
 		})();
-
-		// Run-phase watchdog: bounded wall clock, liveness of the daemon
-		// process, and — critically — continued HTTP availability. A daemon
-		// whose listener starves while the process stays alive is exactly
-		// the #1670/#1671 wedge signature; the poller latency series records
-		// it (timeouts), and this loop surfaces a hard error if BOTH primary
-		// surfaces become unreachable (not merely slow) for 30s straight.
 		const runDeadline = Date.now() + SCALE.runSeconds * 1_000;
 		let lastReachableAt = Date.now();
 		let lastProgressLog = Date.now();
@@ -556,7 +463,7 @@ async function main(): Promise<number> {
 				console.error(
 					`[phase-d] /health/live unreachable for ${Math.round((Date.now() - lastReachableAt) / 1000)}s (last status ${live.status}) — continuing to sample; the latency series and probe will record the outage`,
 				);
-				lastReachableAt = Date.now(); // re-arm; each 30s outage is logged once
+				lastReachableAt = Date.now();
 			}
 			if (Date.now() - lastProgressLog > 15_000) {
 				lastProgressLog = Date.now();
@@ -583,8 +490,6 @@ async function main(): Promise<number> {
 				`[phase-d] pollers did not settle within ${POLLER_SHUTDOWN_TIMEOUT_MS / 1000}s after the run deadline`,
 			);
 		}
-
-		// 8. Collect probe results and evaluate.
 		const probe = await fetchProbeReport(probeOrigin);
 		if (!probe) throw new Error("probe results unavailable: probe server did not respond");
 
@@ -629,8 +534,6 @@ async function main(): Promise<number> {
 					: `${evaluation.summary} Pollers also did not settle within ${POLLER_SHUTDOWN_TIMEOUT_MS / 1000}s after the run deadline.`,
 			};
 		}
-
-		// 9. Output: human summary + machine-readable artifact.
 		let logs = "";
 		try {
 			const logDir = join(agentsDir, ".daemon", "logs");
@@ -689,10 +592,6 @@ async function main(): Promise<number> {
 		return evaluation.pass ? 0 : 1;
 	} finally {
 		if (daemon && !childExited(daemon).exited) {
-			// A wedged daemon can ignore SIGTERM (observed on main: shutdown
-			// cleanup itself timed out after a 30s event-loop block). Escalate
-			// on a short deadline so the harness always terminates; probe
-			// results were already collected before this point.
 			daemon.kill("SIGTERM");
 			await new Promise<void>((done) => {
 				const timer = setTimeout(() => {
@@ -716,9 +615,6 @@ async function main(): Promise<number> {
 }
 
 if (import.meta.main) {
-	// Hard wall-clock self-destruct: a wedged daemon (or a hung await anywhere
-	// in the harness) must never wedge CI. The deadline covers every phase;
-	// SIGKILL to the daemon + exit 124 so the timeout is unmistakable in logs.
 	const SELF_DESTRUCT_MS = (args.scale === "smoke" ? 9 : 16) * 60_000;
 	const selfDestruct = setTimeout(() => {
 		const message = `exceeded ${SELF_DESTRUCT_MS / 60_000}min wall clock`;

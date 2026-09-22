@@ -1,6 +1,3 @@
-/* ==========================================================================
-   FONT LOADING
-   ========================================================================== */
 @font-face {
 	font-family: "Geist Mono";
 	src: url("/fonts/GeistMono-Regular.woff2") format("woff2");
@@ -22,10 +19,6 @@
 	font-style: normal;
 	font-display: swap;
 }
-
-/* ==========================================================================
-   SYS_TOKENS & BASE
-   ========================================================================== */
 :root {
 	--color-bg: #06131d;
 	--color-surface: #0b1b27;
@@ -92,12 +85,6 @@ body {
 	line-height: 1.6;
 	min-height: 100vh;
 }
-
-/* bg-grid removed — replaced by grain+scanline overlays */
-
-/* ==========================================================================
-   TYPOGRAPHY & PRIMITIVES
-   ========================================================================== */
 h1,
 h2,
 h3,
@@ -194,10 +181,6 @@ h4 {
 	border-color: var(--color-highlight-dim);
 	color: var(--color-accent);
 }
-
-/* ==========================================================================
-   LAYOUT
-   ========================================================================== */
 .container {
 	position: relative;
 	z-index: 1;
@@ -234,10 +217,6 @@ section {
 	letter-spacing: 0.1em;
 	color: var(--color-text);
 }
-
-/* ==========================================================================
-   FOOTER
-   ========================================================================== */
 .site-footer {
 	padding: var(--space-3xl) 0 var(--space-xl);
 	border-top: 1px solid var(--color-border);
@@ -297,10 +276,6 @@ section {
 	width: 18px;
 	height: 18px;
 }
-
-/* ==========================================================================
-   UTILS
-   ========================================================================== */
 .reveal {
 	opacity: 0;
 	transform: translateY(24px) scale(0.985);
@@ -342,10 +317,6 @@ section {
 	height: 1px;
 	top: 50%;
 }
-
-/* ==========================================================================
-   GLOBAL NAV
-   ========================================================================== */
 .site-nav-wrapper {
 	position: fixed;
 	top: 0;
@@ -362,8 +333,6 @@ section {
 .site-nav-wrapper.nav-hidden {
 	transform: translateY(calc(-100% - 20px));
 }
-
-/* Anchored full-width bar variant (docs) */
 .site-nav-wrapper--bar {
 	padding: 0;
 	background: rgba(9, 13, 22, 0.82);
@@ -868,10 +837,6 @@ html.nav-open #nav-line-1 {
 html.nav-open #nav-line-2 {
 	transform: translateY(-3.5px) rotate(-45deg);
 }
-
-/* ==========================================================================
-   RESPONSIVE
-   ========================================================================== */
 @media (max-width: 1080px) {
 	.arch-item {
 		grid-template-columns: 56px 1fr;
@@ -1017,8 +982,6 @@ html.nav-open #nav-line-2 {
 		grid-column: 1;
 	}
 }
-
-/* Grain overlay — dashboard-matched feTurbulence noise */
 body::before {
 	content: "";
 	position: fixed;
@@ -1030,8 +993,6 @@ body::before {
 	background-repeat: repeat;
 	background-size: 200px;
 }
-
-/* Scanline overlay — retro CRT effect */
 body::after {
 	content: "";
 	position: fixed;
@@ -1048,14 +1009,10 @@ body::after {
 	);
 	background-size: 100% 4px;
 }
-
-/* Selection styling */
 ::selection {
 	background: var(--color-highlight-muted);
 	color: var(--color-text-bright);
 }
-
-/* Scrollbar styling — match dashboard */
 ::-webkit-scrollbar {
 	width: 3px;
 	height: 3px;
@@ -1070,8 +1027,6 @@ body::after {
 ::-webkit-scrollbar-thumb:hover {
 	background: var(--color-text-muted);
 }
-
-/* sig-panel utility — machined aluminum panel from dashboard */
 .sig-panel {
 	background: var(--color-surface);
 	border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1079,8 +1034,6 @@ body::after {
 	overflow: hidden;
 	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 2px 4px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
-
-/* Badge variants */
 .badge-highlight {
 	border-color: var(--color-highlight-dim);
 	color: var(--color-highlight-text);
@@ -1091,8 +1044,6 @@ body::after {
 	color: var(--color-electric);
 	background: var(--color-electric-dim);
 }
-
-/* Text utility */
 .text-highlight {
 	color: var(--color-highlight-text);
 }

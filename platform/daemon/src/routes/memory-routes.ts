@@ -136,7 +136,6 @@ export interface MemoryRoutesDeps {
 	readonly fetchEmbedding?: typeof fetchEmbedding;
 	readonly getInferenceRouterOrNull?: typeof getInferenceRouterOrNull;
 	readonly memoryCaptureAdmission?: ConcurrencyAdmission;
-	/** Dedicated owner read lane. When set, recall never touches daemon SQLite. */
 	readonly recallOwner?: DbOwnerClient;
 }
 
@@ -577,14 +576,6 @@ function recordRecallQaTelemetry(input: {
 		retentionDays: input.cfg.pipelineV2.telemetry.retentionDays,
 	});
 }
-
-/**
- * Wrap an embed function so embeddings produced during a recall route are
- * attributed to the recall source. Query-role embeddings (the search query
- * vector) are "recall"; the document-role embed aggregateRecall performs on
- * the synthesized aggregate memory content is a memory write, so it records
- * as "memory-capture". Both carry the resolved agent id.
- */
 function recallAttributedEmbedFn(
 	embedFn: typeof fetchEmbedding,
 	agentId: string,
@@ -673,12 +664,6 @@ function documentScopeOwnedBy(
 function documentMetadataJson(metadata: unknown): string | null {
 	return metadata === undefined ? null : JSON.stringify(metadata);
 }
-
-/**
- * Claim the install's one-shot first-use milestone after a successful
- * remember / recall. The collector fires first.remember / first.recall
- * only when this call wins the persisted claim (issue #1202).
- */
 function recordFirstUseTelemetry(kind: "remember" | "recall"): void {
 	getActiveTelemetry()?.recordFirstUse(kind);
 }
@@ -780,9 +765,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	const getInferenceRouterOrNullFn = deps.getInferenceRouterOrNull ?? getInferenceRouterOrNull;
 	const memoryCaptureAdmission =
 		deps.memoryCaptureAdmission ?? createConcurrencyAdmission(MEMORY_CAPTURE_MAX_IN_FLIGHT);
-	// =========================================================================
-	// Permission guards — memory routes
-	// =========================================================================
 
 	app.use("/api/memory/remember", async (c, next) => {
 		return requirePermission("remember", authConfig)(c, next);
@@ -796,8 +778,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 	app.use("/api/hook/remember", async (c, next) => {
 		return requirePermission("remember", authConfig)(c, next);
 	});
-
-	// Recall / search — scope.project is enforced at the handler level.
 	app.use("/api/memory/recall", async (c, next) => {
 		return requirePermission("recall", authConfig)(c, next);
 	});
@@ -920,8 +900,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			"recall",
 		);
 	});
-
-	// Modify — with rate limiting
 	app.use("/api/memory/modify", async (c, next) => {
 		const perm = requirePermission("modify", authConfig);
 		const rate = requireRateLimit("modify", authModifyLimiter, authConfig);
@@ -929,8 +907,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			await rate(c, next);
 		});
 	});
-
-	// Forget — with rate limiting
 	app.use("/api/memory/forget", async (c, next) => {
 		const perm = requirePermission("forget", authConfig);
 		const rate = requireRateLimit("batchForget", authBatchForgetLimiter, authConfig);
@@ -953,22 +929,15 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			await rate(c, next);
 		});
 	});
-	// Recover
 	app.use("/api/memory/:id/recover", async (c, next) => {
 		return requirePermission("recover", authConfig)(c, next);
 	});
-
-	// Documents
 	app.use("/api/documents", async (c, next) => {
 		return requirePermission("documents", authConfig)(c, next);
 	});
 	app.use("/api/documents/*", async (c, next) => {
 		return requirePermission("documents", authConfig)(c, next);
 	});
-
-	// =========================================================================
-	// Memory jobs — read-only (uses documents permission)
-	// =========================================================================
 	app.use("/api/memory/jobs", async (c, next) => {
 		return requirePermission("documents", authConfig)(c, next);
 	});
@@ -1010,10 +979,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 		return next();
 	});
-
-	// =========================================================================
-	// GET /api/memories — list memories
-	// =========================================================================
 	app.get("/api/memories", async (c) => {
 		try {
 			const limit = Number.parseInt(c.req.query("limit") || "100", 10);
@@ -1058,9 +1023,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					try {
 						const embResult = db.prepare("SELECT COUNT(*) as count FROM embeddings").get() as { count: number };
 						embeddingsCount = embResult?.count ?? 0;
-					} catch {
-						// embeddings table might not exist
-					}
+					} catch {}
 					const critResult = db
 						.prepare(
 							"SELECT COUNT(*) as count FROM memories WHERE COALESCE(is_deleted, 0) = 0 AND superseded_by IS NULL AND importance >= 0.9",
@@ -1078,7 +1041,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						},
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1022" },
+				{ siteToken: "routes/memory-routes.ts:987" },
 			);
 
 			return c.json(result);
@@ -1091,10 +1054,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			});
 		}
 	});
-
-	// =========================================================================
-	// GET /api/memories/most-used
-	// =========================================================================
 	app.get("/api/memories/most-used", async (c) => {
 		try {
 			const raw = Number.parseInt(c.req.query("limit") || "6", 10);
@@ -1123,7 +1082,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						)
 						.map(({ agent_id: _agentId, ...row }) => row);
 				},
-				{ siteToken: "routes/memory-routes.ts:1102" },
+				{ siteToken: "routes/memory-routes.ts:1061" },
 			);
 			return c.json({ memories });
 		} catch (e) {
@@ -1131,10 +1090,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ memories: [] });
 		}
 	});
-
-	// =========================================================================
-	// GET /api/memories/curator-slices
-	// =========================================================================
 	app.get("/api/memories/curator-slices", async (c) => {
 		try {
 			const minSessions = Math.max(1, Math.min(100, Number.parseInt(c.req.query("minSessions") || "3", 10) || 3));
@@ -1233,7 +1188,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						highUsed: filterSafe(highUsed).map(({ agent_id: _agentId, ...row }) => row),
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1157" },
+				{ siteToken: "routes/memory-routes.ts:1112" },
 			);
 			return c.json({ agentId, minSessions, limit, ...slices });
 		} catch (e) {
@@ -1241,10 +1196,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Failed to load curator slices" }, 500);
 		}
 	});
-
-	// =========================================================================
-	// GET /api/memory/timeline
-	// =========================================================================
 	app.get("/api/memory/timeline", async (c) => {
 		try {
 			const raw = Number.parseInt(c.req.query("tzOffset") || "0", 10);
@@ -1263,7 +1214,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						readPolicy: agentScope.readPolicy,
 						policyGroup: agentScope.policyGroup ?? undefined,
 					}),
-				{ siteToken: "routes/memory-routes.ts:1258" },
+				{ siteToken: "routes/memory-routes.ts:1209" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1285,10 +1236,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			);
 		}
 	});
-
-	// =========================================================================
-	// GET /api/memory/review-queue
-	// =========================================================================
 	app.get("/api/memory/review-queue", async (c) => {
 		try {
 			const scopedAgent = resolveMemoryScopedAgentId(c, {
@@ -1326,16 +1273,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Failed to fetch review queue", items: [] }, 500);
 		}
 	});
-
-	// =========================================================================
-	// GET /memory/search — FTS + filter search
-	// =========================================================================
 	app.get("/memory/search", async (c) => {
 		const query = c.req.query("q") ?? "";
 		const distinct = c.req.query("distinct");
 		const limitParam = c.req.query("limit");
-
-		// Shortcut: return distinct values for a column
 		if (distinct === "who") {
 			try {
 				const rows = await dbOwnerQuery<{ who: string }[]>(
@@ -1370,7 +1311,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					let rows: unknown[] = [];
 
 					if (query.trim()) {
-						// FTS path
 						const { clause, args } = buildWhere(filterParams);
 						try {
 							rows = prepareTypedStatement<Record<string, unknown>>(
@@ -1386,7 +1326,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
           `,
 							).all(query, ...args);
 						} catch {
-							// FTS not available — fall back to LIKE
 							const { clause: rc, args: rargs } = buildWhereRaw(filterParams);
 							rows = prepareTypedStatement<Record<string, unknown>>(
 								db,
@@ -1400,7 +1339,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							).all(`%${query}%`, `%${query}%`, ...rargs);
 						}
 					} else if (hasFilters) {
-						// Pure filter path
 						const { clause, args } = buildWhereRaw(filterParams);
 						rows = prepareTypedStatement<Record<string, unknown>>(
 							db,
@@ -1435,7 +1373,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							return publicRow;
 						});
 				},
-				{ siteToken: "routes/memory-routes.ts:1368" },
+				{ siteToken: "routes/memory-routes.ts:1309" },
 			);
 
 			recordRecallOutcome({
@@ -1451,10 +1389,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ results: [], error: "Search failed" }, 500);
 		}
 	});
-
-	// =========================================================================
-	// POST /api/memory/codex-native-note
-	// =========================================================================
 	app.post("/api/memory/codex-native-note", async (c) => {
 		const body = await c.req.json().catch(() => ({}));
 		const content = typeof body.content === "string" ? body.content.trim() : "";
@@ -1480,10 +1414,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Failed to save Codex native memory note" }, 500);
 		}
 	});
-
-	// =========================================================================
-	// POST /api/memory/remember
-	// =========================================================================
 	app.post("/api/memory/remember", async (c) => {
 		let body: {
 			content?: string;
@@ -1500,11 +1430,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			validFrom?: string;
 			validUntil?: string;
 			sourceCreatedAt?: string;
-			/** ISO timestamp; due-for-review marker for temporal claims (#945). */
 			reviewAfter?: string;
-			/** Id of the memory this write supersedes (vN -> vN+1 lineage). */
 			supersedes?: string;
-			/** Reason recorded on the superseded memory when supersedes is set. */
 			reason?: string;
 			scope?: string | null;
 			agentId?: string;
@@ -1570,11 +1497,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const scope = body.scope ?? null;
 		const rowProvenance = parseRememberRowProvenance(body as Record<string, unknown>);
 		const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: c.req.header("x-signet-session-key") });
-
-		// Scope check: in team/hybrid mode, verify the token allows writing
-		// to the requested agentId and project before any DB mutations.
-		// Project-scoped tokens must supply a matching project — omitting it
-		// is not allowed since that would create an unscoped memory.
 		const auth = c.get("auth");
 		if (auth?.claims) {
 			const tokenProject = auth.claims.scope?.project;
@@ -1599,20 +1521,13 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (hasBodyTags && bodyTags === undefined) {
 			return c.json({ error: "tags must be a string, string array, or null" }, 400);
 		}
-
-		// Pipeline v2 kill switch: refuse writes when mutations are frozen
 		const fullCfgBase = loadMemoryConfig(AGENTS_DIR);
 		const fullCfg = await withActiveEmbeddingConfig(fullCfgBase);
 		const pipelineCfg = fullCfg.pipelineV2;
 		if (pipelineCfg.mutationsFrozen) {
 			return c.json({ error: "Mutations are frozen (kill switch active)" }, 503);
 		}
-
-		// --- Auto-chunking for oversized memories ---
 		const guardrails = pipelineCfg.guardrails;
-		// supersedes is only meaningful for a single-row memory: chunked content
-		// produces several rows with no single head id to chain the predecessor
-		// to. Fail loudly instead of silently dropping the lineage request.
 		if (
 			requestedSupersedes !== undefined &&
 			"structured" in body === false &&
@@ -1669,7 +1584,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1670" },
+				{ siteToken: "routes/memory-routes.ts:1585" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1677,7 +1592,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1678" },
+				{ siteToken: "routes/memory-routes.ts:1593" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1711,7 +1626,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1712" },
+					{ siteToken: "routes/memory-routes.ts:1627" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1822,7 +1737,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				for (let chunkIndex = 0; chunkIndex < chunkPlans.length; chunkIndex += 1) {
 					const plan = chunkPlans[chunkIndex];
 					const chunkId = savedChunkIds[chunkIndex];
-					// Generate embedding async
 					try {
 						const vec = await fetchEmbedding(plan.normalized.storageContent, fullCfg.embedding, "document", {
 							usage: { source: "memory-capture", agentId },
@@ -1918,7 +1832,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1919" },
+						{ siteToken: "routes/memory-routes.ts:1833" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1928,7 +1842,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		try {
 			const result = await runWriteTxAsync(getDbAccessor(), (db) => {
-				// Check sourceId-based dedupe first (scope-aware)
 				if (sourceId) {
 					const bySource = getScopedSourceDedupeRow(db, sourceType, sourceId, dedupeScope);
 					if (bySource) return { deduped: true as const, row: bySource };
@@ -1936,12 +1849,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 				const byIdempotencyKey = getScopedIdempotencyDedupeRow(db, rowProvenance.idempotencyKey, dedupeScope);
 				if (byIdempotencyKey) return { deduped: true as const, row: byIdempotencyKey };
-
-				// Check content_hash dedupe using the same agent/scope tuple as the unique index.
 				const byHash = getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 				if (byHash) return { deduped: true as const, row: byHash };
-
-				// No duplicate — insert
 				txIngestEnvelope(db, {
 					id,
 					content: normalizedContent.storageContent,
@@ -1985,9 +1894,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					inputs: temporalInputs.inputs ?? [],
 					now,
 				});
-				// #1138: lineage at write time. When the caller names a
-				// supersedes target, mark it superseded in the same tx so the
-				// new row becomes the head of the chain atomically.
 				let superseded: SupersedeMemoryTxStatus | null = null;
 				if (requestedSupersedes !== undefined) {
 					const actor = resolveMutationActor(c, who);
@@ -1999,10 +1905,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						changedAt: now,
 						ctx: { actorType: actor.actorType, sessionId: actor.sessionId, requestId: actor.requestId },
 					});
-					// Atomic lineage: an unusable supersedes target fails the
-					// whole write rather than silently producing an orphan. A
-					// target already superseded by a DIFFERENT successor is a
-					// lineage conflict, not idempotence.
 					if (result.status !== "superseded" && result.status !== "already_superseded") {
 						const statusLabel =
 							result.status === "already_superseded_by_other" ? "already superseded by another memory" : result.status;
@@ -2047,7 +1949,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:2044" },
+					{ siteToken: "routes/memory-routes.ts:1946" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -2076,19 +1978,13 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			}
 			logger.error("memory", "Failed to save memory", e as Error);
 			if (e instanceof Error && e.message.startsWith("supersedes target rejected:")) {
-				// Distinguish a caller error (bad supersedes target) from a
-				// server fault: the tx rolled back, nothing was written.
 				return c.json({ error: e.message }, 400);
 			}
 			return c.json({ error: "Failed to save memory" }, 500);
 		}
-
-		// Lossless transcript storage
 		if (body.transcript && sourceId) {
 			await upsertSessionTranscriptAsync(sourceId, body.transcript, sourceType, project, agentId);
 		}
-
-		// Generate embedding asynchronously
 		let embedded = false;
 		try {
 			const baseCfg = loadMemoryConfig(AGENTS_DIR);
@@ -2108,12 +2004,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					const embHash = scope ? `${contentHash}:${scope}` : contentHash;
 					const blob = vectorToBlob(vec);
 					const embId = crypto.randomUUID();
-
-					// Re-resolve the active embedding config and gate on it inside the same
-					// transaction. Previously the config was resolved once (before the model
-					// call) and re-checked later, so a startup building->ready promotion
-					// between the two could skip the insert while still reporting
-					// embedded=true. `embedded` now reflects whether the vector was written.
 					embedded = await runWriteTxAsync(getDbAccessor(), (db) => {
 						const activeCfg = resolveActiveEmbeddingConfig(db, baseCfg.embedding);
 						if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
@@ -2136,20 +2026,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				error: String(e),
 			});
 		}
-
-		// --- Episodic evidence retained; no direct semantic side effects ---
-		// remember saves are immutable EPISODIC evidence. Raw rows remain
-		// inspectable through the curator/list/get surfaces, while only clean
-		// content is eligible for ordinary search/recall and Dreaming. Rows are
-		// never written directly into the knowledge graph. Only Dreaming derives
-		// semantic state from episodic rows via the shared episodic-sources
-		// selector. Inline entity linking, structured graph persistence, and
-		// legacy extract enqueue are intentionally absent here.
 		let hintsWritten = 0;
 		const structuredRetained = !!body.structured;
-
-		// Prospective recall hints are agent-authored metadata that aid future
-		// retrieval of this evidence; they are not semantic graph state.
 		if (Array.isArray(body.hints) || structuredRetained) {
 			const allHints = structuredRetained
 				? [...(body.structured?.hints ?? []), ...(body.hints ?? [])]
@@ -2198,17 +2076,11 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			entities_linked: 0,
 			hints_written: hintsWritten,
 			structured: structuredRetained,
-			// Explicit non-silent indicator: structured input was retained as
-			// episodic evidence but NOT applied to the knowledge graph.
 			structured_applied: false,
 			...(supersededStatus !== null ? { superseded: supersededStatus } : {}),
 			contentSafety,
 		});
 	});
-
-	// =========================================================================
-	// POST /api/memory/save — alias
-	// =========================================================================
 	app.post("/api/memory/save", async (c) => {
 		const body = await c.req.json().catch(() => ({}));
 		const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -2223,10 +2095,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			body: JSON.stringify(body),
 		});
 	});
-
-	// =========================================================================
-	// POST /api/hook/remember — alias for Claude Code skill compatibility
-	// =========================================================================
 	app.post("/api/hook/remember", async (c) => {
 		const body = await c.req.json().catch(() => ({}));
 		const headers: Record<string, string> = { "Content-Type": "application/json" };
@@ -2241,10 +2109,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			body: JSON.stringify(body),
 		});
 	});
-
-	// =========================================================================
-	// GET /api/memory/:id
-	// =========================================================================
 	app.get("/api/memory/:id", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
 		if (!memoryId) {
@@ -2291,7 +2155,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					: null;
 				return { row, safety };
 			},
-			{ siteToken: "routes/memory-routes.ts:2263" },
+			{ siteToken: "routes/memory-routes.ts:2127" },
 		);
 		const row = memoryRead.row;
 
@@ -2318,10 +2182,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			contentSafety: memoryRead.safety,
 		});
 	});
-
-	// =========================================================================
-	// GET /api/memory/:id/history
-	// =========================================================================
 	app.get("/api/memory/:id/history", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
 		if (!memoryId) {
@@ -2394,16 +2254,10 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			}),
 		});
 	});
-	// =========================================================================
-	// GET /api/memory/:id/lineage
-	// =========================================================================
 	app.get("/api/memory/:id/lineage", async (c) => {
 		const memoryId = c.req.param("id")?.trim();
 		if (!memoryId) return c.json({ error: "memory id is required" }, 400);
 		const limit = Math.min(parseOptionalInt(c.req.query("limit")) ?? 50, 500);
-
-		// Same agent-scope isolation as GET /api/memory/:id: a chain is
-		// only readable by agents permitted to read its members.
 		const sessionKeyRaw = c.req.header("x-signet-session-key");
 		const agentId = resolveAgentId({
 			agentId: c.req.query("agentId") ?? c.req.query("agent_id") ?? c.req.header("x-signet-agent-id"),
@@ -2443,14 +2297,8 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			async (db) => {
 				const head = selectLineage(db, memoryId);
 				if (!head) return [];
-				// #1147 review (finding 9): walk BOTH directions so lineage from
-				// any chain row — including the newest head — resolves the full
-				// history. Forward follows superseded_by to the head; backward
-				// finds rows that this row superseded (superseded_by = this id).
-				// Collect into a map then order oldest -> newest by version.
 				const seen = new Set<string>([head.id]);
 				const byId = new Map<string, LineageRow>([[head.id, head]]);
-				// Forward to the newest head.
 				let current = head;
 				while (current.superseded_by && !seen.has(current.superseded_by) && byId.size < limit) {
 					seen.add(current.superseded_by);
@@ -2459,7 +2307,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					byId.set(next.id, next);
 					current = next;
 				}
-				// Backward to the oldest predecessor(s).
 				let cursor = head;
 				while (byId.size < limit) {
 					const predecessor = db
@@ -2479,12 +2326,9 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					byId.set(predecessor.id, predecessor);
 					cursor = predecessor;
 				}
-				// Order oldest -> newest by created_at: the superseded row's
-				// version is bumped (v1 -> v2) so version is NOT a reliable chain
-				// order — creation time is.
 				return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version);
 			},
-			{ siteToken: "routes/memory-routes.ts:2442" },
+			{ siteToken: "routes/memory-routes.ts:2296" },
 		);
 
 		return c.json({
@@ -2504,10 +2348,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			})),
 		});
 	});
-
-	// =========================================================================
-	// GET /api/memory/jobs/:id
-	// =========================================================================
 	app.get("/api/memory/jobs/:id", async (c) => {
 		const jobId = c.req.param("id")?.trim();
 		if (!jobId) {
@@ -2584,10 +2424,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			updated_at: row.updated_at,
 		});
 	});
-
-	// =========================================================================
-	// POST /api/memory/:id/recover
-	// =========================================================================
 	app.post("/api/memory/:id/recover", async (c) => {
 		const payload = await readOptionalJsonObject(c);
 		if (payload === null) {
@@ -2681,10 +2517,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		return c.json({ error: "Unknown mutation result" }, 500);
 	});
-
-	// =========================================================================
-	// PATCH /api/memory/:id
-	// =========================================================================
 	app.patch("/api/memory/:id", async (c) => {
 		const payload = toRecord(await c.req.json().catch(() => null));
 		if (!payload) {
@@ -2818,10 +2650,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		return c.json({ error: "Unknown mutation result" }, 500);
 	});
-
-	// =========================================================================
-	// DELETE /api/memory/:id
-	// =========================================================================
 	app.delete("/api/memory/:id", async (c) => {
 		const payload = await readOptionalJsonObject(c);
 		if (payload === null) {
@@ -2931,10 +2759,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		return c.json({ error: "Unknown mutation result" }, 500);
 	});
-
-	// =========================================================================
-	// POST /api/memories/:id/tombstone
-	// =========================================================================
 	app.post("/api/memories/:id/tombstone", async (c) => {
 		const payload = await readOptionalJsonObject(c);
 		if (payload === null) return c.json({ error: "Invalid JSON body" }, 400);
@@ -2973,10 +2797,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		if (txResult.status === "not_found") return c.json({ id: txResult.memoryId, status: txResult.status }, 404);
 		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Tombstone failed" }, 409);
 	});
-
-	// =========================================================================
-	// POST /api/memories/:id/supersede
-	// =========================================================================
 	app.post("/api/memories/:id/supersede", async (c) => {
 		const payload = toRecord(await c.req.json().catch(() => null));
 		if (!payload) return c.json({ error: "Invalid JSON body" }, 400);
@@ -3028,10 +2848,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		}
 		return c.json({ id: txResult.memoryId, status: txResult.status, error: "Supersede failed" }, 409);
 	});
-
-	// =========================================================================
-	// POST /api/memory/feedback
-	// =========================================================================
 	app.post("/api/memory/feedback", async (c) => {
 		const payload = toRecord(await c.req.json().catch(() => null));
 		if (!payload) {
@@ -3080,10 +2896,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ ok: true, recorded: Object.keys(parsed).length, fallback: true });
 		}
 	});
-
-	// =========================================================================
-	// POST /api/memory/forget — batch forget
-	// =========================================================================
 	app.post("/api/memory/forget", async (c) => {
 		const payload = toRecord(await c.req.json().catch(() => null));
 		if (!payload) {
@@ -3243,10 +3055,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			results,
 		});
 	});
-
-	// =========================================================================
-	// POST /api/memory/modify — batch modify
-	// =========================================================================
 	app.post("/api/memory/modify", async (c) => {
 		const payload = toRecord(await c.req.json().catch(() => null));
 		if (!payload) {
@@ -3377,10 +3185,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			results,
 		});
 	});
-
-	// =========================================================================
-	// POST /api/memory/recall
-	// =========================================================================
 	app.post("/api/memory/recall", async (c) => {
 		let body: RecallParams;
 		try {
@@ -3430,8 +3234,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const sessionKey = sessionKeyRaw ?? null;
 			const agentId = resolveAgentId({ agentId: body.agentId, sessionKey: sessionKeyRaw });
 			const recallSurface = normalizeRecallSurface(body.recallSurface, "explicit_api");
-
-			// When aggregate save is requested, enforce scope for non-admin tokens.
 			if (aggregateSaveRequested) {
 				const recallAuth = c.get("auth");
 				if (recallAuth?.claims && recallAuth.claims.role !== "admin") {
@@ -3527,10 +3329,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
 		}
 	});
-
-	// =========================================================================
-	// GET /api/memory/search — recall alias
-	// =========================================================================
 	app.get("/api/memory/search", async (c) => {
 		const q = (c.req.query("q") ?? "").trim();
 		if (!q) return c.json({ error: "query is required" }, 400);
@@ -3624,10 +3422,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Recall failed", results: [] }, recallFailureStatus(e));
 		}
 	});
-
-	// =========================================================================
-	// GET /memory/similar — vector similarity search
-	// =========================================================================
 	app.get("/memory/similar", async (c) => {
 		const id = c.req.query("id");
 		if (!id) {
@@ -3651,7 +3445,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
         LIMIT 1
       `)
 						.get(id) as { vector: Buffer } | undefined,
-				{ siteToken: "routes/memory-routes.ts:3641" },
+				{ siteToken: "routes/memory-routes.ts:3435" },
 			);
 
 			if (!embeddingRow) {
@@ -3673,7 +3467,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3675",
+							siteToken: "routes/memory-routes.ts:3469",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3716,7 +3510,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						}),
 					);
 				},
-				{ siteToken: "routes/memory-routes.ts:3693" },
+				{ siteToken: "routes/memory-routes.ts:3487" },
 			);
 
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -3747,10 +3541,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Similarity search failed", results: [] }, 500);
 		}
 	});
-
-	// =========================================================================
-	// GET /api/embeddings
-	// =========================================================================
 	app.get("/api/embeddings", async (c) => {
 		const withVectors = c.req.query("vectors") === "true";
 		const limit = parseBoundedInt(c.req.query("limit"), 600, 50, 5000);
@@ -3811,7 +3601,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3774" },
+				{ siteToken: "routes/memory-routes.ts:3564" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3848,10 +3638,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			});
 		}
 	});
-
-	// =========================================================================
-	// GET /api/embeddings/status
-	// =========================================================================
 	app.get("/api/embeddings/status", async (c) => {
 		const config = await withActiveEmbeddingConfig(loadMemoryConfig(AGENTS_DIR));
 		const status = await checkEmbeddingProvider(config.embedding);
@@ -3863,27 +3649,19 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3859" },
+			{ siteToken: "routes/memory-routes.ts:3645" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
-
-	// =========================================================================
-	// GET /api/embeddings/health
-	// =========================================================================
 	app.get("/api/embeddings/health", async (c) => {
 		const cfg = loadMemoryConfig(AGENTS_DIR);
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3877" },
+			{ siteToken: "routes/memory-routes.ts:3659" },
 		);
 		return c.json(report);
 	});
-
-	// =========================================================================
-	// GET /api/embeddings/projection
-	// =========================================================================
 	app.get("/api/embeddings/projection", async (c) => {
 		const dimParam = c.req.query("dimensions");
 		const nComponents: 2 | 3 = dimParam === "3" ? 3 : 2;
@@ -3957,7 +3735,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3940" },
+					{ siteToken: "routes/memory-routes.ts:3718" },
 				);
 
 				return c.json({
@@ -3987,7 +3765,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3980" },
+			{ siteToken: "routes/memory-routes.ts:3758" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -4019,7 +3797,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:4021",
+						siteToken: "routes/memory-routes.ts:3799",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -4028,7 +3806,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:4024" },
+						{ siteToken: "routes/memory-routes.ts:3802" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {
@@ -4047,10 +3825,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 		return c.json({ status: "computing", dimensions: nComponents }, 202);
 	});
-
-	// =========================================================================
-	// POST /api/documents — create a document for ingestion
-	// =========================================================================
 	app.post("/api/documents", async (c) => {
 		let body: Record<string, unknown>;
 		try {
@@ -4161,10 +3935,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Failed to create document" }, 500);
 		}
 	});
-
-	// =========================================================================
-	// GET /api/documents — list documents
-	// =========================================================================
 	app.get("/api/documents", async (c) => {
 		if (shouldEnforceAuthScope(c)) {
 			return c.json({ error: "documents list requires unscoped credentials" }, 403);
@@ -4198,10 +3968,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Failed to list documents" }, 500);
 		}
 	});
-
-	// =========================================================================
-	// GET /api/documents/:id — single document details
-	// =========================================================================
 	app.get("/api/documents/:id", async (c) => {
 		if (shouldEnforceAuthScope(c)) {
 			return c.json({ error: "document access requires unscoped credentials" }, 403);
@@ -4219,10 +3985,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Failed to get document" }, 500);
 		}
 	});
-
-	// =========================================================================
-	// GET /api/documents/:id/chunks — list memories linked to document
-	// =========================================================================
 	app.get("/api/documents/:id/chunks", async (c) => {
 		const id = c.req.param("id");
 		try {
@@ -4261,10 +4023,6 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			return c.json({ error: "Failed to list chunks" }, 500);
 		}
 	});
-
-	// =========================================================================
-	// DELETE /api/documents/:id — soft-delete document and derived memories
-	// =========================================================================
 	app.delete("/api/documents/:id", async (c) => {
 		const id = c.req.param("id");
 		const reason = c.req.query("reason");

@@ -19,9 +19,7 @@ export interface DeferredRuntimeSchedulerOptions {
 	readonly schedule: (callback: () => void, delayMs: number) => unknown;
 	readonly onPipelineError: (error: unknown) => void;
 	readonly onMaintenanceError: (error: unknown) => void;
-	/** Handle an integrity callback rejection before releasing the runtime gate. */
 	readonly onIntegrityFailure?: (error: unknown) => void;
-	/** Set false when the integrity callback will release the gate itself. */
 	readonly completeIntegrityOnCallback?: boolean;
 }
 
@@ -30,11 +28,6 @@ export interface DeferredRuntimeScheduler {
 	readonly schedulePipeline: (callback: () => Promise<void>) => void;
 	readonly scheduleMaintenance: (callback: () => Promise<void>) => void;
 }
-
-/**
- * Release ordinary startup from the background integrity gate. A retained
- * migration backup still needs verification before any mutating runtime work.
- */
 export function releaseDeferredRuntimeGateIfSafe(
 	gate: DeferredRuntimeGate,
 	options: { readonly migrationBackupPending: boolean; readonly writesBlocked: boolean },
@@ -43,12 +36,6 @@ export function releaseDeferredRuntimeGateIfSafe(
 	gate.completeIntegrity();
 	return true;
 }
-
-/**
- * Keep post-ready pipeline startup behind the deferred integrity work. Both
- * timers can mature together, but the DB owner must only see one maintenance
- * workload at a time.
- */
 export function createDeferredRuntimeGate(): DeferredRuntimeGate {
 	let resolveIntegrity: () => void = () => {};
 	const integrityComplete = new Promise<void>((resolve) => {
@@ -61,8 +48,6 @@ export function createDeferredRuntimeGate(): DeferredRuntimeGate {
 		},
 	};
 }
-
-/** Create the production scheduler used by both same-delay callbacks. */
 export function createDeferredRuntimeScheduler(options: DeferredRuntimeSchedulerOptions): DeferredRuntimeScheduler {
 	const delayMs = options.delayMs ?? 30_000;
 	const completeIntegrityOnCallback = options.completeIntegrityOnCallback ?? true;
@@ -70,8 +55,6 @@ export function createDeferredRuntimeScheduler(options: DeferredRuntimeScheduler
 		try {
 			(options.onIntegrityFailure ?? options.onMaintenanceError)(error);
 		} finally {
-			// A rejected callback must never strand pipeline startup behind a gate
-			// whose producer has already failed.
 			options.gate.completeIntegrity();
 		}
 	};
@@ -97,8 +80,6 @@ export function createDeferredRuntimeScheduler(options: DeferredRuntimeScheduler
 		},
 	};
 }
-
-/** Schedule both deferred callbacks while serializing pipeline startup. */
 export function scheduleDeferredRuntimeWork(options: DeferredRuntimeScheduleOptions): void {
 	const scheduler = createDeferredRuntimeScheduler({
 		...options,

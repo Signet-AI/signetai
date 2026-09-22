@@ -1,17 +1,6 @@
-/**
- * Migration 019: Knowledge Architecture Structure
- *
- * Adds structural backbone for the knowledge graph:
- * - Backfills agent_id on existing entities table
- * - Creates entity_aspects, entity_attributes, entity_dependencies, task_meta
- *
- * Part of KA-1 (Schema + Types + Read/Write Helpers).
- */
-
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {
-	// -- 1a. Backfill agent_id on entities (idempotent) --
 	const entityCols = db.prepare("PRAGMA table_info(entities)").all() as ReadonlyArray<Record<string, unknown>>;
 	const entityColNames = new Set(entityCols.flatMap((c) => (typeof c.name === "string" ? [c.name] : [])));
 
@@ -19,8 +8,6 @@ export function up(db: MigrationDb): void {
 		db.exec("ALTER TABLE entities ADD COLUMN agent_id TEXT NOT NULL DEFAULT 'default'");
 	}
 	db.exec("CREATE INDEX IF NOT EXISTS idx_entities_agent ON entities(agent_id)");
-
-	// -- 1b. entity_aspects --
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_aspects (
 			id             TEXT PRIMARY KEY,
@@ -38,8 +25,6 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_entity_aspects_agent ON entity_aspects(agent_id);
 		CREATE INDEX IF NOT EXISTS idx_entity_aspects_weight ON entity_aspects(weight DESC);
 	`);
-
-	// -- 1c. entity_attributes --
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_attributes (
 			id                 TEXT PRIMARY KEY,
@@ -62,8 +47,6 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_entity_attributes_kind ON entity_attributes(kind);
 		CREATE INDEX IF NOT EXISTS idx_entity_attributes_status ON entity_attributes(status);
 	`);
-
-	// -- 1d. entity_dependencies --
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_dependencies (
 			id                TEXT PRIMARY KEY,
@@ -81,8 +64,6 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_entity_dependencies_target ON entity_dependencies(target_entity_id);
 		CREATE INDEX IF NOT EXISTS idx_entity_dependencies_agent ON entity_dependencies(agent_id);
 	`);
-
-	// -- 1e. task_meta --
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS task_meta (
 			entity_id        TEXT PRIMARY KEY REFERENCES entities(id) ON DELETE CASCADE,

@@ -1,4 +1,3 @@
-/** Regression guard for local CommonJS imports left in native worker bundles. */
 import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
@@ -14,8 +13,6 @@ function unbundledRelativeRequires(source: string): readonly string[] {
 	for (const match of source.matchAll(pattern)) {
 		const specifier = match[1];
 		const normalized = specifier?.replaceAll("\\", "/");
-		// Bun keeps bundled CommonJS modules in an internal registry keyed by
-		// their node_modules path; those calls are not filesystem lookups.
 		if (
 			specifier !== undefined &&
 			normalized !== undefined &&

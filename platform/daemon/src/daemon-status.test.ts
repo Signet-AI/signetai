@@ -80,8 +80,6 @@ describe("daemon status contract", () => {
 			releaseOwner = resolve;
 		});
 		let ownerBlocked = false;
-		// A REAL gate: every read through the owner awaits this promise, so the
-		// "DB owner blocked" condition is actually true while we measure.
 		accessor.withReadDbAsync = async (fn, options) => {
 			ownerBlocked = true;
 			await ownerStarted$;
@@ -89,8 +87,6 @@ describe("daemon status contract", () => {
 		};
 
 		try {
-			// Fire /api/status FIRST. It awaits readEmbeddingUsageSummary ->
-			// withReadDbAsync, so it must be held pending behind the gate.
 			const statusStartedAt = performance.now();
 			let statusLatencyMs = -1;
 			const statusPromise = Promise.resolve(app.request("http://localhost/api/status")).then((response: Response) => {
@@ -98,27 +94,18 @@ describe("daemon status contract", () => {
 				expect(response.status).toBe(200);
 				return response;
 			});
-
-			// Give /api/status a beat to reach the blocked owner.
 			await new Promise<void>((resolve) => setTimeout(resolve, 50));
 			expect(ownerBlocked).toBe(true);
-			// Status must NOT have resolved while the owner is blocked — it is
-			// genuinely contending (not silently dropped). Prove it is still pending.
 			const pending = await Promise.race([
 				statusPromise.then(() => "resolved"),
 				new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 300)),
 			]);
 			expect(pending).toBe("pending");
-
-			// /health/live touches no DB accessor and MUST respond promptly while
-			// the DB owner is still blocked.
 			const healthStartedAt = performance.now();
 			const healthResponse = await app.request("http://localhost/health/live");
 			const healthLatencyMs = performance.now() - healthStartedAt;
 			expect(healthResponse.status).toBe(200);
 			expect(healthLatencyMs).toBeLessThan(1_000);
-
-			// Release the owner; /api/status must now complete promptly.
 			releaseOwner?.();
 			const res = await statusPromise;
 			expect(res.status).toBe(200);
@@ -266,12 +253,6 @@ describe("daemon status contract", () => {
 		expect(extraction).toBeDefined();
 		expect(typeof extraction?.resolved).toBe("string");
 		expect(typeof extraction?.effective).toBe("string");
-		// fallbackProvider must always be present as a string. #949 dropped this field
-		// from the status object (it was sourcing from the retired flat config field),
-		// which made `signet status` print "fallback: unknown". The type was widened
-		// from the narrow "llama-cpp"|"ollama"|"none" enum to RuntimeProviderName
-		// because the routing registry's fallbackTargetRefs can resolve to any
-		// executor. Asserting presence + string type is the real regression guard.
 		expect(typeof extraction?.fallbackProvider).toBe("string");
 		expect(
 			extraction?.status === "active" ||
@@ -317,7 +298,6 @@ describe("daemon status contract", () => {
 					};
 				};
 			};
-			// Dreaming owns all semantic writes; legacy extraction is permanently retired.
 			expect(body.providerResolution?.extraction?.effective).toBe("none");
 			expect(body.providerResolution?.extraction?.status).toBe("disabled");
 			expect(body.providerResolution?.extraction?.reason).toBe("Dreaming owns semantic writes");
@@ -499,7 +479,6 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 	}
 
 	beforeEach(async () => {
-		// Re-init a clean DB so each assertion sees only its own seed rows.
 		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
 		closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"), { agentsDir: dir });
@@ -507,8 +486,6 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 
 	it("retires pre-existing pending legacy extract jobs on startup", async () => {
 		seedPendingLegacyJob("mem-cutover", "job-cutover");
-
-		// Startup sweeps the pending backlog because Dreaming always owns semantic writes.
 		await restartRuntime(DREAMING_ENABLED_CONFIG);
 
 		const job = getJob("job-cutover");
@@ -537,8 +514,6 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 		await restartRuntime(DREAMING_ENABLED_CONFIG);
 		const afterFirst = countMemoryJobs();
 		expect(getJob("job-idem").status).toBe("dead");
-
-		// A second restart must not duplicate, delete, or re-mutate rows.
 		await restartRuntime(DREAMING_ENABLED_CONFIG);
 		expect(countMemoryJobs()).toBe(afterFirst);
 		const job = getJob("job-idem");
@@ -546,14 +521,6 @@ describe.skip("legacy extraction cutover sweep (#946) [retired config fixtures p
 		expect(job.error).toBe("Dreaming cutover: legacy extraction worker not started");
 	});
 });
-
-// ---------------------------------------------------------------------------
-// Structural worker retirement (#946)
-//
-// When Dreaming owns semantic writes, the legacy structural classify and
-// structural dependency workers are not started and their status shape is
-// retired from /api/status. No producer may create pending structural jobs.
-// ---------------------------------------------------------------------------
 describe.skip("structural worker retirement under Dreaming (#946) [retired config fixtures pending migration]", () => {
 	const DREAMING_ENABLED_STRUCTURAL_CONFIG = `memory:
   pipelineV2:
@@ -610,21 +577,15 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 	});
 
 	beforeAll(() => {
-		// The earlier describe block's afterAll restores SIGNET_PATH to its
-		// pre-test value, so re-pin it to this suite's temp dir here.
 		if (process.env.SIGNET_PATH !== dir) process.env.SIGNET_PATH = dir;
 	});
 
 	afterAll(() => {
-		// Restore whatever the daemon process held before this suite; the
-		// top-level suite's afterAll handles the canonical restore.
 		if (prev === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = prev;
 	});
 
 	it("does not expose legacy structural workers in the status shape and never starts them", async () => {
-		// structural.enabled AND graph.enabled would have started both structural
-		// workers under the legacy pipeline; under Dreaming they must be absent.
 		await restartRuntime(DREAMING_ENABLED_STRUCTURAL_CONFIG);
 
 		const res = await app.request("http://localhost/api/pipeline/status");
@@ -635,12 +596,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 		const workers = body.workers ?? {};
 		expect(workers).not.toHaveProperty("structuralClassify");
 		expect(workers).not.toHaveProperty("structuralDependency");
-		// The cross-entity dependency-synthesis worker was retired under the
-		// full Dreaming cutover (#946): it wrote dependencies directly via
-		// upsertDependency, bypassing the audited create_link path. Dreaming
-		// is now the sole semantic dependency writer.
 		expect(workers).not.toHaveProperty("dependencySynthesis");
-		// Preserved non-semantic workers remain present.
 		expect(workers).toHaveProperty("document");
 		expect(workers.document).toMatchObject({
 			inFlight: 0,
@@ -654,9 +610,6 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 	});
 
 	it("does not accumulate new pending structural jobs from pre-existing rows under Dreaming", async () => {
-		// A pre-existing pending structural job (left from before the cutover)
-		// should remain, but the runtime must not create additional pending
-		// structural jobs while Dreaming owns semantic writes.
 		await restartRuntime(DREAMING_ENABLED_STRUCTURAL_CONFIG);
 		seedPendingStructuralJob("mem-pre", "job-struct-pre", "structural_classify");
 		const before = countStructuralJobs();
@@ -667,16 +620,7 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 	});
 
 	it("does not start the dependency-synthesis worker and cannot produce direct dependency writes under Dreaming", async () => {
-		// The retired dependency-synthesis worker polled for entities whose
-		// last_synthesized_at lagged updated_at, called an LLM, and wrote
-		// entity_dependencies rows directly via upsertDependency — bypassing
-		// the audited create_link path. Under the full Dreaming cutover the
-		// worker must never start, so seeding stale entities must produce no
-		// dependency rows and never set last_synthesized_at.
 		await restartRuntime(DREAMING_ENABLED_STRUCTURAL_CONFIG);
-
-		// Seed a stale entity with facts and candidate mentions — exactly the
-		// inputs the retired worker would have picked up on its next tick.
 		const { getDbAccessor } = require("./db-accessor") as typeof import("./db-accessor");
 		getDbAccessor().withWriteTx((db) => {
 			const now = new Date().toISOString();
@@ -701,9 +645,6 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 				 VALUES ('attr-dep', 'asp-dep', 'default', 'fact', 'dep source uses dep target', 'dep source uses dep target', 0.9, 0.5, 'active', ?, ?)`,
 			).run(now, now);
 		});
-
-		// Restart again so any worker that *did* start would observe the stale
-		// entity on its first tick, then wait well past a default poll cycle.
 		await restartRuntime(DREAMING_ENABLED_STRUCTURAL_CONFIG);
 		await new Promise((resolve) => setTimeout(resolve, 1500));
 
@@ -723,8 +664,6 @@ describe.skip("structural worker retirement under Dreaming (#946) [retired confi
 					last_synthesized_at: string | null;
 				},
 		);
-		// The retired worker's exclusive side-effect (markSynthesized) must
-		// never fire — proving no dependency-synthesis tick ran.
 		expect(synthesized.last_synthesized_at).toBeNull();
 	});
 

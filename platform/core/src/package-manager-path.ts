@@ -19,8 +19,6 @@ export function pathIsWithin(path: string, root: string, platform: NodeJS.Platfo
 	const rel = pathApi.relative(normalizeExecutablePath(root, platform), normalizeExecutablePath(path, platform));
 	return rel === "" || (!rel.startsWith("..") && !pathApi.isAbsolute(rel));
 }
-
-/** Shared package-manager ownership inference for active and discovered executables. */
 export function inferPackageManagerFromExecutable(
 	executablePath: string | undefined,
 	options: PackageManagerPathInferenceOptions = {},

@@ -24,10 +24,6 @@ export interface PreCompactionResult {
 	readonly guidelines?: string;
 	readonly summaryPrompt?: string;
 }
-
-// The upstream Oh My Pi package does not currently type-check cleanly as a
-// dependency in this monorepo. Model only the runtime surface this extension
-// actually consumes so `tsc --noEmit` still verifies our integration.
 export type OmpMessageAttribution = "user" | "agent";
 
 export interface OmpAgentMessage extends BaseAgentMessage {

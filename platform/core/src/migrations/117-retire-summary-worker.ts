@@ -85,8 +85,6 @@ function isCompletionBoundary(job: RetiredSummaryJob, columns: Set<string>): boo
 		(columns.has("boundary_reason") && COMPLETION_BOUNDARY_REASONS.has(job.boundary_reason ?? ""))
 	);
 }
-
-/** Preserve every distinct legacy job payload without duplicating full snapshots. */
 function mergeTranscriptContent(current: string, next: string): string {
 	if (current.length === 0) return next;
 	if (next.length === 0 || current === next || current.includes(next)) return current;
@@ -225,15 +223,6 @@ function backfillTranscriptsFromSummaryJobs(db: MigrationDb): void {
 		insert.run(...values);
 	}
 }
-
-/**
- * Migration 117: retire the summary-worker delivery boundary (#1271).
- *
- * Session transcripts now carry their own completion marker and content hash.
- * Existing session-end summary jobs backfill the completion marker and any
- * missing canonical transcript row before the obsolete queue is drained. The
- * historical table remains for migration compatibility.
- */
 export function up(db: MigrationDb): void {
 	if (!hasTable(db, "session_transcripts")) return;
 

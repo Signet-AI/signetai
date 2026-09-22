@@ -2,10 +2,6 @@ import { expect, test } from "bun:test";
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { registerGlobalMiddleware } from "./middleware";
-
-// Exercise the same Node HTTP adapter as daemon.ts: an early data listener can
-// drain this request before Hono reads it, while Content-Length alone misses
-// chunked overflow.
 test("HTTP bodies are bounded without draining streamed transcript uploads", async () => {
 	const app = new Hono();
 	registerGlobalMiddleware(app);

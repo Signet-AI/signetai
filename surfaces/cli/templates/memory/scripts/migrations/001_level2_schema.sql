@@ -1,7 +1,3 @@
--- Migration 001: Level 2 Schema Compliance
--- Adds required tables and columns per Signet spec v0.2.1
-
--- Conversation summaries
 CREATE TABLE IF NOT EXISTS conversations (
   id            TEXT PRIMARY KEY,
   session_id    TEXT NOT NULL,
@@ -18,8 +14,6 @@ CREATE TABLE IF NOT EXISTS conversations (
   version       INTEGER DEFAULT 1,
   manual_override INTEGER DEFAULT 0
 );
-
--- Vector embeddings (spec-required)
 CREATE TABLE IF NOT EXISTS embeddings (
   id            TEXT PRIMARY KEY,
   content_hash  TEXT NOT NULL,

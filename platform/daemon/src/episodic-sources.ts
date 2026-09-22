@@ -1,19 +1,7 @@
 import type { ReadDb } from "./db-accessor";
 import { isMemoryContentContextEligible } from "./memory-content-safety";
-
-/** Immutable evidence available to Dreaming and ontology extraction. */
 export type EpisodicSourceKind = "memory" | "artifact" | "transcript" | "summary";
-
-/**
- * The sane floor for evidence timestamps. Pre-2000 values are corrupt
- * sentinels (the DOS epoch 1980 default from timestamp-stripping
- * filesystems and sync layers): a rolling `since` watermark can never reach
- * them, so a since/cursor-filtered scan must still list them or they fall
- * permanently behind the Dreaming evidence cursor with no catch-up (#1149).
- */
 export const EPISODIC_CAPTURED_AT_FLOOR = "2000-01-01T00:00:00.000Z";
-
-/** Match SQLite julianday's UTC interpretation of timezone-less timestamps. */
 export function timestampMillis(value: string): number {
 	const normalized = /^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(value)
 		? `${value.replace(" ", "T")}Z`
@@ -21,17 +9,10 @@ export function timestampMillis(value: string): number {
 	const parsed = Date.parse(normalized);
 	return Number.isFinite(parsed) ? parsed : 0;
 }
-
-/** A stable resume point across the merged episodic stores. */
 export interface EpisodicCursor {
 	readonly capturedAt: string;
 	readonly kind: EpisodicSourceKind | null;
 	readonly id: string;
-	/**
-	 * A character offset into the canonical rendered evidence for `kind:id`.
-	 * Present only while Dreaming is safely processing an oversized immutable
-	 * record across passes; the source row itself is never changed.
-	 */
 	readonly fragmentOffset?: number;
 }
 
@@ -42,37 +23,12 @@ export interface EpisodicSourceRecord {
 	readonly sourceKind: string;
 	readonly sourceId: string;
 	readonly sourcePath: string | null;
-	/**
-	 * The configured Signet source entry id (memory_artifacts.source_id) that
-	 * owns an artifact, when known. Purge on disconnect matches this id, so
-	 * Dreaming stamps it onto derived semantic rows instead of the episodic
-	 * node/session id in `sourceId`.
-	 */
 	readonly sourceEntryId: string | null;
-	/**
-	 * Stable content revision for the delivery frontier. Artifacts use their
-	 * source hash when available because a path may be re-indexed without a
-	 * different captured_at value; other immutable rows use capturedAt.
-	 */
 	readonly sourceRevision?: string;
 	readonly project: string | null;
 	readonly harness: string | null;
 	readonly capturedAt: string;
-	/**
-	 * Canonical structured evidence metadata (JSON string) preserved verbatim
-	 * from a structured remember save. Present on `memory`-kind records when
-	 * the caller supplied a structured payload; null otherwise. Dreaming reads
-	 * this to reason over structured entities/aspects without direct graph
-	 * writes at save time.
-	 */
 	readonly evidenceMeta: string | null;
-	/**
-	 * Whether the record is a settled, complete capture. Immutable kinds
-	 * (memory, artifact, summary) are always completed; a transcript is
-	 * completed only by the session-end marker on its own retained row. A
-	 * running session's still-growing transcript is not settled evidence: its
-	 * intermediate states may be contradicted by the session's end.
-	 */
 	readonly completed: boolean;
 }
 
@@ -99,12 +55,6 @@ function cursorPredicate(
 	newerThan: string | null,
 	cursor: EpisodicCursor | null | undefined,
 ): { readonly sql: string; readonly args: readonly (string | null)[] } {
-	// Rows stamped with a corrupt pre-epoch timestamp (EPISODIC_CAPTURED_AT_FLOOR)
-	// bypass a since watermark: no rolling cutoff can ever reach them, so the
-	// first listing must still surface them or they are silently lost to
-	// scan-first ingestion (#1149). Cursor pages do NOT re-admit them — they
-	// were surfaced by the initial page, and re-admitting them on every page
-	// would freeze cursor paging on the pre-2000 block forever.
 	if (cursor) {
 		const cursorRank = cursor.kind === null ? -1 : SOURCE_KIND_RANK[cursor.kind];
 		const rank = SOURCE_KIND_RANK[kind];
@@ -231,12 +181,8 @@ export function readEpisodicMemory(db: ReadDb, agentId: string, id: string): Epi
 		sourcePath: readNonEmptyTrimmed(row.source_path) ?? readNonEmptyTrimmed(row.runtime_path),
 		project: row.project,
 		harness: readNonEmptyTrimmed(row.who),
-		// Order/cursor by immutable creation (capture) time, not updated_at.
-		// Metadata edits (tags/importance/pinned) bump updated_at but must not
-		// re-submit already-processed evidence to Dreaming.
 		capturedAt: row.created_at,
 		evidenceMeta: row.evidence_meta,
-		// A memory is a point-in-time capture: always settled.
 		completed: true,
 	};
 }
@@ -297,7 +243,6 @@ export function readEpisodicArtifact(db: ReadDb, agentId: string, id: string): E
 		harness: row.harness,
 		capturedAt: row.captured_at ?? row.updated_at,
 		evidenceMeta: null,
-		// An artifact is a captured file snapshot: always settled.
 		completed: true,
 	};
 }
@@ -372,9 +317,6 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 		harness: row.harness,
 		capturedAt: row.completed_at ?? row.updated_at ?? row.created_at,
 		evidenceMeta: null,
-		// A transcript is settled only after the session-end machinery writes
-		// its completion marker. The marker is independent of any derived
-		// summary, so a failed or retired worker cannot block ingestion.
 		completed: row.completed === 1,
 	};
 }
@@ -382,9 +324,6 @@ export function readEpisodicTranscript(db: ReadDb, agentId: string, id: string):
 export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): EpisodicSourceRecord | null {
 	const ids = sourceIdCandidates(id);
 	const placeholders = ids.map(() => "?").join(", ");
-	// Compaction/checkpoint rows are first-class episodic evidence here. The
-	// Dreaming pass intentionally narrows its own LLM input to primary summaries
-	// to avoid feeding its derived rollups back into consolidation.
 	const row = db
 		.prepare(
 			`SELECT id, content, project, harness, session_key, source_type, source_ref, latest_at
@@ -424,17 +363,9 @@ export function readEpisodicSummary(db: ReadDb, agentId: string, id: string): Ep
 		harness: row.harness,
 		capturedAt: row.latest_at,
 		evidenceMeta: null,
-		// A summary is the session's consolidated end state: always settled.
 		completed: true,
 	};
 }
-
-/**
- * Read evidence across all current episodic stores.
- *
- * `newerThan` is a captured-artifact watermark, not a mutation cursor: the
- * artifacts themselves remain immutable and selectable after a Dreaming pass.
- */
 export function readRecentEpisodicSources(
 	db: ReadDb,
 	agentId: string,
@@ -718,8 +649,6 @@ export function readRecentEpisodicSources(
 		.sort((a, b) => compareEpisodicSources(a, b, order))
 		.slice(0, boundedLimit < 0 ? undefined : boundedLimit);
 }
-
-/** Resolve one episodic record without falling back to semantic memory. */
 export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOptions): EpisodicSourceRecord | null {
 	const from = options.from.trim();
 	if (!from) return null;
@@ -740,13 +669,6 @@ export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOption
 		readEpisodicSummary(db, options.agentId, from)
 	);
 }
-
-/**
- * Resolve a canonical immutable source_ref for a proposal write. Unlike the
- * permissive reader above, this accepts only one explicit episodic kind and
- * never guesses across stores. Callers can therefore reject a fabricated or
- * cross-agent reference before persisting derived-memory provenance.
- */
 export function resolveStrictEpisodicSourceRef(
 	db: ReadDb,
 	params: { readonly agentId: string; readonly sourceRef: unknown },
@@ -769,8 +691,6 @@ export function resolveStrictEpisodicSourceRef(
 	}
 	return { status: "not_found", sourceRef: canonicalRef };
 }
-
-/** Find scopes that own a resolvable source without exposing their contents. */
 export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly string[] {
 	const trimmed = from.trim();
 	const colon = trimmed.indexOf(":");
@@ -832,16 +752,6 @@ export function findEpisodicSourceAgentIds(db: ReadDb, from: string): readonly s
 
 	return [...new Set(rows.map((row) => row.agent_id).filter((agentId): agentId is string => Boolean(agentId)))].sort();
 }
-
-/**
- * Search immutable episodic evidence without falling back to semantic memory.
- *
- * This belongs beside the canonical cross-store reader so every Dreaming
- * caller uses the same provenance, deletion, and source-native boundaries.
- * It deliberately returns complete source records. Ordinary callers bound the
- * number of matches, while aggregate metrics may request the complete set;
- * neither path truncates the evidence a model may cite.
- */
 export function searchEpisodicSources(
 	db: ReadDb,
 	params: {
@@ -850,28 +760,14 @@ export function searchEpisodicSources(
 		readonly since?: string;
 		readonly before?: string;
 		readonly kind?: "memory" | "artifact" | "transcript" | "summary";
-		/** Scan-first delivery drains only records whose current revision is not complete. */
 		readonly excludeDelivered?: boolean;
-		/** `null` requests the complete matching set instead of a bounded page. */
 		readonly limit?: number | null;
 	},
 ): EpisodicSourceRecord[] {
 	const query = params.query.trim();
 	const limit = params.limit === null ? null : Math.max(1, Math.min(Math.floor(params.limit ?? 20), 51));
-	// Scheduled backlog probes request one lookahead row to distinguish a
-	// complete full page from a truncated one.
-	// The empty arm avoids LIKE overflow; artifact placeholders remain excluded
-	// by the length predicate below.
 	const contentPredicate = (column: string): string => `((? = '' AND ${column} IS NOT NULL) OR ${column} LIKE ?)`;
 	const contentArgs: unknown[] = [query, `%${query}%`];
-	// Both the `since` and `before` bounds compare via julianday(): the
-	// watermark can now be ISO (`...T11:00:00.000Z` from an artifact) while
-	// rows use SQLite space format (`... 11:00:00`), and a raw string
-	// comparison would lexically misorder the two (0x20 < 0x54), silently
-	// dropping space-format rows captured after an ISO watermark (#1149).
-	// A `since` cutoff also re-lists corrupt pre-epoch rows: no watermark can
-	// reach them, so they must stay listable or they are lost to ingestion
-	// forever.
 	const sinceArgs: unknown[] = params.since !== undefined ? [params.since, EPISODIC_CAPTURED_AT_FLOOR] : [];
 	const beforeArgs: unknown[] = params.before !== undefined ? [params.before] : [];
 	const deliveredFilterEnabled =
@@ -943,10 +839,6 @@ export function searchEpisodicSources(
 	}
 	if (params.kind === undefined || params.kind === "artifact") {
 		branches.push({
-			// Artifacts are deduped by content hash within their configured source:
-			// content-identical paths in one source collapse to one canonical row,
-			// but independently imported sources must each retain their own durable
-			// delivery frontier. Empty placeholder artifacts are excluded entirely.
 			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at
 			      FROM memory_artifacts ma
 			      WHERE ma.agent_id = ? AND COALESCE(ma.is_deleted, 0) = 0

@@ -1,33 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Signet MCP stdio server end-to-end probe.
- *
- * Spawns the installed `signet-mcp` binary, drives it through a real MCP
- * session (initialize → notifications/initialized → tools/list → a small
- * set of read-only tools/call), and asserts every response shape. This
- * is the manual-probe flow used during issue #826 verification, captured
- * as a CI-friendly script so future regressions in the npm wrapper
- * surface as a red CI run rather than a connector that silently fails
- * handshakes.
- *
- * Used by:
- *   - `bun scripts/probe-signet-mcp.ts` — manual run against a live
- *     daemon
- *   - `bun run probe:signet-mcp` — same, via the root script alias
- *   - The `signet-mcp-stdio-smoke` CI job (when wired in) — uses
- *     `--self-test` to skip the daemon dependency
- *
- * The script is daemon-dependent: it expects a healthy Signet daemon on
- * the default port. Run `signet daemon start` first, or set
- * `SIGNET_DAEMON_URL` to point at a different instance.
- *
- * Frame pacing: each JSON-RPC frame is written with a small delay
- * between writes. The stdio server in `platform/daemon/src/mcp-stdio.ts`
- * shuts down on stdin EOF, so a `cat <<EOF | signet-mcp` style pipe
- * closes stdin too early and frames after the first one are lost. The
- * delays keep stdin open long enough for each request to be processed
- * and the response to be flushed.
- */
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -72,9 +43,6 @@ function sleep(ms: number): Promise<void> {
 }
 
 function findSignetMcpBin(): string {
-	// Resolve the installed `signet-mcp` from PATH, matching the npm
-	// wrapper's bin symlink that consumers actually get. On PATH miss we
-	// fall back to the workspace install location used by `bun add -g`.
 	const candidates: string[] = [];
 	const pathDirs = (process.env.PATH ?? "").split(":").filter(Boolean);
 	for (const dir of pathDirs) {
@@ -128,11 +96,6 @@ class StdioClient {
 		while (newlineIndex !== -1) {
 			const line = this.lineTail.slice(0, newlineIndex).trim();
 			this.lineTail = this.lineTail.slice(newlineIndex + 1);
-			// The daemon writes structured log lines to stderr and JSON-RPC
-			// responses to stdout, but some plugin log lines still leak
-			// through stdout when the log level or formatter is misrouted.
-			// Filter to JSON-shaped lines so waiters only ever see real
-			// JSON-RPC frames.
 			if (line.length > 0 && line.startsWith("{")) {
 				const waiter = this.responseWaiters.shift();
 				if (waiter) waiter(line);
@@ -243,9 +206,6 @@ function unwrapToolResult(result: unknown): unknown {
 	}
 	const textItem = r.content.find((c) => c?.type === "text");
 	if (!textItem?.text) return result;
-	// Tools that return structured data wrap it in JSON inside the text
-	// item. Tools that return pre-formatted text (e.g. signet_code_status)
-	// return human-readable output and we should not try to parse it.
 	const text = textItem.text;
 	if (text.length === 0 || text[0] !== "{") return text;
 	try {

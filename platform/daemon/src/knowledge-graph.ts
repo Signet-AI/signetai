@@ -1,13 +1,3 @@
-/**
- * Knowledge graph CRUD operations for KA-1.
- *
- * Provides read/write helpers for entity aspects, attributes,
- * dependencies, task metadata, and structural density queries.
- * All writes go through withWriteTx, all reads through withReadDb.
- *
- * Follows the DbAccessor pattern established in skill-graph.ts.
- */
-
 import type {
 	AttributeKind,
 	AttributeStatus,
@@ -26,10 +16,6 @@ import { dbOwnerQuery, getDbOwner } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import { runWriteTxAsync } from "./db-accessor";
 import { getDreamingEpisodicTokenBacklogCached } from "./pipeline/dreaming-token-cache";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function toCanonicalName(raw: string): string {
 	return raw.trim().toLowerCase().replace(/\s+/g, " ");
@@ -85,10 +71,6 @@ function rowToEntityAlias(r: Record<string, unknown>): EntityAlias {
 		updatedAt: r.updated_at as string,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Row mappers
-// ---------------------------------------------------------------------------
 
 function rowToAspect(r: Record<string, unknown>): EntityAspect {
 	return {
@@ -181,10 +163,6 @@ function rowToTaskMeta(r: Record<string, unknown>): TaskMeta {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Aspects
-// ---------------------------------------------------------------------------
-
 export async function getAspectsForEntity(
 	_accessor: DbAccessor,
 	entityId: string,
@@ -204,10 +182,6 @@ export async function getAspectsForEntity(
 	return rows.map(rowToAspect);
 }
 
-// ---------------------------------------------------------------------------
-// Attributes
-// ---------------------------------------------------------------------------
-
 export async function getAttributesForAspect(
 	_accessor: DbAccessor,
 	aspectId: string,
@@ -225,12 +199,6 @@ export async function getAttributesForAspect(
 	);
 	return rows.map(rowToAttribute);
 }
-
-/**
- * Get all constraints for an entity across all its aspects.
- * Joins through entity_aspects to collect kind='constraint' rows.
- * This is the query that enforces the "constraints always surface" invariant.
- */
 export async function getConstraintsForEntity(
 	_accessor: DbAccessor,
 	entityId: string,
@@ -253,10 +221,6 @@ export async function getConstraintsForEntity(
 	);
 	return rows.map(rowToAttribute);
 }
-
-// ---------------------------------------------------------------------------
-// Dependencies
-// ---------------------------------------------------------------------------
 
 export async function getEntityDependencyById(
 	_accessor: DbAccessor,
@@ -319,10 +283,6 @@ export async function getDependenciesTo(
 	return rows.map(rowToDependency);
 }
 
-// ---------------------------------------------------------------------------
-// Entity pinning
-// ---------------------------------------------------------------------------
-
 export async function getPinnedEntities(
 	_accessor: DbAccessor,
 	agentId: string,
@@ -346,10 +306,6 @@ export async function getPinnedEntities(
 	});
 }
 
-// ---------------------------------------------------------------------------
-// Task meta
-// ---------------------------------------------------------------------------
-
 export interface UpsertTaskMetaParams {
 	readonly entityId: string;
 	readonly agentId: string;
@@ -364,7 +320,6 @@ export async function upsertTaskMeta(accessor: DbAccessor, params: UpsertTaskMet
 	const completedAt = params.status === "done" || params.status === "cancelled" ? ts : null;
 
 	return await runWriteTxAsync(accessor, (db) => {
-		// entity_id is PRIMARY KEY, so ON CONFLICT handles the upsert
 		db.prepare(
 			`INSERT INTO task_meta
 			 (entity_id, agent_id, status, expires_at, retention_until,
@@ -425,10 +380,6 @@ export async function updateTaskStatus(
 		).run(status, status === "done" || status === "cancelled" ? ts : null, ts, entityId, agentId);
 	});
 }
-
-// ---------------------------------------------------------------------------
-// Structural density
-// ---------------------------------------------------------------------------
 
 export interface StructuralDensity {
 	readonly aspectCount: number;
@@ -1190,11 +1141,6 @@ export async function listKnowledgeEntities(
 		conditions.push("e.canonical_name LIKE ?");
 		args.push(`%${params.query.trim().toLowerCase()}%`);
 	}
-
-	// Paginate entity IDs first, then compute counts only for the page.
-	// This avoids materializing GROUP BY + ORDER BY across every entity in
-	// the agent scope before LIMIT can apply, which is prohibitive on graphs
-	// with tens of thousands of entities. See Signet-AI/signetai#515.
 	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `WITH page AS (
@@ -1687,14 +1633,6 @@ export async function propagateMemoryStatus(accessor: DbAccessor, agentId: strin
 		return ids.length;
 	});
 }
-
-// ---------------------------------------------------------------------------
-// Constellation overlay — hierarchical graph
-// ---------------------------------------------------------------------------
-
-// Source documents are graph-bearing when Dreaming has attached provenance-
-// backed claims to them. Folders, skills, and empty source topology remain
-// excluded so the bounded constellation does not become a filesystem browser.
 const SOURCE_CLAIM_ENTITY_TYPES = ["source_document", "source_document_reference"] as const;
 
 export interface ConstellationAttribute {
@@ -1840,9 +1778,7 @@ function getConstellationVisibleAgentIds(db: ReadDb, agentId: string): readonly 
 				ids.add(row.id);
 			}
 		}
-	} catch {
-		// Older or partially-initialized databases still get the requested agent.
-	}
+	} catch {}
 	return [...ids];
 }
 
@@ -1922,7 +1858,6 @@ function getConstellationDreamingSummary(db: ReadDb, agentId: string): Constella
 			)
 			.get(agentId) as typeof latestPass;
 	} catch {
-		// Dreaming metadata is optional until the workspace migration completes.
 		state = undefined;
 		latestPass = undefined;
 	}
@@ -1987,10 +1922,6 @@ export async function getKnowledgeGraphForConstellation(
 			const agentPlaceholders = placeholders(visibleAgentIds.length);
 			const topologyPlaceholders = placeholders(SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.length);
 			const sourceClaimEntityTypePlaceholders = placeholders(SOURCE_CLAIM_ENTITY_TYPES.length);
-			// Keep the dashboard read path bounded. The previous implementation loaded
-			// every aspect, active attribute, and dependency for the agent, then filtered
-			// in JS. Large real workspaces can turn a simple Ontology tab visit into an
-			// event-loop/RSS spike big enough for systemd to SIGKILL the daemon.
 			const entityRows = db
 				.prepare(
 					`SELECT e.id, e.name, e.entity_type, e.mentions, e.pinned, e.status, e.proposal_id

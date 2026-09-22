@@ -107,8 +107,6 @@ export async function openUrlWithFallback(url: string, options: OpenUrlOptions =
 			options.open ??
 			((target: string) => {
 				if (platform === "win32") return openWindowsUrl(target);
-				// open(wait: true) waits for the browser application to exit on macOS.
-				// Spawn without that app-lifetime wait and observe the opener process here instead.
 				return open(target, { wait: false });
 			});
 		const openPromise = Promise.resolve(opener(url, { wait: true })).then((opened) => {

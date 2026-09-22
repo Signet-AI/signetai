@@ -1,15 +1,3 @@
-/**
- * Phase D stability acceptance criteria (#1543), codified.
- *
- * These are issue #1543's own numbers:
- *   - zero event-loop blocks >= 2000ms across the whole run
- *   - /health/live p95 < 500ms
- *   - /api/status p95 < 1000ms
- *
- * This module is a judge, not a fixer: it evaluates measured numbers and
- * reports pass/fail plus a human summary naming the worst offending window.
- */
-
 export interface StabilityMeasurements {
 	readonly eventLoop: {
 		readonly blockBudgetMs: number;
@@ -45,8 +33,6 @@ export interface StabilityEvaluation {
 	readonly checks: readonly StabilityCheck[];
 	readonly summary: string;
 }
-
-/** p95 from a pre-sorted sample series (index-based, nearest-rank). */
 export function percentile(values: readonly number[], fraction: number): number {
 	if (values.length === 0) return 0;
 	const sorted = [...values].sort((a, b) => a - b);

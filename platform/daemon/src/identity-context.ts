@@ -76,9 +76,6 @@ export function budgetIdentityContent(
 		if (!Number.isFinite(budget.maxTokens) || budget.maxTokens <= 0) return undefined;
 		const maxTokens = Math.floor(budget.maxTokens);
 		if (countTokens(content) <= maxTokens) return content;
-		// Reserve room for the marker so the final string stays within budget.
-		// If the budget is too small to also flag truncation, cap without the marker
-		// rather than exceed the declared budget.
 		const markerTokens = countTokens(TRUNCATED_MARKER);
 		if (markerTokens >= maxTokens) return truncateToTokens(content, maxTokens);
 		return `${truncateToTokens(content, maxTokens - markerTokens)}${TRUNCATED_MARKER}`;

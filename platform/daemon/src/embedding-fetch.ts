@@ -79,9 +79,7 @@ export function setNativeEmbeddingProviderForTest(provider: ((text: string) => P
 export type EmbeddingFetchOptions = {
 	readonly signal?: AbortSignal;
 	readonly timeoutMs?: number;
-	/** Optional usage attribution recorded with the fetch (source_kind, agent). */
 	readonly usage?: EmbeddingUsageAttribution;
-	/** Internal operation accounting hook; never serialized into telemetry. */
 	readonly onFailure?: (causeFamily: PipelineCauseFamily) => void;
 };
 
@@ -336,8 +334,6 @@ async function probeNativeFallback(
 		}
 		observedCause = preferFallbackCause(observedCause, r.failureCause);
 	} catch (error) {
-		// The aggregate warning below is the single actionable diagnostic, while
-		// retaining the most specific observed cause for operation telemetry.
 		observedCause = preferFallbackCause(observedCause, normalizePipelineCause(error));
 	}
 
@@ -433,13 +429,6 @@ export function resolveEmbeddingBaseUrl(cfg: EmbeddingConfig): string {
 	}
 	return cfg.base_url;
 }
-
-/**
- * The llama.cpp fallback target. Unlike {@link resolveEmbeddingBaseUrl}, this
- * is used when the configured provider is anything else (e.g. `native`): the
- * fallback still probes the user's configured llama.cpp base_url and only
- * falls back to the compiled default when it is empty (#1159).
- */
 export function resolveLlamaCppFallbackBaseUrl(cfg: EmbeddingConfig): string {
 	return cfg.base_url.trim() || DEFAULT_LLAMACPP_BASE_URL;
 }
@@ -471,7 +460,6 @@ export function fetchEmbedding(
 	role?: EmbeddingRole,
 	opts?: EmbeddingFetchOptions,
 ): Promise<number[] | null>;
-/** @deprecated Pass the role before options. Kept for callers using the former options position. */
 export function fetchEmbedding(
 	text: string,
 	cfg: EmbeddingConfig,
@@ -484,15 +472,11 @@ export async function fetchEmbedding(
 	roleOrOpts: EmbeddingRole | EmbeddingFetchOptions = "document",
 	optsOrRole: EmbeddingFetchOptions | EmbeddingRole = {},
 ): Promise<number[] | null> {
-	// Ordinary callers always resolve the generation at request time. This
-	// prevents an in-flight writer that captured yesterday's active config from
-	// inserting old-space vectors after an atomic promotion. Only the isolated
-	// migration worker is allowed to address its staging generation directly.
 	const effectiveCfg =
 		cfg.indexGeneration === "staging" || !hasDbAccessor()
 			? cfg
 			: await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-					siteToken: "embedding-fetch.ts:494",
+					siteToken: "embedding-fetch.ts:478",
 					operation: "embedding.resolve-active-config",
 				});
 	if (effectiveCfg.provider === "none") return null;
@@ -530,23 +514,12 @@ export async function fetchEmbedding(
 		return null;
 	}
 }
-
-/**
- * Dispatch a formatted embedding request to the effective provider and report
- * which provider actually served and how many tokens the sent text carried.
- * The fallback chain (native -> llama.cpp/ollama) resolves the serving
- * provider inside, so the boundary records the true provider rather than the
- * configured one.
- */
 async function serveEmbedding(
 	formattedText: string,
 	effectiveCfg: EmbeddingConfig,
 	opts: EmbeddingFetchOptions,
 ): Promise<EmbeddingServeResult> {
 	if (effectiveCfg.provider === "native") {
-		// Kill-switch (#1073): warmNative: false means native is never
-		// warmed or routed to, even when the active embedding profile is
-		// native. Fall through to the llama.cpp/ollama fallback chain.
 		if (effectiveCfg.warmNative === false) {
 			return resolveNativeFallback(
 				formattedText,

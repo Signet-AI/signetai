@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 047: Agent-scoped temporal uniqueness
- *
- * Fixes scoping leaks in temporal storage by making transcript and
- * session-summary retry uniqueness agent-aware.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		DROP TRIGGER IF EXISTS session_transcripts_fts_ai;

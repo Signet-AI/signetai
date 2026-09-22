@@ -241,9 +241,7 @@ describe("InferenceRouter hermetic provider matrix (#1324)", () => {
 			);
 			if (streamed.ok) {
 				const reader = streamed.value.stream.getReader();
-				while (!(await reader.read()).done) {
-					// Drain the stream so the upstream request settles.
-				}
+				while (!(await reader.read()).done) {}
 			}
 
 			expect(callerOwned.ok).toBe(true);

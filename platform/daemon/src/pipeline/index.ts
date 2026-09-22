@@ -1,14 +1,3 @@
-/**
- * Pipeline barrel — startPipeline/stopPipeline orchestration.
- *
- * The legacy extraction/decision/escalation worker runtime, the per-fact
- * structural classify/dependency workers, and the cross-entity
- * dependency-synthesis worker were all retired under the Dreaming cutover
- * (#946). Dreaming owns semantic writes; this barrel starts only the
- * non-semantic workers (document ingest, retention, maintenance,
- * synthesis, prospective/hints) and exposes their handles.
- */
-
 import type { AnalyticsCollector } from "../analytics";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
@@ -67,25 +56,15 @@ export {
 	type DreamingLivePassSnapshot,
 	type DreamingLiveGap,
 } from "./dreaming-live-events";
-
-/** Get the active synthesis worker handle (for API routes). */
 export function getSynthesisWorker(): SynthesisWorkerHandle | null {
 	return synthesisWorkerHandle;
 }
-
-/** Get the active dreaming worker handle (for API routes). */
 export function getDreamingWorker(): DreamingWorkerHandle | null {
 	return dreamingWorkerHandle;
 }
-
-/** Set dreaming worker handle (managed by daemon.ts, not startPipeline). */
 export function setDreamingWorker(handle: DreamingWorkerHandle | null): void {
 	dreamingWorkerHandle = handle;
 }
-
-// ---------------------------------------------------------------------------
-// Singleton state
-// ---------------------------------------------------------------------------
 
 let retentionHandle: RetentionHandle | null = null;
 let maintenanceHandle: MaintenanceHandle | null = null;
@@ -110,7 +89,6 @@ export type PipelineWorkerStatus = {
 	readonly llmConcurrency: {
 		readonly running: boolean;
 		readonly concurrency: LlmConcurrencyStatus;
-		/** Backward-compatible alias for callers that read provider status from stats. */
 		readonly stats: LlmConcurrencyStatus;
 	};
 	readonly summary: WorkerStatusEntry;
@@ -121,8 +99,6 @@ export type PipelineWorkerStatus = {
 	readonly hints: WorkerStatusEntry;
 	readonly dreaming: WorkerStatusEntry;
 };
-
-/** Snapshot of running state for each worker — used by /api/pipeline/status */
 export function getPipelineWorkerStatus(): PipelineWorkerStatus {
 	const llmConcurrency = getLlmConcurrencyStatus();
 	return {
@@ -158,10 +134,6 @@ export function getRetentionWorker(): RetentionHandle | null {
 	return retentionHandle;
 }
 
-// ---------------------------------------------------------------------------
-// Start / Stop
-// ---------------------------------------------------------------------------
-
 export function startPipeline(
 	accessor: DbAccessor,
 	pipelineCfg: PipelineV2Config,
@@ -189,12 +161,7 @@ export function startPipeline(
 	configureLlmConcurrency(pipelineCfg.worker.maxLlmConcurrency);
 
 	const provider = getLlmProvider();
-
-	// Retention worker also managed here when pipeline is active;
-	// standalone retention is started separately in main() for non-pipeline users.
 	ensureRetentionWorker(accessor, DEFAULT_RETENTION, ownerMaintenance);
-
-	// Maintenance worker (F3) — runs alongside retention
 	if (!maintenanceHandle && providerTracker) {
 		maintenanceHandle = startMaintenanceWorker(
 			accessor,
@@ -212,8 +179,6 @@ export function startPipeline(
 			ownerMaintenance,
 		);
 	}
-
-	// Document ingest worker runs alongside the pipeline
 	if (!documentWorkerHandle) {
 		documentWorkerHandle = startDocumentWorker({
 			accessor,
@@ -223,22 +188,12 @@ export function startPipeline(
 			ownerMaintenance,
 		});
 	}
-
-	// Synthesis worker — session-activity-based MEMORY.md regeneration.
-	// Its operational tuning is internal; model selection belongs to the router.
 	if (!synthesisWorkerHandle) {
 		synthesisWorkerHandle = startSynthesisWorker();
 	}
-
-	// Prospective indexing worker — generates hypothetical future queries
-	// for memories to improve search recall.
 	if (!hintsWorkerHandle && pipelineCfg.hints?.enabled && !pipelineCfg.mutationsFrozen) {
 		hintsWorkerHandle = startHintsWorker({ accessor, provider, pipelineCfg, recoverLeasesOnStart: true });
 	}
-
-	// Daily Brief generation is dashboard-open driven. Do not start a
-	// background schedule here; /api/reflections/generate creates fresh,
-	// de-duplicated insights when the dashboard opens.
 
 	logger.info("pipeline", "Pipeline started", {
 		mode:

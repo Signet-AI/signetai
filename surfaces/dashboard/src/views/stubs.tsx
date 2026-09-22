@@ -1,12 +1,6 @@
 import { SquareTerminal } from "@/components/mingcute-icons";
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
 
-/**
- * Thin/placeholder views matching the mockup's stub states (DASHBOARD_API_MAP
- * §2: these views are 17–61 lines in the mockup — mostly empty states). The
- * mockup is the spec; their full designs arrive in a later milestone.
- */
-
 function Placeholder({ title, description }: { title: string; description: string }) {
 	return (
 		<Empty className="m-auto">

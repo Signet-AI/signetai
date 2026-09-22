@@ -910,9 +910,6 @@ describe("Hermes Agent bundled plugin", () => {
 		expect(plugin).toContain('"name": "memory_store"');
 		expect(plugin).toContain('"name": "memory_get"');
 		expect(plugin).toContain('"name": "memory_list"');
-		// `signet_session_search` is the namespaced form: Hermes reserves
-		// `session_search` as a built-in core tool and would silently drop
-		// any provider trying to register the bare name.
 		expect(plugin).toContain('"name": "signet_session_search"');
 		expect(plugin).not.toContain('"name": "signet_search"');
 		expect(plugin).not.toContain('"name": "session_search"');
@@ -1347,10 +1344,6 @@ assert calls == [{
 					"manager.add_provider(provider)",
 					"names = manager.get_all_tool_names()",
 					"assert 'memory_search' in names",
-					// `signet_session_search` is what the Signet provider
-					// registers; the bare `session_search` is the Hermes
-					// built-in core tool, so it never lands in the manager
-					// table when only the Signet provider is registered.
 					"assert 'signet_session_search' in names",
 					"assert 'session_search' not in names",
 					"assert 'recall' in names",
@@ -1477,9 +1470,6 @@ assert calls == [{
 		expect(plugin).toContain("SESSION_SEARCH_SCHEMA");
 		expect(plugin).toContain('"description": "Search active or completed Signet session transcripts."');
 		expect(plugin).not.toContain('"expand":');
-		// The Python client method keeps the unnamespaced name because
-		// it is called by `__init__.py` directly, not by the model. Only
-		// the externally-visible tool name is namespaced.
 		expect(plugin).toContain("self._client.session_search(");
 		expect(client).toContain("def session_search(");
 		expect(client).toContain('self._post("/api/sessions/search", body, timeout=_RECALL_TIMEOUT_SECS)');

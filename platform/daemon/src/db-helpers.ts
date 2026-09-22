@@ -1,20 +1,10 @@
-/**
- * Shared low-level DB helpers used across transaction and pipeline code.
- */
-
 import { createRequire } from "node:module";
 import { type ReadDb, type WriteDb, readVecEmbeddingDimensions } from "./db-accessor";
-
-// Try to load native Rust implementation, fall back to pure TS
 let native: typeof import("@signet/native") | null = null;
 try {
 	const esmRequire = createRequire(import.meta.url);
 	native = esmRequire("@signet/native");
-} catch {
-	// Native addon not available — using TypeScript fallback
-}
-
-/** Serialize a numeric vector to a SQLite BLOB via Float32Array. */
+} catch {}
 export function vectorToBlob(vec: readonly number[]): Buffer {
 	if (native !== null) {
 		return native.vectorToBlob(vec as number[]);
@@ -22,39 +12,17 @@ export function vectorToBlob(vec: readonly number[]): Buffer {
 	const f32 = new Float32Array(vec);
 	return Buffer.from(f32.buffer.slice(0));
 }
-
-/**
- * Extract the `changes` count from a bun:sqlite run result.
- *
- * Note: bun:sqlite's `.changes` includes rows modified by triggers,
- * so for tables with FTS sync triggers the count may be inflated.
- * Use the SELECT-count pattern when an exact row count matters.
- */
 export function countChanges(result: unknown): number {
 	if (typeof result !== "object" || result === null) return 0;
 	const row = result as { changes?: number };
 	return typeof row.changes === "number" ? row.changes : 0;
 }
 
-// ---------------------------------------------------------------------------
-// umap_cache invalidation — clear cached projections on any embedding change.
-// Recomputation is lazy (on next dashboard request). Graceful: non-fatal if
-// the umap_cache table doesn't exist yet (e.g. migration hasn't run).
-// ---------------------------------------------------------------------------
-
 function invalidateUmapCache(db: WriteDb): void {
 	try {
 		db.prepare("DELETE FROM umap_cache").run();
-	} catch {
-		// Table may not exist yet — non-fatal
-	}
+	} catch {}
 }
-
-// ---------------------------------------------------------------------------
-// vec_embeddings sync — keep the sqlite-vec virtual table in lockstep
-// with the regular embeddings table so vector search sees new rows.
-// Graceful: silently skips if vec_embeddings doesn't exist (no sqlite-vec).
-// ---------------------------------------------------------------------------
 
 function vecTableExists(db: WriteDb): boolean {
 	try {
@@ -64,15 +32,6 @@ function vecTableExists(db: WriteDb): boolean {
 		return false;
 	}
 }
-
-/**
- * Read the dimension the live vec_embeddings virtual table is pinned to, parsed
- * from its CREATE schema. Returns null when the table is missing or its schema
- * does not declare a FLOAT[N] embedding column (e.g. the test double, or a
- * non-sqlite-vec fallback). Callers use this to detect a dimension mismatch
- * BEFORE writing: syncVecInsert silently swallows the vec0 dimension error,
- * which would otherwise leave vec_embeddings serving stale vectors.
- */
 export function readLiveVecDimensions(db: ReadDb): number | null {
 	let row: { sql: string } | undefined;
 	try {
@@ -84,27 +43,14 @@ export function readLiveVecDimensions(db: ReadDb): number | null {
 	}
 	return readVecEmbeddingDimensions(row?.sql);
 }
-
-/**
- * Insert or replace a vector in vec_embeddings after writing to embeddings.
- * `embeddingId` must match the embeddings.id value.
- */
 export function syncVecInsert(db: WriteDb, embeddingId: string, vector: readonly number[]): void {
 	invalidateUmapCache(db);
 	if (!vecTableExists(db)) return;
 	try {
 		const f32 = new Float32Array(vector);
 		db.prepare("INSERT OR REPLACE INTO vec_embeddings (id, embedding) VALUES (?, ?)").run(embeddingId, f32);
-	} catch {
-		// sqlite-vec not loaded or schema mismatch — non-fatal
-	}
+	} catch {}
 }
-
-/**
- * Remove rows from vec_embeddings that match embedding ids.
- * Call before deleting from the embeddings table so a failed derived-index
- * write leaves the canonical row available for retry.
- */
 export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly string[]): boolean {
 	if (embeddingIds.length === 0) return true;
 	invalidateUmapCache(db);
@@ -119,11 +65,6 @@ export function syncVecDeleteByEmbeddingIds(db: WriteDb, embeddingIds: readonly 
 		return false;
 	}
 }
-
-/**
- * Remove all vec_embeddings rows for a given memory (via embeddings join).
- * Use before deleting from embeddings by source_id.
- */
 export function syncVecDeleteBySourceId(db: WriteDb, sourceType: string, sourceId: string): void {
 	invalidateUmapCache(db);
 	if (!vecTableExists(db)) return;
@@ -136,15 +77,8 @@ export function syncVecDeleteBySourceId(db: WriteDb, sourceType: string, sourceI
 		for (const row of rows) {
 			stmt.run(row.id);
 		}
-	} catch {
-		// non-fatal
-	}
+	} catch {}
 }
-
-/**
- * Remove vec_embeddings rows for a source except those matching a given hash.
- * Mirrors the "delete stale, keep current hash" pattern in embedding upserts.
- */
 export function syncVecDeleteBySourceExceptHash(
 	db: WriteDb,
 	sourceType: string,
@@ -162,15 +96,8 @@ export function syncVecDeleteBySourceExceptHash(
 		for (const row of rows) {
 			stmt.run(row.id);
 		}
-	} catch {
-		// non-fatal
-	}
+	} catch {}
 }
-
-/**
- * Check whether a table exists in the SQLite database.
- * Replaces 8+ local copies across the daemon codebase.
- */
 export function tableExists(db: { prepare(sql: string): { get(...args: unknown[]): unknown } }, name: string): boolean {
 	return db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null;
 }

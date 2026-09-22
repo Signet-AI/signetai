@@ -9,8 +9,6 @@ const VIEW_LABELS: Record<ViewId, string> = {
 	dreaming: "Dreams",
 	skills: "Skills",
 };
-
-/** Parse a deep link into a view id; `#memory` remains a legacy alias for Graph. */
 function viewFromHash(): ViewId | null {
 	if (typeof window === "undefined") return null;
 	const raw = window.location.hash.replace(/^#\/?/, "").trim();
@@ -22,7 +20,6 @@ interface ViewCtx {
 	view: ViewId;
 	setView: (v: ViewId) => void;
 	label: (v: ViewId) => string;
-	/** Cross-view handoff: return home and land in the connect flow. */
 	connectSourceRequested: boolean;
 	requestConnectSource: () => void;
 	clearConnectSource: () => void;
@@ -33,10 +30,6 @@ const Ctx = createContext<ViewCtx | null>(null);
 export function ViewProvider({ children }: { children: ReactNode }) {
 	const [view, setViewState] = useState<ViewId>(() => viewFromHash() ?? "home");
 	const [connectSourceRequested, setConnectSourceRequested] = useState(false);
-
-	// Views are deep-linkable via location.hash (the marketing-site demo iframe
-	// drives the embedded dashboard by setting its hash). Keep the hash in sync
-	// on every navigation so the URL always reflects the visible view.
 	const setView = useCallback((next: ViewId) => {
 		const canonical = next === "memory" ? "graph" : next;
 		setViewState(canonical);

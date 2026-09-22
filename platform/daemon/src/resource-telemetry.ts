@@ -1,15 +1,7 @@
-/**
- * Privacy-safe resource telemetry derived from local process measurements.
- *
- * Raw resource snapshots stay local to diagnostics. This module is the only
- * projection used by fleet telemetry and deliberately emits stable buckets,
- * not measurements or host capacity.
- */
 import type { ResourceSnapshot } from "./resource-monitor";
 import type { PressureLevel } from "./system-pressure";
 
 export const RESOURCE_TELEMETRY_VERSION = 1;
-/** Resource telemetry is emitted only from the existing daemon heartbeat. */
 export const RESOURCE_TELEMETRY_MAX_CADENCE_MS = 5 * 60 * 1000;
 
 export const RESOURCE_CPU_BUCKETS = ["unavailable", "zero", "1-25%", "26-75%", "76-100%", "101-200%", "201+%"] as const;

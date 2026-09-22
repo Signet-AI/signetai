@@ -4,19 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { SIGNET_GRAPHIQ_PLUGIN_ID } from "./plugins";
 
 export const SIGNET_GRAPHIQ_STATE_FILE = ".daemon/graphiq/state.json";
-
-/**
- * graphiq release the bundled GraphIQ plugin's MCP tools are tested against.
- * The upstream install script defaults to "latest"; signet pins this so the
- * bundled plugin never silently drifts off its tested CLI surface. Bump this
- * together with a graphiq sync PR.
- */
 export const GRAPHIQ_SYNCED_VERSION = "4.3.3";
-
-/**
- * Default install directory for the graphiq binary. User-writable (no sudo)
- * and matches the daemon/CLI resolvers' `~/.local/bin` fallback.
- */
 export const GRAPHIQ_DEFAULT_INSTALL_DIR = join(homedir(), ".local", "bin");
 
 export interface GraphiqIndexedProject {
@@ -103,9 +91,7 @@ export function setGraphiqActiveProject(basePath: string, activeProject: string)
 				throw new Error("graphiq state lock timeout: could not acquire after 50 attempts");
 			}
 			const start = Date.now();
-			while (Date.now() - start < retryMs) {
-				// busy-wait
-			}
+			while (Date.now() - start < retryMs) {}
 		}
 	}
 
@@ -121,9 +107,7 @@ export function setGraphiqActiveProject(basePath: string, activeProject: string)
 	} finally {
 		try {
 			rmSync(lockDir, { recursive: false, force: true });
-		} catch {
-			// lock cleanup best-effort
-		}
+		} catch {}
 	}
 }
 

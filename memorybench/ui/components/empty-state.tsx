@@ -21,8 +21,6 @@ export function EmptyState({ icon, title, description, action }: EmptyStateProps
     </div>
   )
 }
-
-// Common icons for reuse
 export function ListIcon() {
   return (
     <svg

@@ -1,7 +1,4 @@
 use napi_derive::napi;
-
-/// Min-max normalise axes to [-scale/2, scale/2].
-/// Replaces 3 separate JS array iterations with a single native call.
 #[napi(object)]
 pub struct NormalisedAxes {
     pub xs: Vec<f64>,
@@ -16,25 +13,33 @@ fn normalise_one(values: &[f64], scale: f64) -> Vec<f64> {
     let mut min = f64::INFINITY;
     let mut max = f64::NEG_INFINITY;
     for &v in values {
-        if v < min { min = v; }
-        if v > max { max = v; }
+        if v < min {
+            min = v;
+        }
+        if v > max {
+            max = v;
+        }
     }
     let range = if (max - min) == 0.0 { 1.0 } else { max - min };
-    values.iter().map(|&v| ((v - min) / range - 0.5) * scale).collect()
+    values
+        .iter()
+        .map(|&v| ((v - min) / range - 0.5) * scale)
+        .collect()
 }
 
 #[napi]
-pub fn normalise_axes(xs: Vec<f64>, ys: Vec<f64>, zs: Option<Vec<f64>>, scale: f64) -> NormalisedAxes {
+pub fn normalise_axes(
+    xs: Vec<f64>,
+    ys: Vec<f64>,
+    zs: Option<Vec<f64>>,
+    scale: f64,
+) -> NormalisedAxes {
     NormalisedAxes {
         xs: normalise_one(&xs, scale),
         ys: normalise_one(&ys, scale),
         zs: zs.map(|z| normalise_one(&z, scale)),
     }
 }
-
-/// Build KNN edges from 2D/3D projected coordinates.
-/// Uses exact O(n^2) below `exact_threshold`, approximate axis-sorted
-/// window above it. Returns deduplicated [source, target] pairs.
 #[napi]
 pub fn build_knn_edges(coords: Vec<Vec<f64>>, k: u32, exact_threshold: u32) -> Vec<Vec<u32>> {
     let n = coords.len();
@@ -65,7 +70,9 @@ fn build_exact(n: usize, coords: &[Vec<f64>], k: usize) -> Vec<Vec<u32>> {
     for i in 0..n {
         let mut dists: Vec<(usize, f64)> = Vec::with_capacity(n - 1);
         for j in 0..n {
-            if i == j { continue; }
+            if i == j {
+                continue;
+            }
             dists.push((j, squared_dist(&coords[i], &coords[j])));
         }
         dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -83,17 +90,23 @@ fn build_exact(n: usize, coords: &[Vec<f64>], k: usize) -> Vec<Vec<u32>> {
 }
 
 fn build_approximate(n: usize, coords: &[Vec<f64>], k: usize) -> Vec<Vec<u32>> {
-    let window_size = 4usize.max(k * 6); // Math.max(4, k * KNN_APPROX_WINDOW_MULTIPLIER)
+    let window_size = 4usize.max(k * 6);
     let mut edge_set = std::collections::HashSet::new();
     let mut result: Vec<Vec<u32>> = Vec::new();
 
     let mut by_x: Vec<usize> = (0..n).collect();
-    by_x.sort_by(|&a, &b| coords[a][0].partial_cmp(&coords[b][0]).unwrap_or(std::cmp::Ordering::Equal));
+    by_x.sort_by(|&a, &b| {
+        coords[a][0]
+            .partial_cmp(&coords[b][0])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut by_y: Vec<usize> = (0..n).collect();
-    by_y.sort_by(|&a, &b| coords[a][1].partial_cmp(&coords[b][1]).unwrap_or(std::cmp::Ordering::Equal));
-
-    // Collect candidate neighbors from both axis orderings
+    by_y.sort_by(|&a, &b| {
+        coords[a][1]
+            .partial_cmp(&coords[b][1])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut candidates: Vec<Vec<usize>> = (0..n).map(|_| Vec::new()).collect();
 
     let collect = |ordering: &[usize], candidates: &mut Vec<Vec<usize>>| {
@@ -111,22 +124,25 @@ fn build_approximate(n: usize, coords: &[Vec<f64>], k: usize) -> Vec<Vec<u32>> {
 
     collect(&by_x, &mut candidates);
     collect(&by_y, &mut candidates);
-
-    // For each node, find k nearest from candidates
     for source in 0..n {
-        // Deduplicate candidates
         candidates[source].sort_unstable();
         candidates[source].dedup();
 
         let mut nearest: Vec<(usize, f64)> = Vec::with_capacity(k + 1);
         for &cand in &candidates[source] {
-            if cand == source { continue; }
+            if cand == source {
+                continue;
+            }
             let d = squared_dist(&coords[source], &coords[cand]);
-            // Insert into sorted nearest list
-            let pos = nearest.iter().position(|&(_, nd)| d < nd).unwrap_or(nearest.len());
+            let pos = nearest
+                .iter()
+                .position(|&(_, nd)| d < nd)
+                .unwrap_or(nearest.len());
             if pos < k {
                 nearest.insert(pos, (cand, d));
-                if nearest.len() > k { nearest.pop(); }
+                if nearest.len() > k {
+                    nearest.pop();
+                }
             }
         }
 

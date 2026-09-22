@@ -1,15 +1,4 @@
-/**
- * Migration 013: Ingestion Tracking
- *
- * Adds infrastructure for the document ingestion engine:
- *   - ingestion_jobs table: tracks each ingestion run (file → memories)
- *   - source_path column on memories: links memories back to their source file
- *   - source_section column on memories: which section the memory came from
- */
-
 import type { MigrationDb } from "./contract";
-
-/** Helper: add a column only if it doesn't already exist. */
 function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
 	const cols = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	if (!cols.some((c) => c.name === column)) {
@@ -18,9 +7,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 }
 
 export function up(db: MigrationDb): void {
-	// -----------------------------------------------------------------------
-	// ingestion_jobs — tracks each ingestion run
-	// -----------------------------------------------------------------------
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS ingestion_jobs (
 			id TEXT PRIMARY KEY,
@@ -43,10 +29,6 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_ingestion_jobs_source_path
 			ON ingestion_jobs(source_path);
 	`);
-
-	// -----------------------------------------------------------------------
-	// Extend memories table with provenance columns
-	// -----------------------------------------------------------------------
 	addColumnIfMissing(db, "memories", "source_path", "TEXT");
 	addColumnIfMissing(db, "memories", "source_section", "TEXT");
 }

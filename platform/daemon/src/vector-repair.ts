@@ -30,7 +30,6 @@ export interface VectorRepairOptions {
 	readonly maxBatches?: number;
 	readonly runBudgetMs?: number;
 	readonly signal?: AbortSignal;
-	/** Compatibility seam for direct callers that expect cleanup failures to throw. */
 	readonly throwOnFailure?: boolean;
 }
 
@@ -157,12 +156,6 @@ function responseFromBatch(
 		},
 	};
 }
-
-/**
- * Run a bounded, checkpointed vector-repair application service. Each owner
- * call commits at most one hard-capped page; the loop only drains a bounded
- * number of pages before returning control to the HTTP caller.
- */
 export async function runVectorRepair(
 	accessor: DbAccessor,
 	ctx: RepairContext,
@@ -204,9 +197,6 @@ export async function runVectorRepair(
 			latest = batch;
 			callAffected += batch.batchAffected;
 			if (batch.status === "complete" || batch.status === "failed") break;
-			// A phase transition can legitimately have no rows. A byte ceiling,
-			// however, can leave the first candidate for the next call; do not spin
-			// on a cursor that did not advance within the same phase.
 			if (batch.batchRows === 0 && batch.phase === phaseBefore) break;
 			await new Promise<void>((resolve) => setImmediate(resolve));
 		} catch (error) {

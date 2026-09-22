@@ -129,23 +129,18 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 		try {
 			const saved = JSON.parse(localStorage.getItem(storageKey) ?? "null");
 			if (saved && Number.isInteger(saved.step) && saved.step >= 0 && saved.step < STEPS.length) {
-				// Recheck connection after reopening; a UI checkpoint is not runtime readiness.
 				setStep(Math.min(saved.step, 2));
 				if (typeof saved.memory === "string") setMemory(saved.memory.slice(0, 240));
 				if (typeof saved.memoryId === "string") setMemoryId(saved.memoryId);
 				if (typeof saved.memoryKey === "string") memoryKey.current = saved.memoryKey;
 			}
-		} catch {
-			/* A missing UI checkpoint never changes the workspace. */
-		}
+		} catch {}
 	}, [storageKey, store.ready, store.agent, store.aStr, catalog.data]);
 	useEffect(() => {
 		if (!storageKey || !loaded.current) return;
 		try {
 			localStorage.setItem(storageKey, JSON.stringify({ step, memory, memoryId, memoryKey: memoryKey.current }));
-		} catch {
-			/* Onboarding also works when browser storage is unavailable. */
-		}
+		} catch {}
 	}, [storageKey, step, memory, memoryId]);
 
 	const perform = async (work: (signal: AbortSignal) => Promise<void>) => {
@@ -205,7 +200,6 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 		setConnected(false);
 		setError(null);
 		setVerified(false);
-		// A popup is a convenience. The SSE flow also exposes an explicit sign-in link.
 		navigation.open();
 		controller.startOAuth();
 	};

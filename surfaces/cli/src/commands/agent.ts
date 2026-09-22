@@ -17,8 +17,6 @@ interface AgentDeps {
 	readonly AGENTS_DIR: string;
 	readonly fetchFromDaemon: DaemonFetch;
 }
-
-/** Read agent.yaml as a mutable record, or return empty record. */
 function readYaml(dir: string): Record<string, unknown> {
 	const file = join(dir, "agent.yaml");
 	if (!existsSync(file)) return {};
@@ -28,21 +26,13 @@ function readYaml(dir: string): Record<string, unknown> {
 		return {};
 	}
 }
-
-/** Write a record back to agent.yaml. */
 function writeYaml(dir: string, data: Record<string, unknown>): void {
 	writeFileSync(join(dir, "agent.yaml"), formatYaml(data));
 }
-
-/**
- * Add an agent entry to `agents.roster` in agent.yaml.
- * Creates the agents block if absent.
- */
 function addToRoster(dir: string, name: string, policy: string, group: string | null): void {
 	const cfg = readYaml(dir);
 	const agents = (cfg.agents as Record<string, unknown> | undefined) ?? {};
 	const roster = Array.isArray(agents.roster) ? agents.roster : [];
-	// Remove any existing entry with the same name (idempotent).
 	const filtered = roster.filter(
 		(e: unknown) => typeof e !== "object" || e === null || (e as Record<string, unknown>).name !== name,
 	);
@@ -54,11 +44,6 @@ function addToRoster(dir: string, name: string, policy: string, group: string | 
 	cfg.agents = { ...agents, roster: filtered };
 	writeYaml(dir, cfg);
 }
-
-/**
- * Remove an agent entry from `agents.roster` in agent.yaml.
- * No-op if not present.
- */
 function removeFromRoster(dir: string, name: string): void {
 	const cfg = readYaml(dir);
 	const agents = cfg.agents as Record<string, unknown> | undefined;
@@ -70,8 +55,6 @@ function removeFromRoster(dir: string, name: string): void {
 	cfg.agents = { ...agents, roster: filtered };
 	writeYaml(dir, cfg);
 }
-
-/** Validate agent name: lowercase alphanumeric + hyphens, not 'default'. */
 export function validateName(name: string): string | null {
 	if (name === "default") return "Cannot use reserved name 'default'";
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(name)) return "Name must be lowercase alphanumeric + hyphens only";
@@ -80,8 +63,6 @@ export function validateName(name: string): string | null {
 
 export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 	const agentCmd = program.command("agent").description("Manage named agents in the roster");
-
-	// ── signet agent list ────────────────────────────────────────────────────
 
 	agentCmd
 		.command("list")
@@ -99,7 +80,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			if (data?.agents) {
 				rows = data.agents;
 			} else {
-				// Daemon offline — fall back to agent.yaml
 				console.log(chalk.yellow("  Daemon offline — reading agent.yaml\n"));
 				const cfg = readYaml(deps.AGENTS_DIR);
 				const agents = cfg.agents as Record<string, unknown> | undefined;
@@ -138,8 +118,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			console.log();
 		});
 
-	// ── signet agent add <name> ──────────────────────────────────────────────
-
 	agentCmd
 		.command("add <name>")
 		.description("Add a named agent to the roster")
@@ -161,12 +139,8 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			}
 
 			const spinner = ora(`Adding agent ${chalk.cyan(name)}...`).start();
-
-			// Scaffold identity directory
 			scaffoldAgent(name, deps.AGENTS_DIR);
 			const dir = join(deps.AGENTS_DIR, "agents", name);
-
-			// Register with daemon
 			const result = await deps.fetchFromDaemon<{ success?: boolean; error?: string }>("/api/agents", {
 				method: "POST",
 				headers: { "Content-Type": "application/json" },
@@ -182,8 +156,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			} else if (!result) {
 				spinner.warn("Daemon offline — agent registered in agent.yaml only");
 			}
-
-			// Update agent.yaml roster
 			addToRoster(deps.AGENTS_DIR, name, options.memory, options.group ?? null);
 
 			spinner.succeed(`Agent ${chalk.cyan(name)} added`);
@@ -192,8 +164,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 				console.log(chalk.dim(`  Read policy: ${options.memory}${options.group ? ` (group: ${options.group})` : ""}`));
 			}
 		});
-
-	// ── signet agent remove <name> ───────────────────────────────────────────
 
 	agentCmd
 		.command("remove <name>")
@@ -225,8 +195,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			console.log(chalk.dim("  Memories archived. Files retained in agents/ directory."));
 		});
 
-	// ── signet agent purge <name> ────────────────────────────────────────────
-
 	agentCmd
 		.command("purge <name>")
 		.description("Permanently delete an agent and all their memories")
@@ -244,7 +212,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			}
 
 			if (!options.force) {
-				// Simple readline confirmation
 				const readline = await import("node:readline");
 				const rl = readline.createInterface({
 					input: process.stdin,
@@ -271,11 +238,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 				`/api/agents/${encodeURIComponent(name)}?purge=true`,
 				{ method: "DELETE" },
 			);
-
-			// Only clean up local files when daemon confirmed success (success: true)
-			// or was offline (null result — no error was returned by the daemon).
-			// If the daemon returned an explicit error the agent record may still
-			// exist in DB; deleting the local files would create an orphan.
 			const daemonOk = result?.success === true;
 			const daemonOffline = !result;
 			if (result?.error) {
@@ -297,8 +259,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			spinner.succeed(`Agent ${chalk.cyan(name)} purged`);
 		});
 
-	// ── signet agent info <name> ─────────────────────────────────────────────
-
 	agentCmd
 		.command("info <name>")
 		.description("Show details for a named agent")
@@ -317,8 +277,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			);
 
 			spinner.stop();
-
-			// Support both `{ agent: {...} }` and flat response shapes
 			const agent: AgentDetail | null = (() => {
 				if (!data) return null;
 				if ("agent" in data && typeof data.agent === "object" && data.agent !== null) return data.agent as AgentDetail;
@@ -338,8 +296,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 					console.log(`  Memories:     ${agent.memory_count}`);
 				}
 			}
-
-			// Show which identity files exist on disk
 			const files = getAgentIdentityFiles(name, deps.AGENTS_DIR);
 			const entries = Object.entries(files);
 			if (entries.length > 0) {
@@ -353,8 +309,6 @@ export function registerAgentCommands(program: Command, deps: AgentDeps): void {
 			}
 			console.log();
 		});
-
-	// `show` is the canonical name; retain `info` above for compatibility.
 	agentCmd
 		.command("show <name>")
 		.description("Show daemon-backed agent policy and scope")

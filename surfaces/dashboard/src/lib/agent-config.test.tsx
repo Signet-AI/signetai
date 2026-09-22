@@ -1,15 +1,3 @@
-/**
- * Regression test for the OAuth disconnect purge bug: a mutation followed by
- * an immediate save() in the same tick used to serialize the PRE-mutation
- * config, so the daemon-side OAuth secret was deleted but the
- * `inference.accounts.<provider>` entry survived in agent.yaml. The dashboard
- * kept reporting the provider as connected ("credentials are never removed").
- *
- * The store keeps a ref (agentRef.current) that save() serializes; it was only
- * refreshed during React renders, which have not committed by the time the
- * disconnect handler calls save(). mutate() must write through to the ref
- * synchronously.
- */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
@@ -79,7 +67,6 @@ async function mountHarness(): Promise<{
 	await act(async () => {
 		root.render(<Harness onStore={(s) => (store = s)} />);
 	});
-	// Let the reload effect fetch + setAgent land.
 	await act(async () => {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	});
@@ -99,8 +86,6 @@ beforeAll(() => {
 	const window = new Window();
 	for (const key of Object.getOwnPropertyNames(window)) {
 		if (!(key in globalThis)) {
-			// happy-dom v20 ships no GlobalRegistrator; mirror the window's
-			// browser globals so react-dom/client and the api client work.
 			(globalThis as Record<string, unknown>)[key] = (window as unknown as Record<string, unknown>)[key];
 		}
 	}
@@ -137,9 +122,6 @@ describe("agent config store", () => {
 		capturedSaveBody = null;
 		const harness = await mountHarness();
 		expect(harness.store.ready).toBe(true);
-
-		// Exactly what handleDisconnect does: delete the account entry, then
-		// persist — no render in between.
 		await act(async () => {
 			harness.store.aDel(["inference", "accounts", "openai-codex"]);
 			await harness.store.save();
@@ -156,9 +138,6 @@ describe("agent config store", () => {
 		capturedSaveBody = null;
 		const harness = await mountHarness();
 		expect(harness.store.ready).toBe(true);
-
-		// Exactly what linkOAuthAccount does: kind + providerFamily + drop the
-		// credentialRef, then persist without a render in between.
 		await act(async () => {
 			const base = ["inference", "accounts", "anthropic"] as const;
 			harness.store.aSetStr([...base, "kind"], "subscription_session");
@@ -178,11 +157,6 @@ describe("agent config store", () => {
 		capturedSaveBody = null;
 		const harness = await mountHarness();
 		expect(harness.store.ready).toBe(true);
-
-		// Saving without touching the settings must preserve everything the
-		// operator configured outside the dashboard (mutationsFrozen, custom
-		// executors, unknown top-level keys) — a full-model rewrite would drop
-		// them silently.
 		await act(async () => {
 			await harness.store.save();
 		});

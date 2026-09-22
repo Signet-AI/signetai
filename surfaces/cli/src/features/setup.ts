@@ -128,11 +128,6 @@ function writeCapabilitySelection(
 		}),
 	);
 }
-
-/**
- * Scaffold minimal identity files when switching from off to managed.
- * Only creates files that do not already exist.
- */
 function scaffoldIdentityIfNeeded(basePath: string, identityMode: IdentityMode, previousMode: IdentityMode): void {
 	if (identityMode !== "managed" || previousMode === "managed") return;
 	const requiredFiles: Record<string, string> = {
@@ -155,12 +150,6 @@ interface ExtractionEnvironment {
 	readonly detectedProvider: ExtractionProviderChoice;
 	readonly llamaCppServerAvailable: boolean;
 }
-
-/**
- * Parse a non-interactive --agent flag: "name:policy" or "name:policy:group".
- * policy is isolated|shared|group. Fails loudly on malformed input rather than
- * silently dropping it.
- */
 function parseAgentFlag(raw: string): {
 	name: string;
 	memoryPolicy: "isolated" | "shared" | "group";
@@ -188,12 +177,6 @@ function parseAgentFlag(raw: string): {
 	}
 	return { name, memoryPolicy: policyRaw, memoryGroup: group || undefined };
 }
-
-/**
- * Probe the local machine for extraction-capable tools (claude/codex/ollama/
- * opencode CLIs, llama.cpp server, acpx runner). Shared by the interactive
- * wizard and the headless plan path so detection never diverges.
- */
 async function probeExtractionEnvironment(): Promise<ExtractionEnvironment> {
 	const hasClaudeCommand = hasCommand("claude");
 	const hasCodexCommand = hasCommand("codex");
@@ -213,12 +196,6 @@ async function probeExtractionEnvironment(): Promise<ExtractionEnvironment> {
 	const detectedProvider = detectExtractionProviderFromAvailable(availableExtractionProviders);
 	return { availableExtractionProviders, acpxBin, detectedProvider, llamaCppServerAvailable };
 }
-
-/**
- * Load and validate a {@link SetupPlan} from `--file` or `--json`. Headless only —
- * the returned plan carries no runtime context, which is built separately by
- * {@link buildHeadlessApplyContext}.
- */
 function loadPlanFromOptions(options: SetupWizardOptions): SetupPlan {
 	if (options.file && options.json) {
 		failSetupValidation("Pass either --file or --json, not both.");
@@ -245,11 +222,6 @@ function loadPlanFromOptions(options: SetupWizardOptions): SetupPlan {
 		failSetupValidation(err instanceof Error ? err.message : String(err));
 	}
 }
-
-/**
- * Build the runtime {@link SetupApplyContext} for a headless plan by probing the
- * environment (tool detection, OpenClaw configs) the same way the wizard does.
- */
 async function buildHeadlessApplyContext(
 	options: SetupWizardOptions,
 	basePath: string,
@@ -274,8 +246,6 @@ async function buildHeadlessApplyContext(
 		openDashboard: options.openDashboard === true,
 	};
 }
-
-/** Interactive setup boots the workspace; the dashboard owns provider connection. */
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
 	if (options.nonInteractive || options.schema || options.file || options.json || options.dryRun) {
 		await applySetupOptions(options, deps);
@@ -322,7 +292,6 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	const client = createDaemonClient(deps.DEFAULT_PORT, basePath);
 	if (existing.agentYaml || existing.configYaml || existing.memoryDb) {
-		// Resuming onboarding never regenerates configuration or user-authored files.
 		if (client.localWorkspace && !(await deps.startDaemon(basePath))) {
 			throw new Error("Could not start Signet. Run signet doctor for recovery details; your workspace was preserved.");
 		}
@@ -345,9 +314,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		console.log(JSON.stringify(setupPlanJsonSchema(), null, 2));
 		return;
 	}
-
-	// Headless plan path: apply a validated plan from --file/--json with no
-	// prompts. The runtime context is probed from the environment.
 	if (options.file || options.json) {
 		const explicitPath = deps.normalizeStringValue(options.path);
 		const basePath = deps.normalizeAgentPath(explicitPath ?? deps.AGENTS_DIR);
@@ -367,11 +333,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		await runFreshSetup(plan, context, deps);
 		return;
 	}
-
-	// Fail closed: never block on an interactive prompt when stdin is not a TTY
-	// (piped, agent, CI). Headless callers must opt in via --non-interactive
-	// (flags) or --file/--json (plan). Checking stdin (not stdout) still allows
-	// `signet setup | tee log` where stdin remains interactive.
 	if (!options.nonInteractive && !process.stdin.isTTY) {
 		failSetupValidation(
 			"signet setup is interactive and requires a TTY.",
@@ -408,9 +369,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		try {
 			const yaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 			existingConfig = parseSimpleYaml(yaml);
-		} catch {
-			// Ignore
-		}
+		} catch {}
 	}
 
 	const existingAgent = readRecord(existingConfig.agent);
@@ -450,8 +409,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	const existingIdentity = readRecord(existingConfig.identity);
 	const configuredIdentityMode = deps.normalizeChoice(options.identityMode, IDENTITY_MODE_CHOICES);
 	const existingIdentityMode = resolveIdentityModeFromConfig(existingConfig);
-	// Passthrough remains readable for existing installs, but fresh setup no
-	// longer writes or offers it. Reconfiguring explicitly selects a current mode.
 	const existingSetupIdentityMode: IdentityMode = existingIdentityMode === "passthrough" ? "off" : existingIdentityMode;
 	const configuredIdentityPreset = deps.normalizeChoice(options.identityPreset, IDENTITY_PRESET_CHOICES);
 	const existingIdentityPreset = deps.normalizeChoice(existingIdentity.preset, IDENTITY_PRESET_CHOICES);
@@ -531,9 +488,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		}
 
 		const resolvedIdentityMode = configuredIdentityMode ?? existingSetupIdentityMode;
-
-		// When identity mode changes to off, run stale identity cleanup
-		// for all detected and configured harnesses even if --harness was not passed.
 		if (resolvedIdentityMode !== "managed" && existingIdentityMode === "managed") {
 			const h = existing.harnesses;
 			const detectedIds = new Set<string>();
@@ -547,29 +501,21 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			if (h.pi) detectedIds.add("pi");
 			if (h.hermesAgent) detectedIds.add("hermes-agent");
 			if (h.gemini) detectedIds.add("gemini");
-			// Also include harnesses listed in agent.yaml config
 			const configured = deps.loadConfiguredHarnesses?.(basePath) ?? [];
 			for (const id of configured) detectedIds.add(id);
 			for (const harness of detectedIds) {
 				try {
 					await deps.configureHarnessHooks(harness, basePath);
-				} catch {
-					// best-effort cleanup
-				}
+				} catch {}
 			}
 		}
 
 		const requestedHarnesses = normalizeHarnessList(options.harness, deps);
 		if (requestedHarnesses.length > 0) {
-			// Hooks are installed before the daemon starts. This is safe because
-			// connectors only write static files with a baked-in loopback default.
-			// The installed runtime reads SIGNET_DAEMON_URL at runtime and only
-			// falls back to that default when no explicit override is present.
 			for (const harness of requestedHarnesses) {
 				try {
 					await deps.configureHarnessHooks(harness, basePath);
 				} catch (err) {
-					// best-effort — non-interactive should not fail on hook errors
 					console.warn(
 						chalk.yellow(`  ⚠ Could not configure ${harness}: ${err instanceof Error ? err.message : String(err)}`),
 					);
@@ -697,10 +643,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 
 	const signetSecretsEnabled = await resolveSignetSecretsCorePluginSelection(basePath, options);
 	const graphiqEnabled = await resolveGraphiqPluginSelection(basePath, options);
-
-	// One question covers both how a local daemon binds AND whether to skip a
-	// local daemon entirely in favor of a remote one. (networkMode is irrelevant
-	// when remote — no local daemon is started.)
 	const requestedRemoteUrl = normalizeDaemonOrigin(deps.normalizeStringValue(options.remoteUrl));
 	if (options.remoteUrl && !requestedRemoteUrl) {
 		failSetupValidation("--remote-url must be a bare http:// or https:// origin (no path, query, or credentials).");
@@ -708,11 +650,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 
 	const networkMode: NetworkMode = deps.normalizeChoice(options.networkMode, NETWORK_MODES) ?? existingNetworkMode;
 	const daemonUrl = requestedRemoteUrl ?? undefined;
-
-	// Deployment type only tailors non-interactive/reconfigure defaults (e.g.
-	// VPS prefers non-local extraction providers). It has no effect in the
-	// interactive fresh-setup flow, so we don't prompt for it — the flag still
-	// works for non-interactive use.
 	const deploymentType: DeploymentTypeChoice = requestedDeploymentType ?? "local";
 
 	const providerFromConfig = deps.normalizeChoice(existingEmbedding.provider, EMBEDDING_PROVIDER_CHOICES);
@@ -820,10 +757,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		existingProvider: existingSetupExtractionProvider,
 		existingEndpoint: existingExtractionEndpoint,
 	});
-
-	// Optional distinct provider for aggregate recall (query-time evidence
-	// synthesis). pi-ai-only (no harness subprocess). When unset, aggregate
-	// recall falls through to the default policy (the extraction provider).
 	const aggregateRecallProvider =
 		deps.normalizeChoice(options.aggregateRecallProvider, aggregateRecallProviderIds()) ?? undefined ?? undefined;
 	const aggregateRecallModel = deps.normalizeStringValue(options.aggregateRecallModel) ?? undefined;
@@ -862,10 +795,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		const initGit = true;
 		gitEnabled = initGit;
 	}
-
-	// Multi-agent roster: additional named agents beyond the default. Each gets
-	// a memory read-policy; the daemon reconciles agents.roster into the
-	// `agents` table at boot (syncAgentRoster).
 	const agents: { name: string; memoryPolicy: "isolated" | "shared" | "group"; memoryGroup?: string }[] = [];
 
 	const seen = new Set<string>();
@@ -878,8 +807,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		seen.add(parsed.name);
 		agents.push(parsed);
 	}
-
-	// Obsidian vault sources (config files the daemon indexes at boot).
 	const sources: { type: "obsidian"; path: string; name?: string }[] = [];
 
 	for (const raw of options.obsidianSource ?? []) {
@@ -932,9 +859,6 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		openclawConfigCount,
 		openDashboard: options.openDashboard === true,
 	};
-
-	// Enforce the same cross-field invariants the headless --file path gets via
-	// parseSetupPlan (e.g. synthesis requires extraction; group needs a group).
 	try {
 		parseSetupPlan(plan);
 	} catch (err) {

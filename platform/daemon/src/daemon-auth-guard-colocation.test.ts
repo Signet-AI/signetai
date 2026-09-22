@@ -6,22 +6,6 @@ import type { DbOwnerClient, DbOwnerJobHandle, DbOwnerSubmitOptions } from "./db
 import type { DbOwnerRequest } from "./db-owner-protocol";
 import type { RecallParams, RecallResponse } from "./memory-search";
 
-/*
- * Regression test for auth guard co-location refactoring.
- *
- * Goal: verify each route file protects its own endpoints with
- * requirePermission guards. A fresh Hono app registers ONLY the
- * route module under test (no centralized daemon.ts guard block).
- * In team mode with no Bearer token, requirePermission → 403.
- * Routes missing their own guards reach the handler → non-403.
- *
- * Module initialisation:
- *   state.ts ← ../pipeline ← hooks ← daemon ← git-sync ← state (cycle).
- *   Importing daemon.ts first resolves AGENTS_DIR before git-sync
- *   needs it.  SIGNET_PATH is set at module scope so AGENTS_DIR
- *   points to the temp workspace from the very first evaluation.
- */
-
 const prevSignetPath = process.env.SIGNET_PATH;
 const tmpDir = join(tmpdir(), `signet-test-auth-coloc-${Date.now()}`);
 mkdirSync(join(tmpDir, "memory"), { recursive: true });
@@ -69,18 +53,11 @@ afterAll(async () => {
 
 describe("auth guard co-location", () => {
 	beforeAll(async () => {
-		// Import daemon to warm the full module graph and break the
-		// circular dependency chain (state → pipeline → hooks → daemon → git-sync → state).
 		await import("./daemon");
 		const { closeDbAccessor, initDbAccessor } = await import("./db-accessor");
 		closeDbAccessor();
 		initDbAccessor(join(tmpDir, "memory", "memories.db"));
 		closeAccessor = closeDbAccessor;
-
-		// Switch to team mode.  The initial parseAuthConfig(undefined, ...)
-		// always defaults to local.  reloadAuthState reads agent.yaml from
-		// disk which has mode: team.  Within the module graph, ESM live
-		// bindings propagate the update to route modules.
 		const state = await import("./routes/state.js");
 		state.reloadAuthState(tmpDir);
 	});

@@ -24,12 +24,6 @@ function httpError<T>(status: number, error?: string, body?: unknown): DaemonFet
 		...(body === undefined ? {} : { body }),
 	};
 }
-
-/**
- * The deps signature is generic over the response payload; TypeScript cannot
- * infer those type parameters from return position, so concrete mocks are
- * widened once here instead of at every call site.
- */
 function mockFetch(
 	impl: (path: string, options?: RequestInit & { timeout?: number }) => Promise<DaemonFetchResult<unknown>>,
 ): DreamDeps["fetchDaemonResult"] {

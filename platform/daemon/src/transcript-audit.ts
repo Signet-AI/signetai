@@ -107,9 +107,7 @@ export async function pruneTranscriptAudit(basePath?: string): Promise<{ removed
 			totalBytes -= file.size;
 			removedFiles++;
 			removedBytes += file.size;
-		} catch {
-			// Cleanup is best effort; the next maintenance pass retries it.
-		}
+		} catch {}
 	}
 	return { removedFiles, removedBytes };
 }

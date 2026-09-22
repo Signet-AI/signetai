@@ -52,7 +52,6 @@ function Shell() {
 function ViewSwitch() {
 	const { view } = useView();
 	useEffect(() => {
-		// scroll content to top on view change
 		const el = document.querySelector(".sig-content");
 		if (el) el.scrollTo({ top: 0 });
 	}, [view]);

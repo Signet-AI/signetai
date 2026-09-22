@@ -25,8 +25,6 @@ export function parseSearchArgs(args: string[]): SearchArgs | null {
       parsed.runId = args[++i]
     }
   }
-
-  // runId is required for search (must have ingested first)
   if (!parsed.runId || !isValidRunId(parsed.runId)) {
     return null
   }

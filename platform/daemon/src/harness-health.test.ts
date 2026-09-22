@@ -46,7 +46,6 @@ console.log("SIGNET_HEALTH_RESULT " + JSON.stringify(await inspectRegisteredConn
 			expect((await fifo).health.message).toContain("timed out");
 			expect(existsSync(join(dir, "started"))).toBe(true);
 		}
-		// A resolved timeout releases admission only after termination.
 		const retry = await runHarnessInspection(request("blocked"), { entrypoint, timeoutMs: 100 });
 		expect(retry.health.message).toContain("timed out");
 		const pending = await runHarnessInspection(request("pending"), { entrypoint, timeoutMs: 300 });

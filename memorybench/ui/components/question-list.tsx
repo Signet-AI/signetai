@@ -17,8 +17,6 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
   const [selectedTypes, setSelectedTypes] = useState<string[]>([])
   const [showFailuresOnly, setShowFailuresOnly] = useState(false)
   const [expanded, setExpanded] = useState<string | null>(null)
-
-  // Get unique question types with counts
   const questionTypes = useMemo(() => {
     const counts: Record<string, number> = {}
     questions.forEach((q) => {
@@ -30,21 +28,14 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
       count,
     }))
   }, [questions, questionTypeRegistry])
-
-  // Count failures
   const failureCount = useMemo(() => {
     return questions.filter((q) => q.phases.evaluate.label === "incorrect").length
   }, [questions])
-
-  // Filter questions
   const filtered = useMemo(() => {
     return questions.filter((q) => {
-      // Failures filter
       if (showFailuresOnly && q.phases.evaluate.label !== "incorrect") {
         return false
       }
-
-      // Search filter
       if (search) {
         const searchLower = search.toLowerCase()
         const matchesSearch =
@@ -53,8 +44,6 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
           q.groundTruth.toLowerCase().includes(searchLower)
         if (!matchesSearch) return false
       }
-
-      // Type filter
       if (selectedTypes.length > 0 && !selectedTypes.includes(q.questionType)) {
         return false
       }
@@ -71,9 +60,9 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
 
   return (
     <div>
-      {/* Filter Bar */}
+      {}
       <div className="mb-4">
-        {/* Header row */}
+        {}
         <div className="flex items-center justify-between text-sm px-1 mb-2">
           <span className="text-text-secondary">
             Showing {filtered.length} of {questions.length}{" "}
@@ -95,9 +84,9 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
           </button>
         </div>
 
-        {/* Filter bar */}
+        {}
         <div className="inline-flex border border-[#333333] rounded">
-          {/* Search input */}
+          {}
           <div className="w-[200px] border-r border-[#333333]">
             <div className="relative h-[40px] flex items-center">
               <svg
@@ -123,7 +112,7 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
             </div>
           </div>
 
-          {/* Type filter */}
+          {}
           <div className="w-[180px] border-r border-[#333333]">
             <MultiSelect
               label="Select question types"
@@ -134,7 +123,7 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
             />
           </div>
 
-          {/* Failures toggle */}
+          {}
           <button
             type="button"
             className={cn(
@@ -158,7 +147,7 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
         </div>
       </div>
 
-      {/* Questions - Table style */}
+      {}
       {filtered.length === 0 ? (
         <div className="text-center py-8 text-text-secondary">
           {showFailuresOnly ? "No failures found" : "No questions match your filters"}
@@ -178,12 +167,12 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
                   !isLast && !isExpanded && "border-b border-border"
                 )}
               >
-                {/* Row */}
+                {}
                 <div
                   className="px-4 py-3 flex items-center gap-3"
                   onClick={() => setExpanded(isExpanded ? null : q.questionId)}
                 >
-                  {/* Status indicator */}
+                  {}
                   <div
                     className={cn(
                       "w-2 h-2 rounded-full flex-shrink-0",
@@ -191,12 +180,12 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
                     )}
                   />
 
-                  {/* Question ID */}
+                  {}
                   <span className="font-mono text-sm text-text-secondary w-[140px] flex-shrink-0">
                     {q.questionId}
                   </span>
 
-                  {/* Type badge */}
+                  {}
                   <span
                     className="text-xs px-2 py-0.5 rounded bg-bg-primary text-text-muted flex-shrink-0 cursor-default"
                     title={q.questionType}
@@ -205,12 +194,12 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
                       q.questionType.replace(/[-_]/g, " ")}
                   </span>
 
-                  {/* Question text */}
+                  {}
                   <span className="text-sm text-text-primary flex-1 min-w-0 truncate">
                     {q.question}
                   </span>
 
-                  {/* Status label */}
+                  {}
                   <span
                     className={cn(
                       "text-sm font-medium flex-shrink-0",
@@ -220,7 +209,7 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
                     {isCorrect ? "correct" : "incorrect"}
                   </span>
 
-                  {/* Expand icon */}
+                  {}
                   <svg
                     className={cn(
                       "w-4 h-4 text-text-muted transition-transform flex-shrink-0",
@@ -235,7 +224,7 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
                   </svg>
                 </div>
 
-                {/* Expanded content */}
+                {}
                 {isExpanded && (
                   <div
                     className={cn(
@@ -243,7 +232,7 @@ export function QuestionList({ runId, questions, questionTypeRegistry }: Questio
                       !isLast && "border-b border-border"
                     )}
                   >
-                    {/* Question */}
+                    {}
                     <div className="min-w-0">
                       <div className="text-xs text-text-muted uppercase tracking-wide mb-1">
                         Question

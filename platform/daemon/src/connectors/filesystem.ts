@@ -1,11 +1,3 @@
-/**
- * Filesystem connector — ingests local files into the document pipeline.
- *
- * Walks a configured root directory using glob patterns, creates document
- * rows for matching files, and enqueues document_ingest jobs. Chunking,
- * embedding, and indexing are handled downstream by the document worker.
- */
-
 import { constants, access, opendir, open, stat } from "node:fs/promises";
 import { basename, join, relative, resolve } from "node:path";
 import type {
@@ -21,13 +13,9 @@ import type { DbAccessor } from "../db-accessor";
 import { logger } from "../logger";
 import { enqueueDocumentIngestJob } from "../pipeline/document-worker";
 
-// ---------------------------------------------------------------------------
-// Settings
-// ---------------------------------------------------------------------------
-
 const DEFAULT_PATTERNS = ["**/*.md", "**/*.txt"];
 const DEFAULT_IGNORE = [".git", "node_modules", ".DS_Store"];
-const DEFAULT_MAX_FILE_SIZE = 1_048_576; // 1 MB
+const DEFAULT_MAX_FILE_SIZE = 1_048_576;
 const FILESYSTEM_LIST_PAGE_SIZE = 100;
 const DIRECTORY_ENTRIES_PER_YIELD = 64;
 const MAX_FILES_PER_DIRECTORY = 1_000;
@@ -58,10 +46,6 @@ function parseSettings(raw: Readonly<Record<string, unknown>>): FilesystemSettin
 
 	return { rootPath, patterns, ignorePatterns, maxFileSize };
 }
-
-// ---------------------------------------------------------------------------
-// File discovery
-// ---------------------------------------------------------------------------
 
 interface DiscoveredFile {
 	readonly absolutePath: string;
@@ -218,10 +202,6 @@ export async function discoverFiles(
 	return results;
 }
 
-// ---------------------------------------------------------------------------
-// Document row helpers
-// ---------------------------------------------------------------------------
-
 interface ExistingDocRow {
 	readonly id: string;
 	readonly updated_at: string;
@@ -234,7 +214,7 @@ async function findDocBySourceUrl(accessor: DbAccessor, sourceUrl: string): Prom
 				| ExistingDocRow
 				| undefined;
 		},
-		{ siteToken: "connectors/filesystem.ts:231", operation: "connector.filesystem.find-document" },
+		{ siteToken: "connectors/filesystem.ts:211", operation: "connector.filesystem.find-document" },
 	);
 }
 
@@ -271,10 +251,6 @@ export async function readFileContent(
 		return null;
 	}
 }
-
-/**
- * Insert a new document row and return its id.
- */
 async function insertDocument(
 	accessor: DbAccessor,
 	connectorId: string,
@@ -298,15 +274,11 @@ async function insertDocument(
 			         0, 0, NULL, ?, ?, NULL)`,
 			).run(id, sourceUrl, title, rawContent, connectorId, now, now);
 		},
-		{ siteToken: "connectors/filesystem.ts:288" },
+		{ siteToken: "connectors/filesystem.ts:264" },
 	);
 
 	return id;
 }
-
-/**
- * Update an existing document row with fresh content and reset to queued.
- */
 async function updateDocument(accessor: DbAccessor, docId: string, rawContent: string): Promise<void> {
 	const now = new Date().toISOString();
 
@@ -320,13 +292,9 @@ async function updateDocument(accessor: DbAccessor, docId: string, rawContent: s
 			 WHERE id = ?`,
 			).run(rawContent, now, docId);
 		},
-		{ siteToken: "connectors/filesystem.ts:313" },
+		{ siteToken: "connectors/filesystem.ts:285" },
 	);
 }
-
-// ---------------------------------------------------------------------------
-// Sync helpers
-// ---------------------------------------------------------------------------
 
 async function processFile(
 	accessor: DbAccessor,
@@ -357,8 +325,6 @@ async function processFile(
 		await enqueueDocumentIngestJob(accessor, docId);
 		return { added: 1, updated: 0, error: null };
 	}
-
-	// Only update if forced (full sync / replay) or mtime is newer than doc
 	const docUpdatedAt = new Date(existing.updated_at);
 	const needsUpdate = forceUpdate || file.mtime > docUpdatedAt;
 
@@ -370,10 +336,6 @@ async function processFile(
 	await enqueueDocumentIngestJob(accessor, existing.id);
 	return { added: 0, updated: 1, error: null };
 }
-
-// ---------------------------------------------------------------------------
-// ConnectorRuntime implementation
-// ---------------------------------------------------------------------------
 
 class FilesystemConnector implements ConnectorRuntime {
 	readonly id: string;
@@ -553,10 +515,6 @@ class FilesystemConnector implements ConnectorRuntime {
 		};
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 
 export function createFilesystemConnector(config: ConnectorConfig, accessor: DbAccessor): ConnectorRuntime {
 	return new FilesystemConnector(config, accessor);

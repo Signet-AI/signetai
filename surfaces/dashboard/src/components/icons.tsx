@@ -1,7 +1,5 @@
 import type { SVGProps } from "react";
 
-/** Brand / source logos inlined from the mockup (no lucide equivalents). */
-
 export function SignetMark(props: SVGProps<SVGSVGElement>) {
 	return (
 		<svg viewBox="0 0 462 504" fill="none" aria-hidden="true" {...props}>
@@ -78,8 +76,6 @@ export function GoogleDriveLogo(props: SVGProps<SVGSVGElement>) {
 		</svg>
 	);
 }
-
-/** Maps a source `kind` to its brand logo; falls back to a generic icon. */
 export function sourceLogo(kind: string, props: SVGProps<SVGSVGElement> = {}) {
 	switch (kind) {
 		case "obsidian":

@@ -739,10 +739,6 @@ describe("getExtractionStatusNotice", () => {
 		expect(notice?.level).toBe("error");
 		expect(notice?.title).toBe("Extraction blocked");
 	});
-
-	// Regression (#946): the standalone extraction worker was retired, so the
-	// daemon reports an active route as ready even though workerRunning is false.
-	// This must NOT produce a misleading "Extraction worker stopped" notice.
 	it("does not warn when an active route is ready despite the retired worker", () => {
 		const notice = getExtractionStatusNotice({
 			running: true,
@@ -925,11 +921,6 @@ describe("showStatus readiness labeling", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
-
-	// Regression (#1074): a daemon whose event loop is wedged keeps its TCP
-	// listener (and often its process) alive while /health times out. That is
-	// "unresponsive", not "stopped" — a restart re-triggers the same wedge, so
-	// the label must not send the operator down the restart path.
 	it("labels an alive-but-unresponsive daemon as unresponsive, not stopped", async () => {
 		const root = mkdtempSync(join(tmpdir(), "health-status-"));
 		try {
@@ -1304,9 +1295,6 @@ describe("daemon lifecycle exit findings (#1148)", () => {
 	it("does not report an unrecorded death while the recorded pid is alive (custom port / still booting)", async () => {
 		const root = mkdtempSync(join(tmpdir(), "doctor-lifecycle-"));
 		try {
-			// The daemon on a custom SIGNET_PORT is invisible to the fixed-port
-			// probe, but the lifecycle record's pid is live — the finding must
-			// not claim "killed or crashed" against a running process.
 			const jsonOut = await captureDoctorJson(
 				lifecycleDeps(root, {
 					state: "running",

@@ -1,12 +1,3 @@
-/**
- * Live Ollama smoke test for LLM recall summarization.
- *
- * Runs only when SIGNET_OLLAMA_TEST_MODEL is explicitly set.
- *
- * Example:
- * SIGNET_OLLAMA_TEST_MODEL=qwen3:4b bun test reranker-llm.live.test.ts
- */
-
 import { describe, expect, test } from "bun:test";
 import type { LlmProvider } from "@signet/core";
 import { summarizeRecallWithLlm } from "./reranker-llm";

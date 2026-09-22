@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Migration 152: covering index for the episodic-source dedup subquery on memory_artifacts. */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		DROP INDEX IF EXISTS idx_memory_artifacts_agent_sha;

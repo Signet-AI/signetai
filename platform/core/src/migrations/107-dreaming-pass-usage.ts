@@ -13,19 +13,6 @@ const TOKEN_COLUMNS: ReadonlyArray<[string, string]> = [
 	["tokens_cache_write", "INTEGER"],
 	["tokens_cost", "REAL"],
 ];
-
-/**
- * Migration 107: provider-reported token usage breakdown on dreaming_passes.
- *
- * Previously `tokens_consumed` held only a local BPE estimate of the prompt
- * text. Pi-backed agent sessions report real per-call usage
- * (`AgentSession.getSessionStats()`: input/output/cacheRead/cacheWrite
- * tokens plus cost), so a pass record can carry the full provider-reported
- * breakdown instead of an input-only estimate. `tokens_consumed` continues
- * to hold the total for backward-compatible readers; the new columns are
- * additive and nullable — rows written before this migration stay intact,
- * and ACPX-backed passes (which report no usage) leave them NULL.
- */
 export function up(db: MigrationDb): void {
 	for (const [column, type] of TOKEN_COLUMNS) {
 		if (!hasColumn(db, "dreaming_passes", column)) {

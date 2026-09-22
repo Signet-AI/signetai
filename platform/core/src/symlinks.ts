@@ -1,71 +1,36 @@
-/**
- * @signet/core - Symlink utilities
- *
- * Functions for managing symlinks, particularly for skills directories
- * that need to be shared across different harness installations.
- */
-
 import { existsSync, lstatSync, mkdirSync, readdirSync, symlinkSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
-
-/** Create a directory symlink, using junctions on Windows (no admin required) */
 function linkDirSync(target: string, path: string): void {
 	const type = process.platform === "win32" ? "junction" : "dir";
 	symlinkSync(target, path, type);
 }
 
 export interface SymlinkOptions {
-	/** If true, don't actually create symlinks, just report what would happen */
 	dryRun?: boolean;
-	/** Force recreation of existing symlinks */
 	force?: boolean;
 }
 
 export interface SymlinkResult {
-	/** Paths where symlinks were created */
 	created: string[];
-	/** Paths that were skipped (already exist, not directories, etc.) */
 	skipped: string[];
-	/** Errors encountered */
 	errors: Array<{ path: string; error: string }>;
 }
-
-/**
- * Symlink all subdirectories from source to target directory.
- *
- * This is used to share skills from ~/.agents/skills/ to harness-specific
- * directories like ~/.claude/skills/ or ~/.config/opencode/skills/.
- *
- * Behavior:
- * - Only directories are symlinked (files are ignored)
- * - Existing symlinks are replaced (removed then recreated)
- * - Real directories at target are skipped to avoid data loss
- * - Gracefully handles errors (continues with other items)
- */
 export function symlinkSkills(sourceDir: string, targetDir: string, options: SymlinkOptions = {}): SymlinkResult {
 	const result: SymlinkResult = {
 		created: [],
 		skipped: [],
 		errors: [],
 	};
-
-	// Check if source exists
 	if (!existsSync(sourceDir)) {
 		return result;
 	}
-
-	// Ensure target parent exists
 	const targetParent = join(targetDir, "..");
 	if (!existsSync(targetParent)) {
 		mkdirSync(targetParent, { recursive: true });
 	}
-
-	// Ensure target directory exists
 	if (!existsSync(targetDir)) {
 		mkdirSync(targetDir, { recursive: true });
 	}
-
-	// Read source directory
 	let entries: string[];
 	try {
 		entries = readdirSync(sourceDir);
@@ -80,11 +45,6 @@ export function symlinkSkills(sourceDir: string, targetDir: string, options: Sym
 	for (const entry of entries) {
 		const srcPath = join(sourceDir, entry);
 		const destPath = join(targetDir, entry);
-
-		// Skip if not a real directory — use lstatSync (not statSync) to
-		// detect symlinks at the source. statSync follows symlinks, which
-		// would let an attacker replace srcPath with a symlink to a
-		// sensitive directory between the check and the link operation.
 		try {
 			const src = lstatSync(srcPath);
 			if (src.isSymbolicLink() || !src.isDirectory()) {
@@ -98,25 +58,17 @@ export function symlinkSkills(sourceDir: string, targetDir: string, options: Sym
 			});
 			continue;
 		}
-
-		// Check if destination exists
 		try {
 			const destStat = lstatSync(destPath);
 			if (destStat.isSymbolicLink()) {
-				// Remove existing symlink
 				if (!options.dryRun) {
 					unlinkSync(destPath);
 				}
 			} else {
-				// It's a real directory or file - skip to avoid data loss
 				result.skipped.push(destPath);
 				continue;
 			}
-		} catch {
-			// dest doesn't exist, that's fine
-		}
-
-		// Create symlink
+		} catch {}
 		if (options.dryRun) {
 			result.created.push(`${destPath} (dry-run)`);
 		} else {
@@ -134,21 +86,10 @@ export function symlinkSkills(sourceDir: string, targetDir: string, options: Sym
 
 	return result;
 }
-
-/**
- * Create a single directory symlink.
- *
- * Creates the symlink at dest pointing to src.
- * If dest exists and is a symlink, it's replaced.
- * If dest exists and is real, the operation fails unless force is true.
- */
 export function symlinkDir(src: string, dest: string, options: SymlinkOptions = {}): boolean {
-	// Check source exists
 	if (!existsSync(src)) {
 		return false;
 	}
-
-	// Handle existing destination
 	if (existsSync(dest)) {
 		try {
 			const stat = lstatSync(dest);
@@ -157,7 +98,6 @@ export function symlinkDir(src: string, dest: string, options: SymlinkOptions = 
 					unlinkSync(dest);
 				}
 			} else if (!options.force) {
-				// Real file/dir exists and not forcing
 				return false;
 			}
 		} catch {

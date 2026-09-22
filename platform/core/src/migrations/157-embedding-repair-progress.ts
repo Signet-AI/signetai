@@ -1,10 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Splits agent-visible repair progress from the singleton provider admission
- * budget. The lease and hourly window remain global, while completion
- * diagnostics are keyed by the agent whose memories were repaired.
- */
 export function up(db: MigrationDb): void {
 	const columns = new Set(
 		(db.prepare("PRAGMA table_info(embedding_repair_checkpoints)").all() as Array<{ name?: string }>).map(

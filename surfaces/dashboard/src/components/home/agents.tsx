@@ -28,11 +28,6 @@ function ScopeBadge({ children }: { children: string }) {
 		</span>
 	);
 }
-
-/**
- * Home owns the agent workflow. Keep the roster compact and defer scope
- * controls to native disclosure rows, matching the source drill-down pattern.
- */
 export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 	const rosterRef = useRef<HTMLElement>(null);
 	const identityQuery = useAsync(() => api.getIdentity(), { intervalMs: 30000 });

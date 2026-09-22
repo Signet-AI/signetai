@@ -27,8 +27,6 @@ function parseScoreArray(raw: unknown): RerankScore[] {
 }
 
 function parseScores(raw: string): RerankScore[] {
-	// Strip <think> blocks and markdown fences before parsing — qwen and other
-	// chain-of-thought models emit these before the JSON output.
 	const cleaned = stripFences(raw);
 	try {
 		const parsed: unknown = JSON.parse(cleaned);
@@ -131,7 +129,5 @@ export async function summarizeRecallWithLlm(
 		timeoutMs,
 		maxTokens: 180,
 	});
-	// Strip <think> blocks and fences before cleaning — qwen-style models
-	// can emit chain-of-thought before the actual summary text.
 	return cleanSummary(stripFences(raw));
 }

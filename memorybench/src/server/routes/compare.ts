@@ -10,8 +10,6 @@ import type { SamplingConfig } from "../../types/checkpoint"
 const checkpointManager = new CheckpointManager()
 
 const COMPARE_DIR = "./data/compare"
-
-// Track active comparisons in memory (similar to runState.ts)
 export type CompareState = {
   status: "running" | "stopping"
   startedAt: string
@@ -63,8 +61,6 @@ export async function handleCompareRoutes(
 ): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
-
-  // GET /api/compare - List all comparisons
   if (method === "GET" && pathname === "/api/compare") {
     if (!existsSync(COMPARE_DIR)) {
       return json([])
@@ -79,8 +75,6 @@ export async function handleCompareRoutes(
       .map((compareId) => {
         const manifest = batchManager.loadManifest(compareId)
         if (!manifest) return null
-
-        // Calculate progress for each run
         const runProgress = manifest.runs.map((run) => {
           const checkpoint = checkpointManager.load(run.runId)
           if (!checkpoint) {
@@ -100,8 +94,6 @@ export async function handleCompareRoutes(
             status,
           }
         })
-
-        // Overall comparison status
         const allCompleted = runProgress.every((r) => r.status === "completed")
         const anyFailed = runProgress.some((r) => r.status === "failed")
         const anyRunning = runProgress.some((r) => r.status === "running")
@@ -138,8 +130,6 @@ export async function handleCompareRoutes(
 
     return json(compareDetails)
   }
-
-  // POST /api/compare/start - Start new comparison
   if (method === "POST" && pathname === "/api/compare/start") {
     try {
       const body = await req.json()
@@ -154,8 +144,6 @@ export async function handleCompareRoutes(
           400
         )
       }
-
-      // Initialize comparison and wait for manifest + checkpoints to be created
       const { compareId } = await initializeComparison(
         {
           providers: providers as ProviderName[],
@@ -173,8 +161,6 @@ export async function handleCompareRoutes(
       return json({ error: e instanceof Error ? e.message : "Invalid request body" }, 400)
     }
   }
-
-  // GET /api/compare/:compareId - Get comparison detail with run progress
   const compareIdMatch = pathname.match(/^\/api\/compare\/([^/]+)$/)
   if (method === "GET" && compareIdMatch) {
     const compareId = decodeURIComponent(compareIdMatch[1])
@@ -182,8 +168,6 @@ export async function handleCompareRoutes(
     if (!manifest) {
       return json({ error: "Comparison not found" }, 404)
     }
-
-    // Get detailed progress for each run
     const runDetails = manifest.runs.map((run) => {
       const checkpoint = checkpointManager.load(run.runId)
       if (!checkpoint) {
@@ -197,8 +181,6 @@ export async function handleCompareRoutes(
 
       const summary = checkpointManager.getSummary(checkpoint)
       const status = getRunStatus(checkpoint, summary)
-
-      // Calculate accuracy from checkpoint questions
       const questions = Object.values(checkpoint.questions)
       const evaluatedQuestions = questions.filter(
         (q: any) => q.phases?.evaluate?.status === "completed"
@@ -217,8 +199,6 @@ export async function handleCompareRoutes(
         accuracy,
       }
     })
-
-    // Calculate overall status - must match list endpoint logic exactly
     const compareState = getCompareState(compareId)
     const allCompleted = runDetails.every((r) => r.status === "completed")
     const anyFailed = runDetails.some((r) => r.status === "failed")
@@ -244,8 +224,6 @@ export async function handleCompareRoutes(
       runs: runDetails,
     })
   }
-
-  // GET /api/compare/:compareId/report - Get aggregated reports
   const reportMatch = pathname.match(/^\/api\/compare\/([^/]+)\/report$/)
   if (method === "GET" && reportMatch) {
     const compareId = decodeURIComponent(reportMatch[1])
@@ -258,8 +236,6 @@ export async function handleCompareRoutes(
     if (reports.length === 0) {
       return json({ error: "No reports available yet" }, 404)
     }
-
-    // Return aggregated data
     return json({
       compareId: manifest.compareId,
       benchmark: manifest.benchmark,
@@ -271,8 +247,6 @@ export async function handleCompareRoutes(
       })),
     })
   }
-
-  // POST /api/compare/:compareId/stop - Stop all runs in comparison
   const stopMatch = pathname.match(/^\/api\/compare\/([^/]+)\/stop$/)
   if (method === "POST" && stopMatch) {
     const compareId = decodeURIComponent(stopMatch[1])
@@ -284,8 +258,6 @@ export async function handleCompareRoutes(
     if (!success) {
       return json({ error: "Failed to request stop" }, 500)
     }
-
-    // Broadcast stop event
     events.broadcast({
       type: "compare_stopping",
       compareId,
@@ -293,8 +265,6 @@ export async function handleCompareRoutes(
 
     return json({ message: "Stop requested for comparison", compareId })
   }
-
-  // POST /api/compare/:compareId/resume - Resume comparison
   const resumeMatch = pathname.match(/^\/api\/compare\/([^/]+)\/resume$/)
   if (method === "POST" && resumeMatch) {
     const compareId = decodeURIComponent(resumeMatch[1])
@@ -307,14 +277,10 @@ export async function handleCompareRoutes(
     if (!manifest) {
       return json({ error: "Comparison not found" }, 404)
     }
-
-    // Resume the comparison
     resumeComparison(compareId, events)
 
     return json({ message: "Comparison resumed", compareId })
   }
-
-  // DELETE /api/compare/:compareId - Delete comparison
   const deleteMatch = pathname.match(/^\/api\/compare\/([^/]+)$/)
   if (method === "DELETE" && deleteMatch) {
     const compareId = decodeURIComponent(deleteMatch[1])
@@ -331,21 +297,16 @@ export async function handleCompareRoutes(
 }
 
 function getRunStatus(checkpoint: any, summary: any): string {
-  // Active process takes priority
   const runState = getRunState(checkpoint.runId)
   if (runState) {
-    return runState.status // "running" or "stopping"
+    return runState.status
   }
-
-  // Use persisted status from checkpoint (handles crash/stop cases)
   if (checkpoint.status === "completed") {
     return "completed"
   }
   if (checkpoint.status === "failed") {
     return "failed"
   }
-
-  // Check if any question has a failed phase
   const questions = Object.values(checkpoint.questions || {}) as any[]
   const hasFailed = questions.some((q: any) => {
     const phases = q.phases || {}
@@ -365,10 +326,7 @@ function getRunStatus(checkpoint: any, summary: any): string {
   if (summary.evaluated === summary.total && summary.total > 0) {
     return "completed"
   }
-
-  // If checkpoint was ever started (status changed from initializing), it's partial
   if (checkpoint.status === "running" || checkpoint.status === "initializing") {
-    // Was started but no active process - must have crashed/stopped
     if (summary.ingested > 0 || checkpoint.status === "running") {
       return "partial"
     }
@@ -392,7 +350,6 @@ async function initializeComparison(
   },
   events: EventBroadcaster
 ): Promise<{ compareId: string }> {
-  // Only await manifest creation - this is fast
   const manifest = await batchManager.createManifest(options)
   const compareId = manifest.compareId
 
@@ -408,8 +365,6 @@ async function initializeComparison(
     benchmark: options.benchmark,
     providers: options.providers,
   })
-
-  // Run execution in background - don't await
   batchManager
     .executeRuns(manifest)
     .then(() => {

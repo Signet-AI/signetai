@@ -89,12 +89,8 @@ describe("graph-transactions", () => {
 			txDecrementEntityMentions(asWriteDb(db), {
 				entityIds: ["ent-a"],
 			});
-
-			// Alpha orphaned and deleted
 			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-a")).toBeNull();
-			// Beta still exists
 			expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-b")).toBeTruthy();
-			// Dangling relation cleaned
 			expect(db.prepare("SELECT id FROM relations WHERE id = ?").get("rel-1")).toBeNull();
 		});
 

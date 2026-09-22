@@ -1,22 +1,3 @@
-/**
- * Type stubs for OpenClaw Plugin API.
- *
- * OpenClaw is a peer dependency. These stubs mirror the upstream
- * plugin-sdk types so we get compile-time safety without a hard
- * dependency on the full SDK.
- *
- * Intersection with Record<string, unknown> on event/context types
- * preserves access to undocumented extra fields that older OpenClaw
- * versions pass (backwards compatibility).
- *
- * Upstream source: openclaw/src/plugins/types.ts
- */
-
-// ============================================================================
-// Hook event types (from PluginHookHandlerMap)
-// ============================================================================
-
-/** Context shared across all agent-scoped hooks. */
 export type PluginHookAgentContext = {
 	readonly agentId?: string;
 	readonly sessionKey?: string;
@@ -66,10 +47,6 @@ export type PluginHookAfterCompactionEvent = {
 	readonly sessionFile?: string;
 } & Record<string, unknown>;
 
-// ============================================================================
-// Plugin API
-// ============================================================================
-
 export type PluginRegistrationMode =
 	| "full"
 	| "discovery"
@@ -109,8 +86,6 @@ export interface OpenClawPluginApi {
 	registerMemoryCapability(capability: OpenClawMemoryCapability): void;
 	registerCli(fn: (ctx: { program: unknown }) => void, opts?: { commands?: readonly string[] }): void;
 	registerService(service: { id: string; start(): void | Promise<void>; stop(): void | Promise<void> }): void;
-
-	// Typed overloads for known hooks
 	on(
 		event: "before_prompt_build",
 		handler: (
@@ -142,7 +117,6 @@ export interface OpenClawPluginApi {
 		handler: (event: PluginHookAfterCompactionEvent, ctx: PluginHookAgentContext) => Promise<void> | void,
 		opts?: { priority?: number },
 	): void;
-	// Fallback for unknown/newer hooks + legacy event names
 	on(
 		event: string,
 		handler: (event: Record<string, unknown>, ctx: unknown) => unknown | Promise<unknown>,

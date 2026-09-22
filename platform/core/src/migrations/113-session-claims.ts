@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 113: durable session lifecycle claims (#1228).
- *
- * Session ownership and end markers must survive daemon restarts. The
- * composite key keeps identical harness session keys isolated by agent.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_claims (

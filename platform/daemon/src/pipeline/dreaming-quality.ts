@@ -1,4 +1,3 @@
-/** Deterministic, local quality measurements for the semantic layer Dreaming creates. */
 import { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import { getDbOwnerForAccessor } from "../db-owner-runtime";
@@ -33,9 +32,7 @@ export interface DreamingQualityReport {
 	readonly citationCoverage: {
 		readonly totalClaimValues: number;
 		readonly valuesWithResolvedEpisodicQuote: number;
-		/** Active values without a stable claim key cannot be resolved by path. */
 		readonly unaddressableClaimValues: number;
-		/** Paths that disappeared or no longer resolve during this read. */
 		readonly unresolvedClaimPaths: number;
 		readonly rate: number | null;
 	};
@@ -45,16 +42,13 @@ export interface DreamingQualityReport {
 		readonly rate: number | null;
 		readonly examples: readonly DreamingQualityIssue[];
 	};
-	/** Model-sensitive ontology-shape signals, reported alongside correctness. */
 	readonly structureQuality: {
 		readonly totalEntities: number;
 		readonly unknownEntityTypes: number;
 		readonly unknownEntityTypeRate: number | null;
 		readonly totalAspects: number;
-		/** Exact `profile` buckets, retained for model-ablation comparisons. */
 		readonly profileAspects: number;
 		readonly profileAspectRate: number | null;
-		/** Generic buckets (including `details`) that flatten semantic structure. */
 		readonly genericAspects: number;
 		readonly genericAspectRate: number | null;
 	};
@@ -65,10 +59,6 @@ function isResolvedEpisodicQuote(item: {
 	readonly kind: string;
 	readonly reference: unknown;
 }): boolean {
-	// A source pointer alone does not prove a verbatim citation. The quote must
-	// remain in canonical proposal evidence and the referenced episodic source
-	// must still resolve. `provided_quote` deliberately does not qualify because
-	// it lacks an independently resolved source.
 	if (!item.found || !["memory", "memory_artifact", "session_transcript"].includes(item.kind)) return false;
 	if (!item.reference || typeof item.reference !== "object" || Array.isArray(item.reference)) return false;
 	const quote = (item.reference as Record<string, unknown>).quote;
@@ -87,12 +77,6 @@ function qualityIssues(rows: readonly EntityRow[]): readonly DreamingQualityIssu
 			: [];
 	});
 }
-
-/**
- * Measure citation coverage and entity garbage without creating a second
- * semantic reader. Claim evidence is resolved through the same API surface
- * users inspect, while source-native topology is excluded from quality counts.
- */
 export async function getDreamingQualityReport(accessor: DbAccessor, agentId: string): Promise<DreamingQualityReport> {
 	const owner = await getDbOwnerForAccessor(accessor);
 	const topologyPlaceholders = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");

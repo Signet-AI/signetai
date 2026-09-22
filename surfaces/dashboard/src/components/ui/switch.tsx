@@ -2,14 +2,6 @@ import * as React from "react";
 import { Switch as SwitchPrimitive } from "radix-ui";
 
 import { cn } from "@/lib/utils";
-
-/**
- * Structural-only switch — all visuals (38×22 track, thumb, travel, glow)
- * live in src/index.css `[data-slot="switch"]` rules, which mirror the mockup
- * `.toggle` spec. Keep styling classes OUT of this component: utility classes
- * (Tailwind v4 `translate` property) stack on top of the CSS `transform`
- * rules and push the thumb out of the track.
- */
 function Switch({ className, ...props }: React.ComponentProps<typeof SwitchPrimitive.Root>) {
 	return (
 		<SwitchPrimitive.Root

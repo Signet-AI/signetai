@@ -57,11 +57,6 @@ describe("logger config", () => {
 		}
 	});
 });
-
-// Regression for issue #1148: the daemon exit path calls logger.shutdown()
-// before process.exit(); without that explicit flush, the final log lines
-// ("Received SIGTERM; shutting down") can sit in the 1s-flush buffer and be
-// lost on exit, which is exactly the "vanished with no shutdown log" symptom.
 describe("logger shutdown flush", () => {
 	it("writes buffered entries to the log file on shutdown", () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-logger-"));
@@ -73,8 +68,6 @@ describe("logger shutdown flush", () => {
 				level: "info",
 			});
 			log.info("daemon", "Received signal:SIGTERM; shutting down");
-			// No 1s timer flush has run yet (the test is sub-second); shutdown()
-			// must flush the buffer synchronously.
 			log.shutdown();
 			const today = new Date().toISOString().split("T")[0];
 			const content = readFileSync(join(root, `signet-${today}.log`), "utf-8");
@@ -95,9 +88,6 @@ describe("logger shutdown flush", () => {
 			});
 			const today = new Date().toISOString().split("T")[0];
 			const logPath = join(root, `signet-${today}.log`);
-			// Regression for the #1180 review finding: the constructor used
-			// to write a startup line, so any process importing logger.ts
-			// (tests, CLI, MCP) appended to the daemon's log file at import.
 			expect(existsSync(logPath)).toBe(false);
 			log.shutdown();
 			expect(existsSync(logPath)).toBe(false);
@@ -109,8 +99,6 @@ describe("logger shutdown flush", () => {
 	it("recovers file logging after the log directory becomes writable (#1162)", async () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-logger-"));
 		try {
-			// A file where the log directory should be: the initial mkdir fails
-			// and every append fails until the path is fixed.
 			const blocker = join(root, "blocker");
 			writeFileSync(blocker, "i am a file, not a directory");
 			const logPath = join(blocker, "logs", "signet.log");
@@ -123,11 +111,7 @@ describe("logger shutdown flush", () => {
 				flushRetryBackoffMs: 20,
 			});
 			log.info("daemon", "before failure");
-			// Let the 1s flush timer run: the append fails (missing directory),
-			// but the buffered entries must be retained for the retry.
 			await new Promise((resolve) => setTimeout(resolve, 1100));
-			// Fix the path, then write more; the next flush retry must re-append
-			// the retained buffer and recover file logging.
 			rmSync(blocker, { force: true });
 			mkdirSync(join(root, "blocker", "logs"), { recursive: true });
 			log.info("daemon", "after recovery");
@@ -153,14 +137,10 @@ describe("logger shutdown flush", () => {
 				consoleOutput: false,
 				jsonFormat: false,
 				level: "info",
-				flushRetryBackoffMs: 60_000, // long backoff: no timer retry can fire
+				flushRetryBackoffMs: 60_000,
 			});
 			log.info("daemon", "crash trail entry");
-			// Let the 1s flush timer fail the append once.
 			await new Promise((resolve) => setTimeout(resolve, 1100));
-			// Disk recovers, but the next timer retry is 60s away. A SIGTERM
-			// here must not drop the retained buffer (the #1148 crash-trail
-			// failure class): shutdown() force-flushes past the backoff gate.
 			rmSync(blocker, { force: true });
 			mkdirSync(dirname(logPath), { recursive: true });
 			log.shutdown();
@@ -185,13 +165,10 @@ describe("logger shutdown flush", () => {
 				flushRetryBackoffMs: 60_000,
 			});
 			log.info("daemon", "first entry");
-			// First append fails; the retry gate then holds the buffer.
 			await new Promise((resolve) => setTimeout(resolve, 1100));
 			for (let i = 0; i < 5000; i++) {
 				log.info("daemon", `entry ${i}`);
 			}
-			// The next flush tick must trim to the cap even though it cannot
-			// append yet (it is inside the backoff window).
 			await new Promise((resolve) => setTimeout(resolve, 1100));
 			const buffered = (log as unknown as { buffer: LogEntry[] }).buffer;
 			expect(buffered.length).toBeLessThanOrEqual(2000);

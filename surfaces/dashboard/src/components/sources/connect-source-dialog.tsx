@@ -1,8 +1,3 @@
-/**
- * Unified source dialog — file imports and connector-backed sources share one
- * centered picker and modal shell. The daemon contracts stay in the api client;
- * this component only chooses the existing transport and submit path.
- */
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { sourceLogo } from "@/components/icons";
 import { type ImportSourcesResponse, api } from "@/lib/api";

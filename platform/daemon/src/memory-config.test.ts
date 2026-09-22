@@ -524,7 +524,6 @@ network:
 		expect(cfg.pipelineV2.enabled).toBe(true);
 		expect(cfg.pipelineV2.shadowMode).toBe(true);
 		expect(cfg.pipelineV2.graph.enabled).toBe(true);
-		// unset flags fall through to DEFAULT_PIPELINE_V2 values
 		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
 		expect(cfg.pipelineV2.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
 		expect(cfg.pipelineV2.mutationsFrozen).toBe(DEFAULT_PIPELINE_V2.mutationsFrozen);
@@ -620,8 +619,8 @@ describe("loadPipelineConfig", () => {
 				},
 			},
 		});
-		expect(clamped.reflections.count).toBe(6); // clamped to the route cap
-		expect(clamped.reflections.timezone).toBe(detectLocalTimeZone()); // invalid IANA falls back
+		expect(clamped.reflections.count).toBe(6);
+		expect(clamped.reflections.timezone).toBe(detectLocalTimeZone());
 		expect(clamped.reflections.schedule).toBe("0 9 * * *");
 
 		const valid = loadPipelineConfig({
@@ -723,7 +722,6 @@ describe("loadPipelineConfig", () => {
 
 		expect(result.enabled).toBe(true);
 		expect(result.mutationsFrozen).toBe(true);
-		// absent keys fall through to DEFAULT_PIPELINE_V2
 		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
 		expect(result.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
 		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
@@ -791,8 +789,6 @@ describe("loadPipelineConfig", () => {
 				},
 			},
 		});
-
-		// non-boolean values are not typeof "boolean", so they fall through to defaults
 		expect(result.enabled).toBe(DEFAULT_PIPELINE_V2.enabled);
 		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
 		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
@@ -809,14 +805,9 @@ describe("loadPipelineConfig", () => {
 				},
 			},
 		});
-
-		// workerMaxRetries: min 1
 		expect(result.worker.maxRetries).toBe(1);
-		// extractionTimeout: max 300000
 		expect(result.extraction.timeout).toBe(300000);
-		// leaseTimeoutMs: min 10000
 		expect(result.worker.leaseTimeoutMs).toBe(10000);
-		// minFactConfidenceForWrite: max 1
 		expect(result.extraction.minConfidence).toBe(1);
 	});
 
@@ -1008,16 +999,11 @@ describe("loadPipelineConfig", () => {
 				},
 			},
 		});
-
-		// The standalone extraction worker was retired under the Dreaming cutover;
-		// its poll/load/thread/escalation knobs must not survive into the resolved
-		// config as inert compatibility settings.
 		expect(result.worker).not.toHaveProperty("pollMs");
 		expect(result.worker).not.toHaveProperty("maxLoadPerCpu");
 		expect(result.worker).not.toHaveProperty("overloadBackoffMs");
 		expect(result.worker).not.toHaveProperty("threadedExtraction");
 		expect(result.extraction).not.toHaveProperty("escalation");
-		// Retained worker knobs stay present.
 		expect(result.worker.maxRetries).toBe(DEFAULT_PIPELINE_V2.worker.maxRetries);
 		expect(result.worker.leaseTimeoutMs).toBe(DEFAULT_PIPELINE_V2.worker.leaseTimeoutMs);
 		expect(result.worker.maxLlmConcurrency).toBe(DEFAULT_PIPELINE_V2.worker.maxLlmConcurrency);
@@ -1046,9 +1032,6 @@ describe("loadPipelineConfig", () => {
 			else process.env.SIGNET_MAX_LLM_CONCURRENCY = previous;
 		}
 	});
-
-	// #946: threadedExtraction was a standalone-extraction-worker knob and is
-	// retired along with the worker. The parser must ignore legacy YAML values.
 	it("ignores retired threadedExtraction config", () => {
 		const result = loadPipelineConfig({
 			memory: {
@@ -1174,11 +1157,9 @@ describe("loadPipelineConfig", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
-					// Flat key
 					rerankerEnabled: false,
 					rerankerModel: "flat-model",
 					rerankerUseExtractionModel: false,
-					// Nested key (wins)
 					reranker: {
 						enabled: true,
 						model: "nested-model",

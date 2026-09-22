@@ -201,8 +201,6 @@ export class BatchManager {
 
   async executeRuns(manifest: CompareManifest): Promise<CompareResult> {
     logger.info(`Starting ${manifest.runs.length} parallel runs...`)
-
-    // Register all runs in activeRuns before starting
     for (const run of manifest.runs) {
       startRun(run.runId, manifest.benchmark)
     }
@@ -219,14 +217,12 @@ export class BatchManager {
             questionIds: manifest.targetQuestionIds,
           })
         } catch (error) {
-          // Update checkpoint status to persist the failure state
           const checkpoint = checkpointManager.load(run.runId)
           if (checkpoint) {
             checkpointManager.updateStatus(checkpoint, "failed")
           }
           throw error
         } finally {
-          // Always unregister the run when done (success or failure)
           endRun(run.runId)
         }
       })

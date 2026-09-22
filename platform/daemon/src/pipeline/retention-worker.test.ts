@@ -75,7 +75,7 @@ const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 function testRetentionConfig(overrides: Partial<RetentionConfig> = {}): RetentionConfig {
 	return {
-		intervalMs: 999999, // won't fire during tests
+		intervalMs: 999999,
 		tombstoneRetentionMs: 30 * ONE_DAY_MS,
 		historyRetentionMs: 180 * ONE_DAY_MS,
 		completedJobRetentionMs: 14 * ONE_DAY_MS,
@@ -105,13 +105,10 @@ describe("retention worker", () => {
 
 	it("purges tombstoned memories past retention window", async () => {
 		const now = new Date().toISOString();
-		// Fresh soft-delete (within window)
 		db.prepare(
 			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
 		).run("recent-del", "recent", "fact", daysAgo(5), now, now, "test");
-
-		// Old soft-delete (past 30-day window)
 		db.prepare(
 			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
@@ -122,31 +119,22 @@ describe("retention worker", () => {
 		handle.stop();
 
 		expect(result.tombstonesPurged).toBe(1);
-
-		// Recent deletion still exists
 		const recent = db.prepare("SELECT id FROM memories WHERE id = ?").get("recent-del");
 		expect(recent).toBeTruthy();
-
-		// Old deletion was hard-purged
 		const old = db.prepare("SELECT id FROM memories WHERE id = ?").get("old-del");
 		expect(old).toBeNull();
 	});
 
 	it("purges old history events past retention window", async () => {
-		// Insert a memory for FK reference
 		const now = new Date().toISOString();
 		db.prepare(
 			`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
 		).run("mem-hist", "content", "fact", now, now, "test");
-
-		// Recent history
 		db.prepare(
 			`INSERT INTO memory_history (id, memory_id, event, changed_by, created_at)
 			 VALUES (?, ?, ?, ?, ?)`,
 		).run("hist-recent", "mem-hist", "updated", "test", daysAgo(30));
-
-		// Old history (past 180 days)
 		db.prepare(
 			`INSERT INTO memory_history (id, memory_id, event, changed_by, created_at)
 			 VALUES (?, ?, ?, ?, ?)`,
@@ -167,26 +155,18 @@ describe("retention worker", () => {
 			`INSERT INTO memories (id, content, type, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, ?, ?, ?)`,
 		).run("mem-jobs", "content", "fact", now, now, "test");
-
-		// Recent completed job (within 14 days)
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, completed_at, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		).run("job-recent", "mem-jobs", "extract", "completed", daysAgo(5), now, now);
-
-		// Old completed job (past 14 days)
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, completed_at, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		).run("job-old", "mem-jobs", "extract", "completed", daysAgo(20), now, now);
-
-		// Old dead job (past 30 days)
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, failed_at, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		).run("job-dead", "mem-jobs", "extract", "dead", daysAgo(35), now, now);
-
-		// Recent dead job (within 30 days)
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, failed_at, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -234,13 +214,10 @@ describe("retention worker", () => {
 
 	it("purges graph links before tombstones and cleans orphaned entities", async () => {
 		const now = new Date().toISOString();
-		// Tombstoned memory
 		db.prepare(
 			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
 		).run("mem-graph", "graph test", "fact", daysAgo(35), now, now, "test");
-
-		// Entity with mentions=1 (will become orphan after purge)
 		db.prepare(
 			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, 1, ?, ?)`,
@@ -257,36 +234,25 @@ describe("retention worker", () => {
 		expect(result.graphLinksPurged).toBe(1);
 		expect(result.entitiesOrphaned).toBe(1);
 		expect(result.tombstonesPurged).toBe(1);
-
-		// Graph link removed
 		expect(db.prepare("SELECT * FROM memory_entity_mentions WHERE memory_id = ?").get("mem-graph")).toBeNull();
-		// Entity orphaned and cleaned up
 		expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-1")).toBeNull();
-		// Memory row hard-purged
 		expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-graph")).toBeNull();
 	});
 
 	it("decrements entity mentions and orphans during graph link purge", async () => {
 		const now = new Date().toISOString();
-		// Tombstoned memory past retention
 		db.prepare(
 			`INSERT INTO memories (id, content, type, is_deleted, deleted_at, created_at, updated_at, updated_by)
 			 VALUES (?, ?, ?, 1, ?, ?, ?, ?)`,
 		).run("mem-orphan", "orphan test", "fact", daysAgo(35), now, now, "test");
-
-		// Entity with mentions = 1 (will become orphan)
 		db.prepare(
 			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, 1, ?, ?)`,
 		).run("ent-orphan", "Orphan", "orphan", "extracted", now, now);
-
-		// Entity with mentions = 3 (will survive)
 		db.prepare(
 			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, 3, ?, ?)`,
 		).run("ent-survive", "Survivor", "survivor", "extracted", now, now);
-
-		// Mention links for both
 		db.prepare(
 			`INSERT INTO memory_entity_mentions (memory_id, entity_id)
 			 VALUES (?, ?)`,
@@ -302,10 +268,7 @@ describe("retention worker", () => {
 
 		expect(result.graphLinksPurged).toBe(2);
 		expect(result.entitiesOrphaned).toBe(1);
-
-		// Orphan entity deleted
 		expect(db.prepare("SELECT id FROM entities WHERE id = ?").get("ent-orphan")).toBeNull();
-		// Survivor still exists with decremented mentions
 		const survivor = db.prepare("SELECT mentions FROM entities WHERE id = ?").get("ent-survive") as {
 			mentions: number;
 		};
@@ -350,9 +313,6 @@ describe("retention worker", () => {
 		const failingHandle = startRetentionWorker(failingAccessor, testRetentionConfig());
 		await expect(failingHandle.sweep()).rejects.toThrow("failed to reconcile vec_embeddings");
 		failingHandle.stop();
-
-		// The failed derived-index step rolls back graph/provenance cleanup,
-		// canonical deletion, tombstoning, and cold archival as one retryable unit.
 		expect(db.prepare("SELECT id FROM memories WHERE id = ?").get("mem-expired")).toBeTruthy();
 		expect(db.prepare("SELECT id FROM embeddings WHERE id = ?").get("emb-expired")).toBeTruthy();
 		expect(db.prepare("SELECT id FROM vec_embeddings WHERE id = ?").get("emb-expired")).toBeTruthy();

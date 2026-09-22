@@ -33,8 +33,6 @@ describe("stripSignetBlock", () => {
 	});
 
 	test("sync path invariant: buildSignetBlock never injects a new block", () => {
-		// Regression guard: if buildSignetBlock were re-introduced in syncHarnessConfigs,
-		// the synced output would contain a block. This asserts it cannot happen.
 		const block = buildSignetBlock("/any/path");
 		expect(block).toBe("");
 		expect(stripSignetBlock(block)).toBe("");

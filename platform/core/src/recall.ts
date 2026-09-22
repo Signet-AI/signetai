@@ -142,7 +142,6 @@ export interface RecallRequestOptions {
 	readonly session_key?: string;
 	readonly includeRecalled?: boolean;
 	readonly include_recalled?: boolean;
-	/** Exact daemon memory-scope string; agent/session isolation use their dedicated fields. */
 	readonly scope?: string;
 	readonly sourceOnly?: boolean;
 	readonly source_only?: boolean;
@@ -151,16 +150,9 @@ export interface RecallRequestOptions {
 	readonly aggregate_budget?: AggregateRecallBudget;
 	readonly saveAggregate?: boolean;
 	readonly save_aggregate?: boolean;
-	/** Optional score threshold applied at the daemon response boundary. */
 	readonly minScore?: number;
-	/** Internal bounded attribution for first-party recall surfaces. */
 	readonly recallSurface?: RecallSurface;
 }
-
-/**
- * Coarse recall origin used by anonymous retrieval-outcome telemetry.
- * Keep this an enum: it must never carry a harness, agent, or client name.
- */
 export type RecallSurface = "explicit_api" | "tool_call" | "prompt_injection" | "dashboard" | "other";
 
 export interface RememberRequestOptions {
@@ -178,10 +170,7 @@ export interface RememberRequestOptions {
 	readonly validFrom?: string;
 	readonly validUntil?: string;
 	readonly sourceCreatedAt?: string;
-	/** ISO timestamp; due-for-review marker for temporal claims (#945). */
 	readonly reviewAfter?: string;
-	/** Id of the memory this write supersedes. The old row is marked
-	 *  superseded in the same transaction, wiring vN -> vN+1 lineage. */
 	readonly supersedes?: string;
 	readonly hints?: readonly string[];
 	readonly transcript?: string;
@@ -301,9 +290,6 @@ export function applyRecallScoreThreshold(raw: unknown, minScore?: number): unkn
 
 	const payload = raw as RecallScoreFilterPayload;
 	const rows = Array.isArray(payload.results) ? payload.results : [];
-	// Keep unscored rows such as supplementary summaries in-band. Callers use
-	// score thresholds to trim ranked matches, not to strip contextual cards
-	// that do not participate in numeric ranking.
 	const filtered = rows.filter((row) => typeof row.score !== "number" || row.score >= minScore);
 
 	return {

@@ -1,6 +1,3 @@
-/**
- * Daemon resource instrumentation for file descriptors and event loop lag.
- */
 import { dlopen, ptr, read } from "bun:ffi";
 import { readdirSync, readlinkSync } from "node:fs";
 import { join } from "node:path";
@@ -31,7 +28,6 @@ const MACOS_ERRNO_ENOMEM = 12;
 const MACOS_ERRNO_EACCES = 13;
 const MACOS_ERRNO_EINVAL = 22;
 const MACOS_ERRNO_ENOTSUP = 45;
-// sizeof(struct rusage_info_v4) per bsd/sys/resource.h (1×u8[16] + 35×u64).
 const RUSAGE_INFO_V4_SIZE = 296;
 const RUSAGE_INFO_PHYS_FOOTPRINT_OFFSET = 72;
 const RUSAGE_INFO_PEAK_PHYS_FOOTPRINT_OFFSET = 240;
@@ -125,11 +121,6 @@ function unavailableFileDescriptorUsage(): FileDescriptorUsage {
 		other: null,
 	};
 }
-
-/**
- * Parse macOS's struct proc_fdinfo array returned by PROC_PIDLISTFDS.
- * The structure is two little-endian 32-bit fields: descriptor and type.
- */
 export function parseMacOsFdInfo(raw: Uint8Array): FileDescriptorUsage {
 	if (raw.byteLength % PROC_FDINFO_SIZE !== 0) return unavailableFileDescriptorUsage();
 
@@ -146,8 +137,6 @@ export function parseMacOsFdInfo(raw: Uint8Array): FileDescriptorUsage {
 
 	return {
 		total: sockets + pipes + other,
-		// libproc gives descriptor types, but not vnode paths. Keep path-based
-		// categories explicitly unavailable instead of reporting misleading zeroes.
 		memoryMd: null,
 		sockets,
 		inotify: null,
@@ -165,12 +154,6 @@ type MacOsProcPidInfoResult =
 			readonly kind: "unavailable";
 			readonly reason: "process-gone" | "permission-denied" | "invalid-request" | "unsupported" | "unknown";
 	  };
-
-/**
- * libproc's proc_pidinfo wrapper returns 0 when __proc_info fails, so errno
- * must be read immediately after the call to distinguish an empty result from
- * a vanished process, a permission failure, or a retryable interruption.
- */
 export function classifyMacOsProcPidInfoResult(bytes: number, errno: number | null): MacOsProcPidInfoResult {
 	if (bytes > 0) return { kind: "success", bytes };
 	if (bytes < 0) return { kind: "unavailable", reason: "unknown" };
@@ -213,9 +196,6 @@ function readMacOsFileDescriptors(): FileDescriptorUsage {
 		if (result.bytes < bufferSize) return parseMacOsFdInfo(raw.subarray(0, result.bytes));
 		bufferSize *= 2;
 	}
-
-	// Do not turn a process with more descriptors than our bounded read into a
-	// plausible but incomplete count.
 	return unavailableFileDescriptorUsage();
 }
 
@@ -259,11 +239,6 @@ function readFileDescriptors(): FileDescriptorUsage {
 	if (process.platform === "darwin") return readMacOsFileDescriptors();
 	return unavailableFileDescriptorUsage();
 }
-
-/**
- * macOS process.memoryUsage().rss omits driver-backed and compressed memory.
- * proc_pid_rusage reports the same physical-footprint metric used by vmmap.
- */
 function readMacOsPhysicalMemory(): PhysicalMemoryUsage | null {
 	if (process.platform !== "darwin") return null;
 	const libproc = loadLibproc();
@@ -311,10 +286,6 @@ function processOnlyResourceSnapshot(): ResourceSnapshot {
 		cpuPercent: null,
 	};
 }
-
-// HTTP diagnostics read this bounded snapshot. The full /proc walk is
-// performed at daemon startup and by the diagnostic poller, never as part of
-// a request that is meant to prove liveness.
 let cachedResourceSnapshot: ResourceSnapshot = processOnlyResourceSnapshot();
 
 let lastCpuUsage: NodeJS.CpuUsage | null = null;
@@ -381,8 +352,6 @@ export function getResourceSnapshot(readPhysicalMemory?: PhysicalMemoryReader): 
 	if (readPhysicalMemory === undefined) cachedResourceSnapshot = snapshot;
 	return snapshot;
 }
-
-/** Return the most recent bounded resource sample without touching /proc. */
 export function getCachedResourceSnapshot(): ResourceSnapshot {
 	return cachedResourceSnapshot;
 }
@@ -409,12 +378,6 @@ export function logFdSnapshot(stage: string): ResourceSnapshot {
 let eventLoopTimer: ReturnType<typeof setInterval> | null = null;
 let fdPollTimer: ReturnType<typeof setInterval> | null = null;
 let lastLoggedEventLoopLatchId = 0;
-
-/**
- * Periodic event loop lag monitor.
- * Fires every 2s, measures how late the callback is.
- * Lag > 100ms means the event loop was blocked.
- */
 export function startEventLoopMonitor(intervalMs = 2000): void {
 	if (eventLoopTimer) {
 		clearInterval(eventLoopTimer);
@@ -425,7 +388,6 @@ export function startEventLoopMonitor(intervalMs = 2000): void {
 	eventLoopTimer = setInterval(() => {
 		const now = Date.now();
 		const lag = now - lastTick - intervalMs;
-		// Feed the pressure signal so background write loops can yield/pause.
 		reportEventLoopLag(lag);
 		recordEventLoopLag(lag);
 		recordEventLoopHeartbeat(now, intervalMs);
@@ -437,26 +399,15 @@ export function startEventLoopMonitor(intervalMs = 2000): void {
 				syncDbCallSites: liveness.syncDbCallSites,
 			});
 		}
-		// Advance the pressure state machine on the monitor's own cadence so
-		// reads (isSystemPressureHigh) stay pure and never clear the signal.
 		tickPressureState();
 		lastTick = now;
 	}, intervalMs);
-	// Don't keep process alive just for monitoring
 	if (eventLoopTimer.unref) eventLoopTimer.unref();
 }
-
-/**
- * Periodic FD count logger. Logs every N seconds.
- * Logs delta from previous snapshot.
- */
 export function startFdPollMonitor(intervalMs = 30_000): void {
 	if (fdPollTimer) {
 		clearInterval(fdPollTimer);
 	}
-	// Prime the cache before the HTTP server is bound. Subsequent status and
-	// health requests use this value instead of repeating the synchronous FD
-	// walk on the request path.
 	let prev: ResourceSnapshot | null = snapshotResources();
 	cachedResourceSnapshot = prev;
 	fdPollTimer = setInterval(() => {

@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Durable post-commit publication intents for the DB-authoritative memory head. */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_head_publications (

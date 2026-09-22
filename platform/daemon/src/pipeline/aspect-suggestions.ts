@@ -1,10 +1,3 @@
-/**
- * Suggested aspect names per entity type.
- *
- * Used in the structural classification prompt (pass 2a) to guide the
- * LLM toward consistent, useful aspect names.
- */
-
 export const ASPECT_SUGGESTIONS: Readonly<Record<string, readonly string[]>> = {
 	project: [
 		"architecture",

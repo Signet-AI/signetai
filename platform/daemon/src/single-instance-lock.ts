@@ -68,7 +68,6 @@ function isAlive(pid: number): boolean {
 }
 
 function loadPosixApi(): PosixApi | null {
-	// POSIX flock is released by the kernel when the process dies, unlike PID metadata.
 	if (posixApi !== undefined) return posixApi;
 
 	const libraries = process.platform === "darwin" ? ["/usr/lib/libSystem.B.dylib"] : ["libc.so.6", "libc.so"];
@@ -78,9 +77,7 @@ function loadPosixApi(): PosixApi | null {
 				flock: { args: ["i32", "i32"], returns: "i32" },
 			}) as unknown as PosixApi;
 			return posixApi;
-		} catch {
-			// Try the next platform-specific libc name.
-		}
+		} catch {}
 	}
 
 	posixApi = null;
@@ -114,15 +111,11 @@ function closeWindowsHandles(api: WindowsApi, handles: readonly NativePointer[],
 		if (release) {
 			try {
 				api.symbols.ReleaseMutex(handle);
-			} catch {
-				// The kernel releases the mutex when the handle closes.
-			}
+			} catch {}
 		}
 		try {
 			api.symbols.CloseHandle(handle);
-		} catch {
-			// The handle may already be closed during process shutdown.
-		}
+		} catch {}
 	}
 }
 
@@ -161,14 +154,10 @@ function acquireWindowsLock(path: string, fd: number): NativeLock | null {
 function closeDirectoryLock(api: PosixApi, directoryFd: number): void {
 	try {
 		api.symbols.flock(directoryFd, LOCK_UN);
-	} catch {
-		// The kernel releases the lock when the descriptor closes.
-	}
+	} catch {}
 	try {
 		closeSync(directoryFd);
-	} catch {
-		// The descriptor may already be closed during process shutdown.
-	}
+	} catch {}
 }
 
 function acquireNativeLock(fd: number, path: string): NativeLock | null {
@@ -200,22 +189,15 @@ function releaseNativeLock(lock: NativeLock, fd: number): void {
 		if (lock.kind === "posix") {
 			try {
 				lock.api.symbols.flock(fd, LOCK_UN);
-			} catch {
-				// The descriptor may already be closed during process shutdown.
-			}
+			} catch {}
 			closeDirectoryLock(lock.api, lock.directoryFd);
 			return;
 		}
 		closeWindowsHandles(lock.api, lock.handles, true);
-	} catch {
-		// Kernel ownership is also released when the descriptor or handle closes.
-	}
+	} catch {}
 }
 
 function hasLiveLegacyOwner(fd: number): boolean {
-	// Pre-kernel versions wrote PID-only locks. Keep a same-namespace live owner
-	// from racing during an upgrade, but never let that metadata override a
-	// kernel lock after the new format has been written.
 	try {
 		const fields = readFileSync(fd, "utf8").trim().split(/\s+/);
 		if (fields[2] === KERNEL_LOCK_METADATA) return false;
@@ -248,9 +230,7 @@ export function acquireSingleInstanceLock(path: string): SingleInstanceLock | nu
 		if (native !== null) releaseNativeLock(native, fd);
 		try {
 			closeSync(fd);
-		} catch {
-			// The descriptor may already be closed after a native lock failure.
-		}
+		} catch {}
 		return null;
 	}
 
@@ -261,9 +241,7 @@ export function acquireSingleInstanceLock(path: string): SingleInstanceLock | nu
 		releaseNativeLock(native, fd);
 		try {
 			closeSync(fd);
-		} catch {
-			// The descriptor may already be closed after a metadata failure.
-		}
+		} catch {}
 		return null;
 	}
 }
@@ -274,7 +252,5 @@ export function releaseSingleInstanceLock(lock: SingleInstanceLock): void {
 	releaseNativeLock(lock.native, lock.fd);
 	try {
 		closeSync(lock.fd);
-	} catch {
-		// The descriptor may already be closed during process shutdown.
-	}
+	} catch {}
 }

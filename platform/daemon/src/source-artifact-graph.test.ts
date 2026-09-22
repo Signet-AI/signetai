@@ -358,8 +358,6 @@ describe("source artifact graph structure", () => {
 	});
 
 	it("purges dreaming-derived claim values stamped with the source entry id", async () => {
-		// A Dreaming-derived entity_attribute carries the configured Signet source
-		// entry id in source_id (the purge key), not the episodic node identity.
 		const db = getDbAccessor();
 		db.withWriteTx((write) => {
 			write

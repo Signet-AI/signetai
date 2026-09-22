@@ -1,10 +1,3 @@
-/**
- * Token creation and verification using HMAC-SHA256.
- * No external dependencies — uses Web Crypto API only.
- *
- * Token format: {base64url(payload)}.{base64url(hmac)}
- */
-
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";

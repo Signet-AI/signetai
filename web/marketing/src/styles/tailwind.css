@@ -1,10 +1,4 @@
 @import "tailwindcss";
-
-/*
- * shadcn/ui theme mapped to Signet's existing CSS variables.
- * These reference the vars defined in global.css so dark/light
- * mode works automatically via [data-theme].
- */
 @theme inline {
 	--color-background: var(--color-bg);
 	--color-foreground: var(--color-text);

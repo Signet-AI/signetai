@@ -108,7 +108,6 @@ describe("SignetTransport", () => {
 
 	test("network timeout throws SignetTimeoutError", async () => {
 		const server = mockServer(async () => {
-			// Stall long enough to exceed the timeout
 			await new Promise((resolve) => setTimeout(resolve, 5000));
 			return Response.json({ ok: true });
 		});
@@ -129,8 +128,6 @@ describe("SignetTransport", () => {
 	});
 
 	test("GET retries on network error up to retries count", async () => {
-		// Grab a port by starting a server, then stop it immediately.
-		// This gives us a port where nothing is listening (connection refused).
 		const tempServer = Bun.serve({ port: 0, fetch: () => new Response() });
 		const port = tempServer.port;
 		tempServer.stop(true);
@@ -145,15 +142,12 @@ describe("SignetTransport", () => {
 			await transport.get("/flaky");
 			expect.unreachable("should have thrown");
 		} catch (err) {
-			// After 1 initial + 2 retries = 3 attempts, it should throw
-			// a network error (not an API error).
 			expect(err).not.toBeInstanceOf(SignetApiError);
 			expect(err).toBeInstanceOf(SignetNetworkError);
 		}
 	});
 
 	test("POST does not retry on network error", async () => {
-		// Same technique: grab a port with nothing listening
 		const tempServer = Bun.serve({ port: 0, fetch: () => new Response() });
 		const port = tempServer.port;
 		tempServer.stop(true);
@@ -172,9 +166,6 @@ describe("SignetTransport", () => {
 		} catch (err) {
 			const elapsed = Date.now() - start;
 			expect(err).toBeInstanceOf(SignetNetworkError);
-			// POST should fail fast (1 attempt, no retries).
-			// With retries=3 and retryDelayMs=10, if it retried we'd see
-			// at least 10+20+30 = 60ms of delay. Should be well under that.
 			expect(elapsed).toBeLessThan(50);
 		}
 	});
@@ -227,7 +218,6 @@ describe("SignetTransport", () => {
 		expect(url.searchParams.get("q")).toBe("hello world");
 		expect(url.searchParams.get("limit")).toBe("10");
 		expect(url.searchParams.get("active")).toBe("true");
-		// undefined values should be omitted
 		expect(url.searchParams.has("missing")).toBe(false);
 	});
 });

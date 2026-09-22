@@ -160,9 +160,7 @@ function parseRecords(text: string): CanonicalTranscriptRecord[] {
 			if (parsed.schema === "signet.transcript.v1" && typeof parsed.content === "string") {
 				records.push(parsed as CanonicalTranscriptRecord);
 			}
-		} catch {
-			// Ignore malformed historical lines rather than blocking capture.
-		}
+		} catch {}
 	}
 	return records;
 }
@@ -366,9 +364,7 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 					continue;
 				}
 				if (!canonicalKeys.has(key)) liveOnlyKeys.add(key);
-			} catch {
-				// Ignore malformed historical lines rather than blocking capture.
-			}
+			} catch {}
 		}
 	} finally {
 		lines.close();
@@ -395,9 +391,7 @@ async function hasSessionRecord(path: string, input: TranscriptIdentity): Promis
 				) {
 					return true;
 				}
-			} catch {
-				// Ignore malformed historical lines rather than blocking capture.
-			}
+			} catch {}
 		}
 	} finally {
 		lines.close();
@@ -454,11 +448,10 @@ export function writeCanonicalTranscriptSnapshot(
 								role: parsed.role as CanonicalTranscriptRecord["role"],
 								content: cleanTurnContent(parsed.content),
 							});
-							continue; // Skip — will be replaced by `next` records at end
+							continue;
 						}
 						writeSync(fd, `${line}\n`);
 					} catch {
-						// Malformed line — preserve verbatim
 						writeSync(fd, `${line}\n`);
 					}
 				}
@@ -474,15 +467,11 @@ export function writeCanonicalTranscriptSnapshot(
 				(input.preserveExistingSession || (input.sourcePath && !existingSessionLiveOnly)) &&
 				!incomingExtendsExisting
 			) {
-				// A completed source-backed session is append-only. Recovery can rediscover
-				// a stale, shorter, or divergent source, but it must not erase canonical
-				// turns that have already been retained.
 				closeSync(fd);
 				fd = null;
 				rmSync(tmpPath, { force: true });
 				return false;
 			}
-			// Append new canonical records for this session
 			for (const r of next) {
 				writeSync(fd, `${JSON.stringify(r)}\n`);
 			}
@@ -559,9 +548,6 @@ export function rewriteReplacingLiveOnlySessions(
 ): Promise<number> {
 	if (replacements.size === 0 || !existsSync(jsonlPath)) return Promise.resolve(0);
 	return withTranscriptFileLock(jsonlPath, async () => {
-		// Re-classify inside the lock: between external classification and lock
-		// acquisition, session-end hooks may have written non-live records. Only
-		// replace sessions that are STILL live-only at the moment we hold the lock.
 		const healedKeys = new Set<string>();
 		const prescan = createInterface({
 			input: createReadStream(jsonlPath, { encoding: "utf8" }),
@@ -674,9 +660,7 @@ export function inferTranscriptSourceFormat(raw: string): TranscriptSourceFormat
 		try {
 			JSON.parse(line);
 			parsed++;
-		} catch {
-			// not JSON
-		}
+		} catch {}
 	}
 	return parsed >= Math.ceil(lines.length * 0.6) ? "jsonl" : "markdown";
 }

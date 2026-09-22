@@ -229,9 +229,7 @@ async function detectSources(root: string): Promise<Source[]> {
 		try {
 			statSync(zvec);
 			out.push({ type: "zvec", path: zvec, count: 0 });
-		} catch {
-			// Ignore
-		}
+		} catch {}
 	}
 
 	const dbPath = join(dir, "memories.db");
@@ -280,7 +278,6 @@ async function detectSources(root: string): Promise<Source[]> {
 			}
 		}
 	} catch {
-		// Ignore
 	} finally {
 		if (db) {
 			db.close();

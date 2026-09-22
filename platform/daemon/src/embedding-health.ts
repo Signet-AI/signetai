@@ -1,17 +1,5 @@
-/**
- * Embedding health check — aggregates scattered embedding signals
- * into a single actionable report.
- *
- * Read-only module following the diagnostics.ts pattern.
- * All functions accept a ReadDb and return plain data structs.
- */
-
 import { type ReadDb, type VectorRuntimeStatus, getVectorRuntimeStatus } from "./db-accessor";
 import type { EmbeddingConfig } from "./memory-config";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 interface EmbeddingStatus {
 	readonly provider: "native" | "ollama" | "openai" | "llama-cpp" | "none";
@@ -43,10 +31,6 @@ export interface EmbeddingHealthReport {
 	readonly checks: readonly EmbeddingCheckResult[];
 }
 
-// ---------------------------------------------------------------------------
-// Score helpers (duplicated from diagnostics.ts — those are private)
-// ---------------------------------------------------------------------------
-
 function scoreStatus(score: number): "healthy" | "degraded" | "unhealthy" {
 	if (score >= 0.8) return "healthy";
 	if (score >= 0.5) return "degraded";
@@ -56,10 +40,6 @@ function scoreStatus(score: number): "healthy" | "degraded" | "unhealthy" {
 function clamp(n: number): number {
 	return Math.max(0, Math.min(1, n));
 }
-
-// ---------------------------------------------------------------------------
-// Individual checks
-// ---------------------------------------------------------------------------
 
 function checkProviderAvailable(providerStatus: EmbeddingStatus): EmbeddingCheckResult {
 	if (providerStatus.available) {
@@ -352,10 +332,6 @@ function checkOrphanedEmbeddings(db: ReadDb): EmbeddingCheckResult {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Scoring weights
-// ---------------------------------------------------------------------------
-
 const WEIGHTS: Record<string, number> = {
 	"provider-available": 0.3,
 	coverage: 0.25,
@@ -371,10 +347,6 @@ function checkScore(check: EmbeddingCheckResult): number {
 	if (check.status === "warn") return 0.5;
 	return 0;
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 export function buildEmbeddingHealth(
 	db: ReadDb,

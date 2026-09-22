@@ -11,7 +11,7 @@ import { RunActionsMenu } from "@/components/run-actions-menu"
 import { CircularProgress } from "@/components/circular-progress"
 import { EmptyState, ListIcon } from "@/components/empty-state"
 
-const POLL_INTERVAL = 2000 // 2 seconds
+const POLL_INTERVAL = 2000
 
 export default function RunsPage() {
   const router = useRouter()
@@ -19,37 +19,26 @@ export default function RunsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
-
-  // Filters
   const [search, setSearch] = useState("")
   const [selectedProviders, setSelectedProviders] = useState<string[]>([])
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>([])
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([])
-
-  // Check if any run is in progress
   const hasRunningRuns = useMemo(() => {
     return runs.some(
       (r) => r.status === "running" || r.status === "pending" || r.status === "initializing"
     )
   }, [runs])
-
-  // Silent refresh (no loading state)
   const refreshRuns = useCallback(async () => {
     try {
       const data = await getRuns()
       setRuns(data)
       setError(null)
     } catch {
-      // Silent fail on poll
     }
   }, [])
-
-  // Initial load
   useEffect(() => {
     loadRuns()
   }, [])
-
-  // Polling when runs are in progress
   useEffect(() => {
     if (hasRunningRuns) {
       pollIntervalRef.current = setInterval(refreshRuns, POLL_INTERVAL)
@@ -119,8 +108,6 @@ export default function RunsPage() {
       alert(e instanceof Error ? e.message : "Failed to continue run")
     }
   }
-
-  // Get unique values for filter options
   const providers = useMemo(() => {
     const counts: Record<string, number> = {}
     runs.forEach((r) => {
@@ -156,11 +143,8 @@ export default function RunsPage() {
       count,
     }))
   }, [runs])
-
-  // Filter runs
   const filteredRuns = useMemo(() => {
     return runs.filter((run) => {
-      // Search filter
       if (search) {
         const searchLower = search.toLowerCase()
         const matchesSearch =
@@ -169,18 +153,12 @@ export default function RunsPage() {
           run.benchmark.toLowerCase().includes(searchLower)
         if (!matchesSearch) return false
       }
-
-      // Provider filter
       if (selectedProviders.length > 0 && !selectedProviders.includes(run.provider)) {
         return false
       }
-
-      // Benchmark filter
       if (selectedBenchmarks.length > 0 && !selectedBenchmarks.includes(run.benchmark)) {
         return false
       }
-
-      // Status filter
       if (selectedStatuses.length > 0 && !selectedStatuses.includes(run.status)) {
         return false
       }
@@ -188,8 +166,6 @@ export default function RunsPage() {
       return true
     })
   }, [runs, search, selectedProviders, selectedBenchmarks, selectedStatuses])
-
-  // Build columns
   const columns: Column<RunSummary>[] = useMemo(
     () => [
       {
@@ -300,12 +276,12 @@ export default function RunsPage() {
 
   return (
     <div className="animate-fade-in">
-      {/* Header */}
+      {}
       <div className="mb-6">
         <h1 className="text-2xl font-display font-semibold text-text-primary">Runs</h1>
       </div>
 
-      {/* Filter Bar */}
+      {}
       {!loading && runs.length > 0 && (
         <div className="mb-0">
           <FilterBar
@@ -342,7 +318,7 @@ export default function RunsPage() {
         </div>
       )}
 
-      {/* Content */}
+      {}
       {loading ? (
         <div className="py-12 text-center">
           <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />

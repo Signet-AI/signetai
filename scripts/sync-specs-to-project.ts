@@ -1,19 +1,8 @@
 #!/usr/bin/env bun
 
-/**
- * Syncs docs/specs/dependencies.yaml to a GitHub Projects v2 board.
- * YAML is the source of truth. The board is a read-friendly kanban view.
- *
- * Usage:
- *   bun scripts/sync-specs-to-project.ts          # full sync
- *   bun scripts/sync-specs-to-project.ts --dry-run # preview changes
- */
-
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { execSync } from "node:child_process";
-
-// --- config ---
 
 const PROJECT_ID = "PVT_kwDOD4vxcc4BTHDc";
 const PROJECT_NUMBER = 1;
@@ -51,15 +40,11 @@ const DECISION_OPTIONS: Record<string, string> = {
 	superseded: "2bbba4ef",
 	discarded: "b95a033f",
 };
-
-// tier -> built-in status mapping
 function tierToStatus(tier: string): string {
 	if (tier === "complete") return STATUS_OPTIONS.done;
 	if (tier === "approved") return STATUS_OPTIONS.in_progress;
 	return STATUS_OPTIONS.todo;
 }
-
-// --- yaml parser (reused from spec-deps-check.ts) ---
 
 interface Spec {
 	id: string;
@@ -125,8 +110,6 @@ function parseYaml(raw: string): Spec[] {
 			continue;
 		}
 		if (!cur) continue;
-
-		// empty array
 		for (const [yaml, key] of Object.entries(keyMap)) {
 			const pat = new RegExp(`^\\s{4}${yaml}:\\s*\\[\\s*\\]\\s*$`);
 			if (pat.test(raw)) {
@@ -135,8 +118,6 @@ function parseYaml(raw: string): Spec[] {
 				break;
 			}
 		}
-
-		// array start
 		for (const [yaml, key] of Object.entries(keyMap)) {
 			const pat = new RegExp(`^\\s{4}${yaml}:\\s*$`);
 			if (pat.test(raw)) {
@@ -164,8 +145,6 @@ function parseYaml(raw: string): Spec[] {
 	if (cur) specs.push(cur);
 	return specs;
 }
-
-// --- graphql helpers ---
 
 function gql(query: string): unknown {
 	const escaped = query.replace(/'/g, "'\\''");
@@ -277,16 +256,12 @@ mutation {
 }`);
 }
 
-// --- title formatting ---
-
 function formatTitle(spec: Spec): string {
 	return spec.id
 		.split("-")
 		.map((w) => w.charAt(0).toUpperCase() + w.slice(1))
 		.join(" ");
 }
-
-// --- main ---
 
 function main(): void {
 	const dry = process.argv.includes("--dry-run");
@@ -332,8 +307,6 @@ function main(): void {
 			console.log(`  ~ ${spec.id}`);
 			updated++;
 		}
-
-		// set all fields
 		setText(itemId, FIELD.specId, spec.id);
 		setText(itemId, FIELD.specPath, spec.path);
 		setText(itemId, FIELD.hardDeps, spec.hardDeps.join(", ") || "none");

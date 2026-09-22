@@ -1,11 +1,3 @@
-/**
- * Walrus-style 3D knowledge constellation — a faithful port of the locked
- * mockup's Three.js graph (web/marketing/public/redesign-home-mockup.html),
- * driven by real daemon data instead of the mockup's static NODES/EDGES.
- *
- * Framework-free: GraphView mounts it via `createGraphScene(container, data)`
- * and tears it down with `dispose()`.
- */
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
@@ -31,15 +23,10 @@ export interface SceneNode {
 	id: string;
 	label: string;
 	kind: SceneNodeKind;
-	/** Cluster key — nodes of one entity fan around its shell direction. */
 	cluster: string;
-	/** 0..1 prominence — drives label eligibility for non-hubs. */
 	weight: number;
-	/** Inspector/hover metric line (e.g. "41 mentions"). */
 	metric: string;
-	/** Confidence or certainty when the node represents a statement. */
 	confidence?: number;
-	/** Full content for the hover readout when label is abbreviated. */
 	detail?: string;
 }
 
@@ -47,7 +34,6 @@ export interface SceneEdge {
 	from: string;
 	to: string;
 	kind: SceneEdgeKind;
-	/** Domain relationship text, used for dependency edges. */
 	label?: string;
 	strength?: number;
 }
@@ -58,10 +44,8 @@ export interface GraphSceneData {
 }
 
 export interface GraphSceneHandle {
-	/** Orbit-tween to a node and highlight its neighborhood. */
 	focusNode(id: string, drawerOpen?: boolean): void;
 	resetView(): void;
-	/** Node ids that can be focused (hubs). */
 	focusable(): readonly string[];
 	dispose(): void;
 }
@@ -106,11 +90,8 @@ function shorten(value: string, maxLength: number): string {
 
 interface LayoutNode extends SceneNode {
 	pos: THREE.Vector3;
-	/** Normalized position — precomputed once; the depth fade dots it per frame. */
 	dir: THREE.Vector3;
 }
-
-/** Stable string hash — seeds deterministic per-parent fan orientations. */
 const hashSeed = (s: string, salt: number) => {
 	let h = salt | 0;
 	for (let i = 0; i < s.length; i++) h = (h * 33 + s.charCodeAt(i)) | 0;
@@ -120,17 +101,6 @@ const hashSeed = (s: string, salt: number) => {
 export function createGraphScene(container: HTMLElement, data: GraphSceneData): GraphSceneHandle {
 	const NODES: LayoutNode[] = [];
 	const byId = new Map<string, LayoutNode>();
-
-	// ── ForceAtlas2-style layout (one-shot, deterministic) ──
-	// Hubs (subjects, configured sources, and evidence origins) relax over
-	// relationship edges; ontology children fan around their immediate parent.
-	// between every pair, LINEAR attraction along edges (quadratic
-	// attraction is what collapses connected clusters into a blob), and a
-	// whisper of gravity so isolates hover mid-sphere instead of piling
-	// into the core. Runs once at scene build on flat typed arrays — no
-	// continuous sim, no per-frame cost. Aspects/attributes then fan
-	// around their OWN parent, so every entity reads as a local solar
-	// system.
 	const isHubKind = (k: SceneNodeKind) => k === "entity" || k === "source" || k === "origin";
 	const kindById = new Map(data.nodes.map((n) => [n.id, n.kind]));
 	const hubs = data.nodes.filter((n) => isHubKind(n.kind));
@@ -152,7 +122,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	}
 	const pos = new Float32Array(hubCount * 3);
 	{
-		// Fibonacci sphere start — deterministic, avoids degenerate symmetry.
 		const golden = Math.PI * (3 - Math.sqrt(5));
 		for (let i = 0; i < hubCount; i++) {
 			const y = hubCount === 1 ? 0 : 1 - (i / (hubCount - 1)) * 2;
@@ -163,15 +132,13 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			pos[i * 3 + 2] = Math.sin(theta) * rXZ * 170;
 		}
 	}
-	const REPULSE = 135; // pairwise repulsion constant (≈ equilibrium² × attract)
-	const ATTRACT = 0.15; // linear spring coefficient along dependency edges
-	const GRAVITY = 0.02; // weak linear pull toward the origin
+	const REPULSE = 135;
+	const ATTRACT = 0.15;
+	const GRAVITY = 0.02;
 	const iterations = hubCount > 500 ? 60 : hubCount > 150 ? 100 : 150;
 	const disp = new Float32Array(hubCount * 3);
 	for (let iter = 0; iter < iterations; iter++) {
 		disp.fill(0);
-		// degree-weighted repulsion: popular nodes push harder, so
-		// weakly-linked subgroups separate instead of stacking
 		for (let a = 0; a < hubCount; a++) {
 			const ax = pos[a * 3];
 			const ay = pos[a * 3 + 1];
@@ -195,8 +162,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 				disp[b * 3 + 2] -= fz;
 			}
 		}
-		// linear attraction along edges — long links pull gently, so
-		// connected regions hold together without collapsing
 		for (const [a, b] of hubEdges) {
 			const dx = pos[b * 3] - pos[a * 3];
 			const dy = pos[b * 3 + 1] - pos[a * 3 + 1];
@@ -213,7 +178,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			disp[b * 3 + 1] -= fy;
 			disp[b * 3 + 2] -= fz;
 		}
-		// weak gravity + cooling temperature
 		const stepMax = 12 * (1 - iter / iterations) + 0.3;
 		for (let i = 0; i < hubCount; i++) {
 			const dx = disp[i * 3] - pos[i * 3] * GRAVITY;
@@ -229,7 +193,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		}
 	}
 	{
-		// normalize spread so the constellation fills the wireframe sphere
 		let maxR = 1;
 		for (let i = 0; i < hubCount; i++) {
 			const r = Math.sqrt(pos[i * 3] ** 2 + pos[i * 3 + 1] ** 2 + pos[i * 3 + 2] ** 2);
@@ -238,8 +201,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		const scale = 180 / maxR;
 		for (let i = 0; i < hubCount * 3; i++) pos[i] *= scale;
 	}
-
-	// Golden-spiral fan around a center point (deterministic per sibling).
 	const fanOffset = (j: number, count: number, radius: number, seed: number) => {
 		const golden = Math.PI * (3 - Math.sqrt(5));
 		const y = count === 1 ? 0 : 1 - (j / Math.max(1, count - 1)) * 2;
@@ -254,9 +215,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		NODES.push(layoutNode);
 		byId.set(h.id, layoutNode);
 	}
-
-	// Children in two passes: aspects around their hub, then attributes
-	// around their aspect. Orphans park on the outer hull.
 	const aspectsByHub = new Map<string, SceneNode[]>();
 	const attrsByAspect = new Map<string, SceneNode[]>();
 	const orphans: SceneNode[] = [];
@@ -310,8 +268,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	}
 
 	const EDGES = data.edges.filter((e) => byId.has(e.from) && byId.has(e.to));
-
-	// ── Three.js setup ──
 	const canvas = document.createElement("canvas");
 	canvas.style.cssText = "width:100%;height:100%;display:block;cursor:grab";
 	const labelContainer = document.createElement("div");
@@ -346,8 +302,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	controls.autoRotateSpeed = 0.4;
 	controls.minDistance = 100;
 	controls.maxDistance = 1200;
-
-	// ── wireframe bounding sphere (Walrus anchor) ──
 	const sphereMat = new THREE.LineBasicMaterial({
 		color: 0x10b981,
 		transparent: true,
@@ -362,8 +316,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	});
 	sphereModel.scale.setScalar(SPHERE_R);
 	scene.add(sphereModel);
-
-	// ── node shape textures: shape is part of the graph's semantic grammar ──
 	const makeShapeTexture = (drawFn: (ctx: CanvasRenderingContext2D) => void) => {
 		const c = document.createElement("canvas");
 		c.width = c.height = 16;
@@ -424,8 +376,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		ctx.closePath();
 		ctx.stroke();
 	});
-
-	// ── nodes rendered as multiple Points layers by kind ──
 	const KIND_TEX: Record<SceneNodeKind, THREE.CanvasTexture> = {
 		entity: diamondTex,
 		source: crossTex,
@@ -514,8 +464,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
 		edgeCounts.set(edge.to, (edgeCounts.get(edge.to) ?? 0) + 1);
 	}
-
-	// ── CSS2D labels (semantic nodes) with leader lines ──
 	interface LabelEntry {
 		obj: CSS2DObject;
 		div: HTMLDivElement;
@@ -527,9 +475,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		priority: number;
 	}
 	const labelObjs: Record<string, LabelEntry> = {};
-	// Labels are intentionally budgeted. The visual grammar stays visible on
-	// every node, but only a small set of meaningful anchors gets a card at rest;
-	// hover still exposes every node's full semantic payload.
 	const labelIds = new Set<string>();
 	const edgeDegree = new Map<string, number>();
 	for (const edge of EDGES) {
@@ -637,8 +582,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 									: 60;
 		labelObjs[n.id] = { obj, div, pos: n.pos.clone(), dir: n.dir, leader, semantic, kind: n.kind, priority };
 	}
-
-	// ── relationship edges — color and dash encode the graph's grammar ──
 	const EDGE_STYLES: Record<SceneEdgeKind, { color: number; opacity: number; dashed: boolean }> = {
 		contains: { color: 0x34d399, opacity: 0.28, dashed: false },
 		organizes: { color: 0x60a5fa, opacity: 0.34, dashed: false },
@@ -681,8 +624,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		scene.add(line);
 		edgeMeshes.push({ line, baseOpacity: style.opacity });
 	}
-
-	// ── ground dot grid floor ──
 	const floorY = -SPHERE_R - 30;
 	const gridDivs = 20;
 	const gridStep = SPHERE_R * 0.15;
@@ -708,8 +649,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			}),
 		),
 	);
-
-	// ── dashed drop lines from hubs to floor ──
 	const dropPositions: number[] = [];
 	for (const n of NODES) {
 		if (n.kind !== "entity" && n.kind !== "source") continue;
@@ -732,8 +671,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		dropLines.computeLineDistances();
 		scene.add(dropLines);
 	}
-
-	// ── background micro-pixel dust ──
 	const DUST_COUNT = 2200;
 	const dustPos = new Float32Array(DUST_COUNT * 3);
 	for (let d = 0; d < DUST_COUNT; d++) {
@@ -759,8 +696,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			}),
 		),
 	);
-
-	// ── origin reticle crosshair ⊕ ──
 	const reticleR = 8;
 	const reticleGeo = new THREE.BufferGeometry();
 	reticleGeo.setAttribute(
@@ -776,8 +711,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.4, depthWrite: false }),
 		),
 	);
-
-	// ── node targeting bracket + readout (CAD-style hover reticle) ──
 	const targetBracket = new THREE.Group();
 	targetBracket.visible = false;
 	const bracketR = 14;
@@ -831,8 +764,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	};
 	renderer.domElement.addEventListener("pointermove", onPointerMove);
 	renderer.domElement.addEventListener("pointerleave", onPointerLeave);
-
-	// ── turntable camera rig ──
 	interface CamTween {
 		t0: number;
 		dur: number;
@@ -874,15 +805,11 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			toTarget: toTarget.clone(),
 		};
 	};
-
-	// ── focus highlight state — smoothly blended per-frame, in sync with ──
-	// the camera tween (same quintic ease + duration), so the emphasis
-	// lands exactly as the camera arrives.
 	let highlightSet: Set<string> | null = null;
 	let highlightMix = 0;
 	let highlightTween: { t0: number; from: number; to: number; dur: number } | null = null;
 	const HIGHLIGHT_DIM = 0.06;
-	const HIGHLIGHT_SAT = 0.12; // residual saturation for non-members
+	const HIGHLIGHT_SAT = 0.12;
 	const setHighlight = (ids: Set<string> | null) => {
 		highlightSet = ids;
 		highlightTween = { t0: performance.now(), from: highlightMix, to: ids ? 1 : 0, dur: 1680 };
@@ -916,8 +843,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		startTween(a.theta, a.phi, 520, ORIGIN.clone());
 		setHighlight(null);
 	};
-
-	// ── render loop ──
 	let raf = 0;
 	let disposed = false;
 	const animate = () => {
@@ -943,18 +868,12 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			if (t >= 1) camTween = null;
 		}
 		controls.update();
-
-		// Advance the highlight blend on the camera's clock
 		if (highlightTween) {
 			const t = Math.min(1, (performance.now() - highlightTween.t0) / highlightTween.dur);
 			const e = t < 0.5 ? 16 * t * t * t * t * t : 1 - (-2 * t + 2) ** 5 / 2;
 			highlightMix = highlightTween.from + (highlightTween.to - highlightTween.from) * e;
 			if (t >= 1) highlightTween = null;
 		}
-
-		// Spherical depth fade + focus emphasis: front hemisphere full, back
-		// dimmed; while focused, cluster members hold full saturated color and
-		// everything else falls to a dim, desaturated floor.
 		const camDir = camera.position.clone().sub(controls.target).normalize();
 		for (const [kind, layer] of Object.entries(nodeLayers)) {
 			if (!layer) continue;
@@ -1031,10 +950,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 			lb.div.style.opacity = "0";
 			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = 0);
 		}
-
-		// Hover raycast → targeting bracket + semantic readout (every node kind).
-		// The camera keeps moving while the pointer is still, so refresh at 10 Hz;
-		// pointer motion refreshes immediately without paying this cost every frame.
 		if (pointerInside && (pointerDirty || frameNow - lastPointerRaycast >= 100)) {
 			lastPointerRaycast = frameNow;
 			pointerDirty = false;
@@ -1080,8 +995,6 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 		labelRenderer.render(scene, camera);
 	};
 	animate();
-
-	// ── resize ──
 	const ro = new ResizeObserver(() => {
 		const nw = container.clientWidth;
 		const nh = container.clientHeight;

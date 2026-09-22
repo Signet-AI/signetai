@@ -1,14 +1,10 @@
-// Masonry layout for blog cards using pretext for height prediction.
-// Assigns CSS order values for balanced CSS multi-column layout.
-// Degrades gracefully: without JS, cards render in natural order.
-
 import { prepareText, layoutText, resolveSiteFont } from "./pretext-utils";
 
-const CARD_PADDING = 48; // vertical padding inside card
-const IMAGE_HEIGHT = 160; // approximate image block height (aspect 2:1 at ~320px col)
+const CARD_PADDING = 48;
+const IMAGE_HEIGHT = 160;
 const DATE_HEIGHT = 20;
 const TAGS_HEIGHT = 28;
-const GAP = 0; // CSS column-gap handles spacing
+const GAP = 0;
 
 type CardMeasurement = {
 	el: HTMLElement;
@@ -18,7 +14,7 @@ type CardMeasurement = {
 async function measureCards(cards: HTMLElement[], colWidth: number): Promise<CardMeasurement[]> {
 	const titleFont = resolveSiteFont("display", 18, 600);
 	const descFont = resolveSiteFont("mono", 14, 400);
-	const textWidth = colWidth - 32; // horizontal padding
+	const textWidth = colWidth - 32;
 
 	const measurements: CardMeasurement[] = [];
 
@@ -54,8 +50,6 @@ async function measureCards(cards: HTMLElement[], colWidth: number): Promise<Car
 
 function assignOrder(measurements: CardMeasurement[]): void {
 	if (measurements.length === 0) return;
-
-	// Greedy bin-pack into 2 columns
 	const cols = [0, 0];
 	const assignments: number[] = [];
 
@@ -64,8 +58,6 @@ function assignOrder(measurements: CardMeasurement[]): void {
 		assignments.push(target);
 		cols[target] += m.height + GAP;
 	}
-
-	// Assign CSS order: column 0 items first, then column 1
 	const col0: number[] = [];
 	const col1: number[] = [];
 	for (let i = 0; i < assignments.length; i++) {
@@ -84,14 +76,11 @@ async function layoutMasonry(): Promise<void> {
 	if (!container) return;
 
 	const cards = Array.from(container.querySelectorAll(".blog-card")) as HTMLElement[];
-	if (cards.length < 3) return; // not enough cards for masonry
-
-	// Calculate column width from container
+	if (cards.length < 3) return;
 	const containerWidth = container.clientWidth;
-	const colWidth = (containerWidth - 24) / 2; // gap between columns
+	const colWidth = (containerWidth - 24) / 2;
 
 	if (colWidth < 280) {
-		// Too narrow for 2 columns, reset to single column
 		for (const card of cards) card.style.order = "";
 		return;
 	}

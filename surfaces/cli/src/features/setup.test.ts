@@ -649,10 +649,6 @@ memory:
 		await setupWizard({ nonInteractive: true, skipGit: true }, deps);
 
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
-		// Bootstrap must not silently opt users into telemetry.
-		// The flag must land under memory.pipelineV2 — the path the daemon
-		// reads — or the opt-out would be silently ignored (regression:
-		// setup wrote top-level pipelineV2, which the daemon never sees).
 		expect(agentYaml.indexOf("memory:")).toBeGreaterThanOrEqual(0);
 		expect(agentYaml.indexOf("telemetryEnabled: false")).toBeGreaterThan(agentYaml.indexOf("memory:"));
 	});
@@ -815,7 +811,6 @@ memory:
 		const basePath = join(root, "agents");
 		mkdirSync(basePath, { recursive: true });
 		mkdirSync(join(basePath, "memory"), { recursive: true });
-		// Write initial agent.yaml with identity mode off
 		writeFileSync(
 			join(basePath, "agent.yaml"),
 			"capabilities:\n  identity:\n    mode: off\n  memory: {}\n  secrets: {}\n",
@@ -835,15 +830,11 @@ memory:
 		});
 
 		await setupWizard({ nonInteractive: true, identityMode: "managed", skipGit: true }, deps);
-
-		// All required identity files should be scaffolded
 		for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]) {
 			expect(existsSync(join(basePath, name))).toBe(true);
 		}
 		const agentsContent = readFileSync(join(basePath, "AGENTS.md"), "utf-8");
 		expect(agentsContent).toContain("Agent Instructions");
-
-		// agent.yaml should now have managed mode
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("mode: managed");
 	});
@@ -853,7 +844,6 @@ memory:
 		const basePath = join(root, "agents");
 		mkdirSync(basePath, { recursive: true });
 		mkdirSync(join(basePath, "memory"), { recursive: true });
-		// Write initial agent.yaml with identity mode managed
 		writeFileSync(
 			join(basePath, "agent.yaml"),
 			"capabilities:\n  identity:\n    mode: managed\n  memory: {}\n  secrets: {}\nharnesses:\n  - opencode\n",
@@ -875,14 +865,10 @@ memory:
 		});
 
 		await setupWizard({ nonInteractive: true, identityMode: "off", skipGit: true }, deps);
-
-		// Connector cleanup should have been called for the detected harness
 		expect(configureHarnessHooks).toHaveBeenCalled();
 		const calls = configureHarnessHooks.mock.calls.map((c: unknown[]) => c[0]);
 		expect(calls).toContain("opencode");
 		expect(calls).toContain("forge");
-
-		// agent.yaml should now have identity mode off
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("mode: off");
 	});
@@ -895,14 +881,11 @@ memory:
 			const deps = stubDeps({ signetLogo, detectExistingSetup });
 
 			await setupWizard({ schema: true }, deps);
-
-			// Emits a JSON Schema document.
 			const printed = logSpy.mock.calls[0]?.[0] as string;
 			const parsed = JSON.parse(printed);
 			expect(parsed.$schema).toContain("json-schema.org");
 			expect(parsed.properties.agentName).toBeDefined();
 			expect(parsed.properties.networkMode.enum).toEqual(["localhost", "tailscale"]);
-			// Wizard body never ran.
 			expect(signetLogo).not.toHaveBeenCalled();
 			expect(detectExistingSetup).not.toHaveBeenCalled();
 		} finally {
@@ -1198,7 +1181,6 @@ describe("setupWizard headless plan path", () => {
 		expect(agentYaml).toContain("aggregateRecall:");
 		expect(agentYaml).toContain("target: aggregation/default");
 		expect(agentYaml).toContain("anthropic/claude-3.5-sonnet");
-		// openrouter must be backed by a resolvable account or the daemon blocks it.
 		expect(agentYaml).toContain("credentialRef: OPENROUTER_API_KEY");
 	});
 
@@ -1256,7 +1238,6 @@ describe("setupWizard headless plan path", () => {
 			const printed = logSpy.mock.calls[0]?.[0] as string;
 			const parsed = JSON.parse(printed);
 			expect(parsed.agentName).toBe("Dry Run Agent");
-			// Nothing was applied.
 			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
 		} finally {
 			logSpy.mockRestore();
@@ -1303,7 +1284,6 @@ describe("setupWizard headless plan path", () => {
 		try {
 			await expect(setupWizard({ file: planPath }, deps)).rejects.toThrow("process.exit:1");
 			expect(String(errorSpy.mock.calls[0]?.[0] ?? "")).toContain("existing Signet installation");
-			// Nothing was written.
 			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
 		} finally {
 			exitSpy.mockRestore();

@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Imported source removal is not ordinary source purge: derived ontology must
- * remain available for review, but its evidence is no longer supported by a
- * live source. Keep that lifecycle state separately from the graph rows so
- * provenance remains intact and Dreaming can review it later.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS imported_source_lifecycle (

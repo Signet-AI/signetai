@@ -40,12 +40,6 @@ export type RoutingPrivacyTier = (typeof ROUTING_PRIVACY_TIERS)[number];
 export type RoutingReasoningDepth = (typeof ROUTING_REASONING_DEPTHS)[number];
 export type RoutingCostTier = (typeof ROUTING_COST_TIERS)[number];
 export type RoutingOperationKind = (typeof ROUTING_OPERATION_KINDS)[number];
-
-/**
- * Task classes the classifier can emit that are NOT declared in config.taskClasses.
- * Configs may legitimately key policy.taskTargets / agent.preferredTargets /
- * agent.pinnedTargets by these, so reference validation must treat them as valid.
- */
 export const ROUTING_CLASSIFIER_TASK_CLASSES = {
 	codeReasoning: "hard_coding",
 	localSensitive: "local_sensitive",
@@ -69,9 +63,7 @@ export interface RouterError {
 
 export interface RoutingValidationIssue {
 	readonly severity: "error" | "warning";
-	/** Dotted path to the reference site, e.g. "workloads.memoryExtraction.target". */
 	readonly field: string;
-	/** The broken reference value. */
 	readonly ref: string;
 	readonly message: string;
 }
@@ -94,7 +86,6 @@ export interface RoutingModelConfig {
 	readonly label?: string;
 	readonly reasoning?: RoutingReasoningDepth;
 	readonly contextWindow?: number;
-	/** Omitted means the provider has not declared its tool capability. */
 	readonly toolUse?: boolean;
 	readonly streaming?: boolean;
 	readonly multimodal?: boolean;
@@ -170,12 +161,6 @@ function acpxTelemetryProvider(agent?: string): string {
 		(normalized && REMOTE_ACPX_PROVIDERS[normalized as keyof typeof REMOTE_ACPX_PROVIDERS]) ?? UNKNOWN_ACPX_PROVIDER
 	);
 }
-
-/**
- * Classify configuration, not a process name. ACPX is a harness: an
- * unrecognized ACPX-compatible agent stays unknown instead of being guessed
- * local, while an explicitly local target remains local.
- */
 export function routingTargetLocality(
 	target: Pick<RoutingTargetConfig, "executor" | "endpoint" | "privacy" | "acpx">,
 ): InferenceLocality {
@@ -191,8 +176,6 @@ export function routingTargetLocality(
 	if (target.executor === "acpx") return "unknown";
 	return "unknown";
 }
-
-/** Return bounded telemetry attribution for one exact configured route. */
 export function routingTelemetryAttribution(
 	target: Pick<RoutingTargetConfig, "executor" | "endpoint" | "privacy" | "acpx">,
 	model: Pick<RoutingModelConfig, "model">,
@@ -777,29 +760,12 @@ function emptyRoutingConfig(): RoutingConfig {
 		agents: {},
 	};
 }
-
-/**
- * Validate that every cross-reference inside a routing config resolves.
- *
- * Error-severity issues make routing structurally non-functional and refuse
- * config load. Only a broken `defaultPolicy` qualifies: it is treated as a
- * structural anchor even though workload/agent policies can shadow it, because
- * a stale defaultPolicy almost always signals a rename the user forgot to
- * propagate (the #1005 case). This mirrors the pre-existing parse-time check.
- *
- * Warning-severity issues degrade routing for the affected path without
- * blocking load: dangling target refs are filtered out at route time, while a
- * stale policy reference (e.g. an agent defaultPolicy) surfaces as a per-route
- * policy-not-found error rather than silently misrouting.
- */
 export function validateRoutingReferences(config: RoutingConfig): readonly RoutingValidationIssue[] {
 	const issues: RoutingValidationIssue[] = [];
 	const policyIds = new Set(Object.keys(config.policies));
 	const taskClassIds = new Set<string>([
 		...Object.keys(config.taskClasses),
 		...Object.values(ROUTING_CLASSIFIER_TASK_CLASSES),
-		// Operation-fallback task classes the classifier emits independent of
-		// declaration; configs may legitimately key maps by these too.
 		"memory_extraction",
 		"session_synthesis",
 		"interactive",
@@ -850,9 +816,6 @@ export function validateRoutingReferences(config: RoutingConfig): readonly Routi
 		for (const [name, binding] of Object.entries(config.workloads)) {
 			if (!binding) continue;
 			const field = `workloads.${name}`;
-			// Workload policy/target pins are not load-blocking: when a pin is stale the
-			// router still falls back to the policy default/fallback target chain, so a
-			// single stale pin must not disable the whole config (#1005).
 			if (binding.policy) missingPolicy(`${field}.policy`, binding.policy, "warning");
 			if (binding.target) missingTarget(`${field}.target`, binding.target, "warning");
 			if (binding.taskClass) missingTaskClass(`${field}.taskClass`, binding.taskClass);
@@ -881,8 +844,6 @@ export function validateRoutingReferences(config: RoutingConfig): readonly Routi
 			for (const ref of refs) missingTarget(`agents.${agentId}.preferredTargets.${taskClass}`, ref, "warning");
 		}
 		for (const [taskClass, ref] of Object.entries(agent.pinnedTargets ?? {})) {
-			// "default" is the engine's pinnedTargets fallback key (read when no
-			// taskClass-specific pin matches), so it is valid even if undeclared.
 			if (taskClass !== "default") missingTaskClass(`agents.${agentId}.pinnedTargets.${taskClass}`, taskClass);
 			missingTarget(`agents.${agentId}.pinnedTargets.${taskClass}`, ref, "warning");
 		}
@@ -982,15 +943,6 @@ export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
 	}
 
 	const explicitDefaultPolicy = asString(routingRaw.defaultPolicy ?? routingRaw.default_policy);
-
-	// A targets-bearing config with zero policies must not dead-end every routed
-	// generation path in "No routing policy is configured." (#1072): the connect
-	// flow and aggregate-recall route emit targets/accounts/workloads but no
-	// policy. Synthesize an implicit default policy over all configured targets,
-	// mirroring the defaultPolicy auto-resolution below. `validateRoutingReferences`
-	// runs after this, so the synthetic refs are validated like any other policy.
-	// A dangling *explicit* defaultPolicy is left alone (#1005 tolerance: a
-	// mid-setup agent.yaml may name a policy before its block exists).
 	if (!explicitDefaultPolicy && Object.keys(policies).length === 0 && Object.keys(targets).length > 0) {
 		const refs: string[] = [];
 		for (const [targetId, target] of Object.entries(targets)) {
@@ -1243,13 +1195,6 @@ export function allTargetRefs(config: RoutingConfig): readonly string[] {
 	}
 	return refs;
 }
-
-/**
- * Return target refs that can be selected by the configured routing graph
- * without runtime health or account state. This intentionally uses the same
- * workload, policy, task-class, roster, and fallback resolution as runtime
- * routing so configuration summaries do not classify unused target blocks.
- */
 export function configuredRoutingTargetRefs(config: RoutingConfig): readonly string[] {
 	let refs: readonly string[] = [];
 	for (const operation of ROUTING_OPERATION_KINDS) {
@@ -1460,10 +1405,6 @@ export function resolveRoutingDecision(
 		orderedTargets: pref.orderedTargets,
 		candidates: traces,
 	};
-
-	// Per-operation executor constraints. aggregate_recall is latency-sensitive and
-	// pi-ai-only — it must never route through a subprocess (ACPX) harness, whose
-	// spawn latency would dominate the synthesis call.
 	const disallowedExecutors = request.operation === "aggregate_recall" ? new Set(["acpx"]) : null;
 	const executorForCandidate = (ref: string): string | undefined => {
 		const parsed = parseRoutingTargetRef(ref);

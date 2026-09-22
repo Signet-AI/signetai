@@ -34,9 +34,7 @@ export interface ApplyDreamingOperationsResult {
 	readonly ok: boolean;
 	readonly items: readonly DreamingOperationItem[];
 	readonly error?: string;
-	/** First original request index that did not commit after a retriable batch failure. */
 	readonly retryFrom?: number;
-	/** Retry only the uncommitted suffix. Replaying returned items duplicates audit/provenance. */
 	readonly retryable?: boolean;
 }
 
@@ -78,8 +76,6 @@ function citationRecord(value: unknown): {
 	const sourceId = typeof citation.source_id === "string" ? citation.source_id.trim() : "";
 	const sourcePath = typeof citation.source_path === "string" ? citation.source_path.trim() : null;
 	const quote = typeof citation.quote === "string" ? citation.quote.trim() : "";
-	// The canonical source_ref is "kind:id" (e.g. transcript:abc). When the
-	// agent supplies only {quote, source_ref}, derive kind and id from it.
 	let kind = sourceKind;
 	let id = sourceId;
 	const colon = sourceRef.indexOf(":");
@@ -89,13 +85,6 @@ function citationRecord(value: unknown): {
 	}
 	return sourceRef && kind && id && quote ? { sourceRef, sourceKind: kind, sourceId: id, sourcePath, quote } : null;
 }
-
-/**
- * Resolve an exact-quote citation against the episodic source store itself.
- * The Dreaming pass no longer receives an injected evidence window: citations
- * validate against the same immutable store the search tools read, so an
- * agent can cite any in-scope source it found and quoted verbatim.
- */
 interface CitationResolution {
 	readonly evidence: DreamingAgentEvidence | null;
 	readonly sourceAgentIds: readonly string[];
@@ -115,7 +104,7 @@ function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown):
 				return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
 			}
 			return { evidence: [], sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef) };
-		}, "pipeline/dreaming-operations.ts:112");
+		}, "pipeline/dreaming-operations.ts:101");
 	return {
 		evidence:
 			result.evidence.find(
@@ -142,9 +131,7 @@ type ValidatedDreamingOperation = {
 	readonly index: number;
 	readonly input: OntologyOperationInput | null;
 	readonly attentionId: string | null;
-	/** Queue-only op that resolves its cited attention record instead of an ontology write. */
 	readonly decline?: boolean;
-	/** Content operation was escalated for an explicit user decision. */
 	readonly reviewOnly?: boolean;
 };
 
@@ -162,7 +149,7 @@ function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalNa
 			)
 			.all(agentId, canonicalName, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as Array<{ id: string }>;
 		return new Set(rows.map((row) => row.id));
-	}, "pipeline/dreaming-operations.ts:154");
+	}, "pipeline/dreaming-operations.ts:141");
 }
 
 function asStringRecord(value: unknown): Readonly<Record<string, string>> | undefined {
@@ -173,15 +160,6 @@ function asStringRecord(value: unknown): Readonly<Record<string, string>> | unde
 	}
 	return Object.keys(record).length > 0 ? record : undefined;
 }
-
-/**
- * Mint hygiene attention for every flag op in the batch. Returns operation
- * index -> minted attention id, so later ops in the same batch can cite
- * provenance "attention:$<index>". All flags are minted in one bounded
- * request-level transaction: a flag prefix is unusable without the later
- * operations it authorizes, so this prelude must commit atomically or not at
- * all before the yielding ontology writer begins.
- */
 async function mintFlags(
 	accessor: DbAccessor,
 	agentId: string,
@@ -210,8 +188,6 @@ async function mintFlags(
 		},
 		{
 			label: "dreaming attention flags",
-			// A request has at most 100 operations. Keep the flag prelude atomic
-			// so an admission failure cannot leave a prefix that a retry re-mints.
 			maxPerTx: DREAMING_MAX_OPERATIONS_PER_REQUEST,
 		},
 	);
@@ -220,12 +196,6 @@ async function mintFlags(
 		result.items.flatMap((entry) => (entry.attentionId === null ? [] : [[entry.index, entry.attentionId] as const])),
 	);
 }
-
-/**
- * Resolve attention provenance for a hygiene archive/merge op. The target
- * must be exactly the flagged row: the id match and subjectRef pin the target,
- * so the op cannot redirect to anything the flag did not name.
- */
 function attentionProvenance(
 	accessor: DbAccessor,
 	agentId: string,
@@ -274,15 +244,11 @@ function attentionProvenance(
 		attentionId: attention.id,
 	};
 }
-
-/** The row id a hygiene subjectRef pins: the kind prefix plus the id. */
 function pinnedBySubjectRef(subjectRef: string, prefix: string): string | null {
 	if (!subjectRef.startsWith(prefix)) return null;
 	const id = subjectRef.slice(prefix.length);
 	return id.length > 0 ? id : null;
 }
-
-/** Validate the exact target named by a hygiene attention record. */
 function hasExpectedAttentionTarget(
 	accessor: DbAccessor,
 	agentId: string,
@@ -307,9 +273,6 @@ function hasExpectedAttentionTarget(
 			? payload.targets.filter((value): value is string => typeof value === "string")
 			: [];
 		const survivor = typeof payload.survivor === "string" ? payload.survivor : "";
-		// The subjectRef is the canonical pin: agent-minted flags carry the
-		// canonical name in `duplicate:<name>` and may omit details, while
-		// daemon-enqueued flags repeat it in details.canonicalName (#1168).
 		const canonicalName =
 			attention.details.canonicalName ?? pinnedBySubjectRef(attention.subjectRef, "duplicate:") ?? "";
 		const groupIds = semanticDuplicateIds(accessor, agentId, canonicalName);
@@ -325,10 +288,6 @@ function hasExpectedAttentionTarget(
 		);
 	}
 	if (operation.operation === "merge_aspects") {
-		// The flag names the over-cap aspect; the merge must fold it into a
-		// target. The subjectRef is the pin; details.aspectId is an optional
-		// cross-check — a contradictory details id must reject, not redirect
-		// the merge to a different aspect (#1168).
 		const sources = Array.isArray(payload.sources)
 			? payload.sources.filter((value): value is string => typeof value === "string")
 			: [];
@@ -346,13 +305,6 @@ function hasExpectedAttentionTarget(
 	}
 	return false;
 }
-
-/**
- * Resolve a same-request flag reference. A retry keeps the source request's
- * `attention:$<index>` coordinate even though `operations.slice(retryFrom)`
- * rebases the local array. In that continuation form, only a preceding flag
- * that pins this exact hygiene target can stand in for the original index.
- */
 function sameBatchFlagIndex(
 	accessor: DbAccessor,
 	agentId: string,
@@ -366,9 +318,6 @@ function sameBatchFlagIndex(
 	const indexText = sameBatch[1];
 	if (indexText === undefined) return null;
 	const referencedIndex = Number.parseInt(indexText, 10);
-	// A suffix retry may retain the original coordinate while rebasing the
-	// operation array. Do not let an arbitrary out-of-range coordinate turn into
-	// an alias for the nearest preceding flag.
 	if (referencedIndex < 0 || referencedIndex >= operations.length) return null;
 	const referenced = operations[referencedIndex];
 	if (referencedIndex < operationIndex && referenced?.operation === FLAG_OP) {
@@ -382,15 +331,8 @@ function sameBatchFlagIndex(
 			priority: 0,
 			createdAt: "",
 		};
-		// A valid local coordinate is authoritative. If it names a flag for a
-		// different target, do not let suffix recovery redirect the archive.
 		return hasExpectedAttentionTarget(accessor, agentId, operation, attention) ? referencedIndex : null;
 	}
-
-	// A retry keeps the source request's coordinate even after slicing the
-	// committed prefix away. The coordinate can still be in bounds in the
-	// retained suffix, but it no longer identifies the original flag. Search
-	// only preceding flags and keep the target-pinning check above intact.
 	for (let index = operationIndex - 1; index >= 0; index -= 1) {
 		const candidate = operations[index];
 		if (candidate?.operation !== FLAG_OP) continue;
@@ -408,15 +350,6 @@ function sameBatchFlagIndex(
 	}
 	return null;
 }
-
-/**
- * An archive op targets exactly the flagged row when the subjectRef pins the
- * same id. The details id fields are an optional cross-check: daemon-enqueued
- * attention repeats the id there, but agent-minted flags may omit it entirely
- * (#1168) — the subjectRef is mandatory and already pins the target, so a
- * missing details id must not reject the archive, while a contradictory one
- * (a redirect) must.
- */
 function pinnedTarget(
 	payload: Readonly<Record<string, unknown>>,
 	attention: DreamingAttention,
@@ -466,8 +399,6 @@ function provenanceForEvidence(
 	};
 }
 
-// --- model payload -> shared applicator payload mapping --------------------
-
 function lookupString(db: ReadDb, sql: string, ...params: unknown[]): string | null {
 	const row = db.prepare(sql).get(...params) as { value: string | null } | undefined;
 	return row?.value ?? null;
@@ -483,7 +414,7 @@ function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: strin
 				entityId,
 				agentId,
 			),
-		"pipeline/dreaming-operations.ts:478",
+		"pipeline/dreaming-operations.ts:409",
 	);
 }
 
@@ -498,7 +429,7 @@ function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: strin
 				entityId,
 				agentId,
 			),
-		"pipeline/dreaming-operations.ts:492",
+		"pipeline/dreaming-operations.ts:423",
 	);
 }
 
@@ -512,7 +443,7 @@ function lookupAspectEntityId(accessor: DbAccessor, agentId: string, aspectId: s
 				aspectId,
 				agentId,
 			),
-		"pipeline/dreaming-operations.ts:507",
+		"pipeline/dreaming-operations.ts:438",
 	);
 }
 
@@ -532,7 +463,7 @@ function lookupActiveClaimAttributeId(
 				agentId,
 				claimKey,
 			),
-		"pipeline/dreaming-operations.ts:526",
+		"pipeline/dreaming-operations.ts:457",
 	);
 }
 
@@ -549,12 +480,6 @@ function stringArrayField(payload: Readonly<Record<string, unknown>>, key: strin
 		.map((s) => s.trim());
 	return items.length > 0 ? items : null;
 }
-
-/**
- * Convert a model-facing payload to the shared applicator shape. Returns null
- * when a referenced row cannot be resolved — the caller rejects the op rather
- * than letting name-based applicators implicitly create rows from raw ids.
- */
 function toApplicatorPayload(
 	accessor: DbAccessor,
 	agentId: string,
@@ -681,12 +606,6 @@ function toApplicatorPayload(
 			return payload;
 	}
 }
-
-/**
- * Validate every request-level input that can be resolved without creating
- * attention rows. This must run before mintFlags: otherwise a bad citation or
- * target leaves durable flag records behind even though the request is refused.
- */
 function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): string | null {
 	for (const [index, operation] of params.operations.entries()) {
 		if (operation.operation === FLAG_OP) {
@@ -705,7 +624,7 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 						 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
 						)
 						.get(attentionId, params.agentId),
-				"pipeline/dreaming-operations.ts:700",
+				"pipeline/dreaming-operations.ts:619",
 			);
 			if (pending == null) return "Attention record is not pending in this agent scope";
 			continue;
@@ -768,9 +687,6 @@ function applyValidatedOperationBody(
 ): DreamingOperationItem {
 	if (entry.input === null) {
 		if (entry.decline === true && entry.attentionId !== null) {
-			// Decline resolves the cited record in this tx: it must still be
-			// pending in the named agent's scope and is one-use, exactly like a
-			// flag consumed by an archive.
 			const pending = db
 				.prepare(
 					`SELECT 1 FROM dreaming_attention
@@ -791,8 +707,6 @@ function applyValidatedOperationBody(
 			).run(params.passId ?? null, entry.attentionId, params.agentId);
 			return { index: entry.index, ok: true, result: { attentionId: entry.attentionId } };
 		}
-		// Flag ops are already persisted by mintFlags; this result only
-		// surfaces the id for same-batch provenance and callers.
 		return { index: entry.index, ok: true, result: { attentionId: entry.attentionId } };
 	}
 
@@ -835,10 +749,6 @@ function applyValidatedOperationBody(
 	}
 
 	if (entry.attentionId !== null) {
-		// A flag is one-use: an earlier op in this batch may have already
-		// consumed it, so a second op citing the same attention must not apply.
-		// Resolved flags from a prior batch were already rejected by the
-		// provenance pin.
 		const pending = db
 			.prepare(
 				`SELECT 1 FROM dreaming_attention
@@ -861,8 +771,6 @@ function applyValidatedOperationBody(
 		writeCaps: params.writeCaps,
 	});
 	if (entry.attentionId !== null) {
-		// The flag was consumed: resolve it in the same tx so the queue does
-		// not re-surface a handled target next pass.
 		db.prepare(
 			`UPDATE dreaming_attention
 			 SET resolved_at = datetime('now'), resolved_by_pass_id = ?
@@ -898,13 +806,6 @@ function applyValidatedOperationInTx(
 		};
 	}
 }
-
-/**
- * The sole daemon-owned apply seam for Dreaming agents. Flag ops mint hygiene
- * attention in-batch; hygiene archives/merges cite attention provenance;
- * content ops cite exact quotes resolved against the episodic store. Payloads
- * are mapped to the shared applicator contracts; every write is audited.
- */
 export async function applyDreamingOperations(
 	params: ApplyDreamingOperationsParams,
 ): Promise<ApplyDreamingOperationsResult> {

@@ -1,7 +1,5 @@
 export const NETWORK_MODES = ["localhost", "tailscale"] as const;
 export type NetworkMode = (typeof NETWORK_MODES)[number];
-
-/** IPv4 loopback is the daemon's canonical local listener family. */
 export const LOOPBACK_HOST = "127.0.0.1";
 
 export function normalizeLoopbackHost(host: string): string {

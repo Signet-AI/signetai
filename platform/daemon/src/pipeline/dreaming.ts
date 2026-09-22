@@ -1,13 +1,3 @@
-/**
- * Dreaming agent — periodic smart-model consolidation of the knowledge graph.
- *
- * Reads accumulated completed transcript projections and the current entity graph,
- * produces structured graph mutations (create, merge, update, delete,
- * supersede), and applies them through bounded, yielding write transactions.
- *
- * See docs/specs/approved/dreaming-memory-consolidation.md
- */
-
 import type { Database } from "bun:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
@@ -126,13 +116,6 @@ export type DreamingTriggerDecision =
 			readonly trigger: true;
 			readonly reason: "first-run" | "attention" | "token-threshold" | "continuation" | "max-interval";
 	  };
-
-/**
- * The focused runbook a scheduled pass follows (#1098): hygiene passes
- * process structural attention only, content passes handle evidence-linked
- * work and bounded exploration hints. Combined modes ("incremental",
- * "compact") keep the full runbook.
- */
 export type DreamingPassFocus = "hygiene" | "content";
 
 export interface DreamingState {
@@ -143,8 +126,6 @@ export interface DreamingState {
 	readonly lastPassId: string | null;
 	readonly lastPassMode: string | null;
 }
-
-/** Queue bounded deterministic graph cleanup work for the next Dreaming pass. */
 export async function enqueueDreamingHygieneAttention(
 	accessor: DbAccessor,
 	agentId: string,
@@ -172,14 +153,6 @@ export async function enqueueDreamingHygieneAttention(
 			}),
 	});
 }
-
-/**
- * Queue bounded embedding-geometry hints without touching the evidence cursor
- * or invoking an embedding provider. The selector is deliberately independent
- * of the workload resolver: it only reuses vectors already stored for primary
- * episodic memories, then the normal Dreaming worker decides when and how to
- * spend an inference pass.
- */
 export async function enqueueDreamingSurprisalAttention(
 	accessor: DbAccessor,
 	agentId: string,
@@ -269,8 +242,6 @@ function parseEpisodicCursor(value: string | null): EpisodicCursor | null {
 		return null;
 	}
 }
-
-/** Exported for cursor round-trip tests. */
 export function _testParseEpisodicCursor(value: string | null): EpisodicCursor | null {
 	return parseEpisodicCursor(value);
 }
@@ -361,8 +332,6 @@ export interface DreamingEvidenceExclusion {
 }
 
 export type { DreamingAttention } from "./dreaming-attention";
-
-/** Routed bounded-agent executor. The daemon creates the tools and owns all writes. */
 export interface DreamingAgentExecutor {
 	run(input: {
 		readonly passId: string;
@@ -410,10 +379,6 @@ function deferredEvidenceKeys(value: unknown, primaryAgentId: string): ReadonlyS
 	return keys;
 }
 
-// ---------------------------------------------------------------------------
-// Dreaming state DB helpers
-// ---------------------------------------------------------------------------
-
 function readDreamingState(db: ReadDb, agentId: string): DreamingState {
 	let row:
 		| {
@@ -434,7 +399,6 @@ function readDreamingState(db: ReadDb, agentId: string): DreamingState {
 			)
 			.get(agentId) as typeof row;
 	} catch {
-		// The constellation can be read while an old workspace migrates.
 		row = undefined;
 	}
 	if (!row) {
@@ -542,20 +506,7 @@ export async function recordDreamingFailure(accessor: DbAccessor, agentId: strin
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
 }
-
-// ---------------------------------------------------------------------------
-// Dreaming pass records
-// ---------------------------------------------------------------------------
-
-/** Timestamps at or below the corrupt pre-epoch floor never advance a watermark. */
 const EVIDENCE_WATERMARK_FLOOR_MS = Date.parse(EPISODIC_CAPTURED_AT_FLOOR);
-
-/**
- * The newest captured_at `search_evidence` actually returned to a pass. The
- * pass-end watermark may advance only this far: evidence captured after the
- * surfaced frontier but before pass start was never shown to the agent and
- * must stay pending for the next scan-first search (#1149).
- */
 function surfacedEvidenceWatermark(items: readonly unknown[]): string | null {
 	let watermark: string | null = null;
 	for (const item of items) {
@@ -563,26 +514,14 @@ function surfacedEvidenceWatermark(items: readonly unknown[]): string | null {
 		const capturedAt = typeof item.capturedAt === "string" ? item.capturedAt : null;
 		if (capturedAt === null) continue;
 		const ms = timestampMillis(capturedAt);
-		// Corrupt pre-epoch rows can never advance a watermark; the sentinel
-		// bypass in the episodic readers keeps them listable regardless.
 		if (ms <= EVIDENCE_WATERMARK_FLOOR_MS) continue;
 		if (watermark === null || ms > timestampMillis(watermark)) watermark = capturedAt;
 	}
 	return watermark;
 }
-
-/**
- * The pass-end evidence watermark: the newer of the previous watermark and
- * the newest source the pass surfaced, never later than the pass started.
- * A pass that surfaced nothing keeps its previous watermark, so skipped
- * evidence is re-listed by the next scan-first search instead of being
- * counted as processed (#1149).
- */
 function nextEvidenceWatermark(surfaced: string, previous: string | null, cutoff: string): string | null {
 	const surfacedMs = timestampMillis(surfaced);
 	const cutoffMs = timestampMillis(cutoff);
-	// Clock skew can date a source after pass start; cap the watermark so
-	// the cursor never advances past the pass itself.
 	const capped = surfacedMs > cutoffMs ? cutoff : surfaced;
 	if (previous === null) return capped;
 	return timestampMillis(capped) > timestampMillis(previous) ? capped : previous;
@@ -777,8 +716,6 @@ async function recordDreamingToolCall(
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
 }
-
-/** Return the Pi capability trace for one scoped Dreaming pass. */
 export async function getDreamingToolCalls(
 	accessor: DbAccessor,
 	agentId: string,
@@ -888,10 +825,6 @@ export async function requestDreamingEvidenceRequeue(
 	return ownerChanges(result[0]) > 0;
 }
 
-// ---------------------------------------------------------------------------
-// Data fetching for prompt assembly
-// ---------------------------------------------------------------------------
-
 function _fetchEpisodicEvidence(
 	db: ReadDb,
 	agentId: string,
@@ -909,17 +842,11 @@ function _fetchEpisodicEvidence(
 	);
 }
 
-// ---------------------------------------------------------------------------
-// Prompt construction
-// ---------------------------------------------------------------------------
-
 function _readIdentityFile(
 	dir: string,
 	entry: IdentityContextFileEntry,
 ): { readonly content: string; readonly unreadable: boolean } {
 	const path = join(dir, entry.path);
-	// Identity files are optional context. A missing file is ordinary, not a
-	// degraded pass or a reason to fill the daemon logs every five minutes.
 	if (!existsSync(path)) return { content: "", unreadable: false };
 	try {
 		const raw = readFileSync(path, "utf-8").trim();
@@ -934,13 +861,6 @@ function _readIdentityFile(
 		return { content: "", unreadable: true };
 	}
 }
-
-/**
- * The Dreaming agent's complete fixed prompt. No identity files, no working
- * memory, no injected evidence window: the agent drives everything through the
- * tool surface (attention_list, search_evidence, runbook_read) following this
- * process contract. Hardcoded so users cannot accidentally mutate the process.
- */
 export const DREAMING_AGENT_PROMPT = `You are a bounded Signet maintenance agent. Your task is to maintain durable, evidence-cited semantic understanding as the relevant entities, relationships, and claims change over time. Attach each claim to its entity and aspect rather than allowing it to exist as standalone.
 
 ## Process
@@ -1007,13 +927,6 @@ The pass is done when:
 - The pass log is written with sources viewed + changes applied (this is the next pass's dedup).
 - No flag is left unresolved for a target you archived; no writes attempted against pinned or source-root entities.
 `;
-
-/**
- * The fixed prompt for a hygiene-only pass (#1098): the attention-queue
- * runbook (combined-process steps 1-2 + 4). Content maintenance is out of
- * scope — content passes own it, so a hygiene pass spends its whole budget
- * on the queue instead of running out before step 3.
- */
 export const DREAMING_HYGIENE_AGENT_PROMPT = `You are a bounded Signet maintenance agent. Your task is to maintain durable, evidence-cited semantic understanding as the relevant entities, relationships, and claims change over time. Attach each claim to its entity and aspect rather than allowing it to exist as standalone.
 
 ## Process
@@ -1062,13 +975,6 @@ The pass is done when:
 - The pass log is written with changes applied (this is the next pass's dedup).
 - No flag is left unresolved for a target you archived; no writes attempted against pinned or source-root entities.
 `;
-
-/**
- * The fixed prompt for a content-only pass (#1098): the evidence runbook
- * (combined-process steps 1, 3, 4). Hygiene archives are out of scope —
- * hygiene passes own that queue, while content passes handle review and
- * bounded surprisal hints alongside new evidence.
- */
 export const DREAMING_CONTENT_AGENT_PROMPT = `You are a bounded Signet maintenance agent. Your task is to maintain durable, evidence-cited semantic understanding as the relevant entities, relationships, and claims change over time. Attach each claim to its entity and aspect rather than allowing it to exist as standalone.
 
 ## Process
@@ -1126,36 +1032,19 @@ The pass is done when:
 - The pass log is written with sources viewed + changes applied (this is the next pass's dedup).
 - No writes attempted against pinned or source-root entities.
 `;
-
-/** The fixed prompt contract for a pass mode: focused modes get their runbook, combined modes keep the full one. */
 export function dreamingPromptForMode(mode: DreamingMode): string {
 	if (mode === "incremental-hygiene") return DREAMING_HYGIENE_AGENT_PROMPT;
 	if (mode === "incremental-content") return DREAMING_CONTENT_AGENT_PROMPT;
 	return DREAMING_AGENT_PROMPT;
 }
-
-/** The focused runbook a pass mode follows, or null for the combined modes. */
 export function dreamingFocusOfMode(mode: DreamingMode): DreamingPassFocus | null {
 	if (mode === "incremental-hygiene") return "hygiene";
 	if (mode === "incremental-content") return "content";
 	return null;
 }
-
-/**
- * Whether a pass mode is allowed to update episodic state for this pass.
- * Attention-only content work (for example, a surprisal hint with an empty
- * backlog) must not advance or clear the evidence watermark.
- */
 function dreamingModeAdvancesEvidence(mode: DreamingMode, hasEpisodicWork: boolean): boolean {
 	return mode !== "incremental-hygiene" && hasEpisodicWork;
 }
-
-/**
- * The early-exit contract for a pass mode (#1098): a pass exits without
- * invoking the agent when its own work is empty — hygiene on an empty
- * attention queue, content on an empty episodic backlog. Combined modes
- * exit only when both are empty; compact never early-exits.
- */
 export function dreamingEarlyExitSummary(
 	mode: DreamingMode,
 	hasPendingHygieneAttention: boolean,
@@ -1173,16 +1062,8 @@ export function dreamingEarlyExitSummary(
 			? "No new episodic evidence or semantic attention to process"
 			: null;
 	}
-	return null; // compact never early-exits
+	return null;
 }
-
-/**
- * Which runbook the next scheduled pass gets. When both hygiene and content
- * work are pending, the worker alternates (hygiene → content → hygiene → …)
- * so content gets a guaranteed turn even while the hygiene queue refills
- * faster than passes drain it (#1098). When only one kind of work is
- * pending, run that kind directly so no pass is spent on an empty runbook.
- */
 export function selectDreamingPassMode(
 	lastScheduled: DreamingPassFocus | null,
 	hasPendingHygieneAttention: boolean,
@@ -1191,37 +1072,16 @@ export function selectDreamingPassMode(
 ): DreamingMode {
 	const hasContentWork = hasBacklog || hasPendingContentAttention;
 	if (hasPendingHygieneAttention && hasContentWork) {
-		// Tie: alternate so content gets a guaranteed turn even while the
-		// hygiene queue stays full, starting the cycle at hygiene.
 		return lastScheduled === "hygiene" ? "incremental-content" : "incremental-hygiene";
 	}
 	if (hasPendingHygieneAttention) return "incremental-hygiene";
 	if (hasContentWork) return "incremental-content";
-	// Unreachable through shouldTriggerDreaming (it fires only when attention
-	// or a backlog exists); the combined mode's early-exit gate is the
-	// defensive fallback.
 	return "incremental";
 }
 
-// ---------------------------------------------------------------------------
-// Main dreaming orchestrator
-// ---------------------------------------------------------------------------
-
-/**
- * Bounded tool-loop Dreaming pass. The daemon owns evidence selection,
- * exclusion/cursor bookkeeping, tool construction, and audited writes.
- */
-
 export interface DreamingPassLiveOptions {
-	/** Test seam; production uses the process-local ephemeral event hub. */
 	readonly hub?: DreamingLiveEventHub;
 }
-
-/**
- * Anonymous telemetry for a completed agentic dreaming pass: provider-reported
- * token usage and cost so dreaming economics show up in PostHog alongside
- * llm.generate and pipeline.embedding. Best-effort — never throws into the pass.
- */
 export function recordDreamingPassTelemetry(input: {
 	readonly mode: string;
 	readonly outcome: DreamingPassOutcome;
@@ -1277,9 +1137,7 @@ export function recordDreamingPassTelemetry(input: {
 			toolCalls: input.effects.toolCalls,
 			durationMs: input.effects.durationMs,
 		});
-	} catch {
-		// A telemetry collector is an observer, never part of the pass result.
-	}
+	} catch {}
 }
 
 export type DreamingPassOutcome = "completed" | "no-op" | "failed" | "cancelled";
@@ -1341,8 +1199,6 @@ function dreamingPassEffects(
 	return {
 		artifactsConsidered: state.consideredArtifacts.size,
 		memoriesCreated: state.createdMemoryIds.size,
-		// Dreaming semantic updates are represented as a new version plus a
-		// supersession, rather than an in-place memory update.
 		memoriesUpdated: 0,
 		memoriesSuperseded: state.supersededMemoryIds.size,
 		memoriesRetired: state.retiredMemoryIds.size,
@@ -1640,8 +1496,6 @@ export async function runDreamingAgentPass(
 	liveOptions?: DreamingPassLiveOptions,
 	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }> {
-	// Any pass may consume or create episodic evidence. Do not present the
-	// previous exact aggregate while the pass is mutating its source window.
 	for (const scope of scopes) invalidateDreamingEpisodicTokenBacklog(scope);
 	const passId =
 		existingPassId ??
@@ -1661,10 +1515,6 @@ export async function runDreamingAgentPass(
 			scopes.length > 1
 				? `${dreamingPromptForMode(mode)}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
 				: dreamingPromptForMode(mode);
-
-		// Pass-start cutoff, SQLite format. The stored watermark may also be
-		// the raw surfaced captured_at (ISO); every comparison goes through
-		// julianday(), so the mixed formats stay ordered (#1149).
 		const cutoffRow = await ownerQueryOne<{ now: string }>(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.pass.cutoff",
@@ -1673,11 +1523,6 @@ export async function runDreamingAgentPass(
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		);
 		const cutoff = cutoffRow?.now ?? new Date().toISOString();
-
-		// One Dreaming pass covers the whole install: it only runs when some
-		// scope has pending attention or an episodic backlog. Scheduled checks
-		// are already gated by shouldTriggerDreaming; this protects manual
-		// triggers and compact runs from spending tokens on nothing.
 		const [hasPendingHygieneAttention, hasPendingContentAttention, hasPendingAttention] = await Promise.all([
 			Promise.all(
 				scopes.map(
@@ -1739,12 +1584,6 @@ export async function runDreamingAgentPass(
 					[earlyExitSummary, passId],
 				),
 			];
-			// The evidence watermark only advances when nothing new
-			// remains AND the mode consumes evidence: a focused pass
-			// that exits while the other mode's work is pending must not
-			// skip it for the next pass, and a hygiene pass must never
-			// advance the watermark even on an empty backlog (#1098,
-			// #1149).
 			if (dreamingModeAdvancesEvidence(mode, hasBacklog)) {
 				for (const scope of scopes) {
 					if (hasBacklogByScope.get(scope) === true) {
@@ -1792,8 +1631,6 @@ export async function runDreamingAgentPass(
 		let memoryHeadResult: Record<string, unknown> | null = null;
 		let retirementCandidates: DreamingRetirementCandidates = new Map();
 		const rejectedEvidence: RejectedDreamingEvidence[] = [];
-		// The newest captured_at each scope's search_evidence surfaced this
-		// pass; the pass-end watermark may advance only to it (#1149).
 		const surfacedWatermarkByScope = new Map<string, string>();
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
 		const tools = createDreamingAgentTools({
@@ -1835,10 +1672,6 @@ export async function runDreamingAgentPass(
 						if (sourceRef?.startsWith("transcript:")) transcriptRefs.add(sourceRef);
 					}
 					if (transcriptRefs.size > 0) surfacedTranscriptRefsByScope.set(scope, transcriptRefs);
-					// A sourceRef call reads a fragment of a source the
-					// listing already surfaced: it adds no new frontier (the
-					// listing's max covers it) and must not advance the
-					// watermark past the unread remainder (#1149).
 					if (input === null || typeof input.sourceRef !== "string") {
 						const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
 						const surfaced = surfacedEvidenceWatermark(trace.output.items);
@@ -1895,14 +1728,8 @@ export async function runDreamingAgentPass(
 			logger.warn("dreaming", "Content pass completed without a successful memory-head commit", { passId });
 		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}${memoryHeadMissing ? " [memory-head commit missing]" : ""}`;
 		const attribution = executorResult.attribution ?? null;
-		// Provider-reported aggregate when the executor surfaced it (pi-backed
-		// agent sessions); otherwise fall back to the local prompt estimate so
-		// acpx-backed passes keep a meaningful total.
 		const usage = executorResult.usage ?? null;
 		const tokensConsumed = usage?.totalTokens ?? countTokens(prompt);
-		// The watermark advances only to what this pass actually surfaced: a
-		// pass that completes without surfacing (or deferring) pending
-		// evidence must not skip it for the next scan-first search (#1149).
 		const nextWatermarkByScope = new Map<string, string | null>();
 		for (const scope of scopes) {
 			const previous =
@@ -1921,10 +1748,6 @@ export async function runDreamingAgentPass(
 				surfaced === undefined ? previous : nextEvidenceWatermark(surfaced, previous, cutoff),
 			);
 		}
-		// Any pass that surfaces transcript evidence owns its direct temporal
-		// projection. Combined passes can ingest content too; gating this on the
-		// focused-mode name would advance the watermark without writing the
-		// manifest.
 		const transcriptManifestEntries = (
 			await Promise.all(
 				[...surfacedTranscriptRefsByScope.entries()].map(([scope, refs]) =>
@@ -2054,12 +1877,6 @@ export async function runDreamingAgentPass(
 		throw error;
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Threshold check
-// ---------------------------------------------------------------------------
-
-// Max backoff: 5min * 2^6 = ~5.3 hours.
 const MAX_FAILURE_BACKOFF_MULTIPLIER = 6;
 const FAILURE_BACKOFF_BASE_MS = 5 * 60 * 1000;
 const DREAMING_EVIDENCE_KINDS = ["memory", "artifact", "transcript"] as const;
@@ -2101,10 +1918,6 @@ function writeDreamingTranscriptManifestInTx(
 		if (!entry.source.completed || entry.content.trim().length === 0) continue;
 		const content = entry.content.trim();
 		const contentHash = createHash("sha256").update(content).digest("hex");
-		// Reuse an existing depth-0 row for this agent/session. The historical
-		// summary path used a different id, and the partial unique index cannot
-		// be handled by ON CONFLICT(id) alone. Updating it in place preserves
-		// child/memory lineage while replacing the derived content source.
 		const existing = db
 			.prepare(
 				`SELECT id FROM session_summaries
@@ -2152,8 +1965,6 @@ function writeDreamingTranscriptManifestInTx(
 		});
 	}
 }
-
-/** Finalize a pass inside the DB owner; the payload contains no callbacks. */
 export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPassFinalize): void {
 	writeDreamingTranscriptManifestInTx(db, {
 		passId: input.passId,
@@ -2234,12 +2045,6 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		}
 	}
 }
-
-// A scope that fails this many consecutive passes is halted: automatic
-// scheduling stops for the cooldown below instead of retrying forever on
-// the backoff ceiling (~5.3h per attempt). Explicit triggers bypass the
-// gate, and any successful pass resets the counter, so a halt self-heals
-// on the next forced or post-cooldown pass (#1059).
 export const DREAMING_FAILURE_HALT_THRESHOLD = 5;
 export const DREAMING_HALT_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 export const DREAMING_SCHEDULE_BACKLOG_MAX_SOURCES = 50;
@@ -2248,8 +2053,6 @@ export function isDreamingScopeHalted(state: DreamingState, nowMs = Date.now()):
 	const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
 	return Number.isFinite(failedAt) && nowMs - failedAt < DREAMING_HALT_COOLDOWN_MS;
 }
-
-/** Cheap sweep pre-check: one indexed dreaming_state row, no attention scan. */
 export async function isDreamingHaltActive(
 	accessor: DbAccessor,
 	agentId: string,
@@ -2358,13 +2161,6 @@ function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimi
 		return validDreamingBacklogEntry(db, agentId, source, false, offset);
 	});
 }
-
-/**
- * Refresh the exact BPE backlog count without encoding on the daemon thread.
- * This operation always reads the complete canonical pending set. Scheduled
- * checks use probeDreamingEpisodicBacklog instead, so an incomplete page can
- * never overwrite the exact aggregate or masquerade as a token total.
- */
 export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string): Promise<number> {
 	const read = readDreamingEpisodicBacklogInDb(db, agentId, null);
 	return refreshDreamingBacklogTokenCache(agentId, read.entries);
@@ -2376,8 +2172,6 @@ function ensureDreamingTokenThreshold(value: number): number {
 	}
 	return value;
 }
-
-/** Execute the bounded scheduler probe inside the database owner. */
 export function probeDreamingEpisodicBacklogInDb(
 	db: ReadDb,
 	agentId: string,
@@ -2414,8 +2208,6 @@ export function probeDreamingEpisodicBacklogInDb(
 		},
 	);
 }
-
-/** Read pending evidence presence without tokenizing its content. */
 export function hasDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string): boolean {
 	return readDreamingEpisodicBacklogInDb(db, agentId, 1).hasBacklog;
 }
@@ -2510,13 +2302,7 @@ export async function evaluateDreamingTrigger(
 			[agentId],
 			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 		)) !== undefined;
-
-	// Hard halt after repeated consecutive failures: no automatic scheduling
-	// for the cooldown window. Explicit operator triggers bypass this gate.
 	if (isDreamingScopeHalted(state, nowMs)) return { trigger: false };
-
-	// Back off by wall clock, not by evidence volume. A transient provider outage
-	// must not require exponentially more incoming evidence before recovery.
 	if (state.consecutiveFailures > 0) {
 		const exp = Math.min(state.consecutiveFailures, MAX_FAILURE_BACKOFF_MULTIPLIER);
 		const failedAt = state.lastFailureAt === null ? Number.NaN : Date.parse(state.lastFailureAt);
@@ -2524,8 +2310,6 @@ export async function evaluateDreamingTrigger(
 	}
 
 	if (hasAttention) return { trigger: true, reason: "attention" };
-
-	// First run only backfills actual pending episodic evidence.
 	if (cfg.backfillOnFirstRun && state.lastPassAt === null) {
 		return backlog.hasBacklog ? { trigger: true, reason: "first-run" } : { trigger: false };
 	}
@@ -2574,10 +2358,6 @@ export async function evaluateDreamingTrigger(
 			)) !== undefined;
 		if (hasContinuation) return { trigger: true, reason: "continuation" };
 	}
-
-	// A low-volume stream must not wait indefinitely for the batch ceiling.
-	// This is deliberately a maximum wait rather than an unconditional cron:
-	// empty ledgers never trigger a pass.
 	const lastPassMs = state.lastPassAt === null ? Number.NaN : Date.parse(state.lastPassAt);
 	if (backlog.hasBacklog && Number.isFinite(lastPassMs) && nowMs - lastPassMs >= cfg.maxInterval) {
 		return { trigger: true, reason: "max-interval" };

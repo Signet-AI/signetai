@@ -1,9 +1,4 @@
 import { useEffect, useState } from "react";
-
-/**
- * Minimal data hook: fetch on mount + manual refresh, cancelable, null while
- * pending, null on error. Polling optional. Keeps the views free of fetch glue.
- */
 export function useAsync<T>(
 	fetcher: () => Promise<T | null>,
 	opts: { intervalMs?: number; deps?: unknown[] } = {},
@@ -12,8 +7,6 @@ export function useAsync<T>(
 	const [loading, setLoading] = useState(true);
 
 	useEffect(() => {
-		// Local (per-effect-instance) liveness flag — a shared ref breaks under
-		// StrictMode double-invoke because the first cleanup nulls it for both.
 		let alive = true;
 		setLoading(true);
 		const run = async () => {

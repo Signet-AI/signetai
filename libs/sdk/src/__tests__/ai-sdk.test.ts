@@ -4,8 +4,6 @@ import { SignetClient } from "../index.js";
 
 let mockServer: ReturnType<typeof Bun.serve>;
 let port: number;
-
-// Track calls the mock client receives
 const calls: { method: string; args: unknown[] }[] = [];
 let lastRecallBody: Record<string, unknown> | null = null;
 
@@ -19,8 +17,6 @@ beforeAll(() => {
 		port: 0,
 		async fetch(req) {
 			const url = new URL(req.url);
-
-			// recall endpoint - used by memory_search and getMemoryContext
 			if (url.pathname === "/api/memory/recall") {
 				lastRecallBody = (await req.json().catch(() => null)) as Record<string, unknown> | null;
 				return Response.json({
@@ -37,8 +33,6 @@ beforeAll(() => {
 					stats: { total: 1, searchTime: 5 },
 				});
 			}
-
-			// remember endpoint - used by memory_store
 			if (url.pathname === "/api/memory/remember") {
 				return Response.json({
 					id: "new-id",
@@ -49,8 +43,6 @@ beforeAll(() => {
 					content: "stored",
 				});
 			}
-
-			// modify endpoint
 			if (req.method === "PATCH" && url.pathname.startsWith("/api/memory/")) {
 				return Response.json({
 					id: "m1",
@@ -59,8 +51,6 @@ beforeAll(() => {
 					newVersion: 3,
 				});
 			}
-
-			// forget endpoint
 			if (req.method === "DELETE" && url.pathname.startsWith("/api/memory/")) {
 				return Response.json({
 					id: "m1",
@@ -174,7 +164,6 @@ describe("getMemoryContext", () => {
 	});
 
 	test("returns empty string when no results", async () => {
-		// Use a separate mock server that returns empty results
 		const emptyServer = Bun.serve({
 			port: 0,
 			fetch() {
@@ -197,7 +186,6 @@ describe("getMemoryContext", () => {
 	});
 
 	test("respects limit option", async () => {
-		// The mock always returns 1 result, but we verify the call goes through
 		const client = mockClient();
 		const result = await getMemoryContext(client, "query", { limit: 2 });
 		expect(result).toContain("## Relevant Memories");

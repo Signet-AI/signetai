@@ -1,13 +1,3 @@
-/**
- * Fixed-input evaluation for the authorized ontology claim trace (#1318).
- *
- * Run with:
- *   bun scripts/claim-trace-eval.ts
- *
- * The fixture is intentionally local and deterministic. It exercises the
- * operation directly, so the metric measures the canonical trace rather than
- * a renderer or a network server.
- */
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";

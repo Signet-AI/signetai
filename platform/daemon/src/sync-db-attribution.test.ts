@@ -42,7 +42,7 @@ describe("sync DB attribution", () => {
 	});
 
 	test("latches the explicit file and line for a never-completing in-flight call", () => {
-		const token = beginSyncDbCall("withReadDb", 1_000, "sync-db-attribution.test.ts:28");
+		const token = beginSyncDbCall("withReadDb", 1_000, "sync-db-attribution.test.ts:45");
 
 		expect(getSyncDbCallSitesForWindow(1_000, 2_000)).toEqual([
 			"withReadDb@platform/daemon/src/sync-db-attribution.test.ts:28",

@@ -56,9 +56,7 @@ function runResolver(mode: string, script: string): { exitCode: number; output: 
 	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
 	try {
 		Bun.file(outputPath).delete();
-	} catch {
-		// The resolver may exit before creating GITHUB_OUTPUT.
-	}
+	} catch {}
 	return { exitCode: result.exitCode, output };
 }
 

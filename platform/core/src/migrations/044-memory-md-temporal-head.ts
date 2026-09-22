@@ -5,14 +5,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 	if (cols.some((c) => c.name === column)) return;
 	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-
-/**
- * Migration 044: MEMORY.md temporal head metadata
- *
- * Extends `session_summaries` with provenance metadata so the table can
- * represent summary-worker nodes, transcript-chunk leaves, compaction
- * artifacts, and higher-order condensations without losing lineage.
- */
 export function up(db: MigrationDb): void {
 	addColumnIfMissing(db, "session_summaries", "source_type", "TEXT");
 	addColumnIfMissing(db, "session_summaries", "source_ref", "TEXT");

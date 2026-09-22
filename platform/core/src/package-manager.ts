@@ -101,9 +101,6 @@ function readConfiguredPackageManager(agentsDir: string | undefined): PackageMan
 		try {
 			const yaml = parseSimpleYaml(readFileSync(path, "utf-8"));
 			const install = yaml.install as Record<string, unknown> | undefined;
-
-			// Skip config values that were auto-detected (source: fallback)
-			// rather than explicitly chosen by the user
 			const source = install?.source;
 			if (source === "fallback") return null;
 
@@ -114,9 +111,7 @@ function readConfiguredPackageManager(agentsDir: string | undefined): PackageMan
 				normalizePackageManager(yaml.package_manager);
 
 			if (configured) return configured;
-		} catch {
-			// Ignore invalid YAML and continue fallback chain.
-		}
+		} catch {}
 	}
 
 	return null;
@@ -127,7 +122,6 @@ export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptio
 	const fallbackOrder = options.fallbackOrder ?? DEFAULT_FALLBACK_ORDER;
 	const configuredFamily = readConfiguredPackageManager(options.agentsDir);
 	const userAgentFamily = parsePackageManagerUserAgent(options.userAgent ?? options.env?.npm_config_user_agent);
-	// Try the provided exec path, then process.argv[0], then `which signet`
 	let execPathForDetection = options.execPath ?? (typeof process !== "undefined" ? process.argv[0] : undefined);
 	const inferFromPath = (path: string | undefined): PackageManagerFamily | null =>
 		inferPackageManagerFromExecutable(path, {
@@ -142,9 +136,7 @@ export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptio
 			if (result.status === 0 && result.stdout.trim()) {
 				execPathForDetection = result.stdout.trim();
 			}
-		} catch {
-			// Ignore — best effort
-		}
+		} catch {}
 	}
 	const execPathFamily = inferFromPath(execPathForDetection);
 
@@ -193,8 +185,6 @@ export function resolvePrimaryPackageManager(options: ResolvePackageManagerOptio
 			userAgentFamily,
 		};
 	}
-
-	// Detect from the running binary's install path (e.g. ~/.bun/bin/signet → bun)
 	if (execPathFamily && available[execPathFamily]) {
 		return {
 			family: execPathFamily,
@@ -231,11 +221,6 @@ export function getSkillsRunnerCommand(family: PackageManagerFamily, skillsArgs:
 			};
 	}
 }
-
-/**
- * Resolve the filesystem path where a globally-installed package lives.
- * Returns undefined if the path cannot be determined or does not exist.
- */
 export function resolveGlobalPackagePath(family: PackageManagerFamily, packageName: string): string | undefined {
 	try {
 		switch (family) {
@@ -273,8 +258,6 @@ export function resolveGlobalPackagePath(family: PackageManagerFamily, packageNa
 				return undefined;
 			}
 			case "yarn": {
-				// `yarn global dir` is Yarn Classic (v1) only. Yarn Berry (v2+)
-				// removed all `yarn global` subcommands. Detect version first.
 				const versionResult = spawnSyncHidden("yarn", ["--version"], {
 					encoding: "utf-8",
 					timeout: 5_000,
@@ -291,13 +274,6 @@ export function resolveGlobalPackagePath(family: PackageManagerFamily, packageNa
 						if (existsSync(candidate)) return candidate;
 					}
 				} else {
-					// Yarn Berry (v2+) removed `yarn global add` entirely, so no
-					// global package tree is created under the default linker (PnP).
-					// This path only resolves for Berry users who explicitly set
-					// `nodeLinker: node-modules` in their .yarnrc.yml — PnP installs
-					// will not have a node_modules directory here. Checked as a
-					// best-effort fallback; callers should warn when this returns
-					// undefined, since Berry users may need an alternative install path.
 					const berryGlobal = join(
 						process.env.YARN_GLOBAL_FOLDER ?? join(homedir(), ".yarn", "berry", "global"),
 						"node_modules",

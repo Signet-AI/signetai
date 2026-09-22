@@ -108,13 +108,8 @@ export function buildActiveConstraintsSection(
 		fullChars: fullSection.length,
 		injectChars: compressedSection.length,
 	});
-
-	// Hard invariant: constraints for in-scope entities always surface.
-	// We allow this section to exceed its soft budget rather than dropping rows.
 	return compressedSection;
 }
-
-/** Maximum number of traversal IDs hydrated during one session start. */
 export const MAX_TRAVERSAL_CANDIDATE_IDS = 500;
 const TRAVERSAL_CANDIDATE_BATCH_SIZE = 50;
 
@@ -217,12 +212,6 @@ export async function fetchTraversalCandidates(
 		return [];
 	}
 }
-
-/**
- * Return all memories that pass the 0.2 effective score threshold,
- * sorted by project match + score. No budget applied — caller
- * handles truncation via selectWithBudget().
- */
 export async function getAllScoredCandidates(
 	memoryDbPath: string,
 	project: string | undefined,
@@ -242,8 +231,6 @@ export async function getAllScoredCandidates(
 			deadlineMs: 5_000,
 			estimatedWorkUnits: Math.max(1, Math.min(10_000, limit * 3)),
 		};
-		// Legacy databases may predate the safety ledger. Discover that in the
-		// owner before selecting rows so the parent never touches SQLite.
 		const safetyTable = await ownerReadOne<{ readonly name: string }>(
 			owner,
 			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
@@ -288,8 +275,6 @@ export async function getAllScoredCandidates(
 				effScore: effectiveScore(r.importance, r.created_at, r.pinned === 1),
 			}))
 			.filter((r) => r.effScore > 0.2 || r.pinned === 1);
-
-		// Sort: project matches first, then by score.
 		scored.sort((a, b) => {
 			if (project) {
 				const aMatch = a.project === project ? 1 : 0;
@@ -305,13 +290,6 @@ export async function getAllScoredCandidates(
 		return [];
 	}
 }
-
-/**
- * Get predicted context memories by analyzing recent session summaries
- * and using recurring topics as additional search terms. Supplements
- * the regular project-filtered memories with context the user is
- * likely to need based on recent sessions.
- */
 export async function getPredictedContextMemories(
 	memoryDbPath: string,
 	project: string | undefined,
@@ -366,8 +344,6 @@ export async function getPredictedContextMemories(
 		);
 
 		if (eligibleTranscriptRows.length === 0) return [];
-
-		// Extract recurring terms from recent sessions.
 		const termFreq = new Map<string, number>();
 		for (const row of eligibleTranscriptRows) {
 			const text = row.transcript.slice(0, 3000);
@@ -383,8 +359,6 @@ export async function getPredictedContextMemories(
 				termFreq.set(w, (termFreq.get(w) ?? 0) + 1);
 			}
 		}
-
-		// Take terms that appear in 2+ sessions (recurring topics).
 		const recurring = [...termFreq.entries()]
 			.filter(([_, count]) => count >= 2)
 			.sort((a, b) => b[1] - a[1])
@@ -392,8 +366,6 @@ export async function getPredictedContextMemories(
 			.map(([term]) => term);
 
 		if (recurring.length === 0) return [];
-
-		// Use recurring terms as FTS query.
 		const ftsQuery = recurring.join(" OR ");
 		const scope = buildAgentScopeClause(agentId, readPolicy, policyGroup);
 		const rows = await ownerReadAll<{

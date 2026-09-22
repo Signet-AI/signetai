@@ -1,8 +1,6 @@
 import { Filter, Maximize2 } from "@/components/mingcute-icons";
 import { Surface } from "@/components/ui/surface";
 import { cn } from "@/lib/utils";
-
-/** Header used by the Sources + Review panels: title + meta + hover tools. */
 export function PanelHead({ title, meta }: { title: string; meta?: string }) {
 	return (
 		<div className="flex items-center justify-between gap-2.5">

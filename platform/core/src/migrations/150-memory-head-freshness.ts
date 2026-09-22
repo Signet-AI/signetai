@@ -4,8 +4,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 	const columns = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	if (!columns.some((row) => row.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-
-/** Migration 150: fence generated memory heads against source changes. */
 export function up(db: MigrationDb): void {
 	addColumnIfMissing(db, "memory_md_heads", "is_current", "INTEGER NOT NULL DEFAULT 0");
 	addColumnIfMissing(db, "dreaming_passes", "head_base_revision", "INTEGER");

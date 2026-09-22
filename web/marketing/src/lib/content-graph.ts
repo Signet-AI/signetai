@@ -1,10 +1,3 @@
-/**
- * Build-time blog graph index.
- *
- * Standard Markdown links between blog posts become edges in the local
- * graph viewer. Public documentation is indexed and searched by Starlight.
- */
-
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 

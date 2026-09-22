@@ -18,13 +18,6 @@ function backfillVersionRoots(db: MigrationDb): void {
 		WHERE version_root_id IS NULL
 	`);
 }
-
-/**
- * Migration 070: ontology control-plane state.
- *
- * Adds first-class claim version lineage, archive/status metadata, and
- * proposal provenance columns needed by daemon-backed ontology operations.
- */
 export function up(db: MigrationDb): void {
 	for (const table of ["entities", "entity_aspects", "entity_dependencies"] as const) {
 		addColumnIfMissing(db, table, "status", "TEXT NOT NULL DEFAULT 'active'");

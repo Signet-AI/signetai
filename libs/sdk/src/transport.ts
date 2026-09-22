@@ -67,7 +67,6 @@ export class SignetTransport {
 				return await parseResponseBody<T>(response);
 			} catch (error) {
 				if (error instanceof SignetApiError) {
-					// API errors are not retryable
 					throw error;
 				}
 
@@ -148,7 +147,6 @@ async function parseResponseBody<T = unknown>(response: Response): Promise<T> {
 		try {
 			return JSON.parse(text) as T;
 		} catch {
-			// Some endpoints mislabel text as JSON; return raw to avoid masking payloads.
 			return text as T;
 		}
 	}

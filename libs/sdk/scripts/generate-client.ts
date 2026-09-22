@@ -1,10 +1,4 @@
 #!/usr/bin/env bun
-/**
- * SDK Code Generator
- *
- * Parses daemon.ts routes and generates SDK client methods.
- * Run: bun run scripts/generate-client.ts
- */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { dirname, join } from "path";
@@ -21,15 +15,9 @@ interface Route {
 	readonly path: string;
 	readonly line: number;
 }
-
-/**
- * Extract all routes from daemon.ts
- */
 function extractRoutes(daemonCode: string): readonly Route[] {
 	const routes: Route[] = [];
 	const lines = daemonCode.split("\n");
-
-	// Match patterns like: app.get("/path", ...), app.delete("/path", ...)
 	const routeRegex = /^\s*app\.(get|post|put|patch|delete)\s*\(\s*["']([^"']+)["']/;
 
 	for (let i = 0; i < lines.length; i++) {
@@ -71,11 +59,6 @@ function toMethodName(route: Route): string {
 	const raw = `${methodPrefix}${suffix}`;
 	return raw.charAt(0).toLowerCase() + raw.slice(1);
 }
-
-/**
- * Extract path parameters from route
- * Example: /api/items/:id → ["id"]
- */
 function extractParams(path: string): readonly string[] {
 	const params: string[] = [];
 	const regex = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
@@ -85,10 +68,6 @@ function extractParams(path: string): readonly string[] {
 	}
 	return params;
 }
-
-/**
- * Build a unique method name for each route.
- */
 function buildMethodNames(routes: readonly Route[]): readonly string[] {
 	const used = new Map<string, number>();
 	return routes.map((route) => {
@@ -101,10 +80,6 @@ function buildMethodNames(routes: readonly Route[]): readonly string[] {
 		return `${baseName}${seen + 1}`;
 	});
 }
-
-/**
- * Generate TypeScript method for a route.
- */
 function generateMethod(route: Route, methodName: string): string {
 	const params = extractParams(route.path);
 
@@ -144,10 +119,6 @@ function generateMethod(route: Route, methodName: string): string {
 
 	return `  async ${signature} {\n    ${body}\n  }`;
 }
-
-/**
- * Generate the full client file.
- */
 function generateClient(routes: readonly Route[]): string {
 	const methodNames = buildMethodNames(routes);
 	const methods = routes.map((route, index) => generateMethod(route, methodNames[index])).join("\n\n");
@@ -175,10 +146,6 @@ ${methods}
 }
 `;
 }
-
-/**
- * Main
- */
 function main(): void {
 	console.log("Reading daemon.ts...");
 	if (!existsSync(DAEMON_PATH)) {

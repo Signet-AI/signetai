@@ -34,7 +34,7 @@ export function FilterBar({
 
   return (
     <div className="space-y-2">
-      {/* Header row */}
+      {}
       <div className="flex items-center justify-between text-sm px-1">
         <span className="text-text-secondary">
           Showing {displayCount} {displayCount === 1 ? "entry" : "entries"}
@@ -50,9 +50,9 @@ export function FilterBar({
         </button>
       </div>
 
-      {/* Filter bar - connects to table below */}
+      {}
       <div className="flex border border-[#333333] rounded-t">
-        {/* Search input */}
+        {}
         <div className="w-[240px] border-r border-[#333333]">
           <div className="relative h-[44px] flex items-center">
             <svg
@@ -78,7 +78,7 @@ export function FilterBar({
           </div>
         </div>
 
-        {/* Filter dropdowns */}
+        {}
         {filters.map((filter, idx) => (
           <div
             key={filter.key}

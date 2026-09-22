@@ -20,14 +20,10 @@ type PipelineErrorCodeForStage<Stage extends PipelineErrorStage> = {
 export type PipelineErrorPair = {
 	[Stage in PipelineErrorStage]: [stage: Stage, code: PipelineErrorCodeForStage<Stage>];
 }[PipelineErrorStage];
-
-/** Record a stage/code pair without exposing provider messages or stack data. */
 export function recordPipelineError(...pair: PipelineErrorPair): void {
 	const [stage, code] = pair;
 	getActiveTelemetry()?.record("pipeline.error", { stage, code });
 }
-
-// Compile-time regression check: a code from another stage must not be accepted.
 type Assert<T extends true> = T;
 type IsAssignable<From, To> = [From] extends [To] ? true : false;
 type PipelineErrorParameters = Parameters<typeof recordPipelineError>;

@@ -1,26 +1,3 @@
-/**
- * Main-thread adapter for the native embedding worker.
- *
- * Spawns a node:worker_threads Worker running embedding-worker.ts and
- * exposes the embedding provider contract used by the rest of the daemon
- * (native-embedding.ts facade). All potentially-long work happens in the
- * worker; this handle never blocks the main event loop:
- *
- *   - getStatus() is synchronous — it returns a cache fed by proactive
- *     "status" pushes from the worker, so /health and status endpoints
- *     never await the worker.
- *   - embed()/checkAvailable() are RPC calls, each bounded by a
- *     Promise.race timeout. If the worker is grinding (e.g. stuck on an
- *     unreachable model CDN), these fail fast and mark the provider
- *     unavailable instead of hanging — but crucially the main loop keeps
- *     serving other requests the entire time, because the grinding happens
- *     in the worker, not here.
- *
- * Mirrors the established worker pattern:
- * embedded-worker-asset fallback for the compiled binary, workerData init,
- * ready handshake with timeout, injectable workerFactory for tests.
- */
-
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,20 +12,12 @@ import type {
 import { logger } from "./logger";
 import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./native-runtime-assets";
 
-// ---------------------------------------------------------------------------
-// Constants (overridable via options for deterministic tests)
-// ---------------------------------------------------------------------------
-
 const DEFAULT_MODEL_ID = "nomic-ai/nomic-embed-text-v1.5";
 const DEFAULT_DIMENSIONS = 768;
 const READY_TIMEOUT_MS = 30_000;
-const INIT_TIMEOUT_MS = 90_000; // first-run model download can take a while
+const INIT_TIMEOUT_MS = 90_000;
 const EMBED_TIMEOUT_MS = 15_000;
-const COOLDOWN_MS = 300_000; // match prior in-process behaviour
-
-// ---------------------------------------------------------------------------
-// Injectable worker surface (for tests)
-// ---------------------------------------------------------------------------
+const COOLDOWN_MS = 300_000;
 
 export interface EmbeddingWorkerLike {
 	on(event: "message", listener: (msg: WorkerToMainMessage) => void): unknown;
@@ -68,31 +37,14 @@ export interface EmbeddingHandleOptions {
 	readonly modelId?: string;
 	readonly expectedDimensions?: number;
 	readonly cacheDir?: string;
-	/** Test seam: point transformers env.remoteHost at a local blackhole. */
 	readonly remoteHostOverride?: string;
 	readonly workerFactory?: EmbeddingWorkerFactory;
 	readonly readyTimeoutMs?: number;
 	readonly initTimeoutMs?: number;
 	readonly embedTimeoutMs?: number;
 	readonly cooldownMs?: number;
-	/**
-	 * Pre-resolved embedding worker executable path. When provided (including
-	 * null), skips the native asset registry resolution. Needed when this
-	 * handle is created from inside a worker thread (e.g., the extraction
-	 * thread) where `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__` is not
-	 * registered and `resolveEmbeddedWorkerPath` returns null.
-	 */
 	readonly embeddingWorkerPath?: string | null;
-	/**
-	 * Pre-resolved WASM assets directory. Same rationale as
-	 * embeddingWorkerPath — the main thread materializes WASM assets,
-	 * the worker thread inherits the path.
-	 */
 	readonly wasmAssetDir?: string | null;
-	/**
-	 * Pre-resolved transformers runtime path. Same rationale as
-	 * embeddingWorkerPath.
-	 */
 	readonly transformersRuntimeAssetPath?: string | null;
 }
 
@@ -120,14 +72,9 @@ export interface EmbeddingWorkerHandle {
 	checkAvailable(): Promise<EmbeddingProviderStatus>;
 	getStatus(): EmbeddingProviderSnapshot;
 	getLastError(): string | null;
-	/** True when the provider must remain disabled until daemon restart. */
 	isPermanentlyDisabled(): boolean;
 	stop(): Promise<void>;
 }
-
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
 
 export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions = {}): Promise<EmbeddingWorkerHandle> {
 	const modelId = opts.modelId ?? DEFAULT_MODEL_ID;
@@ -138,21 +85,7 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 	const cooldownMs = opts.cooldownMs ?? COOLDOWN_MS;
 
 	const cacheDir = opts.cacheDir ?? join(resolveDefaultBasePath(), ".models");
-	// Main thread owns the compiled-binary asset globals; materialize WASM
-	// here and hand the directory to the worker (which has an isolated
-	// globalThis and cannot read them itself). Null in source mode, where
-	// onnxruntime-wasm resolves its .wasm from node_modules.
-	//
-	// When opts provides pre-resolved values (i.e., this handle is created
-	// from inside a worker thread), use them directly instead of calling
-	// the asset registry — `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__` is
-	// not registered in spawned worker threads (#922).
 	const wasmDir = opts.wasmAssetDir !== undefined ? opts.wasmAssetDir : materializeEmbeddedWasmAssets();
-	// Resolve the worker-specific WASM transformers runtime. The worker has
-	// an isolated globalThis, so the main thread's
-	// globalThis[Symbol.for("onnxruntime")] registration does NOT propagate.
-	// This .mjs file registers WASM onnxruntime on the worker's own globalThis
-	// before transformers loads. Null in source mode.
 	const transformersRuntimePath =
 		opts.transformersRuntimeAssetPath !== undefined
 			? opts.transformersRuntimeAssetPath
@@ -169,13 +102,6 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 
 	const __dirname = dirname(fileURLToPath(import.meta.url));
 	const bundled = join(__dirname, "embedding-worker.js");
-	// When the embedding worker path is pre-resolved by the caller (e.g.,
-	// from the main thread via WorkerInit), use it directly. Otherwise fall
-	// back to the bundled/asset-registry/source path as before. This is
-	// critical when createEmbeddingWorkerHandle() is called from inside the
-	// extraction worker thread — `resolveEmbeddedWorkerPath` returns null
-	// there because `globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__` is not
-	// registered in the worker's isolated globalThis (#922).
 	const workerPath =
 		opts.embeddingWorkerPath !== undefined
 			? (opts.embeddingWorkerPath ?? join(__dirname, "embedding-worker.ts"))
@@ -199,8 +125,6 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 		resolveReady = resolve;
 	});
 	const readyTimer = setTimeout(() => {
-		// If the worker never signals ready, unblock anyway so callers fail
-		// fast via RPC (the worker may have crashed before its first post).
 		resolveReady();
 	}, readyTimeoutMs);
 	readyTimer.unref?.();
@@ -249,17 +173,12 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 							reject(new Error(message));
 							if (kind === "embed") {
 								disabled = true;
-								// A timed-out inference has left the worker unable to
-								// service further RPCs. Terminate it so the stuck WASM
-								// runtime cannot retain threads or memory indefinitely.
 								try {
 									const result = worker.terminate();
 									if (result && typeof (result as Promise<unknown>).then === "function") {
 										void Promise.resolve(result).catch(() => {});
 									}
-								} catch {
-									// best-effort
-								}
+								} catch {}
 							}
 						}
 					}, timeoutMs);
@@ -267,9 +186,6 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				}),
 		);
 	}
-
-	// Single message listener: resolves the ready handshake on first "ready",
-	// then dispatches everything else.
 	worker.on("message", (msg: WorkerToMainMessage) => {
 		switch (msg.type) {
 			case "ready":
@@ -360,10 +276,6 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 				if (inCooldown()) throw new Error(lastError ?? "Native embedding init on cooldown");
 				return rpc<number[]>("embed", embedTimeoutMs, { text });
 			});
-			// ONNX Runtime's WASM session is process-global and has shown
-			// non-reentrant hangs under concurrent inference. Preserve caller
-			// concurrency while serializing the worker RPCs; failures do not
-			// poison the tail, and queued calls observe cooldown before posting.
 			embedQueue = run.then(
 				() => {},
 				() => {},
@@ -391,10 +303,6 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 					modelCached: false,
 				};
 			}
-			// checkAvailable triggers init (model download), so it gets the init budget.
-			// Resolves with {available:false} on timeout/failure to preserve the
-			// checkNativeProvider contract (callers like /api/embeddings/health do
-			// not catch). Only embed() rejects.
 			try {
 				return await rpc<EmbeddingProviderStatus>("checkAvailable", initTimeoutMs);
 			} catch (err) {
@@ -428,21 +336,14 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 			stopped = true;
 			try {
 				worker.postMessage({ type: "shutdown" });
-			} catch {
-				// worker may already be gone
-			}
+			} catch {}
 			failAllPending(new Error("Native embedding provider shut down"));
-			// A real Worker.terminate() resolves once the thread is gone; a fake
-			// returns a sync number. Either way this bounds teardown without
-			// waiting on an "exit" event the peer may never emit.
 			try {
 				const result = worker.terminate();
 				if (result && typeof (result as Promise<unknown>).then === "function") {
 					await result;
 				}
-			} catch {
-				// best-effort
-			}
+			} catch {}
 			logger.info("native-embedding", "Provider shut down");
 		},
 	};
@@ -451,7 +352,5 @@ export async function createEmbeddingWorkerHandle(opts: EmbeddingHandleOptions =
 }
 
 function createNodeWorker(workerPath: string, _init: EmbeddingWorkerInit, options: WorkerOptions): EmbeddingWorkerLike {
-	// node:worker_threads Worker structurally satisfies EmbeddingWorkerLike
-	// (on/postMessage/terminate). Exposed as a factory so tests inject a fake.
 	return new Worker(workerPath, options) as unknown as EmbeddingWorkerLike;
 }

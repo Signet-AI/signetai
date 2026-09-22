@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# GraphIQ install/uninstall script
-#
-# Usage:
-#   curl -fsSL https://raw.githubusercontent.com/aaf2tbz/graphiq/main/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/aaf2tbz/graphiq/main/install.sh | bash -s -- uninstall
-#
-# Environment variables:
-#   GRAPHIQ_INSTALL_DIR  — installation directory (default: existing graphiq dir, then /usr/local/bin)
-#   GRAPHIQ_VERSION      — specific version to install (default: latest)
 set -euo pipefail
 
 REPO="aaf2tbz/graphiq"
@@ -162,15 +153,10 @@ do_install() {
     echo ""
     echo "${BOLD}  GraphIQ Installer${RESET}"
     echo ""
-
-    # Prerequisites
     need_cmd curl "https://curl.se/"
     need_cmd tar  "system package manager"
 
     if [ "$(uname -s)" = "Linux" ]; then
-        # graphiq's binaries load Vulkan lazily at runtime (wgpu dlopens it), so
-        # the binary STARTS and runs on CPU+rayon even with no Vulkan installed.
-        # This prompt only offers the loader+driver for optional GPU acceleration.
         if ! ldconfig -p 2>/dev/null | grep -q "libvulkan.so.1" && \
            ! [ -f /usr/lib/x86_64-linux-gnu/libvulkan.so.1 ] && \
            ! [ -f /usr/lib/aarch64-linux-gnu/libvulkan.so.1 ]; then
@@ -204,8 +190,6 @@ do_install() {
     echo "  platform: ${platform}"
     echo "  target:   ${INSTALL_DIR}"
     echo ""
-
-    # Check for existing installation
     if command -v graphiq >/dev/null 2>&1; then
         local existing
         existing=$(graphiq --version 2>/dev/null || echo "unknown")
@@ -259,14 +243,10 @@ do_install() {
     fi
 
     echo ""
-
-    # Verify installation — run the binary we just installed, not whatever is on PATH
     local fail=0
     local ver
     ver=$("${INSTALL_DIR}/graphiq" --version 2>/dev/null || echo "?")
     info "graphiq ${ver} at ${INSTALL_DIR}/graphiq"
-
-    # Detect shadowing without deleting user-managed binaries.
     if command -v graphiq >/dev/null 2>&1; then
         local on_path
         on_path="$(command -v graphiq)"

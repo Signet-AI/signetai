@@ -148,8 +148,6 @@ export function collectRejectedDreamingEvidenceInDb(
 	}
 	return [...candidates.values()];
 }
-
-/** Resolve rejected citations through the DB owner process. */
 export async function collectRejectedDreamingEvidence(
 	accessor: DbAccessor,
 	agentId: string,
@@ -197,8 +195,6 @@ export function recordRejectedDreamingEvidenceInTx(
 		statement.run(item.agentId, item.sourceKind, item.sourceId, passId, item.failureClass, item.sourceFingerprint);
 	}
 }
-
-/** Mark a requeued citation repaired once the daemon accepts it again. */
 export function resolveRequeuedDreamingEvidenceInTx(
 	db: WriteDb,
 	agentId: string,
@@ -318,8 +314,6 @@ export function autoRequeueRepairedDreamingEvidenceInDb(
 	}
 	return affected;
 }
-
-/** Requeue repaired citations through the DB owner process. */
 export async function autoRequeueRepairedDreamingEvidence(
 	accessor: DbAccessor,
 	policy: DreamingEvidenceRetryPolicy,

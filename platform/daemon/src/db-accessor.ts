@@ -1,11 +1,3 @@
-/**
- * Singleton DB accessor for the Signet daemon.
- *
- * Holds a single write connection for the daemon's lifetime and provides
- * transaction wrappers for safe concurrent access. Read connections are
- * opened on demand (SQLite WAL mode allows concurrent readers).
- */
-
 import {
 	copyFileSync,
 	existsSync,
@@ -115,12 +107,6 @@ type SqliteDatabase = {
 type SqliteWriteSurface = Pick<SqliteDatabase, "prepare" | "exec">;
 
 type DatabaseConstructor = new (path: string, opts?: Record<string, unknown>) => SqliteDatabase;
-
-// Loading the database driver is intentionally deferred until the daemon opens
-// a database. The MCP stdio server imports DB helpers for content-safety
-// projection, but delegates all database work to the daemon over HTTP. Loading
-// better-sqlite3 here would make that otherwise database-free Node entrypoint
-// unusable from the published wrapper, which does not ship this native addon.
 let databaseConstructor: DatabaseConstructor | null = null;
 
 function getDatabaseConstructor(): DatabaseConstructor {
@@ -171,10 +157,6 @@ interface SqliteRuntimeConfig {
 	readonly warning: string | null;
 }
 
-// ---------------------------------------------------------------------------
-// Public interfaces — thin wrappers over the Database surface
-// ---------------------------------------------------------------------------
-
 export interface WriteDb {
 	exec(sql: string): void;
 	prepare(sql: string): SqliteStatement;
@@ -185,69 +167,43 @@ export interface ReadDb {
 }
 
 export interface WritePressure {
-	/** Number of async write operations waiting for admission. */
 	readonly queued: number;
-	/** Maximum number of async write operations waiting for admission. */
 	readonly maxQueue: number;
-	/** Age of the oldest queued operation, or null when the queue is empty. */
 	readonly oldestWaitMs: number | null;
-	/** Duration of the most recently completed write operation. */
 	readonly lastDurationMs: number | null;
-	/** Number of write transactions currently executing. */
 	readonly active: boolean;
-	/** Operation label of the oldest queued job, if any. */
 	readonly oldestOperation: string | null;
-	/** Number of queued jobs rejected because admission was full. */
 	readonly rejected: number;
-	/** Number of queued jobs cancelled before execution. */
 	readonly cancelled: number;
-	/** Number of jobs that missed their deadline before execution. */
 	readonly timedOut: number;
-	/** Queue wait for the most recently started job. */
 	readonly lastQueueWaitMs: number | null;
 }
 
 export interface ReadPressure {
-	/** Number of active read leases. */
 	readonly activeLeases: number;
-	/** Maximum number of read connections, including non-pooled leases. */
 	readonly maxConnections: number;
-	/** Number of callers waiting for a read lease. */
 	readonly queued: number;
-	/** Maximum number of queued read callers. */
 	readonly maxQueue: number;
-	/** Age of the oldest waiting caller, or null when empty. */
 	readonly oldestWaitMs: number | null;
-	/** Most recent read lease wait. */
 	readonly lastWaitMs: number | null;
 	readonly rejected: number;
-	/** Number of synchronous legacy reads rejected at the connection cap. */
 	readonly syncRejected: number;
 	readonly cancelled: number;
 	readonly timedOut: number;
 }
 
 export interface ReadAdmissionOptions {
-	/** Maximum time to wait for a connection. Default 5 seconds. */
 	readonly timeoutMs?: number;
-	/** Abort a queued request without affecting other readers. */
 	readonly signal?: AbortSignal;
-	/** Stable diagnostic label for the owner boundary. */
 	readonly operation?: string;
-	/** Static caller location retained for in-flight parent attribution. */
 	readonly siteToken?: SyncDbCallSiteToken;
 }
 
 export interface WriteAdmissionOptions {
-	/** Stable diagnostic label for the owner boundary. */
 	readonly operation?: string;
-	/** Static caller location retained for in-flight parent attribution. */
 	readonly siteToken?: SyncDbCallSiteToken;
-	/** Maximum time a queued job may wait before it is rejected. */
 	readonly deadlineMs?: number;
-	/** Estimated work units for diagnostics and scheduling. */
 	readonly estimatedWorkUnits?: number;
-	/** Abort a queued job before it starts. */
 	readonly signal?: AbortSignal;
 }
 
@@ -319,47 +275,16 @@ export class DbWriteAdmissionTimeoutError extends Error {
 		this.name = "DbWriteAdmissionTimeoutError";
 	}
 }
-
-/**
- * Canonical contract for daemon code that can cross an event-loop boundary.
- *
- * New production code must use these async primitives. They are required here
- * rather than optional so an accessor implementation cannot silently omit the
- * async boundary and force callers back onto synchronous SQLite.
- */
 export interface AsyncDbAccessor {
-	/** Admit a write transaction through the bounded async writer queue. */
 	withWriteTxAsync<T>(fn: (db: WriteDb) => T, options?: WriteAdmissionOptions): Promise<T>;
-
-	/** Admit an autocommit write session through the bounded async writer queue. */
 	withWriteDbAsync<T>(fn: (db: WriteDb) => T, options?: WriteAdmissionOptions): Promise<T>;
-
-	/** Admit a WAL checkpoint through the bounded async writer queue. */
 	checkpointWalAsync?(options?: WriteAdmissionOptions): Promise<void>;
-
-	/** Admit incremental vacuum through the bounded async writer queue. */
 	incrementalVacuumAsync?(options?: WriteAdmissionOptions): Promise<number>;
-
-	/** Admit the one-time legacy auto_vacuum conversion through the bounded
-	 *  async writer queue. */
 	vacuumConversionAsync?(options?: WriteAdmissionOptions): Promise<boolean>;
-
-	/** Return bounded local diagnostics for the writer admission path. */
 	getWritePressure?(): WritePressure;
-
-	/** Return bounded local diagnostics for the read admission path. */
 	getReadPressure?(): ReadPressure;
-
-	/** Return the combined database-owner diagnostics envelope. */
 	getDbRuntimePressure?(): DbRuntimePressure;
-
-	/** Async variant of withReadDb. The connection is held only while the
-	 * callback's synchronous database work runs and is admitted through a FIFO
-	 * lease queue. If the callback returns a promise, its continuation runs
-	 * after the lease is released and must not use the database connection. */
 	withReadDbAsync<T>(fn: (db: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T>;
-
-	/** Close all held connections. Safe to call multiple times. */
 	close(): void;
 }
 
@@ -370,13 +295,6 @@ export interface AsyncDbAccessor {
  * removes them.
  */
 export interface DbAccessor extends AsyncDbAccessor {}
-
-/**
- * Runtime-only implementation shape. This is not exported, so production
- * callers cannot obtain synchronous methods through the public accessor type.
- * The test/bootstrap-only `db-accessor-sync.ts` module provides the explicit
- * compatibility surface for code that must exercise these legacy methods.
- */
 interface SyncDbAccessorRuntime {
 	withWriteTx<T>(fn: (db: WriteDb) => T): T;
 	withReadDb<T>(fn: (db: ReadDb) => T): T;
@@ -386,10 +304,6 @@ interface SyncDbAccessorRuntime {
 }
 
 type RuntimeDbAccessor = DbAccessor & SyncDbAccessorRuntime;
-
-// ---------------------------------------------------------------------------
-// Singleton state
-// ---------------------------------------------------------------------------
 
 let accessor: RuntimeDbAccessor | null = null;
 let dbPath: string | null = null;
@@ -417,14 +331,7 @@ function assertDatabaseIntegrityWritesAllowed(): void {
 	if (databaseIntegrityWritesBlocked) throw new DatabaseIntegrityCorruptError();
 }
 
-// ---------------------------------------------------------------------------
-// Initialisation
-// ---------------------------------------------------------------------------
-
 function configurePragmas(db: SqliteDatabase, path: string): void {
-	// Set auto_vacuum = INCREMENTAL before any tables are created. This only
-	// affects fresh databases; existing databases are converted by the
-	// post-ready vacuum worker after finishDbAccessorInit (#1139, #1493).
 	db.exec("PRAGMA auto_vacuum = INCREMENTAL");
 	const journal = resolveSqliteJournalConfig({ directory: dirname(path) });
 	db.exec(`PRAGMA journal_mode = ${journal.journalMode}`);
@@ -486,8 +393,6 @@ export function toFtsSchemaQueryDb(db: { prepare(sql: string): SqliteStatement }
 		},
 	};
 }
-
-// Cached extension path — resolved once at startup
 let vecExtPath: string | null | undefined;
 
 function readTrimmed(env: NodeJS.ProcessEnv, key: string): string | null {
@@ -726,10 +631,6 @@ export function isVectorRuntimeUsable(): boolean {
 const MAX_MIGRATION_BACKUPS = 1;
 export const MIGRATION_BACKUP_CHUNK_BYTES = 64 * 1024 * 1024;
 const MIGRATION_BACKUP_SPACE_MARGIN_BYTES = MIGRATION_BACKUP_CHUNK_BYTES * 2;
-/**
- * Startup deadline headroom reserved for migration execution and post-copy
- * bookkeeping inside the initialize job's deadline.
- */
 const MIGRATION_BACKUP_STARTUP_RESERVE_MS = 5_000;
 
 export type MigrationBackupAdmissionReason = "space" | "throughput" | "retained-unverified-backup";
@@ -739,8 +640,6 @@ const MIGRATION_CHECKPOINT_COMPLETE_STATUS = "complete";
 const MIGRATION_CHECKPOINT_PARKED_STATUS = "degraded:integrity-unverified";
 const MIGRATION_CHECKPOINT_FAILED_STATUS = "failed:integrity-unverified";
 const MIGRATION_VERIFY_CHECKPOINT_PREFIX = "database.migration-verify:";
-
-/** Match only names emitted by migrationBackupDestination. */
 export function isGeneratedMigrationBackupName(base: string, name: string): boolean {
 	const escapedBase = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	return new RegExp(`^${escapedBase}\\.bak-v\\d+-\\d+$`).test(name);
@@ -797,7 +696,6 @@ export interface MigrationBackupDeps {
 	readonly now: () => number;
 	readonly log: (message: string) => void;
 	readonly warn?: (message: string) => void;
-	/** Test seam and optional alternate checkpoint source for backup admission. */
 	readonly readVerificationCheckpoint?: (backupPath: string) => string | undefined;
 }
 
@@ -856,8 +754,6 @@ function migrationBackups(
 		})
 		.sort((a, b) => b.mtime - a.mtime);
 }
-
-/** Read the corruption verdict without opening the database. */
 export function readMigrationBackupVerdictStatus(backupPath: string): string | undefined {
 	try {
 		const parsed = JSON.parse(readFileSync(`${backupPath}.verdict.json`, "utf8")) as { status?: unknown };
@@ -892,7 +788,6 @@ function readMigrationBackupCheckpointStatus(
 			.get(`${MIGRATION_VERIFY_CHECKPOINT_PREFIX}${basename(backupPath)}`);
 		return typeof row?.status === "string" ? row.status : undefined;
 	} catch {
-		// A missing/legacy checkpoint is unverified by definition.
 		return undefined;
 	}
 }
@@ -921,17 +816,9 @@ function migrationBackupCursor(
 		return undefined;
 	}
 }
-/**
- * Backups emitted by releases before cursor sidecars existed are still valid
- * rollback points. Treat a generated name with no cursor as an unverified
- * legacy backup; malformed cursor sidecars remain a separate, unclassified
- * case and are never admitted as evidence.
- */
 function isCursorlessLegacyMigrationBackup(backupPath: string, cursor: unknown): boolean {
 	return cursor === undefined && !existsSync(`${backupPath}.cursor.json`);
 }
-
-/** Reclaim only backups whose retained cursor proves an older source generation. */
 function pruneStaleMigrationBackups(
 	dbPath: string,
 	sourceSize: number,
@@ -1003,12 +890,6 @@ function assertNoRetainedUnverifiedMigrationBackup(
 		);
 	}
 }
-
-/**
- * A prior-generation backup that is merely unverified is recoverable: defer
- * this boot's new migration and let the post-ready verifier decide its fate.
- * Terminal failed/parked generations remain a hard admission refusal.
- */
 function shouldDeferPendingMigration(dbPath: string, db: MigrationBackupDb, deps: MigrationBackupDeps): boolean {
 	if (!existsSync(dbPath) || !hasPendingMigrations(db as never)) return false;
 	const source = deps.statSync(dbPath);
@@ -1093,18 +974,13 @@ function pruneMigrationBackups(
 			}
 			try {
 				deps.unlinkSync(`${backupPath}.cursor.json`);
-			} catch {
-				// A completed backup has no cursor; stale cursor cleanup is best effort.
-			}
+			} catch {}
 			try {
 				deps.unlinkSync(`${backupPath}.verdict.json`);
-			} catch {
-				// Terminal verdict cleanup is best effort after the backup is gone.
-			}
+			} catch {}
 			deps.log(`[db-accessor] Pruned old backup: ${old.name}`);
 		} catch (error) {
 			if (strict) throw error;
-			// Best effort during pre-migration pruning; the integrity gate uses strict mode.
 		}
 	}
 }
@@ -1154,9 +1030,6 @@ function preflightMigrationBackupSpace(dbPath: string, deps: MigrationBackupDeps
 		requiredBytes: dbBytes + MIGRATION_BACKUP_SPACE_MARGIN_BYTES,
 	} satisfies DbSpaceMetrics;
 	if (freeBytes === null) {
-		// statfs is unavailable or returned an unusable value on some filesystems.
-		// Do not turn an unknown measurement into a false zero and brick startup;
-		// the copy itself remains the authoritative write check.
 		(deps.warn ?? deps.log)(
 			"[db-accessor] Migration backup free space is unknown; proceeding without the space preflight.",
 		);
@@ -1175,13 +1048,6 @@ function migrationBackupSpaceError(
 	const freeBytes = availableBytes(dirname(dbPath), deps) ?? metrics.freeBytes;
 	return new DbSpacePreflightError("migration_backup", { ...metrics, freeBytes }, err);
 }
-
-/**
- * Back up the database file before running migrations.
- * Flushes WAL first, then copies the main file. Prunes old
- * stale backups before admission, then prunes old backups after the copy is
- * complete so a failed preflight keeps current-generation recovery intact.
- */
 export function backupBeforeMigration(
 	db: { exec(sql: string): unknown },
 	dbPath: string,
@@ -1238,9 +1104,7 @@ async function streamedMigrationBackup(
 ): Promise<string> {
 	try {
 		db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-	} catch {
-		// Non-fatal — the backup remains useful when WAL cannot be truncated.
-	}
+	} catch {}
 	const sourceStat = statSync(dbPath);
 	const sourceSize = sourceStat.size;
 	const sourceMtimeMs = sourceStat.mtimeMs;
@@ -1260,10 +1124,6 @@ async function streamedMigrationBackup(
 		await probeMigrationBackupThroughput(dbPath, sourceSize, backupDest, sourceMode, 0, deadlineAt);
 		await copyMigrationBackupChunks(dbPath, backupDest, sourceSize, sourceMtimeMs, sourceMode, offset, deadlineAt);
 	} else {
-		// Admission holds across restarts too: free space and disk throughput
-		// can change between processes (the partial copy already consumed
-		// `offset` bytes), so a resume re-preflights the remaining bytes and
-		// re-probes the remaining copy budget before writing anything.
 		pruneStaleMigrationBackups(dbPath, sourceSize, sourceMtimeMs, migrationBackupDeps, db);
 		preflightResumedMigrationBackupSpace(dbPath, sourceSize, offset, migrationBackupDeps);
 		await probeMigrationBackupThroughput(dbPath, sourceSize, backupDest, sourceMode, offset, deadlineAt);
@@ -1326,8 +1186,6 @@ async function readMigrationBackupCursor(
 				!destinationIsRegularFile
 			) {
 				try {
-					// A cursor must never be allowed to remove a directory or follow a
-					// symlink. unlinkSync removes only the named directory entry.
 					unlinkSync(destination);
 				} catch (error) {
 					migrationBackupDeps.log(
@@ -1356,9 +1214,7 @@ async function readMigrationBackupCursor(
 			}
 			if (destinationSize > parsed.offset) truncateSync(destination, parsed.offset);
 			return { ...parsed, destination } as MigrationBackupCursor;
-		} catch {
-			// A torn cursor is ignored; the next admission creates a fresh backup.
-		}
+		} catch {}
 	}
 	return undefined;
 }
@@ -1407,11 +1263,6 @@ async function probeMigrationBackupThroughput(
 		const bytesPerMs = result.bytesRead / probeElapsedMs;
 		const remainingBytes = sourceSize - resumeOffset;
 		const estimatedMs = Math.ceil(remainingBytes / bytesPerMs);
-		// The initialize job's deadline covers admission + probe + copy +
-		// migration + startup bookkeeping. The copy may only claim the window
-		// left after the probe spent its time and the reserve is kept for the
-		// migration itself. (The copy loop re-checks this window every chunk;
-		// a stall mid-copy surfaces as the deadline error, never a silent wedge.)
 		const copyWindowMs = deadlineAt - Date.now() - MIGRATION_BACKUP_STARTUP_RESERVE_MS;
 		if (!Number.isFinite(estimatedMs) || copyWindowMs <= 0 || estimatedMs > copyWindowMs) {
 			throw new MigrationBackupAdmissionError(
@@ -1434,9 +1285,7 @@ async function probeMigrationBackupThroughput(
 		await probe?.close();
 		try {
 			await unlinkAsync(probeDest);
-		} catch {
-			// Best effort probe cleanup. Preserve the admission/copy error above.
-		}
+		} catch {}
 	}
 }
 
@@ -1471,10 +1320,6 @@ export async function copyMigrationBackupChunks(
 				offset: 0,
 			});
 		}
-		// The measured rate is admission, not a leash: the deadline owns the
-		// hard stop. This wall-clock check makes budget exhaustion mid-copy a
-		// named admission error with a resumable cursor, instead of letting
-		// the copy run until the deadline kills the job.
 		const buffer = Buffer.allocUnsafe(Math.min(MIGRATION_BACKUP_CHUNK_BYTES, Math.max(1, sourceSize)));
 		while (offset < sourceSize) {
 			if (Date.now() >= deadlineAt - MIGRATION_BACKUP_STARTUP_RESERVE_MS) {
@@ -1500,9 +1345,6 @@ export async function copyMigrationBackupChunks(
 					throw new Error(`Migration backup write stalled at ${offset + chunkOffset} of ${sourceSize} bytes`);
 				chunkOffset += written.bytesWritten;
 			}
-			// Advance and persist the cursor before the post-chunk deadline fence.
-			// If the final chunk consumed the remaining budget, the cursor is the
-			// durable resume point and must not be removed by the caller.
 			offset += result.bytesRead;
 			await destination.sync();
 			await writeMigrationBackupCursor({
@@ -1555,10 +1397,7 @@ function sweepStaleMigrationBackupProbes(dbPath: string, deps: MigrationBackupDe
 		try {
 			deps.unlinkSync(path);
 			deps.log(`[db-accessor] Reclaimed stale migration backup probe: ${entry}`);
-		} catch {
-			// Probe cleanup is deliberately best effort: admission remains
-			// authoritative and must not fail because a stale scratch file races.
-		}
+		} catch {}
 	}
 }
 
@@ -1567,12 +1406,9 @@ function prepareMigrationBackup(
 	dbPath: string,
 	deps: MigrationBackupDeps,
 ): DbSpaceMetrics | null {
-	// Flush WAL so the .db file is self-contained before measuring the copy.
 	try {
 		db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-	} catch {
-		// Non-fatal — backup still useful even with WAL.
-	}
+	} catch {}
 
 	try {
 		const source = deps.statSync(dbPath);
@@ -1582,20 +1418,10 @@ function prepareMigrationBackup(
 		}
 	} catch (error) {
 		if (error instanceof MigrationBackupAdmissionError) throw error;
-		// The space preflight remains authoritative when metadata collection races
-		// with a source or backup disappearing.
 	}
 	sweepStaleMigrationBackupProbes(dbPath, deps);
 	return preflightMigrationBackupSpace(dbPath, deps);
 }
-
-/**
- * Resume admission: the remaining bytes still need headroom on this disk,
- * now, after the partial copy already consumed `offset` bytes. The
- * in-progress backup itself is the current attempt's rollback point, so it
- * is not pruned; only its remaining growth must fit. Unknown statfs readings
- * warn and proceed, exactly like the fresh-copy preflight.
- */
 function preflightResumedMigrationBackupSpace(
 	dbPath: string,
 	sourceSize: number,
@@ -1626,18 +1452,14 @@ function migrationBackupDestination(dbPath: string, schemaVersion: number, deps:
 function cleanupPartialMigrationBackup(backupDest: string, deps: MigrationBackupDeps): void {
 	try {
 		deps.unlinkSync(backupDest);
-	} catch {
-		// Best effort cleanup for partial copy files.
-	}
+	} catch {}
 }
 
 async function cleanupPartialMigrationBackupAsync(backupDest: string, deps: MigrationBackupDeps): Promise<void> {
 	try {
 		if (deps === migrationBackupDeps) await unlinkAsync(backupDest);
 		else deps.unlinkSync(backupDest);
-	} catch {
-		// Best effort cleanup for partial copy files.
-	}
+	} catch {}
 }
 
 function migrationBackupError(backupDest: string, err: unknown): Error {
@@ -1650,25 +1472,17 @@ function migrationBackupError(backupDest: string, err: unknown): Error {
 function finishMigrationBackup(_dbPath: string, backupDest: string, deps: MigrationBackupDeps): void {
 	deps.log(`[db-accessor] Pre-migration backup: ${backupDest}`);
 }
-
-/** Return whether startup still has a migration rollback point awaiting verification. */
 export function hasPendingMigrationBackup(dbPath: string): boolean {
 	return migrationBackups(dbPath, migrationBackupDeps).length > 0;
 }
-
-/** Return the newest rollback backup awaiting post-ready verification. */
 export function pendingMigrationBackupPath(dbPath: string): string | null {
 	const pending = migrationBackups(dbPath, migrationBackupDeps)[0];
 	return pending === undefined ? null : join(dirname(dbPath), pending.name);
 }
-
-/** Return the size of the newest rollback backup awaiting post-ready verification. */
 export function pendingMigrationBackupSizeBytes(dbPath: string): number | null {
 	const pending = migrationBackups(dbPath, migrationBackupDeps)[0];
 	return pending?.size ?? null;
 }
-
-/** Remove rollback points only after post-ready integrity maintenance passes. */
 export function pruneMigrationBackupsAfterIntegrity(
 	dbPath: string,
 	deps: MigrationBackupDeps = migrationBackupDeps,
@@ -1687,17 +1501,9 @@ export function pruneMigrationBackupsAfterIntegrity(
 		if (migrationBackups(dbPath, deps).some((backup) => backup.name === backupName)) continue;
 		try {
 			deps.unlinkSync(join(dir, name));
-		} catch {
-			// Best effort cleanup; retaining a cursor is safer than deleting evidence.
-		}
+		} catch {}
 	}
 }
-
-/**
- * Rowid high-water mark of the migration audit log, read before migrations run.
- * The audit table is an append-only autoincrement log, so rows above this mark
- * are exactly the migrations this startup applied.
- */
 function migrationAuditHighWaterMark(writeConn: SqliteDatabase): number {
 	try {
 		const row = writeConn.prepare("SELECT MAX(id) AS maxId FROM schema_migrations_audit").get() as
@@ -1709,11 +1515,6 @@ function migrationAuditHighWaterMark(writeConn: SqliteDatabase): number {
 		return 0;
 	}
 }
-
-/**
- * Versions applied by this startup's migration run, scoped by the audit
- * high-water mark captured before migrations ran.
- */
 function appliedMigrationVersions(writeConn: SqliteDatabase, auditHighWaterMark: number): Set<number> {
 	try {
 		const rows = writeConn
@@ -1721,8 +1522,6 @@ function appliedMigrationVersions(writeConn: SqliteDatabase, auditHighWaterMark:
 			.all(auditHighWaterMark) as ReadonlyArray<{ version?: unknown }>;
 		return new Set(rows.map((row) => Number(row.version)).filter((v) => Number.isFinite(v)));
 	} catch {
-		// Audit table missing or unreadable: verify every migration so this
-		// fails loudly rather than silently skipping artifact verification.
 		return new Set(MIGRATIONS.map((m) => m.version));
 	}
 }
@@ -1735,11 +1534,6 @@ function verifyMigrationArtifacts(writeConn: SqliteDatabase, auditHighWaterMark:
 		);
 	}
 	const missing: string[] = [];
-	// Only migrations applied during this startup are verified here. Core
-	// migration logic deliberately accepts legacy inline-migrated v1 databases
-	// whose baseline artifacts (conversations, embeddings) were never created;
-	// verifying all migrations unconditionally would reject that supported
-	// shape. Earlier versions were verified by the startup that applied them.
 	const appliedVersions = appliedMigrationVersions(writeConn, auditHighWaterMark);
 	for (const migration of MIGRATIONS) {
 		if (!appliedVersions.has(migration.version)) continue;
@@ -1766,12 +1560,6 @@ function verifyMigrationArtifacts(writeConn: SqliteDatabase, auditHighWaterMark:
 	}
 	if (missing.length > 0) throw new Error(`Migration artifact verification failed: ${missing.join(", ")}`);
 }
-
-/**
- * Initialise the singleton accessor. Must be called once at daemon startup
- * before any route handler runs. Ensures the memory directory exists, opens
- * the write connection, sets pragmas, and runs pending migrations.
- */
 export function initDbAccessor(path: string, opts?: { readonly agentsDir?: string }): void {
 	const writeConn = openDbAccessorConnection(path, opts);
 	const deferMigrations = shouldDeferPendingMigration(path, toMigrationDb(writeConn) as never, migrationBackupDeps);
@@ -1786,9 +1574,7 @@ export function initDbAccessor(path: string, opts?: { readonly agentsDir?: strin
 
 export interface DbAccessorInitializationResult {
 	readonly pendingVecBackfill: boolean;
-	/** sqlite-vec path resolved while opening the owner connection. */
 	readonly extensionPath?: string | null;
-	/** Prior-generation verification is still running; this accessor is readonly. */
 	readonly deferredMigrationVerification: boolean;
 }
 
@@ -1871,8 +1657,6 @@ function finishDbAccessorInit(
 	deadlineAt?: number,
 	skipMigrations = false,
 ): DbAccessorInitializationResult {
-	// Run schema migrations — this is the sole schema authority.
-	// Failures here are fatal: the daemon must not start on bad schema.
 	const auditHighWaterMark = migrationAuditHighWaterMark(writeConn);
 	if (!skipMigrations) {
 		assertMigrationStartupBudget(deadlineAt, "migrations");
@@ -1880,20 +1664,10 @@ function finishDbAccessorInit(
 	}
 	if (!skipMigrations && migrationBackup !== null && migrationBackup !== undefined) {
 		assertMigrationStartupBudget(deadlineAt, "migration artifact verification");
-		// Startup only checks bounded schema artifacts for the migrations this
-		// run applied. The retained rollback point is pruned by post-ready
-		// incremental integrity maintenance after it passes.
 		verifyMigrationArtifacts(writeConn, auditHighWaterMark);
 	}
-
-	// Record one-time conversion state only after migrations have succeeded.
-	// The conversion itself is deliberately post-ready because VACUUM can
-	// block the event loop for minutes on a large legacy database (#1493).
 	assertMigrationStartupBudget(deadlineAt, "vacuum conversion state");
 	ensureVacuumConversionState(toMigrationDb(writeConn));
-
-	// Ensure FTS5 virtual table exists — may be missing on upgrades from
-	// older installs where the table was dropped or never created.
 	assertMigrationStartupBudget(deadlineAt, "FTS setup");
 	resetFtsIndexState();
 	ensureFtsTable(writeConn, { deferBackfill: true });
@@ -1908,17 +1682,12 @@ function finishDbAccessorInit(
 		writeConn,
 		legacyDimensions === null ? configuredEmbedding : { ...configuredEmbedding, dimensions: legacyDimensions },
 	);
-
-	// Ensure vec_embeddings virtual table exists with the configured dimensions.
-	// Older tables may lack the TEXT id column or carry stale FLOAT[N] dims.
 	if (vecExtPath) {
 		assertMigrationStartupBudget(deadlineAt, "vector setup");
 		const vecDimensions = embeddingIndexState.active.dimensions;
 		try {
 			ensureVecTable(writeConn, vecDimensions);
 		} catch (err) {
-			// ensureVecTable failure means the vec0 runtime extension is not
-			// usable — disable vector search for this process lifetime.
 			vecLoaded = false;
 			vecLoadError = err instanceof Error ? err.message : String(err);
 			console.warn("[db-accessor] vec0 unavailable after extension load:", vecLoadError);
@@ -1960,12 +1729,6 @@ export function initDbAccessorLite(dbPathParam: string, vecExtensionPath: string
 
 	accessor = createAccessor(writeConn);
 }
-
-/**
- * Open only the readonly accessor needed to serve recovery/status routes when
- * startup retained a confirmed-corrupt migration checkpoint. Unlike the
- * normal lite path this does not change pragmas or schema/index state.
- */
 export function initDbAccessorReadOnly(
 	dbPathParam: string,
 	vecExtensionPath: string,
@@ -1980,16 +1743,6 @@ export function initDbAccessorReadOnly(
 	loadVecExtension(readConn);
 	accessor = createAccessor(readConn);
 }
-
-// ---------------------------------------------------------------------------
-// FTS table creation (self-healing for upgrades)
-// ---------------------------------------------------------------------------
-
-/**
- * Ensure the memories_fts virtual table exists with the canonical
- * tokenizer. Older installs can carry a legacy porter-tokenized table,
- * which silently harms lexical recall quality for conversational cues.
- */
 export function ensureFtsTable(db: SqliteDatabase, options: { readonly deferBackfill?: boolean } = {}): void {
 	const sql = readMemoriesFtsSql(toFtsSchemaQueryDb(db));
 
@@ -2018,10 +1771,6 @@ export function ensureFtsTable(db: SqliteDatabase, options: { readonly deferBack
 	else recreateMemoriesFts(db);
 	if (options.deferBackfill !== true) refreshMemoriesFtsState(db);
 }
-
-// ---------------------------------------------------------------------------
-// Vec table creation + backfill
-// ---------------------------------------------------------------------------
 
 export function readVecEmbeddingDimensions(sql: string | null | undefined): number | null {
 	if (!sql) return null;
@@ -2053,8 +1802,6 @@ function decodeBackfillVector(
 	expectedDimensions: number,
 ): { readonly vector: Float32Array } | { readonly reason: string } {
 	if (vector === null || vector === undefined) return { reason: "embedding blob is NULL" };
-	// bun:sqlite exposes BLOB columns as Uint8Array (and Buffer is a subtype),
-	// while text/number values from a legacy nullable table are not decodable.
 	if (!(vector instanceof Uint8Array)) return { reason: "embedding blob is not a binary buffer" };
 	const expectedBytes = expectedDimensions * Float32Array.BYTES_PER_ELEMENT;
 	if (vector.byteLength !== expectedBytes) {
@@ -2126,7 +1873,6 @@ function hasMissingVecEmbeddings(db: SqliteWriteSurface, expectedDimensions: num
 }
 
 const VEC_EMBEDDING_BACKFILL_BATCH_SIZE = 10_000;
-// The migration reserve is 5s, leaving a 60s post-ready work window.
 export const VEC_EMBEDDING_POST_READY_BUDGET_MS = 65_000;
 
 let pendingVecBackfillDimensions: number | null = null;
@@ -2137,12 +1883,6 @@ function missingVecEmbeddingsRows(
 	lastId: string,
 	limit: number,
 ): Array<{ id: string; vector: unknown }> {
-	// sqlite-vec's virtual table is expensive for anti-joins: on a 43k-row local
-	// DB, `LEFT JOIN vec_embeddings` costs ~6.5s even when no rows are missing.
-	// The backing rowid table is a normal SQLite table with a UNIQUE id index and
-	// answers the same existence question in tens of milliseconds. Keep the
-	// virtual-table fallback for non-sqlite-vec test doubles and unexpected
-	// future layouts.
 	const targetTable = vecRowidsTableAvailable(db) ? "vec_embeddings_rowids" : "vec_embeddings";
 	return db
 		.prepare(
@@ -2157,9 +1897,7 @@ function missingVecEmbeddingsRows(
 
 export interface VecBackfillOptions {
 	readonly maxBatches?: number;
-	/** Bound one synchronous writer turn so the daemon can yield between slices. */
 	readonly batchSize?: number;
-	/** Optional log sinks for callers whose stdout is a protocol channel. */
 	readonly log?: (message: string) => void;
 	readonly warn?: (message: string) => void;
 }
@@ -2172,12 +1910,7 @@ export function backfillVecEmbeddings(
 ): void {
 	const log = options.log ?? console.error;
 	const warn = options.warn ?? console.warn;
-	// Keep quarantine state durable across restarts and exclude it from every
-	// subsequent pending probe. The table contains IDs and diagnostics only.
 	ensureVecEmbeddingsQuarantineTable(db);
-	// Directly query for missing rows instead of comparing counts.
-	// Count comparison is racy — a row can exist in embeddings but not
-	// vec_embeddings even when counts match (e.g. after a crash mid-sync).
 	const batchSize = Math.max(
 		1,
 		Math.min(options.batchSize ?? VEC_EMBEDDING_BACKFILL_BATCH_SIZE, VEC_EMBEDDING_BACKFILL_BATCH_SIZE),
@@ -2201,7 +1934,6 @@ export function backfillVecEmbeddings(
 		return true;
 	};
 	for (;;) {
-		// Keep both the anti-join and the transaction inside the startup budget.
 		if (options.maxBatches !== undefined && batches >= options.maxBatches) {
 			if (lastBatchSize < batchSize) break;
 			deferred = true;
@@ -2231,13 +1963,9 @@ export function backfillVecEmbeddings(
 					const reason = decoded.reason.slice(0, 1_000);
 					const result = quarantine.run(row.id, expectedDimensions, reason, new Date().toISOString());
 					if (result.changes > 0) {
-						// Log once per validated malformed row; retries do not spam logs.
 						warn(`[db-accessor] Quarantined malformed embedding row ${row.id}: ${reason}`);
 					}
 				} else {
-					// Insert failures are operational errors (for example, SQLITE_BUSY).
-					// Let the outer transaction handler roll back and let the caller retry;
-					// only validated data-shape failures enter durable quarantine.
 					insert.run(row.id, decoded.vector);
 					migrated++;
 				}
@@ -2248,17 +1976,12 @@ export function backfillVecEmbeddings(
 			lastId = batchLastId;
 		} catch (e) {
 			if (e instanceof MigrationBackupAdmissionError && e.reason === "throughput") {
-				// The budget fence can fire inside a large transaction. Commit the
-				// durable prefix instead of rolling it back and retrying the same rows
-				// forever; the keyset cursor resumes after this committed row.
 				try {
 					db.exec("COMMIT");
 				} catch (commitError) {
 					try {
 						db.exec("ROLLBACK");
-					} catch {
-						// Preserve the commit failure.
-					}
+					} catch {}
 					throw commitError;
 				}
 				lastId = batchLastId;
@@ -2267,9 +1990,7 @@ export function backfillVecEmbeddings(
 			}
 			try {
 				db.exec("ROLLBACK");
-			} catch {
-				// Rollback failed — transaction already closed or rolled back
-			}
+			} catch {}
 			throw e;
 		}
 		if (rows.length < batchSize) break;
@@ -2291,7 +2012,6 @@ export function backfillVecEmbeddings(
 		if (stopForBudget(error, 0)) return;
 		throw error;
 	}
-	// Clean orphaned vec_embeddings rows (phantom IDs from prior sync bugs)
 	try {
 		const orphanRow = db
 			.prepare(
@@ -2305,9 +2025,7 @@ export function backfillVecEmbeddings(
 			db.prepare("DELETE FROM vec_embeddings WHERE id NOT IN (SELECT id FROM embeddings)").run();
 			log(`[db-accessor] Cleaned ${orphanCount} orphaned vec_embeddings rows`);
 		}
-	} catch {
-		// vec_embeddings may not exist — non-fatal
-	}
+	} catch {}
 	pendingVecBackfillDimensions = null;
 }
 
@@ -2327,10 +2045,6 @@ export function continuePendingVecBackfill(
 	if (dimensions === null) return;
 	backfillVecEmbeddings(db, dimensions, deadlineAt);
 }
-
-// ---------------------------------------------------------------------------
-// Accessor factory
-// ---------------------------------------------------------------------------
 
 const READ_POOL_SIZE = 4;
 export const MAX_READ_CONNECTIONS = 16;
@@ -2377,8 +2091,6 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 	let writeCancelled = 0;
 	let writeTimedOut = 0;
 	const writeQueue: WriteJob<unknown>[] = [];
-	// Small pool of reusable read connections. Recall does 3 reads per
-	// request so opening/closing every time adds measurable overhead.
 	const readPool: SqliteDatabase[] = [];
 	const readInUse = new Set<SqliteDatabase>();
 	const readWaiters: ReadWaiter[] = [];
@@ -2946,9 +2658,6 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 			let outcome: DbOperationOutcome = "completed";
 			let result: T | Promise<T>;
 			try {
-				// Invoke the callback before releasing the lease so its synchronous
-				// query work runs against the admitted connection. Do not await a
-				// returned promise here: unrelated async work must not retain it.
 				const attribution = beginSyncDbCall("withReadDbAsync", Date.now(), options?.siteToken);
 				try {
 					result = fn(lease.conn);
@@ -3015,10 +2724,6 @@ function createAccessor(writeConn: SqliteDatabase): RuntimeDbAccessor {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Public helpers
-// ---------------------------------------------------------------------------
-
 export async function runWriteTxAsync<T>(
 	accessor: DbAccessor,
 	fn: (db: WriteDb) => T,
@@ -3028,8 +2733,6 @@ export async function runWriteTxAsync<T>(
 	// DYNAMIC_SITE_TOKEN: this helper captures its actual caller before queueing.
 	return await accessor.withWriteTxAsync(fn, siteToken === undefined ? options : { ...options, siteToken });
 }
-
-/** Get the initialised accessor. Throws if `initDbAccessor` hasn't been called. */
 export function getDbAccessor(): DbAccessor {
 	if (!accessor) {
 		throw new Error("DbAccessor not initialised — call initDbAccessor() first");
@@ -3040,14 +2743,10 @@ export function getDbAccessor(): DbAccessor {
 export function hasDbAccessor(): boolean {
 	return accessor !== null;
 }
-
-/** Return the initialized database path for owner-routed helpers. */
 export function getDbAccessorPath(): string {
 	if (dbPath === null) throw new Error("DbAccessor not initialised — call initDbAccessor() first");
 	return dbPath;
 }
-
-/** Tear down the singleton and its lazy DB-owner clients. Safe to call even if never initialised. */
 export async function closeDbAccessor(): Promise<void> {
 	databaseIntegrityWritesBlocked = false;
 	pendingVecBackfillDimensions = null;

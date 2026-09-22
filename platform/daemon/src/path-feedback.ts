@@ -246,8 +246,6 @@ function updateAspects(
 	ts: string,
 ): void {
 	if (rating === 0 || path.aspectIds.length === 0) return;
-	// Aspect weights rank retrieval paths. They do not alter the semantic
-	// conclusion represented by an aspect, attribute, or dependency.
 	const delta = cfg.aspectDelta * Math.abs(rating) * (rating > 0 ? 1 : -1);
 	const stmt = db.prepare(
 		`UPDATE entity_aspects
@@ -705,5 +703,5 @@ export function recordPathFeedback(
 		}
 
 		return { accepted, propagated, cooccurrenceUpdated, dependenciesUpdated };
-	}, "path-feedback.ts:611");
+	}, "path-feedback.ts:609");
 }

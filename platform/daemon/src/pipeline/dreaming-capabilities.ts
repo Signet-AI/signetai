@@ -1,12 +1,3 @@
-/**
- * Canonical Dreaming capability registry.
- *
- * Pi sessions invoke these handlers in-process; MCP and CLI invoke the daemon
- * capability route. The registry is therefore the one owner of capability
- * names, schemas, scope, validation, and graph/evidence reads. The surface is
- * deliberately bounded: the agent can only do what these methods define
- * (search, validate, apply, log) — no open-ended escape hatches.
- */
 import { type Entity, type EntityAttribute, MEMORY_CONTENT_WITHHELD_NOTICE, scanMemoryContent } from "@signet/core";
 import { z } from "zod";
 import { getDbOwnerForAccessor, runDbOwnerDomainOperation } from "../db-owner-runtime";
@@ -133,15 +124,6 @@ async function filterDreamingAttributes(
 		return row === undefined || (row.status === "clean" && row.context_eligible === 1);
 	});
 }
-
-/**
- * The scope's evidence watermark (`dreaming_state.last_pass_at`): the
- * frontier the last pass actually surfaced. It limits historical searches
- * that omit `since`; scan-first delivery deliberately ignores it and drains
- * source revisions from their durable delivered offsets (#1430). Missing on
- * first run, an old workspace, or a scope that never passed: returns null so
- * historical searches fall back to unbounded.
- */
 function readEvidenceWatermark(db: ReadDb, agentId: string): string | null {
 	try {
 		const row = db.prepare("SELECT last_pass_at AS lastPassAt FROM dreaming_state WHERE agent_id = ?").get(agentId) as
@@ -278,8 +260,6 @@ type DreamingCapabilityOutput = {
 	readonly error?: string;
 	readonly [key: string]: unknown;
 };
-
-/** Mutable build-time variant of the capability output (registry handlers). */
 type MutableCapabilityOutput = {
 	ok: boolean;
 	error?: string;
@@ -307,11 +287,8 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly accessor: DbAccessor;
 	readonly agentId: string;
 	readonly actor: string;
-	/** Present only for a live Dreaming pass; protects runbook writes. */
 	readonly passId?: string;
-	/** Focus mode gates content-only capabilities structurally. */
 	readonly mode?: DreamingCapabilityMode;
-	/** Write-path caps forwarded to applyDreamingOperations. */
 	readonly writeCaps?: GraphWriteCaps;
 	readonly onOperationsApplied?: (
 		result: ApplyDreamingOperationsResult,
@@ -367,8 +344,6 @@ function capability<T extends z.ZodType>(
 		},
 	};
 }
-
-/** The one scope-bound handler registry used by Pi, daemon HTTP, MCP, and CLI. */
 export function searchDreamingEvidenceInDb(db: ReadDb, input: DbOwnerDreamingEvidenceSearch): DreamingCapabilityOutput {
 	const scopeId = input.agentId;
 	if (input.sourceRef !== undefined) {
@@ -627,9 +602,6 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				if (ref.type === "claim") {
 					let entityName = ref.entity;
 					let aspectName = ref.aspect;
-					// Accept stable ids as well as names for the claim path:
-					// search results surface ids, and the path resolver is
-					// name-based.
 					const detail = await getKnowledgeEntityDetail(accessor, ref.entity, scopeId);
 					if (detail) {
 						entityName = detail.entity.name;
@@ -951,8 +923,6 @@ export function getDreamingCapability(
 ): DreamingCapability | undefined {
 	return createDreamingCapabilities(params).find((candidate) => candidate.id === id);
 }
-
-/** Public metadata lets CLI and MCP discover the exact registry without a second list. */
 export function getDreamingCapabilityManifest(): readonly DreamingCapabilityManifestEntry[] {
 	return createDreamingCapabilities({
 		accessor: undefined as never,

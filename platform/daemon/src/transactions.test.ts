@@ -569,11 +569,6 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 	});
 
 	it("writes the embedding even when the caller's resolved config raced a building->ready promotion", () => {
-		// Regression: txModifyMemory re-resolves the active embedding config inside
-		// the transaction. Previously it checked the caller-supplied (already
-		// resolved) config, so a startup building->ready promotion between the
-		// caller's resolve and this write skipped the insert and silently dropped
-		// the vector (the API still reported embedded=true).
 		const embeddingConfig = {
 			provider: "native" as const,
 			model: "nomic-embed-text-v1.5",
@@ -585,8 +580,6 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 			"CREATE TABLE IF NOT EXISTS embeddings_staging (id TEXT PRIMARY KEY, content_hash TEXT UNIQUE, vector BLOB, dimensions INTEGER, source_type TEXT, source_id TEXT, chunk_text TEXT, created_at TEXT, agent_id TEXT)",
 		);
 		beginEmbeddingIndexBuild(asWriteDb(db), embeddingConfig);
-		// Promote staging -> active, simulating the startup build completing so
-		// the active profile becomes the recommended nomic profile.
 		db.prepare(
 			"UPDATE embedding_index_state SET active_profile_json = staging_profile_json, staging_profile_json = NULL, state = 'ready' WHERE id = 1",
 		).run();
@@ -607,9 +600,6 @@ describe("transactions: txModifyMemory + txForgetMemory + txRecoverMemory", () =
 			embeddingModelOnContentChange: "nomic-embed-text-v1.5",
 			extractionStatusOnContentChange: "none",
 			extractionModelOnContentChange: null,
-			// Stale: caller resolved this during building (no profile -> identity),
-			// but active is now the promoted nomic profile. Without the in-tx
-			// re-resolve this write would be skipped.
 			embeddingConfig: { ...embeddingConfig, profile: undefined },
 		});
 

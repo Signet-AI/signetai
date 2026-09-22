@@ -1,22 +1,5 @@
 #!/usr/bin/env bun
 
-/**
- * GitHub release download stats (issue #1026 Phase 3).
- *
- * Surfaces the cleaner install signal the issue calls out: GitHub release
- * asset download counts. Each download is a real binary/connector fetch —
- * unlike npm download totals, which include CI pipelines, npx one-offs, and
- * version-update churn.
- *
- * Queries the public GitHub REST API (no auth needed for public repos; the
- * unauthenticated rate limit of 60 req/hr is fine for this) and aggregates
- * `download_count` per release and per asset. Output is a markdown table
- * (default) or NDJSON (`--json`) suitable for dashboards.
- *
- * Usage:
- *   bun scripts/release-download-stats.ts [--json] [--releases N]
- */
-
 const REPO = "Signet-AI/signetai";
 const DEFAULT_RELEASES = 10;
 
@@ -44,8 +27,6 @@ export interface ReleaseStatsResult {
 	readonly releases: readonly ReleaseDownloadStat[];
 	readonly totalDownloads: number;
 }
-
-/** Fetch releases from the GitHub API. Injectable for tests. */
 export async function fetchReleases(
 	repo: string,
 	releases = DEFAULT_RELEASES,
@@ -61,8 +42,6 @@ export async function fetchReleases(
 	const body = (await res.json()) as readonly GitHubRelease[];
 	return body;
 }
-
-/** Aggregate per-release download counts. */
 export function summarizeReleases(releases: readonly GitHubRelease[]): ReleaseStatsResult {
 	const stats: ReleaseDownloadStat[] = releases.map((release) => ({
 		tag: release.tag_name,

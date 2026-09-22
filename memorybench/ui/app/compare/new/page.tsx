@@ -83,8 +83,6 @@ export default function NewComparePage() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-
-    // Validate providers
     if (form.providers.length < 2) {
       setError("Please select at least 2 providers for comparison")
       return

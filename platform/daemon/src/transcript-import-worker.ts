@@ -49,8 +49,6 @@ interface File {
 	readonly checkpoint_line_number: number;
 	readonly state: string;
 }
-
-/** One active import, bounded owner transactions, and an awaited shutdown boundary. */
 export function startTranscriptImportWorker(options: TranscriptImportWorkerOptions): TranscriptImportWorkerHandle {
 	let active = true;
 	let wake: (() => void) | undefined;
@@ -96,7 +94,6 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					fileId: file.id,
 					generation: file.upload_generation,
 				};
-				// Upgrade/retry can leave durable pending records before the saved scan offset.
 				for (;;) {
 					const pending = await store<Array<InventoryRecord & { id: string }>>(job.id, "list", {
 						view: "pending",
@@ -298,7 +295,6 @@ export function startTranscriptImportWorker(options: TranscriptImportWorkerOptio
 					if (jobs[0]) await processJob(jobs[0]);
 				}
 			} catch (error) {
-				// Durable leases/checkpoints remain the retry boundary if the owner dies.
 				console.error("Transcript import worker:", error instanceof Error ? error.message : String(error));
 			}
 			if (active) await wait();

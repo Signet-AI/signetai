@@ -240,10 +240,6 @@ describe("daemon lifecycle recovery", () => {
 
 		expect(stopped).toBe(true);
 	});
-
-	// Regression (#1074): under launchd KeepAlive the daemon respawns on exit,
-	// so "stop" must boot the job out even when the health endpoint says
-	// stopped — otherwise the reported stop is silently undone.
 	it("stop unloads the launchd keepalive when the daemon is unhealthy but launchd-managed", async () => {
 		let stopped = false;
 		const deps = makeDeps({
@@ -441,8 +437,6 @@ describe("showLogs follow mode", () => {
 		}
 	});
 });
-
-// Regression: #429 — failure paths must exit non-zero
 describe("daemon exit codes on failure", () => {
 	let exitSpy: ReturnType<typeof spyOn>;
 
@@ -560,9 +554,6 @@ describe("launchDashboard", () => {
 			...overrides,
 		};
 	}
-
-	// Regression (#1045): a healthy daemon must not be reported as stopped,
-	// started, or restarted by the dashboard command.
 	it("does not claim a start when the daemon is already running", async () => {
 		let startCalls = 0;
 		const deps = dashboardDeps({
@@ -577,18 +568,12 @@ describe("launchDashboard", () => {
 		expect(lines.join("\n")).not.toContain("Daemon started");
 		expect(lines.join("\n")).toContain("http://127.0.0.1:3850");
 	});
-
-	// Regression (#1045): the health probe can transiently false-negative while
-	// the daemon process is alive (same PID). startDaemon short-circuits to
-	// "already running", so the command must not claim it started the daemon.
 	it("does not claim a start when the probe false-negatives but the daemon process was alive the whole time", async () => {
 		let statusCalls = 0;
 		const deps = dashboardDeps({
 			getDaemonStatus: async () => {
 				statusCalls += 1;
 				if (statusCalls === 1) {
-					// Transient false negative: health probe failed, but the
-					// daemon process is alive and its PID is known.
 					return {
 						running: false,
 						pid: 3046866,
@@ -599,8 +584,6 @@ describe("launchDashboard", () => {
 						networkMode: null,
 					};
 				}
-				// startDaemon short-circuited ("already-current"); the same
-				// process is still running moments later.
 				return {
 					running: true,
 					pid: 3046866,

@@ -70,9 +70,7 @@ function terminateChildProcess(child: ChildProcess): void {
 				timeout: 5000,
 			});
 			if (result.status === 0) return;
-		} catch {
-			// Fall through to the signal-based fallback below.
-		}
+		} catch {}
 	}
 	child.kill("SIGTERM");
 }
@@ -85,7 +83,6 @@ export class DaemonManager {
 	#owned = false;
 	#mode: DaemonMode = "none";
 	#startPromise: Promise<DesktopDaemonStatus> | null = null;
-	// File descriptors opened with openSync (sync fd). Closed on process exit or spawn cleanup.
 	#stdoutFd: number | null = null;
 	#stderrFd: number | null = null;
 	#lastMismatch: WorkspaceMismatch | null = null;
@@ -146,20 +143,6 @@ export class DaemonManager {
 			startupErrorCode: this.#startupError?.code ?? null,
 		};
 	}
-
-	/**
-	 * Dual-mode startup (fixes #606 spawn fd race + update drift):
-	 *
-	 * 1. Probe http://127.0.0.1:<port>/health with a short 500ms timeout.
-	 * 2. If a daemon responds → attach (skip spawn, no version check, no auto-update).
-	 *    This eliminates the update-drift restart loop: the CLI-managed daemon is
-	 *    already running its own version; we just proxy to it.
-	 * 3. If not responding → spawn the bundled daemon using fs.openSync (synchronous
-	 *    file descriptor) instead of createWriteStream (lazy fd). Node's child_process
-	 *    spawn validates stdio descriptors synchronously at call time, so the lazy
-	 *    WriteStream fd was undefined at that moment — causing the TypeError described
-	 *    in issue #606. openSync returns a real fd immediately, fixing the race.
-	 */
 	async ensureStarted(): Promise<DesktopDaemonStatus> {
 		if (this.#startPromise) return this.#startPromise;
 		this.#startPromise = this.#ensureStarted();
@@ -171,7 +154,6 @@ export class DaemonManager {
 	}
 
 	async #ensureStarted(): Promise<DesktopDaemonStatus> {
-		// Step 1: fast probe (500ms) — prefer attach to avoid version-check/restart loop.
 		const raw = await this.#probeRaw(500);
 		const mismatch = raw ? healthWorkspaceMismatch(this.#workspacePath, raw.agentsDir) : null;
 		this.#lastMismatch = mismatch;
@@ -184,17 +166,11 @@ export class DaemonManager {
 		}
 
 		if (raw) {
-			// Step 2: attach — daemon already running (CLI-managed or otherwise).
-			// Skip bundled spawn, version check, and auto-update entirely.
 			this.#owned = false;
 			this.#mode = "attached";
 			this.#startupError = null;
 			return this.status();
 		}
-
-		// Step 3: bundled fallback — spawn the daemon we ship inside the .dmg / .app.
-		// Uses fs.openSync (sync fd) instead of createWriteStream (lazy fd) to fix the
-		// TypeError: stream must have an underlying descriptor race from issue #606.
 		if (!this.#child) this.#spawnBundled();
 		for (let i = 0; i < 60; i += 1) {
 			if (this.#startupError) throw new Error(this.#startupError.message);
@@ -256,17 +232,13 @@ export class DaemonManager {
 		if (this.#stdoutFd !== null) {
 			try {
 				closeSync(this.#stdoutFd);
-			} catch {
-				/* ignore */
-			}
+			} catch {}
 			this.#stdoutFd = null;
 		}
 		if (this.#stderrFd !== null) {
 			try {
 				closeSync(this.#stderrFd);
-			} catch {
-				/* ignore */
-			}
+			} catch {}
 			this.#stderrFd = null;
 		}
 	}
@@ -281,20 +253,6 @@ export class DaemonManager {
 			});
 		});
 	}
-
-	/**
-	 * Spawn the bundled bun daemon.
-	 *
-	 * FD-race fix (issue #606): createWriteStream opens the file lazily — the
-	 * underlying fd is not available until the 'open' event fires, which happens
-	 * asynchronously. Node's child_process.spawn validates stdio descriptors
-	 * synchronously at call time, so passing a WriteStream whose fd is still
-	 * undefined produces:
-	 *   TypeError: stream must have an underlying descriptor
-	 *
-	 * Using openSync returns a real integer fd immediately. We pass that fd
-	 * directly to spawn's stdio array, which satisfies the sync validation.
-	 */
 	#spawnBundled(): void {
 		const entry = daemonEntry();
 		if (!existsSync(entry)) {
@@ -304,9 +262,6 @@ export class DaemonManager {
 		const logDir = join(this.#workspacePath, ".daemon", "logs");
 		mkdirSync(logDir, { recursive: true });
 		this.#closeFds();
-
-		// openSync returns a real fd synchronously — no race with spawn's fd validation.
-		// See issue #606: createWriteStream causes "TypeError: stream must have an underlying descriptor"
 		this.#stdoutFd = openSync(join(logDir, "daemon.out.log"), "a");
 		this.#stderrFd = openSync(join(logDir, "daemon.err.log"), "a");
 
@@ -323,8 +278,6 @@ export class DaemonManager {
 				SIGNET_DAEMON_RUNTIME: "bun-js",
 				SIGNET_DAEMON_JS_PATH: daemonEntry(),
 				SIGNET_TIKTOKEN_WASM_PATH: join(daemonRoot(), "node_modules", "tiktoken", "tiktoken_bg.wasm"),
-				// On-disk connector assets (hermes-agent Python plugin) staged by
-				// stage-runtime; connectors resolve them through this variable.
 				SIGNET_CONNECTOR_ASSETS_DIR: process.env.SIGNET_CONNECTOR_ASSETS_DIR ?? join(daemonRoot(), "connectors"),
 				SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "desktop",
 			},

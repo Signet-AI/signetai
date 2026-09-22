@@ -1,10 +1,3 @@
-/**
- * Issue #901 — regression tests for /api/diagnostics/queue + repair.
- *
- * Uses an in-memory SQLite DB with real migrations so the queue
- * breakdowns read against production-shaped tables.
- */
-
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
@@ -191,11 +184,6 @@ describe("POST /api/diagnostics/queue/repair", () => {
 
 describe("repair action integration via the new dispatch path", () => {
 	it("returns a structured result when a repair action throws (no unstructured 500)", async () => {
-		// Simulate a degraded runtime: the write transaction throws (e.g. a
-		// missing migrations table, a closed DbAccessor, or a transient SQLite
-		// error). The handler must return the documented RepairResult instead
-		// of propagating an unhandled exception. Mirrors the GET sibling and
-		// the Rust parity handler.
 		const db = new Database(":memory:");
 		try {
 			runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);

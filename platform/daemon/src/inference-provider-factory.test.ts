@@ -92,8 +92,6 @@ describe("inference provider factory", () => {
 				locality: "remote",
 			});
 			await expect(provider.generate("test")).resolves.toBe("done");
-			// pi-ai 0.84.4's OpenCode Go metadata supports low reasoning, so the
-			// explicit routing depth is now forwarded instead of being suppressed.
 			expect(requestBody?.thinking).toEqual({ type: "enabled" });
 			expect(requestBody?.reasoning_effort).toBe("low");
 		} finally {

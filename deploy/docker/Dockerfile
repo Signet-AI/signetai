@@ -2,10 +2,6 @@
 
 FROM oven/bun:1.4.0 AS build
 WORKDIR /app
-
-# The daemon image does not run the Electron desktop application. Skipping
-# Electron's postinstall download keeps this daemon-only build independent of
-# the GitHub release asset network.
 ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 
 RUN apt-get update \
@@ -27,10 +23,6 @@ COPY public ./public
 COPY web ./web
 
 RUN bun install --frozen-lockfile
-# @signet/sdk bundles @signet/core. Keep the core package's optional native
-# dependencies materialized for that build even when their postinstall cannot
-# produce a Node addon in this Bun-only image. The runtime uses Bun's SQLite
-# implementation, so no better-sqlite3 addon is copied into the final image.
 RUN bun install --frozen-lockfile --ignore-scripts --filter '@signet/core'
 RUN test -e platform/core/node_modules/better-sqlite3
 ARG TARGETOS=linux
@@ -49,8 +41,6 @@ RUN set -eux; \
 RUN bun run build:core
 RUN bun run build:connector-base
 RUN bun run build:opencode-plugin
-# The Docker image intentionally does not install Rust. The image uses the
-# bundled Bun native build below, so skip the optional N-API addon build.
 RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
 RUN bun run build:oh-my-pi-extension
 RUN bun run build:connector-oh-my-pi

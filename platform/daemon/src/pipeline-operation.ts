@@ -132,8 +132,6 @@ export interface PipelineOperationSummary {
 	readonly queueAgeMs: number;
 	readonly causeFamily?: PipelineCauseFamily;
 }
-
-/** Emit one bounded operation summary. Never include ids, paths, content, or provider messages. */
 export function recordPipelineOperation(summary: PipelineOperationSummary): void {
 	const durationMs =
 		Number.isFinite(summary.durationMs) && summary.durationMs >= 0 ? Math.round(summary.durationMs) : 0;

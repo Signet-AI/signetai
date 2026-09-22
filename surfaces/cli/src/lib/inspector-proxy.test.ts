@@ -41,9 +41,7 @@ async function waitForInspector(port: number): Promise<void> {
 		try {
 			const response = await fetch(`http://127.0.0.1:${port}/json/version`);
 			if (response.ok) return;
-		} catch {
-			// The inspector is still starting.
-		}
+		} catch {}
 		await Bun.sleep(50);
 	}
 	throw new Error(`Inspector did not start on port ${port}`);

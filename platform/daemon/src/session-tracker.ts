@@ -1,14 +1,3 @@
-/**
- * Session Tracker
- *
- * Lightweight in-memory tracker that ensures exactly one runtime path
- * (plugin or legacy-hook) is active per session. Prevents duplicate
- * capture/recall when both paths are configured.
- *
- * Also tracks per-session bypass state — when bypassed, all hook
- * endpoints return empty no-op responses while MCP tools still work.
- */
-
 import { logger } from "./logger";
 import type { PersistedSessionClaim, SessionClaimStore } from "./session-claims";
 import {
@@ -34,12 +23,10 @@ export interface SessionInfo {
 }
 
 interface SessionClaim {
-	/** Identity token prevents a delayed eviction result from touching a replacement claim. */
 	readonly claimId: symbol;
 	readonly sessionKey: string;
 	readonly agentId: string;
 	readonly runtimePath: RuntimePath;
-	/** Harness that claimed the session (for telemetry breakdowns). */
 	harness?: string;
 	readonly claimedAt: string;
 	expiresAt: number;
@@ -60,8 +47,6 @@ interface EndedSession {
 }
 
 type ClaimResult = { readonly ok: true } | { readonly ok: false; readonly claimedBy: RuntimePath };
-
-/** Session lifecycle info handed to the TTL-eviction handler (#902). */
 export interface EvictedSessionInfo {
 	readonly sessionKey: string;
 	readonly agentId: string;
@@ -69,36 +54,22 @@ export interface EvictedSessionInfo {
 	readonly harness?: string;
 	readonly claimedAt: string;
 }
-
-/**
- * Optional handler invoked when a stale session claim is evicted by TTL
- * cleanup. Returns "finalized" when the handler applied a formal lifecycle
- * transition (checkpoint + finalization), "skipped" when finalization was
- * intentionally skipped (e.g. synthesis disabled), or undefined when the
- * handler did not classify the outcome. Counters exposed via
- * `getSessionTrackerStats` are updated accordingly (#902).
- */
 export type SessionEvictionOutcome = "finalized" | "skipped" | undefined;
 export type SessionEvictionHandler = (
 	info: EvictedSessionInfo,
 ) => SessionEvictionOutcome | Promise<SessionEvictionOutcome>;
 
-const STALE_SESSION_MS = 4 * 60 * 60 * 1000; // 4 hours
-const ENDED_SESSION_TOMBSTONE_MS = 30 * 60 * 1000; // 30 minutes
-const CLEANUP_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
-const WARN_BEFORE_MS = 30 * 60 * 1000; // warn 30 min before expiry
+const STALE_SESSION_MS = 4 * 60 * 60 * 1000;
+const ENDED_SESSION_TOMBSTONE_MS = 30 * 60 * 1000;
+const CLEANUP_INTERVAL_MS = 15 * 60 * 1000;
+const WARN_BEFORE_MS = 30 * 60 * 1000;
 
 const sessions = new Map<string, SessionClaim>();
 const endedSessions = new Map<string, EndedSession>();
-/** Key → expiresAt timestamp. Entries without a matching session claim are
- *  evicted by `cleanupStaleSessions` once their TTL elapses. */
 const bypassedSessions = new Map<string, number>();
-/** Sessions that have already received an expiry warning — avoid per-hook spam. */
 const warnedSessions = new Set<string>();
 let cleanupTimer: ReturnType<typeof setInterval> | null = null;
-// Synchronous guard — prevents double-start during concurrent async init.
 let cleanupStarted = false;
-// TTL-eviction lifecycle hook + counters (#902).
 let evictionHandler: SessionEvictionHandler | null = null;
 let claimStore: SessionClaimStore | null = null;
 let expiredCount = 0;
@@ -128,9 +99,6 @@ function persistedClaim(
 	};
 }
 
-// normalizeSessionKey is defined in session-end-state.ts (single source of
-// truth for session-key identity) and re-exported here for the routes.
-
 function evictExpiredSession(mapKey: string, claim: SessionClaim, emitEndTelemetry = true): void {
 	if (!sessions.delete(mapKey)) return;
 	const key = claim.sessionKey;
@@ -143,11 +111,6 @@ function evictExpiredSession(mapKey: string, claim: SessionClaim, emitEndTelemet
 		runtimePath: claim.runtimePath,
 		claimedAt: claim.claimedAt,
 	});
-
-	// Real session termination: the daemon judged the session abandoned
-	// (no hooks for STALE_SESSION_MS). Emit session.end once per session
-	// lifetime (#1212) — dedup'd so a session already counted via explicit
-	// clear is not double-counted here.
 	if (
 		emitEndTelemetry &&
 		!hasSessionEndTelemetry({ agentId: claim.agentId, harness: claim.harness, sessionKey: key })
@@ -164,9 +127,6 @@ function evictExpiredSession(mapKey: string, claim: SessionClaim, emitEndTelemet
 		claimStore?.markExpired(key, claim.agentId);
 		return;
 	}
-	// The eviction already removed this claim from the in-memory map. Treat an
-	// absent entry as current, but never let a delayed finalizer touch a newer
-	// replacement claim for the same scoped session.
 	const isCurrentClaim = (): boolean => {
 		const current = sessions.get(mapKey);
 		return current === undefined || current.claimId === claim.claimId;
@@ -209,12 +169,6 @@ function evictExpiredSession(mapKey: string, claim: SessionClaim, emitEndTelemet
 		});
 	}
 }
-
-/**
- * Claim a session for a given runtime path. Returns ok:true if the
- * session is unclaimed or already claimed by the same path. Returns
- * ok:false with claimedBy if claimed by the other path.
- */
 export function claimSession(
 	sessionKey: string,
 	runtimePath: RuntimePath,
@@ -228,14 +182,11 @@ export function claimSession(
 
 	if (existing) {
 		if (existing.runtimePath === runtimePath) {
-			// Same path reclaiming — refresh expiry and repair telemetry metadata.
 			if (harness !== undefined) existing.harness = harness;
 			existing.expiresAt = Date.now() + STALE_SESSION_MS;
 			claimStore?.upsertActive(persistedClaim(key, existing));
 			return { ok: true };
 		}
-
-		// Check if the existing claim is stale
 		if (Date.now() > existing.expiresAt) {
 			logger.info("session-tracker", "Evicting stale session claim", {
 				sessionKey: key,
@@ -243,7 +194,6 @@ export function claimSession(
 				newPath: runtimePath,
 			});
 			evictExpiredSession(mapKey, existing);
-			// Fall through to create new claim
 		} else {
 			return { ok: false, claimedBy: existing.runtimePath };
 		}
@@ -268,11 +218,6 @@ export function claimSession(
 
 	return { ok: true };
 }
-
-/**
- * Release a session claim. Called on session-end.
- * Also cleans up bypass state for the session.
- */
 export function releaseSession(sessionKey: string, agentId = "default"): void {
 	const key = normalizeSessionKey(sessionKey);
 	const mapKey = scopedSessionKey(key, agentId);
@@ -318,11 +263,6 @@ export function markSessionEnded(sessionKey: string, runtimePath?: RuntimePath, 
 		runtimePath,
 	});
 }
-
-/**
- * Return true if the session is currently claimed and not stale.
- * Used by hooks to detect daemon-restart mid-session.
- */
 export function hasSession(sessionKey: string, agentId = "default"): boolean {
 	const key = normalizeSessionKey(sessionKey);
 	const mapKey = scopedSessionKey(key, agentId);
@@ -334,10 +274,6 @@ export function hasSession(sessionKey: string, agentId = "default"): boolean {
 	}
 	return true;
 }
-
-/**
- * Get the runtime path for a session, if claimed.
- */
 export function getSessionPath(sessionKey: string, agentId = "default"): RuntimePath | undefined {
 	const key = normalizeSessionKey(sessionKey);
 	const mapKey = scopedSessionKey(key, agentId);
@@ -369,12 +305,6 @@ export function getEndedSession(sessionKey: string, agentId = "default"): EndedS
 		expiresAt: new Date(ended.expiresAt).toISOString(),
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Bypass state
-// ---------------------------------------------------------------------------
-
-/** Enable bypass for a session — hooks return empty no-op responses. */
 export function bypassSession(
 	sessionKey: string,
 	opts?: { readonly allowUnknown?: boolean; readonly ttlMs?: number },
@@ -392,8 +322,6 @@ export function bypassSession(
 	logger.debug("session-tracker", "Session bypassed", { sessionKey: key });
 	return true;
 }
-
-/** Disable bypass for a session — hooks resume normal behavior. */
 export function unbypassSession(sessionKey: string, agentId = "default"): void {
 	const key = normalizeSessionKey(sessionKey);
 	const removed = bypassedSessions.delete(scopedSessionKey(key, agentId));
@@ -401,8 +329,6 @@ export function unbypassSession(sessionKey: string, agentId = "default"): void {
 		logger.debug("session-tracker", "Session bypass removed", { sessionKey: key });
 	}
 }
-
-/** Check whether a session is currently bypassed. */
 export function isSessionBypassed(sessionKey: string, agentId = "default"): boolean {
 	const key = normalizeSessionKey(sessionKey);
 	const mapKey = scopedSessionKey(key, agentId);
@@ -414,13 +340,9 @@ export function isSessionBypassed(sessionKey: string, agentId = "default"): bool
 	}
 	return true;
 }
-
-/** Get all bypassed session keys with their expiry timestamps. */
 export function getBypassedSessionKeys(): ReadonlyMap<string, number> {
 	return bypassedSessions;
 }
-
-/** List all active sessions with full state. */
 export function getActiveSessions(): readonly SessionInfo[] {
 	const now = Date.now();
 	const result: SessionInfo[] = [];
@@ -442,12 +364,6 @@ export function getActiveSessions(): readonly SessionInfo[] {
 
 	return result;
 }
-
-/**
- * Returns a warning string if the session will expire within WARN_BEFORE_MS,
- * or null if healthy or not found. Throttled — only warns once per session
- * until the session is renewed.
- */
 export function getExpiryWarning(sessionKey: string, agentId = "default"): string | null {
 	if (isSessionBypassed(sessionKey, agentId)) return null;
 	const key = normalizeSessionKey(sessionKey);
@@ -462,25 +378,17 @@ export function getExpiryWarning(sessionKey: string, agentId = "default"): strin
 	const mins = Math.max(1, Math.round(remaining / 60_000));
 	return `session expires in ~${mins} minute${mins === 1 ? "" : "s"} — consider /checkpoint`;
 }
-
-/**
- * Reset a session's TTL. Returns the new expiresAt ISO string, or null
- * if the session is not found.
- */
 export function renewSession(sessionKey: string, agentId = "default"): string | null {
 	const key = normalizeSessionKey(sessionKey);
 	const mapKey = scopedSessionKey(key, agentId);
 	const claim = sessions.get(mapKey);
 	if (!claim) return null;
-	// Reject renewal of already-expired sessions — caller should re-claim
 	if (claim.expiresAt <= Date.now()) {
 		evictExpiredSession(mapKey, claim);
 		return null;
 	}
 	claim.expiresAt = Date.now() + STALE_SESSION_MS;
 	claimStore?.upsertActive(persistedClaim(key, claim));
-	// Keep bypass TTL aligned with the session TTL so bypassed sessions
-	// do not leak after renewal extends the session lifetime.
 	const existing = bypassedSessions.get(mapKey);
 	if (existing !== undefined) {
 		bypassedSessions.set(mapKey, claim.expiresAt);
@@ -489,10 +397,6 @@ export function renewSession(sessionKey: string, agentId = "default"): string | 
 	logger.info("session-tracker", "Session renewed", { sessionKey: key });
 	return new Date(claim.expiresAt).toISOString();
 }
-
-/**
- * Remove expired session claims and expired bypass-only entries.
- */
 function cleanupStaleSessions(): void {
 	const now = Date.now();
 	let cleaned = 0;
@@ -526,30 +430,17 @@ function cleanupStaleSessions(): void {
 		});
 	}
 }
-
-/** Exposed for tests — runs the cleanup cycle synchronously. */
 export function runStaleCleanup(): void {
 	cleanupStaleSessions();
 }
-
-/** Start periodic stale-session cleanup. */
 export function startSessionCleanup(): void {
-	// Set flag before setInterval so concurrent callers see it immediately.
 	if (cleanupStarted) return;
 	cleanupStarted = true;
 	cleanupTimer = setInterval(cleanupStaleSessions, CLEANUP_INTERVAL_MS);
 }
-
-/** Register the durable claim store after database migrations complete. */
 export function setSessionClaimStore(store: SessionClaimStore | null): void {
 	claimStore = store;
 }
-
-/**
- * Rehydrate claims left by a previous daemon process. Expired rows are sent
- * through the same finalizer as in-process TTL cleanup; ended rows restore the
- * short duplicate-end tombstone without claiming the session again.
- */
 function restorePersistedSessionRows(rows: readonly PersistedSessionClaim[]): {
 	readonly active: number;
 	readonly expired: number;
@@ -623,8 +514,6 @@ async function removePersistedClaimAsync(sessionKey: string, agentId: string): P
 	}
 	claimStore?.remove(sessionKey, agentId);
 }
-
-/** Async counterpart used only during startup rehydration. */
 async function evictRestoredSessionAsync(mapKey: string, claim: SessionClaim, emitEndTelemetry = true): Promise<void> {
 	if (!sessions.delete(mapKey)) return;
 	const key = claim.sessionKey;
@@ -746,8 +635,6 @@ export function restorePersistedSessions(): {
 	if (!claimStore) return { active: 0, expired: 0, ended: 0 };
 	return restorePersistedSessionRows(claimStore.list());
 }
-
-/** Async startup variant: durable claim reads use DB-owner admission. */
 export async function restorePersistedSessionsAsync(): Promise<{
 	readonly active: number;
 	readonly expired: number;
@@ -757,8 +644,6 @@ export async function restorePersistedSessionsAsync(): Promise<{
 	const rows = claimStore.listAsync ? await claimStore.listAsync() : claimStore.list();
 	return await restorePersistedSessionRowsAsync(rows);
 }
-
-/** Stop periodic cleanup (for graceful shutdown). */
 export function stopSessionCleanup(): void {
 	cleanupStarted = false;
 	if (cleanupTimer) {
@@ -766,13 +651,9 @@ export function stopSessionCleanup(): void {
 		cleanupTimer = null;
 	}
 }
-
-/** Exposed for tests to verify module imports do not start cleanup side effects. */
 export function isSessionCleanupRunning(): boolean {
 	return cleanupStarted;
 }
-
-/** Release all active sessions (for graceful shutdown). */
 export function releaseAllSessions(): number {
 	const count = sessions.size;
 	sessions.clear();
@@ -782,22 +663,12 @@ export function releaseAllSessions(): number {
 	}
 	return count;
 }
-
-/** Number of active sessions (for diagnostics). */
 export function activeSessionCount(): number {
 	return sessions.size;
 }
-
-/**
- * Register the TTL-eviction lifecycle handler (or clear it with null). The
- * daemon wires this to a finalizer that checkpoints and enqueues idempotent
- * summary work before an expired session's in-memory state is dropped (#902).
- */
 export function setSessionEvictionHandler(handler: SessionEvictionHandler | null): void {
 	evictionHandler = handler;
 }
-
-/** Expired/unfinalized session counters for diagnostics (#902). */
 export function getSessionTrackerStats(): {
 	readonly active: number;
 	readonly ended: number;
@@ -813,8 +684,6 @@ export function getSessionTrackerStats(): {
 		unfinalized: unfinalizedCount,
 	};
 }
-
-/** Reset all sessions (for testing). */
 export function resetSessions(): void {
 	sessions.clear();
 	endedSessions.clear();
@@ -825,8 +694,6 @@ export function resetSessions(): void {
 	unfinalizedCount = 0;
 	resetSessionEndTelemetry();
 }
-
-/** Test-only: force a session claim's expiry so cleanup evicts it. */
 export function _expireSessionForTest(sessionKey: string, agentId = "default"): void {
 	const key = normalizeSessionKey(sessionKey);
 	const claim = sessions.get(scopedSessionKey(key, agentId));

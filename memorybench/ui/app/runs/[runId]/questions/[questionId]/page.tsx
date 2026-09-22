@@ -62,7 +62,7 @@ export default function QuestionDetailPage() {
 
   return (
     <div className="max-w-4xl animate-fade-in">
-      {/* Breadcrumb */}
+      {}
       <div className="flex items-center gap-2 text-sm text-text-secondary mb-4">
         <Link href="/runs" className="hover:text-text-primary">
           Runs
@@ -78,7 +78,7 @@ export default function QuestionDetailPage() {
         <span className="text-text-primary font-mono">{questionId}</span>
       </div>
 
-      {/* Header */}
+      {}
       <div className="flex items-start gap-4 mb-4">
         <div
           className={cn(
@@ -116,7 +116,7 @@ export default function QuestionDetailPage() {
               {isCorrect ? "Correct" : "Incorrect"}
             </span>
           </div>
-          {/* Container Tag - below header */}
+          {}
           {containerTag && (
             <button
               onClick={copyContainerTag}
@@ -142,13 +142,13 @@ export default function QuestionDetailPage() {
         </div>
       </div>
 
-      {/* Question */}
+      {}
       <div className="card mb-4 overflow-hidden">
         <h3 className="text-xs text-text-muted uppercase tracking-wide mb-2">Question</h3>
         <p className="text-text-primary break-words">{question.question}</p>
       </div>
 
-      {/* Answer Comparison */}
+      {}
       <div className="grid grid-cols-2 gap-4 mb-4">
         <div className="card overflow-hidden min-w-0">
           <h3 className="text-xs text-text-muted uppercase tracking-wide mb-2">Ground Truth</h3>
@@ -181,7 +181,7 @@ export default function QuestionDetailPage() {
         </div>
       </div>
 
-      {/* Evaluation */}
+      {}
       {question.phases?.evaluate?.explanation && (
         <div className="card mb-4 overflow-hidden">
           <h3 className="text-xs text-text-muted uppercase tracking-wide mb-2">
@@ -191,7 +191,7 @@ export default function QuestionDetailPage() {
         </div>
       )}
 
-      {/* Search Results */}
+      {}
       <div className="card">
         <h3 className="text-xs text-text-muted uppercase tracking-wide mb-3">
           Retrieved Context ({searchResults.length} results)

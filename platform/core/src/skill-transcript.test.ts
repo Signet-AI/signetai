@@ -1,27 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import { parseTranscriptSkills } from "./skill-transcript.js";
 
-// ---------------------------------------------------------------------------
-// REAL-STRUCTURE fixture
-// Field shape mirrored from a live Claude Code transcript (all values
-// synthesized — zero real user data).  Covers the production quirks that
-// hand-authored fixtures miss:
-//   • full top-level envelope (parentUuid, isSidechain, requestId, uuid,
-//     userType, entrypoint, version, gitBranch, …)
-//   • message has model/id/stop_reason/stop_sequence/stop_details/usage
-//   • tool_use input has an extra `caller` sub-object alongside `skill`
-//   • tool_result content is a plain string (NOT an array)
-//   • tool_result is_error is null (not false) on success
-// ---------------------------------------------------------------------------
-
 const TS_R1 = "2025-03-15T09:00:00.000Z";
-const TS_R2 = "2025-03-15T09:00:02.000Z"; // +2000 ms
-const TS_R3 = "2025-03-15T09:00:04.000Z"; // +4000 ms from R1
-const TS_R4 = "2025-03-15T09:00:06.000Z"; // +2000 ms from R3
+const TS_R2 = "2025-03-15T09:00:02.000Z";
+const TS_R3 = "2025-03-15T09:00:04.000Z";
+const TS_R4 = "2025-03-15T09:00:06.000Z";
 const TS_R5 = "2025-03-15T09:00:08.000Z";
 
 const realStructureFixture = [
-	// assistant: Skill tool_use — full production envelope
 	JSON.stringify({
 		type: "assistant",
 		timestamp: TS_R1,
@@ -57,14 +43,12 @@ const realStructureFixture = [
 					input: {
 						skill: "web-search",
 						args: "latest news",
-						// extra field present in production; parser must not choke on it
 						caller: { type: "assistant" },
 					},
 				},
 			],
 		},
 	}),
-	// user: tool_result — is_error: null (production quirk for success), content is plain string
 	JSON.stringify({
 		type: "user",
 		timestamp: TS_R2,
@@ -90,7 +74,6 @@ const realStructureFixture = [
 			],
 		},
 	}),
-	// assistant: second Skill tool_use — will fail
 	JSON.stringify({
 		type: "assistant",
 		timestamp: TS_R3,
@@ -123,7 +106,6 @@ const realStructureFixture = [
 			],
 		},
 	}),
-	// user: tool_result — is_error: true (failure path), content still plain string
 	JSON.stringify({
 		type: "user",
 		timestamp: TS_R4,
@@ -149,7 +131,6 @@ const realStructureFixture = [
 			],
 		},
 	}),
-	// noise: normal assistant text turn — no tool_use; must produce no record
 	JSON.stringify({
 		type: "assistant",
 		timestamp: TS_R5,
@@ -178,13 +159,10 @@ const realStructureFixture = [
 ].join("\n");
 
 const T1 = "2024-01-01T10:00:00.000Z";
-const T2 = "2024-01-01T10:00:01.500Z"; // +1500ms
-const T3 = "2024-01-01T10:00:03.000Z"; // +3000ms
+const T2 = "2024-01-01T10:00:01.500Z";
+const T3 = "2024-01-01T10:00:03.000Z";
 const T4 = "2024-01-01T10:00:04.000Z";
-
-// Two Skill uses with results + one orphan use (no tool_result → skipped).
 const fixture = [
-	// assistant: two Skill tool_use blocks
 	JSON.stringify({
 		type: "assistant",
 		timestamp: T1,
@@ -198,7 +176,6 @@ const fixture = [
 			],
 		},
 	}),
-	// user: tool_result for toolu_001 (success)
 	JSON.stringify({
 		type: "user",
 		timestamp: T2,
@@ -209,7 +186,6 @@ const fixture = [
 			content: [{ type: "tool_result", tool_use_id: "toolu_001", is_error: false, content: "done" }],
 		},
 	}),
-	// user: tool_result for toolu_002 (error)
 	JSON.stringify({
 		type: "user",
 		timestamp: T3,
@@ -220,7 +196,6 @@ const fixture = [
 			content: [{ type: "tool_result", tool_use_id: "toolu_002", is_error: true, content: "skill failed" }],
 		},
 	}),
-	// assistant: orphan Skill use — no tool_result in this fixture
 	JSON.stringify({
 		type: "assistant",
 		timestamp: T4,
@@ -339,7 +314,6 @@ describe("parseTranscriptSkills — real Claude Code transcript structure", () =
 		const { records } = parseTranscriptSkills(realStructureFixture);
 		for (const r of records) {
 			expect(r.skillName.length).toBeGreaterThan(0);
-			// skillName must be the skill value, not "[object Object]" or similar
 			expect(r.skillName).not.toContain("{");
 		}
 	});

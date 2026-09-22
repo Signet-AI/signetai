@@ -1,21 +1,9 @@
-/**
- * MCP invocation analytics API.
- *
- * Queries the mcp_invocations table to surface per-server, per-tool,
- * and per-agent usage statistics. All queries scope by agent_id
- * using auth-aware resolution (resolveScopedAgent).
- */
-
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
 import { logger } from "../logger.js";
 import { resolveScopedAgent } from "../request-scope.js";
 import { authConfig } from "./state.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 interface ToolStats {
 	readonly toolName: string;
@@ -47,10 +35,6 @@ interface ServerAnalytics {
 	readonly timeline: readonly { readonly date: string; readonly count: number }[];
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function clampPositiveInt(value: unknown, fallback: number, min: number, max: number): number {
 	const n = Number(value);
 	if (!Number.isFinite(n)) return fallback;
@@ -63,10 +47,6 @@ function computePercentile(sorted: readonly number[], p: number): number {
 	return sorted[Math.max(0, idx)] ?? 0;
 }
 
-// ---------------------------------------------------------------------------
-// Route mounting
-// ---------------------------------------------------------------------------
-
 export function mountMcpAnalyticsRoutes(app: Hono): void {
 	app.use("/api/mcp/analytics", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
@@ -74,8 +54,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 	app.use("/api/mcp/analytics/*", async (c, next) => {
 		return requirePermission("analytics", authConfig)(c, next);
 	});
-
-	// GET /api/mcp/analytics — aggregated stats across all servers
 	app.get("/api/mcp/analytics", (c) => {
 		const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
 		if (scoped.error) return c.json({ error: scoped.error }, 403);
@@ -87,7 +65,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const result = getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-				// Build WHERE clause
 				const conditions: string[] = ["agent_id = ?"];
 				const params: unknown[] = [agentId];
 				if (server) {
@@ -99,8 +76,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					params.push(since);
 				}
 				const where = conditions.join(" AND ");
-
-				// Total calls + success rate
 				const totals = db
 					.prepare(
 						`SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successes
@@ -110,8 +85,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 
 				const totalCalls = totals?.total ?? 0;
 				const successRate = totalCalls > 0 ? (totals?.successes ?? 0) / totalCalls : 0;
-
-				// Top servers
 				const topServers = db
 					.prepare(
 						`SELECT server_id as serverId, COUNT(*) as count,
@@ -121,8 +94,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					 GROUP BY server_id ORDER BY count DESC LIMIT ?`,
 					)
 					.all(...params, limit) as ServerStats[];
-
-				// Top tools
 				const topTools = db
 					.prepare(
 						`SELECT tool_name as toolName, COUNT(*) as count,
@@ -132,8 +103,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					 GROUP BY tool_name ORDER BY count DESC LIMIT ?`,
 					)
 					.all(...params, limit) as ToolStats[];
-
-				// Latency percentiles
 				const latencies = db
 					.prepare(`SELECT latency_ms FROM mcp_invocations WHERE ${where} ORDER BY latency_ms`)
 					.all(...params) as readonly { latency_ms: number }[];
@@ -149,7 +118,7 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					topTools,
 					latency: { p50, p95 },
 				} satisfies AnalyticsSummary;
-			}, "routes/mcp-analytics.ts:89");
+			}, "routes/mcp-analytics.ts:67");
 
 			return c.json(result);
 		} catch (error) {
@@ -157,8 +126,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 			return c.json({ error: "Failed to query analytics" }, 500);
 		}
 	});
-
-	// GET /api/mcp/analytics/:server — per-server breakdown
 	app.get("/api/mcp/analytics/:server", (c) => {
 		const serverId = c.req.param("server");
 		const scoped = resolveScopedAgent(c.get("auth")?.claims ?? null, authConfig.mode, c.req.query("agent_id"));
@@ -176,8 +143,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					params.push(since);
 				}
 				const where = conditions.join(" AND ");
-
-				// Total + success rate
 				const totals = db
 					.prepare(
 						`SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successes
@@ -187,8 +152,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 
 				const totalCalls = totals?.total ?? 0;
 				const successRate = totalCalls > 0 ? (totals?.successes ?? 0) / totalCalls : 0;
-
-				// Per-tool breakdown
 				const tools = db
 					.prepare(
 						`SELECT tool_name as toolName, COUNT(*) as count,
@@ -198,8 +161,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					 GROUP BY tool_name ORDER BY count DESC`,
 					)
 					.all(...params) as ToolStats[];
-
-				// 7-day timeline (daily buckets, zero-filled)
 				const timelineCutoff = since ? "datetime(?)" : "datetime('now', '-7 days')";
 				const timelineParams = since ? [...params, since] : [...params];
 				const sparse = db
@@ -209,8 +170,6 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					 GROUP BY DATE(created_at) ORDER BY date`,
 					)
 					.all(...timelineParams) as { date: string; count: number }[];
-
-				// Zero-fill from cutoff to today
 				const counts = new Map(sparse.map((r) => [r.date, r.count]));
 				const timeline: { date: string; count: number }[] = [];
 				const start = since ? new Date(since) : new Date(Date.now() - 6 * 86_400_000);
@@ -227,7 +186,7 @@ export function mountMcpAnalyticsRoutes(app: Hono): void {
 					tools,
 					timeline,
 				} satisfies ServerAnalytics;
-			}, "routes/mcp-analytics.ts:171");
+			}, "routes/mcp-analytics.ts:138");
 
 			return c.json(result);
 		} catch (error) {

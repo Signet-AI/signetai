@@ -1,10 +1,3 @@
-/**
- * Migration 125: derived memory-content safety ledger.
- *
- * The ledger is deliberately separate from source rows. Raw memories,
- * artifacts, transcripts, and summaries remain immutable and inspectable;
- * this table records only the policy decision used by prompt-facing readers.
- */
 import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "../memory-content-safety";
 import type { MigrationDb } from "./contract";
 

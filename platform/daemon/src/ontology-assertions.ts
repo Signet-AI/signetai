@@ -15,7 +15,6 @@ export class OntologyAssertionError extends Error {
 
 export interface CreateEpistemicAssertionInput {
 	readonly agentId: string;
-	/** In the agent-only MVP, an observer must be the scoped agent itself. */
 	readonly observerId?: string | null;
 	readonly entity?: string;
 	readonly entityId?: string;
@@ -303,7 +302,7 @@ export function createEpistemicAssertion(
 	input: CreateEpistemicAssertionInput,
 ): EpistemicAssertion {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
-	return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input), "ontology-assertions.ts:306");
+	return accessor.withWriteTx((db: WriteDb) => insertAssertion(db, input), "ontology-assertions.ts:305");
 }
 
 export function createEpistemicAssertionsInTx(
@@ -380,7 +379,7 @@ export function listEpistemicAssertions(
 			)
 			.get(...args) as { count: number } | undefined;
 		return { items: rows.map(rowToAssertion), count: count?.count ?? rows.length };
-	}, "ontology-assertions.ts:325");
+	}, "ontology-assertions.ts:324");
 }
 
 export function getEpistemicAssertion(
@@ -399,7 +398,7 @@ export function getEpistemicAssertion(
 			)
 			.get(params.id, observerId) as Record<string, unknown> | undefined;
 		return row ? rowToAssertion(row) : null;
-	}, "ontology-assertions.ts:391");
+	}, "ontology-assertions.ts:390");
 }
 
 export function linkEpistemicAssertionClaim(
@@ -427,7 +426,7 @@ export function linkEpistemicAssertionClaim(
 			)
 			.get(params.id, params.agentId) as Record<string, unknown>;
 		return rowToAssertion(row);
-	}, "ontology-assertions.ts:410");
+	}, "ontology-assertions.ts:409");
 }
 
 export function archiveEpistemicAssertion(
@@ -455,7 +454,7 @@ export function archiveEpistemicAssertion(
 			)
 			.get(params.id, params.agentId) as Record<string, unknown>;
 		return rowToAssertion(row);
-	}, "ontology-assertions.ts:438");
+	}, "ontology-assertions.ts:437");
 }
 
 export function supersedeEpistemicAssertion(
@@ -496,5 +495,5 @@ export function supersedeEpistemicAssertion(
 			 WHERE id = ? AND agent_id = ?`,
 		).run(new Date().toISOString(), input.oldAssertionId, input.agentId);
 		return next;
-	}, "ontology-assertions.ts:466");
+	}, "ontology-assertions.ts:465");
 }

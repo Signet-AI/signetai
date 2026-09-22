@@ -1,13 +1,6 @@
-/**
- * React bindings for @signet/sdk.
- * Uses the HTTP client (SignetClient), not direct DB access.
- */
-
 import React, { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { SignetClient, type SignetClientConfig } from "./index.js";
 import type { MemoryRecord, RecallResult } from "./types.js";
-
-// --- Context ---
 
 interface SignetContextValue {
 	client: SignetClient;
@@ -16,8 +9,6 @@ interface SignetContextValue {
 }
 
 const SignetContext = createContext<SignetContextValue | null>(null);
-
-// --- Provider ---
 
 interface SignetProviderProps {
 	client?: SignetClient;
@@ -48,8 +39,6 @@ export function SignetProvider({ client: externalClient, config, children }: Sig
 
 	return <SignetContext.Provider value={{ client, connected, error }}>{children}</SignetContext.Provider>;
 }
-
-// --- Hooks ---
 
 export function useSignet(): SignetContextValue {
 	const context = useContext(SignetContext);

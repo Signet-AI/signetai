@@ -1,20 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 030: Make memory_jobs.memory_id nullable
- *
- * The memory_jobs table was created in 002 with `memory_id TEXT NOT NULL`.
- * Migration 007 added document_id for document_ingest jobs, but those jobs
- * don't have a memory_id at creation time — they produce memories later.
- * The NOT NULL constraint causes POST /api/documents to fail with:
- *   SQLiteError: NOT NULL constraint failed: memory_jobs.memory_id
- *
- * SQLite doesn't support ALTER COLUMN, so we rebuild the table.
- *
- * No artifacts declared: this migration modifies an existing table's
- * constraint (not a new table/column). The memory_jobs table is already
- * tracked by migration 002's artifacts, so phantom detection still works.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_jobs_new (

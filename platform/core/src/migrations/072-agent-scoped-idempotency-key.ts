@@ -9,13 +9,6 @@ function ensureMemoriesScopeColumns(db: MigrationDb): void {
 	if (!names.has("idempotency_key")) db.exec("ALTER TABLE memories ADD COLUMN idempotency_key TEXT");
 	if (!names.has("runtime_path")) db.exec("ALTER TABLE memories ADD COLUMN runtime_path TEXT");
 }
-
-/**
- * Migration 072: Agent-aware idempotency key dedupe.
- *
- * Import keys are stable within a memory owner and visibility domain. The old
- * global index could make retries collide across agents or scopes.
- */
 export function up(db: MigrationDb): void {
 	ensureMemoriesScopeColumns(db);
 

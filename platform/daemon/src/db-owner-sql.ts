@@ -1,5 +1,3 @@
-/** Typed SQL helpers for work that must execute inside the DB owner process. */
-
 import type { DbOwnerClient } from "./db-owner-client";
 import type { DbOwnerParameter, DbOwnerRequest, DbOwnerWorkloadClass } from "./db-owner-protocol";
 

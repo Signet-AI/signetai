@@ -8,20 +8,7 @@ function hasColumn(db: MigrationDb, table: string, column: string): boolean {
 function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
 	if (!hasColumn(db, table, column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-
-/**
- * Migration 138: bounded status projections for /api/status and diagnostics.
- *
- * The HTTP-serving isolate previously grouped transcript_capture_jobs and
- * memories directly to calculate compact health fields. Those payload tables
- * can be very large. This migration installs incrementally maintained
- * projections, backfills them once in the migration/owner lane, and adds
- * covering indexes for the remaining maintenance lookups.
- */
 export function up(db: MigrationDb): void {
-	// A legitimate v1 database can reach this migration without the column
-	// that the baseline schema normally creates. Make this upgrade path safe
-	// before creating the partial index or triggers below.
 	addColumnIfMissing(db, "memories", "manual_override", "INTEGER DEFAULT 0");
 
 	db.exec(`
@@ -283,9 +270,6 @@ export function up(db: MigrationDb): void {
 			   AND dup_count <= 0;
 		END;
 	`);
-
-	// Rebuild projections on every migration invocation so a repaired or
-	// partially-created projection cannot retain stale hashes or counters.
 	db.exec(`
 		DELETE FROM transcript_capture_status;
 		DELETE FROM memories_duplicate_hash_counts;

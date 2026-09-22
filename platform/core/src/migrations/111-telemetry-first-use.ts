@@ -1,16 +1,3 @@
-/**
- * Migration 111: Telemetry first-use milestones
- *
- * Extends the telemetry_install row (migration 109) with one-shot
- * first-use timestamps. The daemon claims a milestone with an atomic
- * guarded UPDATE (only the first caller wins, changes === 1) and emits
- * first.remember / first.recall exactly once per install, so the
- * activation funnel (install.activated -> first.remember/recall) counts
- * installs that were actually used, not just booted.
- *
- * Idempotent: guards each ADD COLUMN with a pragma check (SQLite ALTER
- * has no IF NOT EXISTS).
- */
 import type { MigrationDb } from "./contract";
 
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {

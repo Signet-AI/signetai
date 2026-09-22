@@ -5,15 +5,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 	if (cols.some((col) => col.name === column)) return;
 	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-
-/**
- * Migration 045: Lossless working-memory hardening
- *
- * Adds:
- * - transcript recency + FTS search support for prompt-time fallback lookup
- * - agent scoping columns for summary runtime tables
- * - DB-backed MEMORY.md head metadata for merge-safe writes
- */
 export function up(db: MigrationDb): void {
 	addColumnIfMissing(db, "session_transcripts", "updated_at", "TEXT");
 	addColumnIfMissing(db, "summary_jobs", "agent_id", "TEXT NOT NULL DEFAULT 'default'");

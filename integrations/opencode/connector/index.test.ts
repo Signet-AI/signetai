@@ -102,10 +102,6 @@ describe("OpenCodeConnector.install — legacy SIGNET block migration", () => {
 	});
 });
 
-// ============================================================================
-// Pipeline agent registration
-// ============================================================================
-
 describe("OpenCodeConnector — pipeline agent registration", () => {
 	const EXPECTED_AGENT = {
 		prompt:
@@ -355,9 +351,6 @@ describe("OpenCodeConnector — pipeline agent registration", () => {
 
 		const configPath = join(freshOcPath, "opencode.jsonc");
 		const config = readConfig(configPath);
-		// ensureConfigFile creates the empty file before registerPlugin,
-		// registerMcpServer, and registerPipelineAgent — all three entries
-		// must be present to prove the ordering fix works.
 		expect(config.agent["signet-pipeline"]).toEqual(EXPECTED_AGENT);
 		expect(config.mcp.signet.type).toBe("local");
 		expect(config.mcp.signet.command).toEqual(["signet-mcp"]);

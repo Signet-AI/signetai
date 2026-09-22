@@ -1,7 +1,3 @@
-/**
- * Issue #901 — tests for repair-queue CLI helpers (runRepairQueue, parsing).
- */
-
 import { describe, expect, it } from "bun:test";
 import { parseCsvFlag, parseDurationFlag, parseTablesFlag, runRepairQueue } from "./repair-queue.js";
 

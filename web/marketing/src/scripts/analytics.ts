@@ -149,9 +149,7 @@ function trackClick(event: MouseEvent): void {
 					destination: destinationCategory(url.hostname),
 				});
 			}
-		} catch {
-			// Ignore malformed or non-navigation hrefs.
-		}
+		} catch {}
 	}
 }
 

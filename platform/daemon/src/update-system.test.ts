@@ -1,12 +1,5 @@
 import { describe, expect, it } from "bun:test";
 import { spawnSync } from "node:child_process";
-/**
- * Tests for update-system bug fixes.
- *
- * These tests exercise the exported pure/config functions directly.
- * Network-dependent functions are mostly covered with structural tests,
- * but critical post-install behavior should be exercised directly.
- */
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -956,24 +949,16 @@ describe("native update validation", () => {
 
 describe("Bug 3: auto-restart after successful install", () => {
 	it("calls process.exit(0) in runAutoUpdateCycle after success", () => {
-		// Extract the runAutoUpdateCycle function body
 		const cycleBody = mustMatch(UPDATE_SYSTEM_SRC, /async function runAutoUpdateCycle[\s\S]*?^}/m);
-
-		// Must contain process.exit(0) for auto-restart
 		expect(cycleBody).toContain("process.exit(0)");
-		// Must stop the timer before exiting
 		expect(cycleBody).toContain("stopUpdateTimer()");
-		// Exit should come after successful install check
 		expect(cycleBody.indexOf("installResult.success")).toBeLessThan(cycleBody.indexOf("process.exit(0)"));
 	});
 });
 
 describe("Bug 4: log level for disabled auto-updates", () => {
 	it("uses logger.info (not debug) when auto-updates disabled", () => {
-		// Find the startUpdateTimer function
 		const timerBody = mustMatch(UPDATE_SYSTEM_SRC, /export function startUpdateTimer[\s\S]*?^}/m);
-
-		// Should use info level, not debug
 		expect(timerBody).not.toContain('logger.debug("system", "Auto-update disabled"');
 		expect(timerBody).toContain("updateLogger.info");
 		expect(timerBody).toContain("signet update enable");
@@ -982,7 +967,6 @@ describe("Bug 4: log level for disabled auto-updates", () => {
 
 describe("Bug 6: systemd unit uses dynamic runtime path", () => {
 	it("does not hardcode /usr/bin/bun in systemd unit", () => {
-		// The function generateSystemdUnit should NOT have a hardcoded path
 		const hasHardcoded = SERVICE_SRC.includes('runtime === "bun" ? "/usr/bin/bun" : "/usr/bin/node"');
 		expect(hasHardcoded).toBe(false);
 	});
@@ -994,9 +978,7 @@ describe("Bug 6: systemd unit uses dynamic runtime path", () => {
 
 	it("uses resolveRuntimePath() for both service types", () => {
 		expect(SERVICE_SRC).toContain("function resolveRuntimePath()");
-		// systemd
 		expect(SERVICE_SRC).toMatch(/const runtimePath = resolveRuntimePath\(\)/);
-		// launchd uses the shared plist builder and resolves the runtime before passing it in.
 		expect(SERVICE_SRC).toContain("buildLaunchdPlist({");
 		expect(SERVICE_SRC).toContain("programArguments: [resolveRuntimePath(), daemonPath]");
 	});
@@ -1047,8 +1029,8 @@ describe("config helpers", () => {
 	it("parseUpdateInterval enforces bounds", () => {
 		expect(parseUpdateInterval(MIN_UPDATE_INTERVAL_SECONDS)).toBe(MIN_UPDATE_INTERVAL_SECONDS);
 		expect(parseUpdateInterval(MAX_UPDATE_INTERVAL_SECONDS)).toBe(MAX_UPDATE_INTERVAL_SECONDS);
-		expect(parseUpdateInterval(100)).toBeNull(); // Below min
-		expect(parseUpdateInterval(999999999)).toBeNull(); // Above max
+		expect(parseUpdateInterval(100)).toBeNull();
+		expect(parseUpdateInterval(999999999)).toBeNull();
 		expect(parseUpdateInterval("not a number")).toBeNull();
 	});
 

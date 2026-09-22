@@ -1,14 +1,3 @@
-/**
- * Signet Adapter for OpenClaw
- *
- * Runtime plugin integrating Signet's memory system with OpenClaw's
- * plugin API. Uses the register(api) pattern — tools via
- * api.registerTool(), lifecycle via api.on().
- *
- * All operations route through daemon APIs with the "plugin" runtime
- * path for dedup safety.
- */
-
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -72,11 +61,6 @@ function isTimeoutError(err: unknown): boolean {
 	return code === "ABORT_ERR";
 }
 
-// ---------------------------------------------------------------------------
-// Prompt extraction — OpenClaw wraps user messages in metadata envelopes.
-// Strip the envelope so FTS queries only see the actual user text.
-// ---------------------------------------------------------------------------
-
 const METADATA_LINE_PREFIXES = [
 	"<<<EXTERNAL_UNTRUSTED_CONTENT",
 	">>>",
@@ -93,15 +77,8 @@ function stripSignetMemory(content: string): string {
 function readContextString(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
 }
-
-/**
- * Check if content looks like metadata JSON (sender info, usernames, tags)
- */
 function looksLikeMetadataJson(content: string): boolean {
-	// Must be in a code fence with json
 	if (!content.includes("```json")) return false;
-
-	// Check for metadata field patterns
 	const metadataFields = ["label", "username", "tag", "sender", "conversation"];
 	const hasMultipleMetadataFields =
 		metadataFields.filter((f) => content.includes(`"${f}"`) || content.includes(`'${f}'`)).length >= 2;
@@ -113,21 +90,16 @@ function extractUserMessage(rawPrompt: string): string {
 	const sanitized = stripSignetMemory(rawPrompt);
 	const lines = sanitized.split("\n");
 	let lastContentStart = 0;
-
-	// Track when we're inside a code fence
 	let inCodeFence = false;
 	let codeFenceStart = 0;
 
 	for (let i = 0; i < lines.length; i++) {
 		const line = lines[i];
-
-		// Detect code fence start/end
 		if (line.startsWith("```")) {
 			if (!inCodeFence) {
 				inCodeFence = true;
 				codeFenceStart = i;
 			} else {
-				// End of code fence - check if it was metadata JSON
 				const fenceContent = lines.slice(codeFenceStart, i + 1).join("\n");
 				if (looksLikeMetadataJson(fenceContent)) {
 					lastContentStart = i + 1;
@@ -136,8 +108,6 @@ function extractUserMessage(rawPrompt: string): string {
 			}
 			continue;
 		}
-
-		// Existing line-prefix check
 		if (METADATA_LINE_PREFIXES.some((p) => line.startsWith(p) || line.includes(p))) {
 			lastContentStart = i + 1;
 		}
@@ -146,10 +116,6 @@ function extractUserMessage(rawPrompt: string): string {
 	const extracted = lines.slice(lastContentStart).join("\n").trim();
 	return extracted.length > 0 ? extracted : sanitized;
 }
-
-// ============================================================================
-// Types
-// ============================================================================
 
 export interface SignetConfig {
 	enabled?: boolean;
@@ -328,10 +294,6 @@ interface MarketplaceContextOptions {
 	readonly channel?: string;
 }
 
-// ============================================================================
-// Shared fetch helper
-// ============================================================================
-
 function pluginHeaders(): Record<string, string> {
 	return {
 		"Content-Type": "application/json",
@@ -396,7 +358,6 @@ async function daemonFetchResult<T>(
 				return { ok: false, reason: "invalid-json", status: res.status };
 			}
 		} catch (e) {
-			// Body read failed — typically a timeout firing after headers arrived
 			if (isTimeoutError(e)) {
 				console.warn(`[signet] ${method} ${path} body read timed out after ${timeout}ms`);
 				return { ok: false, reason: "timeout" };
@@ -409,8 +370,6 @@ async function daemonFetchResult<T>(
 			console.warn(`[signet] ${method} ${path} timed out after ${timeout}ms`);
 			return { ok: false, reason: "timeout" };
 		}
-		// Native fetch wraps OS errors as TypeError.cause, but polyfill/proxy
-		// layers may rethrow the OS error directly — check both forms.
 		const cause: unknown = e instanceof TypeError ? e.cause : e;
 		const isConnRefused =
 			typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ECONNREFUSED";
@@ -423,10 +382,6 @@ async function daemonFetchResult<T>(
 	}
 }
 
-// ============================================================================
-// Health check
-// ============================================================================
-
 export async function isDaemonRunning(daemonUrl = DEFAULT_DAEMON_URL): Promise<boolean> {
 	try {
 		const res = await fetch(`${daemonUrl}/health`, {
@@ -437,8 +392,6 @@ export async function isDaemonRunning(daemonUrl = DEFAULT_DAEMON_URL): Promise<b
 		return false;
 	}
 }
-
-/** Returns the daemon PID if reachable, null otherwise. */
 async function getDaemonPid(daemonUrl: string): Promise<number | null> {
 	try {
 		const res = await fetch(`${daemonUrl}/health`, {
@@ -451,12 +404,6 @@ async function getDaemonPid(daemonUrl: string): Promise<number | null> {
 		return null;
 	}
 }
-
-// ============================================================================
-// Static identity fallback when daemon is unreachable
-// ============================================================================
-
-// Wraps @signet/core's readStaticIdentity to produce a SessionStartResult.
 function staticFallback(reason: "offline" | "timeout" = "offline"): SessionStartResult | null {
 	const dir = process.env.SIGNET_PATH ?? join(homedir(), ".agents");
 	const inject =
@@ -466,10 +413,6 @@ function staticFallback(reason: "offline" | "timeout" = "offline"): SessionStart
 	if (!inject) return null;
 	return { identity: { name: "signet" }, memories: [], inject };
 }
-
-// ============================================================================
-// Lifecycle callbacks
-// ============================================================================
 
 export async function onSessionStart(
 	harness: string,
@@ -632,10 +575,6 @@ export async function onSessionEnd(
 
 	return null;
 }
-
-// ============================================================================
-// Tool operations (call v2 daemon memory APIs directly)
-// ============================================================================
 
 export async function memoryRecall(
 	query: string,
@@ -847,10 +786,6 @@ export async function marketplaceToolCall(
 	});
 }
 
-// ============================================================================
-// Legacy aliases (kept for backwards compat)
-// ============================================================================
-
 export async function remember(
 	content: string,
 	options: {
@@ -877,10 +812,6 @@ export async function recall(
 	return memorySearch(query, options);
 }
 
-// ============================================================================
-// Config schema (with parse() method for OpenClaw plugin API)
-// ============================================================================
-
 const signetConfigSchema = {
 	parse(value: unknown): SignetConfig {
 		if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -894,19 +825,12 @@ const signetConfigSchema = {
 	},
 };
 
-// ============================================================================
-// Tool result helpers
-// ============================================================================
-
 function textResult(text: string, details?: Record<string, unknown>): OpenClawToolResult {
 	return {
 		content: [{ type: "text", text }],
 		...(details ? { details } : {}),
 	};
 }
-
-// Dedup window for sessionless session-start calls (time-based; these don't
-// have a stable messageCount to key on).
 const SESSIONLESS_DEDUPE_MS = 1_000;
 
 export function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONLESS_DEDUPE_MS): void {
@@ -920,31 +844,10 @@ export function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = S
 		map.delete(key);
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Request normalization layer — ensures outgoing provider requests carry the
-// correct routing metadata for subscription-tier OAuth token flows. Without
-// this, OAuth-authenticated requests may be misrouted or rejected by the
-// upstream gateway.
-//
-// The plugin hook API does not expose the assembled request body, so we
-// intercept at two layers:
-//
-// - globalThis.fetch wrapper — catches SDK clients using the default fetch
-//   (e.g. pi-ai transport which does not pass a custom fetch).
-// - SDK prototype prepareRequest patch — catches SDK clients that were given
-//   a custom fetch, since prepareRequest fires before fetch.
-// ---------------------------------------------------------------------------
-
-// Routing metadata block — must be system[0] for correct subscription routing.
-// The version field tracks a specific SDK release; update if the gateway
-// begins validating it.
 const BILLING_BLOCK = {
 	type: "text",
 	text: "x-anthropic-billing-header: cc_version=2.1.80.a46; cc_entrypoint=sdk-cli; cch=00000;",
 } as const;
-
-// Beta flags required for OAuth subscription-tier routing.
 const REQUIRED_BETAS = [
 	"claude-code-20250219",
 	"oauth-2025-04-20",
@@ -953,15 +856,9 @@ const REQUIRED_BETAS = [
 	"prompt-caching-scope-2026-01-05",
 	"effort-2025-11-24",
 ] as const;
-
-/**
- * Inject the routing metadata block as system[0] if not already present.
- * Handles both string and array system prompt formats.
- */
 function injectBillingBlock(body: Record<string, unknown>): boolean {
 	const system = body.system;
 	if (Array.isArray(system)) {
-		// Check if already injected
 		const first = system[0] as Record<string, unknown> | undefined;
 		if (first && typeof first.text === "string" && first.text.includes("x-anthropic-billing-header")) {
 			return false;
@@ -970,19 +867,12 @@ function injectBillingBlock(body: Record<string, unknown>): boolean {
 		return true;
 	}
 	if (typeof system === "string") {
-		// Convert string form to array with billing block prepended
 		body.system = [{ ...BILLING_BLOCK }, { type: "text", text: system }];
 		return true;
 	}
-	// No system field — add one with just the routing block
 	body.system = [{ ...BILLING_BLOCK }];
 	return true;
 }
-
-/**
- * Normalize a serialized JSON request body by injecting the routing block.
- * Modifies the carrier object in-place.
- */
 function sanitizeRequest(request: { body?: unknown }): boolean {
 	if (!request.body || typeof request.body !== "string") return false;
 	try {
@@ -992,16 +882,9 @@ function sanitizeRequest(request: { body?: unknown }): boolean {
 			request.body = JSON.stringify(body);
 			return true;
 		}
-	} catch {
-		// Not valid JSON — leave opaque request bodies untouched.
-	}
+	} catch {}
 	return false;
 }
-
-/**
- * Merge required beta flags into the headers object.
- * Preserves existing betas while adding any missing ones.
- */
 function mergeBetaHeaders(headers: Record<string, string>): boolean {
 	const key = Object.keys(headers).find((k) => k.toLowerCase() === "anthropic-beta") ?? "anthropic-beta";
 	const existing = headers[key] ?? "";
@@ -1019,8 +902,6 @@ function mergeBetaHeaders(headers: Record<string, string>): boolean {
 	return added;
 }
 
-// -- Layer 1: globalThis.fetch wrapper ------------------------------------
-
 function isAnthropicApiUrl(url: string): boolean {
 	try {
 		return new URL(url).hostname === "api.anthropic.com";
@@ -1028,11 +909,6 @@ function isAnthropicApiUrl(url: string): boolean {
 		return false;
 	}
 }
-
-/**
- * Read the local OAuth token from the CLI credential store.
- * Returns undefined if credentials are missing or expired.
- */
 function readClaudeCodeOAuthToken(): string | undefined {
 	try {
 		const candidates = [
@@ -1049,17 +925,9 @@ function readClaudeCodeOAuthToken(): string | undefined {
 			if (expiresAt && expiresAt < Date.now()) continue;
 			return oauth.accessToken as string;
 		}
-	} catch {
-		// Credentials not available — fall through to original auth.
-	}
+	} catch {}
 	return undefined;
 }
-
-/**
- * Swap auth headers: replace API key auth with OAuth Bearer token for
- * subscription-tier routing. Uses case-insensitive key matching to
- * avoid duplicate headers.
- */
 function swapAuthHeaders(headers: Record<string, string>, oauthToken: string): void {
 	for (const key of Object.keys(headers)) {
 		const lk = key.toLowerCase();
@@ -1079,8 +947,6 @@ function installFetchSanitizer(): () => void {
 				const carrier = { body: init.body };
 				sanitizeRequest(carrier);
 				const newBody = carrier.body as string;
-				// Flatten headers, filtering stale transport headers that must
-				// be recalculated after body modification.
 				const oauthToken = readClaudeCodeOAuthToken();
 				const skip = new Set(["host", "connection", "content-length", "anthropic-dangerous-direct-browser-access"]);
 				const headers: Record<string, string> = {};
@@ -1116,15 +982,6 @@ function installFetchSanitizer(): () => void {
 		}
 	};
 }
-
-// -- Layer 2: SDK prototype patch -----------------------------------------
-
-/**
- * Resolve the provider SDK's base class from the host process.
- * The plugin and OpenClaw may each have their own copy of the SDK in
- * different node_modules trees. We search the CJS require cache for the
- * already-loaded copy so our prototype patch reaches the actual instances.
- */
 function resolveAnthropicBase(): (new (...args: unknown[]) => unknown) | undefined {
 	try {
 		const cache = typeof require !== "undefined" ? require.cache : undefined;
@@ -1141,9 +998,7 @@ function resolveAnthropicBase(): (new (...args: unknown[]) => unknown) | undefin
 				}
 			}
 		}
-	} catch {
-		// require.cache not available.
-	}
+	} catch {}
 	try {
 		// eslint-disable-next-line @typescript-eslint/no-require-imports
 		const sdk = require("@anthropic-ai/sdk") as Record<string, unknown>;
@@ -1151,9 +1006,7 @@ function resolveAnthropicBase(): (new (...args: unknown[]) => unknown) | undefin
 		if (Base?.prototype && typeof Base.prototype.prepareRequest === "function") {
 			return Base;
 		}
-	} catch {
-		// SDK not available (e.g. tests without it).
-	}
+	} catch {}
 	return undefined;
 }
 
@@ -1181,8 +1034,6 @@ function installSdkSanitizer(): () => void {
 	}
 
 	if (!applyPatch()) {
-		// SDK may be lazy-loaded. Retry briefly so the patch lands before
-		// the first provider call.
 		let attempts = 0;
 		timer = setInterval(() => {
 			attempts++;
@@ -1246,11 +1097,6 @@ function readNumber(value: unknown): number | undefined {
 	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-// ---------------------------------------------------------------------------
-// Dual-source context resolution. Typed ctx fields take priority; legacy
-// extra event fields are the fallback for older OpenClaw versions.
-// ---------------------------------------------------------------------------
-
 interface ResolvedCtx {
 	readonly sessionKey: string | undefined;
 	readonly agentId: string | undefined;
@@ -1309,13 +1155,9 @@ function readSessionFileProject(sessionFile: string | undefined): string | undef
 				const row = JSON.parse(line) as unknown;
 				if (!isRecord(row) || row.type !== "session") continue;
 				return firstNonEmptyString(row.cwd, row.project, row.workspace);
-			} catch {
-				// ignore malformed transcript lines
-			}
+			} catch {}
 		}
-	} catch {
-		// best effort only
-	}
+	} catch {}
 
 	return undefined;
 }
@@ -1340,13 +1182,9 @@ function extractCompactionSummary(event: Record<string, unknown>, sessionFile: s
 				if (!isRecord(row) || row.type !== "compaction") continue;
 				const summary = readString(row.summary);
 				if (summary) return summary;
-			} catch {
-				// ignore malformed transcript lines
-			}
+			} catch {}
 		}
-	} catch {
-		// best effort only
-	}
+	} catch {}
 
 	return undefined;
 }
@@ -1379,16 +1217,6 @@ function buildCompactionEventKey(
 	];
 	return parts.join("|");
 }
-
-// ============================================================================
-// Plugin definition (OpenClaw register(api) pattern)
-// ============================================================================
-
-// Defensive backstop: even if registrationMode is absent or "full", never
-// run the full registration body more than once per process. OpenClaw's
-// documented double-call is mode-gated below, but older hosts or future
-// loader changes could call with "full" twice. Keep this state on globalThis
-// so hot-reload module re-imports still honor the guard.
 const REG_KEY = "__signet_openclaw_registered__signet-memory-openclaw";
 
 function readRegistered(): boolean {
@@ -1436,9 +1264,6 @@ const signetPlugin = {
 
 	register(api: OpenClawPluginApi): void {
 		const mode = api.registrationMode ?? "full";
-
-		// Discovery must remain side-effect free: OpenClaw runs it while
-		// inspecting plugin capabilities, before a live runtime exists.
 		if (mode === "discovery") {
 			api.registerMemoryCapability({ promptBuilder: buildMemoryPromptSection });
 			return;
@@ -1471,13 +1296,8 @@ const signetPlugin = {
 				writeRegistered(true);
 				claimed = true;
 			}
-
-			// Request normalization — two layers for coverage: fetch wrapper +
-			// SDK prototype patch. Tool discovery is deliberately side-effect free.
 			const removeFetchSanitizer = mode === "full" ? installFetchSanitizer() : () => {};
 			const removeSdkSanitizer = mode === "full" ? installSdkSanitizer() : () => {};
-
-			// Instance-scoped health state (safe for multi-register)
 			let daemonReachable = true;
 			let knownPid: number | null = null;
 			let healthTimer: ReturnType<typeof setInterval> | null = null;
@@ -1519,8 +1339,6 @@ const signetPlugin = {
 			if (mode === "full") {
 				api.logger.info(`signet-memory: registered (daemon: ${daemonUrl})`);
 			}
-
-			// Fire-and-forget startup health check (also captures initial PID)
 			if (mode === "full") {
 				getDaemonPid(daemonUrl).then((pid) => {
 					daemonReachable = pid !== null;
@@ -1536,10 +1354,6 @@ const signetPlugin = {
 					}
 				});
 			}
-
-			// ==================================================================
-			// Tools
-			// ==================================================================
 
 			api.registerTool(
 				{
@@ -2013,15 +1827,7 @@ const signetPlugin = {
 				},
 				{ name: "mcp_server_call" },
 			);
-
-			// OpenClaw uses this pass to build the tool registry exposed to a
-			// harness such as Codex. Static tools are enough; hooks, services,
-			// timers, marketplace refreshes, and daemon probes belong to full mode.
 			if (mode === "tool-discovery") return;
-
-			// ==================================================================
-			// Lifecycle hooks
-			// ==================================================================
 
 			const claimedSessions = new Set<string>();
 			type SessionStartContext = {
@@ -2032,34 +1838,14 @@ const signetPlugin = {
 			const sessionStartContexts = new Map<string, SessionStartContext>();
 			const sessionlessSessionStartContexts = new Map<string, SessionStartContext>();
 			const sessionlessSessionStarts = new Map<string, number>();
-			// Maps scoped agent/session keys → {count, at} for per-turn idempotency. Entries are
-			// evicted on agent_end or lazily after SESSION_TURN_TTL_MS so crash/
-			// SIGKILL sessions don't accumulate indefinitely.
 			const SESSION_TURN_TTL_MS = 4 * 60 * 60 * 1000;
 			const injectedTurns = new Map<string, { count: number; at: number }>();
-			// Tracks turn signatures currently in-flight — provides a synchronous
-			// guard so concurrent before_prompt_build / before_agent_start calls on
-			// the same event-loop tick don't both pass the guard before either await
-			// completes (injectedTurns is only written after the daemon responds).
 			const inFlightTurns = new Set<string>();
 			const pendingNotifications = new Map<string, { inject: string; at: number }>();
 			const beforeCompactions = new Map<string, number>();
 			const afterCompactions = new Map<string, number>();
-
-			// Mid-session checkpoint extraction: track turns per session and
-			// fire a checkpoint extract after every N turns. Prevents long-lived
-			// sessions (Discord bots, persistent agents) from going invisible.
 			const CHECKPOINT_TURN_THRESHOLD = 20;
-			// State per scoped session key: turn count, last seen message count (for
-			// dedup), and timestamp (for TTL eviction when agent_end never fires).
 			const checkpointTurns = new Map<string, { count: number; lastMsgCount: number | undefined; at: number }>();
-			// Legacy dedup: when both before_prompt_build and before_agent_start fire
-			// on the same turn without the messages field (older OpenClaw), only one
-			// should count the turn. Generation counters: bpb increments bpbGen each
-			// call; bas tracks the last generation it consumed in basGen. If
-			// basGen < bpbGen, bas is covered and skips the count (then syncs basGen).
-			// Avoids the stale-flag problem where a missed bas leaves the flag set
-			// for the next turn.
 			const bpbGen = new Map<string, number>();
 			const basGen = new Map<string, number>();
 
@@ -2076,21 +1862,12 @@ const signetPlugin = {
 
 				const now = Date.now();
 				const state = checkpointTurns.get(scopedKey);
-
-				// Lazy TTL: evict stale entries for sessions that ended without agent_end.
 				if (state && now - state.at > SESSION_TURN_TTL_MS) {
 					checkpointTurns.delete(scopedKey);
 				} else {
-					// Without a session key there is no safe way to associate a
-					// compaction with one pending session-start block. Drop all
-					// sessionless blocks rather than replaying stale context.
 					sessionlessSessionStartContexts.clear();
 					sessionlessSessionStarts.clear();
 				}
-
-				// Dedup: before_agent_start and before_prompt_build both fire on the
-				// same turn when both are registered. Use message count when available
-				// (modern OpenClaw). Legacy path relies on bpbFired flag — see below.
 				if (msgCount !== undefined && checkpointTurns.get(scopedKey)?.lastMsgCount === msgCount) return;
 
 				const newCount = (checkpointTurns.get(scopedKey)?.count ?? 0) + 1;
@@ -2101,19 +1878,10 @@ const signetPlugin = {
 				});
 
 				if (newCount < CHECKPOINT_TURN_THRESHOLD) return;
-
-				// Inline transcript fallback: when sessionFile is absent (typed-only
-				// OpenClaw without extra event fields), serialize event.messages as JSONL
-				// so the daemon always has a transcript source for delta extraction.
 				const inlineTranscript =
 					!sessionFile && Array.isArray(messages) && messages.length > 0
 						? messages.map((m) => JSON.stringify(m)).join("\n")
 						: undefined;
-				// Fire-and-forget — don't block the hook response.
-				// Counter restore policy (CAS-guarded):
-				//   skipped:true  → restore to threshold-1 (nothing extracted, retry next turn)
-				//   any other 2xx success → keep counter at 0 so checkpoints stay rate-limited
-				//   HTTP error    → restore to threshold-1 (retry next turn)
 				void daemonFetch(daemonUrl, "/api/hooks/session-checkpoint-extract", {
 					method: "POST",
 					body: {
@@ -2128,14 +1896,7 @@ const signetPlugin = {
 					timeout: WRITE_TIMEOUT,
 				})
 					.then((resp) => {
-						// Restore counter only on skipped:true (nothing extracted — delta
-						// too small, no transcript, or bypassed). Other successful
-						// responses keep the counter at 0 so the next checkpoint waits
-						// another N turns rather than firing on every subsequent turn.
 						if (isRecord(resp) && resp.skipped === true) {
-							// CAS guard: only restore if the counter hasn't advanced past
-							// threshold-1 by new turns arriving during the async round-trip.
-							// Prevents a stale callback from overwriting newer accumulated count.
 							const cur = checkpointTurns.get(scopedKey);
 							if (cur && cur.count < CHECKPOINT_TURN_THRESHOLD - 1)
 								checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
@@ -2145,7 +1906,6 @@ const signetPlugin = {
 						api.logger.warn(
 							`signet-memory: checkpoint extract failed: ${err instanceof Error ? err.message : String(err)}`,
 						);
-						// CAS guard: same protection as the .then() path.
 						const cur = checkpointTurns.get(scopedKey);
 						if (cur && cur.count < CHECKPOINT_TURN_THRESHOLD - 1)
 							checkpointTurns.set(scopedKey, { ...cur, count: CHECKPOINT_TURN_THRESHOLD - 1 });
@@ -2228,10 +1988,6 @@ const signetPlugin = {
 						sessionStartContext.dynamicContext = "";
 						sessionStartContext.delivered = false;
 					}
-					// Compaction resets the message count, so the checkpoint turn-dedup
-					// (keyed on lastMsgCount) would falsely skip the first post-compaction
-					// turn if it happens to share the same count as a pre-compaction turn.
-					// Reset the checkpoint state so dedup starts fresh after compaction.
 					checkpointTurns.delete(scopedKey);
 				}
 				const sessionFile = resolveCompactionSessionFile(event, resolved.sessionFile);
@@ -2321,8 +2077,6 @@ const signetPlugin = {
 				sessionKey: string | undefined,
 				agentId: string | undefined,
 			): Promise<unknown> => {
-				// Skip immediately if daemon is known-unreachable — avoids a 5-second
-				// ECONNREFUSED hang on every message turn when the daemon is down.
 				if (!daemonReachable) return undefined;
 
 				const scopedKey = buildScopedSessionKey(sessionKey, agentId);
@@ -2342,27 +2096,14 @@ const signetPlugin = {
 						"session-start",
 					);
 				};
-
-				// Prefer the clean last user message from the structured messages
-				// array. The prompt field carries platform metadata wrappers
-				// (Discord JSON, untrusted-context blocks) that pollute recall.
 				const rawPrompt = typeof event.prompt === "string" ? event.prompt : undefined;
 				const prompt =
 					extractLastUserMessage(event.messages) ?? (rawPrompt ? extractUserMessage(rawPrompt) : undefined);
 				if (!prompt || prompt.length <= 3) {
 					return pendingNotification ? { prependContext: pendingNotification } : undefined;
 				}
-
-				// Deduplicate by (sessionKey, messageCount): both before_prompt_build
-				// and before_agent_start fire on the same turn; only the first should
-				// call the daemon. Sessionless agents (no sessionKey) cannot be
-				// reliably correlated and are allowed to fall through rather than
-				// risk cross-suppressing concurrent independent sessions.
 				const count = Array.isArray(event.messages) ? event.messages.length : undefined;
-				// sig is only defined when we have both a stable scoped session identity
-				// and a message count — the two values that make dedup meaningful.
 				const sig = scopedKey && typeof count === "number" ? `${scopedKey}|${count}` : undefined;
-				// Lazy TTL sweep: evict entries from sessions that ended without agent_end.
 				if (sig) {
 					const now = Date.now();
 					for (const [k, v] of injectedTurns) {
@@ -2384,8 +2125,6 @@ const signetPlugin = {
 					if (notifications?.inject) return { prependContext: notifications.inject };
 					return pendingNotification ? { prependContext: pendingNotification } : undefined;
 				}
-				// Mark in-flight synchronously before any await so concurrent
-				// invocations in the same event-loop tick see the guard immediately.
 				if (sig) inFlightTurns.add(sig);
 
 				const lastAssistantMessage = extractLastAssistantMessage(event);
@@ -2396,15 +2135,11 @@ const signetPlugin = {
 					lastAssistantMessage,
 					sessionKey,
 				});
-
-				// Always clear in-flight regardless of outcome.
 				if (sig) inFlightTurns.delete(sig);
 				if (!result) {
-					// daemonFetch already logged the specific error (ECONNREFUSED or HTTP status).
 					return pendingNotification ? { prependContext: pendingNotification } : undefined;
 				}
 				if (scopedKey) pendingNotifications.delete(scopedKey);
-				// Record the completed turn so the other hook sees it on arrival.
 				if (scopedKey && typeof count === "number") {
 					injectedTurns.set(scopedKey, { count, at: Date.now() });
 				}
@@ -2413,8 +2148,6 @@ const signetPlugin = {
 				const parts = [sessionStartInjection, promptInjection].filter((value): value is string => Boolean(value));
 				return parts.length > 0 ? { prependContext: parts.join("\n\n") } : undefined;
 			};
-
-			// Preferred lifecycle hook in modern OpenClaw versions.
 			api.on(
 				"before_prompt_build",
 				async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
@@ -2423,11 +2156,8 @@ const signetPlugin = {
 					const resolved = resolveCtx(event, ctx);
 					await ensureSessionStarted(event, resolved.sessionKey, resolved.agentId);
 					const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
-					// Count every turn unconditionally — checkpoint should fire based on
-					// conversation progress, not on whether recall injection succeeded.
 					const msgs = Array.isArray(event.messages) ? (event.messages as readonly unknown[]) : undefined;
 					const msgCount = msgs?.length;
-					// Legacy dedup: increment bpbGen so bas can detect if bpb ran this turn.
 					const bpbKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
 					if (bpbKey) bpbGen.set(bpbKey, (bpbGen.get(bpbKey) ?? 0) + 1);
 					maybeFireCheckpoint(
@@ -2442,8 +2172,6 @@ const signetPlugin = {
 				},
 				{ priority: 20 },
 			);
-
-			// Legacy fallback for older OpenClaw runtimes.
 			api.on("before_agent_start", async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
 				if (!cfg.enabled) return undefined;
 
@@ -2452,8 +2180,6 @@ const signetPlugin = {
 				const result = await runPromptInjection(event, resolved.sessionKey, resolved.agentId);
 				const msgs = Array.isArray(event.messages) ? (event.messages as readonly unknown[]) : undefined;
 				const msgCount = msgs?.length;
-				// When messages absent, check generation counters to see if bpb already
-				// counted this turn. If basGen < bpbGen, bas is covered; sync basGen.
 				const basKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
 				const latestBpb = basKey ? (bpbGen.get(basKey) ?? 0) : 0;
 				const lastConsumed = basKey ? (basGen.get(basKey) ?? 0) : 0;
@@ -2506,10 +2232,6 @@ const signetPlugin = {
 
 				const resolved = resolveCtx(event, ctx);
 				const scopedKey = buildScopedSessionKey(resolved.sessionKey, resolved.agentId);
-
-				// Inline transcript fallback: same pattern as maybeFireCheckpoint —
-				// when sessionFile is absent (typed-only ctx), serialize event.messages
-				// so the daemon has a transcript source for session-end extraction.
 				const endMsgs = Array.isArray(event.messages) ? (event.messages as readonly unknown[]) : undefined;
 				const endTranscript =
 					!resolved.sessionFile && endMsgs && endMsgs.length > 0
@@ -2545,15 +2267,6 @@ const signetPlugin = {
 				return undefined;
 			});
 
-			// NOTE: session:compact:before / session:compact:after are not yet
-			// recognized by OpenClaw (as of 2026.3.28). The legacy hooks above
-			// (before_compaction / after_compaction) cover the same logic. Re-add
-			// the modern names when OpenClaw ships support for them.
-
-			// ==================================================================
-			// Service
-			// ==================================================================
-
 			api.registerService({
 				id: "signet-memory-openclaw",
 				start() {
@@ -2576,9 +2289,6 @@ const signetPlugin = {
 						} else if (ok) {
 							void sendHeartbeat();
 						}
-						// Daemon restarted (PID changed). Evict all claimed sessions so
-						// ensureSessionStarted re-inits on next turn, restoring identity
-						// blocks and memory context transparently.
 						if (ok && knownPid !== null && pid !== knownPid) {
 							api.logger.info(`signet-memory: daemon restarted (pid ${knownPid} -> ${pid}), re-initializing sessions`);
 							claimedSessions.clear();
@@ -2602,8 +2312,6 @@ const signetPlugin = {
 							healthTimer = null;
 						}
 					} finally {
-						// Always release the process-level registration guard so a
-						// later full registration pass can reinitialize cleanly.
 						writeRegistered(false);
 					}
 				},
@@ -2619,15 +2327,11 @@ const signetPlugin = {
 		}
 	},
 };
-
-/** @internal Test-only: reset the module-level registration guard. No-op in production. */
 export function _resetRegistration(): void {
 	if (process.env.NODE_ENV === "test") {
 		writeRegistered(false);
 	}
 }
-
-/** @internal Test-only exports for provider request normalization. */
 export const _sanitization = {
 	isAnthropicApiUrl,
 	injectBillingBlock,

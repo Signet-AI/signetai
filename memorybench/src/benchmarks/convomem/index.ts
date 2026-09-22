@@ -23,8 +23,6 @@ interface ConvoMemEvidence {
 interface PreMixedTestCase {
   evidenceItems: ConvoMemEvidence[]
 }
-
-// Categories and their evidence subfolders (all use 1_evidence format)
 const EVIDENCE_CATEGORIES: Record<string, string[]> = {
   user_evidence: ["1_evidence"],
   assistant_facts_evidence: ["1_evidence"],
@@ -33,10 +31,6 @@ const EVIDENCE_CATEGORIES: Record<string, string[]> = {
   preference_evidence: ["1_evidence"],
   implicit_connection_evidence: ["1_evidence"],
 }
-
-/**
- * ConvoMem question types - native evidence category types from the dataset.
- */
 export const CONVOMEM_QUESTION_TYPES: QuestionTypeRegistry = {
   user_evidence: { id: "user_evidence", alias: "user", description: "User-stated facts" },
   assistant_facts_evidence: {
@@ -91,8 +85,6 @@ export class ConvoMemBenchmark implements Benchmark {
 
   private async downloadDataset(dataFile: string): Promise<void> {
     const allItems: { category: string; item: ConvoMemEvidence }[] = []
-
-    // Calculate total downloads for progress
     const totalDownloads = Object.entries(EVIDENCE_CATEGORIES).reduce(
       (sum, [_, subfolders]) => sum + subfolders.length,
       0
@@ -115,8 +107,6 @@ export class ConvoMemBenchmark implements Benchmark {
 
           const data: PreMixedTestCase[] = await response.json()
           let itemCount = 0
-
-          // Extract evidence items from batched format
           for (const testCase of data) {
             if (testCase.evidenceItems) {
               for (const item of testCase.evidenceItems) {
@@ -142,8 +132,6 @@ export class ConvoMemBenchmark implements Benchmark {
     if (allItems.length === 0) {
       throw new Error("ConvoMem download produced no benchmark items")
     }
-
-    // Save all items to a single file only after every required slice succeeds.
     writeFileSync(dataFile, JSON.stringify(allItems, null, 2))
     logger.success(`Downloaded ConvoMem dataset (${allItems.length} items)`)
   }

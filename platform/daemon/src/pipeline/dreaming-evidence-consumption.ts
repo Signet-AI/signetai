@@ -54,8 +54,6 @@ function sourceRef(value: string): { readonly kind: EpisodicSourceKind; readonly
 	if (!id || !["memory", "artifact", "transcript", "summary"].includes(kind)) return null;
 	return { kind: kind as EpisodicSourceKind, id };
 }
-
-/** Parse exact fragments persisted in Dreaming tool-call output. Invalid rows never acknowledge evidence. */
 export function persistedEvidenceDeliveries(db: ReadDb, passId: string): readonly DreamingEvidenceDelivery[] {
 	if (!tableExists(db, "dreaming_tool_calls")) return [];
 	const rows = db
@@ -144,8 +142,6 @@ export function verifiedDreamingEvidenceDelivery(
 	}
 	return source;
 }
-
-/** Advance only contiguous delivery. A fragment after a gap is durable audit evidence but never a completion acknowledgement. */
 export function recordDreamingEvidenceConsumptionInTx(
 	db: WriteDb,
 	params: { readonly passId: string; readonly deferredEvidence: ReadonlySet<string> },
@@ -214,13 +210,6 @@ export function deliveredOffsetForSource(db: ReadDb, agentId: string, source: Ep
 	} | null;
 	return Math.max(0, row?.deliveredOffset ?? 0);
 }
-
-/**
- * A completed content pass made bounded progress and left one of its delivered
- * source revisions incomplete. The worker uses this only to schedule the next
- * regular sweep: a later no-progress pass has a different id, so it cannot
- * create a self-sustaining retry loop.
- */
 export function hasDreamingEvidenceContinuation(db: ReadDb, agentId: string, passId: string | null): boolean {
 	if (!passId || !tableExists(db, "dreaming_evidence_consumption")) return false;
 	const reviewedPredicate = tableExists(db, "dreaming_evidence_reviews")
@@ -246,14 +235,6 @@ export function hasDreamingEvidenceContinuation(db: ReadDb, agentId: string, pas
 			.get(agentId, passId) != null
 	);
 }
-
-/**
- * Return a bounded fair slice of every incomplete current revision. Earlier
- * delivery passes go first, so advancing one capped subset cannot strand the
- * rest of an older subset behind the most recent pass. A scan-first pass
- * receives these sources before consulting the ordinary newest-first queue,
- * so a busy stream cannot strand partial evidence below its next page.
- */
 export function pendingDreamingEvidenceContinuations(
 	db: ReadDb,
 	agentId: string,
@@ -347,8 +328,6 @@ export function pendingDreamingEvidenceContinuations(
 		return [source];
 	});
 }
-
-/** Count current, eligible source-owned evidence using the same delivery frontier and terminal review rules as Dreaming scans. */
 export function countEligibleUnconsumedEvidenceForSource(
 	db: ReadDb,
 	agentId: string,

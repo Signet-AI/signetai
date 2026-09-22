@@ -1,18 +1,4 @@
 #!/usr/bin/env bun
-/**
- * Backfill historical harness skill usage into skill_invocations.
- *
- * Walks Claude Code transcripts (~/.claude/projects/**\/*.jsonl), finds `Skill`
- * tool_use entries, pairs each with its tool_result for success + latency, and
- * POSTs to the daemon's /api/hooks/skill-invocation. Dedupe (the partial-unique
- * index on agent_id/harness/session_id/tool_use_id) makes re-runs safe.
- *
- * Targets either a running daemon (--port, default) or a SQLite file directly
- * (--db, for offline backfill while the daemon keeps running — WAL-safe).
- *
- *   bun scripts/backfill-skill-invocations.ts [--dir <path>] [--port <n>] [--agent-id <id>] [--dry]
- *   bun scripts/backfill-skill-invocations.ts --db ~/.agents/memory/memories.db --agent-id <id>
- */
 import { Database } from "bun:sqlite";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -42,14 +28,10 @@ function walk(dir: string): string[] {
 			const st = statSync(path);
 			if (st.isDirectory()) out.push(...walk(path));
 			else if (name.endsWith(".jsonl")) out.push(path);
-		} catch {
-			// skip unreadable entries (permission errors, broken symlinks, etc.)
-		}
+		} catch {}
 	}
 	return out;
 }
-
-/** Returns the records to send for one transcript file, plus count of skipped (no tool_result). */
 function parse(path: string): { records: Array<Record<string, unknown>>; skipped: number } {
 	let content: string;
 	try {
@@ -134,10 +116,6 @@ async function main(): Promise<void> {
 	}
 	console.log(`Posted ${sent}/${records.length} to ${url}`);
 }
-
-// Direct SQLite insert — mirrors recordSkillInvocation's INSERT OR IGNORE so the
-// partial-unique idx_skill_inv_dedupe drops repeats. WAL + busy_timeout make this
-// safe to run while the daemon holds the same DB.
 function insertDirect(dbPath: string, records: Array<Record<string, unknown>>, agentId: string): void {
 	const db = new Database(dbPath);
 	db.prepare("PRAGMA busy_timeout = 5000").run();
@@ -158,15 +136,11 @@ function insertDirect(dbPath: string, records: Array<Record<string, unknown>>, a
 			   WHERE agent_id = ? AND lower(name) = ?
 		   )`,
 	);
-	// Empty -> NULL so the partial-unique dedupe index (which only applies when
-	// harness/session_id/tool_use_id are all NOT NULL) behaves like the recorder.
 	const nn = (v: unknown): string | null => {
 		const s = typeof v === "string" ? v.trim() : "";
 		return s.length > 0 ? s : null;
 	};
 	const before = (db.query("SELECT COUNT(*) AS n FROM skill_invocations").get() as { n: number }).n;
-	// Commit in batches so the write lock is released frequently, letting the
-	// live daemon interleave its own writes (avoids SQLITE_BUSY on long runs).
 	const BATCH_SIZE = 200;
 	const insertBatch = db.transaction((rows: Array<Record<string, unknown>>) => {
 		for (const r of rows) {

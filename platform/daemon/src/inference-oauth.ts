@@ -76,9 +76,6 @@ interface OAuthProvider {
 	readonly name: string;
 	readonly oauth: OAuthAuth;
 }
-
-/** Pi's provider catalog is the production OAuth authority. Test registrations
- * exercise the same OAuthAuth contract without mutating process-global Pi state. */
 const testProviders = new Map<string, OAuthProvider>();
 
 function oauthProviders(): readonly OAuthProvider[] {
@@ -277,9 +274,7 @@ export function startOAuthLogin(
 			closed = true;
 			try {
 				controllerRef?.close();
-			} catch {
-				// The consumer may already have cancelled the stream.
-			}
+			} catch {}
 		},
 	};
 

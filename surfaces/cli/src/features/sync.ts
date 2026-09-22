@@ -191,7 +191,6 @@ async function syncSourceRepo(basePath: string, deps: Deps): Promise<number> {
 		console.log(chalk.dim(`  ${result.message}`));
 		return 0;
 	}
-	// current: already up to date, no output
 	return 0;
 }
 
@@ -245,8 +244,6 @@ async function syncHarnessHooks(basePath: string, deps: Deps): Promise<number> {
 						),
 					);
 				}
-				// Leave dual-state installs visible in doctor/status for manual cleanup.
-				// sync only self-heals legacy-only configs and should not silently remove hooks.
 			}
 
 			await deps.configureHarnessHooks(

@@ -16,7 +16,7 @@ import {
 
 type Tab = "overview" | "results"
 
-const POLL_INTERVAL = 2000 // 2 seconds
+const POLL_INTERVAL = 2000
 
 export default function RunDetailPage() {
   const params = useParams()
@@ -24,8 +24,6 @@ export default function RunDetailPage() {
   const router = useRouter()
   const runId = decodeURIComponent(params.runId as string)
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
-
-  // Get tab from URL or default to "overview"
   const tabFromUrl = searchParams.get("tab") as Tab | null
   const initialTab: Tab =
     tabFromUrl && ["overview", "results"].includes(tabFromUrl) ? tabFromUrl : "overview"
@@ -36,8 +34,6 @@ export default function RunDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<Tab>(initialTab)
   const [terminating, setTerminating] = useState(false)
-
-  // Check if run is in progress (include stopping to keep polling until fully stopped)
   const isInitializing = run?.status === "initializing"
   const isRunning =
     run?.status === "running" ||
@@ -82,8 +78,6 @@ export default function RunDetailPage() {
       setTerminating(false)
     }
   }
-
-  // Update URL when tab changes
   const handleTabChange = (tab: Tab) => {
     setActiveTab(tab)
     const newUrl =
@@ -92,8 +86,6 @@ export default function RunDetailPage() {
         : `/runs/${encodeURIComponent(runId)}?tab=${tab}`
     router.replace(newUrl, { scroll: false })
   }
-
-  // Silent refresh (no loading state)
   const refreshData = useCallback(async () => {
     try {
       const [runData, reportData] = await Promise.all([
@@ -104,16 +96,11 @@ export default function RunDetailPage() {
       setReport(reportData)
       setError(null)
     } catch {
-      // Silent fail on poll
     }
   }, [runId])
-
-  // Initial load
   useEffect(() => {
     loadData()
   }, [runId])
-
-  // Polling when run is in progress
   useEffect(() => {
     if (isRunning) {
       pollIntervalRef.current = setInterval(refreshData, POLL_INTERVAL)
@@ -166,12 +153,10 @@ export default function RunDetailPage() {
       </div>
     )
   }
-
-  // Show initializing state while benchmark is loading/downloading
   if (isInitializing) {
     return (
       <div className="animate-fade-in">
-        {/* Breadcrumb */}
+        {}
         <div className="flex items-center gap-2 text-sm text-text-secondary mb-4">
           <Link href="/runs" className="hover:text-text-primary">
             Runs
@@ -180,7 +165,7 @@ export default function RunDetailPage() {
           <span className="text-text-primary font-mono">{runId}</span>
         </div>
 
-        {/* Header */}
+        {}
         <div className="mb-8">
           <h1 className="text-2xl font-display font-semibold text-text-primary flex items-center gap-3">
             {runId}
@@ -198,7 +183,7 @@ export default function RunDetailPage() {
           </div>
         </div>
 
-        {/* Loading State */}
+        {}
         <div className="flex flex-col items-center justify-center py-16 border border-border rounded-lg">
           <div className="w-10 h-10 border-2 border-accent border-t-transparent rounded-full animate-spin mb-4" />
           <p className="text-text-secondary text-lg">Loading benchmark dataset...</p>
@@ -211,7 +196,6 @@ export default function RunDetailPage() {
   }
 
   const allQuestions = Object.values(run.questions)
-  // Only count questions that have been evaluated
   const evaluatedQuestions = allQuestions.filter((q) => q.phases.evaluate.status === "completed")
   const accuracy =
     report?.summary?.accuracy ??
@@ -220,8 +204,6 @@ export default function RunDetailPage() {
           evaluatedQuestions.length) *
         100
       : 0)
-
-  // Find error from failed phases
   const runError = (() => {
     for (const q of allQuestions) {
       const phases = q.phases as Record<string, { status?: string; error?: string }>
@@ -236,7 +218,7 @@ export default function RunDetailPage() {
 
   return (
     <div className="animate-fade-in">
-      {/* Breadcrumb */}
+      {}
       <div className="flex items-center gap-2 text-sm text-text-secondary mb-4">
         <Link href="/runs" className="hover:text-text-primary">
           Runs
@@ -245,7 +227,7 @@ export default function RunDetailPage() {
         <span className="text-text-primary font-mono">{runId}</span>
       </div>
 
-      {/* Header */}
+      {}
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-2xl font-display font-semibold text-text-primary flex items-center gap-3">
@@ -297,7 +279,7 @@ export default function RunDetailPage() {
         </div>
       </div>
 
-      {/* Error Display */}
+      {}
       {runError && (
         <div className="my-8 flex justify-center">
           <div className="max-w-xl w-full px-5 py-4 border border-border rounded">
@@ -309,10 +291,10 @@ export default function RunDetailPage() {
         </div>
       )}
 
-      {/* Phase Progress */}
+      {}
       <PhaseProgress summary={run.summary} />
 
-      {/* Tabs */}
+      {}
       <div className="flex gap-1 border-b border-border mt-8 mb-6">
         {(["overview", "results"] as Tab[]).map((tab) => (
           <button
@@ -331,7 +313,7 @@ export default function RunDetailPage() {
         ))}
       </div>
 
-      {/* Tab Content */}
+      {}
       {activeTab === "overview" && (
         <div className="space-y-6">
           {report?.memscore && (

@@ -6,8 +6,6 @@ import { dbOwnerQuery, dbOwnerTransaction } from "./db-owner-runtime";
 
 export const TRANSCRIPT_CHUNK_BYTES = 64 * 1024;
 export const TRANSCRIPT_UPLOAD_BYTES = 1024 * 1024;
-// Seven chunks fit below the 1 MiB owner result cap after hex encoding and
-// protocol framing, while reducing finalization round trips substantially.
 export const TRANSCRIPT_READ_BYTES = 6 * TRANSCRIPT_CHUNK_BYTES;
 export const TRANSCRIPT_FILE_BYTES = 64 * 1024 ** 3;
 export interface TranscriptUploadScope {
@@ -100,8 +98,6 @@ export async function beginTranscriptUpload(scope: TranscriptUploadScope, size: 
 			throw error;
 	}
 }
-
-/** The offset CAS and chunk insertion commit together. Replays must match bytes. */
 export async function appendTranscriptChunk(
 	scope: TranscriptUploadScope,
 	offset: number,
@@ -182,15 +178,12 @@ export async function appendTranscriptChunk(
 		const committed = await transcriptUpload(scope);
 		if (committed.upload_generation !== scope.generation || committed.upload_offset < offset + bytes.length)
 			throw error;
-		// A concurrent CAS winner may have committed this exact request.
 		if ((await transcriptBytesChecksum(scope, offset, bytes.length)) !== expectedChecksum)
 			throw new Error("upload replay checksum mismatch");
 		return committed.upload_offset;
 	}
 	return offset + bytes.length;
 }
-
-/** Each read is independently scoped and bounded, including during export. */
 export async function readTranscriptBytes(
 	scope: TranscriptUploadScope,
 	offset: number,
@@ -238,8 +231,6 @@ async function transcriptBytesChecksum(scope: TranscriptUploadScope, offset: num
 	}
 	return hash.digest("hex");
 }
-
-/** Seal before interpretation. Standard SHA-256 remains the file duplicate identity. */
 export async function sealTranscriptUpload(
 	scope: TranscriptUploadScope,
 	active: () => boolean = () => true,
@@ -279,8 +270,6 @@ export async function sealTranscriptUpload(
 	);
 	return transcriptUpload(scope);
 }
-
-/** Compatibility transport: a single streamed PUT uses the same chunk writer. */
 export async function uploadTranscriptStream(
 	scope: TranscriptUploadScope,
 	size: number,
@@ -306,8 +295,6 @@ export async function uploadTranscriptStream(
 	if (buffered.length) await appendTranscriptChunk(scope, offset, buffered, checksum(buffered));
 	if (offset + buffered.length !== size) throw new Error("upload incomplete");
 }
-
-/** Tombstone first; each delete transaction releases at most sixteen chunks. */
 export async function purgeTranscriptBytes(
 	scope: Omit<TranscriptUploadScope, "generation">,
 	active: () => boolean = () => true,
@@ -348,8 +335,6 @@ export async function purgeTranscriptBytes(
 		write,
 	);
 }
-
-/** Complete a source registration after either normal finalization or crash recovery. */
 export async function bindTranscriptSource(scope: TranscriptUploadScope, sourceId: string): Promise<void> {
 	await dbOwnerTransaction(
 		[
@@ -363,8 +348,6 @@ export async function bindTranscriptSource(scope: TranscriptUploadScope, sourceI
 		write,
 	);
 }
-
-/** Cancellation reclaims incomplete uploads; sealed Sources retain their evidence until deletion. */
 export async function cleanupCancelledTranscriptImport(
 	agentId: string,
 	requestedJobId?: string,

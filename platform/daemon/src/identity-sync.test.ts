@@ -49,7 +49,6 @@ describe("syncAgentWorkspaces", () => {
 			expect(output).toContain("root user");
 			expect(output).toContain("## MEMORY");
 			expect(output).toContain("root memory");
-			// A later sync must remove old generated text already copied into AGENTS.md.
 			const generated = "<!-- generated 2026-09-04 12:00 -->\n\nStale generated Tuesday.";
 			writeFileSync(join(dir, "MEMORY.md"), generated);
 			await syncAgentWorkspaces({ agentsDir: dir });

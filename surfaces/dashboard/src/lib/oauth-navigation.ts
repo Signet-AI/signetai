@@ -70,18 +70,14 @@ export function createOAuthNavigation(options: OAuthNavigationOptions): OAuthNav
 		if (!popup || popup.closed) return;
 		try {
 			popup.location.href = href;
-		} catch {
-			/* cross-origin navigation in progress — the window still lands */
-		}
+		} catch {}
 	};
 
 	const close = (): void => {
 		if (popup && !popup.closed) {
 			try {
 				popup.close();
-			} catch {
-				/* noop */
-			}
+			} catch {}
 		}
 		popup = null;
 	};

@@ -33,9 +33,6 @@ export async function readRetainedMigrationVerifyStatus(
 		const row = await owner.awaitResult(handle, 5_000);
 		return typeof row?.status === "string" ? row.status : null;
 	} catch (error) {
-		// Only the named checkpoint table being absent means this is a legacy DB
-		// with no retained verdict. I/O, corruption, and owner deadlines remain
-		// errors so startup takes the read-only deferred-verification path.
 		if (isMissingMigrationCheckpointTableError(error)) return null;
 		throw error;
 	}
@@ -49,12 +46,6 @@ export interface ProductionMigrationVerificationWiring {
 	readonly schedule: (callback: () => void, delayMs: number) => void;
 	readonly requestShutdown: (reason: string) => void;
 }
-
-/**
- * Observable production lifecycle seam: retain the write block while the
- * rollback point is unverified, then prune and schedule the restart only after
- * the verifier reports a pass.
- */
 export async function runProductionMigrationVerificationWiring(
 	wiring: ProductionMigrationVerificationWiring,
 ): Promise<{ readonly phase: "pass" | "parked" | "failed" | "terminal" }> {

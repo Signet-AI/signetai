@@ -1,15 +1,3 @@
-/**
- * In-memory analytics accumulator for the Signet daemon.
- *
- * All counters are ephemeral per daemon lifetime. The existing
- * structured logs and memory_history table provide durable backing
- * for anything that needs to survive restarts.
- */
-
-// ---------------------------------------------------------------------------
-// Error codes — stage-keyed taxonomy
-// ---------------------------------------------------------------------------
-
 export const ERROR_CODES = {
 	EXTRACTION_TIMEOUT: "extraction",
 	EXTRACTION_PARSE_FAIL: "extraction",
@@ -30,10 +18,6 @@ export const ERROR_CODES = {
 
 export type ErrorCode = keyof typeof ERROR_CODES;
 export type ErrorStage = (typeof ERROR_CODES)[ErrorCode];
-
-// ---------------------------------------------------------------------------
-// Usage counter types
-// ---------------------------------------------------------------------------
 
 export interface EndpointStats {
 	readonly count: number;
@@ -67,10 +51,6 @@ export interface UsageCounters {
 	readonly connectors: Readonly<Record<string, ConnectorStats>>;
 }
 
-// ---------------------------------------------------------------------------
-// Error ring buffer types
-// ---------------------------------------------------------------------------
-
 export interface ErrorEntry {
 	readonly timestamp: string;
 	readonly stage: ErrorStage;
@@ -80,10 +60,6 @@ export interface ErrorEntry {
 	readonly memoryId?: string;
 	readonly actor?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Latency histogram
-// ---------------------------------------------------------------------------
 
 export type LatencyOperation = "remember" | "recall" | "mutate" | "jobs" | "predictor_score" | "predictor_train";
 
@@ -149,10 +125,6 @@ function createLatencyHistogram(capacity = 1000): LatencyHistogram {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Analytics collector
-// ---------------------------------------------------------------------------
-
 export interface AnalyticsCollector {
 	recordRequest(method: string, path: string, status: number, durationMs: number, actor?: string): void;
 
@@ -191,8 +163,6 @@ export function createAnalyticsCollector(errorCapacity = 500): AnalyticsCollecto
 		predictor_score: createLatencyHistogram(),
 		predictor_train: createLatencyHistogram(),
 	};
-
-	// Detect operation type from request path
 	function classifyActor(path: string): "remembers" | "recalls" | "mutations" | "requests" {
 		if (path.includes("/remember") || path.includes("/save")) {
 			return "remembers";
@@ -312,13 +282,10 @@ export function createAnalyticsCollector(errorCapacity = 500): AnalyticsCollecto
 			providers.clear();
 			connectors.clear();
 			errorBuffer.length = 0;
-			// Re-create histograms by clearing their internal state
 			for (const key of Object.keys(histograms) as LatencyOperation[]) {
 				histograms[key] = createLatencyHistogram();
 			}
 		},
 	};
 }
-
-// Utility type — mutable version of a readonly interface for internal maps
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };

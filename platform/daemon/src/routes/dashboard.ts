@@ -13,9 +13,7 @@ function getDashboardCandidates(): string[] {
 
 	return [
 		...(envDashboardDir ? [envDashboardDir] : []),
-		// Development monorepo path from platform/daemon/src/routes or platform/daemon/dist/routes.
 		join(__dirname, "..", "..", "..", "..", "surfaces", "dashboard", "build"),
-		// Published package paths.
 		join(__dirname, "..", "dashboard"),
 		join(__dirname, "dashboard"),
 	];

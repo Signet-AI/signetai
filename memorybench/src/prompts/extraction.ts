@@ -1,8 +1,6 @@
 import { createOpenAI } from "@ai-sdk/openai"
 import { generateText } from "ai"
 import type { UnifiedSession } from "../types/unified"
-
-/** Model used for memory extraction */
 const EXTRACTION_MODEL = process.env.MEMORYBENCH_EXTRACTION_MODEL || "gpt-4o"
 
 function readPositiveInt(name: string, fallback: number): number {
@@ -34,12 +32,6 @@ function extractionModelSupportsTemperature(): boolean {
 function extractionTemperature(): Record<string, number> {
   return extractionModelSupportsTemperature() ? { temperature: 0 } : {}
 }
-
-/**
- * Build an extraction prompt that instructs the LLM to extract structured
- * memories from a conversation session. Produces MEMORY.md-style markdown
- * with categorized facts, events, preferences, and relationships.
- */
 export function buildExtractionPrompt(session: UnifiedSession): string {
   const speakerA = (session.metadata?.speakerA as string) || "Speaker A"
   const speakerB = (session.metadata?.speakerB as string) || "Speaker B"
@@ -121,11 +113,6 @@ Temporal rules:
 - Never collapse a relative reference to the conversation date itself
 - If unsure of the exact day, use the narrowest range possible (e.g. "June 2023" not "sometime in 2023")`
 }
-
-/**
- * Call LLM to extract structured memories from a conversation session.
- * Returns MEMORY.md-style markdown with categorized facts, events, preferences.
- */
 export async function extractMemories(
   openai: ReturnType<typeof createOpenAI>,
   session: UnifiedSession
@@ -143,19 +130,10 @@ export async function extractMemories(
 
   return text.trim()
 }
-
-/** Entity types for structured extraction */
 const ENTITY_TYPES =
   "person, organization, place, project, system, service, tool, product, work, event, unknown"
-
-/** Aspect categories for structured extraction */
 const ASPECT_CATEGORIES =
   "preferences, properties, events, activities, perspectives, relationships, background, decision patterns, general"
-
-/**
- * Build a prompt that extracts structured entities, aspects, and hints
- * from already-extracted markdown memory content.
- */
 export function buildStructuredPrompt(content: string): string {
   const bounded = boundStructuredContent(content)
 
@@ -223,8 +201,6 @@ export function boundStructuredContent(content: string): string {
   const tail = trimmed.slice(trimmed.length - tailChars).trimStart()
   return `${head}\n\n[Truncated ${omitted} middle characters to keep structured extraction inside the local model context window.]\n\n${tail}`
 }
-
-/** Structured extraction result */
 interface StructuredExtraction {
   content: string
   structured: {
@@ -481,8 +457,6 @@ export function sanitizeStructuredExtraction(
 
   return { entities, aspects, hints }
 }
-
-/** Parse JSON from LLM output, stripping code fences and surrounding chatter if present */
 export function parseJson(raw: string): unknown {
   const trimmed = raw.trim()
   try {
@@ -501,12 +475,6 @@ export function parseJson(raw: string): unknown {
     }
   }
 }
-
-/**
- * Extract both markdown memories and structured knowledge graph data
- * from a conversation session. Calls the LLM twice: once for markdown
- * extraction, once for structured JSON extraction.
- */
 export async function extractStructuredMemories(
   openai: ReturnType<typeof createOpenAI>,
   session: UnifiedSession

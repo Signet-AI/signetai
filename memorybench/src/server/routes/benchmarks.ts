@@ -15,16 +15,12 @@ function json(data: unknown, status = 200): Response {
 export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
-
-  // GET /api/providers - List available providers
   if (method === "GET" && pathname === "/api/providers") {
     const providers = getAvailableProviders()
     return json({
       providers: providers.map((name) => getProviderInfo(name)),
     })
   }
-
-  // GET /api/benchmarks - List available benchmarks
   if (method === "GET" && pathname === "/api/benchmarks") {
     const benchmarks = getAvailableBenchmarks()
     return json({
@@ -35,8 +31,6 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
       })),
     })
   }
-
-  // GET /api/downloads - Check for active downloads by observing filesystem
   if (method === "GET" && pathname === "/api/downloads") {
     const benchmarkDatasets: Record<string, { path: string; displayName: string }> = {
       longmemeval: {
@@ -79,8 +73,6 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
       downloads,
     })
   }
-
-  // GET /api/benchmarks/:name/questions - Preview benchmark questions
   const questionsMatch = pathname.match(/^\/api\/benchmarks\/([^/]+)\/questions$/)
   if (method === "GET" && questionsMatch) {
     const benchmarkName = questionsMatch[1]
@@ -89,8 +81,6 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
       const benchmark = createBenchmark(benchmarkName as any)
       await benchmark.load()
       const questions = benchmark.getQuestions()
-
-      // Support pagination
       const page = parseInt(url.searchParams.get("page") || "1")
       const limit = parseInt(url.searchParams.get("limit") || "20")
       const type = url.searchParams.get("type")
@@ -127,8 +117,6 @@ export async function handleBenchmarksRoutes(req: Request, url: URL): Promise<Re
       return json({ error: `Benchmark not found: ${benchmarkName}` }, 404)
     }
   }
-
-  // GET /api/models - List available models
   if (method === "GET" && pathname === "/api/models") {
     const openai = listModelsByProvider("openai").map((alias) => ({
       alias,

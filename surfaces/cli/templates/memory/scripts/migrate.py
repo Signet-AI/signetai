@@ -24,7 +24,6 @@ def get_checksum(sql: str) -> str:
 
 def ensure_migrations_table(conn: sqlite3.Connection):
     """Create schema_migrations table if it doesn't exist, migrate old schema."""
-    # Create table if it doesn't exist (new installations)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version     INTEGER PRIMARY KEY,
@@ -32,13 +31,10 @@ def ensure_migrations_table(conn: sqlite3.Connection):
             checksum    TEXT NOT NULL
         )
     """)
-
-    # Check if checksum column exists (migrate old schema)
     cursor = conn.execute("PRAGMA table_info(schema_migrations)")
     columns = [row[1] for row in cursor.fetchall()]
 
     if "checksum" not in columns:
-        # Old schema without checksum - add the column
         conn.execute("ALTER TABLE schema_migrations ADD COLUMN checksum TEXT NOT NULL DEFAULT 'migrated'")
 
     conn.commit()
@@ -61,7 +57,6 @@ def get_pending_migrations(current_version: int) -> list[tuple[int, Path]]:
     
     migrations = []
     for f in sorted(MIGRATIONS_DIR.glob("*.sql")):
-        # Extract version from filename (e.g., 001_name.sql -> 1)
         try:
             version = int(f.name.split("_")[0])
             if version > current_version:
@@ -80,8 +75,6 @@ def apply_migration(conn: sqlite3.Connection, version: int, path: Path) -> bool:
     print(f"  Applying migration {version}: {path.name}")
     
     try:
-        # Split by semicolon and execute each statement
-        # (executescript doesn't work well with ALTER TABLE)
         statements = [s.strip() for s in sql.split(";") if s.strip()]
         
         for stmt in statements:
@@ -89,17 +82,13 @@ def apply_migration(conn: sqlite3.Connection, version: int, path: Path) -> bool:
                 try:
                     conn.execute(stmt)
                 except sqlite3.OperationalError as e:
-                    # Ignore "duplicate column" errors for idempotency
                     if "duplicate column" in str(e).lower():
                         print(f"    (skipping: {e})")
                         continue
-                    # Ignore "table already exists" errors
                     if "already exists" in str(e).lower():
                         print(f"    (skipping: {e})")
                         continue
                     raise
-        
-        # Record migration
         conn.execute(
             "INSERT INTO schema_migrations (version, applied_at, checksum) VALUES (?, ?, ?)",
             (version, datetime.utcnow().isoformat() + "Z", checksum)
@@ -158,8 +147,6 @@ def status():
     try:
         current = get_current_version(conn)
         print(f"Current schema version: {current}")
-        
-        # Show applied migrations
         try:
             cursor = conn.execute(
                 "SELECT version, applied_at, checksum FROM schema_migrations ORDER BY version"
@@ -171,8 +158,6 @@ def status():
                     print(f"  {v}: {at} ({cs})")
         except sqlite3.OperationalError:
             print("No migrations table yet.")
-        
-        # Show pending
         pending = get_pending_migrations(current)
         if pending:
             print(f"\nPending migrations: {len(pending)}")

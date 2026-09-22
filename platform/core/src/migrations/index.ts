@@ -2,13 +2,6 @@ import { up as transcriptImportBytes } from "./151-transcript-import-bytes";
 import { up as memoryArtifactShaIndex } from "./152-memory-artifact-sha-index";
 import { up as transcriptCaptureSourceIdentity } from "./154-transcript-capture-source-identity";
 import { up as sourceSyncFailures } from "./155-source-sync-failures";
-/**
- * Migration runner for Signet's SQLite database
- *
- * Reads the current schema version from `schema_migrations`, runs
- * any pending migrations in order (each inside a transaction), and
- * records execution in `schema_migrations_audit`.
- */
 
 import type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 
@@ -167,8 +160,6 @@ import { up as embeddingRepairCheckpoints } from "./156-embedding-repair-checkpo
 import { up as embeddingRepairProgress } from "./157-embedding-repair-progress";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
-
-/** Ordered list of all migrations. New migrations go at the end. */
 export const MIGRATIONS: readonly Migration[] = [
 	{
 		version: 1,
@@ -188,7 +179,6 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 3,
 		name: "unique-content-hash",
 		up: uniqueContentHash,
-		// No artifact declaration: rerunning v3 can null duplicate content hashes.
 	},
 	{
 		version: 4,
@@ -1268,9 +1258,6 @@ export const MIGRATIONS: readonly Migration[] = [
 			tables: ["transcript_capture_status", "memories_duplicate_hash_counts", "memories_diagnostics_state"],
 		},
 	},
-	// 139 tracks provider pause/running lifecycle and its legacy checkpoint.
-	// 141/142 track per-agent/source/phase scan cursors/frontiers; they are a
-	// separate bounded walk concern and intentionally remain a distinct table.
 	{
 		version: 139,
 		name: "native-source-sync-state",
@@ -1455,8 +1442,6 @@ export const MIGRATIONS: readonly Migration[] = [
 		},
 	},
 ];
-
-/** Simple checksum for audit trail (hash of migration name + version). */
 function checksum(m: Migration): string {
 	let h = 0;
 	const s = `${m.version}:${m.name}`;
@@ -1465,12 +1450,6 @@ function checksum(m: Migration): string {
 	}
 	return h.toString(16);
 }
-
-/**
- * Ensure schema_migrations and schema_migrations_audit tables exist.
- * Called before reading current version so the queries don't fail
- * on a brand-new database.
- */
 function ensureMetaTables(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -1487,59 +1466,36 @@ function ensureMetaTables(db: MigrationDb): void {
 		);
 	`);
 }
-
-/** Read the highest applied version, or 0 if none. */
 function currentVersion(db: MigrationDb): number {
 	const row = db.prepare("SELECT MAX(version) as version FROM schema_migrations").get();
 	if (row === undefined) return 0;
 	const v = row.version;
 	return typeof v === "number" ? v : 0;
 }
-
-/**
- * Read-only detector for the v0.1.65 CLI bug: version >= 2 stamped but
- * memories table lacks the `content_hash` column added by migration 002.
- */
 function hasBogusVersion(db: MigrationDb): boolean {
 	const current = currentVersion(db);
 	if (current < 2) return false;
 	const cols = db.prepare("PRAGMA table_info(memories)").all();
 	return !cols.filter(hasStringName).some((r) => r.name === "content_hash");
 }
-
-/**
- * Repair the v0.1.65 CLI bug by deleting the bogus version records so all
- * migrations re-run. Safe because every migration uses CREATE IF NOT EXISTS
- * / addColumnIfMissing. Called only inside runMigrations.
- */
 function repairBogusVersion(db: MigrationDb): void {
 	if (!hasBogusVersion(db)) return;
 	db.exec("DELETE FROM schema_migrations WHERE version > 0");
 }
-
-/** Type guard: narrows a query row to one with a string `name` field. */
 function hasStringName(row: Record<string, unknown>): row is { name: string } {
 	return typeof row.name === "string";
 }
-
-/** Type guard: narrows a query row to one with a numeric `version` field. */
 function hasNumericVersion(row: Record<string, unknown>): row is { version: number } {
 	return typeof row.version === "number";
 }
-
-/** Get the set of table names in the database (single query). */
 function existingTables(db: MigrationDb): Set<string> {
 	const rows = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
 	return new Set(rows.filter(hasStringName).map((r) => r.name));
 }
-
-/** Get the set of index names in the database (single query). */
 function existingIndexes(db: MigrationDb): Set<string> {
 	const rows = db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all();
 	return new Set(rows.filter(hasStringName).map((r) => r.name));
 }
-
-/** Get column names for a table, with per-call caching. */
 function tableColumns(db: MigrationDb, table: string, cache: Map<string, Set<string>>): Set<string> {
 	let cols = cache.get(table);
 	if (cols) return cols;
@@ -1574,21 +1530,7 @@ function missingArtifact(
 	}
 	return undefined;
 }
-
-/**
- * Detect phantom migrations — versions recorded in schema_migrations whose
- * expected artifacts (tables/columns/indexes) no longer exist. Read-only; does not
- * modify the database.
- *
- * Used by both hasPendingMigrations (detection only) and
- * repairPhantomMigrations (detection + deletion).
- */
-function findPhantomVersions(
-	db: MigrationDb,
-	// Accepts a pre-fetched applied set to avoid a redundant query when
-	// the caller already has one (e.g. hasPendingMigrations).
-	precomputedApplied?: Set<number>,
-): Set<number> {
+function findPhantomVersions(db: MigrationDb, precomputedApplied?: Set<number>): Set<number> {
 	const tables = existingTables(db);
 	const indexes = existingIndexes(db);
 	const colCache = new Map<string, Set<string>>();
@@ -1608,18 +1550,6 @@ function findPhantomVersions(
 
 	return phantoms;
 }
-
-/**
- * Detect phantom migrations and delete their schema_migrations records so
- * they re-run on the next pass. Logs each repair to stderr.
- *
- * Returns the post-repair applied set so the caller (runMigrations) can
- * use it directly without issuing a redundant appliedVersions() query.
- *
- * schema_migrations_audit rows are intentionally preserved — they are a
- * durable history record that helps diagnose why the phantom occurred.
- * A fresh audit row will be inserted when the migration re-runs.
- */
 function repairPhantomMigrations(db: MigrationDb): Set<number> {
 	const applied = appliedVersions(db);
 	const phantoms = findPhantomVersions(db, applied);
@@ -1631,24 +1561,16 @@ function repairPhantomMigrations(db: MigrationDb): Set<number> {
 				`[signet] phantom migration v${migration.version} (${migration.name}): artifact missing — will re-run`,
 			);
 		}
-		// Only remove from schema_migrations (re-run tracker); audit stays intact
 		db.prepare("DELETE FROM schema_migrations WHERE version = ?").run(version);
 		applied.delete(version);
 	}
 
 	return applied;
 }
-
-/** Get the set of applied migration versions. */
 function appliedVersions(db: MigrationDb): Set<number> {
 	const rows = db.prepare("SELECT version FROM schema_migrations").all();
 	return new Set(rows.filter(hasNumericVersion).map((r) => r.version));
 }
-
-/**
- * Verify that a migration's declared artifacts exist after running.
- * Throws if any artifact is missing (SAVEPOINT catches it).
- */
 function verifyArtifacts(db: MigrationDb, migration: Migration): void {
 	const artifacts = migration.artifacts;
 	if (!artifacts) return;
@@ -1658,22 +1580,9 @@ function verifyArtifacts(db: MigrationDb, migration: Migration): void {
 			`Post-DDL verification failed: migration ${migration.version} (${migration.name}) declares ${missing} but it was not created`,
 		);
 }
-
-/**
- * Check whether there are unapplied migrations without running them.
- * Useful for backup-before-migrate logic in the daemon.
- *
- * Fully read-only: uses hasBogusVersion and findPhantomVersions for
- * detection only — no deletes. All repairs run exclusively inside
- * runMigrations so the daemon's backup version label stays accurate.
- */
 export function hasPendingMigrations(db: MigrationDb): boolean {
 	ensureMetaTables(db);
-	// Single query for applied versions; reused by all three checks below.
 	const applied = appliedVersions(db);
-	// Derive the bogus-version signal from the already-fetched set rather than
-	// calling hasBogusVersion(db) which issues a separate SELECT MAX(version).
-	// v0.1.65 bug: version >= 2 stamped but content_hash column is absent.
 	const isBogus =
 		applied.has(2) &&
 		!db
@@ -1685,17 +1594,7 @@ export function hasPendingMigrations(db: MigrationDb): boolean {
 	const phantoms = findPhantomVersions(db, applied);
 	return isBogus || hasNew || phantoms.size > 0;
 }
-
-/** The highest migration version defined. */
 export const LATEST_SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1]?.version ?? 0;
-
-/**
- * Assert that MIGRATIONS versions are strictly contiguous (each version
- * equals the previous + 1). Called at the top of runMigrations rather
- * than at module scope to comply with the effect-free module scope rule.
- * Catches registration mistakes (wrong order, gaps, copy-paste version
- * numbers) before any migration runs.
- */
 function assertMigrationsSequence(): void {
 	for (let i = 1; i < MIGRATIONS.length; i++) {
 		const prev = MIGRATIONS[i - 1];
@@ -1708,27 +1607,11 @@ function assertMigrationsSequence(): void {
 		}
 	}
 }
-
-/**
- * Run all pending migrations against `db`.
- *
- * Idempotent — safe to call on every startup. Migrations that have
- * already been applied (tracked in `schema_migrations`) are skipped.
- * Set-based skip logic handles gaps from phantom repair correctly.
- * Each migration runs inside a SAVEPOINT so a failure rolls back
- * only that migration.
- */
 export function runMigrations(db: MigrationDb): void {
-	// Guard against mis-registered migrations (wrong order, gaps, duplicates)
 	assertMigrationsSequence();
 
 	ensureMetaTables(db);
-
-	// Repair v0.1.65 CLI bug (stamps version without running migrations)
 	repairBogusVersion(db);
-
-	// Repair phantom migrations (recorded but artifacts missing).
-	// Returns the post-repair applied set to avoid a redundant query.
 	const applied = repairPhantomMigrations(db);
 
 	for (const migration of MIGRATIONS) {
@@ -1736,13 +1619,9 @@ export function runMigrations(db: MigrationDb): void {
 
 		const start = Date.now();
 		const cs = checksum(migration);
-
-		// Use SAVEPOINT for nested-transaction safety
 		db.exec(`SAVEPOINT migration_${migration.version}`);
 		try {
 			migration.up(db);
-
-			// Post-DDL verification: confirm declared artifacts were created
 			verifyArtifacts(db, migration);
 
 			db.prepare(
