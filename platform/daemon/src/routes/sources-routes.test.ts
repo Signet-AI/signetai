@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
 	addDiscordSource,
 	addImportedSource,
+	addLocalFilesSource,
 	addObsidianSource,
 	loadSourcesConfig,
 	removeSourceIfGeneration,
@@ -13,12 +14,15 @@ import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { dbOwnerBatch, ownerStatement } from "../db-owner-runtime";
 import { hashNormalizedBody } from "../memory-lineage";
-import type {
-	NativeMemoryBridgeHandle,
-	NativeMemoryBridgeOptions,
-	NativeMemorySource,
-	NativeMemorySyncResult,
+import {
+	clearNativeMemoryPermissionDenied,
+	type NativeMemoryBridgeHandle,
+	type NativeMemoryBridgeOptions,
+	type NativeMemorySource,
+	type NativeMemorySyncResult,
+	recordNativeMemoryPermissionDenied,
 } from "../native-memory-sources";
+import { resolveDaemonAgentId } from "../agent-id";
 import { indexSourceArtifactStructure } from "../source-artifact-graph";
 import {
 	beginSourceIndexJob,
@@ -1909,6 +1913,32 @@ describe("Sources routes", () => {
 		const res = await makeApp().request("/api/sources/discord%3Amissing/health");
 		expect(res.status).toBe(404);
 		expect(((await res.json()) as { error: string }).error).toContain("Source not found");
+	});
+
+	it("reports recorded local-files permission denials in source health", async () => {
+		const root = join(dir, "permission-denied-files");
+		const denied = join(root, "private.txt");
+		mkdirSync(root, { recursive: true });
+		const added = addLocalFilesSource({ root }, dir);
+		expect(added.ok).toBe(true);
+		if (added.ok === false) throw new Error(added.error);
+
+		const agentId = resolveDaemonAgentId();
+		recordNativeMemoryPermissionDenied({ harness: "local-files" }, denied, agentId);
+		try {
+			const res = await makeApp().request(`/api/sources/${encodeURIComponent(added.source.id)}/health`);
+			expect(res.status).toBe(200);
+			const body = (await res.json()) as {
+				health?: { status?: string; permission?: { status?: string; issues?: readonly { path: string }[] } };
+			};
+			expect(body.health?.status).toBe("unhealthy");
+			expect(body.health?.permission).toEqual({
+				status: "denied",
+				issues: [expect.objectContaining({ path: denied })],
+			});
+		} finally {
+			clearNativeMemoryPermissionDenied({ harness: "local-files" }, denied, agentId);
+		}
 	});
 
 	it("marks source health unhealthy when diagnostics queries fail", async () => {

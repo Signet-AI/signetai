@@ -1013,13 +1013,12 @@ async function sourceStats(source: SignetSourceEntry, agentId: string): Promise<
 async function sourceHealth(source: SignetSourceEntry, agentId: string, stats: SourceStats): Promise<SourceHealth> {
 	const generatedAt = new Date().toISOString();
 	try {
-		const permission =
-			source.kind === "obsidian" || source.kind === "discord"
-				? nativeMemorySourcePermissionHealth(
-						{ harness: source.kind === "discord" ? "discord" : "obsidian", root: source.root },
-						agentId,
-					)
-				: { status: "clear" as const, issues: [] };
+		const nativeSource = getSourceProvider(source.kind)?.toNativeSource?.(source);
+		const permissionSource =
+			nativeSource ?? (source.kind === "discord" ? { harness: "discord", root: source.root } : null);
+		const permission = permissionSource
+			? nativeMemorySourcePermissionHealth(permissionSource, agentId)
+			: { status: "clear" as const, issues: [] };
 		const [artifactSummary, discordSummary, semantic, orphanChunks] = await Promise.all([
 			artifactHealthSummary(source, agentId),
 			discordHealthSummary(source, agentId),
