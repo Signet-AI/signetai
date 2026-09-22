@@ -263,6 +263,9 @@ import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
 import { createOwnerTranscriptImportStore } from "./transcript-import-store";
+import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
+import { admitImport } from "./import-inbox";
+import { startManualInboxWorker, type ManualInboxWorkerHandle } from "./manual-inbox-worker";
 
 import { resolveDaemonRestartMode } from "./daemon-restart";
 import {
@@ -342,6 +345,7 @@ let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 let transcriptImportWorkerHandle: TranscriptImportWorkerHandle | null = null;
+let manualInboxWorkerHandle: ManualInboxWorkerHandle | null = null;
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -528,7 +532,22 @@ registerGraphiqRoutes(app);
 registerSecretRoutes(app);
 registerSessionRoutes(app, { gitConfig, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync });
 registerSourcesRoutes(app);
-registerImportRoutes(app);
+registerImportRoutes(app, {
+	durableImportAdmission: {
+		admit: async ({ fileName, bytes, idempotencyKey }) => {
+			const layout = resolveWorkspaceLayout(AGENTS_DIR);
+			const row = await admitImport({
+				root: layout.root,
+				layout,
+				fileName,
+				bytes,
+				idempotencyKey,
+				ledger: new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() }),
+			});
+			return { key: row.key, originalPath: row.originalPath, sha256: row.sha256, size: row.size };
+		},
+	},
+});
 registerTranscriptImportRoutes(app);
 registerPipelineRoutes(app);
 registerReflectionRoutes(app);
@@ -1997,6 +2016,10 @@ async function cleanup() {
 	try {
 		await flushPendingCheckpoints();
 	} catch {}
+	if (manualInboxWorkerHandle) {
+		await manualInboxWorkerHandle.stop();
+		manualInboxWorkerHandle = null;
+	}
 	if (transcriptImportWorkerHandle) {
 		try {
 			await transcriptImportWorkerHandle.stop();
@@ -2776,6 +2799,18 @@ async function main() {
 						],
 						{ operation: "sources.import.dreaming-attention", lane: "write" },
 					);
+				},
+			});
+		}
+		if (!manualInboxWorkerHandle) {
+			manualInboxWorkerHandle = startManualInboxWorker({
+				root: AGENTS_DIR,
+				ledger: new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() }),
+				dispatchDocument: async (row) => {
+					throw new Error(`manual document importer is not configured: ${row.fileName}`);
+				},
+				dispatchTranscript: async (row) => {
+					throw new Error(`manual transcript importer is not configured: ${row.fileName}`);
 				},
 			});
 		}

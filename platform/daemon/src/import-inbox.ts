@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, rename, stat, lstat, unlink } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import { withMigrationAdmission, type MigrationAdmission } from "./workspace-writer-barrier";
 
 export type ImportStatus =
@@ -31,6 +32,8 @@ export interface ImportLedger {
 }
 export interface InboxOptions {
 	root: string;
+	/** Resolved layout is supplied by the owner; root is retained for compatibility. */
+	layout?: ReturnType<typeof resolveWorkspaceLayout>;
 	ledger: ImportLedger;
 	maxFiles?: number;
 	maxFileBytes?: number;
@@ -38,6 +41,7 @@ export interface InboxOptions {
 }
 export interface Admission {
 	root: string;
+	layout?: ReturnType<typeof resolveWorkspaceLayout>;
 	fileName: string;
 	bytes: Uint8Array;
 	ledger: ImportLedger;
@@ -61,8 +65,8 @@ const keyFor = (bytes: Uint8Array, name: string, supplied?: string) =>
 	supplied ?? createHash("sha256").update(bytes).update("\0").update(name).digest("hex");
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-function paths(root: string, key: string) {
-	const managed = join(resolve(root), "data", "imports", key);
+function paths(root: string, key: string, layout = resolveWorkspaceLayout(root)) {
+	const managed = join(resolve(layout.imports), key);
 	return { managed, original: join(managed, "original") };
 }
 
@@ -80,7 +84,7 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	const key = keyFor(input.bytes, input.fileName, input.idempotencyKey);
 	const prior = await input.ledger.find(key);
 	if (prior) return prior;
-	const target = paths(input.root, key);
+	const target = paths(input.root, key, input.layout);
 	await mkdir(target.managed, { recursive: true });
 	const tmp = `${target.original}.tmp-${process.pid}-${Date.now()}`;
 	await Bun.write(tmp, input.bytes);
@@ -110,7 +114,8 @@ export async function scanInbox(input: InboxOptions): Promise<ImportRow[]> {
 }
 
 async function scanInboxInGeneration(input: InboxOptions): Promise<ImportRow[]> {
-	const inbox = join(resolve(input.root), "files");
+	const layout = input.layout ?? resolveWorkspaceLayout(input.root);
+	const inbox = resolve(layout.files);
 	await mkdir(inbox, { recursive: true });
 	const entries = await readdir(inbox, { withFileTypes: true });
 	const out: ImportRow[] = [];
@@ -170,7 +175,7 @@ async function scanInboxInGeneration(input: InboxOptions): Promise<ImportRow[]> 
 			);
 			continue;
 		}
-		const row = await admitImport({ root: input.root, fileName: entry.name, bytes, ledger: input.ledger });
+		const row = await admitImport({ root: input.root, layout, fileName: entry.name, bytes, ledger: input.ledger });
 		await unlink(source).catch(() => {});
 		out.push(row);
 	}
@@ -178,5 +183,5 @@ async function scanInboxInGeneration(input: InboxOptions): Promise<ImportRow[]> 
 }
 
 export function managedImportRoot(root: string): string {
-	return join(resolve(root), "data", "imports");
+	return resolve(resolveWorkspaceLayout(root).imports);
 }
