@@ -165,11 +165,160 @@ function typeScriptCommentSpans(source: string, path: string): readonly Span[] {
 		.sort((left, right) => left.start - right.start);
 }
 
+interface SourceLine {
+	readonly end: number;
+	readonly start: number;
+	readonly text: string;
+}
+
+function sourceLines(source: string): readonly SourceLine[] {
+	const lines: SourceLine[] = [];
+	let start = 0;
+	while (start < source.length) {
+		const newline = source.indexOf("\n", start);
+		const end = newline < 0 ? source.length : newline + 1;
+		let contentEnd = newline < 0 ? source.length : newline;
+		if (contentEnd > start && source[contentEnd - 1] === "\r") contentEnd -= 1;
+		lines.push({ start, end, text: source.slice(start, contentEnd) });
+		start = end;
+	}
+	return lines;
+}
+
+function yamlBlockScalarSpans(source: string): readonly Span[] {
+	const lines = sourceLines(source);
+	const spans: Span[] = [];
+	const header = /^([ ]*)(?:-\s+)?(?:[^#\r\n]*?:\s*)?[|>](?:[1-9][+-]?|[+-][1-9]?)?\s*(?:#.*)?$/;
+	for (let index = 0; index < lines.length; index += 1) {
+		const headerLine = lines[index];
+		if (headerLine === undefined) continue;
+		const match = header.exec(headerLine.text);
+		if (match === null) continue;
+		const headerIndent = (match[1] ?? "").length;
+		let payloadEnd = index + 1;
+		for (; payloadEnd < lines.length; payloadEnd += 1) {
+			const line = lines[payloadEnd];
+			if (line === undefined) break;
+			if (line.text.trim().length === 0) continue;
+			const indent = /^ */.exec(line.text)?.[0].length ?? 0;
+			if (indent <= headerIndent) break;
+		}
+		const payloadLines = lines.slice(index + 1, payloadEnd);
+		if (/^\s*(?:-\s+)?run\s*:/.test(headerLine.text)) {
+			const nonblank = payloadLines.filter((line) => line.text.trim().length > 0);
+			const contentIndent = Math.min(...nonblank.map((line) => /^ */.exec(line.text)?.[0].length ?? 0));
+			const payloadStart = payloadLines[0]?.start;
+			const payloadStop = payloadLines.at(-1)?.end;
+			if (payloadStart !== undefined && payloadStop !== undefined && Number.isFinite(contentIndent)) {
+				for (const span of shellHeredocSpans(source.slice(payloadStart, payloadStop), contentIndent)) {
+					spans.push({ start: payloadStart + span.start, end: payloadStart + span.end });
+				}
+			}
+		} else {
+			for (const line of payloadLines) spans.push({ start: line.start, end: line.end });
+		}
+		index = payloadEnd - 1;
+	}
+	return spans;
+}
+
+interface Heredoc {
+	readonly delimiter: string;
+	readonly stripTabs: boolean;
+}
+
+function shellHeredocs(line: string): readonly Heredoc[] {
+	const heredocs: Heredoc[] = [];
+	let quote: '"' | "'" | "`" | undefined;
+	for (let index = 0; index < line.length; index += 1) {
+		const character = line[index];
+		if (quote !== undefined) {
+			if (character === "\\" && quote !== "'") index += 1;
+			else if (character === quote) quote = undefined;
+			continue;
+		}
+		if (character === '"' || character === "'" || character === "`") {
+			quote = character;
+			continue;
+		}
+		if (character === "\\") {
+			index += 1;
+			continue;
+		}
+		if (character === "#" && (index === 0 || /[\s;&|()]/.test(line[index - 1] ?? ""))) break;
+		if (!line.startsWith("<<", index) || line[index - 1] === "<" || line[index + 2] === "<") continue;
+		let cursor = index + 2;
+		const stripTabs = line[cursor] === "-";
+		if (stripTabs) cursor += 1;
+		while (line[cursor] === " " || line[cursor] === "	") cursor += 1;
+		let delimiter = "";
+		const delimiterQuote = line[cursor];
+		if (delimiterQuote === '"' || delimiterQuote === "'") {
+			cursor += 1;
+			while (cursor < line.length && line[cursor] !== delimiterQuote) {
+				if (line[cursor] === "\\" && delimiterQuote === '"' && cursor + 1 < line.length) cursor += 1;
+				delimiter += line[cursor];
+				cursor += 1;
+			}
+			if (line[cursor] !== delimiterQuote) continue;
+		} else {
+			if (line[cursor] === "\\") cursor += 1;
+			const start = cursor;
+			while (cursor < line.length && !/[\s;&|()<>]/.test(line[cursor] ?? "")) cursor += 1;
+			delimiter = line.slice(start, cursor);
+		}
+		if (delimiter.length === 0) continue;
+		heredocs.push({ delimiter, stripTabs });
+		index = cursor;
+	}
+	return heredocs;
+}
+
+function shellHeredocSpans(source: string, indent = 0): readonly Span[] {
+	const spans: Span[] = [];
+	const pending: Heredoc[] = [];
+	for (const line of sourceLines(source)) {
+		const text = line.text.startsWith(" ".repeat(indent)) ? line.text.slice(indent) : line.text;
+		const heredoc = pending[0];
+		if (heredoc !== undefined) {
+			let candidate = text;
+			if (heredoc.stripTabs) {
+				let tabs = 0;
+				while (candidate[tabs] === "	") tabs += 1;
+				candidate = candidate.slice(tabs);
+			}
+			if (candidate === heredoc.delimiter) pending.shift();
+			else spans.push({ start: line.start, end: line.end });
+			continue;
+		}
+		pending.push(...shellHeredocs(text));
+	}
+	return spans;
+}
+
 function hashCommentSpans(source: string, path: string): readonly Span[] {
 	const spans: Span[] = [];
 	let quote: '"' | "'" | '"""' | "'''" | "`" | undefined;
 	const python = /\.py$/i.test(path);
+	const name = path.slice(path.lastIndexOf("/") + 1);
+	const protectedSpans =
+		/\.(?:ya?ml)$/i.test(path) || path.endsWith("/agent.yaml.template")
+			? yamlBlockScalarSpans(source)
+			: /\.sh$/i.test(path) || /^(?:Caddyfile|Dockerfile)$/i.test(name) || /^\.githooks\//.test(path)
+				? shellHeredocSpans(source)
+				: [];
+	let protectedIndex = 0;
 	for (let index = 0; index < source.length; index += 1) {
+		while (true) {
+			const candidate = protectedSpans[protectedIndex];
+			if (candidate === undefined || candidate.end > index) break;
+			protectedIndex += 1;
+		}
+		const protectedSpan = protectedSpans[protectedIndex];
+		if (protectedSpan !== undefined && protectedSpan.start <= index) {
+			index = protectedSpan.end - 1;
+			continue;
+		}
 		if (quote !== undefined) {
 			if (quote.length === 3 && source.startsWith(quote, index)) {
 				index += 2;

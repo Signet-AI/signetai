@@ -126,6 +126,73 @@ test("strips hash comments without touching quoted hashes or directives", () => 
 	expect(yamlResult.content).toContain("# yamllint disable");
 });
 
+test("preserves hashes inside YAML block scalar payloads", () => {
+	const source = [
+		"# explanation",
+		"message: |",
+		"  # literal payload",
+		"  text # still payload",
+		"next: value # explanation",
+		"folded: >-",
+		"  text",
+		"  # folded payload",
+		"# explanation",
+		"done: true",
+	].join("\n");
+	const result = stripComments(source, "config/example.yml");
+	expect(result.removed).toBe(3);
+	expect(result.content).toBe(
+		[
+			"message: |",
+			"  # literal payload",
+			"  text # still payload",
+			"next: value",
+			"folded: >-",
+			"  text",
+			"  # folded payload",
+			"done: true",
+		].join("\n"),
+	);
+});
+
+test("strips shell comments from YAML run blocks without changing heredoc payloads", () => {
+	const source = [
+		"steps:",
+		"  - run: |",
+		"      # explanation",
+		"      cat <<'EOF'",
+		"      # literal payload",
+		"      EOF",
+		'      read value <<< "$input"',
+		"      # explanation after here-string",
+		"      echo done # explanation",
+	].join("\n");
+	const result = stripComments(source, ".github/workflows/example.yml");
+	expect(result.removed).toBe(3);
+	expect(result.content).not.toContain("# explanation");
+	expect(result.content).toContain("      # literal payload");
+});
+
+test("preserves hashes inside shell and Dockerfile heredoc payloads", () => {
+	const shell = [
+		"#!/bin/sh",
+		"# explanation",
+		"cat <<'EOF'",
+		"# literal payload",
+		"value # still payload",
+		"EOF",
+		"echo done # explanation",
+	].join("\n");
+	const shellResult = stripComments(shell, "scripts/example.sh");
+	expect(shellResult.removed).toBe(2);
+	expect(shellResult.content).toContain("# literal payload\nvalue # still payload");
+
+	const dockerfile = ["RUN <<-EOF", "	# literal payload", "	EOF", "# explanation"].join("\n");
+	const dockerResult = stripComments(dockerfile, "deploy/Dockerfile");
+	expect(dockerResult.removed).toBe(1);
+	expect(dockerResult.content).toContain("	# literal payload");
+});
+
 test("strips C-family, CSS, JSONC, and SQL comments without changing literals", () => {
 	const rust = [
 		'let url = "https://example.com"; // explanation',
