@@ -8,6 +8,7 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { IMPORT_MAX_BATCH_BYTES } from "../import-normalizer";
 import { purgeSourceArtifactStructureInTx } from "../source-artifact-graph";
 import { registerImportRoutes } from "./import-routes";
+import type { DurableImportAdmission } from "../import-inbox";
 
 function formWithFile(file: File, duplicateMode = "skip"): FormData {
 	const form = new FormData();
@@ -46,6 +47,24 @@ describe("import routes", () => {
 		registerImportRoutes(instance);
 		return instance;
 	}
+
+	it("admits multipart bytes before document normalization", async () => {
+		const seen: Uint8Array[] = [];
+		const admission: DurableImportAdmission = {
+			admit: async ({ bytes, fileName }) => {
+				seen.push(bytes);
+				return { key: `k:${fileName}`, originalPath: `/durable/${fileName}`, sha256: "hash", size: bytes.byteLength };
+			},
+		};
+		const instance = new Hono();
+		registerImportRoutes(instance, { durableImportAdmission: admission });
+		const response = await instance.request("/api/sources/import", {
+			method: "POST",
+			body: formWithFile(new File(["hello"], "note.txt", { type: "text/plain" })),
+		});
+		expect(response.status).toBe(201);
+		expect(new TextDecoder().decode(seen[0])).toBe("hello");
+	});
 
 	it("routes JSONL uploads to the transcript importer instead of generic import", async () => {
 		const response = await app().request("/api/sources/import", {

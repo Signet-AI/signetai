@@ -1065,10 +1065,11 @@ export const api = {
 		duplicateMode: "skip" | "replace" | "reimport" = "skip",
 		paths: readonly string[] = [],
 	): Promise<{ ok: boolean; data?: ImportSourcesResponse; error?: string }> => {
+		if (paths.length > 0)
+			return { ok: false, error: "File bytes are required; local paths are not sent to remote daemons" };
 		try {
 			const form = new FormData();
 			for (const file of files) form.append("files", file, file.name);
-			for (const path of paths) form.append("paths", path);
 			form.set("duplicateMode", duplicateMode);
 			const res = await fetch(`${API_BASE}/api/sources/import`, {
 				method: "POST",

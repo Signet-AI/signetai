@@ -20,6 +20,7 @@ import {
 	normalizeImportedFile,
 } from "../import-normalizer";
 import { markImportedSourceUnsupported } from "../imported-source-lifecycle";
+import type { DurableImportAdmission } from "../import-inbox";
 import {
 	type ImportExtractionOutcome,
 	persistImportedSourceOutcomeInTx,
@@ -54,7 +55,11 @@ type ImportFileStatus =
 	  }
 	| { readonly fileName: string; readonly status: "failed"; readonly error: string };
 
-export function registerImportRoutes(app: Hono): void {
+export interface ImportRouteDeps {
+	readonly durableImportAdmission?: DurableImportAdmission;
+}
+
+export function registerImportRoutes(app: Hono, deps: ImportRouteDeps = {}): void {
 	app.post("/api/sources/import", async (c) => {
 		const contentLength = Number.parseInt(c.req.header("content-length") ?? "", 10);
 		if (Number.isFinite(contentLength) && contentLength > IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD) {
@@ -132,7 +137,20 @@ export function registerImportRoutes(app: Hono): void {
 				});
 				continue;
 			}
-			const normalized = await normalizeImportedFile(file.name, new Uint8Array(await file.arrayBuffer()), file.type);
+			const fileBytes = new Uint8Array(await file.arrayBuffer());
+			if (deps.durableImportAdmission) {
+				try {
+					await deps.durableImportAdmission.admit({ fileName: file.name, bytes: fileBytes, contentType: file.type });
+				} catch (error) {
+					statuses.push({
+						fileName: file.name,
+						status: "failed",
+						error: error instanceof Error ? error.message : "durable admission failed",
+					});
+					continue;
+				}
+			}
+			const normalized = await normalizeImportedFile(file.name, fileBytes, file.type);
 			if (normalized.ok === false) {
 				statuses.push({ fileName: file.name, status: "failed", error: normalized.error });
 				continue;

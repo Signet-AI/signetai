@@ -43,6 +43,16 @@ export interface Admission {
 	maxFileBytes?: number;
 }
 
+/** Durable boundary used by HTTP upload routes before normalization. */
+export interface DurableImportAdmission {
+	admit(input: {
+		readonly fileName: string;
+		readonly bytes: Uint8Array;
+		readonly contentType?: string;
+		readonly idempotencyKey?: string;
+	}): Promise<{ readonly key: string; readonly originalPath: string; readonly sha256: string; readonly size: number }>;
+}
+
 const DEFAULT_MAX = 25 * 1024 * 1024;
 const keyFor = (bytes: Uint8Array, name: string, supplied?: string) =>
 	supplied ?? createHash("sha256").update(bytes).update("\0").update(name).digest("hex");
