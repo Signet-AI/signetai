@@ -209,12 +209,6 @@ export function installMacDesktopApp(
 
 	return { repo, releaseDir, appBundle, applicationsDir, workspace };
 }
-
-/**
- * Install the unpacked Windows build into a user-owned program directory.
- * The directory is intentionally distinct from the native CLI's
- * %LOCALAPPDATA%\\Programs\\Signet\\signet.exe path.
- */
 export function installWindowsDesktopApp(
 	repo: string,
 	home: string,
@@ -246,13 +240,6 @@ export function installWindowsDesktopApp(
 	}
 	return { repo, releaseDir, appDir, executable, programsDir, workspace };
 }
-
-/**
- * Replace a managed file or directory without deleting the previous install
- * until the replacement has been copied successfully. The temporary and
- * backup paths stay beside the target so directory renames remain atomic on
- * the same filesystem on both macOS and Windows.
- */
 function replaceManagedPath(
 	source: string,
 	target: string,
@@ -325,10 +312,6 @@ function isSignetAppBundle(path: string): boolean {
 }
 
 function findMacAppBundle(releaseDir: string, arch: string): string | null {
-	// Electron-builder's unpacked output lives in layout directories such as
-	// release/mac/Signet.app or release/mac_arm64/Signet.app. Recurse only a
-	// bounded depth and verify the executable's Mach-O architecture so a
-	// foreign-arch artifact is never installed.
 	return findNewestCandidate(
 		releaseDir,
 		macAppBundleCandidates(releaseDir, 3),
@@ -348,9 +331,7 @@ function findNewestCandidate(
 		try {
 			const mtime = statSync(candidate).mtimeMs;
 			if (!best || mtime > best.mtime) best = { path: candidate, mtime };
-		} catch {
-			// The release directory can change while a build is being cleaned up.
-		}
+		} catch {}
 	}
 	return best?.path ?? null;
 }
@@ -374,8 +355,6 @@ function* macAppBundleCandidates(root: string, depth: number): Generator<string>
 		yield* macAppBundleCandidates(path, depth - 1);
 	}
 }
-
-/** Reads the Mach-O cputype from the bundle's main executable. */
 function macAppBundleMatchesArch(path: string, arch: string): boolean {
 	const executable = macBundleExecutable(path);
 	if (executable === null) return false;
@@ -441,10 +420,7 @@ function isSignetWindowsAppDirectory(path: string): boolean {
 	try {
 		const contents = readFileSync(asar);
 		if (WINDOWS_PACKAGE_MARKERS.some((marker) => contents.includes(marker))) return true;
-	} catch {
-		// An unpacked Electron directory can expose app/package.json instead of
-		// app.asar during local builds.
-	}
+	} catch {}
 	try {
 		const packageJson = readJson(join(path, "resources", "app", "package.json"));
 		return jsonString(packageJson, "name") === "@signet/desktop";

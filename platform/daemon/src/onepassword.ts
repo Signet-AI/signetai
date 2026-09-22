@@ -1,6 +1,3 @@
-// @1password/sdk is lazy-loaded in defaultOnePasswordClientFactory to avoid
-// WASM ENOENT crash when the package isn't properly installed.
-
 export const ONEPASSWORD_SERVICE_ACCOUNT_SECRET = "OP_SERVICE_ACCOUNT_TOKEN";
 
 const SECRET_REF_PREFIX = "op://";
@@ -241,8 +238,6 @@ export async function defaultOnePasswordClientFactory(token: string): Promise<On
 	if (!token.trim()) {
 		throw new Error("OP_SERVICE_ACCOUNT_TOKEN is required");
 	}
-
-	// Dynamic import — avoids loading WASM at daemon startup
 	const { createClient } = await import("@1password/sdk");
 
 	const rawClient = await createClient({

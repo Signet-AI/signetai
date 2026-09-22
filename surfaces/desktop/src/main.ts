@@ -434,6 +434,4 @@ app.on("will-quit", () => {
 	daemon.shutdownOwned();
 });
 
-app.on("window-all-closed", () => {
-	// Keep the desktop app resident in the tray/menu bar.
-});
+app.on("window-all-closed", () => {});

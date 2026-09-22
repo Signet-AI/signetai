@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 060: Add navigable group identity to structured attributes.
- *
- * Aspects are broad rooms. `group_key` adds a dresser-level navigation
- * layer between an aspect and a claim slot, so agents can browse large
- * entity graphs without loading every attribute under an aspect.
- */
 export function up(db: MigrationDb): void {
 	const cols = db.prepare("PRAGMA table_info(entity_attributes)").all() as Array<{ name: string }>;
 	if (!cols.some((col) => col.name === "group_key")) {

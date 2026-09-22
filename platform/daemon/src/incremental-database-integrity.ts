@@ -1,16 +1,3 @@
-/**
- * Checkpointed database integrity maintenance.
- *
- * SQLite's global `PRAGMA quick_check` is one synchronous native operation and
- * cannot be paused at a page boundary. The maintenance path therefore checks
- * one user table per owner job, commits its frontier, and yields back to the
- * owner queue before checking the next table. The existing global check stays
- * available to explicit operator repair flows, but is not used after readiness.
- * Every request goes through the maintenance helpers, so the owner-lane-classes
- * integration can move this work to its maintenance queue without changing the
- * checkpoint protocol.
- */
-
 import { DbOwnerDeadlineError, type DbOwnerClient } from "./db-owner-client";
 import {
 	ownerQueryAll,
@@ -40,8 +27,6 @@ export type IncrementalIntegrityPhase = "running" | "complete" | "cancelled" | "
 
 const INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS = 1_000;
 const INCREMENTAL_INTEGRITY_RETRY_MAX_DELAY_MS = 30_000;
-
-/** Back off abandoned integrity slices so a blocked owner queue cannot self-fill. */
 export function nextIncrementalIntegrityRetryDelay(phase: IncrementalIntegrityPhase, previousDelayMs: number): number {
 	if (phase !== "timed_out" && phase !== "unavailable") return 0;
 	const previous =
@@ -76,7 +61,6 @@ export interface IncrementalIntegrityOptions {
 	readonly maxWorkUnits?: number;
 	readonly signal?: AbortSignal;
 	readonly onProgress?: (progress: IncrementalIntegrityProgress) => void | Promise<void>;
-	/** Test/diagnostic hook invoked after selecting an object and before scanning it. */
 	readonly onObjectScan?: (object: { readonly name: string; readonly type: TableRow["type"] }) => void | Promise<void>;
 	readonly onBeforeCheckpointCommit?: () => void | Promise<void>;
 }
@@ -130,8 +114,6 @@ function integrityOwnerOptions(
 	onOwnerMetrics?: OwnerMetricsCallback,
 	estimatedWorkUnits?: number,
 ): DbOwnerMaintenanceOptions {
-	// A deadline abandons the client result, but a synchronous SQLite worker can
-	// still be running; the integrity scheduler must not admit its next slice.
 	return {
 		deadlineMs,
 		waitForOwnerCompletionOnDeadline: true,
@@ -433,9 +415,6 @@ async function persistTable(
 		checkedTables: checkpoint.checkedTables + (skipped ? 0 : 1),
 		skippedTables: checkpoint.skippedTables + (skipped ? 1 : 0),
 		failedTables: checkpoint.failedTables + (failed ? 1 : 0),
-		// PRAGMA page_count is a database-wide snapshot, not per-object work.
-		// Adding it for every table multiplies the database size by the object
-		// count (the 765M-page integrity report was this exact bug).
 		pagesChecked: metrics?.pages ?? checkpoint.pagesChecked,
 		bytesChecked: metrics?.bytes ?? checkpoint.bytesChecked,
 		attemptCount: checkpoint.attemptCount,
@@ -517,8 +496,6 @@ function progressFrom(
 		degradationReason: null,
 	};
 }
-
-/** Run at most one bounded maintenance slice and leave a durable resume point. */
 export async function runIncrementalDatabaseIntegrityCheck(
 	options: IncrementalIntegrityOptions,
 ): Promise<IncrementalIntegrityResult> {
@@ -666,8 +643,6 @@ export async function runIncrementalDatabaseIntegrityCheck(
 			}
 			lastTable = `${table.type}:${table.name}`;
 			if (isUnchunkableFts(table)) {
-				// FTS5 has no bounded integrity-check cursor. Record the object as
-				// unverified, advance the frontier, and keep checking other objects.
 				await options.onObjectScan?.(table);
 				checkpoint = await persistTable(
 					options.owner,

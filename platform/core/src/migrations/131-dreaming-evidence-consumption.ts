@@ -1,4 +1,3 @@
-/** Migration 131: durable Dreaming delivery frontier per immutable evidence revision. */
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

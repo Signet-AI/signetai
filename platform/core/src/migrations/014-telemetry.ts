@@ -1,12 +1,3 @@
-/**
- * Migration 014: Telemetry Events
- *
- * Adds a table for anonymous, opt-in telemetry events that track token
- * usage, error rates, performance, and feature usage. Events persist
- * locally for the dashboard and predictor training data, and can
- * optionally be batched to a self-hosted PostHog instance.
- */
-
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

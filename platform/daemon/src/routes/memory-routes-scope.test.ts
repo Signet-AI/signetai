@@ -1,17 +1,6 @@
-/**
- * Regression tests for scope enforcement and structured payload validation
- * on POST /api/memory/remember and aggregate-save paths.
- *
- * These tests validate the input-shape checks and scope gates at the
- * validation boundary — they do not spin up the full Hono server.
- */
 import { describe, expect, it } from "bun:test";
 
 describe("structured payload validation", () => {
-	// Validates the same shape checks that run inline in the remember handler.
-	// Duplicated here as pure validation tests since the route handler
-	// requires full Hono + DB setup.
-
 	function validateStructured(body: { structured?: unknown }): { valid: true } | { valid: false; error: string } {
 		if (!("structured" in body)) {
 			return { valid: true };
@@ -98,7 +87,6 @@ describe("structured payload validation", () => {
 });
 
 describe("project scope check", () => {
-	// Mirrors the inline check in the remember handler for project-scoped tokens.
 	function checkProjectScope(params: {
 		tokenProject: string | undefined;
 		bodyProject: string | undefined;

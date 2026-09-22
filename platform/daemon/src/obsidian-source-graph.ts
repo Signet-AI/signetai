@@ -122,9 +122,6 @@ function upsertSourceEntity(
 		readonly now: string;
 	},
 ): { readonly id: string; readonly inserted: boolean } {
-	// The legacy entities.name constraint is globally unique, so source-native
-	// entities get stable, path-qualified display names. Navigation uses
-	// canonical_name/source_path for exact vault fidelity.
 	const uniqueName = `${input.name} — ${input.canonicalName} — ${input.agentId}`;
 	const existing = db
 		.prepare("SELECT id FROM entities WHERE canonical_name = ? AND agent_id = ? LIMIT 1")
@@ -341,8 +338,6 @@ export function buildObsidianMarkdownPathIndex(root: string, files: readonly str
 	}
 	return index;
 }
-
-/** Add one discovered Markdown path without materializing the full source tree. */
 export function addObsidianMarkdownPathIndex(index: ObsidianMarkdownPathIndex, root: string, file: string): void {
 	const path = normalizedPath(file);
 	const rel = relPath(normalizedRoot(root), path);
@@ -373,10 +368,6 @@ function resolveWikiLinkPath(
 		index?.byRel.get(targetPath) ??
 		(target.includes("/") ? undefined : (index?.byStem.get(target) ?? index?.byNormalizedStem.get(slug(target))));
 	if (indexed) return { path: indexed, rel: relPath(root, indexed), found: true };
-
-	// Owner-side indexing cannot receive the whole discovered source tree for
-	// every file. Resolve the remaining vault-wide basename lookup with one
-	// bounded query against the already-indexed document entities instead.
 	if (db && agentId && sourceId) {
 		const row = db
 			.prepare(
@@ -503,9 +494,6 @@ export function applyObsidianSourceStructureInTx(
 	const fileRel = relPath(root, filePath);
 	const now = new Date().toISOString();
 	const content = stripFrontmatter(input.content);
-	// A source file is authoritative: before rebuilding its projection,
-	// remove the prior per-file headings/claims/links so deleted Markdown
-	// structure does not linger as stale graph facts.
 	purgeObsidianSourceFileStructureInTx(db, input);
 
 	let folderEntitiesTouched = 0;
@@ -722,7 +710,7 @@ export function indexObsidianSourceStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => applyObsidianSourceStructureInTx(db, input),
-		"obsidian-source-graph.ts:723",
+		"obsidian-source-graph.ts:711",
 	);
 }
 
@@ -732,7 +720,7 @@ export function purgeObsidianSourceFileStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => purgeObsidianSourceFileStructureInTx(db, input),
-		"obsidian-source-graph.ts:733",
+		"obsidian-source-graph.ts:721",
 	);
 }
 
@@ -760,12 +748,6 @@ export function applyObsidianSourceStructurePurgeInTx(
 	const communities = db
 		.prepare(`DELETE FROM entity_communities WHERE ${agentWhere}source_id = ? AND source_root = ?`)
 		.run(...params).changes;
-	// Also remove Dreaming-derived semantic rows that carry this configured
-	// Signet source entry id but the literal source_root 'dreaming' instead of
-	// the vault root. Newly created Dreaming entities are source-owned; existing
-	// user-owned entities retain their provenance when new evidence mentions
-	// them. This keeps the disconnect purge consistent with purgeSourceOwnedRows
-	// (used by GitHub/Discord), which deletes source-owned graph rows by id.
 	const derivedParams = input.agentId ? [input.agentId, input.sourceId] : [input.sourceId];
 	purgeAttributeMemoryProjectionsInTx(db, {
 		agentId: input.agentId,
@@ -816,7 +798,7 @@ export function purgeObsidianSourceStructure(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 	return getDbAccessor().withWriteTx(
 		(db: import("./db-accessor").WriteDb) => applyObsidianSourceStructurePurgeInTx(db, input),
-		"obsidian-source-graph.ts:817",
+		"obsidian-source-graph.ts:799",
 	);
 }
 

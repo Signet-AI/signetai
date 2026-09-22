@@ -5,16 +5,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 	if (cols.some((col) => col.name === column)) return;
 	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-
-/**
- * Migration 050: MEMORY.md rolling-window lineage
- *
- * Adds:
- * - richer summary job metadata so session-end and checkpoint flows can
- *   preserve canonical timing/identity context
- * - canonical markdown artifact index + FTS table for rebuildable lineage/search
- * - tombstones so privacy removals survive re-index
- */
 export function up(db: MigrationDb): void {
 	addColumnIfMissing(db, "summary_jobs", "session_id", "TEXT");
 	addColumnIfMissing(db, "summary_jobs", "trigger", "TEXT NOT NULL DEFAULT 'session_end'");

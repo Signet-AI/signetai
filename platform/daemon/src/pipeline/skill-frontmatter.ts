@@ -1,17 +1,5 @@
-/**
- * YAML round-trip frontmatter read/write for SKILL.md files.
- *
- * Uses the `yaml` package's Document API to preserve comments,
- * formatting, and existing fields when rewriting enrichment data
- * back into SKILL.md frontmatter.
- */
-
 import { parseDocument, stringify } from "yaml";
 import type { SkillFrontmatter } from "./skill-graph";
-
-// ---------------------------------------------------------------------------
-// Parse
-// ---------------------------------------------------------------------------
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---\n?([\s\S]*)$/;
 
@@ -63,22 +51,11 @@ export function parseSkillFile(content: string): ParsedSkillFile | null {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Rewrite (round-trip preserving)
-// ---------------------------------------------------------------------------
-
 export interface FrontmatterPatch {
 	readonly description?: string;
 	readonly triggers?: readonly string[];
 	readonly tags?: readonly string[];
 }
-
-/**
- * Apply enrichment data to a SKILL.md file's frontmatter using
- * YAML round-trip parsing. Preserves existing fields and comments.
- *
- * Returns the full rewritten file content, or null if parsing fails.
- */
 export function patchSkillFrontmatter(fileContent: string, patch: FrontmatterPatch): string | null {
 	const match = fileContent.match(FRONTMATTER_RE);
 	if (!match) return null;

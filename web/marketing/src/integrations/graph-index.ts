@@ -1,5 +1,3 @@
-/** Generate the marketing blog graph index at build time. */
-
 import { writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";

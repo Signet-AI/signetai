@@ -18,10 +18,6 @@ export function up(db: MigrationDb): void {
 	addColumnIfMissing(db, "source_mtime_ms", "REAL");
 	addColumnIfMissing(db, "source_format", "TEXT");
 	addColumnIfMissing(db, "audit_path", "TEXT");
-
-	// New admissions are coalesced by this stable identity. Legacy rows are
-	// intentionally left NULL until the repair path can prove which duplicate
-	// is authoritative; a migration must not guess while holding the schema lock.
 	db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_source_identity
 			ON transcript_capture_jobs(agent_id, source_identity, status);

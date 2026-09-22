@@ -488,7 +488,6 @@ describe("dreaming operations", () => {
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-husk")),
 		).toEqual({ status: "archived" });
-		// The consumed flag was resolved in the same tx.
 		expect(
 			getDbAccessor().withReadDb(
 				(db) =>
@@ -539,8 +538,6 @@ describe("dreaming operations", () => {
 			actor: "dreaming",
 			passId: "pass-1",
 			operations: [
-				// Agent-minted flags carry inspection facts in details but no
-				// entityId; the subjectRef is the only id pin.
 				flag({ subjectRef: "entity:e-husk", details: { reason: "zero_active_attributes" } }),
 				{
 					operation: "archive_entity",
@@ -603,7 +600,6 @@ describe("dreaming operations", () => {
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entities WHERE id = ?").get("e-flagged")),
 		).toEqual({ status: "active" });
-		// Preflight rejects the contradictory target before minting the flag.
 		expect(
 			getDbAccessor().withReadDb(
 				(db) => db.prepare("SELECT COUNT(*) AS c FROM dreaming_attention").get() as { c: number },
@@ -620,7 +616,6 @@ describe("dreaming operations", () => {
 			actor: "dreaming",
 			passId: "pass-3",
 			operations: [
-				// Agent-minted flags carry the canonical name only in the subjectRef.
 				flag({ subjectRef: "duplicate:acme", details: { reason: "duplicate_canonical_name" } }),
 				{
 					operation: "merge_entities",
@@ -647,7 +642,6 @@ describe("dreaming operations", () => {
 			agentId: "agent-a",
 			actor: "dreaming",
 			operations: [
-				// The details aspectId names a different aspect than the subjectRef pin.
 				flag({ subjectRef: "aspect:a-s3", details: { aspectId: "a-other", reason: "aspect_over_cap" } }),
 				{
 					operation: "merge_aspects",
@@ -1112,7 +1106,6 @@ describe("dreaming operations", () => {
 		expect(result.ok).toBe(true);
 		expect(result.items[1]?.ok).toBe(true);
 		expect(result.items[1]?.result).toMatchObject({ targetAspect: "timeline", totalAttributesMoved: 2 });
-		// Source archived, target renamed, all attributes under the target
 		expect(
 			getDbAccessor().withReadDb((db) => db.prepare("SELECT status FROM entity_aspects WHERE id = ?").get("a-source")),
 		).toEqual({ status: "archived" });

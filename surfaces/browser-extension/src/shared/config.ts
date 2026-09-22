@@ -1,5 +1,3 @@
-/** Chrome storage helpers for extension configuration */
-
 import { DEFAULT_CONFIG, type ExtensionConfig } from "./types.js";
 
 const STORAGE_KEY = "signet_config";

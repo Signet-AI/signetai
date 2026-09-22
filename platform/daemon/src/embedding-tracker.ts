@@ -1,11 +1,3 @@
-/**
- * Incremental Embedding Refresh Tracker
- *
- * Background polling loop that detects stale/missing embeddings and
- * refreshes them in small batches. Uses setTimeout chains for natural
- * backpressure instead of setInterval.
- */
-
 import { randomUUID } from "node:crypto";
 import type { PipelineEmbeddingTrackerConfig, PipelineRepairConfig } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
@@ -23,10 +15,6 @@ import type { EmbeddingConfig } from "./memory-config";
 import { isSystemPressureHigh } from "./system-pressure";
 import { awaitEmbeddingProviderAvailable } from "./embedding-circuit-breaker";
 
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
-
 export interface EmbeddingTrackerStats {
 	readonly running: boolean;
 	readonly processed: number;
@@ -41,10 +29,6 @@ export interface EmbeddingTrackerHandle {
 	readonly running: boolean;
 	getStats(): EmbeddingTrackerStats;
 }
-
-// ---------------------------------------------------------------------------
-// Stale embedding row shape
-// ---------------------------------------------------------------------------
 
 interface StaleRow {
 	readonly id: string;
@@ -149,10 +133,6 @@ export async function processEmbeddingCycle(
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Main entry point
-// ---------------------------------------------------------------------------
-
 export function startEmbeddingTracker(
 	accessor: DbAccessor,
 	embeddingCfg: EmbeddingConfig,
@@ -181,9 +161,6 @@ export function startEmbeddingTracker(
 		}
 
 		try {
-			// 1. Query stale/missing embeddings (read-only), then merge durable
-			// failure backoff so restarting the daemon cannot immediately replay a
-			// poison row against the provider.
 			const now = Date.now();
 			const staleRows: StaleRow[] = await accessor.withReadDbAsync(
 				(db: import("./db-accessor").ReadDb) => {
@@ -211,10 +188,6 @@ export function startEmbeddingTracker(
 			lastQueueDepth = readyRows.length;
 			lastCycleAt = new Date(now).toISOString();
 			if (readyRows.length === 0) return;
-
-			// 2. Check provider health only when there is actual repair work. This
-			// keeps an idle tracker from loading the native model just because its
-			// timer fired.
 			const gate = await awaitEmbeddingProviderAvailable(
 				`${embeddingCfg.provider}:${embeddingCfg.model}:${embeddingCfg.base_url ?? ""}`,
 				async () => (await checkProviderFn(embeddingCfg)).available,
@@ -225,10 +198,6 @@ export function startEmbeddingTracker(
 				skippedCycles++;
 				return;
 			}
-
-			// The durable lease serializes provider calls before they begin. The
-			// hourly budget is charged only after at least one active-profile
-			// embedding persists, so an abort cannot spend a repair slot.
 			const admission = await acquireEmbeddingRepairLease(
 				accessor,
 				repairCfg.reembedCooldownMs,
@@ -250,10 +219,6 @@ export function startEmbeddingTracker(
 					now,
 				);
 				failed += cycle.failed;
-
-				// Re-check pressure after the async embedding work — the event loop
-				// may have degraded during the awaits above. The lease still closes so
-				// another process cannot pick up the same batch concurrently.
 				if (isSystemPressureHigh()) {
 					skippedCycles++;
 					await finishEmbeddingRepairLease(accessor, admission.lease, {
@@ -270,9 +235,6 @@ export function startEmbeddingTracker(
 
 				let applied = false;
 				if (cycle.results.length > 0) {
-					// Batch write in a single write transaction. A promotion may commit
-					// while this batch is encoding, so never let a tracker closed over
-					// the previous generation overwrite its vectors.
 					applied = await accessor.withWriteTxAsync(
 						(db: import("./db-accessor").WriteDb) => {
 							if (!isActiveEmbeddingConfig(db, embeddingCfg)) return false;
@@ -339,8 +301,6 @@ export function startEmbeddingTracker(
 			schedule();
 		}, trackerCfg.pollMs);
 	}
-
-	// Kick off the first tick after an initial delay
 	schedule();
 
 	logger.info("embedding-tracker", `Started (poll=${trackerCfg.pollMs}ms, batch=${trackerCfg.batchSize})`);

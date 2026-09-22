@@ -1,16 +1,3 @@
-/**
- * Issue #901 — surface queue diagnostics and provide a safe repair
- * endpoint. Mounted next to the existing `/api/diagnostics/*` and
- * `/api/repair/*` routes.
- *
- *  - `GET /api/diagnostics/queue` reads `getDiagnostics(...)` plus the
- *    oldest-dead summaries.
- *  - `POST /api/diagnostics/queue/repair` dispatches to
- *    `requeueDeadJobs` / `cancelObsoleteJobs` / `pruneTerminalJobs`
- *    with the caller's filters. Always dry-runs unless the request
- *    body sets `dryRun: false`.
- */
-
 import type { Hono } from "hono";
 import { requirePermission } from "../auth";
 import type { DbAccessor, ReadDb } from "../db-accessor";
@@ -103,7 +90,7 @@ function parseRepairBody(body: unknown): {
 	if (actionRaw !== "requeue" && actionRaw !== "cancel" && actionRaw !== "prune") {
 		return null;
 	}
-	const dryRun = r.dryRun !== false; // default to dry-run for safety
+	const dryRun = r.dryRun !== false;
 	const ids: string[] = Array.isArray(r.ids)
 		? r.ids.filter((v): v is string => typeof v === "string" && v.length > 0)
 		: [];
@@ -168,7 +155,7 @@ export function registerQueueDiagnosticsRoutes(
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 			const response = resolveAccessor().withReadDb(
 				(db: import("../db-accessor").ReadDb) => buildQueueDiagnosticsResponse(db),
-				"routes/queue-diagnostics.ts:169",
+				"routes/queue-diagnostics.ts:156",
 			);
 			return c.json(response);
 		} catch (err) {
@@ -193,10 +180,6 @@ export function registerQueueDiagnosticsRoutes(
 		try {
 			result = await dispatchRepairWith(ctx, resolveAccessor(), limiter, parsed.action, options);
 		} catch (err) {
-			// Repair actions throw synchronously from inside withWriteTx (e.g. a
-			// missing migrations table, a closed DbAccessor, or a SQLite error).
-			// Mirror the GET sibling and the Rust parity handler by returning the
-			// documented structured RepairResult instead of an unstructured 500.
 			result = {
 				action: parsed.action,
 				success: false,

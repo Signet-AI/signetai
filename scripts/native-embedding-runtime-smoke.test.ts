@@ -16,9 +16,6 @@ const tempDirs: string[] = [];
 const children: ChildProcessWithoutNullStreams[] = [];
 const CHILD_KILL_REAP_MS = 2_000;
 const CHILD_TERM_GRACE_MS = 2_000;
-// A compiled client smoke starts a second copy of the native binary. Keep the
-// protocol and job budgets aligned so slow macOS Intel runners do not expire
-// the query while that nested owner is still loading its embedded runtime.
 const DB_OWNER_SMOKE_TIMEOUT_MS = 30_000;
 
 interface StoppableChild {
@@ -41,17 +38,6 @@ function closesWithin(closed: Promise<true>, timeoutMs: number): Promise<boolean
 		});
 	});
 }
-
-/** Resolve the compiled native binary to smoke-test.
- *  Honors an explicit SIGNET_NATIVE_SMOKE_BINARY override (release CI builds to
- *  dist/native/$RELEASE_ASSET); otherwise derives the asset name for the current
- *  platform so one test covers every release leg.
- *
- *  The override is resolved against the repo root and returned as an absolute
- *  path. Release CI sets a relative value (`./dist/native/$RELEASE_ASSET`);
- *  without absolutizing, the `signet sync` spawnSync below fails with ENOENT
- *  because it runs with `cwd: <tempdir>`, and Node resolves a relative command
- *  path against that cwd rather than the repo root. */
 export function nativeSmokeBinary(): string {
 	const override = process.env.SIGNET_NATIVE_SMOKE_BINARY;
 	if (override) return resolve(root, override);
@@ -172,9 +158,6 @@ async function stopChild(
 }
 
 const blackholeServers: Server[] = [];
-
-/** TCP server that accepts a connection but never responds — makes an HTTP
- *  model fetch hang on response headers (a stalled CDN), hermetically. */
 async function blackholeOrigin(): Promise<string> {
 	return new Promise((resolve, reject) => {
 		const server = createServer((socket) => {
@@ -195,10 +178,6 @@ afterEach(async () => {
 	for (const server of blackholeServers.splice(0)) server.close();
 	for (const path of tempDirs.splice(0)) rmSync(path, { recursive: true, force: true });
 }, 30_000);
-
-/** Start an OAuth login against the compiled binary and read the SSE stream
- *  until the provider's first interactive event (auth_url, select, error, or
- *  done) arrives, then abort the stream so the daemon cancels the session. */
 async function startOAuthLoginSse(origin: string, providerId: string): Promise<string> {
 	const controller = new AbortController();
 	const response = await fetch(`${origin}/api/inference/oauth/login/${providerId}`, {
@@ -218,7 +197,7 @@ async function startOAuthLoginSse(origin: string, providerId: string): Promise<s
 	return text;
 }
 
-process.env.SIGNET_TELEMETRY_OPTOUT = "1"; // keep CI/test daemons out of the PostHog project
+process.env.SIGNET_TELEMETRY_OPTOUT = "1";
 
 describe("native smoke binary path", () => {
 	test("resolves a relative SIGNET_NATIVE_SMOKE_BINARY override to an absolute path", () => {
@@ -497,8 +476,6 @@ describe("compiled native embedding runtime", () => {
 				expect(dashboard.headers.get("content-type")).toContain("text/html");
 				const dashboardHtml = await dashboard.text();
 				expect(dashboardHtml.toLowerCase()).toContain("<!doctype html>");
-				// React dashboard (Vite) serves root-relative hashed assets; the
-				// SvelteKit marker ("/_app/immutable/") was retired with #948.
 				expect(dashboardHtml).toContain("/assets/");
 
 				const db = new Database(join(workspace, "memory", "memories.db"), { readonly: true });
@@ -609,10 +586,6 @@ describe("compiled native embedding runtime", () => {
 	smoke(
 		"keeps /health within SLA while the native embedding download is stalled (event-loop isolation)",
 		async () => {
-			// Regression guard for the shipped binary: the daemon's HTTP server
-			// must stay responsive while the native embedding worker is stuck on
-			// its first-run model download. We stall the fetch hermetically with
-			// a local blackhole and assert /health latency through the window.
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
 				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
@@ -632,8 +605,6 @@ describe("compiled native embedding runtime", () => {
 					SIGNET_PATH: workspace,
 					SIGNET_PORT: String(port),
 					SIGNET_BIND: "127.0.0.1",
-					// Redirect the transformers model fetch at the blackhole so the
-					// embedding worker's first-run download hangs for the window.
 					SIGNET_EMBEDDING_REMOTE_HOST: blackhole,
 					OLLAMA_HOST: "http://127.0.0.1:1",
 				},
@@ -670,14 +641,6 @@ describe("compiled native embedding runtime", () => {
 
 describe("compiled native OAuth sign-in", () => {
 	const smoke = enabled ? test : test.skip;
-
-	// Regression for dashboard sign-in failing with
-	// "ResolveMessage: Cannot find module './anthropic.js'" (and
-	// './openai-codex.js') from '/$bunfs/root/signet-linux-x64'. pi-ai 0.81+
-	// lazy-loads its OAuth flows through a variable-specifier dynamic import
-	// that survives into the compiled binary and resolves against the bundle
-	// root, where no such module exists. The daemon must register pi-ai's
-	// statically bundled flows (registerBunOAuthFlows) before any login.
 	smoke(
 		"starts anthropic and openai-codex sign-in without the pi-ai dynamic-import failure",
 		async () => {
@@ -712,16 +675,10 @@ describe("compiled native OAuth sign-in", () => {
 
 			try {
 				await waitForHealth(origin, child);
-
-				// Anthropic: auth_url via a local callback server, emitted
-				// before any outbound call.
 				const anthropic = await startOAuthLoginSse(origin, "anthropic");
 				expect(anthropic).toContain("event: auth");
 				expect(anthropic).toContain("https://claude.ai/oauth/authorize");
 				expect(anthropic).not.toContain("Cannot find module");
-
-				// OpenAI Codex: login-method select prompt; device-code polling
-				// only starts after the user picks a method, so this is hermetic.
 				const codex = await startOAuthLoginSse(origin, "openai-codex");
 				expect(codex).toContain("event: select");
 				expect(codex).not.toContain("Cannot find module");

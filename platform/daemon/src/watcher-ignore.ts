@@ -2,8 +2,6 @@ import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
 import { resolveWorkspaceSourceRepoPath } from "@signet/core";
-
-// Canonical artifact filename patterns (keep in sync with daemon.ts)
 const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
 const MEMORY_BACKUP_FILENAME_RE = /^MEMORY\.(?:backup|bak|pre)-.+\.md$/;
 const SIGNET_IGNORE_FILENAME = ".sigignore";
@@ -140,9 +138,7 @@ function ensureDefaultSigignore(sigignorePath: string): void {
 		if (!existsSync(sigignorePath)) {
 			writeFileSync(sigignorePath, DEFAULT_SIGNIGNORE_CONTENT, "utf-8");
 		}
-	} catch {
-		// Best-effort; watcher still works without a .sigignore file.
-	}
+	} catch {}
 }
 
 function createSigignoreMatcher(agentsDir: string): (normalizedPath: string) => boolean {
@@ -191,8 +187,6 @@ export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: stri
 		if (relativePathWithin(sourceRepoRoot, normalizedPath) !== null) {
 			return true;
 		}
-
-		// Ignore canonical artifact and backup files inside memory/
 		const relMemory = relativePathWithin(memoryDir, normalizedPath);
 		if (relMemory !== null && relMemory !== "") {
 			const fname = basename(normalizedPath);

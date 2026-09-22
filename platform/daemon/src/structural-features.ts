@@ -7,15 +7,10 @@ export const PREDICTOR_FEATURE_DIMENSIONS = 17;
 export type StructuralCandidateSource = "effective" | "fts_only" | "ka_traversal" | "ka_traversal_pinned";
 
 export interface StructuralFeatures {
-	/** Hashed entity ID (0-255, for embedding table lookup) */
 	readonly entitySlot: number;
-	/** Hashed primary aspect ID (0-255) */
 	readonly aspectSlot: number;
-	/** 1 if this memory is a constraint, 0 otherwise */
 	readonly isConstraint: number;
-	/** aspect_count + attribute_count for parent entity */
 	readonly structuralDensity: number;
-	/** Source: 'ka_traversal' | 'effective' | 'fts_only' | null */
 	readonly candidateSource: string | null;
 }
 

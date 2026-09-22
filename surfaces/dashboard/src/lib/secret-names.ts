@@ -1,9 +1,3 @@
-/**
- * Secret-name normalization + validation, ported from the Svelte app's
- * issue-848-format.ts. Mirrors the daemon's SECRET_NAME_RE
- * (platform/daemon/src/bitwarden.ts, onepassword.ts): ^[A-Za-z_][A-Za-z0-9_]*$.
- */
-
 export function normalizeSecretNameInput(value: string): string {
 	return value
 		.trim()

@@ -46,8 +46,6 @@ export function SingleSelect({
       })
     }
   }, [open, wide])
-
-  // Click outside handler
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       const target = event.target as Node
@@ -78,7 +76,7 @@ export function SingleSelect({
 
   return (
     <>
-      {/* Trigger button */}
+      {}
       <button
         ref={triggerRef}
         type="button"
@@ -104,7 +102,7 @@ export function SingleSelect({
         </svg>
       </button>
 
-      {/* Dropdown - rendered via portal */}
+      {}
       {open &&
         typeof document !== "undefined" &&
         createPortal(
@@ -118,7 +116,7 @@ export function SingleSelect({
               boxShadow: "0 4px 16px rgba(34, 34, 34, 0.5)",
             }}
           >
-            {/* Options list */}
+            {}
             <div className="max-h-64 overflow-y-auto">
               {options.length === 0 ? (
                 <div className="px-3 py-2 text-sm text-text-muted">No options</div>
@@ -137,7 +135,7 @@ export function SingleSelect({
                       )}
                       onClick={() => selectOption(option.value)}
                     >
-                      {/* Radio indicator */}
+                      {}
                       <div
                         className={cn(
                           "w-4 h-4 rounded-full border flex items-center justify-center flex-shrink-0",
@@ -147,7 +145,7 @@ export function SingleSelect({
                         {isSelected && <div className="w-2 h-2 rounded-full bg-accent" />}
                       </div>
 
-                      {/* Label and sublabel */}
+                      {}
                       <div className="flex-1 min-w-0">
                         <span className="block truncate">{option.label}</span>
                         {option.sublabel && (

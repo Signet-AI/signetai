@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react"
 import { getActiveDownloads, type ActiveDownload } from "@/lib/api"
 
-const POLL_INTERVAL = 1000 // 1 second polling
+const POLL_INTERVAL = 1000
 
 interface DownloadToastProps {
   onDownloadComplete?: () => void
@@ -17,8 +17,6 @@ export function DownloadToast({ onDownloadComplete }: DownloadToastProps) {
     try {
       const data = await getActiveDownloads()
       setDownloads(data.downloads)
-
-      // Detect when download completes
       if (wasDownloading && data.downloads.length === 0) {
         onDownloadComplete?.()
         setWasDownloading(false)
@@ -26,7 +24,6 @@ export function DownloadToast({ onDownloadComplete }: DownloadToastProps) {
         setWasDownloading(true)
       }
     } catch {
-      // Silent fail - API might not be available
     }
   }, [wasDownloading, onDownloadComplete])
 
@@ -49,7 +46,7 @@ export function DownloadToast({ onDownloadComplete }: DownloadToastProps) {
             boxShadow: "0 4px 12px rgba(34, 34, 34, 0.8)",
           }}
         >
-          {/* Header */}
+          {}
           <div className="flex items-center gap-2 mb-3">
             <div className="w-2 h-2 rounded-full bg-accent animate-pulse" />
             <span className="text-sm font-medium text-text-primary font-display">
@@ -58,7 +55,7 @@ export function DownloadToast({ onDownloadComplete }: DownloadToastProps) {
             <span className="text-xs text-text-muted ml-auto">Downloading</span>
           </div>
 
-          {/* Indeterminate progress bar */}
+          {}
           <div className="h-2 bg-[#333333] rounded-full overflow-hidden mb-2">
             <div
               className="h-full rounded-full animate-indeterminate"
@@ -69,7 +66,7 @@ export function DownloadToast({ onDownloadComplete }: DownloadToastProps) {
             />
           </div>
 
-          {/* Status text */}
+          {}
           <div className="text-xs text-text-secondary">Downloading dataset...</div>
         </div>
       ))}

@@ -4,10 +4,6 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { classifyPreviousDaemonExit, lifecyclePath, readDaemonLifecycle, writeDaemonLifecycle } from "./lifecycle";
 
-// Regression tests for issue #1148: a daemon death must be distinguishable as
-// clean, error, or unrecorded (killed/crashed) from the durable lifecycle
-// record alone, because the process itself leaves no trace on SIGKILL.
-
 function tempRoot(): string {
 	return mkdtempSync(join(tmpdir(), "signet-lifecycle-"));
 }
@@ -55,9 +51,6 @@ describe("daemon lifecycle record (#1148)", () => {
 	it("leaves the record at running when the process dies without an exit path, which is how SIGKILL/OOM deaths surface", () => {
 		const root = tempRoot();
 		try {
-			// The daemon wrote "running" and then was killed: no terminal state
-			// is ever recorded. A status probe must be able to read exactly this
-			// and call it an unrecorded death, not a clean shutdown.
 			writeDaemonLifecycle(root, {
 				state: "running",
 				pid: 7,

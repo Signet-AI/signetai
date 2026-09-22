@@ -1,20 +1,9 @@
 #!/usr/bin/env bun
 
-/**
- * Doc drift detector — compares documentation claims against source truth.
- * Outputs a JSON report to stdout. Exit 0 = no drift, exit 1 = drift found.
- *
- * Usage: bun scripts/doc-drift.ts [--json | --markdown]
- */
-
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function read(relPath: string): string {
 	const abs = join(ROOT, relPath);
@@ -66,13 +55,13 @@ function listTsFilesRecursive(dir: string): string[] {
 
 	function walk(currentAbs: string, relPrefix: string): void {
 		const real = realpathSync(currentAbs);
-		if (visited.has(real)) return; // guard against circular symlinks
+		if (visited.has(real)) return;
 		visited.add(real);
 		for (const entry of readdirSync(currentAbs)) {
 			if (entry === "node_modules" || entry.startsWith(".")) continue;
 			const nextAbs = join(currentAbs, entry);
 			const nextRel = relPrefix ? `${relPrefix}/${entry}` : entry;
-			if (!existsSync(nextAbs)) continue; // skip broken symlinks
+			if (!existsSync(nextAbs)) continue;
 			const nextStat = statSync(nextAbs);
 			if (nextStat.isDirectory()) {
 				walk(nextAbs, nextRel);
@@ -100,8 +89,6 @@ function sliceSection(content: string, heading: string): string {
 
 	return content.slice(start, end);
 }
-
-/** Normalize a route path for comparison (strip trailing slash, Hono param regexes, lowercase). */
 function normRoute(p: string): string {
 	return p
 		.replace(/\{[^}]+\}/g, "")
@@ -115,10 +102,6 @@ function routeKey(method: string, path: string): string {
 
 const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 
-// ---------------------------------------------------------------------------
-// 1. Route drift
-// ---------------------------------------------------------------------------
-
 interface RouteEntry {
 	method: string;
 	path: string;
@@ -131,10 +114,6 @@ function extractRoutesFromSource(): RouteEntry[] {
 		...listTsFilesRecursive("platform/daemon/src/routes"),
 		"platform/daemon/src/mcp/route.ts",
 	];
-
-	// NOTE: Only matches routes registered directly on `app`. Sub-router patterns
-	// like `const router = new Hono(); router.get(...)` are not detected.
-	// Keep all daemon routes registered on the top-level `app` variable.
 	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*["'`]([^"'`]+)["'`]/g;
 
 	const routes: RouteEntry[] = [];
@@ -147,15 +126,10 @@ function extractRoutesFromSource(): RouteEntry[] {
 		while ((match = routePattern.exec(content)) !== null) {
 			const method = match[1].toUpperCase();
 			const path = match[2];
-			// Skip wildcard middleware paths and static root
 			if (path === "*" || path === "/*" || path === "/**" || path === "/") continue;
 			routes.push({ method, path, source: file });
 		}
 	}
-
-	// Deduplicate by method+path — the same route can appear in both daemon.ts
-	// and a routes file (re-export/remount), which would produce duplicate
-	// false positives in missingFromDocs even after the route is documented.
 	const seen = new Set<string>();
 	return routes.filter((r) => {
 		const k = routeKey(r.method, r.path);
@@ -193,9 +167,6 @@ function checkRouteDrift(apiMd: string): {
 } {
 	const sourceRoutes = extractRoutesFromSource();
 	const docRoutes = parseApiRoutes(apiMd);
-
-	// Build a set of documented route keys; expand ALL to specific HTTP methods
-	// to mirror source-side expansion so comparison is symmetric.
 	const docKeys = new Set<string>();
 	for (const dr of docRoutes) {
 		for (const m of dr.methods) {
@@ -206,9 +177,6 @@ function checkRouteDrift(apiMd: string): {
 			}
 		}
 	}
-
-	// Build a set of source route keys; expand app.all() to all HTTP methods
-	// so documented specific-method entries aren't falsely flagged as missing.
 	const sourceKeys = new Set<string>();
 	for (const sr of sourceRoutes) {
 		if (sr.method === "ALL") {
@@ -220,7 +188,6 @@ function checkRouteDrift(apiMd: string): {
 
 	const missingFromDocs = sourceRoutes.filter((sr) => {
 		if (sr.method === "ALL") {
-			// An app.all() route is documented if any specific method covers it
 			return !HTTP_METHODS.some((m) => docKeys.has(routeKey(m, sr.path)));
 		}
 		return !docKeys.has(routeKey(sr.method, sr.path));
@@ -230,7 +197,6 @@ function checkRouteDrift(apiMd: string): {
 	for (const dr of docRoutes) {
 		const missingMethods = dr.methods.filter((m) => {
 			if (m === "ALL") {
-				// A documented ALL is valid if source has any specific method for that path
 				return !HTTP_METHODS.some((hm) => sourceKeys.has(routeKey(hm, dr.endpoint)));
 			}
 			return !sourceKeys.has(routeKey(m, dr.endpoint));
@@ -242,10 +208,6 @@ function checkRouteDrift(apiMd: string): {
 
 	return { missingFromDocs, extraInDocs };
 }
-
-// ---------------------------------------------------------------------------
-// 2. Migration drift
-// ---------------------------------------------------------------------------
 
 interface MigrationDrift {
 	documentedReferences: { location: string; text: string }[];
@@ -289,10 +251,6 @@ function checkMigrationDrift(architectureMd: string): MigrationDrift {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// 3. Key files drift
-// ---------------------------------------------------------------------------
-
 interface KeyFilesDrift {
 	missing: string[];
 	total: number;
@@ -314,10 +272,6 @@ function checkKeyFilesDrift(claudeMd: string): KeyFilesDrift {
 	return { missing, total: paths.length };
 }
 
-// ---------------------------------------------------------------------------
-// 4. Packages drift
-// ---------------------------------------------------------------------------
-
 interface PackageInfo {
 	name: string;
 	dir: string;
@@ -331,7 +285,7 @@ function getActualPackages(): PackageInfo[] {
 	function scan(dir: string, relPrefix: string): void {
 		if (!existsSync(dir)) return;
 		const realDir = realpathSync(dir);
-		if (visitedDirs.has(realDir)) return; // guard against circular symlinks
+		if (visitedDirs.has(realDir)) return;
 		visitedDirs.add(realDir);
 		const BUILD_DIRS = new Set(["dist", "build", "out", "lib"]);
 		for (const entry of readdirSync(dir)) {
@@ -342,17 +296,11 @@ function getActualPackages(): PackageInfo[] {
 			if (existsSync(pkgJson)) {
 				try {
 					const pkg = JSON.parse(readFileSync(pkgJson, "utf8"));
-					// Skip private packages (workspace roots etc.) — they are
-					// intentionally omitted from documentation tables.
 					if (pkg.name && !pkg.private) {
 						packages.push({ name: pkg.name, dir: rel });
 					}
-				} catch {
-					// Skip malformed package manifests.
-				}
+				} catch {}
 			}
-			// Always recurse — a workspace root may have an unnamed package.json
-			// but still contain named sub-packages underneath it.
 			if (existsSync(full) && statSync(full).isDirectory()) {
 				scan(full, rel);
 			}
@@ -362,8 +310,6 @@ function getActualPackages(): PackageInfo[] {
 	for (const rootName of workspaceRoots) {
 		scan(join(ROOT, rootName), rootName);
 	}
-
-	// Check special top-level locations
 	for (const extra of []) {
 		const pkgJson = join(ROOT, extra, "package.json");
 		if (existsSync(pkgJson)) {
@@ -372,9 +318,7 @@ function getActualPackages(): PackageInfo[] {
 				if (pkg.name && !pkg.private) {
 					packages.push({ name: pkg.name, dir: extra });
 				}
-			} catch {
-				// Skip malformed package manifests.
-			}
+			} catch {}
 		}
 	}
 
@@ -432,8 +376,6 @@ function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 	const actualDirs = new Set(actual.map((p) => p.dir));
 
 	const results: PackageTableDrift[] = [];
-
-	// CLAUDE.md
 	const legacyClaudeTable = parsePackageTable(claudeMd, "## Package map");
 	const claudeTable =
 		legacyClaudeTable.size > 0 ? legacyClaudeTable : parsePackageTable(claudeMd, "## Package And Directory Map");
@@ -445,8 +387,6 @@ function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 			return !actualDirs.has(dir) && !fileExists(dir);
 		}),
 	});
-
-	// README.md
 	if (fileExists("README.md")) {
 		const readme = read("README.md");
 		const readmeTable = parsePackageTable(readme, "## Packages");
@@ -459,10 +399,6 @@ function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
 
 	return results;
 }
-
-// ---------------------------------------------------------------------------
-// Report
-// ---------------------------------------------------------------------------
 
 interface DriftReport {
 	routes: {
@@ -609,10 +545,6 @@ function formatMarkdown(report: DriftReport): string {
 
 	return lines.join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2);
 const format = args.includes("--markdown") ? "markdown" : "json";

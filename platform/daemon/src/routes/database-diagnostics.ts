@@ -112,7 +112,6 @@ const KNOWN_GROUPS: Readonly<Record<string, DatabaseSchemaGroup>> = {
 	schema_migrations: "runtime",
 	schema_migrations_audit: "runtime",
 	memory_jobs: "runtime",
-	// Historical queue table retained only for migration/provenance inspection.
 	summary_jobs: "other",
 	telemetry_events: "runtime",
 	connectors: "runtime",
@@ -265,7 +264,7 @@ function readDatabaseSchemaFromDb(db: ReadDb): DatabaseSchemaResponse {
 
 export async function readDatabaseSchemaAsync(accessor: DbAccessor): Promise<DatabaseSchemaResponse> {
 	return await accessor.withReadDbAsync((db) => readDatabaseSchemaFromDb(db), {
-		siteToken: "routes/database-diagnostics.ts:267",
+		siteToken: "routes/database-diagnostics.ts:266",
 		operation: "diagnostics.database.schema",
 	});
 }
@@ -304,7 +303,7 @@ export async function readTableSampleAsync(
 	offset: number,
 ): Promise<DatabaseTableSampleResponse | { readonly error: string; readonly status: 400 | 404 }> {
 	return await accessor.withReadDbAsync((db) => readTableSampleFromDb(db, table, limit, offset), {
-		siteToken: "routes/database-diagnostics.ts:306",
+		siteToken: "routes/database-diagnostics.ts:305",
 		operation: "diagnostics.database.sample",
 	});
 }

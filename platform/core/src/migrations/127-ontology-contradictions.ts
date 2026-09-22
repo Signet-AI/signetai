@@ -1,13 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 127: persisted contradiction observations.
- *
- * Contradictions are derived observations between two competing claim rows,
- * not a replacement truth value. Attribute ids are intentionally soft links:
- * source removal can delete a claim while the resolved observation remains
- * available for audit with its immutable content and provenance snapshots.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS ontology_contradictions (

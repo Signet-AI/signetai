@@ -123,7 +123,6 @@ describe("hooks config", () => {
 		const resolved = resolveHooksConfigForHarness(loadHooksConfig(dir), "pi");
 
 		expect(resolved.sessionStart?.recallLimit).toBe(5);
-		// Keys the profile did not mention must fall back to the global values.
 		expect(resolved.sessionStart?.recencyBias).toBe(0.3);
 		expect(resolved.sessionStart?.includeIdentity).toBe(false);
 		expect(resolved.sessionStart?.maxInjectTokens).toBe(12000);

@@ -1,26 +1,12 @@
-/**
- * Server-side UMAP projection — loads embeddings from the DB, runs
- * dimensionality reduction, builds KNN edges, normalises coordinates
- * to [-210, 210], and caches the result in the umap_cache table.
- */
-
 import { createRequire } from "node:module";
 import { UMAP } from "umap-js";
 import type { ReadDb, WriteDb } from "./db-accessor";
 import { escapeLike } from "./sql-utils";
-
-// Try to load native Rust accelerators, fall back to pure TS
 let nativeKnn: typeof import("@signet/native") | null = null;
 try {
 	const esmRequire = createRequire(import.meta.url);
 	nativeKnn = esmRequire("@signet/native");
-} catch {
-	// Native addon not available — using TypeScript fallback
-}
-
-// ---------------------------------------------------------------------------
-// Public types
-// ---------------------------------------------------------------------------
+} catch {}
 
 export interface ProjectionNode {
 	readonly id: string;
@@ -77,26 +63,16 @@ export interface CachedProjection {
 	readonly cachedAt: string;
 }
 
-// ---------------------------------------------------------------------------
-// Internal constants
-// ---------------------------------------------------------------------------
-
 const SCALE = 420;
 const KNN_K = 4;
 const KNN_EXACT_THRESHOLD = 450;
 const KNN_APPROX_WINDOW_MULTIPLIER = 6;
-// Truncate high-dimensional vectors before UMAP to avoid stack overflow.
-// OpenAI embeddings support Matryoshka truncation — lower dims preserve
-// relative distances well enough for 2D/3D visualization.
 const UMAP_MAX_DIMENSIONS = 64;
 
 interface ScoredNeighbor {
 	readonly index: number;
 	readonly distance: number;
 }
-
-// Kept as pure TS — projected vectors are 2-3 dimensions, so FFI overhead
-// and typed array allocation would outweigh any native compute benefit.
 function squaredDistance(left: readonly number[], right: readonly number[]): number {
 	let distance = 0;
 	for (let index = 0; index < left.length; index += 1) {
@@ -115,10 +91,6 @@ function insertNearestNeighbor(neighbors: ScoredNeighbor[], next: ScoredNeighbor
 	neighbors.splice(index, 0, next);
 	if (neighbors.length > k) neighbors.pop();
 }
-
-// ---------------------------------------------------------------------------
-// Vector helpers
-// ---------------------------------------------------------------------------
 
 function blobToVector(buf: Uint8Array, dimensions: number | null): number[] {
 	const raw = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
@@ -145,10 +117,6 @@ function normaliseAxis(values: readonly number[]): number[] {
 	const range = max - min || 1;
 	return values.map((v) => ((v - min) / range - 0.5) * SCALE);
 }
-
-// ---------------------------------------------------------------------------
-// KNN edge builders (ported from embedding-graph.ts)
-// ---------------------------------------------------------------------------
 
 function buildExactKnnEdges(projected: readonly number[][], k: number): [number, number][] {
 	const edgeSet = new Set<string>();
@@ -245,10 +213,6 @@ function buildKnnEdges(projected: readonly number[][], k: number): [number, numb
 	return buildApproximateKnnEdges(projected, k);
 }
 
-// ---------------------------------------------------------------------------
-// Row type + validation
-// ---------------------------------------------------------------------------
-
 interface EmbeddingRow {
 	id: string;
 	content: string;
@@ -288,10 +252,6 @@ function toEmbeddingRow(raw: Record<string, unknown>): EmbeddingRow | null {
 		dimensions: typeof raw.dimensions === "number" ? raw.dimensions : null,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
 
 const EMBEDDINGS_SELECT_SQL = `
 	SELECT m.id, m.content, m.who, m.importance, m.type, m.tags, m.pinned,
@@ -387,7 +347,6 @@ function buildProjectionWhere(filters: ProjectionFilters | undefined): {
 
 interface ProjectionRowsResult {
 	readonly rows: EmbeddingRow[];
-	/** Stable DB COUNT using typeof(e.vector)='blob' for dashboard display; over-fetch-by-1 sentinel for hasMore. */
 	readonly total: number;
 	readonly offset: number;
 	readonly limit: number;

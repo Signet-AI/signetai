@@ -16,9 +16,7 @@ export function resolveDefaultBasePath(): string {
 			const value = JSON.parse(readFileSync(configPath, "utf8")) as { workspace?: unknown };
 			if (typeof value.workspace === "string" && value.workspace.trim())
 				return resolve(expandHome(value.workspace, home));
-		} catch {
-			// The canonical preflight reports malformed persisted configuration.
-		}
+		} catch {}
 	}
 	return join(home, ".agents");
 }
@@ -35,4 +33,4 @@ export const SCHEMA_ID = "signet/v1";
 
 export const DEFAULT_EMBEDDING_DIMENSIONS = 768;
 export const DEFAULT_HYBRID_ALPHA = 0.7;
-export const DEFAULT_REPLAY_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+export const DEFAULT_REPLAY_WINDOW_MS = 5 * 60 * 1000;

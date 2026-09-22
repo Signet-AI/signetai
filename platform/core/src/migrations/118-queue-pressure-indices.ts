@@ -1,13 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 118: bounded queue-pressure observation
- *
- * Heartbeat pressure telemetry only needs active queue depth buckets and the
- * oldest active job age. These partial indexes let that path probe a bounded
- * number of live rows without scanning terminal jobs or retired extraction
- * jobs.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_memory_jobs_pressure_status

@@ -147,9 +147,7 @@ export class ForgeConnector extends BaseConnector {
 				try {
 					const raw = readFileSync(staleAgentsPath, "utf-8");
 					if (isSignetGeneratedFile(raw) || raw.includes(SIGNET_FORGE_MARKER)) rmSync(staleAgentsPath);
-				} catch {
-					// Non-fatal; keep unreadable user files in place.
-				}
+				} catch {}
 			}
 		}
 
@@ -192,9 +190,7 @@ export class ForgeConnector extends BaseConnector {
 					rmSync(agentsPath, { force: true });
 					filesRemoved.push(agentsPath);
 				}
-			} catch {
-				// Non-fatal; keep unreadable user files in place.
-			}
+			} catch {}
 		}
 
 		let config: JsonObject | null = null;
@@ -221,9 +217,7 @@ export class ForgeConnector extends BaseConnector {
 						configsPatched.push(this.getMcpConfigPath());
 					}
 				}
-			} catch {
-				// Non-fatal; leave user config untouched on parse/shape errors.
-			}
+			} catch {}
 		}
 
 		return { filesRemoved, configsPatched };
@@ -325,16 +319,12 @@ export class ForgeConnector extends BaseConnector {
 				if (!isChildOf(target, skillsSource)) continue;
 				unlinkSync(entryPath);
 				filesRemoved.push(entryPath);
-			} catch {
-				// Ignore individual broken or unreadable symlinks.
-			}
+			} catch {}
 		}
 
 		try {
 			if (readdirSync(skillsDir).length === 0) rmSync(skillsDir, { recursive: true, force: true });
-		} catch {
-			// Non-fatal.
-		}
+		} catch {}
 	}
 }
 

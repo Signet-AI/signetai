@@ -1,28 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { Database } from "bun:sqlite";
-// tests/ is not a bun workspace, so `@signet/core` does not resolve from
-// here under a clean CI install (it only resolves locally via machine-global
-// node_modules). Import the real migration runner by relative path instead —
-// same code production runs, no package-name resolution involved.
 import { runMigrations } from "../../../platform/core/src/migrations/index";
-
-/**
- * Deterministic production-shaped database builder for the Phase D stability
- * acceptance harness (#1543).
- *
- * Shapes match the real deployment profile the wedge incidents (#1670/#1671)
- * were observed against: ~106k memories, ~11k transcript capture jobs with
- * full-size inline transcripts, telemetry events, and a multi-thousand-file
- * source artifact index. Sizes derive from the shipped schema: transcripts
- * live inline in transcript_capture_jobs.transcript; memory content is stored
- * at realistic sentence lengths.
- *
- * The schema itself is created by the real migration runner (runMigrations)
- * so the harness always boots against exactly what production would create.
- */
-
-/** Fast, deterministic 32-bit PRNG (mulberry32) — same sequence every run. */
 function mulberry32(seed: number): () => number {
 	let a = seed >>> 0;
 	return () => {
@@ -93,22 +72,15 @@ function sentences(rng: () => number, count: number, minLength: number): string 
 }
 
 function isoMinute(seedMs: number): string {
-	// Whole-minute timestamps keep the built database byte-deterministic.
 	return new Date(seedMs - (seedMs % 60_000)).toISOString();
 }
 
 export interface ProductionDbOptions {
-	/** Total memories to create (default 106_000 — the real deployment scale). */
 	readonly memoryCount?: number;
-	/** Transcript capture jobs with full inline payloads (default 11_000). */
 	readonly transcriptJobs?: number;
-	/** Telemetry event rows (default 25_000). */
 	readonly telemetryEvents?: number;
-	/** Source file index rows in memory_artifacts (default 5_000). */
 	readonly sourceFiles?: number;
-	/** Deterministic seed (default 1543). */
 	readonly seed?: number;
-	/** Rows per insert transaction (default 2_000). */
 	readonly batchSize?: number;
 }
 
@@ -138,18 +110,14 @@ export function buildProductionDb(dbPath: string, options: ProductionDbOptions =
 	db.exec("PRAGMA synchronous = NORMAL");
 
 	try {
-		// Real schema, exactly as production would create it.
 		runMigrations(db);
 
 		const rng = mulberry32(seed);
-		// Anchor timestamps so identical seeds produce identical data.
 		const now = 1_780_000_000_000;
 		const memoryTypes = ["fact", "preference", "procedure", "insight", "relationship"] as const;
 		const agents = ["default", "codex", "claude-code", "hermes-agent"] as const;
 		const projects = [null, "signet", "biohazard", "vault", "research"] as const;
 		const jobStatuses = ["completed", "completed", "completed", "pending", "failed", "processing"] as const;
-
-		// -- memories (+ FTS via the shipped triggers) --
 		const insertMemory = db.prepare(`
 			INSERT INTO memories (
 				id, agent_id, type, category, content, normalized_content, content_hash,
@@ -165,10 +133,6 @@ export function buildProductionDb(dbPath: string, options: ProductionDbOptions =
 				id, agent_id, content_hash, vector, dimensions, source_type, source_id, chunk_text, created_at
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`);
-		// Deterministic pseudo-random unit vector (float32 blob, 768 dims —
-		// the nomic-embed-text-v1.5 profile). Values only need to be stable
-		// and dense; the daemon never similarity-matches them in this
-		// harness (the provider is down by design).
 		const vectorBlob = (seed: number): Buffer => {
 			const out = Buffer.allocUnsafe(768 * 4);
 			for (let d = 0; d < 768; d++) {
@@ -230,8 +194,6 @@ export function buildProductionDb(dbPath: string, options: ProductionDbOptions =
 			}
 			db.exec("COMMIT");
 		}
-
-		// -- transcript_capture_jobs: transcripts inline, full-size payloads --
 		const insertJob = db.prepare(`
 			INSERT INTO transcript_capture_jobs (
 				id, agent_id, harness, session_key, session_id, project,
@@ -248,8 +210,6 @@ export function buildProductionDb(dbPath: string, options: ProductionDbOptions =
 				const harness = harnesses[i % harnesses.length];
 				if (harness === undefined) continue;
 				const status = jobStatuses[i % jobStatuses.length];
-				// Full-size payload: role-turn JSON, transcript inline, matching
-				// the shipped schema where transcripts live in the jobs table.
 				const turns = 24 + Math.floor(rng() * 60);
 				const transcript = JSON.stringify({
 					session: `sess-${String(i).padStart(6, "0")}`,
@@ -284,8 +244,6 @@ export function buildProductionDb(dbPath: string, options: ProductionDbOptions =
 			}
 			db.exec("COMMIT");
 		}
-
-		// -- telemetry_events --
 		const insertTelemetry = db.prepare(`
 			INSERT INTO telemetry_events (id, event, timestamp, properties, sent_to_posthog, created_at)
 			VALUES (?, ?, ?, ?, ?, ?)
@@ -318,8 +276,6 @@ export function buildProductionDb(dbPath: string, options: ProductionDbOptions =
 			}
 			db.exec("COMMIT");
 		}
-
-		// -- source file index: memory_artifacts (multi-thousand-file scale) --
 		const insertArtifact = db.prepare(`
 			INSERT INTO memory_artifacts (
 				agent_id, source_path, source_sha256, source_kind, session_id,
@@ -358,19 +314,12 @@ export function buildProductionDb(dbPath: string, options: ProductionDbOptions =
 			}
 			db.exec("COMMIT");
 		}
-
-		// Materialize FTS for the seeded memories in one deterministic pass.
-		// memories_fts is an external-content table: the index is the derived
-		// surface, memories is canonical.
 		db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories WHERE is_deleted = 0");
 		db.exec(
 			"UPDATE memories_fts_state SET memory_count = (SELECT COUNT(*) FROM memories), indexed_count = (SELECT COUNT(*) FROM memories WHERE is_deleted = 0), updated_at = datetime('now') WHERE id = 1",
 		);
 
 		db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-		// Loud-failure check: INSERT OR IGNORE can silently drop rows (a
-		// constraint mismatch once left the DB with 0 embeddings while the
-		// builder reported success). Never trust the counter — count rows.
 		const actual = {
 			memories: db.prepare("SELECT COUNT(*) AS c FROM memories").get() as { c: number },
 			embeddings: db.prepare("SELECT COUNT(*) AS c FROM embeddings").get() as { c: number },

@@ -1,17 +1,4 @@
 #!/usr/bin/env bun
-/**
- * embed-extension.ts
- *
- * Reads the compiled pi extension bundle from
- * ../extension/dist/signet-pi.mjs and embeds it as a string
- * literal inside src/extension-bundle.ts. Run before bundling src/index.ts so
- * the connector ships the managed extension without a runtime dependency on
- * @signet/pi-extension.
- *
- * If the extension package has not been built yet, the script exits cleanly
- * and leaves the placeholder in place. install() will then fail with a clear
- * message instead of writing an empty managed extension file.
- */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

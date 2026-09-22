@@ -1,16 +1,3 @@
-/**
- * Model-facing contract for the daemon-owned ontology apply seam.
- *
- * The Dreaming surface presents a fixed vocabulary (per the dreaming prompt
- * spec): hygiene ops target flagged rows by id and cite attention provenance;
- * content ops target existing rows by id and cite exact quotes from episodic
- * evidence. Payloads are mapped to the shared applicator contracts inside
- * applyDreamingOperations — the applicators in ontology-proposals.ts are used
- * by MCP/CLI too and are not reshaped here.
- *
- * Ops not listed here (restore_claim_version, attach_interface) are not part
- * of the Dreaming vocabulary: the agent can only do what the surface defines.
- */
 import { ATTRIBUTE_KINDS, DEPENDENCY_TYPES, ENTITY_TYPES, ONTOLOGY_PROPOSAL_OPERATIONS } from "@signet/core";
 import { z } from "zod";
 
@@ -35,14 +22,7 @@ function payload<T extends z.ZodRawShape>(shape: T) {
 }
 
 const reasonField = { reason: text.describe("Why this operation is being applied.").optional() };
-
-/**
- * Model-facing payload shapes. Keyed by the Dreaming vocabulary: the 18 ops
- * the agent may emit. Hygiene ops require provenance (attention); content ops
- * require evidence (exact quotes).
- */
 export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
-	// --- hygiene ops: no episodic evidence required; provenance required ---
 	flag: payload({
 		subjectRef: text.describe(
 			"The flagged target, e.g. entity:<id>, aspect:<id>, attribute:<id>, link:<id>, or duplicate:<canonical name>.",
@@ -74,8 +54,6 @@ export const DREAMING_ONTOLOGY_PAYLOAD_SCHEMAS = {
 		newName: aspectName.describe("Optional new name for the merged aspect.").optional(),
 		...reasonField,
 	}),
-
-	// --- content-bearing ops: require evidence with exact quotes ---
 	create_entity: payload({ name: entityName, type: entityType }),
 	add_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter }),
 	set_claim_value: payload({ entityId, aspectId, claimKey, value: claimValue, reviewAfter }),

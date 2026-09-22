@@ -458,9 +458,7 @@ function createAbortPromise(signal: AbortSignal): { readonly promise: Promise<ne
 function cancelResponseBody(response: Response): void {
 	try {
 		void response.body?.cancel().catch(() => {});
-	} catch {
-		// The response may already be consumed or cancelled.
-	}
+	} catch {}
 }
 
 async function requestPinnedWebPage(url: string, options: WebRequestOptions): Promise<Response> {

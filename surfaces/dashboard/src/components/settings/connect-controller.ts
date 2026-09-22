@@ -1,11 +1,3 @@
-/**
- * Connect-provider controller — React port of the old Svelte dashboard's
- * ConnectProviderController state machine. Two flows share one reducer:
- *   1. OAuth login (Claude Max / ChatGPT Codex / GitHub Copilot) — driven by
- *      the daemon's SSE login stream; events advance the machine.
- *   2. API-key connect — paste a key, advisory-validate, save to the vault.
- * States are an exhaustive union so impossible states are unrepresentable.
- */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	type OAuthLoginEvent,
@@ -43,9 +35,7 @@ export interface ConnectControllerOptions {
 	readonly providerId: string;
 	readonly supportsOAuth: boolean;
 	readonly supportsApiKey: boolean;
-	/** Fired when the daemon emits a URL the user must open. */
 	readonly onNavigate?: (url: string) => void;
-	/** Fired once when the login stores the credential daemon-side. */
 	readonly onConnected?: () => Promise<void>;
 }
 

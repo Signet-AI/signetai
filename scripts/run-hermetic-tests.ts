@@ -2,12 +2,6 @@ import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-/**
- * Stage 1 isolates process environment and filesystem roots only. Provider
- * fixtures, generated artifacts, shared database state, and parallel-suite
- * coordination remain later hermetic-runner stages.
- */
 export const CLEARED_ENV_KEYS = [
 	"SIGNET_PATH",
 	"SIGNET_WORKSPACE",

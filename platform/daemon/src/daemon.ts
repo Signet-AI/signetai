@@ -1,9 +1,5 @@
 #!/usr/bin/env node
 import { requestMemoryHead } from "./memory-head";
-/**
- * Signet Daemon
- * Background service for memory, API, and dashboard hosting
- */
 
 import "./bun-socket-polyfill";
 import { spawnHidden as spawn } from "@signet/core";
@@ -342,8 +338,6 @@ let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 let transcriptImportWorkerHandle: TranscriptImportWorkerHandle | null = null;
-// These are mirrored into state.ts via setters for read access by
-// route modules. Only daemon.ts should assign or clear them.
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -479,27 +473,14 @@ async function ownerHasPendingVecBackfill(owner: DbOwnerClient, expectedDimensio
 		},
 		{ operation: "maintenance.vec-backfill-probe", lane: "read", deadlineMs: 5_000 },
 	);
-	// `undefined` is a successful empty result. Errors must escape so the
-	// bounded retry path can distinguish an operational failure from "no work".
 	return (await owner.awaitResult(pendingHandle, 5_000)) !== undefined;
 }
 
 export function countConnectorsActive(connectors: readonly { readonly status: string }[]): number {
-	// ConnectorStatus is "idle" | "syncing" | "error"; there is no "active"
-	// state. The heartbeat field keeps its historical name, but means
-	// connectors that are registered and not currently errored.
 	return connectors.filter((cn) => cn.status !== "error").length;
 }
 
-// ============================================================================
-// Hono App
-// ============================================================================
-
 export const app = new Hono();
-
-// Once migration verification has confirmed corruption, keep every mutating
-// HTTP surface fail-closed while continuing to serve readonly routes and the
-// existing repair guidance used by /health/ready.
 app.use("*", async (c, next) => {
 	if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return await next();
 	if (!migrationIntegrityWritesBlocked) return await next();
@@ -515,15 +496,11 @@ app.use("*", async (c, next) => {
 		503,
 	);
 });
-
-// Resolve the SQLite runtime once for the workspace owner.
 const sqliteRuntime = resolveSqliteRuntimeConfig({ agentsDir: AGENTS_DIR });
 
 export function createRecallDbOwnerOptions(sqlitePath: string | undefined): DbOwnerClientOptions {
 	return { dbPath: MEMORY_DB, sqlitePath };
 }
-
-// Recall, writes, and bounded maintenance share one database owner.
 const recallOwner = createDbOwnerClient(createRecallDbOwnerOptions(sqliteRuntime.choice?.path));
 recallDbOwner = recallOwner;
 
@@ -567,13 +544,7 @@ mountInferenceRoutes(app, {
 	getTelemetry: () => telemetryRef,
 });
 
-// ============================================================================
-// Additional route modules (from main)
-// ============================================================================
-
 setFetchEmbedding(fetchEmbedding);
-// Mount the literal /api/skills/analytics before mountSkillsRoutes, whose
-// /api/skills/:name route would otherwise match "analytics" as a skill name.
 mountSkillAnalyticsRoutes(app);
 mountSkillsRoutes(app);
 mountMarketplaceRoutes(app);
@@ -587,23 +558,11 @@ mountOsChatRoutes(app);
 mountOsAgentRoutes(app);
 setupDashboardRoutes(app);
 
-// ============================================================================
-// File Watcher
-// ============================================================================
-
 let watcher: ReturnType<typeof watch> | null = null;
 let nativeMemoryBridge: NativeMemoryBridgeHandle | null = null;
-
-// Fast in-process cache layered on top of the persistent legacy_markdown_imports
-// manifest. The DB manifest is the authoritative restart-safe skip state;
-// this map only avoids duplicate work within a single daemon lifetime.
 const ingestedMemoryFiles = new Map<string, string>();
 const LEGACY_MARKDOWN_IMPORTER_VERSION = 1;
 const MEMORY_IMPORT_POLL_MS = 30_000;
-
-// #1172: harnesses that never signal session-end (closed/abandoned desktop
-// chats) leave live-retained transcripts unclosed; sweep the stale sessions
-// and fire the deferred session-end on a timer.
 const STALE_SESSION_SWEEP_INTERVAL_MS = 15 * 60 * 1000;
 const ACP_DELIVERY_RECONCILIATION_INTERVAL_MS = 30_000;
 const STALE_SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -619,7 +578,6 @@ const SYNC_DEBOUNCE_MS = 2000;
 async function syncHarnessConfigs() {
 	const identityMode = loadIdentityMode(AGENTS_DIR);
 	if (!identityModeManagesFiles(identityMode)) {
-		// Clean up stale generated harness identity files when mode is off
 		await cleanupStaleHarnessIdentity();
 		await ensureArchitectureDoc();
 		return;
@@ -722,11 +680,6 @@ ${fileList}
 	});
 	await ensureArchitectureDoc();
 }
-
-/**
- * Remove Signet-generated harness identity files when identity mode is off.
- * Only deletes files whose first lines match Signet-generated markers.
- */
 async function cleanupStaleHarnessIdentity(): Promise<void> {
 	const activeHarnesses = new Set(loadConfiguredHarnesses(AGENTS_DIR));
 	const targets: Array<{ path: string; harness: string }> = [];
@@ -735,13 +688,10 @@ async function cleanupStaleHarnessIdentity(): Promise<void> {
 	if (activeHarnesses.has("opencode") && existsSync(opencodeDir)) {
 		targets.push({ path: join(opencodeDir, "AGENTS.md"), harness: "opencode" });
 	}
-
-	// Gemini uses a configurable GEMINI.md path; check the standard and custom locations
 	if (activeHarnesses.has("gemini")) {
 		const geminiDir = join(homedir(), ".gemini");
 		if (existsSync(geminiDir)) {
 			targets.push({ path: join(geminiDir, "GEMINI.md"), harness: "gemini" });
-			// Also check for custom context-file path from settings.json
 			try {
 				const settingsPath = join(geminiDir, "settings.json");
 				if (existsSync(settingsPath)) {
@@ -758,9 +708,7 @@ async function cleanupStaleHarnessIdentity(): Promise<void> {
 						}
 					}
 				}
-			} catch {
-				// Non-fatal — default path already covered
-			}
+			} catch {}
 		}
 	}
 
@@ -778,9 +726,7 @@ async function cleanupStaleHarnessIdentity(): Promise<void> {
 				await unlinkAsync(targetPath);
 				logger.sync.harness(harness, `cleaned stale generated file: ${targetPath}`);
 			}
-		} catch {
-			// Non-fatal
-		}
+		} catch {}
 	}
 }
 
@@ -970,7 +916,6 @@ async function resolveActiveEmbeddingConfigThroughOwner(
 	operation: string,
 ): Promise<ResolvedMemoryConfig["embedding"]> {
 	if (configured.profile) return configured;
-	// Startup must not wait behind FTS/integrity maintenance work.
 	const row = await ownerReadOne<EmbeddingIndexStateRow>(
 		owner,
 		"SELECT active_profile_json, staging_profile_json, state, last_error FROM embedding_index_state WHERE id = 1",
@@ -1018,7 +963,6 @@ async function readLegacyMarkdownImportState(filePath: string): Promise<{
 		);
 		return row ?? null;
 	} catch {
-		// Older/unmigrated DBs fall back to the legacy importer behavior.
 		return null;
 	}
 }
@@ -1084,9 +1028,7 @@ async function writeLegacyMarkdownImportState(args: {
 			],
 			{ deadlineMs: 5_000 },
 		);
-	} catch {
-		// Non-fatal: importer correctness still falls back to idempotency/source dedupe.
-	}
+	} catch {}
 }
 
 async function legacyMarkdownChunkKnown(filePath: string, chunkHash: string): Promise<boolean> {
@@ -1129,9 +1071,7 @@ async function recordLegacyMarkdownChunk(args: {
 			],
 			{ deadlineMs: 5_000 },
 		);
-	} catch {
-		// Non-fatal.
-	}
+	} catch {}
 }
 
 function memoryIdFromRememberResponse(value: unknown): string | null {
@@ -1254,9 +1194,6 @@ async function ingestMemoryMarkdown(filePath: string): Promise<number> {
 				await recordLegacyMarkdownChunk({ filePath, chunkHash, chunkIndex: i, memoryId, sourceId: chunkKey });
 				imported++;
 			} else if (response.status === 409) {
-				// Existing historical imports can predate this manifest table. A 409 still
-				// proves this deterministic chunk should not be posted again on every
-				// daemon restart, so persist a manifest row without a memory id.
 				await recordLegacyMarkdownChunk({ filePath, chunkHash, chunkIndex: i, memoryId: null, sourceId: chunkKey });
 				imported++;
 				logger.debug("watcher", "Legacy memory chunk already exists", { path: filePath, chunkIndex: i });
@@ -1391,9 +1328,6 @@ function stopMemoryImportPoller(): void {
 function startStaleSessionSweeper(): void {
 	if (staleSessionSweepTimer !== null) return;
 	staleSessionSweepTimer = setInterval(() => {
-		// Keep each timer tick small. The sweep is single-flight and yields
-		// between finalizations, so a large abandoned-session backlog cannot
-		// monopolize the daemon or fan out downstream capture work.
 		sweepStaleSessions({ staleOlderThanMs: STALE_SESSION_TTL_MS, limit: 10 }).catch((e) => {
 			logger.error("daemon", "Stale session sweep failed", undefined, {
 				message: e instanceof Error ? e.message : String(e),
@@ -1444,12 +1378,6 @@ function invalidateInferenceConfigForPath(path: string): void {
 }
 
 function startFileWatcher() {
-	// Do NOT watch the memory/ directory directly — Bun's fs.watch()
-	// opens one O_RDONLY FD per file in a watched directory and never
-	// releases them on close(), leaking ~8 000 FDs with canonical
-	// artifacts present. Canonical artifacts and backups are intentionally
-	// ignored; rare legacy non-artifact memory markdown imports are handled
-	// by the lightweight poller started after daemon readiness.
 	watcher = watch(
 		[
 			join(AGENTS_DIR, "agent.yaml"),
@@ -1481,9 +1409,6 @@ function startFileWatcher() {
 		const isRuntimeConfig = base === "agent.yaml" || base === "AGENT.yaml" || base === "config.yaml";
 		if (isRuntimeConfig) {
 			try {
-				// Keep the accepted runtime state and its derived reload paths intact
-				// when a newly selected config is invalid. In particular, do not
-				// invalidate routing or auto-commit the rejected document.
 				loadMemoryConfig(AGENTS_DIR);
 			} catch (error) {
 				logger.error(
@@ -1576,10 +1501,6 @@ function startFileWatcher() {
 	});
 }
 
-// ============================================================================
-// Pipeline runtime
-// ============================================================================
-
 function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 	if (!cfg.enabled) return "disabled";
 	if (cfg.paused) return "paused";
@@ -1660,9 +1581,6 @@ function restartAfterEmbeddingPromotion(telemetry?: TelemetryCollector): void {
 	if (embeddingPromotionRestart) return;
 	const activePass = dreamingWorkerHandle?.activePass;
 	embeddingPromotionRestart = (async () => {
-		// An embedding-index promotion changes recall infrastructure, not the
-		// evidence window already being reasoned over. Let that bounded pass
-		// finish instead of orphaning it during the broad worker restart.
 		if (activePass) {
 			logger.info("embedding", "Deferring embedding worker restart until Dreaming pass completes");
 			await activePass.catch(() => undefined);
@@ -1758,10 +1676,7 @@ function configuredInferenceMode(agentsDir: string): "local" | "remote" | "unkno
 				if (localities.includes("unknown")) return "unknown";
 				return "local";
 			}
-		} catch {
-			// An invalid router config is reported by the router itself. Do not
-			// infer a mode from retired memory.pipelineV2 provider fields.
-		}
+		} catch {}
 		break;
 	}
 
@@ -1809,8 +1724,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				return router.createWorkloadProvider("default", defaultAgentId);
 		}
 	});
-	// Surface broken routing references (defaultPolicy, workload targets, etc.) at
-	// boot before any route is attempted (#1005). Never blocks daemon startup.
 	void router.validateConfigReferences();
 
 	if (dbOwnerMaintenanceHandle === null) {
@@ -1818,9 +1731,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	}
 
 	const activeEmbeddingCfg = await startDeferredRuntimeAfterDreaming(
-		// Admit Dreaming before optional startup work. Legacy-job retirement and
-		// embedding resolution both use the DB-owner queue and can reject the
-		// deferred runtime before the worker would otherwise be created.
 		() => {
 			if (memoryCfg.dreaming.enabled && !pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 				try {
@@ -1860,11 +1770,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		},
 		async () => {
 			logger.info("dreaming", "Dreaming owns all semantic writes; legacy extraction is retired");
-			// Terminalize every pre-existing legacy `extract` job. The source keeps its
-			// provenance and memory kind, so only already-episodic evidence remains
-			// reachable by the Dreaming cursor; derived rows are never reclassified.
-			// Leased rows are terminalized too because no legacy worker remains. Runs on
-			// cold boot and live-reload config transitions (#913).
 			if (!pipelinePaused) {
 				const deadLettered = await retireLegacyExtractionJobsAsync({
 					reason: "Dreaming cutover: legacy extraction worker not started",
@@ -1910,9 +1815,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 				synthesisDecision?.ok ? synthesisDecision.value.targetRef : undefined,
 			) as RuntimeSynthesisProviderName | null)) ??
 		(synthesisAvailable ? "inference" : null);
-	// Dreaming owns all semantic writes (#913 hard cutover). Legacy extraction
-	// is always disabled; the memory_extraction workload binding is still
-	// resolved by the router because Dreaming uses it for inference calls.
 	providerRuntimeResolution.extraction = {
 		configured: null,
 		resolved: "none",
@@ -1960,13 +1862,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 			telemetry,
 			dbOwnerMaintenanceHandle ?? undefined,
 		);
-
-		// Configure the main thread's own native embedding handle — but ONLY when
-		// the provider is actually native. On x86_64, native ONNX warmup wedges
-		// the event loop for 70+ seconds even when provider is ollama/openai
-		// (#1073). A non-native provider must not trigger native warming, and
-		// warmNative: false kills the native path outright even when the active
-		// embedding profile is native.
 		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
 			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
 			configureNativeEmbeddingAssets({
@@ -1991,17 +1886,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		);
 		setEmbeddingTrackerHandle(embeddingTrackerHandle);
 	}
-
-	// Embedding migration is bounded background work and must not gate the
-	// already-admitted Dreaming worker.
 	if (!pipelinePaused) {
 		try {
 			embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
 				accessor: getDbAccessor(),
 				configured: memoryCfg.embedding,
-				// Re-read agent.yaml each tick so a mid-build config edit restarts
-				// the build against the new profile instead of spinning on the
-				// stale persisted one (#1160).
 				readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
 				fetchEmbedding,
 				checkProvider: checkEmbeddingProvider,
@@ -2043,10 +1932,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 }
 
 queueMicrotask(() => setRestartPipelineRuntime(restartPipelineRuntime));
-
-// ============================================================================
-// Shutdown
-// ============================================================================
 
 async function cleanup() {
 	setShuttingDown(true);
@@ -2111,8 +1996,6 @@ async function cleanup() {
 	try {
 		await flushPendingCheckpoints();
 	} catch {}
-
-	// Source ingestion survives inference reconfiguration; only daemon shutdown drains it.
 	if (transcriptImportWorkerHandle) {
 		try {
 			await transcriptImportWorkerHandle.stop();
@@ -2198,9 +2081,6 @@ let exitFlushInFlight: Promise<void> | null = null;
 async function flushAndExit(exitCode: number): Promise<void> {
 	if (exitFlushInFlight) return exitFlushInFlight;
 	exitFlushInFlight = (async () => {
-		// Update handoffs and repeated signals bypass normal cleanup. Give the
-		// telemetry collector a bounded final drain before process.exit so a
-		// wedge/crash record is not discarded on those paths.
 		if (telemetryRef) {
 			const timeout = new Promise<void>((resolve) => {
 				const timer = setTimeout(resolve, 2_000);
@@ -2208,8 +2088,6 @@ async function flushAndExit(exitCode: number): Promise<void> {
 			});
 			await Promise.race([telemetryRef.stop(), timeout]).catch(() => {});
 		}
-		// The logger buffers file writes and flushes on a 1s timer; without an
-		// explicit flush the final log lines can be lost on exit.
 		logger.shutdown();
 		process.exit(exitCode);
 	})();
@@ -2224,31 +2102,9 @@ function buildTerminalLifecycleRecord(reason: string, exitCode: number, error?: 
 		...(error !== undefined ? { error: error instanceof Error ? error.message : String(error) } : {}),
 	});
 }
-
-/** Bounds the draining cleanup so a wedged shutdown can never zombie the daemon. */
 const SHUTDOWN_CLEANUP_DEADLINE_MS = 20_000;
-
-/**
- * Single exit path for every catchable termination (signals and fatal
- * errors). Logs the exit path, records it in the lifecycle file, flushes the
- * logger buffer synchronously so the final lines actually land, then exits.
- * SIGKILL cannot be caught — a kill leaves the lifecycle record stuck at
- * "starting"/"running", which `signet status`/`doctor` report as an
- * unrecorded death instead of silence (issue #1148).
- *
- * The terminal lifecycle record is written only after cleanup completes (or
- * the hard deadline forces the exit): writing it earlier would leave a
- * "clean" record on a process still alive while cleanup hangs.
- *
- * `runCleanup` is disabled only for the update handoff: the replacement
- * daemon is already spawned and needs the port immediately, so the exit is
- * recorded and flushed but skips the draining cleanup.
- */
 function requestShutdown(reason: string, exitCode: number, error?: unknown, runCleanup = true): void {
 	if (shuttingDown) {
-		// A second signal while draining must not wedge the process; flush and
-		// exit immediately so the operator is never stuck with a zombie — and
-		// the final log lines still land.
 		void flushAndExit(exitCode);
 		return;
 	}
@@ -2287,8 +2143,6 @@ process.on("SIGTERM", () => {
 
 process.on("uncaughtException", (err) => {
 	logger.error("daemon", "Uncaught exception", err);
-	// Sanitized crash report: truncated message, home-stripped stack frames,
-	// uptime. No memory content. Joinable to the install's heartbeat context.
 	telemetryRef?.record("error.occurred", sanitizeCrashError(err, process.uptime() * 1000));
 	requestShutdown("error:uncaughtException", 1, err);
 });
@@ -2300,26 +2154,10 @@ process.on("unhandledRejection", (reason) => {
 		reason instanceof Error ? reason : undefined,
 		reason instanceof Error ? undefined : { reason: String(reason) },
 	);
-	// Sanitized crash report for rejections too (primitives degrade to a
-	// truncated string).
 	telemetryRef?.record("error.occurred", sanitizeCrashError(reason, process.uptime() * 1000));
-	// Survive only the bounded-availability rejections the owner protocol is
-	// designed to absorb: deadline exhaustion cancels the job, queue-full and
-	// work-budget reject admission, and the owner keeps serving. Fire-and-forget
-	// background callers (deferred maintenance, recovery, watchers) legitimately
-	// race these rejections at startup, so killing the process here turns
-	// recoverable queue pressure into a crash loop. Every other DB owner
-	// failure — a dead owner, a startup timeout, a failed job, writes blocked
-	// on integrity, a closed client — means the database is degraded or gone,
-	// and the daemon must shut down instead of running without it. Crash on
-	// unknown rejections.
 	if (reason instanceof DbOwnerError && DB_OWNER_SURVIVABLE_CODES.has(String(reason.code))) return;
 	requestShutdown("error:unhandledRejection", 1, reason);
 });
-
-// ============================================================================
-// Main
-// ============================================================================
 
 async function main() {
 	const workspace = preflightWorkspace();
@@ -2338,11 +2176,6 @@ async function main() {
 		process.exitCode = 1;
 		return;
 	}
-
-	// Validate the selected runtime configuration before acquiring the daemon
-	// lock, running migrations, opening the database, or writing lifecycle/PID
-	// state. The loader intentionally reports only file and field diagnostics;
-	// malformed user content must never be echoed during startup failure.
 	try {
 		readRuntimeConfig(AGENTS_DIR);
 	} catch (error) {
@@ -2361,12 +2194,6 @@ async function main() {
 	logger.info("daemon", `File logging to ${logger.logFilePath}`);
 	logger.info("daemon", "Agents directory", { path: AGENTS_DIR });
 	logger.info("daemon", "Network configured", { port: PORT, host: HOST, bindHost: BIND_HOST });
-
-	// Acquire an exclusive lock to prevent multiple daemon instances from
-	// competing for the SQLite write lock. Without this, a respawn (systemd,
-	// launchd, or a script calling `signet daemon start`) starts a second
-	// instance that fights the first for the DB lock, causing
-	// "SQLiteError: database is locked" crashes on every write.
 	const lock = acquireSingleInstanceLock(join(DAEMON_DIR, "daemon.lock"));
 	if (lock === null) {
 		logger.error("daemon", "Another daemon instance is already running or the lock is unavailable. Exiting.");
@@ -2383,9 +2210,6 @@ async function main() {
 	const previousExit = classifyPreviousDaemonExit(previousLifecycle, lifecycleStartedAt);
 	let restartedHeartbeatPending = previousExit !== null && previousExit.classification !== "clean";
 	writeDaemonLifecycle(AGENTS_DIR, buildLifecycleRecord("starting"));
-
-	// Config migrations must precede every initialization path that resolves
-	// memory config, including DB setup below.
 	try {
 		migrateConfig(AGENTS_DIR);
 		migrateInferenceProviders(AGENTS_DIR);
@@ -2399,26 +2223,11 @@ async function main() {
 			error: err instanceof Error ? err.message : String(err),
 		});
 	}
-	// Compatibility migrations translate supported legacy configuration into the
-	// canonical form. Resolve it again before opening the database so migration
-	// output is subject to the same strict runtime validation.
 	const startupMemoryConfig = loadMemoryConfig(AGENTS_DIR);
-	// Apply the validated auth policy before binding the listener. Keeping this
-	// on foreground startup closes the grace period in which middleware could
-	// still hold the module's local-auth default while pipeline workers waited
-	// to start.
 	reloadAuthState(AGENTS_DIR);
-
-	// Expensive schema/FTS initialization must execute in the killable owner
-	// process, not merely behind an async function on this isolate.
 	dbOwnerClient = recallOwner;
 	await dbOwnerClient.start();
 	const owner = dbOwnerClient;
-
-	// Read the retained migration verdict through a strictly read-only owner
-	// query before any mutating database initialization can run. A confirmed
-	// corrupt restart skips initialize() entirely and opens only a readonly
-	// accessor for status and recovery guidance.
 	const retainedMigrationBackupPath = pendingMigrationBackupPath(MEMORY_DB);
 	let retainedMigrationCorrupt = false;
 	let retainedMigrationStatus: string | null = null;
@@ -2443,9 +2252,6 @@ async function main() {
 
 	const initResult =
 		retainedMigrationCorrupt || retainedMigrationReadFailed ? null : await owner.initialize(AGENTS_DIR);
-	// The owner resolves sqlite-vec in its own process. Carry that path across
-	// the protocol so the parent accessor loads the same extension; retained
-	// paths still fall back to local discovery for older owner protocols.
 	const initExtensionPath =
 		initResult?.extensionPath ?? getVectorRuntimeStatus().extensionPath ?? findSqliteVecExtension() ?? "";
 	const deferredMigrationVerification = initResult?.deferredMigrationVerification === true;
@@ -2495,10 +2301,6 @@ async function main() {
 	setSessionClaimStore(createSessionClaimStore(getDbAccessor()));
 	if (!migrationIntegrityWritesBlocked) {
 		startSessionCleanup();
-		// Formal TTL lifecycle (#902): when stale-session cleanup evicts a claim
-		// whose harness never sent session-end, checkpoint the residual continuity
-		// state and mark the retained transcript complete instead of silently
-		// dropping the in-memory lifecycle state.
 		setSessionEvictionHandler(
 			createTtlEvictionHandler({
 				accessor: getDbAccessor(),
@@ -2517,13 +2319,7 @@ async function main() {
 	startFdPollMonitor();
 
 	dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
-	// Clean accumulated crash-loop damage through the owner. This remains a
-	// deferred call, so owner startup and the bounded drain never delay readiness.
 	if (!migrationIntegrityWritesBlocked) runStartupRecovery(getDbAccessor(), { owner: dbOwnerClient });
-
-	// Source-deletion cleanup runs in the post-ready deferred lane below. Do not
-	// put it before binding the HTTP server: its lifecycle-state delete uses the
-	// bounded async writer and must not make readiness depend on that queue.
 
 	const { extensionPath } = getVectorRuntimeStatus();
 	const bundled = join(__dirname, "synthesis-render-worker.js");
@@ -2552,9 +2348,6 @@ async function main() {
 			const timer = setTimeout(() => {
 				rej(new Error("synthesis worker init timeout"));
 			}, 10_000);
-			// Attach error/exit handlers during init to prevent unhandled
-			// 'error' events from crashing the main thread (EventEmitter
-			// convention: unhandled 'error' re-throws in the listener context).
 			const onErr = (err: unknown): void => {
 				clearTimeout(timer);
 				rej(err instanceof Error ? err : new Error(String(err)));
@@ -2637,17 +2430,11 @@ async function main() {
 		if (previousExit !== null) {
 			telemetryCollector.record("daemon.previous_exit", previousExitTelemetryProperties(previousExit));
 		}
-
-		// Lifecycle event (issue #1026 Phase 2): version + platform only.
 		telemetryCollector.record("daemon.started", {
 			version: CURRENT_VERSION,
 			platform: process.platform,
 			uptimeMs: 0,
 		});
-		// A daemon restart turns any still-running pass into a failed pass. Wait
-		// for the bounded drain to finish before emitting telemetry. The immediate
-		// compatibility report is deliberately marked "draining" and has no final
-		// orphan count yet.
 		void getStartupRecoveryCompletion().then((recovery) => {
 			if (recovery.recoveryPhase !== "complete") return;
 			for (let index = 0; index < Math.min(recovery.orphanedPassesSwept, 100); index++) {
@@ -2673,7 +2460,6 @@ async function main() {
 		});
 		for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
 			if (source.enabled) {
-				// Server readiness must not wait on best-effort telemetry, but shutdown must drain it.
 				void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
 			}
 		}
@@ -2737,9 +2523,7 @@ async function main() {
 								recoveryOutcome,
 							});
 							setRuntimePressureEnvelope(runtimePressure);
-						} catch {
-							// Pressure context is best-effort; a slow or unavailable subsystem must never suppress liveness.
-						}
+						} catch {}
 						telemetryRef?.record("daemon.heartbeat", {
 							uptimeMs: Date.now() - daemonStartTime,
 							version: CURRENT_VERSION,
@@ -2753,9 +2537,7 @@ async function main() {
 							...(resourceTelemetry ?? {}),
 						});
 						if (runtimePressure?.recoveryOutcome === "restarted") restartedHeartbeatPending = false;
-					} catch {
-						// Database pressure is diagnostic only; preserve the heartbeat if the owner is unavailable.
-					}
+					} catch {}
 				})();
 			},
 			5 * 60 * 1000,
@@ -2863,17 +2645,12 @@ async function main() {
 								},
 							);
 							await vectorBackfillOwner.awaitResult(backfill, remainingMs);
-							// Yield after every bounded owner batch so health and ready can run
-							// between slices without this isolate executing SQLite writes.
 							await new Promise<void>((resolve) => setImmediate(resolve));
 							if (!(await probePendingVecBackfillWithRetry())) return;
 						}
 					} finally {
 						vecBackfillScheduled = false;
 						if (budgetExpired && !migrationIntegrityWritesBlocked) {
-							// Probe after the bounded slice and give the serialized
-							// maintenance scheduler a short breather before arming the
-							// next slice. Errors are handled by the bounded probe retry.
 							const timer = setTimeout(() => schedulePendingVecBackfill(), 100);
 							timer.unref?.();
 						}
@@ -2886,9 +2663,6 @@ async function main() {
 				});
 			});
 	};
-	// The owner initialization result seeds daemon knowledge, while this probe
-	// remains authoritative so restarts and cross-process drift cannot strand a
-	// pending backfill behind the owner boundary.
 	if (daemonPendingVecBackfill) schedulePendingVecBackfill();
 	else
 		void probePendingVecBackfillWithRetry()
@@ -2900,10 +2674,6 @@ async function main() {
 					error: error instanceof Error ? error.message : String(error),
 				});
 			});
-
-	// Grace period: defer all background workers for 10s after startup so the
-	// event-loop monitor can calibrate and migrations can settle before any
-	// background write work piles on (#1059 thundering-herd prevention).
 	const startPostReadyRuntime = async (): Promise<void> => {
 		await deferredRuntimeGate.waitForIntegrity();
 		if (migrationIntegrityWritesBlocked) {
@@ -3030,8 +2800,6 @@ async function main() {
 		startUpdateTimer();
 	};
 	deferredRuntimeScheduler.schedulePipeline(startPostReadyRuntime);
-	// Cleanup is retryable maintenance. It must not hold up pipeline startup if
-	// the async writer is blocked or unavailable.
 	if (!migrationIntegrityWritesBlocked) {
 		deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
 			try {
@@ -3053,9 +2821,6 @@ async function main() {
 
 	const BIND_MAX_DELAY_MS = 30_000;
 	const BIND_RETRY_BASE_MS = 1000;
-	// SQLite's global quick_check is one opaque native operation. Integrity
-	// maintenance therefore advances one table at a time and checkpoints after
-	// every owner job instead of monopolizing the post-ready owner lane.
 	const INCREMENTAL_INTEGRITY_TABLES_PER_RUN = 8;
 	const INCREMENTAL_INTEGRITY_RUN_BUDGET_MS = 5_000;
 	const INCREMENTAL_INTEGRITY_OWNER_DEADLINE_MS = 1_000;
@@ -3125,12 +2890,6 @@ async function main() {
 				vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor(), { owner });
 			};
 			if (!migrationBackupPending) startVacuumConversion();
-
-			// ── Migration backup prune gate ──────────────────────────────────
-			// Global `PRAGMA integrity_check` is the ONLY result that may delete
-			// the rollback backup. Each completed backup generation gets its own
-			// checkpoint key, so a parked or failed prior generation cannot suppress
-			// verification of this generation.
 			let integritySliceTimer: ReturnType<typeof setTimeout> | null = null;
 			let integritySlicePending = false;
 			let integrityRetryDelayMs = 0;
@@ -3173,9 +2932,6 @@ async function main() {
 				state: "healthy" | "corrupt" | "degraded",
 				messages?: readonly string[],
 			): void => {
-				// The terminal callback is intentionally injected into the gate so
-				// `if (state === "corrupt") armMigrationIntegrityWriteBlock();` runs
-				// only after the checkpoint and sidecar have been attempted.
 				publishDatabaseIntegrityStatus(state, messages, owner);
 				if (state === "degraded" && !scheduledVerifyRuntimeGateReleased) {
 					scheduledVerifyRuntimeGateReleased = true;
@@ -3251,9 +3007,6 @@ async function main() {
 					try {
 						const result = await runMigrationIntegrityVerifyGate({
 							...migrationVerifyGateOptions,
-							// Do not let the 30-minute continuation race a deadline-abandoned
-							// worker. Scheduling after settlement makes the global latch a true
-							// single-flight guard even when an old worker settles late.
 							scheduleNextAttempt: (callback, delayMs): void => {
 								void workerSettled.then(() => {
 									const timer = setTimeout(callback, delayMs);
@@ -3263,8 +3016,6 @@ async function main() {
 							onWorkerSettled: settleWorker,
 							onAdmissionFailure: () => {
 								settleWorker();
-								// No owner job exists to settle after a synchronous admission
-								// rejection, so the integrity lane can be released now.
 								releaseVerifyLatch();
 							},
 						});
@@ -3424,7 +3175,6 @@ async function main() {
 					const startupSourceJobs = new Map<string, string>();
 					for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
 						if (!source.enabled || source.kind !== "obsidian") continue;
-						// Startup indexing is asynchronous; keep its lifecycle write in the shutdown drain.
 						void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
 						const job = beginSourceIndexJob(source.id, "source-startup");
 						startupSourceJobs.set(source.id, job.id);
@@ -3473,7 +3223,6 @@ async function main() {
 								const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
 								const job = getSourceIndexJob(sourceId);
 								if (source) {
-									// Index completion is intentionally fire-and-forget, but tracked until shutdown.
 									void trackSourceLifecycleWrite(
 										recordSourceIndexOperation({
 											source,
@@ -3501,7 +3250,6 @@ async function main() {
 								const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
 								const job = getSourceIndexJob(sourceId);
 								if (source) {
-									// Failed indexing follows the same tracked best-effort shutdown path.
 									void trackSourceLifecycleWrite(
 										recordSourceIndexOperation({
 											source,
@@ -3571,9 +3319,6 @@ async function main() {
 			createSignetHttpServer({
 				fetch: app.fetch,
 				hostname: BIND_HOST,
-				// Type assertion needed: arrow functions cannot satisfy overloaded
-				// function types. The wrapper passes all args through to nodeCreateServer
-				// so it is correct at runtime for every overload.
 				createServer: nodeCreateServer,
 			}),
 		onBound: (server) => {

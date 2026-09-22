@@ -40,7 +40,6 @@ class FakeAccessor implements ReviewDueAccessor {
 		this.sqls.push(sql);
 		const now = String(params[0]);
 		const limit = Number(params[params.length - 1]);
-		// Minimal emulation of the SQL semantics for the two query shapes.
 		if (sql.includes("review_after < ?")) {
 			return this.rows
 				.filter((r) => r.review_after < now && r.is_deleted === 0)

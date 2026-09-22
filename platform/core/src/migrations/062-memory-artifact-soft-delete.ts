@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 062: Soft-delete memory artifacts.
- *
- * Native harness memory files can disappear while still being useful lineage.
- * Keep their provenance rows but mark them inactive so recall does not treat
- * stale external files as current source truth.
- */
 export function up(db: MigrationDb): void {
 	const cols = db.prepare("PRAGMA table_info(memory_artifacts)").all() as Array<{ name: string }>;
 	const names = new Set(cols.map((col) => col.name));

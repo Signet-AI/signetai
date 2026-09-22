@@ -1,20 +1,7 @@
-/**
- * SQLite free-page reclamation (#1139).
- *
- * Existing databases need a one-time VACUUM to switch from the legacy
- * auto_vacuum=0 mode to incremental mode. That rebuild can take minutes on a
- * large database, so startup only records durable work state. The conversion
- * runs after the daemon is ready and is single-flight across the worker. In
- * production the VACUUM executes in the DB-owner child so the rebuild cannot
- * block HTTP callbacks on the daemon event loop.
- */
-
 import { statSync, statfsSync } from "node:fs";
 import { dirname } from "node:path";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { logger } from "./logger";
-
-/** Marker table name for the one-time VACUUM conversion. */
 const VACUUM_CONVERSION_TABLE = "_signet_vacuum_converted";
 const VACUUM_CONVERSION_STATE_TABLE = "_signet_vacuum_conversion";
 const MAX_CONVERSION_ATTEMPTS = 3;
@@ -53,7 +40,6 @@ export interface VacuumConversionOptions {
 	readonly dbPath?: string;
 	readonly deps?: DbSpaceDeps;
 	readonly log?: (message: string) => void;
-	/** Test-only seam at the real VACUUM conversion boundary. */
 	readonly beforeVacuum?: () => void;
 }
 
@@ -81,8 +67,6 @@ function measureDbSpace(dbPath: string, deps: DbSpaceDeps): DbSpaceMetrics | nul
 			Number.isFinite(stats.bavail) && stats.bavail >= 0 && Number.isFinite(stats.bsize) && stats.bsize > 0
 				? stats.bavail * stats.bsize
 				: null;
-		// SQLite's VACUUM documentation says that as much as twice the original
-		// database size may be required while the rebuilt file is in progress.
 		return { dbBytes, freeBytes, requiredBytes: dbBytes * 2 };
 	} catch {
 		return null;
@@ -98,16 +82,12 @@ function assertDbSpace(operation: DbSpaceOperation, dbPath: string, deps: DbSpac
 }
 
 const UNKNOWN_DB_SPACE_METRICS: DbSpaceMetrics = { dbBytes: 0, freeBytes: null, requiredBytes: 0 };
-
-/** Read-only pragma surface. */
 export interface PragmaReadDb {
 	prepare(sql: string): {
 		get(...args: unknown[]): Record<string, unknown> | undefined;
 		all(...args: unknown[]): Record<string, unknown>[];
 	};
 }
-
-/** Read/write pragma surface for conversion operations. */
 export interface PragmaDb extends PragmaReadDb {
 	exec(sql: string): void;
 	prepare(sql: string): {
@@ -267,12 +247,6 @@ function writeState(
 				last_error = excluded.last_error`,
 	).run(state, fields.attempts, fields.requestedAt, fields.startedAt, fields.completedAt, updatedAt, fields.lastError);
 }
-
-/**
- * Create and reconcile the durable conversion state after schema migrations.
- * A killed conversion is made pending on the next boot. Failed conversions
- * retry only while the bounded attempt budget remains, preventing a crash loop.
- */
 export function ensureVacuumConversionState(db: PragmaDb): VacuumConversionStatus {
 	db.exec(STATE_TABLE_SQL);
 	const mode = getAutoVacuumMode(db);
@@ -324,25 +298,19 @@ export function ensureVacuumConversionState(db: PragmaDb): VacuumConversionStatu
 
 	return readStatusFromDb(db);
 }
-
-/** Read durable conversion state for status and readiness diagnostics. */
 export function getVacuumConversionStatus(accessor: DbAccessor): VacuumConversionStatus {
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: import("./db-accessor").ReadDb) => readStatusFromDb(toPragmaReadDb(db)),
-		"db-vacuum.ts:331",
+		"db-vacuum.ts:303",
 	);
 }
-
-/** Async durable conversion-state lookup for background workers. */
 export async function getVacuumConversionStatusAsync(accessor: DbAccessor): Promise<VacuumConversionStatus> {
 	return await accessor.withReadDbAsync((db) => readStatusFromDb(toPragmaReadDb(db)), {
-		siteToken: "db-vacuum.ts:339",
+		siteToken: "db-vacuum.ts:309",
 		operation: "maintenance.vacuum.status",
 	});
 }
-
-/** Claim one pending conversion attempt before dispatching the owner job. */
 export async function markVacuumConversionRunning(accessor: DbAccessor): Promise<void> {
 	await accessor.withWriteTxAsync(
 		(db) => {
@@ -358,11 +326,9 @@ export async function markVacuumConversionRunning(accessor: DbAccessor): Promise
 				lastError: null,
 			});
 		},
-		{ siteToken: "db-vacuum.ts:347", operation: "maintenance.vacuum.mark-running" },
+		{ siteToken: "db-vacuum.ts:315", operation: "maintenance.vacuum.mark-running" },
 	);
 }
-
-/** Persist successful completion after the owner finishes the conversion. */
 export async function markVacuumConversionCompleted(accessor: DbAccessor): Promise<void> {
 	await accessor.withWriteTxAsync(
 		(db) => {
@@ -377,11 +343,9 @@ export async function markVacuumConversionCompleted(accessor: DbAccessor): Promi
 				lastError: null,
 			});
 		},
-		{ siteToken: "db-vacuum.ts:367", operation: "maintenance.vacuum.mark-completed" },
+		{ siteToken: "db-vacuum.ts:333", operation: "maintenance.vacuum.mark-completed" },
 	);
 }
-
-/** Persist a bounded failure message for startup retry policy. */
 export async function markVacuumConversionFailed(accessor: DbAccessor, message: string): Promise<void> {
 	await accessor.withWriteTxAsync(
 		(db) => {
@@ -396,11 +360,9 @@ export async function markVacuumConversionFailed(accessor: DbAccessor, message: 
 				lastError: message.slice(0, 500),
 			});
 		},
-		{ siteToken: "db-vacuum.ts:386", operation: "maintenance.vacuum.mark-failed" },
+		{ siteToken: "db-vacuum.ts:350", operation: "maintenance.vacuum.mark-failed" },
 	);
 }
-
-/** Get the free-page ratio (freelist_count / page_count). */
 export function getFreePageRatio(db: PragmaReadDb): number {
 	const freelist = db.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
 	const pages = db.prepare("PRAGMA page_count").get() as { page_count?: number } | undefined;
@@ -408,17 +370,9 @@ export function getFreePageRatio(db: PragmaReadDb): number {
 	const total = typeof pages?.page_count === "number" ? pages.page_count : 0;
 	return total > 0 ? free / total : 0;
 }
-
-/**
- * One-time conversion of an existing database to incremental auto_vacuum.
- * This function must only be called by the post-ready worker. It deliberately
- * does not run from either synchronous or asynchronous DB initialization.
- */
 export function convertToIncrementalVacuum(db: PragmaDb, options: VacuumConversionOptions = {}): boolean {
 	const mode = getAutoVacuumMode(db);
 	const writeLog = options.log ?? ((message: string): void => logger.info("db-vacuum", message));
-
-	// 2 = INCREMENTAL. Already converted or fresh DB created after the fix.
 	if (mode === 2) return false;
 	if (hasTable(db, VACUUM_CONVERSION_TABLE)) return false;
 
@@ -426,8 +380,6 @@ export function convertToIncrementalVacuum(db: PragmaDb, options: VacuumConversi
 	if (preflightMetrics?.freeBytes === null) {
 		writeLog("VACUUM scratch free space is unknown; proceeding without the space preflight");
 	}
-
-	// Set the desired mode BEFORE VACUUM so the rebuilt file uses it.
 	db.exec("PRAGMA auto_vacuum = INCREMENTAL");
 
 	const freelistBefore = db.prepare("PRAGMA freelist_count").get() as { freelist_count?: number } | undefined;
@@ -438,9 +390,6 @@ export function convertToIncrementalVacuum(db: PragmaDb, options: VacuumConversi
 
 	const startedAt = Date.now();
 	try {
-		// This is deliberately adjacent to the real SQLite statement, not in the
-		// owner job dispatcher. Tests may pause here, proving they reached the
-		// conversion boundary rather than an artificial pre-VACUUM hole.
 		options.beforeVacuum?.();
 		db.exec("VACUUM");
 	} catch (error) {
@@ -460,8 +409,6 @@ export function convertToIncrementalVacuum(db: PragmaDb, options: VacuumConversi
 	writeLog(
 		`VACUUM complete in ${Math.round(elapsedMs / 1000)}s — free pages: ${freeBefore} -> ${freeAfter}, auto_vacuum: ${mode} -> ${modeAfter}`,
 	);
-
-	// Write marker so we never re-run VACUUM on this database.
 	db.exec(`CREATE TABLE IF NOT EXISTS ${VACUUM_CONVERSION_TABLE} (converted_at TEXT)`);
 	db.prepare(`INSERT INTO ${VACUUM_CONVERSION_TABLE} (converted_at) VALUES (?)`).run(now());
 	return true;

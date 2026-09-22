@@ -55,11 +55,8 @@ export class WebSocketManager implements EventBroadcaster {
           break
       }
     } catch (_e) {
-      // Ignore invalid messages
     }
   }
-
-  // Broadcast to all clients subscribed to a specific run
   broadcastToRun(runId: string, message: object): void {
     const payload = JSON.stringify(message)
     for (const [ws, client] of this.clients) {
@@ -67,25 +64,19 @@ export class WebSocketManager implements EventBroadcaster {
         try {
           ws.send(payload)
         } catch (_e) {
-          // Client disconnected, will be cleaned up
         }
       }
     }
   }
-
-  // Broadcast to all connected clients
   broadcast(message: object): void {
     const payload = JSON.stringify(message)
     for (const [ws] of this.clients) {
       try {
         ws.send(payload)
       } catch (_e) {
-        // Client disconnected
       }
     }
   }
-
-  // Get count of connected clients
   getClientCount(): number {
     return this.clients.size
   }

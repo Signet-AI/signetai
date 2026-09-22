@@ -211,17 +211,12 @@ const LOW_SIGNAL_PROMPTS = new Set([
 	"yes please",
 	"yep",
 ]);
-
-// A bare negation is still a meaningful correction. Keep this list tiny so
-// the gate remains conservative for short identifiers and project names.
 const SHORT_CORRECTION_TERMS = new Set(["no"]);
 
 export interface RecallQueryShape {
 	readonly keywordTerms: string[];
 	readonly vectorQuery: string;
 }
-
-/** Return true only when a prompt has no useful automatic-recall signal. */
 export function isLowSignalPrompt(text: string): boolean {
 	const cleaned = stripUntrustedMetadata(text).trim();
 	if (cleaned.length === 0) return true;
@@ -240,20 +235,14 @@ export function isLowSignalPrompt(text: string): boolean {
 }
 
 export function extractSubstantiveWords(text: string): string[] {
-	const cleaned = stripUntrustedMetadata(text).replace(/<@!?\d+>/g, ""); // strip Discord mention tags
-
-	// Preserve hyphenated identifiers (e.g., "KA-6", "pre-compaction")
+	const cleaned = stripUntrustedMetadata(text).replace(/<@!?\d+>/g, "");
 	const hyphenated = (cleaned.match(/[a-zA-Z][a-zA-Z0-9]*-[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*/g) || []).map((t) =>
 		t.toLowerCase(),
 	);
-
-	// Standard word extraction
 	const words = cleaned
 		.toLowerCase()
 		.split(/\W+/)
 		.filter((word) => word.length >= 3 && !RECALL_STOPWORDS.has(word) && !/^\d+$/.test(word));
-
-	// Deduplicate: hyphenated first (more specific), then words
 	const seen = new Set<string>();
 	const result: string[] = [];
 	for (const term of [...hyphenated, ...words]) {
@@ -292,13 +281,7 @@ export function queryAnchorsMissingFromRecall(query: string, results: ReadonlyAr
 }
 
 export function buildRecallQueryShape(userPrompt: string): RecallQueryShape {
-	// Pass cleaned raw text for both keyword and vector queries.
-	// FTS5 with implicit AND + BM25 IDF handles term weighting naturally —
-	// manual stopword stripping destroyed phrase semantics and let
-	// individual OR'd terms match unrelated content.
 	const vectorQuery = stripUntrustedMetadata(userPrompt).trim().slice(0, 200);
-
-	// extractSubstantiveWords still used for display/telemetry only.
 	const keywordTerms = extractSubstantiveWords(userPrompt);
 
 	return { keywordTerms, vectorQuery };

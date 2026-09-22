@@ -15,7 +15,6 @@ interface DreamDeps {
 		opts?: RequestInit & { timeout?: number },
 	) => Promise<DaemonFetchResult<T>>;
 	readonly fetchDaemonStream?: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
-	/** Poll cadence for `dream trigger` (test seams; defaults match production). */
 	readonly pollIntervalMs?: number;
 	readonly minWaitMs?: number;
 }
@@ -76,13 +75,6 @@ interface TriggerAccepted {
 	readonly mode: string;
 	readonly error?: string;
 }
-
-/**
- * Name the real cause instead of a generic connectivity message. A timed-out
- * probe means the daemon process is up but its event loop is blocked (for
- * example, a wedged worker) — a restart often re-triggers the same wedge, so
- * point at the logs rather than advising one (#1074).
- */
 function reportDaemonUnavailable(reason: DaemonFetchFailure, status: number | undefined, action: string): void {
 	if (reason === "timeout") {
 		console.error(chalk.red(`${action} — the daemon is not responding (its event loop may be blocked).`));
@@ -101,8 +93,6 @@ function formatCost(cost: number): string {
 	if (cost >= 0.01) return `$${cost.toFixed(4)}`;
 	return `$${cost.toFixed(6)}`;
 }
-
-/** One-line provider-reported token breakdown, or null when the pass recorded none. */
 function formatTokenUsage(pass: DreamPass): string | null {
 	if (pass.tokensInput != null) {
 		const cost = pass.tokensCost != null ? `  cost ${formatCost(pass.tokensCost)}` : "";
@@ -116,9 +106,6 @@ function formatTokenUsage(pass: DreamPass): string | null {
 			].join("  ") + cost
 		);
 	}
-	// No provider breakdown: acpx-backed passes (and pre-upgrade daemons)
-	// only carry the local prompt-token estimate. Label it instead of
-	// zero-filling the breakdown as if the provider reported it.
 	if (pass.tokensConsumed != null && pass.tokensConsumed > 0) {
 		return `total ${pass.tokensConsumed} (prompt estimate)`;
 	}
@@ -363,8 +350,6 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 		.option("--wait-secs <seconds>", "Max seconds to wait for pass completion (default: 720)", "720")
 		.action(async (opts: { compact?: boolean; waitSecs?: string }) => {
 			const mode = opts.compact ? "compact" : "incremental";
-			// Poll ceiling: default 720s (12 min) > default LLM timeout 300s.
-			// Increase with --wait-secs if your dreaming.timeout config exceeds 5 min.
 			const rawWait = (opts.waitSecs ?? "720").trim();
 			const parsedWait = Number.parseInt(rawWait, 10);
 			if (!/^\d+$/.test(rawWait) || Number.isNaN(parsedWait) || parsedWait <= 0) {
@@ -400,10 +385,6 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 			}
 
 			console.log(chalk.dim(`  Pass ${accepted.passId} accepted, polling for result...\n`));
-
-			// Poll status until the pass completes or fails. The first probe
-			// runs immediately so a fast terminal failure is surfaced without
-			// a full poll interval.
 			let pass: DreamPass | undefined;
 			let statusUnavailable: DaemonFetchFailure | null = null;
 			for (let i = 0; i < maxPolls; i++) {

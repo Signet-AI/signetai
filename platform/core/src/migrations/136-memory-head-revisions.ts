@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Adds the audited entry-level contract to the lineage revision table. */
 export function up(db: MigrationDb): void {
 	const cols = new Set(
 		(db.prepare("PRAGMA table_info(memory_head_revisions)").all() as Array<{ name: string }>).map((r) => r.name),

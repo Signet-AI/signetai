@@ -1,19 +1,3 @@
-/**
- * Benchmark: session memory recording hot-path overhead
- *
- * Measures the cost added to handleSessionStart by recording candidates
- * to the session_memories table. This runs in the harness request path
- * so it needs to be fast — any regression here is felt by every session.
- *
- * Run: bun run platform/daemon/src/session-memories.bench.ts
- *
- * Targets:
- *   recordSessionCandidates (30 candidates) < 5ms
- *   recordSessionCandidates (100 candidates) < 15ms
- *   trackFtsHits (10 hits, mixed) < 3ms
- *   Full handleSessionStart overhead < 2ms added
- */
-
 import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -26,10 +10,6 @@ process.env.SIGNET_PATH = TEST_DIR;
 const { initDbAccessor, closeDbAccessor } = await import("./db-accessor");
 const { recordSessionCandidates, trackFtsHits } = await import("./session-memories");
 const { handleSessionStart } = await import("./hooks");
-
-// ---------------------------------------------------------------------------
-// Setup
-// ---------------------------------------------------------------------------
 
 function setupDb(memoryCount: number): void {
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
@@ -77,10 +57,6 @@ function makeCandidates(count: number): Array<{ id: string; effScore: number; so
 		source: "effective" as const,
 	}));
 }
-
-// ---------------------------------------------------------------------------
-// Timing harness
-// ---------------------------------------------------------------------------
 
 interface BenchResult {
 	name: string;
@@ -138,17 +114,11 @@ function printResult(r: BenchResult): void {
 	);
 }
 
-// ---------------------------------------------------------------------------
-// Run
-// ---------------------------------------------------------------------------
-
 console.log("\n========================================================");
 console.log("  Session Memory Recording -- Hot Path Benchmark");
 console.log("========================================================");
 
 const ITERS = 200;
-
-// --- recordSessionCandidates: 30 candidates (typical session) ---
 
 setupDb(100);
 let sessionCounter = 0;
@@ -165,8 +135,6 @@ const r30 = await bench(
 );
 printResult(r30);
 
-// --- recordSessionCandidates: 100 candidates (heavy session) ---
-
 closeDbAccessor();
 setupDb(200);
 sessionCounter = 0;
@@ -182,8 +150,6 @@ const r100 = await bench(
 	ITERS,
 );
 printResult(r100);
-
-// --- trackFtsHits: 10 mixed hits ---
 
 closeDbAccessor();
 setupDb(100);
@@ -202,8 +168,6 @@ const rFts = await bench(
 	ITERS,
 );
 printResult(rFts);
-
-// --- Full handleSessionStart overhead comparison ---
 
 closeDbAccessor();
 setupDb(50);
@@ -230,8 +194,6 @@ const rWithRecording = await bench(
 	ITERS,
 );
 printResult(rWithRecording);
-
-// --- Interleaved overhead measurement ---
 
 closeDbAccessor();
 setupDb(50);
@@ -274,8 +236,6 @@ console.log(
 	`  p95 baseline: ${baselineP95.toFixed(3)}ms | recording: ${recordingP95.toFixed(3)}ms | overhead: ${overheadP95.toFixed(3)}ms`,
 );
 
-// --- Thresholds ---
-
 const thresholds: Array<{ name: string; actual: number; limit: number }> = [
 	{ name: "recordSessionCandidates(30) p95", actual: r30.p95Ms, limit: 5 },
 	{ name: "recordSessionCandidates(100) p95", actual: r100.p95Ms, limit: 15 },
@@ -294,8 +254,6 @@ for (const t of thresholds) {
 	const icon = pass ? "PASS" : "FAIL";
 	console.log(`  [${icon}] ${t.name}: ${t.actual.toFixed(3)}ms (limit: ${t.limit}ms)`);
 }
-
-// Cleanup
 closeDbAccessor();
 if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
 

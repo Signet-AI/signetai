@@ -46,10 +46,6 @@ function parseLongMemEvalDate(dateStr: string): { iso: string; formatted: string
     formatted: `${formattedHour}:${min} ${ampm} on ${parseInt(day)} ${monthNames[parseInt(month) - 1]}, ${year}`,
   }
 }
-
-/**
- * LongMemEval question types - native string types from the dataset.
- */
 export const LONGMEMEVAL_QUESTION_TYPES: QuestionTypeRegistry = {
   "single-session-user": {
     id: "single-session-user",

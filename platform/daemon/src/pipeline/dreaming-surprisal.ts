@@ -1,7 +1,5 @@
 import type { DreamingSurprisalConfig } from "@signet/core";
 import type { ReadDb } from "../db-accessor";
-
-/** A point-in-time episodic observation with an already persisted embedding. */
 export interface DreamingSurprisalObservation {
 	readonly id: string;
 	readonly capturedAt: string;
@@ -22,7 +20,6 @@ export interface DreamingSurprisalSelection {
 	readonly sampled: number;
 	readonly valid: number;
 	readonly durationMs: number;
-	/** This selector reuses stored vectors; no provider embedding work is done. */
 	readonly embeddingRequests: number;
 	readonly embeddingTokens: number;
 	readonly embeddingCostUsd: number;
@@ -100,13 +97,6 @@ function chooseProjectionAxis(indexes: readonly number[], vectors: readonly Floa
 	}
 	return bestAxis;
 }
-
-/**
- * Build a deterministic projection tree. Honcho's tree family uses random
- * projections; Dreaming needs repeatable attention records so a re-run does
- * not churn the queue, therefore this bounded variant projects onto the
- * highest-variance coordinate and splits at its median.
- */
 function buildProjectionTree(
 	indexes: readonly number[],
 	vectors: readonly Float32Array[],
@@ -142,8 +132,6 @@ function pathSurprisal(node: ProjectionTreeNode, vector: Float32Array): number {
 		score += -Math.log(child.count / current.count);
 		current = child;
 	}
-	// A smaller leaf represents a less populated region of the embedding
-	// space. Keep this bounded even when a malformed tree is supplied.
 	return Number.isFinite(score) ? Math.max(0, score) : 0;
 }
 
@@ -173,15 +161,6 @@ function emptySelection(
 		skippedReason,
 	};
 }
-
-/**
- * Rank a bounded observation sample by embedding geometry.
- *
- * The local-density term is the primary signal: an observation is surprising
- * when its nearest neighbours are far away. The projection-tree path term is
- * a small stabilizing signal for sparse regions. This is deliberately a
- * selector only; it never emits an ontology operation or evidence claim.
- */
 export function rankDreamingSurprisal(
 	observations: readonly DreamingSurprisalObservation[],
 	config: Pick<
@@ -274,8 +253,6 @@ function blobToVector(value: unknown): Float32Array | null {
 	aligned.set(bytes);
 	return Float32Array.from(new Float32Array(aligned.buffer));
 }
-
-/** Read only primary, scoped memory embeddings; never asks the provider for new vectors. */
 export function selectDreamingSurprisalInDb(
 	db: ReadDb,
 	agentId: string,

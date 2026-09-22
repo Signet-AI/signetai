@@ -55,9 +55,9 @@ export function getProviderConfig(provider: string): { apiKey: string; baseUrl?:
     case "zep":
       return { apiKey: config.zepApiKey }
     case "filesystem":
-      return { apiKey: config.openaiApiKey } // Filesystem uses OpenAI for memory extraction
+      return { apiKey: config.openaiApiKey }
     case "rag":
-      return { apiKey: config.openaiApiKey } // RAG provider uses OpenAI for embeddings
+      return { apiKey: config.openaiApiKey }
     case "signet":
     case "signet-dreaming":
     case "signet-supermemory-parity":

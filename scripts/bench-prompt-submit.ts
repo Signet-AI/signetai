@@ -1,21 +1,5 @@
 #!/usr/bin/env bun
 
-/**
- * Compare the prompt-submit hot path with and without the low-signal gate.
- *
- * The "before gate" sample uses a substantive prompt and exercises the
- * entity-context recall path. The "after gate" sample uses a greeting and
- * proves that the same hook preserves stable prompt context without embedding
- * work. Both prompt-submit latency and recall-stage timing are reported.
- *
- * Run with:
- *   bun run build:core
- *   bun scripts/bench-prompt-submit.ts
- *
- * Set SIGNET_PROMPT_SUBMIT_BENCH_ITERS or SIGNET_PROMPT_SUBMIT_BENCH_EMBED_MS
- * to adjust sample count or the synthetic embedding delay.
- */
-
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -207,7 +191,4 @@ try {
 	}
 	rmSync(workspace, { recursive: true, force: true });
 }
-
-// The daemon modules may leave optional native/runtime handles alive after
-// their one-shot benchmark work. Exit only after the cleanup above completes.
 process.exit(0);

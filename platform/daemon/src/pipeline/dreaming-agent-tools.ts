@@ -1,4 +1,3 @@
-/** Pi AgentSession binding for the canonical Dreaming capability registry. */
 import * as Type from "typebox";
 import type { TSchema } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
@@ -13,12 +12,6 @@ export type CreateDreamingAgentToolsParams = CreateDreamingCapabilitiesParams;
 function textResult(payload: DreamingCapabilityResult): { readonly type: "text"; readonly text: string } {
 	return { type: "text", text: JSON.stringify(payload) };
 }
-
-/**
- * Bind every registry capability to an isolated Pi session. The schema is
- * generated from the registry's Zod source of truth; invoke performs the
- * same validation again at the daemon boundary before any read or write.
- */
 export function createDreamingAgentTools(params: CreateDreamingAgentToolsParams): readonly ToolDefinition<TSchema>[] {
 	return createDreamingCapabilities(params).map((capability) => ({
 		name: capability.id,

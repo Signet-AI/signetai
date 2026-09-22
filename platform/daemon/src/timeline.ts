@@ -1,18 +1,6 @@
-/**
- * Incident timeline builder for operator debugging.
- *
- * Given a memory ID, request ID, or session ID, builds a chronological
- * timeline of everything that happened to/around that entity by joining
- * across memory_history, memory_jobs, logger, and error buffer.
- */
-
 import type { ErrorEntry } from "./analytics";
 import type { ReadDb } from "./db-accessor";
 import type { LogEntry } from "./logger";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface TimelineEvent {
 	readonly timestamp: string;
@@ -27,10 +15,6 @@ export interface Timeline {
 	readonly events: readonly TimelineEvent[];
 	readonly generatedAt: string;
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 interface HistoryRow {
 	memory_id: string;
@@ -140,41 +124,23 @@ function tryParseJson(s: string): Record<string, unknown> {
 	try {
 		const parsed = JSON.parse(s);
 		if (typeof parsed === "object" && parsed !== null) return parsed;
-	} catch {
-		// not json
-	}
+	} catch {}
 	return {};
 }
-
-// ---------------------------------------------------------------------------
-// Entity detection
-// ---------------------------------------------------------------------------
 
 type EntityType = "memory" | "request" | "session" | "unknown";
 
 function detectEntityType(db: ReadDb, id: string): { type: EntityType; memoryId?: string } {
-	// Try memory_history by memory_id
 	const historyHit = db.prepare("SELECT 1 FROM memory_history WHERE memory_id = ? LIMIT 1").get(id) as unknown;
 	if (historyHit) return { type: "memory", memoryId: id };
-
-	// Try memories table directly
 	const memoryHit = db.prepare("SELECT 1 FROM memories WHERE id = ? LIMIT 1").get(id) as unknown;
 	if (memoryHit) return { type: "memory", memoryId: id };
-
-	// Try job by memory_id
 	const jobHit = db.prepare("SELECT memory_id FROM memory_jobs WHERE id = ? LIMIT 1").get(id) as
 		| { memory_id: string }
 		| undefined;
 	if (jobHit) return { type: "memory", memoryId: jobHit.memory_id };
-
-	// Could be a request ID or session ID — we can't resolve these
-	// from the DB alone, but we can still gather log/error matches
 	return { type: "unknown" };
 }
-
-// ---------------------------------------------------------------------------
-// Predictor comparison events
-// ---------------------------------------------------------------------------
 
 interface ComparisonRow {
 	session_key: string;
@@ -213,14 +179,9 @@ function predictorToEvents(sessionKey: string, db: ReadDb): TimelineEvent[] {
 			},
 		}));
 	} catch {
-		// predictor_comparisons table may not exist on older databases
 		return [];
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Builder
-// ---------------------------------------------------------------------------
 
 export interface TimelineSources {
 	readonly db: ReadDb;
@@ -232,8 +193,6 @@ export function buildTimeline(sources: TimelineSources, entityId: string): Timel
 	const { db, getRecentLogs, getRecentErrors } = sources;
 	const detection = detectEntityType(db, entityId);
 	const allEvents: TimelineEvent[] = [];
-
-	// Gather history events
 	if (detection.memoryId) {
 		const historyRows = db
 			.prepare(
@@ -245,8 +204,6 @@ export function buildTimeline(sources: TimelineSources, entityId: string): Timel
 			)
 			.all(detection.memoryId) as unknown as HistoryRow[];
 		allEvents.push(...historyToEvents(historyRows));
-
-		// Gather job events
 		const jobRows = db
 			.prepare(
 				`SELECT id, memory_id, job_type, status, attempts,
@@ -259,8 +216,6 @@ export function buildTimeline(sources: TimelineSources, entityId: string): Timel
 			.all(detection.memoryId) as unknown as JobRow[];
 		allEvents.push(...jobToEvents(jobRows));
 	}
-
-	// Gather log entries that mention this ID
 	const logs = getRecentLogs({ limit: 500 });
 	const matchingLogs = logs.filter((l) => {
 		if (l.data) {
@@ -272,19 +227,12 @@ export function buildTimeline(sources: TimelineSources, entityId: string): Timel
 		return l.message.includes(entityId);
 	});
 	allEvents.push(...logToEvents(matchingLogs));
-
-	// Gather error entries that mention this ID
 	const errors = getRecentErrors({ limit: 500 });
 	const matchingErrors = errors.filter(
 		(e) => e.memoryId === entityId || e.requestId === entityId || e.message.includes(entityId),
 	);
 	allEvents.push(...errorToEvents(matchingErrors));
-
-	// Gather predictor comparison events for this entity (works
-	// when entityId is a session_key — returns empty otherwise)
 	allEvents.push(...predictorToEvents(entityId, db));
-
-	// Sort chronologically
 	allEvents.sort((a, b) => a.timestamp.localeCompare(b.timestamp));
 
 	return {

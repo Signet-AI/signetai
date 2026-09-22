@@ -426,17 +426,9 @@ describe("Obsidian source graph structure", () => {
 	});
 
 	it("purges Dreaming-derived semantic rows stamped with the source entry id on disconnect", () => {
-		// Regression for #946: a Dreaming pass stamps claim values and links with
-		// the configured Signet source entry id in source_id but the literal
-		// source_root 'dreaming' (not the vault root). The Obsidian disconnect
-		// purge must remove those derived rows alongside the vault-root topology,
-		// mirroring purgeSourceOwnedRows (used by the GitHub/Discord providers).
 		const root = join(dir, "dreaming-vault");
 		mkdirSync(root, { recursive: true });
 		const sourceId = "obsidian:dreaming-vault";
-
-		// Stand up a source-owned Dreaming entity/aspect with a claim and link
-		// stamped with the source entry id + source_root 'dreaming'.
 		const db = getDbAccessor();
 		db.withWriteTx((write) => {
 			write
@@ -507,9 +499,6 @@ describe("Obsidian source graph structure", () => {
 	});
 
 	it("preserves vault-root topology purge and user-owned contrast rows on disconnect", () => {
-		// Disconnect must still purge the vault-root topology rows AND remove the
-		// dreaming-rooted derived rows for that source, while keeping unrelated
-		// user-owned rows and rows belonging to a different source.
 		const root = join(dir, "disconnect-vault");
 		mkdirSync(root, { recursive: true });
 		const doc = join(root, "Note.md");
@@ -524,8 +513,6 @@ describe("Obsidian source graph structure", () => {
 		});
 
 		const db = getDbAccessor();
-		// User-owned semantic claim on a separate entity with no source provenance
-		// (operator-created, not source-owned): must survive the disconnect purge.
 		db.withWriteTx((write) => {
 			write
 				.prepare(
@@ -551,7 +538,6 @@ describe("Obsidian source graph structure", () => {
 					 'general', 'target', 1, datetime('now'), datetime('now'))`,
 				)
 				.run();
-			// A Dreaming-derived claim from a DIFFERENT source: must survive.
 			write
 				.prepare(
 					`INSERT INTO entities (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
@@ -583,7 +569,6 @@ describe("Obsidian source graph structure", () => {
 			sourceId: "obsidian:disconnect-vault",
 			root,
 		});
-		// Vault-root topology rows removed.
 		expect(purged.entities).toBeGreaterThan(0);
 		expect(purged.attributes).toBeGreaterThan(0);
 

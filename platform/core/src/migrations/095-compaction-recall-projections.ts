@@ -1,8 +1,3 @@
-/**
- * Migration 095: compaction rows in `memories` are retrieval projections,
- * not primary episodic evidence. Their temporal-DAG summary is Dreaming's
- * canonical input, while the memory row remains available to ordinary recall.
- */
 import type { MigrationDb } from "./contract";
 
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {

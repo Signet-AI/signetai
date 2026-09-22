@@ -1796,7 +1796,7 @@ describe("inference streaming", () => {
 			if (!reader) return;
 			const buffer = { value: "" };
 
-			await readNextSseEvent(reader, buffer); // meta
+			await readNextSseEvent(reader, buffer);
 			const delta = await readNextSseEvent(reader, buffer);
 			expect(delta?.event).toBe("delta");
 			expect(delta?.data).toContain("hel");

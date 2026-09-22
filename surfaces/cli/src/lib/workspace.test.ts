@@ -7,10 +7,6 @@ import { getWorkspaceConfigPath, resolveAgentsDir, writeConfiguredWorkspacePath 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
-
-// Strip both workspace env vars from the host so precedence/fallback tests are
-// deterministic regardless of the developer shell (the resolver honors
-// SIGNET_PATH then SIGNET_WORKSPACE).
 function cleanEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 	return { ...process.env, SIGNET_PATH: "", SIGNET_WORKSPACE: "", ...overrides };
 }

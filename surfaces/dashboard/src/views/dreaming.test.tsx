@@ -1,4 +1,3 @@
-/** Regression test for dreaming summaries being clipped by the outer content surface. */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";

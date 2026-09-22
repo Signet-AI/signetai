@@ -814,9 +814,7 @@ export function registerTelemetryRoutes(app: Hono): void {
 		let projectNormalized = project;
 		try {
 			projectNormalized = realpathSync(project);
-		} catch {
-			// Use raw path if realpath fails
-		}
+		} catch {}
 
 		const rows = getCheckpointsByProject(getDbAccessor(), projectNormalized, Math.min(limit, 100));
 		const redacted = rows.map(redactCheckpointRow);

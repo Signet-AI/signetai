@@ -46,7 +46,6 @@ export default function LeaderboardEntryPage() {
             setActiveCodeFile(fileNames[0])
           }
         } catch {
-          // Not JSON, just raw code
         }
       }
     } catch (e) {

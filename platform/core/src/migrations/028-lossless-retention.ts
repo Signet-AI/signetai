@@ -1,11 +1,3 @@
-/**
- * Migration 028: Lossless Retention (Cold Tier)
- *
- * Replaces hard deletion of tombstoned memories with cold-tier archival.
- * Nothing is ever truly lost — expired memories are archived into
- * memories_cold before being removed from the active table.
- */
-
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

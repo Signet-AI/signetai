@@ -161,12 +161,6 @@ describe("acquireNativeSyncLock / releaseNativeSyncLock", () => {
 		const startMs = Date.now();
 		const lock2 = await acquireNativeSyncLock(root);
 		const elapsed = Date.now() - startMs;
-
-		// Should timeout (15s) trying to acquire. But current process is alive
-		// so stale-lock detection won't clear it. Give it a smaller window —
-		// the lock file's age threshold is 5 minutes, so it won't auto-clear.
-		// In tests, the 15s timeout makes this slow. We verify it returns null
-		// because the lock is held.
 		expect(lock2).toBeNull();
 		expect(elapsed).toBeGreaterThanOrEqual(14_000);
 

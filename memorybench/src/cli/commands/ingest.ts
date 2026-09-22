@@ -93,8 +93,6 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
       parsed.force = true
     }
   }
-
-  // Either runId alone (for continuation) or provider+benchmark (for new run)
   if (!parsed.runId && (!parsed.provider || !parsed.benchmark)) {
     return null
   }

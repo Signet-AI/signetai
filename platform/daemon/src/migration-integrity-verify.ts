@@ -1,14 +1,3 @@
-/**
- * Bounded, observable global integrity verification for the migration backup
- * prune gate.
- *
- * SQLite's global `PRAGMA integrity_check` is one synchronous native operation
- * and cannot be paused at a page boundary. Each maintenance tick therefore
- * runs exactly one generous attempt. An incomplete attempt is persisted and
- * retried on a fixed interval; a pass is the only result that prunes the
- * rollback backup.
- */
-
 import type { DbOwnerClient } from "./db-owner-client";
 import { DB_OWNER_MAX_MAINTENANCE_DEADLINE_MS } from "./db-owner-protocol";
 import { readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -70,9 +59,7 @@ function writeMigrationVerifyTerminalVerdict(
 }
 
 export interface MigrationVerifyResult {
-	/** "pass" — global integrity_check returned a single "ok" row. */
 	readonly phase: "pass" | "incomplete" | "failed";
-	/** Whether the owner accepted the integrity job before it settled. */
 	readonly admitted: boolean;
 	readonly messages: readonly string[];
 	readonly elapsedMs: number;
@@ -81,12 +68,9 @@ export interface MigrationVerifyResult {
 
 export interface MigrationVerifyOptions {
 	readonly owner: DbOwnerClient;
-	/** Per-attempt owner deadline. Production derives this from the database size. */
 	readonly attemptDeadlineMs?: number;
 	readonly onProgress?: (result: MigrationVerifyResult) => void | Promise<void>;
-	/** Fires when the owner worker, including a deadline-abandoned scan, is done. */
 	readonly onWorkerSettled?: () => void | Promise<void>;
-	/** Fires when owner admission rejects before a worker job exists. */
 	readonly onAdmissionFailure?: (error: unknown) => void;
 }
 
@@ -125,8 +109,6 @@ function isSqliteCorruptionCode(code: SqliteErrorCode): boolean {
 		normalized === "SQLITE_NOTADB"
 	);
 }
-
-/** Run one global integrity_check attempt on the owner's maintenance lane. */
 export async function runMigrationIntegrityVerify(options: MigrationVerifyOptions): Promise<MigrationVerifyResult> {
 	const attemptDeadlineMs = options.attemptDeadlineMs ?? MIGRATION_VERIFY_ATTEMPT_DEADLINE_MS;
 	const startedAt = Date.now();
@@ -190,26 +172,19 @@ export interface MigrationVerifyCheckpointStore {
 
 export interface MigrationVerifyGateOptions {
 	readonly owner: DbOwnerClient;
-	/** Completed backup generation this gate is verifying. */
 	readonly backupPath: string;
-	/** Optional stat result for tests or callers that already have the file size. */
 	readonly databaseSizeBytes?: number;
 	readonly checkpointStore?: MigrationVerifyCheckpointStore;
 	readonly runAttempt?: () => Promise<MigrationVerifyResult>;
 	readonly pruneBackup: () => void | Promise<void>;
 	readonly scheduleNextAttempt?: (callback: () => void, delayMs: number) => void;
 	readonly onProgress?: (result: MigrationVerifyResult) => void | Promise<void>;
-	/** Fires when the owner worker, including a deadline-abandoned scan, is done. */
 	readonly onWorkerSettled?: () => void | Promise<void>;
-	/** Fires when owner admission rejects before a worker job exists. */
 	readonly onAdmissionFailure?: (error: unknown) => void;
 	readonly publishStatus?: (state: "healthy" | "corrupt" | "degraded", messages?: readonly string[]) => void;
-	/** Arm the process-wide write block only after the terminal verdict is durable. */
 	readonly armWriteBlock?: () => void;
-	/** Reset a stronger global latch only after a confirmed clean pass. */
 	readonly resetGlobalLatch?: () => void;
 	readonly log?: (message: string, details?: Record<string, unknown>) => void;
-	/** Wrapped gate runner used for continuations and rejection retries. */
 	readonly continuation?: () => Promise<MigrationVerifyGateResult>;
 	readonly onContinuationRejection?: (callback: () => Promise<unknown>, error: unknown) => void;
 }
@@ -251,8 +226,6 @@ export interface MigrationVerifySetupRetryController {
 	readonly run: () => void;
 	readonly handleRejection: (callback: () => Promise<unknown>, error: unknown) => void;
 }
-
-/** Share the bounded setup-rejection policy between the first run and continuations. */
 export function createMigrationVerifySetupRetry(
 	options: MigrationVerifySetupRetryOptions,
 ): MigrationVerifySetupRetryController {
@@ -292,11 +265,6 @@ export function createMigrationVerifySetupRetry(
 		handleRejection,
 	};
 }
-
-/**
- * Process one maintenance tick. The continuation is deliberately scheduled
- * only after an incomplete attempt, and never runs a tight retry loop.
- */
 export async function runMigrationIntegrityVerifyGate(
 	options: MigrationVerifyGateOptions,
 ): Promise<MigrationVerifyGateResult> {
@@ -308,9 +276,6 @@ export async function runMigrationIntegrityVerifyGate(
 			failed ? "corrupt" : "degraded",
 			failed ? ["global integrity verification previously failed"] : ["degraded:integrity-unverified"],
 		);
-		// A checkpoint can be discovered after startup if the pre-init read was
-		// transiently unavailable. Match the fresh failed-scan path and fail-close
-		// all application writers immediately when that durable verdict is found.
 		if (failed) options.armWriteBlock?.();
 		options.log?.("Migration integrity verify terminal state retained", {
 			phase: checkpoint.status,
@@ -321,10 +286,6 @@ export async function runMigrationIntegrityVerifyGate(
 
 	options.publishStatus?.("degraded", ["degraded:integrity-unverified"]);
 	const attemptDeadlineMs = migrationVerifyAttemptDeadlineMs(options.databaseSizeBytes ?? 0);
-
-	// Count the attempt before starting integrity_check. The check can occupy
-	// the maintenance lane until its owner deadline, so persisting afterward
-	// can queue behind the very work whose incomplete result must be retried.
 	const attemptCount = await store.incrementIncompleteAttempt();
 	const result = await (
 		options.runAttempt ??
@@ -355,10 +316,6 @@ export async function runMigrationIntegrityVerifyGate(
 		return { phase: "pass", attemptCount, admitted: result.admitted, scheduled: false };
 	}
 	if (result.phase === "failed") {
-		// Persist both terminal fallbacks before arming the process-wide write
-		// block. Once armed, the owner rejects every non-read submission, so
-		// publishing first and marking afterward can leave neither verdict
-		// durable across a restart.
 		options.publishStatus?.("corrupt", result.messages);
 		writeMigrationVerifyTerminalVerdict(
 			options.backupPath,
@@ -376,8 +333,6 @@ export async function runMigrationIntegrityVerifyGate(
 				status: MIGRATION_VERIFY_FAILED_STATUS,
 			});
 		}
-		// Memory safety takes precedence over checkpoint persistence. The
-		// sidecar above remains the durable fallback when the owner is down.
 		options.armWriteBlock?.();
 		if (persistenceError !== undefined) throw persistenceError;
 		options.log?.("Global integrity check FAILED; rollback backup retained", {

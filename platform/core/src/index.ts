@@ -1,8 +1,3 @@
-/**
- * @signet/core
- * Core library for Signet - portable AI agent identity
- */
-
 export { Signet } from "./signet";
 export {
 	execFileHidden,
@@ -432,8 +427,6 @@ export type {
 	SourceSyncResult,
 	SourceSyncStatus,
 } from "./source-substrate";
-
-// Portable export/import
 export {
 	collectExportData,
 	serializeExportData,
@@ -449,12 +442,8 @@ export type {
 	ExportImportResult,
 	ImportConflictStrategy,
 } from "./export";
-
-// Migration runner
 export { runMigrations, hasPendingMigrations, MIGRATIONS, LATEST_SCHEMA_VERSION } from "./migrations/index";
 export type { MigrationDb, Migration } from "./migrations/index";
-
-// Identity file management
 export {
 	IDENTITY_FILES,
 	IDENTITY_PRESETS,
@@ -499,8 +488,6 @@ export type {
 	IdentityMap,
 	HermesTarget,
 } from "./identity";
-
-// Multi-agent support
 export {
 	discoverAgents,
 	scaffoldAgent,
@@ -511,8 +498,6 @@ export {
 	normalizeAgentRosterEntry,
 } from "./agents";
 export type { AgentRosterReadPolicy, NormalizedAgentRosterEntry, ResolvedAgentMemoryPolicy } from "./agents";
-
-// Skills unification
 export {
 	loadClawdhubLock,
 	symlinkClaudeSkills,
@@ -526,12 +511,8 @@ export type {
 	SkillsConfig,
 	SkillsResult,
 } from "./skills";
-
-// Skill transcript parsing (pure — no fs)
 export { parseTranscriptSkills } from "./skill-transcript";
 export type { ParsedSkillInvocation } from "./skill-transcript";
-
-// Memory import
 export {
 	importMemoryLogs,
 	chunkContent,
@@ -543,8 +524,6 @@ export type {
 	ChunkOptions,
 	HierarchicalChunk,
 } from "./import";
-
-// Markdown utilities
 export {
 	buildSignetBlock,
 	buildArchitectureDoc,
@@ -554,8 +533,6 @@ export {
 	SIGNET_BLOCK_START,
 	SIGNET_BLOCK_END,
 } from "./markdown";
-
-// YAML utilities
 export { formatYaml, parseRuntimeYaml, parseSimpleYaml, parseYamlDocument, stringifyYamlDocument } from "./yaml";
 export {
 	ROUTING_ACCOUNT_KINDS,
@@ -618,16 +595,12 @@ export {
 	setPipelinePaused,
 } from "./pipeline-pause";
 export type { PipelineConfigData, PipelinePauseState } from "./pipeline-pause";
-
-// Symlink utilities
 export {
 	symlinkSkills,
 	symlinkDir,
 	type SymlinkOptions,
 	type SymlinkResult,
 } from "./symlinks";
-
-// Package manager resolution utilities
 export {
 	parsePackageManagerUserAgent,
 	detectAvailablePackageManagers,
@@ -648,12 +621,8 @@ export {
 	type SignetInstallMethod,
 	type SignetUpdateTarget,
 } from "./signet-installation";
-
-// Memory provenance
 export { DAEMON_DERIVED_MEMORY_SOURCE_TYPES, isDaemonDerivedMemorySourceType } from "./memory-provenance";
 export { SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES } from "./ontology-topology";
-
-// Connector runtime types
 export {
 	CONNECTOR_PROVIDERS,
 	CONNECTOR_STATUSES,
@@ -674,8 +643,6 @@ export type {
 	DocumentRow,
 	ConnectorRow,
 } from "./connector-types";
-
-// Signet OS types
 export { DEFAULT_APP_SIZE } from "./signet-os-types";
 export type {
 	SignetAppManifest,

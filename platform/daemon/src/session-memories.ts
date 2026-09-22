@@ -1,11 +1,3 @@
-/**
- * Session memory candidate recording and FTS hit tracking.
- *
- * Records which memories were considered and injected at session start,
- * and tracks FTS hits during user prompt handling. This data feeds
- * the continuity scorer and tracks session continuity signals.
- */
-
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
@@ -20,10 +12,6 @@ function getMemoryDbPath(): string {
 	return join(agentsDir, "memory", "memories.db");
 }
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface SessionMemoryCandidate {
 	readonly id: string;
 	readonly effScore: number;
@@ -35,20 +23,6 @@ export interface SessionMemoryCandidate {
 	readonly structuralDensity?: number;
 	readonly pathJson?: string | null;
 }
-
-// ---------------------------------------------------------------------------
-// Recording
-// ---------------------------------------------------------------------------
-
-/**
- * Batch-insert all candidate memories for a session. Candidates that
- * were actually injected get was_injected=1; the rest get 0.
- * Safe to call with an empty candidates array (no-op).
- *
- * Optimization: Uses multi-row INSERTs to minimize bridge overhead
- * between Bun and SQLite. Records are processed in chunks of 50 to
- * stay safely within SQLite's parameter limits.
- */
 export async function recordSessionCandidates(
 	sessionKey: string | undefined,
 	candidates: ReadonlyArray<SessionMemoryCandidate>,
@@ -118,25 +92,11 @@ export async function recordSessionCandidates(
 			injected: injectedIds.size,
 		});
 	} catch (e) {
-		// Non-fatal — don't break session start for recording failures
 		logger.warn("session-memories", "Failed to record candidates", {
 			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }
-
-// ---------------------------------------------------------------------------
-// FTS hit tracking
-// ---------------------------------------------------------------------------
-
-/**
- * Increment fts_hit_count for memories matched during user prompt handling.
- * If a memory wasn't a session-start candidate, inserts a new row with
- * source='fts_only'.
- *
- * Optimization: Uses SQLite UPSERT (INSERT ... ON CONFLICT DO UPDATE) to
- * collapse two queries into one, reducing roundtrips.
- */
 export function trackFtsHits(
 	sessionKey: string | undefined,
 	matchedIds: ReadonlyArray<string>,
@@ -149,7 +109,6 @@ export function trackFtsHits(
 		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			const now = new Date().toISOString();
 			const CHUNK_SIZE = 50;
-			// Each row contributes 5 params: id, session_key, agent_id, memory_id, created_at
 			const ROW = "(?, ?, ?, ?, 'fts_only', 0, 0, 0, 0, 1, ?)";
 			const BASE_SQL = `INSERT INTO session_memories
 				 (id, session_key, agent_id, memory_id, source, effective_score,
@@ -158,9 +117,6 @@ export function trackFtsHits(
 			const CONFLICT_CLAUSE = `
 				 ON CONFLICT(session_key, agent_id, memory_id) DO UPDATE SET
 				  fts_hit_count = fts_hit_count + 1`;
-
-			// Pre-compile the full-chunk UPSERT statement once to avoid
-			// recompiling identical SQL for every batch of 50.
 			const fullChunkStmt =
 				matchedIds.length >= CHUNK_SIZE
 					? db.prepare(BASE_SQL + Array.from({ length: CHUNK_SIZE }, () => ROW).join(",") + CONFLICT_CLAUSE)
@@ -184,22 +140,13 @@ export function trackFtsHits(
 
 				stmt.run(...values);
 			}
-		}, "session-memories.ts:149");
+		}, "session-memories.ts:109");
 	} catch (e) {
 		logger.warn("session-memories", "Failed to track FTS hits", {
 			error: e instanceof Error ? e.message : String(e),
 		});
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Agent relevance feedback
-// ---------------------------------------------------------------------------
-
-/**
- * Validate and clamp a raw feedback object. Returns a clean map of
- * memory IDs to scores in [-1, 1], or null if the input is invalid.
- */
 export function parseFeedback(raw: unknown): Record<string, number> | null {
 	if (raw === null || raw === undefined || typeof raw !== "object" || Array.isArray(raw)) {
 		return null;
@@ -214,25 +161,12 @@ export function parseFeedback(raw: unknown): Record<string, number> | null {
 	}
 	return count > 0 ? result : null;
 }
-
-/**
- * Accumulate agent relevance feedback for session memories.
- *
- * Uses a running mean: for each memory_id in the feedback map,
- * new_score = (old_score * old_count + score) / (old_count + 1).
- * When old_score is NULL (first feedback), the score is used directly.
- *
- * Operates on the inner WriteDb so callers can integrate into an
- * existing transaction. For standalone use, wrap with withWriteTx.
- */
 export function recordAgentFeedbackInner(
 	db: WriteDb,
 	sessionKey: string,
 	feedback: Readonly<Record<string, number>>,
 	agentId = "default",
 ): void {
-	// Single-row UPDATE with running mean calculation.
-	// CASE handles NULL (first feedback) vs existing score.
 	const stmt = db.prepare(`
 		UPDATE session_memories
 		SET agent_relevance_score = CASE
@@ -247,11 +181,6 @@ export function recordAgentFeedbackInner(
 		stmt.run(score, score, sessionKey, agentId, memoryId);
 	}
 }
-
-/**
- * Public entry point: accumulate agent relevance feedback for a session.
- * Fail-open — logs warnings but never throws.
- */
 export function recordAgentFeedback(
 	sessionKey: string | undefined,
 	feedback: Readonly<Record<string, number>>,
@@ -263,7 +192,7 @@ export function recordAgentFeedback(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			recordAgentFeedbackInner(db, sessionKey, feedback, agentId);
-		}, "session-memories.ts:264");
+		}, "session-memories.ts:193");
 
 		logger.debug("session-memories", "Recorded agent feedback", {
 			sessionKey,

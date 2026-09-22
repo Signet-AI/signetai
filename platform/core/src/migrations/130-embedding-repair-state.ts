@@ -1,10 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 129: durable admission and retry state for incremental embedding
- * repair. The tracker is intentionally a singleton budget plus per-memory
- * backoff rows, not a second queue or owner for embedding writes.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_repair_budget (

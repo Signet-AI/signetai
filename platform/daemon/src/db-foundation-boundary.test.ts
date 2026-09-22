@@ -52,9 +52,6 @@ describe("close participant lifecycle", () => {
 		expect(closed).toEqual(["db-owner", "agent-scope-cache"]);
 		expect(duringCloseError).toBeInstanceOf(Error);
 		expect((duringCloseError as Error).message).toContain("registered after close started");
-
-		// A later accessor lifecycle may load a participant after the previous
-		// close has completed; only registration during close is forbidden.
 		lifecycle.register({
 			name: "next-lifecycle-participant",
 			order: 300,

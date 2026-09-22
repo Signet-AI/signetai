@@ -50,9 +50,7 @@ function parseAllowedAcpOrigins(raw: string | undefined): ReadonlySet<string> {
 			const parsed = new URL(trimmed);
 			if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
 			out.add(parsed.origin);
-		} catch {
-			// Ignore malformed entries and continue with valid origins.
-		}
+		} catch {}
 	}
 
 	return out;
@@ -107,8 +105,6 @@ function isPrivateOrLocalHostname(hostname: string): boolean {
 	const ipType = isIP(normalized);
 	if (ipType === 4) return isPrivateIpv4(normalized);
 	if (ipType === 6) return isPrivateIpv6(normalized);
-
-	// Single-label hosts are typically local network names.
 	return !normalized.includes(".");
 }
 

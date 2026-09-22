@@ -149,9 +149,7 @@ function containedParts(root: string, candidate: string, allowRoot = false): str
 async function closeQuietly(handle: FileHandle): Promise<void> {
 	try {
 		await handle.close();
-	} catch {
-		// Preserve the operation's original result or error.
-	}
+	} catch {}
 }
 
 async function assertFinalComponentIsNotSymlink(path: string): Promise<void> {
@@ -162,8 +160,6 @@ async function assertFinalComponentIsNotSymlink(path: string): Promise<void> {
 		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 }
-
-/** Open every parent directory from a held descriptor. */
 async function openContainedDirectory(root: string, parts: readonly string[]): Promise<FileHandle> {
 	requireDescriptorFilesystem();
 	let current: FileHandle;
@@ -184,8 +180,6 @@ async function openContainedDirectory(root: string, parts: readonly string[]): P
 		throw normalizePathError(error);
 	}
 }
-
-/** Open a file through a checked, descriptor-relative parent directory. */
 export async function openContainedTranscriptFile(
 	root: string,
 	candidate: string,
@@ -206,8 +200,6 @@ export async function openContainedTranscriptFile(
 		await closeQuietly(parent);
 	}
 }
-
-/** Remove a final entry while holding its checked parent directory. */
 export async function removeContainedTranscriptPath(
 	root: string,
 	candidate: string,
@@ -237,8 +229,6 @@ export async function removeContainedTranscriptPath(
 		await closeQuietly(parent);
 	}
 }
-
-/** Migration inventory holds the directory while iterating a bounded native buffer. */
 export async function* iterateContainedTranscriptDirectory(root: string, candidate: string): AsyncGenerator<string> {
 	const directory = await openContainedDirectory(root, containedParts(root, candidate, true));
 	try {
@@ -254,8 +244,6 @@ export async function* iterateContainedTranscriptDirectory(root: string, candida
 		await closeQuietly(directory);
 	}
 }
-
-/** Resolve a ledger path only inside imports/transcripts under the workspace. */
 export function resolveManagedTranscriptPath(root: string, managedPath: string): string {
 	const rootResolved = resolve(root);
 	const candidate = resolve(rootResolved, managedPath);

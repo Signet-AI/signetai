@@ -248,9 +248,6 @@ describe("Sources routes", () => {
 				2,
 			)}\n`,
 		);
-
-		// This app is the production source route registration used after the
-		// daemon is ready. Cleanup is intentionally not run before these reads.
 		const app = makeApp();
 		const list = await app.request("/api/sources");
 		expect(list.status).toBe(200);
@@ -910,10 +907,6 @@ describe("Sources routes", () => {
 			(await app.request(`/api/sources/${encodeURIComponent(added.source.id)}`, { method: "DELETE" })).status,
 		).toBe(200);
 		expect(runtimePurges).toBe(1);
-
-		// Route registration runs before the DB accessor is initialized, so it
-		// must not purge tombstones: the old behavior crashed the daemon with
-		// "DbAccessor not initialised" whenever a tombstone existed at boot.
 		const restarted = new Hono();
 		expect(() =>
 			registerSourcesRoutes(restarted, {
@@ -924,8 +917,6 @@ describe("Sources routes", () => {
 			}),
 		).not.toThrow();
 		expect(runtimePurges).toBe(1);
-
-		// The startup sequence runs the purge after DB init.
 		await cleanupSourceDeletionTombstones(dir, () => {
 			startupPurges++;
 			return 1;
@@ -960,7 +951,6 @@ describe("Sources routes", () => {
 			throw new Error("embedding store unavailable");
 		});
 		expect(attempts).toBe(1);
-		// The tombstone survives a failed purge so the next boot retries it.
 		expect(JSON.parse(readFileSync(tombstonePath, "utf8"))).toHaveLength(1);
 
 		await cleanupSourceDeletionTombstones(dir, () => 1);

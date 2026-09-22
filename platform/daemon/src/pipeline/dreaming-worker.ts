@@ -1,9 +1,3 @@
-/**
- * Dreaming worker — periodically checks token threshold and triggers
- * consolidation passes. Manages the dreaming lifecycle as a daemon
- * background task.
- */
-
 import type { DreamingConfig } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
@@ -34,8 +28,6 @@ import {
 } from "./dreaming";
 import { DREAMING_CONTENT_ATTENTION_KINDS, hasDreamingAttentionKindInDb } from "./dreaming-attention";
 import { type DreamingEvidenceRetryPolicy, autoRequeueRepairedDreamingEvidence } from "./dreaming-evidence-retry";
-
-/** Thrown when a trigger is attempted while a pass is already in-flight. */
 export class AlreadyRunningError extends Error {
 	constructor() {
 		super("A dreaming pass is already running");
@@ -45,34 +37,16 @@ export class AlreadyRunningError extends Error {
 
 export interface DreamingWorkerHandle {
 	stop(): void;
-	/** Force-trigger a pass synchronously (CLI / testing). */
 	trigger(
 		mode: DreamingMode,
 		agentId?: string,
 	): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }>;
-	/**
-	 * Fire-and-forget trigger: creates the pass record synchronously
-	 * (so the passId is returned immediately), then runs the pass in the
-	 * background. Callers should poll GET /api/dream/status for completion.
-	 * Throws AlreadyRunningError if a pass is already active.
-	 */
 	triggerAsync(mode: DreamingMode, agentId?: string): Promise<string>;
 	readonly running: boolean;
 	readonly activeAgentId: string | null;
-	/**
-	 * Resolves when the in-flight pass completes (or is null when idle).
-	 * Await this (with a timeout) during shutdown before closing the DB.
-	 */
 	readonly activePass: Promise<unknown> | null;
-	/** Latest periodic-sweep decision. This is intentionally separate from a manual pass. */
 	readonly scheduler: DreamingSchedulerStatus;
 }
-
-/**
- * The periodic scheduler's last decision. Queue pressure is reported only
- * when the scheduler itself yielded to queue pressure, not when another
- * readiness gate happened to be degraded.
- */
 export interface DreamingSchedulerStatus {
 	readonly status: "idle" | "deferred";
 	readonly reason: "queue_pressure" | "system_pressure" | null;
@@ -108,32 +82,25 @@ export function _testDreamingTriggerLogData(
 }
 
 export interface DreamingWorkerOptions {
-	/** Test seam; production always uses the configured inference router. */
 	readonly executorFactory?: (agentId: string) => DreamingAgentExecutor;
-	/** Test seam; production always uses the 5-minute check interval. */
 	readonly checkIntervalMs?: number;
-	/** Scoped connection details for ACPX's temporary MCP server. */
 	readonly acpxMcp?: {
 		readonly daemonUrl: string;
 		readonly authorizationTokenForAgent?: (agentId: string) => string | undefined;
 	};
-	/** Repair-aware automatic evidence requeue policy. */
 	readonly evidenceRetry?: DreamingEvidenceRetryPolicy;
-	/** Owner-routed queue gate for scheduled Dreaming sweeps. */
 	readonly ownerMaintenance?: DbOwnerMaintenance;
 }
 
-const CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 min
-const AGENT_SCOPE_SNAPSHOT_REFRESH_MS = 30 * 60 * 1000; // 30 min
-
-/** Dreaming is deferrable work. Yield an entire sweep while live queues are under pressure. */
+const CHECK_INTERVAL_MS = 5 * 60 * 1000;
+const AGENT_SCOPE_SNAPSHOT_REFRESH_MS = 30 * 60 * 1000;
 export async function shouldDeferDreamingSweep(
 	accessor: DbAccessor,
 	ownerMaintenance?: DbOwnerMaintenance,
 ): Promise<boolean> {
 	if (ownerMaintenance) return !(await ownerMaintenance.queueIsHealthy());
 	return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== "healthy", {
-		siteToken: "pipeline/dreaming-worker.ts:135",
+		siteToken: "pipeline/dreaming-worker.ts:102",
 		operation: "dreaming.worker.queue-health",
 	});
 }
@@ -178,15 +145,9 @@ export async function getDreamingWorkerAgentIds(
 		? await ownerQueryAll<{ id: string | null }>(ownerMaintenance.owner, "pipeline/dreaming-worker.agent-scopes", sql)
 		: await accessor.withReadDbAsync(
 				(db) => {
-					// UNION ALL + app-side dedup instead of UNION: the caller collapses
-					// rows into a Set, so the cross-branch sort/merge UNION performs is
-					// pure waste. UNION ALL concatenates the per-table index scans
-					// (every branch resolves through an agent_id-prefix or covering
-					// index), bounding the query by index size rather than table
-					// content (#1094).
 					return db.prepare(sql).all() as Array<{ id: string | null }>;
 				},
-				{ siteToken: "pipeline/dreaming-worker.ts:179", operation: "dreaming.worker.agent-scopes" },
+				{ siteToken: "pipeline/dreaming-worker.ts:146", operation: "dreaming.worker.agent-scopes" },
 			);
 	const ids = new Set<string>([defaultAgentId]);
 	for (const row of rows) {
@@ -195,14 +156,6 @@ export async function getDreamingWorkerAgentIds(
 	}
 	return [...ids].sort();
 }
-
-/**
- * Bounded agent-scope discovery: resolves the union query on a refresh
- * cadence and serves the snapshot between refreshes. Periodic dreaming is
- * deferrable, so a stale list only delays work for a brand-new scope by one
- * refresh window instead of re-running the 9-table union on every sweep
- * (#1059).
- */
 export function createAgentScopeSnapshot(
 	refreshMs: number,
 	resolve: () => readonly string[] | Promise<readonly string[]>,
@@ -230,13 +183,6 @@ export function createAgentScopeSnapshot(
 		return await pending;
 	};
 }
-
-/**
- * The runbook for the next scheduled sweep pass (#1098): read the pending
- * work across every scope, then pick hygiene/content — alternating when both
- * kinds are pending so content gets a guaranteed turn even while the hygiene
- * queue stays full. Shared between check() and tests.
- */
 export async function selectDreamingCheckMode(
 	accessor: DbAccessor,
 	scopes: readonly string[],
@@ -256,7 +202,7 @@ export async function selectDreamingCheckMode(
 							[scope, "hygiene"],
 						).then((row) => row != null)
 					: accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]), {
-							siteToken: "pipeline/dreaming-worker.ts:258",
+							siteToken: "pipeline/dreaming-worker.ts:204",
 							operation: "dreaming.worker.hygiene-attention",
 						}),
 			),
@@ -278,7 +224,7 @@ export async function selectDreamingCheckMode(
 					: accessor.withReadDbAsync(
 							(db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
 							{
-								siteToken: "pipeline/dreaming-worker.ts:278",
+								siteToken: "pipeline/dreaming-worker.ts:224",
 								operation: "dreaming.worker.content-attention",
 							},
 						),
@@ -306,9 +252,6 @@ export function startDreamingWorker(
 	let stopped = false;
 	let activePassPromise: Promise<unknown> | null = null;
 	let scheduler: DreamingSchedulerStatus = { status: "idle", reason: null, checkedAt: null };
-	// The last focused runbook the periodic sweep scheduled, used to
-	// alternate hygiene → content → hygiene → … when both kinds of work are
-	// pending (#1098). Explicit triggers do not touch it.
 	let nextScheduledFocus: DreamingPassFocus | null = null;
 	const getAgentScopes = createAgentScopeSnapshot(AGENT_SCOPE_SNAPSHOT_REFRESH_MS, () =>
 		getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance),
@@ -321,9 +264,6 @@ export function startDreamingWorker(
 	const executorForAgent = (agentId: string): DreamingAgentExecutor => {
 		const factory = options.executorFactory;
 		if (factory) return factory(agentId);
-		// getOrCreateInferenceRouter is a singleton accessor; resolving here
-		// (instead of a nullable eager handle) keeps the closure free of
-		// non-null assertions.
 		const router = getOrCreateInferenceRouter(agentsDir);
 		return {
 			async run(input) {
@@ -383,8 +323,6 @@ export function startDreamingWorker(
 		active = true;
 		activeAgent = runAgentId;
 		try {
-			// Periodic sweeps pass their snapshot through; explicit triggers and
-			// CLI passes resolve fresh so operator intent is never stale.
 			const passScopes =
 				scopes ?? (await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance));
 			const p = runDreamingAgentPass(
@@ -427,10 +365,6 @@ export function startDreamingWorker(
 			return;
 		}
 		scheduler = { status: "idle", reason: null, checkedAt };
-
-		// One Dreaming universe: a single pass covers every agent scope. The
-		// sweep runs one pass when any scope has attention or a backlog; the
-		// pass itself addresses scopes via the per-call agentId on its tools.
 		const scopes = await getAgentScopes();
 		const autoRequeued = await autoRequeueRepairedDreamingEvidence(accessor, evidenceRetry);
 		if (autoRequeued > 0) {
@@ -442,8 +376,6 @@ export function startDreamingWorker(
 		let triggered = false;
 		for (const scopeId of scopes) {
 			if (stopped || active) return;
-			// A halted scope must not burn the 6-query hygiene scan and the
-			// episodic backlog read on every sweep: skip straight past it.
 			if (await isDreamingHaltActive(accessor, scopeId)) continue;
 			try {
 				await enqueueDreamingHygieneAttention(accessor, scopeId, undefined, caps, options.ownerMaintenance);
@@ -472,24 +404,11 @@ export function startDreamingWorker(
 			}
 		}
 		if (!triggered) return;
-		// #1098: with the hygiene queue perpetually full, every pass used to
-		// drain flags first and run out of budget before content work. Give
-		// content a guaranteed turn: alternate the runbook per check cycle
-		// when both kinds of work are pending; run the only-pending kind
-		// directly otherwise.
 		const mode = await selectDreamingCheckMode(accessor, scopes, nextScheduledFocus, options.ownerMaintenance);
 		nextScheduledFocus = dreamingFocusOfMode(mode) ?? nextScheduledFocus;
 		try {
 			await runPass(defaultAgentId, mode, undefined, scopes);
 		} catch (e) {
-			// runPass already recorded the failure (recordDreamingFailure)
-			// and failDreamingPass marked the pass row failed. A pass error
-			// (provider 429, timeout, any executor rejection) must never
-			// escape the check loop: as an unhandled rejection it hits the
-			// daemon's unhandledRejection exit path and kills the whole
-			// process (#1198). Log and keep the loop running; the per-scope
-			// failure backoff (keyed on the run agent's state) paces the
-			// retries.
 			logger.error(
 				"dreaming-worker",
 				"Scheduled dreaming pass failed; check loop continues",
@@ -502,10 +421,6 @@ export function startDreamingWorker(
 	function schedule(): void {
 		if (stopped) return;
 		timer = setTimeout(async () => {
-			// check() handles pass failures internally; this catch is the
-			// last line of defense so no check error (from any future
-			// path) becomes an unhandled rejection, and the sweep always
-			// re-arms instead of silently dying (#1198).
 			try {
 				await check();
 			} catch (e) {
@@ -519,12 +434,6 @@ export function startDreamingWorker(
 			schedule();
 		}, options.checkIntervalMs ?? CHECK_INTERVAL_MS);
 	}
-
-	// Start the periodic check. Hygiene attention is enqueued during regular
-	// check() ticks, NOT here — the hygiene scan does 6 SQL queries per agent
-	// that can take minutes on large graphs (30k entities = 2s/query on cold
-	// cache). Running it at startup blocks the event loop before the HTTP
-	// server binds, making the daemon appear to fail to start.
 	schedule();
 
 	logger.info("dreaming-worker", "Dreaming worker started", {
@@ -532,9 +441,6 @@ export function startDreamingWorker(
 	});
 
 	return {
-		// Cancels the timer but does NOT await an in-flight pass.
-		// An active pass will complete (or fail) asynchronously; the
-		// `stopped` flag prevents new passes from being scheduled.
 		stop() {
 			stopped = true;
 			if (timer) {

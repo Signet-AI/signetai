@@ -20,14 +20,14 @@ from pathlib import Path
 DB_PATH = Path.home() / ".agents/memory/memories.db"
 CURRENT_MD_PATH = Path.home() / ".agents/memory/MEMORY.md"
 TRANSCRIPTS_DIRS = [
-    Path.home() / ".claude/transcripts",       # old location
-    Path.home() / ".claude/projects",          # new location (project-based)
+    Path.home() / ".claude/transcripts",
+    Path.home() / ".claude/projects",
 ]
 CLAUDE_MD_PATH = Path.home() / ".claude/CLAUDE.md"
 DEBUG_LOG = Path.home() / ".agents/memory/debug.log"
 
 TRANSCRIPT_WINDOW_DAYS = 14
-MODELS = ["glm-4.7-flash", "qwen3:4b"]  # fallback chain
+MODELS = ["glm-4.7-flash", "qwen3:4b"]
 
 
 def debug_log(msg: str):
@@ -48,19 +48,14 @@ def get_recent_transcripts() -> list[dict]:
     """get transcripts from the last N days, sorted by recency"""
     cutoff = datetime.now() - timedelta(days=TRANSCRIPT_WINDOW_DAYS)
     transcripts = []
-
-    # collect jsonl files from all transcript locations
     jsonl_files = []
     for transcript_dir in TRANSCRIPTS_DIRS:
         if not transcript_dir.exists():
             continue
-        # old location: direct files
         jsonl_files.extend(transcript_dir.glob("*.jsonl"))
-        # new location: project subdirs (but not subagents)
         for project_dir in transcript_dir.iterdir():
             if project_dir.is_dir() and not project_dir.name.startswith('.'):
                 for f in project_dir.glob("*.jsonl"):
-                    # skip subagent transcripts
                     if "subagents" not in str(f):
                         jsonl_files.append(f)
 
@@ -76,11 +71,8 @@ def get_recent_transcripts() -> list[dict]:
                     try:
                         entry = json.loads(line)
                         entry_type = entry.get("type")
-
-                        # handle both old format (content directly) and new format (message.content)
                         if entry_type == "user":
                             content = entry.get("content") or ""
-                            # new format: content is in message.content
                             if not content and "message" in entry:
                                 content = entry["message"].get("content", "")
                             if content and isinstance(content, str):
@@ -88,11 +80,9 @@ def get_recent_transcripts() -> list[dict]:
 
                         elif entry_type == "assistant":
                             content = entry.get("content") or ""
-                            # new format: content is in message.content (may be list of blocks)
                             if not content and "message" in entry:
                                 msg_content = entry["message"].get("content", [])
                                 if isinstance(msg_content, list):
-                                    # extract text blocks
                                     texts = [b.get("text", "") for b in msg_content if b.get("type") == "text"]
                                     content = " ".join(texts)
                                 elif isinstance(msg_content, str):
@@ -111,8 +101,6 @@ def get_recent_transcripts() -> list[dict]:
                 })
         except Exception as e:
             debug_log(f"error reading {jsonl_file}: {e}")
-
-    # sort by recency, most recent first
     transcripts.sort(key=lambda x: x["mtime"], reverse=True)
     return transcripts
 
@@ -142,8 +130,6 @@ def get_claude_md_context() -> str:
 
     content = CLAUDE_MD_PATH.read_text()
     sections = []
-
-    # extract key sections that define who nicholai is
     section_patterns = [
         (r'your role\n-+\n(.*?)(?=\n[a-z])', "Role"),
         (r'speaking and mannerisms\n-+\n(.*?)(?=\n[a-z])', "Communication style"),
@@ -162,23 +148,17 @@ def get_claude_md_context() -> str:
 
 def build_synthesis_prompt(transcripts: list, memories: list, claude_md: str) -> str:
     """build the prompt for synthesizing MEMORY.md"""
-
-    # summarize recent transcripts
     transcript_summary = []
-    for i, t in enumerate(transcripts[:15]):  # more sessions
-        msgs = t["messages"][:15]  # more messages per session
+    for i, t in enumerate(transcripts[:15]):
+        msgs = t["messages"][:15]
         transcript_summary.append(f"[{t['mtime'].strftime('%Y-%m-%d')}]\n" +
                                   "\n".join(msgs))
 
-    transcript_text = "\n\n".join(transcript_summary)[:8000]  # bigger budget
-
-    # format memories - these are the PRIMARY source
+    transcript_text = "\n\n".join(transcript_summary)[:8000]
     memories_text = "\n".join([
         f"- [{m['type']}] {m['content']}" + (f" [{m['tags']}]" if m['tags'] else "")
         for m in memories
     ])[:4000]
-
-    # /no_think suppresses qwen3's thinking output
     return f"""/no_think
 You are synthesizing a memory document about Nicholai for AI assistants.
 
@@ -239,19 +219,12 @@ Write the document now. Output ONLY the markdown, no preamble."""
 
 def strip_markdown(text: str) -> str:
     """remove markdown formatting for cleaner output"""
-    # remove ### headers, keep text
     text = re.sub(r'^###\s+', '', text, flags=re.MULTILINE)
-    # remove ## headers, keep text
     text = re.sub(r'^##\s+', '', text, flags=re.MULTILINE)
-    # remove # headers, keep text
     text = re.sub(r'^#\s+', '', text, flags=re.MULTILINE)
-    # remove bold **text**
     text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)
-    # remove italic *text*
     text = re.sub(r'\*([^*]+)\*', r'\1', text)
-    # remove bullet points, keep text
     text = re.sub(r'^\s*\*\s+', '- ', text, flags=re.MULTILINE)
-    # clean up excessive blank lines
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -276,20 +249,12 @@ def synthesize_current_md(transcripts: list, memories: list, claude_md: str) -> 
                 continue
 
             output = result.stdout.strip()
-
-            # clean up any thinking tags/blocks if present
             output = re.sub(r'<think>.*?</think>', '', output, flags=re.DOTALL)
             output = re.sub(r'```thinking.*?```', '', output, flags=re.DOTALL)
-
-            # find ALL occurrences of main headers and take the LAST complete one
-            # (model often outputs thinking first, then actual content)
             all_matches = list(re.finditer(r'# (Current Context|Nicholai)\n', output, re.IGNORECASE))
             if all_matches:
-                # take the last occurrence
                 last_match = all_matches[-1]
                 output = output[last_match.start():].strip()
-
-                # remove trailing reasoning/meta text (often starts with "Let me" or similar)
                 reasoning_patterns = [
                     r'\n\nLet me .*$',
                     r'\n\nLet\'s .*$',
@@ -306,11 +271,8 @@ def synthesize_current_md(transcripts: list, memories: list, claude_md: str) -> 
             output = output.strip()
 
             if output.startswith("# Current") or output.startswith("# Nicholai") or output.startswith("# nicholai") or output.startswith("Current Context"):
-                # check it's not just a template (has actual content, not [brackets])
                 if "[1-2 sentence" not in output and "[List projects" not in output:
-                    # strip markdown formatting
                     output = strip_markdown(output)
-                    # truncate to 8000 chars if needed
                     if len(output) > 8000:
                         output = output[:8000].rsplit('\n', 1)[0] + "\n\n[truncated]"
                     debug_log(f"success with {model} ({len(output)} chars)")
@@ -334,8 +296,6 @@ def main():
     args = parser.parse_args()
 
     debug_log("starting regeneration")
-
-    # gather inputs
     transcripts = get_recent_transcripts()
     memories = get_high_value_memories()
     claude_md = get_claude_md_context()
@@ -346,16 +306,12 @@ def main():
         debug_log("no data to synthesize from")
         print("no transcripts or memories found, skipping regeneration")
         return
-
-    # synthesize
     result = synthesize_current_md(transcripts, memories, claude_md)
 
     if not result:
         debug_log("synthesis produced no output")
         print("synthesis failed, keeping existing MEMORY.md")
         return
-
-    # add generation timestamp
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
     result = f"<!-- generated {timestamp} -->\n\n{result}"
 

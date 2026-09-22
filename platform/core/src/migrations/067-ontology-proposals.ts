@@ -10,14 +10,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 	}
 }
-
-/**
- * Migration 067: Ontology proposal loop.
- *
- * Stores reviewable ontology maintenance operations before they mutate graph
- * state. This is the first durable proposal-before-mutation surface for
- * transcript/source-driven ontology maintenance.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS ontology_proposals (

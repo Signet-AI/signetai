@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Migration 149: explicit import controls, retry timing, and file failures. */
 export function up(db: MigrationDb): void {
 	const addColumn = (table: string, column: string, definition: string): void => {
 		const statement = db.prepare("SELECT 1 AS found FROM pragma_table_info(?) WHERE name = ?");

@@ -116,7 +116,7 @@ describe("memory-lineage", () => {
 		);
 		const deletion = source.slice(
 			source.indexOf("export async function softDeleteArtifactRowsForPath"),
-			source.indexOf("// Coalesce duplicate scoped reindexes"),
+			source.indexOf("const reindexFlights", source.indexOf("export async function softDeleteArtifactRowsForPath")),
 		);
 		expect(source).toContain("dbOwnerSourceArtifactUpsert");
 		expect(indexing).not.toContain("runWriteTxAsync");
@@ -800,11 +800,7 @@ describe("memory-lineage", () => {
 		it("renderMemoryProjection output is identical on cold vs warm call", async () => {
 			await addSummary({ sessionId: "parity-a", project: "/home/nicholai/signet/signetai", minutesAgo: 1 });
 			await addSummary({ sessionId: "parity-b", project: "/home/nicholai/signet/signetai", minutesAgo: 2 });
-
-			// Cold call: cache is empty, full reindex runs
 			const cold = await renderMemoryProjection("default");
-
-			// Warm call: cache is populated, incremental reindex skips all files
 			const warm = await renderMemoryProjection("default");
 
 			expect(warm.content).toBe(cold.content);
@@ -1049,9 +1045,6 @@ describe("memory-lineage", () => {
 
 describe("reindexMemoryArtifacts batch staging", () => {
 	beforeAll(async () => {
-		// The parent suite restores SIGNET_PATH after its sibling describe has finished.
-		// Re-bind this suite to its own temp workspace before resetting the DB; otherwise
-		// reindexMemoryArtifacts scans the user's default workspace.
 		process.env.SIGNET_PATH = dir;
 		await resetWorkspace();
 	});
@@ -1061,10 +1054,6 @@ describe("reindexMemoryArtifacts batch staging", () => {
 	});
 
 	it("threshold-crossing items are cached — second reindex is a no-op", async () => {
-		// Create >50 artifacts to exceed the batch size (50) and trigger a flush mid-loop.
-		// The regression: the 50th item's cache update was lost because it was only
-		// staged in the `else` branch (when flush didn't fire). After the fix, all
-		// items including the threshold-crossing one are cached correctly.
 		const count = 30;
 		const promises: Promise<void>[] = [];
 		for (let i = 0; i < count; i++) {
@@ -1077,8 +1066,6 @@ describe("reindexMemoryArtifacts batch staging", () => {
 			);
 		}
 		await Promise.all(promises);
-
-		// Clear all DB rows so reindex must rebuild from files alone.
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ?").run("default");
 		});
@@ -1095,11 +1082,7 @@ describe("reindexMemoryArtifacts batch staging", () => {
 					)
 					.all("default") as Array<{ source_path: string; updated_at: string }>,
 		);
-		// Each addSummary writes 2 files (summary + manifest), so 30 sessions = 60 files > batch size 50.
 		expect(afterFirst.length).toBeGreaterThan(50);
-
-		// Second reindex with no file changes should be a complete no-op
-		// if the cache was correctly updated for ALL items (including #50).
 		await Bun.sleep(5);
 		await reindexMemoryArtifacts("default");
 
@@ -1118,11 +1101,6 @@ describe("reindexMemoryArtifacts batch staging", () => {
 	});
 
 	it("stamps corrupt pre-epoch mtimes as the index time, not the DOS-epoch sentinel (#1149)", async () => {
-		// Regression for #1149: files whose mtime is the 1980 DOS-epoch
-		// sentinel (timestamp-stripping filesystems/sync layers) used to get
-		// captured_at = 1980, which no rolling `since` watermark can reach —
-		// the row was invisible to Dreaming forever. The index time must be
-		// stamped instead; the raw mtime still lands in source_mtime_ms.
 		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: "/vault/notes/sentinel.md",
@@ -1144,8 +1122,6 @@ describe("reindexMemoryArtifacts batch staging", () => {
 		if (sentinel === undefined) throw new Error("sentinel artifact row missing");
 		expect(Date.parse(sentinel.captured_at)).toBeGreaterThan(Date.parse("2025-01-01T00:00:00.000Z"));
 		expect(sentinel.sourceMtimeMs).toBe(Date.parse("1980-01-01T06:00:00.000Z"));
-
-		// A real mtime is still stamped verbatim.
 		await indexExternalMemoryArtifact({
 			agentId: "default",
 			sourcePath: "/vault/notes/real.md",

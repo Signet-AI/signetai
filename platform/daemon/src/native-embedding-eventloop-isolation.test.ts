@@ -1,22 +1,3 @@
-/**
- * End-to-end regression: the daemon's HTTP server (incl. /health) must stay
- * responsive while the native embedding provider is stuck on its first-run
- * model download.
- *
- * This is the test the bug class escaped. The prior in-process implementation
- * ran ONNX-WASM init + model fetch on the main event loop, so an unreachable
- * model CDN wedged the whole daemon — /health timed out even though the
- * process was alive and the port was bound. The unit tests mocked
- * @huggingface/transformers and so never exercised any of that.
- *
- * Here we spawn the REAL daemon (source mode) configured for native
- * embeddings, point the model fetch at a local TCP blackhole (accepts the
- * connection, never responds — simulates a stalled CDN, fully hermetic, no
- * real network), and poll /health through the window where the embedding
- * worker is grinding. Every response must return within the SLA. The main
- * event loop can't be starved because the grinding now happens in a worker.
- */
-
 import { Database } from "bun:sqlite";
 import { afterEach, describe, expect, it } from "bun:test";
 import { type ChildProcessByStdio, spawn } from "node:child_process";
@@ -156,15 +137,11 @@ type BlackholeEndpoint = {
 	readonly origin: string;
 	readonly connectionCount: () => number;
 };
-
-/** A TCP server that accepts connections but never responds — makes an HTTP
- *  fetch hang indefinitely on response headers (a stalled CDN), hermetically. */
 async function blackholeOrigin(): Promise<BlackholeEndpoint> {
 	return new Promise((resolve, reject) => {
 		let connectionCount = 0;
 		const server = createServer((socket) => {
 			connectionCount += 1;
-			// Hold the connection open without ever writing a response.
 			socket.on("error", () => {});
 		});
 		server.once("error", reject);
@@ -213,7 +190,7 @@ async function waitForHealth(
 	throw new Error("daemon did not become healthy in time");
 }
 
-process.env.SIGNET_TELEMETRY_OPTOUT = "1"; // keep CI/test daemons out of the PostHog project
+process.env.SIGNET_TELEMETRY_OPTOUT = "1";
 
 describe("native embedding event-loop isolation (e2e)", () => {
 	it("preserves child output and daemon diagnostics when startup exits before health", async () => {
@@ -246,15 +223,11 @@ describe("native embedding event-loop isolation (e2e)", () => {
 
 		const result = waitForHealth("http://127.0.0.1:1", child, lifecycle, 2_000);
 		if (process.platform === "win32") {
-			// Bun reports process.kill(SIGTERM) as an ordinary status-1 exit on
-			// Windows, rather than exposing the POSIX signal through close().
 			await expect(result).rejects.toThrow(/status 1\)/);
 			return;
 		}
 		await expect(result).rejects.toThrow(/status unknown, signal SIGTERM/);
 	});
-
-	// Generous timeout: daemon startup + deferred native startup + a 5s probe window.
 	it("/health stays within SLA while the embedding worker is stuck on a model download", async () => {
 		const agentsDir = tempDir();
 		mkdirSync(join(agentsDir, "memory"), { recursive: true });
@@ -283,29 +256,18 @@ describe("native embedding event-loop isolation (e2e)", () => {
 				SIGNET_PORT: String(port),
 				SIGNET_PATH: agentsDir,
 				SIGNET_BIND: "127.0.0.1",
-				// Redirect the transformers model fetch to the blackhole so the
-				// embedding worker's first-run download hangs for the whole probe.
 				SIGNET_EMBEDDING_REMOTE_HOST: blackhole.origin,
-				// Avoid crosstalk with the user's real daemon/services.
 				SIGNET_DAEMON_ENTRYPOINT: "1",
 			},
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 		children.push(child);
 		const lifecycle = captureChildLifecycle(child, agentsDir);
-
-		// Drain stdout so the child cannot block on a full pipe.
 		child.stdout.on("data", () => {});
 
 		await waitForHealth(origin, child, lifecycle);
-
-		// The daemon's deferred startup probe (daemon.ts) fires after the initial
-		// health handshake. Waiting for the blackhole connection proves the native worker
-		// entered its model fetch before this test evaluates the /health SLA.
 		await waitForBlackholeConnection(blackhole, child, lifecycle);
 		expect(blackhole.connectionCount()).toBeGreaterThan(0);
-
-		// Poll /health through the window and assert the SLA.
 		const samples: number[] = [];
 		const probeDeadline = Date.now() + 5_000;
 		while (Date.now() < probeDeadline) {
@@ -317,8 +279,6 @@ describe("native embedding event-loop isolation (e2e)", () => {
 		}
 
 		expect(samples.length).toBeGreaterThan(5);
-		// /health is a cheap SELECT 1; it must return well under a second even
-		// while the embedding worker is hung. (Before the fix this timed out.)
 		const max = Math.max(...samples);
 		expect(max).toBeLessThan(1_000);
 	}, 120_000);

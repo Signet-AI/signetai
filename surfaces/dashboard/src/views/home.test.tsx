@@ -1,10 +1,3 @@
-/**
- * Regression coverage for the home view's setup link gate (PR #1858 review):
- * the link must hide only when a Signet connection was actually established —
- * the `configuredHarnesses` record in agent.yaml — never merely because a
- * harness home directory exists on disk (pre-existing `~/.codex`, Hermes home,
- * etc. used to hide the only setup/repair link on a fresh workspace).
- */
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";

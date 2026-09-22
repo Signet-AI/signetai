@@ -1,12 +1,5 @@
-/**
- * Signet background service worker
- * Handles: context menu, health polling, badge updates, message routing
- */
-
 import { checkHealth } from "../shared/api.js";
 import { getConfig } from "../shared/config.js";
-
-// --- Context Menu ---
 
 chrome.runtime.onInstalled.addListener(() => {
 	chrome.contextMenus.create({
@@ -28,8 +21,6 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
 	});
 });
 
-// --- Keyboard shortcut ---
-
 chrome.commands.onCommand.addListener((command) => {
 	if (command !== "save-selection") return;
 
@@ -42,8 +33,6 @@ chrome.commands.onCommand.addListener((command) => {
 		});
 	});
 });
-
-// --- Health polling & badge ---
 
 type HealthState = "healthy" | "degraded" | "offline";
 
@@ -79,8 +68,6 @@ async function pollHealth(): Promise<void> {
 		chrome.action.setBadgeText({ text: BADGE_TEXT[newState] });
 	}
 }
-
-// Poll every 60 seconds
 chrome.alarms.create("signet-health-poll", { periodInMinutes: 1 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -88,11 +75,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 		pollHealth();
 	}
 });
-
-// Initial poll on startup
 pollHealth();
-
-// --- Message routing ---
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 	if (message.action === "get-health") {

@@ -275,8 +275,6 @@ describe("imported source lifecycle", () => {
 			sourceMeta: { representation: "structured-json-projection" },
 		});
 		getDbAccessor().withWriteTx((db) => {
-			// Replace the migration's virtual table with a regular test double so a
-			// trigger can inject a derived-index delete failure deterministically.
 			db.exec("DROP TABLE vec_embeddings");
 			db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB NOT NULL)");
 			db.prepare(

@@ -10,15 +10,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 	}
 }
-
-/**
- * Migration 064: source graph provenance.
- *
- * Sources such as Obsidian are mounted as read-only graph citizens. These
- * provenance columns keep the source-native filesystem topology visible on the
- * graph rows that were created from that source, so disconnect can purge them
- * without touching user-authored memories or unrelated semantic graph rows.
- */
 export function up(db: MigrationDb): void {
 	for (const table of ["entities", "entity_communities", "entity_attributes", "entity_dependencies"] as const) {
 		addColumnIfMissing(db, table, "source_id", "TEXT");

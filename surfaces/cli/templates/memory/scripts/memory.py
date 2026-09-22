@@ -135,26 +135,19 @@ def select_with_budget(rows: list, char_budget: int = 1000) -> list:
 
 
 MEMORY_MD_PATH = Path.home() / ".agents/memory/MEMORY.md"
-# budget: ~4096 tokens total, roughly 3.5 chars/token
-# MEMORY.md gets ~10k chars, db memories get ~2k chars
 MEMORY_MD_BUDGET = 10000
 DB_MEMORIES_BUDGET = 2000
 
 
 def load_session_start(project: str | None = None):
     output = ["[memory active | /remember | /recall]"]
-
-    # prepend MEMORY.md if it exists
     if MEMORY_MD_PATH.exists():
         current_md = MEMORY_MD_PATH.read_text().strip()
         if current_md:
-            # truncate if over budget
             if len(current_md) > MEMORY_MD_BUDGET:
                 current_md = current_md[:MEMORY_MD_BUDGET] + "\n[truncated]"
             output.append("")
             output.append(current_md)
-
-    # then add db memories
     db = get_db()
     score_sql = effective_score_sql()
 
@@ -450,7 +443,6 @@ Transcript:
         json_match = re.search(r"\[[\s\S]*?\]", output)
         if json_match:
             memories = json.loads(json_match.group())
-            # enforce importance cap for auto-extracted
             for mem in memories:
                 if mem.get("importance", 0.5) > 0.5:
                     mem["importance"] = 0.4

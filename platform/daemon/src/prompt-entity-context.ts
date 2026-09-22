@@ -114,14 +114,6 @@ function promptEntityTermMatches(promptTerm: string, phraseTerm: string): boolea
 		(phraseTerm.length >= 4 && !PROMPT_BARE_POSSESSIVE_DENY_TERMS.has(phraseTerm) && promptTerm === `${phraseTerm}s`)
 	);
 }
-
-/**
- * Locate a phrase's token span inside precomputed prompt terms.
- *
- * Callers tokenize the prompt once and pass the terms in: tokenizing the
- * prompt here would re-run the same regex pass per entity row, making
- * prompt-submit O(rows x prompt length) on large graphs (#1059).
- */
 export function promptPhraseSpan(
 	promptTerms: readonly string[],
 	phrase: string,
@@ -274,8 +266,6 @@ function resolvePromptEntityMatches(db: ReadDb, agentId: string, userMessage: st
 	}>;
 
 	const candidatesByPhrase = new Map<string, PromptEntityCandidate[]>();
-	// Tokenize the prompt once: promptPhraseSpan takes precomputed terms, so
-	// the full-prompt regex pass does not repeat per entity row (#1059).
 	const promptTerms = promptEntityTerms(userMessage);
 	for (const row of rows) {
 		if (!isPromptEntityContextTypeAllowed(row.entity_type)) continue;
@@ -670,15 +660,12 @@ export async function buildEntityPromptContext({
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const matches: PromptEntityMatch[] = getDbAccessor().withReadDb(
 		(db: import("./db-accessor").ReadDb) => resolvePromptEntityMatches(db, agentId, userMessage),
-		"prompt-entity-context.ts:671",
+		"prompt-entity-context.ts:661",
 	);
 	if (matches.length === 0) return { lines: [], memories: [], memoryCount: 0, engine: "no-entity" };
 
 	const sharedSemanticQuery = queryWithoutPromptEntities(userMessage, matches);
 	if (!sharedSemanticQuery) return { lines: [], memories: [], memoryCount: 0, engine: "no-aspect-hit" };
-	// Embed the invariant query once, not once per matched entity: every match
-	// is scored against the same vector, so per-entity fetches are identical
-	// calls that multiply embedding latency by the match count (#1059).
 	let sharedQueryVector: Float32Array | null = null;
 	try {
 		const vector = await fetchEmbedding(sharedSemanticQuery, embedding, "query", {
@@ -725,7 +712,7 @@ export async function buildEntityPromptContext({
 			memoryCount: selected.length,
 			engine: selected.length > 0 ? "entity-context" : "no-aspect-hit",
 		};
-	}, "prompt-entity-context.ts:698");
+	}, "prompt-entity-context.ts:685");
 }
 
 export function buildEntityContextInject(

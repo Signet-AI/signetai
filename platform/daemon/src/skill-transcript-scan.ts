@@ -9,7 +9,7 @@ export function recordSkillsFromTranscript(args: {
 	readonly transcriptPath: string;
 	readonly harness: string;
 	readonly agentId: string;
-	readonly origin?: string; // default "scan"
+	readonly origin?: string;
 	readonly expectedSessionId?: string;
 }): void {
 	if (args.transcriptPath.trim().length === 0) return;
@@ -37,10 +37,6 @@ export function recordSkillsFromTranscript(args: {
 		});
 		return;
 	}
-
-	// Fire-and-forget telemetry: this must never throw (callers invoke it from
-	// setImmediate, where an uncaught throw would crash the daemon). Guard the
-	// parse + record loop so the whole function is throw-proof at the contract.
 	try {
 		const { records, skipped } = parseTranscriptSkills(content);
 		const origin = args.origin ?? "scan";

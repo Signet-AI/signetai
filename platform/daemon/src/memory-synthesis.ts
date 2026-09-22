@@ -14,7 +14,6 @@ export interface SynthesisResponse {
 	harness: string;
 	model: string;
 	prompt: string;
-	/** Number of source items included in the prompt. */
 	fileCount: number;
 	indexBlock?: string;
 }
@@ -28,11 +27,6 @@ export function setSynthesisWorker(worker: Worker | null): void {
 export function getSynthesisWorker(): Worker | null {
 	return synthesisWorker;
 }
-
-/**
- * Retired unversioned writer compatibility response.
- * Dreaming content passes own generated heads.
- */
 export function writeMemoryMd(
 	content: string,
 	opts?: {

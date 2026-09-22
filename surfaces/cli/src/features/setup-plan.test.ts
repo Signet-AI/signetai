@@ -267,8 +267,6 @@ describe("setupPlanJsonSchema", () => {
 	});
 
 	it("keeps the zod schema and its inferred type in sync", () => {
-		// parseSetupPlan returns the same shape setupPlanSchema infers; a
-		// round-trip through JSON must stay valid (plan is serializable).
 		const plan = basePlan();
 		const roundTrip = parseSetupPlan(JSON.parse(JSON.stringify(plan)));
 		expect(roundTrip).toEqual(plan);

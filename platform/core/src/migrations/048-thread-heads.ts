@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 048: Persistent thread heads
- *
- * Adds agent-scoped thread head storage used by three-tier memory rendering
- * and temporal fallback retrieval.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_thread_heads (

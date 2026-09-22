@@ -1,15 +1,3 @@
-/**
- * Builds the dashboard with VITE_DEMO=1 (fixture data, no daemon needed) and
- * copies the static output into public/dashboard/ so Showcase.astro can embed
- * the real product UI instead of screenshots.
- *
- * Runs automatically before every `astro build` (see "prebuild" in
- * package.json). Skip with SKIP_DASHBOARD_DEMO=1.
- *
- * The demo build is a SEPARATE outDir (build-demo) with base /dashboard/ —
- * it never touches surfaces/dashboard/build/index.html, which the daemon
- * route and Electron consume, and normal dashboard builds stay fixture-free.
- */
 import { cpSync, mkdirSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 

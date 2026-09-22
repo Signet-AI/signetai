@@ -19,15 +19,6 @@
       rel="stylesheet"
     />
     <style>
-      /* ───────────────────────────────────────────────────────────
-         Signet dashboard redesign — Home (static mockup)
-         Vite + React 19 + shadcn/ui + Tailwind v4 target.
-         Neutral monochrome oklch · radius 0.3rem · flat shadows
-         Geist / Geist Mono · light :root, dark via [data-theme=dark]
-         Fits one viewport — no scroll. Issue #948
-         ─────────────────────────────────────────────────────────── */
-
-      /* ---- LIGHT (default :root) ---- */
       :root {
         --background: oklch(0.99 0 0);
         --foreground: oklch(0.18 0 0);
@@ -56,8 +47,6 @@
         --font-sans: "Geist", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
         --font-mono: "Geist Mono", ui-monospace, "SF Mono", "Menlo", monospace;
       }
-
-      /* ---- DARK (applies when [data-theme="dark"]) ---- */
       [data-theme="dark"] {
         --background: oklch(0.16 0 0);
         --foreground: oklch(0.97 0 0);
@@ -99,21 +88,12 @@
       }
       .mono { font-family: var(--font-mono); }
       .muted { color: var(--muted-foreground); }
-
-      /* ── Shell ── */
       .shell {
         display: grid;
         grid-template-columns: 248px 1fr;
         height: 100vh;
         overflow: hidden;
       }
-
-      /* ── Frameless window chrome ──
-         macOS: the OS draws the traffic lights at a fixed top-left spot; we
-         reserve a sidebar titlebar strip so the workspace switcher clears them.
-         Windows/Linux: native caption buttons sit top-right, so we reserve
-         right padding on the topbar. -webkit-app-region is honoured by Electron
-         (inert in a plain browser). Press P in the mockup to preview platforms. */
       .sidebar__titlebar, .topbar { -webkit-app-region: drag; user-select: none; }
       .brand__switcher, .nav__item, .util-btn, .footer__status,
       .icon-btn, .avatar, .window-controls, .wc, .search { -webkit-app-region: no-drag; }
@@ -133,8 +113,6 @@
       [data-platform="win"] .traffic-lights,
       [data-theme="light"][data-platform="win"] .traffic-lights,
       [data-platform="linux"] .traffic-lights { display: none; }
-
-      /* Windows/Linux caption buttons, flush to the top-right edge */
       .window-controls { display: flex; align-items: center; margin-left: 10px; }
       .wc { width: 46px; height: 38px; display: grid; place-items: center; color: var(--muted-foreground); cursor: pointer; background: none; border: none; }
       .wc:hover { background: var(--accent); color: var(--foreground); }
@@ -142,8 +120,6 @@
       [data-platform="mac"] .window-controls { display: none; }
       [data-platform="win"] .topbar,
       [data-platform="linux"] .topbar { padding-right: 0; }
-
-      /* ── Sidebar ── */
       .sidebar {
         background: transparent;
         color: var(--sidebar-foreground);
@@ -205,7 +181,6 @@
       [data-theme="light"] .nav__item.is-active .nav__icon { color: oklch(0.12 0 0); filter: drop-shadow(0 0 4px oklch(0 0 0 / 0.1)); }
       .nav__item:hover .nav__icon { color: var(--sidebar-foreground); }
       .nav__label { flex: 1; }
-      /* chiseled monospace count badges */
       .nav__badge {
         font-family: var(--font-mono); font-size: 9.5px; font-weight: 500; line-height: 1;
         padding: 2px 6px; border-radius: 4px; margin-left: -4px;
@@ -214,7 +189,6 @@
       }
       [data-theme="light"] .nav__badge { color: var(--muted-foreground); background: color-mix(in oklch, var(--foreground) 4%, transparent); border-color: oklch(0 0 0 / 0.08); box-shadow: inset 0 -1px 0 oklch(0 0 0 / 0.08); }
       .nav__item.is-active .nav__badge { color: var(--sidebar-foreground); background: color-mix(in oklch, var(--foreground) 12%, transparent); border-color: oklch(1 0 0 / 0.14); }
-      /* urgent/high-activity tints */
       .nav__badge.is-amber {
         color: oklch(0.82 0.14 75); background: color-mix(in oklch, var(--warning) 16%, transparent);
         border-color: color-mix(in oklch, var(--warning) 30%, transparent); box-shadow: inset 0 -1px 0 oklch(0 0 0 / 0.15);
@@ -223,12 +197,10 @@
         color: oklch(0.82 0.16 150); background: color-mix(in oklch, var(--success) 16%, transparent);
         border-color: color-mix(in oklch, var(--success) 30%, transparent); box-shadow: inset 0 -1px 0 oklch(0 0 0 / 0.15);
       }
-      /* keyboard shortcut hint — removed */
       .nav__kbd { display: none; }
       .nav__item:hover .nav__badge { opacity: 1; transition: opacity .15s; }
 
       .sidebar__footer { padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 10px; }
-      /* Unified account row — single intentional bottom component */
       .account {
         display: flex; align-items: center; gap: 10px;
         padding: 7px 8px 7px 7px; border-radius: var(--radius);
@@ -241,7 +213,6 @@
         background: linear-gradient(150deg, oklch(0.6 0.02 270), oklch(0.35 0.02 270));
         color: #fff; display: grid; place-items: center; font-size: 11px; font-weight: 600;
       }
-      /* 6px pulsing green health dot, seated at the avatar corner */
       .account__health {
         position: absolute; right: -1px; bottom: -1px; width: 8px; height: 8px;
         border-radius: 50%; background: var(--success); border: 2px solid var(--card);
@@ -265,8 +236,6 @@
       .util-btn svg { flex-shrink: 0; }
       #theme-icon { display: inline-grid; place-items: center; }
       .dot-live { width: 6px; height: 6px; border-radius: 50%; background: var(--success); flex-shrink: 0; }
-
-      /* ── Main ── */
       .main { display: flex; flex-direction: column; min-width: 0; height: 100vh; overflow: hidden; }
       .topbar {
         height: 52px; flex-shrink: 0; display: flex; align-items: center; gap: 14px; padding: 0 24px; background: transparent;
@@ -277,8 +246,6 @@
       .icon-btn:hover { background: var(--accent); color: var(--foreground); }
       .icon-btn .ping { position: absolute; top: 7px; right: 7px; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
       .avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(150deg, oklch(0.6 0.02 270), oklch(0.35 0.02 270)); color: #fff; display: grid; place-items: center; font-size: 12px; font-weight: 600; cursor: pointer; }
-
-      /* ── Content: floating card inside unified shell ── */
       .content {
         position: relative; flex: 1; min-height: 0; overflow: hidden;
         margin: 0 14px 14px; border-radius: 12px;
@@ -286,9 +253,6 @@
         box-shadow: 0 1px 0 0 oklch(0 0 0 / 0.25), inset 0 1px 0 oklch(1 0 0 / 0.04);
         padding: 18px 22px 16px; display: flex; flex-direction: column; gap: 16px;
       }
-      /* overhead key-light: rounded gradient ring drawn as a pseudo-element
-         (border-image kills border-radius, so we keep the rounded solid border
-         and paint the light gradient on top) */
       .content::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; background: linear-gradient(180deg, oklch(1 0 0 / 0.2), oklch(1 0 0 / 0.04)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
       }
       [data-theme="light"] .content { background: var(--sidebar); border-color: oklch(0 0 0 / 0.06); box-shadow: 0 1px 2px oklch(0 0 0 / 0.05), inset 0 1px 0 oklch(1 0 0 / 0.8); }
@@ -298,8 +262,6 @@
       .page-head h1 { margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.02em; line-height: 1; }
       .page-head__right { display: flex; align-items: center; gap: 14px; }
       .page-head .date { font-family: var(--font-sans); font-size: 12.5px; color: var(--muted-foreground); line-height: 1; }
-
-      /* Structured KPI cards (clean 4-up grid) */
       .kpirow { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 10px; flex-shrink: 0; }
       .kpi {
         position: relative; background: var(--card); border-radius: var(--radius);
@@ -322,14 +284,11 @@
       .kpi__value { font-family: var(--font-mono); font-size: 19px; font-weight: 500; color: var(--foreground); letter-spacing: -0.02em; line-height: 1; }
       .kpi__sub { font-size: 10.5px; color: var(--muted-foreground); margin-top: 4px; }
       .kpi__sub .trend { font-family: var(--font-mono); color: var(--success); }
-      /* small bounded ring for agents/sources; unbounded stats get a live dot */
       .kpi__ring { width: 18px; height: 18px; flex-shrink: 0; }
       .kpi__ring circle { fill: none; stroke-width: 3; }
       .kpi__ring .track { stroke: color-mix(in oklch, var(--foreground) 16%, transparent); }
       .kpi__ring .fill { stroke: var(--foreground); stroke-linecap: round; transform: rotate(-90deg); transform-origin: center; }
       .kpi__dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); flex-shrink: 0; box-shadow: 0 0 0 2px color-mix(in oklch, var(--success) 22%, transparent); }
-
-      /* Header controls: time range, command, refresh — compact, sits in page head */
       .controls { display: flex; align-items: center; gap: 8px; height: 30px; }
       .range { display: inline-flex; align-items: center; height: 30px; background: transparent; border: 1px solid oklch(1 0 0 / 0.1); border-radius: var(--radius); overflow: hidden; }
       [data-theme="light"] .range { border-color: var(--border); }
@@ -342,12 +301,8 @@
       .ctrl-btn:hover { color: var(--foreground); }
       .cmd-trigger { display: inline-flex; align-items: center; justify-content: center; gap: 6px; width: auto; padding: 0 9px; font-family: var(--font-mono); font-size: 11px; }
       .cmd-trigger .kbd { font-size: 10px; padding: 1px 4px; border: 1px solid var(--border); border-radius: 3px; color: var(--muted-foreground); }
-
-      /* Grounding status line */
       .groundbar { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted-foreground); padding-top: 16px; margin-top: 24px; border-top: 1px solid var(--border); }
       .groundbar__spacer { flex: 1; }
-
-      /* Two-column main grid — left hero top-aligned, right rail */
       .grid-wrap { flex: 1; min-height: 0; display: flex; align-items: stretch; overflow: hidden; padding-top: 4px; }
       .grid-main { display: grid; grid-template-columns: 1.45fr 1fr; gap: 24px; width: 100%; }
       .col { display: flex; flex-direction: column; min-height: 0; gap: 18px; }
@@ -361,8 +316,6 @@
       .card__title { font-size: 13px; font-weight: 600; margin: 0; display: flex; align-items: center; gap: 8px; }
       .card__sub { font-size: 11px; color: var(--muted-foreground); margin-top: 1px; }
       .card__body { padding: 4px 16px 14px; overflow: hidden; }
-
-      /* Daily brief — same neutral card surface as the other panels */
       .brief {
         position: relative; display: flex; flex-direction: column; gap: 16px; padding: 16px 18px 16px;
         background: var(--card); border-radius: var(--radius); border: 1px solid oklch(1 0 0 / 0.05);
@@ -406,14 +359,12 @@
       [data-theme="light"] .panel { border-color: oklch(0 0 0 / 0.06); box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.8), 0 1px 1px oklch(0 0 0 / 0.04); }
       .panel::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; background: linear-gradient(180deg, oklch(1 0 0 / 0.22), oklch(1 0 0 / 0.05)); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
       [data-theme="light"] .panel::before { background: linear-gradient(180deg, oklch(0 0 0 / 0.18), oklch(0 0 0 / 0.04)); }
-      /* overhead key-light along the top edge */
       .panel::before {
         content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px;
         background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.14), transparent);
         pointer-events: none; border-radius: var(--radius) var(--radius) 0 0;
       }
       [data-theme="light"] .panel::before { background: linear-gradient(90deg, transparent, oklch(0 0 0 / 0.06), transparent); }
-      /* cursor-tracking border glow */
       .panel::after {
         content: ""; position: absolute; inset: -1px; border-radius: calc(var(--radius) + 1px);
         padding: 1px; background: radial-gradient(160px circle at var(--mx, -200px) var(--my, -200px), oklch(0.85 0 0 / 0.4), transparent 60%);
@@ -454,7 +405,6 @@
       .activity__tools { display: flex; gap: 2px; opacity: 0; transition: opacity .2s; }
       .activity:hover .activity__tools { opacity: 0.6; }
       .activity__chart { display: block; }
-      /* responsive square cells that fill the full card width */
       .pc { display: grid; grid-template-rows: repeat(7, 1fr); grid-auto-flow: column; grid-auto-columns: 1fr; gap: 3px; width: 100%; aspect-ratio: 36 / 7; }
       .pc__cell { border-radius: 2px; background: color-mix(in oklch, var(--foreground) 9%, transparent); transition: background .12s, transform .12s; }
       .pc__cell.l1 { background: color-mix(in oklch, var(--success) 28%, transparent); }
@@ -471,8 +421,6 @@
       .pc__axis__times { display: flex; gap: 14px; }
 
       .panel__body { display: flex; flex-direction: column; }
-
-      /* Review rows — uniform fixed-height rows */
       .q { display: grid; grid-template-columns: minmax(0,1fr) 168px; align-items: center; gap: 16px; min-height: 50px; padding: 4px 0; }
       .q + .q { border-top: 1px solid var(--border); }
       .q__txt { font-size: 12.5px; line-height: 1.4; }
@@ -489,8 +437,6 @@
       .mini-btn--primary { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
       .mini-btn--primary:hover { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); opacity: 0.9; }
       .mini-btn--ghost { color: var(--muted-foreground); }
-
-      /* Sources rundown — compact rail */
       .src-row { display: grid; grid-template-columns: 18px 1fr auto; align-items: center; gap: 10px; padding: 7px 0; }
       .src-row + .src-row { border-top: 1px solid var(--border); }
       .src-row__ic { width: 18px; height: 18px; display: grid; place-items: center; color: var(--foreground); flex-shrink: 0; }
@@ -501,11 +447,6 @@
       .src-delta { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted-foreground); }
       .src-delta b { color: var(--foreground); font-weight: 600; }
       .src-delta.zero b { color: var(--muted-foreground); opacity: 0.4; }
-
-      /* ════════════════════════════════════════════════════════
-         Settings modal — floating workbench suspended over canvas
-         Stage-drop: canvas scales down + blurs + dims; modal lifts off.
-         ════════════════════════════════════════════════════════ */
       .modal-backdrop {
         position: fixed; inset: 0; z-index: 90;
         background: oklch(0 0 0 / 0.55); backdrop-filter: blur(10px);
@@ -527,7 +468,6 @@
       }
       [data-theme="light"] .modal { border-color: oklch(0 0 0 / 0.1); box-shadow: 0 40px 100px oklch(0 0 0 / 0.3), 0 12px 32px oklch(0 0 0 / 0.15), inset 0 1px 0 oklch(1 0 0 / 0.8); }
       body.settings-open .modal { transform: translate(-50%, -50%) scale(1); opacity: 1; pointer-events: auto; }
-      /* top-lit gradient border edge — bright at top, deep shadow at bottom */
       .modal::before {
         content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; pointer-events: none; z-index: 1;
         background: linear-gradient(180deg, oklch(1 0 0 / 0.28), oklch(1 0 0 / 0.04) 30%, oklch(0 0 0 / 0.3));
@@ -536,8 +476,6 @@
         -webkit-mask-composite: xor; mask-composite: exclude;
       }
       [data-theme="light"] .modal::before { background: linear-gradient(180deg, oklch(1 0 0 / 0.9), oklch(0 0 0 / 0.04) 40%, oklch(0 0 0 / 0.12)); }
-
-      /* modal internal sidebar */
       .modal__side {
         flex-shrink: 0; width: 220px; padding: 18px 12px;
         background: color-mix(in oklch, var(--background) 60%, var(--card));
@@ -550,8 +488,6 @@
       .mnav:hover { background: color-mix(in oklch, var(--foreground) 6%, transparent); color: var(--foreground); }
       .mnav.is-on { background: color-mix(in oklch, var(--foreground) 9%, transparent); color: var(--foreground); font-weight: 500; box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.08); }
       .mnav.is-on svg { color: var(--foreground); }
-
-      /* modal content */
       .modal__main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
       .modal__head { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid oklch(1 0 0 / 0.06); flex-shrink: 0; }
       [data-theme="light"] .modal__head { border-bottom-color: oklch(0 0 0 / 0.06); }
@@ -567,32 +503,22 @@
       .modal__body { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 18px 20px; }
       .msection { display: none; flex-direction: column; gap: 12px; }
       .msection.is-on { display: flex; }
-
-      /* subcards — each settings group sits in a subtle contained surface,
-         filling the pane with intentional structure instead of a void */
       .mcard {
         background: color-mix(in oklch, var(--foreground) 3%, transparent); border: 1px solid oklch(1 0 0 / 0.06);
         border-radius: 8px; padding: 6px; box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.03);
       }
       [data-theme="light"] .mcard { background: color-mix(in oklch, var(--foreground) 2%, transparent); border-color: oklch(0 0 0 / 0.06); }
-
-      /* compact model-assignment rows */
       .assign-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 10px; border-radius: var(--radius); }
       .assign-row:hover { background: color-mix(in oklch, var(--foreground) 4%, transparent); }
       .assign-row__role { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
       .assign-row__role-label { font-size: 12.5px; font-weight: 500; }
       .assign-row__role-tag { font-family: var(--font-mono); font-size: 9px; color: var(--muted-foreground); }
-
-      /* provider search bar */
       .psearch { display: flex; align-items: center; gap: 8px; padding: 0 10px; height: 30px; border-radius: var(--radius); border: 1px solid oklch(1 0 0 / 0.16); background: color-mix(in oklch, var(--foreground) 5%, transparent); margin-bottom: 8px; }
       [data-theme="light"] .psearch { border-color: oklch(0 0 0 / 0.14); }
       .psearch svg { color: var(--muted-foreground); flex-shrink: 0; }
       .psearch input { border: none; background: none; outline: none; color: var(--foreground); font: inherit; font-size: 11.5px; width: 100%; }
       .psearch input::placeholder { color: var(--muted-foreground); }
-
-      /* provider matrix grid */
       .pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; max-height: 280px; overflow-y: auto; padding: 0 2px 18px 0;
-        /* ambient fade — cards dissolve into the surface at the bottom edge */
         -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
                 mask-image: linear-gradient(to bottom, #000 calc(100% - 24px), transparent 100%);
       }
@@ -605,9 +531,7 @@
       }
       .pcard[hidden] { display: none; }
       .pcard:hover { border-color: oklch(1 0 0 / 0.14); background: color-mix(in oklch, var(--foreground) 5%, transparent); }
-      /* disconnected — passive flat zinc circle */
       .pcard__dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; background: oklch(0.38 0 0); }
-      /* connected — live emerald telemetry with ambient glow + soft pulse */
       .pcard.is-on .pcard__dot {
         background: var(--success);
         box-shadow: 0 0 0 3px color-mix(in oklch, var(--success) 16%, transparent), 0 0 8px color-mix(in oklch, var(--success) 60%, transparent);
@@ -618,7 +542,6 @@
         50% { box-shadow: 0 0 0 5px color-mix(in oklch, var(--success) 8%, transparent), 0 0 12px color-mix(in oklch, var(--success) 80%, transparent); }
       }
       @media (prefers-reduced-motion: reduce) { .pcard.is-on .pcard__dot { animation: none; } }
-      /* center text block — two-row flex column, never mashes inline */
       .pcard__txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; overflow: hidden; }
       .pcard__name { font-size: 12px; font-weight: 500; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .pcard__auth { font-family: var(--font-mono); font-size: 9px; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -632,11 +555,8 @@
       [data-theme="light"] .pact:hover { border-color: oklch(0 0 0 / 0.26); }
       .pcard.is-on .pact { background: color-mix(in oklch, var(--foreground) 6%, transparent); color: var(--muted-foreground); }
       .pact--oauth:hover { border-color: color-mix(in oklch, var(--success) 40%, transparent); color: oklch(0.82 0.16 150); }
-
-      /* ════ LOGS section — edge-to-edge high-precision telemetry ════ */
       .msection[data-section="logs"] { height: 100%; min-height: 0; }
       .log-view { display: flex; flex-direction: column; height: 100%; min-height: 0; margin: 0 -20px; }
-      /* header row — pulsing tail indicator + segmented pill + search */
       .log-head { display: flex; align-items: center; gap: 10px; padding: 6px 24px 12px; border-bottom: 1px solid oklch(1 0 0 / 0.06); flex-shrink: 0; }
       [data-theme="light"] .log-head { border-bottom-color: oklch(0 0 0 / 0.06); }
       .log-export { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 10px; cursor: pointer; color: var(--muted-foreground);
@@ -650,7 +570,6 @@
       .log-search svg { width: 12px; height: 12px; color: var(--muted-foreground); flex-shrink: 0; }
       .log-search input { border: none; background: none; outline: none; color: var(--foreground); font: inherit; font-size: 11px; width: 130px; }
       .log-search input::placeholder { color: var(--muted-foreground); }
-      /* segmented glass pill — level filter */
       .log-seg { display: inline-flex; align-items: center; gap: 0; padding: 3px; border-radius: var(--radius); border: 1px solid oklch(1 0 0 / 0.08);
         background: color-mix(in oklch, var(--foreground) 4%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
       [data-theme="light"] .log-seg { border-color: oklch(0 0 0 / 0.08); }
@@ -659,13 +578,10 @@
       .log-seg__item:hover { color: var(--foreground); }
       .log-seg__item.is-on { color: var(--foreground); background: color-mix(in oklch, var(--foreground) 10%, transparent); }
       .log-seg__dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-      /* edge-to-edge stream — no inner card, no border, no padding around list */
       .log-stream { flex: 1; min-height: 0; overflow-y: auto; font-family: var(--font-mono); font-size: 11px; line-height: 1.7;
         -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 20px), transparent 100%); mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 20px), transparent 100%); }
       .log-stream::-webkit-scrollbar { width: 6px; }
       .log-stream::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--foreground) 18%, transparent); border-radius: 3px; }
-      /* locked-width grid columns for straight-down scanning */
-      /* locked 4-column grid: time | level | scope | message */
       .log-line { display: grid; grid-template-columns: 88px 52px 84px 1fr; gap: 0; padding: 3px 24px; cursor: pointer; transition: background .1s; align-items: baseline; border-bottom: 1px solid oklch(1 0 0 / 0.03); }
       [data-theme="light"] .log-line { border-bottom-color: oklch(0 0 0 / 0.03); }
       .log-line:hover { background: color-mix(in oklch, var(--foreground) 5%, transparent); }
@@ -674,21 +590,18 @@
       .log-line[hidden] { display: none; }
       .log-line__time { color: oklch(0.5 0 0); padding-right: 12px; }
       [data-theme="light"] .log-line__time { color: oklch(0.55 0 0); }
-      /* level — warn/error get micropilled background tints */
       .log-line__lvl { font-weight: 600; padding-right: 12px; font-size: 10px; }
       .log-line__lvl--info { color: oklch(0.7 0.1 220); }
       .log-line__lvl--warn { color: oklch(0.82 0.15 85); padding: 1px 6px; border-radius: 4px; background: oklch(0.7 0.15 85 / 0.12); }
       .log-line__lvl--error { color: oklch(0.78 0.19 25); padding: 1px 6px; border-radius: 4px; background: oklch(0.6 0.2 25 / 0.14); }
       .log-line__lvl--debug { color: oklch(0.55 0 0); }
       [data-theme="light"] .log-line__lvl--debug { color: oklch(0.5 0 0); }
-      /* scope column — the module name */
       .log-line__scope { color: oklch(0.62 0 0); padding-right: 12px; font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       [data-theme="light"] .log-line__scope { color: oklch(0.42 0 0); }
       .log-line__msg { color: oklch(0.82 0 0); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       [data-theme="light"] .log-line__msg { color: oklch(0.25 0 0); }
       .log-line__msg .path { color: oklch(0.6 0 0); }
       [data-theme="light"] .log-line__msg .path { color: oklch(0.45 0 0); }
-      /* inline slide-down drawer for raw payload / stack */
       .log-drawer { display: none; grid-column: 1 / -1; margin: 2px 24px 4px; padding: 10px 14px; border-radius: var(--radius);
         background: oklch(0.14 0 0); border: 1px solid oklch(1 0 0 / 0.08); font-family: var(--font-mono); font-size: 10px; line-height: 1.6;
         max-height: 160px; overflow: auto; animation: log-drawer-in .18s ease; }
@@ -703,18 +616,12 @@
       .log-drawer__num { color: oklch(0.75 0.13 70); }
       .log-drawer__err { color: oklch(0.72 0.19 25); }
       .log-drawer__path { color: oklch(0.65 0.05 220); }
-
-      /* setting rows */
       .mrow { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 9px 10px; border-radius: var(--radius); }
       .mrow:hover { background: color-mix(in oklch, var(--foreground) 4%, transparent); }
       .mrow__txt { min-width: 0; }
       .mrow__title { font-size: 13px; font-weight: 500; }
       .mrow__desc { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; line-height: 1.4; }
       .mrow__control { flex-shrink: 0; display: inline-flex; align-items: center; }
-
-      /* unified control container — every editable value shares the same
-         height, background, border, font, and radius; aligned to the row's
-         right gridline */
       .ctrl {
         display: inline-flex; align-items: center; gap: 8px; width: 220px;
         height: 30px; padding: 0 10px; border-radius: var(--radius);
@@ -732,8 +639,6 @@
       .ctrl--readonly .ctrl__value { color: var(--foreground); font-weight: 500; }
       .ctrl .ctrl__sub { color: var(--muted-foreground); font-size: 10.5px; }
       .ctrl svg { color: var(--muted-foreground); flex-shrink: 0; }
-
-      /* toggle switch — visible capsule, emerald on-state with glowing thumb */
       .toggle {
         position: relative; display: inline-block; width: 38px; height: 22px; border-radius: 999px; cursor: pointer; flex-shrink: 0;
         background: color-mix(in oklch, var(--foreground) 12%, transparent);
@@ -744,14 +649,8 @@
       .toggle::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: oklch(0.7 0 0); box-shadow: 0 1px 3px oklch(0 0 0 / 0.5); transition: transform .2s cubic-bezier(0.34, 1.4, 0.64, 1), background .2s; }
       .toggle.is-on { background: color-mix(in oklch, var(--success) 45%, transparent); border-color: color-mix(in oklch, var(--success) 55%, transparent); box-shadow: inset 0 1px 2px oklch(0 0 0 / 0.2), 0 0 8px color-mix(in oklch, var(--success) 30%, transparent); }
       .toggle.is-on::after { transform: translateX(16px); background: oklch(0.95 0.06 150); box-shadow: 0 0 6px color-mix(in oklch, var(--success) 60%, transparent), 0 1px 2px oklch(0 0 0 / 0.3); }
-
-      /* ════════════════════════════════════════════════════════
-         Memory view — calm cortex feed, progressive disclosure
-         ════════════════════════════════════════════════════════ */
       .view { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 14px; }
       .view[hidden] { display: none; }
-
-      /* ultra-thin telemetry hero */
       .mhero { position: relative; display: flex; align-items: center; gap: 0; height: 40px; padding: 0 16px;
         background: var(--card); border: 1px solid oklch(1 0 0 / 0.05); border-radius: var(--radius);
         box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.05), 0 1px 0 0 oklch(0 0 0 / 0.2); flex-shrink: 0; }
@@ -769,8 +668,6 @@
       [data-theme="light"] .ingest { border-color: oklch(0 0 0 / 0.14); }
       .ingest:hover { border-color: oklch(1 0 0 / 0.3); background: color-mix(in oklch, var(--foreground) 10%, transparent); }
       .ingest svg { color: var(--muted-foreground); }
-
-      /* centered search */
       .msearchbar { position: relative; display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 14px;
         border-radius: var(--radius); border: 1px solid oklch(1 0 0 / 0.14); background: color-mix(in oklch, var(--foreground) 4%, transparent); flex-shrink: 0; }
       [data-theme="light"] .msearchbar { border-color: oklch(0 0 0 / 0.12); }
@@ -781,15 +678,11 @@
       .msearchbar .relevance { font-family: var(--font-mono); font-size: 10px; color: var(--success); opacity: 0; transition: opacity .15s; white-space: nowrap; }
       .msearchbar.is-active .relevance { opacity: 1; }
       .msearchbar__kbd { font-family: var(--font-mono); font-size: 10px; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; color: var(--muted-foreground); }
-
-      /* feed + right sidebar */
       .mem-layout { display: grid; grid-template-columns: 1fr 240px; gap: 16px; flex: 1; min-height: 0; }
       .mem-feed { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
       .mem-feed-scroll { flex: 1; min-height: 0; overflow-y: auto; padding-right: 4px; }
       .mem-feed-scroll::-webkit-scrollbar { width: 6px; }
       .mem-feed-scroll::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--foreground) 20%, transparent); border-radius: 3px; }
-
-      /* chronological group */
       .mgroup { margin-bottom: 18px; }
       .mgroup__head { display: flex; align-items: baseline; gap: 10px; padding: 0 2px 8px; }
       .mgroup__title { font-family: var(--font-mono); font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: oklch(0.58 0 0); }
@@ -797,8 +690,6 @@
       .mgroup__count { font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); }
       .mgroup__rule { flex: 1; height: 1px; background: oklch(1 0 0 / 0.06); }
       [data-theme="light"] .mgroup__rule { background: oklch(0 0 0 / 0.06); }
-
-      /* feed item — translucent dark container */
       .mfeed-item { position: relative; display: flex; gap: 12px; padding: 12px 14px 14px; margin-bottom: 8px;
         background: color-mix(in oklch, var(--foreground) 3.5%, transparent); border: 1px solid oklch(1 0 0 / 0.05);
         border-radius: 8px; transition: border-color .15s, background .15s; box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.03); overflow: hidden; }
@@ -822,7 +713,6 @@
       .mfeed-item__time { margin-left: auto; font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); }
       .mfeed-item__score { font-family: var(--font-mono); font-size: 9.5px; color: var(--success); display: none; }
       .mem-feed-searching .mfeed-item__score { display: inline; }
-      /* hover-reveal micro actions */
       .mfeed-item__actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; opacity: 0; transition: opacity .15s; align-self: center; }
       .mfeed-item:hover .mfeed-item__actions { opacity: 1; }
       .mact { width: 26px; height: 26px; display: grid; place-items: center; border-radius: var(--radius); color: var(--muted-foreground); cursor: pointer; border: 1px solid transparent; }
@@ -830,8 +720,6 @@
       .mact--danger:hover { color: oklch(0.78 0.18 25); }
       .mfeed-item__pin { color: var(--muted-foreground); }
       .mfeed-item__pin.is-pinned { color: oklch(0.85 0.14 75); }
-
-      /* right quiet sidebar */
       .mside { display: flex; flex-direction: column; gap: 14px; min-height: 0; overflow-y: auto; padding-right: 2px; }
       .mside::-webkit-scrollbar { width: 6px; }
       .mside::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--foreground) 20%, transparent); border-radius: 3px; }
@@ -850,18 +738,12 @@
       .mside__topic { display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px; border-radius: 999px; border: 1px solid oklch(1 0 0 / 0.08); background: color-mix(in oklch, var(--foreground) 5%, transparent); color: var(--muted-foreground); font-family: var(--font-mono); font-size: 10px; line-height: 1.3; cursor: pointer; transition: all .15s; }
       .mside__topic:hover { border-color: oklch(1 0 0 / 0.24); color: var(--foreground); }
       .mside__topic.is-on { background: color-mix(in oklch, var(--foreground) 10%, transparent); color: var(--foreground); border-color: oklch(1 0 0 / 0.18); }
-
-      /* ════════════════════════════════════════════════════════
-         Graph view — memory graph explorer + ask-signet chat
-         ════════════════════════════════════════════════════════ */
       .graph-view { display: flex; flex-direction: column; flex: 1; min-height: 0; gap: 0; position: relative; }
-      /* floating HUD telemetry overlay — CAD/Figma style viewport anchor */
       .graph-hud { position: absolute; top: 12px; left: 16px; z-index: 4; display: flex; align-items: center; gap: 10px;
         font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); pointer-events: none; }
       .graph-hud b { color: var(--foreground); font-weight: 600; }
       .graph-hud__sep { color: oklch(0.4 0 0); }
       [data-theme="light"] .graph-hud__sep { color: oklch(0.6 0 0); }
-      /* floating legend popover via gear icon */
       .graph-legend-btn { position: absolute; top: 12px; right: 16px; z-index: 4; width: 30px; height: 30px; border-radius: 8px;
         display: grid; place-items: center; color: var(--muted-foreground); cursor: pointer;
         background: color-mix(in oklch, var(--background) 60%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -877,8 +759,6 @@
       .lg-item { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); }
       .lg-item b { color: var(--foreground); font-weight: 500; }
       .lg-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
-
-      /* seamless canvas floor — no border, no container */
       .graph-stage-wrap { position: relative; flex: 1; min-height: 0; overflow: hidden; background: transparent; border: none; box-shadow: none; border-radius: 0; }
       .graph-stage { width: 100%; height: 100%; position: absolute; inset: 0;
         background-image: radial-gradient(oklch(1 0 0 / 0.03) 1px, transparent 1px); background-size: 28px 28px; }
@@ -894,15 +774,12 @@
       .gnode circle.node-fill { filter: drop-shadow(0 0 4px currentColor); }
       .glabel { font-family: var(--font-mono); font-size: 11px; fill: var(--foreground); pointer-events: none; transition: opacity .25s; font-weight: 500; vector-effect: non-scaling-stroke; }
       .glabel.dim { opacity: 0.2; }
-      /* edges — glowing stroke with pulse flow */
       .gedge { stroke: oklch(1 0 0 / 0.1); stroke-width: 1; fill: none; transition: stroke .25s, stroke-width .25s, opacity .25s; }
       [data-theme="light"] .gedge { stroke: oklch(0 0 0 / 0.08); }
       .gedge.dim { opacity: 0.06; }
       .gedge.hl { stroke: oklch(0.85 0 0 / 0.85); stroke-width: 1.8; opacity: 1; filter: drop-shadow(0 0 3px oklch(0.85 0 0 / 0.6)); }
       .gedge.hl-flow { stroke-dasharray: 5 3; animation: flow-pulse 1.4s ease-in-out infinite; }
       @keyframes flow-pulse { 0% { stroke-dashoffset: 0; opacity: 1; } 50% { stroke-dashoffset: -8; opacity: 0.6; } 100% { stroke-dashoffset: -16; opacity: 1; } }
-
-      /* floating glass inspector (top-right, matches dock aesthetic) */
       .graph-inspector { position: absolute; top: 12px; right: 12px; width: 220px; z-index: 5;
         background: color-mix(in oklch, var(--background) 72%, transparent); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
         border: 1px solid oklch(1 0 0 / 0.1); border-radius: 10px; padding: 12px 14px;
@@ -913,8 +790,6 @@
       .gi-meta { font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); margin-bottom: 8px; }
       .gi-mentions { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted-foreground); }
       .gi-mentions b { color: var(--foreground); font-family: var(--font-mono); }
-
-      /* floating prompt chips — embedded in dock expand state when focused */
       .graph-prompts { display: none; }
       .dock-prompts { display: none; flex-direction: column; gap: 6px; padding: 8px 14px 10px; }
       .dock-prompts.show { display: flex; }
@@ -923,8 +798,6 @@
         background: color-mix(in oklch, var(--foreground) 5%, transparent); border: 1px solid oklch(1 0 0 / 0.1); color: var(--muted-foreground); transition: all .15s; }
       [data-theme="light"] .dp-chip { border-color: oklch(0 0 0 / 0.1); }
       .dp-chip:hover { border-color: oklch(1 0 0 / 0.22); color: var(--foreground); background: color-mix(in oklch, var(--foreground) 8%, transparent); }
-
-      /* authoritative glass command dock — wider, taller, high-craft */
       .graph-dock { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 6;
         display: flex; flex-direction: column; width: 600px; max-width: calc(100% - 48px); padding: 0;
         background: color-mix(in oklch, var(--background) 78%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
@@ -934,7 +807,6 @@
       [data-theme="light"] .graph-dock { border-color: oklch(0 0 0 / 0.1); }
       .graph-dock::before { content: ""; position: absolute; top: 0; left: 8%; right: 8%; height: 1px;
         background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.35), transparent); border-radius: 1px; pointer-events: none; }
-      /* when responded, dock fades out entirely — conversation moves into the drawer */
       .graph-dock.responded { opacity: 0; pointer-events: none; transform: translateX(-50%) translateY(16px); }
       .dock-row { display: flex; align-items: center; gap: 0; padding: 0 8px 0 16px; height: 52px; }
       .gd-icon { width: 26px; height: 26px; display: grid; place-items: center; flex-shrink: 0; color: var(--foreground); margin-right: 12px; }
@@ -946,8 +818,6 @@
         box-shadow: 0 0 14px color-mix(in oklch, var(--success) 28%, transparent), inset 0 1px 0 oklch(1 0 0 / 0.1); transition: all .2s; }
       .gd-send:hover { background: color-mix(in oklch, var(--success) 35%, transparent); box-shadow: 0 0 22px color-mix(in oklch, var(--success) 50%, transparent); }
       .gd-send:disabled { opacity: 0.3; cursor: default; box-shadow: none; }
-
-      /* floating glass HUD — rounded sheet suspended inside the canvas */
       .graph-response { position: absolute; top: 16px; right: 16px; bottom: 16px; width: 360px; max-width: calc(45% - 16px); z-index: 5;
         background: color-mix(in oklch, var(--background) 94%, transparent); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
         border: 1px solid oklch(1 0 0 / 0.1); border-radius: 16px;
@@ -956,11 +826,9 @@
         opacity: 0; transform: translateX(40px) scale(0.96); pointer-events: none;
         transition: opacity .35s ease, transform .35s cubic-bezier(0.34, 1.3, 0.64, 1); }
       [data-theme="light"] .graph-response { border-color: oklch(0 0 0 / 0.1); }
-      /* top-lit bevel */
       .graph-response::before { content: ""; position: absolute; top: 0; left: 12%; right: 12%; height: 1px;
         background: linear-gradient(90deg, transparent, oklch(1 0 0 / 0.4), transparent); pointer-events: none; z-index: 1; }
       .graph-response.show { opacity: 1; transform: translateX(0) scale(1); pointer-events: auto; }
-      /* header — quiet node title row */
       .gr-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px 12px; flex-shrink: 0; }
       .gr-avatar { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; color: var(--foreground); flex-shrink: 0;
         background: color-mix(in oklch, var(--foreground) 6%, transparent); border: 1px solid oklch(1 0 0 / 0.08); }
@@ -970,7 +838,6 @@
       .gr-close { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; color: var(--muted-foreground); cursor: pointer; flex-shrink: 0; transition: all .15s; }
       .gr-close:hover { color: var(--foreground); background: oklch(1 0 0 / 0.08); }
       .gr-close svg { width: 15px; height: 15px; }
-      /* body — clean typography */
       .gr-body { flex: 1; overflow-y: auto; padding: 0 16px 14px; display: flex; flex-direction: column; gap: 14px; }
       .gr-body::-webkit-scrollbar { width: 5px; }
       .gr-body::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--foreground) 18%, transparent); border-radius: 3px; }
@@ -982,7 +849,6 @@
       [data-theme="light"] .gr-answer .mono { color: oklch(0.4 0 0); }
       .gr-prov { display: inline-flex; align-items: center; gap: 6px; margin-top: 10px; font-family: var(--font-mono); font-size: 9.5px; color: var(--success); }
       .gr-prov .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
-      /* clickable citation micro cards */
       .gr-cite { display: flex; align-items: flex-start; gap: 9px; padding: 9px 11px; border-radius: 8px;
         background: color-mix(in oklch, var(--foreground) 4%, transparent); border: 1px solid oklch(1 0 0 / 0.06);
         cursor: pointer; transition: border-color .15s, background .15s; }
@@ -990,7 +856,6 @@
       .gr-cite__dot { width: 6px; height: 6px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
       .gr-cite__txt { font-size: 12px; line-height: 1.45; color: var(--foreground); }
       .gr-cite__meta { font-family: var(--font-mono); font-size: 9px; color: var(--muted-foreground); margin-top: 3px; }
-      /* collapsible execution log accordion */
       .gr-acc { border-top: 1px solid oklch(1 0 0 / 0.06); padding: 10px 0 0; }
       .gr-acc-trigger { display: flex; align-items: center; gap: 6px; cursor: pointer; font-family: var(--font-mono); font-size: 9.5px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: oklch(0.5 0 0); transition: color .15s; }
       .gr-acc-trigger:hover { color: var(--foreground); }
@@ -998,7 +863,6 @@
       .gr-acc.open .gr-acc-trigger svg { transform: rotate(90deg); }
       .gr-acc-body { max-height: 0; overflow: hidden; transition: max-height .25s ease; font-family: var(--font-mono); font-size: 10px; line-height: 1.7; color: var(--muted-foreground); padding-top: 0; }
       .gr-acc.open .gr-acc-body { max-height: 200px; padding-top: 8px; }
-      /* conversation dock at the bottom of the card */
       .gr-dock { display: flex; align-items: center; gap: 8px; padding: 10px 14px 12px; flex-shrink: 0; }
       .gr-dock-input { flex: 1; display: flex; align-items: center; gap: 8px; height: 38px; padding: 0 10px 0 12px;
         background: color-mix(in oklch, var(--foreground) 6%, transparent); border: 1px solid oklch(1 0 0 / 0.1); border-radius: 10px; }
@@ -1011,12 +875,6 @@
         box-shadow: 0 0 12px color-mix(in oklch, var(--success) 22%, transparent), inset 0 1px 0 oklch(1 0 0 / 0.08); transition: all .2s; }
       .gr-send-pill:hover { background: color-mix(in oklch, var(--success) 28%, transparent); box-shadow: 0 0 18px color-mix(in oklch, var(--success) 42%, transparent); }
       .gr-send-pill:disabled { opacity: 0.3; cursor: default; box-shadow: none; }
-
-      /* ════════════════════════════════════════════════════════════════
-         SOURCES VIEW
-         Reflects SignetSourceEntry: kind, root, health, stats, indexJob
-      ════════════════════════════════════════════════════════════════ */
-      /* borderless floating telemetry line — no container, no borders */
       .src-hero { display: flex; align-items: center; gap: 9px; padding: 2px 2px 14px; flex-shrink: 0; font-family: var(--font-mono); }
       .src-hero__stat { display: inline-flex; align-items: baseline; gap: 5px; }
       .src-hero__val { font-size: 12px; font-weight: 500; color: var(--foreground); letter-spacing: -0.01em; }
@@ -1024,7 +882,6 @@
       .src-hero__sep { color: oklch(0.35 0 0); user-select: none; }
       [data-theme="light"] .src-hero__sep { color: oklch(0.65 0 0); }
       .src-hero__spacer { flex: 1; }
-      /* two-column connector grid */
       .src-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; padding: 12px 0; flex: 1; overflow-y: auto; align-content: start;
         -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 24px), transparent 100%); mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 24px), transparent 100%); }
       .src-card { position: relative; display: flex; flex-direction: column; gap: 10px; padding: 16px; border-radius: var(--radius);
@@ -1034,7 +891,6 @@
       .src-card:hover { border-color: oklch(1 0 0 / 0.14); box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.04), 0 4px 16px oklch(0 0 0 / 0.4); }
       [data-theme="light"] .src-card:hover { border-color: oklch(0 0 0 / 0.14); }
       .src-card::before { content: ""; position: absolute; inset: 0; border-radius: inherit; padding: 1px; background: linear-gradient(180deg, oklch(1 0 0 / 0.18), transparent 50%); -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0); -webkit-mask-composite: xor; mask-composite: exclude; pointer-events: none; }
-      /* header row */
       .src-card__top { display: flex; align-items: center; gap: 12px; }
       .src-card__icon { width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center; color: var(--foreground); flex-shrink: 0;
         background: color-mix(in oklch, var(--foreground) 5%, transparent); border: 1px solid oklch(1 0 0 / 0.06); }
@@ -1043,7 +899,6 @@
       .src-card__name { font-size: 14px; font-weight: 600; letter-spacing: -0.01em; line-height: 1.2; }
       .src-card__sub { display: flex; align-items: center; gap: 5px; margin-top: 2px; font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); }
       .src-card__kind { text-transform: uppercase; letter-spacing: 0.06em; }
-      /* root path utility bar — leading icon + hover copy */
       .src-card__root { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 10.5px; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; padding: 0 4px 0 8px; height: 28px; border-radius: 6px; background: color-mix(in oklch, var(--foreground) 3%, transparent); transition: background .15s; }
       .src-card__root:hover { background: color-mix(in oklch, var(--foreground) 5%, transparent); }
       .src-card__root-ic { width: 13px; height: 13px; flex-shrink: 0; color: oklch(0.55 0 0); }
@@ -1053,19 +908,16 @@
       .src-card__root:hover .src-card__root-copy { opacity: 0.7; }
       .src-card__root-copy:hover { opacity: 1 !important; color: var(--foreground); background: oklch(1 0 0 / 0.08); }
       .src-card__root-copy svg { width: 12px; height: 12px; }
-      /* health badge */
       .src-health { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 9.5px; font-weight: 500; flex-shrink: 0; }
       .src-health__dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
       .src-health--healthy { color: oklch(0.72 0.15 150); } .src-health--healthy .src-health__dot { background: oklch(0.72 0.15 150); box-shadow: 0 0 6px oklch(0.72 0.15 150 / 0.5); }
       .src-health--degraded { color: oklch(0.75 0.15 85); } .src-health--degraded .src-health__dot { background: oklch(0.75 0.15 85); box-shadow: 0 0 6px oklch(0.75 0.15 85 / 0.5); }
       .src-health--unhealthy { color: oklch(0.7 0.18 25); } .src-health--unhealthy .src-health__dot { background: oklch(0.7 0.18 25); box-shadow: 0 0 6px oklch(0.7 0.18 25 / 0.5); }
       .src-health--empty { color: var(--muted-foreground); } .src-health--empty .src-health__dot { background: var(--muted-foreground); }
-      /* stats — 3-col grid */
       .src-card__stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
       .src-stat { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px; border-radius: 7px; background: color-mix(in oklch, var(--foreground) 2.5%, transparent); }
       .src-stat__val { font-family: var(--font-mono); font-size: 14px; font-weight: 500; color: var(--foreground); letter-spacing: -0.01em; }
       .src-stat__label { font-size: 9px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; }
-      /* pipeline telemetry strip — always visible */
       .src-card__pipe { display: flex; align-items: center; gap: 9px; padding: 8px 10px; border-radius: 7px; background: color-mix(in oklch, var(--foreground) 2.5%, transparent); }
       .src-pipe__dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; background: var(--success); box-shadow: 0 0 6px color-mix(in oklch, var(--success) 50%, transparent); }
       .src-pipe__dot.is-amber { background: oklch(0.75 0.15 85); box-shadow: 0 0 6px oklch(0.75 0.15 85 / 0.5); }
@@ -1078,7 +930,6 @@
       .src-pipe__fill.is-degraded { background: oklch(0.75 0.15 85); box-shadow: 0 0 6px oklch(0.75 0.15 85 / 0.4); }
       .src-pipe__fill.is-unhealthy { background: oklch(0.7 0.18 25); box-shadow: none; }
       .src-pipe__txt { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); white-space: nowrap; flex-shrink: 0; }
-      /* footer */
       .src-card__foot { display: flex; align-items: center; justify-content: space-between; padding-top: 8px; margin-top: 2px; border-top: 1px solid oklch(1 0 0 / 0.06); }
       [data-theme="light"] .src-card__foot { border-top-color: oklch(0 0 0 / 0.06); }
       .src-card__time { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); }
@@ -1088,7 +939,6 @@
       .src-act:hover { color: var(--foreground); background: oklch(1 0 0 / 0.08); }
       .src-act svg { width: 13px; height: 13px; }
       .src-act.is-danger:hover { color: oklch(0.7 0.18 25); }
-      /* inline add-source tile */
       .src-add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 24px 16px; border-radius: var(--radius);
         border: 1.5px dashed oklch(1 0 0 / 0.12); background: color-mix(in oklch, var(--card) 86%, transparent); cursor: pointer; transition: all .2s; min-height: 180px; }
       [data-theme="light"] .src-add { border-color: oklch(0 0 0 / 0.12); }
@@ -1099,7 +949,6 @@
       .src-add__ic svg { width: 18px; height: 18px; }
       .src-add__label { font-size: 12.5px; font-weight: 500; color: var(--foreground); }
       .src-add__hint { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); }
-      /* connect modal */
       .src-modal-bg { position: fixed; inset: 0; z-index: 100; background: oklch(0 0 0 / 0.5); backdrop-filter: blur(8px); display: grid; place-items: center; opacity: 0; pointer-events: none; transition: opacity .25s; }
       .src-modal-bg.show { opacity: 1; pointer-events: auto; }
       .src-modal { width: 480px; max-width: 90vw; border-radius: 16px; background: var(--card); border: 1px solid oklch(1 0 0 / 0.1); box-shadow: 0 24px 64px oklch(0 0 0 / 0.6); transform: scale(0.96); transition: transform .25s cubic-bezier(0.34, 1.3, 0.64, 1); }
@@ -1128,12 +977,7 @@
       .btn-ghost:hover { color: var(--foreground); }
       .btn-primary { height: 32px; padding: 0 14px; border-radius: var(--radius); font-size: 12px; font-weight: 500; color: oklch(0.15 0 0); background: var(--foreground); cursor: pointer; transition: opacity .15s; }
       .btn-primary:hover { opacity: 0.88; }
-
-      /* ════════════════════════════════════════════════════════════════
-         AGENTS VIEW — identity + access config cards
-      ════════════════════════════════════════════════════════════════ */
       .ag-view { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 12px; overflow: hidden; }
-      /* telemetry line */
       .ag-hero { display: flex; align-items: center; gap: 9px; padding: 2px 2px; flex-shrink: 0; font-family: var(--font-mono); }
       .ag-hero__stat { display: inline-flex; align-items: baseline; gap: 5px; }
       .ag-hero__val { font-size: 12px; font-weight: 500; color: var(--foreground); letter-spacing: -0.01em; }
@@ -1146,10 +990,8 @@
       [data-theme="light"] .ag-new { border-color: oklch(0 0 0 / 0.1); }
       .ag-new:hover { color: oklch(0.82 0.16 150); border-color: color-mix(in oklch, var(--success) 40%, transparent); }
       .ag-new svg { width: 12px; height: 12px; }
-      /* ── split-pane layout ── */
       .ag-layout { display: flex; gap: 0; flex: 1; min-height: 0; border: 1px solid oklch(1 0 0 / 0.06); border-radius: var(--radius); overflow: hidden; }
       [data-theme="light"] .ag-layout { border-color: oklch(0 0 0 / 0.06); }
-      /* left pane — compact agent list */
       .ag-list { width: 220px; flex-shrink: 0; overflow-y: auto; border-right: 1px solid oklch(1 0 0 / 0.06); padding: 8px 0; }
       [data-theme="light"] .ag-list { border-right-color: oklch(0 0 0 / 0.06); }
       .ag-list::-webkit-scrollbar { width: 5px; }
@@ -1164,7 +1006,6 @@
       .ag-item__dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
       .ag-item__dot--active { background: oklch(0.72 0.15 150); box-shadow: 0 0 6px oklch(0.72 0.15 150 / 0.5); }
       .ag-item__dot--idle { background: oklch(0.55 0 0); }
-      /* right pane — detail workspace */
       .ag-detail { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
       .ag-detail__head { display: flex; align-items: center; gap: 12px; padding: 16px 20px; border-bottom: 1px solid oklch(1 0 0 / 0.06); flex-shrink: 0; }
       [data-theme="light"] .ag-detail__head { border-bottom-color: oklch(0 0 0 / 0.06); }
@@ -1178,14 +1019,11 @@
       .ag-conn--active .dot { background: oklch(0.72 0.15 150); box-shadow: 0 0 6px oklch(0.72 0.15 150 / 0.5); }
       .ag-conn--idle { color: var(--muted-foreground); }
       .ag-conn--idle .dot { background: oklch(0.55 0 0); }
-      /* scrollable detail body */
       .ag-detail__body { flex: 1; min-height: 0; overflow: hidden; padding: 16px 20px 0; display: flex; flex-direction: column; gap: 14px; }
-      /* section labels */
       .ag-section { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
       .ag-section--grow { flex: 1; min-height: 0; overflow: hidden; }
       .ag-section__label { font-family: var(--font-mono); font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: oklch(0.45 0 0); }
       [data-theme="light"] .ag-section__label { color: oklch(0.55 0 0); }
-      /* connected harnesses — borderless text rows with hairlines */
       .ag-harnesses { display: flex; flex-direction: column; gap: 0; }
       .ag-harness { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid oklch(1 0 0 / 0.04); transition: background .1s; }
       [data-theme="light"] .ag-harness { border-bottom-color: oklch(0 0 0 / 0.04); }
@@ -1196,7 +1034,6 @@
       .ag-harness__via { font-family: var(--font-mono); font-size: 9px; color: var(--muted-foreground); }
       .ag-harness__sync { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); flex-shrink: 0; }
       .ag-no-harnesses { font-family: var(--font-mono); font-size: 11px; color: oklch(0.45 0 0); padding: 8px 0; }
-      /* identity file chips */
       .ag-tags { display: flex; flex-wrap: wrap; gap: 6px; }
       .ag-tag { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10.5px; font-weight: 500;
         padding: 5px 11px; border-radius: var(--radius); cursor: pointer; transition: all .15s;
@@ -1207,7 +1044,6 @@
       .ag-tag.is-active { background: color-mix(in oklch, oklch(0.7 0.1 220) 14%, transparent); border-color: oklch(0.6 0.1 220 / 0.4); color: oklch(0.7 0.1 220); }
       [data-theme="light"] .ag-tag.is-active { color: oklch(0.45 0.12 220); }
       .ag-tag--more { background: none; border-style: dashed; color: var(--muted-foreground); cursor: default; }
-      /* unboxed editor — toolbar header + borderless text surface */
       .ag-editor { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
       .ag-editor__bar { display: flex; align-items: center; gap: 8px; padding: 6px 0 8px; border-bottom: 1px solid oklch(1 0 0 / 0.06); flex-shrink: 0; font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); }
       [data-theme="light"] .ag-editor__bar { border-bottom-color: oklch(0 0 0 / 0.06); }
@@ -1221,7 +1057,6 @@
       [data-theme="light"] .ag-editor__line { color: oklch(0.3 0 0); }
       .ag-editor__line--heading { color: oklch(0.92 0 0); font-weight: 600; }
       [data-theme="light"] .ag-editor__line--heading { color: oklch(0.1 0 0); }
-      /* workspace custody footer */
       .ag-custody { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 20px; border-top: 1px solid oklch(1 0 0 / 0.06); flex-shrink: 0; }
       [data-theme="light"] .ag-custody { border-top-color: oklch(0 0 0 / 0.06); }
       .ag-stats { display: flex; align-items: baseline; gap: 16px; font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); }
@@ -1231,12 +1066,7 @@
       [data-theme="light"] .ag-btn { border-color: oklch(0 0 0 / 0.08); }
       .ag-btn:hover { color: var(--foreground); border-color: oklch(1 0 0 / 0.16); }
       .ag-btn svg { width: 12px; height: 12px; }
-
-      /* ════════════════════════════════════════════════════════════════
-         SECRETS VIEW — locked vault → unlocked secret grid
-      ════════════════════════════════════════════════════════════════ */
       .sec-view { display: flex; flex-direction: column; height: 100%; min-height: 0; position: relative; }
-      /* locked gate — centered card */
       .sec-gate { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; z-index: 10;
         background: transparent; transition: opacity .3s ease; }
       .sec-gate.is-hidden { opacity: 0; pointer-events: none; }
@@ -1259,10 +1089,8 @@
       .sec-unlock-btn:hover { opacity: 0.88; }
       .sec-error { font-family: var(--font-mono); font-size: 10.5px; color: oklch(0.72 0.19 25); height: 16px; margin-top: 10px; opacity: 0; transition: opacity .2s; }
       .sec-error.show { opacity: 1; }
-      /* unlocked vault */
       .sec-vault { display: flex; flex-direction: column; height: 100%; min-height: 0; opacity: 0; transform: translateY(8px); transition: opacity .35s ease, transform .35s ease; pointer-events: none; }
       .sec-vault.is-open { opacity: 1; transform: translateY(0); pointer-events: auto; }
-      /* borderless telemetry line */
       .sec-hero { display: flex; align-items: center; gap: 9px; padding: 2px 2px 14px; flex-shrink: 0; font-family: var(--font-mono); }
       .sec-hero__stat { display: inline-flex; align-items: baseline; gap: 5px; }
       .sec-hero__val { font-size: 12px; font-weight: 500; color: var(--foreground); letter-spacing: -0.01em; }
@@ -1273,7 +1101,6 @@
       .sec-lock-back { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10px; cursor: pointer; color: var(--muted-foreground); transition: color .15s; }
       .sec-lock-back:hover { color: var(--foreground); }
       .sec-lock-back svg { width: 12px; height: 12px; }
-      /* secret card grid */
       .sec-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; flex: 1; overflow-y: auto; align-content: start; padding-bottom: 12px;
         -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 20px), transparent 100%); mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 20px), transparent 100%); }
       .sec-card { position: relative; display: flex; flex-direction: column; gap: 8px; padding: 14px; border-radius: var(--radius);
@@ -1292,7 +1119,6 @@
       .sec-card__src--local .sec-card__src-dot { background: var(--muted-foreground); }
       .sec-card__src--1password .sec-card__src-dot { background: oklch(0.7 0.12 250); }
       .sec-card__src--bitwarden .sec-card__src-dot { background: oklch(0.72 0.15 150); }
-      /* masked value */
       .sec-card__val { font-family: var(--font-mono); font-size: 11px; color: oklch(0.5 0 0); padding: 6px 10px; border-radius: 6px; background: color-mix(in oklch, var(--foreground) 3%, transparent);
         display: flex; align-items: center; justify-content: space-between; }
       [data-theme="light"] .sec-card__val { color: oklch(0.45 0 0); }
@@ -1301,7 +1127,6 @@
       .sec-card:hover .sec-card__copy { opacity: 0.7; }
       .sec-card__copy:hover { opacity: 1 !important; color: var(--foreground); background: oklch(1 0 0 / 0.08); }
       .sec-card__copy svg { width: 12px; height: 12px; }
-      /* footer with usage ref */
       .sec-card__foot { display: flex; align-items: center; justify-content: space-between; padding-top: 8px; margin-top: 2px; border-top: 1px solid oklch(1 0 0 / 0.06); }
       [data-theme="light"] .sec-card__foot { border-top-color: oklch(0 0 0 / 0.06); }
       .sec-card__ref { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -1312,7 +1137,6 @@
       .sec-act:hover { color: var(--foreground); background: oklch(1 0 0 / 0.08); }
       .sec-act svg { width: 12px; height: 12px; }
       .sec-act.is-danger:hover { color: oklch(0.7 0.18 25); }
-      /* inline add tile */
       .sec-add { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 20px 16px; border-radius: var(--radius);
         border: 1.5px dashed oklch(1 0 0 / 0.12); background: color-mix(in oklch, var(--card) 86%, transparent); cursor: pointer; transition: all .2s; min-height: 140px; }
       [data-theme="light"] .sec-add { border-color: oklch(0 0 0 / 0.12); }
@@ -1322,7 +1146,6 @@
       .sec-add:hover .sec-add__ic { color: oklch(0.82 0.16 150); border-color: color-mix(in oklch, var(--success) 40%, transparent); box-shadow: 0 0 10px color-mix(in oklch, var(--success) 20%, transparent); }
       .sec-add__ic svg { width: 15px; height: 15px; }
       .sec-add__label { font-size: 11.5px; font-weight: 500; color: var(--foreground); }
-      /* add-secret modal */
       .sec-modal-bg { position: fixed; inset: 0; z-index: 100; background: oklch(0 0 0 / 0.5); backdrop-filter: blur(8px); display: grid; place-items: center; opacity: 0; pointer-events: none; transition: opacity .25s; }
       .sec-modal-bg.show { opacity: 1; pointer-events: auto; }
       .sec-modal { width: 440px; max-width: 90vw; border-radius: 16px; background: var(--card); border: 1px solid oklch(1 0 0 / 0.1); box-shadow: 0 24px 64px oklch(0 0 0 / 0.6); transform: scale(0.96); transition: transform .25s cubic-bezier(0.34, 1.3, 0.64, 1); }
@@ -1339,14 +1162,9 @@
       .sec-field__input:focus { border-color: color-mix(in oklch, var(--foreground) 30%, transparent); }
       .sec-field__hint { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); }
       .sec-modal__foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 20px; border-top: 1px solid oklch(1 0 0 / 0.06); }
-
-      /* ════════════════════════════════════════════════════════════════
-         DREAMING VIEW — pass brief + history timeline
-      ════════════════════════════════════════════════════════════════ */
       .dr-view { display: flex; flex-direction: column; height: 100%; min-height: 0; gap: 14px; overflow-y: auto; overflow-x: hidden; }
       .dr-view::-webkit-scrollbar { width: 6px; }
       .dr-view::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--foreground) 15%, transparent); border-radius: 3px; }
-      /* telemetry line */
       .dr-hero { display: flex; align-items: center; gap: 9px; padding: 2px 2px; flex-shrink: 0; font-family: var(--font-mono); }
       .dr-hero__stat { display: inline-flex; align-items: baseline; gap: 5px; }
       .dr-hero__val { font-size: 12px; font-weight: 500; color: var(--foreground); letter-spacing: -0.01em; }
@@ -1354,7 +1172,6 @@
       .dr-hero__sep { color: oklch(0.35 0 0); user-select: none; }
       [data-theme="light"] .dr-hero__sep { color: oklch(0.65 0 0); }
       .dr-hero__spacer { flex: 1; }
-      /* tactile buffer progress pill */
       .dr-buffer { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); }
       .dr-buffer__label { font-size: 9px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: oklch(0.45 0 0); }
       [data-theme="light"] .dr-buffer__label { color: oklch(0.55 0 0); }
@@ -1365,7 +1182,6 @@
       [data-theme="light"] .dr-buffer__gauge .off { color: oklch(0.78 0 0); }
       .dr-buffer__pct { color: var(--foreground); font-weight: 600; }
       .dr-buffer__txt { color: var(--muted-foreground); }
-      /* threshold-reached active state */
       .dr-status { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted-foreground); }
       .dr-status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); box-shadow: 0 0 6px color-mix(in oklch, var(--success) 50%, transparent); }
       .dr-status.is-active { color: oklch(0.78 0.16 85); }
@@ -1377,9 +1193,7 @@
       [data-theme="light"] .dr-trigger { border-color: oklch(0 0 0 / 0.1); }
       .dr-trigger:hover { color: oklch(0.82 0.16 150); border-color: color-mix(in oklch, var(--success) 40%, transparent); }
       .dr-trigger svg { width: 12px; height: 12px; }
-      /* ── Last pass brief — narrative journal ── */
       .dr-brief { display: flex; flex-direction: column; gap: 16px; padding: 4px 2px; flex-shrink: 0; }
-      /* narrative body */
       .dr-brief__narrative { font-size: 14px; line-height: 1.7; color: oklch(0.85 0 0); }
       [data-theme="light"] .dr-brief__narrative { color: oklch(0.28 0 0); }
       .dr-brief__narrative p { margin: 0 0 12px; }
@@ -1390,17 +1204,14 @@
       .dr-brief__narrative .ent { font-family: var(--font-mono); font-size: 12.5px; font-weight: 500; color: oklch(0.65 0.1 200); }
       [data-theme="light"] .dr-brief__narrative .ent { color: oklch(0.45 0.12 220); }
       [data-theme="light"] .dr-brief__narrative code { color: oklch(0.45 0.15 145); }
-      /* mutation chips */
       .dr-summary { font-family: var(--font-mono); font-size: 9.5px; color: oklch(0.5 0 0); }
       [data-theme="light"] .dr-summary { color: oklch(0.5 0 0); }
       .dr-summary b { color: oklch(0.7 0 0); font-weight: 600; }
       [data-theme="light"] .dr-summary b { color: oklch(0.35 0 0); }
-      /* section separator between narrative and diff */
       .dr-section-rule { border-top: 1px solid oklch(1 0 0 / 0.06); margin: 4px 0 0; padding-top: 16px; }
       [data-theme="light"] .dr-section-rule { border-top-color: oklch(0 0 0 / 0.06); }
       .dr-section-label { font-family: var(--font-mono); font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: oklch(0.45 0 0); padding-bottom: 6px; }
       [data-theme="light"] .dr-section-label { color: oklch(0.55 0 0); }
-      /* mutation rows — no inner box, hairline dividers */
       .dr-changes { display: flex; flex-direction: column; gap: 0; }
       .dr-change { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid oklch(1 0 0 / 0.04); }
       [data-theme="light"] .dr-change { border-bottom-color: oklch(0 0 0 / 0.04); }
@@ -1414,7 +1225,6 @@
       [data-theme="light"] .dr-change__op--update { color: oklch(0.5 0 0); }
       .dr-change__txt { font-size: 12.5px; line-height: 1.5; color: oklch(0.82 0 0); flex: 1; min-width: 0; }
       [data-theme="light"] .dr-change__txt { color: oklch(0.3 0 0); }
-      /* entity:* references — distinct cyan mono pills */
       .dr-change__txt code { font-family: var(--font-mono); font-size: 11px; color: var(--foreground); font-weight: 500; background: color-mix(in oklch, var(--foreground) 6%, transparent); padding: 1px 5px; border-radius: 4px; }
       .dr-change__txt .ent { font-family: var(--font-mono); font-size: 11px; font-weight: 500; color: oklch(0.65 0.1 200); }
       [data-theme="light"] .dr-change__txt .ent { color: oklch(0.45 0.12 220); }
@@ -1422,12 +1232,7 @@
       [data-theme="light"] .dr-change__txt .arr { color: oklch(0.5 0 0); }
       .dr-change__reason { font-family: var(--font-mono); font-size: 9.5px; color: var(--muted-foreground); margin-top: 4px; }
       .dr-pass__stat b { color: var(--foreground); font-weight: 600; }
-
-      /* ════════════════════════════════════════════════════════════════
-         SKILLS VIEW — file tree + markdown editor
-      ════════════════════════════════════════════════════════════════ */
       .sk-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-      /* borderless telemetry header */
       .sk-hero { display: flex; align-items: center; gap: 9px; padding: 2px 2px 14px; flex-shrink: 0; font-family: var(--font-mono); }
       .sk-hero__stat { display: inline-flex; align-items: baseline; gap: 5px; }
       .sk-hero__val { font-size: 12px; font-weight: 500; color: var(--foreground); letter-spacing: -0.01em; }
@@ -1440,11 +1245,9 @@
       [data-theme="light"] .sk-new { border-color: oklch(0 0 0 / 0.1); }
       .sk-new:hover { color: var(--foreground); border-color: oklch(1 0 0 / 0.22); }
       .sk-new svg { width: 12px; height: 12px; }
-      /* two-pane layout — edge-to-edge, no outer card */
       .sk-layout { display: flex; gap: 0; flex: 1; min-height: 0; border-radius: 0; overflow: hidden;
         border-top: 1px solid oklch(1 0 0 / 0.06); }
       [data-theme="light"] .sk-layout { border-top-color: oklch(0 0 0 / 0.06); }
-      /* file tree */
       .sk-tree { width: 240px; flex-shrink: 0; overflow-y: auto; border-right: 1px solid oklch(1 0 0 / 0.06); padding: 8px 0; }
       [data-theme="light"] .sk-tree { border-right-color: oklch(0 0 0 / 0.06); }
       .sk-tree::-webkit-scrollbar { width: 5px; }
@@ -1453,7 +1256,6 @@
       .sk-tree-search svg { width: 13px; height: 13px; color: var(--muted-foreground); flex-shrink: 0; }
       .sk-tree-search input { flex: 1; border: none; background: none; outline: none; color: var(--foreground); font: inherit; font-size: 11.5px; }
       .sk-tree-search input::placeholder { color: var(--muted-foreground); }
-      /* tree nodes */
       .sk-node { font-size: 11.5px; cursor: pointer; white-space: nowrap; user-select: none; display: flex; align-items: center; gap: 5px; padding: 2px 12px; transition: background .1s; color: var(--muted-foreground); }
       .sk-node:hover { background: color-mix(in oklch, var(--foreground) 5%, transparent); color: var(--foreground); }
       .sk-node.is-active { background: color-mix(in oklch, var(--foreground) 8%, transparent); color: var(--foreground); }
@@ -1469,7 +1271,6 @@
       .sk-node__badge--builtin { background: color-mix(in oklch, var(--success) 14%, transparent); color: oklch(0.72 0.15 150); }
       .sk-node__children { overflow: hidden; }
       .sk-node__children.is-hidden { display: none; }
-      /* editor pane */
       .sk-editor { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
       .sk-editor__head { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid oklch(1 0 0 / 0.06); flex-shrink: 0; }
       [data-theme="light"] .sk-editor__head { border-bottom-color: oklch(0 0 0 / 0.06); }
@@ -1479,7 +1280,6 @@
       .sk-editor__tag--builtin { background: color-mix(in oklch, var(--success) 14%, transparent); color: oklch(0.72 0.15 150); }
       .sk-editor__tag--invocable { background: color-mix(in oklch, var(--foreground) 6%, transparent); color: var(--muted-foreground); }
       .sk-editor__tag--custom { background: color-mix(in oklch, oklch(0.7 0.1 250) 14%, transparent); color: oklch(0.7 0.1 250); }
-      /* markdown body */
       .sk-md { flex: 1; overflow-y: auto; padding: 24px 32px; line-height: 1.65; }
       .sk-md::-webkit-scrollbar { width: 6px; }
       .sk-md::-webkit-scrollbar-thumb { background: color-mix(in oklch, var(--foreground) 15%, transparent); border-radius: 3px; }
@@ -1507,16 +1307,10 @@
       [data-theme="light"] .sk-md td { border-bottom-color: oklch(0 0 0 / 0.04); color: oklch(0.3 0 0); }
       .sk-md a { color: oklch(0.7 0.1 220); text-decoration: none; }
       .sk-md a:hover { text-decoration: underline; }
-
-      /* ════════════════════════════════════════════════════════════════
-         MOBILE RESPONSIVE — @media (max-width: 768px)
-         Sidebar → drawer · grids → 1-col · modals → fullscreen
-      ════════════════════════════════════════════════════════════════ */
       .menu-btn { display: none; }
       .sidebar-backdrop { display: none; }
 
       @media (max-width: 768px) {
-        /* ── Shell: single column, sidebar becomes drawer ── */
         .shell { grid-template-columns: 1fr; }
         .sidebar {
           position: fixed; top: 0; left: 0; bottom: 0; width: 280px; z-index: 200;
@@ -1532,64 +1326,43 @@
           opacity: 0; pointer-events: none; transition: opacity .3s;
         }
         body.nav-open .sidebar-backdrop { opacity: 1; pointer-events: auto; }
-        /* hide mac titlebar strip, keep compact */
         .sidebar__titlebar { height: 12px; padding: 0; }
         .traffic-lights { display: none !important; }
-
-        /* ── Hamburger button in topbar ── */
         .menu-btn {
           display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--radius);
           color: var(--muted-foreground); cursor: pointer; flex-shrink: 0; transition: all .15s;
         }
         .menu-btn:hover { color: var(--foreground); background: var(--accent); }
         .menu-btn svg { width: 18px; height: 18px; }
-
-        /* ── Topbar: hide desktop chrome ── */
         .topbar { height: 48px; padding: 0 12px; gap: 8px; }
         .window-controls { display: none !important; }
         .icon-btn { width: 36px; height: 36px; }
         .topbar__crumb { font-size: 12px; }
         .avatar { width: 28px; height: 28px; font-size: 11px; }
-
-        /* ── Content: edge-to-edge, no floating card ── */
         .content {
           margin: 0; border-radius: 0; border: none; box-shadow: none; padding: 12px 12px 8px; gap: 12px;
         }
         .content::before { display: none; }
-
-        /* ── Page head ── */
         .page-head h1 { font-size: 17px; }
         .page-head .date { font-size: 11px; }
-
-        /* ── KPI: 2-col ── */
         .kpirow { grid-template-columns: repeat(2, 1fr); gap: 8px; }
         .kpi { padding: 10px 11px; }
         .kpi__value { font-size: 17px; }
-
-        /* ── Home two-col → stacked ── */
         .grid-main { grid-template-columns: 1fr; gap: 14px; }
         .col--right { gap: 14px; }
         .q { grid-template-columns: 1fr; gap: 8px; min-height: auto; padding: 8px 0; }
         .insight__txt { font-size: 12px; }
-
-        /* ── Memory: feed + sidebar → stacked ── */
         .mem-layout { grid-template-columns: 1fr; gap: 12px; }
         .mside { max-height: 200px; overflow-y: auto; }
         .mhero { height: auto; flex-wrap: wrap; gap: 8px; padding: 8px 12px; }
         .mhero__stat { padding: 0 8px; }
-
-        /* ── Graph: full-width panels ── */
         .graph-response { width: auto; left: 8px; right: 8px; top: auto; bottom: 8px; max-width: none; max-height: 50vh; }
         .graph-response.show { transform: translateY(0); }
         .graph-hud { font-size: 9px; gap: 6px; }
         .graph-legend-btn { top: 8px; right: 8px; }
-
-        /* ── Sources/Secrets: 2-col → 1-col ── */
         .src-grid, .sec-grid { grid-template-columns: 1fr; }
         .src-hero, .sec-hero { flex-wrap: wrap; gap: 6px; }
         .src-card__stats, .sec-card { gap: 8px; }
-
-        /* ── Skills: tree becomes slide-over ── */
         .sk-layout { flex-direction: column; }
         .sk-tree {
           position: absolute; top: 0; left: 0; bottom: 0; width: 260px; z-index: 10;
@@ -1597,29 +1370,17 @@
         }
         body.sk-tree-open .sk-tree { transform: translateX(0); }
         .sk-tree-toggle { display: inline-grid !important; }
-
-        /* ── Settings modal: fullscreen ── */
         .modal { width: 100vw !important; height: 100vh !important; max-width: none !important; max-height: none !important;
           top: 0; left: 0; border-radius: 0; transform: translateY(100%); }
         body.settings-open .modal { transform: translateY(0); }
         .modal__side { width: 200px; }
-
-        /* ── All modals: fullscreen ── */
         .src-modal, .sec-modal { width: 100vw !important; max-width: none !important; border-radius: 0; }
         .src-modal-bg, .sec-modal-bg { place-items: end center; }
-
-        /* ── Logs: tighter grid ── */
         .log-line { grid-template-columns: 70px 44px 64px 1fr; padding: 3px 12px; font-size: 10px; }
         .log-head { flex-wrap: wrap; gap: 6px; padding: 8px 12px; }
         .log-search input { width: 100px; }
-
-        /* ── Secrets gate ── */
         .sec-pw { width: calc(100vw - 120px); max-width: 280px; }
-
-        /* ── Disable cursor glow on touch ── */
         .kpi::after, .panel::after, .activity::after, .brief::after { display: none !important; }
-
-        /* ── Hide kbd hints ── */
         .nav__kbd { display: none; }
       }
     </style>
@@ -1627,10 +1388,7 @@
   <body>
     <div class="shell">
       <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
-      <!-- ───────────── SIDEBAR ───────────── -->
       <aside class="sidebar">
-        <!-- Drag strip; macOS traffic lights live in its top-left padding
-             (OS-rendered in Electron; rendered here for the mockup) -->
         <div class="sidebar__titlebar">
           <div class="traffic-lights" title="Window controls">
             <span class="tl tl--close"></span>
@@ -1638,8 +1396,6 @@
             <span class="tl tl--zoom"></span>
           </div>
         </div>
-
-        <!-- Unified brand + workspace dropdown -->
         <div class="sidebar__brand">
           <button class="brand__switcher" type="button">
             <span class="brand__mark">
@@ -1687,7 +1443,6 @@
         </div>
 
         <nav class="sidebar__nav">
-          <!-- System -->
           <div class="nav__group">
             <div class="nav__group-label">System</div>
             <ul class="nav__list">
@@ -1704,8 +1459,6 @@
               </li>
             </ul>
           </div>
-
-          <!-- Focus -->
           <div class="nav__group">
             <div class="nav__group-label">Focus</div>
             <ul class="nav__list">
@@ -1723,8 +1476,6 @@
               </li>
             </ul>
           </div>
-
-          <!-- Knowledge engine -->
           <div class="nav__group">
             <div class="nav__group-label">Knowledge engine</div>
             <ul class="nav__list">
@@ -1742,8 +1493,6 @@
               </li>
             </ul>
           </div>
-
-          <!-- Assets -->
           <div class="nav__group">
             <div class="nav__group-label">Assets</div>
             <ul class="nav__list">
@@ -1781,8 +1530,6 @@
           </div>
         </div>
       </aside>
-
-      <!-- ───────────── MAIN ───────────── -->
       <main class="main">
         <header class="topbar">
           <span class="menu-btn" id="menu-btn" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h18M3 6h18M3 18h18"/></svg></span>
@@ -1796,7 +1543,6 @@
             <span class="ping"></span>
           </div>
           <div class="avatar">NV</div>
-          <!-- Windows/Linux caption buttons (top-right) -->
           <div class="window-controls" title="Window controls">
             <button class="wc wc--min" aria-label="Minimize" type="button"><svg viewBox="0 0 12 12" width="11" height="11"><rect x="2" y="5.5" width="8" height="1" fill="currentColor"/></svg></button>
             <button class="wc wc--max" aria-label="Maximize" type="button"><svg viewBox="0 0 12 12" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1"><rect x="2.5" y="2.5" width="7" height="7"/></svg></button>
@@ -1806,13 +1552,10 @@
 
         <div class="content">
         <div class="view view--home" id="view-home">
-          <!-- Page head -->
           <div class="page-head">
             <h1>Home</h1>
             <span class="date">Tuesday, July 22</span>
           </div>
-
-          <!-- Structured KPI cards + header controls -->
           <div class="kpirow">
             <div class="kpi">
               <div class="kpi__head"><span class="kpi__label">Memories</span><span class="kpi__dot" title="indexing live"></span></div>
@@ -1854,13 +1597,9 @@
               </button>
             </div>
           </div>
-
-          <!-- Two columns -->
           <div class="grid-wrap">
           <div class="grid-main">
-            <!-- LEFT: daily brief -->
             <div class="col col--left">
-              <!-- Daily brief (inline, single + carrots) -->
               <div class="brief">
                 <div class="brief__head">
                   <span class="brief__title">Daily brief</span>
@@ -2157,10 +1896,7 @@
                 </div>
               </div>
             </div>
-
-            <!-- RIGHT: sources + review -->
             <div class="col col--right">
-              <!-- Sources (flat panel) -->
               <div class="panel">
                 <div class="panel__head">
                   <div class="panel__head-left"><span class="panel__title">Sources</span><span class="panel__meta">4 connected · 24h</span></div>
@@ -2192,8 +1928,6 @@
                   </div>
                 </div>
               </div>
-
-              <!-- Review suggestions (flat panel) -->
               <div class="panel">
                 <div class="panel__head">
                   <div class="panel__head-left"><span class="panel__title">Review suggestions</span><span class="panel__meta">3 pending</span></div>
@@ -2230,10 +1964,7 @@
           </div>
           </div>
           </div>
-
-          <!-- ═══════════════ AGENTS VIEW ═══════════════ -->
           <div class="view ag-view" id="view-agents" hidden>
-            <!-- telemetry line -->
             <div class="ag-hero">
               <div class="ag-hero__stat"><span class="ag-hero__val">3</span><span class="ag-hero__label">agents</span></div>
               <span class="ag-hero__sep">/</span>
@@ -2246,16 +1977,12 @@
                 New agent
               </span>
             </div>
-            <!-- split-pane: agent list + detail workspace -->
             <div class="ag-layout">
               <div class="ag-list" id="ag-list"></div>
               <div class="ag-detail" id="ag-detail"></div>
             </div>
           </div>
-
-          <!-- ════════ MEMORY VIEW ════════ -->
           <div class="view view--memory" id="view-memory" hidden>
-            <!-- ultra-thin telemetry hero -->
             <div class="mhero">
               <div class="mhero__stat"><span class="mhero__val">8,142</span><span class="mhero__label">memories</span></div>
               <div class="mhero__stat"><span class="mhero__val">1.2 GB</span><span class="mhero__label">stored</span></div>
@@ -2266,22 +1993,16 @@
                 Ingest source
               </button>
             </div>
-
-            <!-- centered search -->
             <div class="msearchbar" id="mem-searchbar">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
               <input id="mem-search" placeholder="Search memories, tags, queries…" />
               <span class="relevance" id="mem-relevance"></span>
               <span class="msearchbar__kbd">⌘K</span>
             </div>
-
-            <!-- feed + right sidebar -->
             <div class="mem-layout">
               <div class="mem-feed">
                 <div class="mem-feed-scroll" id="mem-feed"></div>
               </div>
-
-              <!-- quiet right sidebar -->
               <div class="mside">
                 <div class="mside__group">
                   <span class="mside__label">Memory type</span>
@@ -2309,10 +2030,7 @@
               </div>
             </div>
           </div>
-
-          <!-- ════════ GRAPH VIEW ════════ -->
           <div class="view graph-view" id="view-graph" hidden>
-            <!-- floating HUD telemetry overlay (CAD-style viewport anchor) -->
             <div class="graph-hud">
               <span><b>2,418</b> nodes</span>
               <span class="graph-hud__sep">/</span>
@@ -2320,7 +2038,6 @@
               <span class="graph-hud__sep">/</span>
               <span><b>13</b> clusters</span>
             </div>
-            <!-- floating legend gear -->
             <div class="graph-legend-btn" id="legend-btn" title="Node categories">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v3M12 20v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1 12h3M20 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>
             </div>
@@ -2336,12 +2053,7 @@
                 <canvas id="graph-canvas" style="width:100%;height:100%;display:block"></canvas>
                 <div id="graph-labels" style="position:absolute;inset:0;pointer-events:none;z-index:1"></div>
               </div>
-
-              <!-- floating prompt chips (legacy, hidden) -->
               <div class="graph-prompts" id="graph-prompts"></div>
-
-              <!-- right insight drawer (full-height glass, slides in on response) -->
-              <!-- floating glass HUD -->
               <div class="graph-response" id="graph-response">
                 <div class="gr-head">
                   <span class="gr-avatar"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="8" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="12" cy="16" r="2.5"/><path d="M7.5 9.5 10.5 14M16.5 9.5 13.5 14"/></svg></span>
@@ -2356,8 +2068,6 @@
                   <button class="gr-send-pill" id="gr-send" disabled><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg></button>
                 </div>
               </div>
-
-              <!-- authoritative glass command dock (centered, ~24px above bottom) -->
               <div class="graph-dock" id="graph-dock">
                 <div class="dock-row">
                   <span class="gd-icon"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="6" cy="8" r="2"/><circle cx="18" cy="8" r="2"/><circle cx="12" cy="16" r="2.5"/><path d="M7.5 9.5 10.5 14M16.5 9.5 13.5 14"/></svg></span>
@@ -2370,10 +2080,7 @@
               </div>
             </div>
           </div>
-
-          <!-- ═══════════════ SOURCES VIEW ═══════════════ -->
           <div class="view" id="view-sources" hidden>
-            <!-- borderless floating telemetry line -->
             <div class="src-hero">
               <div class="src-hero__stat"><span class="src-hero__val" id="src-total-artifacts">6,847</span><span class="src-hero__label">artifacts</span></div>
               <span class="src-hero__sep">/</span>
@@ -2383,14 +2090,9 @@
               <span class="src-hero__sep">/</span>
               <div class="src-hero__stat"><span class="src-hero__label" style="display:inline-flex;align-items:center;gap:5px"><span style="width:6px;height:6px;border-radius:50%;background:var(--success);box-shadow:0 0 6px color-mix(in oklch, var(--success) 50%, transparent)"></span>4 sources connected</span></div>
             </div>
-
-            <!-- source card grid (connect tile pinned top-left, populated by JS) -->
             <div class="src-grid" id="src-grid"></div>
           </div>
-
-          <!-- ═══════════════ SECRETS VIEW ═══════════════ -->
           <div class="view sec-view" id="view-secrets" hidden>
-            <!-- locked gate -->
             <div class="sec-gate" id="sec-gate">
               <div class="sec-lock-ic" id="sec-lock-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
               <div class="sec-gate__title">Secrets vault</div>
@@ -2401,10 +2103,7 @@
               </div>
               <div class="sec-error" id="sec-error">Incorrect password. Try again.</div>
             </div>
-
-            <!-- unlocked vault -->
             <div class="sec-vault" id="sec-vault">
-              <!-- telemetry line -->
               <div class="sec-hero">
                 <div class="sec-hero__stat"><span class="sec-hero__val" id="sec-count">12</span><span class="sec-hero__label">secrets</span></div>
                 <span class="sec-hero__sep">/</span>
@@ -2416,15 +2115,10 @@
                 <span class="sec-hero__spacer"></span>
                 <span class="sec-lock-back" id="sec-lock-back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg> Lock</span>
               </div>
-
-              <!-- secret grid (populated by JS) -->
               <div class="sec-grid" id="sec-grid"></div>
             </div>
           </div>
-
-          <!-- ═══════════════ SKILLS VIEW ═══════════════ -->
           <div class="view sk-view" id="view-skills" hidden>
-            <!-- telemetry header -->
             <div class="sk-hero">
               <div class="sk-hero__stat"><span class="sk-hero__val">120</span><span class="sk-hero__label">skills</span></div>
               <span class="sk-hero__sep">/</span>
@@ -2437,10 +2131,7 @@
                 New skill
               </span>
             </div>
-
-            <!-- file tree + editor -->
             <div class="sk-layout">
-              <!-- file tree -->
               <div class="sk-tree" id="sk-tree">
                 <div class="sk-tree-search">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
@@ -2448,7 +2139,6 @@
                 </div>
                 <div id="sk-tree-nodes"></div>
               </div>
-              <!-- editor -->
               <div class="sk-editor">
                 <div class="sk-editor__head" id="sk-editor-head">
                   <span class="sk-tree-toggle menu-btn" id="sk-tree-toggle" style="display:none;width:32px;height:32px" title="File tree"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></span>
@@ -2458,10 +2148,7 @@
               </div>
             </div>
           </div>
-
-          <!-- ═══════════════ DREAMING VIEW ═══════════════ -->
           <div class="view dr-view" id="view-dreaming" hidden>
-            <!-- telemetry line -->
             <div class="dr-hero">
               <div class="dr-buffer">
                 <span class="dr-buffer__label">Cortex buffer</span>
@@ -2477,8 +2164,6 @@
                 Trigger pass
               </span>
             </div>
-
-            <!-- last pass brief (populated by JS) -->
             <div class="dr-brief" id="dr-brief"></div>
 
           </div>
@@ -2486,11 +2171,8 @@
         </div>
       </main>
     </div>
-
-    <!-- ───────────── SETTINGS MODAL ───────────── -->
     <div class="modal-backdrop" id="settings-backdrop"></div>
     <div class="modal" id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
-      <!-- internal sidebar -->
       <aside class="modal__side">
         <div class="modal__side-title">Settings</div>
         <div class="mnav is-on" data-section="network">
@@ -2506,8 +2188,6 @@
           Logs
         </div>
       </aside>
-
-      <!-- main content -->
       <div class="modal__main">
         <div class="modal__head">
           <span class="modal__title" id="settings-title">Network</span>
@@ -2519,8 +2199,6 @@
           </div>
         </div>
         <div class="modal__body">
-
-          <!-- Network section -->
           <div class="msection is-on" data-section="network">
             <div class="mcard">
               <div class="mgroup-label">Daemon</div>
@@ -2545,10 +2223,7 @@
               </div>
             </div>
           </div>
-
-          <!-- Inference section -->
           <div class="msection" data-section="inference">
-            <!-- TOP ZONE: model assignment — 3 quick pickers -->
             <div class="mcard">
               <div class="mgroup-label">Model assignment</div>
               <div class="assign-row">
@@ -2564,8 +2239,6 @@
                 <span class="ctrl"><span class="ctrl__value">Voyage-3</span><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg></span>
               </div>
             </div>
-
-            <!-- BOTTOM ZONE: connected providers matrix -->
             <div class="mcard">
               <div class="mgroup-label">Connected providers <span style="font-weight:400;color:var(--muted-foreground)">· 20 available</span></div>
               <div class="psearch">
@@ -2656,11 +2329,8 @@
               </div>
             </div>
           </div>
-
-          <!-- Logs section (replaces Audit) — edge-to-edge telemetry -->
           <div class="msection" data-section="logs" style="padding:0">
             <div class="log-view">
-              <!-- header: pulsing tail + spacer + segmented pill + search -->
               <div class="log-head">
                 <span class="log-export" id="log-export" title="Export logs as JSON">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
@@ -2679,7 +2349,6 @@
                   <span class="log-seg__item" data-level="debug"><span class="log-seg__dot" style="background:oklch(0.55 0 0)"></span>Debug</span>
                 </div>
               </div>
-              <!-- edge-to-edge stream -->
               <div class="log-stream" id="log-stream"></div>
             </div>
           </div>
@@ -2689,7 +2358,6 @@
     </div>
 
     <script>
-      // ── Mobile nav drawer + skills tree toggle ──
       (function () {
         const body = document.body;
         const menuBtn = document.getElementById("menu-btn");
@@ -2697,14 +2365,10 @@
         function closeNav() { body.classList.remove("nav-open"); }
         if (menuBtn) menuBtn.addEventListener("click", () => body.classList.toggle("nav-open"));
         if (backdrop) backdrop.addEventListener("click", closeNav);
-        // close drawer when a nav item is tapped
         document.querySelectorAll(".nav__item").forEach((item) => item.addEventListener("click", closeNav));
-        // skills tree toggle
         const skToggle = document.getElementById("sk-tree-toggle");
         if (skToggle) skToggle.addEventListener("click", () => body.classList.toggle("sk-tree-open"));
       })();
-
-      // ── Working light/dark toggle ──
       const SUN = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M6.3 17.7l-1.4 1.4M19.1 4.9l-1.4 1.4"/></svg>';
       const MOON = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>';
 
@@ -2714,16 +2378,12 @@
         document.getElementById("theme-icon").innerHTML = isDark ? SUN : MOON;
         document.getElementById("theme-toggle").title = isDark ? "Light mode" : "Dark mode";
       }
-
-      // init from current attribute (dark by default)
       applyTheme(document.documentElement.getAttribute("data-theme") || "dark");
 
       document.getElementById("theme-toggle").addEventListener("click", () => {
         const next = document.documentElement.getAttribute("data-theme") === "dark" ? "light" : "dark";
         applyTheme(next);
       });
-
-      // ── Daily brief carrots ──
       (function () {
         const panes = Array.from(document.querySelectorAll(".brief__pane"));
         const dots = Array.from(document.querySelectorAll(".brief__dots i"));
@@ -2743,12 +2403,9 @@
         if (next) next.addEventListener("click", () => show(i + 1));
         show(0);
       })();
-
-      // optional keyboard preview
       function applyPlatform(p) { document.documentElement.setAttribute("data-platform", p); }
       function togglePlatform() {
         const cur = document.documentElement.getAttribute("data-platform") || "mac";
-        // win/linux render identically in this mockup, so it's a two-state toggle
         applyPlatform(cur === "mac" ? "win" : "mac");
       }
       document.addEventListener("keydown", (e) => {
@@ -2758,16 +2415,12 @@
           e.preventDefault();
           document.getElementById("theme-toggle").click();
         }
-        // P toggles mac ⇄ win/linux for mockup preview
         if (!e.metaKey && !e.ctrlKey && e.key.toLowerCase() === "p") {
           togglePlatform();
         }
       });
-      // clicking either control cluster flips between the two platform styles
       document.querySelector(".traffic-lights")?.addEventListener("click", togglePlatform);
       document.querySelector(".window-controls")?.addEventListener("click", togglePlatform);
-
-      // ── Cursor-tracking border glow on panels + activity card ──
       document.querySelectorAll(".panel, .activity, .kpi, .brief").forEach((p) => {
         p.addEventListener("mousemove", (e) => {
           const r = p.getBoundingClientRect();
@@ -2775,8 +2428,6 @@
           p.style.setProperty("--my", e.clientY - r.top + "px");
         });
       });
-
-      // ── Settings modal: open/close + section switching ──
       (function () {
         const body = document.body;
         const btn = document.getElementById("settings-btn");
@@ -2806,11 +2457,9 @@
             e.preventDefault(); open();
           }
         });
-        // toggle switches flip on click
         document.querySelectorAll("[data-toggle]").forEach((t) =>
           t.addEventListener("click", () => t.classList.toggle("is-on"))
         );
-        // provider search filter
         const ps = document.getElementById("provider-search");
         const grid = document.getElementById("provider-grid");
         if (ps && grid) {
@@ -2823,8 +2472,6 @@
             });
           });
         }
-
-        // ── Logs viewer ──
         const LOGS = [
           { t: "09:14:32.104", lvl: "info", scope: "daemon", msg: "pipeline cycle complete · <span class=\"path\">extraction → decision → graph → retention</span> in 412ms",
             raw: '{\n  "event": "pipeline.cycle",\n  "stages": ["extraction", "decision", "graph", "retention"],\n  "durationMs": <span class="log-drawer__num">412</span>,\n  "memoriesProcessed": <span class="log-drawer__num">8</span>\n}' },
@@ -2892,7 +2539,6 @@
           }).join("");
         }
         renderLogs();
-        // segmented filter
         document.querySelectorAll(".log-seg__item").forEach((item) => {
           item.addEventListener("click", () => {
             document.querySelectorAll(".log-seg__item").forEach((x) => x.classList.remove("is-on"));
@@ -2903,7 +2549,6 @@
           });
         });
         if (logSearch) logSearch.addEventListener("input", () => { searchQuery = logSearch.value.trim().toLowerCase(); renderLogs(); });
-        // export visible logs as JSON
         if (logExport) logExport.addEventListener("click", () => {
           const strip = (s) => s.replace(/<[^>]*>/g, "");
           const data = visibleLogs().map((l) => ({ timestamp: l.t, level: l.lvl, message: strip(l.msg), raw: strip(l.raw || "") }));
@@ -2914,7 +2559,6 @@
           document.body.appendChild(a); a.click(); a.remove();
           URL.revokeObjectURL(url);
         });
-        // row click → toggle drawer
         if (logStream) logStream.addEventListener("click", (e) => {
           const line = e.target.closest(".log-line"); if (!line) return;
           const idx = parseInt(line.dataset.idx, 10);
@@ -2923,8 +2567,6 @@
         });
 
       })();
-
-      // ── View switching (Home / Memory) ──
       (function () {
         const VIEWS = { home: "view-home", memory: "view-memory", graph: "view-graph", sources: "view-sources", secrets: "view-secrets", skills: "view-skills", dreaming: "view-dreaming", agents: "view-agents" };
         function showView(name) {
@@ -2943,8 +2585,6 @@
           item.addEventListener("click", () => showView(item.dataset.view));
         });
       })();
-
-      // ── Memory view: calm feed, chronological, cosine-scoring ──
       (function () {
         const SOURCE_ICONS = {
           obsidian: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.36 18.54a69 69 0 0 0 1.86-2.95.81.81 0 0 0-.06-.9c-.52-.69-1.5-2.08-2.04-3.36-.55-1.32-.64-3.38-.64-4.38a1.7 1.7 0 0 0-.36-1.05l-3.2-4.06a3.7 3.7 0 0 1-.07.54c-.11.5-.31 1-.54 1.5-.13.29-.29.6-.45.91l-.31.63c-.52 1.07-1 2.23-1.13 3.59-.12 1.26.05 2.73.82 4.48l.38.04a6.4 6.4 0 0 1 3.33 1.51c.92.79 1.74 1.92 2.42 3.5zM8.2 22.57l.22.02c.78.02 2.1.09 3.16.29.87.16 2.6.64 4.01 1.06 1.08.31 2.2-.55 2.36-1.67.11-.81.33-1.73.72-2.58-.67-1.87-1.52-3.08-2.41-3.85a5.3 5.3 0 0 0-2.78-1.26c-1.54-.21-2.95.19-3.84.45.53 2.22.37 4.83-1.43 7.53zM5.53 9.94l-.1.29L2.82 16.06a1.6 1.6 0 0 0 .31 1.77l4.12 4.24c2.1-3.1 1.8-6.02.84-8.3-.73-1.73-1.84-3.08-2.56-3.83zM9.32 14.01c.62-.18 1.61-.46 2.75-.53-.68-1.73-.85-3.23-.72-4.58.16-1.55.7-2.85 1.24-3.95l.33-.66c.15-.3.29-.58.42-.86.22-.47.38-.88.46-1.27.08-.38.08-.72-.01-1.04-.1-.33-.3-.68-.68-1.06a1.6 1.6 0 0 0-1.48.36L7.18 4.33a1.6 1.6 0 0 0-.51.95l-.43 2.83c.67.59 2.33 2.32 3.34 4.71l.74.19z"/></svg>',
@@ -3084,12 +2724,9 @@
         }
         render();
       })();
-
-      // ── Graph view: memory graph explorer + ask-signet ──
         </script>
 
     <script>
-      // ── Sources view: cards, health, index jobs, connect modal ──
       (function () {
         const SOURCE_ICONS = {
           obsidian: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19.36 18.54a69 69 0 0 0 1.86-2.95.81.81 0 0 0-.06-.9c-.52-.69-1.5-2.08-2.04-3.36-.55-1.32-.64-3.38-.64-4.38a1.7 1.7 0 0 0-.36-1.05l-3.2-4.06a3.7 3.7 0 0 1-.07.54c-.11.5-.31 1-.54 1.5-.13.29-.29.6-.45.91l-.31.63c-.52 1.07-1 2.23-1.13 3.59-.12 1.26.05 2.73.82 4.48l.38.04a6.4 6.4 0 0 1 3.33 1.51c.92.79 1.74 1.92 2.42 3.5zM8.2 22.57l.22.02c.78.02 2.1.09 3.16.29.87.16 2.6.64 4.01 1.06 1.08.31 2.2-.55 2.36-1.67.11-.81.33-1.73.72-2.58-.67-1.87-1.52-3.08-2.41-3.85a5.3 5.3 0 0 0-2.78-1.26c-1.54-.21-2.95.19-3.84.45.53 2.22.37 4.83-1.43 7.53zM5.53 9.94l-.1.29L2.82 16.06a1.6 1.6 0 0 0 .31 1.77l4.12 4.24c2.1-3.1 1.8-6.02.84-8.3-.73-1.73-1.84-3.08-2.56-3.83zM9.32 14.01c.62-.18 1.61-.46 2.75-.53-.68-1.73-.85-3.23-.72-4.58.16-1.55.7-2.85 1.24-3.95l.33-.66c.15-.3.29-.58.42-.86.22-.47.38-.88.46-1.27.08-.38.08-.72-.01-1.04-.1-.33-.3-.68-.68-1.06a1.6 1.6 0 0 0-1.48.36L7.18 4.33a1.6 1.6 0 0 0-.51.95l-.43 2.83c.67.59 2.33 2.32 3.34 4.71l.74.19z"/></svg>',
@@ -3101,7 +2738,6 @@
           github: { label: "Repository", placeholder: "Signet-AI/signetai", hint: "owner/repo — use owner/* for org-wide glob" },
           discord: { label: "Guild ID", placeholder: "123456789012345678", hint: "Requires DISCORD_BOT_TOKEN in Secrets (use --token-ref)" },
         };
-        // real SignetSourceEntry-shaped data
         const SOURCES = [
           { id: "obsidian:nicholai-vault", kind: "obsidian", name: "Research Vault", root: "/home/nicholai/Notes/Research", enabled: true, health: "healthy",
             stats: { artifacts: 4291, chunks: 12847, indexed: 4291 }, lastIndexedAt: "2026-07-22T06:40:00Z",
@@ -3132,7 +2768,6 @@
         };
         const COPY_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>';
         function pipeHtml(job, health) {
-          // when health is degraded/unhealthy, override the dot+fill color to match the badge
           const hClass = health === "degraded" ? "is-amber" : health === "unhealthy" ? "is-red" : "";
           const fClass = health === "degraded" ? "is-degraded" : health === "unhealthy" ? "is-unhealthy" : "";
           if (!job) return '<div class="src-card__pipe"><span class="src-pipe__dot ' + hClass + '"></span><div class="src-pipe__bar"><div class="src-pipe__fill ' + fClass + '" style="width:0"></div></div><span class="src-pipe__txt">no job</span></div>';
@@ -3187,7 +2822,6 @@
           if (addTile) addTile.addEventListener("click", openModal);
         }
         render();
-        // connect modal
         const modalBg = document.getElementById("src-modal-bg");
         const connectBtn = document.getElementById("src-connect-btn");
         const modalClose = document.getElementById("src-modal-close");
@@ -3200,7 +2834,6 @@
         if (modalClose) modalClose.addEventListener("click", closeModal);
         if (modalCancel) modalCancel.addEventListener("click", closeModal);
         if (modalBg) modalBg.addEventListener("click", (e) => { if (e.target === modalBg) closeModal(); });
-        // picker switching
         document.querySelectorAll(".src-pick").forEach((pick) => {
           pick.addEventListener("click", () => {
             document.querySelectorAll(".src-pick").forEach((p) => p.classList.remove("is-on"));
@@ -3214,10 +2847,8 @@
           });
         });
         if (modalConnect) modalConnect.addEventListener("click", closeModal);
-        // card actions (delegated)
         const grid = document.getElementById("src-grid");
         if (grid) grid.addEventListener("click", (e) => {
-          // copy path button on root bar
           const copyBtn = e.target.closest(".src-card__root-copy");
           if (copyBtn) {
             const card = copyBtn.closest(".src-card");
@@ -3249,8 +2880,6 @@
           }
         });
       })();
-
-      // ── Secrets view: vault lock, secret cards, add modal ──
       (function () {
         const SECRET_ICONS = {
           key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="7.5" cy="15.5" r="3.5"/><path d="M10 13l8-8M16 5l3 3M14 7l3 3"/></svg>',
@@ -3309,7 +2938,6 @@
           const countEl = document.getElementById("sec-count");
           if (countEl) countEl.textContent = SECRETS.length;
         }
-        // gate logic
         const gate = document.getElementById("sec-gate");
         const vault = document.getElementById("sec-vault");
         const pwInput = document.getElementById("sec-pw");
@@ -3341,7 +2969,6 @@
         if (unlockBtn) unlockBtn.addEventListener("click", tryUnlock);
         if (pwInput) pwInput.addEventListener("keydown", (e) => { if (e.key === "Enter") tryUnlock(); });
         if (lockBack) lockBack.addEventListener("click", lockVault);
-        // card actions
         const grid = document.getElementById("sec-grid");
         if (grid) grid.addEventListener("click", (e) => {
           const act = e.target.closest("[data-act]"); if (!act) return;
@@ -3359,7 +2986,6 @@
             setTimeout(() => { SECRETS.splice(idx, 1); render(); }, 200);
           }
         });
-        // add-secret modal
         const modalBg = document.getElementById("sec-modal-bg");
         const modalClose = document.getElementById("sec-modal-close");
         const modalCancel = document.getElementById("sec-modal-cancel");
@@ -3379,13 +3005,10 @@
           }
         });
       })();
-
-      // ── Skills view: file tree + markdown editor ──
       (function () {
         const FOLDER_SVG = '<svg class="sk-node__chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>';
         const FOLDER_IC = '<svg class="sk-node__ic sk-node__ic--folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>';
         const MD_IC = '<svg class="sk-node__ic sk-node__ic--md" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13l2 2 2-2M9 17l2 2 2-2"/></svg>';
-        // representative skill tree (subset of the real 120)
         const TREE = [
           { type: "folder", name: "design", children: [
             { type: "file", name: "interactive-graph-canvas", builtin: false },
@@ -3418,7 +3041,6 @@
           { type: "file", name: "obsidian-cli", builtin: false },
           { type: "file", name: "obsidian-markdown", builtin: false },
         ];
-        // markdown content per skill (realistic excerpts)
         const CONTENT = {
           onboarding: { path: "skills/onboarding/SKILL.md", tags: ["builtin", "invocable"], html: `<h1>/onboarding</h1><p>Interactive interview to set up your Signet workspace (~5-10 minutes). Writes workspace instruction files to <code>~/.agents/</code> — does not access external APIs, send data anywhere, or execute arbitrary code.</p><h2>What This Skill Does</h2><p>This skill writes configuration files to <code>~/.agents/</code>. Specifically:</p><ul><li><code>agent.yaml</code> — config and model defaults</li><li><code>AGENTS.md</code> — operating instructions</li><li><code>SOUL.md</code> — working style and values</li><li><code>IDENTITY.md</code> — workspace name and metadata</li><li><code>USER.md</code> — user context and preferences</li></ul><blockquote>Use when user runs <code>/onboarding</code> or says 'set up my agent'.</blockquote>` },
           recall: { path: "skills/recall/SKILL.md", tags: ["builtin", "invocable"], html: `<h1>/recall</h1><p>Use this skill for targeted explicit recall. It is not the same surface as prompt-submit context injection.</p><p>Signet's canonical explicit recall endpoint is <code>POST /api/memory/recall</code>. The CLI, MCP, and hook recall surfaces should stay thin wrappers around that endpoint.</p><h2>Usage</h2><pre><code>POST /api/memory/recall\n{ "query": "dashboard design decisions",\n  "limit": 5,\n  "agentId": "default" }</code></pre><p>Returns scored results with provenance — <code>source</code>, <code>score</code>, <code>created_at</code>, and supplementary context.</p>` },
@@ -3491,10 +3113,7 @@
           renderTree();
         });
       })();
-
-      // ── Dreaming view: last pass brief + history timeline ──
       (function () {
-        // real DreamingPassRow-shaped data reflecting the dreaming schema
         const LAST_PASS = {
           id: "dream_01J7XK4M3N",
           mode: "incremental",
@@ -3540,7 +3159,6 @@
         }
         const briefEl = document.getElementById("dr-brief");
         if (briefEl) briefEl.innerHTML = briefHtml(LAST_PASS);
-        // dynamic buffer gauge + threshold state
         const TOKENS = 8240, THRESHOLD = 10000;
         const pct = Math.min(100, Math.round((TOKENS / THRESHOLD) * 100));
         const filled = Math.round(pct / 10);
@@ -3557,8 +3175,6 @@
           statusTxt.textContent = "\u26a1 Threshold reached \u00b7 Auto-dream queued";
         }
       })();
-
-      // ── Agents view: split-pane master/detail ──
       (function () {
         const AGENTS = [
           { id: "default", name: "Signet", initials: "Si", color: "linear-gradient(150deg, oklch(0.6 0.02 270), oklch(0.35 0.02 270))",
@@ -3677,7 +3293,6 @@
       (function () {
         const COLORS = { source: "#38bdf8", document: "#60a5fa", session: "#818cf8", entity: "#ffffff", aspect: "#34d399", attribute: "#a78bfa", memory: "#a1a1aa", proposal: "#f59e0b" };
         const NODES = [
-          // cluster: dashboard rewrite (#948)
           { id: "e-dashboard", label: "dashboard rewrite", kind: "entity", cluster: "dashboard", mentions: 41 },
           { id: "a-react", label: "React + Vite", kind: "aspect", cluster: "dashboard", mentions: 18 },
           { id: "a-svelte-out", label: "Svelte (archived)", kind: "aspect", cluster: "dashboard", mentions: 9 },
@@ -3686,73 +3301,61 @@
           { id: "m-948", label: "#948 decision", kind: "memory", cluster: "dashboard", mentions: 1 },
           { id: "m-palette", label: "oklch palette", kind: "memory", cluster: "dashboard", mentions: 1 },
           { id: "m-frameless", label: "frameless chrome", kind: "memory", cluster: "dashboard", mentions: 1 },
-          // cluster: positioning
           { id: "e-positioning", label: "infrastructure-forward", kind: "entity", cluster: "positioning", mentions: 28 },
           { id: "a-headline", label: "portable memory", kind: "aspect", cluster: "positioning", mentions: 14 },
           { id: "a-local-first", label: "local-first", kind: "aspect", cluster: "positioning", mentions: 16 },
           { id: "m-pos", label: "positioning convergence", kind: "memory", cluster: "positioning", mentions: 1 },
           { id: "m-oss-trust", label: "OSS trust story", kind: "memory", cluster: "positioning", mentions: 1 },
-          // cluster: inference routing
           { id: "e-inference", label: "inference routing", kind: "entity", cluster: "inference", mentions: 22 },
           { id: "a-hosted", label: "hosted vs local", kind: "aspect", cluster: "inference", mentions: 11 },
           { id: "a-fallback", label: "cosine fallback", kind: "aspect", cluster: "inference", mentions: 6 },
           { id: "m-tension", label: "Mira tension", kind: "memory", cluster: "inference", mentions: 1 },
           { id: "m-acpx", label: "ACPX bridge", kind: "memory", cluster: "inference", mentions: 1 },
-          // cluster: storage & data
           { id: "e-storage", label: "data location", kind: "entity", cluster: "storage", mentions: 16 },
           { id: "a-sqlite", label: "SQLite default", kind: "aspect", cluster: "storage", mentions: 8 },
           { id: "a-sidecars", label: "JSON sidecars", kind: "aspect", cluster: "storage", mentions: 5 },
           { id: "m-dataloc", label: "$SIGNET_WORKSPACE", kind: "memory", cluster: "storage", mentions: 1 },
           { id: "m-migrations", label: "migration 055", kind: "memory", cluster: "storage", mentions: 1 },
-          // cluster: agent scoping
           { id: "e-scoping", label: "agent scoping", kind: "entity", cluster: "scoping", mentions: 13 },
           { id: "a-agent-id", label: "agent_id threading", kind: "aspect", cluster: "scoping", mentions: 9 },
           { id: "a-visibility", label: "visibility filter", kind: "aspect", cluster: "scoping", mentions: 4 },
           { id: "m-issue422", label: "agent_id leak", kind: "memory", cluster: "scoping", mentions: 1 },
-          // cluster: identity stack
           { id: "e-identity", label: "workspace memory", kind: "entity", cluster: "identity", mentions: 19 },
           { id: "a-soul", label: "SOUL.md", kind: "aspect", cluster: "identity", mentions: 11 },
           { id: "a-agents-md", label: "AGENTS.md", kind: "aspect", cluster: "identity", mentions: 14 },
           { id: "a-identity-md", label: "IDENTITY.md", kind: "aspect", cluster: "identity", mentions: 8 },
           { id: "a-user-md", label: "USER.md", kind: "aspect", cluster: "identity", mentions: 6 },
           { id: "a-presets", label: "workspace presets", kind: "aspect", cluster: "identity", mentions: 7 },
-          // cluster: pipeline & dreaming
           { id: "e-pipeline", label: "daemon pipeline", kind: "entity", cluster: "pipeline", mentions: 24 },
           { id: "a-extract", label: "extraction stage", kind: "aspect", cluster: "pipeline", mentions: 8 },
           { id: "a-decision", label: "decision stage", kind: "aspect", cluster: "pipeline", mentions: 6 },
           { id: "a-graph", label: "graph stage", kind: "aspect", cluster: "pipeline", mentions: 9 },
           { id: "a-retention", label: "retention decay", kind: "aspect", cluster: "pipeline", mentions: 5 },
           { id: "m-dream-pass", label: "dream pass 01J7", kind: "memory", cluster: "pipeline", mentions: 1 },
-          // cluster: connectors & harnesses
           { id: "e-connectors", label: "connector registry", kind: "entity", cluster: "connectors", mentions: 31 },
           { id: "a-cc", label: "Claude Code", kind: "aspect", cluster: "connectors", mentions: 12 },
           { id: "a-pi", label: "Pi extension", kind: "aspect", cluster: "connectors", mentions: 8 },
           { id: "a-opencode", label: "OpenCode plugin", kind: "aspect", cluster: "connectors", mentions: 6 },
           { id: "a-codex", label: "Codex connector", kind: "aspect", cluster: "connectors", mentions: 4 },
           { id: "a-hooks", label: "hook lifecycle", kind: "aspect", cluster: "connectors", mentions: 10 },
-          // cluster: embeddings & search
           { id: "e-embeddings", label: "vector search", kind: "entity", cluster: "embeddings", mentions: 17 },
           { id: "a-sqlite-vec", label: "sqlite-vec", kind: "aspect", cluster: "embeddings", mentions: 8 },
           { id: "a-hybrid", label: "hybrid recall", kind: "aspect", cluster: "embeddings", mentions: 11 },
           { id: "a-voyage", label: "Voyage-3", kind: "attribute", cluster: "embeddings", mentions: 3 },
           { id: "a-rerank", label: "reranker", kind: "aspect", cluster: "embeddings", mentions: 5 },
-          // cluster: secrets & auth
           { id: "e-secrets", label: "secrets vault", kind: "entity", cluster: "secrets", mentions: 14 },
           { id: "a-oauth", label: "OAuth flow", kind: "aspect", cluster: "secrets", mentions: 6 },
           { id: "a-token-ref", label: "token-ref pattern", kind: "aspect", cluster: "secrets", mentions: 7 },
           { id: "a-1password", label: "1Password", kind: "attribute", cluster: "secrets", mentions: 3 },
           { id: "a-bitwarden", label: "Bitwarden", kind: "attribute", cluster: "secrets", mentions: 2 },
-          // cluster: ontology control plane
           { id: "e-ontology", label: "ontology plane", kind: "entity", cluster: "ontology", mentions: 21 },
           { id: "a-claims", label: "claim slots", kind: "aspect", cluster: "ontology", mentions: 8 },
           { id: "a-proposals", label: "proposals queue", kind: "aspect", cluster: "ontology", mentions: 6 },
           { id: "a-merge", label: "entity merge-plan", kind: "aspect", cluster: "ontology", mentions: 4 },
           { id: "a-deps", label: "entity_dependencies", kind: "aspect", cluster: "ontology", mentions: 9 },
-          // cluster: cloud sync
           { id: "e-cloud", label: "cloud sync", kind: "entity", cluster: "cloud", mentions: 12 },
           { id: "a-encrypt", label: "encrypted backup", kind: "aspect", cluster: "cloud", mentions: 5 },
           { id: "a-signetai-sh", label: "signetai.sh", kind: "attribute", cluster: "cloud", mentions: 2 },
-          // cluster: sources (orbit on outer shell)
           { id: "s-obsidian", label: "Obsidian", kind: "source", cluster: "source", mentions: 142 },
           { id: "s-github", label: "GitHub", kind: "source", cluster: "source", mentions: 318 },
           { id: "s-notion", label: "Notion", kind: "source", cluster: "source", mentions: 64 },
@@ -3760,54 +3363,41 @@
           { id: "s-slack", label: "Slack", kind: "source", cluster: "source", mentions: 31 },
         ];
         const EDGES = [
-          // dashboard cluster
           ["e-dashboard", "a-react", "has_aspect"], ["e-dashboard", "a-svelte-out", "has_aspect"],
           ["e-dashboard", "a-shadcn", "has_aspect"], ["e-dashboard", "a-tailwind", "has_aspect"],
           ["e-dashboard", "m-948", "mentions"], ["e-dashboard", "m-palette", "mentions"],
           ["e-dashboard", "m-frameless", "mentions"], ["a-react", "a-shadcn", "extends"],
           ["a-tailwind", "a-shadcn", "supports"],
-          // positioning cluster
           ["e-positioning", "a-headline", "has_aspect"], ["e-positioning", "a-local-first", "has_aspect"],
           ["e-positioning", "m-pos", "mentions"], ["e-positioning", "m-oss-trust", "mentions"],
           ["a-local-first", "a-headline", "supports"],
-          // inference cluster
           ["e-inference", "a-hosted", "has_aspect"], ["e-inference", "a-fallback", "has_aspect"],
           ["e-inference", "m-tension", "mentions"], ["e-inference", "m-acpx", "mentions"],
           ["a-hosted", "a-fallback", "updates"],
-          // storage cluster
           ["e-storage", "a-sqlite", "has_aspect"], ["e-storage", "a-sidecars", "has_aspect"],
           ["e-storage", "m-dataloc", "mentions"], ["e-storage", "m-migrations", "mentions"],
-          // scoping cluster
           ["e-scoping", "a-agent-id", "has_aspect"], ["e-scoping", "a-visibility", "has_aspect"],
           ["e-scoping", "m-issue422", "mentions"],
-          // identity cluster
           ["e-identity", "a-soul", "has_aspect"], ["e-identity", "a-agents-md", "has_aspect"],
           ["e-identity", "a-identity-md", "has_aspect"], ["e-identity", "a-user-md", "has_aspect"],
           ["e-identity", "a-presets", "has_aspect"], ["a-soul", "a-agents-md", "supports"],
-          // pipeline cluster
           ["e-pipeline", "a-extract", "has_aspect"], ["e-pipeline", "a-decision", "has_aspect"],
           ["e-pipeline", "a-graph", "has_aspect"], ["e-pipeline", "a-retention", "has_aspect"],
           ["e-pipeline", "m-dream-pass", "mentions"], ["a-extract", "a-decision", "extends"],
           ["a-decision", "a-graph", "extends"], ["a-graph", "a-retention", "extends"],
-          // connectors cluster
           ["e-connectors", "a-cc", "has_aspect"], ["e-connectors", "a-pi", "has_aspect"],
           ["e-connectors", "a-opencode", "has_aspect"], ["e-connectors", "a-codex", "has_aspect"],
           ["e-connectors", "a-hooks", "has_aspect"], ["a-hooks", "a-cc", "supports"],
-          // embeddings cluster
           ["e-embeddings", "a-sqlite-vec", "has_aspect"], ["e-embeddings", "a-hybrid", "has_aspect"],
           ["e-embeddings", "a-rerank", "has_aspect"], ["e-embeddings", "a-voyage", "has_attribute"],
           ["a-sqlite-vec", "a-hybrid", "supports"], ["a-voyage", "a-hybrid", "updates"],
-          // secrets cluster
           ["e-secrets", "a-oauth", "has_aspect"], ["e-secrets", "a-token-ref", "has_aspect"],
           ["e-secrets", "a-1password", "has_attribute"], ["e-secrets", "a-bitwarden", "has_attribute"],
           ["a-token-ref", "a-oauth", "supports"],
-          // ontology cluster
           ["e-ontology", "a-claims", "has_aspect"], ["e-ontology", "a-proposals", "has_aspect"],
           ["e-ontology", "a-merge", "has_aspect"], ["e-ontology", "a-deps", "has_aspect"],
           ["a-claims", "a-deps", "extends"], ["a-merge", "a-proposals", "supports"],
-          // cloud cluster
           ["e-cloud", "a-encrypt", "has_aspect"], ["e-cloud", "a-signetai-sh", "has_attribute"],
-          // ── cross-cluster semantic links (the Walrus web) ──
           ["e-dashboard", "e-positioning", "supports"], ["e-dashboard", "e-identity", "extends"],
           ["e-inference", "e-scoping", "updates"], ["e-storage", "e-embeddings", "supports"],
           ["e-pipeline", "e-ontology", "updates"], ["e-connectors", "e-identity", "supports"],
@@ -3818,7 +3408,6 @@
           ["m-tension", "e-scoping", "about"], ["m-dream-pass", "e-ontology", "about"],
           ["a-hooks", "e-pipeline", "supports"], ["a-presets", "e-scoping", "supports"],
           ["a-sqlite", "a-sqlite-vec", "extends"], ["a-agent-id", "e-identity", "supports"],
-          // ── source provenance (outer shell → inner clusters) ──
           ["s-obsidian", "m-948", "contains"], ["s-obsidian", "e-dashboard", "mentions"],
           ["s-github", "m-dataloc", "contains"], ["s-github", "m-issue422", "contains"],
           ["s-github", "e-pipeline", "mentions"], ["s-github", "e-connectors", "mentions"],
@@ -3827,22 +3416,14 @@
           ["s-slack", "m-issue422", "contains"], ["s-slack", "e-scoping", "mentions"],
           ["s-obsidian", "e-identity", "mentions"], ["s-github", "e-embeddings", "mentions"],
         ];
-
-        // ── nested spherical shells (Walrus layout) ──
-        // Center (r=0): root node. Inner shell (r~100): cluster heads.
-        // Outer shell (r~250): leaf memories/sources fanning as disks.
         const SPHERE_R = 260;
         const seededRand = (s) => { let x = Math.sin(s * 9999 + 1) * 10000; return x - Math.floor(x); };
         const byId = {};
-
-        // Group nodes by cluster
         const clusterNodes = {};
         NODES.forEach((n) => {
           if (!clusterNodes[n.cluster]) clusterNodes[n.cluster] = [];
           clusterNodes[n.cluster].push(n);
         });
-
-        // Distribute cluster heads on inner shell using Fibonacci spiral
         const clusterNames = Object.keys(clusterNodes);
         const clusterBases = {};
         clusterNames.forEach((cl, ci) => {
@@ -3856,28 +3437,23 @@
             y,
             Math.sin(theta) * radiusXZ
           ).normalize();
-          // perpendicular basis for disk fans
           const helper = Math.abs(dir.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
           const u = new THREE.Vector3().crossVectors(dir, helper).normalize();
           const v = new THREE.Vector3().crossVectors(dir, u).normalize();
           clusterBases[cl] = { dir, u, v };
         });
-
-        // Assign positions: hubs on inner shell, leaves on outer shell disks
         NODES.forEach((n, i) => {
           const cb = clusterBases[n.cluster] || Object.values(clusterBases)[0];
           const isHub = n.kind === "entity" || n.kind === "source";
           const isLeaf = n.kind === "memory";
 
           if (isHub) {
-            // Inner shell: r = 90-120, minimal disk offset
             const r = 90 + seededRand(i + 200) * 30;
             const jitter = 12;
             n.pos = cb.dir.clone().multiplyScalar(r)
               .add(cb.u.clone().multiplyScalar((seededRand(i + 1) - 0.5) * jitter))
               .add(cb.v.clone().multiplyScalar((seededRand(i + 100) - 0.5) * jitter));
           } else if (isLeaf) {
-            // Outer shell: r = 220-250, large perpendicular disk fan
             const r = 220 + seededRand(i + 200) * 30;
             const angle = seededRand(i + 1) * Math.PI * 2;
             const diskR = (0.4 + seededRand(i + 50) * 0.6) * 55;
@@ -3885,7 +3461,6 @@
               .add(cb.u.clone().multiplyScalar(Math.cos(angle) * diskR))
               .add(cb.v.clone().multiplyScalar(Math.sin(angle) * diskR));
           } else {
-            // Mid shell: aspects/attributes at r = 150-180, medium disk
             const r = 150 + seededRand(i + 200) * 30;
             const angle = seededRand(i + 1) * Math.PI * 2;
             const diskR = (0.3 + seededRand(i + 50) * 0.7) * 35;
@@ -3895,15 +3470,12 @@
           }
           byId[n.id] = n;
         });
-
-        // ── Three.js setup ──
         const canvas = document.getElementById("graph-canvas");
         const labelContainer = document.getElementById("graph-labels");
         const view = document.getElementById("view-graph");
         if (!canvas || !view) return;
 
         const scene = new THREE.Scene();
-        // Stronger depth fog for Walrus depth perception
         scene.fog = new THREE.FogExp2(0x050505, 0.0018);
         const w = view.clientWidth || 800, h = view.clientHeight || 500;
         const camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 3000);
@@ -3929,8 +3501,6 @@
         controls.autoRotateSpeed = 0.4;
         controls.minDistance = 100;
         controls.maxDistance = 1200;
-
-        // ── wireframe bounding sphere from OBJ model (Walrus anchor) ──
         const objLoader = new OBJLoader();
         const sphereMat = new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.28, depthWrite: false });
         objLoader.load("bounding-sphere.obj", (obj) => {
@@ -3942,9 +3512,6 @@
           obj.scale.setScalar(SPHERE_R);
           scene.add(obj);
         });
-
-        // ── glow texture for nodes ──
-        // ── node shape textures: crosshair (hub), diamond (entity), square (leaf) ──
         function makeShapeTexture(drawFn) {
           const c = document.createElement("canvas");
           c.width = c.height = 16;
@@ -3953,7 +3520,6 @@
           drawFn(ctx);
           return new THREE.CanvasTexture(c);
         }
-        // Hub/source: crosshair +
         const crossTex = makeShapeTexture((ctx) => {
           ctx.lineWidth = 1.5;
           ctx.beginPath();
@@ -3961,19 +3527,15 @@
           ctx.moveTo(2, 8); ctx.lineTo(14, 8);
           ctx.stroke();
         });
-        // Entity: diamond
         const diamondTex = makeShapeTexture((ctx) => {
           ctx.lineWidth = 1.5;
           ctx.beginPath();
           ctx.moveTo(8, 2); ctx.lineTo(14, 8); ctx.lineTo(8, 14); ctx.lineTo(2, 8);
           ctx.closePath(); ctx.stroke();
         });
-        // Leaf: tiny filled square
         const squareTex = makeShapeTexture((ctx) => {
           ctx.fillRect(6, 6, 4, 4);
         });
-
-        // ── nodes rendered as multiple Points layers by kind ──
         const baseColors = [];
         const nodeLayers = {};
         const KIND_TEX = { entity: diamondTex, source: crossTex, aspect: squareTex, attribute: squareTex, memory: squareTex };
@@ -4001,15 +3563,11 @@
           scene.add(pts);
           nodeLayers[kind] = { pts, geo, colArr: col, origIndices: kindNodes.map(({ i }) => i) };
         });
-        // Fill baseColors for any remaining nodes
         NODES.forEach((n, i) => { if (!baseColors[i]) baseColors[i] = new THREE.Color(COLORS[n.kind] || "#fff"); });
         const colArr = new Float32Array(NODES.length * 3);
-        const nodeGeo = { getAttribute: () => ({ needsUpdate: false }) }; // compat stub
-
-        // ── CSS2D labels (major hubs only) ──
+        const nodeGeo = { getAttribute: () => ({ needsUpdate: false }) };
         const labelObjs = {};
         NODES.forEach((n) => {
-          // Only show labels on hubs (entity/source) and high-mention aspects
           if (n.kind !== "entity" && n.kind !== "source" && n.mentions < 20) return;
           const div = document.createElement("div");
           div.className = "glabel3d";
@@ -4020,8 +3578,6 @@
           const obj = new CSS2DObject(div);
           obj.position.set(n.pos.x + 10 * 0.7, n.pos.y + 10, n.pos.z + 10 * 0.7);
           scene.add(obj);
-          // Leader line: tiny hairline from label anchor to node
-          // 45-degree diagonal leader line from node to label anchor
           const lOffset = 10;
           const leaderPts = [
             n.pos.x, n.pos.y, n.pos.z,
@@ -4034,8 +3590,6 @@
           scene.add(leader);
           labelObjs[n.id] = { obj, div, pos: n.pos.clone(), leader };
         });
-
-        // ── razor-thin Bezier edges (0.1 opacity for moiré density) ──
         const edgeMeshes = [];
         EDGES.forEach(([s, t]) => {
           const a = byId[s], b = byId[t];
@@ -4050,8 +3604,6 @@
           scene.add(line);
           edgeMeshes.push(line);
         });
-
-        // ── ground dot grid floor ──
         const floorY = -SPHERE_R - 30;
         const gridDivs = 20, gridStep = SPHERE_R * 0.15;
         const gridPos = [];
@@ -4066,8 +3618,6 @@
         gridGeo.setAttribute("position", new THREE.Float32BufferAttribute(gridPos, 3));
         const gridMat = new THREE.PointsMaterial({ size: 1.5, color: 0x1a3a30, transparent: true, opacity: 0.3, sizeAttenuation: true, depthWrite: false });
         scene.add(new THREE.Points(gridGeo, gridMat));
-
-        // ── dashed drop lines from major hubs to floor ──
         const dropPositions = [];
         NODES.forEach((n) => {
           if (n.kind !== "entity" && n.kind !== "source") return;
@@ -4081,12 +3631,9 @@
           dropLines.computeLineDistances();
           scene.add(dropLines);
         }
-
-        // ── background micro-pixel dust (2,000+ static leaf points) ──
         const DUST_COUNT = 2200;
         const dustPos = new Float32Array(DUST_COUNT * 3);
         for (let d = 0; d < DUST_COUNT; d++) {
-          // random points inside the sphere volume
           const r = (0.3 + Math.random() * 0.7) * SPHERE_R;
           const th = Math.random() * Math.PI * 2;
           const ph = Math.acos(2 * Math.random() - 1);
@@ -4098,8 +3645,6 @@
         dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPos, 3));
         const dustMat = new THREE.PointsMaterial({ size: 1.5, color: 0x52525b, transparent: true, opacity: 0.4, sizeAttenuation: true, depthWrite: false });
         scene.add(new THREE.Points(dustGeo, dustMat));
-
-        // ── origin reticle crosshair ⊕ ──
         const reticleR = 8;
         const reticlePts = [
           -reticleR, 0, 0, reticleR, 0, 0,
@@ -4110,31 +3655,26 @@
         reticleGeo.setAttribute("position", new THREE.Float32BufferAttribute(reticlePts, 3));
         const reticleMat = new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.4, depthWrite: false });
         scene.add(new THREE.LineSegments(reticleGeo, reticleMat));
-
-        // ── node targeting bracket + readout (CAD-style hover reticle) ──
         const targetBracket = new THREE.Group();
         targetBracket.visible = false;
         const bracketR = 14;
         const bracketCorner = 5;
-        // 4 L-shaped corner brackets
         const cornerPts = [];
         [[-1,-1],[1,-1],[-1,1],[1,1]].forEach(([sx, sy]) => {
           const x = sx * bracketR, y = sy * bracketR;
-          cornerPts.push(x, y, 0,  x - sx * bracketCorner, y, 0);  // horizontal arm
-          cornerPts.push(x, y, 0,  x, y - sy * bracketCorner, 0);  // vertical arm
+          cornerPts.push(x, y, 0,  x - sx * bracketCorner, y, 0);
+          cornerPts.push(x, y, 0,  x, y - sy * bracketCorner, 0);
         });
         const bracketGeo = new THREE.BufferGeometry();
         bracketGeo.setAttribute("position", new THREE.Float32BufferAttribute(cornerPts, 3));
         const bracketMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.8, depthWrite: false });
         targetBracket.add(new THREE.LineSegments(bracketGeo, bracketMat));
         scene.add(targetBracket);
-        // CSS readout overlay
         const targetReadout = document.createElement("div");
         targetReadout.style.cssText = "position:absolute;display:none;font-family:var(--font-mono);font-size:9px;" +
           "color:#f4f4f5;background:rgba(9,9,11,0.92);padding:5px 8px;border-radius:4px;border:1px solid oklch(1 0 0 / 0.1);" +
           "pointer-events:none;line-height:1.5;z-index:10;white-space:nowrap";
         labelContainer.appendChild(targetReadout);
-        // Raycaster for hover
         const raycaster = new THREE.Raycaster();
         raycaster.params.Points = { threshold: 8 };
         const mouseNDC = new THREE.Vector2();
@@ -4144,16 +3684,12 @@
           mouseNDC.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
           mouseNDC.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
         });
-
-        // ── turntable camera rig: pivot at origin, camera on local Z ──
-        // Like a Blender empty at world origin that only rotates, with the
-        // camera as a child that can only dolly forward/back (change radius).
         let camTween = null;
         function dirToAngles(dir) {
           const d = dir.clone().normalize();
           return {
-            theta: Math.atan2(d.x, d.z),      // azimuth around Y
-            phi: Math.acos(Math.max(-1, Math.min(1, d.y))),  // polar from Y
+            theta: Math.atan2(d.x, d.z),
+            phi: Math.acos(Math.max(-1, Math.min(1, d.y))),
           };
         }
         function anglesToDir(theta, phi) {
@@ -4167,11 +3703,9 @@
         function startTween(toTheta, toPhi, toRadius, toTarget, dur) {
           const curDir = camera.position.clone().sub(ORIGIN);
           const a = dirToAngles(curDir);
-          // Shortest angular path: normalize delta to [-π, π]
           let dTheta = toTheta - a.theta;
           while (dTheta > Math.PI) dTheta -= 2 * Math.PI;
           while (dTheta < -Math.PI) dTheta += 2 * Math.PI;
-          // Shortest path on phi: normalize delta to [-π, π]
           let dPhi = toPhi - a.phi;
           while (dPhi > Math.PI) dPhi -= 2 * Math.PI;
           while (dPhi < -Math.PI) dPhi += 2 * Math.PI;
@@ -4222,15 +3756,9 @@
         function focusNode(id, drawerOpen) {
           const n = byId[id]; if (!n) return;
           controls.autoRotate = false;
-          // The "empty" rotates to aim the camera toward the cluster from origin
           const targetDir = n.pos.clone().normalize();
           const a = dirToAngles(targetDir);
-          // The camera dollies in along its local Z to this radius
           const targetRadius = 240;
-          // Look-at target = cluster center. When the drawer is open,
-          // shift the look-at point to screen-right so the cluster
-          // sits in the left ~70% of the canvas. We offset perpendicular
-          // to the view direction using the turntable's right vector.
           const target = n.pos.clone();
           if (drawerOpen) {
             const right = anglesToDir(a.theta + Math.PI / 2, Math.PI / 2);
@@ -4246,8 +3774,6 @@
           startTween(a.theta, a.phi, 520, ORIGIN.clone(), 1680);
           resetHighlight();
         }
-
-        // ── query interaction (ported from original) ──
         const input = document.getElementById("gc-input");
         const send = document.getElementById("gc-send");
         const dock = document.getElementById("graph-dock");
@@ -4316,19 +3842,14 @@
           document.addEventListener("click", () => legendPop.classList.remove("show"));
           legendPop.addEventListener("click", (e) => e.stopPropagation());
         }
-
-        // ── render loop ──
         function animate() {
           requestAnimationFrame(animate);
           if (camTween) {
             const elapsed = performance.now() - camTween.t0;
             const t = Math.min(1, elapsed / camTween.dur);
-            // Quintic ease-in-out for buttery smooth orbit
             const orbitEase = t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2;
-            // Interpolate using deltas (guarantees shortest path)
             const theta = camTween.fromTheta + camTween.dTheta * orbitEase;
             const phi = camTween.fromPhi + camTween.dPhi * orbitEase;
-            // Dolly: zoom starts at 40%, smootherstep through the end
             let radius;
             if (t < 0.4) {
               radius = camTween.fromRadius;
@@ -4337,17 +3858,13 @@
               const zoomEase = zoomT * zoomT * zoomT * (zoomT * (6 * zoomT - 15) + 10);
               radius = camTween.fromRadius + (camTween.toRadius - camTween.fromRadius) * zoomEase;
             }
-            // Camera position = ORIGIN + direction * radius (turntable — never translates)
             const dir = anglesToDir(theta, phi);
             camera.position.copy(ORIGIN).add(dir.multiplyScalar(radius));
-            // Look-at target lerps smoothly to the cluster center
             controls.target.lerpVectors(camTween.fromTarget, camTween.toTarget, orbitEase);
             if (t >= 1) camTween = null;
           }
           controls.update();
-          // Spherical depth fade + label visibility
           const camDir = camera.position.clone().sub(controls.target).normalize();
-          // Fade node layers: front hemisphere = full, back hemisphere = 0.2
           Object.entries(nodeLayers).forEach(([kind, layer]) => {
             const isHub = kind === "entity" || kind === "source";
             layer.origIndices.forEach((origIdx, j) => {
@@ -4355,7 +3872,6 @@
               const nodeDir = n.pos.clone().normalize();
               const dot = nodeDir.dot(camDir);
               const base = baseColors[origIdx];
-              // sharp curve: front=1.0, back=0.2 for hubs, back=0.1 for leaves
               const minAlpha = isHub ? 0.2 : 0.08;
               const alpha = dot > 0 ? 1.0 : minAlpha;
               layer.colArr[j * 3] = base.r * alpha;
@@ -4364,14 +3880,12 @@
             });
             layer.geo.getAttribute("color").needsUpdate = true;
           });
-          // Labels: only front-facing hubs
           Object.values(labelObjs).forEach((lb) => {
             const nodeDir = lb.pos.clone().normalize();
             const dot = nodeDir.dot(camDir);
             lb.div.style.opacity = dot > 0.3 ? String(Math.min(1, (dot - 0.3) * 1.5)) : "0";
             if (lb.leader) lb.leader.material.opacity = dot > 0.3 ? 0.4 : 0;
           });
-          // Raycast for node hover → targeting bracket
           raycaster.setFromCamera(mouseNDC, camera);
           const hubPoints = [];
           ["entity", "source"].forEach((k) => { if (nodeLayers[k]) hubPoints.push(nodeLayers[k].pts); });
@@ -4384,7 +3898,6 @@
               hoveredNode = n;
               targetBracket.visible = true;
               targetBracket.position.copy(n.pos);
-              // project to screen for readout
               const sp = n.pos.clone().project(camera);
               const sx = (sp.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
               const sy = (-sp.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
@@ -4406,8 +3919,6 @@
           labelRenderer.render(scene, camera);
         }
         animate();
-
-        // ── resize ──
         const ro = new ResizeObserver(() => {
           const nw = view.clientWidth, nh = view.clientHeight;
           if (nw === 0 || nh === 0) return;
@@ -4417,8 +3928,6 @@
           labelRenderer.setSize(nw, nh);
         });
         ro.observe(view);
-
-        // stop auto-rotate on interaction
         controls.addEventListener("start", () => { controls.autoRotate = false; });
       })();
       window.__graphDebug.push('IIFE completed');
@@ -4460,8 +3969,6 @@
         </div>
       </div>
     </div>
-
-    <!-- Secrets: add-secret modal -->
     <div class="sec-modal-bg" id="sec-modal-bg">
       <div class="sec-modal">
         <div class="sec-modal__head">

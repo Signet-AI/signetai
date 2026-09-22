@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 073: Durable per-session recall context dedupe.
- *
- * Tracks which recall items have already been returned or injected within the
- * current context epoch for a session and agent. Compaction-complete advances
- * the epoch so prior items can be recalled again in the fresh context.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_context_epochs (

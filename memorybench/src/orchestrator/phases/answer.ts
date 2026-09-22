@@ -129,9 +129,6 @@ export async function runAnswerPhase(
 
         const basePromptTokens = countTokens(basePrompt, modelConfig)
         const promptTokens = countTokens(prompt, modelConfig)
-        // Derive contextTokens from the difference so it reflects the actual formatted
-        // context in the prompt (not the raw JSON), which matters for providers with
-        // custom prompt functions that transform context (e.g. Zep's XML-like tags).
         const contextTokens = Math.max(0, promptTokens - basePromptTokens)
 
         const params: Record<string, unknown> = {

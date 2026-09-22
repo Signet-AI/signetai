@@ -1,15 +1,3 @@
-/**
- * Skill filesystem reconciler for procedural memory P1.
- *
- * Ensures the knowledge graph stays in sync with the skills directory:
- * - Startup backfill: creates graph nodes for installed skills missing from DB
- * - Periodic reconciler: same scan on configurable interval
- * - File watcher: low-latency reconciliation via chokidar
- * - Orphan cleanup: removes graph nodes when SKILL.md files are deleted
- *
- * Idempotent — matched by canonical name + frontmatter content hash.
- */
-
 import { access, readFile, readdir, stat } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
 import { watch } from "chokidar";
@@ -18,10 +6,6 @@ import { logger } from "../logger.js";
 import type { EmbeddingConfig, PipelineV2Config } from "../memory-config.js";
 import { parseSkillFile } from "./skill-frontmatter.js";
 import { installSkillNode, skillEmbeddingHash, uninstallSkillNode } from "./skill-graph.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface ReconcilerDeps {
 	readonly accessor: DbAccessor;
@@ -40,10 +24,6 @@ export interface ReconcileOptions {
 }
 
 export type ReconcileSkillResult = "installed" | "updated" | "unchanged" | "removed" | "skipped" | "failed";
-
-// Every trigger that can reconcile a skill uses this queue. The lock is keyed
-// by workspace and skill so a startup/periodic scan, watcher event, and
-// post-install hook cannot observe the same stale embedding concurrently.
 const skillReconcileFlights = new Map<string, Promise<unknown>>();
 
 export function withSkillReconciliationLock<T>(
@@ -62,10 +42,6 @@ export function withSkillReconciliationLock<T>(
 	return next;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function skillsDir(agentsDir: string): string {
 	return join(agentsDir, "skills");
 }
@@ -78,28 +54,11 @@ async function pathExists(path: string): Promise<boolean> {
 		return false;
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Per-skill failure backoff
-// ---------------------------------------------------------------------------
-
-/**
- * A skill whose reconcile fails deterministically (schema conflict, provider
- * outage, unreadable file) must not re-run the full install pipeline every
- * interval: each attempt re-reads the file, rewrites the graph, and can
- * saturate the daemon event loop (Signet-AI/signetai#1086). After
- * SKILL_BACKOFF_FAILURES consecutive failures the skill is skipped until its
- * backoff window elapses; the window doubles per subsequent failure up to
- * SKILL_BACKOFF_MAX_MS. Any pass that completes without throwing clears the
- * state, as does a watcher event (new content is a fresh signal).
- */
 const SKILL_BACKOFF_BASE_MS = 10_000;
 const SKILL_BACKOFF_MAX_MS = 10 * 60_000;
 const SKILL_BACKOFF_FAILURES = 3;
 
 const skillFailureState = new Map<string, { consecutiveFailures: number; nextAttemptAt: number }>();
-
-/** Backoff delay after `consecutiveFailures` failures (0 until the threshold). */
 export function skillBackoffDelayMs(
 	consecutiveFailures: number,
 	baseMs: number = SKILL_BACKOFF_BASE_MS,
@@ -109,24 +68,9 @@ export function skillBackoffDelayMs(
 	const delay = baseMs * 2 ** (consecutiveFailures - SKILL_BACKOFF_FAILURES - 1);
 	return Math.min(delay, maxMs);
 }
-
-/** Clear a skill's failure state after a successful pass or watcher event. */
 export function resetSkillFailureState(skillName: string): void {
 	skillFailureState.delete(skillName);
 }
-
-// ---------------------------------------------------------------------------
-// Reconciliation logic
-// ---------------------------------------------------------------------------
-
-/**
- * Single reconciliation pass:
- * 1. Scan filesystem for installed skills
- * 2. For each skill with SKILL.md:
- *    - If entity missing → install
- *    - If entity exists but frontmatter changed → re-install
- * 3. For each skill_meta row with no matching file → uninstall
- */
 export async function reconcileOnce(
 	deps: ReconcilerDeps,
 	options: ReconcileOptions = {},
@@ -139,9 +83,7 @@ export async function reconcileOnce(
 	let installed = 0;
 	let updated = 0;
 	let removed = 0;
-
-	// 1. Scan filesystem
-	const diskSkills = new Map<string, string>(); // name → SKILL.md path
+	const diskSkills = new Map<string, string>();
 	if (options.scanFilesystem !== false && (await pathExists(dir))) {
 		const entries = await readdir(dir, { withFileTypes: true });
 		for (const entry of entries) {
@@ -152,10 +94,6 @@ export async function reconcileOnce(
 			}
 		}
 	}
-
-	// 2. Check each disk skill against the graph. The per-skill helper is
-	// shared with watcher and explicit post-install triggers, so all callers
-	// re-check the embedding state after acquiring the same single-flight lock.
 	for (const [name, mdPath] of diskSkills) {
 		const result = await reconcileSkillFile(name, mdPath, deps);
 		if (result === "installed") {
@@ -166,20 +104,16 @@ export async function reconcileOnce(
 			logger.info("reconciler", "Updated changed skill node", { skill: name });
 		}
 	}
-
-	// 3. Check for orphaned graph nodes (file removed from disk)
 	const graphSkills = await deps.accessor.withReadDbAsync(
 		(db: import("../db-accessor").ReadDb) =>
 			db
 				.prepare("SELECT entity_id, fs_path FROM skill_meta WHERE agent_id = 'default' AND uninstalled_at IS NULL")
 				.all() as Array<{ entity_id: string; fs_path: string }>,
-		{ siteToken: "pipeline/skill-reconciler.ts:171", operation: "pipeline.skill-reconciler.list-graph-skills" },
+		{ siteToken: "pipeline/skill-reconciler.ts:107", operation: "pipeline.skill-reconciler.list-graph-skills" },
 	);
 
 	for (const row of graphSkills) {
 		if (!(await pathExists(row.fs_path))) {
-			// Prefer the namespace id, but retain the filesystem name for legacy
-			// rows whose entity_id does not use the skill namespace.
 			const parts = row.entity_id.split(":");
 			const skillName = parts[0] === "skill" ? parts.slice(2).join(":") : basename(dirname(row.fs_path));
 			if (skillName) {
@@ -212,12 +146,6 @@ export interface ReconcileSkillFileOptions {
 	readonly forceInstall?: boolean;
 	readonly source?: string;
 }
-
-/**
- * Reconcile one skill through the shared per-skill flight. The state check is
- * deliberately inside the lock: a queued trigger must observe the embedding
- * written by the first trigger instead of issuing a duplicate provider call.
- */
 export async function reconcileSkillFile(
 	skillName: string,
 	mdPath: string,
@@ -225,9 +153,6 @@ export async function reconcileSkillFile(
 	options: ReconcileSkillFileOptions = {},
 ): Promise<ReconcileSkillResult> {
 	return withSkillReconciliationLock(deps.agentsDir, skillName, async () => {
-		// A watcher or explicit install is a fresh signal. Reset only after
-		// entering the flight so an older in-flight failure cannot overwrite
-		// this reset before the queued trigger starts.
 		if (options.forceInstall) resetSkillFailureState(skillName);
 		const failureState = skillFailureState.get(skillName);
 		if (failureState && failureState.nextAttemptAt > Date.now()) {
@@ -251,7 +176,7 @@ export async function reconcileSkillFile(
 					db
 						.prepare("SELECT id FROM entities WHERE id = ? OR (name = ? AND agent_id = 'default')")
 						.get(entityId, skillName) as { id: string } | undefined,
-				{ siteToken: "pipeline/skill-reconciler.ts:249", operation: "pipeline.skill-reconciler.find-entity" },
+				{ siteToken: "pipeline/skill-reconciler.ts:174", operation: "pipeline.skill-reconciler.find-entity" },
 			);
 			const actualId = existing?.id ?? entityId;
 			const rawHash = skillEmbeddingHash(actualId, parsed.frontmatter);
@@ -260,7 +185,7 @@ export async function reconcileSkillFile(
 					db
 						.prepare("SELECT content_hash FROM embeddings WHERE source_type = 'skill' AND source_id = ?")
 						.get(actualId) as { content_hash: string } | undefined,
-				{ siteToken: "pipeline/skill-reconciler.ts:258", operation: "pipeline.skill-reconciler.find-embedding" },
+				{ siteToken: "pipeline/skill-reconciler.ts:183", operation: "pipeline.skill-reconciler.find-embedding" },
 			);
 
 			const shouldInstall =
@@ -308,11 +233,6 @@ export async function reconcileSkillFile(
 		}
 	});
 }
-
-/**
- * Remove one skill through the shared per-skill flight. This is the watcher
- * unlink path and must use the workspace key, not the skills directory path.
- */
 export function reconcileUnlinkedSkill(skillName: string, deps: ReconcilerDeps): Promise<ReconcileSkillResult> {
 	return withSkillReconciliationLock(deps.agentsDir, skillName, async () => {
 		const result = await uninstallSkillNode({ skillName }, deps.accessor);
@@ -320,17 +240,6 @@ export function reconcileUnlinkedSkill(skillName: string, deps: ReconcilerDeps):
 		return result.removed ? "removed" : "unchanged";
 	});
 }
-
-// ---------------------------------------------------------------------------
-// Reconciler lifecycle
-// ---------------------------------------------------------------------------
-
-/**
- * Start the skill reconciler:
- * 1. Run an immediate backfill pass
- * 2. Set up periodic reconciliation on interval
- * 3. Watch the skills directory for file changes
- */
 export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 	const intervalMs = deps.pipelineConfig.procedural.reconcileIntervalMs;
 	const dir = skillsDir(deps.agentsDir);
@@ -362,9 +271,6 @@ export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 		activePass = guardedPass;
 		return guardedPass;
 	};
-
-	// Immediate backfill and periodic scans share one pass flight. A periodic
-	// tick that arrives during startup coalesces onto the startup pass.
 	reconcileIfChanged().catch((e) => {
 		logger.error("reconciler", "Startup backfill failed", e instanceof Error ? e : undefined, {
 			error: String(e),
@@ -378,8 +284,6 @@ export function startReconciler(deps: ReconcilerDeps): ReconcilerHandle {
 			});
 		});
 	}, intervalMs);
-
-	// File watcher for low-latency reconciliation
 	let watcher: ReturnType<typeof watch> | null = null;
 
 	watcher = watch(join(dir, "*", "SKILL.md"), {

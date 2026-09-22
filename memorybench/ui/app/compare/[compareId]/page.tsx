@@ -19,7 +19,7 @@ import { CircularProgress } from "@/components/circular-progress"
 import { EmptyState, DocumentIcon } from "@/components/empty-state"
 import { Tooltip } from "@/components/tooltip"
 
-const POLL_INTERVAL = 2000 // 2 seconds
+const POLL_INTERVAL = 2000
 
 export default function CompareDetailPage() {
   const params = useParams()
@@ -33,16 +33,12 @@ export default function CompareDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [stopping, setStopping] = useState(false)
   const [continuing, setContinuing] = useState(false)
-
-  // Check if comparison is in progress
   const isRunning = compare?.status === "running" || compare?.status === "pending"
   const isStopping = compare?.status === "stopping"
   const isPartial = compare?.status === "partial"
   const isFailed = compare?.status === "failed"
   const canStop = isRunning || isStopping
   const canContinue = isPartial || isFailed
-
-  // Table columns for runs
   const runColumns: Column<CompareRunInfo>[] = useMemo(
     () => [
       {
@@ -156,8 +152,6 @@ export default function CompareDetailPage() {
     ],
     [compare]
   )
-
-  // Silent refresh (no loading state)
   const refreshData = useCallback(async () => {
     try {
       const [compareData, reportData] = await Promise.all([
@@ -168,16 +162,11 @@ export default function CompareDetailPage() {
       setReport(reportData)
       setError(null)
     } catch {
-      // Silent fail on poll
     }
   }, [compareId])
-
-  // Initial load
   useEffect(() => {
     loadData()
   }, [compareId])
-
-  // Polling when comparison is in progress
   useEffect(() => {
     if (isRunning) {
       pollIntervalRef.current = setInterval(refreshData, POLL_INTERVAL)
@@ -259,7 +248,7 @@ export default function CompareDetailPage() {
 
   return (
     <div className="animate-fade-in">
-      {/* Breadcrumb */}
+      {}
       <div className="flex items-center gap-2 text-sm text-text-secondary mb-4">
         <Link href="/compare" className="hover:text-text-primary">
           Comparisons
@@ -268,7 +257,7 @@ export default function CompareDetailPage() {
         <span className="text-text-primary font-mono">{compareId}</span>
       </div>
 
-      {/* Header */}
+      {}
       <div className="flex items-start justify-between mb-6">
         <div>
           <h1 className="text-2xl font-display font-semibold text-text-primary flex items-center gap-3">
@@ -331,7 +320,7 @@ export default function CompareDetailPage() {
             </span>
           </div>
 
-          {/* Run IDs - clickable links to individual runs */}
+          {}
           {compare.runs && compare.runs.length > 0 && (
             <div className="flex gap-3 mt-3 flex-wrap">
               {compare.runs.map((run) => (
@@ -382,13 +371,13 @@ export default function CompareDetailPage() {
         </div>
       )}
 
-      {/* Comparison Tables (when reports available) */}
+      {}
       {report && report.reports.length > 0 && (
         <div className="space-y-8">
-          {/* Overall Accuracy Table */}
-          {/* Accuracy and Latency side by side */}
+          {}
+          {}
           <div className="flex gap-6">
-            {/* Overall Accuracy - 35% width */}
+            {}
             <div className="w-[35%]">
               <h3 className="text-sm font-medium text-text-primary font-display mb-3">Accuracy</h3>
               <div className="card">
@@ -416,7 +405,6 @@ export default function CompareDetailPage() {
                         .filter((a): a is number => a != null)
                       const bestAccuracy =
                         validAccuracies.length > 0 ? Math.max(...validAccuracies) : null
-                      // Only highlight the FIRST occurrence of the best value
                       const firstBestIndex =
                         bestAccuracy != null
                           ? rows.findIndex((r) => r.accuracy === bestAccuracy)
@@ -452,7 +440,7 @@ export default function CompareDetailPage() {
               </div>
             </div>
 
-            {/* Latency - 65% width */}
+            {}
             {report.reports.some((r) => r.report.latency || r.report.latencyStats) && (
               <div className="w-[65%]">
                 <h3 className="text-sm font-medium text-text-primary font-display mb-3">
@@ -502,8 +490,6 @@ export default function CompareDetailPage() {
                               provider: r.provider,
                               latency: (r.report.latency || r.report.latencyStats)!,
                             }))
-
-                          // Find best (lowest) for each phase and the FIRST index with that value
                           const bestByPhase = phases.reduce(
                             (acc, phase) => {
                               const values = rows.map((r) => r.latency[phase]?.median)
@@ -526,7 +512,6 @@ export default function CompareDetailPage() {
                               </td>
                               {phases.map((phase) => {
                                 const value = row.latency[phase]?.median
-                                // Only highlight the FIRST occurrence of the best value
                                 const isBest = rowIndex === bestByPhase[phase].firstIndex
                                 return (
                                   <td key={phase} className="py-2 px-3 text-right font-mono">
@@ -557,7 +542,7 @@ export default function CompareDetailPage() {
             )}
           </div>
 
-          {/* Retrieval Metrics Table */}
+          {}
           {report.reports.some((r) => r.report.retrieval) && (
             <div>
               <h3 className="text-sm font-medium text-text-primary font-display mb-3">
@@ -608,8 +593,6 @@ export default function CompareDetailPage() {
                           </tr>
                         )
                       }
-
-                      // Find best values and FIRST index for each metric
                       const metrics = [
                         "hitAtK",
                         "precisionAtK",
@@ -707,7 +690,7 @@ export default function CompareDetailPage() {
             </div>
           )}
 
-          {/* By Question Type - Table and Chart */}
+          {}
           {report.reports.some(
             (r) => r.report.byQuestionType && Object.keys(r.report.byQuestionType).length > 0
           ) && (
@@ -716,7 +699,7 @@ export default function CompareDetailPage() {
                 Accuracy by Question Type
               </h3>
               <div className="flex gap-8 items-stretch" style={{ minHeight: 420 }}>
-                {/* Left: Table (50%) */}
+                {}
                 <div className="w-[50%] flex flex-col">
                   <div className="flex-1 overflow-x-auto">
                     <table className="w-full text-sm">
@@ -737,7 +720,6 @@ export default function CompareDetailPage() {
                       </thead>
                       <tbody>
                         {(() => {
-                          // Collect all question types
                           const allTypes = new Set<string>()
                           report.reports.forEach((r) => {
                             if (r.report.byQuestionType) {
@@ -760,8 +742,6 @@ export default function CompareDetailPage() {
                                 .filter((a) => a !== undefined) as number[]
                               const bestAccuracy =
                                 validValues.length > 0 ? Math.max(...validValues) : undefined
-
-                              // Find the index of the FIRST best value (for tie-breaking)
                               const firstBestIndex =
                                 bestAccuracy !== undefined
                                   ? values.findIndex((v) => v.accuracy === bestAccuracy)
@@ -773,7 +753,6 @@ export default function CompareDetailPage() {
                                     {type.replace(/[-_]/g, "-")}
                                   </td>
                                   {values.map(({ provider, accuracy }, index) => {
-                                    // Only highlight the FIRST occurrence of the best value
                                     const isBest = index === firstBestIndex
                                     return (
                                       <td key={provider} className="py-4 px-4 text-right font-mono">
@@ -796,8 +775,6 @@ export default function CompareDetailPage() {
                                 </tr>
                               )
                             })
-
-                          // Calculate overall accuracy for each provider
                           const overallValues = report.reports.map((r) => {
                             const accuracy = r.report.summary?.accuracy ?? r.report.accuracy
                             return {
@@ -819,7 +796,7 @@ export default function CompareDetailPage() {
                           return (
                             <>
                               {rows}
-                              {/* Overall row */}
+                              {}
                               <tr className="border-t-2 border-border">
                                 <td className="py-4 px-4 text-text-primary font-semibold">
                                   Overall
@@ -853,10 +830,9 @@ export default function CompareDetailPage() {
                   </div>
                 </div>
 
-                {/* Right: Bar Chart (50%) */}
+                {}
                 <div className="w-[50%] flex flex-col">
                   {(() => {
-                    // Prepare data for chart
                     const allTypes = new Set<string>()
                     report.reports.forEach((r) => {
                       if (r.report.byQuestionType) {
@@ -885,7 +861,7 @@ export default function CompareDetailPage() {
         </div>
       )}
 
-      {/* Empty state when no reports yet */}
+      {}
       {!report && !isRunning && (
         <EmptyState
           icon={<DocumentIcon />}

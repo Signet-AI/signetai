@@ -1,15 +1,6 @@
-/**
- * Migration 018: Skill Meta
- *
- * Creates the skill_meta table for procedural memory P1.
- * Skills become first-class nodes in the knowledge graph,
- * with per-agent scoping, usage tracking, and decay.
- */
-
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {
-	// Check if table already exists (idempotent)
 	const existing = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='skill_meta'").get();
 
 	if (existing) return;

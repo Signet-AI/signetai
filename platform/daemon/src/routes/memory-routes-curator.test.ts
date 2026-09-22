@@ -13,13 +13,10 @@ let registerMemoryRoutes: ((app: Hono) => void) | undefined;
 
 process.env.SIGNET_PATH = agentsDir;
 mkdirSync(join(agentsDir, "memory"), { recursive: true });
-// Fast, dependency-free embedding: provider "none" makes fetchEmbedding
-// return null immediately instead of downloading nomic-embed at first use.
 mkdirSync(join(agentsDir, ".daemon"), { recursive: true });
 writeFileSync(join(agentsDir, "agent.yaml"), "embedding:\n  provider: none\n");
 
 beforeAll(async () => {
-	// Static import would capture AGENTS_DIR before this test installs its temp SIGNET_PATH.
 	registerMemoryRoutes = (await import("./memory-routes")).registerMemoryRoutes;
 });
 
@@ -269,8 +266,6 @@ describe("memory curator routes", () => {
 		]);
 		expect(body.highUsed).toEqual([{ id: "mem-used", content: "useful memory", used_count: 1 }]);
 	});
-
-	// #1138: remember-with-supersedes — lineage at write time.
 	it("marks the supersedes target superseded atomically with the new memory", async () => {
 		seedMemory("mem-v1", "original claim");
 		const app = makeApp();
@@ -311,7 +306,6 @@ describe("memory curator routes", () => {
 		expect((await res.json()) as { error: string }).toMatchObject({
 			error: "supersedes target rejected: not_found",
 		});
-		// The new memory must not exist — atomic lineage, no orphan.
 		const count = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT COUNT(*) AS count FROM memories WHERE content = 'orphan claim'").get() as { count: number },
@@ -334,7 +328,6 @@ describe("memory curator routes", () => {
 		expect((await res.json()) as { error: string }).toMatchObject({
 			error: "supersedes cannot be combined with oversized content (auto-chunking)",
 		});
-		// No chunks written, predecessor untouched.
 		const chunkCount = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT COUNT(*) AS count FROM memories WHERE source_type = 'chunk'").get() as { count: number },
@@ -393,9 +386,6 @@ describe("memory curator routes", () => {
 			body: JSON.stringify({ content: "third claim", supersedes: v2Body.id }),
 		});
 		const v3Body = (await v3.json()) as { id: string };
-
-		// #1147 review (finding 9): lineage resolves the full chain from ANY
-		// row — including the newest head — ordered oldest -> newest.
 		for (const start of ["mem-gen1", v2Body.id, v3Body.id]) {
 			const res = await app.request(`/api/memory/${start}/lineage`);
 			expect(res.status).toBe(200);
@@ -413,7 +403,6 @@ describe("memory curator routes", () => {
 	it("refuses to re-supersede a mid-chain memory with a different successor (no fork)", async () => {
 		seedMemory("mem-a", "genesis");
 		const app = makeApp();
-		// a -> (new v2 memory)
 		const r1 = await app.request("/api/memory/remember", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
@@ -421,8 +410,6 @@ describe("memory curator routes", () => {
 		});
 		expect(r1.status).toBe(200);
 		const v2Id = ((await r1.json()) as { id: string }).id;
-		// Try to re-supersede a with a fresh memory c: must fail the write,
-		// and a's chain must still point at v2 (no second head).
 		const r2 = await app.request("/api/memory/remember", {
 			method: "POST",
 			headers: { "content-type": "application/json" },
@@ -436,13 +423,10 @@ describe("memory curator routes", () => {
 				},
 		);
 		expect(aRow.superseded_by).toBe(v2Id);
-		// The rejected write must not have created a memory.
 		const cCount = getDbAccessor().withReadDb(
 			(db) => db.prepare("SELECT COUNT(*) AS c FROM memories WHERE content = 'c'").get() as { c: number },
 		);
 		expect(cCount.c).toBe(0);
-		// And the old successor (v2) is still the only head of the chain:
-		// it is not superseded, and nothing else supersedes mem-a.
 		const v2Row = getDbAccessor().withReadDb(
 			(db) =>
 				db.prepare("SELECT superseded_by FROM memories WHERE id = ?").get(v2Id) as {

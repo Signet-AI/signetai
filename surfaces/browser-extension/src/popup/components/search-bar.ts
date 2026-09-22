@@ -1,5 +1,3 @@
-/** Search bar component — debounced recall search */
-
 import { recallMemories } from "../../shared/api.js";
 import type { Memory } from "../../shared/types.js";
 

@@ -79,9 +79,6 @@ function formatMetadataValue(value: string): string {
 }
 
 function estimateSessionContinuityTokens(text: string): number {
-	// UTF-8 bytes are a conservative upper bound for cl100k token count for
-	// every input, without doing a blocking BPE encode here. The character
-	// estimate is intentionally not used for this hard preview budget.
 	return new TextEncoder().encode(text).length;
 }
 

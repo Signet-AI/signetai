@@ -1,10 +1,3 @@
-/**
- * Shared secrets storage and execution primitives.
- *
- * This module is intentionally daemon-independent so the CLI can use the same
- * encrypted store when no daemon is running.
- */
-
 import { randomBytes, randomUUID } from "node:crypto";
 import {
 	chmodSync,
@@ -42,10 +35,6 @@ function recordSecretEvent(event: string, data: Record<string, unknown>): void {
 	secretEventRecorder(event, data);
 }
 
-// ---------------------------------------------------------------------------
-// Storage layout
-// ---------------------------------------------------------------------------
-
 function getAgentsDir(): string {
 	return resolveDefaultBasePath();
 }
@@ -62,12 +51,8 @@ function getMachineIdFile(): string {
 	return join(getSecretsDir(), ".machine-id");
 }
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 interface SecretEntry {
-	ciphertext: string; // base64-encoded nonce+ciphertext
+	ciphertext: string;
 	created: string;
 	updated: string;
 }
@@ -142,10 +127,6 @@ export interface SecretProviderV1 {
 	health(ctx: SecretContextV1): Promise<SecretProviderHealthV1>;
 }
 
-// ---------------------------------------------------------------------------
-// Key derivation
-// ---------------------------------------------------------------------------
-
 type MachineIdResolver = () => string | undefined;
 type MachineIdSource = "persisted" | "resolved" | "fallback";
 
@@ -153,24 +134,17 @@ interface MachineIdSelection {
 	readonly id: string;
 	readonly source: MachineIdSource;
 }
-
-/** Read a machine-specific identifier to bind the key to this host. */
 function resolveMachineId(): string | undefined {
 	const isWindows = process.platform === "win32";
 
 	if (!isWindows) {
-		// Linux: /etc/machine-id
 		const candidates = ["/etc/machine-id", "/var/lib/dbus/machine-id"];
 		for (const p of candidates) {
 			try {
 				const id = readFileSync(p, "utf-8").trim();
 				if (id) return id;
-			} catch {
-				// try next
-			}
+			} catch {}
 		}
-
-		// macOS fallback
 		try {
 			const out = execSyncHidden("ioreg -rd1 -c IOPlatformExpertDevice | grep IOPlatformUUID | awk '{print $3}'", {
 				timeout: 2000,
@@ -179,11 +153,8 @@ function resolveMachineId(): string | undefined {
 				.trim()
 				.replace(/"/g, "");
 			if (out) return out;
-		} catch {
-			// ignore
-		}
+		} catch {}
 	} else {
-		// Windows: use MachineGuid from registry
 		try {
 			const out = execSyncHidden('reg query "HKLM\\SOFTWARE\\Microsoft\\Cryptography" /v MachineGuid', {
 				encoding: "utf-8",
@@ -191,9 +162,7 @@ function resolveMachineId(): string | undefined {
 			});
 			const match = out.match(/MachineGuid\s+REG_SZ\s+(\S+)/);
 			if (match?.[1]) return match[1];
-		} catch {
-			// ignore
-		}
+		} catch {}
 	}
 
 	return undefined;
@@ -255,15 +224,6 @@ function persistMachineId(machineId: string): string {
 		throw new Error(`Failed to persist secrets machine identity: ${message}`);
 	}
 }
-
-/**
- * Resolve the durable identity used by the secrets key.
- *
- * Existing stores predate the identity anchor. Do not persist a newly selected
- * identity for one of those stores until its ciphertext has been verified with
- * that identity. A transient resolver failure must not make the old key
- * unrecoverable.
- */
 function getMachineId(): string {
 	const persisted = readPersistedMachineId();
 	if (persisted) {
@@ -343,9 +303,7 @@ function emitDegradedWarning(result: SecretKeyringResult): void {
 			encoding: "utf-8",
 			mode: 0o600,
 		});
-	} catch {
-		// The health response still reports degraded state if the marker cannot be written.
-	}
+	} catch {}
 }
 
 function clearDegradedWarning(): void {
@@ -355,14 +313,6 @@ function clearDegradedWarning(): void {
 		if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
 	}
 }
-
-/**
- * Re-encrypt a legacy snapshot with the native keyring key.
- *
- * The caller must hold the cross-process secret-store lock for the full
- * read/decrypt/rewrite sequence. Releasing it before saveStore() would let a
- * concurrent writer update the snapshot and then be overwritten here.
- */
 async function migrateLegacyStore(store: SecretsStore, legacyKey: Uint8Array, nativeKey: Uint8Array): Promise<void> {
 	const plaintexts = new Map<string, string>();
 	for (const [name, entry] of Object.entries(store.secrets)) {
@@ -420,10 +370,6 @@ async function resolveMasterKey(store: SecretsStore): Promise<MasterKeyResolutio
 	return { key: await getLegacyMasterKey(), provider: "legacy-obfuscated" };
 }
 
-// ---------------------------------------------------------------------------
-// Encrypt / decrypt
-// ---------------------------------------------------------------------------
-
 async function decryptWithKey(ciphertext: string, key: Uint8Array): Promise<string> {
 	const sodium = await getSodium();
 	let message: Uint8Array | false;
@@ -465,10 +411,6 @@ async function encryptWithKey(plaintext: string, key: Uint8Array): Promise<strin
 	return sodium.to_base64(combined, sodium.base64_variants.ORIGINAL);
 }
 
-// ---------------------------------------------------------------------------
-// Store I/O
-// ---------------------------------------------------------------------------
-
 function isSecretStoreTempProcessLive(name: string): boolean {
 	const pid = name.slice(SECRET_STORE_TEMP_PREFIX.length).split("-", 1)[0];
 	if (!/^\d+$/.test(pid)) return false;
@@ -494,9 +436,7 @@ function cleanupStaleSecretStoreTemps(): void {
 		if (!name.startsWith(SECRET_STORE_TEMP_PREFIX) || isSecretStoreTempProcessLive(name)) continue;
 		try {
 			unlinkSync(join(dir, name));
-		} catch {
-			// Best effort. Another process may have finished or removed the file.
-		}
+		} catch {}
 	}
 }
 
@@ -517,8 +457,6 @@ function loadStore(): SecretsStore {
 type SecretStoreWriteStage = "after-write" | "before-close";
 type SecretStoreWriteHookForTests = (stage: SecretStoreWriteStage, fd?: number) => void;
 let secretStoreWriteHookForTests: SecretStoreWriteHookForTests | null = null;
-
-/** @internal Inject a failure or process kill while testing atomic store replacement. */
 export function __setSecretStoreWriteHookForTests(hook: SecretStoreWriteHookForTests | null): void {
 	secretStoreWriteHookForTests = hook;
 }
@@ -542,15 +480,11 @@ function saveStore(store: SecretsStore): void {
 		if (fd !== null) {
 			try {
 				closeSync(fd);
-			} catch {
-				// Continue cleanup and preserve the original write error.
-			}
+			} catch {}
 		}
 		try {
 			unlinkSync(tmp);
-		} catch {
-			// Best effort cleanup. The existing store remains untouched if replacement did not happen.
-		}
+		} catch {}
 		throw error;
 	}
 }
@@ -564,8 +498,6 @@ const SECRET_STORE_LOCK_WAIT_MS = 10;
 type SecretStoreLockHookStage = "after-acquire" | "after-stale-check";
 type SecretStoreLockHookForTests = (stage: SecretStoreLockHookStage) => void;
 let secretStoreLockHookForTests: SecretStoreLockHookForTests | null = null;
-
-/** @internal Pause an acquired lock in a child-process race regression test. */
 export function __setSecretStoreLockHookForTests(hook: SecretStoreLockHookForTests | null): void {
 	secretStoreLockHookForTests = hook;
 }
@@ -630,9 +562,6 @@ function tryAcquireSecretStoreLock(owner: string): boolean {
 	let fd: number | null = null;
 	try {
 		if (existsSync(`${lockFile}.${SECRET_STORE_LOCK_STALE_CLAIM_FILE}`)) return false;
-		// Build the complete owner directory before publishing it. Renaming a
-		// populated directory onto the non-empty lock directory cannot replace a
-		// lock that another writer has acquired.
 		mkdirSync(tempDirectory, { mode: 0o700 });
 		fd = openSync(ownerFile, "wx", 0o600);
 		writeFileSync(fd, `${owner}\n`, "utf-8");
@@ -655,20 +584,14 @@ function tryAcquireSecretStoreLock(owner: string): boolean {
 		if (fd !== null) {
 			try {
 				closeSync(fd);
-			} catch {
-				// Preserve the original lock acquisition error.
-			}
+			} catch {}
 		}
 		try {
 			unlinkSync(ownerFile);
-		} catch {
-			// Best effort cleanup. The published lock owns the owner file.
-		}
+		} catch {}
 		try {
 			rmdirSync(tempDirectory);
-		} catch {
-			// Best effort cleanup. The published lock owns the directory.
-		}
+		} catch {}
 	}
 }
 
@@ -692,9 +615,7 @@ function acquireSecretStoreLockStaleClaim(): string | null {
 		if (fd !== null) {
 			try {
 				closeSync(fd);
-			} catch {
-				// Preserve the original stale-claim error.
-			}
+			} catch {}
 		}
 	}
 }
@@ -738,9 +659,7 @@ function removeStaleSecretStoreLock(observedOwner: string | null): boolean {
 	} finally {
 		try {
 			unlinkSync(claimFile);
-		} catch {
-			// The claim is removed with the stale lock directory.
-		}
+		} catch {}
 	}
 }
 
@@ -959,23 +878,7 @@ export async function getLocalSecretProviderHealth(): Promise<SecretProviderHeal
 		};
 	}
 }
-
-// Belt-and-suspenders: reject obvious shell metacharacters even though
-// we no longer use sh -c. Catches injection attempts early with a
-// clear error message before argv parsing.
 const SHELL_META = /[;&|`$(){}[\]<>!\\]/;
-
-/**
- * Spawn a subprocess with one or more secrets injected as environment
- * variables. The agent only supplies references (env var names), never
- * the actual values.
- *
- * Uses direct argv execution (no shell) to eliminate glob/tilde/pipe
- * expansion. The command string is parsed into argv tokens.
- *
- * @param command  Command string to execute (parsed as argv, no shell)
- * @param secretRefs  Map of env var name → secret name, e.g. { OPENAI_API_KEY: "OPENAI_API_KEY" }
- */
 export async function execWithSecrets(
 	command: string,
 	secretRefs: Record<string, string>,
@@ -984,8 +887,6 @@ export async function execWithSecrets(
 	if (SHELL_META.test(command)) {
 		return { stdout: "", stderr: "command contains disallowed shell metacharacters", code: 1 };
 	}
-
-	// Parse command into argv — no shell, so no glob/tilde/pipe expansion
 	const argv = command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g);
 	if (!argv || argv.length === 0) {
 		return { stdout: "", stderr: "empty command", code: 1 };
@@ -993,8 +894,6 @@ export async function execWithSecrets(
 	const cmd = argv.map((a) => a.replace(/^["']|["']$/g, ""));
 	const timeoutMs = normalizeSecretExecTimeoutMs(options.timeoutMs);
 	const maxOutputBytes = normalizeSecretExecMaxOutputBytes(options.maxOutputBytes);
-
-	// Resolve all secret values up front so we can redact them from output
 	const resolved: Record<string, string> = {};
 	for (const [envVar, secretName] of Object.entries(secretRefs)) {
 		resolved[envVar] = await getLocalSecretValue(secretName);
@@ -1071,9 +970,7 @@ export async function execWithSecrets(
 			} catch {
 				try {
 					proc.kill(signal);
-				} catch {
-					// Already gone.
-				}
+				} catch {}
 			}
 		}
 
@@ -1172,10 +1069,6 @@ function normalizeSecretExecMaxOutputBytes(value: unknown): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) return DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES;
 	return Math.min(DEFAULT_SECRET_EXEC_MAX_OUTPUT_BYTES, Math.max(1024, Math.trunc(value)));
 }
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 const NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 

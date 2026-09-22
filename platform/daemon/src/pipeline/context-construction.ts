@@ -1,23 +1,8 @@
-/**
- * DP-7: Constructed memories with path provenance.
- *
- * Synthesizes purpose-built context blocks from knowledge graph
- * traversal paths. Each block combines entity attributes, constraints,
- * and dependency relationships into a coherent text representation
- * with provenance metadata for future path feedback (DP-9).
- *
- * No LLM calls — pure template synthesis.
- */
-
 import { scanMemoryContent } from "@signet/core";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
 import type { ReadDb } from "../db-accessor";
 import { isMemoryContentContextEligible } from "../memory-content-safety";
-
-// ---------------------------------------------------------------------------
-// Public interfaces
-// ---------------------------------------------------------------------------
 
 export interface ConstructedProvenance {
 	readonly entityId: string;
@@ -37,10 +22,6 @@ export interface ConstructedContext {
 	readonly source: "constructed";
 	readonly provenance: ConstructedProvenance;
 }
-
-// ---------------------------------------------------------------------------
-// Internal row types
-// ---------------------------------------------------------------------------
 
 interface EntityRow {
 	readonly id: string;
@@ -82,8 +63,6 @@ function isNoise(value: string): boolean {
 	if (/^\*+\s*:/.test(text)) return true;
 	if (text.includes("[[memory/")) return true;
 	if (/(^|[\s|])(session|source|latest|node|project|harness|compaction)=[^\s]/.test(text)) return true;
-	// Require no space after ":" to distinguish machine-generated tags (project:signet)
-	// from human-authored sentences ("Project: Signet daemon").
 	if (/(^|[\s|])(session|source|latest|node|project|harness):[^\s]/.test(text)) return true;
 	if (text.includes("#source:")) return true;
 	return false;
@@ -98,22 +77,10 @@ function trimBlock(text: string): { text: string; truncated: boolean } {
 		truncated: true,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Score normalization
-// ---------------------------------------------------------------------------
-
-/** Structural density score: more structure = higher score, clamped to [0, 1]. */
 function densityScore(aspects: number, attrs: number, constraints: number): number {
-	// Weighted sum: aspects contribute breadth, attributes depth,
-	// constraints are high-value invariants worth extra weight.
 	const raw = aspects * 0.15 + attrs * 0.05 + constraints * 0.2;
 	return Math.min(1, Math.max(0, raw));
 }
-
-// ---------------------------------------------------------------------------
-// Main construction function
-// ---------------------------------------------------------------------------
 
 export function constructContextBlocks(
 	db: ReadDb,
@@ -181,8 +148,6 @@ export function constructContextBlocks(
 			const vals = values.join("; ");
 			lines.push(`- ${asp.name}: ${vals}`);
 		}
-
-		// Constraints: always surface (invariant 5)
 		const constraints = db
 			.prepare(
 				`SELECT DISTINCT ea.content, ea.importance, ea.memory_id
@@ -212,8 +177,6 @@ export function constructContextBlocks(
 			const vals = cleanConstraints.join("; ");
 			lines.push(`- Constraints: ${vals}`);
 		}
-
-		// Dependencies: cross-reference names
 		const deps = db
 			.prepare(
 				`SELECT ed.target_entity_id, e.name
@@ -251,13 +214,9 @@ export function constructContextBlocks(
 			},
 		});
 	}
-
-	// Sort by density score descending, then truncate to limit
 	blocks.sort((a, b) => b.score - a.score);
 	return blocks.slice(0, limit);
 }
-
-/** Owner-bound constructed context for recall paths that cannot read parent SQLite. */
 export async function constructContextBlocksViaOwner(
 	owner: DbOwnerClient,
 	agentId: string,

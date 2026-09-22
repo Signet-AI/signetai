@@ -163,9 +163,6 @@ function seedArtifact(
 }
 
 function seedSummary(db: Database, id: string, content: string, tokens: number, agentId = AGENT): void {
-	// Keep a legacy row for explicit provenance-compatibility assertions, but
-	// seed the canonical direct transcript path used by Dreaming's default
-	// evidence selector.
 	const timestamp = (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now;
 	db.prepare(
 		`INSERT INTO session_transcripts
@@ -327,9 +324,6 @@ describe("Dreaming", () => {
 				{
 					async run(input) {
 						prompt = input.prompt;
-						// The scan-first listing surfaces the pending evidence, so
-						// the pass-end watermark legitimately advances to it and
-						// the same evidence must not re-trigger the next pass.
 						const search = input.tools.find((tool) => tool.name === "search_evidence");
 						if (!search) throw new Error("Missing search_evidence");
 						await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
@@ -368,8 +362,6 @@ describe("Dreaming", () => {
 		expect(secondDelivery?.output).toMatchObject({
 			items: [expect.objectContaining({ sourceRef: "transcript:s1", contentOffset: 2_000, contentLength: 5_000 })],
 		});
-		// The second pass records the next contiguous fragment; the final
-		// 1,000-character fragment remains pending until a third pass.
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		await run();
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBe(0);
@@ -816,11 +808,8 @@ describe("Dreaming", () => {
 		}
 		const failedAt = Date.parse((await getDreamingState(accessor, AGENT)).lastFailureAt ?? "");
 		const cfg = defaultCfg({ tokenThreshold: 1, backfillOnFirstRun: false });
-		// Halted: a large backlog and fresh attention must not trigger a pass
-		// inside the cooldown window.
 		seedSummary(db, "later", "episodic source ".repeat(3_000), 3_000);
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + 60 * 1000)).toBe(false);
-		// Cooldown elapsed: scheduling resumes (the next failure re-halts).
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, failedAt + DREAMING_HALT_COOLDOWN_MS + 1_000)).toBe(true);
 	});
 
@@ -900,15 +889,10 @@ describe("Dreaming", () => {
 				now,
 			),
 		).toEqual({ trigger: true, reason: "continuation" });
-
-		// A subsequent no-progress pass gets a new id. It may be retried later
-		// through the normal threshold/interval policy, but it cannot spin here.
 		accessor.withWriteTx((tx) => {
 			tx.prepare("UPDATE dreaming_state SET last_pass_id = ? WHERE agent_id = ?").run("no-progress-pass", AGENT);
 		});
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
-
-		// Completion clears the continuation even when it was the latest pass.
 		accessor.withWriteTx((tx) => {
 			tx.prepare("UPDATE dreaming_state SET last_pass_id = ? WHERE agent_id = ?").run(passId, AGENT);
 			tx.prepare("UPDATE dreaming_evidence_consumption SET delivered_offset = source_length WHERE pass_id = ?").run(
@@ -916,9 +900,6 @@ describe("Dreaming", () => {
 			);
 		});
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now)).toBe(false);
-
-		// Scheduler failure backoff gates a partial continuation like every other
-		// automatic pass. It cannot bypass error recovery or the failure halt.
 		accessor.withWriteTx((tx) => {
 			tx.prepare("UPDATE dreaming_evidence_consumption SET delivered_offset = 2_000 WHERE pass_id = ?").run(passId);
 		});
@@ -973,17 +954,11 @@ describe("Dreaming", () => {
 				)
 				.get("partial-frontier"),
 		).toEqual({ passId: second.passId, offset: 4_000 });
-		// The progression moved to the second pass, so the final page remains a
-		// bounded continuation rather than falling behind the newer evidence.
 		expect(second.passId).not.toBe(first.passId);
 		expect(await shouldTriggerDreaming(accessor, cfg, AGENT, now + 21_000)).toBe(true);
 	}, 15_000);
 
 	it("rotates every capped partial frontier before revisiting a newer subset (#1430)", async () => {
-		// Regression for #1434: when 50 source revisions were partial and a
-		// 20-source page advanced, selecting only last_pass_id made the other
-		// 30 older rows unreachable. The scan must choose an unadvanced prior
-		// subset even while the newer partial rows still exist.
 		const capturedAt = "2026-08-11T00:00:00.000Z";
 		const priorPassId = "prior-partial-pass";
 		const newerPassId = "newer-partial-pass";
@@ -1489,8 +1464,6 @@ describe("Dreaming", () => {
 
 		expect(result.summary).toBe("Reviewed due claim");
 		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
-		// Attention is not auto-resolved: the agent consumes it via a flag +
-		// archive batch, which is covered by the operations suite.
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(1);
 	});
 
@@ -1511,9 +1484,6 @@ describe("Dreaming", () => {
 			accessor,
 			{
 				async run(input) {
-					// The agent surfaces the flag via attention_list, inspects
-					// the target, and judges it a deliberate keep — the
-					// affirmative decline closes the record.
 					const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
 					if (!apply) throw new Error("Missing apply_ontology_ops");
 					const out = (await apply.execute(
@@ -1539,8 +1509,6 @@ describe("Dreaming", () => {
 		);
 
 		expect(result.summary).toBe("Reviewed and kept");
-		// The agent judged the flag and kept the target: the explicit decline
-		// closes it, so declined work stops re-triggering passes.
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(0);
 	});
 
@@ -1565,10 +1533,6 @@ describe("Dreaming", () => {
 			accessor,
 			{
 				async run(input) {
-					// The agent works the queue, closes one flag it judged to
-					// keep, and defers the rest with reasons in the pass log —
-					// the runbook-sanctioned state. Mere listing must not
-					// resolve the deferred records.
 					const apply = input.tools.find((tool) => tool.name === "apply_ontology_ops");
 					if (!apply) throw new Error("Missing apply_ontology_ops");
 					const out = (await apply.execute(
@@ -1592,9 +1556,6 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental",
 		);
-
-		// Exactly the declined record resolves; the deferred two stay pending
-		// for a later pass instead of being silently dropped.
 		expect(getDreamingAttention(accessor, AGENT)).toHaveLength(2);
 	});
 
@@ -1882,9 +1843,6 @@ describe("Dreaming", () => {
 				 VALUES (?, 'transcript', ?, 'semantic_operation_rejected', 'failed-pass', ?, NULL, NULL, ?, ?, 0, NULL)`,
 			).run(AGENT, sourceId, timestamp, failureClass, fingerprint);
 		}
-
-		// The incomplete transcript, absent projection, and scope mismatch
-		// remain quarantined; only the changed rendered source is retryable.
 		expect(
 			await autoRequeueRepairedDreamingEvidence(
 				accessor,
@@ -1892,8 +1850,6 @@ describe("Dreaming", () => {
 				Date.parse(timestamp),
 			),
 		).toBe(1);
-		// Repair the remaining three sources, including the scope that was
-		// temporarily owned by another agent.
 		seedTranscript(db, "projected", "projected later", timestamp);
 		seedTranscript(db, "scope-repaired", "returned to the scope", timestamp);
 		db.prepare("UPDATE session_transcripts SET completed_at = ? WHERE agent_id = ? AND session_key = 'incomplete'").run(
@@ -1907,7 +1863,6 @@ describe("Dreaming", () => {
 				Date.parse(timestamp) + 1_000,
 			),
 		).toBe(3);
-		// A requested repair is not re-enqueued on every sweep.
 		expect(
 			await autoRequeueRepairedDreamingEvidence(
 				accessor,
@@ -2112,7 +2067,6 @@ describe("Dreaming", () => {
 			[AGENT],
 			"compact",
 		);
-		// The pass prompt is fixed; the agent reads prior notes via runbook_read.
 		expect(prompt).toBe(DREAMING_AGENT_PROMPT);
 	});
 
@@ -2214,9 +2168,6 @@ describe("Dreaming", () => {
 				}),
 			}),
 		);
-
-		// Seed evidence with a future watermark so it is unambiguously newer
-		// than the previous pass's cutoff (same-second seeds are racy).
 		seedTranscript(db, "failure", "Evidence that reaches the agent.", new Date(Date.now() + 60_000).toISOString());
 		await expect(
 			runDreamingAgentPass(
@@ -2245,15 +2196,9 @@ describe("Dreaming", () => {
 	});
 
 	it("selects the focused runbook, alternating when both kinds of work are pending (#1098)", () => {
-		// Regression for #1098: with the hygiene queue perpetually full, the
-		// old worker ran the combined runbook hygiene-first every pass and
-		// content ingestion never got budget. With both kinds of work
-		// pending, the worker must alternate so content gets a guaranteed
-		// turn.
 		expect(selectDreamingPassMode(null, true, true)).toBe("incremental-hygiene");
 		expect(selectDreamingPassMode("hygiene", true, true)).toBe("incremental-content");
 		expect(selectDreamingPassMode("content", true, true)).toBe("incremental-hygiene");
-		// Only one kind pending: run that kind directly, no alternation.
 		expect(selectDreamingPassMode("content", true, false)).toBe("incremental-hygiene");
 		expect(selectDreamingPassMode("hygiene", false, true)).toBe("incremental-content");
 		expect(selectDreamingPassMode(null, false, false, true)).toBe("incremental-content");
@@ -2262,9 +2207,6 @@ describe("Dreaming", () => {
 	});
 
 	it("early-exits each focused pass mode on its own empty work (#1098)", () => {
-		// Hygiene exits on an empty attention queue even while evidence is
-		// pending; content exits on an empty backlog even while attention is
-		// pending; combined modes need both empty; compact never exits.
 		expect(dreamingEarlyExitSummary("incremental-hygiene", false, false)).toBe("No hygiene attention to process");
 		expect(dreamingEarlyExitSummary("incremental-hygiene", true, true)).toBeNull();
 		expect(dreamingEarlyExitSummary("incremental-content", true, false)).toBe("No new episodic evidence to process");
@@ -2382,11 +2324,6 @@ describe("Dreaming", () => {
 	});
 
 	it("does not advance the evidence watermark for hygiene-only work (#1098)", async () => {
-		// Regression for #1098: a pass that only processed hygiene used to
-		// reset the evidence cursor anyway, so the unprocessed episodic
-		// backlog no longer counted as new and content ingestion never got
-		// budget. A hygiene pass must leave the watermark untouched so the
-		// next content pass still sees the backlog.
 		seedSummary(db, "starved-evidence", "New transcript evidence that content passes never reached.", 8);
 		accessor.withWriteTx((tx) => {
 			enqueueDreamingAttentionInTx(tx, {
@@ -2410,17 +2347,12 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-hygiene",
 		);
-		// The hygiene pass consumed no evidence: the backlog still counts as
-		// new, so the next scheduled content pass gets it.
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 
 		await runDreamingAgentPass(
 			accessor,
 			{
 				async run(input) {
-					// The content pass surfaces the starved evidence through
-					// the scan-first listing, so the watermark legitimately
-					// advances to it and the backlog drains.
 					const search = input.tools.find((tool) => tool.name === "search_evidence");
 					if (!search) throw new Error("Missing search_evidence");
 					await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
@@ -2462,9 +2394,6 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-
-		// The time watermark remains a pass-start discovery boundary, but the
-		// returned late source is durably consumed and leaves no episodic backlog.
 		expect((await getDreamingState(accessor, AGENT)).lastPassAt).toBeNull();
 		expect(
 			(
@@ -2479,19 +2408,11 @@ describe("Dreaming", () => {
 	});
 
 	it("does not advance the evidence watermark past evidence a content pass never surfaced (#1149)", async () => {
-		// Regression for #1149: a content pass that completes without ever
-		// surfacing the pending evidence used to reset the watermark to
-		// pass-start anyway, so the un-surfaced window was counted as processed
-		// and the next scan-first search never re-listed it. A pass that
-		// surfaced nothing must leave the watermark untouched so the evidence
-		// stays pending.
 		seedSummary(db, "unread-evidence", "Evidence that a 0/0 content pass never surfaced.", 8);
 		await runDreamingAgentPass(
 			accessor,
 			{
 				async run() {
-					// The agent spent its budget elsewhere: no search_evidence
-					// call, so nothing was surfaced this pass.
 					return { summary: "Reviewed due claims only" };
 				},
 			},
@@ -2506,9 +2427,6 @@ describe("Dreaming", () => {
 	});
 
 	it("advances the evidence watermark only to the evidence the pass surfaced (#1149)", async () => {
-		// Regression for #1149: the watermark must move to the newest source the
-		// pass actually surfaced, never to pass-start. Evidence captured after
-		// the surfaced frontier stays pending for the next scan-first search.
 		const seed = (id: string, latestAt: string): void => {
 			seedTranscript(db, id, `Transcript evidence for ${id}.`, latestAt);
 		};
@@ -2528,8 +2446,6 @@ describe("Dreaming", () => {
 				async run(input) {
 					const search = input.tools.find((tool) => tool.name === "search_evidence");
 					if (!search) throw new Error("Missing search_evidence");
-					// The listing is bounded below the gap evidence: only the two
-					// surfaced transcript projections are returned to the pass.
 					await search.execute(
 						"call",
 						{ agentId: AGENT, since: "2026-08-05T00:00:00.000Z", before: "2026-08-06T12:00:00.000Z" },
@@ -2546,10 +2462,7 @@ describe("Dreaming", () => {
 			[AGENT],
 			"incremental-content",
 		);
-		// The watermark advanced to the newest surfaced source, not pass-start.
 		expect((await getDreamingState(accessor, AGENT)).lastPassAt).toBe("2026-08-06T12:00:00.000Z");
-		// The gap evidence (captured after the surfaced frontier, before pass
-		// start) remains pending for the next scan-first search.
 		expect(await getDreamingEpisodicTokenBacklog(accessor, AGENT)).toBeGreaterThan(0);
 		const manifestNodes = accessor.withReadDb(
 			(db) =>
@@ -2566,9 +2479,6 @@ describe("Dreaming", () => {
 	});
 
 	it("does not advance the watermark on a fragment read of an already-listed source (#1149)", async () => {
-		// Regression for #1149 (adversarial review F4): paging a sourceRef
-		// fragment is a content read of a source the listing already surfaced;
-		// it must not advance the frontier past the unread remainder.
 		seedTranscript(db, "frag-source", "Fragment evidence for frontier checks.", "2026-08-06T12:00:00.000Z");
 		accessor.withWriteTx((tx) => {
 			tx.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
@@ -2603,10 +2513,6 @@ describe("Dreaming", () => {
 	});
 
 	it("does not advance the evidence watermark when a hygiene pass early-exits (#1098, #1149)", async () => {
-		// Regression for #1149 (adversarial review F5): a hygiene pass that
-		// early-exits on an empty queue used to advance the watermark to
-		// pass-start anyway, violating the hygiene-never-advances contract
-		// and skipping evidence indexed in the TOCTOU gap.
 		await runDreamingAgentPass(
 			accessor,
 			{
@@ -2625,12 +2531,6 @@ describe("Dreaming", () => {
 });
 
 describe("Dreaming runbook structure (#1211)", () => {
-	// The runbook is served to whatever model the inference route resolves,
-	// from local 26B to large hosted models. #1211 pins the structure that
-	// keeps both ends working: a load-bearing numbered process, completion
-	// criteria that define done, and narrow "You may not" prohibitions
-	// instead of category-level safe/unsafe lists (which small models read
-	// as blanket caution and generalize into inaction — #1208).
 	const runbooks = [
 		["combined", DREAMING_AGENT_PROMPT],
 		["hygiene", DREAMING_HYGIENE_AGENT_PROMPT],
@@ -2639,35 +2539,23 @@ describe("Dreaming runbook structure (#1211)", () => {
 
 	for (const [name, prompt] of runbooks) {
 		it(`${name} runbook defines completion criteria and narrow must-nots (#1211)`, () => {
-			// Completion criteria: what "done" looks like (flags resolved or
-			// blocker-named, claims complete, pass log written).
 			expect(prompt).toContain("### Done");
 			expect(prompt).toContain("The pass is done when");
-			// Narrow must-nots: every prohibition is finite and specific
-			// ("You may not ..."), never a category-level list.
 			const mustNot = prompt.split("### Must not")[1]?.split("### Done")[0] ?? "";
 			const prohibitions = mustNot.split("\n").filter((line) => line.trim().startsWith("- "));
 			expect(prohibitions.length).toBeGreaterThan(3);
 			for (const prohibition of prohibitions) {
 				expect(prohibition.trim()).toMatch(/^- You may not /);
 			}
-			// No category-level "unsafe" list remains.
 			expect(prompt).not.toContain("### Unsafe");
 			expect(prompt).not.toContain("### Safe");
-			// Deferral is not an escape hatch: it needs a named blocker,
-			// never the same blocker twice in a row.
 			expect(prompt).toContain("named blocker");
 			expect(prompt).toContain("not the same blocker twice in a row");
-			// Deferral is not a close: deferred records stay pending and are
-			// re-examined next pass.
 			expect(prompt).toContain("Deferred records stay pending");
 		});
 	}
 
 	it("rejects fragment claims wherever claims are filed (#1210)", () => {
-		// The content and combined runbooks reach claim filing; both must
-		// carry the complete-statement standard with the concrete
-		// anti-examples the local model filed as durable knowledge.
 		for (const prompt of [DREAMING_AGENT_PROMPT, DREAMING_CONTENT_AGENT_PROMPT]) {
 			expect(prompt).toContain("complete statement");
 			expect(prompt).toContain("SHIP-WITH-FIXES");
@@ -2676,16 +2564,10 @@ describe("Dreaming runbook structure (#1211)", () => {
 	});
 
 	it("keeps the focused-mode boundaries and names the mid-stream blocker (#1098, #1140)", () => {
-		// Focused modes own disjoint work: hygiene never ingests evidence,
-		// content never processes the hygiene queue.
 		expect(DREAMING_HYGIENE_AGENT_PROMPT).not.toContain("find new evidence since the cutoff");
 		expect(DREAMING_CONTENT_AGENT_PROMPT).not.toContain("Process ALL pending hygiene records");
 		expect(DREAMING_AGENT_PROMPT).toContain("find new evidence since the cutoff");
 		expect(DREAMING_AGENT_PROMPT).toContain("Process ALL pending hygiene records");
-		// The mid-stream deferral carries a named blocker that survives
-		// re-checking — a still-active session is a re-verified blocker,
-		// not a repeated one, so #1140 does not collide with the
-		// same-blocker-twice rule.
 		for (const prompt of [DREAMING_AGENT_PROMPT, DREAMING_CONTENT_AGENT_PROMPT]) {
 			expect(prompt).toContain("transcript still mid-stream");
 			expect(prompt).toContain("re-verified blocker");

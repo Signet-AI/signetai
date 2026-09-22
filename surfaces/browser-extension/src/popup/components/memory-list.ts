@@ -1,5 +1,3 @@
-/** Memory list component — renders recent memories or search results */
-
 import type { Memory } from "../../shared/types.js";
 
 function formatTimestamp(iso: string): string {
@@ -57,29 +55,21 @@ function createMemoryItem(memory: Memory): HTMLElement {
 
 	const meta = document.createElement("div");
 	meta.className = "memory-meta";
-
-	// Timestamp
 	const time = document.createElement("span");
 	time.textContent = formatTimestamp(memory.created_at);
 	meta.appendChild(time);
-
-	// Importance
 	if (memory.importance > 0) {
 		const imp = document.createElement("span");
 		imp.className = "memory-importance";
 		imp.textContent = `${(memory.importance * 100).toFixed(0)}%`;
 		meta.appendChild(imp);
 	}
-
-	// Search score
 	if (memory.score !== undefined && memory.score > 0) {
 		const score = document.createElement("span");
 		score.className = "memory-importance";
 		score.textContent = `score: ${memory.score.toFixed(2)}`;
 		meta.appendChild(score);
 	}
-
-	// Tags
 	const tags = parseTags(memory.tags);
 	for (const tag of tags.slice(0, 3)) {
 		const tagEl = document.createElement("span");

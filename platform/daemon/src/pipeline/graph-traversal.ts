@@ -2,13 +2,6 @@ import { yieldEvery } from "../async-yield";
 import type { ReadDb } from "../db-accessor";
 import type { DbOwnerClient } from "../db-owner-client";
 import { ownerReadAll } from "../db-owner-sql";
-
-/**
- * Yield cadence for long row loops inside the traversal. Row work is cheap
- * per item but the batched queries can return tens of thousands of rows on
- * large graphs — yielding every N rows keeps the event loop responsive
- * (#1118: session-start traversal blocked the loop ~1.7s uninterrupted).
- */
 const ROW_YIELD_BATCH = 500;
 
 export interface TraversalPath {
@@ -18,27 +11,18 @@ export interface TraversalPath {
 }
 
 export interface TraversalResult {
-	/** Memory IDs collected from entity_attributes.memory_id */
 	readonly memoryIds: Set<string>;
-	/** Structural importance score per memory (max importance across aspects) */
 	readonly memoryScores: ReadonlyMap<string, number>;
-	/** Provenance path per memory (for DP-9 feedback propagation). */
 	readonly memoryPaths: ReadonlyMap<string, TraversalPath>;
-	/** Constraint content that must always be surfaced */
 	readonly constraints: ReadonlyArray<{
 		readonly entityName: string;
 		readonly content: string;
 		readonly importance: number;
 	}>;
-	/** Entities traversed (for telemetry) */
 	readonly entityCount: number;
-	/** Whether traversal hit the timeout */
 	readonly timedOut: boolean;
-	/** Aspect IDs walked during traversal */
 	readonly activeAspectIds: ReadonlyArray<string>;
-	/** Entity IDs that seeded the walk (needed by context-construction, DP-7) */
 	readonly focalEntityIds: ReadonlyArray<string>;
-	/** Operational failure, when the walk could not complete normally. */
 	readonly error?: TraversalError;
 }
 
@@ -48,36 +32,18 @@ export interface TraversalError {
 }
 
 export interface TraversalConfig {
-	/** Scope filter — when set, only collect attributes from in-scope memories */
 	readonly scope?: string | null;
-	/** Max aspects per entity, ordered by weight DESC (default 10) */
 	readonly maxAspectsPerEntity: number;
-	/** Max attributes per aspect (default 20) */
 	readonly maxAttributesPerAspect: number;
-	/** Max one-hop dependency expansions (default 10) */
 	readonly maxDependencyHops: number;
-	/** Minimum dependency strength to traverse (default 0.3) */
 	readonly minDependencyStrength: number;
-	/** Max outgoing edges per entity node (default 4) */
 	readonly maxBranching: number;
-	/** Total memory ID budget — early exit when reached (default 50) */
 	readonly maxTraversalPaths: number;
-	/** Minimum edge confidence to traverse (default 0.5) */
 	readonly minConfidence: number;
-	/** Timeout in ms (default 500) */
 	readonly timeoutMs: number;
-	/** Optional absolute owner deadline shared with focal resolution. */
 	readonly deadlineAt?: number;
-	/** Filter aspects by canonical_name substring (on-demand expansion) */
 	readonly aspectFilter?: string;
 }
-
-/**
- * Traversal yields between SQL stages to keep the event loop responsive. A
- * callback source lets each synchronous query acquire and release a pooled
- * connection independently; the direct ReadDb form remains useful for
- * callers that already own a bounded read scope.
- */
 type ReadDbSource = ReadDb | (<T>(fn: (db: ReadDb) => T) => T) | (<T>(fn: (db: ReadDb) => T) => Promise<T>);
 type ReadAll = <Row extends object>(
 	sql: string,
@@ -127,7 +93,6 @@ export interface FocalEntityResult {
 	readonly entityNames: string[];
 	readonly pinnedEntityIds: string[];
 	readonly source: "project" | "checkpoint" | "query" | "session_key";
-	/** Operational failure, when focal resolution could not complete normally. */
 	readonly error?: TraversalError;
 }
 
@@ -174,12 +139,6 @@ export function setTraversalStatus(snapshot: TraversalStatusSnapshot): void {
 export function getTraversalStatus(): TraversalStatusSnapshot | null {
 	return lastTraversalStatus;
 }
-
-/**
- * Reset cached traversal state after migrations.
- * Also clears the last status snapshot so callers do not read stale telemetry
- * after traversal tables are recreated or invalidated.
- */
 export function invalidateTraversalCache(): void {
 	traversalTablesAvailableCache = null;
 	lastTraversalStatus = null;
@@ -204,8 +163,6 @@ function getEntityNames(db: ReadDb, ids: ReadonlyArray<string>): string[] {
 	const entityIds = sanitizeEntityIds(ids);
 	if (entityIds.length === 0) return [];
 	const placeholders = entityIds.map(() => "?").join(", ");
-	// Keep entities_fts first; broad query tokens can otherwise make
-	// SQLite scan all agent entities before applying the FTS rowid match.
 	const rows = db
 		.prepare(
 			`SELECT id, name
@@ -297,8 +254,6 @@ function resolveByProject(db: ReadDb, agentId: string, projectPath: string): str
 function resolveByQueryTokens(db: ReadDb, agentId: string, queryTokens: ReadonlyArray<string>): string[] {
 	const tokens = sanitizeQueryTokens(queryTokens);
 	if (tokens.length === 0) return [];
-
-	// Try FTS5 first — proper token-boundary matching with BM25 ranking
 	try {
 		const fts = tokens.join(" OR ");
 		const rows = db
@@ -312,9 +267,7 @@ function resolveByQueryTokens(db: ReadDb, agentId: string, queryTokens: Readonly
 			)
 			.all(fts, agentId) as Array<{ id: string }>;
 		if (rows.length > 0) return sanitizeEntityIds(rows.map((r) => r.id));
-	} catch {
-		// FTS table doesn't exist — fall through to LIKE
-	}
+	} catch {}
 
 	return resolveByQueryTokensLike(db, agentId, tokens);
 }
@@ -410,8 +363,6 @@ export function resolveFocalEntities(
 		};
 	}
 }
-
-/** Resolve focal entities through the serialized DB owner. */
 export async function resolveFocalEntitiesViaOwner(
 	owner: DbOwnerClient,
 	agentId: string,
@@ -421,7 +372,6 @@ export async function resolveFocalEntitiesViaOwner(
 		checkpointEntityIds?: string[];
 		queryTokens?: string[];
 		includePinned?: boolean;
-		/** Optional absolute deadline for owner-backed focal queries. */
 		deadlineAt?: number;
 	},
 ): Promise<FocalEntityResult> {
@@ -510,7 +460,6 @@ export async function resolveFocalEntitiesViaOwner(
 					queryIds = sanitizeEntityIds(queryRows.map((row) => row.id));
 				} catch (error) {
 					if (isTraversalDeadlineError(error)) throw error;
-					// FTS is optional on pre-migration databases.
 				}
 				if (queryIds.length === 0) {
 					const likeStatement = buildQueryTokenLikeStatement(tokens);
@@ -577,26 +526,6 @@ function toPathStatic(
 function pathSize(path: TraversalPath): number {
 	return path.entityIds.length + path.aspectIds.length + path.dependencyIds.length;
 }
-
-// ---------------------------------------------------------------------------
-// Batched traversal
-// ---------------------------------------------------------------------------
-
-/**
- * Batch-collect memories, constraints, and paths for a set of entity IDs.
- *
- * Replaces the old per-entity loop (N×4 queries) with 4 batched queries total:
- *   1. constraints for all entities
- *   2. aspects for all entities (grouped per entity for budget)
- *   3. attributes for all aspects
- *   4. mentions for all entities (fallback)
- *
- * Produces identical output to the old collectForEntity loop, but collapses
- * up to 60+ sequential SQLite queries into 4 regardless of entity count.
- *
- * Async so the event loop breathes between batched query stages and inside
- * long row loops (#1118) — query shapes and result identity are unchanged.
- */
 async function batchCollectForEntities(
 	readAll: ReadAll,
 	entityIds: ReadonlyArray<string>,
@@ -627,8 +556,6 @@ async function batchCollectForEntities(
 	const visitedEntities = new Set<string>(entityIds);
 
 	const entityPh = entityIds.map(() => "?").join(", ");
-
-	// --- 1. Batch constraints for all entities ---
 	const constraintRows = await readAll<{
 		entity_id: string;
 		entity_name: string;
@@ -665,8 +592,6 @@ async function batchCollectForEntities(
 	}
 
 	await stageYield();
-
-	// --- 2. Batch aspects for all entities ---
 	let aspectQuery: string;
 	let aspectArgs: unknown[];
 	if (config.aspectFilter) {
@@ -689,8 +614,6 @@ async function batchCollectForEntities(
 		Math.max(1, entityIds.length * config.maxAspectsPerEntity),
 		deadlineAt,
 	);
-
-	// Apply maxAspectsPerEntity budget by grouping and slicing
 	const aspectsByEntity = new Map<string, Array<{ id: string }>>();
 	for (const row of allAspectRows) {
 		let list = aspectsByEntity.get(row.entity_id);
@@ -705,8 +628,6 @@ async function batchCollectForEntities(
 	}
 
 	await stageYield();
-
-	// Collect the budgeted aspect IDs
 	const budgetedAspectIds: string[] = [];
 	const aspectEntityMap = new Map<string, string>();
 	for (const [eid, aspects] of aspectsByEntity) {
@@ -715,8 +636,6 @@ async function batchCollectForEntities(
 			aspectEntityMap.set(a.id, eid);
 		}
 	}
-
-	// --- 3. Batch attributes for all budgeted aspects ---
 	if (budgetedAspectIds.length > 0) {
 		const aspectPh = budgetedAspectIds.map(() => "?").join(", ");
 		let attributeRows: Array<{
@@ -767,8 +686,6 @@ async function batchCollectForEntities(
 				)),
 			];
 		}
-
-		// Apply maxAttributesPerAspect budget and collect memories
 		const attrCountByAspect = new Map<string, number>();
 		for (const row of attributeRows) {
 			if (!row.memory_id) continue;
@@ -793,8 +710,6 @@ async function batchCollectForEntities(
 	}
 
 	await stageYield();
-
-	// --- 4. Batch mentions for all entities (fallback) ---
 	if (memoryIds.size < budget) {
 		const mentionBudget = budget - memoryIds.size;
 		let mentionRows: Array<{ memory_id: string; importance: number; entity_id: string }>;
@@ -860,12 +775,6 @@ async function batchCollectForEntities(
 
 	return { memoryIds, memoryScores, memoryPaths, constraints, activeAspectIds, visitedEntities };
 }
-
-/**
- * Async since #1118: the walk yields to the event loop between batched
- * query stages so concurrent session starts interleave instead of
- * serializing on ~1.7s of uninterrupted main-thread work (large graphs).
- */
 async function traverseKnowledgeGraphWithReadAll(
 	focalEntityIds: ReadonlyArray<string>,
 	readAll: ReadAll,
@@ -908,15 +817,11 @@ async function traverseKnowledgeGraphWithReadAll(
 		const stageYield = yieldEvery(1);
 		const rowYield = yieldEvery(ROW_YIELD_BATCH);
 		const budget = config.maxTraversalPaths;
-
-		// --- Phase 1: Batch-collect for focal entities ---
 		const collected = await batchCollectForEntities(readAll, focalIds, agentId, config, budget, deadline);
 		phase1 = collected;
 		let timedOut = Date.now() >= deadline;
 
 		await stageYield();
-
-		// --- Phase 2: Dependency expansion + batch collect for hops ---
 		if (!timedOut && collected.memoryIds.size < budget) {
 			const focalPh = focalIds.map(() => "?").join(", ");
 			const dependencyRows = await readAll<{ id: string; source_entity_id: string; target_entity_id: string }>(
@@ -939,8 +844,6 @@ async function traverseKnowledgeGraphWithReadAll(
 				Math.max(1, config.maxBranching * focalIds.length),
 				deadline,
 			);
-
-			// Filter to hop targets not already visited
 			const hopTargetIds = dependencyRows
 				.map((r) => r.target_entity_id)
 				.filter((id) => !collected.visitedEntities.has(id));
@@ -948,8 +851,6 @@ async function traverseKnowledgeGraphWithReadAll(
 			if (hopTargetIds.length > 0) {
 				const remainingBudget = budget - collected.memoryIds.size;
 				const phase2 = await batchCollectForEntities(readAll, hopTargetIds, agentId, config, remainingBudget, deadline);
-
-				// Merge phase2 results into phase1
 				for (const mid of phase2.memoryIds) {
 					if (collected.memoryIds.size >= budget) break;
 					collected.memoryIds.add(mid);
@@ -968,7 +869,6 @@ async function traverseKnowledgeGraphWithReadAll(
 					}
 					await rowYield();
 				}
-				// Rebuild paths for hop entities with source/dependency provenance
 				const sourceByTarget = new Map<string, { sourceEntityId: string; dependencyId: string }>();
 				for (const dep of dependencyRows) {
 					sourceByTarget.set(dep.target_entity_id, {
@@ -977,11 +877,9 @@ async function traverseKnowledgeGraphWithReadAll(
 					});
 				}
 				for (const [mid, existingPath] of collected.memoryPaths) {
-					// If this memory came from a hop entity and doesn't already have source info, upgrade it
 					for (const hopId of hopTargetIds) {
 						const source = sourceByTarget.get(hopId);
 						if (!source) continue;
-						// Check if the memory path involves this hop entity
 						if (existingPath.entityIds.includes(hopId) && !existingPath.dependencyIds.length) {
 							const upgraded = toPathStatic(
 								hopId,
@@ -997,7 +895,6 @@ async function traverseKnowledgeGraphWithReadAll(
 					await rowYield();
 				}
 				collected.constraints.push(...phase2.constraints);
-				// Deduplicate across phase1/phase2 boundary (in-place to respect readonly)
 				const seen = new Set<string>();
 				let write = 0;
 				for (let read = 0; read < collected.constraints.length; read++) {
@@ -1059,8 +956,6 @@ export async function traverseKnowledgeGraph(
 ): Promise<TraversalResult> {
 	return await traverseKnowledgeGraphWithReadAll(focalEntityIds, readAllFromSource(db), agentId, config);
 }
-
-/** Traverse graph data through the serialized DB owner, outside the parent DB seam. */
 export async function traverseKnowledgeGraphViaOwner(
 	focalEntityIds: ReadonlyArray<string>,
 	owner: DbOwnerClient,

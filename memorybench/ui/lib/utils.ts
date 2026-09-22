@@ -9,29 +9,19 @@ export function formatDate(date: string): string {
   const diffSec = Math.floor(diffMs / 1000)
   const diffMin = Math.floor(diffSec / 60)
   const diffHour = Math.floor(diffMin / 60)
-
-  // Less than 1 minute
   if (diffSec < 60) {
     return diffSec <= 5 ? "just now" : `${diffSec}s ago`
   }
-
-  // Less than 1 hour
   if (diffMin < 60) {
     return `${diffMin}m ago`
   }
-
-  // Less than 6 hours
   if (diffHour < 6) {
     return `${diffHour}h ago`
   }
-
-  // Same day - just show time
   const isToday = d.toDateString() === now.toDateString()
   if (isToday) {
     return d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
   }
-
-  // This year - show month day + time
   if (d.getFullYear() === now.getFullYear()) {
     return (
       d.toLocaleDateString("en-US", { month: "short", day: "numeric" }) +
@@ -39,8 +29,6 @@ export function formatDate(date: string): string {
       d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" })
     )
   }
-
-  // Different year - show full date
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })
 }
 

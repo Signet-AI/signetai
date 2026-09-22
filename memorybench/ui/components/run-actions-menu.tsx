@@ -41,8 +41,6 @@ export function RunActionsMenu({
   const isFailed = status === "failed"
   const isPartial = status === "partial"
   const canContinue = isFailed || isPartial
-
-  // Calculate dropdown position
   useEffect(() => {
     if (open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
@@ -54,8 +52,6 @@ export function RunActionsMenu({
       })
     }
   }, [open])
-
-  // Calculate popover position
   useEffect(() => {
     if (showLeaderboardPopover && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
@@ -67,20 +63,14 @@ export function RunActionsMenu({
       })
     }
   }, [showLeaderboardPopover])
-
-  // Click outside handler
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       const target = event.target as Node
-
-      // Handle dropdown
       if (open && triggerRef.current && dropdownRef.current) {
         if (!triggerRef.current.contains(target) && !dropdownRef.current.contains(target)) {
           setOpen(false)
         }
       }
-
-      // Handle popover
       if (showLeaderboardPopover && popoverRef.current) {
         if (!popoverRef.current.contains(target)) {
           setShowLeaderboardPopover(false)
@@ -112,7 +102,7 @@ export function RunActionsMenu({
         </svg>
       </button>
 
-      {/* Dropdown menu */}
+      {}
       {open &&
         typeof document !== "undefined" &&
         createPortal(
@@ -196,7 +186,7 @@ export function RunActionsMenu({
           document.body
         )}
 
-      {/* Leaderboard popover */}
+      {}
       {showLeaderboardPopover &&
         typeof document !== "undefined" &&
         createPortal(
@@ -216,8 +206,6 @@ export function RunActionsMenu({
     </>
   )
 }
-
-// Separate popover component for adding to leaderboard
 import { forwardRef } from "react"
 
 interface LeaderboardPopoverProps {
@@ -267,7 +255,7 @@ const LeaderboardPopover = forwardRef<HTMLDivElement, LeaderboardPopoverProps>(
           boxShadow: "0 4px 16px rgba(34, 34, 34, 0.5)",
         }}
       >
-        {/* Header */}
+        {}
         <div className="px-4 py-3 border-b border-[#333333] flex items-center justify-between">
           <span className="text-sm text-text-primary">add to leaderboard</span>
           <button
@@ -287,14 +275,14 @@ const LeaderboardPopover = forwardRef<HTMLDivElement, LeaderboardPopoverProps>(
         </div>
 
         <div className="p-4 space-y-4">
-          {/* Provider / Benchmark */}
+          {}
           <div className="text-xs text-text-muted">
             <span className="lowercase">{provider}</span>
             <span className="mx-1">/</span>
             <span className="lowercase">{benchmark}</span>
           </div>
 
-          {/* Version */}
+          {}
           <div className="space-y-1.5">
             <label className="text-xs text-text-muted">version</label>
             {!editingVersion ? (
@@ -335,7 +323,7 @@ const LeaderboardPopover = forwardRef<HTMLDivElement, LeaderboardPopoverProps>(
             )}
           </div>
 
-          {/* Notes */}
+          {}
           <div className="space-y-1.5">
             <label className="text-xs text-text-muted">notes</label>
             <textarea
@@ -347,7 +335,7 @@ const LeaderboardPopover = forwardRef<HTMLDivElement, LeaderboardPopoverProps>(
             />
           </div>
 
-          {/* Submit button */}
+          {}
           <button
             className="w-full flex items-center justify-center gap-1.5 py-2 rounded text-sm font-medium transition-all font-display tracking-tight text-white border border-transparent hover:border-white/30 cursor-pointer disabled:opacity-50"
             style={{

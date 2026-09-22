@@ -1,20 +1,7 @@
-/**
- * One-time config migration for existing agent.yaml files.
- * Flips pipeline subsystem defaults to ON (except trainingTelemetry → OFF).
- * Guarded by `configVersion: 2` to prevent re-running.
- *
- * Regex-based — matches key names anywhere in the file. The target names
- * (semanticContradictionEnabled, graphEnabled, agentFeedback, etc.) are
- * specific enough that false positives in unrelated YAML sections are
- * effectively impossible. Migration is restricted to agent.yaml/AGENT.yaml
- * (not config.yaml) to limit blast radius.
- */
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type Document, isMap, isPair, parseDocument } from "yaml";
 import { logger } from "./logger";
-
-// Flat keys: flip false → true
 const FLIP_TRUE = [
 	"semanticContradictionEnabled",
 	"graphEnabled",
@@ -24,17 +11,11 @@ const FLIP_TRUE = [
 	"rehearsal_enabled",
 	"agentFeedback",
 ] as const;
-
-// Nested `enabled: false` under these parent keys → flip to true
 const NESTED_PARENTS = ["graph", "reranker", "autonomous", "predictor"] as const;
 
 function flip(text: string, key: string): string {
 	return text.replace(new RegExp(`^(\\s*${key}:\\s*)false(\\s*(?:#.*)?)$`, "m"), "$1true$2");
 }
-
-// Require 2+ leading spaces so we only match inside a nested block (pipelineV2),
-// not a top-level key that happens to share the same name.
-// Use \r?\n to handle both LF and CRLF files.
 function flipNested(text: string, parent: string): string {
 	return text.replace(
 		new RegExp(`(^[ ]{2,}${parent}:\\s*(?:\\r?\\n)(?:\\s+\\w+:.*(?:\\r?\\n))*?\\s+enabled:\\s*)false`, "m"),
@@ -47,8 +28,6 @@ function flipTelemetryOff(text: string): string {
 }
 
 export function migrateConfig(agentsDir: string): void {
-	// Only migrate agent.yaml/AGENT.yaml — config.yaml can contain arbitrary
-	// user sections where regex-based key matching would be unsafe.
 	const candidates = ["agent.yaml", "AGENT.yaml"];
 	let path: string | undefined;
 	for (const name of candidates) {
@@ -66,8 +45,6 @@ export function migrateConfig(agentsDir: string): void {
 	} catch {
 		return;
 	}
-
-	// Already migrated (any version >= 2)
 	const vMatch = /^configVersion:\s*(\d+)/m.exec(text);
 	if (vMatch && Number(vMatch[1]) >= 2) return;
 
@@ -90,9 +67,6 @@ export function migrateConfig(agentsDir: string): void {
 		text = flipTelemetryOff(text);
 		if (text !== before) mutations.push("trainingTelemetry: true → false");
 	}
-
-	// Stamp version — insert after `---` if present to keep valid YAML.
-	// Handle both LF and CRLF files.
 	const eol = text.includes("\r\n") ? "\r\n" : "\n";
 	if (/^---(?:\r?\n|[ \t])/.test(text)) {
 		const nl = text.indexOf("\n");
@@ -100,8 +74,6 @@ export function migrateConfig(agentsDir: string): void {
 	} else {
 		text = `configVersion: 2${eol}${text}`;
 	}
-
-	// Atomic write: temp file + rename to avoid partial writes on crash
 	const tmp = `${path}.migration.tmp`;
 	writeFileSync(tmp, text, "utf-8");
 	renameSync(tmp, path);
@@ -113,20 +85,6 @@ export function migrateConfig(agentsDir: string): void {
 		});
 	}
 }
-
-// ---------------------------------------------------------------------------
-// v3: inference provider cutover (#947)
-// ---------------------------------------------------------------------------
-// Rewrites folded harness-executor targets to the retained ACPX backend.
-// The folded executors (claude-code, codex, opencode, kimi) are replaced by
-// `executor: acpx` with an `acpx: { agent: <mapped> }` block. The generic
-// `command` executor and legacy `memory.pipelineV2.*.provider` fields cannot
-// be mapped deterministically (arbitrary bin/args, or implicit-target
-// compilation) and are left to the structured runtime error, which points at
-// https://docs.signetai.sh/upgrading/.
-//
-// Guarded by `configVersion: 3`. Uses the yaml package's Document API so
-// comments and formatting are preserved (regex is unsafe for block insertion).
 
 const EXECUTOR_AGENT_MAP: Readonly<Record<string, string>> = {
 	"claude-code": "claude",
@@ -153,15 +111,11 @@ export function migrateInferenceProviders(agentsDir: string): void {
 	} catch {
 		return;
 	}
-
-	// Skip if already at v3+. (v2 may not have run on this file yet; that's
-	// fine — the executor migration is independent of the default-flip migration.)
 	const vMatch = /^configVersion:\s*(\d+)/m.exec(text);
 	if (vMatch && Number(vMatch[1]) >= 3) return;
 
 	const doc = parseDocument(text);
 	if (doc.errors.length > 0) {
-		// Don't migrate a file we can't parse; let config load report the error.
 		logger.warn("config-migration", "Skipping inference migration: agent.yaml has parse errors", {
 			file: path,
 			errors: doc.errors.map((e) => e.message).slice(0, 3),
@@ -182,7 +136,6 @@ export function migrateInferenceProviders(agentsDir: string): void {
 			if (!executor) continue;
 			const agent = EXECUTOR_AGENT_MAP[executor];
 			if (!agent) continue;
-			// Only insert an acpx block if one isn't already present (avoid duplicates).
 			if (!target.has("acpx")) {
 				target.set("acpx", doc.createNode({ agent }));
 			}
@@ -192,7 +145,6 @@ export function migrateInferenceProviders(agentsDir: string): void {
 	}
 
 	if (mutations.length === 0) {
-		// Still stamp v3 so we don't re-parse on every startup.
 		stampConfigVersion(doc, 3);
 		writeAtomic(path, doc.toString());
 		return;
@@ -209,16 +161,10 @@ export function migrateInferenceProviders(agentsDir: string): void {
 }
 
 function stampConfigVersion(doc: Document.Parsed, version: number): void {
-	// Use Document.set (typed `key: any, value: unknown`) rather than the
-	// narrowed YAMLMap.set on `doc.contents`, which types its key as ParsedNode
-	// and rejects the string key "configVersion" (TS2345). Document.set
-	// delegates to contents.set when contents is a map, so behavior is
-	// identical for both branches.
 	const root = doc.contents;
 	if (isMap(root)) {
 		doc.set("configVersion", version);
 	} else {
-		// Empty or non-map document — wrap it.
 		doc.set("configVersion", version);
 	}
 }
@@ -228,18 +174,6 @@ function writeAtomic(path: string, contents: string): void {
 	writeFileSync(tmp, contents, "utf-8");
 	renameSync(tmp, path);
 }
-
-// ---------------------------------------------------------------------------
-// v4/v5: retire legacy pipelineV2 routing fields -> inference registry
-// ---------------------------------------------------------------------------
-// Compiles memory.pipelineV2.extraction/synthesis routing fields into the
-// inference.accounts/targets/workloads registry, then NULLS the legacy routing keys (provider,
-// model, endpoint, fallbackProvider, command) so the registry is the single
-// source of truth. Tuning fields (timeout, maxTokens, enabled) are preserved.
-//
-// v5 completes the v4 cleanup by removing legacy flat routing keys. It must
-// rerun for v4 configs because the incomplete migration shipped to users.
-// Idempotent: a file already at v5+ is skipped.
 
 const LEGACY_FLAT_KEYS = [
 	"extractionProvider",
@@ -264,12 +198,10 @@ const LEGACY_HARNESS_AGENT: Readonly<Record<string, string>> = {
 	opencode: "opencode",
 	kimi: "kimi",
 };
-
-/** Map a legacy provider to the account name/id this migration creates. */
 function legacyAccountFor(provider: string): { name: string; family: string; cred: string } | null {
 	if (provider === "openrouter") return { name: "legacy-openrouter", family: "openrouter", cred: "OPENROUTER_API_KEY" };
 	if (provider === "anthropic") return { name: "legacy-anthropic", family: "anthropic", cred: "ANTHROPIC_API_KEY" };
-	return null; // local providers (ollama/llama-cpp/openai-compatible-local) need no account
+	return null;
 }
 
 function legacyExecutorFor(provider: string): { executor: string; acpxAgent?: string } | null {
@@ -316,7 +248,6 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		(isMap(synthesis) && ["provider", "model", "endpoint", "baseUrl", "base_url"].some((key) => synthesis.has(key)));
 
 	if (!hasNestedLegacyRouting && !hasLegacyFlatKeys && !hasSynthesisBlock) {
-		// Nothing to migrate; still stamp v5 so we don't re-parse every startup.
 		stampConfigVersion(doc, 5);
 		writeAtomic(path, doc.toString());
 		return;
@@ -330,7 +261,6 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 	}
 
 	if (hasNestedLegacyRouting || hasLegacyFlatRouting) {
-		// Ensure inference/accounts and inference/targets maps exist.
 		const inference =
 			doc.getIn(["inference"], true) ?? doc.setIn(["inference"], doc.createNode({})) ?? doc.getIn(["inference"], true);
 		if (!isMap(inference)) {
@@ -433,13 +363,9 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 			"legacy-extraction",
 		);
 	}
-
-	// Remove legacy extraction routing keys; the obsolete synthesis block is deleted.
 	function nullRoutingKeys(node: ReturnType<typeof doc.getIn>, label: string): void {
 		if (!isMap(node)) return;
 		const provider = String(node.get("provider", true) ?? "").trim();
-		// Preserve unmappable providers so the runtime can report an actionable
-		// configuration error instead of silently deleting the user's route.
 		if (provider && provider !== "none" && !legacyExecutorFor(provider)) return;
 		for (const key of ["provider", "model", "endpoint", "fallbackProvider", "command", "baseUrl", "base_url"]) {
 			if (node.has(key)) {
@@ -486,13 +412,6 @@ export function migrateLegacyRoutingToRegistry(agentsDir: string): void {
 		});
 	}
 }
-
-// ---------------------------------------------------------------------------
-// v6: remove the obsolete session-synthesis inference route
-// ---------------------------------------------------------------------------
-// Session processing is internal and follows memoryExtraction/default routing.
-// Older migrations created workloads.sessionSynthesis -> legacy-synthesis/default,
-// which permanently preserved an unavailable local target after upgrades.
 export function migrateSessionSynthesisRoute(agentsDir: string): void {
 	const path = findConfigPath(agentsDir);
 	if (!path) return;
@@ -539,14 +458,6 @@ export function migrateSessionSynthesisRoute(agentsDir: string): void {
 		logger.info("config-migration", "Removed obsolete session synthesis route", { mutations, file: path });
 	}
 }
-
-// ---------------------------------------------------------------------------
-// v7: remove retired extraction-worker write gate settings
-// ---------------------------------------------------------------------------
-// The write gate and durability settings belonged exclusively to the retired
-// extraction worker. Remove them before config validation so existing agent
-// files reach the canonical Dreaming-only configuration without a startup
-// failure. This is intentionally a one-time rewrite, not a runtime fallback.
 const RETIRED_EXTRACTION_WRITER_KEYS = [
 	"writeGate",
 	"durability",
@@ -594,14 +505,6 @@ export function migrateRetiredExtractionWriterConfig(agentsDir: string): void {
 		logger.info("config-migration", "Removed retired extraction writer configuration", { mutations, file: path });
 	}
 }
-
-// ---------------------------------------------------------------------------
-// v8: canonicalize embedding endpoints and remove retired memory-pipeline routing
-// ---------------------------------------------------------------------------
-// The dashboard briefly wrote `baseUrl`, while the daemon's canonical embedding
-// schema uses `base_url`. v5-v7 configs may also contain retired memory-pipeline
-// routing keys. Apply both changes in one v8 migration so neither operation can
-// stamp version 8 before the other has run.
 const RETIRED_MEMORY_ROUTING_KEYS = [
 	"allowRemoteProviders",
 	"extractionProvider",
@@ -708,13 +611,6 @@ function migrateV8(agentsDir: string): void {
 		logger.info("config-migration", "Applied v8 config migration", { mutations, file: path });
 	}
 }
-
-// ---------------------------------------------------------------------------
-// v9: repair retired routing left behind by the v8 migration
-// ---------------------------------------------------------------------------
-// v8 originally owned this cleanup, but configs already stamped v8 were
-// skipped when the cleanup was added. Keep the repair on its own version so
-// those workspaces can reach validation without manual agent.yaml edits.
 export function migrateRetiredMemoryPipelineRoutingV9(agentsDir: string): void {
 	const path = findConfigPath(agentsDir);
 	if (!path) return;

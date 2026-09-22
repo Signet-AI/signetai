@@ -28,8 +28,6 @@ function json(data: unknown, status = 200): Response {
 export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
-
-  // GET /api/leaderboard - List all leaderboard entries
   if (method === "GET" && pathname === "/api/leaderboard") {
     try {
       const entries = db
@@ -37,8 +35,6 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
         .from(schema.leaderboardEntries)
         .orderBy(desc(schema.leaderboardEntries.accuracy))
         .all()
-
-      // Parse JSON fields with error handling
       const parsed = entries.map((entry) => {
         let byQuestionType = {}
         let latencyStats = null
@@ -48,22 +44,18 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
         try {
           byQuestionType = JSON.parse(entry.byQuestionType)
         } catch {
-          /* ignore */
         }
         try {
           latencyStats = entry.latencyStats ? JSON.parse(entry.latencyStats) : null
         } catch {
-          /* ignore */
         }
         try {
           evaluations = entry.evaluations ? JSON.parse(entry.evaluations) : []
         } catch {
-          /* ignore */
         }
         try {
           promptsUsed = entry.promptsUsed ? JSON.parse(entry.promptsUsed) : null
         } catch {
-          /* ignore */
         }
 
         return {
@@ -81,8 +73,6 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
       return json({ error: e instanceof Error ? e.message : "Failed to load leaderboard" }, 500)
     }
   }
-
-  // POST /api/leaderboard - Add run to leaderboard
   if (method === "POST" && pathname === "/api/leaderboard") {
     try {
       const body = await req.json()
@@ -91,23 +81,15 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
       if (!runId) {
         return json({ error: "runId is required" }, 400)
       }
-
-      // Use provided version or default to "baseline"
       const entryVersion = version?.trim() || "baseline"
-
-      // Load checkpoint
       const checkpoint = checkpointManager.load(runId)
       if (!checkpoint) {
         return json({ error: `Run not found: ${runId}` }, 404)
       }
-
-      // Check if run is completed
       const summary = checkpointManager.getSummary(checkpoint)
       if (summary.evaluated !== summary.total) {
         return json({ error: "Run must be fully evaluated before adding to leaderboard" }, 400)
       }
-
-      // Check if entry with same provider+benchmark+version exists (for upsert)
       const existing = db
         .select()
         .from(schema.leaderboardEntries)
@@ -119,26 +101,16 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
           )
         )
         .get()
-
-      // Load report for accuracy stats
       const reportPath = join(checkpointManager.getRunPath(runId), "report.json")
       let report: any = null
       if (existsSync(reportPath)) {
         report = JSON.parse(readFileSync(reportPath, "utf8"))
       }
-
-      // Calculate accuracy from checkpoint if no report
       const questions = Object.values(checkpoint.questions)
       const correctCount = questions.filter((q: any) => q.phases?.evaluate?.score === 1).length
       const accuracy = report?.summary?.accuracy ?? correctCount / summary.total
-
-      // Get provider code
       const providerCode = getProviderCode(checkpoint.provider)
-
-      // Get prompts (if available in provider)
       const promptsUsed = getProviderPrompts(checkpoint.provider)
-
-      // Build by question type stats
       const byQuestionType: Record<string, { total: number; correct: number; accuracy: number }> =
         {}
       for (const q of questions) {
@@ -155,8 +127,6 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
       for (const type of Object.keys(byQuestionType)) {
         byQuestionType[type].accuracy = byQuestionType[type].correct / byQuestionType[type].total
       }
-
-      // Build evaluations from checkpoint if no report
       let evaluations = report?.evaluations || []
       if (!report?.evaluations) {
         evaluations = questions.map((q: any) => ({
@@ -195,7 +165,6 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
       let isUpdate = false
 
       if (existing) {
-        // Update existing entry (upsert)
         entry = db
           .update(schema.leaderboardEntries)
           .set(entryData)
@@ -204,7 +173,6 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
           .get()
         isUpdate = true
       } else {
-        // Insert new entry
         entry = db.insert(schema.leaderboardEntries).values(entryData).returning().get()
       }
 
@@ -220,8 +188,6 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
       return json({ error: e instanceof Error ? e.message : "Failed to add to leaderboard" }, 500)
     }
   }
-
-  // DELETE /api/leaderboard/:id - Remove from leaderboard
   const deleteMatch = pathname.match(/^\/api\/leaderboard\/(\d+)$/)
   if (method === "DELETE" && deleteMatch) {
     try {
@@ -247,8 +213,6 @@ export async function handleLeaderboardRoutes(req: Request, url: URL): Promise<R
       )
     }
   }
-
-  // GET /api/leaderboard/:id - Get single entry with full details
   const getMatch = pathname.match(/^\/api\/leaderboard\/(\d+)$/)
   if (method === "GET" && getMatch) {
     try {
@@ -316,18 +280,12 @@ function getProviderCode(provider: string): string {
   const promptsPath = join(providerDir, "prompts.ts")
 
   const files: Record<string, string> = {}
-
-  // Read index.ts
   if (existsSync(indexPath)) {
     files["index.ts"] = readFileSync(indexPath, "utf8")
   }
-
-  // Read prompt.ts if exists
   if (existsSync(promptPath)) {
     files["prompt.ts"] = readFileSync(promptPath, "utf8")
   }
-
-  // Read prompts.ts if exists
   if (existsSync(promptsPath)) {
     files["prompts.ts"] = readFileSync(promptsPath, "utf8")
   }
@@ -335,16 +293,12 @@ function getProviderCode(provider: string): string {
   if (Object.keys(files).length === 0) {
     return `// Provider code not found at ${providerDir}`
   }
-
-  // Return as JSON with all files
   return JSON.stringify(files)
 }
 
 function getProviderPrompts(provider: string): Record<string, string> | null {
   const providerDir = join(process.cwd(), "src", "providers", provider)
   const prompts: Record<string, string> = {}
-
-  // Check for dedicated prompt files
   const promptFiles = ["prompt.ts", "prompts.ts"]
   for (const file of promptFiles) {
     const filePath = join(providerDir, file)
@@ -352,13 +306,9 @@ function getProviderPrompts(provider: string): Record<string, string> | null {
       prompts[file] = readFileSync(filePath, "utf8")
     }
   }
-
-  // Also extract inline prompts from index.ts
   const indexPath = join(providerDir, "index.ts")
   if (existsSync(indexPath)) {
     const code = readFileSync(indexPath, "utf8")
-
-    // Match template literal prompts
     const promptMatches = code.matchAll(
       /(?:prompt|PROMPT|systemPrompt|userPrompt)\s*[=:]\s*[`"']([^`"']+)[`"']/g
     )

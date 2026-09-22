@@ -104,9 +104,7 @@ function parseChildResponse(output: string, code: number | null): SecretKeyringR
 				...(parsed.message === undefined ? {} : { message: parsed.message.slice(0, 500) }),
 			};
 		}
-	} catch {
-		// The helper boundary reports malformed output without exposing it.
-	}
+	} catch {}
 	return { state: "unavailable", message: `Native keyring helper exited with code ${code ?? "unknown"}` };
 }
 

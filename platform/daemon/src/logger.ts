@@ -1,85 +1,72 @@
-/**
- * Signet Structured Logging System
- *
- * Features:
- * - Structured JSON logs
- * - Log levels (debug, info, warn, error)
- * - Log rotation
- * - Activity tracking (memory ops, syncs, git, API)
- * - Real-time streaming for dashboard
- */
-
 import { EventEmitter } from "node:events";
 import { appendFileSync, existsSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
-
-// Types
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
 export type LogCategory =
-	| "daemon" // Daemon lifecycle
-	| "api" // API requests
-	| "memory" // Memory operations (save, recall, search)
-	| "sync" // Harness sync operations
-	| "git" // Git auto-commits
-	| "github-source" // GitHub source ingestion and fetch diagnostics
-	| "watcher" // File watcher events
-	| "embedding" // Embedding operations
-	| "harness" // Harness configuration
-	| "skills" // Skills management
-	| "plugins" // Plugin lifecycle and diagnostics
-	| "secrets" // Secrets management
-	| "hooks" // Hook handlers
-	| "pipeline" // Extraction/decision pipeline
-	| "inference" // Inference router and provider execution
-	| "embedding-tracker" // Incremental embedding refresh tracker
-	| "synthesis" // MEMORY.md synthesis worker
-	| "session-memories" // Session memory tracking
-	| "predictor" // Predictive memory scorer
-	| "maintenance" // Autonomous maintenance worker
-	| "retention" // Retention worker (decay + cold archival)
-	| "reflections" // Daily reflection generation and writeback
-	| "session-tracker" // Runtime-path session ownership + bypass TTL tracking
-	| "system" // System events
-	| "update" // Auto-update cycle
-	| "probe" // MCP server auto-probe (Signet OS)
-	| "event-bus" // Signet OS event bus
-	| "event-bridge" // Browser-to-event-bus bridge
-	| "widget" // Widget HTML generation (Signet OS)
-	| "os-chat" // OS chat agent (natural language → MCP tools)
-	| "os-agent" // OS page-agent (visual GUI automation)
-	| "mcp-analytics" // MCP invocation analytics
-	| "config" // Configuration loading and resolution
-	| "config-migration" // Legacy config migration on startup
-	| "diagnostics" // Runtime diagnostics and health reporting
-	| "dreaming" // Dreaming worker (background knowledge synthesis)
-	| "http" // HTTP server lifecycle
-	| "resources" // FD / event-loop resource monitoring
-	| "connectors" // Connector management
-	| "documents" // Document ingestion
-	| "projection" // UMAP projection computation
-	| "os" // Signet OS app tray and system operations
-	| "changelog" // Changelog, roadmap, and README serving
-	| "auth" // Authentication and authorization
-	| "reconciler" // Skill filesystem reconciler
-	| "llm" // LLM provider calls
-	| "native-embedding" // Native ONNX embedding operations
-	| "document-worker" // Pipeline document ingestion worker
-	| "dreaming-worker" // Background dreaming worker
-	| "model-registry" // LLM model registry management
-	| "structural-classify" // Pipeline structural classification
-	| "structural-dependency" // Pipeline structural dependency analysis
-	| "training-pairs" // Training pair generation
-	| "telemetry" // Telemetry collection
-	| "temporal-fallback" // Temporal fallback retrieval
-	| "checkpoints" // Session checkpoint management
-	| "system-pressure" // Event-loop pressure signal and backpressure
-	| "yielding-writes" // Bounded write-batch drain with cooperative yielding
-	| "startup-recovery" // Automatic crash-loop damage cleanup on boot
-	| "db-vacuum" // SQLite free-page reclamation (VACUUM / incremental_vacuum)
-	| "transcripts" // Lossless transcript storage
-	| "shadow"; // Shadow logs for sensitive data (not written to disk, only emitted for real-time streaming)
+	| "daemon"
+	| "api"
+	| "memory"
+	| "sync"
+	| "git"
+	| "github-source"
+	| "watcher"
+	| "embedding"
+	| "harness"
+	| "skills"
+	| "plugins"
+	| "secrets"
+	| "hooks"
+	| "pipeline"
+	| "inference"
+	| "embedding-tracker"
+	| "synthesis"
+	| "session-memories"
+	| "predictor"
+	| "maintenance"
+	| "retention"
+	| "reflections"
+	| "session-tracker"
+	| "system"
+	| "update"
+	| "probe"
+	| "event-bus"
+	| "event-bridge"
+	| "widget"
+	| "os-chat"
+	| "os-agent"
+	| "mcp-analytics"
+	| "config"
+	| "config-migration"
+	| "diagnostics"
+	| "dreaming"
+	| "http"
+	| "resources"
+	| "connectors"
+	| "documents"
+	| "projection"
+	| "os"
+	| "changelog"
+	| "auth"
+	| "reconciler"
+	| "llm"
+	| "native-embedding"
+	| "document-worker"
+	| "dreaming-worker"
+	| "model-registry"
+	| "structural-classify"
+	| "structural-dependency"
+	| "training-pairs"
+	| "telemetry"
+	| "temporal-fallback"
+	| "checkpoints"
+	| "system-pressure"
+	| "yielding-writes"
+	| "startup-recovery"
+	| "db-vacuum"
+	| "transcripts"
+	| "shadow";
 
 export interface LogEntry {
 	timestamp: string;
@@ -87,7 +74,7 @@ export interface LogEntry {
 	category: LogCategory;
 	message: string;
 	data?: Record<string, unknown>;
-	duration?: number; // For timed operations (ms)
+	duration?: number;
 	error?: {
 		name: string;
 		message: string;
@@ -99,11 +86,10 @@ export interface LoggerConfig {
 	logDir: string;
 	logFilePath?: string;
 	level: LogLevel;
-	maxFileSize: number; // bytes
-	maxFiles: number; // number of rotated files to keep
+	maxFileSize: number;
+	maxFiles: number;
 	consoleOutput: boolean;
 	jsonFormat: boolean;
-	/** Backoff between file-write retry attempts after a transport failure. */
 	flushRetryBackoffMs?: number;
 }
 
@@ -113,13 +99,11 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 	warn: 2,
 	error: 3,
 };
-
-// Default configuration
 const DEFAULT_CONFIG: LoggerConfig = {
 	logDir: join(homedir(), ".agents", ".daemon", "logs"),
 	logFilePath: undefined,
 	level: "info",
-	maxFileSize: 10 * 1024 * 1024, // 10MB
+	maxFileSize: 10 * 1024 * 1024,
 	maxFiles: 5,
 	consoleOutput: true,
 	jsonFormat: true,
@@ -150,8 +134,6 @@ export class Logger extends EventEmitter {
 	private flushTimer: ReturnType<typeof setInterval> | null = null;
 	private fileOutputEnabled = true;
 	private lastFlushFailureAt = 0;
-	// Bound the in-memory buffer while the file transport is down so a long
-	// outage cannot grow it without limit (#1162).
 	private static readonly MAX_BUFFERED_ENTRIES = 2000;
 	private static readonly LOG_FILE_PATTERN = /^signet-(\d{4}-\d{2}-\d{2})(?:-(.+))?\.log$/;
 
@@ -159,8 +141,6 @@ export class Logger extends EventEmitter {
 		super();
 		this.config = { ...DEFAULT_CONFIG, ...config };
 		this.currentLogFile = this.getLogFileName();
-		// Do not create workspace state during module import. The daemon startup
-		// preflight decides whether this path is safe to touch.
 		this.startFlushTimer();
 	}
 
@@ -171,11 +151,6 @@ export class Logger extends EventEmitter {
 		const date = new Date().toISOString().split("T")[0];
 		return join(this.config.logDir, `signet-${date}.log`);
 	}
-
-	// The resolved file destination, logged by the daemon at boot (#1162).
-	// Kept out of the constructor so module import has no file-write side
-	// effects (any process importing logger.ts would otherwise append to the
-	// daemon's log file).
 	get logFilePath(): string {
 		return this.currentLogFile;
 	}
@@ -238,10 +213,10 @@ export class Logger extends EventEmitter {
 
 	private formatConsole(entry: LogEntry): string {
 		const levelColors: Record<LogLevel, string> = {
-			debug: "\x1b[90m", // gray
-			info: "\x1b[36m", // cyan
-			warn: "\x1b[33m", // yellow
-			error: "\x1b[31m", // red
+			debug: "\x1b[90m",
+			info: "\x1b[36m",
+			warn: "\x1b[33m",
+			error: "\x1b[31m",
 		};
 		const reset = "\x1b[0m";
 		const dim = "\x1b[2m";
@@ -273,20 +248,13 @@ export class Logger extends EventEmitter {
 	}
 
 	private write(entry: LogEntry) {
-		// Console output
 		if (this.config.consoleOutput) {
 			const message = this.formatConsole(entry);
 			if (process.env.SIGNET_DB_OWNER_WORKER === "1") console.error(message);
 			else console.log(message);
 		}
-
-		// Buffer for file write
 		this.buffer.push(entry);
-
-		// Emit for real-time streaming
 		this.emit("log", entry);
-
-		// Check if we need to rotate
 		this.checkRotation();
 	}
 
@@ -294,10 +262,6 @@ export class Logger extends EventEmitter {
 		if (this.buffer.length === 0) return;
 
 		if (!this.fileOutputEnabled && !force) {
-			// A previous append failed. Retry periodically instead of disabling
-			// file logging forever, so a transient error (disk full, sync lock,
-			// moved directory) recovers without a daemon restart (#1162). The
-			// buffer is retained (bounded) so the retry re-appends the entries.
 			const backoffMs = this.config.flushRetryBackoffMs ?? 30_000;
 			if (Date.now() - this.lastFlushFailureAt < backoffMs) {
 				this.trimBuffer();
@@ -321,7 +285,6 @@ export class Logger extends EventEmitter {
 			.join("\n")}\n`;
 
 		try {
-			// Check if date changed (new log file)
 			const newLogFile = this.getLogFileName();
 			if (newLogFile !== this.currentLogFile) {
 				this.currentLogFile = newLogFile;
@@ -342,7 +305,6 @@ export class Logger extends EventEmitter {
 	}
 
 	private startFlushTimer() {
-		// Flush every second
 		this.flushTimer = setInterval(() => this.flush(), 1000);
 	}
 
@@ -356,9 +318,7 @@ export class Logger extends EventEmitter {
 			if (stats.size > this.config.maxFileSize) {
 				this.rotate();
 			}
-		} catch {
-			// Ignore rotation check errors
-		}
+		} catch {}
 	}
 
 	private rotate() {
@@ -366,31 +326,20 @@ export class Logger extends EventEmitter {
 		const rotatedName = this.currentLogFile.replace(".log", `-${timestamp}.log`);
 
 		try {
-			// Rename current to rotated
 			renameSync(this.currentLogFile, rotatedName);
-
-			// Clean up old files
 			this.cleanOldLogs();
-		} catch {
-			// Ignore rotation errors
-		}
+		} catch {}
 	}
 
 	private cleanOldLogs() {
 		if (!this.fileOutputEnabled) return;
 		try {
 			const files = this.listLogFilesNewestFirst();
-
-			// Keep only maxFiles
 			for (let i = this.config.maxFiles; i < files.length; i++) {
 				unlinkSync(files[i].path);
 			}
-		} catch {
-			// Ignore cleanup errors
-		}
+		} catch {}
 	}
-
-	// Public logging methods
 	log(level: LogLevel, category: LogCategory, message: string, data?: Record<string, unknown>) {
 		if (!this.shouldLog(level)) return;
 
@@ -450,8 +399,6 @@ export class Logger extends EventEmitter {
 
 		this.write(entry);
 	}
-
-	// Timed operation logging
 	time(category: LogCategory, operation: string): (data?: Record<string, unknown>) => void {
 		const start = Date.now();
 		return (data?: Record<string, unknown>) => {
@@ -462,8 +409,6 @@ export class Logger extends EventEmitter {
 			});
 		};
 	}
-
-	// Activity logging helpers
 	memory = {
 		save: (content: string, type: string, who: string) => {
 			this.info("memory", "Memory saved", {
@@ -514,69 +459,44 @@ export class Logger extends EventEmitter {
 			this.debug("api", `${method} ${path}`, { status, duration });
 		},
 	};
-
-	// Get recent logs (reads across all log files, not just current day)
 	getRecent(options: { limit?: number; level?: LogLevel; category?: LogCategory; since?: Date } = {}): LogEntry[] {
 		const { limit = 100, level, category, since } = options;
 		const results: LogEntry[] = [];
 
 		try {
-			// Get all log files sorted by canonical log date (newest first)
 			const logFiles = this.listLogFilesNewestFirst();
-
-			// Read files until we have enough entries
 			for (const file of logFiles) {
-				if (results.length >= limit * 2) break; // Read extra for filtering
+				if (results.length >= limit * 2) break;
 
 				try {
 					const content = readFileSync(file.path, "utf-8");
 					const lines = content.trim().split("\n").filter(Boolean);
-					// Assumption: entries in each file are append-only in timestamp order.
-					// Cross-file timestamp interleaving is not supported by this tail read.
 					const recentLines = lines.slice(-(limit * 2));
 
 					for (const line of recentLines) {
 						try {
 							const entry = JSON.parse(line) as LogEntry;
-
-							// Apply filters
 							if (level && LOG_LEVELS[entry.level] < LOG_LEVELS[level]) continue;
 							if (category && entry.category !== category) continue;
 							if (since && new Date(entry.timestamp) < since) continue;
 
 							results.push(entry);
-						} catch {
-							// Skip non-JSON lines
-						}
+						} catch {}
 					}
-				} catch {
-					// Skip files that can't be read
-				}
+				} catch {}
 			}
-
-			// Sort all results by timestamp (newest last for chronological order)
 			results.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-		} catch {
-			// Return empty on read error
-		}
+		} catch {}
 
 		return results.slice(-limit);
 	}
-
-	// Cleanup
 	shutdown(flush = true) {
-		// Final best-effort flush. Bypass the retry backoff so the retained
-		// buffer survives a shutdown that lands inside the backoff window
-		// (e.g. SIGTERM shortly after a failed append) — otherwise the crash
-		// trail the retry exists to preserve is dropped on exit.
 		if (flush) this.flush(true);
 		if (this.flushTimer) {
 			clearInterval(this.flushTimer);
 		}
 	}
 }
-
-// Singleton instance
 export const logger = new Logger(resolveLoggerConfig());
 
 export default logger;

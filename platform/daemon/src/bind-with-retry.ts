@@ -16,19 +16,6 @@ interface BindOptions {
 	readonly onFatalError?: (err: Error) => void;
 	readonly schedule?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
 }
-
-/**
- * Bind an HTTP server with indefinite retry + capped exponential backoff
- * for EADDRINUSE so process-manager restarts (e.g. launchd KeepAlive)
- * that race with port release do not enter an infinite crash loop.
- *
- * EADDRINUSE retries forever in-process (delay caps at maxDelayMs).
- * Non-EADDRINUSE errors are forwarded to onFatalError (default: throw).
- *
- * Pass an AbortSignal to cancel pending retries during shutdown.
- * The error handler is attached BEFORE listen() so EADDRINUSE is caught
- * before it becomes an uncaught exception.
- */
 export function bindWithRetry(opts: BindOptions, attempt = 0): void {
 	if (opts.signal?.aborted) return;
 
@@ -48,16 +35,13 @@ export function bindWithRetry(opts: BindOptions, attempt = 0): void {
 			logger.warn("daemon", `Port ${opts.port} in use, retrying in ${delay}ms (attempt ${attempt + 1})`);
 			try {
 				server.close();
-			} catch {
-				// Server may not have fully initialized — safe to ignore
-			}
+			} catch {}
 			if (opts.signal?.aborted) return;
 			const onAbort = (): void => clearTimeout(timer);
 			const timer = schedule(() => {
 				opts.signal?.removeEventListener("abort", onAbort);
 				bindWithRetry(opts, attempt + 1);
 			}, delay);
-			// Cancel the pending retry if shutdown is requested
 			opts.signal?.addEventListener("abort", onAbort, { once: true });
 		} else {
 			handleFatal(err);

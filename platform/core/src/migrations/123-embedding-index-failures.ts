@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Persist terminal failures from an embedding-index migration. A provider can
- * be healthy while one source row is not representable by its context window;
- * keeping that decision in SQLite prevents a poison row from blocking future
- * polls or disappearing from migration diagnostics.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS embedding_index_failures (

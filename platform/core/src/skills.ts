@@ -1,95 +1,39 @@
-/**
- * Skills unification for Signet
- *
- * Unifies skills from multiple harness sources (OpenClaw, Claude Code, etc.)
- * into a single unified registry with optional symlinking.
- */
-
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { symlinkDir } from "./symlinks.js";
-
-/**
- * Metadata for a unified skill
- */
 export interface SkillMeta {
-	/** Skill name */
 	name: string;
-	/** Optional version string */
 	version?: string;
-	/** Source harness */
 	source: "openclaw" | "claude-code" | "opencode" | "codex" | "manual";
-	/** When the skill was installed */
 	installedAt?: Date;
-	/** Whether this skill is symlinked (vs copied) */
 	symlinked?: boolean;
-	/** Path to the skill directory */
 	path?: string;
 }
-
-/**
- * A skill source configuration
- */
 export interface SkillSource {
-	/** Type of source (e.g., 'openclaw', 'claude-code') */
 	type: string;
-	/** Path to the source directory */
 	path: string;
 }
-
-/**
- * The unified skill registry
- */
 export interface SkillRegistry {
-	/** Map of skill name to metadata */
 	skills: Record<string, SkillMeta>;
-	/** List of configured sources */
 	sources: SkillSource[];
 }
-
-/**
- * Configuration for skills unification
- */
 export interface SkillsConfig {
-	/** External registries to import from */
 	registries?: Array<{
-		/** Path to the registry */
 		path: string;
-		/** Harness type */
 		harness: string;
-		/** Whether to symlink instead of copy */
 		symlink?: boolean;
 	}>;
 }
-
-/**
- * Result of skills unification
- */
 export interface SkillsResult {
-	/** The unified registry */
 	registry: SkillRegistry;
-	/** Number of skills imported */
 	imported: number;
-	/** Number of skills symlinked */
 	symlinked: number;
-	/** Number of skills skipped */
 	skipped: number;
 }
 
 const home = homedir();
-
-/**
- * Raw skill data from lock.json files
- */
 type RawSkillData = Record<string, unknown>;
-
-/**
- * Load the OpenClaw lock.json registry if it exists
- *
- * @param basePath - Base path to look for .clawdhub/lock.json
- * @returns Parsed lock.json or null if not found
- */
 export function loadClawdhubLock(basePath: string): RawSkillData | null {
 	const lockPath = join(basePath, ".clawdhub", "lock.json");
 
@@ -104,13 +48,6 @@ export function loadClawdhubLock(basePath: string): RawSkillData | null {
 		return null;
 	}
 }
-
-/**
- * Symlink skills from ~/.claude/skills/ to the unified skills directory
- *
- * @param basePath - Base path containing the skills/ directory
- * @returns Object with count of symlinked skills and their names
- */
 export function symlinkClaudeSkills(basePath: string): {
 	symlinked: number;
 	skills: string[];
@@ -121,8 +58,6 @@ export function symlinkClaudeSkills(basePath: string): {
 	if (!existsSync(claudeSkillsDir)) {
 		return { symlinked: 0, skills: [] };
 	}
-
-	// Ensure target directory exists
 	if (!existsSync(targetSkillsDir)) {
 		mkdirSync(targetSkillsDir, { recursive: true });
 	}
@@ -135,8 +70,6 @@ export function symlinkClaudeSkills(basePath: string): {
 		for (const skill of skills) {
 			const src = join(claudeSkillsDir, skill);
 			const dest = join(targetSkillsDir, skill);
-
-			// Skip if not a directory
 			try {
 				if (!statSync(src).isDirectory()) continue;
 			} catch {
@@ -147,43 +80,19 @@ export function symlinkClaudeSkills(basePath: string): {
 				symlinkedSkills.push(skill);
 			}
 		}
-	} catch {
-		// Failed to read source directory
-	}
+	} catch {}
 
 	return { symlinked: symlinkedSkills.length, skills: symlinkedSkills };
 }
-
-/**
- * Write the unified skill registry to skills/registry.json
- *
- * @param basePath - Base path containing the skills/ directory
- * @param registry - The registry to write
- */
 export function writeRegistry(basePath: string, registry: SkillRegistry): void {
 	const skillsDir = join(basePath, "skills");
 	const registryPath = join(skillsDir, "registry.json");
-
-	// Ensure skills directory exists
 	if (!existsSync(skillsDir)) {
 		mkdirSync(skillsDir, { recursive: true });
 	}
 
 	writeFileSync(registryPath, JSON.stringify(registry, null, 2), "utf-8");
 }
-
-/**
- * Unify skills from multiple harness sources into a single registry
- *
- * This function:
- * - Imports skills from .clawdhub/lock.json (OpenClaw registry) if it exists
- * - Symlinks skills from ~/.claude/skills/ (Claude Code) to skills/ directory
- * - Writes unified registry to skills/registry.json
- *
- * @param basePath - Base path for the unified skills directory
- * @param config - Configuration for skill sources
- * @returns Result with registry and counts
- */
 export async function unifySkills(basePath: string, config: SkillsConfig = {}): Promise<SkillsResult> {
 	const registry: SkillRegistry = {
 		skills: {},
@@ -193,18 +102,12 @@ export async function unifySkills(basePath: string, config: SkillsConfig = {}): 
 	let imported = 0;
 	let symlinked = 0;
 	let skipped = 0;
-
-	// Import from OpenClaw's .clawdhub/lock.json
 	const clawdhubLock = loadClawdhubLock(basePath);
 	if (clawdhubLock) {
 		registry.sources.push({
 			type: "openclaw",
 			path: join(basePath, ".clawdhub"),
 		});
-
-		// Parse skills from lock.json
-		// Format is typically { "skills": { "skill-name": { ... } } }
-		// or { "skill-name": { ... } } at root
 		const skillsData = clawdhubLock.skills || clawdhubLock;
 
 		for (const [name, data] of Object.entries(skillsData)) {
@@ -229,8 +132,6 @@ export async function unifySkills(basePath: string, config: SkillsConfig = {}): 
 			}
 		}
 	}
-
-	// Symlink from Claude Code's ~/.claude/skills/
 	const claudeResult = symlinkClaudeSkills(basePath);
 	if (claudeResult.symlinked > 0 || existsSync(join(home, ".claude", "skills"))) {
 		registry.sources.push({
@@ -239,7 +140,6 @@ export async function unifySkills(basePath: string, config: SkillsConfig = {}): 
 		});
 
 		for (const skillName of claudeResult.skills) {
-			// Don't overwrite if already imported from another source
 			if (!registry.skills[skillName]) {
 				registry.skills[skillName] = {
 					name: skillName,
@@ -253,8 +153,6 @@ export async function unifySkills(basePath: string, config: SkillsConfig = {}): 
 			}
 		}
 	}
-
-	// Process additional registries from config
 	if (config.registries) {
 		for (const reg of config.registries) {
 			if (!existsSync(reg.path)) {
@@ -277,8 +175,6 @@ export async function unifySkills(basePath: string, config: SkillsConfig = {}): 
 					} catch {
 						continue;
 					}
-
-					// Skip if already in registry
 					if (registry.skills[entry]) {
 						skipped++;
 						continue;
@@ -286,8 +182,6 @@ export async function unifySkills(basePath: string, config: SkillsConfig = {}): 
 
 					if (reg.symlink) {
 						const targetPath = join(basePath, "skills", entry);
-
-						// Ensure skills dir exists
 						if (!existsSync(join(basePath, "skills"))) {
 							mkdirSync(join(basePath, "skills"), { recursive: true });
 						}
@@ -304,7 +198,6 @@ export async function unifySkills(basePath: string, config: SkillsConfig = {}): 
 							skipped++;
 						}
 					} else {
-						// Just register without symlinking
 						registry.skills[entry] = {
 							name: entry,
 							source: reg.harness as SkillMeta["source"],
@@ -314,13 +207,9 @@ export async function unifySkills(basePath: string, config: SkillsConfig = {}): 
 						imported++;
 					}
 				}
-			} catch {
-				// Failed to read registry directory
-			}
+			} catch {}
 		}
 	}
-
-	// Write the unified registry
 	writeRegistry(basePath, registry);
 
 	return {

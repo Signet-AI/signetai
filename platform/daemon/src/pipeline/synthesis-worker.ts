@@ -1,14 +1,3 @@
-/**
- * Synthesis worker: session-activity-based MEMORY.md regeneration.
- *
- * Instead of fixed daily/weekly schedules, this worker monitors session
- * activity and triggers synthesis after an idle gap — when the user has
- * stopped using sessions for a configurable number of minutes.
- *
- * Renders MEMORY.md programmatically from canonical artifacts, thread
- * heads, and DB-native runtime state after an idle gap.
- */
-
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
@@ -40,25 +29,11 @@ function normalizeAgentId(agentId?: string): string {
 	const next = agentId?.trim();
 	return next && next.length > 0 ? next : "default";
 }
-
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-/** How often the worker checks if synthesis is due (60s). */
 const CHECK_INTERVAL_MS = 60_000;
-
-/** Minimum time between syntheses to avoid rapid re-runs (1 hour). */
 const MIN_INTERVAL_MS = 60 * 60 * 1000;
-
-/** Initial delay after daemon start before first check (60s). */
 const STARTUP_DELAY_MS = 60_000;
 const FORCE_RETRY_MS = 5_000;
 const DRAIN_TIMEOUT_BUFFER_MS = 1_000;
-
-// ---------------------------------------------------------------------------
-// Timestamp persistence
-// ---------------------------------------------------------------------------
 
 function getLastSynthesisPath(agentId?: string): string {
 	const key = normalizeAgentId(agentId);
@@ -88,15 +63,6 @@ function writeLastSynthesisTime(deps: SynthesisDeps, timestamp: number, agentId?
 		});
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Session activity detection
-// ---------------------------------------------------------------------------
-
-/**
- * Get the timestamp of the most recent session end from checkpoints.
- * Falls back to the latest completed retained transcript when no checkpoint exists.
- */
 function parseLastEndTimestamp(row: unknown): number {
 	if (typeof row !== "object" || row === null || !("last_end" in row)) {
 		return 0;
@@ -130,7 +96,7 @@ function getLastSessionEndTime(deps: SynthesisDeps): number {
 				WHERE trigger = 'session_end'
 			`)
 				.get();
-		}, "pipeline/synthesis-worker.ts:125");
+		}, "pipeline/synthesis-worker.ts:91");
 		const checkpointTs = parseLastEndTimestamp(checkpointRow);
 		if (checkpointTs > 0) {
 			return checkpointTs;
@@ -149,8 +115,6 @@ function getLastSessionEndTime(deps: SynthesisDeps): number {
 	try {
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 		const transcriptRow = deps.getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-			// completed_at is the canonical settled-session boundary, including
-			// stale/TTL finalization when no explicit hook arrived.
 			return db
 				.prepare(`
 					SELECT MAX(completed_at) as last_end
@@ -158,7 +122,7 @@ function getLastSessionEndTime(deps: SynthesisDeps): number {
 					WHERE completed_at IS NOT NULL
 				`)
 				.get();
-		}, "pipeline/synthesis-worker.ts:151");
+		}, "pipeline/synthesis-worker.ts:117");
 		return parseLastEndTimestamp(transcriptRow);
 	} catch (error) {
 		if (!isExpectedSessionActivityLookupError(error, "session_transcripts")) {
@@ -172,10 +136,6 @@ function getLastSessionEndTime(deps: SynthesisDeps): number {
 		return 0;
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Core synthesis execution
-// ---------------------------------------------------------------------------
 
 type SynthesisResult = "ok" | "empty" | "failed" | "busy";
 export type SynthesisDrainResult = "completed" | "timeout";
@@ -238,9 +198,6 @@ async function runSynthesisWithDeps(
 			deps.logger.warn("synthesis", "Discarding synthesis result after shutdown abandoned the run");
 			return "failed";
 		}
-
-		// The legacy idle-gap renderer is retained only for scheduling/audit
-		// compatibility. Dreaming is the sole MEMORY.md publication trigger.
 		deps.logger.info("synthesis", "Skipped retired idle-gap MEMORY.md publication", {
 			agentId: scopeAgentId,
 			sourceItems: synthesisData.fileCount,
@@ -255,31 +212,19 @@ async function runSynthesisWithDeps(
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Worker handle
-// ---------------------------------------------------------------------------
-
 export interface SynthesisWorkerHandle {
 	stop(): void;
-	/** Drain in-flight synthesis work. Must be called after stop() to prevent new locks. */
 	drain(): Promise<SynthesisDrainResult>;
-	/**
-	 * Acquire the shared write lock for manual/legacy synthesis paths.
-	 * The returned token is single-use and must always be released in a finally block.
-	 */
 	acquireWriteLock(): number | null;
-	/** Release a token previously returned by acquireWriteLock(). */
 	releaseWriteLock(token: number): void;
 	readonly running: boolean;
 	readonly isSynthesizing: boolean;
 	readonly pendingForceCount: number;
-	/** Trigger an immediate synthesis (e.g. from API). */
 	triggerNow(opts?: { readonly force?: boolean; readonly source?: string; readonly agentId?: string }): Promise<{
 		success: boolean;
 		skipped: boolean;
 		reason?: string;
 	}>;
-	/** Last synthesis timestamp. */
 	readonly lastRunAt: number;
 }
 
@@ -441,37 +386,26 @@ export function startSynthesisWorker(
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
 			}
-
-			// Don't synthesize while sessions are active
 			if (deps.activeSessionCount() > 0) {
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
 			}
-
-			// Check when the last session ended
 			const lastSessionEnd = getLastSessionEndTime(deps);
 			if (lastSessionEnd === 0) {
-				// No session-end checkpoints yet — nothing to synthesize from
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
 			}
 
 			const idleSince = Date.now() - lastSessionEnd;
 			if (idleSince < idleGapMs) {
-				// Not idle long enough
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
 			}
-
-			// Check if we already synthesized since the last session ended
 			const lastRun = readLastSynthesisTime();
 			if (lastRun >= lastSessionEnd) {
-				// Already synthesized after the most recent session
 				scheduleTick(CHECK_INTERVAL_MS);
 				return;
 			}
-
-			// Enforce minimum interval
 			const elapsed = Date.now() - lastRun;
 			if (elapsed < MIN_INTERVAL_MS) {
 				scheduleTick(CHECK_INTERVAL_MS);
@@ -494,9 +428,6 @@ export function startSynthesisWorker(
 				});
 				const result = await currentRunPromise;
 				if (shouldRecordSuccess(result) && !runState.abandoned) {
-					// Busy means another writer currently owns the shared
-					// MEMORY.md head lease. Leave last-run untouched so the
-					// next tick retries instead of waiting a full interval.
 					writeLastSynthesisTime(deps, Date.now());
 				}
 			} finally {
@@ -522,8 +453,6 @@ export function startSynthesisWorker(
 			});
 		}, delay);
 	}
-
-	// Initial delay to let other workers settle
 	scheduleTick(STARTUP_DELAY_MS);
 	emitLifecycleObservation({ stage: "startup" });
 
@@ -539,12 +468,7 @@ export function startSynthesisWorker(
 		},
 		async drain() {
 			const startedAtMs = Date.now();
-			// Capture the active owner at shutdown entry. It may clear its owner
-			// fields before the drain wait resolves, but it still counts toward the
-			// shutdown result. Queued forced work is drained after the wait so work
-			// queued by an in-flight forced attempt is accounted for too.
 			const workIdAtShutdown = activeWorkId;
-			// Cancel any pending tick to prevent new synthesis starting
 			if (timer) {
 				clearTimeout(timer);
 				timer = null;
@@ -568,9 +492,6 @@ export function startSynthesisWorker(
 			let timedOut = false;
 			try {
 				await Promise.race([
-					// External callers can hold the write lock without setting
-					// currentRunPromise, so drain must wait for both the active run
-					// and the shared lock release before shutdown continues.
 					Promise.all([currentRunPromise ?? Promise.resolve(), lockReleasedPromise]).then(() => undefined),
 					new Promise<void>((resolve) => {
 						timeoutId = setTimeout(() => {

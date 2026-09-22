@@ -172,10 +172,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			plan.extractionEndpoint,
 		);
 		applySetupInferenceRoute(config, inference);
-
-		// Optional distinct provider for aggregate recall (query-time evidence
-		// synthesis). Overlaid on config.inference; the daemon merges it atop the
-		// legacy pipeline.* base, so extraction/session-synthesis are unaffected.
 		if (plan.aggregateRecallProvider) {
 			applyAggregateRecallRoute(
 				config,
@@ -200,19 +196,12 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		if (plan.daemonUrl) {
 			config.daemon = { url: plan.daemonUrl };
 		}
-
-		// New installations share telemetry only after an explicit opt-in in settings.
 		const telemetryEnabled = false;
-		// The daemon reads telemetryEnabled from memory.pipelineV2 — writing it
-		// at the top level would be silently ignored and the opt-out would not
-		// reach the daemon.
 		const memoryCfg = (config.memory as Record<string, unknown> | undefined) ?? {};
 		const pipelineCfg = (memoryCfg.pipelineV2 as Record<string, unknown> | undefined) ?? {};
 		config.memory = { ...memoryCfg, pipelineV2: { ...pipelineCfg, telemetryEnabled } };
 
 		writeFileSync(join(context.basePath, "agent.yaml"), formatYaml(config));
-
-		// Connect configured sources (config files the daemon indexes at boot).
 		if (plan.sources && plan.sources.length > 0) {
 			for (const src of plan.sources) {
 				if (src.type === "obsidian") {
@@ -278,11 +267,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		);
 
 		spinner.text = "Configuring harness hooks...";
-		// Hooks are installed before the daemon starts. This is safe because
-		// connectors only write static files (extension bundles) with a
-		// well-known daemon URL (127.0.0.1:3850). The extension resolves the
-		// actual daemon address at runtime via SIGNET_DAEMON_URL, falling back
-		// to the baked default — no live daemon connection is needed here.
 		const configuredHarnesses: string[] = [];
 		const failedHarnesses: string[] = [];
 		for (const harness of plan.harnesses) {
@@ -317,8 +301,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		const remoteDaemon = Boolean(plan.daemonUrl);
 		let daemonStarted: boolean;
 		if (remoteDaemon) {
-			// Remote instance: no local daemon to start; the CLI/connector clients
-			// resolve daemon.url from config at runtime.
 			daemonStarted = true;
 		} else {
 			spinner.text = "Starting daemon...";

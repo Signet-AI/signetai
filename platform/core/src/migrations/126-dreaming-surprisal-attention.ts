@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Add the opt-in embedding-geometry attention kind without rewriting any
- * attention records. SQLite CHECK constraints are part of the table definition,
- * so existing installs need an additive table rebuild rather than an ALTER
- * COLUMN. The migration runs inside the migration runner's savepoint.
- */
 export function up(db: MigrationDb): void {
 	const table = db
 		.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_attention'")

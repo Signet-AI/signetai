@@ -1,8 +1,4 @@
 #!/usr/bin/env node
-/**
- * Signet CLI
- * Own your agent. Bring it anywhere.
- */
 
 import { spawnSyncHidden as spawnSync } from "@signet/core";
 import {
@@ -120,8 +116,6 @@ import {
 import "./sqlite.js";
 
 const isDaemonEntrypoint = process.env.SIGNET_DAEMON_ENTRYPOINT === "1";
-
-// Template directory location (relative to built CLI)
 function getTemplatesDir() {
 	if (process.env.SIGNET_TEMPLATES_DIR && existsSync(process.env.SIGNET_TEMPLATES_DIR)) {
 		return process.env.SIGNET_TEMPLATES_DIR;
@@ -135,30 +129,19 @@ function getTemplatesDir() {
 
 	return join(__dirname, "templates");
 }
-
-// Skills source directory (root skills/ copied into package at build time)
 function getSkillsSourceDir() {
 	if (process.env.SIGNET_SKILLS_SOURCE && existsSync(process.env.SIGNET_SKILLS_SOURCE)) {
 		return process.env.SIGNET_SKILLS_SOURCE;
 	}
-
-	// Dev: monorepo root skills/
 	const devPath = join(__dirname, "..", "..", "..", "skills");
-	// Dist: skills/ next to dist/
 	const distPath = join(__dirname, "..", "skills");
 	const distPath2 = join(__dirname, "..", "..", "skills");
 
 	if (existsSync(devPath)) return devPath;
 	if (existsSync(distPath)) return distPath;
 	if (existsSync(distPath2)) return distPath2;
-
-	// Backward compat: fall back to templates/skills/
 	return join(getTemplatesDir(), "skills");
 }
-
-// ============================================================================
-// Harness Hook Configuration
-// ============================================================================
 
 async function configureHarnessHooks(
 	harness: string,
@@ -219,25 +202,14 @@ async function configureHarnessHooks(
 		}
 		case "openclaw": {
 			const connector = new OpenClawConnector();
-			// sync.ts can force plugin migration by passing openclawRuntimePath here;
-			// fall back to the discovered runtime only when no explicit override was provided.
 			const runtimePath = options?.openclawRuntimePath ?? connector.getConfiguredRuntimePath() ?? "plugin";
-			// Install connector first — writes config with runtimePath so
-			// ensureOpenClawPluginPackage's getConfiguredRuntimePath() check passes.
 			await connector.install(basePath, {
 				configureWorkspace: options?.configureOpenClawWorkspace ?? false,
 				runtimePath,
 			});
 			if (runtimePath === "plugin") {
-				// ensureOpenClawPluginPackage installs the package, creates the symlink,
-				// and returns the resolved global path so we can patch load.paths in one
-				// targeted call without re-running the full connector install.
 				const globalPkgPath = await ensureOpenClawPluginPackage(basePath);
 				if (globalPkgPath) {
-					// dirname gives the parent search directory (e.g. …/@signetai/)
-					// that OpenClaw scans for "signet-memory-openclaw" subdirectory.
-					// patchLoadPaths already calls console.warn internally for each
-					// skipped config (same pattern as sibling private methods).
 					const { patched: lPathPatched, warnings: lPathWarnings } = connector.patchLoadPaths(dirname(globalPkgPath));
 					if (lPathPatched.length > 0) {
 						console.log(
@@ -246,8 +218,6 @@ async function configureHarnessHooks(
 							),
 						);
 					} else if (lPathWarnings.length === 0) {
-						// No configs found yet — expected on first run before OpenClaw
-						// has been launched and created its config file.
 						console.log(
 							chalk.dim(
 								"  (no OpenClaw configs found to patch with load.paths; run 'signet setup' again after first OpenClaw launch)",
@@ -343,9 +313,7 @@ function getCliVersion(): string {
 		try {
 			const version = readFileSync(join(process.env.SIGNET_DIR, "VERSION"), "utf8").trim();
 			if (version) return version;
-		} catch {
-			// Fall through to unknown version.
-		}
+		} catch {}
 	}
 
 	return "0.0.0";
@@ -353,10 +321,6 @@ function getCliVersion(): string {
 
 const program = new Command();
 const VERSION = getCliVersion();
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 function signetLogo() {
 	return `
@@ -501,17 +465,13 @@ function writeOpenClawPluginRetryAt(basePath: string): void {
 		const path = openClawPluginRetryPath(basePath);
 		mkdirSync(dirname(path), { recursive: true });
 		writeFileSync(path, `${Date.now()}\n`);
-	} catch {
-		// Best-effort throttle stamp only.
-	}
+	} catch {}
 }
 
 function clearOpenClawPluginRetryAt(basePath: string): void {
 	try {
 		rmSync(openClawPluginRetryPath(basePath), { force: true });
-	} catch {
-		// Best-effort cleanup only.
-	}
+	} catch {}
 }
 
 function shouldSkipOpenClawPluginRefresh(basePath: string): boolean {
@@ -689,9 +649,6 @@ async function ensureOpenClawPluginPackage(
 	});
 
 	if (!options.force && readOpenClawPluginSyncVersion(basePath) === VERSION) {
-		// Cached — skip re-install but still resolve and return path for caller.
-		// If the path can't be resolved (package was pruned after the stamp was
-		// written), fall through to re-install rather than returning undefined.
 		const cachedPath = resolveGlobalPackagePath(packageManager.family, OPENCLAW_PLUGIN_PACKAGE);
 		if (cachedPath) {
 			if (!hasOpenClawPluginRuntime(cachedPath)) {
@@ -711,7 +668,6 @@ async function ensureOpenClawPluginPackage(
 		if (!cachedPath && !options.silent) {
 			console.log(chalk.yellow(`  Warning: cached ${OPENCLAW_PLUGIN_PACKAGE} not found on disk; retrying install.`));
 		}
-		// Fall through to re-install below.
 	}
 
 	if (!options.force && shouldSkipOpenClawPluginRefresh(basePath)) {
@@ -734,8 +690,6 @@ async function ensureOpenClawPluginPackage(
 		}
 		return undefined;
 	}
-
-	// Resolve once and reuse for both symlink creation and load.paths patch.
 	const globalPath = resolveGlobalPackagePath(packageManager.family, OPENCLAW_PLUGIN_PACKAGE);
 	if (!globalPath) {
 		writeOpenClawPluginRetryAt(basePath);
@@ -769,26 +723,14 @@ async function ensureOpenClawPluginPackage(
 	ensureOpenClawExtensionSymlink(globalPath, options.silent);
 	return globalPath;
 }
-
-/**
- * Create a symlink from OpenClaw's extensions directory to the globally
- * installed plugin package. Idempotent — skips if already correct,
- * updates if stale, creates if missing.
- */
 function ensureOpenClawExtensionSymlink(globalPath: string, silent?: boolean): void {
-	// Discover the active OpenClaw state directory. Check env overrides first
-	// (expanding ~ just like the connector does), then probe for existing legacy
-	// dirs (~/.clawdbot, ~/.moldbot, ~/.moltbot).
 	const stateDirCandidates: string[] = [];
-	// normalizeAgentPath expands ~ and resolves to an absolute path.
 	if (process.env.OPENCLAW_STATE_DIR) {
 		stateDirCandidates.push(normalizeAgentPath(process.env.OPENCLAW_STATE_DIR));
 	}
 	if (process.env.CLAWDBOT_STATE_DIR) {
 		stateDirCandidates.push(normalizeAgentPath(process.env.CLAWDBOT_STATE_DIR));
 	}
-	// OPENCLAW_STATE_HOME is the root of the state directory (openclaw.json lives
-	// directly inside it), so extensions/ belongs there too.
 	if (process.env.OPENCLAW_STATE_HOME) {
 		stateDirCandidates.push(normalizeAgentPath(process.env.OPENCLAW_STATE_HOME));
 	}
@@ -799,12 +741,9 @@ function ensureOpenClawExtensionSymlink(globalPath: string, silent?: boolean): v
 			stateDirCandidates.push(candidate);
 		}
 	}
-	// Default to ~/.openclaw if nothing else exists
 	if (stateDirCandidates.length === 0) {
 		stateDirCandidates.push(join(home, ".openclaw"));
 	}
-
-	// Create symlink in every discovered state dir
 	for (const stateDir of [...new Set(stateDirCandidates)]) {
 		createExtensionSymlink(stateDir, globalPath, silent);
 	}
@@ -822,18 +761,13 @@ function createExtensionSymlink(stateDir: string, globalPath: string, silent?: b
 		}
 		return;
 	}
-
-	// Check existing symlink — lstatSync doesn't follow symlinks, so it
-	// catches both valid and broken symlinks. existsSync follows symlinks
-	// and misses broken ones.
 	try {
 		const stat = lstatSync(symlinkPath);
 		if (stat.isSymbolicLink()) {
 			const currentTarget = readlinkSync(symlinkPath);
 			if (currentTarget === globalPath) {
-				return; // Already correct
+				return;
 			}
-			// Stale symlink — remove and recreate
 			try {
 				rmSync(symlinkPath, { force: true });
 			} catch (rmErr) {
@@ -843,10 +777,6 @@ function createExtensionSymlink(stateDir: string, globalPath: string, silent?: b
 				return;
 			}
 		} else {
-			// Exists but is not a symlink (real file or directory). Removing it
-			// before symlinkSync could permanently destroy a working manual
-			// installation if symlink creation then fails. Leave it in place and
-			// warn — the user can remove it manually to enable the managed symlink.
 			if (!silent) {
 				console.log(
 					chalk.yellow(
@@ -856,9 +786,7 @@ function createExtensionSymlink(stateDir: string, globalPath: string, silent?: b
 			}
 			return;
 		}
-	} catch {
-		// Path doesn't exist — will create below
-	}
+	} catch {}
 
 	try {
 		symlinkSync(globalPath, symlinkPath, process.platform === "win32" ? "junction" : "dir");
@@ -871,10 +799,6 @@ function createExtensionSymlink(stateDir: string, globalPath: string, silent?: b
 		}
 	}
 }
-
-// ============================================================================
-// CLI Definition
-// ============================================================================
 
 program.name("signet").version(VERSION);
 program.showHelpAfterError();
@@ -920,9 +844,6 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 	if (!existsSync(AGENTS_DIR)) {
 		return;
 	}
-
-	// Open telemetry log (issue #1026 Phase 2): record the command name
-	// (never arguments) while telemetry is enabled. Best-effort.
 	recordCommandInvoked(AGENTS_DIR, topLevelCommand);
 	void flushCliTelemetry(AGENTS_DIR, VERSION);
 
@@ -1047,12 +968,6 @@ registerGraphiqCommands(program, {
 	agentsDir: AGENTS_DIR,
 });
 
-// (issue #901) Repair queue CLI is registered after secretApiCall below.
-
-// ============================================================================
-// signet secret - Secrets management
-// ============================================================================
-
 async function ensureDaemonForSecrets(): Promise<boolean> {
 	return ensureDaemonRunning(isDaemonRunning);
 }
@@ -1144,10 +1059,6 @@ registerWorkspaceCommands(program, {
 	signetLogo,
 });
 
-// ============================================================================
-// signet hook - Lifecycle hooks for harness integration
-// ============================================================================
-
 registerHookCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonResult,
@@ -1215,17 +1126,9 @@ registerVectorCommands(program, {
 	signetLogo,
 });
 
-// ============================================================================
-// signet bypass - Per-session bypass toggle
-// ============================================================================
-
 registerSessionCommands(program, {
 	fetchFromDaemon,
 });
-
-// ============================================================================
-// signet dream - Dreaming memory consolidation
-// ============================================================================
 
 registerDreamCommands(program, {
 	fetchFromDaemon,
@@ -1233,13 +1136,7 @@ registerDreamCommands(program, {
 	fetchDaemonStream,
 });
 
-// ============================================================================
-// Default action when no command specified
-// ============================================================================
-
 registerBrowseCommand(program);
-
-// Default action when no command specified
 registerDefaultAction(program, {
 	agentsDir: AGENTS_DIR,
 	defaultPort: DEFAULT_PORT,

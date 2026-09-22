@@ -147,23 +147,11 @@ function verifySha256(path: string, expected: string): void {
 
 function extractConnectorAssets(archivePath: string, extractRoot: string): void {
 	mkdirSync(extractRoot, { recursive: true });
-	// Tarballs are produced by `scripts/build-connector-assets.ts` with a
-	// `runtime/connectors/<harness>/...` layout, so we extract to the
-	// runtime root and let the tarball's own `runtime/` prefix land
-	// naturally at `<extractRoot>/runtime/connectors/...`.
 	const result = spawnSync("tar", ["xzf", archivePath, "-C", extractRoot], { stdio: "inherit" });
 	if (result.status !== 0) {
 		throw new Error(`tar extraction failed with status ${result.status ?? "unknown"}`);
 	}
 }
-
-/**
- * Install connector plugin assets (e.g. the Hermes Python memory
- * provider) alongside the Signet binary. The tarball is verified
- * against the manifest's `components.connectors.sha256` and extracted
- * to `<binDir>/../runtime/connectors/`, mirroring the layout the npm
- * wrapper uses after `install-native.js` runs.
- */
 type RuntimeComponent = "connectors" | "daemonJs";
 
 function installRuntimeAssetsFromManifest(
@@ -172,9 +160,6 @@ function installRuntimeAssetsFromManifest(
 	component: RuntimeComponent,
 	componentLabel: string,
 ): string {
-	// Look up the expected SHA-256 from the manifest. Curl installs keep the
-	// manifest next to the native binary; workspace and older installs may not
-	// have one, so extraction remains compatible with the connector path.
 	const manifestCandidates = [
 		join(process.cwd(), "native-manifest.json"),
 		join(dirname(process.execPath), "native-manifest.json"),
@@ -200,7 +185,6 @@ function installRuntimeAssetsFromManifest(
 			if (error instanceof Error && (error.message.startsWith("SHA-256") || error.message.startsWith("Tarball size"))) {
 				throw error;
 			}
-			// Ignore malformed manifests and try the next candidate.
 		}
 	}
 
@@ -250,10 +234,6 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 			daemonJsAssetsDir,
 		};
 	}
-
-	// Validate and extract companion assets before replacing an existing
-	// executable. A connector checksum or extraction failure must leave the
-	// previously working Signet binary in place.
 	const connectorAssetsDir = options.connectorAssets
 		? installConnectorAssetsFromManifest(options.connectorAssets, binDir)
 		: null;
@@ -268,7 +248,7 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 	try {
 		if (process.platform !== "win32") chmodSync(tmp, 0o755);
 		if (process.platform === "win32" && existsSync(target)) {
-			const backup = join(dirname(target), `.${basename(target)}.backup`); // Parent may still execute this renamed image.
+			const backup = join(dirname(target), `.${basename(target)}.backup`);
 			rmSync(backup, { force: true });
 			renameSync(target, backup);
 			try {
@@ -280,8 +260,6 @@ export function installNativeBinary(options: NativeInstallOptions = {}): NativeI
 				throw error;
 			}
 		} else {
-			// POSIX rename replaces the existing path atomically, so a failed
-			// copy or checksum never removes the previously installed binary.
 			renameSync(tmp, target);
 		}
 	} finally {

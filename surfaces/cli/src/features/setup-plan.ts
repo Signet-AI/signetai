@@ -16,37 +16,16 @@ import {
 	SETUP_HARNESS_CHOICES,
 } from "./setup-shared.js";
 
-/**
- * `SetupPlan` is the single typed, serializable seam for `signet setup`.
- *
- * It captures every decision a scripted install needs — no prompts, no
- * side effects, no environment-derived values. Headless `--json`/`--file` payloads and CLI flags converge on it.
- * Interactive setup uses these defaults to bootstrap, then connects providers
- * through the daemon-backed dashboard. A validated plan is handed to {@link runFreshSetup} together with
- * a {@link SetupApplyContext} that carries the runtime/detected bits.
- *
- * Design note: the choice enums are derived from the existing readonly choice
- * arrays in `setup-shared.ts` so there is a single source of truth for the
- * allowed harness/provider values.
- */
-
 const networkModeSchema = z.enum(NETWORK_MODES);
 const harnessSchema = z.enum(SETUP_HARNESS_CHOICES);
 const embeddingProviderSchema = z.enum(EMBEDDING_PROVIDER_CHOICES);
-// Extraction provider accepts both the legacy CLI choices and the dashboard
-// connect families (anthropic, openai-codex, github-copilot, …) — sourced from
-// pi-ai's catalog, all valid routing executors the daemon handles.
 const EXTRACTION_PROVIDER_IDS = [...new Set([...EXTRACTION_PROVIDER_CHOICES, ...connectableProviderIds()])] as const;
 const extractionProviderSchema = z.enum(EXTRACTION_PROVIDER_IDS);
-// Aggregate recall is pi-ai-only; accept any connectable pi-ai family + local servers.
 const aggregateRecallProviderSchema = z.enum(aggregateRecallProviderIds());
 const openclawRuntimeSchema = z.enum(OPENCLAW_RUNTIME_CHOICES);
 
 const identityModeSchema = z.enum(IDENTITY_MODES);
-const identityPresetSchema = z.enum(
-	// IDENTITY_PRESETS is Record<IdentityPresetName, ...>, so its keys are exactly the preset names.
-	Object.keys(IDENTITY_PRESETS) as [IdentityPresetName, ...IdentityPresetName[]],
-);
+const identityPresetSchema = z.enum(Object.keys(IDENTITY_PRESETS) as [IdentityPresetName, ...IdentityPresetName[]]);
 const identitySessionKindSchema = z.enum(["dreaming", "heartbeat", "bootstrap"]);
 
 const identityContextFileSchema = z.strictObject({
@@ -59,17 +38,11 @@ const identityContextFileSchema = z.strictObject({
 const identitySpecialFileSchema = identityContextFileSchema.extend({
 	kind: identitySessionKindSchema,
 });
-
-// Single regex enforced identically by both parseSetupPlan (runtime) and the
-// published --schema (pattern). Avoids zod .url(), whose constraint does not
-// round-trip into z.toJSONSchema.
 const httpEndpointSchema = z
 	.string()
 	.regex(/^https?:\/\/\S+$/, "must be an http:// or https:// URL")
 	.describe("Required when extractionProvider is 'openai-compatible'")
 	.optional();
-
-/** A daemon URL is a bare origin, not an API path or credential-bearing URL. */
 export const BARE_DAEMON_ORIGIN_PATTERN = /^https?:\/\/(?:[\w.-]+|\[[0-9A-Fa-f:.]+\])(?::\d+)?\/?$/;
 
 export function isBareDaemonOrigin(value: string): boolean {
@@ -121,9 +94,6 @@ export const setupPlanSchema = z
 		dreamingEnabled: z.boolean().optional(),
 		daemonUrl: z
 			.string()
-			// Match normalizeDaemonUrl's rules: a bare origin (no path, query,
-			// fragment, or credentials) so a persisted daemon.url cannot brick the
-			// module-load daemon client.
 			.regex(BARE_DAEMON_ORIGIN_PATTERN, "must be a bare http(s) origin (no path, query, or credentials)")
 			.optional(),
 		sources: z
@@ -146,10 +116,6 @@ export const setupPlanSchema = z
 			.optional(),
 	})
 	.superRefine((plan, ctx) => {
-		// The published regex admits bracketed IPv6 origins but cannot fully encode
-		// IPv6 grammar. Apply URL parsing at the plan boundary too, so --file and
-		// --json match the interactive/flag path rather than persisting a daemon
-		// URL the runtime will reject.
 		if (plan.daemonUrl && BARE_DAEMON_ORIGIN_PATTERN.test(plan.daemonUrl) && !isBareDaemonOrigin(plan.daemonUrl)) {
 			ctx.addIssue({
 				code: "custom",
@@ -157,8 +123,6 @@ export const setupPlanSchema = z
 				path: ["daemonUrl"],
 			});
 		}
-		// openai-compatible extraction has no implicit endpoint; the interactive
-		// wizard defaults one, but a headless --file plan must state it.
 		if (plan.extractionProvider === "openai-compatible" && !plan.extractionEndpoint) {
 			ctx.addIssue({
 				code: "custom",
@@ -166,9 +130,6 @@ export const setupPlanSchema = z
 				path: ["extractionEndpoint"],
 			});
 		}
-		// Aggregate recall is a distinct provider for query-time evidence
-		// synthesis. It is pi-ai-only (no harness subprocess) and optional —
-		// when unset it falls through to the default policy (extraction).
 		if (plan.aggregateRecallProvider === "openai-compatible" && !plan.aggregateRecallEndpoint) {
 			ctx.addIssue({
 				code: "custom",
@@ -190,9 +151,6 @@ export const setupPlanSchema = z
 				path: ["aggregateRecallModel"],
 			});
 		}
-		// Aggregate recall synthesizes extracted memories at query time. With the
-		// pipeline disabled (extraction none) there is nothing to synthesize, so a
-		// distinct aggregate-recall provider would be dead config.
 		if (plan.extractionProvider === "none" && plan.aggregateRecallProvider) {
 			ctx.addIssue({
 				code: "custom",
@@ -224,12 +182,6 @@ export const setupPlanSchema = z
 	});
 
 export type SetupPlan = z.infer<typeof setupPlanSchema>;
-
-/**
- * Runtime/detected context that is NOT a user decision and therefore not part
- * of the serializable plan: where to apply, what was detected on disk, and how
- * the invocation should behave (interactive vs. headless, protection policy).
- */
 export interface SetupApplyContext {
 	readonly basePath: string;
 	readonly existingAgentsDir: boolean;
@@ -241,12 +193,6 @@ export interface SetupApplyContext {
 	readonly openclawConfigCount: number;
 	readonly openDashboard: boolean;
 }
-
-/**
- * Parse and validate a raw (e.g. JSON-decoded) setup plan. Throws a structured
- * error listing every invalid field, so headless/agent callers get actionable
- * feedback instead of a raw zod stack.
- */
 export function parseSetupPlan(json: unknown): SetupPlan {
 	const result = setupPlanSchema.safeParse(json);
 	if (result.success) {
@@ -258,12 +204,7 @@ export function parseSetupPlan(json: unknown): SetupPlan {
 	});
 	throw new Error(`Invalid setup plan:\n${issues.join("\n")}`);
 }
-
-/** JSON Schema (draft 2020-12) for the setup plan, for `signet setup --schema`. */
 export function setupPlanJsonSchema(): unknown {
 	return z.toJSONSchema(setupPlanSchema);
 }
-
-// Re-export the entry types so callers of the plan API do not need a second
-// import surface; the zod schemas mirror these core types exactly.
 export type { IdentityContextFileEntry, IdentitySpecialFileEntry };

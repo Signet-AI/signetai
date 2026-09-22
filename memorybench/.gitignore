@@ -7,8 +7,6 @@
 
 .env
 .env.local
-
-# UI
 ui/node_modules/
 ui/.next/
 ui/tsconfig.tsbuildinfo

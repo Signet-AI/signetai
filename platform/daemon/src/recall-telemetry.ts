@@ -12,8 +12,6 @@ const RECALL_SURFACES: ReadonlySet<string> = new Set<RecallSurface>([
 	"dashboard",
 	"other",
 ]);
-
-/** Resolve untrusted request metadata to the bounded telemetry vocabulary. */
 export function normalizeRecallSurface(value: unknown, fallback: RecallSurface = "other"): RecallSurface {
 	return typeof value === "string" && RECALL_SURFACES.has(value) ? (value as RecallSurface) : fallback;
 }
@@ -22,8 +20,6 @@ export function recallResultState(resultCount: number, truncated = false): Exclu
 	if (resultCount <= 0) return "empty";
 	return truncated ? "truncated" : "non_empty";
 }
-
-/** Keep funnel truncation comparisons aligned with the recall engine cap. */
 export function effectiveRecallLimit(value: unknown): number {
 	if (typeof value !== "number" || !Number.isFinite(value)) return 10;
 	return Math.min(50, Math.max(1, Math.trunc(value)));
@@ -32,16 +28,9 @@ export function effectiveRecallLimit(value: unknown): number {
 function boundedResultCount(value: number): number {
 	return Number.isFinite(value) ? Math.min(100, Math.max(0, Math.trunc(value))) : 0;
 }
-
-/** Record a retrieval attempt without accepting query or caller-identifying data. */
 export function recordRecallAttempt(surface: RecallSurface): void {
 	getActiveTelemetry()?.record("recall.attempted", { surface });
 }
-
-/**
- * Record the result and delivery boundary for one supported recall surface.
- * The event deliberately contains only bounded enums and a result count.
- */
 export function recordRecallOutcome(input: {
 	readonly surface: RecallSurface;
 	readonly resultCount?: number;

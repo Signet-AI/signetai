@@ -1,15 +1,3 @@
-/**
- * Hybrid Search Engine (BM25 + Vector)
- *
- * Implements the search approach used by OpenClaw's memory system and QMD:
- * - BM25 keyword search for exact term matching
- * - Vector similarity search using cosine distance
- * - Hybrid score fusion: (vector_score * 0.7) + (bm25_score * 0.3)
- *
- * All data is stored in-memory per container for fast access during benchmarking.
- */
-
-// ─── Types ───────────────────────────────────────────────────────────────────
 
 export interface Chunk {
   id: string
@@ -31,8 +19,6 @@ export interface SearchResult {
   date?: string
   metadata?: Record<string, unknown>
 }
-
-// ─── Tokenizer ───────────────────────────────────────────────────────────────
 
 const STOP_WORDS = new Set([
   "a",
@@ -155,19 +141,13 @@ function tokenize(text: string): string[] {
     .filter((t) => t.length > 1 && !STOP_WORDS.has(t))
 }
 
-// ─── BM25 Index ──────────────────────────────────────────────────────────────
-
 const BM25_K1 = 1.2
 const BM25_B = 0.75
 
 interface BM25Index {
-  /** Inverted index: term -> Map<chunkId, termFrequency> */
   invertedIndex: Map<string, Map<string, number>>
-  /** Document lengths (in tokens) */
   docLengths: Map<string, number>
-  /** Average document length */
   avgDocLength: number
-  /** Total number of documents */
   docCount: number
 }
 
@@ -184,21 +164,15 @@ function addToBM25Index(index: BM25Index, chunkId: string, text: string): void {
   const tokens = tokenize(text)
   index.docLengths.set(chunkId, tokens.length)
   index.docCount++
-
-  // Update average document length
   let totalLength = 0
   for (const len of index.docLengths.values()) {
     totalLength += len
   }
   index.avgDocLength = totalLength / index.docCount
-
-  // Build term frequency map
   const termFreqs = new Map<string, number>()
   for (const token of tokens) {
     termFreqs.set(token, (termFreqs.get(token) || 0) + 1)
   }
-
-  // Update inverted index
   for (const [term, freq] of termFreqs) {
     if (!index.invertedIndex.has(term)) {
       index.invertedIndex.set(term, new Map())
@@ -231,8 +205,6 @@ function searchBM25(index: BM25Index, query: string): Map<string, number> {
   return scores
 }
 
-// ─── Vector Search ───────────────────────────────────────────────────────────
-
 function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) return 0
 
@@ -251,12 +223,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
 
   return dot / denominator
 }
-
-// ─── Hybrid Search Engine ────────────────────────────────────────────────────
-
-/** Weight for vector similarity in hybrid score */
 const VECTOR_WEIGHT = 0.7
-/** Weight for BM25 keyword score in hybrid score */
 const BM25_WEIGHT = 0.3
 
 export class HybridSearchEngine {
@@ -290,18 +257,12 @@ export class HybridSearchEngine {
   search(containerTag: string, queryEmbedding: number[], query: string, limit: number): SearchResult[] {
     const container = this.containers.get(containerTag)
     if (!container || container.chunks.size === 0) return []
-
-    // BM25 keyword scores
     const bm25Scores = searchBM25(container.bm25Index, query)
-
-    // Vector similarity scores
     const vectorScores = new Map<string, number>()
     for (const [chunkId, chunk] of container.chunks) {
       const sim = cosineSimilarity(queryEmbedding, chunk.embedding)
       vectorScores.set(chunkId, sim)
     }
-
-    // Normalize BM25 scores to 0-1 range
     let maxBM25 = 0
     for (const score of bm25Scores.values()) {
       if (score > maxBM25) maxBM25 = score
@@ -311,8 +272,6 @@ export class HybridSearchEngine {
     for (const [chunkId, score] of bm25Scores) {
       normalizedBM25.set(chunkId, maxBM25 > 0 ? score / maxBM25 : 0)
     }
-
-    // Compute hybrid scores
     const hybridScores: Array<{
       chunkId: string
       score: number
@@ -332,11 +291,7 @@ export class HybridSearchEngine {
         bm25Score: bs,
       })
     }
-
-    // Sort by hybrid score descending
     hybridScores.sort((a, b) => b.score - a.score)
-
-    // Return top results
     return hybridScores.slice(0, limit).map((result) => {
       const chunk = container.chunks.get(result.chunkId)!
       return {

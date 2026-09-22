@@ -1,10 +1,3 @@
-/**
- * Issue #1051 — command-level tests for `signet repair queue`.
- *
- * A failed daemon request must surface as a non-zero exit so incident
- * recovery scripts using `&&` do not proceed after a repair failure.
- */
-
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Command, CommanderError } from "commander";
 import { registerRepairQueueCommands } from "./repair-queue.js";

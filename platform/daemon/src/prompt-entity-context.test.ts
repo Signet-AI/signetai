@@ -157,10 +157,6 @@ describe("prompt entity context scaling (#1059)", () => {
 			},
 			embedding: { provider: "test", model: "test" } as EmbeddingConfig,
 		});
-
-		// Two entities match the prompt, but both are scored against the same
-		// query vector. One fetch per entity would double embedding latency on
-		// every prompt-submit (#1059).
 		expect(embeddingCalls).toBe(1);
 		expect(result.engine).toBe("entity-context");
 		expect(result.lines.length).toBeGreaterThanOrEqual(2);

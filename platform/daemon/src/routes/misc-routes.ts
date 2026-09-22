@@ -483,9 +483,7 @@ export function registerMiscRoutes(app: Hono): void {
 			if (body.targetVersion && typeof body.targetVersion === "string") {
 				targetVersion = body.targetVersion;
 			}
-		} catch {
-			// No body or invalid JSON — fall through to check
-		}
+		} catch {}
 
 		if (!targetVersion) {
 			const check = await checkForUpdatesImpl();

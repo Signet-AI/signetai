@@ -4,13 +4,6 @@ import { runMigrations } from "../../../core/src/migrations";
 import { Hono } from "hono";
 import { mountMcpAnalyticsRoutes } from "./mcp-analytics.js";
 
-/**
- * Tests for MCP analytics API routes.
- *
- * Uses an in-memory SQLite database with all migrations applied.
- * Overrides getDbAccessor by setting up the DB before tests.
- */
-
 function seedInvocations(
 	db: Database,
 	rows: ReadonlyArray<{
@@ -48,23 +41,10 @@ describe("mcp-analytics routes", () => {
 	let db: Database;
 	let app: Hono;
 
-	// We need to mock getDbAccessor — the simplest way is to use the module
-	// system. Since mcp-analytics.ts imports from ../db-accessor.js, we
-	// override it via Bun's module mock. For integration tests, we'll use
-	// the real DB accessor. For now, test at the route level via the hono
-	// test client with a pre-seeded DB.
-
-	// Note: This test requires the daemon's db-accessor to be initialized.
-	// In the test environment, we'll skip if getDbAccessor throws.
-
 	beforeEach(() => {
 		db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		app = new Hono();
-
-		// Monkey-patch: make the module use our test DB
-		// This relies on the analytics routes using getDbAccessor().withReadDb()
-		// which calls db.prepare(). We intercept at the import level.
 	});
 
 	afterEach(() => {
@@ -72,7 +52,6 @@ describe("mcp-analytics routes", () => {
 	});
 
 	it("returns empty analytics when no invocations exist", async () => {
-		// Test the SQL directly since we can't easily mock getDbAccessor in route context
 		const totals = db
 			.prepare(
 				"SELECT COUNT(*) as total, COALESCE(SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END), 0) as successes FROM mcp_invocations WHERE agent_id = ?",
@@ -90,14 +69,10 @@ describe("mcp-analytics routes", () => {
 			{ id: "inv-3", serverId: "srv-a", toolName: "tool-2", latencyMs: 300, success: false, errorText: "timeout" },
 			{ id: "inv-4", serverId: "srv-b", toolName: "tool-3", latencyMs: 50 },
 		]);
-
-		// Total
 		const total = db.prepare("SELECT COUNT(*) as c FROM mcp_invocations WHERE agent_id = 'default'").get() as {
 			c: number;
 		};
 		expect(total.c).toBe(4);
-
-		// Top servers
 		const servers = db
 			.prepare(
 				`SELECT server_id, COUNT(*) as count FROM mcp_invocations
@@ -106,16 +81,12 @@ describe("mcp-analytics routes", () => {
 			.all() as { server_id: string; count: number }[];
 		expect(servers[0].server_id).toBe("srv-a");
 		expect(servers[0].count).toBe(3);
-
-		// Success rate
 		const successes = db
 			.prepare(
 				"SELECT SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) as s FROM mcp_invocations WHERE agent_id = 'default'",
 			)
 			.get() as { s: number };
-		expect(successes.s).toBe(3); // 3 out of 4
-
-		// Failure recorded
+		expect(successes.s).toBe(3);
 		const failures = db.prepare("SELECT error_text FROM mcp_invocations WHERE success = 0").all() as {
 			error_text: string;
 		}[];

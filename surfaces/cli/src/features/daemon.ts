@@ -78,12 +78,6 @@ export async function launchDashboard(options: PathOptions, deps: Deps): Promise
 			console.error(chalk.red("  Failed to start daemon"));
 			process.exit(1);
 		}
-
-		// The health probe can transiently false-negative (e.g. an event-loop
-		// block) while the daemon process itself was alive the whole time.
-		// startDaemon short-circuits to "already running" in that case, so the
-		// same PID before and after means we did not start anything — do not
-		// claim we did (issue #1045).
 		if (before.pid !== null && before.pid === after.pid) {
 			console.log(chalk.dim("  Daemon is running"));
 		} else {
@@ -246,9 +240,6 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 	const basePath = readPath(options, deps);
 	const running = await deps.isDaemonRunning();
 	const stale = running ? false : await deps.hasDaemonProcess(basePath);
-	// Under launchd KeepAlive the daemon respawns on exit, so an unhealthy
-	// daemon still counts as managed: `stop` must boot the job out or the
-	// reported "stop" is silently undone moments later (#1074).
 	const launchdManaged = running ? false : await (deps.isLaunchdDaemonLoaded?.(basePath) ?? Promise.resolve(false));
 	if (!running && !stale && !launchdManaged) {
 		console.log(chalk.yellow("  Daemon is not running"));
@@ -680,9 +671,7 @@ function printLogEventBlock(eventBlock: string): void {
 			return;
 		}
 		console.log(`  ${formatLogEntry(entry)}`);
-	} catch {
-		// Ignore malformed SSE payloads.
-	}
+	} catch {}
 }
 
 function readFileLogs(basePath: string, limit: number, options: LogOptions): void {

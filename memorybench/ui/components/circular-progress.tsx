@@ -1,7 +1,7 @@
 "use client"
 
 interface CircularProgressProps {
-  progress: number // 0 to 1
+  progress: number
   size?: number
   strokeWidth?: number
   showPercentage?: boolean
@@ -24,7 +24,7 @@ export function CircularProgress({
       viewBox={`0 0 ${size} ${size}`}
       className="transform -rotate-90"
     >
-      {/* Background circle */}
+      {}
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -35,7 +35,7 @@ export function CircularProgress({
         className="text-[#333333]"
       />
 
-      {/* Progress circle - using the lighter blue from gradient (top-left color) */}
+      {}
       <circle
         cx={size / 2}
         cy={size / 2}
@@ -49,7 +49,7 @@ export function CircularProgress({
         className="transition-all duration-300"
       />
 
-      {/* Optional percentage text */}
+      {}
       {showPercentage && (
         <text
           x="50%"

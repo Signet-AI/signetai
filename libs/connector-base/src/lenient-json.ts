@@ -1,7 +1,5 @@
 import { parse as parseJson5 } from "json5";
 import { type ParseError, parse as parseJsonc, printParseErrorCode } from "jsonc-parser/lib/esm/main.js";
-
-/** Parse a connector config as JSONC or JSON5 and require an object root. */
 export function parseLenientJsonObject(raw: string, options: { readonly label: string }): Record<string, unknown> {
 	const source = raw.replace(/^\uFEFF/, "");
 	const errors: ParseError[] = [];

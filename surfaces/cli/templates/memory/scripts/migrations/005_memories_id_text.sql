@@ -1,7 +1,3 @@
--- Migration 005: Convert memories.id from INTEGER to TEXT (UUID)
--- SQLite requires table rebuild for column type changes
-
--- Step 1: Create new table with correct schema
 CREATE TABLE memories_new (
   id              TEXT PRIMARY KEY,
   type            TEXT NOT NULL DEFAULT 'fact',
@@ -17,7 +13,6 @@ CREATE TABLE memories_new (
   vector_clock    TEXT NOT NULL DEFAULT '{}',
   version         INTEGER DEFAULT 1,
   manual_override INTEGER DEFAULT 0,
-  -- Legacy fields (keep for compatibility)
   who             TEXT,
   why             TEXT,
   project         TEXT,
@@ -27,8 +22,6 @@ CREATE TABLE memories_new (
   access_count    INTEGER DEFAULT 0,
   pinned          INTEGER DEFAULT 0
 );
-
--- Step 2: Copy data with UUID conversion
 INSERT INTO memories_new (
   id, type, category, content, confidence, source_id, source_type, tags,
   created_at, updated_at, updated_by, vector_clock, version, manual_override,
@@ -61,18 +54,12 @@ SELECT
   COALESCE(access_count, 0),
   COALESCE(pinned, 0)
 FROM memories;
-
--- Step 3: Drop old table and rename
 DROP TABLE memories;
 ALTER TABLE memories_new RENAME TO memories;
-
--- Step 4: Recreate indexes
 CREATE INDEX idx_memories_type ON memories(type);
 CREATE INDEX idx_memories_category ON memories(category);
 CREATE INDEX idx_memories_source ON memories(source_type, source_id);
 CREATE INDEX idx_memories_created ON memories(created_at DESC);
-
--- Step 5: Recreate FTS triggers
 CREATE TRIGGER memories_ai AFTER INSERT ON memories BEGIN
     INSERT INTO memories_fts(rowid, content) VALUES (new.rowid, new.content);
 END;

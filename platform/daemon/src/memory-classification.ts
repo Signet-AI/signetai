@@ -25,15 +25,11 @@ export function inferType(content: string): string {
 	}
 	return "fact";
 }
-
-/** Decay-weighted score: pinned items always score 1.0 */
 export function effectiveScore(importance: number, createdAt: string, pinned: boolean): number {
 	if (pinned) return 1.0;
 	const ageDays = (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60 * 24);
 	return importance * 0.95 ** ageDays;
 }
-
-/** Check if content overlaps 70%+ with existing memories via FTS */
 export function isDuplicate(db: Database, content: string, agentId: string): boolean {
 	const words = content
 		.toLowerCase()
@@ -69,8 +65,6 @@ export function isDuplicate(db: Database, content: string, agentId: string): boo
 			}
 			if (overlap / inputWords.size >= 0.7) return true;
 		}
-	} catch {
-		// FTS table might not exist yet.
-	}
+	} catch {}
 	return false;
 }

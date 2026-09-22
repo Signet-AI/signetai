@@ -83,9 +83,7 @@ export async function syncAgentWorkspaces({
 					content: memoryContent,
 				})
 			).generated;
-		} catch {
-			/* Unverified text must not become a durable context copy. */
-		}
+		} catch {}
 	}
 	const sharedIdentity =
 		(await composeIdentitySections([join(agentsDir, "USER.md")])) +

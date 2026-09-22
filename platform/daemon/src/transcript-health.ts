@@ -158,9 +158,6 @@ export async function getTranscriptHealthReport(
 		},
 		{ siteToken: "transcript-health.ts:114" },
 	);
-	// Summary status fields are retained as historical provenance, but no
-	// longer participate in health: the summary worker is retired and direct
-	// transcript completion is the live delivery contract.
 	const ok = capture.failed === 0 && capture.dead === 0 && artifacts.missingTranscriptArtifacts === 0;
 	return {
 		ok,

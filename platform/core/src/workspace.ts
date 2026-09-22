@@ -1,21 +1,3 @@
-/**
- * Canonical Signet workspace path resolution.
- *
- * One owner for the "resolve `SIGNET_PATH` → `SIGNET_WORKSPACE` →
- * `$XDG_CONFIG_HOME/signet/workspace.json` → `~/.agents` default" chain that
- * is shared by connector-base, the CLI, and the desktop shell (issue #956).
- *
- * Resolution precedence:
- *   1. `SIGNET_PATH` env var
- *   2. `SIGNET_WORKSPACE` env var (alias, lower precedence)
- *   3. persisted `$XDG_CONFIG_HOME/signet/workspace.json` `{ workspace }`
- *   4. `~/.agents` default
- *
- * Env var precedence is defined once here and applied everywhere, so a synced
- * or cloned agents directory resolves consistently regardless of which surface
- * performs the resolution.
- */
-
 import { randomUUID } from "node:crypto";
 import {
 	closeSync,
@@ -32,10 +14,6 @@ import {
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { expandHome } from "./constants";
-
-// ============================================================================
-// Types
-// ============================================================================
 
 export type WorkspaceSource = "env" | "config" | "default";
 
@@ -56,22 +34,7 @@ export interface WorkspaceStartupPreflight extends WorkspaceResolution {
 export interface ResolveWorkspacePathOptions {
 	readonly env?: NodeJS.ProcessEnv;
 	readonly home?: string;
-	/**
-	 * Throw on a malformed persisted workspace.json instead of falling back to
-	 * the default. Defaults to `true` for canonical workspace resolution so a
-	 * malformed persisted pointer fails loudly when no environment override
-	 * wins. An environment override is always resolved leniently because it has
-	 * higher precedence.
-	 */
 	readonly strict?: boolean;
-	/**
-	 * Require an env-derived workspace path to point at an existing directory.
-	 * When `false` (default) an env override is trusted verbatim. When `true`,
-	 * a stale env override is treated as unset (with a warning) and resolution
-	 * falls through to the config/default, which prevents a migrated/legacy
-	 * managed extension from re-embedding a path that no longer exists
-	 * (issue #1016).
-	 */
 	readonly requireExistingEnvPath?: boolean;
 }
 
@@ -98,19 +61,9 @@ const defaultWorkspaceFileSystem: WorkspaceFileSystem = {
 	rmSync,
 	writeSync,
 };
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-/** Env vars honored as workspace overrides, in precedence order. */
 export const WORKSPACE_ENV_KEYS = ["SIGNET_PATH", "SIGNET_WORKSPACE"] as const;
 
 const DEFAULT_AGENTS_DIRNAME = ".agents";
-
-// ============================================================================
-// Helpers
-// ============================================================================
 
 export function normalizeWorkspacePath(pathValue: string, home = homedir()): string {
 	return resolve(expandHome(pathValue.trim(), home));
@@ -142,21 +95,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-// ============================================================================
-// Config path + read/write
-// ============================================================================
-
 export function getWorkspaceConfigPath(env: NodeJS.ProcessEnv = process.env, home = homedir()): string {
 	return join(readConfigHome(env, home), "signet", "workspace.json");
 }
-
-/**
- * Read the persisted `workspace` value from `workspace.json`.
- *
- * Returns `null` only when the file is absent. By default, an existing
- * malformed file throws. Pass `strict: false` only when an explicit caller
- * can safely ignore malformed persisted configuration.
- */
 export function readConfiguredWorkspacePath(
 	env: NodeJS.ProcessEnv = process.env,
 	home = homedir(),
@@ -234,15 +175,6 @@ export function clearConfiguredWorkspacePath(env: NodeJS.ProcessEnv = process.en
 	if (!existsSync(configPath)) return;
 	rmSync(configPath, { force: true });
 }
-
-// ============================================================================
-// Resolution
-// ============================================================================
-
-/**
- * Resolve the active Signet workspace path from env, persisted config, and
- * default, returning a structured result describing which source won.
- */
 export function resolveWorkspacePath(options: ResolveWorkspacePathOptions = {}): WorkspaceResolution {
 	const env = options.env ?? process.env;
 	const home = options.home ?? homedir();
@@ -250,10 +182,6 @@ export function resolveWorkspacePath(options: ResolveWorkspacePathOptions = {}):
 	const requireExistingEnvPath = options.requireExistingEnvPath ?? false;
 
 	const configPath = getWorkspaceConfigPath(env, home);
-	// Resolve the env override first. When it wins, a malformed persisted config
-	// is irrelevant and must not block the explicit override. Without an env
-	// override, keep strict validation so a malformed persisted pointer fails
-	// loudly instead of silently selecting the default workspace.
 	const envPath = resolveEnvWorkspace(env, home, requireExistingEnvPath);
 	const configValue = readConfiguredWorkspacePath(env, home, { strict: envPath ? false : strict });
 
@@ -282,22 +210,11 @@ export function resolveWorkspacePath(options: ResolveWorkspacePathOptions = {}):
 		configuredPath: configValue,
 	};
 }
-
-/**
- * Read-only startup classification. This must run before any daemon-owned
- * directory, database, identity, plugin, or telemetry initialization.
- *
- * A missing explicit/configured path is never treated as a fresh workspace:
- * recreating it would hide data loss. The unconfigured default remains
- * bootstrap-compatible for explicit first-run setup.
- */
 export function preflightWorkspace(options: ResolveWorkspacePathOptions = {}): WorkspaceStartupPreflight {
 	const env = options.env ?? process.env;
 	const home = options.home ?? homedir();
 	let resolution: WorkspaceResolution;
 	try {
-		// A malformed persisted pointer is itself an incomplete configured
-		// workspace. Never fall through to the default and bootstrap there.
 		resolution = resolveWorkspacePath({ ...options, strict: true });
 	} catch (error) {
 		const detail = error instanceof Error ? error.message : String(error);
@@ -348,11 +265,6 @@ function resolveEnvWorkspace(env: NodeJS.ProcessEnv, home: string, requireExisti
 		if (!raw) continue;
 		const normalized = normalizeWorkspacePath(raw, home);
 		if (!requireExisting || isExistingDirectory(normalized)) return normalized;
-		// A stale env override (from a migrated/legacy managed extension) points
-		// at a directory that no longer exists on this machine. Treat it as
-		// unset and fall through to config/default resolution so the wrong path
-		// is not re-embedded (issue #1016). Warn so the dropped override is
-		// diagnosable.
 		console.warn(
 			`[signet] ${key}="${raw}" does not point to an existing workspace directory; using the default workspace resolution instead.`,
 		);

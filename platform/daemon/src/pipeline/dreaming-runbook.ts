@@ -1,8 +1,3 @@
-/**
- * Dreaming's local operational memory. This is pass metadata, not a second
- * semantic or episodic store: it records what a scoped pass considered and
- * what it chose to defer so later passes can avoid repeating blind work.
- */
 import type { DbAccessor, WriteDb } from "../db-accessor";
 import type { DreamingAgentEvidence } from "./dreaming-evidence";
 import type { DreamingReviewedExcludedEvidenceEntry } from "./dreaming-evidence-reviews";
@@ -18,9 +13,7 @@ export interface DreamingRunbookEntry {
 	readonly summary: string;
 	readonly openQuestions: readonly string[];
 	readonly deferred: readonly string[];
-	/** Canonical source refs deliberately deferred, never acknowledged as consumed. */
 	readonly deferredEvidence: readonly DreamingDeferredEvidenceEntry[];
-	/** Fully inspected source revisions with no durable fact to retain. */
 	readonly reviewedExcludedEvidence: readonly DreamingReviewedExcludedEvidenceEntry[];
 }
 
@@ -192,8 +185,6 @@ function operationResults(
 function serializeRunbook(entry: DreamingRunbookEntry): string {
 	return JSON.stringify(entry);
 }
-
-/** The current running pass is the only runbook row an agent may mutate. */
 export function writeDreamingRunbook(
 	accessor: DbAccessor,
 	params: { readonly agentId: string; readonly passId: string; readonly entry: DreamingRunbookEntry },
@@ -207,10 +198,8 @@ export function writeDreamingRunbook(
 			)
 			.run(serializeRunbook(params.entry), params.passId, params.agentId);
 		return result.changes === 1;
-	}, "pipeline/dreaming-runbook.ts:202");
+	}, "pipeline/dreaming-runbook.ts:193");
 }
-
-/** Persist the exact source references presented to one pass, never their content. */
 export function recordDreamingEvidenceWindowInTx(
 	db: WriteDb,
 	params: {
@@ -236,8 +225,6 @@ export function recordDreamingEvidenceWindowInTx(
 		params.agentId,
 	);
 }
-
-/** Recent scoped pass state, including write outcomes, evidence windows, and unresolved quarantines. */
 export function readDreamingRunbook(accessor: DbAccessor, agentId: string, limit = 5): readonly DreamingRunbookPass[] {
 	const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 20);
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
@@ -277,10 +264,8 @@ export function readDreamingRunbook(accessor: DbAccessor, agentId: string, limit
 			runbook: parseRunbook((row.runbookJson as string) ?? null),
 			quarantines: quarantines.all(agentId, row.id) as DreamingRunbookPass["quarantines"],
 		}));
-	}, "pipeline/dreaming-runbook.ts:244");
+	}, "pipeline/dreaming-runbook.ts:231");
 }
-
-/** Compact, delimited local history for a later pass; never a semantic claim source. */
 export function renderDreamingRunbookForPrompt(items: readonly DreamingRunbookPass[], maxChars = 6_000): string {
 	if (items.length === 0) return "";
 	const rendered = JSON.stringify(items);

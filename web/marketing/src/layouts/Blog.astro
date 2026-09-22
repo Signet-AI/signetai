@@ -57,8 +57,6 @@ const formattedDate = date.toLocaleDateString("en-US", {
 
 const tocHeadings = headings.filter((h) => h.depth === 2 || h.depth === 3);
 const hasToc = tocHeadings.length > 2;
-
-// Build blog post list for left sidebar
 const allPosts = (await getCollection("blog"))
 	.filter((p) => !p.data.draft)
 	.sort((a, b) => b.data.date.getTime() - a.data.date.getTime());
@@ -69,7 +67,6 @@ const allPosts = (await getCollection("blog"))
 
   <div class="blog-shell">
     <div class="blog-content-grid">
-      <!-- Left rail: blog post list -->
       <aside class="blog-nav-rail">
         <div class="blog-nav-rail-sticky">
           <p class="docs-rail-label">
@@ -90,8 +87,6 @@ const allPosts = (await getCollection("blog"))
           </ul>
         </div>
       </aside>
-
-      <!-- Main content -->
       <main class="blog-main">
         {image ? (
           <img class="blog-hero-image" src={image} alt="" width="1408" height="768" loading="eager" />
@@ -176,8 +171,6 @@ const allPosts = (await getCollection("blog"))
           </nav>
         ) : null}
       </main>
-
-      <!-- Right rail: TOC + graph -->
       {hasToc ? (
         <aside class="blog-toc-rail">
           <div class="blog-toc-rail-sticky">

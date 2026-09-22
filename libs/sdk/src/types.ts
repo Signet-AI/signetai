@@ -1,5 +1,3 @@
-// Response types for the Signet daemon HTTP API.
-
 export interface MemoryRecord {
 	readonly id: string;
 	readonly content: string;
@@ -171,9 +169,7 @@ export interface SdkRecallOptions {
 	readonly aggregate_budget?: "small" | "medium" | "large";
 	readonly saveAggregate?: boolean;
 	readonly save_aggregate?: boolean;
-	/** Internal bounded attribution for first-party tool integrations. */
 	readonly recallSurface?: "explicit_api" | "tool_call" | "prompt_injection" | "dashboard" | "other";
-	/** Applied at the daemon response boundary; the SDK also re-applies it defensively. */
 	readonly minScore?: number;
 }
 
@@ -288,8 +284,6 @@ export interface RecoverResult {
 	readonly retentionDays: number;
 }
 
-// Document types
-
 export interface DocumentRecord {
 	readonly id: string;
 	readonly source_type: string;
@@ -334,8 +328,6 @@ export interface DocumentDeleteResult {
 	readonly status: "deleted";
 	readonly memoriesRemoved: number;
 }
-
-// Job types
 
 type JobStatusBase = {
 	readonly id: string;
@@ -386,8 +378,6 @@ export type JobStatus =
 			readonly error: string;
 	  });
 
-// Health / status types
-
 export interface HealthResponse {
 	readonly status: string;
 	readonly uptime: number;
@@ -426,8 +416,6 @@ export interface StatusResponse {
 	};
 }
 
-// Timeline types
-
 export interface TimelineEvent {
 	readonly id: string;
 	readonly entityType: string;
@@ -449,8 +437,6 @@ export interface TimelineExportResponse {
 	};
 	readonly timeline: TimelineResponse;
 }
-
-// Pipeline types
 
 export interface PipelineStatusResponse {
 	readonly workers: Record<string, unknown>;
@@ -475,8 +461,6 @@ export interface PipelineStatusResponse {
 		readonly alpha: number;
 	};
 }
-
-// Telemetry types
 
 export interface TelemetryEvent {
 	readonly id: string;
@@ -616,7 +600,6 @@ export interface TelemetryStatsEnabledResponse {
 	readonly pipelineErrorsByCode: Readonly<Record<string, number>>;
 	readonly pipelineOperations: {
 		readonly total: number;
-		/** Failed or partial operations, bounded independently from raw attempt errors. */
 		readonly incidents: number;
 		readonly classes: Readonly<
 			Record<
@@ -690,8 +673,6 @@ export interface MemorySearchTelemetryResponse {
 	readonly count: number;
 }
 
-// Config types
-
 export interface ConfigFile {
 	readonly name: string;
 	readonly content: string;
@@ -708,15 +689,11 @@ export interface ConfigWriteResponse {
 	readonly error?: string;
 }
 
-// Identity types
-
 export interface IdentityResponse {
 	readonly name: string;
 	readonly creature: string;
 	readonly vibe: string;
 }
-
-// Embeddings types
 
 export interface EmbeddingStatusResponse {
 	readonly provider: "native" | "ollama" | "openai" | "llama-cpp" | "none";
@@ -789,8 +766,6 @@ export type EmbeddingProjectionResponse =
 	| EmbeddingProjectionComputingResponse
 	| EmbeddingProjectionErrorResponse;
 
-// Harness types
-
 export interface Harness {
 	readonly name: string;
 	readonly id: string;
@@ -801,11 +776,6 @@ export interface Harness {
 
 export interface HarnessListResponse {
 	readonly harnesses: readonly Harness[];
-	/**
-	 * Harness ids recorded as connected in the workspace's agent.yaml — the
-	 * Signet-owned connection record. Absent on older daemons; `exists` on each
-	 * harness merely reports harness home-directory presence, not a connection.
-	 */
 	readonly configuredHarnesses?: readonly string[];
 }
 
@@ -815,8 +785,6 @@ export interface HarnessRegenerateResponse {
 	readonly output?: string;
 	readonly error?: string;
 }
-
-// Checkpoint types
 
 export interface Checkpoint {
 	readonly id: string;
@@ -832,20 +800,14 @@ export interface CheckpointListResponse {
 	readonly count: number;
 }
 
-// Features types
-
 export interface FeaturesResponse {
 	readonly [key: string]: boolean | string | number;
 }
-
-// Greeting types
 
 export interface GreetingResponse {
 	readonly greeting: string;
 	readonly cachedAt: string;
 }
-
-// Session types
 
 export interface SessionInfo {
 	readonly key: string;
@@ -858,8 +820,6 @@ export interface SessionListResponse {
 	readonly sessions: readonly SessionInfo[];
 	readonly count: number;
 }
-
-// Git sync types
 
 export interface GitStatus {
 	readonly isRepo: boolean;
@@ -899,8 +859,6 @@ export interface GitConfig {
 	readonly remote: string;
 	readonly branch: string;
 }
-
-// Secret types
 
 export interface SecretListResponse {
 	readonly secrets: readonly string[];
@@ -1119,8 +1077,6 @@ export interface PluginDiagnosticsResponse {
 	};
 }
 
-// Skill types
-
 export interface SkillMeta {
 	readonly description: string;
 	readonly version?: string;
@@ -1188,10 +1144,7 @@ export interface SkillDeleteResult {
 	readonly name: string;
 	readonly message: string;
 }
-
-// Re-export P2 domain types
 export type {
-	// Hooks
 	SessionStartResponse,
 	UserPromptSubmitResponse,
 	SessionEndResponse,
@@ -1201,7 +1154,6 @@ export type {
 	CompactionCompleteResponse,
 	SynthesisConfigResponse,
 	SynthesisRequestResponse,
-	// Connectors
 	ConnectorRecord,
 	ConnectorListResponse,
 	ConnectorCreateResponse,
@@ -1209,7 +1161,6 @@ export type {
 	ConnectorResyncResponse,
 	ConnectorDeleteResponse,
 	ConnectorHealthResponse,
-	// Analytics
 	UsageCountersResponse,
 	ErrorEvent,
 	ErrorsResponse,
@@ -1221,7 +1172,6 @@ export type {
 	ContinuityScore,
 	ContinuityResponse,
 	ContinuityLatestResponse,
-	// Knowledge Graph
 	KnowledgeEntity,
 	KnowledgeEntityDetail,
 	KnowledgeEntityListResponse,
@@ -1238,14 +1188,12 @@ export type {
 	ConstellationNode,
 	ConstellationEdge,
 	ConstellationResponse,
-	// Repair
 	RepairActionResponse,
 	VectorRepairOptions,
 	VectorRepairResponse,
 	EmbeddingGapsResponse,
 	DedupStatsResponse,
 	DeduplicateResponse,
-	// Cross-Agent
 	AgentPresence,
 	AgentPresenceListResponse,
 	AgentPresenceUpdateResponse,

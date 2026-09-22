@@ -1,8 +1,6 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* Font Faces */
 @font-face {
   font-family: "Space Grotesk";
   src: url("https://fonts.gstatic.com/s/spacegrotesk/v22/V8mDoQDjQSkFtoMM3T6r8E7mPbF4Cw.woff2") format("woff2");
@@ -26,8 +24,6 @@
   font-style: normal;
   font-display: swap;
 }
-
-/* Base Styles */
 :root {
   --bg-primary: #0b0b0e;
   --bg-surface: #222222;
@@ -55,8 +51,6 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
-
-/* Scrollbar Styling */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -74,20 +68,14 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--border-hover);
 }
-
-/* Selection */
 ::selection {
   background-color: var(--accent-muted);
   color: var(--text-primary);
 }
-
-/* Focus Styles */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-
-/* Component Utilities */
 @layer components {
   .card {
     @apply bg-bg-surface border border-border rounded p-4;
@@ -168,8 +156,6 @@ body {
     font-weight: 500;
   }
 }
-
-/* Animations */
 @keyframes shimmer {
   0% {
     background-position: -200% 0;
@@ -189,8 +175,6 @@ body {
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
 }
-
-/* Progress bar animation */
 @keyframes progress-indeterminate {
   0% {
     transform: translateX(-100%);

@@ -1,10 +1,3 @@
-/**
- * Auth types for Signet daemon deployment modes.
- *
- * Phase J: local (default, no auth), team (token-required),
- * hybrid (localhost free, remote requires token).
- */
-
 export const AUTH_MODES = ["local", "team", "hybrid"] as const;
 export type AuthMode = (typeof AUTH_MODES)[number];
 

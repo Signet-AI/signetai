@@ -163,8 +163,6 @@ export function getDreamingAttentionWorkloadDiagnostics(
 		};
 	}, "pipeline/dreaming-attention.ts:148");
 }
-
-/** Scoped attention query with kind and resolution filters (attention_list). */
 export function getDreamingAttentionScoped(
 	accessor: DbAccessor,
 	agentId: string,
@@ -202,14 +200,8 @@ export function getDreamingAttentionScoped(
 			...attention,
 			details: parseDetails(detailsJson),
 		}));
-	}, "pipeline/dreaming-attention.ts:184");
+	}, "pipeline/dreaming-attention.ts:182");
 }
-
-/**
- * Universe-wide attention query: one Dreaming pass addresses every agent
- * scope, so the queue is not partitioned by agent — each record carries its
- * owning agentId as provenance for downstream attribution.
- */
 export function getDreamingAttentionAcrossScopes(
 	accessor: DbAccessor,
 	options: {
@@ -248,7 +240,7 @@ export function getDreamingAttentionAcrossScopes(
 			...attention,
 			details: parseDetails(detailsJson),
 		}));
-	}, "pipeline/dreaming-attention.ts:228");
+	}, "pipeline/dreaming-attention.ts:220");
 }
 
 export function getDreamingAttentionById(
@@ -281,7 +273,7 @@ export function getDreamingAttentionById(
 			priority: row.priority,
 			createdAt: row.createdAt,
 		};
-	}, "pipeline/dreaming-attention.ts:259");
+	}, "pipeline/dreaming-attention.ts:251");
 }
 
 export function getDreamingAttentionSnapshots(
@@ -292,7 +284,7 @@ export function getDreamingAttentionSnapshots(
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return accessor.withReadDb(
 		(db: import("../db-accessor").ReadDb) => getDreamingAttentionSnapshotsInDb(db, agentId, limit),
-		"pipeline/dreaming-attention.ts:293",
+		"pipeline/dreaming-attention.ts:285",
 	);
 }
 
@@ -304,7 +296,6 @@ export function enqueueDreamingAttentionInTx(
 		readonly subjectRef: string;
 		readonly details?: Readonly<Record<string, string>>;
 		readonly priority?: number;
-		/** Leave unchanged deterministic work resolved; reopen it if its state changes or it is explicitly requeued. */
 		readonly reopen?: boolean;
 	},
 ): string {
@@ -336,8 +327,6 @@ export function enqueueDreamingAttentionInTx(
 		reopen,
 		reopen,
 	);
-	// The upsert keeps the original id on conflict, so re-read the stored id to
-	// return a citable handle for the caller (e.g. provenance: attention:<id>).
 	const stored = db
 		.prepare("SELECT id FROM dreaming_attention WHERE agent_id = ? AND kind = ? AND subject_ref = ?")
 		.get(input.agentId, input.kind, subjectRef) as { id: string } | null;

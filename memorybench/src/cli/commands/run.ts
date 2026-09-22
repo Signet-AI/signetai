@@ -173,12 +173,8 @@ export async function runCommand(args: string[]): Promise<void> {
   }
 
   const checkpointManager = new CheckpointManager()
-
-  // Check if run exists
   if (checkpointManager.exists(parsed.runId)) {
     const checkpoint = checkpointManager.load(parsed.runId)!
-
-    // If provider/benchmark provided, validate they match
     if (parsed.provider && parsed.provider !== checkpoint.provider) {
       logger.error(
         `Run ${parsed.runId} exists with provider ${checkpoint.provider}, not ${parsed.provider}`
@@ -191,8 +187,6 @@ export async function runCommand(args: string[]): Promise<void> {
       )
       return
     }
-
-    // Use stored values
     parsed.provider = checkpoint.provider
     parsed.benchmark = checkpoint.benchmark
     parsed.judgeModel = parsed.judgeModel || checkpoint.judge
@@ -200,7 +194,6 @@ export async function runCommand(args: string[]): Promise<void> {
 
     logger.info(`Continuing run ${parsed.runId} (${checkpoint.provider}/${checkpoint.benchmark})`)
   } else {
-    // New run - provider and benchmark required
     if (!parsed.provider || !parsed.benchmark) {
       logger.error("New run requires -p/--provider and -b/--benchmark")
       return
@@ -215,8 +208,6 @@ export async function runCommand(args: string[]): Promise<void> {
       console.error(`Invalid benchmark: ${parsed.benchmark}`)
       return
     }
-
-    // Apply defaults for new run
     parsed.judgeModel = parsed.judgeModel || DEFAULT_JUDGE_MODEL
   }
 

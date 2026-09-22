@@ -1,16 +1,3 @@
-/**
- * Live verification that createAcpxProvider drives each ACP-backed harness
- * (claude, codex, opencode, gemini, etc.). Runs only when
- * SIGNET_ACPX_LIVE_AGENT is set.
- *
- * Example:
- *   SIGNET_ACPX_LIVE_AGENT=claude bun test platform/daemon/src/pipeline/acpx-harness.live.test.ts
- *
- * The harness should be installed on the host; authentication is optional — an
- * AUTH_REQUIRED response is treated as a successful invocation (it proves the
- * full chain createAcpxProvider -> acpx -> harness -> ACP init ran and reached
- * the harness's auth gate).
- */
 import { describe, expect, test } from "bun:test";
 import { createAcpxProvider } from "./provider";
 
@@ -34,11 +21,6 @@ describe.skipIf(SKIP)(`createAcpxProvider drives ${AGENT ?? "harness"} (live)`, 
 			expect(text.toLowerCase()).toContain("pong");
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : String(e);
-			// AUTH_REQUIRED proves the invocation chain worked — createAcpxProvider
-			// spawned acpx, which spawned the harness, which initialized its ACP
-			// client and reached the auth gate. The failure is the harness's own
-			// missing/expired auth, not a provider defect. Treat as a pass so the
-			// test is useful even where harness auth isn't configured.
 			if (/AUTH_REQUIRED|Authentication required/i.test(msg)) {
 				console.log(`[${AGENT}] invocation reached auth gate (success): ${msg}`);
 				return;

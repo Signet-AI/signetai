@@ -151,8 +151,6 @@ export function cancelSourceIndexJob(sourceId: string): void {
 	if (job && (job.status === "queued" || job.status === "running")) canceledSourceIndexJobs.add(job.id);
 	sourceIndexJobs.delete(sourceId);
 }
-
-/** Invalidate work because the daemon is stopping, without purging source data. */
 export function invalidateSourceIndexJob(sourceId: string): void {
 	sourceIndexJobs.delete(sourceId);
 }

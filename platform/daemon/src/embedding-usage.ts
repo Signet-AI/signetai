@@ -1,29 +1,8 @@
-/**
- * Embedding token usage accounting.
- *
- * The shared embedding-fetch boundary records every successful embedding
- * fetch into the `embedding_usage` daily-aggregate table (migration 108).
- * The count comes from the real tokenizer (countTokens) applied to the text
- * actually sent to the provider — never provider-reported usage, because
- * Ollama's /api/embeddings returns none and the native ONNX path reports
- * none either.
- *
- * Rows are keyed by (day, agent_id, source_kind, provider) and accumulate
- * `requests` + `tokens`, keeping the table bounded at one row per day per
- * dimension while still answering "how much did vault ingest cost in tokens
- * vs. captures" and "what is Ollama/native throughput".
- *
- * Recording is strictly best-effort: it must never fail or slow down the
- * embedding path it observes.
- */
-
 import type { DbAccessor } from "./db-accessor";
 import { getDbAccessor, hasDbAccessor } from "./db-accessor";
 import { type EmbeddingCostRates, resolveEmbeddingAccounting } from "./embedding-cost";
 import { logger } from "./logger";
 import { getActiveTelemetry } from "./telemetry";
-
-/** What produced the embedding. Used for per-source cost attribution. */
 export type EmbeddingUsageSource = "memory-capture" | "artifact-index" | "recall" | "dreaming" | "other";
 
 export interface EmbeddingUsageAttribution {
@@ -40,8 +19,6 @@ interface EmbeddingUsageRow {
 	readonly requests: number;
 	readonly tokens: number;
 }
-
-/** UTC day key, matching the ISO timestamps used across the daemon. */
 function todayKey(now: Date = new Date()): string {
 	return now.toISOString().slice(0, 10);
 }
@@ -52,13 +29,6 @@ const UPSERT_SQL = `
 	ON CONFLICT(day, agent_id, source_kind, provider)
 	DO UPDATE SET requests = requests + 1, tokens = tokens + excluded.tokens
 `;
-
-/**
- * Record one successful embedding fetch. Best-effort: a DB failure is logged
- * and swallowed so the embedding result is never affected. Skips silently
- * when no daemon DB accessor is initialised (isolated migration worker,
- * tests).
- */
 export function recordEmbeddingUsage(input: {
 	readonly provider: string;
 	readonly tokens: number;
@@ -69,9 +39,6 @@ export function recordEmbeddingUsage(input: {
 	readonly costRates?: EmbeddingCostRates;
 	readonly now?: Date;
 }): void {
-	// Anonymous telemetry: emit the pipeline.embedding event at the same fetch
-	// boundary so embedding token spend shows up in PostHog alongside
-	// llm.generate (issue #1181). Best-effort, like the DB accounting below.
 	const accounting = resolveEmbeddingAccounting(input.provider, input.tokens, {
 		baseUrl: input.baseUrl,
 		rates: input.costRates,
@@ -97,7 +64,7 @@ export function recordEmbeddingUsage(input: {
 						input.tokens,
 					);
 				},
-				{ siteToken: "embedding-usage.ts:90", operation: "embedding.usage", estimatedWorkUnits: 1 },
+				{ siteToken: "embedding-usage.ts:57", operation: "embedding.usage", estimatedWorkUnits: 1 },
 			)
 			.catch((e) => {
 				logger.warn("embedding", "Failed to record embedding usage", {
@@ -119,12 +86,6 @@ export interface EmbeddingUsageSummary {
 }
 
 let cachedEmbeddingUsageSummary: EmbeddingUsageSummary | null = null;
-
-/**
- * Aggregate the daily table into totals, today's totals, and per-source /
- * per-provider breakdowns for /api/status. Returns null when the table is
- * absent (pre-migration database) or the DB is unavailable.
- */
 export async function readEmbeddingUsageSummary(
 	accessor: DbAccessor,
 	now: Date = new Date(),
@@ -157,7 +118,7 @@ export async function readEmbeddingUsageSummary(
 					.all() as Array<{ provider: string; requests: number; tokens: number }>;
 				return { total: totals, today, bySource, byProvider };
 			},
-			{ siteToken: "embedding-usage.ts:133" },
+			{ siteToken: "embedding-usage.ts:94" },
 		);
 		cachedEmbeddingUsageSummary = summary;
 		return summary;
@@ -168,8 +129,6 @@ export async function readEmbeddingUsageSummary(
 		return null;
 	}
 }
-
-/** Return the last usage aggregate without synchronously reading SQLite. */
 export function getCachedEmbeddingUsageSummary(): EmbeddingUsageSummary | null {
 	return cachedEmbeddingUsageSummary;
 }

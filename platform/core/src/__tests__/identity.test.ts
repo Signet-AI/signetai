@@ -98,14 +98,12 @@ describe("readStaticIdentity", () => {
 	});
 
 	test("truncates files exceeding budget", () => {
-		// IDENTITY.md has a 2KB budget
 		const large = "x".repeat(3000);
 		writeFileSync(join(TMP, "IDENTITY.md"), large);
 
 		const result = readStaticIdentity(TMP);
 		expect(result).not.toBeNull();
 		expect(result).toContain("[truncated]");
-		// Should contain exactly 2000 chars of content + truncation marker
 		expect(result).toContain("x".repeat(2000));
 		expect(result).not.toContain("x".repeat(2001));
 	});

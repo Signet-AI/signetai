@@ -169,8 +169,6 @@ const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 		),
 	},
 ];
-
-/** Radix Select rejects empty-string item values; map the "none" choice. */
 const NONE = "__none__";
 
 export function SettingsModal() {
@@ -181,7 +179,7 @@ export function SettingsModal() {
 				className="sig-modal flex h-[560px] max-h-[calc(100vh-48px)] w-[840px] max-w-[calc(100vw-48px)] gap-0 overflow-hidden rounded-[12px] border border-[oklch(1_0_0/0.1)] bg-card p-0 sm:max-w-[calc(100vw-48px)] lg:max-w-[840px] max-sm:h-[calc(100vh-24px)] max-sm:max-w-[calc(100vw-24px)] max-sm:flex-col [html:not(.dark)_&]:border-[oklch(0_0_0/0.1)]"
 				showCloseButton={false}
 			>
-				{/* internal sidebar */}
+				{}
 				<aside
 					aria-label="Settings sections"
 					className="flex w-[220px] shrink-0 flex-col gap-1 border-r border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--background)_60%,var(--card))] p-3 pt-4.5 max-sm:grid max-sm:grid-cols-5 max-sm:h-auto max-sm:w-full max-sm:items-stretch max-sm:gap-0 max-sm:border-b max-sm:border-r-0 max-sm:p-2 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]"
@@ -239,8 +237,6 @@ export function SettingsModal() {
 		</Dialog>
 	);
 }
-
-/* ── shared bits ── */
 
 function GroupLabel({ children, suffix }: { children: React.ReactNode; suffix?: React.ReactNode }) {
 	return (
@@ -328,8 +324,6 @@ function CtrlReadonly({ value, sub }: { value: string; sub?: string }) {
 	);
 }
 
-/* ── Network ── */
-
 function NetworkSection() {
 	const status = useAsync(() => api.getStatus()).data;
 	const store = useAgentConfig();
@@ -366,8 +360,6 @@ function NetworkSection() {
 	);
 }
 
-/* ── Inference ── */
-
 function readAccounts(store: AgentConfigStore): AccountsMap {
 	const raw = store.agent["inference"];
 	if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return {};
@@ -375,10 +367,6 @@ function readAccounts(store: AgentConfigStore): AccountsMap {
 	if (accounts == null || typeof accounts !== "object" || Array.isArray(accounts)) return {};
 	return accounts as AccountsMap;
 }
-
-/** Persist provider wiring, then reload the catalog — the daemon re-reads
- * agent.yaml from disk, so save() must land BEFORE the refresh (mirrors the
- * old Svelte save→invalidate ordering). */
 async function persistProviderChange(store: AgentConfigStore, refreshCatalog: () => void): Promise<void> {
 	if (!(await store.save())) throw new Error("Could not save the connection settings. Please retry.");
 	refreshCatalog();
@@ -401,7 +389,7 @@ function InferenceSection() {
 
 	return (
 		<div className="flex flex-col gap-3">
-			{/* TOP ZONE: model assignment — background / aggregation / embeddings */}
+			{}
 			<div className="sig-mcard flex flex-col gap-px">
 				<GroupLabel suffix={store.saving ? "· saving…" : undefined}>Model assignment</GroupLabel>
 				<TargetEditor
@@ -432,7 +420,7 @@ function InferenceSection() {
 			</div>
 			<RouteHealthPanel refreshKey={routeRefreshKey} />
 
-			{/* BOTTOM ZONE: connected providers matrix */}
+			{}
 			<div className="sig-mcard flex flex-col gap-px">
 				<GroupLabel suffix={`· ${providers.length} available`}>Connected providers</GroupLabel>
 				<div className="mb-2 flex h-7.5 items-center gap-2 rounded-[var(--radius)] border border-[oklch(1_0_0/0.16)] bg-[color-mix(in_oklch,var(--foreground)_5%,transparent)] px-2.5 [html:not(.dark)_&]:border-[oklch(0_0_0/0.14)]">
@@ -589,8 +577,6 @@ function RouteHealthPanel({ refreshKey }: { refreshKey: number }) {
 		setReport({ status: nextStatus, statusError: nextStatusResult.error, memoryExtraction, aggregateRecall, probeOk });
 		setChecking(false);
 	};
-
-	// The refresh key is the intentional trigger; checkRoutes is recreated from live query state.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey intentionally controls the route check.
 	useEffect(() => {
 		if (refreshKey > 0) void checkRoutes();
@@ -727,10 +713,6 @@ function RouteDecisionRow({
 		</div>
 	);
 }
-
-/** One model-assignment row group (backend + model + endpoint + optional key).
- * Logic ported from the Svelte InferenceSection's writeTarget — field clearing
- * keeps stale config from a prior selection from leaking into agent.yaml. */
 function TargetEditor({
 	label,
 	tag,
@@ -754,7 +736,7 @@ function TargetEditor({
 	providers: ConnectableProvider[];
 	onRouteChanged: () => void;
 }) {
-	const accountName = targetName; // per-target account for local openai-compatible keys
+	const accountName = targetName;
 	const targetBase = ["inference", "targets", targetName] as const;
 	const accountBase = ["inference", "accounts", accountName] as const;
 	const workloadBase = ["inference", "workloads", workloadKey] as const;
@@ -824,15 +806,12 @@ function TargetEditor({
 			if (nextKind !== "acpx") store.aDel([...targetBase, "acpx"]);
 			if (nextKind !== "local") store.aDel([...targetBase, "endpoint"]);
 			if (nextKind === "provider") {
-				// Reference a connected account for this family (resolved by family,
-				// not literal name — accounts may be named e.g. `openrouter-api`.
 				store.aSetStr([...targetBase, "account"], accountForFamily(accounts, next) ?? next);
 				store.aDel(accountBase);
 			} else if (nextKind === "acpx") {
 				store.aDel([...targetBase, "account"]);
 				store.aDel(accountBase);
 			} else {
-				// local: keyless unless a per-target openai-compatible key exists
 				const hasKey = !!store.aStr([...accountBase, "credentialRef"]);
 				if (next === "openai-compatible" && remoteEndpoint) store.aSetStr([...targetBase, "endpoint"], remoteEndpoint);
 				if (next === "openai-compatible" && hasKey) {
@@ -1012,14 +991,9 @@ function TargetEditor({
 		</>
 	);
 }
-
-/** Embeddings use the canonical top-level config block. */
 function resolveEmbPath(_agent: Record<string, unknown>): readonly string[] {
 	return ["embedding"];
 }
-
-/** Embeddings assignment — provider + model + endpoint. Changing provider or
- * model re-embeds the entire memory database, so the warning stays visible. */
 function EmbeddingEditor({ store }: { store: AgentConfigStore }) {
 	const embPath = useMemo(() => resolveEmbPath(store.agent), [store.agent]);
 
@@ -1069,10 +1043,6 @@ function EmbeddingEditor({ store }: { store: AgentConfigStore }) {
 		</>
 	);
 }
-
-/* ── Advanced ── */
-
-/** Numeric ctrl — commits on blur/Enter, clamps to [min,max], reverts on junk. */
 function NumCtrl({
 	value,
 	min,
@@ -1249,10 +1219,6 @@ function AdvNum({
 		</Row>
 	);
 }
-
-/** Consolidated power-user surface. Everything here is config the daemon
- * actually reads (verified against memory-config.ts); the old dashboard's
- * dead sections (auth/trust/mode/paths) were dropped, not ported. */
 function AdvancedSection() {
 	const store = useAgentConfig();
 	const pv2 = (key: string): readonly string[] => ["memory", "pipelineV2", key];
@@ -1500,8 +1466,6 @@ function AdvancedSection() {
 	);
 }
 
-/* ── Secrets ── */
-
 function SecretsSection() {
 	const secrets = useAsync(() => api.getSecrets());
 	const [adding, setAdding] = useState(false);
@@ -1540,8 +1504,6 @@ function SecretsSection() {
 		</div>
 	);
 }
-
-/* ── Licenses ── */
 
 export function LicensesSection() {
 	return (
@@ -1632,8 +1594,6 @@ export function LicensesSection() {
 		</div>
 	);
 }
-
-/* ── Logs ── */
 
 type LogLevel = "info" | "warn" | "error" | "debug";
 
@@ -1867,8 +1827,6 @@ function LogsSection() {
 		</div>
 	);
 }
-
-// Keyboard: ⌘, opens settings (wired in the layout).
 export function useSettingsHotkey() {
 	const { open, setOpen } = useSettings();
 	useEffect(() => {

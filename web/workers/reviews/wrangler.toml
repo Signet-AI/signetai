@@ -6,8 +6,6 @@ compatibility_date = "2025-01-01"
 binding       = "DB"
 database_name = "signet-reviews"
 database_id   = "d1fcce93-0b8a-4b95-b67d-39e9611dd4b3"
-
-# Rate limiting: 5 sync requests per IP per 60 seconds
 [[unsafe.bindings]]
 name         = "RATE_LIMITER"
 type         = "ratelimit"

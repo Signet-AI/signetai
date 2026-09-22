@@ -7,7 +7,6 @@ export function Providers({ children }: { children: React.ReactNode }) {
   const router = useRouter()
 
   const handleDownloadComplete = () => {
-    // Refresh the current page when download completes
     router.refresh()
   }
 

@@ -192,16 +192,12 @@ export class DesktopTray {
 			);
 		}
 		this.#contextMenu = Menu.buildFromTemplate(this.#menu(update));
-		// Electron suppresses Tray's click event on macOS when a context menu is set.
-		// Keep the menu detached so left-click can open the dashboard; right-click pops it manually.
 		if (process.platform !== "darwin") this.#tray.setContextMenu(this.#contextMenu);
 	}
 
 	#menu(update: TrayUpdate): MenuItemConstructorOptions[] {
 		const running = update.kind === "running";
 		const mode = this.#daemon.daemonMode;
-		// Only allow stop/restart when we own the bundled daemon.
-		// When attached to a CLI-managed daemon, those controls belong to the CLI.
 		const ownsBundled = running && mode === "bundled";
 		return [
 			{ label: running ? `Signet v${update.version ?? "unknown"}` : "Signet", enabled: false },

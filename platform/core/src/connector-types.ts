@@ -1,10 +1,3 @@
-/**
- * Connector runtime contract for document ingestion sources.
- *
- * Connectors bridge external data sources (filesystem, GitHub, Google
- * Drive, etc.) into the Signet document ingest pipeline.
- */
-
 export const CONNECTOR_PROVIDERS = ["filesystem", "github-docs", "gdrive"] as const;
 export type ConnectorProvider = (typeof CONNECTOR_PROVIDERS)[number];
 

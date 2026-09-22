@@ -1,21 +1,5 @@
-/**
- * Conservative inline entity mention linking for the remember endpoint.
- *
- * The default remember path is intentionally mechanical: it may attach a
- * memory to entities that already exist in the graph, but it must not invent
- * entities, aspects, attributes, or dependencies from raw text. Semantic graph
- * authorship belongs to Dreaming, audited interactive mutations, or reviewed
- * repair/normalization passes.
- */
-
 import type { ReadDb, WriteDb } from "./db-accessor";
 import { countChanges } from "./db-helpers";
-
-// ---------------------------------------------------------------------------
-// Name extraction
-// ---------------------------------------------------------------------------
-
-// Common words that appear capitalized but aren't entity names
 const SKIP_WORDS = new Set([
 	"the",
 	"this",
@@ -174,19 +158,12 @@ const SKIP_WORDS = new Set([
 	"simply",
 	"finally",
 	"initially",
-	// Markdown / structural tokens
 	"key",
 	"facts",
 	"preferences",
 	"events",
 	"relationships",
 ]);
-
-/**
- * Extract candidate proper nouns from text. Finds capitalized words
- * and multi-word names (consecutive capitalized tokens). Filters out
- * sentence-initial capitals and common false positives.
- */
 export function extractCandidateNames(text: string): string[] {
 	const names: string[] = [];
 	const sentences = text.split(/[.!?\n]+/).filter(Boolean);
@@ -206,8 +183,6 @@ export function extractCandidateNames(text: string): string[] {
 			const isAllCaps = /^[A-Z]{2,}$/.test(clean) && clean.length <= 6;
 
 			if ((isCapitalized || isAllCaps) && !SKIP_WORDS.has(clean.toLowerCase())) {
-				// Sentence-initial capitals that pass SKIP_WORDS are proper
-				// nouns (Caroline, Melanie, etc.) — include them.
 				run.push(clean);
 			} else {
 				if (run.length > 0) {
@@ -226,10 +201,6 @@ export function extractCandidateNames(text: string): string[] {
 
 	return [...new Set(names)];
 }
-
-// ---------------------------------------------------------------------------
-// Existing entity resolution
-// ---------------------------------------------------------------------------
 
 function findKnownEntityId(db: ReadDb, name: string, agentId: string): string {
 	const canonical = name.trim().toLowerCase().replace(/\s+/g, " ");
@@ -253,18 +224,12 @@ function resolveKnownEntity(db: WriteDb, name: string, agentId: string, now: str
 	return entityId;
 }
 
-// ---------------------------------------------------------------------------
-// Public API
-// ---------------------------------------------------------------------------
-
 export interface LinkResult {
 	readonly linked: number;
 	readonly entityIds: string[];
 	readonly aspects: number;
 	readonly attributes: number;
 }
-
-/** Preview the links `linkMemoryToEntities` would create without mutating graph state. */
 export function previewMemoryEntityLinks(db: ReadDb, memoryId: string, content: string, agentId: string): LinkResult {
 	const names = extractCandidateNames(content);
 	if (names.length === 0) return { linked: 0, entityIds: [], aspects: 0, attributes: 0 };
@@ -283,16 +248,6 @@ export function previewMemoryEntityLinks(db: ReadDb, memoryId: string, content: 
 
 	return { linked, entityIds, aspects: 0, attributes: 0 };
 }
-
-/**
- * Link a memory to already-known entities found in its content.
- *
- * This is deliberately mention-only. It never creates graph structure from
- * raw text, because doing so turns incidental casing and LLM-ish heuristics
- * into semantic claims. Structured remember is the graph write surface.
- *
- * Must run inside a withWriteTx closure.
- */
 export function linkMemoryToEntities(db: WriteDb, memoryId: string, content: string, agentId: string): LinkResult {
 	const names = extractCandidateNames(content);
 	if (names.length === 0) return { linked: 0, entityIds: [], aspects: 0, attributes: 0 };

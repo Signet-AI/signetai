@@ -1,10 +1,3 @@
-/**
- * The dashboard's shared icon surface.
- *
- * Keep the local names used by the UI components stable while sourcing every
- * application glyph from MingCute's Regular set. This also gives the icon
- * system one place to tune later without changing component behavior.
- */
 export {
 	AlertRegular as AlertCircle,
 	AlertRegular as TriangleAlert,

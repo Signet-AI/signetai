@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# synthesis-stress-test.sh
-# Stress test: prove synthesis worker thread does NOT block the event loop.
-#
-# Protocol:
-#   1. Start daemon on port 3851 with a known-good temp workspace
-#   2. Fire 5 concurrent POST /api/hooks/synthesis requests (background)
-#   3. While synthesis runs, fire 10 sequential /health requests with timing
-#   4. Report: health p50/p95/max (must all be < 100ms), synthesis times, FD delta
 set -uo pipefail
 
 BASE="http://127.0.0.1:3851"
-# Use existing workspace — fresh workspaces fail migration (Bun/SQLite compat issue)
 WORKSPACE="/tmp/signet-t5-test-workspace"
 WORKTREE="$(cd "$(dirname "$0")/../.." && pwd)"
 LOG=$(mktemp /tmp/signet-stress-daemon.XXXXXX.log)
@@ -26,8 +17,6 @@ cleanup() {
   rm -rf "$SCRATCH" "$LOG"
 }
 trap cleanup EXIT
-
-# Kill anything already on 3851
 existing=$(lsof -ti tcp:3851 2>/dev/null || true)
 if [[ -n "$existing" ]]; then
   echo "Killing existing process on port 3851 (PID=$existing)"
@@ -44,14 +33,10 @@ echo "Workspace: $WORKSPACE"
 echo "Worktree:  $WORKTREE"
 echo "==================================================================="
 echo ""
-
-# -- 1. Start daemon -------------------------------------------------------
 SIGNET_PATH="$WORKSPACE" SIGNET_PORT=3851 SIGNET_BIND=127.0.0.1 \
   bun run "$WORKTREE/platform/daemon/src/daemon.ts" >"$LOG" 2>&1 &
 DAEMON_PID=$!
 echo "Daemon started (PID=$DAEMON_PID), waiting for healthy..."
-
-# Poll /health every 500ms, max 30s
 MAX_WAIT_ITERS=60
 started=0
 for i in $(seq 1 $MAX_WAIT_ITERS); do
@@ -73,8 +58,6 @@ if [[ "$started" -eq 0 ]]; then
   exit 1
 fi
 echo ""
-
-# -- 2. FD baseline --------------------------------------------------------
 echo "=== FD BASELINE ==="
 baseline_json=$(curl -s --max-time 2 "$BASE/health" 2>/dev/null || echo "{}")
 baseline=$(echo "$baseline_json" | python3 -c \
@@ -82,8 +65,6 @@ baseline=$(echo "$baseline_json" | python3 -c \
   2>/dev/null || echo "N/A")
 echo "FDs before stress: $baseline"
 echo ""
-
-# -- 3. Fire 5 concurrent synthesis requests in background -----------------
 echo "=== FIRING 5 CONCURRENT SYNTHESIS REQUESTS ==="
 mkdir -p "$SCRATCH/synth"
 
@@ -106,13 +87,9 @@ for i in 1 2 3 4 5; do
   } &
   SYNTH_PIDS+=($!)
 done
-
-# Brief pause to ensure synthesis has started processing before health loop
 sleep 0.3
 echo "Synthesis requests in-flight, now measuring health latency..."
 echo ""
-
-# -- 4. Fire 10 sequential health requests while synthesis runs ------------
 echo "=== HEALTH ENDPOINT TIMING (during concurrent synthesis) ==="
 mkdir -p "$SCRATCH/health"
 
@@ -126,13 +103,9 @@ for i in $(seq 1 10); do
     2>/dev/null || echo "error")
   echo "$elapsed_ms $h_status" >> "$SCRATCH/health/times.txt"
 done
-
-# Wait only for the 5 synthesis jobs (not the daemon background process)
 wait "${SYNTH_PIDS[@]}"
 
 echo ""
-
-# -- 5. Collect and report synthesis results --------------------------------
 echo "=== SYNTHESIS RESULTS ==="
 synth_ok=0
 declare -a synth_times=()
@@ -152,8 +125,6 @@ for i in 1 2 3 4 5; do
     echo "  synth-$i: MISSING result file"
   fi
 done
-
-# Synth stats
 if [[ ${#synth_times[@]} -gt 0 ]]; then
   sorted_synth=($(printf '%s\n' "${synth_times[@]}" | sort -n))
   n=${#sorted_synth[@]}
@@ -164,8 +135,6 @@ if [[ ${#synth_times[@]} -gt 0 ]]; then
   echo "Synthesis: n=$n  p50=${s_p50}ms  p95=${s_p95}ms  max=${s_max}ms"
 fi
 echo ""
-
-# -- 6. Report health timing results ----------------------------------------
 echo "=== HEALTH ENDPOINT RESULTS ==="
 declare -a health_times=()
 healthy_count=0
@@ -183,8 +152,6 @@ if [[ -f "$SCRATCH/health/times.txt" ]]; then
     echo "  health: ${ms}ms  [${st}]"
   done < "$SCRATCH/health/times.txt"
 fi
-
-# Health stats
 if [[ ${#health_times[@]} -gt 0 ]]; then
   sorted_health=($(printf '%s\n' "${health_times[@]}" | sort -n))
   n=${#sorted_health[@]}
@@ -196,8 +163,6 @@ if [[ ${#health_times[@]} -gt 0 ]]; then
   echo "Healthy:  $healthy_count/$total_count responded with status=healthy"
 fi
 echo ""
-
-# -- 7. FD count after stress -----------------------------------------------
 echo "=== FD AFTER STRESS ==="
 final_json=$(curl -s --max-time 2 "$BASE/health" 2>/dev/null || echo "{}")
 final_fds=$(echo "$final_json" | python3 -c \
@@ -209,14 +174,10 @@ if [[ "$baseline" != "N/A" && "$final_fds" != "N/A" ]]; then
   echo "FD delta: $delta (baseline=$baseline final=$final_fds)"
 fi
 echo ""
-
-# -- 8. Verdict -------------------------------------------------------------
 echo "==================================================================="
 echo "VERDICT"
 echo "==================================================================="
 pass=1
-
-# Health < 100ms check
 if [[ ${#sorted_health[@]} -gt 0 ]]; then
   if [[ "$h_max" -lt 100 ]]; then
     echo "  health_under_100ms:   PASS (max=${h_max}ms < 100ms threshold)"
@@ -228,16 +189,12 @@ else
   echo "  health_under_100ms:   FAIL (no health timing data collected)"
   pass=0
 fi
-
-# Synthesis completion check
 if [[ "$synth_ok" -ge 1 ]]; then
   echo "  synthesis_completed:  PASS ($synth_ok/5 returned prompt field)"
 else
   echo "  synthesis_completed:  FAIL (0/5 returned prompt field)"
   pass=0
 fi
-
-# FD stability check
 if [[ "$baseline" != "N/A" && "$final_fds" != "N/A" ]]; then
   delta=$((final_fds - baseline))
   if [[ "$delta" -le 100 ]]; then

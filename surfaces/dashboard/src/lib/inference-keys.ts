@@ -1,12 +1,3 @@
-/**
- * Per-provider API-key format hints + validation. Dependency-free so it is
- * unit-testable outside the SvelteKit runtime (api.ts pulls in $app/environment).
- *
- * Used by the connect dialog for instant client-side feedback — no network
- * round-trip. Validation is advisory: a non-match never blocks save (providers
- * change formats and custom gateways accept arbitrary keys); it only nudges.
- * Patterns reflect the common shipped key shapes as of mid-2026.
- */
 export interface ApiKeyFormat {
 	readonly hint: string;
 	readonly pattern: RegExp;
@@ -38,19 +29,10 @@ export function validateApiKey(providerFamily: string, value: string): KeyValida
 	if (!trimmed) return "empty";
 	const format = apiKeyFormat(providerFamily);
 	if (!format) {
-		// No known format: never disable Connect for a non-empty key (that would
-		// silently block legitimate short keys for custom gateways / some Bedrock
-		// shapes). Surface it as "unsure" so the hint shows and the button stays on.
 		return "unsure";
 	}
 	return format.pattern.test(trimmed) ? "valid" : "unsure";
 }
-
-/**
- * Stable secret name for a stored provider API key. Kept provider-keyed so a
- * user can hold one key per provider and the name is human-meaningful in the
- * secrets list. Collisions with real env vars are implausible for this prefix.
- */
 export function providerKeySecretName(providerFamily: string): string {
 	return `SIGNET_KEY_${providerFamily.replace(/[^A-Z0-9_]/gi, "_").toUpperCase()}`;
 }

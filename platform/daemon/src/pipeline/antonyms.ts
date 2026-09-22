@@ -1,10 +1,3 @@
-/**
- * Shared antonym pairs for contradiction detection.
- *
- * Used by the contradiction detection module (semantic attribute
- * contradiction).
- */
-
 export const NEGATION_TOKENS = new Set([
 	"not",
 	"no",
@@ -18,12 +11,6 @@ export const NEGATION_TOKENS = new Set([
 	"wont",
 	"without",
 ]);
-
-/**
- * Narrow set of boolean/toggle antonyms for prospective contradiction risk
- * scoring on UPDATE/DELETE proposals. Kept separate from the full set to
- * avoid widening the false-positive surface of existing prospective detection.
- */
 export const PROSPECTIVE_ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]> = [
 	["enabled", "disabled"],
 	["allow", "deny"],
@@ -34,7 +21,6 @@ export const PROSPECTIVE_ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]>
 ];
 
 export const ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]> = [
-	// boolean / toggle
 	["enabled", "disabled"],
 	["allow", "deny"],
 	["accept", "reject"],
@@ -42,19 +28,16 @@ export const ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]> = [
 	["on", "off"],
 	["true", "false"],
 	["yes", "no"],
-	// relationship
 	["together", "apart"],
 	["dating", "single"],
 	["married", "divorced"],
 	["friends", "strangers"],
 	["close", "distant"],
-	// preference
 	["love", "hate"],
 	["like", "dislike"],
 	["prefer", "avoid"],
 	["enjoy", "dread"],
 	["want", "refuse"],
-	// state
 	["start", "stop"],
 	["begin", "end"],
 	["open", "close"],
@@ -63,13 +46,10 @@ export const ANTONYM_PAIRS: ReadonlyArray<readonly [string, string]> = [
 	["buy", "sell"],
 	["alive", "dead"],
 	["active", "inactive"],
-	// value / direction
 	["positive", "negative"],
 	["increase", "decrease"],
 	["before", "after"],
 ];
-
-/** Bidirectional set for O(1) lookup in either direction. */
 export const ANTONYM_SET: ReadonlySet<string> = new Set(ANTONYM_PAIRS.flatMap(([a, b]) => [`${a}:${b}`, `${b}:${a}`]));
 
 export function tokenize(text: string): string[] {
@@ -114,13 +94,6 @@ export function hasAntonymConflict(
 	}
 	return false;
 }
-
-/**
- * Conservative lexical contradiction check shared by prospective guard callers.
- * It intentionally reports only high-signal negation and toggle conflicts;
- * semantic contradiction remains a reasoning task, not a false-positive-prone
- * string heuristic.
- */
 export function detectProspectiveContradictionRisk(
 	candidate: string,
 	existing: string,

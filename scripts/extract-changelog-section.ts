@@ -1,12 +1,5 @@
 #!/usr/bin/env bun
 
-/**
- * Extract a single version's section from CHANGELOG.md.
- * Usage: bun scripts/extract-changelog-section.ts 0.2.0
- *
- * Prints the matching section to stdout (used by CI for GitHub release body).
- */
-
 import { readFileSync, existsSync } from "node:fs";
 
 const CHANGELOG_PATH = "CHANGELOG.md";
@@ -18,8 +11,6 @@ function extractSection(version: string): string {
 	const versionHeader = `## [${version}]`;
 	const startIdx = content.indexOf(versionHeader);
 	if (startIdx < 0) return "";
-
-	// Find the next ## header after this one
 	const afterHeader = content.indexOf("\n", startIdx);
 	if (afterHeader < 0) return content.slice(startIdx);
 

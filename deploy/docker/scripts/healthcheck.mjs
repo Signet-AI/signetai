@@ -19,8 +19,6 @@ const secret = Buffer.from(await secretFile.arrayBuffer());
 if (secret.length !== 32) {
 	process.exit(1);
 }
-
-// Stateless signed token, not stored in daemon token tables.
 const now = Math.floor(Date.now() / 1000);
 const claims = {
 	sub: "docker:healthcheck",

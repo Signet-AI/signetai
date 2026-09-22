@@ -184,8 +184,6 @@ connector_sha="$(manifest_component_value connectors sha256)"
 
 connector_path=""
 if [ -n "$connector_url" ] && [ -n "$connector_sha" ]; then
-	# The wrapper exposes `connector_url` as a relative path; promote it
-	# to a full GitHub release URL when only the basename was given.
 	case "$connector_url" in
 		http*) connector_full="$connector_url" ;;
 		*)     connector_full="$DOWNLOAD_BASE/$connector_url" ;;
@@ -202,9 +200,6 @@ if [ -n "$connector_url" ] && [ -n "$connector_sha" ]; then
 		exit 1
 	fi
 fi
-
-# Bun JavaScript daemon runtime assets. Releases that provide the selectable
-# runtime list a verified tarball under `components.daemonJs`.
 daemon_js_url="$(manifest_component_value daemonJs url)"
 daemon_js_sha="$(manifest_component_value daemonJs sha256)"
 
@@ -226,9 +221,6 @@ if [ -n "$daemon_js_url" ] && [ -n "$daemon_js_sha" ]; then
 		exit 1
 	fi
 fi
-# `signet install` accepts connector and Bun daemon asset flags so it can
-# verify and extract the tarballs next to the binary at its final install
-# location.
 if [ -n "$connector_path" ] && [ -n "$daemon_js_path" ]; then
 	"$binary_path" install --force --connector-assets "$connector_path" --daemon-js-assets "$daemon_js_path" "$@"
 elif [ -n "$connector_path" ]; then

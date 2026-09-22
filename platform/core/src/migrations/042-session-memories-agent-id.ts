@@ -5,17 +5,7 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 	if (cols.some((col) => col.name === column)) return;
 	db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }
-
-/**
- * Migration 042: Add agent scoping to session_memories
- *
- * Rebuilds session_memories so rows are keyed by
- * (session_key, agent_id, memory_id), enabling agent-scoped writes/reads
- * when multiple agents reuse a session key.
- */
 export function up(db: MigrationDb): void {
-	// Defensive: older repaired DBs may have stamped versions without columns.
-	// Ensure all columns referenced by the copy query exist before rebuild.
 	addColumnIfMissing(db, "session_memories", "entity_slot", "INTEGER");
 	addColumnIfMissing(db, "session_memories", "aspect_slot", "INTEGER");
 	addColumnIfMissing(db, "session_memories", "is_constraint", "INTEGER NOT NULL DEFAULT 0");

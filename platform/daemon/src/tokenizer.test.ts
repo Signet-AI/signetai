@@ -14,9 +14,6 @@ describe("tokenizer", () => {
 	});
 
 	it("estimates never exceed the exact BPE count for plain prose", () => {
-		// chars/4 is the standard heuristic; for ASCII prose the exact BPE count
-		// is typically at or below the estimate, so budgeting on the estimate is
-		// safe (never under-reserves for the common case).
 		const text = "the quick brown fox jumps over the lazy dog and keeps running";
 		expect(countTokens(text)).toBeLessThanOrEqual(estimateTokens(text));
 	});

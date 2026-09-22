@@ -34,7 +34,6 @@ const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
     <meta name="generator" content={Astro.generator} />
     <ClientRouter />
     <script>if(typeof crypto!=="undefined"&&!crypto.randomUUID){crypto.randomUUID=function(){return([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g,function(c){return(c^crypto.getRandomValues(new Uint8Array(1))[0]&15>>c/4).toString(16)})};}</script>
-    <!-- Meta Pixel Code -->
     <script>
     !function(f,b,e,v,n,t,s)
     {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
@@ -50,27 +49,17 @@ const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
     <noscript><img height="1" width="1" style="display:none"
     src="https://www.facebook.com/tr?id=927146099694855&ev=PageView&noscript=1"
     /></noscript>
-    <!-- End Meta Pixel Code -->
-    <!-- Reddit Pixel -->
     <script>
     !function(w,d){if(!w.rdt){var p=w.rdt=function(){p.sendEvent?p.sendEvent.apply(p,arguments):p.callQueue.push(arguments)};p.callQueue=[];var t=d.createElement("script");t.src="https://www.redditstatic.com/ads/pixel.js?pixel_id=a2_ird5pcyqpvjy",t.async=!0;var s=d.getElementsByTagName("script")[0];s.parentNode.insertBefore(t,s)}}(window,document);rdt('init','a2_ird5pcyqpvjy');rdt('track', 'PageVisit', {conversionId: crypto.randomUUID()});
     </script>
-    <!-- DO NOT MODIFY UNLESS TO REPLACE A USER IDENTIFIER -->
-    <!-- End Reddit Pixel -->
     <meta name="facebook-domain-verification" content="rgwxwhzzfpfry68kxw5nld9jo5r0sq" />
     <title>{title}</title>
     <meta name="description" content={description} />
     <link rel="canonical" href={canonicalUrl.href} />
-
-    <!-- Favicon -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-
-    <!-- RSS autodiscovery -->
     <link rel="alternate" type="application/rss+xml" title={`${SITE_NAME} Blog`} href="/rss.xml" />
-
-    <!-- Open Graph -->
     <meta property="og:type" content={type} />
     <meta property="og:site_name" content={SITE_NAME} />
     <meta property="og:title" content={title} />
@@ -80,14 +69,10 @@ const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
     <meta property="og:image:width" content="1408" />
     <meta property="og:image:height" content="768" />
     <meta property="og:image:type" content="image/png" />
-
-    <!-- Twitter/X Card -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={imageUrl.href} />
-
-    <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -100,8 +85,6 @@ const imageUrl = new URL(image, Astro.site ?? "https://signetai.sh");
     <slot />
 
     <script src="../scripts/analytics.ts"></script>
-
-    <!-- Reddit Pixel Conversion Events -->
     <script>
     document.addEventListener('astro:page-load', function() {
       function trackReddit(event, selectors) {

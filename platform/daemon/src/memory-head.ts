@@ -31,8 +31,6 @@ export async function requestMemoryHead<Result>(request: MemoryHeadRequest): Pro
 		{ operation: `memory-head.${request.action}`, lane: "write", deadlineMs: 5000, estimatedWorkUnits: 1000 },
 	).result;
 }
-
-/** Unversioned callers cannot prove which evidence produced their text. */
 export function writeMemoryHead(
 	_content: string,
 	_opts?: { readonly agentId?: string; readonly owner?: string },

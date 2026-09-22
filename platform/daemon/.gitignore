@@ -1,4 +1,3 @@
-# Build artifacts copied or generated at package build time.
 /dashboard/
 /skills/
 

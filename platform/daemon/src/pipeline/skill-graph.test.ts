@@ -99,9 +99,6 @@ describe("installSkillNode", () => {
 });
 
 describe("installSkillNode semantic-writer cutover (#946)", () => {
-	// A SKILL.md body long enough that the retired extractor would have run
-	// (the old guard required body.trim().length >= 20). Mentions entities the
-	// extractingProvider would return.
 	const BODY =
 		"This skill builds Astro portfolio websites and deploys them to GitHub Pages. " +
 		"It reads brand assets and scaffolds the project from a template.";
@@ -125,13 +122,9 @@ describe("installSkillNode semantic-writer cutover (#946)", () => {
 			emb,
 			async () => null,
 		);
-
-		// The result contract no longer reports extracted entities.
 		expect("entitiesExtracted" in result).toBe(false);
 
 		const accessor = getDbAccessor();
-
-		// Only the single native skill entity exists — no extracted semantic entities.
 		const entities = accessor.withReadDb(
 			(db) =>
 				db.prepare("SELECT id, name, entity_type FROM entities WHERE agent_id = 'default'").all() as Array<{
@@ -143,9 +136,6 @@ describe("installSkillNode semantic-writer cutover (#946)", () => {
 		expect(entities).toHaveLength(1);
 		expect(entities[0]?.entity_type).toBe("skill");
 		expect(entities[0]?.name).toBe("astro-portfolio-site");
-
-		// No relations authored by skill install (cross-skill links are owned by
-		// the audited Dreaming apply path).
 		const relationCount = accessor.withReadDb(
 			(db) =>
 				db
@@ -153,8 +143,6 @@ describe("installSkillNode semantic-writer cutover (#946)", () => {
 					.get(result.entityId, result.entityId) as { n: number },
 		);
 		expect(relationCount.n).toBe(0);
-
-		// No mention links created from the body.
 		const mentionCount = accessor.withReadDb(
 			(db) =>
 				db.prepare("SELECT COUNT(*) AS n FROM memory_entity_mentions WHERE entity_id = ?").get(result.entityId) as {
@@ -188,9 +176,6 @@ describe("installSkillNode semantic-writer cutover (#946)", () => {
 		);
 
 		const accessor = getDbAccessor();
-
-		// Source topology: the skill node itself is native, written directly with
-		// entity_type = 'skill'.
 		const entity = accessor.withReadDb(
 			(db) =>
 				db.prepare("SELECT entity_type, description FROM entities WHERE id = ?").get(result.entityId) as {
@@ -200,8 +185,6 @@ describe("installSkillNode semantic-writer cutover (#946)", () => {
 		);
 		expect(entity.entity_type).toBe("skill");
 		expect(entity.description).toBe("A skill that ships its own SKILL.md frontmatter.");
-
-		// Provenance: skill_meta carries the install source, version, and role.
 		const meta = accessor.withReadDb(
 			(db) =>
 				db

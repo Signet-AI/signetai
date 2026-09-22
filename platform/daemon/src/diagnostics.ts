@@ -1,10 +1,3 @@
-/**
- * Read-only health signals for the Signet memory system.
- *
- * All functions accept a ReadDb or ProviderTracker and return plain
- * data structs — no side effects, no mutations.
- */
-
 import { readMemoriesFtsIndexRowCount } from "@signet/core";
 import type { ReadDb } from "./db-accessor";
 import {
@@ -17,30 +10,19 @@ import {
 } from "./diagnostics-queue";
 import type { UpdateState } from "./update-system";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export interface HealthScore {
 	readonly score: number;
 	readonly status: "healthy" | "degraded" | "unhealthy";
 }
 
 export interface QueueHealth extends HealthScore {
-	/** Legacy aggregate depth (memory_jobs pending). Kept for back-compat. */
 	readonly depth: number;
-	/** Legacy aggregate oldest pending age (memory_jobs). Kept for back-compat. */
 	readonly oldestAgeSec: number;
-	/** Legacy aggregate dead rate within QUEUE_RECENT_WINDOW_MS. Kept for back-compat. */
 	readonly deadRate: number;
-	/** Legacy aggregate count of stale leased rows. Kept for back-compat. */
 	readonly leaseAnomalies: number;
-	/** Per-queue counts (memory / summary). */
 	readonly memory: QueueCounts;
 	readonly summary: QueueCounts;
-	/** Oldest dead summary job for the diagnostics surface. */
 	readonly oldestDeadSummaryJob: OldestDeadJob | null;
-	/** Oldest dead memory job. */
 	readonly oldestDeadMemoryJob: OldestDeadJob | null;
 }
 
@@ -55,7 +37,6 @@ export interface IndexHealth extends HealthScore {
 	readonly memoriesRowCount: number;
 	readonly ftsMismatch: boolean;
 	readonly embeddingCoverage: number;
-	/** True when FTS is mismatched or embedding coverage is below 80%. */
 	readonly indexNeedsRepair: boolean;
 }
 
@@ -135,10 +116,6 @@ export interface DiagnosticsOptions {
 	readonly traversalPrimary?: boolean;
 }
 
-// ---------------------------------------------------------------------------
-// Provider tracker (in-memory ring buffer)
-// ---------------------------------------------------------------------------
-
 export interface ProviderTracker {
 	record(outcome: "success" | "failure" | "timeout"): void;
 	readonly stats: {
@@ -155,8 +132,6 @@ export function createProviderTracker(capacity = 100): ProviderTracker {
 	const buffer: Array<Outcome> = new Array(capacity).fill(null);
 	let head = 0;
 	let size = 0;
-
-	// Counts for the active portion of the ring buffer
 	let successes = 0;
 	let failures = 0;
 	let timeouts = 0;
@@ -170,7 +145,6 @@ export function createProviderTracker(capacity = 100): ProviderTracker {
 	return {
 		record(outcome: Outcome): void {
 			const evicted = buffer[head];
-			// If the slot we're about to overwrite held a real value, subtract it
 			if (size === capacity && evicted !== null) {
 				addCount(evicted as Outcome, -1);
 			}
@@ -191,10 +165,6 @@ export function createProviderTracker(capacity = 100): ProviderTracker {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Score helper
-// ---------------------------------------------------------------------------
-
 function scoreStatus(score: number): "healthy" | "degraded" | "unhealthy" {
 	if (score >= 0.8) return "healthy";
 	if (score >= 0.5) return "degraded";
@@ -212,17 +182,10 @@ function clamp(n: number): number {
 }
 
 const QUEUE_RECENT_WINDOW_MS = 60 * 60 * 1000;
-
-// Queue backlog thresholds. Exported so /health/ready gates on the same
-// limits that drive the queue health score.
 export const QUEUE_MAX_DEPTH = 50;
 export const QUEUE_MAX_DEAD_RATE = 0.01;
 export const QUEUE_MAX_OLDEST_AGE_SEC = 300;
 const GRAPH_FLATLINE_MEMORY_THRESHOLD = 10;
-
-// ---------------------------------------------------------------------------
-// Domain health functions
-// ---------------------------------------------------------------------------
 
 export function getQueueHealth(db: ReadDb): QueueHealth {
 	const pendingRow = db
@@ -250,8 +213,6 @@ export function getQueueHealth(db: ReadDb): QueueHealth {
 	const dead = deadRow?.dead ?? 0;
 	const completedAndDead = deadRow?.total ?? 0;
 	const deadRate = completedAndDead > 0 ? dead / completedAndDead : 0;
-
-	// Jobs that are still 'leased' but were created more than 10 minutes ago
 	const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
 	const anomalyRow = db
 		.prepare(
@@ -262,14 +223,7 @@ export function getQueueHealth(db: ReadDb): QueueHealth {
 		.get(tenMinAgo) as { cnt: number } | undefined;
 
 	const leaseAnomalies = anomalyRow?.cnt ?? 0;
-
-	// Issue #901 — per-queue breakdown and oldest-dead lookup. The
-	// expansion is cached because status and maintenance surfaces can call
-	// diagnostics repeatedly within a short interval.
 	const { memory, summary, oldestDeadSummaryJob, oldestDeadMemoryJob } = getQueueDiagnosticsSnapshot(db);
-
-	// Composite score mixes legacy penalty math with the new
-	// threshold-based per-queue penalties (worst of all queues).
 	const memoryScore = scoreCountsWithThresholds(memory, "memory", DEFAULT_QUEUE_THRESHOLDS);
 	const summaryScore = scoreCountsWithThresholds(summary, "summary", DEFAULT_QUEUE_THRESHOLDS);
 	const queueScore = worstQueueScore([memoryScore, summaryScore]);
@@ -280,8 +234,6 @@ export function getQueueHealth(db: ReadDb): QueueHealth {
 	if (oldestAgeSec > QUEUE_MAX_OLDEST_AGE_SEC) score -= 0.2;
 	if (leaseAnomalies > 0) score -= 0.2;
 	score = clamp(score);
-
-	// Blend legacy and per-queue scores — conservative: take the lower.
 	const blended = clamp(Math.min(score, queueScore.score));
 	const status = worstStatus([scoreStatus(blended), queueScore.status]);
 
@@ -340,21 +292,13 @@ function getDatabaseSizeBytes(db: ReadDb): number {
 }
 
 export function getIndexHealth(db: ReadDb): IndexHealth {
-	// FTS external-content indexes intentionally retain soft-deleted memories;
-	// health must compare the physical index to the full canonical row set.
 	const canonicalMemRow = db.prepare("SELECT COUNT(*) AS cnt FROM memories").get() as { cnt: number } | undefined;
 	const activeMemRow = db.prepare("SELECT COUNT(*) AS cnt FROM memories WHERE is_deleted = 0").get() as
 		| { cnt: number }
 		| undefined;
 
 	const canonicalMemoriesRowCount = canonicalMemRow?.cnt ?? 0;
-	// Preserve the existing public field and embedding denominator: embedding
-	// coverage describes live memories, not retained tombstones.
 	const memoriesRowCount = activeMemRow?.cnt ?? 0;
-
-	// COUNT(*) FROM memories_fts resolves through the external content table and
-	// therefore cannot detect an index gap. The docsize shadow table counts the
-	// documents actually present in the FTS index.
 	let ftsRowCount = 0;
 	let ftsIndexAvailable = false;
 	try {
@@ -363,9 +307,7 @@ export function getIndexHealth(db: ReadDb): IndexHealth {
 			ftsRowCount = indexRowCount;
 			ftsIndexAvailable = true;
 		}
-	} catch {
-		// Missing FTS shadow state — report as a full mismatch.
-	}
+	} catch {}
 
 	const ftsMismatch = !ftsIndexAvailable || canonicalMemoriesRowCount !== ftsRowCount;
 
@@ -397,7 +339,7 @@ export function getIndexHealth(db: ReadDb): IndexHealth {
 
 export function getProviderHealth(tracker: ProviderTracker): ProviderHealth {
 	const { total, successes, failures, timeouts } = tracker.stats;
-	const availabilityRate = total > 0 ? successes / total : 1; // no data → assume healthy
+	const availabilityRate = total > 0 ? successes / total : 1;
 
 	const score = clamp(availabilityRate);
 	return {
@@ -427,7 +369,6 @@ export function getMutationHealth(db: ReadDb): MutationHealth {
 	const recentDeletes = row?.deletes ?? 0;
 
 	let score = 1.0;
-	// Many recoveries suggest wrong-target deletes being undone
 	if (recentRecovers > 5) score -= 0.3;
 
 	score = clamp(score);
@@ -440,11 +381,6 @@ export function getMutationHealth(db: ReadDb): MutationHealth {
 }
 
 export function getDuplicateHealth(db: ReadDb): DuplicateHealth {
-	// Read the maintained one-row aggregate (migration 138) instead of
-	// grouping every active memory by content_hash on the HTTP-serving isolate
-	// (#1670). The hash-count table is only the mutation-side read model; this
-	// route performs one primary-key lookup and never scans either payload table
-	// or the distinct-hash projection.
 	const row = db
 		.prepare(
 			`SELECT total_active AS totalActive,
@@ -511,8 +447,6 @@ export function getConnectorHealth(db: ReadDb): ConnectorHealth {
 		const connectorCount = totalRow?.total ?? 0;
 		const syncingCount = totalRow?.syncing ?? 0;
 		const errorCount = totalRow?.errors ?? 0;
-
-		// Find the oldest unresolved error to gauge how long things have been broken
 		const oldestErrorRow = db
 			.prepare(
 				`SELECT MIN(updated_at) AS oldest
@@ -538,7 +472,6 @@ export function getConnectorHealth(db: ReadDb): ConnectorHealth {
 			oldestErrorAge,
 		};
 	} catch {
-		// connectors table doesn't exist yet on older databases
 		return perfect;
 	}
 }
@@ -592,10 +525,6 @@ export function getUpdateHealth(state?: UpdateState): UpdateHealth {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Composite report
-// ---------------------------------------------------------------------------
-
 const BASE_WEIGHTS = {
 	queue: 0.23,
 	storage: 0.1,
@@ -607,10 +536,6 @@ const BASE_WEIGHTS = {
 	update: 0.1,
 	graph: 0.05,
 } as const;
-
-// ---------------------------------------------------------------------------
-// Graph health
-// ---------------------------------------------------------------------------
 
 export function getGraphHealth(
 	db: ReadDb,
@@ -625,8 +550,6 @@ export function getGraphHealth(
 			| undefined;
 
 		const communityCount = communityRow?.n ?? 0;
-
-		// Read average cohesion to infer quality without re-running detection
 		const cohesionRow = db
 			.prepare("SELECT AVG(cohesion) AS avg FROM entity_communities WHERE member_count > 1")
 			.get() as { avg: number | null } | undefined;
@@ -663,7 +586,6 @@ export function getGraphHealth(
 			quality,
 		};
 	} catch {
-		// entity_communities table may not exist yet
 		return {
 			score: 1,
 			status: "healthy",

@@ -132,12 +132,6 @@ function traversalMetadata(
 	}
 	return {};
 }
-
-/**
- * Hydrate an expansion entirely from the DB owner after traversal has
- * collected its IDs. The route must not reopen the parent SQLite connection
- * between traversal stages or during content hydration.
- */
 export async function expandKnowledgeGraphViaOwner(
 	owner: DbOwnerClient,
 	params: {

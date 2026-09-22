@@ -1,9 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 132: make the existing agent scope an explicit observer query
- * dimension without duplicating it into a second identity column.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_observer_entity

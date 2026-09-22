@@ -8,7 +8,6 @@ export interface NavItem {
 	view: ViewId;
 	label: string;
 	icon: (props: { className?: string }) => ReactNode;
-	/** Disabled nav items remain visible as a quiet affordance for future views. */
 	disabled?: boolean;
 }
 

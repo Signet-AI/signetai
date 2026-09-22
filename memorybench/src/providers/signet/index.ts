@@ -236,14 +236,6 @@ async function parseJson<T>(response: Response): Promise<T> {
     throw new Error(`Invalid JSON response (${response.status}): ${text.slice(0, 500)}`)
   }
 }
-
-/**
- * Signet daemon provider.
- *
- * The adapter keeps MemoryBench's scoring and judging intact, but uses the full
- * remember endpoint surface: extracted memory content, structured entities /
- * aspects / attributes / hints, scoped metadata, and lossless transcripts.
- */
 export class SignetProvider implements Provider {
   name = "signet"
   prompts = SIGNET_PROMPTS
@@ -433,9 +425,6 @@ export class SignetProvider implements Provider {
         scope: options.containerTag,
         agentId,
         project: this.project,
-        // Use Signet's lossless expansion surface during benchmarks.
-        // The daemon still ranks ordinary recall results first, but expanded
-        // results may include transcript-backed excerpts for retrieved sessions.
         expand: true,
       }),
     })
@@ -452,21 +441,11 @@ export class SignetProvider implements Provider {
       `Signet provider clear skipped for ${containerTag}; isolated daemon workspace owns cleanup`
     )
   }
-
-  /**
-   * Dream only after the whole benchmark source corpus is present. This keeps
-   * the benchmark honest: raw episodic inputs first, one canonical semantic
-   * derivation second, then retrieval.
-   */
   async finalizeIngest(_options: FinalizeIngestOptions): Promise<void> {
     if (this.profile !== "dreaming") return
     const scopes = this.dreamingAgentIds.size > 0 ? [...this.dreamingAgentIds] : [this.agentId]
     const dreamStatusPath = (agentId: string): string =>
       `/api/dream/status?agentId=${encodeURIComponent(agentId)}`
-
-    // A daemon may be restarting its pipeline after embedding initialization
-    // while ingest finishes. Wait for every fixture scope instead of turning
-    // that short lifecycle transition into a misleading benchmark result.
     const readyDeadline = Date.now() + 60_000
     let workerReady = false
     while (Date.now() < readyDeadline) {
@@ -486,16 +465,11 @@ export class SignetProvider implements Provider {
     while (Date.now() < deadline) {
       let accepted: DreamingTriggerResponse
       try {
-        // Explicitly trigger the canonical worker once. The worker owns the
-        // install-wide universe pass and discovers every fixture scope itself.
         accepted = await this.request<DreamingTriggerResponse>("/api/dream/trigger", {
           method: "POST",
           body: JSON.stringify({ mode: "incremental", agentId: this.agentId }),
         })
       } catch (error) {
-        // The worker may begin its periodic pass in the small interval between
-        // our completed-pass poll and this trigger. Join that pass instead of
-        // treating an already-running error as a benchmark failure.
         if (!(error instanceof Error) || !error.message.includes("/api/dream/trigger failed (409)")) throw error
         const status = await this.request<DreamingStatusResponse>(dreamStatusPath(this.agentId), { method: "GET" })
         const running = status.passes?.find((pass) => pass.status === "running" && pass.id)
@@ -710,8 +684,6 @@ export class SignetSupermemoryParityProvider extends SignetProvider {
     super("supermemory-parity")
   }
 }
-
-/** Raw episodic benchmark input followed by the daemon's bounded Dreaming pass. */
 export class SignetDreamingProvider extends SignetProvider {
   constructor() {
     super("dreaming")

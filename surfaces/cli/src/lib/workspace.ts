@@ -9,12 +9,6 @@ import {
 	writeConfiguredWorkspacePath as writeCore,
 } from "@signet/core";
 
-// Canonical Signet workspace resolution lives in @signet/core (issue #956).
-// These thin wrappers preserve the CLI's historical default-argument shape
-// (resolving against process.env at call time) while delegating to the single
-// shared implementation, so the CLI, desktop shell, and connectors can no
-// longer drift on env-var precedence or the workspace.json schema.
-
 export type { WorkspaceSource, WorkspaceResolution };
 
 export function normalizeWorkspacePath(pathValue: string): string {

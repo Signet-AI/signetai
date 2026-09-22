@@ -515,8 +515,6 @@ export function findStructuredClaimCandidates(
 		.sort((a, b) => b.score - a.score)
 		.slice(0, options.limit);
 }
-
-/** Owner-bound path candidates for graph-enabled recall. */
 export async function findStructuredPathCandidatesViaOwner(
 	owner: DbOwnerClient,
 	query: string,
@@ -618,8 +616,6 @@ export async function findStructuredPathCandidatesViaOwner(
 			.slice(0, options.limit),
 	);
 }
-
-/** Owner-bound evidence scoring for graph-enabled recall. */
 export async function scoreStructuredPathEvidenceViaOwner(
 	owner: DbOwnerClient,
 	memoryIds: readonly string[],
@@ -664,8 +660,6 @@ export async function scoreStructuredPathEvidenceViaOwner(
 		queryTokens,
 	);
 }
-
-/** Owner-bound claim candidates for graph-enabled recall. */
 export async function findStructuredClaimCandidatesViaOwner(
 	owner: DbOwnerClient,
 	query: string,

@@ -62,9 +62,7 @@ export function parseTranscriptRecoveryResult(output: string): TranscriptRecover
 		try {
 			const event = JSON.parse(line) as { type?: string; result?: TranscriptRecoveryScanResult };
 			if (event.type === "result" && event.result !== undefined) return event.result;
-		} catch {
-			// Logger output is not part of the child protocol.
-		}
+		} catch {}
 	}
 	return null;
 }
@@ -74,9 +72,7 @@ function parseTranscriptRecoveryChildPid(output: string): number | null {
 		try {
 			const event = JSON.parse(line) as { type?: string; pid?: unknown };
 			if (event.type === "started" && typeof event.pid === "number" && Number.isInteger(event.pid)) return event.pid;
-		} catch {
-			// Logger output is not part of the child protocol.
-		}
+		} catch {}
 	}
 	return null;
 }
@@ -85,17 +81,13 @@ export interface TranscriptRecoveryWorkerHandle {
 	stop(): Promise<void>;
 	nudge(): void;
 	readonly running: boolean;
-	/** Active child PID, exposed for lifecycle tests and diagnostics. */
 	readonly childPid: number | null;
 }
 
 type TranscriptRecoveryWorkerOptions = TranscriptRecoveryScanOptions & {
 	readonly intervalMs?: number;
-	/** Production scans run in a killable child; in-process is reserved for worker tests. */
 	readonly execution?: "child" | "in-process";
-	/** Test-only child entrypoint used to exercise the stdio/close protocol deterministically. */
 	readonly childPath?: string;
-	/** Test-only supervisor entrypoint; production uses the bundled supervisor. */
 	readonly supervisorPath?: string;
 };
 
@@ -145,9 +137,7 @@ async function discoverFiles(
 				const metadata = await stat(resolvedPath);
 				if (!metadata.isFile()) continue;
 				output.push({ harness, rootPath: root, path: resolvedPath, size: metadata.size, mtimeMs: metadata.mtimeMs });
-			} catch {
-				// A harness may rotate a file between directory enumeration and stat.
-			}
+			} catch {}
 		}
 	}
 	return !signal?.aborted;
@@ -215,9 +205,6 @@ async function readMetadataFromSource(
 		await handle.close().catch(() => undefined);
 	}
 }
-
-// Recovery only needs a bounded generation marker; the capture worker computes the
-// authoritative content digest after it reads the source.
 function sourceMetadataFingerprint(candidate: RecoveryCandidate): string {
 	return createHash("sha256")
 		.update(String(candidate.size))
@@ -393,9 +380,6 @@ export async function runTranscriptRecoveryScan(
 	candidates.sort((a, b) => a.path.localeCompare(b.path));
 	const frontiers = await loadFrontiers(dbAccessor, agentId, options.signal);
 	const recoveryFingerprints = await loadRecoveryFingerprints(dbAccessor, agentId, candidates, options.signal);
-	// Stat fingerprints only avoid rescanning the same frontier entry twice. They
-	// never decide source identity: the capture worker re-reads and hashes each
-	// admitted generation, and a full frontier cycle rechecks unchanged stats.
 	const resumableCandidates = candidates.filter((candidate) => {
 		const cursor = frontiers.get(frontierKey(candidate));
 		if (cursor === undefined || cursor === null || candidate.path > cursor) return true;
@@ -559,21 +543,15 @@ export function startTranscriptRecoveryWorker(
 		if (activeTargetPid !== null) {
 			try {
 				if (process.platform !== "win32") process.kill(-activeTargetPid, signal);
-			} catch {
-				// The target may have exited between the check and kill.
-			}
+			} catch {}
 			try {
 				process.kill(activeTargetPid, signal);
-			} catch {
-				// The target may have exited between the group and direct kills.
-			}
+			} catch {}
 		}
 		if (activeChild !== null) {
 			try {
 				activeChild.kill(signal);
-			} catch {
-				// The supervisor may have exited between the check and kill.
-			}
+			} catch {}
 		}
 	};
 
@@ -613,9 +591,6 @@ export function startTranscriptRecoveryWorker(
 			};
 			child.stdout?.setEncoding("utf8");
 			child.stdout?.on("data", (chunk: string) => {
-				// Buffer the complete protocol until the stdio streams close. The
-				// child may write its result and exit in the same turn; resolving from
-				// `data` or rejecting from `exit` races the final stdout delivery.
 				output += chunk;
 				activeTargetPid = parseTranscriptRecoveryChildPid(output) ?? activeTargetPid;
 			});

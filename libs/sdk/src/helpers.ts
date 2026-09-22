@@ -1,29 +1,15 @@
-/**
- * Manual helper methods for SignetClient
- *
- * These provide conveniences beyond the auto-generated API coverage:
- * - Polling utilities
- * - Composite operations
- * - Progress callbacks
- * - Error shortcuts
- */
-
 import { applyRecallScoreThreshold, buildRecallRequestBody } from "@signet/core/recall";
 import { SignetApiError } from "./errors.js";
 import type { SignetTransport } from "./transport.js";
 import type { DocumentRecord, JobStatus, MemoryRecord, RecallResponse, SdkRecallOptions } from "./types.js";
 
 export interface WaitForJobOptions {
-	/** Maximum time to wait in milliseconds (default: 30_000) */
 	readonly timeout?: number;
-	/** Polling interval in milliseconds (default: 500) */
 	readonly interval?: number;
 }
 
 export interface BatchModifyProgress {
-	/** Number of patches completed */
 	readonly done: number;
-	/** Total patches to process */
 	readonly total: number;
 }
 
@@ -37,17 +23,6 @@ export class SignetClientHelpers {
 	constructor(transport: SignetTransport) {
 		this.transport = transport;
 	}
-
-	/**
-	 * Poll a job until it completes, fails, or times out.
-	 *
-	 * @example
-	 * ```typescript
-	 * const job = await client.createDocument({ source_type: "url", url: "https://..." });
-	 * const result = await client.waitForJob(job.jobId, { timeout: 60_000 });
-	 * console.log(result.status); // "completed" | "failed" | "done" | "dead"
-	 * ```
-	 */
 	async waitForJob(jobId: string, opts?: WaitForJobOptions): Promise<JobStatus> {
 		const timeout = opts?.timeout ?? 30_000;
 		const interval = opts?.interval ?? 500;
@@ -65,10 +40,6 @@ export class SignetClientHelpers {
 
 		throw new Error(`Job ${jobId} did not complete within ${timeout}ms`);
 	}
-
-	/**
-	 * Poll a document until ingestion reaches a terminal state.
-	 */
 	async waitForDocument(documentId: string, opts?: WaitForJobOptions): Promise<DocumentRecord> {
 		const timeout = opts?.timeout ?? 30_000;
 		const interval = opts?.interval ?? 500;
@@ -84,20 +55,6 @@ export class SignetClientHelpers {
 
 		throw new Error(`Document ${documentId} did not complete within ${timeout}ms`);
 	}
-
-	/**
-	 * Create a document and wait for ingestion to complete.
-	 *
-	 * @example
-	 * ```typescript
-	 * const doc = await client.createAndIngestDocument({
-	 *   source_type: "url",
-	 *   url: "https://example.com/article",
-	 *   title: "Example Article"
-	 * });
-	 * console.log(doc.status); // "done"
-	 * ```
-	 */
 	async createAndIngestDocument(opts: {
 		readonly source_type: "text" | "url" | "file";
 		readonly content?: string;
@@ -108,28 +65,11 @@ export class SignetClientHelpers {
 		readonly metadata?: Record<string, unknown>;
 	}): Promise<DocumentRecord> {
 		const result = await this.transport.post<{ id: string; jobId?: string }>("/api/documents", opts);
-
-		// If the daemon returns a job id (legacy/optional), wait for it first.
 		if (result.jobId) {
 			await this.waitForJob(result.jobId);
 		}
-
-		// Poll document status until ingest reaches a terminal state.
 		return this.waitForDocument(result.id);
 	}
-
-	/**
-	 * Recall memories and throw if no results found.
-	 *
-	 * @example
-	 * ```typescript
-	 * // Throws if no preferences found
-	 * const memories = await client.recallOrThrow("user preferences", {
-	 *   type: "preference",
-	 *   limit: 5
-	 * });
-	 * ```
-	 */
 	async recallOrThrow(query: string, opts?: SdkRecallOptions): Promise<RecallResponse> {
 		const { minScore, ...requestOptions } = opts ?? {};
 		const result = applyRecallMinScore(
@@ -146,15 +86,6 @@ export class SignetClientHelpers {
 
 		return result;
 	}
-
-	/**
-	 * Get a memory by ID and throw if not found.
-	 *
-	 * @example
-	 * ```typescript
-	 * const memory = await client.getMemoryOrThrow("mem-abc-123");
-	 * ```
-	 */
 	async getMemoryOrThrow(id: string): Promise<MemoryRecord> {
 		try {
 			return await this.transport.get<MemoryRecord>(`/api/memory/${id}`);
@@ -165,15 +96,6 @@ export class SignetClientHelpers {
 			throw error;
 		}
 	}
-
-	/**
-	 * Get a document by ID and throw if not found.
-	 *
-	 * @example
-	 * ```typescript
-	 * const doc = await client.getDocumentOrThrow("doc-456");
-	 * ```
-	 */
 	async getDocumentOrThrow(id: string): Promise<DocumentRecord> {
 		try {
 			return await this.transport.get<DocumentRecord>(`/api/documents/${id}`);
@@ -184,21 +106,6 @@ export class SignetClientHelpers {
 			throw error;
 		}
 	}
-
-	/**
-	 * Batch modify memories with progress callback.
-	 *
-	 * @example
-	 * ```typescript
-	 * await client.batchModifyWithProgress(
-	 *   [
-	 *     { id: "m1", reason: "fix", content: "updated" },
-	 *     { id: "m2", reason: "fix", content: "updated" },
-	 *   ],
-	 *   (done, total) => console.log(`${done}/${total} complete`)
-	 * );
-	 * ```
-	 */
 	async batchModifyWithProgress(
 		patches: readonly {
 			readonly id: string;
@@ -217,10 +124,7 @@ export class SignetClientHelpers {
 			readonly changed_by?: string;
 		},
 	): Promise<{ success: number; failed: number; results: unknown[] }> {
-		// Notify start
 		onProgress?.({ done: 0, total: patches.length });
-
-		// Send batch request
 		const mapped = patches.map(({ ifVersion, ...rest }) => ({
 			...rest,
 			if_version: ifVersion,
@@ -234,8 +138,6 @@ export class SignetClientHelpers {
 			patches: mapped,
 			...opts,
 		});
-
-		// Notify completion
 		onProgress?.({ done: patches.length, total: patches.length });
 
 		return response;

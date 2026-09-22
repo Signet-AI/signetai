@@ -31,7 +31,6 @@ function failed(request: HarnessHealthRequest, message: string): HarnessConnecto
 		configured: request.configured,
 		detected: false,
 		installed: false,
-		// An incomplete inspection cannot establish irrelevance. Keep its failure visible.
 		relevant: true,
 		configPath: null,
 		lastSeen: request.lastSeen,
@@ -39,8 +38,6 @@ function failed(request: HarnessHealthRequest, message: string): HarnessConnecto
 		health: { status: "unhealthy", message, checkedAt: new Date().toISOString() },
 	};
 }
-
-/** At most one child process per registered connector; every outcome waits for process cleanup. */
 export async function runHarnessInspection(
 	request: HarnessHealthRequest,
 	options: { signal?: AbortSignal; timeoutMs?: number; entrypoint?: string } = {},
@@ -63,8 +60,6 @@ export async function runHarnessInspection(
 			result = status;
 			clearTimeout(timer);
 			options.signal?.removeEventListener("abort", cancel);
-			// A thread cannot interrupt a synchronous native read. A process can
-			// be killed even when its connector is blocked opening a FIFO.
 			child.kill("SIGKILL");
 		};
 		cancel = () => finish(failed(request, "Health inspection cancelled."));

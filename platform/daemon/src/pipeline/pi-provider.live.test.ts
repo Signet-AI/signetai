@@ -1,12 +1,3 @@
-/**
- * Live smoke test for createPiModelProvider against an OpenAI-compatible local
- * server (LM Studio / Ollama). Runs only when SIGNET_PI_LIVE_MODEL is set.
- *
- * Example:
- *   SIGNET_PI_LIVE_MODEL=qwen3.5-0.8b-sft-fable5 \
- *   SIGNET_PI_LIVE_BASE=http://localhost:1234/v1 \
- *   bun test platform/daemon/src/pipeline/pi-provider.live.test.ts
- */
 import { describe, expect, test } from "bun:test";
 import { createPiModelProvider } from "./pi-provider";
 

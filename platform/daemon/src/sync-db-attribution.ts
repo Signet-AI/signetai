@@ -1,15 +1,3 @@
-/**
- * Bounded attribution for transitional synchronous SQLite calls.
- *
- * The event-loop monitor runs on the same isolate as SQLite, so a monitor tick
- * cannot observe a synchronous call while it is executing. We retain a bounded
- * interval history and match the observed stall window against calls that
- * overlapped it. Normal calls record only timestamps and a small token. Caller
- * stack capture is deliberately lazy: it happens only when a call is slow
- * enough to explain an event-loop stall. No SQL, arguments, or user data are
- * retained.
- */
-
 import { classifySyncDbSiteToken, normalizeSyncDbSiteToken, type SyncDbCallSiteToken } from "./sync-db-site-token";
 
 export type { SyncDbCallSiteToken } from "./sync-db-site-token";
@@ -112,8 +100,6 @@ function parseFrame(
 		: "";
 	return { file: normalizeFileName(match[1] ?? ""), line: lineNumber, functionName };
 }
-
-/** Resolve the first frame outside the attribution/accessor implementation. */
 function captureCallerSite(): string {
 	const stack = new Error().stack?.split("\n").slice(1) ?? [];
 	for (const frame of stack) {
@@ -163,9 +149,6 @@ export function beginSyncDbCall(
 	siteToken?: SyncDbCallSiteToken,
 ): SyncDbCallToken {
 	if (siteToken === undefined) {
-		// Unmarked calls cannot be named while they are executing. Keep their
-		// normal-path cost to a timestamp token and recover a caller frame only
-		// when the completed call is slow enough to matter.
 		return { sequence: FAST_PATH_SEQUENCE, siteId: "", kind, startedAtMs };
 	}
 	const record: SyncDbCallRecord = {
@@ -237,7 +220,6 @@ export function endSyncDbCall(token: SyncDbCallToken, endedAtMs = Date.now()): v
 	record.durationMs = record.endedAtMs - token.startedAtMs;
 	const isSlow = record.durationMs >= SLOW_CALL_THRESHOLD_MS;
 	if (isSlow && !record.hasSiteToken) {
-		// This is the only hot-path escape: normal calls never construct or parse a stack.
 		record.siteId = `${record.kind}@${captureCallerSite()}`;
 	}
 	calls++;
@@ -264,8 +246,6 @@ export function endSyncDbCall(token: SyncDbCallToken, endedAtMs = Date.now()): v
 	history.push(record);
 	if (history.length > MAX_HISTORY) history.shift();
 }
-
-/** Capture the caller token before an async helper queues work on the owner. */
 export function captureSyncDbCallSiteToken(): SyncDbCallSiteToken | undefined {
 	const site = captureCallerSite();
 	if (site === UNATTRIBUTED_SITE) return undefined;
@@ -275,8 +255,6 @@ export function captureSyncDbCallSiteToken(): SyncDbCallSiteToken | undefined {
 	const token = prefixIndex >= 0 ? normalizedSite.slice(prefixIndex + SITE_TOKEN_PREFIX.length) : normalizedSite;
 	return normalizeSyncDbSiteToken(token) ?? undefined;
 }
-
-/** Return site ids whose synchronous interval overlapped the observed stall. */
 export function getSyncDbCallSitesForWindow(startMs: number, endMs: number): readonly string[] {
 	const sites = new Set<string>();
 	for (const record of [...history, ...inFlight.values()]) {

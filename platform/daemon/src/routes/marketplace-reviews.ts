@@ -26,12 +26,8 @@ interface ReviewsSyncConfig {
 	readonly lastSyncAt: string | null;
 	readonly lastSyncError: string | null;
 }
-
-// Production sync endpoint. Pre-configured so users only need to set enabled: true.
 const REVIEWS_SYNC_URL = "https://reviews.signetai.sh/api/reviews/sync";
 const REVIEW_SYNC_TIMEOUT_MS = 15_000;
-// A daemon normally owns a workspace; keying the queue keeps distinct test or
-// embedded workspaces independent while serializing calls for the same one.
 const reviewSyncFlights = new Map<string, Promise<unknown>>();
 
 const DEFAULT_CONFIG: ReviewsSyncConfig = {

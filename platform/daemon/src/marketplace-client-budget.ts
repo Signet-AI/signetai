@@ -1,11 +1,3 @@
-/**
- * Process and client budget for marketplace MCP operations.
- *
- * Marketplace MCP calls may create stdio child processes. Keep discovery,
- * probes, and user calls behind one daemon-wide budget so one cache refresh or
- * burst of callers cannot exhaust local process and file-descriptor limits.
- */
-
 const DEFAULT_MAX_CONCURRENT_CLIENTS = 4;
 const MAX_CONCURRENT_CLIENTS = 16;
 const MAX_CLIENTS_ENV = "SIGNET_MARKETPLACE_MAX_CONCURRENT_CLIENTS";
@@ -125,11 +117,6 @@ export const marketplaceMcpClientBudget = new MarketplaceMcpClientBudget(configu
 export function getMarketplaceMcpRuntimeStatus(): MarketplaceMcpRuntimeStatus {
 	return marketplaceMcpClientBudget.status();
 }
-
-/**
- * Run an operation under the shared client budget and return its remaining
- * deadline after queue acquisition.
- */
 export async function withMarketplaceMcpPermit<T>(
 	timeoutMs: number,
 	fn: (permit: MarketplaceMcpClientPermit, remainingTimeoutMs: number) => Promise<T>,
@@ -143,12 +130,6 @@ export async function withMarketplaceMcpPermit<T>(
 		permit.release();
 	}
 }
-
-/**
- * Race an MCP operation against its deadline and close the underlying client
- * as soon as the deadline fires. Closing before releasing the permit prevents
- * timed-out stdio children from occupying an invisible slot indefinitely.
- */
 export async function withMarketplaceMcpTimeout<T>(
 	promise: Promise<T>,
 	timeoutMs: number,

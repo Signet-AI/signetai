@@ -10,41 +10,30 @@ import { CompareActionsMenu } from "@/components/compare-actions-menu"
 import { CircularProgress } from "@/components/circular-progress"
 import { EmptyState, ChartIcon } from "@/components/empty-state"
 
-const POLL_INTERVAL = 2000 // 2 seconds
+const POLL_INTERVAL = 2000
 
 export default function ComparesPage() {
   const [compares, setCompares] = useState<CompareSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
-
-  // Filters
   const [search, setSearch] = useState("")
   const [selectedBenchmarks, setSelectedBenchmarks] = useState<string[]>([])
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>([])
-
-  // Check if any comparison is in progress
   const hasRunningCompares = useMemo(() => {
     return compares.some((c) => c.status === "running" || c.status === "pending")
   }, [compares])
-
-  // Silent refresh (no loading state)
   const refreshCompares = useCallback(async () => {
     try {
       const data = await getCompares()
       setCompares(data)
       setError(null)
     } catch {
-      // Silent fail on poll
     }
   }, [])
-
-  // Initial load
   useEffect(() => {
     loadCompares()
   }, [])
-
-  // Polling when comparisons are in progress
   useEffect(() => {
     if (hasRunningCompares) {
       pollIntervalRef.current = setInterval(refreshCompares, POLL_INTERVAL)
@@ -85,8 +74,6 @@ export default function ComparesPage() {
       alert(e instanceof Error ? e.message : "Failed to delete comparison")
     }
   }
-
-  // Get unique values for filter options
   const benchmarks = useMemo(() => {
     const counts: Record<string, number> = {}
     compares.forEach((c) => {
@@ -110,11 +97,8 @@ export default function ComparesPage() {
       count,
     }))
   }, [compares])
-
-  // Filter comparisons
   const filteredCompares = useMemo(() => {
     return compares.filter((compare) => {
-      // Search filter
       if (search) {
         const searchLower = search.toLowerCase()
         const matchesSearch =
@@ -123,13 +107,9 @@ export default function ComparesPage() {
           compare.benchmark.toLowerCase().includes(searchLower)
         if (!matchesSearch) return false
       }
-
-      // Benchmark filter
       if (selectedBenchmarks.length > 0 && !selectedBenchmarks.includes(compare.benchmark)) {
         return false
       }
-
-      // Status filter
       if (selectedStatuses.length > 0 && !selectedStatuses.includes(compare.status)) {
         return false
       }
@@ -137,8 +117,6 @@ export default function ComparesPage() {
       return true
     })
   }, [compares, search, selectedBenchmarks, selectedStatuses])
-
-  // Build columns
   const columns: Column<CompareSummary>[] = useMemo(
     () => [
       {
@@ -179,8 +157,6 @@ export default function ComparesPage() {
         header: "Status",
         render: (compare) => {
           const isRunning = compare.status === "running" || compare.status === "pending"
-
-          // Calculate overall progress from all runs
           let progress = 0
           let phasesFullyComplete = 0
           if (compare.runProgress && compare.runProgress.length > 0) {
@@ -199,8 +175,6 @@ export default function ComparesPage() {
                   (p.answered || 0) +
                   (p.evaluated || 0)
                 totalPhases += 5 * total
-
-                // Count fully complete phases for this run
                 let runPhasesComplete = 0
                 if (p.ingested === total) runPhasesComplete++
                 if (p.indexed === total) runPhasesComplete++
@@ -212,7 +186,6 @@ export default function ComparesPage() {
             }
 
             progress = totalPhases > 0 ? totalPhasesCompleted / totalPhases : 0
-            // Average phases complete across all runs
             phasesFullyComplete =
               compare.runProgress.length > 0
                 ? Math.floor(allRunsPhasesComplete / compare.runProgress.length)
@@ -261,12 +234,12 @@ export default function ComparesPage() {
 
   return (
     <div className="animate-fade-in">
-      {/* Header */}
+      {}
       <div className="mb-6">
         <h1 className="text-2xl font-display font-semibold text-text-primary">Comparisons</h1>
       </div>
 
-      {/* Filter Bar */}
+      {}
       {!loading && compares.length > 0 && (
         <div className="mb-0">
           <FilterBar
@@ -296,7 +269,7 @@ export default function ComparesPage() {
         </div>
       )}
 
-      {/* Content */}
+      {}
       {loading ? (
         <div className="py-12 text-center">
           <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin mx-auto" />

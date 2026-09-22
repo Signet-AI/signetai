@@ -1,6 +1,3 @@
--- Signet Reviews -- D1 Schema
--- Run via: wrangler d1 migrations apply signet-reviews --remote
-
 CREATE TABLE IF NOT EXISTS reviews (
   id          TEXT    PRIMARY KEY,
   target_type TEXT    NOT NULL CHECK (target_type IN ('skill', 'mcp')),

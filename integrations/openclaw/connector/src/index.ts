@@ -1,26 +1,3 @@
-/**
- * @signet/connector-openclaw
- *
- * Signet connector for OpenClaw (and its earlier names: clawdbot, moltbot).
- *
- * Unlike Claude Code and OpenCode, OpenClaw reads ~/.agents/AGENTS.md
- * directly — so no generated output file is needed. Instead, this
- * connector can patch OpenClaw config to:
- *   1. Point `agents.defaults.workspace` at ~/.agents
- *   2. Enable the `signet-memory` internal hook entry
- *
- * It also installs hook handler files that OpenClaw loads for
- * /remember, /recall, and /context commands.
- *
- * @example
- * ```typescript
- * import { OpenClawConnector } from '@signet/connector-openclaw';
- *
- * const connector = new OpenClawConnector();
- * await connector.install('~/.agents');
- * ```
- */
-
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
@@ -33,10 +10,6 @@ import {
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
 import { LOOPBACK_HOST, expandHome } from "@signet/core";
-
-// ============================================================================
-// Deep merge helper
-// ============================================================================
 
 type JsonObject = Record<string, unknown>;
 const OPENCLAW_PARSE_OPTIONS = { label: "OpenClaw config" } as const;
@@ -87,11 +60,6 @@ export interface OpenClawInstallOptions {
 }
 
 export type OpenClawRuntimeState = "plugin" | "legacy" | "dual" | null;
-
-/**
- * Recursively merge `source` into `target`. Arrays are replaced (not
- * concatenated); objects are merged. Mutates and returns `target`.
- */
 function deepMerge(target: JsonObject, source: JsonObject): JsonObject {
 	for (const key of Object.keys(source)) {
 		const srcVal = source[key];
@@ -160,28 +128,11 @@ function removePluginAllow(pluginsObj: JsonObject, pluginName: string): { change
 	}
 	return { changed: !unchanged };
 }
-
-/**
- * Write a .signet-backup copy of the config before patching. Best-effort —
- * a failure here must not block the patch itself.
- */
 function backupConfig(configPath: string, raw: string): void {
 	try {
 		writeFileSync(`${configPath}.signet-backup`, raw, "utf-8");
-	} catch {
-		// best-effort
-	}
+	} catch {}
 }
-
-// ============================================================================
-// OpenClaw Connector
-// ============================================================================
-
-/**
- * Connector for OpenClaw (and its historical names: clawdbot, moltbot).
- *
- * Idempotent — safe to run multiple times.
- */
 export class OpenClawConnector extends BaseConnector {
 	readonly name = "OpenClaw";
 	readonly harnessId = "openclaw";
@@ -189,20 +140,6 @@ export class OpenClawConnector extends BaseConnector {
 	getIconAsset(): string {
 		return "openclaw.svg";
 	}
-
-	/**
-	 * Install the connector.
-	 *
-	 * - Patches OpenClaw hook entries by default
-	 * - Patches OpenClaw workspace only when explicitly requested
-	 * - Installs hook handler files under `<basePath>/hooks/agent-memory/`
-	 *
-	 * **`runtimePath` default changed in 0.53:** The default is now `"plugin"`
-	 * (automatic per-prompt memory injection via the OpenClaw plugin system)
-	 * instead of the old `"legacy"` (manual `/remember`/`/recall` commands
-	 * only). SDK callers that relied on the legacy path must now pass
-	 * `{ runtimePath: "legacy" }` explicitly.
-	 */
 	async install(basePath: string, options: OpenClawInstallOptions = {}): Promise<InstallResult> {
 		const expandedBasePath = expandHome(basePath, this.getHomeDir());
 		const filesWritten: string[] = [];
@@ -232,9 +169,6 @@ export class OpenClawConnector extends BaseConnector {
 					internal: {
 						entries: {
 							"signet-memory": {
-								// Disable the legacy hook when using the plugin path to
-								// prevent dual-system operation (duplicate memories, 2x
-								// token burn, session-tracker 409 conflicts).
 								enabled: runtimePath !== "plugin",
 							},
 						},
@@ -252,9 +186,6 @@ export class OpenClawConnector extends BaseConnector {
 					entries: {
 						"signet-memory-openclaw": {
 							enabled: true,
-							// OpenClaw 2026.7.1+ blocks raw-conversation hooks for
-							// non-bundled plugins unless the operator opts in. The
-							// plugin needs agent_end to persist the session transcript.
 							hooks: {
 								allowConversationAccess: true,
 							},
@@ -312,10 +243,6 @@ export class OpenClawConnector extends BaseConnector {
 	async reinitialize(basePath: string): Promise<InstallResult> {
 		return this.installRecovery(basePath);
 	}
-
-	/**
-	 * Patch OpenClaw configs to set workspace only.
-	 */
 	async configureWorkspace(basePath: string): Promise<string[]> {
 		this.validateWorkspacePath(basePath);
 		const expandedBasePath = expandHome(basePath, this.getHomeDir());
@@ -332,12 +259,6 @@ export class OpenClawConnector extends BaseConnector {
 		});
 		return result.patched;
 	}
-
-	/**
-	 * Sync a multi-agent roster into the `agents.list` section of all
-	 * discovered OpenClaw configs. Only agents that include `"openclaw"` in
-	 * their `harnesses` array (or have no harnesses specified) are written.
-	 */
 	async syncMultipleAgents(
 		roster: ReadonlyArray<{
 			name: string;
@@ -346,8 +267,6 @@ export class OpenClawConnector extends BaseConnector {
 		}>,
 		basePath: string,
 	): Promise<void> {
-		// Validate names before any filesystem join — roster comes from a
-		// user-editable agent.yaml and must not contain path traversal sequences.
 		const SAFE_NAME = /^[a-z0-9][a-z0-9-]*$/;
 		const eligible = roster.filter((a) => {
 			if (!SAFE_NAME.test(a.name)) {
@@ -370,9 +289,6 @@ export class OpenClawConnector extends BaseConnector {
 				const raw = readFileSync(configPath, "utf-8");
 				const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
 				const indent = this.detectIndent(raw);
-
-				// Preserve pre-existing OpenClaw agents not managed by Signet.
-				// Only replace entries whose id is in the Signet roster.
 				const existing = config as Record<string, unknown>;
 				const agentsSection = existing.agents as Record<string, unknown> | undefined;
 				const prevList = Array.isArray(agentsSection?.list)
@@ -381,13 +297,10 @@ export class OpenClawConnector extends BaseConnector {
 				const kept = prevList.filter((e) => !signetIds.has(e.id as string));
 				const dropped = prevList.length - kept.length;
 				if (dropped === 0 && prevList.length > 0 && signetEntries.length === 0) {
-					// Nothing to do — no Signet agents, no change needed
 					continue;
 				}
 
 				const merged = [...kept, ...signetEntries];
-				// deepMerge replaces arrays (not concatenates), so passing `merged`
-				// directly is intentional — it's already the complete target list.
 				const patch: JsonObject = { agents: { list: merged } };
 				deepMerge(config, patch);
 				backupConfig(configPath, raw);
@@ -398,19 +311,9 @@ export class OpenClawConnector extends BaseConnector {
 			}
 		}
 	}
-
-	/**
-	 * Return all existing OpenClaw config paths discovered on this machine.
-	 */
 	getDiscoveredConfigPaths(): string[] {
 		return this.getConfigCandidates().filter((p) => existsSync(p));
 	}
-
-	/**
-	 * Return normalized workspace paths declared in discovered OpenClaw configs.
-	 *
-	 * Paths are expanded (`~` -> home) and de-duplicated.
-	 */
 	getDiscoveredWorkspacePaths(): string[] {
 		const workspaces: string[] = [];
 		const seen = new Set<string>();
@@ -438,23 +341,13 @@ export class OpenClawConnector extends BaseConnector {
 
 				seen.add(expanded);
 				workspaces.push(expanded);
-			} catch {
-				// Malformed config; skip workspace extraction.
-			}
+			} catch {}
 		}
 
 		return workspaces;
 	}
-
-	/**
-	 * Uninstall the connector.
-	 *
-	 * Disables both legacy hooks and plugin entries, removes hook handler files.
-	 */
 	async uninstall(): Promise<UninstallResult> {
 		const filesRemoved: string[] = [];
-
-		// Disable legacy hooks
 		const hookResult = this.patchAllConfigs({
 			hooks: {
 				internal: {
@@ -464,8 +357,6 @@ export class OpenClawConnector extends BaseConnector {
 				},
 			},
 		});
-
-		// Disable plugin entries (both old and new names), release slot
 		const pluginResult = this.patchAllConfigs({
 			plugins: {
 				slots: {
@@ -487,8 +378,6 @@ export class OpenClawConnector extends BaseConnector {
 		const allowResult = this.removePluginFromAllow("signet-memory-openclaw");
 
 		const configsPatched = [...new Set([...hookResult.patched, ...pluginResult.patched, ...allowResult.patched])];
-
-		// Remove hook handler files from the first valid base path
 		const basePath = join(this.getHomeDir(), ".agents");
 		const hookDir = join(basePath, "hooks", "agent-memory");
 		for (const file of ["HOOK.md", "handler.js", "package.json"]) {
@@ -547,11 +436,6 @@ export class OpenClawConnector extends BaseConnector {
 
 		return { patched, warnings };
 	}
-
-	/**
-	 * Check whether any OpenClaw config has signet enabled
-	 * (via legacy hooks or plugin entry).
-	 */
 	isInstalled(): boolean {
 		for (const configPath of this.getDiscoveredConfigPaths()) {
 			try {
@@ -559,21 +443,16 @@ export class OpenClawConnector extends BaseConnector {
 					readFileSync(configPath, "utf-8"),
 					OPENCLAW_PARSE_OPTIONS,
 				) as OpenClawConfigShape;
-				// Legacy hook system
 				if (config.hooks?.internal?.entries?.["signet-memory"]?.enabled === true) {
 					return true;
 				}
-				// Plugin system (new name)
 				if (config.plugins?.entries?.["signet-memory-openclaw"]?.enabled === true) {
 					return true;
 				}
-				// Plugin system (old name, pre-migration)
 				if (config.plugins?.entries?.["signet-memory"]?.enabled === true) {
 					return true;
 				}
-			} catch {
-				// malformed config — skip
-			}
+			} catch {}
 		}
 		return false;
 	}
@@ -603,9 +482,7 @@ export class OpenClawConnector extends BaseConnector {
 				if (sawPlugin && sawLegacy) {
 					return "dual";
 				}
-			} catch {
-				// malformed config — skip
-			}
+			} catch {}
 		}
 
 		if (sawPlugin) {
@@ -625,10 +502,6 @@ export class OpenClawConnector extends BaseConnector {
 		}
 		return null;
 	}
-
-	/**
-	 * Get the primary config path (first existing config, or default).
-	 */
 	getConfigPath(): string {
 		const candidates = this.getConfigCandidates();
 		for (const configPath of candidates) {
@@ -636,19 +509,8 @@ export class OpenClawConnector extends BaseConnector {
 				return configPath;
 			}
 		}
-		// Default to openclaw.json if none exist
 		return candidates[0];
 	}
-
-	// ==========================================================================
-	// Private helpers
-	// ==========================================================================
-
-	/**
-	 * Reject workspace paths that point into temp directories.
-	 * Prevents accidental persistence of test/ephemeral paths
-	 * in production OpenClaw configs.
-	 */
 	private validateWorkspacePath(p: string): void {
 		const resolved = resolve(expandHome(p, this.getHomeDir()));
 		const tmp = tmpdir();
@@ -656,12 +518,6 @@ export class OpenClawConnector extends BaseConnector {
 			throw new Error(`Refusing to set workspace to temp directory: ${resolved}`);
 		}
 	}
-
-	/**
-	 * Check that a resolved workspace path exists and belongs to
-	 * the current user's home directory. Returns warnings (non-fatal)
-	 * so callers can surface them without blocking the install.
-	 */
 	private checkWorkspaceOwnership(resolved: string): string[] {
 		const warnings: string[] = [];
 		const home = this.getHomeDir();
@@ -709,8 +565,6 @@ export class OpenClawConnector extends BaseConnector {
 				push(pathEntry);
 			}
 		};
-
-		// Current OpenClaw/Clawdbot explicit config env vars.
 		pushPathList(process.env.OPENCLAW_CONFIG_PATH);
 		pushPathList(process.env.CLAWDBOT_CONFIG_PATH);
 
@@ -722,11 +576,8 @@ export class OpenClawConnector extends BaseConnector {
 			}
 			stateDirs.push(expandHome(raw.trim(), this.getHomeDir()));
 		};
-
-		// Current state-dir env vars + legacy Signet compatibility fallback.
 		pushStateDir(process.env.OPENCLAW_STATE_DIR);
 		pushStateDir(process.env.CLAWDBOT_STATE_DIR);
-		// Preserve historical behavior: OPENCLAW_STATE_HOME maps to openclaw.json only.
 		push(
 			process.env.OPENCLAW_STATE_HOME
 				? join(expandHome(process.env.OPENCLAW_STATE_HOME, this.getHomeDir()), "openclaw.json")
@@ -738,8 +589,6 @@ export class OpenClawConnector extends BaseConnector {
 				push(join(stateDir, filename));
 			}
 		}
-
-		// Historical home-dir overrides.
 		push(
 			process.env.OPENCLAW_HOME
 				? join(expandHome(process.env.OPENCLAW_HOME, this.getHomeDir()), "openclaw.json")
@@ -771,8 +620,6 @@ export class OpenClawConnector extends BaseConnector {
 		const xdgStateHome = process.env.XDG_STATE_HOME
 			? expandHome(process.env.XDG_STATE_HOME, this.getHomeDir())
 			: join(home, ".local", "state");
-
-		// XDG fallbacks for older non-default installs.
 		for (const pair of namedConfigPairs) {
 			push(join(xdgConfigHome, pair.dirName, pair.fileName));
 			push(join(xdgStateHome, pair.dirName, pair.fileName));
@@ -780,16 +627,6 @@ export class OpenClawConnector extends BaseConnector {
 
 		return candidates;
 	}
-
-	/**
-	 * Patch configs with plugin entry using the object format:
-	 * plugins.entries["signet-memory-openclaw"] = { enabled, hooks, config }
-	 *
-	 * Migrates:
-	 * - Legacy array-style plugins (["signet-memory"] -> { entries: {...} })
-	 * - Top-level `signet: { daemonUrl }` key
-	 * - Old plugin name "signet-memory" -> "signet-memory-openclaw"
-	 */
 	private patchAllConfigsWithPlugin(patch: JsonObject): {
 		patched: string[];
 		warnings: string[];
@@ -807,8 +644,6 @@ export class OpenClawConnector extends BaseConnector {
 				const raw = readFileSync(configPath, "utf-8");
 				const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
 				const indent = this.detectIndent(raw);
-
-				// Migrate legacy array-style plugins to object format
 				if (Array.isArray(config.plugins)) {
 					const oldArray = config.plugins as string[];
 					const entries: JsonObject = {};
@@ -817,8 +652,6 @@ export class OpenClawConnector extends BaseConnector {
 					}
 					config.plugins = { entries };
 				}
-
-				// Migrate old plugin name "signet-memory" -> "signet-memory-openclaw"
 				{
 					const pluginsObj = isJsonObject(config.plugins) ? config.plugins : {};
 					const entriesObj = isJsonObject(pluginsObj.entries) ? pluginsObj.entries : {};
@@ -829,14 +662,11 @@ export class OpenClawConnector extends BaseConnector {
 						pluginsObj.entries = entriesObj;
 						config.plugins = pluginsObj;
 					} else if (OLD_NAME in entriesObj && pluginName in entriesObj) {
-						// Both exist — drop the old one
 						delete entriesObj[OLD_NAME];
 						pluginsObj.entries = entriesObj;
 						config.plugins = pluginsObj;
 					}
 				}
-
-				// Migrate top-level `signet` key into plugin config
 				if (config.signet && typeof config.signet === "object") {
 					const legacySignet = config.signet as JsonObject;
 					const pluginsObj = isJsonObject(config.plugins) ? config.plugins : { entries: {} };
@@ -910,16 +740,6 @@ export class OpenClawConnector extends BaseConnector {
 		deepMerge(config, patch);
 		atomicWriteJson(configPath, config, indent);
 	}
-
-	/**
-	 * Narrow config-only update: add `searchPath` to `plugins.load.paths` and
-	 * ensure `plugins.allow` trusts `signet-memory-openclaw` in all discovered
-	 * configs without re-running the full install flow.
-	 *
-	 * `searchPath` should be the **parent** directory of the plugin package
-	 * (e.g. `…/@signetai/`) so OpenClaw can find `signet-memory-openclaw`
-	 * as a subdirectory.
-	 */
 	patchLoadPaths(searchPath: string): { patched: string[]; warnings: string[] } {
 		const patched: string[] = [];
 		const warnings: string[] = [];
@@ -930,12 +750,6 @@ export class OpenClawConnector extends BaseConnector {
 				const raw = readFileSync(configPath, "utf-8");
 				const config = parseLenientJsonObject(raw, OPENCLAW_PARSE_OPTIONS);
 				const indent = this.detectIndent(raw);
-
-				// Legacy configs store plugins as an array of strings. The
-				// install() call migrates these to object form before patchLoadPaths
-				// is called in the normal CLI flow, but guard explicitly so a direct
-				// SDK caller against an unmigrated config doesn't silently produce a
-				// no-op (JSON.stringify drops non-index array properties).
 				if (Array.isArray(config.plugins)) {
 					const warning = `[signet/openclaw] Skipped load.paths patch for ${configPath}: plugins is in legacy array format; run install() first`;
 					warnings.push(warning);
@@ -952,9 +766,6 @@ export class OpenClawConnector extends BaseConnector {
 					continue;
 				}
 				if (rawLoad !== undefined && !isJsonObject(rawLoad)) {
-					// Scalar values (false, "disabled", 0, etc.) likely represent an
-					// intentional opt-out — overwriting them silently could change
-					// deliberate user config.
 					const warning = `[signet/openclaw] Skipped load.paths patch for ${configPath}: plugins.load has unexpected type (${typeof rawLoad}); cannot safely merge`;
 					warnings.push(warning);
 					console.warn(warning);
@@ -962,8 +773,6 @@ export class OpenClawConnector extends BaseConnector {
 				}
 				const loadObj = isJsonObject(rawLoad) ? rawLoad : {};
 				const rawPaths = loadObj.paths;
-				// filter (not every) so valid string entries are preserved even
-				// if the array contains a stray non-string element.
 				const existingPaths = Array.isArray(rawPaths)
 					? rawPaths.filter((entry): entry is string => typeof entry === "string")
 					: [];
@@ -1001,13 +810,6 @@ export class OpenClawConnector extends BaseConnector {
 
 		return { patched, warnings };
 	}
-
-	/**
-	 * Create the hook handler files that OpenClaw loads for
-	 * /remember, /recall, and /context commands.
-	 *
-	 * This is the canonical implementation; cli.ts delegates here.
-	 */
 	installHookFiles(basePath: string): string[] {
 		const hookDir = join(basePath, "hooks", "agent-memory");
 		mkdirSync(hookDir, { recursive: true });
@@ -1157,8 +959,6 @@ configured by rejecting session claims from the second path (HTTP 409).
 
 		return [hookMdPath, handlerJsPath, packageJsonPath, migrationMdPath];
 	}
-
-	/** Detect the indentation style used in a JSON string. */
 	private detectIndent(content: string): number {
 		if (content.includes('    "')) return 4;
 		return 2;
@@ -1169,12 +969,6 @@ configured by rejecting session claims from the second path (HTTP 409).
 		return typeof home === "string" && home.trim().length > 0 ? home.trim() : homedir();
 	}
 }
-
-// ============================================================================
-// Factory + exports
-// ============================================================================
-
-/** Create an OpenClaw connector instance. */
 export function createConnector(): OpenClawConnector {
 	return new OpenClawConnector();
 }

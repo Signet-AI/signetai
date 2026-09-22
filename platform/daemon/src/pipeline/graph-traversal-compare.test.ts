@@ -1,15 +1,3 @@
-/**
- * Comparison test: old per-entity loop vs new batched traversal.
- *
- * Runs both implementations against the real memories.db and diffs:
- *   - memory IDs selected
- *   - memory scores
- *   - constraints
- *   - paths
- *
- * Run: bun test platform/daemon/src/pipeline/graph-traversal-compare.test.ts
- */
-
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { type Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
@@ -17,10 +5,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { traverseKnowledgeGraph as traverseKnowledgeGraph_NEW, resolveFocalEntities } from "./graph-traversal.js";
 import type { ReadDb } from "../db-accessor.js";
-
-// ---------------------------------------------------------------------------
-// Types (shared)
-// ---------------------------------------------------------------------------
 
 interface TraversalPath {
 	readonly entityIds: ReadonlyArray<string>;
@@ -41,10 +25,6 @@ interface TraversalConfig {
 	readonly aspectFilter?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function sanitizeEntityIds(ids: ReadonlyArray<string>): string[] {
 	const unique = new Set<string>();
 	for (const id of ids) {
@@ -63,10 +43,6 @@ const DEFAULT_CONFIG: TraversalConfig = {
 	minConfidence: 0.5,
 	timeoutMs: 5000,
 };
-
-// ---------------------------------------------------------------------------
-// OLD implementation (per-entity loop, extracted from git HEAD)
-// ---------------------------------------------------------------------------
 
 function traverseKnowledgeGraph_OLD(
 	focalEntityIds: ReadonlyArray<string>,
@@ -121,8 +97,6 @@ function traverseKnowledgeGraph_OLD(
 	const collectForEntity = (entityId: string, sourceEntityId?: string, dependencyId?: string): void => {
 		if (visitedEntities.has(entityId) || memoryIds.size >= budget) return;
 		visitedEntities.add(entityId);
-
-		// Constraints
 		const cRows = db
 			.prepare(
 				`SELECT e.name as entity_name, ea.content, ea.importance FROM entity_aspects asp INDEXED BY idx_entity_aspects_entity CROSS JOIN entity_attributes ea INDEXED BY idx_entity_attributes_aspect ON ea.aspect_id = asp.id JOIN entities e ON e.id = asp.entity_id WHERE asp.entity_id = ? AND asp.agent_id = ? AND ea.agent_id = ? AND ea.kind = 'constraint' AND ea.status = 'active' ORDER BY ea.importance DESC`,
@@ -135,8 +109,6 @@ function traverseKnowledgeGraph_OLD(
 				constraints.push({ entityName: r.entity_name, content: r.content, importance: r.importance });
 			}
 		}
-
-		// Aspects
 		const aRows = db
 			.prepare(
 				`SELECT id FROM entity_aspects INDEXED BY idx_entity_aspects_entity WHERE entity_id = ? AND agent_id = ? ORDER BY weight DESC LIMIT ?`,
@@ -158,8 +130,6 @@ function traverseKnowledgeGraph_OLD(
 				if (cur === undefined || r.importance > cur) memoryScores.set(r.memory_id, r.importance);
 			}
 		}
-
-		// Mentions fallback
 		if (memoryIds.size >= budget) return;
 		const mBud = Math.min(config.maxAttributesPerAspect, budget - memoryIds.size);
 		if (mBud <= 0) return;
@@ -212,10 +182,6 @@ function traverseKnowledgeGraph_OLD(
 		focalEntityIds: focalIds,
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Test
-// ---------------------------------------------------------------------------
 
 const dbPath = join(homedir(), ".agents", "memory", "memories.db");
 
@@ -306,23 +272,14 @@ describe.skipIf(!existsSync(dbPath))("traversal comparison (old vs new)", () => 
 
 		console.log(`\n  === Active Aspects ===`);
 		console.log(`  OLD: ${oldResult.activeAspectIds.length}, NEW: ${newResult.activeAspectIds.length}`);
-
-		// New code visits ALL focal entities; old code stopped at the first
-		// entity that filled the budget, silently skipping the rest.
-		// This means the new code will always have >= constraints and entities.
 		expect(newResult.entityCount).toBeGreaterThanOrEqual(oldResult.entityCount);
 		expect(newCKeys.size).toBeGreaterThanOrEqual(oldCKeys.size);
-		// All old constraints must be present in new (old is a subset)
 		for (const k of oldCKeys) {
 			expect(newCKeys.has(k)).toBe(true);
 		}
 
 		const overlap = common.length / Math.max(oldResult.memoryIds.size, newResult.memoryIds.size, 1);
 		console.log(`  Memory overlap: ${(overlap * 100).toFixed(1)}%`);
-
-		// When old code visits only 1 entity (budget filled by entity 1),
-		// the new code will produce a different (broader) memory set.
-		// This is expected — the new code doesn't silently skip entities.
 		if (oldResult.entityCount < newResult.entityCount) {
 			console.log(
 				`\n  ℹ️  OLD visited ${oldResult.entityCount} entity(s), NEW visited ${newResult.entityCount} — memory differences expected`,

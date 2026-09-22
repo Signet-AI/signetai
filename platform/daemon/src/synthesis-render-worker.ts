@@ -20,8 +20,6 @@ if (parentPort === null) {
 }
 
 const port = parentPort;
-
-// Serialize renders: only one renderMemoryProjection in flight at a time.
 const renderQueue: Array<{ agentId: string; requestId: string }> = [];
 let rendering = false;
 

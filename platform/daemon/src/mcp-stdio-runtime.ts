@@ -1,4 +1,3 @@
-/** Signet MCP stdio runtime shared by the public entrypoint and native binary. */
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -33,9 +32,7 @@ async function resolveAgentsDir(daemonUrl: string): Promise<string | undefined> 
 		if (typeof data.agentsDir !== "string") return undefined;
 		if (!isValidAgentsDir(data.agentsDir)) return undefined;
 		return data.agentsDir;
-	} catch {
-		// daemon unreachable - fall through to SIGNET_PATH
-	}
+	} catch {}
 	return undefined;
 }
 

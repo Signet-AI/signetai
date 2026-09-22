@@ -55,8 +55,6 @@ function tableExists(db: ReadDb): boolean {
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get("dreaming_evidence_reviews") != null
 	);
 }
-
-/** Parse the explicit terminal disposition from a persisted runbook. */
 export function parseDreamingReviewedExcludedEvidence(
 	value: unknown,
 ): readonly DreamingReviewedExcludedEvidenceEntry[] | null {
@@ -111,8 +109,6 @@ function wasFullyDelivered(
 	}
 	return matches.length > 0 && offset >= length;
 }
-
-/** Persist only terminal decisions for complete, current source revisions. */
 export function recordDreamingReviewedExcludedEvidenceInTx(
 	db: WriteDb,
 	params: {
@@ -207,8 +203,6 @@ export async function getDreamingReviewedEvidence(
 		{ operation: "dreaming.evidence-reviews-read", workloadClass: "foreground" },
 	);
 }
-
-/** Re-open every reviewed revision for this source and enqueue a normal review. */
 export async function requestDreamingReviewedEvidenceRequeue(
 	accessor: DbAccessor,
 	agentId: string,
@@ -235,6 +229,6 @@ export async function requestDreamingReviewedEvidenceRequeue(
 			});
 			return true;
 		},
-		{ siteToken: "pipeline/dreaming-evidence-reviews.ts:180" },
+		{ siteToken: "pipeline/dreaming-evidence-reviews.ts:232" },
 	);
 }

@@ -1,4 +1,3 @@
-/** Source types emitted by daemon derivation rather than primary evidence. */
 export const DAEMON_DERIVED_MEMORY_SOURCE_TYPES = [
 	"extract",
 	"aggregate-recall",

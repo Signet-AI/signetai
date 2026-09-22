@@ -1,14 +1,8 @@
-/**
- * P2 domain methods for SignetClient.
- * This file will be merged into index.ts
- */
-
 import type { SignetTransport } from "./transport.js";
 import type {
 	AgentMessageAcknowledgeResponse,
 	AgentMessageListResponse,
 	AgentMessageSendResponse,
-	// Cross-Agent
 	AgentPresenceListResponse,
 	AgentPresenceUpdateResponse,
 	AspectAttributesResponse,
@@ -16,7 +10,6 @@ import type {
 	ConnectorCreateResponse,
 	ConnectorDeleteResponse,
 	ConnectorHealthResponse,
-	// Connectors
 	ConnectorListResponse,
 	ConnectorRecord,
 	ConnectorResyncResponse,
@@ -32,7 +25,6 @@ import type {
 	ErrorsResponse,
 	HookRecallResponse,
 	KnowledgeEntityDetail,
-	// Knowledge Graph
 	KnowledgeEntityListResponse,
 	KnowledgeStatsResponse,
 	LatencyResponse,
@@ -40,38 +32,21 @@ import type {
 	MemorySafetyResponse,
 	PinEntityResponse,
 	PreCompactionResponse,
-	// Repair
 	RepairActionResponse,
 	SessionEndResponse,
-	// Hooks
 	SessionStartResponse,
 	SynthesisConfigResponse,
 	SynthesisRequestResponse,
 	TraversalStatusResponse,
 	UnpinEntityResponse,
-	// Analytics
 	UsageCountersResponse,
 	UserPromptSubmitResponse,
 	VectorRepairResponse,
 	VectorRepairOptions,
 } from "./types-p2.js";
 
-// ============================================================================
-// Hooks API (10 methods)
-// ============================================================================
-
 export class SignetClientP2 {
 	constructor(private readonly transport: SignetTransport) {}
-
-	// --- Hooks ---
-
-	/**
-	 * @example
-	 * const result = await client.sessionStart({
-	 *   sessionKey: 'sess-123',
-	 *   project: 'my-project'
-	 * });
-	 */
 	async sessionStart(opts: {
 		readonly sessionKey: string;
 		readonly project?: string;
@@ -80,14 +55,6 @@ export class SignetClientP2 {
 	}): Promise<SessionStartResponse> {
 		return this.transport.post<SessionStartResponse>("/api/hooks/session-start", opts);
 	}
-
-	/**
-	 * @example
-	 * const result = await client.userPromptSubmit({
-	 *   sessionKey: 'sess-123',
-	 *   prompt: 'Help me with...'
-	 * });
-	 */
 	async userPromptSubmit(opts: {
 		readonly sessionKey: string;
 		readonly prompt: string;
@@ -95,14 +62,6 @@ export class SignetClientP2 {
 	}): Promise<UserPromptSubmitResponse> {
 		return this.transport.post<UserPromptSubmitResponse>("/api/hooks/user-prompt-submit", opts);
 	}
-
-	/**
-	 * @example
-	 * const result = await client.sessionEnd({
-	 *   sessionKey: 'sess-123',
-	 *   summary: 'Completed task X'
-	 * });
-	 */
 	async sessionEnd(opts: {
 		readonly sessionKey: string;
 		readonly harness: string;
@@ -133,14 +92,6 @@ export class SignetClientP2 {
 	}): void {
 		this.transport.post("/api/hooks/session-end", opts).catch(() => {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.hookRemember({
-	 *   content: 'User prefers dark mode',
-	 *   type: 'preference'
-	 * });
-	 */
 	async hookRemember(opts: {
 		readonly content: string;
 		readonly type?: string;
@@ -152,10 +103,6 @@ export class SignetClientP2 {
 	}): Promise<{ readonly id: string }> {
 		return this.transport.post<{ readonly id: string }>("/api/hooks/remember", opts);
 	}
-
-	/**
-	 * @deprecated Use `hookRemember()` instead.
-	 */
 	async rememberHook(opts: {
 		readonly content: string;
 		readonly type?: string;
@@ -167,13 +114,6 @@ export class SignetClientP2 {
 	}): Promise<{ readonly id: string }> {
 		return this.hookRemember(opts);
 	}
-
-	/**
-	 * @example
-	 * const result = await client.hookRecall({
-	 *   query: 'dark mode preferences'
-	 * });
-	 */
 	async hookRecall(opts: {
 		readonly query: string;
 		readonly keywordQuery?: string;
@@ -198,10 +138,6 @@ export class SignetClientP2 {
 	}): Promise<HookRecallResponse> {
 		return this.transport.post<HookRecallResponse>("/api/hooks/recall", opts);
 	}
-
-	/**
-	 * @deprecated Use `hookRecall()` instead.
-	 */
 	async recallHook(opts: {
 		readonly query: string;
 		readonly keywordQuery?: string;
@@ -226,14 +162,6 @@ export class SignetClientP2 {
 	}): Promise<HookRecallResponse> {
 		return this.hookRecall(opts);
 	}
-
-	/**
-	 * @example
-	 * const result = await client.preCompaction({
-	 *   sessionKey: 'sess-123',
-	 *   context: 'Current conversation about...'
-	 * });
-	 */
 	async preCompaction(opts: {
 		readonly sessionKey: string;
 		readonly context: string;
@@ -241,14 +169,6 @@ export class SignetClientP2 {
 	}): Promise<PreCompactionResponse> {
 		return this.transport.post<PreCompactionResponse>("/api/hooks/pre-compaction", opts);
 	}
-
-	/**
-	 * @example
-	 * const result = await client.compactionComplete({
-	 *   sessionKey: 'sess-123',
-	 *   summary: 'Discussed X, Y, Z'
-	 * });
-	 */
 	async compactionComplete(opts: {
 		readonly sessionKey: string;
 		readonly summary: string;
@@ -256,46 +176,18 @@ export class SignetClientP2 {
 	}): Promise<CompactionCompleteResponse> {
 		return this.transport.post<CompactionCompleteResponse>("/api/hooks/compaction-complete", opts);
 	}
-
-	/**
-	 * @example
-	 * const config = await client.getSynthesisConfig();
-	 */
 	async getSynthesisConfig(): Promise<SynthesisConfigResponse> {
 		return this.transport.get<SynthesisConfigResponse>("/api/hooks/synthesis/config");
 	}
-
-	/**
-	 * @example
-	 * const result = await client.requestSynthesis({
-	 *   project: 'my-project'
-	 * });
-	 */
 	async requestSynthesis(opts?: {
 		readonly project?: string;
 		readonly force?: boolean;
 	}): Promise<SynthesisRequestResponse> {
 		return this.transport.post<SynthesisRequestResponse>("/api/hooks/synthesis", opts ?? {});
 	}
-
-	// --- Connectors ---
-
-	/**
-	 * @example
-	 * const { connectors } = await client.listConnectors();
-	 */
 	async listConnectors(): Promise<ConnectorListResponse> {
 		return this.transport.get<ConnectorListResponse>("/api/connectors");
 	}
-
-	/**
-	 * @example
-	 * const { id } = await client.createConnector({
-	 *   provider: 'filesystem',
-	 *   displayName: 'My Docs',
-	 *   settings: { rootPath: '/path/to/docs' }
-	 * });
-	 */
 	async createConnector(opts: {
 		readonly provider: "filesystem" | "github-docs" | "gdrive";
 		readonly displayName?: string;
@@ -303,70 +195,28 @@ export class SignetClientP2 {
 	}): Promise<ConnectorCreateResponse> {
 		return this.transport.post<ConnectorCreateResponse>("/api/connectors", opts);
 	}
-
-	/**
-	 * @example
-	 * const connector = await client.getConnector('conn-123');
-	 */
 	async getConnector(id: string): Promise<ConnectorRecord> {
 		return this.transport.get<ConnectorRecord>(`/api/connectors/${id}`);
 	}
-
-	/**
-	 * @example
-	 * const result = await client.syncConnector('conn-123');
-	 */
 	async syncConnector(id: string): Promise<ConnectorSyncResponse> {
 		return this.transport.post<ConnectorSyncResponse>(`/api/connectors/${id}/sync`, {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.resyncAllConnectors();
-	 */
 	async resyncAllConnectors(): Promise<ConnectorResyncResponse> {
 		return this.transport.post<ConnectorResyncResponse>("/api/connectors/resync", {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.fullSyncConnector('conn-123');
-	 */
 	async fullSyncConnector(id: string): Promise<ConnectorSyncResponse> {
 		return this.transport.post<ConnectorSyncResponse>(`/api/connectors/${id}/sync/full?confirm=true`, {});
 	}
-
-	/**
-	 * @example
-	 * const { deleted } = await client.deleteConnector('conn-123', { cascade: true });
-	 */
 	async deleteConnector(id: string, opts?: { readonly cascade?: boolean }): Promise<ConnectorDeleteResponse> {
 		const cascade = opts?.cascade ? "?cascade=true" : "";
 		return this.transport.del<ConnectorDeleteResponse>(`/api/connectors/${id}${cascade}`, {});
 	}
-
-	/**
-	 * @example
-	 * const health = await client.getConnectorHealth('conn-123');
-	 */
 	async getConnectorHealth(id: string): Promise<ConnectorHealthResponse> {
 		return this.transport.get<ConnectorHealthResponse>(`/api/connectors/${id}/health`);
 	}
-
-	// --- Analytics ---
-
-	/**
-	 * @example
-	 * const usage = await client.getUsageCounters();
-	 */
 	async getUsageCounters(): Promise<UsageCountersResponse> {
 		return this.transport.get<UsageCountersResponse>("/api/analytics/usage");
 	}
-
-	/**
-	 * @example
-	 * const { errors, summary } = await client.getErrors({ stage: 'mutation', limit: 50 });
-	 */
 	async getErrors(opts?: {
 		readonly stage?: string;
 		readonly since?: string;
@@ -374,19 +224,9 @@ export class SignetClientP2 {
 	}): Promise<ErrorsResponse> {
 		return this.transport.get<ErrorsResponse>("/api/analytics/errors", opts);
 	}
-
-	/**
-	 * @example
-	 * const latency = await client.getLatency();
-	 */
 	async getLatency(): Promise<LatencyResponse> {
 		return this.transport.get<LatencyResponse>("/api/analytics/latency");
 	}
-
-	/**
-	 * @example
-	 * const { logs, count } = await client.getAnalyticsLogs({ level: 'error', limit: 100 });
-	 */
 	async getAnalyticsLogs(opts?: {
 		readonly limit?: number;
 		readonly level?: "debug" | "info" | "warn" | "error";
@@ -395,37 +235,15 @@ export class SignetClientP2 {
 	}): Promise<LogsResponse> {
 		return this.transport.get<LogsResponse>("/api/analytics/logs", opts);
 	}
-
-	/**
-	 * @example
-	 * const safety = await client.getMemorySafety();
-	 */
 	async getMemorySafety(): Promise<MemorySafetyResponse> {
 		return this.transport.get<MemorySafetyResponse>("/api/analytics/memory-safety");
 	}
-
-	/**
-	 * @example
-	 * const { scores, summary } = await client.getContinuity({ project: 'my-project', limit: 50 });
-	 */
 	async getContinuity(opts?: { readonly project?: string; readonly limit?: number }): Promise<ContinuityResponse> {
 		return this.transport.get<ContinuityResponse>("/api/analytics/continuity", opts);
 	}
-
-	/**
-	 * @example
-	 * const { scores } = await client.getLatestContinuity();
-	 */
 	async getLatestContinuity(): Promise<ContinuityLatestResponse> {
 		return this.transport.get<ContinuityLatestResponse>("/api/analytics/continuity/latest");
 	}
-
-	// --- Knowledge Graph ---
-
-	/**
-	 * @example
-	 * const { items } = await client.listKnowledgeEntities({ type: 'person', limit: 50 });
-	 */
 	async listKnowledgeEntities(opts?: {
 		readonly agentId?: string;
 		readonly type?: string;
@@ -435,11 +253,6 @@ export class SignetClientP2 {
 	}): Promise<KnowledgeEntityListResponse> {
 		return this.transport.get<KnowledgeEntityListResponse>("/api/knowledge/entities", opts);
 	}
-
-	/**
-	 * @example
-	 * const { pinned, pinnedAt } = await client.pinEntity('entity-123');
-	 */
 	async pinEntity(id: string, opts?: { readonly agentId?: string }): Promise<PinEntityResponse> {
 		return this.transport.post<PinEntityResponse>(
 			`/api/knowledge/entities/${id}/pin`,
@@ -447,28 +260,13 @@ export class SignetClientP2 {
 			opts ? { query: opts } : undefined,
 		);
 	}
-
-	/**
-	 * @example
-	 * const { pinned } = await client.unpinEntity('entity-123');
-	 */
 	async unpinEntity(id: string, opts?: { readonly agentId?: string }): Promise<UnpinEntityResponse> {
 		const query = opts?.agentId ? `?agent_id=${opts.agentId}` : "";
 		return this.transport.del<UnpinEntityResponse>(`/api/knowledge/entities/${id}/pin${query}`, {});
 	}
-
-	/**
-	 * @example
-	 * const entities = await client.getPinnedEntities();
-	 */
 	async getPinnedEntities(opts?: { readonly agentId?: string }): Promise<KnowledgeEntityListResponse> {
 		return this.transport.get<KnowledgeEntityListResponse>("/api/knowledge/entities/pinned", opts);
 	}
-
-	/**
-	 * @example
-	 * const health = await client.getEntityHealth({ minComparisons: 3 });
-	 */
 	async getEntityHealth(opts?: {
 		readonly agentId?: string;
 		readonly since?: string;
@@ -476,27 +274,12 @@ export class SignetClientP2 {
 	}): Promise<{ readonly entities: readonly unknown[] }> {
 		return this.transport.get<{ readonly entities: readonly unknown[] }>("/api/knowledge/entities/health", opts);
 	}
-
-	/**
-	 * @example
-	 * const entity = await client.getKnowledgeEntity('entity-123');
-	 */
 	async getKnowledgeEntity(id: string, opts?: { readonly agentId?: string }): Promise<KnowledgeEntityDetail> {
 		return this.transport.get<KnowledgeEntityDetail>(`/api/knowledge/entities/${id}`, opts);
 	}
-
-	/**
-	 * @example
-	 * const { items } = await client.getEntityAspects('entity-123');
-	 */
 	async getEntityAspects(entityId: string, opts?: { readonly agentId?: string }): Promise<EntityAspectsResponse> {
 		return this.transport.get<EntityAspectsResponse>(`/api/knowledge/entities/${entityId}/aspects`, opts);
 	}
-
-	/**
-	 * @example
-	 * const { items } = await client.getAspectAttributes('entity-123', 'aspect-456', { kind: 'attribute' });
-	 */
 	async getAspectAttributes(
 		entityId: string,
 		aspectId: string,
@@ -513,146 +296,57 @@ export class SignetClientP2 {
 			opts,
 		);
 	}
-
-	/**
-	 * @example
-	 * const { dependencies } = await client.getEntityDependencies('entity-123');
-	 */
 	async getEntityDependencies(
 		entityId: string,
 		opts?: { readonly agentId?: string },
 	): Promise<EntityDependenciesResponse> {
 		return this.transport.get<EntityDependenciesResponse>(`/api/knowledge/entities/${entityId}/dependencies`, opts);
 	}
-
-	/**
-	 * @example
-	 * const stats = await client.getKnowledgeStats();
-	 */
 	async getKnowledgeStats(): Promise<KnowledgeStatsResponse> {
 		return this.transport.get<KnowledgeStatsResponse>("/api/knowledge/stats");
 	}
-
-	/**
-	 * @example
-	 * const status = await client.getTraversalStatus();
-	 */
 	async getTraversalStatus(): Promise<TraversalStatusResponse> {
 		return this.transport.get<TraversalStatusResponse>("/api/knowledge/traversal/status");
 	}
-
-	/**
-	 * @example
-	 * const constellation = await client.getConstellation();
-	 */
 	async getConstellation(): Promise<ConstellationResponse> {
 		return this.transport.get<ConstellationResponse>("/api/knowledge/constellation");
 	}
-
-	// --- Repair ---
-
-	/**
-	 * @example
-	 * const result = await client.requeueDeadJobs();
-	 */
 	async requeueDeadJobs(): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/requeue-dead", {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.releaseStaleLeases();
-	 */
 	async releaseStaleLeases(): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/release-leases", {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.checkFts({ repair: true });
-	 */
 	async checkFts(opts?: { readonly repair?: boolean }): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/check-fts", opts ?? {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.triggerRetentionSweep();
-	 */
 	async triggerRetentionSweep(): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/retention-sweep", {});
 	}
-
-	/**
-	 * @example
-	 * const gaps = await client.getEmbeddingGaps();
-	 */
 	async getEmbeddingGaps(): Promise<EmbeddingGapsResponse> {
 		return this.transport.get<EmbeddingGapsResponse>("/api/repair/embedding-gaps");
 	}
-
-	/**
-	 * @example
-	 * const result = await client.reembedMissing({ limit: 100 });
-	 */
 	async reembedMissing(opts?: { readonly limit?: number }): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/re-embed", opts ?? {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.resyncVectorIndex();
-	 */
 	async resyncVectorIndex(opts?: VectorRepairOptions): Promise<VectorRepairResponse> {
 		return this.transport.post<VectorRepairResponse>("/api/repair/resync-vec", opts ?? {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.cleanOrphanedEmbeddings();
-	 */
 	async cleanOrphanedEmbeddings(opts?: VectorRepairOptions): Promise<VectorRepairResponse> {
 		return this.transport.post<VectorRepairResponse>("/api/repair/clean-orphans", opts ?? {});
 	}
-
-	/**
-	 * @example
-	 * const stats = await client.getDedupStats();
-	 */
 	async getDedupStats(): Promise<DedupStatsResponse> {
 		return this.transport.get<DedupStatsResponse>("/api/repair/dedup-stats");
 	}
-
-	/**
-	 * @example
-	 * const result = await client.deduplicateMemories({ dryRun: false });
-	 */
 	async deduplicateMemories(opts?: { readonly dryRun?: boolean }): Promise<DeduplicateResponse> {
 		return this.transport.post<DeduplicateResponse>("/api/repair/deduplicate", opts ?? {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.pruneChunkGroups();
-	 */
 	async pruneChunkGroups(): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/prune-chunk-groups", {});
 	}
-
-	/**
-	 * @example
-	 * const result = await client.pruneSingletonEntities({ minMentions: 2 });
-	 */
 	async pruneSingletonEntities(opts?: { readonly minMentions?: number }): Promise<RepairActionResponse> {
 		return this.transport.post<RepairActionResponse>("/api/repair/prune-singleton-entities", opts ?? {});
 	}
-
-	// --- Cross-Agent ---
-
-	/**
-	 * @example
-	 * const { sessions, count } = await client.listAgentPresence({ project: 'my-project' });
-	 */
 	async listAgentPresence(opts?: {
 		readonly agentId?: string;
 		readonly sessionKey?: string;
@@ -662,15 +356,6 @@ export class SignetClientP2 {
 	}): Promise<AgentPresenceListResponse> {
 		return this.transport.get<AgentPresenceListResponse>("/api/cross-agent/presence", opts);
 	}
-
-	/**
-	 * @example
-	 * const result = await client.updateAgentPresence({
-	 *   harness: 'claude-code',
-	 *   runtimePath: 'plugin',
-	 *   project: 'my-project'
-	 * });
-	 */
 	async updateAgentPresence(opts: {
 		readonly harness: string;
 		readonly runtimePath?: "plugin" | "legacy";
@@ -680,19 +365,9 @@ export class SignetClientP2 {
 	}): Promise<AgentPresenceUpdateResponse> {
 		return this.transport.post<AgentPresenceUpdateResponse>("/api/cross-agent/presence", opts);
 	}
-
-	/**
-	 * @example
-	 * await client.removeAgentPresence('sess-123');
-	 */
 	async removeAgentPresence(sessionKey: string): Promise<{ readonly removed: boolean }> {
 		return this.transport.del<{ readonly removed: boolean }>(`/api/cross-agent/presence/${sessionKey}`, {});
 	}
-
-	/**
-	 * @example
-	 * const { items, count } = await client.listAgentMessages({ limit: 25, unreadOnly: true });
-	 */
 	async listAgentMessages(opts?: {
 		readonly agentId?: string;
 		readonly sessionKey?: string;
@@ -714,15 +389,6 @@ export class SignetClientP2 {
 			include_broadcast: opts?.includeBroadcast,
 		});
 	}
-
-	/**
-	 * @example
-	 * const { id } = await client.sendAgentMessage({
-	 *   toAgentId: 'agent-456',
-	 *   type: 'assist_request',
-	 *   content: 'Need help with...'
-	 * });
-	 */
 	async sendAgentMessage(opts: {
 		readonly toAgentId?: string;
 		readonly toSessionKey?: string;
@@ -739,8 +405,6 @@ export class SignetClientP2 {
 	}): Promise<AgentMessageSendResponse> {
 		return this.transport.post<AgentMessageSendResponse>("/api/cross-agent/messages", opts);
 	}
-
-	/** Mark one visible cross-agent message as processed. */
 	async acknowledgeAgentMessage(
 		messageId: string,
 		opts?: { readonly agentId?: string; readonly sessionKey?: string },
@@ -750,8 +414,6 @@ export class SignetClientP2 {
 			opts ?? {},
 		);
 	}
-
-	/** Retry an indeterminate ACP delivery using the same durable idempotency key. */
 	async retryAgentMessage(messageId: string, opts?: { readonly agentId?: string }): Promise<AgentMessageSendResponse> {
 		return this.transport.post<AgentMessageSendResponse>(
 			`/api/cross-agent/messages/${encodeURIComponent(messageId)}/retry`,
@@ -759,30 +421,20 @@ export class SignetClientP2 {
 		);
 	}
 
-	// --- Predictor (retired) ---
-
 	private predictorDeprecated(): never {
 		throw new Error(
 			"Signet predictor APIs were removed in v0.112. Use memory search telemetry and pipeline diagnostics instead.",
 		);
 	}
-
-	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getPredictorStatus(): Promise<never> {
 		this.predictorDeprecated();
 	}
-
-	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getComparisonsByProject(_project: string): Promise<never> {
 		this.predictorDeprecated();
 	}
-
-	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getComparisonsByEntity(_entityId: string): Promise<never> {
 		this.predictorDeprecated();
 	}
-
-	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async listComparisons(_opts?: {
 		readonly limit?: number;
 		readonly offset?: number;
@@ -790,18 +442,12 @@ export class SignetClientP2 {
 	}): Promise<never> {
 		this.predictorDeprecated();
 	}
-
-	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async listTrainingRuns(_opts?: { readonly agentId?: string; readonly limit?: number }): Promise<never> {
 		this.predictorDeprecated();
 	}
-
-	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async getTrainingPairsCount(): Promise<never> {
 		this.predictorDeprecated();
 	}
-
-	/** @deprecated Signet predictor APIs were removed in 0.112. */
 	async trainPredictor(_opts?: { readonly force?: boolean }): Promise<never> {
 		this.predictorDeprecated();
 	}

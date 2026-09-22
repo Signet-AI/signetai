@@ -13,9 +13,7 @@ export type DaemonFetchResult<T> =
 			readonly ok: false;
 			readonly reason: DaemonFetchFailure;
 			readonly status?: number;
-			/** Daemon-provided error message, when the HTTP error body carries one. */
 			readonly error?: string;
-			/** Parsed daemon error payload for callers that need structured retry data. */
 			readonly body?: unknown;
 	  };
 
@@ -48,8 +46,6 @@ function isTimeoutError(err: unknown): boolean {
 	const code = typeof err === "object" && err !== null ? Reflect.get(err, "code") : undefined;
 	return code === "ABORT_ERR";
 }
-
-/** Preserve a daemon error payload while exposing its concise message to ordinary CLI callers. */
 async function readHttpErrorBody(res: Response): Promise<{ readonly error?: string; readonly body?: unknown }> {
 	const text = await res.text().catch(() => "");
 	if (!text.trim()) return {};
@@ -104,7 +100,6 @@ export function createDaemonClient(
 	agentsDir?: string,
 ): {
 	readonly url: string;
-	/** Whether this client addresses the selected local workspace. */
 	readonly localWorkspace: boolean;
 	readonly fetchFromDaemon: DaemonFetch;
 	readonly fetchDaemonResult: <T>(
@@ -112,7 +107,6 @@ export function createDaemonClient(
 		opts?: RequestInit & { timeout?: number },
 	) => Promise<DaemonFetchResult<T>>;
 	readonly fetchDaemonStream: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
-	/** Raw request transport for streaming uploads; never serializes the body. */
 	readonly fetchDaemonRaw: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 	readonly secretApiCall: DaemonApiCall;
 } {
@@ -135,10 +129,6 @@ export function createDaemonClient(
 				signal: AbortSignal.timeout(timeout || 5_000),
 			});
 			if (!res.ok) {
-				// Surface the daemon's own error message (e.g. "A dreaming pass
-				// is already running", "No routing policy is configured.") so
-				// callers can name the real cause instead of a generic
-				// connectivity failure (#1074).
 				const response = await readHttpErrorBody(res);
 				return { ok: false, reason: "http", status: res.status, ...response };
 			}
@@ -161,9 +151,6 @@ export function createDaemonClient(
 		opts?: RequestInit & { timeout?: number },
 	): Promise<DaemonStreamResult> => {
 		const { timeout, ...fetchOpts } = opts || {};
-		// Bound only the initial HTTP handshake. Once headers arrive, the SSE
-		// body is intentionally long-lived and is cancelled by the caller's
-		// attachment signal instead.
 		const streamSignal = createStreamAbortSignal(fetchOpts.signal ?? undefined, timeout ?? 5_000);
 		try {
 			const res = await fetch(`${url}${path}`, {
@@ -239,8 +226,6 @@ export function createDaemonClient(
 		secretApiCall,
 	};
 }
-
-/** Read the persisted `daemon.url` from agent.yaml, if any. */
 function readDaemonUrlConfig(agentsDir: string): string | undefined {
 	const file = join(agentsDir, "agent.yaml");
 	if (!existsSync(file)) return undefined;

@@ -1,9 +1,5 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
-
-/// Cosine similarity between two f32 slices.
-/// Truncates to the shorter length if mismatched.
-/// Returns f64 for JS number precision.
 #[napi]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     let len = a.len().min(b.len());
@@ -26,9 +22,6 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
         0.0
     }
 }
-
-/// Squared Euclidean distance between two f64 slices.
-/// Truncates to the shorter length if mismatched.
 #[napi]
 pub fn squared_distance(a: &[f64], b: &[f64]) -> f64 {
     let len = a.len().min(b.len());
@@ -39,19 +32,11 @@ pub fn squared_distance(a: &[f64], b: &[f64]) -> f64 {
     }
     distance
 }
-
-/// Serialize a vector of f64 numbers to a Buffer via Float32Array.
 #[napi]
 pub fn vector_to_blob(vec: Vec<f64>) -> Buffer {
-    let bytes: Vec<u8> = vec.iter()
-        .flat_map(|&v| (v as f32).to_le_bytes())
-        .collect();
+    let bytes: Vec<u8> = vec.iter().flat_map(|&v| (v as f32).to_le_bytes()).collect();
     Buffer::from(bytes)
 }
-
-/// Cosine similarity of one query vector against N concatenated vectors.
-/// `matrix` is a flat buffer of N*dim f32 values (little-endian).
-/// Returns N similarity scores in one call, eliminating per-item FFI overhead.
 #[napi]
 pub fn batch_cosine_similarity(query: &[f32], matrix: Buffer, dim: u32) -> napi::Result<Vec<f64>> {
     let bytes: &[u8] = &matrix;
@@ -74,8 +59,6 @@ pub fn batch_cosine_similarity(query: &[f32], matrix: Buffer, dim: u32) -> napi:
     }
     let n = total_floats / dim;
     let q_len = query.len().min(dim);
-
-    // Pre-compute query norm
     let mut query_norm: f64 = 0.0;
     for i in 0..q_len {
         let qi = query[i] as f64;
@@ -88,8 +71,6 @@ pub fn batch_cosine_similarity(query: &[f32], matrix: Buffer, dim: u32) -> napi:
         let base = row * dim * 4;
         let mut dot: f64 = 0.0;
         let mut norm_b: f64 = 0.0;
-
-        // Truncate to shared length (matches scalar cosine_similarity behavior)
         for i in 0..q_len {
             let offset = base + i * 4;
             let bi = f32::from_le_bytes([
@@ -109,9 +90,6 @@ pub fn batch_cosine_similarity(query: &[f32], matrix: Buffer, dim: u32) -> napi:
 
     Ok(results)
 }
-
-/// Deserialize a Buffer (Float32Array bytes) to a Vec<f32>.
-/// Returns an error if the buffer length is not a multiple of 4.
 #[napi]
 pub fn blob_to_vector(buf: Buffer) -> napi::Result<Vec<f32>> {
     let bytes: &[u8] = &buf;

@@ -15,8 +15,6 @@ export function CompareActionsMenu({ compareId, onDelete }: CompareActionsMenuPr
 
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
-
-  // Calculate dropdown position
   useEffect(() => {
     if (open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
@@ -28,8 +26,6 @@ export function CompareActionsMenu({ compareId, onDelete }: CompareActionsMenuPr
       })
     }
   }, [open])
-
-  // Click outside handler
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       const target = event.target as Node
@@ -60,7 +56,7 @@ export function CompareActionsMenu({ compareId, onDelete }: CompareActionsMenuPr
         </svg>
       </button>
 
-      {/* Dropdown menu */}
+      {}
       {open &&
         typeof document !== "undefined" &&
         createPortal(

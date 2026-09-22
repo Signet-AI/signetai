@@ -1,18 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 081: Harness skill-invocation columns
- *
- * Migration 053 created skill_invocations for Signet's own scheduler/api
- * skill runs. This extends it to capture skill use emitted by external agent
- * harnesses (claude-code, opencode, ...) as source='agent' rows, keyed and
- * deduped on (agent_id, harness, session_id, tool_use_id) so a harness hook
- * that fires or retries records each invocation once per scoped agent.
- *
- * Idempotent: guards each ADD COLUMN with a pragma check (SQLite ALTER has no
- * IF NOT EXISTS) and uses IF NOT EXISTS on indexes, so it is a no-op on DBs
- * that already had these columns hand-applied.
- */
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {
 	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	return rows.some((row) => row.name === column);
@@ -26,11 +12,6 @@ export function up(db: MigrationDb): void {
 			db.exec(`ALTER TABLE skill_invocations ADD COLUMN ${column} TEXT`);
 		}
 	}
-
-	// Dedupe key for harness-emitted rows. Partial so Signet-internal
-	// scheduler/api rows (which have no harness/session/tool ids) never collide.
-	// Drop first to repair any dev database that ran an earlier PR draft with
-	// the same index name but without agent_id in the key.
 	db.exec("DROP INDEX IF EXISTS idx_skill_inv_dedupe");
 	db.exec(`
 		CREATE UNIQUE INDEX idx_skill_inv_dedupe

@@ -9,7 +9,6 @@ export interface ModelConfig {
 }
 
 export const MODEL_CONFIGS: Record<string, ModelConfig> = {
-  // OpenAI - Standard models (support temperature)
   "gpt-4o": {
     id: "gpt-4o",
     provider: "openai",
@@ -55,8 +54,6 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
     maxTokensParam: "maxTokens",
     defaultMaxTokens: 1000,
   },
-
-  // OpenAI - Reasoning models (NO temperature support)
   "gpt-5": {
     id: "gpt-5",
     provider: "openai",
@@ -129,8 +126,6 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
     maxTokensParam: "max_completion_tokens",
     defaultMaxTokens: 1000,
   },
-
-  // Anthropic - All Claude models (support temperature)
   "opus-4.5": {
     id: "claude-opus-4-5-20251101",
     provider: "anthropic",
@@ -176,8 +171,6 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
     maxTokensParam: "maxTokens",
     defaultMaxTokens: 1000,
   },
-
-  // Google - Gemini 2.x (support temperature)
   "gemini-2.5-pro": {
     id: "gemini-2.5-pro",
     provider: "google",
@@ -214,8 +207,6 @@ export const MODEL_CONFIGS: Record<string, ModelConfig> = {
     maxTokensParam: "maxTokens",
     defaultMaxTokens: 1000,
   },
-
-  // Google - Gemini 3 (MUST use temperature=1, lower causes issues)
   "gemini-3-pro-preview": {
     id: "gemini-3-pro-preview",
     provider: "google",
@@ -240,11 +231,6 @@ export function getModelConfig(alias: string): ModelConfig {
   if (MODEL_CONFIGS[lowerAlias]) {
     return MODEL_CONFIGS[lowerAlias]
   }
-
-  // Fallback for unknown models - try to infer from prefix/name. Local
-  // OpenAI-compatible servers such as llama.cpp often reject temperature for
-  // GGUF models even though they expose an OpenAI-shaped API. Keep benchmark
-  // prompts deterministic by omitting unsupported temperature params.
   if (
     lowerAlias.startsWith("gpt-5") ||
     lowerAlias.startsWith("o1") ||
@@ -308,8 +294,6 @@ export function getModelConfig(alias: string): ModelConfig {
       defaultMaxTokens: 1000,
     }
   }
-
-  // Default fallback
   return {
     id: alias,
     provider: "openai",
@@ -320,8 +304,6 @@ export function getModelConfig(alias: string): ModelConfig {
     defaultMaxTokens: 1000,
   }
 }
-
-// Legacy exports for backward compatibility
 export const MODEL_ALIASES = MODEL_CONFIGS
 
 export function resolveModel(alias: string): ModelConfig {

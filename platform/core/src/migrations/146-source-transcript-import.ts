@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Migration 146: durable, agent-scoped transcript import ledgers. */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS source_import_jobs (

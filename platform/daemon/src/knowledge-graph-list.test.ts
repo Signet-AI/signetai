@@ -1,13 +1,3 @@
-/**
- * Regression tests for the paginated-ID rewrites of
- * `listKnowledgeEntities`, `getKnowledgeEntityDetail`, and
- * `getKnowledgeStats`. See Signet-AI/signetai#515.
- *
- * These seed a small graph (2 agents, mixed aspects/attributes/dependencies)
- * and assert counts + ordering match expected values. They'd fail if the
- * scalar subqueries drift from the original GROUP BY semantics.
- */
-
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -218,12 +208,9 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedAspect("asp-2", "e-hub", "dependency");
 		seedAttribute("attr-1", "asp-1", { kind: "attribute", status: "active" });
 		seedAttribute("attr-2", "asp-1", { kind: "attribute", status: "active" });
-		// Superseded attribute should not be counted
 		seedAttribute("attr-3", "asp-1", { kind: "attribute", status: "superseded" });
 		seedAttribute("attr-4", "asp-2", { kind: "constraint", status: "active" });
-		// Dependency where hub is source
 		seedDependency("dep-1", "e-hub", "e-leaf");
-		// Dependency where hub is target (inbound) — should also count
 		seedDependency("dep-2", "e-leaf", "e-hub");
 
 		const result = await listKnowledgeEntities(getDbAccessor(), {
@@ -473,13 +460,10 @@ describe("listKnowledgeEntities (issue #515)", () => {
 
 		const realBacklog = await getDreamingEpisodicTokenBacklog(getDbAccessor(), "default");
 		{
-			// Regression (#1759 re-verdict): the ownerMaintenance branch must record the
-			// parent-visible backlog mirror before returning, or the constellation cache
-			// reads zero until an inline path happens to run.
 			const { getDreamingEpisodicTokenBacklogCached, recordDreamingEpisodicTokenBacklog } = await import(
 				"./pipeline/dreaming-token-cache"
 			);
-			recordDreamingEpisodicTokenBacklog("default", 0); // prime stale value
+			recordDreamingEpisodicTokenBacklog("default", 0);
 			const maintenance = {
 				dreamingEpisodicBacklog: async () => 123,
 			};
@@ -487,7 +471,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			if (getDreamingEpisodicTokenBacklogCached("default") !== 123) {
 				throw new Error("owner-maintenance branch did not record the backlog mirror");
 			}
-			recordDreamingEpisodicTokenBacklog("default", realBacklog); // restore for metadata assertions
+			recordDreamingEpisodicTokenBacklog("default", realBacklog);
 		}
 		const source = getDbAccessor().withReadDb(
 			(db) =>
@@ -717,9 +701,6 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		seedEntity("e-hub", "Hub");
 
 		const accessor = getDbAccessor();
-		// The live base routes getKnowledgeEntityDetail through the DB owner.
-		// Keep this synchronization proof at the accessor boundary where the
-		// lease contract is implemented, rather than wrapping an unused seam.
 		let entered = 0;
 		let releaseCallbacks = (): void => {};
 		let resolveAllEntered = (): void => {};
@@ -732,13 +713,10 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		const requests = Array.from({ length: MAX_READ_CONNECTIONS }, (_, index) =>
 			accessor.withReadDbAsync(
 				async (db) => {
-					// This is the synchronous detail query in the saturated request.
 					db.prepare("SELECT ? AS entity_id").get(index);
 					entered += 1;
 					if (entered === MAX_READ_CONNECTIONS) resolveAllEntered();
 					await callbackGate;
-					// The structural-density query must be able to acquire a new
-					// lease while the outer callback continuation is still pending.
 					return await accessor.withReadDbAsync((innerDb) => innerDb.prepare("SELECT 1 AS structural_density").get(), {
 						operation: "db:knowledge.structural-density.read",
 					});

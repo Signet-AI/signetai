@@ -52,8 +52,6 @@ describe("graph-search", () => {
 		const now = new Date().toISOString();
 		seedEntityWithMemory("ent-react", "React", "mem-react");
 		seedEntityWithMemory("ent-jsx", "JSX", "mem-jsx");
-
-		// React → "uses" → JSX
 		db.prepare(
 			`INSERT INTO relations (id, source_entity_id, target_entity_id, relation_type, strength, mentions, confidence, created_at)
 			 VALUES (?, ?, ?, ?, 1.0, 1, 0.9, ?)`,
@@ -62,7 +60,6 @@ describe("graph-search", () => {
 		const result = getGraphBoostIds("react", asReadDb(db), 5000);
 
 		expect(result.graphLinkedIds.has("mem-react")).toBe(true);
-		// JSX memory included via one-hop expansion
 		expect(result.graphLinkedIds.has("mem-jsx")).toBe(true);
 	});
 
@@ -70,11 +67,7 @@ describe("graph-search", () => {
 		seedEntityWithMemory("ent-1", "Python", "mem-py");
 
 		const result = getGraphBoostIds("python", asReadDb(db), 0);
-
-		// With 0ms timeout, should either time out or return results
-		// (depends on execution speed), but should not throw
 		expect(typeof result.timedOut).toBe("boolean");
-		// The set may or may not be populated depending on speed
 	});
 
 	it("returns empty set when no entities match", () => {
@@ -87,7 +80,6 @@ describe("graph-search", () => {
 
 	it("excludes deleted memories from results", () => {
 		const now = new Date().toISOString();
-		// Entity linked to a soft-deleted memory
 		db.prepare(
 			`INSERT INTO entities (id, name, canonical_name, entity_type, mentions, created_at, updated_at)
 			 VALUES (?, ?, ?, ?, 1, ?, ?)`,

@@ -87,7 +87,6 @@ async function resolveOnePasswordToken(explicitToken?: string): Promise<string> 
 }
 
 export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
-	// Permission guards
 	app.use("/api/secrets", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	});

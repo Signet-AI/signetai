@@ -1,14 +1,4 @@
-/**
- * Vercel AI SDK adapter for Signet memory.
- *
- * Provides tool definitions and context injection compatible with
- * the Vercel AI SDK (sdk.vercel.ai). Requires `zod` as a peer dep.
- */
-
 import type { SignetClient } from "./index.js";
-
-// Lazy import so the module loads even without zod installed.
-// Callers using this adapter already have zod from the AI SDK.
 async function getZod() {
 	const z = await import("zod");
 	return z;

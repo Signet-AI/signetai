@@ -1,9 +1,3 @@
-/**
- * Issue #901 — `signet repair queue` subcommands. They all default to
- * dry-run and require `--apply` to mutate. The HTTP path is
- * `POST /api/diagnostics/queue/repair`; this CLI is a thin wrapper.
- */
-
 import { LOOPBACK_HOST } from "@signet/core";
 import chalk from "chalk";
 
@@ -90,8 +84,6 @@ function render(result: RepairQueueActionResult, dryRun: boolean, deps: RepairQu
 		}
 	}
 }
-
-/** Parse `--ids=a,b,c` and `--tables=summary,memory` flags into arrays. */
 export function parseCsvFlag(value: string | undefined): string[] {
 	if (!value) return [];
 	return value
@@ -99,13 +91,6 @@ export function parseCsvFlag(value: string | undefined): string[] {
 		.map((s) => s.trim())
 		.filter((s) => s.length > 0);
 }
-
-/**
- * Validate the `--tables` enum list. Returns the validated selectors, or
- * `undefined` when the flag was omitted (the intentional both-queue default).
- * Throws on any invalid value so a typo can never degrade into the broadest
- * repair selection (issue #1050).
- */
 export function parseTablesFlag(value: string | undefined): ("memory" | "summary")[] | undefined {
 	if (value === undefined) return undefined;
 	const parts: ("memory" | "summary")[] = [];
@@ -118,8 +103,6 @@ export function parseTablesFlag(value: string | undefined): ("memory" | "summary
 	}
 	return parts;
 }
-
-/** Parse `--older-than=7d` / `--older-than=12h` / `--older-than=30m` into ms. */
 export function parseDurationFlag(value: string | undefined): number | undefined {
 	if (!value) return undefined;
 	const m = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/.exec(value.trim());

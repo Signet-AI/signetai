@@ -82,37 +82,25 @@ inference:
       maxTokens: 1024           # tuning — must be preserved
 `,
 			);
-			// The startup preflight permits this supported legacy input so the
-			// canonical migration can translate it before resolved validation.
 			expect(() => readRuntimeConfig(dir)).not.toThrow();
 			migrateLegacyRoutingToRegistry(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
-
-			// Registry created with the right shape.
 			expect(after).toContain("inference:");
 			expect(after).toMatch(/accounts:\s*\n\s+legacy-openrouter:/);
 			expect(after).toMatch(/providerFamily: openrouter/);
 			expect(after).toMatch(/credentialRef: OPENROUTER_API_KEY/);
-
-			// Targets carry executor + model + account.
 			expect(after).toMatch(/legacy-extraction:/);
 			expect(after).toMatch(/executor: openrouter/);
 			expect(after).toMatch(/account: legacy-openrouter/);
 			expect(after).toMatch(/model: anthropic\/claude-haiku/);
-
-			// Only extraction has a configurable workload; session processing follows it.
 			expect(after).toMatch(/memoryExtraction:\s*\n\s+target: legacy-extraction\/default/);
 			expect(after).not.toContain("sessionSynthesis");
 			expect(after).not.toContain("legacy-synthesis");
-
-			// Legacy extraction routing is gone; extraction tuning remains.
 			expect(after).not.toMatch(/provider: openrouter/);
 			expect(after).not.toMatch(/fallbackProvider:/);
 			expect(after).not.toMatch(/memory.pipelineV2.synthesis/);
 			expect(after).toContain("timeout: 90000");
 			expect(after).not.toContain("maxTokens: 1024");
-
-			// Version stamped.
 			expect(after).toMatch(/^configVersion: 5/m);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -301,7 +289,6 @@ memory:
 			);
 			migrateLegacyRoutingToRegistry(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
-			// command stays intact (manual reconfiguration required); no target created.
 			expect(after).toContain("provider: command");
 			expect(after).toContain("bin: ./my-script");
 			expect(after).not.toMatch(/legacy-extraction:/);
@@ -349,7 +336,6 @@ inference:
 			migrateLegacyRoutingToRegistry(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
 			expect(after).toMatch(/^configVersion: 5/m);
-			// Existing inference block untouched.
 			expect(after).toContain("background:");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -481,9 +467,6 @@ inference:
 	});
 
 	it("does not create a synthesis target when synthesis.enabled is false", () => {
-		// Regression: the old code used String(scalarNode) which returns "false"
-		// (a truthy string), so the guard never fired and a disabled synthesis was
-		// silently re-enabled — destructive for a migration that nulls routing keys.
 		const dir = setupDir();
 		try {
 			writeFileSync(
@@ -501,7 +484,6 @@ inference:
 			);
 			migrateLegacyRoutingToRegistry(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
-			// Extraction target created; synthesis target must NOT be.
 			expect(after).toContain("legacy-extraction");
 			expect(after).not.toContain("sessionSynthesis");
 			expect(after).not.toContain("legacy-synthesis");

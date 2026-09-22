@@ -1,4 +1,3 @@
-/** Regression smoke for Dreaming finalization in compiled native binaries (#1824). */
 import { afterEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
@@ -64,10 +63,6 @@ test("force-closes prepared SQLite handles before temporary workspace cleanup (#
 	const database = new Database(join(directory, "memory.db"));
 	const prepared = database.prepare("CREATE TABLE prepared_fixture (value TEXT NOT NULL)");
 	prepared.run();
-
-	// Bun keeps prepare() statements alive after close() until they are
-	// finalized or collected. Windows cannot remove the workspace while that
-	// SQLite handle is still open, so native smoke fixtures must force-close.
 	database.close(true);
 
 	expect(() => rmSync(directory, { recursive: true, force: true })).not.toThrow();

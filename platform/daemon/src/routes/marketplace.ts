@@ -1,9 +1,3 @@
-/**
- * Marketplace API routes.
- *
- * Exposes MCP server catalog browsing, install state, and tool routing.
- */
-
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -27,7 +21,6 @@ const CATALOG_PAGE_SIZE = 30;
 const CATALOG_MAX_PAGES = 10;
 const CATALOG_TTL_MS = 10 * 60 * 1000;
 const TOOLS_TTL_MS = 30 * 1000;
-/** mcpservers.org locale prefix — shared across catalog listing, detail fetch, and homepage URLs. */
 const MCPSERVERS_LOCALE = "en";
 
 export type MarketplaceMcpTransport = "stdio" | "http";
@@ -138,8 +131,6 @@ interface DetailConfig {
 
 const DEFAULT_TIMEOUT_MS = 20_000;
 const SECRET_REF_PREFIX = "secret://";
-// Sentinel: "never explicitly set" — not process start time, which would
-// be misleading since this default is returned whenever no policy file exists.
 const DEFAULT_EXPOSURE_POLICY: MarketplaceMcpExposurePolicy = {
 	mode: "hybrid",
 	maxExpandedTools: 12,
@@ -310,8 +301,6 @@ function parseExposurePolicy(value: unknown, fallbackUpdatedAt?: string): Market
 
 	const maxExpandedTools = parsePositiveInt(value.maxExpandedTools, DEFAULT_EXPOSURE_POLICY.maxExpandedTools, 0, 100);
 	const maxSearchResults = parsePositiveInt(value.maxSearchResults, DEFAULT_EXPOSURE_POLICY.maxSearchResults, 1, 50);
-	// Prefer stored updatedAt, then caller-supplied fallback (file mtime),
-	// then the default sentinel — never use process start time.
 	const updatedAt =
 		typeof value.updatedAt === "string" ? value.updatedAt : (fallbackUpdatedAt ?? DEFAULT_EXPOSURE_POLICY.updatedAt);
 
@@ -490,7 +479,6 @@ function parseCatalogMarkdown(markdown: string, page: number): ParsedCatalogPage
 
 	const entries: MarketplaceMcpCatalogEntry[] = [];
 	const seen = new Set<string>();
-	// Locale segment is intentionally loose ([a-z][a-z-]{1,9}) to cover BCP-47 codes (en, zh-cn, pt-br)
 	const re = /\[([^\]]+)\]\((https:\/\/mcpservers\.org\/(?:[a-z][a-z-]{1,9}\/)?servers\/[^)]+)\)/g;
 	let m: RegExpExecArray | null;
 
@@ -530,23 +518,12 @@ function parseCatalogMarkdown(markdown: string, page: number): ParsedCatalogPage
 
 	return { total, entries };
 }
-
-/**
- * Parse the modelcontextprotocol/servers README into catalog entries.
- * Extracts both official reference servers (src/ links) and third-party
- * servers (external GitHub links). Non-GitHub third-party URLs are skipped.
- */
 export function parseReferenceServersMarkdown(markdown: string): MarketplaceMcpCatalogEntry[] {
 	const entries: MarketplaceMcpCatalogEntry[] = [];
-	// Shared across reference and third-party passes; IDs are namespaced
-	// ("modelcontextprotocol/servers:slug" vs "github:org/repo") so no collisions.
 	const seen = new Set<string>();
-
-	// Parse reference servers (src/ links)
 	const refStart = markdown.indexOf("## 🌟 Reference Servers");
 	if (refStart >= 0) {
 		const refAfter = markdown.slice(refStart);
-		// Find earliest section boundary; empty filter → Math.min() → Infinity → use whole remainder
 		const boundaries = [refAfter.indexOf("\n### Archived"), refAfter.indexOf("\n## ", 1)].filter((i) => i > 0);
 		const refEnd = boundaries.length > 0 ? Math.min(...boundaries) : refAfter.length;
 		const refSection = refAfter.slice(0, refEnd);
@@ -575,8 +552,6 @@ export function parseReferenceServersMarkdown(markdown: string): MarketplaceMcpC
 			});
 		}
 	}
-
-	// Parse third-party servers (external GitHub links)
 	const tpStart = markdown.indexOf("## 🤝 Third-Party Servers");
 	if (tpStart >= 0) {
 		const tpAfter = markdown.slice(tpStart);
@@ -589,7 +564,6 @@ export function parseReferenceServersMarkdown(markdown: string): MarketplaceMcpC
 			const name = m[1].trim();
 			const url = m[2].trim();
 			let raw = m[3].replace(/!\[[^\]]*\]\([^)]*\)/g, "");
-			// Strip HTML tags iteratively to prevent nested-tag bypass (e.g. <scr<script>ipt>)
 			let prev = "";
 			while (prev !== raw) {
 				prev = raw;
@@ -749,9 +723,7 @@ export function extractStandardMcpConfig(markdown: string): DetailConfig {
 			nameHint = first[0];
 			config = normalizeMcpConfig(first[1]);
 			if (config) break;
-		} catch {
-			// Ignore non-JSON or non-standard blocks
-		}
+		} catch {}
 	}
 
 	return {
@@ -799,9 +771,6 @@ function parseInstalledServer(value: unknown): InstalledMarketplaceMcpServer | n
 		updatedAt: value.updatedAt,
 	};
 }
-
-/** NOTE: marketplace-helpers.ts has a public copy of this function to avoid circular imports.
- *  If you change the path or format here, update marketplace-helpers.ts to match. */
 function readInstalledServers(): InstalledMarketplaceMcpServer[] {
 	const path = getInstalledMcpPath();
 	if (!existsSync(path)) return [];
@@ -836,8 +805,6 @@ async function fetchMcpServersOrgDetail(catalogId: string): Promise<DetailConfig
 	const markdown = await readCapped(res);
 	return extractStandardMcpConfig(markdown);
 }
-
-/** Fetch README from the modelcontextprotocol/servers repo for a reference server. */
 async function fetchReferenceServerDetail(catalogId: string): Promise<DetailConfig> {
 	const encodedPath = catalogId
 		.split("/")
@@ -858,9 +825,7 @@ async function fetchReferenceServerDetail(catalogId: string): Promise<DetailConf
 }
 
 const GITHUB_RAW_HOST = "https://raw.githubusercontent.com" as const;
-const MAX_README_BYTES = 2 * 1024 * 1024; // 2 MB cap on fetched READMEs
-
-/** Read response body with a size cap to prevent memory exhaustion. */
+const MAX_README_BYTES = 2 * 1024 * 1024;
 async function readCapped(res: Response): Promise<string> {
 	const len = res.headers.get("content-length");
 	if (len && Number.parseInt(len, 10) > MAX_README_BYTES) {
@@ -872,12 +837,6 @@ async function readCapped(res: Response): Promise<string> {
 	}
 	return text;
 }
-
-/**
- * Fetch README.md from a GitHub repo to extract MCP server config.
- * Security: only fetches from raw.githubusercontent.com with strict
- * org/repo validation — no arbitrary URLs or redirects followed.
- */
 async function fetchGithubServerDetail(catalogId: string): Promise<DetailConfig> {
 	if (!/^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/.test(catalogId)) {
 		throw new Error("invalid github catalog id: expected org/repo");
@@ -904,8 +863,6 @@ async function fetchGithubServerDetail(catalogId: string): Promise<DetailConfig>
 	const markdown = await readCapped(res);
 	return extractStandardMcpConfig(markdown);
 }
-
-/** Route detail fetch to the appropriate handler based on catalog source. */
 function fetchDetailBySource(source: MarketplaceMcpCatalogSource, catalogId: string): Promise<DetailConfig> {
 	if (source === "modelcontextprotocol/servers") return fetchReferenceServerDetail(catalogId);
 	if (source === "github") return fetchGithubServerDetail(catalogId);
@@ -1107,10 +1064,6 @@ function rankMarketplaceTools(tools: readonly MarketplaceMcpTool[], query: strin
 	return scored.map((entry) => entry.tool);
 }
 
-// ---------------------------------------------------------------------------
-// Invocation tracking
-// ---------------------------------------------------------------------------
-
 interface McpInvocationRecord {
 	readonly serverId: string;
 	readonly toolName: string;
@@ -1139,7 +1092,7 @@ function recordMcpInvocation(record: McpInvocationRecord): void {
 				record.success ? 1 : 0,
 				record.errorText ?? null,
 			);
-		}, "routes/marketplace.ts:1128");
+		}, "routes/marketplace.ts:1081");
 	} catch (err) {
 		logger.warn("skills", "Failed to record MCP invocation", err instanceof Error ? err : undefined);
 	}
@@ -1393,7 +1346,6 @@ export function mountMarketplaceRoutes(app: Hono): void {
 			const next = installed.map((s) => (s.id === existing.id ? updated : s));
 			writeInstalledServers(next);
 			invalidateMarketplaceToolsCache();
-			// Fire-and-forget probe on install/update
 			void probeServer(updated)
 				.then(storeProbeResult)
 				.catch((err) => {
@@ -1430,7 +1382,6 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		writeInstalledServers([...installed, server]);
 		invalidateMarketplaceToolsCache();
-		// Fire-and-forget probe on new install
 		void probeServer(server)
 			.then(storeProbeResult)
 			.catch((err) => {
@@ -1476,7 +1427,6 @@ export function mountMarketplaceRoutes(app: Hono): void {
 
 		writeInstalledServers([...installed, server]);
 		invalidateMarketplaceToolsCache();
-		// Fire-and-forget probe on manual register
 		void probeServer(server)
 			.then(storeProbeResult)
 			.catch((err) => {
@@ -1706,7 +1656,6 @@ export function mountMarketplaceRoutes(app: Hono): void {
 		}
 		writeInstalledServers(installed.filter((s) => s.id !== id));
 		invalidateMarketplaceToolsCache();
-		// Clean up probe result and app tray entry on uninstall
 		removeProbeResult(id);
 		return c.json({ success: true, id });
 	});

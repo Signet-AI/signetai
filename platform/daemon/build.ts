@@ -1,10 +1,5 @@
 import { rmSync } from "node:fs";
 
-/**
- * Daemon build script — dual-runtime: Bun.build under Bun, esbuild under Node.
- * Aliases native packages that break when bundled (baked paths to .node/.wasm binaries).
- */
-
 const EXTERNAL_BUN = ["@firecrawl/anydoc"];
 
 const EXTERNAL_NODE = [

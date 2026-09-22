@@ -33,7 +33,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function makeEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 	return {
-		// Strip host env so precedence tests are deterministic.
 		SIGNET_PATH: undefined,
 		SIGNET_WORKSPACE: undefined,
 		XDG_CONFIG_HOME: undefined,

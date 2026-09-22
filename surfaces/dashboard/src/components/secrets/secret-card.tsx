@@ -1,14 +1,8 @@
-/**
- * Compact secret disclosure. Values are never read back from the daemon;
- * expanded state exposes only the `$secret:NAME` reference and actions.
- */
 import { useState } from "react";
 import { Bot, ChevronRight, Cloud, Copy, KeyRound, ShieldCheck, Trash2 } from "@/components/mingcute-icons";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-
-/** Deterministic icon from the secret name (mockup SECRET_ICONS family). */
 function secretIcon(name: string) {
 	if (/BOT/.test(name)) return Bot;
 	if (/TOKEN/.test(name)) return ShieldCheck;

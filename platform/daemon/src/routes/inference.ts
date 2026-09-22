@@ -828,11 +828,6 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			concurrency: concurrencyStatus(opts),
 		});
 	});
-
-	// Catalog of providers + models (pi-ai) and ACPX agents. Backs the dashboard
-	// inference settings redesign (#947). Reads only provider/model metadata and
-	// encrypted credential presence; it never returns credential values or makes
-	// provider network calls.
 	app.get("/api/inference/catalog", async (c) => {
 		const providers = getProviders();
 		const models: Record<
@@ -850,7 +845,6 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 		for (const provider of providers) {
 			try {
 				const available = getModels(provider).filter((m) => m.input.includes("text"));
-				// Reuse the curated default only when this provider actually offers it.
 				const defaultId =
 					provider === "openai-codex" || provider === "openai"
 						? MODEL_DEFAULTS.codex
@@ -875,8 +869,6 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 			modelErrors,
 			recommendedModels,
 			oauthProviders,
-			// ACPX agent subcommands (acpx <agent> ...). Static — matches the
-			// agents createAcpxProvider drives. Mirrors `acpx --help` subcommands.
 			acpxAgents: ["claude", "codex", "opencode", "gemini", "pi", "openclaw", "kimi"],
 		});
 	});

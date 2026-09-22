@@ -1,15 +1,3 @@
-/**
- * Signet Reviews Worker
- *
- * Central aggregation endpoint for marketplace reviews.
- * Receives synced reviews from user daemons and serves them publicly.
- *
- * Routes:
- *   GET  /              - health check
- *   GET  /api/reviews   - list/query reviews (public, cached)
- *   POST /api/reviews/sync - batch upsert from signetai daemon
- */
-
 export interface Env {
 	DB: D1Database;
 	RATE_LIMITER: { limit(opts: { key: string }): Promise<{ success: boolean }> };
@@ -40,8 +28,6 @@ interface IncomingReview {
 	createdAt: string;
 	updatedAt: string;
 }
-
-// Validation limits
 const LIMITS = {
 	BATCH_SIZE: 100,
 	TARGET_ID: 200,
@@ -52,10 +38,6 @@ const LIMITS = {
 	TITLE_MIN: 3,
 	REQUEST_BODY_BYTES: 512_000,
 } as const;
-
-// ---------------------------------------------------------------------------
-// Validation
-// ---------------------------------------------------------------------------
 
 function parseStr(value: unknown, min: number, max: number): string | null {
 	if (typeof value !== "string") return null;
@@ -124,10 +106,6 @@ function validateReview(raw: unknown): IncomingReview | null {
 	return { id, targetType, targetId, displayName, rating, title, body, createdAt, updatedAt };
 }
 
-// ---------------------------------------------------------------------------
-// CORS
-// ---------------------------------------------------------------------------
-
 function corsHeaders(origin: string): Record<string, string> {
 	return {
 		"Access-Control-Allow-Origin": origin,
@@ -139,15 +117,12 @@ function corsHeaders(origin: string): Record<string, string> {
 
 function isOriginAllowed(origin: string | null, allowed: string): boolean {
 	if (allowed === "*") return true;
-	// No Origin header = server-to-server (daemon sync). Allow.
 	if (!origin) return true;
 	if (origin === allowed) return true;
 	try {
 		const u = new URL(origin);
 		if (u.hostname === "localhost" || u.hostname === "127.0.0.1") return true;
-	} catch {
-		// ignore
-	}
+	} catch {}
 	return false;
 }
 
@@ -157,10 +132,6 @@ function json(body: unknown, status: number, extra: Record<string, string> = {})
 		headers: { "Content-Type": "application/json;charset=UTF-8", ...extra },
 	});
 }
-
-// ---------------------------------------------------------------------------
-// DB
-// ---------------------------------------------------------------------------
 
 function rowToPublic(row: ReviewRow) {
 	return {
@@ -221,20 +192,12 @@ async function upsertReviews(
 	return { accepted, rejected };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function parseIntParam(v: string | null, min: number, max: number, def: number): number {
 	if (!v) return def;
 	const n = parseInt(v, 10);
 	if (!Number.isFinite(n)) return def;
 	return Math.max(min, Math.min(max, n));
 }
-
-// ---------------------------------------------------------------------------
-// Route handlers
-// ---------------------------------------------------------------------------
 
 async function handleGetReviews(request: Request, env: Env, cors: Record<string, string>): Promise<Response> {
 	const url = new URL(request.url);
@@ -362,10 +325,6 @@ async function handleSync(
 		return json({ error: "storage error" }, 500, cors);
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 export default {
 	async fetch(request: Request, env: Env): Promise<Response> {

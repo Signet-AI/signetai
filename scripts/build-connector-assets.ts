@@ -1,28 +1,5 @@
 #!/usr/bin/env bun
 
-/**
- * Stage runtime plugin assets shipped by Signet connectors into a single
- * tarball that the native-bundle install path unpacks next to the Signet
- * binary. Connectors that only write config (no on-disk plugin files) are
- * skipped — they have nothing to stage.
- *
- * The tarball layout mirrors what the connectors' `getPluginSourceDir`
- * fallbacks already look for under `$SIGNET_DIR/runtime/connectors/<harness>/`.
- * For example, the Hermes connector's Python plugin ends up at:
- *
- *   runtime/connectors/hermes-agent/hermes-plugin/__init__.py
- *   runtime/connectors/hermes-agent/hermes-plugin/client.py
- *   runtime/connectors/hermes-agent/hermes-plugin/plugin.yaml
- *   runtime/connectors/hermes-agent/hermes-plugin/README.md
- *
- * This restores the asset-shipping side of v0.135.0's bundle.yml, which
- * #816 dropped when collapsing the runtime into a single `--compile`'d
- * binary. Connector JS is still compiled in; only files the harness's
- * own runtime loads (e.g. Python for Hermes) need to be external.
- *
- * Output: <root>/dist/native/signet-connectors-<version>.tar.gz
- */
-
 import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -35,11 +12,6 @@ const version =
 const stagingRoot = join(nativeDir, "connectors-staging");
 const tarballName = `signet-connectors-${version}.tar.gz`;
 const tarballPath = join(nativeDir, tarballName);
-
-// Asset directories the build will copy through. These are the on-disk
-// payloads a connector relies on at install time and the harness loads
-// at runtime. Anything else under `integrations/<harness>/connector/` is
-// source/test/build artifacts that must not be shipped.
 const SKIP_NAMES = new Set([
 	"dist",
 	"node_modules",
@@ -84,10 +56,6 @@ function collectAssetEntries(harness: string): AssetEntry[] {
 		const full = join(connectorDir, name);
 		const stat = statSync(full);
 		if (!stat.isDirectory()) continue;
-
-		// Only pick up directories that contain at least one file matching
-		// a known asset suffix. This keeps generated dirs (e.g. dist/) from
-		// sneaking through, and rejects empty placeholder directories.
 		const files: string[] = [];
 		for (const inner of readdirSync(full)) {
 			const innerFull = join(full, inner);
@@ -124,9 +92,6 @@ function main(): void {
 	if (!existsSync(nativeDir)) {
 		mkdirSync(nativeDir, { recursive: true });
 	}
-
-	// Clean and re-stage. Cached tarballs are removed so re-runs always
-	// reflect the current tree.
 	if (existsSync(stagingRoot)) {
 		rmSync(stagingRoot, { recursive: true, force: true });
 	}
@@ -142,8 +107,6 @@ function main(): void {
 
 	if (entries.length === 0) {
 		console.log("No connector runtime assets to stage; skipping tarball.");
-		// Remove any stale tarball from a prior release that may have shipped
-		// these assets so the manifest and install flow stay consistent.
 		if (existsSync(tarballPath)) rmSync(tarballPath);
 		return;
 	}

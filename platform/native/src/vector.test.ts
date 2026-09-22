@@ -1,8 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-
-// Load the native addon directly (can't resolve @signet/native from within itself)
 const nativePackagePath = join(__dirname, "..");
 const nativeTriples = {
 	"linux-x64-gnu": "signet-native.linux-x64-gnu.node",
@@ -35,8 +33,6 @@ const native =
 		? (require(nativePackagePath) as typeof import("@signet/native"))
 		: null;
 const describeNative = native ? describe : describe.skip;
-
-// TS reference implementations for parity checks
 function tsCosineSimilarity(a: Float32Array, b: Float32Array): number {
 	let dot = 0;
 	let normA = 0;
@@ -144,10 +140,6 @@ function tsVectorToBlob(vec: readonly number[]): Buffer {
 	return Buffer.from(f32.buffer.slice(0));
 }
 
-// ---------------------------------------------------------------------------
-// cosineSimilarity
-// ---------------------------------------------------------------------------
-
 describeNative("cosineSimilarity", () => {
 	test("identical vectors return 1", () => {
 		const v = new Float32Array([1, 2, 3]);
@@ -181,7 +173,6 @@ describeNative("cosineSimilarity", () => {
 	test("mismatched lengths truncate to shorter", () => {
 		const a = new Float32Array([1, 0, 0, 99]);
 		const b = new Float32Array([1, 0, 0]);
-		// Should only compare first 3 elements
 		expect(native.cosineSimilarity(a, b)).toBeCloseTo(1.0, 5);
 	});
 
@@ -200,10 +191,6 @@ describeNative("cosineSimilarity", () => {
 	});
 });
 
-// ---------------------------------------------------------------------------
-// squaredDistance
-// ---------------------------------------------------------------------------
-
 describeNative("squaredDistance", () => {
 	test("identical points return 0", () => {
 		const v = new Float64Array([1, 2, 3]);
@@ -213,14 +200,12 @@ describeNative("squaredDistance", () => {
 	test("known distance", () => {
 		const a = new Float64Array([1, 2, 3]);
 		const b = new Float64Array([4, 5, 6]);
-		// (3^2 + 3^2 + 3^2) = 27
 		expect(native.squaredDistance(a, b)).toBe(27);
 	});
 
 	test("mismatched lengths truncate to shorter", () => {
 		const a = new Float64Array([1, 2, 3]);
 		const b = new Float64Array([4, 5]);
-		// only first 2: (3^2 + 3^2) = 18
 		expect(native.squaredDistance(a, b)).toBe(18);
 	});
 
@@ -240,10 +225,6 @@ describeNative("squaredDistance", () => {
 		}
 	});
 });
-
-// ---------------------------------------------------------------------------
-// vectorToBlob / blobToVector round-trip
-// ---------------------------------------------------------------------------
 
 describeNative("vectorToBlob + blobToVector", () => {
 	test("round-trip preserves values (f32 precision)", () => {
@@ -266,7 +247,6 @@ describeNative("vectorToBlob + blobToVector", () => {
 		const vec = [1.0, 2.0, 3.0];
 		const rustBlob = native.vectorToBlob(vec);
 		const tsBlob = tsVectorToBlob(vec);
-		// Both should produce identical byte sequences
 		expect(Buffer.compare(rustBlob, tsBlob)).toBe(0);
 	});
 
@@ -282,15 +262,10 @@ describeNative("vectorToBlob + blobToVector", () => {
 		const back = native.blobToVector(blob);
 		expect(back.length).toBe(768);
 		for (let i = 0; i < vec.length; i++) {
-			// f64 -> f32 -> f64 loses precision
 			expect(Math.abs(vec[i] - back[i])).toBeLessThan(1e-6);
 		}
 	});
 });
-
-// ---------------------------------------------------------------------------
-// batchCosineSimilarity
-// ---------------------------------------------------------------------------
 
 describeNative("batchCosineSimilarity", () => {
 	test("single row matches individual cosineSimilarity", () => {
@@ -359,20 +334,13 @@ describeNative("batchCosineSimilarity", () => {
 	test("empty matrix returns empty array", () => {
 		const query = new Float32Array([1, 2, 3]);
 		const matrix = Buffer.alloc(0);
-		// dim * 0 = 0 total floats, 0 % dim = 0 — valid
-		// But 0 bytes / 4 = 0, 0 % 3 = 0, so n=0
 		const batch = native.batchCosineSimilarity(query, matrix, 3);
 		expect(batch.length).toBe(0);
 	});
 });
 
-// ---------------------------------------------------------------------------
-// buildKnnEdges
-// ---------------------------------------------------------------------------
-
 describeNative("buildKnnEdges", () => {
 	test("small dataset matches TS exact implementation", () => {
-		// Generate 20 random 2D points
 		const coords: number[][] = [];
 		for (let i = 0; i < 20; i++) {
 			coords.push([Math.random() * 100, Math.random() * 100]);
@@ -381,8 +349,6 @@ describeNative("buildKnnEdges", () => {
 
 		const rustEdges = native.buildKnnEdges(coords, k, 450);
 		const tsEdges = tsBuildExactKnnEdges(coords, k);
-
-		// Both should produce the same set of edges (order may differ)
 		const rustSet = new Set(rustEdges.map((e) => `${e[0]}-${e[1]}`));
 		const tsSet = new Set(tsEdges.map((e) => `${e[0]}-${e[1]}`));
 		expect(rustSet).toEqual(tsSet);
@@ -440,29 +406,21 @@ describeNative("buildKnnEdges", () => {
 	});
 
 	test("approximate path produces reasonable edges for larger sets", () => {
-		// Generate enough points to trigger approximate path
 		const n = 500;
 		const coords: number[][] = [];
 		for (let i = 0; i < n; i++) {
 			coords.push([Math.random() * 1000, Math.random() * 1000]);
 		}
-		// threshold=100 forces approximate path
 		const edges = native.buildKnnEdges(coords, 4, 100);
 		expect(edges.length).toBeGreaterThan(0);
-		// Every node should have at least one edge (for connected datasets)
 		const connected = new Set<number>();
 		for (const [a, b] of edges) {
 			connected.add(a);
 			connected.add(b);
 		}
-		// Most nodes should be connected (may not be all for sparse datasets)
 		expect(connected.size).toBeGreaterThan(n * 0.8);
 	});
 });
-
-// ---------------------------------------------------------------------------
-// normaliseAxes
-// ---------------------------------------------------------------------------
 
 describeNative("normaliseAxes", () => {
 	test("output range is [-scale/2, scale/2]", () => {
@@ -503,7 +461,6 @@ describeNative("normaliseAxes", () => {
 
 	test("single value normalises to 0", () => {
 		const result = native.normaliseAxes([42], [99], null, 420);
-		// range=1 fallback: (42-42)/1 - 0.5 = -0.5, * 420 = -210
 		expect(result.xs[0]).toBeCloseTo(-210, 5);
 	});
 
@@ -513,10 +470,6 @@ describeNative("normaliseAxes", () => {
 		expect(result.ys).toEqual([]);
 	});
 });
-
-// ---------------------------------------------------------------------------
-// mergeHybridScores
-// ---------------------------------------------------------------------------
 
 describeNative("mergeHybridScores", () => {
 	test("parity with TS merge logic", () => {
@@ -555,7 +508,6 @@ describeNative("mergeHybridScores", () => {
 		const result = native.mergeHybridScores(["a"], [1.0], ["a"], [0.5], 0.7, 0.0);
 		expect(result.length).toBe(1);
 		expect(result[0].source).toBe("hybrid");
-		// 0.7 * 1.0 + 0.3 * 0.5 = 0.85
 		expect(result[0].score).toBeCloseTo(0.85, 10);
 	});
 

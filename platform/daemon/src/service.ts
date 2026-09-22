@@ -1,8 +1,3 @@
-/**
- * Signet Daemon Service Installation
- * Handles systemd (Linux), launchd (macOS), and Windows service management
- */
-
 import { execSyncHidden as execSync, spawnHidden as spawn } from "@signet/core";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -23,8 +18,6 @@ const LOG_DIR = join(DAEMON_DIR, "logs");
 const DAEMON_PORT = 3850;
 const HEALTH_PROBE_TIMEOUT_MS = 1_200;
 const HEALTH_PROBE_URL = `http://${LOOPBACK_HOST}:${DAEMON_PORT}/health/live`;
-
-// Platform-specific paths
 const LAUNCHD_PLIST = join(homedir(), "Library", "LaunchAgents", "ai.signet.daemon.plist");
 const SYSTEMD_UNIT = join(homedir(), ".config", "systemd", "user", "signet.service");
 
@@ -36,7 +29,6 @@ export interface ServiceStatus {
 	pid: number | null;
 	uptime: number | null;
 	port: number;
-	/** The management probe status; a running process can still be degraded. */
 	status: ServiceHealthStatus;
 }
 
@@ -45,12 +37,6 @@ interface HealthProbeResult {
 	uptime: number | null;
 	pid: number | null;
 }
-
-/**
- * Probe only daemon liveness. Service management does not need the database
- * work performed by the legacy `/health` endpoint, and the deadline prevents
- * a wedged local daemon from blocking status callers indefinitely.
- */
 export async function probeDaemonHealth(
 	fetcher?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
 ): Promise<HealthProbeResult> {
@@ -84,12 +70,7 @@ export async function probeDaemonHealth(
 		return { status: "degraded", uptime: null, pid: null };
 	}
 }
-
-/**
- * Get the path to the daemon executable
- */
 function getDaemonPath(): string {
-	// Try to find the installed daemon
 	const candidates = [
 		join(__dirname, "..", "..", "daemon", "dist", "daemon.js"),
 		join(__dirname, "..", "dist", "daemon.js"),
@@ -101,14 +82,8 @@ function getDaemonPath(): string {
 			return candidate;
 		}
 	}
-
-	// Fallback to npx/bunx
 	return "@signet/daemon";
 }
-
-/**
- * Find bun executable (required - signet uses bun:sqlite)
- */
 function getRuntime(): string {
 	try {
 		const locator = platform() === "win32" ? "where" : "which";
@@ -124,10 +99,6 @@ function getRuntime(): string {
 		process.exit(1);
 	}
 }
-
-// ============================================================================
-// macOS (launchd)
-// ============================================================================
 
 export function generateLaunchdPlist(port: number = 3850): string {
 	const daemonPath = getDaemonPath();
@@ -153,18 +124,10 @@ async function installLaunchd(port: number = 3850): Promise<void> {
 	const plistDir = join(homedir(), "Library", "LaunchAgents");
 	mkdirSync(plistDir, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
-
-	// Unload if already loaded
 	try {
 		execSync(`launchctl unload "${LAUNCHD_PLIST}" 2>/dev/null`);
-	} catch {
-		// Ignore - might not be loaded
-	}
-
-	// Write plist
+	} catch {}
 	writeFileSync(LAUNCHD_PLIST, generateLaunchdPlist(port));
-
-	// Load the service
 	execSync(`launchctl load "${LAUNCHD_PLIST}"`);
 }
 
@@ -175,9 +138,7 @@ async function uninstallLaunchd(): Promise<void> {
 
 	try {
 		execSync(`launchctl unload "${LAUNCHD_PLIST}"`);
-	} catch {
-		// Ignore
-	}
+	} catch {}
 
 	unlinkSync(LAUNCHD_PLIST);
 }
@@ -193,12 +154,7 @@ function isLaunchdRunning(): boolean {
 	}
 }
 
-// ============================================================================
-// Linux (systemd)
-// ============================================================================
-
 function resolveRuntimePath(): string {
-	// Use the currently running process's executable if it's bun/node
 	const execPath = process.execPath;
 	if (execPath && existsSync(execPath)) {
 		return execPath;
@@ -244,21 +200,11 @@ async function installSystemd(port: number = 3850): Promise<void> {
 	const unitDir = join(homedir(), ".config", "systemd", "user");
 	mkdirSync(unitDir, { recursive: true });
 	mkdirSync(LOG_DIR, { recursive: true });
-
-	// Stop if running
 	try {
 		execSync("systemctl --user stop signet.service 2>/dev/null");
-	} catch {
-		// Ignore
-	}
-
-	// Write unit file
+	} catch {}
 	writeFileSync(SYSTEMD_UNIT, generateSystemdUnit(port));
-
-	// Reload systemd
 	execSync("systemctl --user daemon-reload");
-
-	// Enable and start
 	execSync("systemctl --user enable signet.service");
 	execSync("systemctl --user start signet.service");
 }
@@ -267,9 +213,7 @@ async function uninstallSystemd(): Promise<void> {
 	try {
 		execSync("systemctl --user stop signet.service 2>/dev/null");
 		execSync("systemctl --user disable signet.service 2>/dev/null");
-	} catch {
-		// Ignore
-	}
+	} catch {}
 
 	if (existsSync(SYSTEMD_UNIT)) {
 		unlinkSync(SYSTEMD_UNIT);
@@ -277,9 +221,7 @@ async function uninstallSystemd(): Promise<void> {
 
 	try {
 		execSync("systemctl --user daemon-reload");
-	} catch {
-		// Ignore
-	}
+	} catch {}
 }
 
 function isSystemdRunning(): boolean {
@@ -290,10 +232,6 @@ function isSystemdRunning(): boolean {
 		return false;
 	}
 }
-
-// ============================================================================
-// Direct Process Management (fallback)
-// ============================================================================
 
 function assertWorkspaceStartable(): void {
 	const workspace = preflightWorkspace();
@@ -321,8 +259,6 @@ async function startDirect(port: number = 3850): Promise<number> {
 	});
 
 	proc.unref();
-
-	// Wait a moment for PID file to be written
 	await new Promise((resolve) => setTimeout(resolve, 500));
 
 	return proc.pid || 0;
@@ -337,16 +273,10 @@ async function stopDirect(): Promise<void> {
 
 	try {
 		process.kill(pid, "SIGTERM");
-	} catch {
-		// Process might already be dead
-	}
-
-	// Clean up PID file
+	} catch {}
 	try {
 		unlinkSync(PID_FILE);
-	} catch {
-		// Ignore
-	}
+	} catch {}
 }
 
 function isDirectRunning(): boolean {
@@ -360,23 +290,12 @@ function isDirectRunning(): boolean {
 		process.kill(pid, 0);
 		return true;
 	} catch {
-		// Process doesn't exist, clean up stale PID file
 		try {
 			unlinkSync(PID_FILE);
-		} catch {
-			// Ignore
-		}
+		} catch {}
 		return false;
 	}
 }
-
-// ============================================================================
-// Public API
-// ============================================================================
-
-/**
- * Install the daemon as a system service
- */
 export async function installService(port: number = 3850): Promise<void> {
 	const os = platform();
 
@@ -385,14 +304,9 @@ export async function installService(port: number = 3850): Promise<void> {
 	} else if (os === "linux") {
 		await installSystemd(port);
 	} else {
-		// Windows or other - just start directly
 		await startDirect(port);
 	}
 }
-
-/**
- * Uninstall the daemon system service
- */
 export async function uninstallService(): Promise<void> {
 	const os = platform();
 
@@ -401,14 +315,8 @@ export async function uninstallService(): Promise<void> {
 	} else if (os === "linux") {
 		await uninstallSystemd();
 	}
-
-	// Always stop direct process too
 	await stopDirect();
 }
-
-/**
- * Start the daemon
- */
 export async function startDaemon(port: number = 3850): Promise<void> {
 	assertWorkspaceStartable();
 	const os = platform();
@@ -421,42 +329,26 @@ export async function startDaemon(port: number = 3850): Promise<void> {
 		await startDirect(port);
 	}
 }
-
-/**
- * Stop the daemon
- */
 export async function stopDaemon(): Promise<void> {
 	const os = platform();
 
 	if (os === "darwin" && existsSync(LAUNCHD_PLIST)) {
 		try {
 			execSync(`launchctl unload "${LAUNCHD_PLIST}"`);
-		} catch {
-			// Might not be loaded
-		}
+		} catch {}
 	} else if (os === "linux" && existsSync(SYSTEMD_UNIT)) {
 		try {
 			execSync("systemctl --user stop signet.service");
-		} catch {
-			// Might not be running
-		}
+		} catch {}
 	}
 
 	await stopDirect();
 }
-
-/**
- * Restart the daemon
- */
 export async function restartDaemon(port: number = 3850): Promise<void> {
 	await stopDaemon();
 	await new Promise((resolve) => setTimeout(resolve, 500));
 	await startDaemon(port);
 }
-
-/**
- * Check if daemon is running
- */
 export function isDaemonRunning(): boolean {
 	const os = platform();
 
@@ -468,10 +360,6 @@ export function isDaemonRunning(): boolean {
 
 	return isDirectRunning();
 }
-
-/**
- * Check if service is installed
- */
 export function isServiceInstalled(): boolean {
 	const os = platform();
 
@@ -480,16 +368,11 @@ export function isServiceInstalled(): boolean {
 	} else if (os === "linux") {
 		return existsSync(SYSTEMD_UNIT);
 	} else if (os === "win32") {
-		// On Windows, check if daemon is running via direct process management
 		return existsSync(PID_FILE);
 	}
 
 	return false;
 }
-
-/**
- * Get comprehensive daemon status
- */
 export async function getDaemonStatus(): Promise<ServiceStatus> {
 	const running = isDaemonRunning();
 	let pid: number | null = null;
@@ -501,9 +384,7 @@ export async function getDaemonStatus(): Promise<ServiceStatus> {
 	if (running && existsSync(PID_FILE)) {
 		try {
 			pid = parseInt(readFileSync(PID_FILE, "utf-8").trim(), 10);
-		} catch {
-			// Ignore
-		}
+		} catch {}
 	}
 
 	if (health.uptime !== null) {
@@ -522,15 +403,10 @@ export async function getDaemonStatus(): Promise<ServiceStatus> {
 		status: health.status,
 	};
 }
-
-/**
- * Get daemon logs
- */
 export function getDaemonLogs(lines: number = 50): string[] {
 	const logFile = join(LOG_DIR, `daemon-${new Date().toISOString().split("T")[0]}.log`);
 
 	if (!existsSync(logFile)) {
-		// Try stdout log
 		const outLog = join(LOG_DIR, "daemon.out.log");
 		if (existsSync(outLog)) {
 			const content = readFileSync(outLog, "utf-8");

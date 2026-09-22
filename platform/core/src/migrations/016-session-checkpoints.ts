@@ -1,11 +1,3 @@
-/**
- * Migration 016: Session Checkpoints
- *
- * Persistence layer for the session continuity protocol.
- * Stores rolling digests so agents can recover context
- * after compaction or session restart.
- */
-
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

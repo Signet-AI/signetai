@@ -1,28 +1,8 @@
-/**
- * OS Agent routes — visual GUI agent execution for Signet OS widgets.
- *
- * Implements the observe-think-act loop:
- *   1. OBSERVE: Request DOM state from the dashboard (via SSE → postMessage → iframe)
- *   2. THINK: Call LLM with simplified HTML + user task
- *   3. ACT: Send action command to dashboard (via SSE → postMessage → iframe)
- *   4. WAIT: Let DOM settle
- *   5. LOOP: Repeat until done or max steps reached
- *
- * Routes:
- *   POST /api/os/agent-execute  — start an agent execution session
- *   POST /api/os/agent-state    — dashboard sends DOM state back to daemon
- *   GET  /api/os/agent-events   — SSE stream of agent commands for the dashboard
- */
-
 import type { RoutingPrivacyTier } from "@signet/core";
 import type { Hono } from "hono";
 import { getInferenceRouterOrNull } from "../inference-router.js";
 import { getInteractiveLlmProviderOrNull } from "../llm.js";
 import { logger } from "../logger.js";
-
-// ============================================================================
-// Agent Session State (in-memory)
-// ============================================================================
 
 interface AgentSessionState {
 	id: string;
@@ -34,16 +14,12 @@ interface AgentSessionState {
 	status: "running" | "done" | "error";
 	step: number;
 	maxSteps: number;
-	/** Pending DOM state request — resolved when dashboard POSTs back */
 	pendingDomState: {
 		resolve: (state: unknown) => void;
 		reject: (err: Error) => void;
 	} | null;
-	/** SSE listeners waiting for agent commands */
 	sseListeners: Array<(event: AgentEvent) => void>;
-	/** Conversation history for the LLM */
 	messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
-	/** Final result */
 	result?: string;
 	error?: string;
 }
@@ -62,10 +38,6 @@ let sessionCounter = 0;
 function createSessionId(): string {
 	return `agent_${Date.now()}_${++sessionCounter}`;
 }
-
-// ============================================================================
-// LLM Integration
-// ============================================================================
 
 const AGENT_SYSTEM_PROMPT = `You are a GUI automation agent operating inside a web widget. You can see the page as simplified HTML with indexed interactive elements like [0]<button>Click me</button>.
 
@@ -157,8 +129,6 @@ async function callAgentLlm(
 			maxTokens: 512,
 		});
 	}
-
-	// Parse the action JSON
 	let cleaned = raw.trim();
 	if (cleaned.startsWith("```json")) cleaned = cleaned.slice(7);
 	else if (cleaned.startsWith("```")) cleaned = cleaned.slice(3);
@@ -168,7 +138,6 @@ async function callAgentLlm(
 	try {
 		return JSON.parse(cleaned) as AgentAction;
 	} catch {
-		// Try to extract JSON from within text
 		const jsonMatch = cleaned.match(/\{[\s\S]*"action"[\s\S]*\}/);
 		if (jsonMatch) {
 			return JSON.parse(jsonMatch[0]) as AgentAction;
@@ -177,20 +146,13 @@ async function callAgentLlm(
 	}
 }
 
-// ============================================================================
-// Agent Execution Loop
-// ============================================================================
-
 async function runAgentLoop(session: AgentSessionState): Promise<void> {
 	try {
-		// Notify dashboard to start agent mode (show mask + cursor)
 		broadcastToSession(session, {
 			type: "agentStart",
 			sessionId: session.id,
 			serverId: session.serverId,
 		});
-
-		// Initialize conversation
 		session.messages = [
 			{ role: "system", content: AGENT_SYSTEM_PROMPT },
 			{ role: "user", content: `Task: ${session.task}` },
@@ -198,8 +160,6 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 
 		for (let step = 1; step <= session.maxSteps; step++) {
 			session.step = step;
-
-			// --- OBSERVE ---
 			broadcastToSession(session, {
 				type: "status",
 				sessionId: session.id,
@@ -212,7 +172,6 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 			if (!domState || !(domState as Record<string, unknown>).success) {
 				const errMsg = (domState as Record<string, unknown>)?.error || "Failed to get DOM state";
 				logger.warn("os-agent", `DOM state error: ${errMsg}`);
-				// Retry once
 				await sleep(500);
 				continue;
 			}
@@ -222,17 +181,11 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 				content: string;
 				footer: string;
 			};
-
-			// Build observation message for LLM
 			const observation = `${browserState.header}\n\n${browserState.content}\n\n${browserState.footer}`;
-
-			// Add observation to conversation
 			session.messages.push({
 				role: "user",
 				content: `Current page state:\n${observation}`,
 			});
-
-			// --- THINK ---
 			broadcastToSession(session, {
 				type: "status",
 				sessionId: session.id,
@@ -260,14 +213,10 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 			logger.info("os-agent", `Step ${step}: ${action.action}`, {
 				thought: action.thought?.slice(0, 100),
 			});
-
-			// Add assistant response to conversation
 			session.messages.push({
 				role: "assistant",
 				content: JSON.stringify(action),
 			});
-
-			// --- DONE CHECK ---
 			if (action.action === "done") {
 				session.status = "done";
 				session.result = action.summary || action.thought || "Task completed";
@@ -280,8 +229,6 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 				});
 				break;
 			}
-
-			// --- ACT ---
 			broadcastToSession(session, {
 				type: "status",
 				sessionId: session.id,
@@ -292,8 +239,6 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 					message: `Step ${step}: ${describeAction(action)}`,
 				},
 			});
-
-			// Map agent action to iframe action format
 			const iframeAction = mapToIframeAction(action);
 
 			broadcastToSession(session, {
@@ -302,19 +247,12 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 				serverId: session.serverId,
 				data: { action: iframeAction },
 			});
-
-			// Wait for the dashboard to relay the action and DOM to settle
-			// The dashboard will execute the action immediately, we don't need to wait for a response
 			await sleep(800);
-
-			// Add action result context for next observation
 			session.messages.push({
 				role: "user",
 				content: `Action executed: ${describeAction(action)}. The page may have changed. Observe the new state.`,
 			});
 		}
-
-		// If we exhausted steps without completing
 		if (session.status === "running") {
 			session.status = "done";
 			session.result = "Reached maximum steps without completing the task.";
@@ -338,14 +276,11 @@ async function runAgentLoop(session: AgentSessionState): Promise<void> {
 			data: { error: msg },
 		});
 	} finally {
-		// Notify dashboard to stop agent mode
 		broadcastToSession(session, {
 			type: "agentStop",
 			sessionId: session.id,
 			serverId: session.serverId,
 		});
-
-		// Clean up after a delay to let SSE clients receive final events
 		setTimeout(() => {
 			activeSessions.delete(session.id);
 		}, 30000);
@@ -391,15 +326,11 @@ function describeAction(action: AgentAction): string {
 async function requestDomState(session: AgentSessionState): Promise<unknown> {
 	return new Promise((resolve, reject) => {
 		session.pendingDomState = { resolve, reject };
-
-		// Broadcast request to dashboard via SSE
 		broadcastToSession(session, {
 			type: "getDomState",
 			sessionId: session.id,
 			serverId: session.serverId,
 		});
-
-		// Timeout after 15s
 		setTimeout(() => {
 			if (session.pendingDomState) {
 				session.pendingDomState = null;
@@ -414,9 +345,7 @@ function broadcastToSession(session: AgentSessionState, event: AgentEvent): void
 	for (let i = 0; i < listeners.length; i++) {
 		try {
 			listeners[i](event);
-		} catch {
-			// Listener may have disconnected
-		}
+		} catch {}
 	}
 }
 
@@ -424,17 +353,7 @@ function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ============================================================================
-// HTTP Routes
-// ============================================================================
-
 export function mountOsAgentRoutes(app: Hono): void {
-	/**
-	 * POST /api/os/agent-execute — Start an agent execution session.
-	 *
-	 * Body: { serverId: string, task: string }
-	 * Returns: { sessionId: string } — connect to /api/os/agent-events?session=<id> for updates
-	 */
 	app.post("/api/os/agent-execute", async (c) => {
 		let body: { serverId?: string; task?: string; agentId?: string; taskClass?: string; privacy?: RoutingPrivacyTier };
 		try {
@@ -449,8 +368,6 @@ export function mountOsAgentRoutes(app: Hono): void {
 		if (!serverId || !task) {
 			return c.json({ error: "serverId and task are required" }, 400);
 		}
-
-		// Check if there's already an active session for this server
 		const existingSessions = Array.from(activeSessions.values());
 		for (let i = 0; i < existingSessions.length; i++) {
 			if (existingSessions[i].serverId === serverId && existingSessions[i].status === "running") {
@@ -481,19 +398,10 @@ export function mountOsAgentRoutes(app: Hono): void {
 			serverId,
 			task: task.slice(0, 100),
 		});
-
-		// Start the agent loop asynchronously (don't await — return session ID immediately)
-		// Small delay to let the SSE client connect first
 		setTimeout(() => runAgentLoop(session), 500);
 
 		return c.json({ sessionId, serverId });
 	});
-
-	/**
-	 * POST /api/os/agent-state — Dashboard sends DOM state back to the daemon.
-	 *
-	 * Body: { sessionId: string, domState: unknown }
-	 */
 	app.post("/api/os/agent-state", async (c) => {
 		let body: { sessionId?: string; domState?: unknown };
 		try {
@@ -511,8 +419,6 @@ export function mountOsAgentRoutes(app: Hono): void {
 		if (!session) {
 			return c.json({ error: "Session not found" }, 404);
 		}
-
-		// Resolve the pending DOM state promise
 		if (session.pendingDomState) {
 			session.pendingDomState.resolve(body.domState);
 			session.pendingDomState = null;
@@ -520,15 +426,6 @@ export function mountOsAgentRoutes(app: Hono): void {
 
 		return c.json({ success: true });
 	});
-
-	/**
-	 * GET /api/os/agent-events — SSE stream of agent commands for the dashboard.
-	 *
-	 * Query params:
-	 *   ?session=<sessionId> — filter to a specific session (optional)
-	 *
-	 * The dashboard listens here and relays commands to the appropriate widget iframe.
-	 */
 	app.get("/api/os/agent-events", (c) => {
 		const sessionFilter = c.req.query("session") || undefined;
 		const encoder = new TextEncoder();
@@ -539,18 +436,12 @@ export function mountOsAgentRoutes(app: Hono): void {
 					try {
 						const data = `data: ${JSON.stringify(event)}\n\n`;
 						controller.enqueue(encoder.encode(data));
-					} catch {
-						// Client disconnected
-					}
+					} catch {}
 				};
-
-				// If session specified, attach to that session only
 				if (sessionFilter) {
 					const session = activeSessions.get(sessionFilter);
 					if (session) {
 						session.sseListeners.push(onEvent);
-
-						// Send initial connected event
 						controller.enqueue(
 							encoder.encode(
 								`data: ${JSON.stringify({
@@ -566,14 +457,10 @@ export function mountOsAgentRoutes(app: Hono): void {
 						);
 					}
 				} else {
-					// Listen to ALL sessions (broadcast mode)
-					// Register on all current sessions
 					for (const session of activeSessions.values()) {
 						session.sseListeners.push(onEvent);
 					}
 				}
-
-				// Heartbeat
 				const heartbeat = setInterval(() => {
 					try {
 						controller.enqueue(encoder.encode(": heartbeat\n\n"));
@@ -581,11 +468,8 @@ export function mountOsAgentRoutes(app: Hono): void {
 						clearInterval(heartbeat);
 					}
 				}, 15000);
-
-				// Cleanup on disconnect
 				c.req.raw.signal.addEventListener("abort", () => {
 					clearInterval(heartbeat);
-					// Remove listener from all sessions
 					for (const session of activeSessions.values()) {
 						const idx = session.sseListeners.indexOf(onEvent);
 						if (idx >= 0) session.sseListeners.splice(idx, 1);
@@ -602,10 +486,6 @@ export function mountOsAgentRoutes(app: Hono): void {
 			},
 		});
 	});
-
-	/**
-	 * GET /api/os/agent-sessions — List active agent sessions.
-	 */
 	app.get("/api/os/agent-sessions", (c) => {
 		const sessions = Array.from(activeSessions.values()).map((s) => ({
 			id: s.id,

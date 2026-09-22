@@ -1,18 +1,7 @@
-/**
- * CLI commands for MCP server management and tool invocation.
- *
- * Provides `signet mcp list`, `signet mcp call`, and `signet mcp analytics`
- * subcommands. All operations go through the daemon's HTTP API.
- */
-
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
 import type { DaemonFetch } from "../lib/daemon.js";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 interface McpDeps {
 	readonly fetchFromDaemon: DaemonFetch;
@@ -66,10 +55,6 @@ interface AnalyticsSummary {
 	readonly latency: { readonly p50: number; readonly p95: number };
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 async function ensureDaemon(deps: McpDeps): Promise<boolean> {
 	if (!(await deps.isDaemonRunning())) {
 		console.error(chalk.red("Daemon is not running. Start it with: signet daemon start"));
@@ -79,16 +64,11 @@ async function ensureDaemon(deps: McpDeps): Promise<boolean> {
 }
 
 function resolveServer(servers: readonly McpServer[], query: string): McpServer | null {
-	// Exact match by id
 	const byId = servers.find((s) => s.id === query);
 	if (byId) return byId;
-
-	// Case-insensitive match by name
 	const lower = query.toLowerCase();
 	const byName = servers.filter((s) => s.name.toLowerCase() === lower);
 	if (byName.length === 1) return byName[0];
-
-	// Prefix match
 	const prefix = servers.filter((s) => s.name.toLowerCase().startsWith(lower));
 	if (prefix.length === 1) return prefix[0];
 
@@ -122,7 +102,6 @@ function parseToolArgs(params: readonly string[]): Record<string, unknown> {
 		}
 		const key = param.slice(0, eq);
 		const raw = param.slice(eq + 1);
-		// Auto-parse JSON values
 		try {
 			args[key] = JSON.parse(raw);
 		} catch {
@@ -132,14 +111,8 @@ function parseToolArgs(params: readonly string[]): Record<string, unknown> {
 	return args;
 }
 
-// ---------------------------------------------------------------------------
-// Command registration
-// ---------------------------------------------------------------------------
-
 export function registerMcpCommands(program: Command, deps: McpDeps): void {
 	const mcpCmd = program.command("mcp").description("Manage and invoke MCP tool servers");
-
-	// signet mcp list
 	mcpCmd
 		.command("list")
 		.description("List installed MCP servers")
@@ -175,8 +148,6 @@ export function registerMcpCommands(program: Command, deps: McpDeps): void {
 			}
 			console.log();
 		});
-
-	// signet mcp tools <server>
 	mcpCmd
 		.command("tools <server>")
 		.description("List tools exposed by an installed MCP server")
@@ -223,8 +194,6 @@ export function registerMcpCommands(program: Command, deps: McpDeps): void {
 			}
 			console.log();
 		});
-
-	// signet mcp call <server> <tool> [params...]
 	mcpCmd
 		.command("call <server> <tool> [params...]")
 		.description("Invoke a tool on an installed MCP server")
@@ -274,8 +243,6 @@ export function registerMcpCommands(program: Command, deps: McpDeps): void {
 			const indent = options.pretty ? 2 : undefined;
 			console.log(JSON.stringify(result.result, null, indent));
 		});
-
-	// signet mcp analytics
 	mcpCmd
 		.command("analytics")
 		.description("Show MCP tool usage analytics")

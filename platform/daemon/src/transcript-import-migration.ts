@@ -16,8 +16,6 @@ import {
 import { resolveManagedTranscriptPath } from "./transcript-import-safe-fs";
 import { buildCompletedTranscriptCommit, canonicalTranscriptLine } from "./transcript-import-commit";
 import { signetExportV1Adapter } from "./transcript-import-adapter";
-
-/** Finite translation of the old evidence store. Normal imports never read legacy paths. */
 export async function migrateTranscriptImportFile(
 	root: string,
 	agentId: string,
@@ -103,7 +101,6 @@ export async function migrateTranscriptImportFile(
 			await handle.close();
 		}
 	}
-	// After sealing, a missing old file means an earlier cleanup already removed it.
 	try {
 		await removeContainedTranscriptPath(root, path, { force: true });
 	} catch (error) {

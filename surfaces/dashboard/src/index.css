@@ -1,19 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/*
- * Signet dashboard design system (issue #948).
- * Source of truth: web/marketing/public/redesign-home-mockup.html
- * - Cool-neutral semantic ramps, radius 0.3rem, flat shadows.
- * - Light is :root; dark is the `.dark` class (next-themes attribute="class").
- * - Geist / Geist Mono self-hosted via @fontsource (offline Electron).
- * Bespoke effects with no Tailwind equivalent (mask-composite key-light border,
- * JS cursor-tracking radial glow) live in @layer components as `.sig-surface`.
- */
-
 @custom-variant dark (&:is(.dark *));
-
-/* ---- LIGHT (default :root) ---- */
 :root {
 	--radius: 0.3rem;
 
@@ -45,22 +33,16 @@
 	--sidebar-accent-foreground: oklch(0.22 0.015 250);
 
 	--shadow-flat: 0 1px 0 0 oklch(0.4 0 0 / 0.05);
-
-	/* Promoted overlay tokens (mockup re-derived these as one-off color-mix). */
 	--hover-overlay: color-mix(in oklch, var(--foreground) 7%, transparent);
 	--active-overlay: color-mix(in oklch, var(--foreground) 10%, transparent);
 	--accent-subtle: color-mix(in oklch, var(--foreground) 5%, transparent);
 	--border-glow: color-mix(in oklch, var(--foreground) 12%, transparent);
-
-	/* Surface treatment primitives (light defaults). */
 	--sig-keylight: linear-gradient(180deg, oklch(0 0 0 / 0.18), oklch(0 0 0 / 0.04));
 	--sig-surface-shadow: inset 0 1px 0 oklch(1 0 0 / 0.8), 0 1px 1px oklch(0 0 0 / 0.04);
 	--sig-surface-border: oklch(0 0 0 / 0.06);
 	--sig-glow-color: oklch(0 0 0 / 0.4);
 	--sig-dotted-grid: radial-gradient(oklch(0 0 0 / 0.03) 1px, transparent 1px);
 }
-
-/* ---- DARK (.dark) ---- */
 .dark {
 	--background: oklch(0.16 0.012 250);
 	--foreground: oklch(0.92 0.015 250);
@@ -131,8 +113,6 @@
 	--radius-sm: calc(var(--radius) - 4px);
 	--radius-md: calc(var(--radius) - 2px);
 	--radius-lg: var(--radius);
-	/* xl is used for the large floating surfaces (content card, modal) which the
-	   mockup rounds at 12px, not radius+4. */
 	--radius-xl: 0.75rem;
 }
 
@@ -154,7 +134,6 @@
 		text-rendering: optimizeLegibility;
 		font-feature-settings: "cv11", "ss01";
 	}
-	/* Electron frameless window drag regions (inert in a plain browser). */
 	.sig-drag {
 		-webkit-app-region: drag;
 		user-select: none;
@@ -170,8 +149,6 @@
 	transition: none !important;
 	animation: none !important;
 }
-
-	/* Home reference composition: application chrome, canvas, system rail. */
 	.sig-app-frame {
 		--background: #f5f7f9;
 		--foreground: #27313a;
@@ -254,9 +231,7 @@
 	}
 	.sig-app-frame > header { background: var(--home-chrome); }
 	.sig-app-frame > header { height: 56px; padding-inline-start: 40px; }
-	/* macOS traffic lights are present only in the Electron desktop shell. */
 	html[data-surface="desktop"][data-platform="mac"] .sig-app-frame > header { padding-inline-start: 96px; }
-	/* Electron's native Windows/Linux controls overlay the titlebar; keep header actions in the safe area. */
 	html[data-surface="desktop"]:not([data-platform="mac"]) .sig-app-frame > header {
 		padding-inline-start: max(24px, env(titlebar-area-x, 0px));
 		padding-inline-end: max(
@@ -404,7 +379,6 @@
 	.home-system [aria-labelledby="home-secrets-title"] .font-mono { font-size: 10.5px; font-weight: 400; }
 	.sig-app-frame > header > div.ml-auto > button { width: 32px; height: 32px; }
 	.sig-app-frame > header > div.ml-auto > button svg { width: 17px; height: 17px; }
-	/* Optical hierarchy: prose, indexed records, and machine annotations. */
 	.home-page-heading :is(h1, h2) { color: var(--home-title, var(--foreground)); }
 	.home-daily-brief .insight-text { color: var(--home-body, var(--foreground)); }
 	.home-memory-summary p,
@@ -509,7 +483,6 @@
 		.sig-app-frame [aria-label="Dashboard navigation"] [aria-hidden] { transition: none; }
 	}
 @layer components {
-	/* Scroll containers keep the canvas clean while remaining keyboard/touch accessible. */
 	.scrollbar-none {
 		-ms-overflow-style: none;
 		scrollbar-width: none;
@@ -540,11 +513,6 @@
 			will-change: auto;
 		}
 	}
-
-	/*
-	 * `.sig-modal` — settings modal. Dramatic lift shadow + top-lit gradient
-	 * edge (bright top → deep bottom). Matches the mockup `.modal`.
-	 */
 	.sig-modal {
 		box-shadow: 0 40px 100px oklch(0 0 0 / 0.7), 0 12px 32px oklch(0 0 0 / 0.5),
 			inset 0 1px 0 oklch(1 0 0 / 0.1);
@@ -570,9 +538,6 @@
 	:root:not(.dark) .sig-modal::before {
 		background: linear-gradient(180deg, oklch(1 0 0 / 0.9), oklch(0 0 0 / 0.04) 40%, oklch(0 0 0 / 0.12));
 	}
-
-	/* Settings "stage-drop": a restrained backdrop dim/blur and a 1% shell
-	   scale-down while open (driven by body.settings-open). */
 	[data-slot="dialog-overlay"] {
 		background: oklch(0 0 0 / 0.42) !important;
 		backdrop-filter: blur(4px) !important;
@@ -591,12 +556,6 @@
 		transition: transform 0.2s ease;
 		transform-origin: 50% 42%;
 	}
-
-	/*
-	 * Switch — restyle the radix primitive to the mockup's emerald glowing
-	 * capsule (38×22px, success-tinted track + glowing thumb on). Keeps radix
-	 * a11y; overrides shadcn's monochrome default sizing/look.
-	 */
 	[data-slot="switch"] {
 		height: 22px !important;
 		width: 38px !important;
@@ -626,15 +585,6 @@
 		background: oklch(0.95 0.06 150) !important;
 		box-shadow: 0 0 6px color-mix(in oklch, var(--success) 60%, transparent), 0 1px 2px oklch(0 0 0 / 0.3) !important;
 	}
-
-	/*
-	 * `.sig-surface` — the card primitive shared by KPI cards, daily brief,
-	 * panels, activity card, memory feed items, source cards. Renders the
-	 * mask-composite "key-light" gradient border (::before) and the
-	 * cursor-tracking radial glow (::after). The glow follows --mx/--my, which
-	 * the useCursorGlow hook updates on mousemove; absent those vars it stays
-	 * off-screen and invisible.
-	 */
 	.sig-surface {
 		position: relative;
 		border: 1px solid var(--sig-surface-border);
@@ -680,16 +630,12 @@
 			transition: none;
 		}
 	}
-
-	/* Per-element keylight variant for source cards (shorter 50% fade). */
 	.sig-keylight-src::before {
 		background: linear-gradient(180deg, oklch(1 0 0 / 0.18), transparent 50%) !important;
 	}
 	:root:not(.dark) .sig-keylight-src::before {
 		background: linear-gradient(180deg, oklch(0 0 0 / 0.14), transparent 50%) !important;
 	}
-
-	/* Source card hover lift (heavier than the generic card shadow). */
 	.sig-src-card:hover {
 		border-color: oklch(1 0 0 / 0.14) !important;
 		box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.04), 0 4px 16px oklch(0 0 0 / 0.4) !important;
@@ -697,8 +643,6 @@
 	:root:not(.dark) .sig-src-card:hover {
 		border-color: oklch(0 0 0 / 0.14) !important;
 	}
-
-	/* Settings field group — contained surface (`.mcard`). */
 	.sig-mcard {
 		background: color-mix(in oklch, var(--foreground) 3%, transparent);
 		border: 1px solid oklch(1 0 0 / 0.06);
@@ -710,8 +654,6 @@
 		background: color-mix(in oklch, var(--foreground) 2%, transparent);
 		border-color: oklch(0 0 0 / 0.06);
 	}
-
-	/* Esc hint pill (settings modal header). */
 	.sig-esc-pill {
 		display: inline-flex;
 		align-items: center;
@@ -726,13 +668,6 @@
 	:root:not(.dark) .sig-esc-pill {
 		border-color: oklch(0 0 0 / 0.1);
 	}
-
-	/*
-	 * Memory feed item — translucent container (not a solid card). Distinct from
-	 * `.sig-surface`: bg is foreground/3.5%, radius 8px, the key-light fades to
-	 * transparent at 40%. Its key-light is self-contained so it does not inherit
-	 * the generic card surface treatment.
-	 */
 	.sig-mfeed {
 		position: relative;
 		background: color-mix(in oklch, var(--foreground) 3.5%, transparent);
@@ -770,9 +705,6 @@
 		border-color: oklch(0 0 0 / 0.14);
 	}
 }
-
-/* Provider-card connected dot — ambient emerald glow pulse (mockup `dot-pulse`).
-   Distinct from other ambient pulses: glow-size grows rather than an expanding ring. */
 @keyframes dot-pulse {
 	0%,
 	100% {
@@ -792,17 +724,9 @@
 		}
 	}
 }
-
-/* ════════════════════════════════════════════════════════════════
-   Graph view — memory graph explorer (port of the locked mockup's
-   graph-view overlay layer; the 3D scene itself lives in
-   src/lib/graph-scene.ts). Values are 1:1 with the mockup.
-   ════════════════════════════════════════════════════════════════ */
 .graph-view-root { position: relative; display: flex; flex: 1; min-height: 0; overflow: hidden; }
 .graph-stage { position: absolute; inset: 0; background-image: radial-gradient(oklch(1 0 0 / 0.03) 1px, transparent 1px); background-size: 28px 28px; }
 :root:not(.dark) .graph-stage { background-image: radial-gradient(oklch(0 0 0 / 0.03) 1px, transparent 1px); }
-
-/* Labels carry the ontology role, not just the node's stored name. */
 .graph-node-label { display: flex; flex-direction: column; gap: 1px; max-width: 190px; padding: 3px 6px 4px; border: 1px solid color-mix(in oklch, var(--node-color) 45%, transparent); border-left: 2px solid var(--node-color); border-radius: 4px; background: color-mix(in oklch, var(--background) 88%, transparent); box-shadow: 0 3px 10px oklch(0 0 0 / 0.34), 0 0 10px color-mix(in oklch, var(--node-color) 10%, transparent); color: var(--foreground); white-space: normal; opacity: 0; transition: opacity .25s ease; pointer-events: none; }
 .graph-node-label__kind { color: var(--node-color); font-family: var(--font-mono); font-size: 7px; font-weight: 700; letter-spacing: .1em; line-height: 1; text-transform: uppercase; }
 .graph-node-label__name { overflow: hidden; color: var(--foreground); font-family: var(--font-mono); font-size: 10px; font-weight: 600; line-height: 1.2; text-overflow: ellipsis; }
@@ -810,15 +734,11 @@
 .graph-node-label--entity .graph-node-label__meta, .graph-node-label--source .graph-node-label__meta, .graph-node-label--origin .graph-node-label__meta { display: none; }
 .graph-node-label--entity, .graph-node-label--source { min-width: 92px; }
 .graph-node-label--claim, .graph-node-label--constraint, .graph-node-label--assertion, .graph-node-label--origin { min-width: 125px; }
-
-/* floating HUD telemetry overlay (CAD-style viewport anchor) */
 .graph-hud { position: absolute; top: 12px; left: 16px; z-index: 4; display: flex; align-items: center; gap: 10px;
 	font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); pointer-events: none; }
 .graph-hud b { color: var(--foreground); font-weight: 600; }
 .graph-hud__sep { color: oklch(0.4 0 0); }
 :root:not(.dark) .graph-hud__sep { color: oklch(0.6 0 0); }
-
-/* floating legend popover via gear icon */
 .graph-legend-btn { position: absolute; top: 12px; right: 16px; z-index: 4; width: 30px; height: 30px; border-radius: 8px;
 	display: grid; place-items: center; color: var(--muted-foreground); cursor: pointer;
 	background: color-mix(in oklch, var(--background) 60%, transparent); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -834,8 +754,6 @@
 .lg-item { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); }
 .lg-item b { color: var(--foreground); font-weight: 500; }
 .lg-dot { width: 8px; height: 8px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
-
-/* authoritative glass command dock */
 .graph-dock { position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); z-index: 6;
 	display: flex; flex-direction: column; width: 600px; max-width: calc(100% - 48px); padding: 0;
 	background: color-mix(in oklch, var(--background) 78%, transparent); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
@@ -856,8 +774,6 @@
 	box-shadow: 0 0 14px color-mix(in oklch, var(--success) 28%, transparent), inset 0 1px 0 oklch(1 0 0 / 0.1); transition: all .2s; }
 .gd-send:hover { background: color-mix(in oklch, var(--success) 35%, transparent); box-shadow: 0 0 22px color-mix(in oklch, var(--success) 50%, transparent); }
 .gd-send:disabled { opacity: 0.3; cursor: default; box-shadow: none; }
-
-/* floating glass response drawer (right, full-height) */
 .graph-response { position: absolute; top: 16px; right: 16px; bottom: 16px; width: 360px; max-width: calc(45% - 16px); z-index: 5;
 	background: color-mix(in oklch, var(--background) 94%, transparent); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
 	border: 1px solid oklch(1 0 0 / 0.1); border-radius: 16px;
@@ -912,8 +828,6 @@
 	box-shadow: 0 0 12px color-mix(in oklch, var(--success) 22%, transparent); transition: all .2s; }
 .gr-send-pill:hover { background: color-mix(in oklch, var(--success) 28%, transparent); box-shadow: 0 0 18px color-mix(in oklch, var(--success) 42%, transparent); }
 .gr-send-pill:disabled { opacity: 0.3; cursor: default; box-shadow: none; }
-
-/* density slider inside the graph HUD */
 .graph-hud-density { display: inline-flex; align-items: center; gap: 8px; pointer-events: auto; }
 .graph-hud-density input[type="range"] { appearance: none; -webkit-appearance: none; width: 90px; height: 2px; border-radius: 1px;
 	background: oklch(1 0 0 / 0.15); outline: none; cursor: pointer; }
@@ -923,10 +837,6 @@
 .graph-hud-density input[type="range"]::-webkit-slider-thumb:hover { transform: scale(1.2); }
 .graph-hud-density input[type="range"]::-moz-range-thumb { width: 9px; height: 9px; border-radius: 2px; background: var(--foreground); border: 1px solid oklch(0 0 0 / 0.4); }
 .graph-hud-density input[type="range"]:disabled { opacity: 0.35; cursor: default; }
-
-/* ════════════════════════════════════════════════════════════════
-   Connect-provider dialog — floats above the settings modal
-   ════════════════════════════════════════════════════════════════ */
 .cp-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;
 	background: oklch(0 0 0 / 0.5); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
 .cp-panel { width: 420px; max-width: calc(100vw - 48px); border-radius: 12px; overflow: hidden;
@@ -968,13 +878,7 @@
 .cp-device__code { font-family: var(--font-mono); font-size: 18px; font-weight: 600; letter-spacing: 0.12em; }
 .cp-eye { display: grid; place-items: center; width: 22px; color: var(--muted-foreground); background: none; border: none; cursor: pointer; flex-shrink: 0; }
 .cp-eye:hover { color: var(--foreground); }
-
-/* settings nav icons */
 .mnav-icon { flex-shrink: 0; }
-
-/* ════════════════════════════════════════════════════════════════
-   Settings controls — .ctrl family (mockup settings ctrl/ctrl__value)
-   ════════════════════════════════════════════════════════════════ */
 .ctrl { display: inline-flex; align-items: center; justify-content: space-between; gap: 8px;
 	height: 30px; padding: 0 10px; border-radius: var(--radius); cursor: default;
 	background: color-mix(in oklch, var(--foreground) 5%, transparent); border: 1px solid oklch(1 0 0 / 0.16);
@@ -990,8 +894,6 @@
 .ctrl--field input { flex: 1; min-width: 0; background: none; border: none; outline: none;
 	font-family: var(--font-mono); font-size: 11px; color: var(--foreground); }
 .ctrl--field input::placeholder { color: var(--muted-foreground); }
-
-/* ── Connect-source dialog (.cs-*) — mockup .src-modal family ── */
 .cs-backdrop { position: fixed; inset: 0; z-index: 120; display: grid; place-items: center;
 	background: oklch(0 0 0 / 0.5); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
 .cs-panel { position: static; margin: 0; padding: 0; width: 480px; max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); display: flex; flex-direction: column; overflow: hidden; border-radius: 16px;
@@ -1081,12 +983,9 @@
 	.cs-options { padding: 16px; }
 	.cs-foot { padding-inline: 16px; }
 }
-
-/* ── Secrets vault (mockup .sec-* family) ───────────────────────────────── */
 @keyframes sec-shake { 0%, 100% { transform: translateX(0); } 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
 .sec-shake { animation: sec-shake .4s; }
 @keyframes sec-vault-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 .sec-vault-enter { animation: sec-vault-in .35s ease; }
-/* grid bottom fade while scrolling (mockup .sec-grid mask) */
 .sec-grid-mask { -webkit-mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 20px), transparent 100%);
 	mask-image: linear-gradient(180deg, #000 0, #000 calc(100% - 20px), transparent 100%); }

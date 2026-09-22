@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Add FTS5 full-text search index for entities.
- *
- * Replaces LIKE %token% matching with proper token-boundary search
- * and BM25 ranking for entity resolution (DP-6). Content-sync
- * triggers keep the FTS index in lockstep with the entities table.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(

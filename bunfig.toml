@@ -1,5 +1,1 @@
 [test]
-
-# Test discovery now runs through workspace package scripts instead of one
-# shared source root. Avoid adding a root here or package-local `bun test`
-# commands will resolve against the wrong subtree after the layout split.

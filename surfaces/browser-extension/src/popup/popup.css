@@ -1,5 +1,3 @@
-/* Signet Extension — Popup Styles */
-
 @font-face {
 	font-family: "Chakra Petch";
 	src: url("https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&display=swap");
@@ -9,8 +7,6 @@
 	font-family: "IBM Plex Mono";
 	src: url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap");
 }
-
-/* === Dark theme (default) === */
 :root {
 	--sig-bg: #08080a;
 	--sig-surface: #0e0e12;
@@ -41,8 +37,6 @@
 	--ease: cubic-bezier(0.16, 1, 0.3, 1);
 	--dur: 0.2s;
 }
-
-/* === Light theme === */
 [data-theme="light"] {
 	--sig-bg: #e4dfd8;
 	--sig-surface: #dbd5cd;
@@ -57,8 +51,6 @@
 	--sig-danger: #8a4a48;
 	--sig-success: #4a7a5e;
 }
-
-/* === Base === */
 * {
 	margin: 0;
 	padding: 0;
@@ -78,8 +70,6 @@ body {
 	line-height: 1.55;
 	-webkit-font-smoothing: antialiased;
 }
-
-/* Scrollbar */
 ::-webkit-scrollbar {
 	width: 3px;
 }
@@ -92,16 +82,12 @@ body {
 ::-webkit-scrollbar-thumb:hover {
 	background: var(--sig-text-muted);
 }
-
-/* === Layout === */
 .popup {
 	display: flex;
 	flex-direction: column;
 	height: 100%;
 	max-height: 520px;
 }
-
-/* === Header === */
 .header {
 	display: flex;
 	align-items: center;
@@ -146,8 +132,6 @@ body {
 	font-size: var(--font-size-xs);
 	color: var(--sig-text-muted);
 }
-
-/* === Stats Bar === */
 .stats-bar {
 	display: flex;
 	gap: var(--space-md);
@@ -174,8 +158,6 @@ body {
 	text-transform: uppercase;
 	letter-spacing: 0.06em;
 }
-
-/* === Search === */
 .search-section {
 	padding: var(--space-sm) var(--space-md);
 	border-bottom: 1px solid var(--sig-border);
@@ -200,8 +182,6 @@ body {
 .search-input:focus {
 	border-color: var(--sig-accent);
 }
-
-/* === Memory List === */
 .memory-list {
 	flex: 1;
 	overflow-y: auto;
@@ -250,8 +230,6 @@ body {
 .memory-importance {
 	color: var(--sig-accent);
 }
-
-/* === Empty / Loading / Error states === */
 .state-message {
 	display: flex;
 	flex-direction: column;
@@ -290,8 +268,6 @@ body {
 		opacity: 0.4;
 	}
 }
-
-/* === Footer === */
 .footer {
 	display: flex;
 	align-items: center;

@@ -36,8 +36,6 @@ export async function stopHarnessInstall(): Promise<void> {
 	cancelInstall?.();
 	await installationClosed;
 }
-
-/** One bounded adapter install at a time; completion waits for process cleanup. */
 export async function installHarness(
 	id: string,
 	signal: AbortSignal,
@@ -163,9 +161,7 @@ export function registerHarnessInstallRoutes(app: Hono): void {
 				let body: unknown = null;
 				try {
 					body = await c.req.json();
-				} catch {
-					// Missing or malformed confirmation is intentionally treated as no confirmation.
-				}
+				} catch {}
 				if (typeof body !== "object" || body === null || Array.isArray(body) || Reflect.get(body, "confirm") !== true) {
 					return c.json(
 						{

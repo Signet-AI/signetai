@@ -10,7 +10,6 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 function corsHeaders(origin: string): Record<string, string> {
 	if (!origin) return {};
 	if (ALLOWED_ORIGINS.includes(origin)) return { "Access-Control-Allow-Origin": origin };
-	// Allow localhost and Tailscale origins for local dev
 	if (origin.startsWith("http://localhost:") || origin.startsWith("http://100.")) {
 		return { "Access-Control-Allow-Origin": origin };
 	}
@@ -23,8 +22,6 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 		...corsHeaders(origin),
 		"Content-Type": "application/json",
 	};
-
-	// Rate limit by IP — 10 submissions per 60 seconds
 	if (context.env.RATE_LIMITER) {
 		const ip = context.request.headers.get("CF-Connecting-IP") ?? "unknown";
 		const { success } = await context.env.RATE_LIMITER.limit({ key: ip });
@@ -72,8 +69,6 @@ export const onRequestPost: PagesFunction<Env> = async (context) => {
 				headers,
 			});
 		}
-
-		// Create/update contact in GoHighLevel (v2 API)
 		if (!context.env.GHL_API_KEY || !context.env.GHL_LOCATION_ID) {
 			console.error("Missing GHL_API_KEY or GHL_LOCATION_ID");
 			return new Response(JSON.stringify({ error: "Server misconfigured", detail: "Missing GHL credentials" }), {

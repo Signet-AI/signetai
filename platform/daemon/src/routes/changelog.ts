@@ -1,11 +1,3 @@
-/**
- * Changelog and roadmap routes.
- *
- * Fetches project markdown docs from GitHub, renders them to HTML
- * server-side (no client-side markdown library needed), and caches for 5 min.
- * Falls back to local files when GitHub is unreachable.
- */
-
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
@@ -16,8 +8,6 @@ const GITHUB_RAW_BASE = "https://raw.githubusercontent.com/Signet-AI/signetai/ma
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 8_000;
 const CHANGELOG_MAX_RELEASES = 30;
-
-// Resolve monorepo root relative to this file (dev only; absent in npm installs)
 const REPO_ROOT = fileURLToPath(new URL("../../../../", import.meta.url));
 
 interface CacheEntry {
@@ -29,8 +19,6 @@ interface CacheEntry {
 type DocFilename = "CHANGELOG.md" | "ROADMAP.md" | "README.md";
 
 const cache = new Map<string, CacheEntry>();
-
-/** Trim changelog to N most recent release sections. */
 function truncateChangelog(content: string, max = CHANGELOG_MAX_RELEASES): string {
 	const sections = content.split(/(?=\n## \[)/);
 	const header = sections[0] ?? "";
@@ -68,8 +56,6 @@ function isShieldBadge(line: string): boolean {
 		/^\[!\[[^\]]*]\(https:\/\/img\.shields\.io\/[^)\s]+\)]\([^)]+\)$/.test(line)
 	);
 }
-
-/** Minimal markdown → HTML for headings, lists, bold, code, hr. */
 function renderMarkdown(md: string): string {
 	const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
@@ -87,8 +73,6 @@ function renderMarkdown(md: string): string {
 	for (let i = 0; i < lines.length; i++) {
 		const raw = lines[i];
 		const next = lines[i + 1] ?? "";
-
-		// Setext headings (line followed by === or ---)
 		if (/^=+$/.test(next.trim()) && raw.trim()) {
 			flushList();
 			out.push(`<h1>${esc(raw.trim())}</h1>`);
@@ -101,8 +85,6 @@ function renderMarkdown(md: string): string {
 			i++;
 			continue;
 		}
-
-		// ATX headings
 		const h3 = raw.match(/^### (.+)/);
 		if (h3) {
 			flushList();
@@ -121,15 +103,11 @@ function renderMarkdown(md: string): string {
 			out.push(`<h1>${esc(h1[1])}</h1>`);
 			continue;
 		}
-
-		// horizontal rule
 		if (/^---+$/.test(raw.trim())) {
 			flushList();
 			out.push("<hr>");
 			continue;
 		}
-
-		// list item
 		const li = raw.match(/^- (.+)/);
 		if (li) {
 			if (!inUl) {
@@ -139,22 +117,16 @@ function renderMarkdown(md: string): string {
 			out.push(`<li>${inlineFormat(esc(li[1]))}</li>`);
 			continue;
 		}
-
-		// blank line
 		if (raw.trim() === "") {
 			flushList();
 			continue;
 		}
-
-		// paragraph
 		flushList();
 		out.push(`<p>${inlineFormat(esc(raw))}</p>`);
 	}
 	flushList();
 	return out.join("\n");
 }
-
-/** Bold, italic, inline code, links. */
 function inlineFormat(s: string): string {
 	return s
 		.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
@@ -170,8 +142,6 @@ async function fetchAndRender(filename: DocFilename): Promise<CacheEntry | null>
 
 	let raw: string | null = null;
 	let source: "github" | "local" = "github";
-
-	// Try GitHub first
 	try {
 		const res = await fetch(`${GITHUB_RAW_BASE}/${filename}`, {
 			headers: { "User-Agent": "signet-daemon", Accept: "text/plain" },
@@ -185,8 +155,6 @@ async function fetchAndRender(filename: DocFilename): Promise<CacheEntry | null>
 	} catch (err) {
 		logger.warn("changelog", `GitHub fetch failed for ${filename}`, err as Error);
 	}
-
-	// Fall back to local file
 	if (!raw) {
 		const localPath = join(REPO_ROOT, filename);
 		if (existsSync(localPath)) {

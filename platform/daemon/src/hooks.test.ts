@@ -1,10 +1,3 @@
-/**
- * Tests for Signet Hook System
- *
- * Uses dynamic import so SIGNET_PATH is set before hooks.ts evaluates
- * its module-level constants.
- */
-
 import { Database } from "bun:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, test } from "bun:test";
 import { createHash } from "node:crypto";
@@ -76,10 +69,6 @@ const {
 } = lineage;
 const { writeTranscriptAudit } = transcriptAudit;
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 function ensureDir(path: string): void {
 	mkdirSync(path, { recursive: true });
 }
@@ -88,9 +77,6 @@ async function flushSessionEndDeferredWork(): Promise<void> {
 	await new Promise<void>((resolve) => setImmediate(resolve));
 	await hooks.flushDeferredSessionEndWorkForTests();
 }
-
-// Collector config for telemetry regression tests (#1212): empty posthogHost
-// means nothing is ever sent, and the buffer is queried directly.
 const TEST_TELEMETRY_CONFIG = {
 	posthogHost: "",
 	posthogApiKey: "",
@@ -99,8 +85,6 @@ const TEST_TELEMETRY_CONFIG = {
 	retentionDays: 90,
 	memorySearchQaEnabled: false,
 } as const;
-
-/** Ensure the telemetry tables exist on the test DB (migrations 014/109). */
 function ensureTelemetryTables(): void {
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare("CREATE TABLE IF NOT EXISTS telemetry_install (id TEXT PRIMARY KEY, created_at TEXT NOT NULL)").run();
@@ -116,8 +100,6 @@ function ensureTelemetryTables(): void {
 		).run();
 	});
 }
-
-/** Create an isolated test DB with the full schema */
 function createMemoryDb(
 	memories: Array<{
 		content: string;
@@ -485,13 +467,9 @@ function createMemoryDb(
 	}
 
 	db.close();
-
-	// Re-init the singleton accessor so hooks can find the DB
 	closeDbAccessor();
 	initDbAccessor(dbPath);
 }
-
-/** Return a writable DB handle for isDuplicate testing */
 function openTestDb(): Database {
 	const dbPath = join(TEST_DIR, "memory", "memories.db");
 	return new Database(dbPath);
@@ -562,10 +540,6 @@ function ledgerSection(content: string): string {
 	return content.slice(start, next);
 }
 
-// ============================================================================
-// Setup / Teardown
-// ============================================================================
-
 beforeEach(() => {
 	resetProjectionPurgeState();
 	if (existsSync(TEST_DIR)) {
@@ -597,10 +571,6 @@ describe("db accessor pragmas", () => {
 	});
 });
 
-// ============================================================================
-// effectiveScore
-// ============================================================================
-
 describe("effectiveScore", () => {
 	test.serial("pinned items always score 1.0", async () => {
 		expect(effectiveScore(0.1, "2020-01-01", true)).toBe(1.0);
@@ -609,14 +579,12 @@ describe("effectiveScore", () => {
 
 	test.serial("today's memory scores approximately its importance", async () => {
 		const score = effectiveScore(0.8, new Date().toISOString(), false);
-		// With 0 days age: importance * 0.95^0 = importance
 		expect(score).toBeCloseTo(0.8, 1);
 	});
 
 	test.serial("30-day-old memory decays", async () => {
 		const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 		const score = effectiveScore(1.0, thirtyDaysAgo, false);
-		// 1.0 * 0.95^30 ≈ 0.214
 		expect(score).toBeGreaterThan(0.1);
 		expect(score).toBeLessThan(0.4);
 	});
@@ -627,19 +595,11 @@ describe("effectiveScore", () => {
 	});
 });
 
-// ============================================================================
-// selectWithBudget
-// ============================================================================
-
 describe("selectWithBudget", () => {
 	test.serial("fits rows within budget", async () => {
-		const rows = [
-			{ content: "aaaa" }, // 4 chars
-			{ content: "bbbb" }, // 4 chars
-			{ content: "cccc" }, // 4 chars
-		];
+		const rows = [{ content: "aaaa" }, { content: "bbbb" }, { content: "cccc" }];
 		const result = selectWithBudget(rows, 10);
-		expect(result.length).toBe(2); // 4+4=8 fits, 4+4+4=12 doesn't
+		expect(result.length).toBe(2);
 	});
 
 	test.serial("0 budget returns empty", async () => {
@@ -656,10 +616,6 @@ describe("selectWithBudget", () => {
 		expect(selectWithBudget([], 1000)).toEqual([]);
 	});
 });
-
-// ============================================================================
-// isDuplicate
-// ============================================================================
 
 describe("isDuplicate", () => {
 	test.serial("detects high overlap as duplicate", async () => {
@@ -700,17 +656,12 @@ describe("isDuplicate", () => {
 		createMemoryDb([{ content: "is an a to or" }]);
 
 		const db = openTestDb();
-		// All words < 3 chars, should return false (no words to match)
 		const result = isDuplicate(db, "is an a to or", "default");
 		db.close();
 
 		expect(result).toBe(false);
 	});
 });
-
-// ============================================================================
-// inferType
-// ============================================================================
 
 describe("inferType", () => {
 	test.serial("detects preferences", async () => {
@@ -742,10 +693,6 @@ describe("inferType", () => {
 		expect(inferType("The sky is blue")).toBe("fact");
 	});
 });
-
-// ============================================================================
-// handleSessionStart
-// ============================================================================
 
 describe("handleSessionStart", () => {
 	test.serial("does not inject a pinned superseded memory", async () => {
@@ -855,13 +802,6 @@ describe("handleSessionStart", () => {
 		resetTokenizerStats();
 
 		const result = await handleSessionStart({ harness: "claude-code" });
-
-		// Session-start used to run one full BPE encode per recall candidate (up
-		// to ~50) plus re-encodes of the reserved sections and the final inject —
-		// 55+ synchronous encodes blocking the daemon's event loop for seconds.
-		// Budget decisions now use the cheap char estimate; only the exact
-		// truncation path may encode, so the count must stay small and must not
-		// scale with the recall pool.
 		expect(tokenizerStats.encodeCalls).toBeLessThanOrEqual(3);
 		expect(result.inject.length).toBeGreaterThan(0);
 	});
@@ -999,12 +939,6 @@ hooks:
 		expect(rows).toHaveLength(2);
 		expect(rows.filter((row) => row.was_injected === 1).map((row) => row.memory_id)).toEqual([memory?.id]);
 	});
-
-	// prompt for context, but the agent never recalled them. Bumping
-	// access_count/last_accessed here permanently inflates rehearsal boost for
-	// the injection set and resets last_accessed so the half-life never decays
-	// it. Those columns must only advance on genuine recall (CLI/MCP/harness
-	// prompt-submit recall via hybridRecall).
 	test.serial("session-start injection does not advance access_count/last_accessed", async () => {
 		createMemoryDb([{ content: "Injected startup memory", importance: 0.9 }]);
 		const injectedId = getDbAccessor().withReadDb(
@@ -1295,7 +1229,6 @@ identity:
 	});
 
 	test.serial("filters out low-score memories", async () => {
-		// Very old, low importance memory should be filtered by effectiveScore > 0.2
 		const veryOld = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();
 		createMemoryDb([
 			{
@@ -1306,8 +1239,6 @@ identity:
 		]);
 
 		const result = await handleSessionStart({ harness: "test" });
-
-		// 0.1 * 0.95^365 ≈ extremely small, should be filtered out
 		expect(result.memories.length).toBe(0);
 	});
 
@@ -1346,8 +1277,6 @@ identity:
 			harness: "test",
 			project: "/home/user/myproject",
 		});
-
-		// Project-matching memory should appear first despite lower importance
 		if (result.memories.length >= 2) {
 			expect(result.memories[0].content).toBe("Project-specific memory");
 		}
@@ -1474,10 +1403,6 @@ memory:
 		expect(result.memories.some((memory) => memory.content === "Hidden private note")).toBe(false);
 	});
 });
-
-// ============================================================================
-// handlePreCompaction
-// ============================================================================
 
 describe("handlePreCompaction", () => {
 	test.serial("returns default guidelines when no config", async () => {
@@ -1828,10 +1753,6 @@ describe("direct transcript regressions", () => {
 	});
 });
 
-// ============================================================================
-// handleUserPromptSubmit
-// ============================================================================
-
 describe("handleUserPromptSubmit", () => {
 	test.serial("returns before a real slow provider settles and records the bounded outcome", async () => {
 		createMemoryDb();
@@ -1952,10 +1873,6 @@ describe("handleUserPromptSubmit", () => {
 	});
 });
 
-// ============================================================================
-// handleSessionEnd
-// ============================================================================
-
 describe("handleSessionEnd", () => {
 	test.serial("skips on reason=clear", async () => {
 		const result = await handleSessionEnd({
@@ -1967,7 +1884,6 @@ describe("handleSessionEnd", () => {
 	});
 
 	test.serial("skips on short transcript", async () => {
-		// Write a short transcript
 		const transcriptPath = join(TEST_DIR, "transcript.txt");
 		writeFileSync(transcriptPath, "Hello world");
 
@@ -1999,20 +1915,14 @@ describe("handleSessionEnd", () => {
 	test(
 		"handles missing ollama gracefully",
 		async () => {
-			// Write a long enough transcript
 			const transcriptPath = join(TEST_DIR, "transcript.txt");
 			writeFileSync(transcriptPath, "x".repeat(1000));
 
 			createMemoryDb([]);
-
-			// Ollama is installed but qwen3:4b may not be pulled,
-			// so the 45s spawn timeout may fire before returning.
 			const result = await handleSessionEnd({
 				harness: "test",
 				transcriptPath,
 			});
-
-			// Should return 0 without crashing
 			expect(result.memoriesSaved).toBe(0);
 		},
 		{ timeout: 60000 },
@@ -2523,12 +2433,6 @@ memory:
 		}
 	});
 
-	// ------------------------------------------------------------------
-	// #1212/#1231 — session.end telemetry must not fire per session-end hook
-	// call, but explicit lifecycle reasons are real boundaries. The per-turn
-	// event is session.turn; session.end is once per lifetime.
-	// ------------------------------------------------------------------
-
 	test.serial("non-boundary session-end calls emit session.turn (#1212/#1231)", async () => {
 		createMemoryDb([]);
 		ensureTelemetryTables();
@@ -2591,7 +2495,6 @@ memory:
 		setActiveTelemetry(collector);
 		try {
 			await handleSessionEnd({ harness: "test", sessionKey: "sess-clear-a", reason: "clear" });
-			// Repeated clear for the same lifetime must not inflate the counter.
 			await handleSessionEnd({ harness: "test", sessionKey: "sess-clear-a", reason: "clear" });
 			await collector.flush();
 
@@ -2599,8 +2502,6 @@ memory:
 			expect(ends).toHaveLength(1);
 			expect(ends[0]?.properties.reason).toBe("clear");
 			expect(ends[0]?.properties.harness).toBe("test");
-
-			// A real session start opens a new lifetime — the next clear counts again.
 			await handleSessionStart({ harness: "test", sessionKey: "sess-clear-a" });
 			await collector.flush();
 			const starts = (await collector.query()).filter((e) => e.event === "session.start");
@@ -2616,10 +2517,6 @@ memory:
 		}
 	});
 });
-
-// ============================================================================
-// handleSynthesisRequest
-// ============================================================================
 
 describe("handleSynthesisRequest", () => {
 	test.serial("returns prompt with database-backed temporal sources", async () => {
@@ -2823,10 +2720,6 @@ describe("handleSynthesisRequest", () => {
 	);
 });
 
-// ============================================================================
-// memory-lineage
-// ============================================================================
-
 describe("memory-lineage", () => {
 	test("checksum scope normalizes line endings and trailing whitespace", () => {
 		const bodyA = "alpha  \r\nbeta\t\r\n\r\n";
@@ -2867,9 +2760,6 @@ describe("memory-lineage", () => {
 			createMemoryDb([]);
 			const capturedAt = "2026-04-03T10:00:00.000Z";
 			const sharedKey = "agent:main:main";
-
-			// Create a manifest via the normal path — this simulates a pre-fix
-			// row where session_id was persisted verbatim from the shared key.
 			const manifest = await ensureCanonicalManifest({
 				agentId: "default",
 				sessionId: sharedKey,
@@ -2882,9 +2772,6 @@ describe("memory-lineage", () => {
 			});
 			expect(manifest).toBeDefined();
 			expect(manifest.path).toBeTruthy();
-
-			// Calling again with the same session_id should return the
-			// existing manifest via the session_id lookup.
 			const found = await ensureCanonicalManifest({
 				agentId: "default",
 				sessionId: sharedKey,
@@ -2903,8 +2790,6 @@ describe("memory-lineage", () => {
 		createMemoryDb([]);
 		const capturedAt = "2026-04-03T11:00:00.000Z";
 		const sharedKey = "agent:main:main";
-
-		// Pre-fix row: session_id === session_key
 		const legacy = await ensureCanonicalManifest({
 			agentId: "default",
 			sessionId: sharedKey,
@@ -2915,9 +2800,6 @@ describe("memory-lineage", () => {
 			startedAt: null,
 			endedAt: null,
 		});
-
-		// New-style call with a derived session_id should NOT match
-		// the legacy row and should create a fresh manifest.
 		const fresh = await ensureCanonicalManifest({
 			agentId: "default",
 			sessionId: "session-end:path:/tmp/transcript:abc123",
@@ -3367,10 +3249,6 @@ describe("memory-lineage", () => {
 	});
 });
 
-// ============================================================================
-// writeMemoryMd
-// ============================================================================
-
 describe("handleSessionStart multi-agent identity", () => {
 	let agentsDir = "";
 	let previousSignetPath: string | undefined;
@@ -3606,10 +3484,6 @@ describe("writeMemoryMd", () => {
 	});
 });
 
-// ============================================================================
-// Edge cases and error handling
-// ============================================================================
-
 describe("error handling", () => {
 	test.serial("handles corrupt agent.yaml gracefully", async () => {
 		writeAgentYaml("{{{{invalid yaml content!!!!");
@@ -3638,10 +3512,6 @@ describe("error handling", () => {
 		expect(result.recentContext).toBeUndefined();
 	});
 });
-
-// ============================================================================
-// Schema: FTS and triggers
-// ============================================================================
 
 describe("schema", () => {
 	test.serial("FTS5 table exists and works", async () => {
@@ -3677,10 +3547,6 @@ describe("schema", () => {
 		expect(rows.length).toBe(1);
 	});
 });
-
-// ============================================================================
-// Integration: inject string format
-// ============================================================================
 
 describe("inject string formatting", () => {
 	test.serial("combines identity, memories, and working memory", async () => {
@@ -3718,10 +3584,6 @@ agent:
 	});
 });
 
-// ============================================================================
-// selectWithBudget generic type preservation
-// ============================================================================
-
 describe("selectWithBudget type preservation", () => {
 	test.serial("preserves extra properties on input type", async () => {
 		const rows = [
@@ -3729,16 +3591,11 @@ describe("selectWithBudget type preservation", () => {
 			{ content: "bbbb", id: "2", score: 0.7 },
 		];
 		const result = selectWithBudget(rows, 10);
-		// Should preserve id and score properties
 		expect(result[0].id).toBe("1");
 		expect(result[0].score).toBe(0.9);
 		expect(result[1].id).toBe("2");
 	});
 });
-
-// ============================================================================
-// getAllScoredCandidates
-// ============================================================================
 
 describe("getAllScoredCandidates", () => {
 	test.serial("returns scored memories without budget truncation", async () => {
@@ -3749,10 +3606,7 @@ describe("getAllScoredCandidates", () => {
 		]);
 
 		const candidates = await getAllScoredCandidates(undefined, 30);
-
-		// All three should be returned (no budget applied)
 		expect(candidates.length).toBe(3);
-		// Each should have effScore
 		for (const c of candidates) {
 			expect(c.effScore).toBeGreaterThan(0);
 			expect(c.id).toBeTruthy();
@@ -3772,8 +3626,6 @@ describe("getAllScoredCandidates", () => {
 		]);
 
 		const candidates = await getAllScoredCandidates(undefined, 30);
-
-		// Only the recent one should pass
 		expect(candidates.length).toBe(1);
 		expect(candidates[0].content).toBe("Recent important fact");
 	});
@@ -3800,15 +3652,10 @@ describe("getAllScoredCandidates", () => {
 	});
 
 	test.serial("returns empty for missing database", async () => {
-		// No createMemoryDb call
 		const candidates = await getAllScoredCandidates(undefined, 30);
 		expect(candidates).toEqual([]);
 	});
 });
-
-// ============================================================================
-// Session memory recording integration
-// ============================================================================
 
 describe("session memory recording integration", () => {
 	test.serial("handleSessionStart records candidates to session_memories table", async () => {
@@ -3821,8 +3668,6 @@ describe("session memory recording integration", () => {
 			harness: "test",
 			sessionKey: "integration-session-001",
 		});
-
-		// Read session_memories directly
 		const db = openTestDb();
 		const rows = db
 			.prepare(
@@ -3836,15 +3681,11 @@ describe("session memory recording integration", () => {
 			effective_score: number;
 		}>;
 		db.close();
-
-		// Should have recorded at least some candidates
 		expect(rows.length).toBeGreaterThan(0);
-		// All should have source = 'effective'
 		for (const row of rows) {
 			expect(row.source).toBe("effective");
 			expect(row.effective_score).toBeGreaterThan(0);
 		}
-		// At least one should be injected
 		const injectedCount = rows.filter((r) => r.was_injected === 1).length;
 		expect(injectedCount).toBeGreaterThan(0);
 	});
@@ -3854,7 +3695,6 @@ describe("session memory recording integration", () => {
 
 		await handleSessionStart({
 			harness: "test",
-			// no sessionKey
 		});
 
 		const db = openTestDb();
@@ -3871,8 +3711,6 @@ describe("session memory recording integration", () => {
 				importance: 0.8,
 			},
 		]);
-
-		// First, do a session start to establish context
 		await handleSessionStart({
 			harness: "test",
 			sessionKey: "fts-tracking-session",
@@ -3898,10 +3736,6 @@ describe("session memory recording integration", () => {
 		expect(withHits).toHaveLength(0);
 	});
 });
-
-// ============================================================================
-// handleCheckpointExtract
-// ============================================================================
 
 describe("handleCheckpointExtract", () => {
 	test.serial("returns skipped when no transcript available", async () => {
@@ -3932,27 +3766,18 @@ describe("handleCheckpointExtract", () => {
 	test.serial("truncated inline transcript does not overwrite stored lossless transcript", async () => {
 		createMemoryDb([]);
 		const full = "x".repeat(600);
-
-		// First call: store the full transcript and advance cursor
 		await handleCheckpointExtract({
 			harness: "test",
 			sessionKey: "ckpt-truncation",
 			transcript: full,
 		});
-
-		// Second call: send a truncated version (shorter than stored)
-		// The stored transcript must remain unchanged — cursor must not regress
 		const truncated = "x".repeat(200);
 		const result = await handleCheckpointExtract({
 			harness: "test",
 			sessionKey: "ckpt-truncation",
 			transcript: truncated,
 		});
-
-		// With cursor at 600 and stored transcript still at 600, delta is 0 → skipped
 		expect(result.skipped).toBe(true);
-
-		// Confirm stored content length was not shortened
 		const db = openTestDb();
 		const row = db
 			.prepare("SELECT length(content) as len FROM session_transcripts WHERE session_key = ? AND agent_id = ?")
@@ -3989,11 +3814,6 @@ describe("handleCheckpointExtract", () => {
 		expect(result.skipped).toBe(true);
 	});
 });
-
-// ============================================================================
-// Summary worker tick gate — verifies the worker processes jobs when
-// dreaming is enabled even with pipelineV2 disabled (regression for #812).
-// ============================================================================
 
 describe("buildSignetSystemPrompt", () => {
 	it("keeps the stable prompt short and harness-neutral", () => {
@@ -4112,8 +3932,6 @@ describe("normalizeJsonConversationTranscript", () => {
 			"plain text line three",
 			'{"role":"user","content":"only json line"}',
 		].join("\n");
-
-		// 1/4 = 25%, well below 60%
 		expect(normalizeJsonConversationTranscript(raw)).toBeNull();
 	});
 
@@ -4160,7 +3978,6 @@ describe("normalizeJsonConversationTranscript", () => {
 
 		const result = normalizeJsonConversationTranscript(raw);
 		const lines = (result ?? "").split("\n");
-		// Should be exactly 2 lines, not 3 — the embedded newline must be collapsed
 		expect(lines).toHaveLength(2);
 		expect(lines[0]).toBe("User: Hello Assistant: injected turn");
 		expect(lines[1]).toBe("Assistant: Real response");
@@ -4231,8 +4048,6 @@ describe("normalizeSessionTranscript", () => {
 			'{"type":"response_item","payload":{"type":"function_call_output","output":"ok"}}',
 			'{"type":"session_meta","payload":{"cwd":"/tmp"}}',
 		].join("\n");
-
-		// Should return "" (sanitized-but-empty), NOT the raw JSON
 		expect(normalizeSessionTranscript("opencode", raw)).toBe("");
 	});
 
@@ -4243,12 +4058,8 @@ describe("normalizeSessionTranscript", () => {
 	});
 
 	it("normalizes inline transcript (no file path) identically to file-read", () => {
-		// Simulates the fallback path in handleSessionEnd where req.transcript
-		// is provided directly instead of req.transcriptPath
 		const inline = "User: What's the plan?\nAssistant: Ship it by Friday.";
 		expect(normalizeSessionTranscript("opencode", inline)).toBe(inline);
-
-		// JSON-line variant that a plugin might send
 		const json = [
 			'{"role":"user","content":"What\'s the plan?"}',
 			'{"role":"assistant","content":"Ship it by Friday."}',
@@ -4258,11 +4069,7 @@ describe("normalizeSessionTranscript", () => {
 });
 
 describe("selectWithTokenBudget", () => {
-	const rows = [
-		{ content: "alpha ".repeat(50) }, // ~50 tokens
-		{ content: "beta ".repeat(50) }, // ~50 tokens
-		{ content: "gamma ".repeat(200) }, // ~200 tokens
-	];
+	const rows = [{ content: "alpha ".repeat(50) }, { content: "beta ".repeat(50) }, { content: "gamma ".repeat(200) }];
 
 	it("selects rows up to the token budget", () => {
 		const result = selectWithTokenBudget(rows, 120);
@@ -4293,7 +4100,7 @@ describe("selectWithTokenBudget", () => {
 });
 
 describe("applyTokenBudget", () => {
-	const TEXT = "word ".repeat(500); // ~500 tokens
+	const TEXT = "word ".repeat(500);
 
 	it("returns inject unchanged when it fits within budget", () => {
 		expect(applyTokenBudget("hello world", 1000)).toBe("hello world");
@@ -4302,7 +4109,6 @@ describe("applyTokenBudget", () => {
 	it("truncates and appends marker when inject exceeds budget", async () => {
 		const result = applyTokenBudget(TEXT, 50);
 		expect(result).toContain("[context truncated]");
-		// total tokens must not exceed budget (marker tokens pre-subtracted)
 		const { countTokens } = await import("./pipeline/tokenizer");
 		expect(countTokens(result)).toBeLessThanOrEqual(50);
 	});
@@ -4316,8 +4122,6 @@ describe("applyTokenBudget", () => {
 	});
 
 	it("never exceeds budget when budget is smaller than marker token count", async () => {
-		// Regression: marker is ~5 tokens; budgets in [1, TRUNCATED_MARKER_TOKENS) must
-		// not overflow by appending the full marker after truncation.
 		const { countTokens } = await import("./pipeline/tokenizer");
 		for (const budget of [1, 2, 3, 4]) {
 			const result = applyTokenBudget(TEXT, budget);

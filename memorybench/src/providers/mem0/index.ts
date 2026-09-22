@@ -21,11 +21,6 @@ import type {
 import type { UnifiedSession } from "../../types/unified"
 import { logger } from "../../utils/logger"
 import { MEM0_PROMPTS } from "./prompts"
-
-/**
- * Custom instructions from Mem0's official evaluation.
- * Sets project-level instructions for memory extraction.
- */
 const CUSTOM_INSTRUCTIONS = `Generate personal memories that follow these guidelines:
 
 1. Each memory should be self-contained with complete context, including:

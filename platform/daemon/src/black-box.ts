@@ -239,8 +239,6 @@ function listSessionRecallEvents(
 	project: string | undefined,
 	limit: number,
 ): BlackBoxEvent[] {
-	// session_recall_events intentionally has no project column. In scoped
-	// requests, rely on project-filtered telemetry/artifact provenance instead.
 	if (project) return [];
 	const rows = db
 		.prepare(
@@ -441,7 +439,7 @@ export function buildBlackBoxSession(
 			]
 				.sort(compareEvent)
 				.slice(0, limit),
-		"black-box.ts:434",
+		"black-box.ts:432",
 	);
 	return {
 		sessionKey: input.sessionKey,
@@ -525,5 +523,5 @@ export function listBlackBoxSessions(
 		}
 
 		return [...bySession.values()].sort((a, b) => b.lastAt.localeCompare(a.lastAt)).slice(0, limit);
-	}, "black-box.ts:469");
+	}, "black-box.ts:467");
 }

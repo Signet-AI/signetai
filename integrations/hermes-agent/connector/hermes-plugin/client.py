@@ -210,7 +210,6 @@ class SignetClient:
             "x-signet-agent-id": self._agent_id,
             "x-signet-actor": "hermes-memory-plugin",
         }
-        # Include auth token only for loopback or explicitly trusted origins.
         token = _sanitize(os.environ.get("SIGNET_API_KEY", "")) or _sanitize(os.environ.get("SIGNET_TOKEN", ""))
         if token and _should_send_auth_token(self._base_url):
             h["Authorization"] = f"Bearer {token}"
@@ -313,14 +312,10 @@ class SignetClient:
             logger.debug("Signet DELETE %s failed: %s", path, e)
             return None
 
-    # -- Health ---------------------------------------------------------------
-
     def is_available(self) -> bool:
         """Check if the Signet daemon is reachable. No credentials needed."""
         result = self._get("/health", timeout=2)
         return result is not None
-
-    # -- Hooks ----------------------------------------------------------------
 
     def session_start(
         self,
@@ -471,8 +466,6 @@ class SignetClient:
             },
             timeout=_LONG_TIMEOUT_SECS,
         )
-
-    # -- Memory API -----------------------------------------------------------
 
     def remember(
         self,

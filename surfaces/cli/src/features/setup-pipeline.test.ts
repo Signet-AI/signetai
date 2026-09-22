@@ -264,8 +264,6 @@ describe("buildSetupAggregateRecall", () => {
 			executor: "ollama",
 			models: { default: { model: "qwen3:4b", reasoning: "medium" } },
 		});
-		// No taskClass — the daemon validates taskClasses and 'aggregate_recall' is
-		// not declared; mirror the dashboard writer (target only).
 		expect(ar.workloads.aggregateRecall).toEqual({ target: "aggregation/default" });
 		expect(ar.accounts).toBeUndefined();
 	});
@@ -277,7 +275,6 @@ describe("buildSetupAggregateRecall", () => {
 		});
 		const or = buildSetupAggregateRecall("openrouter", "m");
 		expect(or.targets.aggregation).toMatchObject({ executor: "openrouter", account: "aggregation" });
-		// The account must exist or the daemon hard-blocks the target as 'missing'.
 		expect(or.accounts?.aggregation).toMatchObject({
 			kind: "api",
 			providerFamily: "openrouter",
@@ -320,8 +317,6 @@ describe("applyAggregateRecallRoute", () => {
 	});
 
 	it("emits a default policy over all merged targets when none exist (#1072)", () => {
-		// Regression for #1072: targets/accounts/workloads without a policy
-		// dead-end every generation path in "No routing policy is configured.".
 		const config: Record<string, unknown> = {};
 		applyAggregateRecallRoute(config, buildSetupAggregateRecall("ollama", "qwen3:4b"));
 		const inference = config.inference as {

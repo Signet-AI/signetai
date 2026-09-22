@@ -37,8 +37,6 @@ export async function handleRunsRoutes(
 ): Promise<Response | null> {
   const method = req.method
   const pathname = url.pathname
-
-  // GET /api/runs - List all runs
   if (method === "GET" && pathname === "/api/runs") {
     const runs = checkpointManager.listRuns()
     const runDetails = runs
@@ -46,8 +44,6 @@ export async function handleRunsRoutes(
         const checkpoint = checkpointManager.load(runId)
         if (!checkpoint) return null
         const summary = checkpointManager.getSummary(checkpoint)
-
-        // Calculate accuracy from checkpoint questions
         const questions = Object.values(checkpoint.questions)
         const evaluatedQuestions = questions.filter(
           (q: any) => q.phases?.evaluate?.status === "completed"
@@ -76,8 +72,6 @@ export async function handleRunsRoutes(
 
     return json(runDetails)
   }
-
-  // GET /api/runs/:runId - Get checkpoint
   const runIdMatch = pathname.match(/^\/api\/runs\/([^/]+)$/)
   if (method === "GET" && runIdMatch) {
     const runId = decodeURIComponent(runIdMatch[1])
@@ -92,8 +86,6 @@ export async function handleRunsRoutes(
       summary,
     })
   }
-
-  // GET /api/runs/:runId/report - Get report
   const reportMatch = pathname.match(/^\/api\/runs\/([^/]+)\/report$/)
   if (method === "GET" && reportMatch) {
     const runId = decodeURIComponent(reportMatch[1])
@@ -104,8 +96,6 @@ export async function handleRunsRoutes(
     const report = JSON.parse(readFileSync(reportPath, "utf8"))
     return json(report)
   }
-
-  // GET /api/runs/:runId/questions - List questions
   const questionsMatch = pathname.match(/^\/api\/runs\/([^/]+)\/questions$/)
   if (method === "GET" && questionsMatch) {
     const runId = decodeURIComponent(questionsMatch[1])
@@ -113,16 +103,12 @@ export async function handleRunsRoutes(
     if (!checkpoint) {
       return json({ error: "Run not found" }, 404)
     }
-
-    // Support pagination and filtering
     const page = parseInt(url.searchParams.get("page") || "1")
     const limit = parseInt(url.searchParams.get("limit") || "50")
-    const status = url.searchParams.get("status") // completed, failed, pending
-    const type = url.searchParams.get("type") // question type filter
+    const status = url.searchParams.get("status")
+    const type = url.searchParams.get("type")
 
     let questions = Object.values(checkpoint.questions)
-
-    // Filter by status
     if (status) {
       questions = questions.filter((q) => {
         const evalStatus = q.phases.evaluate.status
@@ -132,8 +118,6 @@ export async function handleRunsRoutes(
         return true
       })
     }
-
-    // Filter by question type
     if (type) {
       questions = questions.filter((q) => q.questionType === type)
     }
@@ -153,8 +137,6 @@ export async function handleRunsRoutes(
       },
     })
   }
-
-  // GET /api/runs/:runId/questions/:questionId - Get question detail
   const questionDetailMatch = pathname.match(/^\/api\/runs\/([^/]+)\/questions\/([^/]+)$/)
   if (method === "GET" && questionDetailMatch) {
     const runId = decodeURIComponent(questionDetailMatch[1])
@@ -167,8 +149,6 @@ export async function handleRunsRoutes(
     if (!question) {
       return json({ error: "Question not found" }, 404)
     }
-
-    // Also load the search results file if it exists
     const resultsPath = join(checkpointManager.getResultsDir(runId), `${questionId}.json`)
     let searchResults = null
     if (existsSync(resultsPath)) {
@@ -180,8 +160,6 @@ export async function handleRunsRoutes(
       searchResultsFile: searchResults,
     })
   }
-
-  // POST /api/runs/start - Start new run
   if (method === "POST" && pathname === "/api/runs/start") {
     try {
       const body = await req.json()
@@ -219,8 +197,6 @@ export async function handleRunsRoutes(
           400
         )
       }
-
-      // Ingest is disabled in advanced mode (when using sourceRunId)
       if (sourceRunId && fromPhase === "ingest") {
         return json(
           {
@@ -234,15 +210,11 @@ export async function handleRunsRoutes(
       if (activeRuns.has(runId)) {
         return json({ error: "Run is already active" }, 409)
       }
-
-      // If sourceRunId is provided, copy checkpoint data from source run
       if (sourceRunId) {
         const sourceCheckpoint = checkpointManager.load(sourceRunId)
         if (!sourceCheckpoint) {
           return json({ error: `Source run not found: ${sourceRunId}` }, 404)
         }
-
-        // Validate provider/benchmark match
         if (sourceCheckpoint.provider !== provider) {
           return json(
             {
@@ -259,13 +231,9 @@ export async function handleRunsRoutes(
             400
           )
         }
-
-        // Check if new runId already exists
         if (checkpointManager.exists(runId)) {
           return json({ error: `Run ${runId} already exists` }, 409)
         }
-
-        // Copy checkpoint with new runId, resetting phases from fromPhase onwards
         checkpointManager.copyCheckpoint(sourceRunId, runId, fromPhase as PhaseId, {
           judge: judgeModel,
           answeringModel: answeringModel || sourceCheckpoint.answeringModel,
@@ -298,8 +266,6 @@ export async function handleRunsRoutes(
       return json({ error: e instanceof Error ? e.message : "Invalid request body" }, 400)
     }
   }
-
-  // POST /api/runs/:runId/stop - Stop running benchmark
   const stopMatch = pathname.match(/^\/api\/runs\/([^/]+)\/stop$/)
   if (method === "POST" && stopMatch) {
     const runId = decodeURIComponent(stopMatch[1])
@@ -309,8 +275,6 @@ export async function handleRunsRoutes(
     requestStop(runId)
     return json({ message: "Stop requested", runId })
   }
-
-  // DELETE /api/runs/:runId - Delete run
   const deleteMatch = pathname.match(/^\/api\/runs\/([^/]+)$/)
   if (method === "DELETE" && deleteMatch) {
     const runId = decodeURIComponent(deleteMatch[1])
@@ -336,8 +300,6 @@ function getRunStatus(checkpoint: any, summary: any): string {
   if (checkpoint.status === "failed") {
     return "failed"
   }
-
-  // Check if any question has a failed phase
   const questions = Object.values(checkpoint.questions || {}) as any[]
   const hasFailed = questions.some((q: any) => {
     const phases = q.phases || {}
@@ -357,10 +319,7 @@ function getRunStatus(checkpoint: any, summary: any): string {
   if (summary.evaluated === summary.total && summary.total > 0) {
     return "completed"
   }
-
-  // If checkpoint was ever started (status changed from initializing), it's partial
   if (checkpoint.status === "running" || checkpoint.status === "initializing") {
-    // Was started but no active process - must have crashed/stopped
     if (summary.ingested > 0 || checkpoint.status === "running") {
       return "partial"
     }
@@ -418,8 +377,6 @@ async function runBenchmark(
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error"
     const wasStoppedByUser = message.includes("stopped by user")
-
-    // Update checkpoint status to persist the failure/stopped state
     const checkpoint = checkpointManager.load(options.runId)
     if (checkpoint) {
       checkpointManager.updateStatus(checkpoint, "failed")

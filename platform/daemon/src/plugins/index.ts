@@ -21,9 +21,7 @@ function resolveGraphiqEnabled(): boolean {
 			) {
 				return (parsed as Record<string, unknown>).enabled as boolean;
 			}
-		} catch {
-			// corrupted state file — fall through to default
-		}
+		} catch {}
 	}
 	return false;
 }

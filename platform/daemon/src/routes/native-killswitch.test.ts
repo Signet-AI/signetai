@@ -66,9 +66,6 @@ describe("checkEmbeddingProvider native kill-switch (#1073)", () => {
 			dimensions: 768,
 			base_url: "http://localhost:8081",
 		};
-
-		// Startup status check pins the fallback provider; a fetch after it
-		// must use the configured llama.cpp server, not the default-port probe.
 		const status = await checkEmbeddingProvider(cfg);
 		const result = await fetchEmbedding("test", cfg);
 

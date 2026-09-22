@@ -36,9 +36,7 @@ export interface PersistedEmbeddingProfile {
 	readonly dimensions: number;
 	readonly baseUrl: string;
 	readonly profile?: string;
-	/** Projection table containing vectors for this durable embedding slot. */
 	readonly projectionSlot?: EmbeddingProjectionSlot;
-	/** Set only while a promoted durable slot still needs its vec projection rebuilt. */
 	readonly projectionRebuild?: boolean;
 }
 
@@ -112,8 +110,6 @@ export function resolveActiveEmbeddingConfigFromState(
 		provider: active.provider,
 		model: active.model,
 		dimensions: active.dimensions,
-		// Endpoint is transport, not vector identity. Use the live configured
-		// endpoint after the compatibility shim accepts an endpoint-only change.
 		base_url: configured.base_url,
 		...(active.profile ? { profile: active.profile } : { profile: undefined }),
 	};
@@ -122,18 +118,9 @@ export function resolveActiveEmbeddingConfigFromState(
 export function resolveActiveEmbeddingConfig(db: ReadDb, configured: EmbeddingConfig): EmbeddingConfig {
 	return resolveActiveEmbeddingConfigFromState(configured, readEmbeddingIndexState(db));
 }
-
-/** True only while `cfg` still describes the generation that owns active recall. */
 export function isActiveEmbeddingConfig(db: ReadDb, cfg: EmbeddingConfig): boolean {
 	const state = readEmbeddingIndexState(db);
-	// Lightweight/test databases that have run schema migrations but not daemon
-	// initialization cannot be mid-promotion. Preserve their legacy behavior;
-	// a running daemon always seeds this singleton before any worker starts.
 	if (!state) return true;
-	// The durable slots have already swapped while the sqlite-vec projection is
-	// rebuilt in bounded transactions. No generation may mutate the new active
-	// slot during that window: callers can finish an in-flight provider request,
-	// but their write must fail closed when it reaches the database.
 	if (state.state === "building" && state.staging?.projectionRebuild === true) return false;
 	return embeddingProfileFingerprintsEqual(embeddingProfileFingerprint(cfg), state.active.fingerprint);
 }
@@ -166,8 +153,6 @@ function updateProgressColumns(
 	const assignments = entries.map(([column]) => `${column} = ?`).join(", ");
 	db.prepare(`UPDATE embedding_index_state SET ${assignments} WHERE id = 1`).run(...entries.map(([, value]) => value));
 }
-
-/** Read bounded migration visibility without exposing raw SQL to HTTP callers. */
 export function readEmbeddingIndexMigrationProgress(
 	db: ReadDb,
 	configured?: EmbeddingConfig,
@@ -179,9 +164,7 @@ export function readEmbeddingIndexMigrationProgress(
 	try {
 		total = (db.prepare("SELECT COUNT(*) AS n FROM embeddings").get() as { n?: number } | undefined)?.n ?? 0;
 		staged = (db.prepare("SELECT COUNT(*) AS n FROM embeddings_staging").get() as { n?: number } | undefined)?.n ?? 0;
-	} catch {
-		// Pre-generation/fixture databases may not carry the payload tables.
-	}
+	} catch {}
 	if (state.state !== "building") staged = total;
 	let phase: EmbeddingMigrationPhase | null = state.state === "building" ? "staging" : null;
 	let lastId: string | null = null;
@@ -247,7 +230,6 @@ function parseProfile(value: string): PersistedEmbeddingProfile | null {
 			typeof parsed.model !== "string" ||
 			typeof parsed.baseUrl !== "string" ||
 			!Number.isInteger(dimensions) ||
-			// `Number.isInteger` does not narrow `number | undefined` for TypeScript.
 			dimensions === undefined ||
 			dimensions <= 0 ||
 			!isEmbeddingProvider(parsed.provider)
@@ -298,13 +280,6 @@ export function readEmbeddingIndexState(db: ReadDb): EmbeddingIndexState | null 
 		.get() as EmbeddingIndexStateRow | undefined;
 	return parseEmbeddingIndexStateRow(row ?? null);
 }
-
-/**
- * Initialise the singleton with the legacy raw-text profile. This deliberately
- * does not infer a new formatter from the model name: existing vectors were
- * created from raw input and must keep their matching query transform until a
- * staged generation has rebuilt them.
- */
 export function ensureEmbeddingIndexState(
 	db: WriteDb,
 	cfg: EmbeddingConfig,
@@ -327,8 +302,6 @@ export function ensureEmbeddingIndexState(
 	).run(JSON.stringify(active), now, now);
 	return { active, staging: null, state: "ready", lastError: null };
 }
-
-/** Start (or resume) the inactive generation without changing active recall. */
 export function beginEmbeddingIndexBuild(
 	db: WriteDb,
 	cfg: EmbeddingConfig,
@@ -345,9 +318,6 @@ export function beginEmbeddingIndexBuild(
 	};
 	const activeMatchesTarget = embeddingProfileFingerprintsEqual(current.active.fingerprint, staging.fingerprint);
 	if (activeMatchesTarget) {
-		// Compatibility shim for v91-v142 rows whose fingerprint included the
-		// endpoint. Rewrite the persisted profile in place; this resolves an old
-		// stuck `building` latch without re-embedding the corpus.
 		const normalizedActive = {
 			...current.active,
 			fingerprint: staging.fingerprint,
@@ -357,15 +327,8 @@ export function beginEmbeddingIndexBuild(
 			JSON.stringify(normalizedActive),
 		);
 		updateProgressColumns(db, { provider_endpoint: cfg.base_url });
-		// The configured profile IS the active generation: nothing to build.
-		// If a build of a different generation is in flight (the live config
-		// flipped back to the active profile mid-build, #1160), abandon it
-		// instead of promoting a generation the config no longer wants.
 		if (current.state === "building") {
 			if (current.staging?.projectionRebuild === true) {
-				// Promotion has already swapped durable slots. Restore the old
-				// active pair before clearing the interrupted build; deleting
-				// embeddings_staging first would destroy active recall.
 				const projectionTable = staging.projectionSlot === "staging" ? "vec_embeddings_staging" : "vec_embeddings";
 				db.exec("ALTER TABLE embeddings RENAME TO embeddings_next");
 				db.exec("ALTER TABLE embeddings_staging RENAME TO embeddings");
@@ -428,9 +391,7 @@ export function beginEmbeddingIndexBuild(
 	let total = 0;
 	try {
 		total = (db.prepare("SELECT COUNT(*) AS n FROM embeddings").get() as { n?: number } | undefined)?.n ?? 0;
-	} catch {
-		// Fixtures and pre-generation databases may not have durable embeddings.
-	}
+	} catch {}
 	db.prepare(
 		`UPDATE embedding_index_state
 		 SET staging_profile_json = ?, state = 'building', last_error = NULL, updated_at = ?

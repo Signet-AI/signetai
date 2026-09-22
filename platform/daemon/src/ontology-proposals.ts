@@ -258,8 +258,6 @@ export interface OntologyOperationBatchError {
 	readonly error: string;
 	readonly status: 400 | 404 | 409;
 }
-
-/** Apply an audited operation batch inside a caller-owned transaction. */
 export function applyOntologyOperationBatchInTx(
 	db: WriteDb,
 	params: Pick<ApplyOntologyOperationBatchParams, "agentId" | "actor" | "operations"> & {
@@ -337,8 +335,6 @@ export class OntologyProposalError extends Error {
 		this.name = "OntologyProposalError";
 	}
 }
-
-/** Write-path caps enforced before add_claim_value/create_aspect. */
 export interface GraphWriteCaps {
 	readonly maxAspectsPerEntity: number;
 	readonly maxAttributesPerAspect: number;
@@ -483,7 +479,7 @@ async function getProposalReadRow(accessor: DbAccessor, id: string, agentId: str
 				| undefined;
 			return row ?? null;
 		},
-		{ siteToken: "ontology-proposals.ts:479" },
+		{ siteToken: "ontology-proposals.ts:475" },
 	);
 }
 
@@ -591,12 +587,6 @@ function proposalEvidenceRefs(proposal: OntologyProposal): OntologyEvidenceRef[]
 function proposalAuditEvidence(proposal: ProposalRow): readonly unknown[] {
 	return parseJsonArray(proposal.evidence);
 }
-
-/**
- * The graph keeps connector/source ownership separately on its rows. Derived
- * memory lineage instead keys on the immutable record named by source_ref, so
- * corrections to that record can invalidate every dependent semantic row.
- */
 function derivedMemorySourcesForProposalInTx(
 	db: WriteDb,
 	proposal: ProposalRow,
@@ -767,8 +757,6 @@ function applyCreateEntity(
 		resolveOrCreateEntity(db, agentId, name, normalizeEntityType(readString(payload, "entity_type")));
 	const proposalEvidence = JSON.stringify(proposalAuditEvidence(proposal));
 	if (existingEntityId !== null) {
-		// Never turn a previously user-owned or differently sourced entity into a
-		// source-owned row merely because new evidence mentions it.
 		db.prepare(
 			`UPDATE entities
 			 SET proposal_id = ?, proposal_evidence = ?, updated_at = datetime('now')
@@ -793,12 +781,6 @@ function applyCreateEntity(
 	}
 	return { entityId, entity: name };
 }
-
-/**
- * Policies are durable constraints on the entity they govern. Keeping them as
- * claims preserves their evidence, versioning, and existing constraint guards
- * rather than introducing a second policy store.
- */
 function applyCreatePolicy(
 	db: WriteDb,
 	agentId: string,
@@ -846,8 +828,6 @@ function applyCreateInterface(
 	if (name === null) throw new OntologyProposalError("payload.name is required", 400);
 	return applyCreateEntity(db, agentId, proposal, { name, entity_type: "interface" });
 }
-
-/** Attach a concrete entity to an interface using the existing typed edge. */
 function applyAttachInterface(
 	db: WriteDb,
 	agentId: string,
@@ -868,12 +848,6 @@ function applyAttachInterface(
 		confidence: readNumber(payload, "confidence") ?? proposal.confidence,
 	});
 }
-
-/**
- * An active claim value is a first-class semantic memory, not merely a graph
- * decoration. The attribute and its retrievable memory intentionally share a
- * durable id and are created in the same ontology apply transaction.
- */
 function materializeAttributeMemoryInTx(
 	db: WriteDb,
 	input: {
@@ -895,8 +869,6 @@ function materializeAttributeMemoryInTx(
 			id: input.attributeId,
 			content: input.content,
 			normalizedContent: input.normalizedContent,
-			// Claim identity, rather than raw text, is the deduplication unit: two
-			// independently maintained claims may legitimately render the same text.
 			contentHash: `semantic-attribute:${input.attributeId}`,
 			who: "dreaming",
 			why: input.proposal.rationale || null,
@@ -1029,9 +1001,6 @@ function applyAddClaimValue(
 	if (value === null) throw new OntologyProposalError("payload.value is required", 400);
 
 	const entityId = resolveOrCreateEntity(db, agentId, entity, normalizeEntityType(readString(payload, "entity_type")));
-	// E1 fix (#1147 review): add_claim_value resolves-or-creates the aspect,
-	// so a new aspect name would bypass the aspect cap. Guard it the same way
-	// create_aspect does.
 	const addEntityRow = db.prepare("SELECT id, name FROM entities WHERE id = ?").get(entityId) as
 		| { id: string; name: string }
 		| undefined;
@@ -1195,10 +1164,6 @@ function applySetClaimValue(
 	}
 
 	const previous = active[0] ?? slot[0] ?? null;
-	// E2 fix (#1147 review): set_claim_value with a brand-new claim_key
-	// inserts a new attribute row, bypassing the attribute cap. Replacing an
-	// existing active slot does not grow the count, so the guard only fires
-	// when this write would add a new row.
 	if (previous === null && writeCaps !== undefined) {
 		const attrCount = db
 			.prepare(
@@ -1472,13 +1437,6 @@ function applyArchiveEntity(
 	);
 	return { entityId: entity.id, archived: true };
 }
-
-/**
- * Reject aspect growth past the cap when the named aspect is not already
- * active. Applies to both create_aspect and add_claim_value resolving a
- * new aspect name: creating a fresh aspect OR reactivating an archived
- * one grows the active set, so both count against the cap.
- */
 function enforceAspectCapForNewAspect(
 	db: WriteDb,
 	entity: { readonly id: string; readonly name: string },
@@ -1877,18 +1835,6 @@ function applyMergeEntities(
 		relationshipsChanged: relationshipChanges,
 	};
 }
-
-/**
- * Fold source aspects into a target aspect on the same entity. Every
- * attribute row (active, superseded, deleted) of each source is repointed to
- * the target so claim version history stays with the merged aspect, then the
- * source aspect is archived. The merged target may exceed the write-path
- * attribute cap: consolidation is the remedy the cap forces, so it is never
- * blocked by it. Claim-key collisions between source and target are preserved
- * as distinct rows — further dedup is the agent's job via
- * supersede_claim_value. Original proposal attribution on moved rows is
- * preserved so claim-evidence drill-down still resolves the original write.
- */
 function applyMergeAspects(
 	db: WriteDb,
 	agentId: string,
@@ -1928,11 +1874,6 @@ function applyMergeAspects(
 		const source = resolveAspectStrict(db, agentId, entity.id, raw);
 		if (seen.has(source.id)) continue;
 		seen.add(source.id);
-
-		// #1147 review (findings 10, 11): move EVERY attribute row (active,
-		// superseded, deleted) so version history stays with the merged
-		// aspect, and preserve each row's original proposal_id/proposal_evidence
-		// so claim-evidence drill-down still resolves the original write.
 		const attributes = db
 			.prepare("SELECT id FROM entity_attributes WHERE aspect_id = ? AND agent_id = ?")
 			.all(source.id, agentId) as Array<{ id: string }>;
@@ -2235,10 +2176,6 @@ function applyOperation(
 	writeCaps?: GraphWriteCaps,
 ): Readonly<Record<string, unknown>> {
 	try {
-		// Revalidate strict source_ref evidence at the common apply seam, not
-		// just inside materializeAttributeMemoryInTx: a pending proposal whose
-		// evidence source disappears after creation must fail closed here,
-		// before any handler mutation or dedupe early-return can apply it.
 		validateProposalEvidenceSourcesInTx(db, proposal.agent_id, proposalAuditEvidence(proposal));
 		const payload = parseJsonRecord(proposal.payload);
 		if (proposal.operation === "create_entity") return applyCreateEntity(db, proposal.agent_id, proposal, payload);
@@ -2343,7 +2280,7 @@ export async function getOntologyProposalEvidence(
 	if (proposal === null) throw new OntologyProposalError("Proposal not found", 404);
 	const items = await accessor.withReadDbAsync(
 		async (db) => proposalEvidenceRefs(proposal).map((ref) => resolveOntologyEvidenceRef(db, agentId, ref)),
-		{ siteToken: "ontology-proposals.ts:2344" },
+		{ siteToken: "ontology-proposals.ts:2281" },
 	);
 	return { proposal, items, count: items.length };
 }
@@ -2381,7 +2318,7 @@ export async function listOntologyProposals(
 				.all(...args) as ProposalRow[];
 			return { items: rows.map(toProposal), limit, offset };
 		},
-		{ siteToken: "ontology-proposals.ts:2361" },
+		{ siteToken: "ontology-proposals.ts:2298" },
 	);
 }
 
@@ -2439,7 +2376,7 @@ export async function listOntologyProposalConflicts(
 			);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2393" },
+		{ siteToken: "ontology-proposals.ts:2330" },
 	);
 }
 
@@ -2529,7 +2466,7 @@ export async function listClaimVersions(
 			const items = rows.map(claimVersionRow);
 			return { items, count: items.length };
 		},
-		{ siteToken: "ontology-proposals.ts:2472" },
+		{ siteToken: "ontology-proposals.ts:2409" },
 	);
 }
 
@@ -2660,9 +2597,7 @@ function wasEntityMergeApplied(
 				})
 			)
 				return true;
-		} catch {
-			// Ignore malformed historical proposal results.
-		}
+		} catch {}
 	}
 	return false;
 }
@@ -2944,12 +2879,6 @@ function duplicateMergeCandidates(
 		.sort((a, b) => b.sources.length - a.sources.length || a.canonicalName.localeCompare(b.canonicalName))
 		.slice(0, limit);
 }
-
-/**
- * Read-only exact-canonical duplicate lookup for a named entity. The same
- * merge candidate planner powers the repair/proposal path, so guard callers
- * see the target, sources, and safety warnings that the daemon would use.
- */
 export async function findDuplicateEntityMerges(
 	accessor: DbAccessor,
 	params: FindDuplicateEntityMergesParams,
@@ -2958,7 +2887,7 @@ export async function findDuplicateEntityMerges(
 	const canonicalName = canonical(params.name);
 	if (canonicalName.length === 0) return [];
 	return await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, 1, canonicalName, true), {
-		siteToken: "ontology-proposals.ts:2960",
+		siteToken: "ontology-proposals.ts:2889",
 	});
 }
 
@@ -2969,7 +2898,7 @@ export async function proposeDuplicateEntityMerges(
 	const agentId = requireText(params.agentId, "agentId");
 	const limit = Math.min(Math.max(params.limit ?? 25, 1), 100);
 	const items = await accessor.withReadDbAsync(async (db) => duplicateMergeCandidates(db, agentId, limit), {
-		siteToken: "ontology-proposals.ts:2971",
+		siteToken: "ontology-proposals.ts:2900",
 	});
 	const dryRun = params.writeProposals !== true;
 	if (dryRun || items.length === 0) {
@@ -3020,7 +2949,7 @@ export async function createEntityMergePlan(
 	const dryRun = params.writeProposal !== true;
 	const plan = await accessor.withReadDbAsync(
 		async (db) => buildEntityMergePlan(db, { ...params, agentId }, "manual_entity_merge"),
-		{ siteToken: "ontology-proposals.ts:3021" },
+		{ siteToken: "ontology-proposals.ts:2950" },
 	);
 	if (dryRun || plan.blocked) return { ...plan, dryRun: true };
 	const proposal = await createOntologyProposal(accessor, {

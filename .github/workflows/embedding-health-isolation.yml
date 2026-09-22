@@ -1,14 +1,5 @@
 name: Embedding Health Isolation
 
-# Permanent CI invariant: the daemon's HTTP server (incl. /health) must stay
-# responsive regardless of native embedding state — init, model download, or
-# inference. The guard that would have caught the event-loop wedge fixed in
-# this change. Runs the worker-handle unit tests (bounded RPC, crash/exit
-# handling, sync status) and the end-to-end isolation test (real daemon over
-# HTTP, model fetch stalled at a local blackhole, /health SLA asserted).
-#
-# Path-scoped pull_request + push-to-main.
-
 on:
   pull_request:
     paths:
@@ -65,16 +56,11 @@ jobs:
 
       - name: Install dependencies
         env:
-          # This daemon-only job does not run Electron's desktop application.
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
       - name: Build workspace dependencies
         run: bun run build
-      # Unit guard: proves the main-thread adapter never blocks while the
-      # embedding worker is stuck (the ★ non-blocking invariant), plus RPC
-      # bounds, crash/exit handling, and sync status. The compiled-binary
-      # guard below builds the full workspace and exercises the shipped asset.
       - name: Worker-handle unit + facade contract tests
         working-directory: platform/daemon
         run: bun test src/embedding-worker-handle.test.ts src/native-embedding.test.ts
@@ -82,11 +68,6 @@ jobs:
       - name: Native embedding /health isolation (source daemon)
         working-directory: platform/daemon
         run: bun test src/native-embedding-eventloop-isolation.test.ts
-
-      # Compiled-binary guard: this is deliberately a separate gate from the
-      # embedding smoke. It constructs DbOwnerClient inside the Bun-compiled
-      # binary and executes a real owner query, so a missing embedded
-      # db-owner-worker asset fails this PR check instead of being skipped.
       - name: Build dashboard assets
         run: bun run build:dashboard
 

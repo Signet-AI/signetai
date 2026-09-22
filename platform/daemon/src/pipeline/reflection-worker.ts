@@ -23,7 +23,6 @@ const DEFAULT_DEPS: ReflectionDeps = {
 
 const POLL_INTERVAL_MS = 300_000;
 const DAILY_BRIEF_MEMORY_BATCH_SIZE = 50;
-/** Hard ceiling per brief, enforced at parse time and requested in the prompt. */
 export const BRIEF_MAX_CHARS = 236;
 
 function getAgentsDir(): string {
@@ -57,12 +56,6 @@ function writeLastReflectionTime(agentId: string, date: string): void {
 		});
 	}
 }
-
-// -- Timezone-aware calendar math -------------------------------------------
-// The daily schedule fires in the user's detected timezone (daemon local time
-// by default). Plain setHours() + toISOString() mixes local and UTC calendar
-// days, so "today" and "6am" must be computed through Intl with the configured
-// IANA timezone, DST included.
 
 type ZonedParts = {
 	readonly year: number;
@@ -107,12 +100,6 @@ function zonedParts(timeZone: string, instant: Date): ZonedParts {
 		second: Number(values.second),
 	};
 }
-
-/**
- * The instant whose wall clock in `timeZone` reads (y, m0, d) at hh:mm.
- * Refines the UTC offset by round-tripping through Intl, which converges in
- * two or three iterations and stays correct across DST boundaries.
- */
 function zonedDateTime(
 	timeZone: string,
 	year: number,
@@ -130,14 +117,10 @@ function zonedDateTime(
 	}
 	return new Date(guess);
 }
-
-/** Calendar date (YYYY-MM-DD) of `now` in `timeZone`. */
 export function todayDateInTimeZone(timeZone: string, now = new Date()): string {
 	const parts = zonedParts(timeZone, now);
 	return `${parts.year}-${String(parts.month).padStart(2, "0")}-${String(parts.day).padStart(2, "0")}`;
 }
-
-/** Today's wall-clock occurrence of `M H * * *` in `timeZone`; null for non-daily schedules. */
 function scheduledTimeFor(schedule: string, timeZone: string, now = new Date()): Date | null {
 	const parts = schedule.trim().split(/\s+/);
 	if (parts.length !== 5 || parts[2] !== "*" || parts[3] !== "*" || parts[4] !== "*") return null;
@@ -147,8 +130,6 @@ function scheduledTimeFor(schedule: string, timeZone: string, now = new Date()):
 		return null;
 	}
 	const local = zonedParts(timeZone, now);
-	// Today's occurrence, even when already past: the delay logic uses the
-	// pastness to decide "due now" (catch up after the slot was missed).
 	return zonedDateTime(timeZone, local.year, local.month - 1, local.day, hour, minute);
 }
 
@@ -163,8 +144,6 @@ export function nextReflectionDelayMs(
 
 	const date = todayDateInTimeZone(timeZone, now);
 	if (lastDate === date) {
-		// Already generated today: sleep until tomorrow's slot, computed in the
-		// same timezone so DST transitions do not drift the wake-up by an hour.
 		const local = zonedParts(timeZone, now);
 		const scheduledParts = zonedParts(timeZone, scheduled);
 		const tomorrow = zonedDateTime(
@@ -395,7 +374,7 @@ export function collectReflectionContext(
 				tags: r.tags ?? "",
 				createdAt: r.created_at,
 			}));
-	}, "pipeline/reflection-worker.ts:368");
+	}, "pipeline/reflection-worker.ts:347");
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const existingReflections = dbAccessor.withReadDb((db: import("../db-accessor").ReadDb) => {
@@ -413,7 +392,7 @@ export function collectReflectionContext(
 					(row.question === null || scanMemoryContent(row.question).contextEligible),
 			)
 			.map((r) => ({ id: r.id, question: r.question, summary: r.summary, createdAt: r.created_at }));
-	}, "pipeline/reflection-worker.ts:401");
+	}, "pipeline/reflection-worker.ts:380");
 
 	return { memories, summaries: [], transcripts: [], graphFacts: [], existingReflections };
 }
@@ -485,7 +464,7 @@ export async function generateDailyBriefInsights(
 				);
 			if (result.changes > 0) ids.push(id);
 		}
-	}, "pipeline/reflection-worker.ts:463");
+	}, "pipeline/reflection-worker.ts:442");
 
 	return ids;
 }

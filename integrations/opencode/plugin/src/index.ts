@@ -1,16 +1,3 @@
-/**
- * Signet plugin for OpenCode.
- *
- * Integrates Signet's persistent memory with OpenCode via the
- * daemon API. Handles session lifecycle hooks and exposes 8 memory
- * tools to the agent.
- *
- * Usage in opencode.json:
- * ```json
- * { "plugin": ["@signet/opencode-plugin"] }
- * ```
- */
-
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
@@ -35,10 +22,6 @@ import {
 	SESSION_START_TIMEOUT_ENV,
 	WRITE_TIMEOUT,
 } from "./types.js";
-
-// ============================================================================
-// Session context carried between hooks
-// ============================================================================
 
 interface SessionStartResult {
 	readonly inject?: string;
@@ -91,10 +74,6 @@ function appendClockContext(text: string, clockContext: string): string {
 	const clockBlock = `${CLOCK_CONTEXT_START}\n${clockContext}\n${CLOCK_CONTEXT_END}`;
 	return [cleanText, clockBlock].filter((part) => part.length > 0).join("\n\n");
 }
-
-// Per-turn inject cache: every LLM transform for a prompt receives the same context.
-// The next chat.message replaces it, and session end removes it. The cap prevents
-// unbounded growth if OpenCode never emits either lifecycle hook for a session.
 const MAX_ACTIVE_TURNS = 64;
 interface ActiveTurn {
 	messageID?: string;
@@ -142,14 +121,6 @@ function readRuntimeEnv(name: string): string | undefined {
 	const value = Reflect.get(runtimeEnv, name);
 	return typeof value === "string" ? value : undefined;
 }
-
-// ============================================================================
-// Static identity fallback when daemon is unreachable
-// ============================================================================
-
-// Thin wrapper: uses readRuntimeEnv for safe env access (OpenCode may run in
-// non-standard runtimes where process.env is not directly accessible), then
-// delegates all file reading and budget logic to @signet/core.
 function staticFallback(): string {
 	const dir = readRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
 	return readStaticIdentity(dir) ?? "";
@@ -170,13 +141,6 @@ function sessionStartTimeout(): number {
 function promptSubmitTimeout(): number {
 	return resolvePromptSubmitTimeoutMs(readRuntimeEnv(PROMPT_SUBMIT_TIMEOUT_ENV));
 }
-
-// ============================================================================
-// Event helpers
-// ============================================================================
-
-// session.idle provides properties.sessionID directly.
-// session.deleted provides properties.info.id (Session object).
 function extractSessionId(props: Record<string, unknown> | undefined): string | undefined {
 	if (!props) return undefined;
 	if (typeof props.id === "string") return props.id;
@@ -204,11 +168,6 @@ function extractParentSessionId(props: Record<string, unknown> | undefined): str
 	const parentId = Reflect.get(info, "parentId");
 	return typeof parentId === "string" ? parentId : undefined;
 }
-
-// ============================================================================
-// Transcript builder — fetches messages via OpenCode SDK and formats
-// a plain-text transcript for the daemon's direct session-transcript path.
-// ============================================================================
 
 async function buildTranscript(oc: PluginInput["client"], sid: string): Promise<string> {
 	const res = await oc.session.messages({
@@ -238,10 +197,6 @@ function readPartText(part: unknown): string | null {
 	const text = Reflect.get(part, "text");
 	return typeof text === "string" ? text : null;
 }
-
-// ============================================================================
-// Plugin
-// ============================================================================
 
 export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 	const enabled = readRuntimeEnv("SIGNET_ENABLED") !== "false" && readRuntimeEnv("SIGNET_NO_HOOKS") !== "1";
@@ -276,7 +231,6 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 	} else if (start.reason === "timeout") {
 		sessionContext = sessionStartFallback("timeout");
 	} else {
-		// offline, http error, invalid-json — all fall back to static identity
 		sessionContext = staticFallback();
 	}
 
@@ -337,16 +291,10 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			if (activeTurns.get(sessionID) === turn) {
 				turn.notificationInject = readContextString(result?.inject);
 			}
-		} catch {
-			// Peer notifications are best-effort and never block OpenCode.
-		}
+		} catch {}
 	}
 
 	return {
-		// ------------------------------------------------------------------
-		// Record skill usage — OpenCode runs skills via the `skill` tool,
-		// whose args carry { name }. Recorded as a source='agent' invocation.
-		// ------------------------------------------------------------------
 		"tool.execute.before": async (input): Promise<void> => {
 			await refreshNotifications(input.sessionID, "tool.execute.before");
 		},
@@ -355,10 +303,6 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 			if (input.tool !== "skill") return;
 			const skillName = typeof input.args?.name === "string" ? input.args.name : "";
 			if (!skillName) return;
-			// opencode's execute.after carries no structured success flag — its output
-			// is { title, output, metadata } and the ToolStateError status lives on the
-			// message part, not here. Best-effort: treat a metadata.error as failure,
-			// else assume success. ponytail: tighten if opencode exposes a state flag.
 			const meta = output?.metadata as Record<string, unknown> | undefined;
 			const success = !(meta && typeof meta === "object" && "error" in meta);
 			void client
@@ -377,12 +321,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				.catch(() => {});
 		},
 
-		// ------------------------------------------------------------------
-		// Per-prompt memory recall — extract user text and call daemon
-		// ------------------------------------------------------------------
-
 		"chat.message": async (input, output): Promise<void> => {
-			// Every message starts a new turn, including prompts without text parts.
 			activeTurns.delete(input.sessionID);
 
 			const userText = output.parts
@@ -398,10 +337,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 					const startContext = await ensureSessionStarted(input.sessionID);
 					if (startContext) appendTurnContext(input.sessionID, turn, startContext);
 					sessionStartDynamicContexts.delete(input.sessionID);
-				} catch {
-					// Session-start context is optional; still run prompt-submit so
-					// recall and transcript capture stay fail-open independently.
-				}
+				} catch {}
 
 				const result = await client.post<UserPromptSubmitResult>(
 					"/api/hooks/user-prompt-submit",
@@ -422,22 +358,14 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 					turn.notificationInject =
 						readContextString(result.notifications?.dynamicContext) || readContextString(result.notifications?.inject);
 				}
-			} catch {
-				// never block the user's message
-			}
+			} catch {}
 		},
-
-		// ------------------------------------------------------------------
-		// Inject per-turn context into every LLM request for the prompt
-		// ------------------------------------------------------------------
 		"experimental.chat.system.transform": async (input, output): Promise<void> => {
 			if (!input.sessionID) return;
 			let startContext = "";
 			try {
 				startContext = await ensureSessionStarted(input.sessionID);
-			} catch {
-				// Signet context is optional; never break OpenCode prompt rendering.
-			}
+			} catch {}
 			await refreshNotifications(input.sessionID, "experimental.chat.system.transform");
 			const systemPrompt = sessionSystemPrompts.get(input.sessionID) ?? sessionContext;
 			const turn = activeTurns.get(input.sessionID);
@@ -451,12 +379,6 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 		"experimental.text.complete": async (_input, output): Promise<void> => {
 			output.text = stripInternalMemoryContext(scrubPromptContext(output.text));
 		},
-
-		// ------------------------------------------------------------------
-		// Inject dynamic context into the provider-bound message copy. OpenCode
-		// persists the message before this transform, so the session transcript
-		// remains the clean user message while replay receives the same bytes.
-		// ------------------------------------------------------------------
 		"experimental.chat.messages.transform": async (_input, output): Promise<void> => {
 			for (let index = output.messages.length - 1; index >= 0; index--) {
 				const message = output.messages[index];
@@ -484,10 +406,6 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				return;
 			}
 		},
-
-		// ------------------------------------------------------------------
-		// Inject memory context before context compaction
-		// ------------------------------------------------------------------
 		"experimental.session.compacting": async (input, output): Promise<void> => {
 			try {
 				const result = await client.post<PreCompactionResult>(
@@ -505,15 +423,8 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 				} else if (sessionContext) {
 					output.context.push(sessionContext);
 				}
-			} catch {
-				// never block compaction
-			}
+			} catch {}
 		},
-
-		// ------------------------------------------------------------------
-		// Event hook — session idle / deleted → session end
-		//             session.compacted → compaction-complete
-		// ------------------------------------------------------------------
 		event: async ({
 			event,
 		}: {
@@ -537,9 +448,7 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 					if (sid) {
 						try {
 							transcript = await buildTranscript(oc, sid);
-						} catch {
-							// non-fatal — send without transcript
-						}
+						} catch {}
 					}
 
 					client
@@ -585,14 +494,8 @@ export const SignetPlugin: Plugin = async ({ directory, client: oc }) => {
 						WRITE_TIMEOUT,
 					);
 				}
-			} catch {
-				// never surface lifecycle errors to the user
-			}
+			} catch {}
 		},
-
-		// ------------------------------------------------------------------
-		// Memory tools
-		// ------------------------------------------------------------------
 		tool: createTools(client),
 	};
 };

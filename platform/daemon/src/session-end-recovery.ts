@@ -9,10 +9,6 @@ export interface ClearSessionStartRequest {
 	readonly project?: string;
 	readonly sessionKey?: string;
 }
-
-// Session keys can be shared across distinct harness runs (for example
-// recurring heartbeat sessions), so artifact lineage needs a more specific
-// fallback identifier when the harness does not supply sessionId.
 function canonicalTranscriptPath(path: string): string {
 	try {
 		return realpathSync(path);
@@ -28,9 +24,6 @@ export function deriveSessionEndFallbackId(
 ): string {
 	const scopedKey = sessionKey?.trim() || "anonymous";
 	const path = transcriptPath?.trim();
-	// The source generation belongs to capture admission, not artifact identity.
-	// Keeping this key stable lets a newer source generation replace the one
-	// transcript artifact instead of appending a new artifact for every turn.
 	if (path) return `session-end:path:${canonicalTranscriptPath(path)}`;
 	if (sessionKey?.trim()) return `session-end:${scopedKey}`;
 	return `session-end:anonymous:${transcript.trim().length > 0 ? "inline" : "empty"}`;

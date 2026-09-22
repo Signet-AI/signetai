@@ -1,5 +1,3 @@
-/** Theme detection and CSS variable injection */
-
 import type { ThemeMode } from "./types.js";
 
 export function resolveTheme(mode: ThemeMode): "dark" | "light" {

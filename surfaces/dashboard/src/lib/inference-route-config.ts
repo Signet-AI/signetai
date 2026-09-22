@@ -9,13 +9,6 @@ function targetRef(targetId: string, target: unknown): string | undefined {
 	const modelId = Object.keys(models)[0];
 	return modelId ? `${targetId}/${modelId}` : undefined;
 }
-
-/**
- * Make the dashboard's two model assignments a complete canonical route.
- * Existing policies and task classes remain authoritative. Generated values
- * only fill missing routing structure so advanced configurations are not
- * rewritten by a simple provider change.
- */
 export function ensureInferenceRoute(agent: ConfigRecord): void {
 	const inference = record(agent.inference);
 	const targets = record(inference.targets);
@@ -77,8 +70,6 @@ export function ensureInferenceRoute(agent: ConfigRecord): void {
 	if (Object.keys(targets).length > 0) inference.targets = targets;
 	agent.inference = inference;
 }
-
-/** Persist the explicit user decision to allow remote memory extraction. */
 export function allowRemoteMemoryExtraction(agent: ConfigRecord): void {
 	const inference = record(agent.inference);
 	const taskClasses = record(inference.taskClasses);
@@ -99,8 +90,6 @@ function isRemoteInferenceEndpoint(endpoint: string): boolean {
 		return false;
 	}
 }
-
-/** Return whether a background executor needs explicit remote-memory consent. */
 export function requiresRemoteMemoryConsent(
 	kind: InferenceBackendKind,
 	executor: string,

@@ -12,15 +12,6 @@ function addColumnIfMissing(db: MigrationDb, column: string, definition: string)
 		db.exec(`ALTER TABLE cross_agent_messages ADD COLUMN ${column} ${definition}`);
 	}
 }
-
-/**
- * Migration 116: durable ACP relay attempt reconciliation (#1263).
- *
- * The existing delivery_status column is kept for compatibility with clients
- * that only understand queued/delivered/failed. delivery_state carries the
- * finer-grained crash-window state and the lease fields prevent another
- * daemon from declaring an active relay abandoned.
- */
 export function up(db: MigrationDb): void {
 	const table = db
 		.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'cross_agent_messages'")

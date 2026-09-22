@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 040: Session Transcripts (Lossless Retention)
- *
- * Stores raw session transcripts alongside extracted facts.
- * Extraction creates the search surface; the transcript preserves
- * completeness so nothing is permanently lost.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_transcripts (

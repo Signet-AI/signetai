@@ -37,8 +37,6 @@ describe("identity context", () => {
 
 	test("renders profile-managed identity sections in configured order with token budgets", () => {
 		const dir = makeTempDir();
-		// Content is ~10 tokens; budget (6) is larger than the truncation marker (~5)
-		// but smaller than the content, so the file is truncated with the marker.
 		writeFileSync(join(dir, "AGENTS.md"), "alpha beta gamma delta epsilon zeta eta theta iota");
 		writeFileSync(join(dir, "USER.md"), "user preference detail");
 
@@ -69,10 +67,8 @@ describe("identity context", () => {
 		});
 
 		expect(sections?.[0]?.content).toContain("[truncated]");
-		// Token budget is the hard contract for the maxTokens variant.
 		expect(countTokens(sections?.[0]?.content ?? "")).toBeLessThanOrEqual(tokenBudget);
 		expect(sections?.[1]?.content).toContain("[truncated]");
-		// Character budget is the hard contract for the maxChars variant.
 		expect(sections?.[1]?.content.length).toBeLessThanOrEqual(charBudget);
 	});
 
@@ -87,8 +83,6 @@ describe("identity context", () => {
 				{ path: "USER.md", maxChars: 1 },
 			],
 		});
-
-		// Even a 1-unit budget must hold (no marker overflow).
 		expect(countTokens(sections?.[0]?.content ?? "")).toBeLessThanOrEqual(1);
 		expect(sections?.[1]?.content.length).toBeLessThanOrEqual(1);
 	});

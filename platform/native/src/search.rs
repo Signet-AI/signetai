@@ -4,11 +4,8 @@ use napi_derive::napi;
 pub struct ScoredId {
     pub id: String,
     pub score: f64,
-    pub source: String, // "vector" | "keyword" | "hybrid"
+    pub source: String,
 }
-
-/// Alpha-weighted blending of vector + keyword search results.
-/// Returns merged, filtered, and sorted scored IDs.
 #[napi]
 pub fn merge_hybrid_scores(
     vector_ids: Vec<String>,
@@ -29,8 +26,6 @@ pub fn merge_hybrid_scores(
     for (id, &score) in keyword_ids.iter().zip(keyword_scores.iter()) {
         keyword_map.insert(id.as_str(), score);
     }
-
-    // Collect all unique IDs
     let mut all_ids: Vec<&str> = Vec::with_capacity(vector_ids.len() + keyword_ids.len());
     for id in &vector_ids {
         all_ids.push(id.as_str());
@@ -64,6 +59,10 @@ pub fn merge_hybrid_scores(
         }
     }
 
-    results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    results.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     results
 }

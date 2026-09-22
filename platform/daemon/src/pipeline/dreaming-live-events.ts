@@ -1,13 +1,3 @@
-/**
- * Ephemeral live-event bridge for an in-flight Dreaming pass.
- *
- * The database remains the durable source of pass and tool-call audit data.
- * This module only keeps a small in-process replay window for read-only
- * observers. Event delivery is deliberately synchronous: a subscriber must
- * enqueue or drop its own notification and must never perform awaited work in
- * the Dreaming agent's event callback.
- */
-
 export const DREAMING_LIVE_MAX_EVENTS = 256;
 export const DREAMING_LIVE_MAX_SUBSCRIBERS = 16;
 export const DREAMING_LIVE_MAX_PASSES = 32;
@@ -122,8 +112,6 @@ function truncatedJsonValue(serialized: string, maxChars: number): Readonly<Reco
 	}
 	return result;
 }
-
-/** Bound a raw Pi object before it enters the replay buffer or SSE payload. */
 export function boundDreamingLiveValue(value: unknown, maxChars = DREAMING_LIVE_MAX_RAW_CHARS): unknown {
 	const json = safeJson(value);
 	if (json.length <= maxChars) return value;
@@ -191,8 +179,6 @@ function isTerminal(status: string): boolean {
 function isTerminalEvent(event: DreamingLiveEvent): boolean {
 	return event.type === "pass_completed" || event.type === "pass_failed";
 }
-
-/** In-memory bounded event hub shared by the daemon's Dreaming worker/routes. */
 export class DreamingLiveEventHub {
 	private readonly passes = new Map<string, LivePass>();
 
@@ -209,9 +195,6 @@ export class DreamingLiveEventHub {
 			existing.lastTouchedAt = Date.now();
 			return;
 		}
-		// Live observation is optional. If every retained pass is actively
-		// viewed, decline this in-process registration rather than growing the
-		// map or displacing another operator's stream.
 		if (this.passes.size >= DREAMING_LIVE_MAX_PASSES) return;
 
 		const pass: LivePass = {
@@ -228,8 +211,6 @@ export class DreamingLiveEventHub {
 			startedAt: pass.metadata.startedAt,
 		});
 	}
-
-	/** Create route visibility for a pass recovered from the durable database. */
 	ensurePass(
 		input: DreamingLivePassInput & Partial<Omit<DreamingLivePassMetadata, keyof DreamingLivePassInput>>,
 	): void {
@@ -249,9 +230,6 @@ export class DreamingLiveEventHub {
 			}
 			return;
 		}
-		// A route lookup can observe the durable row just before the worker
-		// publishes its terminal event. Never let that stale running row reopen
-		// an already-finished in-memory pass on reconnect.
 		if (isTerminal(existing.metadata.status) && (input.status === undefined || input.status === "running")) {
 			existing.lastTouchedAt = Date.now();
 			return;
@@ -373,9 +351,7 @@ export class DreamingLiveEventHub {
 		for (const listener of [...pass.subscribers]) {
 			try {
 				listener(event);
-			} catch {
-				// A disconnected or malformed viewer must not affect Dreaming.
-			}
+			} catch {}
 		}
 	}
 
@@ -439,8 +415,6 @@ function textFromContent(value: unknown): string {
 function rawEventData(event: Record<string, unknown>): Record<string, unknown> {
 	return { raw: boundDreamingLiveValue(event) };
 }
-
-/** Translate Pi AgentSession events into the stable remote Dreaming event model. */
 export function publishDreamingAgentEvent(passId: string, input: unknown, hub = dreamingLiveEvents): void {
 	const event = asRecord(input);
 	const type = typeof event.type === "string" ? event.type : "unknown";
@@ -515,7 +489,6 @@ export function publishDreamingSessionInfo(
 	hub.publish(passId, "session_info", {
 		...(info.sessionId ? { sessionId: info.sessionId } : {}),
 		...(info.model ? { model: info.model } : {}),
-		// The prompt is intentionally present only in the opt-in raw channel.
 		raw: boundDreamingLiveValue({ systemPrompt: info.systemPrompt ?? "" }),
 	});
 }

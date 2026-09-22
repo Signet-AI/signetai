@@ -1,20 +1,8 @@
-/**
- * Migration 002: Pipeline v2 schema
- *
- * Adds columns for the memory pipeline (content hashing, soft delete,
- * extraction tracking), plus new tables for history, jobs, and the
- * entity graph.
- */
-
 import type { MigrationDb } from "./contract";
-
-/** Check whether a column already exists on a table. */
 function hasColumn(db: MigrationDb, table: string, column: string): boolean {
 	const rows = db.prepare(`PRAGMA table_info(${table})`).all() as ReadonlyArray<Record<string, unknown>>;
 	return rows.some((r) => r.name === column);
 }
-
-/** Conditionally add a column if it doesn't exist yet. */
 function addColumnIfMissing(db: MigrationDb, table: string, column: string, definition: string): void {
 	if (!hasColumn(db, table, column)) {
 		db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
@@ -22,7 +10,6 @@ function addColumnIfMissing(db: MigrationDb, table: string, column: string, defi
 }
 
 export function up(db: MigrationDb): void {
-	// -- New columns on memories --
 	addColumnIfMissing(db, "memories", "content_hash", "TEXT");
 	addColumnIfMissing(db, "memories", "normalized_content", "TEXT");
 	addColumnIfMissing(db, "memories", "is_deleted", "INTEGER DEFAULT 0");
@@ -34,13 +21,10 @@ export function up(db: MigrationDb): void {
 	addColumnIfMissing(db, "memories", "who", "TEXT");
 	addColumnIfMissing(db, "memories", "why", "TEXT");
 	addColumnIfMissing(db, "memories", "project", "TEXT");
-	// These may already exist from 001-baseline
 	addColumnIfMissing(db, "memories", "pinned", "INTEGER DEFAULT 0");
 	addColumnIfMissing(db, "memories", "importance", "REAL DEFAULT 0.5");
 	addColumnIfMissing(db, "memories", "last_accessed", "TEXT");
 	addColumnIfMissing(db, "memories", "access_count", "INTEGER DEFAULT 0");
-
-	// -- memory_history (immutable audit trail) --
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_history (
 			id TEXT PRIMARY KEY,
@@ -55,8 +39,6 @@ export function up(db: MigrationDb): void {
 			FOREIGN KEY (memory_id) REFERENCES memories(id)
 		);
 	`);
-
-	// -- memory_jobs (durable queue) --
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS memory_jobs (
 			id TEXT PRIMARY KEY,
@@ -76,8 +58,6 @@ export function up(db: MigrationDb): void {
 			FOREIGN KEY (memory_id) REFERENCES memories(id)
 		);
 	`);
-
-	// -- Entity graph --
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS entities (
 			id TEXT PRIMARY KEY,
@@ -112,8 +92,6 @@ export function up(db: MigrationDb): void {
 			FOREIGN KEY (entity_id) REFERENCES entities(id)
 		);
 	`);
-
-	// -- Audit table for migration history --
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations_audit (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -123,8 +101,6 @@ export function up(db: MigrationDb): void {
 			checksum TEXT
 		);
 	`);
-
-	// -- Indexes --
 	db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_memories_content_hash
 			ON memories(content_hash);

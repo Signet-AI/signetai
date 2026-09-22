@@ -1,17 +1,3 @@
-/**
- * Signet Connector for Claude Code
- *
- * Integrates Signet's memory system with Claude Code's lifecycle hooks.
- *
- * Usage:
- * ```typescript
- * import { ClaudeCodeConnector } from '@signet/connector-claude-code';
- *
- * const connector = new ClaudeCodeConnector();
- * await connector.install('~/.agents');
- * ```
- */
-
 import { spawnHidden as spawn } from "@signet/core";
 import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
@@ -25,10 +11,6 @@ import {
 	resolveSignetMcpCommand,
 } from "@signet/connector-base";
 import { expandHome, resolvePromptSubmitTimeoutMs, resolveSessionStartTimeoutMs } from "@signet/core";
-
-// ============================================================================
-// Types
-// ============================================================================
 
 export interface ConnectorConfig {
 	daemonUrl?: string;
@@ -119,36 +101,14 @@ export function dispatchSessionEndFireAndForget(
 		return false;
 	}
 }
-
-// Returns the timeout written into the Claude Code hook config. This is
-// intentionally 2 s longer than the Signet fetch timeout so the hook process
-// can return a graceful static-identity fallback before Claude Code kills it.
 function sessionStartHookTimeout(): number {
 	const raw = process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT;
 	return resolveSessionStartTimeoutMs(raw) + 2_000;
 }
 
 function userPromptSubmitHookTimeout(): number {
-	// Claude Code hooks are written once to settings.json at install time.
-	// This env is resolved during connector install/update, not per prompt.
-	// Keep the same grace buffer as session-start so Claude Code does not kill
-	// the hook at the exact daemon timeout boundary.
 	return resolvePromptSubmitTimeoutMs(process.env.SIGNET_PROMPT_SUBMIT_TIMEOUT) + 2_000;
 }
-
-// ============================================================================
-// Claude Code Connector
-// ============================================================================
-
-/**
- * Connector for Claude Code (Anthropic's CLI)
- *
- * Implements the Signet connector interface for Claude Code, handling:
- * - Hook installation into ~/.claude/settings.json
- * - CLAUDE.md generation from identity files
- * - Skills directory symlink management
- * - Lifecycle callbacks for session management
- */
 export class ClaudeCodeConnector extends BaseConnector {
 	readonly name = "Claude Code";
 	readonly harnessId = "claude-code";
@@ -165,10 +125,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 		this.config = config;
 		this.daemonUrl = config.daemonUrl || "http://127.0.0.1:3850";
 	}
-
-	/**
-	 * Install the connector into Claude Code
-	 */
 	async install(basePath: string): Promise<InstallResult> {
 		const expandedBasePath = expandHome(basePath);
 		const filesWritten: string[] = [];
@@ -176,15 +132,9 @@ export class ClaudeCodeConnector extends BaseConnector {
 		if (strippedAgentsPath !== null) {
 			filesWritten.push(strippedAgentsPath);
 		}
-
-		// Configure hooks in settings.json
 		await this.configureHooks(expandedBasePath);
 		const settingsPath = this.getConfigPath();
 		filesWritten.push(settingsPath);
-
-		// CLAUDE.md generation removed — identity content is injected
-		// via session-start hooks, so the generated file was redundant.
-		// Clean up stale generated CLAUDE.md from previous versions.
 		const staleClaude = join(homedir(), ".claude", "CLAUDE.md");
 		try {
 			if (existsSync(staleClaude)) {
@@ -193,11 +143,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 					unlinkSync(staleClaude);
 				}
 			}
-		} catch {
-			// Non-fatal — stale file is harmless
-		}
-
-		// Symlink skills directory using base class method
+		} catch {}
 		const sourceSkillsDir = join(expandedBasePath, "skills");
 		const targetSkillsDir = join(homedir(), ".claude", "skills");
 		this.symlinkSkills(sourceSkillsDir, targetSkillsDir);
@@ -208,10 +154,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 			filesWritten,
 		};
 	}
-
-	/**
-	 * Uninstall the connector from Claude Code
-	 */
 	async uninstall(): Promise<UninstallResult> {
 		const settingsPath = this.getConfigPath();
 		const filesRemoved: string[] = [];
@@ -223,17 +165,13 @@ export class ClaudeCodeConnector extends BaseConnector {
 		try {
 			const content = readFileSync(settingsPath, "utf-8");
 			const settings = JSON.parse(content);
-
-			// Remove signet hooks
 			if (settings.hooks) {
 				settings.hooks.SessionStart = undefined;
 				settings.hooks.UserPromptSubmit = undefined;
 				settings.hooks.PreToolUse = undefined;
-				settings.hooks.PreCompaction = undefined; // legacy
+				settings.hooks.PreCompaction = undefined;
 				settings.hooks.PreCompact = undefined;
 				settings.hooks.SessionEnd = undefined;
-
-				// Remove empty hooks object
 				if (Object.keys(settings.hooks).length === 0) {
 					settings.hooks = undefined;
 				}
@@ -241,19 +179,11 @@ export class ClaudeCodeConnector extends BaseConnector {
 
 			atomicWriteJson(settingsPath, settings);
 			filesRemoved.push(settingsPath);
-		} catch {
-			// If parsing fails, leave settings as-is
-		}
-
-		// Remove MCP server from ~/.claude.json
+		} catch {}
 		this.removeMcpServer();
 
 		return { filesRemoved };
 	}
-
-	/**
-	 * Check if the connector is installed
-	 */
 	isInstalled(): boolean {
 		const settingsPath = this.getConfigPath();
 
@@ -262,30 +192,15 @@ export class ClaudeCodeConnector extends BaseConnector {
 		try {
 			const content = readFileSync(settingsPath, "utf-8");
 			const settings = JSON.parse(content);
-
-			// Check if Signet hooks are present (matches both Unix "signet hook ..."
-			// and Windows 'node "...signet.js" hook ...' command formats)
 			const cmd = settings.hooks?.SessionStart?.[0]?.hooks?.[0]?.command ?? "";
 			return cmd.includes("hook session-start");
 		} catch {
 			return false;
 		}
 	}
-
-	/**
-	 * Get the path to Claude Code's settings.json
-	 */
 	getConfigPath(): string {
 		return join(homedir(), ".claude", "settings.json");
 	}
-
-	// ============================================================================
-	// Session Lifecycle Methods
-	// ============================================================================
-
-	/**
-	 * Called when a session starts
-	 */
 	async onSessionStart(ctx: SessionContext): Promise<SessionStartResult | null> {
 		try {
 			const res = await fetch(`${this.daemonUrl}/api/hooks/session-start`, {
@@ -314,10 +229,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 	protected dispatchSessionEnd(payload: SessionEndFireAndForgetPayload): boolean {
 		return dispatchSessionEndFireAndForget(this.daemonUrl, payload);
 	}
-
-	/**
-	 * Called when a session ends
-	 */
 	async onSessionEnd(ctx: SessionContext): Promise<SessionEndResult> {
 		const dispatched = this.dispatchSessionEnd({
 			harness: "claude-code",
@@ -327,14 +238,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 
 		return { success: dispatched, memoriesExtracted: 0 };
 	}
-
-	// ============================================================================
-	// Private Methods
-	// ============================================================================
-
-	/**
-	 * Configure hooks in ~/.claude/settings.json
-	 */
 	private async configureHooks(_basePath: string): Promise<void> {
 		const settingsPath = this.getConfigPath();
 		const claudeDir = join(homedir(), ".claude");
@@ -356,21 +259,14 @@ export class ClaudeCodeConnector extends BaseConnector {
 			preCompact: true,
 			sessionEnd: true,
 		};
-
-		// On Windows, bypass the .cmd wrapper which flashes a console window.
-		// Invoke the node binary with the signet.js entry point directly.
 		let signetCmd = "signet";
 		if (process.platform === "win32") {
-			// process.argv[1] is the entry point (e.g. .../signetai/bin/signet.js).
-			// Navigate up to the package root and into bin/signet.js.
 			const cliEntry = process.argv[1] || "";
 			const signetJs = join(cliEntry, "..", "..", "bin", "signet.js");
 			if (existsSync(signetJs)) {
 				signetCmd = `"${process.execPath}" "${signetJs}"`;
 			}
 		}
-
-		// $(pwd) is bash; %CD% is the cmd.exe equivalent
 		const pwdExpr = process.platform === "win32" ? "%CD%" : "$(pwd)";
 
 		const hooks: Record<string, unknown[]> = {};
@@ -449,23 +345,12 @@ export class ClaudeCodeConnector extends BaseConnector {
 			...(settings.hooks as Record<string, unknown>),
 			...hooks,
 		};
-
-		// Migration: remove stale PreCompaction key from existing installs
 		const { PreCompaction: _legacyPreCompaction, ...hooksWithoutLegacy } = settings.hooks as Record<string, unknown>;
 		settings.hooks = hooksWithoutLegacy;
 
 		atomicWriteJson(settingsPath, settings);
-
-		// Register Signet MCP server in ~/.claude.json (user scope)
 		this.registerMcpServer();
 	}
-
-	/**
-	 * Register Signet MCP server in ~/.claude.json (user scope)
-	 *
-	 * Claude Code reads MCP servers from the top-level `mcpServers` key
-	 * in ~/.claude.json, NOT from ~/.claude/settings.json.
-	 */
 	private registerMcpServer(): void {
 		const claudeJsonPath = join(homedir(), ".claude.json");
 
@@ -474,7 +359,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 			try {
 				config = JSON.parse(readFileSync(claudeJsonPath, "utf-8"));
 			} catch {
-				return; // Don't corrupt an unparseable config
+				return;
 			}
 		}
 
@@ -493,10 +378,6 @@ export class ClaudeCodeConnector extends BaseConnector {
 
 		atomicWriteJson(claudeJsonPath, config);
 	}
-
-	/**
-	 * Remove Signet MCP server from ~/.claude.json
-	 */
 	private removeMcpServer(): void {
 		const claudeJsonPath = join(homedir(), ".claude.json");
 
@@ -522,17 +403,7 @@ export class ClaudeCodeConnector extends BaseConnector {
 		}
 	}
 }
-
-// ============================================================================
-// Factory Function
-// ============================================================================
-
-/**
- * Create a Claude Code connector instance
- */
 export function createConnector(config?: ConnectorConfig): ClaudeCodeConnector {
 	return new ClaudeCodeConnector(config);
 }
-
-// Default export
 export default ClaudeCodeConnector;

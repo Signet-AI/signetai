@@ -427,7 +427,6 @@ function makeMacAppBundle(dir: string, arch: "x64" | "arm64", executable = "sign
 		join(app, "Contents", "Info.plist"),
 		`<?xml version="1.0" encoding="UTF-8"?>\n<plist version="1.0"><dict><key>CFBundleExecutable</key><string>${executable}</string><key>CFBundleIdentifier</key><string>ai.signet.app</string></dict></plist>\n`,
 	);
-	// Mach-O 64-bit magic (MH_MAGIC_64, little-endian) followed by cputype.
 	const header = Buffer.alloc(8);
 	header.writeUInt32LE(0xfeedfacf, 0);
 	header.writeUInt32LE(arch === "arm64" ? 0x0100000c : 0x01000007, 4);
@@ -540,7 +539,6 @@ describe("mac desktop install", () => {
 			mkdirSync(applications, { recursive: true });
 			const foreign = makeMacAppBundle(applications, process.arch === "arm64" ? "arm64" : "x64");
 			renameSync(foreign, join(applications, "Signet.app"));
-			// Rewrite its plist so it is no longer Signet-owned.
 			writeFileSync(
 				join(applications, "Signet.app", "Contents", "Info.plist"),
 				`<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.example.other</string></dict></plist>\n`,
@@ -594,11 +592,6 @@ describe("mac desktop install", () => {
 		try {
 			const release = join(root, "surfaces", "desktop", "release", "mac");
 			mkdirSync(release, { recursive: true });
-			// An unreadable non-executable resource makes cpSync fail mid-copy
-			// while the bundle still passes the pre-selection arch check (which
-			// only reads the Mach-O executable). The pre-fix code deleted the
-			// installed app BEFORE the copy, so this failure left the user with
-			// no installed app at all.
 			const source = makeMacAppBundle(release, process.arch === "arm64" ? "arm64" : "x64");
 			const doomed = join(source, "Contents", "Resources", "doomed.bin");
 			mkdirSync(join(source, "Contents", "Resources"), { recursive: true });
@@ -610,15 +603,11 @@ describe("mac desktop install", () => {
 			makeMacAppBundle(applications, process.arch === "arm64" ? "arm64" : "x64");
 
 			expect(() => installMacDesktopApp(root, home, join(home, "workspace"))).toThrow();
-			// The previously installed bundle survived the failed install...
 			expect(existsSync(join(applications, "Signet.app", "Contents", "Info.plist"))).toBe(true);
-			// ...and no swap debris was left behind.
 			expect(readdirSync(applications).some((name) => name.includes(".previous-"))).toBe(false);
 			expect(readdirSync(applications).some((name) => name.startsWith(".Signet.app."))).toBe(false);
 		} finally {
 			if (existsSync(sourceExecutable)) {
-				// Not strictly required (only Resources/doomed.bin was locked), but
-				// keep the tree removable regardless of platform semantics.
 				chmodSync(sourceExecutable, 0o755);
 			}
 			chmodSync(
@@ -636,14 +625,12 @@ describe("mac desktop install", () => {
 		try {
 			const release = join(root, "surfaces", "desktop", "release");
 			mkdirSync(release, { recursive: true });
-			// Two candidate layouts: an arm64 build and the host-arch build.
 			const armDir = join(release, "mac_arm64");
 			const hostDir = join(release, "mac");
 			mkdirSync(armDir, { recursive: true });
 			mkdirSync(hostDir, { recursive: true });
 			const armApp = makeMacAppBundle(armDir, "arm64");
 			const hostApp = makeMacAppBundle(hostDir, process.arch === "arm64" ? "arm64" : "x64");
-			// Make the foreign-arch artifact the newest; arch check must win.
 			utimesSync(armApp, new Date(9_000), new Date(9_000));
 			utimesSync(hostApp, new Date(2_000), new Date(2_000));
 

@@ -8,20 +8,12 @@ export const PROMPT_CONTEXT_CLOSE = "</signet-memory-context>";
 export interface PromptContextEnvelope {
 	readonly version: typeof PROMPT_CONTEXT_VERSION;
 	readonly content: string;
-	/** SHA-256 of the exact serialized bytes sent to the harness. */
 	readonly hash: string;
 	readonly serialized: string;
 }
-
-/**
- * Normalize only transport noise. Do not reflow or otherwise rewrite memory
- * content: the normalized value is the replay contract for every harness.
- */
 export function normalizePromptContext(content: string): string {
 	return content.replace(/\r\n?/g, "\n").trimEnd();
 }
-
-/** Hash the exact bytes delivered through the hook response. */
 export function hashPromptContext(serialized: string): string {
 	return createHash("sha256").update(serialized).digest("hex");
 }
@@ -42,18 +34,10 @@ export function createPromptContext(content: string): PromptContextEnvelope | nu
 		serialized,
 	};
 }
-
-/** Remove a complete or incomplete internal context block from provider text. */
 export function scrubPromptContext(text: string): string {
 	const scrubber = new PromptContextStreamScrubber();
 	return `${scrubber.push(text)}${scrubber.flush()}`;
 }
-
-/**
- * Streaming-safe counterpart to scrubPromptContext. It buffers only a
- * possible fence and its contents, so a marker split across provider chunks
- * cannot reach a visible assistant-output callback.
- */
 export class PromptContextStreamScrubber {
 	private pending = "";
 

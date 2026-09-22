@@ -41,8 +41,6 @@ describe("bindWithRetry", () => {
 
 	it("retries on EADDRINUSE and succeeds when port is released", async () => {
 		const port = await freePort();
-
-		// Occupy the port
 		const blocker = createServer();
 		await new Promise<void>((resolve) => {
 			blocker.listen(port, "127.0.0.1", () => resolve());
@@ -69,7 +67,6 @@ describe("bindWithRetry", () => {
 				},
 				schedule: (fn, ms) => {
 					scheduledDelays.push(ms);
-					// Release the port before the next attempt
 					if (blocker.listening) {
 						return blocker.close(() => setTimeout(fn, 5)) as unknown as ReturnType<typeof setTimeout>;
 					}
@@ -114,7 +111,6 @@ describe("bindWithRetry", () => {
 				},
 				schedule: (fn, ms) => {
 					scheduledDelays.push(ms);
-					// Stop after 6 attempts to end the test
 					if (attempts >= 6) {
 						resolve();
 						return setTimeout(() => {}, 0);
@@ -123,8 +119,6 @@ describe("bindWithRetry", () => {
 				},
 			});
 		});
-
-		// Should have retried at least 6 times without calling onFatalError
 		expect(attempts).toBeGreaterThanOrEqual(6);
 		expect(fatalCalled).toBe(false);
 
@@ -164,8 +158,6 @@ describe("bindWithRetry", () => {
 				},
 			});
 		});
-
-		// Delays: 100, 200, 400, 500 (capped), 500 (capped)
 		expect(scheduledDelays[0]).toBe(100);
 		expect(scheduledDelays[1]).toBe(200);
 		expect(scheduledDelays[2]).toBe(400);
@@ -176,20 +168,16 @@ describe("bindWithRetry", () => {
 
 	it("calls onFatalError for non-EADDRINUSE errors", async () => {
 		let fatalError: Error | null = null;
-
-		// Create a server that emits a non-EADDRINUSE error
 		bindWithRetry({
 			port: 0,
 			hostname: "127.0.0.1",
 			createServer: () => {
 				const server = createServer();
-				// Simulate a non-EADDRINUSE error after listen attempt
 				process.nextTick(() => {
 					const err = new Error("test error") as NodeJS.ErrnoException;
 					err.code = "EACCES";
 					server.emit("error", err);
 				});
-				// Override listen to no-op so it doesn't actually bind
 				server.listen = (() => server) as typeof server.listen;
 				return server;
 			},
@@ -199,8 +187,6 @@ describe("bindWithRetry", () => {
 				fatalError = err;
 			},
 		});
-
-		// Wait for nextTick
 		await new Promise((resolve) => setTimeout(resolve, 50));
 
 		expect(fatalError).not.toBeNull();
@@ -231,21 +217,13 @@ describe("bindWithRetry", () => {
 				onBound: () => {},
 				onListening: () => {},
 				schedule: (fn, _ms) => {
-					// Abort after the first retry is scheduled
 					controller.abort();
-					// Still call fn — the guard inside bindWithRetry should bail
 					const timer = setTimeout(fn, 1);
 					return timer;
 				},
 			});
-
-			// Wait for the scheduled fn to fire and be guarded
 			setTimeout(() => resolve(), 100);
 		});
-
-		// First attempt fails (EADDRINUSE), schedules retry, abort fires,
-		// retry enters bindWithRetry but bails at the signal check.
-		// So we get exactly 2 createServer calls: attempt 0 + attempt 1 (bailed).
 		expect(attempts).toBeLessThanOrEqual(2);
 
 		blocker.close();

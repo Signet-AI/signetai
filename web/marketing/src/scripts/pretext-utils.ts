@@ -1,5 +1,3 @@
-// Shared pretext utilities: font resolution, caching, font-ready gating.
-
 import type { PreparedText, PreparedTextWithSegments } from "@chenglou/pretext";
 
 type FontRole = "display" | "body" | "mono";

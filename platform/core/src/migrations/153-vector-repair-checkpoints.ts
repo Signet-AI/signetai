@@ -1,13 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Durable progress for bounded vector-index repair.
- *
- * There is one resumable checkpoint per operation and resolved agent. The
- * checkpoint is intentionally separate from embedding-index migration state:
- * this table tracks repair of the active derived vec index and canonical
- * orphan cleanup, not a provider/profile generation change.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS vector_repair_checkpoints (

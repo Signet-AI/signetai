@@ -252,10 +252,6 @@ describe("resolveSignetDaemonUrl", () => {
 });
 
 describe("resolveSignetWorkspacePath", () => {
-	// Config/default-path tests below rely on SIGNET_PATH being absent so the
-	// config-file and homedir fallbacks are exercised; clear both workspace env
-	// vars (the resolver now honors SIGNET_PATH then SIGNET_WORKSPACE) so the
-	// suite is deterministic regardless of the host environment.
 	beforeEach(() => {
 		Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		Reflect.deleteProperty(process.env, "SIGNET_WORKSPACE");

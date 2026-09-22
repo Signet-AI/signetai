@@ -135,14 +135,6 @@ describe("knowledge graph hygiene report", () => {
 	});
 
 	test("zero-active-attribute detector probes per-entity aspects, not an agent-wide attribute scan (#1094)", () => {
-		// Regression: the detector's NOT EXISTS used a flat
-		// entity_aspects JOIN entity_attributes, which let the planner root
-		// the subquery in entity_attributes by agent_id alone. On a large
-		// install that made the dreaming worker's first check
-		// O(entities × attributes) — 200s+ on a 30k-entity/72k-attribute
-		// graph — blocking the daemon's event loop minutes after restart.
-		// The subquery must drive from entity_aspects (agent_id, entity_id)
-		// and probe attributes per aspect.
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		seedEntity("husk", "Legacy Husk", 5);
@@ -157,9 +149,6 @@ describe("knowledge graph hygiene report", () => {
 		expect(plan).toContain("SEARCH asp USING INDEX idx_entity_aspects_status (agent_id=? AND entity_id=?)");
 		expect(plan).not.toContain("SEARCH attr USING INDEX idx_entity_attributes_claim_version (agent_id=?)");
 	});
-
-	// #1138: over-cap detectors — the write gate rejects past the cap, so the
-	// hygiene pass must surface the over-cap set for consolidation.
 	function seedAspectWithAttributes(aspectId: string, entityId: string, name: string, count: number): void {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
@@ -185,7 +174,6 @@ describe("knowledge graph hygiene report", () => {
 		seedEntity("lean-entity", "Lean Entity", 5);
 		seedAspectWithAttributes("fat-aspect", "fat-entity", "status_history", 7);
 		seedAspectWithAttributes("lean-aspect", "lean-entity", "facts", 2);
-		// A second aspect pushes fat-entity over the aspect cap (2 > 1)
 		seedAspectWithAttributes("extra-aspect", "fat-entity", "extra", 1);
 
 		const caps = { maxAspectsPerEntity: 1, maxAttributesPerAspect: 5 };

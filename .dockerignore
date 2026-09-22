@@ -1,16 +1,11 @@
 .git
 .github
-
-# Dependencies/build outputs
 node_modules
 **/node_modules
 **/dist
 **/build
 **/.svelte-kit
 **/target
-
-# `dist/` is a source bucket in this repo. Keep the publish package
-# sources available to Docker while still excluding generated outputs.
 !dist
 !dist/signetai
 !dist/signetai/**
@@ -19,8 +14,6 @@ dist/signetai/dashboard
 dist/signetai/dist
 dist/signetai/node_modules
 dist/signetai/skills
-
-# Local/dev artifacts that should never enter the Docker build context
 .bench
 .bun-tmp
 .claude
@@ -33,20 +26,14 @@ dist/signetai/skills
 dogfood-output
 marketing
 references
-
-# Heavy generated package artifacts
 surfaces/desktop/release
 surfaces/desktop/resources
 surfaces/dashboard/dogfood-output
-
-# MemoryBench local datasets/secrets/results are not needed for image builds
 memorybench/data
 memorybench/.env
 memorybench/.env.*
 memorybench/results
 memorybench/runs
-
-# Misc
 **/.DS_Store
 **/*.log
 tmp

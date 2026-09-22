@@ -44,15 +44,6 @@ function normalizeRole(role: string): ExportTranscriptRole {
 			return "unknown";
 	}
 }
-
-/**
- * Parse stored transcript content into role-labeled messages.
- *
- * Mirrors the training-data aggregator's strategy so `signet export
- * transcripts` output is a drop-in replacement for its brittle SQLite reader:
- * try JSONL lines first ({role, content} per line), fall back to role-prefixed
- * text (user/assistant/system/tool) with multi-line accumulation.
- */
 export function parseTranscriptMessages(content: string): ExportTranscriptMessage[] {
 	try {
 		const value: unknown = JSON.parse(content);
@@ -63,9 +54,7 @@ export function parseTranscriptMessages(content: string): ExportTranscriptMessag
 			)
 		)
 			return value.map((m) => ({ role: normalizeRole(m.role), content: m.content }));
-	} catch {
-		/* Legacy live transcripts use JSONL or role-prefixed text. */
-	}
+	} catch {}
 
 	const jsonl = parseJsonlMessages(content);
 	if (jsonl.length >= 2) return jsonl;
@@ -75,9 +64,6 @@ export function parseTranscriptMessages(content: string): ExportTranscriptMessag
 
 function parseJsonlMessages(content: string): ExportTranscriptMessage[] {
 	const messages: ExportTranscriptMessage[] = [];
-	// Match the aggregator's splitlines(): split on \r and \n alike so lines
-	// containing literal carriage returns cannot smuggle a role prefix into a
-	// continuation line.
 	for (const line of content.split(/\r\n|\r|\n/)) {
 		const trimmed = line.trim();
 		if (trimmed.length === 0) continue;
@@ -86,9 +72,7 @@ function parseJsonlMessages(content: string): ExportTranscriptMessage[] {
 			if (typeof entry.role === "string" && typeof entry.content === "string" && entry.content.length > 0) {
 				messages.push({ role: normalizeRole(entry.role), content: entry.content });
 			}
-		} catch {
-			// Not a JSONL line; the prefix parser handles mixed text.
-		}
+		} catch {}
 	}
 	return messages;
 }

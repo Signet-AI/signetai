@@ -1,5 +1,3 @@
 import type { MigrationDb } from "./contract";
 
-export function up(_db: MigrationDb): void {
-	// Reserved historical migration slot. The retired scorer was removed.
-}
+export function up(_db: MigrationDb): void {}

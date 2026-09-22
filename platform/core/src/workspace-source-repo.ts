@@ -13,7 +13,6 @@ const SOURCE_REPO_SYNC_LOCK_WAIT_MS = 15_000;
 export type WorkspaceSourceRepoStatus = "cloned" | "pulled" | "fetched" | "current" | "skipped" | "error";
 
 export interface WorkspaceSourceRepoSyncOptions {
-	/** Only explicit source builds may create a checkout; routine sync updates existing repositories. */
 	readonly cloneIfMissing?: boolean;
 	readonly gitTimeoutMs?: number;
 	readonly remoteUrl?: string;
@@ -398,9 +397,7 @@ function killGitProcessTree(proc: ReturnType<typeof spawnHidden>, signal: NodeJS
 			return;
 		}
 		proc.kill(signal);
-	} catch {
-		// Best effort.
-	}
+	} catch {}
 }
 
 function hasGitMetadata(path: string): boolean {
@@ -578,9 +575,7 @@ async function acquireSourceRepoSyncLockAsync(workspaceDir: string): Promise<Syn
 function releaseSourceRepoSyncLock(lock: SyncLock): void {
 	try {
 		closeSync(lock.fd);
-	} catch {
-		// Ignore.
-	}
+	} catch {}
 	rmSync(lock.path, { force: true });
 }
 

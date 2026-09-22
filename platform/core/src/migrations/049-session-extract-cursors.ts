@@ -1,13 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 049: Session extract cursors
- *
- * Tracks the last extraction offset per session so mid-session
- * checkpoint extraction only processes new transcript content
- * (delta tracking). Prevents double-extraction for long-lived
- * sessions that never call session-end.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS session_extract_cursors (

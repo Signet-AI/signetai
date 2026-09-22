@@ -1,18 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 090: Add `job_archive` provenance table for issue #901.
- *
- * `pruneTerminalJobs` removes rows that have already reached a
- * terminal state (cancelled / completed / dead) and lived beyond the
- * configured retention window. To preserve provenance — required by
- * the issue's "preserving provenance" constraint — we copy the full
- * source row to `job_archive` before deleting it. The archive table
- * holds the original payload plus bookkeeping columns (`archived_at`,
- * `archived_by`, `reason`, `source_table`).
- *
- * Idempotent: `CREATE TABLE IF NOT EXISTS`. Safe to re-run.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS job_archive (

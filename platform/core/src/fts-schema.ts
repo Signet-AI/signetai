@@ -107,8 +107,6 @@ export function recreateMemoriesFts(db: FtsSchemaExecDb): void {
 	db.exec("INSERT INTO memories_fts(rowid, content) SELECT rowid, content FROM memories");
 	refreshMemoriesFtsState(db);
 }
-
-/** Refresh the persistent counters after a bulk FTS operation. */
 export function refreshMemoriesFtsState(db: FtsSchemaExecDb): void {
 	ensureMemoriesFtsState(db);
 	db.exec(`
@@ -131,15 +129,6 @@ export interface MemoriesFtsIntegrity {
 function sqliteBoolean(value: unknown): boolean {
 	return value === 1 || value === true;
 }
-
-/**
- * Read the maintained counters plus bounded physical probes for the FTS index.
- *
- * The probes stop at the first matching row and only inspect the first and last
- * memory rowids. They can detect an empty/reset index and boundary loss, but
- * they cannot prove that every middle row is present. Full verification belongs
- * to deferred owner maintenance, where an O(N) scan is allowed.
- */
 export function readMemoriesFtsIntegrity(db: FtsSchemaQueryDb): MemoriesFtsIntegrity | null {
 	const row = db
 		.prepare(`
@@ -200,14 +189,6 @@ export function readMemoriesFtsSql(db: FtsSchemaQueryDb): string | null {
 		| undefined;
 	return typeof row?.sql === "string" ? row.sql : null;
 }
-
-/**
- * Return the number of documents physically present in the FTS index.
- *
- * An external-content FTS table resolves COUNT(*) through its content table,
- * so COUNT(*) FROM memories_fts includes tombstones and cannot describe index
- * integrity. The docsize shadow table tracks indexed documents instead.
- */
 export function readMemoriesFtsIndexRowCount(db: FtsSchemaQueryDb): number | null {
 	const row = db.prepare("SELECT COUNT(*) AS count FROM memories_fts_docsize").get() as { count?: unknown } | undefined;
 	return typeof row?.count === "number" ? row.count : null;

@@ -9,14 +9,6 @@ function hasColumn(db: MigrationDb, table: string, column: string): boolean {
 		(row) => row.name === column,
 	);
 }
-
-/**
- * One canonical, reverse-indexed evidence relation for every derived memory.
- *
- * The historical aggregate tables stay in place because their migration
- * artifacts are part of schema integrity checks. This migration copies their
- * lineage once; runtime code writes and reads only this relation afterwards.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS derived_memory_sources (

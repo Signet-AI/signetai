@@ -28,7 +28,6 @@ function insertEpisodicMemory(
 		type?: string;
 		sourceType?: string;
 		sourceId?: string | null;
-		/** Defaults to 'episodic' when omitted. Pass null explicitly to model a derived row. */
 		memoryKind?: string | null;
 		isDeleted?: number;
 		createdAt?: string;
@@ -90,7 +89,6 @@ describe("episodic-evidence cutover: episodic-sources selector", () => {
 			contentHash: "hash-epi-del",
 			isDeleted: 1,
 		});
-		// A non-episodic (derived) memory row is NOT primary evidence
 		insertEpisodicMemory(db, {
 			id: "derived-1",
 			content: "derived semantic fact",
@@ -208,9 +206,6 @@ describe("episodic-evidence cutover: episodic-sources selector", () => {
 	});
 
 	it("metadata edits do not re-submit already-processed evidence (#946)", () => {
-		// Evidence is ordered/cursored by immutable created_at, not updated_at.
-		// A metadata edit (tags/importance/pinned) bumps updated_at but must not
-		// move the row past the cursor, which would re-process it.
 		insertEpisodicMemory(db, {
 			id: "epi-stable",
 			content: "first evidence",
@@ -232,8 +227,6 @@ describe("episodic-evidence cutover: episodic-sources selector", () => {
 			kind: first[0].kind,
 			id: first[0].id,
 		};
-
-		// Metadata edit bumps updated_at to a time AFTER the second evidence.
 		txModifyMemory(asWriteDb(db), {
 			memoryId: "epi-stable",
 			patch: { tags: "re-ranked" },
@@ -241,8 +234,6 @@ describe("episodic-evidence cutover: episodic-sources selector", () => {
 			changedBy: "curator",
 			changedAt: "2026-03-01T00:00:00.000Z",
 		});
-
-		// The edited row must NOT reappear — cursor is by created_at.
 		const next = readRecentEpisodicSources(readDb, "default", 10, undefined, null, "oldest", cursor);
 		expect(next.map((r) => r.id)).toEqual(["epi-after"]);
 	});
@@ -271,7 +262,6 @@ describe("episodic-evidence cutover: immutable content protection", () => {
 			changedAt: new Date().toISOString(),
 		});
 		expect(result.status).toBe("episodic_content_immutable");
-		// Content is unchanged
 		const row = db.prepare("SELECT content FROM memories WHERE id = ?").get("epi-imm") as { content: string };
 		expect(row.content).toBe("original evidence");
 	});
@@ -326,7 +316,6 @@ describe("episodic-evidence cutover: immutable content protection", () => {
 			importance: number;
 			pinned: number;
 		};
-		// Content unchanged, metadata updated
 		expect(row.content).toBe("metadata evidence");
 		expect(row.tags).toBe("re-ranked");
 		expect(row.importance).toBe(0.9);
@@ -368,7 +357,6 @@ describe("episodic-evidence cutover: immutable content protection", () => {
 		};
 		expect(row.is_deleted).toBe(1);
 		expect(row.deleted_at).not.toBeNull();
-		// Tombstoned evidence is excluded from episodic selection
 		expect(
 			readRecentEpisodicSources(db as unknown as Parameters<typeof readRecentEpisodicSources>[0], "default", 10).map(
 				(r) => r.id,
@@ -434,8 +422,6 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 			visibility: "global",
 			createdAt: new Date().toISOString(),
 		});
-
-		// The evidence_meta column holds the canonical JSON blob
 		const row = db.prepare("SELECT evidence_meta FROM memories WHERE id = ?").get("epi-struct") as {
 			evidence_meta: string | null;
 		};
@@ -457,11 +443,7 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 			content: "Signet is built in TypeScript",
 			contentHash: "h-visible",
 		});
-		// Patch evidence_meta directly — the helper doesn't expose it, but the
-		// selector reads it from the column.
 		db.prepare("UPDATE memories SET evidence_meta = ? WHERE id = ?").run(evidenceMeta, "epi-visible");
-
-		// readRecentEpisodicSources surfaces evidenceMeta
 		const records = readRecentEpisodicSources(
 			db as unknown as Parameters<typeof readRecentEpisodicSources>[0],
 			"default",
@@ -469,8 +451,6 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 		);
 		expect(records).toHaveLength(1);
 		expect(records[0].evidenceMeta).toBe(evidenceMeta);
-
-		// readEpisodicMemory also surfaces it
 		const direct = readEpisodicMemory(
 			db as unknown as Parameters<typeof readEpisodicMemory>[0],
 			"default",
@@ -542,14 +522,10 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 			visibility: "global",
 			createdAt: new Date().toISOString(),
 		});
-
-		// The memory row exists with the structured evidence preserved
 		const mem = db.prepare("SELECT evidence_meta FROM memories WHERE id = ?").get("epi-no-graph") as {
 			evidence_meta: string | null;
 		};
 		expect(mem.evidence_meta).not.toBeNull();
-
-		// Zero direct semantic graph rows were created
 		const entityCount = (
 			db.prepare("SELECT COUNT(*) as n FROM entities WHERE name LIKE '%react%' OR name LIKE '%frontend%'").get() as {
 				n: number;
@@ -568,16 +544,6 @@ describe("episodic-evidence cutover: structured payload persistence", () => {
 		expect(attrCount).toBe(0);
 	});
 });
-
-/*
- * Classification consistency: fresh live-writer rows must match migration 094.
- *
- * Migration 094 classifies `reflection-answer` and `document` source_types as
- * episodic (they are NOT in the daemon-derived exclusion list
- * [extract, aggregate-recall, session_end, checkpoint]). The live writers for
- * those source types set `memoryKind: 'episodic'`; daemon-derived writers omit
- * it so fresh rows stay non-episodic (NULL), matching the migration's exclusion.
- */
 describe("episodic-evidence cutover: live writer classification matches migration 094", () => {
 	let db: Database;
 
@@ -595,7 +561,6 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 	}
 
 	it("reflection-answer writer stamps memoryKind='episodic' (matches migration 094)", () => {
-		// Mirror of the envelope built in routes/reflection-routes.ts answer route.
 		txIngestEnvelope(asWriteDb(db), {
 			id: "refl-1",
 			content: "Ship the scoping fix.",
@@ -618,8 +583,6 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 			memory_kind: string | null;
 		};
 		assertEpisodic(row);
-
-		// Selected by the episodic reader.
 		const records = readRecentEpisodicSources(
 			db as unknown as Parameters<typeof readRecentEpisodicSources>[0],
 			"agent-b",
@@ -630,7 +593,6 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 	});
 
 	it("document-ingest writer stamps memoryKind='episodic' (matches migration 094)", () => {
-		// Mirror of the envelope built in pipeline/document-worker.ts.
 		txIngestEnvelope(asWriteDb(db), {
 			id: "doc-chunk-1",
 			content: "document source chunk",
@@ -660,8 +622,6 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 			memory_kind: string | null;
 		};
 		assertEpisodic(row);
-
-		// Selected by the episodic reader.
 		const records = readRecentEpisodicSources(
 			db as unknown as Parameters<typeof readRecentEpisodicSources>[0],
 			"default",
@@ -672,8 +632,6 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 	});
 
 	it("daemon-derived writers omit memoryKind so fresh rows stay non-episodic (NULL)", () => {
-		// aggregate-recall is a daemon-synthesized output, NOT primary evidence.
-		// Its writer (aggregate-recall.ts) omits memoryKind -> NULL -> excluded.
 		txIngestEnvelope(asWriteDb(db), {
 			id: "agg-1",
 			content: "aggregate recall answer",
@@ -704,8 +662,6 @@ describe("episodic-evidence cutover: live writer classification matches migratio
 			memory_kind: string | null;
 		};
 		expect(row.memory_kind).toBeNull();
-
-		// Excluded from the episodic reader, matching migration 094's exclusion list.
 		const records = readRecentEpisodicSources(
 			db as unknown as Parameters<typeof readRecentEpisodicSources>[0],
 			"default",

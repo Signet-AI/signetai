@@ -9,12 +9,7 @@ import { cn } from "@/lib/utils";
 import { Activity, AlertCircle, Check, ChevronRight, Loader2, Play, X } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
 
-/* ── Formatting helpers ──────────────────────────────────────────────────── */
-
 function parseDate(s: string): Date | null {
-	// SQLite datetime('now') strings ("YYYY-MM-DD HH:MM:SS") are UTC; ISO
-	// strings pass through unchanged. Never let the engine parse the space
-	// form as local time — it would shift every pass by the TZ offset.
 	const iso = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s) ? `${s.replace(" ", "T")}Z` : s;
 	const d = new Date(iso);
 	return Number.isNaN(d.getTime()) ? null : d;
@@ -64,8 +59,6 @@ interface OntologyOp {
 	operation?: string;
 	payload?: Record<string, unknown>;
 }
-
-/** One-line summary of a tool call's input, so the stream reads at a glance. */
 function summarizeToolInput(t: DreamToolCall): string {
 	const input = t.input;
 	if (!input || typeof input !== "object") return "";
@@ -88,8 +81,6 @@ function summarizeToolInput(t: DreamToolCall): string {
 		.map(([k, v]) => `${k}=${String(v).slice(0, 18)}`)
 		.join(" ");
 }
-
-/** Per-operation counts for an apply_ontology_ops call, or null for other tools. */
 function opCounts(t: DreamToolCall): ReadonlyArray<[string, number]> | null {
 	if (t.toolName !== "apply_ontology_ops" || !Array.isArray(t.input?.operations)) return null;
 	const counts = new Map<string, number>();
@@ -99,13 +90,9 @@ function opCounts(t: DreamToolCall): ReadonlyArray<[string, number]> | null {
 	}
 	return [...counts.entries()].sort((a, b) => b[1] - a[1]);
 }
-
-/** Syntax-highlighted parameter rendering: cyan keys, bright values, op pills. */
 function ParamTokens({ t }: { t: DreamToolCall }) {
 	const input = t.input;
 	if (!input || typeof input !== "object") return null;
-
-	// apply_ontology_ops renders each operation as a translucent pill badge.
 	if (t.toolName === "apply_ontology_ops" && Array.isArray(input.operations)) {
 		const ops = input.operations as ReadonlyArray<OntologyOp>;
 		const names = ops.slice(0, 4).map((o) => o.operation ?? "?");
@@ -127,9 +114,6 @@ function ParamTokens({ t }: { t: DreamToolCall }) {
 			</>
 		);
 	}
-
-	// Generic key=value pairs render as one non-wrapping pill each, so a key
-	// never separates from its value and rows stay single-line.
 	const text = Object.entries(input)
 		.map(([k, v]) => `${k}=${typeof v === "string" ? v : JSON.stringify(v)}`)
 		.join(" ");
@@ -165,26 +149,16 @@ function ParamTokens({ t }: { t: DreamToolCall }) {
 	return <>{out}</>;
 }
 
-/* ── View ────────────────────────────────────────────────────────────────── */
-
 export function DreamsView() {
-	// Status is the heartbeat: worker state, active pass, ledger, attention.
-	// Polled at 3s — a pass runs for minutes and tool calls land every few
-	// seconds, so this is effectively live without a daemon-side SSE emitter.
 	const status = useAsync(() => api.getDreamStatus(), { intervalMs: 3000 });
 
 	const activePass = useMemo(() => status.data?.passes.find((p) => p.status === "running") ?? null, [status.data]);
-	// While idle, keep showing the most recent pass's trace so the panel
-	// doesn't go empty between passes.
 	const trackedPass = activePass ?? status.data?.passes[0] ?? null;
 
 	const tools = useAsync(() => (trackedPass ? api.getDreamPassTools(trackedPass.id) : Promise.resolve(null)), {
 		intervalMs: activePass ? 2500 : 10000,
 		deps: [trackedPass?.id ?? ""],
 	});
-
-	// The last successfully completed pass, plus its runbook summary (the
-	// natural-language account the agent writes at the end of the pass).
 	const lastSuccessful = useMemo(
 		() => status.data?.passes.find((p) => p.status === "completed") ?? null,
 		[status.data],
@@ -202,15 +176,12 @@ export function DreamsView() {
 				: null;
 		return runbookSummary ?? lastSuccessful?.summary ?? null;
 	}, [runbook.data, lastSuccessful]);
-	// Ticking elapsed clock while a pass is running.
 	const [now, setNow] = useState(() => Date.now());
 	useEffect(() => {
 		if (!activePass) return;
 		const id = setInterval(() => setNow(Date.now()), 1000);
 		return () => clearInterval(id);
 	}, [activePass]);
-
-	// Ledger drill-down: which pass's trace is open in the dialog.
 	const [selectedPass, setSelectedPass] = useState<DreamPass | null>(null);
 
 	const lastPass = status.data?.passes[0] ?? null;
@@ -229,7 +200,7 @@ export function DreamsView() {
 
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-3.5">
-			{/* Compact breadcrumb-style stat strip — mirrors the memory page header. */}
+			{}
 			<Surface className="flex h-10 shrink-0 items-center justify-between gap-6 px-4">
 				<Stat label="state" value={running ? "running" : "idle"} live={running} />
 				<Stat
@@ -266,8 +237,7 @@ export function DreamsView() {
 				</span>
 			</Surface>
 
-			{/* Summary prose sits on the canvas to the left; the two cards share the
-			    right column so they keep the same width. */}
+			{}
 			<div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-[minmax(13rem,1fr)_1.9fr] lg:grid-rows-[minmax(0,1fr)]">
 				<DreamingSummarySection pass={lastSuccessful} summary={summaryText} loading={runbook.loading} />
 				<div className="flex min-h-0 min-w-0 flex-col gap-4.5">
@@ -287,8 +257,6 @@ export function DreamsView() {
 		</div>
 	);
 }
-
-/* ── Header stat chip (memory-page style) ───────────────────────────────── */
 
 function Stat({ label, value, live, tone }: { label: string; value: string; live?: boolean; tone?: "ok" | "warn" }) {
 	return (
@@ -314,8 +282,6 @@ function Stat({ label, value, live, tone }: { label: string; value: string; live
 	);
 }
 
-/* ── Trigger control ─────────────────────────────────────────────────────── */
-
 function TriggerControl({ running, refresh }: { running: boolean; refresh: () => void }) {
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
@@ -331,8 +297,6 @@ function TriggerControl({ running, refresh }: { running: boolean; refresh: () =>
 		refresh();
 	};
 	if (running) {
-		// Passive status indicator while a pass is active — deliberately NOT a
-		// primary-looking button, so the trigger affordance stays unambiguous.
 		return (
 			<span className="flex h-7 shrink-0 items-center gap-1.5 rounded-full border border-[oklch(1_0_0/0.12)] bg-white/[0.04] px-3 font-mono text-[10px] font-medium uppercase tracking-[0.06em] text-slate-500 dark:text-slate-400">
 				<span className="size-1.5 animate-pulse rounded-full bg-success shadow-[0_0_6px_color-mix(in_oklch,var(--success)_70%,transparent)]" />
@@ -362,8 +326,6 @@ function TriggerControl({ running, refresh }: { running: boolean; refresh: () =>
 		</div>
 	);
 }
-
-/* ── Dreaming summary (last successful run) — prose on the canvas ─────────── */
 
 function DreamingSummarySection({
 	pass,
@@ -404,10 +366,6 @@ function DreamingSummarySection({
 		</section>
 	);
 }
-
-/** Markdown prose renderer for the runbook summary. Handles headings, lists,
- *  paragraphs, **bold**, *italic*, `code`, and [links](url) — no raw HTML, so
- *  no sanitization surface. Ids/error phrases get the same tinting as before. */
 function MarkdownSummary({ text }: { text: string }) {
 	const blocks = splitMarkdownBlocks(text);
 	return (
@@ -496,8 +454,6 @@ function renderInline(text: string, keyBase: string): React.ReactNode[] {
 	if (last < text.length) out.push(...renderTinted(text.slice(last), `${keyBase}t${n}`));
 	return out;
 }
-
-/** Ids get a neutral chip, error-ish phrases get a red wash. */
 function renderTinted(text: string, keyBase: string): React.ReactNode[] {
 	const out: React.ReactNode[] = [];
 	let last = 0;
@@ -587,8 +543,6 @@ function splitMarkdownBlocks(text: string): ReadonlyArray<{
 	flushList();
 	return blocks;
 }
-
-/** Plain one-line preview for ledger rows and native browser tooltips. */
 function markdownSummaryPreview(text: string): string {
 	const content = splitMarkdownBlocks(text)
 		.map((block) => (block.type === "list" ? (block.items ?? []).map((item) => item.text).join(" · ") : block.text))
@@ -601,8 +555,6 @@ function markdownSummaryPreview(text: string): string {
 		.replace(/\s+/g, " ")
 		.trim();
 }
-
-/* ── Live pass + tool trace ──────────────────────────────────────────────── */
 
 function LivePassPanel({
 	pass,
@@ -679,8 +631,6 @@ function LivePassPanel({
 		</Panel>
 	);
 }
-
-/** Structured trace table: # · Function · Parameters · Duration · Status. */
 function TraceTable({
 	items,
 	compact,
@@ -762,8 +712,6 @@ function TraceTable({
 	);
 }
 
-/* ── Pass ledger (drill-down) ────────────────────────────────────────────── */
-
 function PassLedger({ passes, onSelect }: { passes: DreamPass[]; onSelect: (p: DreamPass) => void }) {
 	return (
 		<Panel title="Pass ledger" meta={`last ${passes.length} · click a row for details`}>
@@ -795,7 +743,7 @@ function PassLedger({ passes, onSelect }: { passes: DreamPass[]; onSelect: (p: D
 								)}
 								title={p.summary ? markdownSummaryPreview(p.summary) : undefined}
 							>
-								{/* Latest pass gets a blue accent bar — it's the active reference row. */}
+								{}
 								{idx === 0 && (
 									<span className="absolute left-0 top-1/2 h-4 w-[3px] -translate-y-1/2 rounded-full bg-[#3B82F6]" />
 								)}
@@ -828,14 +776,9 @@ function PassLedger({ passes, onSelect }: { passes: DreamPass[]; onSelect: (p: D
 	);
 }
 
-/* ── Pass detail dialog (drill-down) ─────────────────────────────────────── */
-
 function PassDetailDialog({ pass, onClose }: { pass: DreamPass; onClose: () => void }) {
 	const tools = useAsync(() => api.getDreamPassTools(pass.id), { deps: [pass.id] });
 	const items = tools.data?.items ?? [];
-
-	// Resolve entity ids → names from the pass's own get_entity outputs, so
-	// mutation cards read "Discord" instead of a 36-char uuid.
 	const nameMap = useMemo(() => {
 		const m = new Map<string, string>();
 		for (const t of items) {
@@ -901,7 +844,7 @@ function PassDetailDialog({ pass, onClose }: { pass: DreamPass; onClose: () => v
 						</div>
 					)}
 
-					{/* One-line stats footer — the substance is above; this is context. */}
+					{}
 					<div className="border-t border-border/60 pt-2.5 font-mono text-[10px] text-muted-foreground">
 						<span>tokens {fmtTokens(pass.tokensConsumed)}</span>
 						<span>
@@ -923,8 +866,6 @@ function PassDetailDialog({ pass, onClose }: { pass: DreamPass; onClose: () => v
 		</Dialog>
 	);
 }
-
-/** Readable rendering of one ontology mutation (flag/archive/add_claim/...). */
 function MutationsList({
 	mutations,
 	nameMap,
@@ -986,8 +927,6 @@ function MutationCard({ op, nameMap }: { op: OntologyOp; nameMap: ReadonlyMap<st
 		</div>
 	);
 }
-
-/** Shorten a subject ref, resolving entity ids through the pass's name map. */
 function resolveRef(ref: string, nameMap: ReadonlyMap<string, string>): string {
 	if (ref.startsWith("entity:")) {
 		const id = ref.slice("entity:".length);
@@ -997,8 +936,6 @@ function resolveRef(ref: string, nameMap: ReadonlyMap<string, string>): string {
 	if (ref.startsWith("attention:")) return `attention:${ref.slice("attention:".length, "attention:".length + 8)}`;
 	return ref.length > 24 ? `${ref.slice(0, 24)}…` : ref;
 }
-
-/** Full tool calls with readable, un-truncated parameters. */
 function ToolCallList({ items, nameMap }: { items: DreamToolCall[]; nameMap: ReadonlyMap<string, string> }) {
 	return (
 		<div className="flex flex-col gap-2">
@@ -1052,8 +989,6 @@ function prettyJson(v: unknown): string {
 	}
 }
 
-/* ── Shared bits ─────────────────────────────────────────────────────────── */
-
 function ModeBadge({
 	mode,
 	running,
@@ -1072,7 +1007,6 @@ function ModeBadge({
 			className={cn(
 				"h-[18px] shrink-0 rounded-full px-1.5 font-mono text-[9px] font-normal normal-case tracking-wide",
 				fixedWidth && "w-20 justify-center",
-				// Pass-type colors: cyan = content, purple = hygiene.
 				label === "content" &&
 					!running &&
 					!failed &&

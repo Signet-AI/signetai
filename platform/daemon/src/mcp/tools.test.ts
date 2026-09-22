@@ -1,9 +1,3 @@
-/**
- * Tests for MCP tool definitions.
- *
- * Tool handlers call the daemon HTTP API, so we mock global fetch.
- */
-
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -23,10 +17,6 @@ import { Hono } from "hono";
 import { resetDefaultPluginHostForTests } from "../plugins/index.js";
 import { mountMarketplaceRoutes } from "../routes/marketplace.js";
 import { createMcpServer, __resetMarketplaceRefreshesForTests, refreshMarketplaceProxyTools } from "./tools.js";
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 interface RegisteredTool {
 	handler: (args: Record<string, unknown>) => Promise<unknown>;
@@ -166,10 +156,6 @@ function mockFetch(
 		});
 	}) as unknown as typeof fetch;
 }
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("createMcpServer", () => {
 	let server: McpServer;
@@ -1817,10 +1803,6 @@ process.stdin.on("data", (chunk) => {
 
 	describe("schema compatibility", () => {
 		it("no tool schema emits propertyNames (OpenAI compat)", async () => {
-			// propertyNames is emitted by z.record(z.string(), ValueType) and is
-			// rejected by the OpenAI function-calling API with a hard 400.
-			// This test calls tools/list through the actual MCP protocol to catch
-			// any regression at the serialization layer, not just the schema definition.
 			const [ct, st] = InMemoryTransport.createLinkedPair();
 			const client = new Client({ name: "test-client", version: "0.0.1" });
 			await server.connect(st);

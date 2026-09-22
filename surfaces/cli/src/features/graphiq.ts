@@ -101,8 +101,6 @@ export async function ensureGraphiqInstalled(options: {
 	const spinner = ora("Installing GraphIQ...").start();
 	const result = await runCommand("bash", [script, "install"], {
 		env: {
-			// Pin the release the bundled plugin is tested against, and keep the
-			// binary in a user-writable dir the resolvers check (no sudo).
 			GRAPHIQ_INSTALL_DIR: GRAPHIQ_DEFAULT_INSTALL_DIR,
 			GRAPHIQ_VERSION: GRAPHIQ_SYNCED_VERSION,
 		},

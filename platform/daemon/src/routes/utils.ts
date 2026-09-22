@@ -94,9 +94,7 @@ export function parseTagsField(raw: string | null): string[] {
 		if (Array.isArray(parsed)) {
 			return parsed.filter((value): value is string => typeof value === "string");
 		}
-	} catch {
-		// Fallback to comma-separated tags.
-	}
+	} catch {}
 
 	return raw
 		.split(",")
@@ -464,9 +462,7 @@ export function loadForgetCandidates(
 					version: row.version,
 					score: 1 / (1 + Math.abs(row.raw_score ?? 0)),
 				}));
-			} catch {
-				// Fall through to LIKE fallback.
-			}
+			} catch {}
 
 			const fallbackRows = db
 				.prepare(
@@ -507,7 +503,7 @@ export function loadForgetCandidates(
 			version: row.version,
 			score: 0,
 		}));
-	}, "routes/utils.ts:437");
+	}, "routes/utils.ts:435");
 }
 
 export function loadForgetCandidatesByIds(
@@ -547,7 +543,7 @@ export function loadForgetCandidatesByIds(
 				version: row.version,
 				score: 0,
 			}));
-	}, "routes/utils.ts:525");
+	}, "routes/utils.ts:521");
 }
 
 export function buildForgetConfirmToken(memoryIds: readonly string[]): string {
@@ -651,14 +647,11 @@ export const STATUS_CACHE_TTL = 30000;
 const embeddingStatusCache = new Map<string, { readonly status: EmbeddingStatus; readonly checkedAt: number }>();
 
 function embeddingStatusCacheKey(cfg: EmbeddingConfig): string {
-	// warmNative participates in the key: a cached native status from a
-	// warmNative-enabled probe must not mask the kill-switch (#1073).
 	return `${cfg.provider}\u0000${cfg.model}\u0000${resolveEmbeddingBaseUrl(cfg)}\u0000${cfg.warmNative === false ? "no-native" : "native"}`;
 }
 
 function cacheEmbeddingStatus(key: string, status: EmbeddingStatus, now: number): void {
 	embeddingStatusCache.set(key, { status, checkedAt: now });
-	// Preserve the existing exported latest-status diagnostics surface.
 	cachedEmbeddingStatus = status;
 	statusCacheTime = now;
 }
@@ -696,9 +689,6 @@ export async function checkEmbeddingProvider(cfg: EmbeddingConfig): Promise<Embe
 
 	try {
 		if (cfg.provider === "native") {
-			// Kill-switch (#1073): warmNative: false never initializes the
-			// native worker. Probe the same fallback chain used by fetchEmbedding
-			// so readiness, migration, and tracker callers see usable embeddings.
 			if (cfg.warmNative === false) {
 				const fallback = await fetchEmbedding("test", cfg);
 				if (fallback) {

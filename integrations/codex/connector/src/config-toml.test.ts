@@ -1,10 +1,3 @@
-/**
- * Integration tests for CodexConnector MCP config.toml management.
- *
- * Tests exercise real production code via CodexConnector.install() and
- * CodexConnector.uninstall(). A subclass redirects getCodexHome() to a
- * temp directory so the real ~/.codex is never touched.
- */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -256,13 +249,10 @@ describe("CodexConnector.install — config.toml MCP registration", () => {
 		expect(content).toContain("[mcp_servers.signet]");
 		expect(content).toContain("command = 'signet-mcp'");
 		expect(content).not.toContain("disabled_tools");
-		// Must not be an array — Codex's Rust parser expects Option<String>
 		expect(content).not.toContain("command = [");
 	});
 
 	test("repairs stale array-format command on re-install (regression: #273 / invalid transport)", async () => {
-		// This is the exact config that caused "invalid transport in 'mcp_servers.signet'"
-		// errors for users who installed before PR #273 fixed the array bug.
 		writeFileSync(configPath, "# Signet MCP server\n[mcp_servers.signet]\ncommand = ['signet-mcp']\n");
 
 		await connector().install(tempHome);
@@ -737,8 +727,6 @@ describe("CodexConnector.uninstall — config.toml cleanup", () => {
 	});
 
 	test("handles multi-line TOML args without corrupting surrounding sections (regression: unpatchConfigToml)", async () => {
-		// A user who hand-edited args to multi-line form would have had
-		// continuation lines left in the file by the old section-end detection.
 		writeFileSync(
 			configPath,
 			[
@@ -763,16 +751,11 @@ describe("CodexConnector.uninstall — config.toml cleanup", () => {
 
 		const content = readFileSync(configPath, "utf-8");
 		expect(content).not.toContain("[mcp_servers.signet]");
-		// Continuation lines must not leak into the output
 		expect(content).not.toContain("--verbose");
 		expect(content).toContain("[other]");
 		expect(content).toContain("[after]");
 	});
 });
-
-// buildMcpBlock is tested directly here because resolveSignetMcp() always
-// returns the non-Windows path on Linux, so Windows quoting can't be
-// exercised through install().
 describe("buildMcpBlock — TOML quoting", () => {
 	test("produces string command, not array", () => {
 		const block = buildMcpBlock({ command: "signet-mcp", args: [] });
@@ -809,7 +792,6 @@ describe("buildMcpBlock — TOML quoting", () => {
 			command: "C:\\Program Files\\node.exe",
 			args: ["C:\\signet\\mcp-stdio.js"],
 		});
-		// No single-quote in the path, so literal single-quote TOML strings are used
 		expect(block).toContain("command = 'C:\\Program Files\\node.exe'");
 		expect(block).toContain("args = ['C:\\signet\\mcp-stdio.js']");
 		expect(block).not.toContain("command = [");
@@ -836,10 +818,6 @@ describe("buildMcpBlock — TOML quoting", () => {
 		expect(block).toContain("SIGNET_MCP_STDIO_WORKER = '1'");
 	});
 });
-
-// ---------------------------------------------------------------------------
-// hooks.json regression tests (issue #481)
-// ---------------------------------------------------------------------------
 
 function readHooksJson(): Record<string, unknown> {
 	return JSON.parse(readFileSync(hooksPath, "utf-8"));

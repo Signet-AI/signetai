@@ -1,8 +1,5 @@
 use napi_derive::napi;
 use sha2::{Digest, Sha256};
-
-// napi(object) converts snake_case fields to camelCase in JS:
-// storage_content -> storageContent, etc.
 #[napi(object)]
 pub struct NormalizedMemoryContent {
     pub storage_content: String,
@@ -13,15 +10,18 @@ pub struct NormalizedMemoryContent {
 
 #[napi]
 pub fn normalize_content_for_storage(content: String) -> String {
-    content.replace("\r\n", "\n").replace('\r', "\n").trim().to_string()
+    content
+        .replace("\r\n", "\n")
+        .replace('\r', "\n")
+        .trim()
+        .to_string()
 }
 
 #[napi]
 pub fn derive_normalized_content(storage_content: String) -> String {
     let lowered = collapse_whitespace(&storage_content.to_lowercase());
-    // Parity: TS uses /[.,!?;:]+$/ regex. trim_end_matches char-by-char
-    // is equivalent here since input is already trimmed of whitespace.
-    let trimmed = lowered.trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ';' | ':'));
+    let trimmed =
+        lowered.trim_end_matches(|c: char| matches!(c, '.' | ',' | '!' | '?' | ';' | ':'));
     trimmed.trim().to_string()
 }
 
@@ -69,11 +69,14 @@ fn collapse_whitespace(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{derive_normalized_content, normalize_and_hash_content, normalize_content_for_storage};
+    use super::{
+        derive_normalized_content, normalize_and_hash_content, normalize_content_for_storage,
+    };
 
     #[test]
     fn storage_preserves_multiline_markdown() {
-        let input = "  ## Session Logs\r\n\r\n| id | kind |\r\n|----|------|\r\n| a | summary |\r\n";
+        let input =
+            "  ## Session Logs\r\n\r\n| id | kind |\r\n|----|------|\r\n| a | summary |\r\n";
         let result = normalize_content_for_storage(input.to_string());
         assert_eq!(
             result,

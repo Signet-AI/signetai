@@ -44,7 +44,6 @@ describe("release-download-stats (issue #1026 Phase 3)", () => {
 		expect(result.totalDownloads).toBe(2900);
 		expect(result.releases[0].totalDownloads).toBe(2000);
 		expect(result.releases[0].assets[0]).toEqual({ name: "signetai-linux-x64-0.163.15.tgz", downloads: 1200 });
-		// Assets sorted by downloads descending
 		expect(result.releases[0].assets[0].downloads).toBeGreaterThanOrEqual(result.releases[0].assets[1].downloads);
 	});
 

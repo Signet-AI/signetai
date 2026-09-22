@@ -4,12 +4,6 @@ import { DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
 import type { VectorSearchOptions, VectorSearchResponse } from "@signet/core";
 import type { RecallParams, RecallResponse } from "./memory-search";
 import type { ResolvedMemoryConfig } from "./memory-config";
-
-/**
- * Minimal recall seam for the Phase C plumbing proof. Category migrations can
- * replace their synchronous recall query with this helper without learning
- * whether the client has one owner or a future set of read lanes.
- */
 export async function recallThroughDbOwner<Row extends object>(
 	client: DbOwnerClient,
 	sql: string,
@@ -22,8 +16,6 @@ export async function recallThroughDbOwner<Row extends object>(
 	);
 	return await client.awaitResult(handle);
 }
-
-/** Execute the full hybrid recall algorithm inside the owner read lane. */
 export async function hybridRecallThroughDbOwner(
 	client: DbOwnerClient,
 	params: RecallParams,
@@ -50,8 +42,6 @@ export async function hybridRecallThroughDbOwner(
 	);
 	return await client.awaitResult(handle);
 }
-
-/** Execute vector scoring, including the bounded fallback scan, in the owner. */
 export async function vectorSearchThroughDbOwner(
 	client: DbOwnerClient,
 	queryEmbedding: readonly number[],

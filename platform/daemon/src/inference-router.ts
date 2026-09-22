@@ -104,12 +104,9 @@ export interface InferenceExecutionResult {
 	readonly decision: RouteDecision;
 	readonly attempts: readonly InferenceExecutionAttempt[];
 }
-
-/** Successful bounded-agent run using one router-selected target. */
 export interface InferenceAgentExecutionResult {
 	readonly decision: RouteDecision;
 	readonly attempts: readonly InferenceExecutionAttempt[];
-	/** Privacy-safe metadata for the target that actually completed the run. */
 	readonly attribution: InferenceExecutionAttribution | null;
 }
 
@@ -161,12 +158,6 @@ export class PiAgentSessionTimeoutError extends Error {
 		this.cleanup = cleanup;
 	}
 }
-
-/**
- * Race a Pi agent prompt against its deadline. A timeout returns immediately,
- * but carries the cancellation-settlement promise so the caller can retain its
- * concurrency permit until the upstream work has actually stopped.
- */
 export async function promptPiAgentSession(
 	session: PiAgentSession,
 	prompt: string,
@@ -295,8 +286,6 @@ function inferenceConfigPaths(agentsDir: string): readonly string[] {
 function resolveForComparison(path: string): string {
 	return normalize(isAbsolute(path) ? path : resolve(path));
 }
-
-/** True only for the root config files read by this router. */
 export function isInferenceRouterConfigPath(agentsDir: string, path: string): boolean {
 	const changedPath = resolveForComparison(path);
 	return inferenceConfigPaths(agentsDir).some((candidate) => resolveForComparison(candidate) === changedPath);
@@ -392,7 +381,6 @@ function buildPromptFromMessages(messages: ReadonlyArray<{ readonly role: string
 export class InferenceRouter {
 	private configCache: RouterResult<LoadedRoutingConfig> | null = null;
 	private configLoad: Promise<RouterResult<LoadedRoutingConfig>> | null = null;
-	// Coalesce explicit refreshes without letting one join a non-refresh load.
 	private configLoadForced = false;
 	private configGeneration = 0;
 	private snapshotCache: SnapshotCacheEntry | null = null;
@@ -418,16 +406,10 @@ export class InferenceRouter {
 	private nextBackgroundExecutionId = 1;
 
 	constructor(private readonly agentsDir: string) {}
-
-	/**
-	 * Eagerly load + validate the routing config once at daemon boot so broken
-	 * references are surfaced in the log before any route is attempted (#1005).
-	 * Never throws: a missing/invalid config is reported via the structured log.
-	 */
 	async validateConfigReferences(): Promise<void> {
 		try {
 			const loaded = await this.loadConfig();
-			if (!loaded.ok) return; // loadConfig already logged the structured error.
+			if (!loaded.ok) return;
 		} catch (error) {
 			logger.error("inference", "Routing config boot validation failed", error as Error);
 		}
@@ -519,12 +501,6 @@ export class InferenceRouter {
 		const execution = this.activeBackgroundExecutions.get(id);
 		if (execution) execution.kind = "pi";
 	}
-
-	/**
-	 * Drop the cached routing config after the daemon watcher observes a config
-	 * change. Concurrent callers that already started loading may finish with
-	 * the old snapshot, but the next caller starts a fresh load.
-	 */
 	invalidateConfig(): void {
 		this.configGeneration += 1;
 		this.configCache = null;
@@ -1031,12 +1007,6 @@ export class InferenceRouter {
 			this.finishBackgroundExecution(background?.id);
 		}
 	}
-
-	/**
-	 * Run a daemon-owned bounded tool session through the same routing policy as
-	 * ordinary inference. Only Pi-backed targets can execute in-process tools;
-	 * ACPX gets its equivalent MCP binding rather than a fake text fallback.
-	 */
 	async runAgent(
 		request: RouteRequest,
 		prompt: string,
@@ -1045,9 +1015,7 @@ export class InferenceRouter {
 			readonly timeoutMs?: number;
 			readonly maxTokens?: number;
 			readonly refresh?: boolean;
-			/** Synchronous observer for the in-process Pi session event stream. */
 			readonly onEvent?: (event: AgentSessionEvent) => void;
-			/** Synchronous observer for the session's non-message context. */
 			readonly onSessionInfo?: (info: {
 				readonly sessionId?: string;
 				readonly model?: string;
@@ -1172,23 +1140,13 @@ export class InferenceRouter {
 									model: session.getModelName?.(),
 									systemPrompt: session.getSystemPrompt?.(),
 								});
-							} catch {
-								// Observers cannot change the provider/session result.
-							}
+							} catch {}
 						}
 						if (opts?.onEvent && session.subscribe) {
 							try {
 								unsubscribeSessionEvents = session.subscribe(opts.onEvent);
-							} catch {
-								// Event observation is optional; keep the Pi run usable when
-								// an older provider wrapper lacks the subscription seam.
-							}
+							} catch {}
 						}
-						// AgentSession owns an internal model loop, so acquire the
-						// process-wide permit before initialization and hold it until
-						// the whole session is disposed. This prevents tool-driven
-						// Pi turns from multiplying concurrency outside the canonical
-						// provider boundary, including cancellation cleanup.
 						const remainingMs = deadline === undefined ? undefined : deadline - performance.now();
 						if (remainingMs !== undefined && remainingMs <= 0) {
 							throw new PiAgentSessionTimeoutError(deadlineMs, Promise.resolve());
@@ -1210,9 +1168,6 @@ export class InferenceRouter {
 						}
 						const failure = session.getFailureMessage();
 						if (failure) throw new Error(failure);
-						// Read the session aggregate before dispose() tears the
-						// in-memory entries down. getStats is the only way to
-						// capture provider-reported tokens for the agentic loop.
 						sessionUsage = mapSessionStatsToUsage(
 							session.getStats(),
 							Date.now() - startedAt,
@@ -1317,9 +1272,6 @@ export class InferenceRouter {
 					maxTokens: opts?.maxTokens,
 					signal: opts?.signal,
 					sessionId,
-					// aggregate_recall is latency-sensitive (the routing engine already
-					// excludes ACPX subprocesses for it). Suppress thinking for the same
-					// reason: thinking tokens would dominate the synthesis budget.
 					reasoning: request.operation === "aggregate_recall" ? false : undefined,
 				});
 				this.clearObservedRuntimeState(loaded.value, targetRef);
@@ -1435,8 +1387,6 @@ export class InferenceRouter {
 					maxTokens: opts?.maxTokens,
 					abortSignal: opts?.abortSignal,
 					sessionId,
-					// aggregate_recall is latency-sensitive: suppress thinking tokens
-					// (mirrors the execute path and the routing engine's ACPX exclusion).
 					reasoning: request.operation === "aggregate_recall" ? false : undefined,
 				});
 

@@ -332,8 +332,6 @@ describe("registerMemoryCommands embed backfill --all guard", () => {
 		} finally {
 			console.error = prevErr;
 		}
-
-		// The bulk operation must not reach the daemon.
 		expect(calledPath).toBeUndefined();
 		expect(calledBody).toBeUndefined();
 		expect(errText).toContain("--all");
@@ -359,10 +357,6 @@ describe("registerMemoryCommands embed backfill --all guard", () => {
 	});
 
 	test("surfaces a structured failure message (e.g. dimension-mismatch refusal) to the user", async () => {
-		// Regression guard: repairHttpStatus maps success:false to HTTP 500, so
-		// ok:false arrives with a RepairResult body (message/details, no `error`).
-		// The CLI must surface `message` rather than the generic "Backfill failed",
-		// or the operator never sees the "restart the daemon" guidance.
 		const program = new Command();
 		registerMemoryCommands(program, {
 			ensureDaemonForSecrets: async () => true,
@@ -374,9 +368,6 @@ describe("registerMemoryCommands embed backfill --all guard", () => {
 				},
 			}),
 		});
-
-		// The !ok branch calls process.exit(1); stub it to throw so the test can
-		// observe the printed message without terminating the runner.
 		const exitSentinel = Symbol("exit");
 		const prevExit = process.exit;
 		const prevStderrWrite = process.stderr.write.bind(process.stderr);

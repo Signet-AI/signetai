@@ -224,11 +224,6 @@ async function serveConnectorRelease(connectorTarball: Buffer, version: string):
 }
 
 function buildFakeConnectorTarball(): Buffer {
-	// Build a real tar.gz with a `runtime/connectors/hermes-agent/hermes-plugin/...`
-	// layout so the install path's tar extraction is exercised end-to-end.
-	// Tar the explicit directory entries to avoid tar seeing the staging
-	// dir as "file changed as we read it" under aggressive test-runner
-	// file-watching.
 	const stage = mkdtempSync(join(tmpdir(), "signet-connector-tar-"));
 	tempDirs.push(stage);
 	const pluginDir = join(stage, "runtime", "connectors", "hermes-agent", "hermes-plugin");
@@ -458,9 +453,6 @@ describe("native install smoke", () => {
 		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), {
 			recursive: true,
 		});
-		// Stash the manifest in the wrapper root. `install-native.js`
-		// looks for `native-manifest.json` next to the wrapper's own
-		// package.json.
 		const manifest = JSON.stringify({
 			schemaVersion: 1,
 			version,
@@ -478,8 +470,6 @@ describe("native install smoke", () => {
 			join(nativePackageDir, "package.json"),
 			JSON.stringify({ name: nativePackageName, version, type: "module" }),
 		);
-		// Native binary can be empty here — the connector install path
-		// runs even when the binary link is skipped.
 		writeFileSync(nativePackageBin, "");
 		chmodSync(nativePackageBin, 0o755);
 
@@ -491,11 +481,6 @@ describe("native install smoke", () => {
 
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("Installed connector assets to");
-
-		// Tarball layout puts files at `<packageDir>/runtime/connectors/...`.
-		// This is the path the binary's `$SIGNET_DIR/runtime/connectors/...`
-		// lookup resolves to, and the layout the connector's
-		// `getPluginSourceDir()` expects.
 		const extractedDir = join(packageDir, "runtime", "connectors", "hermes-agent", "hermes-plugin");
 		expect(existsSync(join(extractedDir, "__init__.py"))).toBe(true);
 		expect(existsSync(join(extractedDir, "plugin.yaml"))).toBe(true);
@@ -513,7 +498,6 @@ describe("native install smoke", () => {
 
 		const version = "0.0.0-smoke-831-bad";
 		const tarball = buildFakeConnectorTarball();
-		// Serve a manifest with a wrong SHA so verification must fail.
 		const wrongSha = "0".repeat(64);
 		const server = createServer((req, res) => {
 			if (req.url === "/download/native-manifest.json" || req.url === `/download/v${version}/native-manifest.json`) {
@@ -566,11 +550,6 @@ describe("native install smoke", () => {
 		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), {
 			recursive: true,
 		});
-		// The wrapper-side manifest must match what the HTTP server
-		// advertises, otherwise the postinstall skips the connector
-		// install entirely (no URL to fetch from). We override the
-		// SHA via the test server so the postinstall sees a mismatching
-		// value and bails out with the expected error.
 		const manifest = JSON.stringify({
 			schemaVersion: 1,
 			version,
@@ -711,12 +690,6 @@ describe("native install smoke", () => {
 		mkdirSync(join(nativePackageDir, "bin"), { recursive: true });
 		cpSync(join(root, "dist", "signetai", "scripts"), join(packageDir, "scripts"), { recursive: true });
 		cpSync(join(root, "dist", "signetai", "bin"), join(packageDir, "bin"), { recursive: true });
-		// The signet-mcp stdio bundle is a build artifact (gitignored).
-		// It only exists after `bun run build:signetai`; copy it into the
-		// fake install if present so the install-path probe below can run.
-		// On a clean checkout this whole block is skipped — the dedicated
-		// signet-mcp stdio smoke test (which also skips cleanly) covers
-		// the bundle in isolation.
 		const stdioSource = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
 		const hasStdioBundle = existsSync(stdioSource);
 		if (hasStdioBundle) {
@@ -752,20 +725,6 @@ describe("native install smoke", () => {
 		const wrapper = await runCommand("node", [join(packageDir, "bin", "signet.js"), "--version"], process.env);
 		expect(wrapper.status).toBe(0);
 		expect(wrapper.stdout).toContain("fake native signet --version");
-
-		// signet-mcp must be the self-contained stdio JSON-RPC bundle, not
-		// a wrapper that forwards to the native binary. Beyond the file
-		// presence check, exercise the bundle from a fake install layout
-		// and assert it actually speaks JSON-RPC. This catches bundle-
-		// level breakage (e.g. the bundle was never built, the alias
-		// config is wrong, the entry file is missing) at the install
-		// smoke layer. A typo in the `bin` field of
-		// dist/signetai/package.json itself (e.g. `dist/mcpstdio.js`
-		// pointing at a file that doesn't exist) is caught separately
-		// by the manifest assertion in
-		// scripts/check-publish-manifests.test.ts. Skipped on clean
-		// checkouts where the bundle has not been built; full handshake
-		// coverage lives in scripts/signet-mcp-stdio-smoke.test.ts.
 		const mcpBinPath = join(packageDir, "dist", "mcp-stdio.js");
 		if (!hasStdioBundle) return;
 

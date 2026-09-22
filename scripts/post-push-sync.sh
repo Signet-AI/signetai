@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Wait for GitHub release workflow then pull the result.
-# Usage: ./scripts/post-push-sync.sh [branch]
 
 set -euo pipefail
 

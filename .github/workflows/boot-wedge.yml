@@ -1,8 +1,4 @@
 name: Boot Wedge Safety Gate
-
-# L1 safety invariant: a source-run daemon must boot, remain live, and settle
-# below an idle CPU ceiling. This is intentionally separate from the longer
-# Phase D load harness so a boot wedge fails a small, direct CI check first.
 on:
   pull_request:
     paths:
@@ -50,7 +46,6 @@ jobs:
       - name: Install dependencies
         shell: bash
         env:
-          # This daemon-only job does not run Electron's desktop application.
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 

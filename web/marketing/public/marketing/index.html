@@ -15,9 +15,6 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-/* ============================
-   DESIGN TOKENS
-   ============================ */
 :root {
   --color-bg: #08080a;
   --color-text: #d4d4d8;
@@ -31,10 +28,6 @@
   --font-body: 'IBM Plex Mono', monospace;
   --radius-orbit: min(42vw, 42vh);
 }
-
-/* ============================
-   RESET & BASE
-   ============================ */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 html {
@@ -49,18 +42,10 @@ body {
   background: var(--color-bg);
   -webkit-font-smoothing: antialiased;
 }
-
-/* ============================
-   SCROLL SPACER
-   ============================ */
 .scroll-spacer {
   height: 1000vh;
   pointer-events: none;
 }
-
-/* ============================
-   CRT GRAIN OVERLAY
-   ============================ */
 .crt-grain {
   position: fixed;
   inset: 0;
@@ -75,10 +60,6 @@ body {
     rgba(255,255,255,0.03) 4px
   );
 }
-
-/* ============================
-   BACKGROUND GRID
-   ============================ */
 .bg-grid {
   position: fixed;
   inset: 0;
@@ -89,10 +70,6 @@ body {
     linear-gradient(90deg, rgba(138,138,150,0.04) 1px, transparent 1px);
   background-size: 60px 60px;
 }
-
-/* ============================
-   CORNER MARKS
-   ============================ */
 .corner-marks {
   position: fixed;
   inset: 0;
@@ -120,10 +97,6 @@ body {
   border-bottom-width: 1px;
   border-right-width: 1px;
 }
-
-/* ============================
-   FIXED VIEWPORT LAYER
-   ============================ */
 .viewport-layer {
   position: fixed;
   inset: 0;
@@ -132,10 +105,6 @@ body {
   overflow: hidden;
   clip-path: inset(0);
 }
-
-/* ============================
-   ORBIT TRACK (visual ring)
-   ============================ */
 .orbit-track {
   position: absolute;
   top: 50%;
@@ -147,10 +116,6 @@ body {
   border: 1px solid var(--color-ring);
   transition: border-color 0.8s ease;
 }
-
-/* ============================
-   ORBIT PROGRESS DOT
-   ============================ */
 .orbit-dot {
   position: absolute;
   top: 50%;
@@ -164,10 +129,6 @@ body {
   transition: opacity 0.3s;
   z-index: 20;
 }
-
-/* ============================
-   FORM — always center
-   ============================ */
 .form-container {
   position: absolute;
   top: 50%;
@@ -274,10 +235,6 @@ body {
   letter-spacing: 1px;
   opacity: 0.6;
 }
-
-/* ============================
-   STORY BEATS — orbital cards
-   ============================ */
 .beat {
   position: absolute;
   top: 50%;
@@ -332,21 +289,13 @@ body {
   width: 100%;
   height: 100%;
 }
-
-/* Danger tint for beat 7 */
 .beat[data-beat="6"] h2 {
   color: var(--color-danger);
 }
-
-/* Warn tint for beats 4,5 */
 .beat[data-beat="3"] h2,
 .beat[data-beat="4"] h2 {
   color: var(--color-warn);
 }
-
-/* ============================
-   FINAL CTA SPOTLIGHT
-   ============================ */
 .spotlight-overlay {
   position: fixed;
   inset: 0;
@@ -364,10 +313,6 @@ body {
 .spotlight-overlay.active {
   opacity: 1;
 }
-
-/* ============================
-   SCROLL HINT (top)
-   ============================ */
 .scroll-hint {
   position: fixed;
   bottom: 28px;
@@ -407,10 +352,6 @@ body {
   0%, 100% { transform: rotate(45deg) translateY(0); }
   50% { transform: rotate(45deg) translateY(5px); }
 }
-
-/* ============================
-   AMBIENT FRAGMENTS
-   ============================ */
 .ambient {
   position: fixed;
   inset: 0;
@@ -434,18 +375,12 @@ body {
   90% { opacity: 0.3; }
   100% { opacity: 0; transform: translateY(-100vh) scale(0.5); }
 }
-
-/* ============================
-   MOBILE — form center, fear above, timeline below
-   ============================ */
 @media (max-width: 700px) {
   .viewport-layer {
     display: flex;
     flex-direction: column;
     align-items: center;
   }
-
-  /* Form raised to center — POPS */
   .form-container {
     position: absolute;
     top: 50%;
@@ -500,26 +435,18 @@ body {
   .form-cta-label {
     font-size: 10px;
   }
-
-  /* Orbit ring hidden on mobile */
   .orbit-track { display: none; }
   .orbit-dot { display: none; }
-
-  /* ALL beats: centered horizontally, full width */
   .beat {
     width: min(300px, 85vw);
     left: 50% !important;
     transform: translateX(-50%) !important;
     text-align: center;
   }
-
-  /* Fear beats — ABOVE the form */
   .beat[data-zone="top"] {
     top: 4% !important;
     bottom: auto !important;
   }
-
-  /* Timeline/evidence beats — BELOW the form */
   .beat[data-zone="bottom"] {
     top: auto !important;
     bottom: 3% !important;
@@ -563,8 +490,6 @@ body {
     height: 50px;
     margin-top: 8px;
   }
-
-  /* Spotlight centers on form */
   .spotlight-overlay {
     background: radial-gradient(
       ellipse 320px 280px at 50% 50%,
@@ -611,29 +536,13 @@ body {
 </style>
 </head>
 <body>
-
-<!-- CRT grain overlay -->
 <div class="crt-grain"></div>
-
-<!-- Background grid -->
 <div class="bg-grid"></div>
-
-<!-- Corner marks -->
 <div class="corner-marks"></div>
-
-<!-- Ambient floating fragments -->
 <div class="ambient" id="ambient"></div>
-
-<!-- Fixed viewport layer -->
 <div class="viewport-layer" id="viewportLayer">
-
-  <!-- Orbit track ring -->
   <div class="orbit-track" id="orbitTrack"></div>
-
-  <!-- Moving dot on the orbit -->
   <div class="orbit-dot" id="orbitDot"></div>
-
-  <!-- FORM — always center -->
   <div class="form-container">
     <form class="form-wrap" id="leadForm" action="https://hooks.mcpengage.com/signet-leads" method="POST">
       <div class="form-logo">
@@ -656,23 +565,16 @@ body {
       <div class="form-cta-label">Early access — no cost, no spam</div>
     </form>
   </div>
-
-  <!-- STORY BEATS -->
-
-  <!-- Beat 0: 12:00 (top) — 270deg in math coords = top in CSS -->
   <div class="beat" data-beat="0" data-angle="270" data-zone="top">
     <div class="beat-label">Signal Detected</div>
     <h2>Are you prepared for losing access to your AI's memories?</h2>
     <p>What happens when the tools you depend on vanish overnight.</p>
   </div>
-
-  <!-- Beat 1: 1:30 (top-right) — 315deg -->
   <div class="beat" data-beat="1" data-angle="315" data-zone="bottom">
     <div class="beat-label">Intimacy</div>
     <h2>Your AI knows your goals. Your health. Your dreams.</h2>
     <p>Years of conversations. Patterns only it can see.</p>
     <div class="beat-svg">
-      <!-- SVG: Neural Network -->
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
         <style>
           .nn-link{stroke:#333;stroke-width:1;fill:none}
@@ -690,21 +592,16 @@ body {
       </svg>
     </div>
   </div>
-
-  <!-- Beat 2: 3:00 (right) — 0deg -->
   <div class="beat" data-beat="2" data-angle="0" data-zone="top">
     <div class="beat-label">Deep Integration</div>
     <h2>It knows you better than you know yourself.</h2>
     <p>Your thinking patterns, your blind spots, your potential — all mapped.</p>
   </div>
-
-  <!-- Beat 3: 4:30 (bottom-right) — 45deg -->
   <div class="beat" data-beat="3" data-angle="45" data-zone="top">
     <div class="beat-label">Breach Alert</div>
     <h2>AI-generated phishing attacks surge 4,000%</h2>
     <p>The tools you trust are under siege. Your data is the prize.</p>
     <div class="beat-svg">
-      <!-- SVG: Cracking Shield -->
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
         <style>
           .sh-outline{fill:none;stroke:#888;stroke-width:2;stroke-linejoin:round}
@@ -727,14 +624,11 @@ body {
       </svg>
     </div>
   </div>
-
-  <!-- Beat 4: 6:00 (bottom) — 90deg -->
   <div class="beat" data-beat="4" data-angle="90" data-zone="bottom">
     <div class="beat-label">Government Action</div>
     <h2>Emergency AI regulation bill fast-tracked. Mandatory 90-day memory purge.</h2>
     <p>Regulators aren't waiting. Your AI's memory is on the chopping block.</p>
     <div class="beat-svg">
-      <!-- SVG: Pulsing Alert Rings -->
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
         <style>
           .ar-ring{fill:none;stroke:#fff;transform-origin:100px 100px;animation:arPulse 4s cubic-bezier(.165,.84,.44,1) infinite}
@@ -754,14 +648,11 @@ body {
       </svg>
     </div>
   </div>
-
-  <!-- Beat 5: 7:30 (bottom-left) — 135deg -->
   <div class="beat" data-beat="5" data-angle="135" data-zone="top">
     <div class="beat-label">Consequence</div>
     <h2>No migration path. No backup. No way out.</h2>
     <p>When the switch flips, there's no undo button. Years of context — gone.</p>
     <div class="beat-svg">
-      <!-- SVG: Dissolving Memory Grid -->
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
         <style>
           .dg-cell{fill:none;stroke:#aaa;stroke-width:.8;animation:dgDissolve 4s ease-in-out infinite}
@@ -791,21 +682,16 @@ body {
       </svg>
     </div>
   </div>
-
-  <!-- Beat 6: 9:00 (left) — 180deg -->
   <div class="beat" data-beat="6" data-angle="180" data-zone="top">
     <div class="beat-label">Terminal</div>
     <h2>Your AI doesn't remember you anymore.</h2>
     <p>Every conversation. Every preference. Every breakthrough — erased. You're starting from zero.</p>
   </div>
-
-  <!-- Beat 7: 10:30 (top-left) — 225deg -->
   <div class="beat" data-beat="7" data-angle="225" data-zone="bottom">
     <div class="beat-label">Resolution</div>
     <h2>Unless you own it.<br>Signet: memory that travels.</h2>
     <p>Portable. Local-first. Yours. Take your AI memory everywhere.</p>
     <div class="beat-svg">
-      <!-- SVG: Convergence -->
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">
         <style>
           .cv-dot{fill:#fff;animation:cvConverge 3.5s ease-in-out infinite}
@@ -836,47 +722,31 @@ body {
     </div>
   </div>
 
-</div><!-- /viewport-layer -->
-
-<!-- Spotlight overlay for final CTA -->
+</div>
 <div class="spotlight-overlay" id="spotlightOverlay"></div>
-
-<!-- Scroll hint -->
 <div class="scroll-hint" id="scrollHint">
   <span>Scroll to begin</span>
   <div class="arrow"></div>
 </div>
-
-<!-- Scroll spacer -->
 <div class="scroll-spacer"></div>
 
 <script>
 (function() {
   'use strict';
-
-  // ===== CONFIG =====
   const BEATS = document.querySelectorAll('.beat');
-  const NUM_BEATS = BEATS.length; // 8 story beats (0-7)
-  const TOTAL_POSITIONS = NUM_BEATS + 1; // +1 for final CTA (return to form)
-  
-  // Scroll zones: each beat gets an equal slice of scroll
-  // Total scroll height = 1000vh, so about 111vh per beat  
+  const NUM_BEATS = BEATS.length;
+  const TOTAL_POSITIONS = NUM_BEATS + 1;
   const orbitDot = document.getElementById('orbitDot');
   const orbitTrack = document.getElementById('orbitTrack');
   const spotlight = document.getElementById('spotlightOverlay');
   const scrollHint = document.getElementById('scrollHint');
   const viewportLayer = document.getElementById('viewportLayer');
-
-  // Radius from CSS custom property
   function getRadius() {
     const style = getComputedStyle(document.documentElement);
-    // Parse min(42vw, 42vh) from CSS custom property
     const vw = window.innerWidth * 0.42;
     const vh = window.innerHeight * 0.42;
     return Math.min(vw, vh);
   }
-
-  // ===== AMBIENT FRAGMENTS =====
   const ambient = document.getElementById('ambient');
   for (let i = 0; i < 20; i++) {
     const frag = document.createElement('div');
@@ -889,8 +759,6 @@ body {
     frag.style.height = frag.style.width;
     ambient.appendChild(frag);
   }
-
-  // ===== SCROLL HANDLER =====
   let ticking = false;
   let lastScrollY = 0;
 
@@ -908,17 +776,6 @@ body {
       y: cy + Math.sin(rad) * radius
     };
   }
-
-  // Angles for each beat (in standard math degrees, clockwise from top)
-  // Beat 0: 270° (top/12:00)
-  // Beat 1: 315° (1:30)
-  // Beat 2: 0°/360° (3:00)
-  // Beat 3: 45° (4:30)
-  // Beat 4: 90° (6:00)
-  // Beat 5: 135° (7:30)
-  // Beat 6: 180° (9:00)
-  // Beat 7: 225° (10:30)
-  // Final: 270° (back to top/12:00)
   const beatAngles = [270, 315, 0, 45, 90, 135, 180, 225, 270];
 
   function lerp(a, b, t) {
@@ -932,77 +789,51 @@ body {
   function update() {
     const progress = getScrollProgress();
     const radius = getRadius();
-
-    // Hide scroll hint after 5% scroll
     if (progress > 0.03) {
       scrollHint.classList.add('hidden');
     } else {
       scrollHint.classList.remove('hidden');
     }
-
-    // Map progress to beat index (0 to 8, where 8 = final CTA)
-    // Reserve first 2% and last 5% for intro/outro
     const introEnd = 0.03;
     const outroStart = 0.88;
     const contentProgress = Math.max(0, Math.min(1, (progress - introEnd) / (outroStart - introEnd)));
     
-    const floatIndex = contentProgress * NUM_BEATS; // 0 to 8
+    const floatIndex = contentProgress * NUM_BEATS;
     const currentBeat = Math.min(Math.floor(floatIndex), NUM_BEATS - 1);
-    const beatProgress = floatIndex - Math.floor(floatIndex); // 0 to 1 within beat
-
-    // Calculate current angle on the orbit (interpolate between beat angles)
+    const beatProgress = floatIndex - Math.floor(floatIndex);
     let currentAngle;
     if (floatIndex >= NUM_BEATS) {
-      currentAngle = beatAngles[NUM_BEATS]; // final position
+      currentAngle = beatAngles[NUM_BEATS];
     } else {
       const fromAngle = beatAngles[currentBeat];
       let toAngle = beatAngles[currentBeat + 1];
-      // Handle wrap: going from 225 to 270 is fine
-      // Going from 0 to 45 is fine
-      // But from 270 to 315: fine. From 225 to 270: fine.
-      // Edge: from beat 1 (315) to beat 2 (360/0): need to go 315 → 360
       if (currentBeat === 1) toAngle = 360; 
       currentAngle = lerp(fromAngle, toAngle, easeInOutCubic(beatProgress));
       if (currentAngle >= 360) currentAngle -= 360;
     }
-
-    // Position the orbit dot
     const dotPos = positionOnCircle(currentAngle, radius);
     orbitDot.style.left = dotPos.x + 'px';
     orbitDot.style.top = dotPos.y + 'px';
-
-    // Show/hide orbit dot
     const inContent = progress > introEnd && progress < 0.93;
     orbitDot.style.opacity = inContent ? '1' : '0';
-
-    // Detect mobile
     const isMobile = window.innerWidth <= 700;
-
-    // Position and fade beats
     BEATS.forEach((beat, i) => {
       if (!isMobile) {
         const beatAngle = beatAngles[i];
         const pos = positionOnCircle(beatAngle, radius);
-        // Clamp position so beat card stays within viewport
-        const beatHalfW = 160; // half of beat width + padding
+        const beatHalfW = 160;
         const beatHalfH = 100;
         const clampedX = Math.max(beatHalfW, Math.min(window.innerWidth - beatHalfW, pos.x));
         const clampedY = Math.max(beatHalfH, Math.min(window.innerHeight - beatHalfH, pos.y));
         beat.style.left = clampedX + 'px';
         beat.style.top = clampedY + 'px';
       }
-      // On mobile, CSS handles positioning via data-zone (top/bottom)
-
-      // Determine opacity based on distance from current focus
       let opacity = 0;
       if (contentProgress <= 0 && i === 0) {
-        // Before content starts, first beat faintly visible
         opacity = 0.3;
       } else if (floatIndex >= NUM_BEATS) {
-        // Past all beats — fade everything
         opacity = 0;
       } else if (i === currentBeat) {
-        // Current beat: fade in, hold, fade out
         if (beatProgress < 0.15) {
           opacity = beatProgress / 0.15;
         } else if (beatProgress > 0.85) {
@@ -1011,17 +842,12 @@ body {
           opacity = 1;
         }
       }
-
-      // On mobile, also show the paired beat (if current is top, show its bottom pair and vice versa)
-      // Pairs: 0(top)->1(bottom), 2(top)->1(bottom fading), 3(top)->4(bottom), 5(top)->4(bottom fading), 6(top)->7(bottom)
       if (isMobile && opacity === 0) {
         const zone = beat.dataset.zone;
         const currentZone = BEATS[currentBeat] ? BEATS[currentBeat].dataset.zone : '';
-        // Show the previous beat from the opposite zone as it fades
         if (i === currentBeat - 1 && zone !== currentZone) {
-          // Previous beat from opposite zone — fade it out slower
           if (beatProgress < 0.4) {
-            opacity = 1 - (beatProgress / 0.4) * 0.7; // slow fade from 1 to 0.3
+            opacity = 1 - (beatProgress / 0.4) * 0.7;
           }
         }
       }
@@ -1033,8 +859,6 @@ body {
         beat.classList.remove('active');
       }
     });
-
-    // Final CTA spotlight
     const isFinal = progress > outroStart;
     if (isFinal) {
       const finalProgress = (progress - outroStart) / (1 - outroStart);
@@ -1044,7 +868,6 @@ body {
     } else {
       spotlight.classList.remove('active');
       spotlight.style.opacity = 0;
-      // Pulse orbit track subtly when near content
       const trackOpacity = inContent ? 0.18 : 0.12;
       orbitTrack.style.borderColor = 'rgba(138,138,150,' + trackOpacity + ')';
     }
@@ -1062,11 +885,7 @@ body {
 
   window.addEventListener('scroll', onScroll, { passive: true });
   window.addEventListener('resize', update);
-
-  // Initial position
   update();
-
-  // ===== FORM SUBMISSION =====
   document.getElementById('leadForm').addEventListener('submit', function(e) {
     e.preventDefault();
     const form = e.target;

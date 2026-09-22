@@ -4,13 +4,6 @@ export interface SignetDaemonUrlOptions {
 	readonly env?: Record<string, string | undefined>;
 	readonly defaultHost?: string;
 	readonly defaultPort?: number;
-	/**
-	 * Persisted daemon URL from config (e.g. agent.yaml `daemon.url`). Used only
-	 * when no SIGNET_DAEMON_URL env override is present; still below the env
-	 * override but above SIGNET_HOST/PORT. Keeping the resolver pure (no fs)
-	 * means the caller loads config once and threads it in — one resolution
-	 * path, no parallel reader.
-	 */
 	readonly configUrl?: string;
 }
 

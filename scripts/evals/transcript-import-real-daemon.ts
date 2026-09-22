@@ -1,5 +1,4 @@
 #!/usr/bin/env bun
-/** Real-daemon acceptance eval for transcript import (#1814). */
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -100,9 +99,6 @@ async function start(env: Record<string, string> = {}) {
 			SIGNET_TELEMETRY_OPTOUT: "1",
 			SIGNET_DAEMON_ENTRYPOINT: "1",
 			SIGNET_AGENT_ID: agent,
-			// Keep native watcher discovery inside this eval workspace. The daemon's
-			// production defaults intentionally inspect the user's configured homes;
-			// inheriting the evaluator's HOME would contaminate agent/source counts.
 			HOME: root,
 			USERPROFILE: root,
 			HERMES_HOME: join(root, ".hermes"),

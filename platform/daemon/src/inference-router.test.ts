@@ -23,8 +23,6 @@ const originalOpenRouterApiKey = process.env.OPENROUTER_API_KEY;
 const originalOpenAiApiKey = process.env.OPENAI_API_KEY;
 const originalSignetPath = process.env.SIGNET_PATH;
 const REVOKED_OAUTH_PROVIDER_ID = "signet-router-review-oauth";
-
-/** Build an OpenAI-compatible SSE streaming response (pi-ai's openai-completions transport streams). */
 function openAiSseResponse(
 	content: string,
 	usage?: { readonly prompt_tokens: number; readonly completion_tokens: number },
@@ -417,11 +415,6 @@ describe("InferenceRouter legacy API credentials", () => {
 	});
 
 	it("enforces the agent-session deadline when the agent loop never returns (#1168)", async () => {
-		// Regression for #1168: the router set an abort timer for the agent
-		// session but still awaited session.prompt() unconditionally — if the
-		// abort did not settle the prompt, runAgent (and the Dreaming pass)
-		// hung past every deadline. The prompt must be raced against the
-		// deadline so runAgent returns and disposes the session either way.
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-agent-deadline-"));
 		const bin = join(dir, "fake-sleeping-agent.sh");
 		writeFileSync(
@@ -477,10 +470,6 @@ printf 'never reached\\n'
 				},
 			);
 			const elapsed = Date.now() - startedAt;
-			// The deadline is enforced: runAgent returned (no hang), failed the
-			// attempt with a timeout/deadline message, and finished in bounded
-			// time (the ACPX transport reports "timeout after Nms"; the
-			// pi-agent session path reports "exceeded the Nms deadline").
 			expect(elapsed).toBeLessThan(5_000);
 			expect(result.ok).toBe(false);
 			if (!result.ok) {
@@ -570,8 +559,6 @@ printf 'never reached\\n'
 			);
 			expect(timedOut.ok).toBe(false);
 			expect(chatRequests).toBe(2);
-			// runAgent returns at its deadline, but the permit remains held until
-			// Pi's abort has settled the active upstream request.
 			expect(getLlmConcurrencyStatus().running).toBe(1);
 			for (let i = 0; i < 20 && getLlmConcurrencyStatus().running !== 0; i += 1) {
 				await new Promise((resolve) => setTimeout(resolve, 10));
@@ -887,9 +874,6 @@ printf 'never reached\\n'
 			}) as unknown as typeof fetch;
 
 			const router = getOrCreateInferenceRouter(dir);
-			// Force refreshes must share the async config load as well as the
-			// runtime probe. Otherwise the second load clears the first snapshot
-			// flight and both callers wait on independent probes.
 			const first = router.status(true);
 			const second = router.status(true);
 			await probeStarted;
@@ -1112,9 +1096,6 @@ printf 'never reached\\n'
 			if (!result.ok) return;
 			expect(result.value.text).toBe("mercury answer");
 			expect(result.value.decision.targetRef).toBe("mercury/default");
-			// pi-ai owns the reasoning abstraction: the OpenRouter { enabled, maxTokens }
-			// config is translated by pi-ai. With reasoning disabled (enabled: false),
-			// pi-ai omits the reasoning field entirely rather than forwarding the raw config.
 			expect(requestBody?.reasoning).toBeUndefined();
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -1122,12 +1103,6 @@ printf 'never reached\\n'
 	});
 
 	it("forwards per-call reasoning effort when OpenRouter reasoning is enabled (#959)", async () => {
-		// Regression guard for the reasoning fix: on `main`, the factory derived
-		// reasoning from `=== "deep"` (TS2367, never matched) and pi-provider.ts
-		// never forwarded options.reasoning, so thinking was always off. With the
-		// fix, OpenRouter reasoning.enabled produces a non-disabled reasoning
-		// effort on the wire. This model's current Pi catalog maps medium to no
-		// wire value and supports high, so Pi correctly clamps it to high.
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-openrouter-reasoning-on-"));
 		try {
 			mkdirSync(join(dir, "memory"), { recursive: true });
@@ -1188,9 +1163,6 @@ printf 'never reached\\n'
 			);
 
 			expect(result.ok).toBe(true);
-			// The fix forwards options.reasoning; pi-ai's openrouter thinkingFormat
-			// emits it as { effort: <level> }. Before the fix this was { effort: "none" }
-			// (disabled) or absent.
 			expect(requestBody?.reasoning).toEqual({ effort: "high" });
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -1198,10 +1170,6 @@ printf 'never reached\\n'
 	});
 
 	it("does not enable reasoning for a medium-depth model by default (#959)", async () => {
-		// RoutingModelConfig.reasoning defaults to "medium" at parse time, so it
-		// must NOT be treated as intent to emit thinking (would flip a costly
-		// default on for every routed call). Only an explicit reasoning block or
-		// a "high" depth enables thinking.
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-reasoning-medium-default-"));
 		try {
 			mkdirSync(join(dir, "memory"), { recursive: true });
@@ -1260,8 +1228,6 @@ printf 'never reached\\n'
 			);
 
 			expect(result.ok).toBe(true);
-			// Default "medium" depth must NOT enable thinking. pi-ai emits
-			// { effort: "none" } (disabled) or omits — never "medium"/"high".
 			const effort = (requestBody?.reasoning as { effort?: string } | undefined)?.effort;
 			expect(effort === "medium" || effort === "high").toBe(false);
 		} finally {
@@ -1270,11 +1236,6 @@ printf 'never reached\\n'
 	});
 
 	it("aggregate_recall suppresses reasoning even on a reasoning:high target (#959)", async () => {
-		// aggregate_recall is latency-sensitive: it must never emit thinking tokens,
-		// even when routed to a target explicitly configured reasoning: high. The
-		// router passes reasoning:false at the call site (mirroring the ACPX
-		// exclusion). Without this guard the fix would regress aggregate-recall
-		// cost/latency whenever its workload target is a high-reasoning model.
 		const dir = mkdtempSync(join(tmpdir(), "signet-router-aggregate-reasoning-"));
 		try {
 			mkdirSync(join(dir, "memory"), { recursive: true });
@@ -1333,9 +1294,6 @@ printf 'never reached\\n'
 			);
 
 			expect(result.ok).toBe(true);
-			// The target is reasoning: high, but aggregate_recall must suppress it.
-			// Acceptable wire shapes: reasoning absent, or { effort: "none" }.
-			// A regression would emit { effort: "high" } or { effort: "medium" }.
 			const effort = (requestBody?.reasoning as { effort?: string } | undefined)?.effort;
 			expect(effort === "high" || effort === "medium").toBe(false);
 		} finally {
@@ -1544,7 +1502,6 @@ describe("InferenceRouter config reference validation (#1005)", () => {
 `,
 			);
 			const router = getOrCreateInferenceRouter(dir);
-			// Boot validation must not throw; it logs the structured error.
 			await router.validateConfigReferences();
 			const status = await router.status(true);
 			expect(status.ok).toBe(false);

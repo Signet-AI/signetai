@@ -37,8 +37,6 @@ export function parseTestArgs(args: string[]): TestArgs | null {
       parsed.answeringModel = args[++i]
     }
   }
-
-  // runId and questionId are always required
   if (!parsed.runId || !isValidRunId(parsed.runId) || !parsed.questionId) {
     return null
   }

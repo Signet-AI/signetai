@@ -258,10 +258,6 @@ function dreamingEventForTransport(event: DreamingLiveEvent, verbose: boolean): 
 	const { raw: _raw, ...conciseData } = event.data;
 	return { ...event, data: conciseData };
 }
-
-// A ReadableStream will otherwise keep accepting chunks while a client is
-// paused. Closing a full stream lets the viewer reconnect from its last SSE id
-// instead of allowing one slow terminal to accumulate an unbounded queue.
 const DREAMING_LIVE_STREAM_QUEUE_SIZE = 64;
 
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
@@ -338,9 +334,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		try {
 			const report = getCachedDiagnosticsReportIfFresh();
 			if (report !== null) health = report.composite;
-		} catch {
-			// DB not ready yet — omit health
-		}
+		} catch {}
 
 		const us = getUpdateState();
 		let embeddingMigration = null;
@@ -349,9 +343,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				(await withRegisteredDbOwnerMaintenance((maintenance) =>
 					maintenance.embeddingMigrationProgress(config.embedding.base_url),
 				)) ?? null;
-		} catch {
-			// Database may still be initializing; omit migration visibility.
-		}
+		} catch {}
 
 		let agentCreatedAt: string | null = null;
 		try {
@@ -365,9 +357,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					break;
 				}
 			}
-		} catch {
-			/* ignore parse errors */
-		}
+		} catch {}
 
 		let transcriptCapture:
 			| {
@@ -385,9 +375,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				dead: capture.dead,
 				processing: capture.processing,
 			};
-		} catch {
-			// DB may still be initializing; omit compact transcript health.
-		}
+		} catch {}
 
 		return c.json({
 			status: "running",
@@ -406,9 +394,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			resources: getCachedResourceSnapshot(),
 			pipelineV2: config.pipelineV2,
 			pipeline: {
-				// A status request is a liveness surface. Do not synchronously scan
-				// memory_jobs when the diagnostics cache is cold or the DB is under
-				// pressure; the dedicated diagnostics route owns that work.
 				queue: pipelineQueueBlock({ allowSynchronousRead: false }),
 				dreaming: getDreamingWorker()?.scheduler ?? null,
 			},
@@ -458,9 +443,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		let soulContent = "";
 		try {
 			soulContent = readFileSync(soulPath, "utf-8").slice(0, 500);
-		} catch {
-			/* no soul file */
-		}
+		} catch {}
 
 		const hour = new Date().getHours();
 		const timeOfDay = hour < 12 ? "morning" : hour < 17 ? "afternoon" : "evening";
@@ -474,9 +457,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				greetingCache = { greeting, cachedAt: new Date().toISOString(), expires: now + 3600000 };
 				return c.json({ greeting: greetingCache.greeting, cachedAt: greetingCache.cachedAt });
 			}
-		} catch {
-			/* LLM unavailable */
-		}
+		} catch {}
 
 		const fallback = `good ${timeOfDay}`;
 		greetingCache = { greeting: fallback, cachedAt: new Date().toISOString(), expires: now + 3600000 };
@@ -530,7 +511,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					limit,
 					offset,
 				}),
-			"routes/pipeline-routes.ts:524",
+			"routes/pipeline-routes.ts:505",
 		);
 		return c.json({
 			agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
@@ -551,10 +532,6 @@ export function registerPipelineRoutes(app: Hono): void {
 
 	app.get("/api/diagnostics/:domain", async (c, next) => {
 		const domain = c.req.param("domain");
-		// These concrete routes are registered after this generic diagnostics
-		// domain route. Let each return its own response rather than a cached
-		// aggregate subobject. Any new single-segment diagnostics route must
-		// either be registered before this route or be added here.
 		if (domain === "queue" || domain === "openclaw" || domain === "workloads") return next();
 		const report = getCachedDiagnosticsReport();
 
@@ -633,7 +610,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:616",
+				"routes/pipeline-routes.ts:613",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -725,10 +702,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			registry: getRegistryStatus(),
 		});
 	});
-
-	// External Dreaming agents get only the cited apply seam with a scoped
-	// agent credential. Administrative status, trigger, and requeue controls
-	// remain admin-only.
 	app.use("/api/dream/operations", async (c, next) => {
 		return requirePermission("modify", authConfig)(c, next);
 	});
@@ -786,8 +759,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			reviewedEvidence,
 		});
 	});
-
-	/** List active passes for read-only attach selection in one agent scope. */
 	app.get("/api/dream/passes/active", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
@@ -796,11 +767,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			items: await getActiveDreamingPasses(getDbAccessor(), scopedAgent.agentId),
 		});
 	});
-
-	/**
-	 * Stream one scoped Dreaming pass. The stream is observation-only: it has
-	 * no request body and no action that can steer, abort, or retry the pass.
-	 */
 	app.get("/api/dream/passes/:passId/events", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
@@ -839,9 +805,7 @@ export function registerPipelineRoutes(app: Hono): void {
 			requestSignal.removeEventListener("abort", close);
 			try {
 				controllerRef?.close();
-			} catch {
-				// The client may already have cancelled the stream.
-			}
+			} catch {}
 		};
 		const write = (eventName: string, data: unknown, cursor?: number): void => {
 			if (closed || !controllerRef) return;
@@ -884,9 +848,6 @@ export function registerPipelineRoutes(app: Hono): void {
 						close();
 						return;
 					}
-					// Snapshot/gap frames describe state but do not claim the replay
-					// cursor. Replay and live event ids must remain the only resume
-					// checkpoints so a disconnect cannot skip older replay frames.
 					write("snapshot", { type: "snapshot", passId, snapshot: subscription.snapshot });
 					if (subscription.gap) {
 						write("gap", { type: "gap", passId, gap: subscription.gap });
@@ -930,11 +891,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			},
 		});
 	});
-
-	/**
-	 * Review the exact capability calls a Pi Dreaming agent made during one
-	 * scoped pass. The trace is local, agent-scoped, and never written to logs.
-	 */
 	app.get("/api/dream/passes/:passId/tools", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
@@ -946,8 +902,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			items: await getDreamingToolCalls(getDbAccessor(), scopedAgent.agentId, passId),
 		});
 	});
-
-	/** Deterministic semantic-quality measurements for the scoped Dreaming graph. */
 	app.get("/api/dream/quality", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
@@ -978,7 +932,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:971",
+						"routes/pipeline-routes.ts:935",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -1024,12 +978,6 @@ export function registerPipelineRoutes(app: Hono): void {
 			sourceId,
 		});
 	});
-
-	/**
-	 * Daemon apply seam for external Dreaming agents. Unlike generic ontology
-	 * operations, every write must carry a canonical episodic source reference
-	 * and an exact quote; the daemon resolves it in the caller's agent scope.
-	 */
 	app.post("/api/dream/operations", async (c) => {
 		const raw: unknown = await c.req.json().catch(() => null);
 		if (raw === null) return c.json({ error: "Malformed JSON body" }, 400);
@@ -1062,9 +1010,6 @@ export function registerPipelineRoutes(app: Hono): void {
 		});
 		return c.json({ ...result, agentId }, result.ok ? 200 : result.retryable ? 503 : 400);
 	});
-
-	// Pi invokes this registry in-process; MCP and CLI use this transport
-	// binding. The capability id and input schema are never copied here.
 	app.get("/api/dream/tools", (c) => c.json({ items: getDreamingCapabilityManifest() }));
 	app.post("/api/dream/tools/:capability", async (c) => {
 		const raw: unknown = await c.req.json().catch(() => null);

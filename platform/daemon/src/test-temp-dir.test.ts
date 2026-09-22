@@ -9,9 +9,7 @@ afterAll(() => {
 	for (const dir of leaked) {
 		try {
 			rmSync(dir, { recursive: true, force: true });
-		} catch {
-			// best-effort
-		}
+		} catch {}
 	}
 });
 
@@ -42,8 +40,6 @@ describe("test-temp-dir (exit-safe cleanup)", () => {
 		const other = mkdtempSync(join(tmpdir(), "signet-test-tempdir-other-"));
 		leaked.push(other);
 		cleanupTestTempDir(other);
-		// The helper only deregisters dirs it created; an unregistered dir is
-		// still removed by cleanupTestTempDir, so use it as the removal path.
 		expect(existsSync(other)).toBe(false);
 	});
 });

@@ -111,8 +111,6 @@ export function registerRepairRoutes(
 ): void {
 	const effectiveAuthConfig = deps.authConfig ?? authConfig;
 	const resolveMemoryConfig = deps.loadMemoryConfig ?? loadMemoryConfig;
-
-	// Permission guards
 	app.use("/api/repair/*", async (c, next) => {
 		return requirePermission("admin", effectiveAuthConfig)(c, next);
 	});
@@ -141,9 +139,7 @@ export function registerRepairRoutes(
 		try {
 			const body = await c.req.json();
 			repair = body?.repair === true;
-		} catch {
-			// no body or invalid JSON — default repair=false
-		}
+		} catch {}
 		const result = await checkFtsConsistency(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, repair);
 		return c.json(result, result.success ? 200 : 429);
 	});
@@ -196,9 +192,7 @@ export function registerRepairRoutes(
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body.fullSweep === "boolean") fullSweep = body.fullSweep;
 			operationId = readString(body, "operationId") ?? readString(body, "operation_id");
-		} catch {
-			// no body or invalid JSON — use defaults
-		}
+		} catch {}
 		const options = vectorRepairOptions(body, c.req.raw.signal);
 		if ("batchSize" in body) {
 			if (options.batchSize === undefined || !Number.isInteger(options.batchSize)) {
@@ -352,9 +346,7 @@ export function registerRepairRoutes(
 			if (typeof body?.dryRun === "boolean") options.dryRun = body.dryRun;
 			if (typeof body?.semanticThreshold === "number") options.semanticThreshold = body.semanticThreshold;
 			if (typeof body?.semanticEnabled === "boolean") options.semanticEnabled = body.semanticEnabled;
-		} catch {
-			// no body or invalid JSON — use defaults
-		}
+		} catch {}
 		const result = await deduplicateMemories(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, options);
 		return c.json(result, repairHttpStatus(result));
 	});
@@ -378,9 +370,7 @@ export function registerRepairRoutes(
 			const body = await c.req.json();
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
-		} catch {
-			// no body or invalid JSON — use defaults
-		}
+		} catch {}
 		const result = await pruneChunkGroupEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
 			dryRun,
@@ -399,9 +389,7 @@ export function registerRepairRoutes(
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
 			if (typeof body?.maxMentions === "number") maxMentions = body.maxMentions;
-		} catch {
-			// no body or invalid JSON — use defaults
-		}
+		} catch {}
 		const result = await pruneSingletonExtractedEntities(getDbAccessor(), cfg.pipelineV2, ctx, repairLimiter, {
 			batchSize,
 			dryRun,
@@ -420,9 +408,7 @@ export function registerRepairRoutes(
 			body = asRecord(await c.req.json());
 			if (typeof body?.batchSize === "number") batchSize = body.batchSize;
 			if (typeof body?.dryRun === "boolean") dryRun = body.dryRun;
-		} catch {
-			// no body or invalid JSON — use defaults
-		}
+		} catch {}
 		const scoped = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			effectiveAuthConfig.mode,
@@ -513,9 +499,7 @@ export function registerRepairRoutes(
 				batchSize = Math.min(Math.floor(body.batchSize), 500);
 			}
 			if (typeof body.dryRun === "boolean") dryRun = body.dryRun;
-		} catch {
-			// defaults
-		}
+		} catch {}
 		const scoped = resolveScopedAgent(
 			c.get("auth")?.claims ?? null,
 			effectiveAuthConfig.mode,
@@ -661,9 +645,7 @@ export function registerRepairRoutes(
 		try {
 			const body = await c.req.json();
 			if (typeof body?.batchSize === "number") batchSize = Math.min(body.batchSize, 200);
-		} catch {
-			// defaults
-		}
+		} catch {}
 
 		const accessor = getDbAccessor();
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site

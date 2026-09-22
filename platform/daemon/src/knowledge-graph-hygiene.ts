@@ -91,8 +91,6 @@ export interface DreamingHygieneCandidate {
 	readonly details: Readonly<Record<string, string>>;
 	readonly priority: number;
 }
-
-/** Write-path caps that drive the over-cap detectors (#1138). */
 export interface GraphHygieneCaps {
 	readonly maxAspectsPerEntity: number;
 	readonly maxAttributesPerAspect: number;
@@ -105,23 +103,8 @@ function normalize(value: string): string {
 }
 
 const TOPOLOGY_PLACEHOLDERS = SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES.map(() => "?").join(", ");
-
-/** Predicate shared by every hygiene detector: real semantic entities only. */
 const SEMANTIC_ENTITY_FRAGMENT = `COALESCE(e.pinned, 0) = 0
 	AND NOT (e.entity_type IN (${TOPOLOGY_PLACEHOLDERS}) OR (e.entity_type = 'source' AND e.source_root IS NOT NULL))`;
-
-/**
- * Entities with no active attribute on any active aspect ("husks").
- *
- * The subquery deliberately nests the attribute check INSIDE the aspect
- * lookup: the planner must drive from entity_aspects via (agent_id,
- * entity_id, status) and probe attributes per aspect. A flat
- * `entity_aspects JOIN entity_attributes` under NOT EXISTS lets the planner
- * root the scan in entity_attributes by agent_id alone, making the detector
- * O(entities × agent attributes) — on a large install that blocked the
- * dreaming worker's first check (~5 min after restart) for minutes,
- * wedging the daemon's event loop (Signet-AI/signetai#1094).
- */
 export const ZERO_ACTIVE_ATTRIBUTE_ENTITIES_SQL = `
 	SELECT e.id, e.name
 	FROM entities e
@@ -168,12 +151,6 @@ function hasMention(content: string, name: string): boolean {
 function membershipDigest(ids: readonly string[]): string {
 	return createHash("sha256").update(ids.join("\u001f")).digest("hex").slice(0, 16);
 }
-
-/**
- * Deterministic, bounded cleanup work for Dreaming. The queue owner turns
- * these into scoped attention rows; this module owns the graph detectors so
- * MCP hygiene reporting and Dreaming do not grow competing classifiers.
- */
 export function getDreamingHygieneCandidatesInDb(
 	db: ReadDb,
 	input: { readonly agentId: string; readonly limit?: number; readonly caps?: GraphHygieneCaps },
@@ -185,10 +162,6 @@ export function getDreamingHygieneCandidatesInDb(
 		const existing = candidates.get(candidate.subjectRef);
 		if (!existing || candidate.priority > existing.priority) candidates.set(candidate.subjectRef, candidate);
 	};
-
-	// #1138: over-cap detectors run first — these are the forcing function's
-	// targets. The write gate rejects new writes past the cap, so the agent
-	// must consolidate these before the graph can keep growing.
 	if (caps !== undefined) {
 		const overCapAspects = db
 			.prepare(
@@ -560,5 +533,5 @@ export function getKnowledgeHygieneReport(
 			},
 			safeMentionCandidates,
 		};
-	}, "knowledge-graph-hygiene.ts:428");
+	}, "knowledge-graph-hygiene.ts:401");
 }

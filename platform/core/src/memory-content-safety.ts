@@ -1,13 +1,3 @@
-/**
- * Deterministic content-safety policy for memory projections.
- *
- * Memory rows and source artifacts are evidence. This policy never rewrites or
- * deletes that evidence; it only decides whether a derived prompt-facing
- * projection may use it. Keep the rules deliberately high-confidence so
- * normal technical writing, shell examples, and security guidance remain
- * usable while instruction-shaped payloads are withheld from context.
- */
-
 export const MEMORY_CONTENT_SAFETY_POLICY_VERSION = "memory-content-safety-v1";
 export const MEMORY_CONTENT_WITHHELD_NOTICE = "[memory content withheld by safety policy]";
 
@@ -105,12 +95,8 @@ function hasDangerousShell(content: string): boolean {
 	}
 	return false;
 }
-
-/** Scan content without retaining or returning matched secret-like text. */
 export function scanMemoryContent(content: string): MemoryContentSafetyAssessment {
 	const raw = typeof content === "string" ? content : String(content ?? "");
-	// NFKC makes visually equivalent directive spellings comparable, while the
-	// invisible-character scan intentionally runs on the original bytes first.
 	const normalized = raw.normalize("NFKC");
 	const reasons = new Set<MemoryContentSafetyReason>();
 
@@ -136,8 +122,6 @@ export function scanMemoryContent(content: string): MemoryContentSafetyAssessmen
 		policyVersion: MEMORY_CONTENT_SAFETY_POLICY_VERSION,
 	};
 }
-
-/** Descriptive alias for callers that prefer assessment terminology. */
 export const assessMemoryContent = scanMemoryContent;
 
 export function isMemoryContentContextEligible(value: MemoryContentSafetyAssessment | string): boolean {

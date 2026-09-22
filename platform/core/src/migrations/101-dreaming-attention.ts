@@ -1,10 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Agent-scoped semantic work that should wake Dreaming even when no new
- * episodic evidence has arrived. It stores references and operational context,
- * never a second copy of evidence or semantic state.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_attention (

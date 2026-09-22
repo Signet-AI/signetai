@@ -50,8 +50,6 @@ function assertNoUnbundledRelativeRequires(path: string, worker: string): void {
 	for (const match of source.matchAll(pattern)) {
 		const specifier = match[1];
 		const normalized = specifier?.replaceAll("\\", "/");
-		// Bun keeps bundled CommonJS modules in an internal registry keyed by
-		// their node_modules path; those calls are not filesystem lookups.
 		if (
 			specifier !== undefined &&
 			normalized !== undefined &&
@@ -134,23 +132,11 @@ const workerEntries = [
 	["native-memory-source-worker", "platform/daemon/src/native-memory-source-worker.ts"],
 	["harness-install-worker", "platform/daemon/src/harness-install-worker.ts"],
 	["harness-health-worker", "platform/daemon/src/harness-health-worker.ts"],
-	// Native ONNX embedding runs in a worker so model download / WASM compile /
-	// inference can never block the daemon's main event loop (see
-	// embedding-worker.ts). Transformers is bundled into this asset; the ONNX
-	// .wasm is embedded separately (wasmAssets) and the main thread passes the
-	// materialized wasmDir to the worker via workerData.
 	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],
 	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
-	// Kept in the compiled asset set so the native smoke can prove that a
-	// materialized Worker entrypoint executes in the parent process.
 	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
 const nativeExternalArgs = ["--external", "better-sqlite3"] as const;
-
-// `@napi-rs/keyring` can't be require()'d by name inside a compiled binary
-// (Bun `--compile` can't trace its loader). Embed the platform `.node` file
-// as a runtime asset; cli-native.ts points SIGNET_KEYRING_NATIVE_MODULE_PATH
-// at the materialized copy before anything imports the addon.
 const coreRequire = createRequire(join(root, "platform", "core", "package.json"));
 const nativeAddonAssets = (() => {
 	const packagePlatformKey = platformKey.startsWith("linux-") ? `${platformKey}-gnu` : platformKey;
@@ -223,18 +209,9 @@ const onnxRuntimeWebRequire = createRequire(onnxRuntimeWebPackageJson);
 const onnxRuntimeCommonPackageJson = onnxRuntimeWebRequire.resolve("onnxruntime-common/package.json");
 const onnxRuntimeCommonEsmPath = join(dirname(onnxRuntimeCommonPackageJson), "dist", "esm", "index.js");
 const transformersWebRuntimePath = join(transformersDir, "dist", "transformers.web.js");
-
-// Bun's compiled executable reports a Node-like environment, so Transformers.js
-// selects its native ONNX branch even though this release embeds the web/WASM
-// runtime. Patch only the generated build copy, with unique-anchor guards so a
-// dependency upgrade fails loudly instead of silently producing a broken binary.
 let patchedTransformersWebRuntimeSource = readFileSync(transformersWebRuntimePath, "utf8");
 for (const [specifier, resolved] of [
 	["onnxruntime-common", onnxRuntimeCommonEsmPath],
-	// Transformers.js 4.x imports the WebGPU entry ("onnxruntime-web/webgpu")
-	// where 3.x imported the bare "onnxruntime-web" specifier. The compiled
-	// binary runs the custom-runtime branch, so both resolve to the same
-	// embedded WASM bundle.
 	["onnxruntime-web/webgpu", onnxRuntimeWebWasmPath],
 ] as const) {
 	const externalImport = `from ${JSON.stringify(specifier)};`;
@@ -254,22 +231,10 @@ patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replac
 	customRuntimeAnchor,
 	`${customRuntimeAnchor}  // The custom-runtime branch does not populate device defaults; pin the\n  // WASM device like the web branch so inference defaults to 'wasm'.\n  supportedDevices.push('wasm');\n  defaultDevices = ['wasm'];\n`,
 );
-// Transformers.js 4.x decides the null-device default through defaultDevices
-// set per runtime branch (no device ?? ternary). The Node branch's 'cpu'
-// default must stay uniquely present so a future restructure of the
-// runtime-selection block fails loudly instead of silently changing the
-// default the custom-runtime branch overrides.
 const nodeDeviceDefault = /defaultDevices = \["cpu"\];/g;
 if ((patchedTransformersWebRuntimeSource.match(nodeDeviceDefault) ?? []).length !== 1) {
 	throw new Error("Unsupported @huggingface/transformers web runtime: Node device default changed");
 }
-// Transformers.js 4.x ALSO decides the null-device default in selectDevice
-// through a module-level DEFAULT_DEVICE const, separate from defaultDevices.
-// The compiled binary reports a Node-like environment, so without this pin
-// selectDevice(null) returns "cpu" and the patched WASM-only runtime throws
-// `Unsupported device: "cpu". Should be one of: wasm.` when the embedding
-// worker initializes a pipeline. Keep the unique-anchor guard so a future
-// restructure of this default fails loudly instead of shipping a broken binary.
 const deviceDefault = /var DEFAULT_DEVICE = apis\.IS_NODE_ENV \? "cpu" : "wasm";/g;
 if ((patchedTransformersWebRuntimeSource.match(deviceDefault) ?? []).length !== 1) {
 	throw new Error("Unsupported @huggingface/transformers web runtime: DEFAULT_DEVICE changed");
@@ -278,14 +243,6 @@ patchedTransformersWebRuntimeSource = patchedTransformersWebRuntimeSource.replac
 	deviceDefault,
 	'var DEFAULT_DEVICE = "wasm";',
 );
-// Transformers.js 4.x web build stubs node:fs/path/url as empty objects
-// (`// ignore-modules:node:fs` + `var node_fs_default = {};`), which forces
-// env.useFS=false and breaks local model loading in the compiled binary:
-// getFile() falls through to fetch() on a bare filesystem path, throwing
-// `ERR_INVALID_URL` and failing pipeline init with "Unable to get model file
-// path or buffer". The 3.8.1 web build shipped real fs modules; wire the
-// Node builtins back in so FileResponse can read the model cache from disk.
-// Unique-anchor guards keep a future stub restructure loud.
 for (const [name, specifier] of [
 	["fs", "node:fs"],
 	["path", "node:path"],
@@ -300,13 +257,6 @@ for (const [name, specifier] of [
 		`import node_${name}_default from ${JSON.stringify(specifier)};`,
 	);
 }
-// Transformers.js 4.x treats a Node-like environment as able to hand model
-// files to onnxruntime by PATH (getCoreModelFile/getModelDataFiles pass
-// return_path = apis.IS_NODE_ENV). onnxruntime-web 1.26's session glue loads
-// a string path with fetch() (1.22 read it with fs.readFileSync), so the
-// compiled binary dies with `fetch() URL is invalid` once the model downloads.
-// Force return_path=false so the model bytes are handed to the session, which
-// never touches the filesystem for the onnx input.
 for (const returnPathAnchor of [
 	"const return_path = apis.IS_NODE_ENV;",
 	"return await getModelFile(pretrained_model_name_or_path, fullPath, true, options, apis.IS_NODE_ENV);",
@@ -325,14 +275,6 @@ const wasmAssets = ["ort-wasm-simd-threaded.mjs", "ort-wasm-simd-threaded.wasm"]
 	name,
 	contentBase64: readFileSync(join(onnxRuntimeWebDir, "dist", name)).toString("base64"),
 }));
-
-// The embedding worker has an isolated globalThis (worker_threads), so the
-// main thread's globalThis[Symbol.for("onnxruntime")] registration does NOT
-// propagate. We generate a standalone runtime that the worker can import to
-// register the WASM ONNX runtime on its own globalThis before transformers
-// loads. This must be bun-bundled separately so onnxruntime-web and the
-// patched transformers.web.js are inlined (the materialized .mjs is imported
-// at runtime and cannot resolve node_modules paths in a compiled binary).
 writeFileSync(
 	join(buildDir, "embedding-worker-transformers-runtime.ts"),
 	`import * as onnxRuntime from ${JSON.stringify(onnxRuntimeWebWasmPath)};\nglobalThis[Symbol.for("onnxruntime")] = onnxRuntime.default ?? onnxRuntime;\nconst transformers = await import(${JSON.stringify(patchedTransformersWebRuntimePath)});\nexport const { env, pipeline } = transformers;\n`,

@@ -1,11 +1,3 @@
-/**
- * Cost attribution for embedding telemetry.
- *
- * Rates are USD per million input tokens. Local providers are free by
- * default. Remote rates are intentionally configurable because provider and
- * model pricing changes independently of the daemon release.
- */
-
 import type { AccountingProvenance } from "@signet/core";
 
 export type EmbeddingCostProvider = "native" | "llama-cpp" | "ollama" | "openai" | "openrouter";

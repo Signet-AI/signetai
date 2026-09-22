@@ -1,9 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Durable visibility and projection cursor for the killable embedding owner.
- * The column checks keep this safe for partially repaired v91 databases.
- */
 export function up(db: MigrationDb): void {
 	const columns = new Set(
 		(db.prepare("PRAGMA table_info(embedding_index_state)").all() as Array<{ name?: string }>)
@@ -22,8 +17,6 @@ export function up(db: MigrationDb): void {
 	for (const [name, definition] of additions) {
 		if (!columns.has(name)) db.exec(`ALTER TABLE embedding_index_state ADD COLUMN ${name} ${definition}`);
 	}
-	// Backfill the endpoint from the durable active profile without making the
-	// endpoint part of the vector identity.
 	db.exec(`
 		UPDATE embedding_index_state
 		SET provider_endpoint = COALESCE(
@@ -32,8 +25,6 @@ export function up(db: MigrationDb): void {
 		)
 		WHERE id = 1
 	`);
-	// Existing interrupted builds need an immediately useful snapshot after the
-	// schema upgrade, before the next owner tick gets a chance to refresh it.
 	const hasEmbeddings =
 		(db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'").get() as
 			| { present?: number }

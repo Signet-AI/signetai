@@ -1,180 +1,53 @@
-# Signet Agent Configuration
-# Portable AI agent identity - https://signetai.sh
-
 version: 1
 schema: signet/v1
-
-# ============================================================================
-# Agent Identity
-# ============================================================================
 
 agent:
   name: "{{AGENT_NAME}}"
   description: "Personal AI assistant"
   created: "{{CREATED_AT}}"
   updated: "{{CREATED_AT}}"
-
-# Optional: Owner information
-# owner:
-#   name: "Your Name"
-#   address: "0x..."  # Ethereum address
-#   ens: "yourname.eth"
-
-# ============================================================================
-# Harness Configuration
-# ============================================================================
-
-# AI tools this agent works with
 harnesses:
   - claude-code
   - codex
   - opencode
   - openclaw
 
-# ============================================================================
-# Embedding Configuration
-# ============================================================================
-
 embedding:
-  # Provider: "ollama" (local) or "openai"
   provider: ollama
-  
-  # Model name
-  # Ollama: nomic-embed-text, all-minilm, mxbai-embed-large
-  # OpenAI: text-embedding-3-small, text-embedding-3-large
   model: nomic-embed-text
-  
-  # Vector dimensions (must match model output)
   dimensions: 768
-  
-  # API endpoint (optional, defaults to standard URLs)
-  # base_url: http://localhost:11434
-
-# ============================================================================
-# Search Configuration
-# ============================================================================
 
 search:
-  # Alpha: weight for vector similarity (1-alpha = BM25 keyword weight)
-  # 0.7 = 70% semantic, 30% keyword
   alpha: 0.7
-
-  # Candidates to fetch from each source before blending
   top_k: 20
-
-  # Minimum score threshold for results
   min_score: 0.3
-
-  # Spaced rehearsal — boosts frequently-accessed memories
   rehearsal_enabled: true
 
-# ============================================================================
-# Memory Configuration
-# ============================================================================
-
 memory:
-  # Database location (relative to ~/.agents/)
   database: memory/memories.db
-
-  # Character budget for session context injection
   session_budget: 2000
-  
-  # Importance decay rate per day (0.95 = 5% decay/day)
   decay_rate: 0.95
-  
-  # Pipeline V2 — retrieval, indexing, maintenance, and Dreaming support
   pipelineV2:
-    # Master switch (true = run pipeline workers)
-    # When false, shadowMode is ignored and the pipeline is fully disabled.
     enabled: true
-
-    # Temporary operator pause. Keeps queueing raw work, but workers stay offline
-    # until you run `signet daemon resume`.
-    # paused: false
-
-    # Shadow mode: extract but don't write to DB (dry-run for testing)
-    # shadowMode: false
-
-    # Freeze all mutations (reads only, no writes/updates/deletes)
-    # mutationsFrozen: false
-
-    # Knowledge graph — boosts related memories in search results
     graph:
       enabled: true
-      # boostWeight: 0.15
-
-    # Reranker — re-scores search results for better relevance
     reranker:
       enabled: true
-      # topN: 20
-
-    # Autonomous maintenance — prunes, merges, and updates memories
     autonomous:
       enabled: true
       allowUpdateDelete: true
-      maintenanceMode: execute  # "execute" or "observe"
-      # maintenanceIntervalMs: 1800000  # 30 min
-
-    # Semantic contradiction detection — flags conflicting memory updates
+      maintenanceMode: execute
     semanticContradictionEnabled: true
-
-    # Memory relevance configuration removed (hard-deprecated in 0.112.0)
-
-  # Background semantic consolidation is opt-in during setup.
-  # dreaming:
-  #   enabled: true
-
-# ============================================================================
-# Hooks Configuration
-# ============================================================================
-
-# Lifecycle hooks - called by harness adapters at key moments
 hooks:
-  # Called when a new session starts
   sessionStart:
-    # Number of candidate memories to consider
     recallLimit: 10
-    # Maximum rendered Session Continuity records
     sessionContinuityMaxEntries: 15
-    # Maximum tokens in the complete Session Continuity section
     sessionContinuityMaxTokens: 3000
-    # Maximum tokens in one Session Continuity preview
     sessionContinuityEntryMaxTokens: 250
-    # Include agent identity in context
     includeIdentity: true
-    # Include recent context from MEMORY.md
     includeRecentContext: true
-    # Weight recent memories higher (0-1, higher = more recency bias)
     recencyBias: 0.7
-
-  # Optional named context-budget profiles for different harness workflows.
-  # Use leaner profiles for coding harnesses and richer profiles for
-  # operator/character-forward harnesses. Generate a compact coding prompt with:
-  #   signet context compile --profile coding --max-chars 2200
-  # contextProfiles:
-  #   coding:
-  #     sessionStart:
-  #       recallLimit: 5
-  #       maxInjectTokens: 5000
-  #     userPromptSubmit:
-  #       maxInjectChars: 300
-  #     identity:
-  #       files:
-  #         - path: context-profiles/coding/AGENTS.md
-  #           maxChars: 2200
-  #   rich:
-  #     sessionStart:
-  #       recallLimit: 50
-  #       maxInjectTokens: 20000
-  # harnessProfiles:
-  #   pi: coding
-  #   codex: coding
-  #   hermes-agent: rich
-  #   openclaw: rich
-
-  # Called before session compaction/summarization
   preCompaction:
-    # Guidelines for the agent when generating session summary
     summaryGuidelines: |
       Summarize this session focusing on:
       - Key decisions made
@@ -184,15 +57,5 @@ hooks:
       - Any errors or issues encountered
 
       Keep the summary concise but complete.
-    # Include recent memories for context when summarizing
     includeRecentMemories: true
-    # How many recent memories to include
     memoryLimit: 5
-
-# ============================================================================
-# Trust & Verification (optional)
-# ============================================================================
-
-# trust:
-#   verification: none  # none | erc8128 | gpg | did | registry
-#   registry: "https://registry.signetai.sh"

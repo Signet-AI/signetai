@@ -26,9 +26,7 @@ export function readConfiguredNetworkMode(dir: string): NetworkMode {
 		if (!existsSync(path)) continue;
 		try {
 			return readNetworkMode(parseSimpleYaml(readFileSync(path, "utf8")));
-		} catch {
-			// Ignore malformed config and keep scanning fallbacks.
-		}
+		} catch {}
 	}
 
 	return "localhost";

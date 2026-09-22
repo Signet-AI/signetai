@@ -1,4 +1,3 @@
-/** Temporary ACPX MCP configuration for one bounded Dreaming pass. */
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, extname, join } from "node:path";
@@ -32,13 +31,6 @@ function resolveMcpProcess(): DreamingMcpProcess {
 	}
 	return { command: process.execPath, args: [entrypoint], internal: false };
 }
-
-/**
- * ACPX loads `mcpServers` only from this ephemeral config. It receives one
- * constrained Signet server, whose schemas never accept an agent id. The
- * JSON is process configuration (not application state) and is removed as
- * soon as the bounded agent turn exits.
- */
 export function createDreamingAcpxMcpConfig(params: {
 	readonly agentId: string;
 	readonly passId: string;

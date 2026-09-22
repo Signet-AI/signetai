@@ -400,11 +400,6 @@ describe("episodic source selection", () => {
 	});
 
 	it("re-lists corrupt pre-epoch artifacts behind the since watermark (#1149)", () => {
-		// Regression for #1149: artifacts stamped with the DOS-epoch sentinel
-		// (1980, from timestamp-stripping filesystems) can never be reached
-		// by a rolling `since` watermark, so the since-filtered scan-first
-		// listing used to exclude them forever. They must stay listable as a
-		// catch-up backstop.
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memory_artifacts
@@ -438,9 +433,6 @@ describe("episodic source selection", () => {
 		expect(searched.map((source) => source.id)).toEqual(
 			expect.arrayContaining(["sources/sentinel.md", "sources/modern.md"]),
 		);
-		// captured_at) while rows use SQLite space format. A raw string
-		// comparison would lexically misorder them (' ' < 'T'), silently
-		// dropping a space-format row captured after an ISO watermark.
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memory_artifacts
@@ -459,17 +451,12 @@ describe("episodic source selection", () => {
 				  'ant', 'summary', 'session-a', '{}', '2026-08-01 12:00:00')`,
 			).run();
 		});
-
-		// ISO watermark: both space-format rows are captured after it and
-		// must be listed.
 		const isoSearched = getDbAccessor().withReadDb((db) =>
 			searchEpisodicSources(db, { agentId: "ant", query: "", since: "2026-08-01T11:00:00.000Z" }),
 		);
 		expect(isoSearched.map((source) => source.id)).toEqual(
 			expect.arrayContaining(["sources/space-format.md", "sources/modern.md", "sources/sentinel.md"]),
 		);
-
-		// A space-format before bound still excludes rows captured after it.
 		const bounded = getDbAccessor().withReadDb((db) =>
 			searchEpisodicSources(db, {
 				agentId: "ant",
@@ -484,9 +471,6 @@ describe("episodic source selection", () => {
 	});
 
 	it("pages cursor listings past pre-epoch sentinel rows without re-listing them (#1149)", () => {
-		// Regression for #1149 (adversarial review F2): re-admitting sentinel
-		// rows on every cursor page froze paging on the pre-2000 block. The
-		// initial page surfaces them; later pages must move past them.
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(
 				`INSERT INTO memory_artifacts
@@ -525,7 +509,6 @@ describe("episodic source selection", () => {
 		const last = pageOne[pageOne.length - 1];
 		if (!last) throw new Error("page one empty");
 		const pageTwo = page({ capturedAt: last.capturedAt, kind: last.kind, id: last.id });
-		// The sentinel was surfaced by the initial page and must not re-enter.
 		expect(pageTwo.map((source) => source.id)).not.toContain("sources/sentinel.md");
 		expect(pageTwo.map((source) => source.id)).toEqual(["sources/second.md"]);
 	});

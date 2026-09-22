@@ -33,9 +33,7 @@ export function resolveGraphiqBinary(): string | null {
 		try {
 			accessSync(candidate, constants.X_OK);
 			return candidate;
-		} catch {
-			// not executable, try next
-		}
+		} catch {}
 	}
 	return null;
 }

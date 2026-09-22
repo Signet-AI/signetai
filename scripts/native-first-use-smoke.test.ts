@@ -1,4 +1,3 @@
-/** Release regression guard for the compiled binary's first-install contract. */
 import { afterEach, describe, expect, test } from "bun:test";
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";

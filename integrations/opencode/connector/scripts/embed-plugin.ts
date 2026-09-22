@@ -1,16 +1,4 @@
 #!/usr/bin/env bun
-/**
- * embed-plugin.ts
- *
- * Reads the compiled opencode-plugin bundle from
- * ../plugin/dist/signet.mjs and embeds it as a string literal
- * inside src/plugin-bundle.ts. Run before bundling src/index.ts so the
- * plugin travels with the connector without a separate file.
- *
- * If the plugin package has not been built yet, the script exits cleanly
- * and leaves the placeholder in place (install() will write an empty file,
- * which OpenCode ignores).
- */
 
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -27,8 +15,6 @@ if (!existsSync(pluginDistPath)) {
 }
 
 const pluginSource = readFileSync(pluginDistPath, "utf-8");
-
-// Escape backticks and template literal markers in the plugin source
 const escaped = pluginSource.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${");
 
 const output = `/**

@@ -96,11 +96,6 @@ describe("native memory sources", () => {
 	});
 
 	it("heals legacy pre-epoch captured_at rows on rescan (#1149)", async () => {
-		// Regression for #1149 (adversarial review F3): rows already stamped
-		// with the 1980 DOS-epoch sentinel stay permanently pending — no
-		// watermark can reach them, so content passes never early-exit and
-		// re-list the same stale row forever. The watcher must re-stamp them
-		// with the index time once.
 		const root = join(dir, ".codex");
 		mkdirSync(join(root, "memories", "rollout_summaries"), { recursive: true });
 		const file = join(root, "memories", "rollout_summaries", "sentinel-heal.md");
@@ -115,8 +110,6 @@ describe("native memory sources", () => {
 				file,
 			);
 		});
-
-		// Cold scan (fresh daemon): the unchanged-file path heals the row.
 		resetNativeMemoryIndexCache();
 		expect(await indexNativeMemoryFile(source, file)).toBe(false);
 
@@ -1204,12 +1197,9 @@ describe("native memory sources", () => {
 						.get("agent-native", file) as { count: number },
 			).count,
 		).toBe(1);
-
-		// The file vanishes before the watcher reads it (ENOENT).
 		rmSync(file);
 
 		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(false);
-		// The stale row is soft-deleted instead of being retried every scan.
 		const after = getDbAccessor().withReadDb((db) => ({
 			active: (
 				db
@@ -1228,8 +1218,6 @@ describe("native memory sources", () => {
 		}));
 		expect(after.active).toBe(0);
 		expect(after.softDeleted).toBe(1);
-
-		// Re-attempting the gone path stays a no-op.
 		expect(await indexNativeMemoryFile(source, file, "agent-native")).toBe(false);
 	});
 
@@ -1240,14 +1228,10 @@ describe("native memory sources", () => {
 		writeFileSync(file, "Codex remembered the locked-file contract.\n");
 
 		expect(await indexNativeMemoryFile(codexNativeMemorySource(root), file, "agent-native")).toBe(true);
-
-		// Make the path fail with a non-ENOENT error (parent replaced by a
-		// file -> ENOTDIR), standing in for a transiently locked file.
 		rmSync(root, { recursive: true, force: true });
 		writeFileSync(join(dir, ".codex"), "now a plain file\n");
 
 		expect(await indexNativeMemoryFile(codexNativeMemorySource(root), file, "agent-native")).toBe(false);
-		// Transient failures must NOT drop the artifact row (only ENOENT does).
 		expect(
 			getDbAccessor().withReadDb(
 				(db) =>
@@ -1258,9 +1242,6 @@ describe("native memory sources", () => {
 						.get("agent-native", file) as { count: number },
 			).count,
 		).toBe(1);
-
-		// The path is in failure cooldown: the retry is skipped, still false,
-		// and the row is untouched.
 		expect(await indexNativeMemoryFile(codexNativeMemorySource(root), file, "agent-native")).toBe(false);
 	});
 
@@ -1347,9 +1328,6 @@ describe("native memory sources", () => {
 		} finally {
 			await handle.close();
 		}
-
-		// A new bridge must honor the durable pause without rescanning, owner
-		// churn, or a legacy artifact fallback.
 		const restarted = makeHandle();
 		try {
 			expect(await restarted.syncExisting()).toBe(0);
@@ -1407,7 +1385,7 @@ describe("native memory sources", () => {
 			expect(embeddingStarted).toBe(true);
 			const manualRun = manualBridge.syncExisting();
 			await Bun.sleep(20);
-			expect(providerCalls).toBe(3); // one non-empty admission check per bridge layer plus one file embedding
+			expect(providerCalls).toBe(3);
 			expect(rejectedEmptyInputs).toBe(0);
 			expect(embeddingCalls).toBe(1);
 			releaseEmbedding();
@@ -2163,8 +2141,6 @@ describe("native memory sources", () => {
 			);
 			expect(indexingPath).not.toMatch(/\b(?:readFileSync|statSync|lstatSync|createHash)\b/);
 			expect(implementation).not.toContain('from "node:crypto"');
-			// This is the runtime attribution shim: warnings are inspected by
-			// category/message rather than inferred from elapsed wall-clock time.
 			expect(criticalWarnings).toEqual([]);
 		} finally {
 			logger.warn = originalWarn;
@@ -2248,8 +2224,6 @@ describe("native memory sources", () => {
 			sourceGraphEnabled: false,
 			onSourceWorkerScanStarted: () => {
 				scanStarts += 1;
-				// The first scan commits note-0. The second scan is killed from
-				// the worker-start event, before its descriptor is returned.
 				if (scanStarts === 2) first.cancel();
 			},
 			onFileIndexed: ({ filePath }) => firstIndexed.push(filePath),
@@ -2487,11 +2461,6 @@ describe("resolveEmbeddingBridgeOptions", () => {
 	});
 
 	it("omits embeddingConfig and fetchEmbedding when the embedding provider is 'none'", () => {
-		// Regression guard: source-sync callers (daemon startup, manual re-sync
-		// routes) must skip embedding wiring when embeddings are disabled, but
-		// must NOT skip it merely because a caller forgot to pass the config.
-		// This previously caused Obsidian (and other) sources to be recorded in
-		// memory_artifacts but never chunked/embedded.
 		const options = resolveEmbeddingBridgeOptions(
 			{ provider: "none", model: "", dimensions: 0, base_url: "" },
 			fetchEmbedding,

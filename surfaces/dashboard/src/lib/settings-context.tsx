@@ -1,6 +1,4 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-
-/** Settings modal open/close + active section, driven from the account row. */
 type SettingsSection = "network" | "inference" | "secrets" | "logs" | "advanced" | "licenses";
 export type { SettingsSection };
 
@@ -18,7 +16,6 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
 	const [open, setOpen] = useState(false);
 	const [section, setSection] = useState<SettingsSection>("network");
 	const toggle = useCallback(() => setOpen((o) => !o), []);
-	// Drive the body class that powers the settings "stage-drop" shell scale.
 	useEffect(() => {
 		document.body.classList.toggle("settings-open", open);
 		return () => document.body.classList.remove("settings-open");

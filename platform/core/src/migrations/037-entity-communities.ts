@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 037: Entity Communities
- *
- * Adds entity_communities table for Louvain community detection
- * (DP-5). Entities gain a community_id foreign key that links them to
- * their detected neighborhood cluster.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS entity_communities (
@@ -21,8 +13,6 @@ export function up(db: MigrationDb): void {
 	`);
 
 	db.exec("CREATE INDEX IF NOT EXISTS idx_entity_communities_agent ON entity_communities(agent_id)");
-
-	// Add community_id to entities if not present
 	const cols = db.prepare("PRAGMA table_info(entities)").all() as Array<{
 		name: string;
 	}>;

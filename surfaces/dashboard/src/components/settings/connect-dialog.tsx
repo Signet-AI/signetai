@@ -1,8 +1,3 @@
-/**
- * Connect-provider dialog — OAuth sign-in (popup + SSE state machine) or
- * API-key paste. Visual language follows the settings modal (mcard/ctrl);
- * flows ported from the old Svelte ConnectProviderDialog.
- */
 import { useConnectController } from "@/components/settings/connect-controller";
 import { api } from "@/lib/api";
 import { getDesktopBridge } from "@/lib/desktop";
@@ -40,17 +35,11 @@ export function ConnectProviderDialog({
 	provider: ConnectableProvider;
 	modelCount: number;
 	onClose: () => void;
-	/** Persist config + refresh catalog after any wiring change. */
 	onSaved: () => void | Promise<void>;
-	/** Write the subscription_session account entry into agent config. */
 	linkOAuthAccount: () => void;
-	/** Write the api account entry (kind + providerFamily + credentialRef). */
 	linkApiKeyAccount: (secretName: string) => void;
-	/** Remove the account entry entirely (disconnect path). */
 	unlinkAccount: () => void;
 }) {
-	// Desktop uses the context-isolated external-navigation bridge. Browser
-	// sessions keep the synchronous popup fallback for popup blockers.
 	const [oauthOpenError, setOAuthOpenError] = useState<string | null>(null);
 	const oauthNavigationRef = useRef<OAuthNavigation | null>(null);
 	const oauthNavigation =
@@ -77,9 +66,6 @@ export function ConnectProviderDialog({
 		},
 	});
 	const { phase } = controller;
-
-	// Auto-enter the only available path. OAuth is NEVER auto-started — the
-	// navigation must begin inside a real click gesture.
 	const [autoEntered, setAutoEntered] = useState(false);
 	useEffect(() => {
 		if (autoEntered || provider.connected) return;
@@ -88,8 +74,6 @@ export function ConnectProviderDialog({
 			setAutoEntered(true);
 		}
 	}, [autoEntered, provider, controller]);
-
-	// Close the popup once OAuth resolves (any non-running phase).
 	useEffect(() => {
 		if (phase.kind !== "oauth-running") oauthNavigation.close();
 	}, [phase.kind, oauthNavigation]);
@@ -130,9 +114,6 @@ export function ConnectProviderDialog({
 
 	const handleDisconnect = async () => {
 		setDisconnecting(true);
-		// daemon-side first: clear OAuth creds + delete any stored API key,
-		// then remove the account entry and persist — order matters, or
-		// agent.yaml keeps a credentialRef pointing at a deleted secret.
 		await api.deleteSecret(providerKeySecretName(provider.id));
 		await controller.disconnect();
 		unlinkAccount();
@@ -182,7 +163,7 @@ export function ConnectProviderDialog({
 				</header>
 
 				<div className="cp-body">
-					{/* connected state — status + disconnect */}
+					{}
 					{provider.connected && phase.kind === "method" && (
 						<>
 							<div className="cp-status-line">
@@ -200,7 +181,7 @@ export function ConnectProviderDialog({
 						</>
 					)}
 
-					{/* method choice */}
+					{}
 					{!provider.connected && phase.kind === "method" && (
 						<div className="flex flex-col gap-2">
 							{provider.supportsOAuth && (
@@ -216,7 +197,7 @@ export function ConnectProviderDialog({
 						</div>
 					)}
 
-					{/* OAuth running */}
+					{}
 					{phase.kind === "oauth-running" && (
 						<div className="flex flex-col gap-2.5">
 							<div className="cp-status-line">
@@ -284,7 +265,7 @@ export function ConnectProviderDialog({
 						</div>
 					)}
 
-					{/* API-key entry */}
+					{}
 					{phase.kind === "key-entry" && (
 						<div className="flex flex-col gap-2">
 							<label className="cp-label" htmlFor="cp-key">

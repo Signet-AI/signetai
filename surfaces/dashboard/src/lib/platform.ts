@@ -1,8 +1,3 @@
-/**
- * Platform detection for platform-aware dashboard spacing.
- * Native window controls are owned by Electron desktop shells; browser
- * surfaces render the dashboard without window controls.
- */
 export type Platform = "mac" | "win" | "linux";
 
 export function detectPlatform(): Platform {

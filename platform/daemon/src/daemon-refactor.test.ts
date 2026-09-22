@@ -8,15 +8,6 @@ describe("daemon route extraction refactor", () => {
 	beforeEach(() => {
 		stopSessionCleanup();
 	});
-
-	// Guards against module-level side effects at import time (e.g.
-	// calling startSessionCleanup() during top-level evaluation).
-	// BEST-EFFORT GUARD: This test relies on ESM module caching — the
-	// daemon module body only runs on the first import in a given
-	// process. If another test file imports ./daemon first, this test
-	// becomes a no-op. This is an intentional trade-off: running this
-	// test in isolation still catches regressions, and the daemon's
-	// integration tests cover session cleanup behavior independently.
 	it("does not start session cleanup when daemon is imported for route registration", async () => {
 		expect.assertions(2);
 		expect(isSessionCleanupRunning()).toBe(false);
@@ -37,27 +28,12 @@ describe("daemon route extraction refactor", () => {
 
 		expect(mode2).toBe(mode1);
 		expect(secret2?.toString("hex")).toBe(secret1?.toString("hex"));
-
-		// In local mode (the test environment default), authSecret is always
-		// null. Make this invariant explicit rather than relying on the
-		// trivially-true toString comparison above.
 		if (state.authConfig.mode === "local") {
 			expect(state.authSecret).toBeNull();
 		} else {
 			expect(state.authSecret).not.toBeNull();
 		}
 	});
-
-	// Exercises the non-local auth path (team mode) end-to-end:
-	// reloadAuthState reads agent.yaml, parses mode=team, and calls
-	// loadOrCreateSecret to populate authSecret. A throw would indicate
-	// a parsing or secret-loading failure.
-	//
-	// Limitation: Bun's ES module live bindings may not reliably propagate
-	// `export let` reassignments from within function calls in the test
-	// runner, so we assert no-throw only. At runtime in the daemon
-	// process, live bindings propagate correctly because state.ts and
-	// daemon.ts share the same module instance.
 	it("reloadAuthState completes without error in team mode", async () => {
 		expect.assertions(1);
 		const state = await import("./routes/state.js");

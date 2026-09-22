@@ -1,7 +1,3 @@
-/**
- * Tests for the shared JSON parsing helpers in the extraction pipeline module.
- */
-
 import { describe, expect, it } from "bun:test";
 import { stripFences } from "./extraction";
 

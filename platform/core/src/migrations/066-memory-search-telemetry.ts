@@ -1,11 +1,3 @@
-/**
- * Migration 066: Memory Search Telemetry
- *
- * Local-only QA ledger for explicit recall requests. Unlike anonymous
- * telemetry_events, this table intentionally stores query text and recalled
- * result snapshots, so it must never be forwarded to external telemetry sinks.
- */
-
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

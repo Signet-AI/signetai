@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 052: MCP invocation tracking
- *
- * Records every MCP tool call (CLI, agent, and MCP-originated) with
- * server, tool, agent, latency, and outcome. Powers the analytics API
- * and the dashboard usage panel.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS mcp_invocations (

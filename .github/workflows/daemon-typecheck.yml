@@ -1,9 +1,4 @@
 name: Daemon Typecheck
-
-# Blocking daemon production typecheck gate (#969).
-#
-# Tests run through the Bun test suite; this project checks the daemon sources
-# that ship to users and excludes test-only mocks and fixtures.
 on:
   pull_request:
     paths:
@@ -38,7 +33,6 @@ jobs:
       - name: Install dependencies
         shell: bash
         env:
-          # This daemon-only job does not run Electron's desktop application.
           ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
 
@@ -56,9 +50,6 @@ jobs:
         shell: bash
         run: |
           set +e
-          # The daemon tsconfig excludes test-only mocks/fixtures; those are
-          # exercised by the Bun test suite. Keep the rootDir cross-package
-          # TS6059 noise out of this production source gate.
           cd platform/daemon
           set +e
           npx tsc --noEmit > /tmp/daemon-tsc-raw.txt 2>&1
@@ -68,8 +59,6 @@ jobs:
           if grep -q "error TS" /tmp/daemon-tsc.txt; then
             exit 1
           fi
-          # Preserve failures that did not produce a TypeScript diagnostic
-          # (for example, an invocation or resource failure).
           if [ "$TSC_STATUS" -ne 0 ] && ! grep -q "TS6059" /tmp/daemon-tsc-raw.txt; then
             exit "$TSC_STATUS"
           fi

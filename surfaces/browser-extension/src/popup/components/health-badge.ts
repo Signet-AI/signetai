@@ -1,5 +1,3 @@
-/** Health badge component — updates the dot and version display */
-
 import { checkHealth, getStatus } from "../../shared/api.js";
 
 type HealthState = "healthy" | "degraded" | "offline";

@@ -1,12 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 053: Skill invocation tracking
- *
- * Records task- and agent-driven skill usage with timestamps, latency,
- * agent scope, and success outcome. Powers overview usage analytics and
- * keeps procedural-memory usage fields grounded in real invocations.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS skill_invocations (

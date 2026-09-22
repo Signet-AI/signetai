@@ -1,14 +1,3 @@
-/**
- * Agent config store — React equivalent of the old Svelte dashboard's
- * settings store (`st`). Loads agent.yaml via GET /api/config, exposes path
- * accessors used by the settings screens (inference accounts/targets, git
- * sync toggles), tracks dirtiness, and persists via POST /api/config.
- *
- * Writes are explicit: mutate with the aSet/aDel helpers, then save(). Callers that
- * change provider wiring must save BEFORE reloading catalogs, because the
- * daemon re-reads agent.yaml from disk (mirrors the Svelte save→invalidate
- * ordering).
- */
 import { parse, stringify } from "yaml";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "@/lib/api";
@@ -63,16 +52,13 @@ export function isDreamingEnabled(agent: Record<string, unknown>): boolean {
 export interface AgentConfigStore {
 	ready: boolean;
 	dirty: boolean;
-	/** Raw parsed agent.yaml (read-only for views). */
 	agent: YamlObject;
 	aStr: (path: readonly string[]) => string;
 	aBool: (path: readonly string[]) => boolean;
 	aSetStr: (path: readonly string[], value: string) => void;
 	aSetBool: (path: readonly string[], value: boolean) => void;
 	aSetNum: (path: readonly string[], value: number) => void;
-	/** Delete a key and prune now-empty parents (keeps YAML canonical). */
 	aDel: (path: readonly string[]) => void;
-	/** Apply one synchronous mutation to the current draft. */
 	aUpdate: (fn: (draft: Record<string, unknown>) => void) => void;
 	save: () => Promise<boolean>;
 	reload: () => Promise<void>;
@@ -91,7 +77,6 @@ export function useAgentConfig(): AgentConfigStore {
 	const [error, setError] = useState<string | null>(null);
 	const saveRef = useRef<Promise<boolean> | null>(null);
 	const revision = useRef(0);
-	// Mutations accumulate in a ref between renders; state mirrors for repaint.
 	const agentRef = useRef<YamlObject>({});
 	agentRef.current = agent;
 
@@ -124,12 +109,6 @@ export function useAgentConfig(): AgentConfigStore {
 		const draft: YamlObject = structuredClone(agentRef.current);
 		fn(draft);
 		revision.current++;
-		// Write through to the ref synchronously: save() serializes
-		// agentRef.current, and React state (agentRef.current = agent on
-		// render) does not commit before the next paint. Without this, a
-		// mutation followed by an immediate save in the same tick (disconnect,
-		// target rewire) serializes the pre-mutation config and the change is
-		// silently lost on disk — the provider stays connected forever.
 		agentRef.current = draft;
 		setAgent(draft);
 		setDirty(true);
@@ -179,7 +158,6 @@ export function useAgentConfig(): AgentConfigStore {
 		if (saveRef.current) return saveRef.current;
 		if (!fileName) return Promise.resolve(false);
 		setSaving(true);
-		// One write in flight; edits made during it replace the pending snapshot.
 		saveRef.current = (async () => {
 			const deadline = Date.now() + 30_000;
 			while (Date.now() < deadline) {

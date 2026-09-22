@@ -1,18 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 089: Add `job_cancellations` audit table for issue #901.
- *
- * Operators cancel `memory_jobs` and `summary_jobs` rows via the
- * `cancelObsoleteJobs` repair action. We never hard-delete the source
- * row in cancel — we copy the full payload to `job_cancellations` and
- * flip the source row's `status` to `cancelled`. This preserves
- * provenance for support cases where operators need to explain a
- * cancellation after the fact.
- *
- * Idempotent: `CREATE TABLE IF NOT EXISTS` + index check via
- * `pragma_index_list`. Safe to re-run on a partial upgrade.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS job_cancellations (

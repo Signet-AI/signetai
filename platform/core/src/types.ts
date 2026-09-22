@@ -1,11 +1,3 @@
-/**
- * Core types for Signet
- */
-
-// ---------------------------------------------------------------------------
-// LLM Provider interface (used by ingest extractors, daemon pipeline, etc.)
-// ---------------------------------------------------------------------------
-
 export const ACCOUNTING_PROVENANCES = [
 	"provider_reported",
 	"locally_estimated",
@@ -16,23 +8,13 @@ export const ACCOUNTING_PROVENANCES = [
 
 export type AccountingProvenance = (typeof ACCOUNTING_PROVENANCES)[number];
 export type AccountingSummaryProvenance = AccountingProvenance | "mixed";
-
-/** Where a configured inference route executes. Unknown is intentional. */
 export type InferenceLocality = "local" | "remote" | "unknown";
-
-/** Bounded routing attribution kept separate from the executor or harness. */
 export interface LlmTelemetryAttribution {
 	readonly executor: string;
 	readonly provider?: string;
 	readonly model?: string;
 	readonly locality: InferenceLocality;
 }
-
-/**
- * Summarize the provenance of one or more accounting values without treating
- * a missing value as a zero. The result is intentionally bounded so API
- * consumers can render it without knowing provider-specific names.
- */
 export function summarizeAccountingProvenance(
 	values: readonly (AccountingProvenance | null | undefined)[],
 ): AccountingSummaryProvenance {
@@ -60,9 +42,7 @@ export interface LlmUsage {
 	readonly totalTokens: number | null;
 	readonly totalCost: number | null;
 	readonly totalDurationMs: number | null;
-	/** Cost/token accounting source. Omitted by legacy providers means unavailable. */
 	readonly accountingProvenance?: AccountingProvenance;
-	/** Bounded per-request cache accounting, when the provider exposes it. */
 	readonly cacheRequests?: LlmCacheRequestAccounting | null;
 }
 
@@ -76,7 +56,6 @@ export interface LlmGenerateOptions {
 	readonly maxTokens?: number;
 	readonly temperature?: number;
 	readonly signal?: AbortSignal;
-	/** Optional upstream session identity for providers that support session affinity. */
 	readonly sessionId?: string;
 	readonly responseFormat?: "json";
 	readonly think?: boolean;
@@ -84,72 +63,43 @@ export interface LlmGenerateOptions {
 
 export interface LlmProvider {
 	readonly name: string;
-	/** Known cost accounting mode for local providers; remote providers may report it per result. */
 	readonly accountingProvenance?: AccountingProvenance;
-	/** Privacy-safe routing metadata when this provider came from a configured target. */
 	readonly telemetryAttribution?: LlmTelemetryAttribution;
 	generate(prompt: string, opts?: LlmGenerateOptions): Promise<string>;
 	generateWithUsage?(prompt: string, opts?: LlmGenerateOptions): Promise<LlmGenerateResult>;
 	available(): Promise<boolean>;
 }
-
-// ---------------------------------------------------------------------------
-// Multi-agent types
-// ---------------------------------------------------------------------------
-
-/**
- * Controls which agents' memories are visible on read.
- * - "isolated": only own memories
- * - "shared": all global memories + own private
- * - { type: "group" }: global memories from group members + own private
- */
 export type ReadPolicy = "isolated" | "shared" | { readonly type: "group"; readonly group: string };
-
-/** A named agent entry in the roster. */
 export interface AgentDefinition {
 	readonly name: string;
 	readonly model?: string;
 	readonly harnesses?: readonly string[];
-	/** Skills allowlist. Omit or empty string[] = all skills. */
 	readonly skills?: readonly string[];
-	/** Relative path to agent's SOUL.md (defaults to root SOUL.md). */
 	readonly personality?: string;
 	readonly memory?: {
 		readonly read_policy?: ReadPolicy;
 	};
 }
 
-// ---------------------------------------------------------------------------
-
 export interface AgentManifest {
 	version: number;
 	schema: string;
-
-	// Identity
 	agent: {
 		name: string;
 		description?: string;
 		created: string;
 		updated: string;
 	};
-
-	// Owner (optional)
 	owner?: {
 		address?: string;
 		localId?: string;
 		ens?: string;
 		name?: string;
 	};
-
-	// Multi-agent roster (optional; omit for single-agent installs)
 	agents?: {
 		readonly roster: readonly AgentDefinition[];
 	};
-
-	// Harnesses this agent works with
 	harnesses?: string[];
-
-	// Embedding configuration
 	embedding?: {
 		provider: "native" | "llama-cpp" | "ollama" | "openai" | "local";
 		model: string;
@@ -157,15 +107,11 @@ export interface AgentManifest {
 		base_url?: string;
 		api_key?: string;
 	};
-
-	// Search configuration
 	search?: {
-		alpha: number; // Vector weight (0-1)
-		top_k: number; // Candidates per source
-		min_score: number; // Minimum threshold
+		alpha: number;
+		top_k: number;
+		min_score: number;
 	};
-
-	// Memory configuration
 	memory?: {
 		database: string;
 		vectors?: string;
@@ -174,30 +120,21 @@ export interface AgentManifest {
 		pipelineV2?: Partial<PipelineV2Config>;
 		dreaming?: Partial<DreamingConfig>;
 	};
-
-	// Trust & verification (optional)
 	trust?: {
 		verification: "none" | "erc8128" | "gpg" | "did" | "registry";
 		registry?: string;
 	};
-
-	// External service integration
 	services?: {
 		openclaw?: {
 			restart_command?: string;
 		};
 	};
-
-	// Home dashboard configuration (optional)
 	home?: {
 		spotlightEntity?: string;
 	};
-
-	// Legacy fields
 	auth?: {
 		method: "none" | "erc8128" | "gpg" | "did";
 		chainId?: number;
-		// Phase J: deployment mode auth
 		mode?: "local" | "team" | "hybrid";
 		defaultTokenTtlSeconds?: number;
 		sessionTokenTtlSeconds?: number;
@@ -247,8 +184,6 @@ export interface AgentConfig {
 	};
 }
 
-// -- Pipeline v2 feature flags --
-
 export const PIPELINE_FLAGS = [
 	"enabled",
 	"paused",
@@ -265,17 +200,12 @@ export const PIPELINE_FLAGS = [
 
 export type PipelineFlag = (typeof PIPELINE_FLAGS)[number];
 
-// -- Pipeline v2 sub-config interfaces --
-
 export interface PipelineCommandConfig {
 	readonly bin: string;
 	readonly args: ReadonlyArray<string>;
 	readonly cwd?: string;
 	readonly env?: Readonly<Record<string, string>>;
 }
-
-// Callers may provide a partial rate-limit config; omitted fields fall back to
-// these defaults in the config parser and in withRateLimit().
 export interface ProviderRateLimitConfig {
 	readonly maxCallsPerHour?: number;
 	readonly burstSize?: number;
@@ -303,7 +233,6 @@ export interface PipelineWorkerConfig {
 }
 
 export interface PipelineClaudeCodeConfig {
-	/** Allow daemon-spawned Claude Code calls to inherit ambient Anthropic API-key env vars. */
 	readonly allowApiKeyEnv: boolean;
 	readonly maxBudgetUsd?: number;
 	readonly cooldownMs: number;
@@ -395,9 +324,7 @@ export interface PipelineTelemetryConfig {
 	readonly flushBatchSize: number;
 	readonly retentionDays: number;
 	readonly memorySearchQaEnabled: boolean;
-	/** Explicit operator declaration; absent or invalid values resolve to unknown. */
 	readonly deploymentRole?: TelemetryDeploymentRole;
-	/** Explicit installation provenance; absent or invalid values resolve to unknown. */
 	readonly installChannel?: TelemetryInstallChannel;
 }
 
@@ -416,7 +343,6 @@ export interface PipelineSubagentsConfig {
 }
 
 export interface PipelineV2Config {
-	// Master switches (flat)
 	readonly enabled: boolean;
 	readonly paused: boolean;
 	readonly shadowMode: boolean;
@@ -424,8 +350,6 @@ export interface PipelineV2Config {
 	readonly semanticContradictionEnabled: boolean;
 	readonly semanticContradictionTimeoutMs: number;
 	readonly telemetryEnabled: boolean;
-
-	// Grouped sub-objects
 	readonly extraction: PipelineExtractionConfig;
 	readonly worker: PipelineWorkerConfig;
 	readonly claudeCode: PipelineClaudeCodeConfig;
@@ -506,11 +430,8 @@ export interface PipelineReflectionsConfig {
 	readonly model: string;
 	readonly timeout: number;
 	readonly maxTokens: number;
-	/** Daily cron in `M H * * *` form, evaluated in `timezone`. */
 	readonly schedule: string;
-	/** IANA timezone the daily schedule fires in; defaults to the daemon's detected local timezone. */
 	readonly timezone: string;
-	/** How many briefs one scheduled (or default manual) generation writes. */
 	readonly count: number;
 	readonly timeWindowHours: number;
 	readonly maxMemories: number;
@@ -518,37 +439,25 @@ export interface PipelineReflectionsConfig {
 }
 
 export interface DreamingSurprisalConfig {
-	/** Opt-in only: structural attention remains the default selector. */
 	readonly enabled: boolean;
-	/** Maximum number of recent, already-embedded episodic observations to inspect. */
 	readonly sampleSize: number;
-	/** Maximum number of embedding-surprisal hints to queue for one pass. */
 	readonly maxCandidates: number;
-	/** Minimum number of valid vectors needed before geometry is meaningful. */
 	readonly minObservations: number;
-	/** Number of nearest neighbours used for local-density surprisal. */
 	readonly neighborCount: number;
-	/** Maximum number of points held by a deterministic projection-tree leaf. */
 	readonly treeLeafSize: number;
-	/** Normalized score below which a candidate is not queued. */
 	readonly minScore: number;
 }
 
 export interface DreamingConfig {
-	/** Enable the background Dreaming worker. Semantic writes stay off when false. */
 	readonly enabled: boolean;
 	readonly tokenThreshold: number;
-	/** Maximum time that non-empty episodic evidence may wait below the token threshold. */
 	readonly maxInterval: number;
 	readonly timeout: number;
 	readonly maxInputTokens: number;
 	readonly maxOutputTokens: number;
 	readonly backfillOnFirstRun: boolean;
-	/** Optional, fail-open embedding-geometry hints for Dreaming attention. */
 	readonly surprisal?: DreamingSurprisalConfig;
 }
-
-// -- Status/union constants --
 
 export const MEMORY_TYPES = [
 	"fact",
@@ -575,8 +484,6 @@ export type HistoryEvent = (typeof HISTORY_EVENTS)[number];
 export const DECISION_ACTIONS = ["add", "update", "delete", "none"] as const;
 export type DecisionAction = (typeof DECISION_ACTIONS)[number];
 
-// -- Core interfaces --
-
 export interface Memory {
 	id: string;
 	type: MemoryType;
@@ -595,7 +502,6 @@ export interface Memory {
 	vectorClock: Record<string, number>;
 	version: number;
 	manualOverride: boolean;
-	// v2 fields (optional for backward compatibility)
 	contentHash?: string;
 	normalizedContent?: string;
 	isDeleted?: boolean;
@@ -647,7 +553,7 @@ export interface MemoryHistory {
 	newContent?: string;
 	changedBy: string;
 	reason?: string;
-	metadata?: string; // JSON
+	metadata?: string;
 	createdAt: string;
 	actorType?: string;
 	sessionId?: string;
@@ -659,8 +565,8 @@ export interface MemoryJob {
 	memoryId: string;
 	jobType: string;
 	status: JobStatus;
-	payload?: string; // JSON
-	result?: string; // JSON
+	payload?: string;
+	result?: string;
 	attempts: number;
 	maxAttempts: number;
 	leasedAt?: string;
@@ -725,8 +631,6 @@ export interface MemoryEntityMention {
 	createdAt?: string;
 }
 
-// -- Extraction pipeline contracts --
-
 export interface ExtractedFact {
 	readonly content: string;
 	readonly type: MemoryType;
@@ -759,8 +663,6 @@ export interface DecisionResult {
 	readonly proposals: readonly DecisionProposal[];
 	readonly warnings: readonly string[];
 }
-
-// -- Knowledge Architecture types --
 
 export const ENTITY_TYPES = [
 	"person",
@@ -795,7 +697,6 @@ export const ONTOLOGY_ROW_STATUSES = ["active", "archived"] as const;
 export type OntologyRowStatus = (typeof ONTOLOGY_ROW_STATUSES)[number];
 
 export const DEPENDENCY_TYPES = [
-	// core
 	"uses",
 	"requires",
 	"owned_by",
@@ -804,7 +705,6 @@ export const DEPENDENCY_TYPES = [
 	"informs",
 	"maintains",
 	"implements",
-	// knowledge
 	"built",
 	"depends_on",
 	"related_to",
@@ -815,20 +715,17 @@ export const DEPENDENCY_TYPES = [
 	"supports_claim",
 	"authored_by",
 	"links_to",
-	// structural
 	"contains",
 	"contains_note",
 	"contradicts",
 	"supersedes",
 	"part_of",
 	"produced_artifact",
-	// temporal / execution flow
 	"precedes",
 	"follows",
 	"triggers",
 	"may_execute",
 	"requires_approval_from",
-	// impact
 	"impacts",
 	"produces",
 	"consumes",
@@ -1015,7 +912,6 @@ export interface EntityDependency {
 export interface EpistemicAssertion {
 	readonly id: string;
 	readonly agentId: string;
-	/** The agent-scoped observer. This is intentionally the same identity as agentId in the MVP. */
 	readonly observerId: string;
 	readonly subjectEntityId: string;
 	readonly subjectEntityName: string | null;

@@ -113,14 +113,11 @@ function startConnectorSync(connectorId: string, mode: "incremental" | "full"): 
 
 	return { status: "syncing" };
 }
-
-/** Escape LIKE special characters for safe prefix matching. */
 export function escapeLikePrefix(value: string): string {
 	return `${value.replace(/[%_\\]/g, "\\$&")}%`;
 }
 
 export function registerConnectorRoutes(app: Hono): void {
-	// Permission guards — skip GET (public reads)
 	app.use("/api/connectors", async (c, next) => {
 		if (c.req.method === "GET") return next();
 		return requirePermission("admin", authConfig)(c, next);
@@ -352,13 +349,7 @@ export function registerConnectorRoutes(app: Hono): void {
 		}
 	});
 
-	// Harnesses API
-
 	app.get("/api/harnesses", async (c) => {
-		// Signet-owned connection record: the harnesses the operator (or the
-		// onboarding flow) actually connected, from agent.yaml. Unlike `exists`,
-		// which reports a discovered harness configuration, a non-empty list
-		// proves a Signet connection was established.
 		const configuredHarnesses = loadConfiguredHarnesses(AGENTS_DIR);
 		const connectors = await enumerateHarnessConnectors(configuredHarnesses, harnessLastSeen, c.req.raw.signal);
 		const harnesses = connectors.map((connector) => ({

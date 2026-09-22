@@ -1,13 +1,3 @@
-/**
- * Helpers for keeping Signet's injected memory context separate from a
- * harness' canonical conversation.
- *
- * The delimiters are transport markers, not user-visible content.  Harnesses
- * may use the wrapped form when they need to put dynamic context in an API
- * copy of a user message, and must pass provider output through the streaming
- * scrubber before displaying it.
- */
-
 const INTERNAL_FENCE_NAMES = ["signet-memory-context", "signet-memory", "memory-context"] as const;
 
 const FENCE_PREFIXES = [
@@ -92,14 +82,6 @@ function findNextFence(
 	}
 	return undefined;
 }
-
-/**
- * Remove internal memory blocks and orphaned delimiters from canonical text.
- *
- * An unterminated opening delimiter drops the remainder of the value.  This
- * is intentional: retaining a partial provider block would make a transcript
- * or recall query depend on transport state and could leak hidden context.
- */
 export function stripInternalMemoryContext(text: string): string {
 	let remaining = text;
 	let output = "";
@@ -127,8 +109,6 @@ export function stripInternalMemoryContext(text: string): string {
 
 	return output;
 }
-
-/** Escape delimiters found inside memory content before it is wrapped. */
 export function escapeMemoryContextForFence(text: string): string {
 	let output = "";
 	let cursor = 0;
@@ -141,19 +121,12 @@ export function escapeMemoryContextForFence(text: string): string {
 	}
 	return output + text.slice(cursor);
 }
-
-/** Build the provider-bound wrapper for dynamic context. */
 export function wrapMemoryContext(context: string, source = "api-context"): string {
 	const clean = escapeMemoryContextForFence(context).trim();
 	if (!clean) return "";
 	const safeSource = source.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 40) || "api-context";
 	return `<signet-memory source="${safeSource}">\n${clean}\n</signet-memory>`;
 }
-
-/**
- * Compose the API-only copy of a user message.  The caller must persist the
- * original user message, not this returned value.
- */
 export function composeApiUserContent(userContent: string, dynamicContext: string): string {
 	const cleanUserContent = stripInternalMemoryContext(userContent);
 	const contextBlock = wrapMemoryContext(dynamicContext);
@@ -205,13 +178,6 @@ function partialFenceSuffixLength(text: string): number {
 	}
 	return longest;
 }
-
-/**
- * Streaming equivalent of stripInternalMemoryContext.
- *
- * Delimiter prefixes are retained between feeds, so a marker split across
- * provider chunks cannot be displayed before the next chunk arrives.
- */
 export class StreamingMemoryContextScrubber {
 	private buffer = "";
 	private fenceDepth = 0;

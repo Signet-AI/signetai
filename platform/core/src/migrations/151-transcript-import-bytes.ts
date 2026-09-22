@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Raw evidence is immutable once sealed; legacy paths require explicit migration. */
 export function up(db: MigrationDb): void {
 	const hasColumn = (table: string, column: string): boolean => {
 		const statement = db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`);

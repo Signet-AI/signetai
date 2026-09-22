@@ -1,10 +1,3 @@
-/**
- * Route contract for GET /api/harnesses (PR #1858 review, finding 3): the
- * response carries `configuredHarnesses` — the harnesses recorded as connected
- * in the workspace's agent.yaml — separately from the per-harness home
- * directory `exists` flag, so clients can distinguish "harness installed on
- * this machine" from "Signet connected to it".
- */
 import { expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -41,8 +34,6 @@ const {logger} = await import(${JSON.stringify(join(import.meta.dir, "../logger.
 `,
 	);
 	try {
-		// SIGNET_PATH selects a fresh workspace whose agent.yaml carries one
-		// connected harness; a harness home directory is deliberately absent.
 		mkdirSync(join(home, "workspace"), { recursive: true });
 		writeFileSync(join(home, "workspace", "agent.yaml"), "name: Example\nharnesses:\n  - codex\n");
 		const result = spawnSync(process.execPath, [fixture], {

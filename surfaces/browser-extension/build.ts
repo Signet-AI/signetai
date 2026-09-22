@@ -1,8 +1,3 @@
-/**
- * Build script for Signet browser extension
- * Outputs to dist/chrome/ and dist/firefox/
- */
-
 import { existsSync, mkdirSync, cpSync, writeFileSync, readFileSync, watch } from "node:fs";
 import { join, resolve } from "node:path";
 
@@ -34,13 +29,11 @@ function buildManifest(target: Target): Record<string, unknown> {
 	const base = loadManifest();
 
 	if (target === "firefox") {
-		// Firefox uses background.scripts instead of service_worker
 		const bg = base.background as Record<string, unknown> | undefined;
 		if (bg?.service_worker) {
 			bg.scripts = [bg.service_worker];
 			delete bg.service_worker;
 		}
-		// Add Firefox-specific settings
 		base.browser_specific_settings = {
 			gecko: {
 				id: "signet@signet.ai",
@@ -53,21 +46,16 @@ function buildManifest(target: Target): Record<string, unknown> {
 }
 
 function copyStaticFiles(outDir: string): void {
-	// Copy HTML files
 	for (const dir of ["popup", "options"]) {
 		const htmlSrc = join(SRC, dir, "index.html");
 		if (existsSync(htmlSrc)) {
 			cpSync(htmlSrc, join(outDir, dir, "index.html"));
 		}
 	}
-
-	// Copy icons
 	const iconsDir = join(SRC, "icons");
 	if (existsSync(iconsDir)) {
 		cpSync(iconsDir, join(outDir, "icons"), { recursive: true });
 	}
-
-	// Copy CSS files
 	for (const cssPath of ["content/content.css", "popup/popup.css"]) {
 		const src = join(SRC, cssPath);
 		if (existsSync(src)) {
@@ -79,8 +67,6 @@ function copyStaticFiles(outDir: string): void {
 async function buildTarget(target: Target): Promise<void> {
 	const outDir = join(DIST, target);
 	mkdirSync(outDir, { recursive: true });
-
-	// Build TypeScript entry points
 	const entrypoints = Object.values(ENTRY_POINTS);
 	const result = await Bun.build({
 		entrypoints,
@@ -101,12 +87,8 @@ async function buildTarget(target: Target): Promise<void> {
 		}
 		process.exit(1);
 	}
-
-	// Write manifest
 	const manifest = buildManifest(target);
 	writeFileSync(join(outDir, "manifest.json"), JSON.stringify(manifest, null, 2));
-
-	// Copy static files
 	copyStaticFiles(outDir);
 
 	console.log(`Built ${target} → ${outDir}`);

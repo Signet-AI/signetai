@@ -8,10 +8,6 @@ import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import { getEmbeddingGapStats } from "../repair-actions";
 import { startMaintenanceWorker } from "./maintenance-worker";
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 function freshDb(): Database {
 	const db = new Database(":memory:");
 	runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
@@ -57,9 +53,7 @@ function asAccessor(db: Database): DbAccessor {
 function ensureVecTable(db: Database): void {
 	try {
 		db.exec("DROP TABLE IF EXISTS vec_embeddings");
-	} catch {
-		// The migration may have created a sqlite-vec virtual table.
-	}
+	} catch {}
 	db.exec("CREATE TABLE vec_embeddings (id TEXT PRIMARY KEY, embedding BLOB)");
 }
 
@@ -93,7 +87,7 @@ const BASE_CFG: PipelineV2Config = {
 	},
 	repair: {
 		...DEFAULT_PIPELINE_V2.repair,
-		requeueCooldownMs: 0, // no cooldown for tests
+		requeueCooldownMs: 0,
 		requeueHourlyBudget: 1000,
 	},
 };
@@ -106,10 +100,6 @@ const TEST_EMBEDDING_CFG: EmbeddingConfig = {
 	dimensions: 3,
 	base_url: "http://127.0.0.1:11434",
 };
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
 
 describe("maintenance-worker", () => {
 	it("returns healthy report on empty database", async () => {
@@ -287,8 +277,6 @@ describe("maintenance-worker", () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
-
-		// Insert 10 completed + 5 dead jobs -> dead rate = 33%
 		for (let i = 0; i < 10; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, completed_at, created_at, updated_at)
@@ -315,8 +303,6 @@ describe("maintenance-worker", () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
-
-		// Insert 2 dead jobs + 1 completed to get dead rate > 1%
 		for (let i = 0; i < 2; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
@@ -333,8 +319,6 @@ describe("maintenance-worker", () => {
 
 		const result = await handle.tick();
 		expect(result.executed.length).toBeGreaterThan(0);
-
-		// Dead jobs should be requeued
 		const deadCount = (db.prepare("SELECT COUNT(*) as n FROM memory_jobs WHERE status = 'dead'").get() as { n: number })
 			.n;
 		expect(deadCount).toBe(0);
@@ -349,8 +333,6 @@ describe("maintenance-worker", () => {
 			...BASE_CFG,
 			autonomous: { ...BASE_CFG.autonomous, maintenanceMode: "observe" },
 		};
-
-		// Insert dead jobs + 1 completed
 		for (let i = 0; i < 3; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
@@ -368,8 +350,6 @@ describe("maintenance-worker", () => {
 		const result = await handle.tick();
 		expect(result.recommendations.length).toBeGreaterThan(0);
 		expect(result.executed).toHaveLength(0);
-
-		// Dead jobs still dead
 		const deadCount = (db.prepare("SELECT COUNT(*) as n FROM memory_jobs WHERE status = 'dead'").get() as { n: number })
 			.n;
 		expect(deadCount).toBe(3);
@@ -386,8 +366,6 @@ describe("maintenance-worker", () => {
 		};
 
 		const handle = startMaintenanceWorker(accessor, disabledCfg, tracker, null);
-
-		// tick() still works for manual invocation
 		const result = await handle.tick();
 		expect(result.report.composite.status).toBe("healthy");
 
@@ -399,9 +377,6 @@ describe("maintenance-worker", () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
-
-		// A recommendation makes doTick await the repair execution, leaving
-		// the first cycle pending at the point where the second tick is called.
 		for (let i = 0; i < 2; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
@@ -418,9 +393,6 @@ describe("maintenance-worker", () => {
 
 		const first = handle.tick();
 		const second = handle.tick();
-
-		// The same promise proves the second dispatch coalesced rather than
-		// entering a second maintenance cycle concurrently.
 		expect(second).toBe(first);
 		await first;
 		db.close();
@@ -430,8 +402,6 @@ describe("maintenance-worker", () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
-
-		// Job leased 20 minutes ago (past 10min anomaly threshold)
 		const oldLease = new Date(Date.now() - 20 * 60 * 1000).toISOString();
 		db.prepare(
 			`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, leased_at, created_at, updated_at)
@@ -451,8 +421,6 @@ describe("maintenance-worker", () => {
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
-
-		// 10 memories, 5 deleted (50% ratio > 30% threshold)
 		for (let i = 0; i < 10; i++) {
 			const isDeleted = i < 5 ? 1 : 0;
 			db.prepare(
@@ -479,17 +447,9 @@ describe("maintenance-worker", () => {
 	});
 
 	it("does not abort the cycle when the inference provider is not initialised", async () => {
-		// Regression: a maintenance execute-cycle must remain best-effort when
-		// no LLM provider resolver is wired up (e.g. mid-boot). The summary-
-		// condensation block in the execute path calls getLlmProvider()
-		// unguarded; a thrown error there must be caught and never abort the
-		// full cycle (retention, dedup, dead-memory scan, feedback telemetry).
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
-
-		// Dead jobs → non-empty recommendations → exercises the execute branch
-		// where the summary-condensation block runs after repairs.
 		for (let i = 0; i < 2; i++) {
 			db.prepare(
 				`INSERT INTO memory_jobs (id, memory_id, job_type, status, attempts, max_attempts, failed_at, created_at, updated_at)
@@ -499,9 +459,6 @@ describe("maintenance-worker", () => {
 
 		const handle = startMaintenanceWorker(accessor, BASE_CFG, tracker, null);
 		handle.stop();
-
-		// No initInferenceProviderResolver() call — emulates a boot where the
-		// provider is not yet wired up. tick() must resolve, not reject.
 		const result = await handle.tick();
 		expect(result.recommendations.length).toBeGreaterThan(0);
 		expect(result.executed.length).toBeGreaterThan(0);
@@ -509,18 +466,9 @@ describe("maintenance-worker", () => {
 	});
 
 	it("Dreaming-enabled maintenance cycle does not directly supersede semantic rows", async () => {
-		// Regression (#946): the maintenance worker previously invoked a direct
-		// retroactive supersession sweep that mutated entity_attributes status
-		// outside the audited Dreaming apply path. After the cutover, semantic
-		// supersession must flow through Dreaming's audited apply only. A
-		// maintenance cycle — even with graph + feedback enabled (the branch
-		// where the sweep used to run) — must leave contradicting sibling
-		// attributes untouched.
 		const db = freshDb();
 		const accessor = asAccessor(db);
 		const tracker = createProviderTracker();
-
-		// Entity + aspect
 		db.prepare(
 			`INSERT INTO entities (id, name, entity_type, canonical_name, mentions, agent_id, created_at, updated_at)
 			 VALUES ('entity-supersede', 'User', 'person', 'user', 2, 'default', ?, ?)`,
@@ -529,9 +477,6 @@ describe("maintenance-worker", () => {
 			`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
 			 VALUES ('aspect-editor', 'entity-supersede', 'default', 'editor', 'editor', 0.5, ?, ?)`,
 		).run(now, now);
-
-		// Two contradicting siblings that the retired sweep *would* have
-		// flagged (value conflict on shared verb "prefers").
 		db.prepare(
 			`INSERT INTO memories (id, content, type, updated_by, created_at, updated_at, is_deleted)
 			 VALUES ('mem-vim', 'prefers vim', 'fact', 'test', ?, ?, 0)`,
@@ -550,10 +495,6 @@ describe("maintenance-worker", () => {
 			 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
 			 VALUES ('attr-emacs', 'aspect-editor', 'default', 'mem-emacs', 'attribute', 'user prefers emacs', 'user prefers emacs', 1, 0.5, 'active', ?, ?)`,
 		).run(now, now);
-
-		// Config mirroring the Dreaming-enabled defaults: graph + feedback on.
-		// Empty recommendations forces the graph/feedback block (where the
-		// sweep used to run) to execute.
 		const dreamingCfg: PipelineV2Config = {
 			...BASE_CFG,
 		};
@@ -562,10 +503,7 @@ describe("maintenance-worker", () => {
 		handle.stop();
 
 		const result = await handle.tick();
-		// Healthy (no recommendations) → the graph/feedback branch ran.
 		expect(result.recommendations).toHaveLength(0);
-
-		// Neither contradicting sibling may be superseded by the cycle.
 		const statuses = db
 			.prepare(`SELECT id, status, superseded_by FROM entity_attributes WHERE aspect_id = 'aspect-editor' ORDER BY id`)
 			.all() as Array<{ id: string; status: string; superseded_by: string | null }>;

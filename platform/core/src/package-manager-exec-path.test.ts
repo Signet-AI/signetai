@@ -74,9 +74,8 @@ describe("Bug 2: exec path detection", () => {
 	it("skips exec path detection when detected manager is unavailable", () => {
 		const result = resolvePrimaryPackageManager({
 			execPath: "/home/user/.bun/bin/signet",
-			commandExists: (cmd) => cmd === "npm", // bun not available
+			commandExists: (cmd) => cmd === "npm",
 		});
-		// Should fall through exec path (bun unavailable) to default fallback
 		expect(result.family).toBe("npm");
 		expect(result.source).toBe("fallback");
 	});
@@ -92,9 +91,6 @@ describe("Bug 2: source: fallback in config is not authoritative", () => {
 			execPath: "/home/user/.bun/bin/signet",
 			commandExists: (cmd) => cmd === "bun" || cmd === "npm",
 		});
-
-		// Should NOT use npm from config (it's a fallback, not user-chosen)
-		// Should use bun from exec path detection
 		expect(result.family).toBe("bun");
 		expect(result.reason).toContain("executable path");
 
@@ -110,8 +106,6 @@ describe("Bug 2: source: fallback in config is not authoritative", () => {
 			execPath: "/home/user/.bun/bin/signet",
 			commandExists: (cmd) => cmd === "bun" || cmd === "npm",
 		});
-
-		// Explicit config should be respected
 		expect(result.family).toBe("npm");
 		expect(result.source).toBe("config");
 
@@ -127,8 +121,6 @@ describe("Bug 2: source: fallback in config is not authoritative", () => {
 			execPath: "/home/user/.bun/bin/signet",
 			commandExists: (cmd) => cmd === "bun" || cmd === "npm",
 		});
-
-		// No source field = treat as explicit config
 		expect(result.family).toBe("npm");
 		expect(result.source).toBe("config");
 

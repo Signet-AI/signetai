@@ -1,23 +1,8 @@
-/**
- * Due-for-review temporal claims (issue #945).
- *
- * Temporal claims ("X is going to Y on March 15th, 2027") carry a
- * `review_after` ISO timestamp set when the claim is created. This module
- * provides the query the dreaming pass needs to surface claims that are now
- * due (review_after in the past) or about to become due, so supersession
- * (prospective → retrospective) can run without scanning the whole table.
- *
- * The dreaming pass itself lives in the #913 unified pipeline; this helper is
- * intentionally standalone so both pipeline dreaming and agentic dreaming can
- * share it.
- */
-
 export interface ReviewDueMemory {
 	readonly id: string;
 	readonly content: string;
 	readonly type: string;
 	readonly importance: number;
-	/** ISO timestamp of the review deadline. */
 	readonly reviewAfter: string;
 	readonly createdAt: string;
 	readonly agentId: string;
@@ -31,10 +16,6 @@ export interface ReviewDueMemory {
 }
 
 export interface ReviewWindowOptions {
-	/**
-	 * Look-ahead window (ms) for "about to expire" claims. Defaults to 7 days
-	 * so the dreaming pass can act before the deadline passes.
-	 */
 	readonly expiringSoonMs?: number;
 	readonly limit?: number;
 	readonly agentId?: string;
@@ -103,11 +84,6 @@ const REVIEW_DUE_SELECT = `
 	 WHERE m.review_after IS NOT NULL
 	   AND m.superseded_by IS NULL
 	   AND m.is_deleted = 0`;
-
-/**
- * Query memories whose `review_after` deadline has passed — temporal claims
- * that are now due for supersession review.
- */
 export function findExpiredReviewDueMemories(
 	accessor: ReviewDueAccessor,
 	now = new Date(),
@@ -127,12 +103,6 @@ export function findExpiredReviewDueMemories(
 	);
 	return rows.map(toReviewDueMemory);
 }
-
-/**
- * Query memories whose `review_after` deadline is approaching (within the
- * look-ahead window) but has not yet passed — so the dreaming pass can
- * prioritize them before they expire.
- */
 export function findApproachingReviewDueMemories(
 	accessor: ReviewDueAccessor,
 	now = new Date(),
@@ -156,11 +126,6 @@ export function findApproachingReviewDueMemories(
 	);
 	return rows.map(toReviewDueMemory);
 }
-
-/**
- * Convenience bundle for the dreaming context: both expired and approaching
- * claims in one call.
- */
 export function collectReviewDueClaims(
 	accessor: ReviewDueAccessor,
 	now: Date,

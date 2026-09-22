@@ -1,13 +1,3 @@
-/**
- * Behavior tests for the #913 hard cutover of LIVE interactive semantic
- * mutations onto the daemon-owned audited ontology apply path.
- *
- * Pin/unpin entity and create/archive entity alias now flow through
- * "applyOntologyOperation" (the audited apply path) rather than direct
- * knowledge-graph writers. Each migrated route/operation must both change the
- * underlying data AND create an applied ontology proposal audit record.
- */
-
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";

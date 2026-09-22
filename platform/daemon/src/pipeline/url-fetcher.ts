@@ -1,13 +1,4 @@
-/**
- * URL content fetcher for the document ingest pipeline.
- *
- * Fetches web content with timeout and size guards, strips HTML
- * to plain text for downstream chunking and embedding.
- */
-
 import { resolve4, resolve6 } from "node:dns/promises";
-
-// Private/reserved IP ranges that must never be fetched (SSRF protection)
 const PRIVATE_RANGES = [
 	/^127\./,
 	/^10\./,
@@ -28,22 +19,11 @@ const PRIVATE_RANGES = [
 function isPrivateIp(ip: string): boolean {
 	return PRIVATE_RANGES.some((r) => r.test(ip));
 }
-
-/**
- * Resolve hostname and reject private/reserved IPs.
- *
- * Note: DNS rebinding can bypass this check — an attacker with a low-TTL
- * DNS record could return a public IP here and a private IP when fetch()
- * resolves the same hostname moments later. Defence-in-depth via
- * network-level egress filtering is recommended for production deployments.
- */
 export async function validateUrl(url: string): Promise<void> {
 	const parsed = new URL(url);
 	if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
 		throw new Error(`Unsupported protocol: ${parsed.protocol}`);
 	}
-
-	// Resolve both A and AAAA records; reject if any resolve to private ranges
 	const [v4, v6] = await Promise.allSettled([resolve4(parsed.hostname), resolve6(parsed.hostname)]);
 
 	const addresses: string[] = [];
@@ -73,11 +53,9 @@ export interface FetchOptions {
 }
 
 const DEFAULT_TIMEOUT_MS = 30000;
-const DEFAULT_MAX_BYTES = 10 * 1024 * 1024; // 10MB
+const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 
 const MAX_REDIRECTS = 5;
-
-/** Fetch with manual redirect handling — validates each hop against SSRF. */
 async function fetchWithSsrfProtection(url: string, timeoutMs: number): Promise<Response> {
 	await validateUrl(url);
 	let target = url;
@@ -104,19 +82,9 @@ async function fetchWithSsrfProtection(url: string, timeoutMs: number): Promise<
 
 	throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
 }
-
-/**
- * Fetch URL content with timeout and size guards.
- *
- * For HTML responses, strips tags and extracts title.
- * For plain text, returns content directly.
- * Rejects unsupported content types (binary, PDF, etc.).
- */
 export async function fetchUrlContent(url: string, opts?: FetchOptions): Promise<FetchResult> {
 	const timeoutMs = opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 	const maxBytes = opts?.maxBytes ?? DEFAULT_MAX_BYTES;
-
-	// SSRF protection: validate URL resolves to public IP before fetching
 	const response = await fetchWithSsrfProtection(url, timeoutMs);
 
 	if (!response.ok) {
@@ -125,16 +93,12 @@ export async function fetchUrlContent(url: string, opts?: FetchOptions): Promise
 
 	const contentType = response.headers.get("content-type") ?? "text/plain";
 	const contentLength = response.headers.get("content-length");
-
-	// Pre-flight size check from header
 	if (contentLength) {
 		const declared = Number.parseInt(contentLength, 10);
 		if (Number.isFinite(declared) && declared > maxBytes) {
 			throw new Error(`Content too large: ${declared} bytes exceeds ${maxBytes} limit`);
 		}
 	}
-
-	// Check content type is text-based
 	const isHtml = contentType.includes("text/html");
 	const isText =
 		contentType.includes("text/") ||
@@ -144,8 +108,6 @@ export async function fetchUrlContent(url: string, opts?: FetchOptions): Promise
 	if (!isText) {
 		throw new Error(`Unsupported content type: ${contentType}. Only text-based content is supported.`);
 	}
-
-	// Stream-read with size guard
 	const reader = response.body?.getReader();
 	if (!reader) {
 		throw new Error("Response body is not readable");
@@ -179,23 +141,16 @@ export async function fetchUrlContent(url: string, opts?: FetchOptions): Promise
 
 	return { content: rawText, contentType, byteLength: totalBytes };
 }
-
-/** Extract content of the first <title> tag. */
 function extractHtmlTitle(html: string): string | undefined {
 	const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html);
 	if (!match?.[1]) return undefined;
 	return decodeHtmlEntities(match[1].trim());
 }
-
-/** Strip HTML tags and normalize whitespace. */
 function stripHtmlTags(html: string): string {
 	let text = removeHtmlElementBlocks(html, "script");
 	text = removeHtmlElementBlocks(text, "style");
-	// Remove all remaining tags
 	text = text.replace(/<[^>]*>/g, " ");
-	// Decode common HTML entities
 	text = decodeHtmlEntities(text);
-	// Normalize whitespace
 	text = text.replace(/\s+/g, " ").trim();
 	return text;
 }
@@ -238,8 +193,6 @@ function removeHtmlElementBlocks(html: string, tag: string): string {
 
 	return out;
 }
-
-/** Decode common HTML entities. */
 function decodeHtmlEntities(text: string): string {
 	return text
 		.replace(/&lt;/g, "<")
@@ -249,8 +202,6 @@ function decodeHtmlEntities(text: string): string {
 		.replace(/&nbsp;/g, " ")
 		.replace(/&amp;/g, "&");
 }
-
-/** Concatenate Uint8Array chunks into one. */
 function concatUint8Arrays(chunks: readonly Uint8Array[]): Uint8Array {
 	const totalLength = chunks.reduce((sum, c) => sum + c.byteLength, 0);
 	const result = new Uint8Array(totalLength);

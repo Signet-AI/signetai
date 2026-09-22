@@ -1,33 +1,10 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 105: agent-scoped entity name uniqueness.
- *
- * `entities.name` was declared globally UNIQUE in migration 002, before
- * agent scoping existed. Migration 019 added `agent_id` but never relaxed
- * the constraint, so an entity extracted under one agent blocks any other
- * agent (including the skill reconciler's `agent_id='default'` installs)
- * from ever creating a same-named entity. That perpetual UNIQUE failure is
- * what drove the skill reconciler hot-loop (Signet-AI/signetai#1070, #1086):
- * the reconciler's install never landed, so every periodic pass retried the
- * full pipeline forever.
- *
- * This rebuilds `entities` with UNIQUE(agent_id, name) so distinct agents can
- * legitimately share a name. Rowids are preserved so the entities_fts
- * external-content table stays aligned, then the full index set (migrations
- * 005/019/022/058/064/070) and the FTS5 trigger set (migration 035) are
- * restored and the FTS index repopulated.
- */
 export function up(db: MigrationDb): void {
-	// The FTS triggers belong to the old table and die with it.
 	db.exec(`
 		DROP TRIGGER IF EXISTS entities_fts_ai;
 		DROP TRIGGER IF EXISTS entities_fts_ad;
 		DROP TRIGGER IF EXISTS entities_fts_au;
 	`);
-
-	// Current entities shape (002 base + 005/019/022/031/037/064/070 additions),
-	// with the global name UNIQUE replaced by the agent-scoped composite.
 	db.exec(`
 		CREATE TABLE entities_105 (
 			id TEXT PRIMARY KEY,
@@ -57,9 +34,6 @@ export function up(db: MigrationDb): void {
 			UNIQUE(agent_id, name)
 		);
 	`);
-
-	// Preserve rowids so entities_fts (keyed by content-table rowid) stays
-	// consistent; the rebuild below repopulates it regardless.
 	db.exec(`
 		INSERT INTO entities_105 (
 			rowid, id, name, entity_type, description, created_at, updated_at,
@@ -81,8 +55,6 @@ export function up(db: MigrationDb): void {
 		DROP TABLE entities;
 		ALTER TABLE entities_105 RENAME TO entities;
 	`);
-
-	// Restore the full index set (migrations 005/019/022/058/064/070).
 	db.exec(`
 		CREATE INDEX IF NOT EXISTS idx_entities_canonical_name ON entities(canonical_name);
 		CREATE INDEX IF NOT EXISTS idx_entities_agent ON entities(agent_id);
@@ -96,9 +68,6 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(agent_id, status, updated_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_entities_proposal ON entities(agent_id, proposal_id);
 	`);
-
-	// Restore the entities_fts external-content triggers (migration 035) and
-	// repopulate the FTS index from the rebuilt table.
 	db.exec(`
 		CREATE TRIGGER IF NOT EXISTS entities_fts_ai AFTER INSERT ON entities BEGIN
 			INSERT INTO entities_fts(rowid, name, canonical_name)

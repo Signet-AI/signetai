@@ -6,7 +6,6 @@ import { getDefaultPluginHost } from "../plugins/index.js";
 import { authConfig } from "./state.js";
 
 export function registerPluginRoutes(app: Hono, host: PluginHostV1 = getDefaultPluginHost()): void {
-	// Permission guards
 	app.use("/api/plugins", async (c, next) => {
 		return requirePermission("admin", authConfig)(c, next);
 	});

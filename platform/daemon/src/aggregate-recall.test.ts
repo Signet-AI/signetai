@@ -306,10 +306,6 @@ describe("aggregateRecall", () => {
 		expect(saved.who).toBe("signet");
 		expect(saved.type).toBe("semantic");
 		expect(saved.extraction_status).toBe("none");
-
-		// No legacy extract job is enqueued — the extraction worker runtime is
-		// deleted and Dreaming owns semantic processing. Aggregate saves are
-		// retrievable evidence, not direct graph writes.
 		const extractJobCount = getDbAccessor().withReadDb((db) =>
 			db.prepare("SELECT COUNT(*) as cnt FROM memory_jobs WHERE memory_id = ?").get("aggregate-1"),
 		) as { cnt: number };
@@ -359,13 +355,7 @@ memory:
 				hybridRecall: async () => response("what happened", [row("mem-1", "First evidence")]),
 			},
 		);
-
-		// The aggregate memory is still saved (immediate retrieval preserved).
 		expect(result.aggregate).toMatchObject({ savedMemoryId: "aggregate-dream", saved: true });
-
-		// No legacy extract job is enqueued — the extraction worker runtime is
-		// fully deleted; Dreaming owns semantic processing. This holds regardless
-		// of config because there is no worker to lease the job.
 		const jobCount = getDbAccessor().withReadDb((db) =>
 			db
 				.prepare("SELECT COUNT(*) as cnt FROM memory_jobs WHERE memory_id = ? AND job_type = 'extract'")
@@ -411,9 +401,6 @@ memory:
 			const headers = new Headers(init?.headers);
 			seen.push({ url, authorization: headers.get("authorization") });
 			if (url.endsWith("/models")) {
-				// OpenAI-compatible gateways may not implement discovery. The shared
-				// Pi provider deliberately treats a reachable 404 as available and
-				// lets the actual completion request establish compatibility.
 				return Promise.resolve(new Response("not found", { status: 404 }));
 			}
 			chatCalls += 1;
@@ -1378,7 +1365,6 @@ memory:
 		) as { loser_count: number; link_count: number; pending_extract_count: number };
 		expect(rows.loser_count).toBe(0);
 		expect(rows.link_count).toBe(1);
-		// No extract job — worker runtime deleted, Dreaming owns semantics.
 		expect(rows.pending_extract_count).toBe(0);
 	});
 

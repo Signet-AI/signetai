@@ -43,10 +43,6 @@ Question: ${question}
 
 Answer concisely and directly.`
 }
-
-/**
- * Mem0 provider prompts configuration.
- */
 export const MEM0_PROMPTS: ProviderPrompts = {
   answerPrompt: buildMem0AnswerPrompt,
 }

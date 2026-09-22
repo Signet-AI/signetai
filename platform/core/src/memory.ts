@@ -1,13 +1,8 @@
 export interface ParsedMemory {
-	/** Content under the "## User Profile" section. */
 	userProfile: string;
-	/** Content under the "## Key Facts" section. */
 	keyFacts: string;
-	/** Content under the "## Ongoing Context" section. */
 	ongoingContext: string;
-	/** Content between MANUAL:START and MANUAL:END markers. */
 	manualNotes: string;
-	/** The full raw markdown input, preserved for round-tripping. */
 	raw: string;
 }
 
@@ -27,15 +22,6 @@ function normalizeManualNotes(content: string): string {
 	const trimmed = content.trim();
 	return trimmed === MANUAL_NOTES_PLACEHOLDER ? "" : trimmed;
 }
-
-/**
- * Parse a Signet memory markdown file into structured sections.
- *
- * Extracts content from well-known `## ` headings and the
- * `<!-- MANUAL:START -->` / `<!-- MANUAL:END -->` block. Any content
- * outside recognized sections is ignored — the `raw` field always
- * contains the original markdown for lossless round-tripping.
- */
 export function parseMemory(markdown: string): ParsedMemory {
 	const sections: Record<string, string> = {};
 	let currentSection: string | null = null;

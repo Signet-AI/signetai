@@ -1,7 +1,3 @@
-/**
- * Auth configuration parsing from agent.yaml.
- */
-
 import { join } from "node:path";
 import { z } from "zod";
 import { AUTH_MODES, type AuthMode } from "./types";

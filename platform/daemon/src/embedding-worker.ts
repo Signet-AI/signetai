@@ -1,32 +1,8 @@
-/**
- * Native embedding worker — runs nomic-embed-text ONNX (via
- * @huggingface/transformers WASM runtime) inside a worker_threads Worker.
- *
- * This is the thread that performs the long, partly-synchronous work:
- * first-run model download, WASM compile, and per-call forward passes.
- * Keeping it off the daemon's main event loop is what guarantees that
- * /health and every HTTP handler stay responsive regardless of embedding
- * state. The main-thread adapter (embedding-worker-handle.ts) bounds each
- * RPC with a timeout so callers fail fast even if this worker is grinding.
- *
- * Loaded in the worker via:
- *   - source mode: `new Worker(new URL("./embedding-worker.ts", import.meta.url))`
- *     → resolves @huggingface/transformers from node_modules.
- *   - compiled binary: the worker is bun-bundled into an embedded worker
- *     asset (see scripts/build-native-bun.ts workerEntries) with transformers
- *     inlined, and the main thread passes the materialized wasmDir via
- *     workerData (the worker cannot read the main-thread asset globals).
- */
-
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isMainThread, parentPort, workerData } from "node:worker_threads";
 import { type EmbeddingWasmConfig, configureEmbeddingWasm } from "./embedding-wasm-config";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
-
-// Lazy, narrow transformers typing — keeps the contract we use without
-// dragging in the library's complex generics (same approach as the prior
-// in-process implementation).
 interface TransformersEnv {
 	cacheDir?: string;
 	localModelPath?: string;
@@ -57,8 +33,6 @@ interface EmbedCallable {
 const workerInit = workerData as EmbeddingWorkerInit | undefined;
 
 if (isMainThread || !parentPort || !workerInit) {
-	// Defensive: should never be imported on the main thread. Bail loudly
-	// rather than silently no-op'ing.
 	throw new Error("embedding-worker.ts must run as a worker_threads Worker with EmbeddingWorkerInit workerData");
 }
 
@@ -73,10 +47,6 @@ function post(msg: WorkerToMainMessage): void {
 function log(level: string, message: string, data?: Record<string, unknown>): void {
 	post({ type: "log", level, message, data });
 }
-
-// ---------------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------------
 
 let transformers: TransformersBindings | null = null;
 let embedFn: EmbedCallable | null = null;
@@ -97,27 +67,7 @@ function pushStatus(): void {
 	post({ type: "status", status: snapshot() });
 }
 
-// ---------------------------------------------------------------------------
-// Transformers loading + init
-// ---------------------------------------------------------------------------
-
 async function loadTransformers(): Promise<TransformersBindings> {
-	// The worker cannot use the compiled binary's main-thread
-	// __SIGNET_NATIVE_TRANSFORMERS_BINDINGS__ global (isolated globalThis),
-	// so load via the bundled runtime entry. In source mode this resolves
-	// @huggingface/transformers from node_modules; in the compiled binary
-	// the worker .mjs has transformers inlined by the bun build.
-	//
-	// In the compiled binary, transformers resolves to the Node entry which
-	// tries to load native onnxruntime .node bindings that don't exist in a
-	// Bun-compiled executable. The main thread registers a WASM runtime via
-	// globalThis[Symbol.for("onnxruntime")], but the worker has an isolated
-	// globalThis so that registration does NOT propagate.
-	//
-	// Fix: when transformersRuntimePath is set (compiled binary mode), import
-	// the materialized WASM runtime first — it registers onnxruntime-web on
-	// the worker's own globalThis and exports env/pipeline from the patched
-	// web entry. Fall back to the standard import in source mode.
 	if (init.transformersRuntimePath) {
 		const mod = (await import(init.transformersRuntimePath)) as {
 			env: TransformersEnv;
@@ -139,8 +89,6 @@ async function ensureInitialized(): Promise<void> {
 	try {
 		await initPromise;
 	} finally {
-		// Keep initPromise around only while in-flight; clear on settle so
-		// retries (after cooldown, controlled by the main thread) can re-init.
 		initPromise = null;
 	}
 	return;
@@ -153,13 +101,6 @@ async function doInit(): Promise<void> {
 
 		mkdirSync(init.cacheDir, { recursive: true });
 		transformers = await loadTransformers();
-
-		// Configure cache + LOCAL load path. Setting localModelPath to the
-		// same cacheDir is the fix for the "Unable to load from local path
-		// /models/…" noise: without it transformers defaults localModelPath
-		// to a root "/models" that never exists, so every load pointlessly
-		// probes-and-fails locally before hitting the network. With this, a
-		// cached model loads straight from disk on subsequent starts.
 		transformers.env.cacheDir = init.cacheDir;
 		transformers.env.localModelPath = init.cacheDir;
 		transformers.env.allowLocalModels = true;
@@ -168,10 +109,6 @@ async function doInit(): Promise<void> {
 		}
 		configureEmbeddingWasm(transformers.env.backends?.onnx?.wasm, init.wasmDir);
 		if (init.wasmDir && transformers.env.backends?.onnx?.wasm) {
-			// onnxruntime-web 1.26's emscripten glue fetches the .wasm file
-			// (1.22 read it with fs.readFileSync), which cannot resolve the
-			// materialized filesystem path inside the compiled binary. Load it
-			// here and pass the binary so session creation never fetches it.
 			const wasmBytes = readFileSync(join(init.wasmDir, "ort-wasm-simd-threaded.wasm"));
 			transformers.env.backends.onnx.wasm.wasmBinary = wasmBytes.buffer.slice(
 				wasmBytes.byteOffset,
@@ -197,7 +134,6 @@ async function doInit(): Promise<void> {
 		});
 
 		const embed = toEmbedCallable(pipe);
-		// Warm-up to verify output shape before declaring readiness.
 		const warmup = await embed("test", { pooling: "mean", normalize: true });
 		if (warmup.data.length !== init.expectedDimensions) {
 			throw new Error(`Expected ${init.expectedDimensions} dimensions but got ${warmup.data.length}`);
@@ -237,10 +173,6 @@ function toEmbedCallable(value: unknown): EmbedCallable {
 	return embed;
 }
 
-// ---------------------------------------------------------------------------
-// RPC
-// ---------------------------------------------------------------------------
-
 async function handleEmbed(id: number, text: string): Promise<void> {
 	try {
 		await ensureInitialized();
@@ -265,9 +197,7 @@ async function handleShutdown(): Promise<void> {
 	if (embedFn?.dispose) {
 		try {
 			await embedFn.dispose();
-		} catch {
-			// best-effort
-		}
+		} catch {}
 	}
 	embedFn = null;
 	modelCached = false;

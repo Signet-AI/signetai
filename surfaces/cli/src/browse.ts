@@ -1,18 +1,5 @@
-/**
- * signet browse — CDP bridge
- *
- * Attaches to an existing Chrome instance via Chrome DevTools Protocol (CDP).
- * Supports: navigate, extract, watch, and agent-piloted task modes.
- *
- * Phase 1a implementation (Buba)
- */
-
 import { Command } from "commander";
 import chalk from "chalk";
-
-// ============================================================================
-// Types
-// ============================================================================
 
 const CDP_DEFAULT_PORT = 9222;
 const DOM_CHANGE_THROTTLE_MS = 2000;
@@ -36,10 +23,6 @@ interface CDPMessage {
 }
 
 type EventListener = (params: Record<string, unknown>) => void;
-
-// ============================================================================
-// SignetOSEvent — matches the event bus envelope from the spec
-// ============================================================================
 
 interface BrowserNavigatePayload {
 	url: string;
@@ -106,17 +89,11 @@ interface SignetOSEvent {
 function makeEventId(): string {
 	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
-
-// ── Event Transport Abstraction ─────────────────────────────────────────────
-// Default: stdout. Phase 3 (event bus) swaps this to EventEmitter/Redis
-// without touching any of the emit callsites.
 type EventTransport = (event: SignetOSEvent) => void;
 
 let activeTransport: EventTransport = (event) => {
 	process.stdout.write(JSON.stringify(event) + "\n");
 };
-
-/** Replace the default stdout transport (Phase 3 hook point) */
 export function setEventTransport(transport: EventTransport): void {
 	activeTransport = transport;
 }
@@ -132,10 +109,6 @@ function emitEvent(type: string, payload: BrowserEventPayload) {
 	activeTransport(event);
 }
 
-// ============================================================================
-// CDP Client — minimal WebSocket-based client
-// ============================================================================
-
 class CDPClient {
 	private ws: WebSocket | null = null;
 	private commandId = 0;
@@ -149,8 +122,6 @@ class CDPClient {
 	private onReconnect: (() => Promise<void>) | null = null;
 
 	constructor(private wsUrl: string) {}
-
-	/** Set a callback to re-enable CDP domains after reconnect */
 	setOnReconnect(cb: () => Promise<void>): void {
 		this.onReconnect = cb;
 	}
@@ -160,9 +131,6 @@ class CDPClient {
 			this.connectResolve = resolve;
 			this.connectReject = reject;
 			this.closed = false;
-
-			// WebSocket is available natively in Bun and Node.js ≥ 21.
-			// The build target is Node ≥ 18, but the runtime (bun/node 22) supports it.
 			// biome-ignore lint/suspicious/noExplicitAny: native global in bun/node22
 			const WS = (globalThis as any).WebSocket;
 			if (!WS) {
@@ -173,7 +141,7 @@ class CDPClient {
 			this.ws = new WS(this.wsUrl) as WebSocket;
 
 			this.ws.onopen = () => {
-				this.reconnectAttempts = 0; // Reset on successful connect
+				this.reconnectAttempts = 0;
 				this.connectResolve?.();
 				this.connectResolve = null;
 				this.connectReject = null;
@@ -186,7 +154,6 @@ class CDPClient {
 					this.connectResolve = null;
 					this.connectReject = null;
 				}
-				// Reject all pending commands
 				for (const [, { reject: rej }] of this.pendingCommands) {
 					rej(err);
 				}
@@ -199,8 +166,6 @@ class CDPClient {
 					rej(err);
 				}
 				this.pendingCommands.clear();
-
-				// Attempt reconnect with exponential backoff (unless intentionally closed)
 				if (!this.closed && this.reconnectAttempts < this.maxReconnectAttempts) {
 					this.reconnectAttempts++;
 					const delayMs = Math.min(1000 * 2 ** (this.reconnectAttempts - 1), 16000);
@@ -214,7 +179,6 @@ class CDPClient {
 						try {
 							await this.connect();
 							console.error(chalk.green("  ✓ CDP reconnected."));
-							// Re-enable CDP domains after reconnect
 							if (this.onReconnect) {
 								await this.onReconnect();
 							}
@@ -232,8 +196,6 @@ class CDPClient {
 				} catch {
 					return;
 				}
-
-				// Command response
 				if (typeof msg.id === "number") {
 					const pending = this.pendingCommands.get(msg.id);
 					if (pending) {
@@ -246,16 +208,12 @@ class CDPClient {
 					}
 					return;
 				}
-
-				// Event
 				if (msg.method) {
 					const listeners = this.eventListeners.get(msg.method) ?? [];
 					for (const listener of listeners) {
 						try {
 							listener((msg.params ?? {}) as Record<string, unknown>);
-						} catch {
-							// Swallow listener errors
-						}
+						} catch {}
 					}
 				}
 			};
@@ -264,7 +222,7 @@ class CDPClient {
 
 	send(method: string, params?: Record<string, unknown>): Promise<unknown> {
 		return new Promise((resolve, reject) => {
-			if (!this.ws || this.ws.readyState !== 1 /* OPEN */) {
+			if (!this.ws || this.ws.readyState !== 1) {
 				reject(new Error("CDP WebSocket is not connected"));
 				return;
 			}
@@ -299,10 +257,6 @@ class CDPClient {
 	}
 }
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
 async function getCDPTabs(port: number): Promise<CDPTab[]> {
 	let resp: Response;
 	try {
@@ -328,7 +282,6 @@ async function getActiveCDPTab(port: number): Promise<CDPTab> {
 	if (pageTabs.length === 0) {
 		throw new Error("No page tabs found with a WebSocket debugger URL.");
 	}
-	// Return the first page tab (most recently focused, per Chrome ordering)
 	return pageTabs[0];
 }
 
@@ -344,18 +297,13 @@ async function connectToTab(tab: CDPTab): Promise<CDPClient> {
 function sleep(ms: number): Promise<void> {
 	return new Promise((r) => setTimeout(r, ms));
 }
-
-/** Very simple diff: returns a summary string describing content change */
 function simpleTextDiff(before: string, after: string): string {
 	if (before === after) return "";
 	const lenDiff = Math.abs(after.length - before.length);
 	if (lenDiff < DOM_CHANGE_MIN_DIFF_CHARS) return "";
-	// Return a short excerpt of added/changed content
 	const preview = after.slice(0, 200).replace(/\s+/g, " ").trim();
 	return `[Δ${lenDiff > 0 ? "+" : ""}${after.length - before.length} chars] ${preview}`;
 }
-
-/** Extract domain from URL */
 function getDomain(url: string): string {
 	try {
 		return new URL(url).hostname;
@@ -363,10 +311,6 @@ function getDomain(url: string): string {
 		return url;
 	}
 }
-
-// ============================================================================
-// signet browse navigate <url>
-// ============================================================================
 
 async function cmdNavigate(url: string, opts: { port: number; passive: boolean }): Promise<void> {
 	if (opts.passive) {
@@ -392,8 +336,6 @@ async function cmdNavigate(url: string, opts: { port: number; passive: boolean }
 
 		await client.send("Page.navigate", { url });
 		await Promise.race([loadPromise, sleep(10000)]);
-
-		// Get final URL and title
 		const { result: urlResult } = (await client.send("Runtime.evaluate", {
 			expression: "location.href",
 			returnByValue: true,
@@ -410,10 +352,6 @@ async function cmdNavigate(url: string, opts: { port: number; passive: boolean }
 		client.close();
 	}
 }
-
-// ============================================================================
-// signet browse extract "what to extract"
-// ============================================================================
 
 const EXTRACT_SCRIPT = (query: string) => `
 (() => {
@@ -526,8 +464,6 @@ async function cmdExtract(query: string, opts: { port: number }): Promise<void> 
 		}
 
 		const data = evalResult.result?.value;
-
-		// Emit as a browser.extract event
 		emitEvent("browser.extract", {
 			data,
 			source: tab.url,
@@ -538,12 +474,6 @@ async function cmdExtract(query: string, opts: { port: number }): Promise<void> 
 		client.close();
 	}
 }
-
-// ============================================================================
-// signet browse watch
-// ============================================================================
-
-/** Detect checkout page heuristics */
 function detectCheckout(url: string, title: string, body: string): boolean {
 	const s = `${url} ${title} ${body}`.toLowerCase();
 	return (
@@ -554,8 +484,6 @@ function detectCheckout(url: string, title: string, body: string): boolean {
 		s.includes("order summary")
 	);
 }
-
-/** Detect login page heuristics */
 function detectLogin(url: string, title: string, body: string): boolean {
 	const s = `${url} ${title}`.toLowerCase();
 	return (
@@ -566,8 +494,6 @@ function detectLogin(url: string, title: string, body: string): boolean {
 		s.includes("authenticate")
 	);
 }
-
-// ── Form detection JS expression (injected into pages) ──────────────────────
 const FORM_DETECT_EXPRESSION = `(() => {
 	const forms = [];
 	document.querySelectorAll("form").forEach(form => {
@@ -594,8 +520,6 @@ const FORM_DETECT_EXPRESSION = `(() => {
 	});
 	return forms;
 })()`;
-
-// ── Checkout extraction JS expression ────────────────────────────────────────
 const CHECKOUT_EXTRACT_EXPRESSION = `(() => {
 	const items = [];
 	document.querySelectorAll("[class*=item],[class*=product],[class*=cart-line]").forEach(el => {
@@ -607,30 +531,20 @@ const CHECKOUT_EXTRACT_EXPRESSION = `(() => {
 	const totalMatch = totalText?.match(/[€$£¥][\\d,]+\\.?\\d*/);
 	return { items: [...new Set(items)].slice(0, 20), total: totalMatch ? parseFloat(totalMatch[0].replace(/[^\\d.]/g, "")) : null };
 })()`;
-
-// ── Tab state type ───────────────────────────────────────────────────────────
 interface TabWatchState {
 	lastDomChangeAt: number;
 	lastBodyText: string;
 	title: string;
 	url: string;
 }
-
-/**
- * Wire all event handlers for a watched tab.
- * Single source of truth — used for both initial tabs and dynamically discovered ones.
- */
 function wireTabEventHandlers(client: CDPClient, tabId: string, tabState: Map<string, TabWatchState>): void {
-	// ── browser.navigate ────────────────────────────────────────────────
 	client.on("Page.frameNavigated", async (params) => {
 		const frame = params.frame as Record<string, unknown> | undefined;
-		if (!frame || frame.parentId) return; // Only top-level frame
+		if (!frame || frame.parentId) return;
 
 		const url = (frame.url as string) ?? "";
 		const state = tabState.get(tabId);
 		if (state) state.url = url;
-
-		// Resolve title via Runtime.evaluate — frame.name is almost always empty
 		let title = "";
 		try {
 			const { result: titleResult } = (await client.send("Runtime.evaluate", {
@@ -639,27 +553,20 @@ function wireTabEventHandlers(client: CDPClient, tabId: string, tabState: Map<st
 			})) as { result: { value: string } };
 			title = titleResult?.value ?? "";
 			if (state) state.title = title;
-		} catch {
-			// Page might not be ready yet — title will be updated on loadEventFired
-		}
+		} catch {}
 
 		emitEvent("browser.navigate", { url, title, tabId, timestamp: Date.now() });
 	});
-
-	// ── Page load: title update + form/checkout/login detection ──────────
 	client.on("Page.loadEventFired", async () => {
 		const state = tabState.get(tabId);
 		if (!state) return;
 
 		try {
-			// Update title
 			const { result: titleResult } = (await client.send("Runtime.evaluate", {
 				expression: "document.title",
 				returnByValue: true,
 			})) as { result: { value: string } };
 			if (titleResult?.value) state.title = titleResult.value;
-
-			// Detect forms — emit rich field objects per spec
 			const { result: formsResult } = (await client.send("Runtime.evaluate", {
 				expression: FORM_DETECT_EXPRESSION,
 				returnByValue: true,
@@ -673,8 +580,6 @@ function wireTabEventHandlers(client: CDPClient, tabId: string, tabState: Map<st
 					timestamp: Date.now(),
 				});
 			}
-
-			// Detect checkout / login pages
 			const body =
 				(
 					(await client
@@ -710,12 +615,8 @@ function wireTabEventHandlers(client: CDPClient, tabId: string, tabState: Map<st
 					timestamp: Date.now(),
 				});
 			}
-		} catch {
-			// Best-effort
-		}
+		} catch {}
 	});
-
-	// ── browser.dom.change (throttled) ───────────────────────────────────
 	client.on("DOM.documentUpdated", async () => {
 		const state = tabState.get(tabId);
 		if (!state) return;
@@ -737,13 +638,9 @@ function wireTabEventHandlers(client: CDPClient, tabId: string, tabState: Map<st
 			state.lastDomChangeAt = now;
 
 			emitEvent("browser.dom.change", { diff, tabId, timestamp: now });
-		} catch {
-			// Best-effort
-		}
+		} catch {}
 	});
 }
-
-/** Enable CDP domains on a client and set up reconnect handler */
 async function enableCDPDomains(client: CDPClient): Promise<void> {
 	await Promise.all([
 		client.send("Page.enable").catch(() => {}),
@@ -775,8 +672,6 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 	const tabState = new Map<string, TabWatchState>();
 	const clients: CDPClient[] = [];
 	const attachedTabIds = new Set<string>();
-
-	// Attach to all existing page tabs
 	for (const tab of pageTabs) {
 		if (!tab.webSocketDebuggerUrl) continue;
 
@@ -809,8 +704,6 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 
 	console.error(chalk.green(`  ✓ Watching ${clients.length} tab(s). Streaming events to stdout.`));
 	console.error(chalk.dim("  Press Ctrl+C to stop.\n"));
-
-	// Poll for new tabs every 5 seconds
 	const TAB_POLL_INTERVAL_MS = 5000;
 	const tabPollTimer = setInterval(async () => {
 		try {
@@ -837,16 +730,10 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 					wireTabEventHandlers(client, tab.id, tabState);
 
 					console.error(chalk.green(`  ✓ New tab attached: "${tab.title}" (${tab.id})`));
-				} catch {
-					// Failed to attach — skip, retry next poll
-				}
+				} catch {}
 			}
-		} catch {
-			// Tab poll failed — Chrome might be busy, retry next interval
-		}
+		} catch {}
 	}, TAB_POLL_INTERVAL_MS);
-
-	// Keep process alive until SIGINT
 	await new Promise<void>((resolve) => {
 		process.on("SIGINT", () => {
 			clearInterval(tabPollTimer);
@@ -860,12 +747,7 @@ async function cmdWatch(opts: { port: number; passive: boolean }): Promise<void>
 	});
 }
 
-// ============================================================================
-// signet browse "<task>" — agent-piloted mode
-// ============================================================================
-
 async function cmdTask(task: string, opts: { port: number; passive: boolean }): Promise<void> {
-	// CDP attach & context snapshot — LLM integration is Phase 3
 	const tab = await getActiveCDPTab(opts.port);
 	const client = await connectToTab(tab);
 
@@ -919,8 +801,6 @@ async function cmdTask(task: string, opts: { port: number; passive: boolean }): 
 				),
 			);
 		}
-
-		// Emit the context as an extract event so it's on the event bus
 		emitEvent("browser.extract", {
 			data: { task, title, url, bodyPreview: body.slice(0, 500), mode: opts.passive ? "passive" : "active" },
 			source: url,
@@ -931,10 +811,6 @@ async function cmdTask(task: string, opts: { port: number; passive: boolean }): 
 		client.close();
 	}
 }
-
-// ============================================================================
-// Commander command builder
-// ============================================================================
 
 export function registerBrowseCommand(program: Command): void {
 	const browseCmd = program
@@ -953,15 +829,13 @@ Examples:
   signet browse watch                           # stream page events to stdout
 		`,
 		);
-
-	// signet browse navigate <url>
 	browseCmd
 		.command("navigate <url>")
 		.description("Navigate the active Chrome tab to a URL")
 		.action(async (url: string) => {
 			const opts = browseCmd.opts() as { port: string; passive: boolean; active: boolean };
 			const port = Number.parseInt(opts.port, 10) || CDP_DEFAULT_PORT;
-			const passive = opts.passive || !opts.active; // default passive
+			const passive = opts.passive || !opts.active;
 			try {
 				await cmdNavigate(url, { port, passive });
 			} catch (err) {
@@ -969,8 +843,6 @@ Examples:
 				process.exit(1);
 			}
 		});
-
-	// signet browse extract "<query>"
 	browseCmd
 		.command("extract <query>")
 		.description("Extract structured data from the active tab")
@@ -984,8 +856,6 @@ Examples:
 				process.exit(1);
 			}
 		});
-
-	// signet browse watch
 	browseCmd
 		.command("watch")
 		.description("Stream page events as JSON to stdout (navigate, form, dom.change, checkout, login)")
@@ -1000,8 +870,6 @@ Examples:
 				process.exit(1);
 			}
 		});
-
-	// signet browse "<task>" — agent-piloted (default action / positional arg)
 	browseCmd
 		.argument("[task]", "Natural language task for the agent to execute in Chrome")
 		.action(async (task: string | undefined) => {

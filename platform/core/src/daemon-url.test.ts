@@ -71,7 +71,6 @@ describe("resolveSignetDaemonUrl", () => {
 		expect(resolveSignetDaemonUrl({ configUrl: "https://remote.signet.example:8443", env: {} })).toBe(
 			"https://remote.signet.example:8443",
 		);
-		// SIGNET_DAEMON_URL wins over configUrl.
 		expect(
 			resolveSignetDaemonUrl({
 				env: { SIGNET_DAEMON_URL: "http://127.0.0.1:3850" },

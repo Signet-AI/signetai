@@ -96,9 +96,6 @@ function documentScopeColumnsPreservingExisting(db: MigrationDb): void {
 }
 
 export function up(db: MigrationDb): void {
-	// Long-lived mac DBs used versions 79-81 for local memory lifecycle patches
-	// before upstream assigned those versions. Re-run upstream's idempotent 79-81
-	// migrations here so collided DBs get the upstream artifacts too.
 	transcriptCaptureJobs(db);
 	if (hasTable(db, "documents")) {
 		documentScopeColumnsPreservingExisting(db);

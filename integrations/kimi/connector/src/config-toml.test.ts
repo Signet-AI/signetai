@@ -1,10 +1,3 @@
-/**
- * Integration tests for KimiConnector config.toml hook + mcp.json management.
- *
- * Tests exercise real production code via KimiConnector.install() and
- * KimiConnector.uninstall(). A subclass redirects getKimiHome() to a
- * temp directory so the real ~/.kimi-code is never touched.
- */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";

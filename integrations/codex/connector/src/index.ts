@@ -75,17 +75,6 @@ interface NativePluginCommandResult {
 	readonly filesWritten: readonly string[];
 	readonly warning?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Signet command resolution
-// ---------------------------------------------------------------------------
-
-/** Resolve the packaged Signet entry used by the compiled CLI.
- *
- * Bun-compiled binaries expose a virtual bunfs path in argv[1], so it cannot be
- * used to locate the installed package. The npm wrapper passes its package root
- * explicitly because it can launch an optional-dependency binary outside that
- * package when postinstall did not link a local native binary. */
 function resolveSignetEntry(): string | null {
 	const wrapperDir = readTrimmedEnv("SIGNET_WRAPPER_DIR") ?? readTrimmedEnv("SIGNET_DIR");
 	const candidates = [
@@ -144,9 +133,6 @@ function resolveSignetArgs(runtime: string | null = null): string[] {
 	const resolved = resolveSignetCliCommand();
 	return [resolved.command, ...resolved.args];
 }
-
-/** Resolve signet-mcp as { command, args } for Codex config.toml.
- *  Codex expects `command` as a string and `args` as a separate array. */
 function resolveSignetMcp(runtime: string | null = null): SignetMcpConfig {
 	const remoteDaemonUrl = resolveRemoteDaemonUrl();
 	if (remoteDaemonUrl) {
@@ -194,9 +180,7 @@ function readBoundedDirectoryEntries(root: string, limit: number): Dirent[] {
 	} finally {
 		try {
 			directory?.closeSync();
-		} catch {
-			// Ignore directories that disappear or become inaccessible during the scan.
-		}
+		} catch {}
 	}
 	return entries;
 }
@@ -331,9 +315,7 @@ function codexDesktopExecutableCandidates(
 		try {
 			if (!statSync(path).isDirectory()) continue;
 			candidates.push(...codexDesktopExecutableCandidates(path, executableNames, depth + 1, budget));
-		} catch {
-			// Ignore broken symlinks and files that disappear while scanning.
-		}
+		} catch {}
 	}
 	return candidates;
 }
@@ -414,15 +396,6 @@ function isUsableCodexCli(path: string, platform: NodeJS.Platform = process.plat
 		return false;
 	}
 }
-
-/** Resolve a plugin-capable Codex executable used for native plugin management.
- *
- * ChatGPT.app bundles the same Codex CLI used by the standalone Codex app,
- * but it is not guaranteed to be exposed as a shell command in every desktop
- * launch environment. Prefer an explicit override, then bundled app paths,
- * then the user's PATH so Work/Codex mode and the standalone CLI share one
- * install path.
- */
 export function resolveCodexCli(
 	appPaths: readonly string[] = defaultCodexDesktopAppPaths(),
 	validate: (path: string) => boolean = isUsableCodexCli,
@@ -442,10 +415,6 @@ export function resolveCodexCli(
 	}
 	return null;
 }
-
-// ---------------------------------------------------------------------------
-// Codex plugin bundle generation
-// ---------------------------------------------------------------------------
 
 function codexPluginBundleFiles(
 	signetArgs: readonly string[],
@@ -610,24 +579,6 @@ export function writeCodexPluginBundle(input: {
 	return { marketplaceRoot, pluginRoot, filesWritten };
 }
 
-// ---------------------------------------------------------------------------
-// hooks.json management
-//
-// Codex expects hooks.json with this shape (from codex-rs/hooks/src/engine/config.rs):
-//
-//   {
-//     "hooks": {
-//       "SessionStart": [{ "hooks": [{ "type": "command", "command": "...", "timeout": N }] }],
-//       "UserPromptSubmit": [...],
-//       "PreToolUse": [...],
-//       "Stop": [...]
-//     }
-//   }
-//
-// Event names are PascalCase. Inner handler arrays use "hooks" (not "handlers").
-// Each handler is a tagged union with "type": "command" and "command" as a string.
-// ---------------------------------------------------------------------------
-
 const HOOK_EVENT_KEYS = ["SessionStart", "UserPromptSubmit", "PreToolUse", "Stop"] as const;
 const CODEX_SESSION_START_GRACE_SECONDS = 5;
 const CODEX_PROMPT_SUBMIT_GRACE_SECONDS = 2;
@@ -727,9 +678,6 @@ function codexCommandInvocation(
 	environment: NodeJS.ProcessEnv = process.env,
 ): CodexCommandInvocation {
 	if (platform === "win32" && /\.(?:cmd|bat)$/i.test(command)) {
-		// Keep user-controlled paths and arguments out of cmd.exe's command string.
-		// The quoted environment values survive cmd.exe expansion without Node's
-		// Windows argument quoting turning embedded quotes into backslashes.
 		const commandVariable = "SIGNET_CODEX_SHIM_COMMAND";
 		const env: NodeJS.ProcessEnv = {
 			...environment,
@@ -798,9 +746,7 @@ function writeWindowsHookWrapper(
 				rmSync(join(wrapperRoot, entry.name), { force: true });
 			}
 		}
-	} catch {
-		// The current wrapper is still usable if an older generated wrapper cannot be removed.
-	}
+	} catch {}
 
 	const lines = ["@echo off", "setlocal"];
 	if (remoteDaemonUrl) lines.push(`set "SIGNET_DAEMON_URL=${cmdEnvQuote(remoteDaemonUrl)}"`);
@@ -1174,12 +1120,7 @@ function migrateLegacyHooksFile(file: HooksFile): HooksFile {
 	return migrated;
 }
 
-// ---------------------------------------------------------------------------
-// MCP server registration (config.toml)
-// ---------------------------------------------------------------------------
-
 function tomlQuote(s: string): string {
-	// Use TOML literal strings (single-quoted) to avoid backslash escaping
 	if (!s.includes("'")) return `'${s}'`;
 	return `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n")}"`;
 }
@@ -1237,9 +1178,6 @@ function patchConfigToml(path: string, mcp: SignetMcpConfig): boolean {
 		writeFileSync(path, `${content.trimEnd()}\n\n${block}`);
 		return true;
 	}
-
-	// Section exists but may be stale (e.g. old array-format command).
-	// Remove and re-add with correct format.
 	unpatchConfigToml(path);
 	const updated = existsSync(path) ? readFileSync(path, "utf-8").trim() : "";
 	const prefix = updated.length > 0 ? `${updated}\n\n` : "";
@@ -1251,8 +1189,6 @@ function unpatchConfigToml(path: string): boolean {
 	if (!existsSync(path)) return false;
 	const content = readFileSync(path, "utf-8");
 	if (!content.includes("[mcp_servers.signet]")) return false;
-
-	// Remove the signet MCP block — handles both with and without comment
 	const lines = content.split("\n");
 	const filtered: string[] = [];
 	let inSection = false;
@@ -1262,7 +1198,6 @@ function unpatchConfigToml(path: string): boolean {
 			inSection = true;
 			continue;
 		}
-		// Skip all lines belonging to the signet section and descendant child tables
 		if (inSection) {
 			if (line.match(/^\s*\[/)) {
 				if (line.trim().startsWith("[mcp_servers.signet.")) {
@@ -1320,10 +1255,6 @@ function unpatchNativePluginConfig(path: string): boolean {
 	writeFileSync(path, updated);
 	return true;
 }
-
-// ---------------------------------------------------------------------------
-// Connector
-// ---------------------------------------------------------------------------
 
 export class CodexConnector extends BaseConnector {
 	readonly name = "Codex";
@@ -1478,9 +1409,7 @@ export class CodexConnector extends BaseConnector {
 				env,
 			);
 			spawnSync(removeMarketplace.command, removeMarketplace.args, { ...options, env: removeMarketplace.env });
-		} catch {
-			// Uninstall still removes Signet-owned compatibility state below.
-		}
+		} catch {}
 	}
 
 	private getHooksJsonPath(): string {
@@ -1641,24 +1570,16 @@ export class CodexConnector extends BaseConnector {
 					warnings,
 				};
 			}
-			// The CLI may have partially registered the marketplace before failing.
-			// Remove only the Signet-owned sections before falling back.
 			if (unpatchNativePluginConfig(this.getConfigPath()) && !configsPatched.includes(this.getConfigPath())) {
 				configsPatched.push(this.getConfigPath());
 			}
 		}
-
-		// 1. Install hooks.json (native Codex hook system)
 		if (windowsHookCommand && !filesWritten.includes(windowsHookCommand)) filesWritten.push(windowsHookCommand);
 		this.installCompatibilityHooks(signetArgs, filesWritten, configsPatched, warnings, windowsHookCommand);
-
-		// 2. Symlink skills directory
 		const skillsResult = this.symlinkSkills(expandedBasePath, codexHome);
 		if (!skillsResult) {
 			warnings.push("Failed to symlink skills directory");
 		}
-
-		// 3. Register MCP server in config.toml
 		if (patchConfigToml(configPath, mcp)) {
 			configsPatched.push(configPath);
 		}
@@ -1683,8 +1604,6 @@ export class CodexConnector extends BaseConnector {
 	async uninstall(): Promise<UninstallResult> {
 		const filesRemoved: string[] = [];
 		const configsPatched: string[] = [];
-
-		// 1. Remove hooks.json (or clean Signet entries from merged file)
 		const hooksPath = this.getHooksJsonPath();
 		const existing = readHooksFile(hooksPath);
 		const hookTrustEntries = existing ? buildHookTrustEntries(hooksPath, existing) : [];
@@ -1710,15 +1629,11 @@ export class CodexConnector extends BaseConnector {
 				}
 			}
 		}
-
-		// 2. Remove skills symlink
 		const skillsLink = join(this.getCodexHome(), "skills");
 		if (existsSync(skillsLink)) {
 			rmSync(skillsLink, { force: true });
 			filesRemoved.push(skillsLink);
 		}
-
-		// 3. Remove MCP server from config.toml
 		const configPath = this.getConfigPath();
 		this.removeNativePlugin(this.getCodexHome());
 		if (unpatchNativePluginConfig(configPath)) {

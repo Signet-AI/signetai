@@ -1,12 +1,3 @@
-/**
- * Startup integrity checks for SQLite's derived database surfaces.
- *
- * `PRAGMA quick_check` deliberately does not validate every index/table
- * relationship. The telemetry table is append-only and its indexes are
- * disposable, so it gets a targeted full check and a transactional REINDEX
- * when SQLite reports an index mismatch.
- */
-
 import { spawnHidden as spawn, type ChildProcess } from "@signet/core";
 import { existsSync } from "node:fs";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -73,13 +64,6 @@ const INTEGRITY_CHILD_ENV_KEYS = [
 	"SIGNET_INSPECTOR_PROXY_PUBLIC",
 	"SIGNET_INSPECTOR_PROXY_TARGET",
 ] as const;
-
-/**
- * Integrity's direct-database compatibility path remains process-isolated:
- * SQLite work is synchronous and must be hard-killable at its deadline. It
- * deliberately admits one child at a time and does not queue callers. The
- * owner-routed production path below does not use this child at all.
- */
 let integrityChildActive = false;
 
 class IntegrityChildAdmissionError extends Error {
@@ -117,13 +101,9 @@ async function terminateAndReapChild(child: ChildProcess, reaped: Promise<void>)
 	if (!childHasExited(child)) {
 		try {
 			child.kill("SIGKILL");
-		} catch {
-			// The child may have exited between the state check and kill.
-		}
+		} catch {}
 	}
 	await reaped;
-	// Let the runtime finish releasing stdio and native file handles after the
-	// close event before another operation can touch the database path.
 	await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
@@ -173,8 +153,6 @@ function mergeIntegrityState(
 		? incrementalState
 		: globalState;
 }
-
-/** Clear the migration-wide latch after a confirmed clean global scan. */
 export function resetGlobalIntegrityLatch(): void {
 	globalIntegrityState = null;
 	globalIntegrityMessage = null;
@@ -229,8 +207,6 @@ function statusWith(
 		incrementalProgress: null,
 	};
 }
-
-/** Publish checkpointed integrity maintenance through the existing health surfaces. */
 export function updateDatabaseIntegrityStatus(
 	progress: DatabaseIntegrityProgress,
 	errors: readonly string[] = [],
@@ -298,8 +274,6 @@ export function updateDatabaseIntegrityStatus(
 		incrementalProgress: progress,
 	};
 }
-
-/** Publish migration-wide integrity without replacing quick-check details. */
 export function publishDatabaseIntegrityStatus(
 	state: "healthy" | GlobalIntegrityState,
 	messages: readonly string[] = [],
@@ -333,8 +307,6 @@ export function publishDatabaseIntegrityStatus(
 		ownerGeneration: health?.generation ?? latestStatus.ownerGeneration,
 	};
 }
-
-/** Return integrity status, optionally projected onto one owner-health snapshot. */
 export function getDatabaseIntegrityStatus(ownerHealth?: DbOwnerHealth | null): DatabaseIntegrityStatus {
 	if (ownerHealth === undefined) return latestStatus;
 	return {
@@ -413,8 +385,6 @@ interface KillableChildOptions {
 	readonly onLine?: (line: string) => boolean;
 	readonly errorMessage?: (code: number | null, stderr: string) => string;
 }
-
-/** Run a synchronous child with one timeout/reap path for all integrity phases. */
 async function runKillableChild(options: KillableChildOptions): Promise<KillableChildOutput> {
 	const child = spawn(options.executable, [...options.args], {
 		env: options.env,
@@ -644,13 +614,6 @@ async function runKillableTelemetryRepair(
 async function writeAsync<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
 	return accessor.withWriteTxAsync(processBatch, { siteToken: "db:database.integrity.write" });
 }
-
-/**
- * Run the global quick_check away from Bun's main event loop after readiness.
- * The scan runs in a child process because SQLite's synchronous PRAGMA cannot
- * observe Worker.terminate() while native code is running. A child process can
- * be SIGKILLed at the deadline, so the budget is a real upper bound.
- */
 export function runDeferredIntegrityCheck(
 	accessor: DbAccessor,
 	dbPath: string,
@@ -769,16 +732,6 @@ async function runDeferredIntegrityCheckInternal(
 		return latestStatus;
 	}
 }
-
-/**
- * Check the database and repair only disposable telemetry indexes when the
- * targeted check identifies damage. Production REINDEX work runs in a
- * killable child with a real deadline. Production audits are admitted through
- * the bounded async writer queue only after the child commits and verification
- * succeeds. Owner-routed repairs keep their audit statement in the same
- * transaction as REINDEX; test doubles without a database path use one queued
- * transaction for both operations.
- */
 export interface IntegrityRepairOptions {
 	readonly quickCheck?: IntegrityCheckStatus;
 	readonly dbPath?: string;
@@ -873,9 +826,6 @@ export async function repairTelemetryIndexes(
 		latestStatus = statusWith("healthy", quickCheck, telemetryCheck, [], "complete", 0, null, options?.owner);
 		return latestStatus;
 	}
-
-	// quick_check covers the whole database. A failed global check is not
-	// safely repairable by rebuilding a telemetry index.
 	if (!quickCheck.ok) {
 		latestStatus = statusWith(
 			"corrupt",

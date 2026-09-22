@@ -1,22 +1,3 @@
-/**
- * LLM provider infrastructure for the daemon pipeline.
- *
- * After #947, the only inference backends are:
- *   - Pi (pi-ai) via createPiModelProvider (see pi-provider.ts), and
- *   - ACPX (createAcpxProvider below), a retained harness-subprocess backend.
- * The per-provider HTTP/subprocess factories (Anthropic, OpenAI-compatible,
- * Ollama, llama.cpp, OpenRouter, Claude Code, Codex, OpenCode, command-line)
- * have been removed; their capabilities are provided by pi-ai or ACPX.
- *
- * This module retains the cross-provider infrastructure those backends share:
- * the global LLM concurrency semaphore, per-provider rate limiting, usage
- * tracking, the streaming types, and the ACPX provider.
- *
- * The LlmProvider interface itself lives in @signet/core so that the
- * ingestion pipeline and other consumers can accept any provider.
- */
-// Use the shared launcher so every daemon subprocess inherits the Windows
-// hidden-console default. Bun.spawn does not support windowsHide.
 import { spawnHidden as nodeSpawn, type ChildProcess } from "@signet/core";
 import { mkdirSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
@@ -38,15 +19,6 @@ import {
 import { logger } from "../logger";
 import { getActiveTelemetry } from "../telemetry";
 import { which } from "../which";
-
-// ---------------------------------------------------------------------------
-// Global concurrency semaphore for all LLM providers
-// ---------------------------------------------------------------------------
-// Prevents starvation when multiple pipeline workers (extraction,
-// structural-classify, summary, etc.) all issue LLM calls simultaneously
-// — whether via CLI subprocesses or HTTP providers.
-// Without this, 10+ concurrent calls can cause memory bloat, API rate
-// limiting, and timeout cascades.
 
 const DEFAULT_MAX_LLM_CONCURRENCY = 2;
 
@@ -220,13 +192,6 @@ export function getLlmConcurrencyStatus(): {
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Token-bucket rate limiter for provider-level call throttling
-// ---------------------------------------------------------------------------
-// Prevents runaway subprocess spawning when a pipeline stall loop or
-// aggressive scheduling causes excessive LLM calls. Independent of the
-// concurrency semaphore (which limits parallelism, not throughput).
-
 export class RateLimitExceededError extends Error {
 	constructor(
 		public readonly providerName: string,
@@ -307,12 +272,6 @@ const RATE_LIMIT_PROVIDERS: ReadonlySet<string> = new Set([
 	"opencode",
 	"openai-compatible",
 ]);
-
-// Compile-time check: if a new remote provider is added to the RemoteProvider
-// union but omitted from the _exhaustiveCheck Record above, this produces a
-// type error. NOTE: this only enforces that the Record keys cover the union —
-// keeping RATE_LIMIT_PROVIDERS in sync with the Record remains a human
-// discipline step (the Set is untyped ReadonlySet<string>).
 const _exhaustiveCheck: Record<RemoteProvider, true> = {
 	acpx: true,
 	"claude-code": true,
@@ -394,11 +353,6 @@ export function withRateLimit(provider: LlmProvider, config?: ProviderRateLimitC
 		},
 	};
 }
-
-/**
- * Resolve the caller-supplied abort signal (preferring `signal` over the
- * legacy `abortSignal` alias).
- */
 function generateSignal(opts?: {
 	readonly signal?: AbortSignal;
 	readonly abortSignal?: AbortSignal;
@@ -449,10 +403,6 @@ export async function acquireLlmConcurrencyPermit(
 	};
 }
 
-// ---------------------------------------------------------------------------
-// Streaming-capable provider types
-// ---------------------------------------------------------------------------
-
 export type { LlmProvider, LlmGenerateResult } from "@signet/core";
 
 export type LlmProviderCallOptions = Pick<
@@ -460,15 +410,6 @@ export type LlmProviderCallOptions = Pick<
 	"timeoutMs" | "maxTokens" | "temperature" | "signal" | "sessionId"
 > & {
 	readonly abortSignal?: AbortSignal;
-	/**
-	 * Per-call thinking-level override for pi-ai-backed providers.
-	 * - `undefined`: use the provider's configured reasoning level.
-	 * - a `ThinkingLevel` ("minimal"|"low"|"medium"|"high"|"xhigh"): override
-	 *   the configured level for this call.
-	 * - `false`: explicitly suppress thinking for this call, even if the
-	 *   provider/target is configured for reasoning. Used by latency-sensitive
-	 *   operations (e.g. aggregate_recall) that must never emit thinking tokens.
-	 */
 	readonly reasoning?: ThinkingLevel | false;
 };
 
@@ -484,12 +425,6 @@ export interface LlmProviderStreamResult {
 export interface StreamCapableLlmProvider extends LlmProvider {
 	streamWithUsage?(prompt: string, opts?: LlmProviderCallOptions): Promise<LlmProviderStreamResult>;
 }
-
-/**
- * Run a provider call, returning usage when the provider reports it.
- * Records an anonymous `llm.generate` telemetry event (usage counts and
- * latency only — never prompt content) when a collector is active.
- */
 export async function generateWithTracking(
 	provider: LlmProvider,
 	prompt: string,
@@ -513,8 +448,6 @@ function recordLlmGenerate(provider: LlmProvider, usage: LlmUsage | null, latenc
 	if (!telemetry) return;
 	const attribution = provider.telemetryAttribution;
 	telemetry.record("llm.generate", {
-		// Provider names are diagnostic identifiers and ACPX includes its configured
-		// agent in one. Routed telemetry must emit the bounded executor instead.
 		provider: attribution?.executor ?? provider.name,
 		...(attribution
 			? {
@@ -541,16 +474,6 @@ function recordLlmGenerate(provider: LlmProvider, usage: LlmUsage | null, latenc
 					: "unavailable"),
 	});
 }
-
-// ---------------------------------------------------------------------------
-// Subprocess deadline helper (shared by harness/command providers)
-// ---------------------------------------------------------------------------
-// Runs a result-extracting callback against a spawned subprocess, racing
-// against a deadline. On timeout: SIGTERM -> grace period -> SIGKILL.
-//
-// INVARIANT: the returned promise settles only AFTER `proc.exited` resolves,
-// so callers wrapped in `withLlmConcurrency` won't release the semaphore
-// until the child process is actually dead.
 
 interface SpawnResult {
 	readonly stdout: ReadableStream<Uint8Array>;
@@ -595,16 +518,11 @@ function signalSubprocess(proc: SpawnResult, signal: "SIGTERM" | "SIGKILL"): voi
 		try {
 			process.kill(-processGroupId, signal);
 			return;
-		} catch {
-			// Fall back to the proc-specific kill hook below. The group may have
-			// already drained, or the hook may know how to terminate this process.
-		}
+		} catch {}
 	}
 	try {
 		proc.kill(signal);
-	} catch {
-		// The process may already be gone.
-	}
+	} catch {}
 }
 
 async function terminateSubprocessWithEscalation(proc: SpawnResult): Promise<void> {
@@ -689,10 +607,6 @@ export async function awaitSubprocessWithDeadline<T>(
 	}
 	throw result.error;
 }
-
-// ---------------------------------------------------------------------------
-// ACPX harness-subprocess provider (retained backend, peer of Pi)
-// ---------------------------------------------------------------------------
 
 export type AcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "approve-all";
 export type AcpxHooksMode = "inherit" | "disabled" | "enabled";
@@ -826,8 +740,6 @@ async function waitForAcpxAdmission(
 		throw error;
 	}
 }
-
-/** Wait for the currently tracked orphan cleanup for an ACPX agent. */
 export async function waitForAcpxCleanup(agent: string): Promise<void> {
 	while (true) {
 		const barrier = acpxCleanupBarriers.get(acpxCleanupKey(agent));
@@ -1035,10 +947,7 @@ function terminateChildProcessTree(child: ReturnType<typeof nodeSpawn>, signal: 
 		try {
 			process.kill(-pid, signal);
 			return;
-		} catch {
-			// Fall back to killing the direct child below. This can happen if the
-			// process exits before we signal the detached process group.
-		}
+		} catch {}
 	}
 	child.kill(signal);
 }
@@ -1081,9 +990,6 @@ function acpxAgentProcessBasenames(agent: string): string[] {
 function acpxProcRoot(): string {
 	return process.env.SIGNET_ACPX_PROC_ROOT || "/proc";
 }
-
-// Test seam mirroring SIGNET_ACPX_PROC_ROOT: forces a cleanup platform so the
-// darwin sweep is exercisable on Linux CI runners.
 function acpxCleanupPlatform(): NodeJS.Platform {
 	const override = process.env.SIGNET_ACPX_CLEANUP_PLATFORM;
 	if (override === "linux" || override === "darwin") return override;
@@ -1138,14 +1044,10 @@ function runProcessCapture(binary: string, args: readonly string[], deadline: nu
 		const kill = (signal: "SIGTERM" | "SIGKILL"): void => {
 			try {
 				child.kill(signal);
-			} catch {
-				// The process may have exited between the timeout and the signal.
-			}
+			} catch {}
 		};
 		const hardKill = (): void => {
 			kill("SIGKILL");
-			// Do not wait for close. A SIGTERM-resistant process can keep the
-			// stdio pipe open, but SIGKILL has already ended the ps child.
 			settle({ stdout: "", succeeded: false });
 		};
 		const softKill = (): void => {
@@ -1168,24 +1070,10 @@ function commandMatchesAgentBasename(command: string, basenames: ReadonlySet<str
 	}
 	return false;
 }
-
-// macOS ps(1) documents -E as "Display the environment as well". The ACPX
-// children are spawned under the same user as Signet, so this reads their
-// inherited run id without launchctl procinfo or root privileges.
 function psEnvironmentContainsRunId(stdout: string, runId: string): boolean {
 	const marker = `SIGNET_ACPX_RUN_ID=${runId}`;
 	return stdout.split(/\r?\n/).some((line) => line.split(/\s+/).includes(marker));
 }
-
-/**
- * macOS has no /proc, so the Linux sweep cannot enumerate candidate agent
- * processes there. Mirror it with a bounded scan: `ps -axo pid=,command=`
- * process table; we filter it down to commands whose basename is an agent
- * process, then read only those candidates' environments via `ps -E` to
- * require the run id. The per-candidate env read keeps the scan bounded the
- * way per-pid /proc reads are bounded on Linux, and it never signals a
- * same-named process from another run or a user tool.
- */
 async function darwinSweepCandidates(basenames: ReadonlySet<string>, runId: string): Promise<number[]> {
 	const deadline = performance.now() + DARWIN_CLEANUP_SWEEP_TIMEOUT_MS;
 	const listingResult = await runProcessCapture(acpxPsBinary(), ["-axo", "pid=,command="], deadline);
@@ -1294,9 +1182,7 @@ async function terminateAcpxAgentProcess(pid: number): Promise<void> {
 	if (!acpxCleanupProcessExists(pid)) return;
 	try {
 		process.kill(pid, "SIGKILL");
-	} catch {
-		// Already exited.
-	}
+	} catch {}
 }
 
 async function cleanupAcpxAgentProcesses(agent: string, runId: string): Promise<void> {

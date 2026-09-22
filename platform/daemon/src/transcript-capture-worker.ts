@@ -29,7 +29,6 @@ export interface TranscriptCaptureJobInput {
 	readonly transcript: string;
 	readonly rawTranscript?: string | null;
 	readonly transcriptPath?: string | null;
-	/** Workspace root owning the DB and transcript artifacts; one DB must not be shared across roots. */
 	readonly basePath?: string;
 	readonly capturedAt: string;
 	readonly endedAt: string | null;
@@ -274,8 +273,6 @@ export async function enqueueTranscriptCaptureJob(
 				const sameGeneration =
 					Boolean(existing?.id) &&
 					existing?.status !== "dead" &&
-					// A completed source must be re-read. Size and mtime are only cheap
-					// admission hints; they are not content identity.
 					(source
 						? (existing?.status === "pending" || existing?.status === "processing") &&
 							existing?.source_size_bytes === source.sizeBytes &&
@@ -828,18 +825,6 @@ function projectionRowToSummary(row: TranscriptStatusProjectionRow): TranscriptC
 		lastError: row.lastError ?? null,
 	};
 }
-
-/**
- * Bounded capture status for /api/status and health surfaces.
- *
- * Reads the `transcript_capture_status` projection (migration 138), which
- * triggers maintain on every job mutation. The previous implementation
- * grouped `transcript_capture_jobs` — whose rows carry full transcript
- * payloads inline — directly on the HTTP-serving isolate, which wedged the
- * parent event loop on production-scale databases (#1670). Both reads here
- * are bounded: one projection row by primary key, or a SUM over the tiny
- * one-row-per-agent projection table. Same fields, same values, cheap source.
- */
 export async function getTranscriptCaptureStatus(
 	dbAccessor: DbAccessor,
 	agentId?: string | null,
@@ -876,8 +861,6 @@ export async function getTranscriptCaptureStatus(
 		{ siteToken: "db:transcript.capture.status" },
 	);
 }
-
-/** Read one agent-scoped capture receipt without exposing transcript content. */
 export async function getTranscriptCaptureJobStatus(
 	dbAccessor: DbAccessor,
 	agentId: string,

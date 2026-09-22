@@ -12,21 +12,15 @@ export function countTokens(text: string, modelConfig: ModelConfig): number {
   } else if (provider === "anthropic") {
     return countAnthropicTokens(text)
   } else if (provider === "google") {
-    // Approximation: Google doesn't provide a client-side tokenizer.
-    // char/4 tends to undercount for JSON-heavy content (lots of short tokens
-    // like {, ", :) but is reasonable for natural language.
     return Math.ceil(text.length / 4)
   }
 
   return Math.ceil(text.length / 4)
 }
-
-// Cached encoder instances (lazy singletons) to avoid re-instantiation per call
 let _o200k: Tiktoken | null = null
 let _cl100k: Tiktoken | null = null
 
 function getEncoder(modelId: string): Tiktoken {
-  // o200k_base: GPT-4o+, GPT-4.1, GPT-5, and reasoning models (o1, o3, o4)
   if (
     modelId.includes("gpt-4o") ||
     modelId.includes("gpt-4.1") ||

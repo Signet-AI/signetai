@@ -1,11 +1,3 @@
-/**
- * Cross-harness lifecycle proof helpers.
- *
- * This package owns no queues, timers, providers, or session state. Harnesses
- * and the daemon record observations from their existing lifecycle owners, then
- * use assertLifecycleInvariants() to check the shared contract.
- */
-
 export const LIFECYCLE_STAGES = [
 	"startup",
 	"session-start",
@@ -44,8 +36,6 @@ export type LifecycleProviderObserver = (window: LifecycleProviderWindow) => voi
 let lifecycleObserver: LifecycleObserver | undefined;
 let shutdownObserver: LifecycleShutdownObserver | undefined;
 let providerObserver: LifecycleProviderObserver | undefined;
-
-/** Install the owner-emission sink used by daemon and harness proof adapters. */
 export function setLifecycleObservers(
 	observers:
 		| {
@@ -59,23 +49,15 @@ export function setLifecycleObservers(
 	shutdownObserver = observers?.shutdown;
 	providerObserver = observers?.provider;
 }
-
-/** Emit an observation from a production lifecycle owner. */
 export function emitLifecycleObservation(observation: LifecycleObservationInput): void {
 	lifecycleObserver?.(observation);
 }
-
-/** Emit measured bounded-shutdown evidence from a production lifecycle owner. */
 export function emitLifecycleShutdown(window: LifecycleShutdownWindow): void {
 	shutdownObserver?.(window);
 }
-
-/** Emit measured provider/prompt timing from a production lifecycle owner. */
 export function emitLifecycleProvider(window: LifecycleProviderWindow): void {
 	providerObserver?.(window);
 }
-
-/** Assigns a monotonic sequence to observations emitted by lifecycle owners. */
 export class LifecycleObservationRecorder {
 	private nextSequence = 1;
 	private readonly recorded: LifecycleObservation[] = [];
@@ -95,9 +77,7 @@ export interface LifecycleShutdownWindow {
 	readonly startedAtMs: number;
 	readonly completedAtMs: number;
 	readonly budgetMs: number;
-	/** Work present when shutdown began. */
 	readonly startedWork: number;
-	/** Work still pending when shutdown completed. */
 	readonly pendingWork: number;
 	readonly completedWork: number;
 	readonly abandonedWork: number;
@@ -111,13 +91,9 @@ export interface LifecycleProviderWindow {
 
 export interface LifecycleProofInput {
 	readonly observations: readonly LifecycleObservation[];
-	/** Required evidence from the owner that drains deferred work. */
 	readonly shutdown: LifecycleShutdownWindow;
-	/** Required evidence from the owner that handles prompts and provider calls. */
 	readonly slowProvider: LifecycleProviderWindow;
 }
-
-/** Collects lifecycle observations and measured owner evidence for one run. */
 export class LifecycleEvidenceRecorder {
 	private readonly observationRecorder = new LifecycleObservationRecorder();
 	private shutdown: LifecycleShutdownWindow | undefined;
@@ -340,8 +316,6 @@ function countWorkStates(observations: readonly LifecycleObservation[]): Readonl
 	}
 	return counts;
 }
-
-/** Assert ordering and attribution evidence emitted by a lifecycle owner. */
 export function assertLifecycleObservationInvariants(
 	observations: readonly LifecycleObservation[],
 ): Pick<LifecycleProofResult, "invariants" | "observations" | "workStateCounts"> {
@@ -358,18 +332,12 @@ export function assertLifecycleObservationInvariants(
 		workStateCounts: countWorkStates(observations),
 	};
 }
-
-/** Assert the shutdown window measured by a lifecycle owner. */
 export function assertShutdownInvariant(window: LifecycleShutdownWindow): void {
 	assertShutdownBounded(window);
 }
-
-/** Assert the provider window measured by a lifecycle owner. */
 export function assertSlowProviderInvariant(window: LifecycleProviderWindow): void {
 	assertSlowProviderDoesNotBlockPrompt(window);
 }
-
-/** Assert the shared lifecycle contract against observations from real owners. */
 export function assertLifecycleInvariants(input: LifecycleProofInput): LifecycleProofResult {
 	if (!input.shutdown) fail(LIFECYCLE_INVARIANTS[6], "shutdown evidence was not recorded");
 	if (!input.slowProvider) fail(LIFECYCLE_INVARIANTS[7], "slow-provider evidence was not recorded");

@@ -1,11 +1,5 @@
 import type { WriteDb } from "./db-accessor";
 import { txForgetMemory } from "./transactions";
-
-/**
- * Semantic claim memories are a retrievable projection of entity attributes.
- * Remove that projection before a source owner removes its graph rows, so a
- * disconnected source cannot leave derived claims available to retrieval.
- */
 export function purgeAttributeMemoryProjectionsInTx(
 	db: WriteDb,
 	input: {

@@ -22,10 +22,6 @@ import {
 	shuttingDown,
 } from "./state.js";
 import { checkEmbeddingProvider } from "./utils";
-
-// Native/ollama embedding probes do network or model work; a probe must never
-// block the event loop on the /health path (see
-// .github/workflows/embedding-health-isolation.yml).
 const EMBEDDING_CHECK_TIMEOUT_MS = 2000;
 
 async function withTimeout<T>(promise: Promise<T>, ms: number, timeoutError: Error): Promise<T> {
@@ -50,8 +46,6 @@ interface EmbeddingCheck {
 	readonly checkedAt?: string;
 	readonly migration?: ReturnType<typeof readEmbeddingIndexMigrationProgress>;
 }
-
-/** Embedding gates readiness when a provider is configured; "none" means intentionally disabled. */
 async function checkEmbedding(): Promise<{ ok: boolean; detail: EmbeddingCheck; reason: string | null }> {
 	let cfg: ReturnType<typeof loadMemoryConfig>["embedding"];
 	try {
@@ -70,9 +64,7 @@ async function checkEmbedding(): Promise<{ ok: boolean; detail: EmbeddingCheck; 
 			(await withRegisteredDbOwnerMaintenance((ownerMaintenance) =>
 				ownerMaintenance.embeddingMigrationProgress(cfg.base_url),
 			)) ?? null;
-	} catch {
-		// The provider probe remains useful while the database is initializing.
-	}
+	} catch {}
 	const migrationDetail = migration === null ? {} : { migration };
 
 	if (cfg.provider === "none") {
@@ -124,8 +116,6 @@ interface InferenceCheck {
 	readonly effective: string;
 	readonly reason: string | null;
 }
-
-/** Inference gates readiness only when the extraction route is fully blocked; degraded still serves. */
 function checkInference(): { ok: boolean; detail: InferenceCheck; reason: string | null } {
 	let cfg: ReturnType<typeof loadMemoryConfig>;
 	try {
@@ -172,11 +162,9 @@ export function mountHealthRoutes(app: Hono): void {
 			try {
 				const ownerHealth = await withRegisteredDbOwnerMaintenance(async (ownerMaintenance) => {
 					try {
-						await ownerQueryOne(ownerMaintenance.owner, "routes/health.ts:212", "SELECT 1", [], { deadlineMs: 500 });
+						await ownerQueryOne(ownerMaintenance.owner, "routes/health.ts:165", "SELECT 1", [], { deadlineMs: 500 });
 						dbOk = true;
-					} catch {
-						// Keep the structured admission outcome visible below.
-					}
+					} catch {}
 					return ownerMaintenance.health();
 				});
 				if (ownerHealth !== undefined) {
@@ -230,8 +218,6 @@ export function mountHealthRoutes(app: Hono): void {
 			resources: getCachedResourceSnapshot(),
 		});
 	});
-
-	// Cheap liveness: process is up. Never touches db or subsystems, always 200.
 	app.get("/health/live", (c) => {
 		return c.json({
 			status: shuttingDown ? "shutting_down" : "healthy",
@@ -244,16 +230,12 @@ export function mountHealthRoutes(app: Hono): void {
 			eventLoop: getEventLoopLiveness(),
 		});
 	});
-
-	// Readiness: composed per-check results. 200 only when every gate passes.
 	app.get("/health/ready", async (c) => {
 		const workspace = preflightWorkspace();
 		const reasons: string[] = [];
 		if (workspace.status === "missing" || workspace.status === "incomplete") {
 			reasons.push(...workspace.reasons);
 		}
-
-		// db, migrations, and queue share one owner-health snapshot.
 		let dbResult: { readonly migrationsOk: boolean; readonly queueHealth: QueueHealth } | null = null;
 		let dbReader: ReadPressure | null = null;
 		let dbRuntime = getDbRuntimeMetrics();
@@ -282,9 +264,7 @@ export function mountHealthRoutes(app: Hono): void {
 				const accessor = getDbAccessor();
 				dbReader = accessor.getReadPressure?.() ?? null;
 				dbRuntime = accessor.getDbRuntimePressure?.().runtime ?? dbRuntime;
-			} catch {
-				// The accessor may be unavailable while the database check fails.
-			}
+			} catch {}
 		}
 		const dbOk = dbResult !== null;
 		const migrationsOk = dbResult?.migrationsOk ?? false;
@@ -354,13 +334,6 @@ export function mountHealthRoutes(app: Hono): void {
 	app.get("/api/features", (c) => {
 		return c.json(getAllFeatureFlags());
 	});
-
-	// Environment probe (issue #1001): deliberately lightweight and
-	// unauthenticated so the dashboard can distinguish "talking to a real
-	// daemon" (any hostname: localhost, Tailscale, .local, tunnel, LAN IP)
-	// from the marketing site or cloud app. `mode` reflects the daemon's
-	// auth mode; `requiresAuth` reflects whether data endpoints require a
-	// token in that mode.
 	app.get("/api/mode", (c) => {
 		return c.json({ mode: authConfig.mode, requiresAuth: authConfig.mode !== "local" });
 	});

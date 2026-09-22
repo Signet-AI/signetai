@@ -1,18 +1,6 @@
-/**
- * Portable agent export and import.
- *
- * Creates a ZIP archive containing the full agent identity, memories,
- * entities, relations, and optionally embeddings. Supports round-trip
- * import with conflict resolution.
- */
-
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 import { MEMORY_CONTENT_SAFETY_POLICY_VERSION, scanMemoryContent } from "./memory-content-safety";
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface ExportOptions {
 	readonly includeEmbeddings?: boolean;
@@ -57,10 +45,6 @@ export interface ExportImportResult {
 	readonly identityFilesWritten: number;
 }
 
-// ---------------------------------------------------------------------------
-// Database interface (minimal, avoids coupling to bun:sqlite)
-// ---------------------------------------------------------------------------
-
 interface ExportDb {
 	prepare(sql: string): {
 		all(...args: unknown[]): Record<string, unknown>[];
@@ -103,10 +87,6 @@ function recordImportedMemoryContentSafety(db: ImportDb, memoryId: string, conte
 	);
 }
 
-// ---------------------------------------------------------------------------
-// Identity file names
-// ---------------------------------------------------------------------------
-
 const IDENTITY_FILE_NAMES = [
 	"AGENTS.md",
 	"SOUL.md",
@@ -117,19 +97,12 @@ const IDENTITY_FILE_NAMES = [
 	"TOOLS.md",
 ] as const;
 
-// ---------------------------------------------------------------------------
-// Export
-// ---------------------------------------------------------------------------
-
 export function collectExportData(agentsDir: string, db: ExportDb, options: ExportOptions = {}): ExportData {
-	// Read agent.yaml
 	let agentYaml: string | null = null;
 	const yamlPath = join(agentsDir, "agent.yaml");
 	if (existsSync(yamlPath)) {
 		agentYaml = readFileSync(yamlPath, "utf-8");
 	}
-
-	// Read identity files
 	const identityFiles: Array<{ name: string; content: string }> = [];
 	for (const name of IDENTITY_FILE_NAMES) {
 		const path = join(agentsDir, name);
@@ -137,8 +110,6 @@ export function collectExportData(agentsDir: string, db: ExportDb, options: Expo
 			identityFiles.push({ name, content: readFileSync(path, "utf-8") });
 		}
 	}
-
-	// Export memories
 	const memories = db
 		.prepare(
 			`SELECT id, content, type, category, confidence, source_type,
@@ -148,8 +119,6 @@ export function collectExportData(agentsDir: string, db: ExportDb, options: Expo
 			 ORDER BY created_at ASC`,
 		)
 		.all();
-
-	// Export entities
 	const entities = db
 		.prepare(
 			`SELECT id, name, canonical_name, entity_type, description,
@@ -158,8 +127,6 @@ export function collectExportData(agentsDir: string, db: ExportDb, options: Expo
 			 ORDER BY created_at ASC`,
 		)
 		.all();
-
-	// Export relations
 	const relations = db
 		.prepare(
 			`SELECT id, source_entity_id, target_entity_id, relation_type,
@@ -168,8 +135,6 @@ export function collectExportData(agentsDir: string, db: ExportDb, options: Expo
 			 ORDER BY created_at ASC`,
 		)
 		.all();
-
-	// Collect skills
 	const skills: Array<{
 		name: string;
 		files: Array<{ path: string; content: string }>;
@@ -186,9 +151,7 @@ export function collectExportData(agentsDir: string, db: ExportDb, options: Expo
 					collectSkillFiles(skillDir, "", skillFiles);
 					skills.push({ name: entry.name, files: skillFiles });
 				}
-			} catch {
-				// Non-fatal
-			}
+			} catch {}
 		}
 	}
 
@@ -222,23 +185,14 @@ function collectSkillFiles(dir: string, prefix: string, out: Array<{ path: strin
 				collectSkillFiles(fullPath, relPath, out);
 			} else {
 				const stat = statSync(fullPath);
-				if (stat.size > 1_000_000) continue; // skip files > 1MB
+				if (stat.size > 1_000_000) continue;
 				try {
 					out.push({ path: relPath, content: readFileSync(fullPath, "utf-8") });
-				} catch {
-					// Skip binary files
-				}
+				} catch {}
 			}
 		}
-	} catch {
-		// Non-fatal
-	}
+	} catch {}
 }
-
-/**
- * Serialize export data to JSONL format for memories, entities, relations.
- * Returns a map of filename -> content for the export archive.
- */
 export function serializeExportData(data: ExportData): ReadonlyMap<string, string> {
 	const files = new Map<string, string>();
 
@@ -267,10 +221,6 @@ export function serializeExportData(data: ExportData): ReadonlyMap<string, strin
 	return files;
 }
 
-// ---------------------------------------------------------------------------
-// Import
-// ---------------------------------------------------------------------------
-
 export function importMemories(
 	db: ImportDb,
 	memoriesJsonl: string,
@@ -281,8 +231,6 @@ export function importMemories(
 	let imported = 0;
 	let skipped = 0;
 	let errors = 0;
-
-	// Wrap in transaction so partial import doesn't leave inconsistent state
 	db.exec("BEGIN");
 	try {
 		for (const line of lines) {
@@ -294,8 +242,6 @@ export function importMemories(
 				continue;
 			}
 			const id = mem.id as string;
-
-			// Check for existing
 			const existing = db.prepare("SELECT id FROM memories WHERE id = ?").get(id);
 
 			if (existing) {
@@ -324,8 +270,6 @@ export function importMemories(
 					continue;
 				}
 			}
-
-			// Insert new
 			db.prepare(
 				`INSERT OR IGNORE INTO memories
 				 (id, content, type, category, confidence, source_type,

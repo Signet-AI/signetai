@@ -23,16 +23,12 @@ import type { DaemonRuntime } from "@signet/core";
 export let restartPipelineRuntimeRef:
 	| ((memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>)
 	| null = null;
-
-// Paths
 export const AGENTS_DIR = resolveDefaultBasePath();
 export const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
 export const PID_FILE = join(DAEMON_DIR, "pid");
 export const LOG_DIR = join(DAEMON_DIR, "logs");
 export const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
 export const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
-
-/** The runtime selected by the process environment; null means invalid input. */
 export const DAEMON_RUNTIME: DaemonRuntime | null = (() => {
 	try {
 		return resolveDaemonRuntime(undefined, process.env);
@@ -48,8 +44,6 @@ export function getCurrentAgentsDir(): string {
 export function getCurrentMemoryDbPath(): string {
 	return join(getCurrentAgentsDir(), "memory", "memories.db");
 }
-
-// Config utilities
 export function readEnvTrimmed(key: string): string | undefined {
 	const raw = process.env[key];
 	if (typeof raw !== "string") return undefined;
@@ -167,8 +161,6 @@ export const HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_HOST") ?? NET.h
 export const BIND_HOST = normalizeLoopbackHost(readEnvTrimmed("SIGNET_BIND") ?? NET.bind);
 export const NETWORK_MODE = networkModeFromBindHost(BIND_HOST);
 export const INTERNAL_SELF_HOST = BIND_HOST === "0.0.0.0" || BIND_HOST === "::" ? "127.0.0.1" : BIND_HOST;
-
-// isAllowedOrigin must come after ALLOWED_ORIGINS is defined, so declare origins first
 const _ALLOWED_ORIGINS = new Set([
 	"http://localhost:3850",
 	"http://127.0.0.1:3850",
@@ -198,8 +190,6 @@ export function isAllowedOrigin(origin: string | undefined): boolean {
 		return false;
 	}
 }
-
-// Types
 export type RuntimeProviderName =
 	| "none"
 	| "ollama"
@@ -232,9 +222,6 @@ export interface ProviderRuntimeResolution {
 		configured: string | null;
 		resolved: RuntimeProviderName;
 		effective: RuntimeProviderName;
-		// Widened from "llama-cpp" | "ollama" | "none" after #949: the routing
-		// registry expresses fallback via fallbackTargetRefs, whose executor can be
-		// any RuntimeProviderName. Defaults to "none" when no fallback is configured.
 		fallbackProvider: RuntimeProviderName;
 		status: "active" | "degraded" | "blocked" | "disabled" | "paused";
 		degraded: boolean;
@@ -257,19 +244,6 @@ export type ExtractionWorkloadState = ProviderRuntimeResolution["extraction"] & 
 	readonly ready: boolean;
 	readonly blockedReason: string | null;
 };
-
-/**
- * Canonical extraction workload state shared by status, health, diagnostics,
- * and CLI consumers. A resolved provider alone never means that jobs run.
- *
- * The standalone extraction worker was retired under the Dreaming cutover
- * (#946); there is no live worker process to report. `workerRunning` is
- * therefore a fixed `false`, and `ready` reflects route resolution alone
- * (an `active` or `degraded` route is ready to service command-mode
- * extraction). Treating the retired worker's absence as a not-ready anomaly
- * made `signet status` print a misleading "Extraction worker stopped"
- * notice for every legacy (non-Dreaming) route.
- */
 export function getExtractionWorkloadState(input: {
 	readonly enabled: boolean;
 	readonly paused: boolean;
@@ -287,8 +261,6 @@ export function getExtractionWorkloadState(input: {
 		blockedReason,
 	};
 }
-
-// Runtime state singletons
 export const providerRuntimeResolution: ProviderRuntimeResolution = {
 	extraction: {
 		configured: null,
@@ -322,8 +294,6 @@ export let diagnosticsCache: {
 	readonly expiresAt: number;
 } | null = null;
 export const DIAGNOSTICS_CACHE_TTL_MS = 2000;
-
-// OpenClaw health state
 export interface OpenClawHeartbeatData {
 	readonly pluginVersion: string;
 	readonly hooksRegistered: string[];
@@ -336,14 +306,10 @@ export interface OpenClawHeartbeatData {
 }
 export let openClawHeartbeat: { timestamp: string; data: OpenClawHeartbeatData } | null = null;
 export const OPENCLAW_STALE_MS = 10 * 60 * 1000;
-
-// Projection state
 export const projectionInFlight = new Map<number, Promise<void>>();
 export const projectionErrors = new Map<number, { message: string; expires: number }>();
 export const PROJECTION_ERROR_TTL_MS = 30_000;
 export const hasMemoriesSessionIdColumnCache: boolean | null = null;
-
-// Auth state
 export let authConfig: AuthConfig = parseAuthConfig(undefined, AGENTS_DIR);
 export let authSecret: Buffer | null = null;
 export let authForgetLimiter = new AuthRateLimiter(60_000, 30);
@@ -353,13 +319,9 @@ export let authAdminLimiter = new AuthRateLimiter(60_000, 10);
 export let authLoginLimiter = new AuthRateLimiter(60_000, 5);
 export let authRecallLlmLimiter = new AuthRateLimiter(60_000, 60);
 export const authCrossAgentMessageLimiter = new AuthRateLimiter(60_000, 120);
-
-// Provider tracker and analytics singletons
 export const providerTracker = createProviderTracker();
 export const analyticsCollector = createAnalyticsCollector();
 export const repairLimiter = createRateLimiter();
-
-// Version
 function getDaemonVersion(): string {
 	const envVersion = readEnvTrimmed("SIGNET_VERSION");
 	if (envVersion) {
@@ -383,17 +345,13 @@ function getDaemonVersion(): string {
 			if (typeof parsed.version === "string" && parsed.version) {
 				return parsed.version;
 			}
-		} catch {
-			// skip
-		}
+		} catch {}
 	}
 
 	return "0.0.0";
 }
 
 export const CURRENT_VERSION = getDaemonVersion();
-
-// Diagnostics helpers
 export function invalidateDiagnosticsCache(): void {
 	diagnosticsCache = null;
 }
@@ -460,14 +418,6 @@ export function getCachedDiagnosticsReport(): DiagnosticsReport {
 	};
 	return report;
 }
-
-/**
- * Read the diagnostics cache without running its synchronous database query.
- *
- * Lightweight status and liveness routes must not turn a cache miss into a
- * main-loop database scan while the daemon is already under pressure. The
- * full getter remains available to the bounded diagnostics surface.
- */
 export function getCachedDiagnosticsReportIfFresh(): DiagnosticsReport | null {
 	const now = Date.now();
 	return diagnosticsCache !== null && diagnosticsCache.expiresAt > now ? diagnosticsCache.report : null;
@@ -532,8 +482,6 @@ export function reloadAuthState(agentsDir: string): void {
 export function setOpenClawHeartbeat(value: { timestamp: string; data: OpenClawHeartbeatData } | null): void {
 	openClawHeartbeat = value;
 }
-
-// Feature flag and session helpers that use AGENTS_DIR
 export { AGENTS_DIR as default };
 
 export { getUpdateState };

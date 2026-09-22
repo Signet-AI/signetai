@@ -18,9 +18,6 @@
       <div class="showcase-glow" aria-hidden="true"></div>
 
       <div class="showcase-frame" id="showcase-frame">
-        <!-- Embedded build of the real dashboard (fixture data, no daemon):
-             regenerated automatically by scripts/build-dashboard-demo.ts
-             before every astro build. -->
         <iframe
           class="showcase-embed"
           id="showcase-embed"
@@ -84,8 +81,6 @@
   .showcase-stage {
     position: relative;
   }
-
-  /* Soft radial lift behind the window */
   .showcase-glow {
     position: absolute;
     inset: -40px -60px;
@@ -110,11 +105,6 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.06);
     aspect-ratio: 16 / 9;
   }
-
-  /* The embedded dashboard renders at 1536x864 (a ~1.25x browser zoom of the
-     designed 1920x1080) and is scaled to the frame width, so the UI reads
-     larger while the whole view stays visible - nothing cropped, no internal
-     scroll. Below 700px the frame gets taller and the SPA reflows naturally. */
   .showcase-embed {
     position: absolute;
     top: 0;
@@ -148,7 +138,6 @@
     }
     .showcase-frame {
       border-radius: 10px;
-      /* Taller viewport so the embedded SPA stays readable on small screens */
       aspect-ratio: 3 / 4;
     }
   }
@@ -158,12 +147,6 @@
   const frame = document.getElementById("showcase-frame");
   if (frame) {
     const embed = document.getElementById("showcase-embed") as HTMLIFrameElement | null;
-
-    // Render the embedded dashboard at 1536x864 (1.25x browser zoom of the
-    // designed 1920x1080) and scale it to the frame width: content reads
-    // ~25% larger, the layout reflows so nothing is cropped, and the 16:9
-    // frame is filled exactly with no internal scrollbar. Below 700px, let
-    // the SPA reflow at natural size inside the taller mobile frame.
     function fitEmbed() {
       if (!embed) return;
       const frameW = frame.clientWidth;

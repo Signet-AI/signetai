@@ -251,9 +251,7 @@ export async function runExistingSetupWizard(
 				if (nameMatch) {
 					agentName = nameMatch[1].trim();
 				}
-			} catch {
-				// Ignore
-			}
+			} catch {}
 		}
 
 		const configuredHarnessList = readHarnesses(existingConfig.harnesses);
@@ -374,8 +372,6 @@ export async function runExistingSetupWizard(
 				if (Object.hasOwn(config, "inference")) {
 					updatedConfig.inference = config.inference;
 				} else {
-					// Remove only a generated setup route when extraction is disabled;
-					// preserve any user-owned inference configuration.
 					applySetupInferenceRoute(updatedConfig, undefined);
 				}
 			}

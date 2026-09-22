@@ -21,13 +21,6 @@ export interface PreCompactionResult {
 	readonly guidelines?: string;
 	readonly summaryPrompt?: string;
 }
-
-// The upstream pi package's main entry point (@mariozechner/pi-coding-agent) does not
-// export the handler result types (ContextEventResult, BeforeAgentStartEventResult,
-// SessionBeforeCompactResult) needed to type the overloaded `on()` signatures. They
-// exist in an internal dist path with no public sub-path export. Local shims here model
-// only the runtime surface this extension actually consumes so `tsc --noEmit` still
-// verifies our integration end-to-end.
 export type PiAgentMessage = BaseAgentMessage;
 export type PiSessionEntry = BaseSessionEntry;
 export type PiSessionHeader = BaseSessionHeader;
@@ -73,33 +66,15 @@ export interface PiSessionSwitchEvent {
 	readonly type: string;
 	readonly previousSessionFile?: string;
 }
-
-/**
- * `session_before_switch` — fired before switching to another session.
- *
- * pi-mono (the older monorepo fork of pi, v0.66.x) emits this INSTEAD of the
- * post-event `session_switch`; current pi emits both. The payload carries the
- * session being switched TO (`targetSessionFile`), not the previous one, so the
- * handler relies on `endPreviousSession`'s active-session-file fallback.
- */
 export interface PiSessionBeforeSwitchEvent {
 	readonly type: "session_before_switch";
 	readonly reason?: "new" | "resume";
 	readonly targetSessionFile?: string;
 }
-
-/**
- * `session_before_fork` — fired before forking a session.
- *
- * pi-mono emits this INSTEAD of the post-event `session_fork`; current pi emits
- * both. Same end-previous-only handling as `session_before_switch`.
- */
 export interface PiSessionBeforeForkEvent {
 	readonly type: "session_before_fork";
 	readonly entryId?: string;
 }
-
-// UI and notification types
 export interface PiTheme {
 	fg(color: string, text: string): string;
 }
@@ -115,14 +90,10 @@ export interface PiExtensionContext {
 	readonly sessionManager: ReadonlySessionManager;
 	readonly ui: PiUI;
 }
-
-// Command types
 export interface PiCommandHandler {
 	readonly description: string;
 	readonly handler: (args: string, ctx: PiExtensionContext) => Promise<void>;
 }
-
-// Tool types
 export interface ToolExecuteResult {
 	readonly content: ReadonlyArray<{ readonly type: string; readonly text: string }>;
 	readonly details?: Record<string, unknown>;
@@ -144,8 +115,6 @@ export interface PiToolDefinition {
 		ctx: PiExtensionContext,
 	) => Promise<ToolExecuteResult>;
 }
-
-// Flag types
 export interface PiFlagDefinition {
 	readonly description: string;
 	readonly type: "boolean" | "string" | "number";

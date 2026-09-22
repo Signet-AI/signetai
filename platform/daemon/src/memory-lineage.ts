@@ -54,14 +54,8 @@ const REINDEX_BATCH_SIZE = 50;
 
 const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const purgeSeen = new Set<string>();
-
-// Incremental index cache: outer key = agentId or "*" for global, inner key = absolute path, value = stat fingerprint
 const artifactIndexCache = new Map<string, Map<string, string>>();
-
-// Changed manifest paths from last reindexMemoryArtifacts call — read by renderMemoryProjection, keyed by agentId
 const lastChangedManifestsByAgent = new Map<string, Set<string>>();
-
-// Tracks which manifest rel paths were referenced in the previous ledger render per agent
 const prevLedgerRefsByAgent = new Map<string, Set<string>>();
 
 export type ArtifactKind = "summary" | "transcript" | "compaction" | "manifest";
@@ -257,13 +251,6 @@ function base32Sha256(input: string): string {
 	}
 	return out;
 }
-
-// Derive a deterministic, agent-scoped token used in artifact file names.
-// Uses sessionId as the identity source so each session-end run (which has
-// a unique derived sessionId) produces a distinct token and artifact path,
-// even when multiple runs share the same sessionKey. For checkpoint-extract
-// where sessionId === sessionKey, the result is unchanged from the old
-// behavior.
 export function deriveSessionToken(agentId: string, sessionId: string): string {
 	const seed = `${agentId}:${sessionId.trim()}`;
 	return base32Sha256(seed).slice(0, 16);
@@ -426,9 +413,7 @@ export async function resolveMemorySentence(
 					generatedAt,
 				};
 			}
-		} catch {
-			// fall through to deterministic fallback
-		}
+		} catch {}
 	}
 
 	return {
@@ -526,11 +511,6 @@ function writeImmutableArtifact(seed: ArtifactSeed): string {
 	writeAtomic(path, content);
 	return path;
 }
-
-/**
- * Explicit column values for a single memory_artifacts upsert.
- * Values are bound as-is; no derivation or defaults are applied.
- */
 export interface MemoryArtifactUpsertFields {
 	readonly agentId: string;
 	readonly sourcePath: string;
@@ -559,13 +539,6 @@ export interface MemoryArtifactUpsertFields {
 }
 
 export interface MemoryArtifactUpsertOptions {
-	/**
-	 * When true, the ON CONFLICT update only applies when the conflicting row
-	 * already belongs to the same source_id (`WHERE memory_artifacts.source_id
-	 * = excluded.source_id`). Used by source-snapshot restore, which pairs this
-	 * guard with an up-front path-ownership check. Defaults to false
-	 * (unconditional conflict update).
-	 */
 	readonly conflictGuardSourceId?: boolean;
 }
 
@@ -602,13 +575,6 @@ const MEMORY_ARTIFACT_UPSERT_SQL = `INSERT INTO memory_artifacts (
 		source_meta_json = excluded.source_meta_json,
 		is_deleted = 0,
 		deleted_at = NULL`;
-
-/**
- * Canonical memory_artifacts upsert, run inside an existing write
- * transaction. This is the single owner of the 24-column INSERT ... ON
- * CONFLICT statement. Both the frontmatter-derived lineage path and the
- * source-snapshot restore path delegate here so the SQL is not duplicated.
- */
 export function upsertMemoryArtifactInTx(
 	db: Database,
 	fields: MemoryArtifactUpsertFields,
@@ -919,9 +885,6 @@ export async function deleteArtifactRowsForPath(path: string, agentId: string | 
 		estimatedWorkUnits: 2,
 	});
 }
-
-// Coalesce duplicate scoped reindexes, but serialize all scopes. A global
-// reindex and a scoped reindex both mutate shared artifact tables/caches.
 const reindexFlights = new Map<string, Promise<void>>();
 let reindexTail: Promise<void> = Promise.resolve();
 
@@ -970,7 +933,6 @@ async function doReindex(agentId?: string): Promise<void> {
 	}
 	const pendingUpserts: PendingUpsert[] = [];
 	const pendingDeletes: PendingDelete[] = [];
-	// Cache-only updates for files that need no DB write (e.g. unreadable).
 	const cacheOnlyUpdates: Array<{ path: string; statKey: string }> = [];
 	const commitBatchCacheUpserts = (batch: readonly PendingUpsert[]): void => {
 		for (const item of batch) {
@@ -1050,8 +1012,6 @@ async function doReindex(agentId?: string): Promise<void> {
 	}
 
 	if (cache.size === 0) {
-		// Seed from DB state too so files deleted while daemon was down get
-		// detected, while unchanged files can skip a full reread on restart.
 		const dbPaths = await getDbAccessor().withReadDbAsync(
 			async (db) => {
 				const rows = scope
@@ -1073,9 +1033,6 @@ async function doReindex(agentId?: string): Promise<void> {
 			const root = getAgentsDir();
 			for (const row of dbPaths) {
 				const absPath = join(root, row.source_path);
-				// Cold caches must re-read existing files at least once. Mtime-only
-				// seeding can miss fast local tampering where the frontmatter checksum
-				// no longer matches the body but the timestamp did not advance.
 				cache.set(absPath, "0");
 			}
 			for (const path of files) {
@@ -1200,7 +1157,6 @@ async function doReindex(agentId?: string): Promise<void> {
 	if (await flushDeleteBatch()) {
 		await yielder();
 	}
-	// Commit cache-only items (no DB dependency — safe to apply unconditionally).
 	for (const { path: p, statKey: sk } of cacheOnlyUpdates) {
 		cache.set(p, sk);
 	}
@@ -1327,12 +1283,6 @@ async function saveManifestAsyncUnlocked(
 
 async function findExistingManifest(agentId: string, sessionId: string): Promise<ManifestState | null> {
 	try {
-		// Pre-fix rows stored session_id verbatim from the caller (equal to
-		// session_key). New rows use a derived session_id (e.g. "session-end:
-		// path:…"). Both cases are covered by this single session_id lookup —
-		// a separate session_key fallback is unnecessary because pre-fix rows
-		// match on session_id directly (it was persisted as the session_key
-		// value) and new rows have a unique derived session_id.
 		const row = await getDbAccessor().withReadDbAsync(
 			async (db) =>
 				db
@@ -1606,8 +1556,6 @@ export async function writeTranscriptArtifact(params: {
 			transcript_path: relativePath(fullPath),
 			transcript_status: "completed",
 			canonical_transcript_path: params.harness ? canonicalTranscriptRelativePath(params.harness) : null,
-			// New direct captures do not request a summary. Preserve terminal
-			// historical status values so provenance is not rewritten.
 			summary_status: frontmatter.summary_path
 				? "completed"
 				: terminalSummaryStatus
@@ -1680,10 +1628,6 @@ export async function writeCompactionArtifact(params: {
 	readonly provider?: LlmProvider | null;
 }): Promise<{ readonly manifestPath: string; readonly compactionPath: string }> {
 	const manifest = await ensureCanonicalManifest(params);
-	// A compaction is a new immutable event even when it belongs to an existing
-	// session. Its path must use this event's capture time, not the session
-	// manifest's original capture time, or a later compaction would attempt to
-	// overwrite the first one.
 	const capturedAt = params.capturedAt;
 	const sessionToken = deriveSessionToken(params.agentId, params.sessionId);
 	const body = normalizeMarkdownBody(params.summary);
@@ -1907,9 +1851,6 @@ async function readTemporalNodes(agentId: string): Promise<
 function chooseSentence(rows: ReadonlyArray<ArtifactRow>): ArtifactRow | null {
 	const ranked = [...rows].sort((a, b) => {
 		const rank = (row: ArtifactRow): number => {
-			// Direct completed transcripts are the canonical session projection.
-			// Keep historical summaries as lower-priority provenance so an old
-			// artifact cannot override a newly sanitized transcript view.
 			if (row.source_kind === "transcript") return 3;
 			if (row.source_kind === "compaction") return 2;
 			if (row.source_kind === "summary") return 1;
@@ -2076,10 +2017,6 @@ function renderLedgerSection(
 			lines,
 		});
 	}
-
-	// renderCount is not monotone at the full-length boundary because dropping
-	// one row adds the clipping notice. Check the unclipped case up front before
-	// binary-searching clipped prefixes.
 	if (fitsBudget([...base, renderCount(sessions.length)])) {
 		const refs = sessions
 			.map((session) => session.manifestPath)

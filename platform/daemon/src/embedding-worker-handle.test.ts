@@ -6,19 +6,7 @@ import {
 	createEmbeddingWorkerHandle,
 } from "./embedding-worker-handle";
 import type { EmbeddingWorkerInit, MainToWorkerMessage, WorkerToMainMessage } from "./embedding-worker-protocol";
-
-// Flush the microtask queue so an async RPC method (which posts its message
-// via a resolved-promise continuation) has actually written to worker.posted
-// before the test inspects it.
 const flush = (): Promise<void> => Bun.sleep(0);
-
-// ---------------------------------------------------------------------------
-// Fake worker that speaks the IPC protocol. The test drives it by calling
-// emit()/emitError()/emitExit() and inspects posted[] to respond. This lets
-// us exercise every adapter path — including a worker that *never*
-// responds (simulating a stuck model download) — deterministically, without
-// a real ONNX runtime or network.
-// ---------------------------------------------------------------------------
 
 interface FakeWorkerListeners {
 	message: Array<(msg: WorkerToMainMessage) => void>;
@@ -75,7 +63,7 @@ const handles: Array<{ stop: () => Promise<void> }> = [];
 
 async function makeHandle(worker: FakeWorker, factory: EmbeddingWorkerFactory, opts: Record<string, number> = {}) {
 	const handle = await createEmbeddingWorkerHandle({ workerFactory: factory, expectedDimensions: DIM, ...opts });
-	worker.emit({ type: "ready" }); // complete the ready handshake AFTER the listener is registered
+	worker.emit({ type: "ready" });
 	handles.push(handle);
 	return handle;
 }
@@ -84,9 +72,7 @@ afterEach(async () => {
 	for (const h of handles.splice(0)) {
 		try {
 			await h.stop();
-		} catch {
-			/* best-effort teardown */
-		}
+		} catch {}
 	}
 });
 
@@ -131,8 +117,7 @@ describe("embedding-worker-handle", () => {
 		const { worker, factory } = fakePair();
 		const handle = await makeHandle(worker, factory);
 
-		void handle.checkAvailable().catch(() => {}); // init in flight; do NOT await
-		// getStatus must NOT await the RPC — it reads the push-driven cache.
+		void handle.checkAvailable().catch(() => {});
 		expect(handle.getStatus().initialized).toBe(false);
 
 		worker.emit({
@@ -147,15 +132,10 @@ describe("embedding-worker-handle", () => {
 	});
 
 	it("★ main event loop stays responsive while an RPC is stuck (the regression this fixes)", async () => {
-		// Simulate an unreachable model CDN: the worker accepts the
-		// checkAvailable RPC but NEVER responds. The handle's main-thread
-		// work must not block — heartbeat ticks must stay on schedule and
-		// getStatus() must remain instant. (Under the old in-process
-		// implementation, the synchronous WASM/download work froze the loop.)
 		const { worker, factory } = fakePair();
 		const handle = await makeHandle(worker, factory, { initTimeoutMs: 10_000 });
 
-		const pending = handle.checkAvailable(); // worker will not respond
+		const pending = handle.checkAvailable();
 		void pending.catch(() => {});
 
 		const intervals: number[] = [];
@@ -163,13 +143,8 @@ describe("embedding-worker-handle", () => {
 		for (let i = 0; i < 5; i++) {
 			await Bun.sleep(25);
 			intervals.push(Date.now() - start);
-			// getStatus stays synchronous and instant on every tick
 			expect(typeof handle.getStatus().initialized).toBe("boolean");
 		}
-
-		// Each ~25ms tick landed on schedule (generous jitter, but the loop
-		// never stalled). If the main thread had blocked, these would balloon
-		// toward the 10s init timeout.
 		for (let i = 0; i < intervals.length; i++) {
 			expect(intervals[i]).toBeLessThan(500 * (i + 1));
 		}
@@ -181,10 +156,9 @@ describe("embedding-worker-handle", () => {
 		const handle = await makeHandle(worker, factory, { embedTimeoutMs: 60, cooldownMs: 5_000 });
 
 		await expect(handle.embed("stuck")).rejects.toThrow(/timed out/);
-		// Cooldown gates an immediate retry without re-posting
 		const before = worker.posted.length;
 		await expect(handle.embed("again")).rejects.toThrow(/cooldown|timed out/);
-		expect(worker.posted.length).toBe(before); // no new RPC sent during cooldown
+		expect(worker.posted.length).toBe(before);
 	});
 
 	it("checkAvailable fails fast on timeout and marks the provider unavailable", async () => {
@@ -276,18 +250,11 @@ describe("embedding-worker-handle", () => {
 
 		await expect(handle.embed("first")).rejects.toThrow(/timed out/);
 		const posted = worker.posted.length;
-		await Bun.sleep(120); // past cooldown
+		await Bun.sleep(120);
 		await expect(handle.embed("retry")).rejects.toThrow(/timed out|disabled/);
 		expect(worker.posted).toHaveLength(posted);
 		expect(worker.terminated).toBe(true);
 	});
-
-	// Regression test for #922: when the embedding worker handle is created
-	// inside the extraction worker thread, globalThis.__SIGNET_NATIVE_RUNTIME_ASSETS__
-	// is not registered, so resolveEmbeddedWorkerPath() returns null. The
-	// caller must be able to pass pre-resolved asset paths that bypass the
-	// registry. This test verifies the handle uses embeddingWorkerPath from
-	// opts and passes wasmDir/transformersRuntimePath through to workerData.
 	it("uses pre-resolved asset paths instead of the native asset registry (#922)", async () => {
 		const { worker, factory } = fakePair();
 		const fakeWorkerPath = "/tmp/test-embedding-worker-resolved.mjs";
@@ -303,20 +270,11 @@ describe("embedding-worker-handle", () => {
 		});
 		worker.emit({ type: "ready" });
 		handles.push(handle);
-
-		// The factory received the pre-resolved worker path, not a .ts fallback
-		// or a null. We verify by checking the factory was called (the worker
-		// was created). The path itself was passed as the first arg to the
-		// factory — since FakeWorker ignores it, we verify the init payload
-		// was passed correctly by checking the worker responds to embed.
 		const p = handle.embed("test");
 		await flush();
 		expect(worker.posted.some((m) => m.type === "embed" && m.text === "test")).toBe(true);
 		worker.emit({ type: "embed_result", id: lastEmbedId(worker), vector: vec() });
 		await expect(p).resolves.toHaveLength(DIM);
-
-		// Verify the factory was called with the exact pre-resolved path
-		// by re-creating with a tracking factory.
 		let capturedPath = "";
 		const trackingFactory: EmbeddingWorkerFactory = (path: string) => {
 			capturedPath = path;
@@ -331,9 +289,6 @@ describe("embedding-worker-handle", () => {
 	});
 
 	it("passes pre-resolved wasmDir and transformersRuntimePath into workerData init (#922)", async () => {
-		// Verify that when pre-resolved paths are provided, they flow into
-		// the EmbeddingWorkerInit that becomes workerData. The factory's
-		// second arg is the init object.
 		const initCaptures: EmbeddingWorkerInit[] = [];
 		const trackingFactory: EmbeddingWorkerFactory = (_path: string, init: EmbeddingWorkerInit): EmbeddingWorkerLike => {
 			initCaptures.push(init);

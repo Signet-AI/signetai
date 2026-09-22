@@ -1,11 +1,3 @@
-/**
- * Migration 001: Baseline schema
- *
- * Captures the unified schema as migration version 1.
- * All statements use IF NOT EXISTS so this is safe to run
- * against databases that already have these tables.
- */
-
 import { createMemoriesFts } from "../fts-schema";
 import type { MigrationDb } from "./contract";
 
@@ -89,19 +81,12 @@ export function up(db: MigrationDb): void {
 		CREATE INDEX IF NOT EXISTS idx_embeddings_hash
 			ON embeddings(content_hash);
 	`);
-
-	// vec0 virtual table — requires sqlite-vec extension which may
-	// not be loaded. Gracefully skip if unavailable.
 	try {
 		db.exec(`
 			CREATE VIRTUAL TABLE IF NOT EXISTS vec_embeddings USING vec0(
 				embedding FLOAT[768]
 			);
 		`);
-	} catch {
-		// sqlite-vec extension not loaded — vector search will be disabled
-	}
-
-	// FTS5 virtual table for full-text search on memories
+	} catch {}
 	createMemoriesFts(db);
 }

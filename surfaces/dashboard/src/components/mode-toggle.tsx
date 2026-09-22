@@ -7,12 +7,6 @@ import { cn } from "@/lib/utils";
 
 const ORDER = ["system", "light", "dark"] as const;
 type Theme = (typeof ORDER)[number];
-
-/**
- * Theme cycle button in the account row. Cycles system → light → dark, matching
- * the mockup's single-toggle behavior (which flipped dark ⇄ light; we add the
- * system default the issue mandates).
- */
 export function ModeToggle() {
 	const { theme, resolvedTheme, setTheme } = useTheme();
 	const [mounted, setMounted] = useState(false);

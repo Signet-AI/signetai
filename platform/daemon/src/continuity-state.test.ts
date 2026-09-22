@@ -23,7 +23,6 @@ const SESSION = "test-session-snippets";
 
 describe("continuity-state", () => {
 	beforeEach(() => {
-		// Clean up any leftover state
 		for (const key of getActiveSessionKeys()) {
 			clearContinuity(key);
 		}
@@ -55,7 +54,7 @@ describe("continuity-state", () => {
 		}
 		const state = getState("s3");
 		expect(state?.pendingQueries.length).toBe(20);
-		expect(state?.pendingQueries[0]).toBe("query-5"); // oldest dropped
+		expect(state?.pendingQueries[0]).toBe("query-5");
 		expect(state?.pendingQueries[19]).toBe("query-24");
 	});
 
@@ -88,8 +87,6 @@ describe("continuity-state", () => {
 		const snap = consumeState("s7");
 		expect(snap?.promptCount).toBe(1);
 		expect(snap?.pendingQueries).toEqual(["q1"]);
-
-		// State should be reset
 		const after = getState("s7");
 		expect(after?.promptCount).toBe(0);
 		expect(after?.pendingQueries).toEqual([]);
@@ -102,7 +99,6 @@ describe("continuity-state", () => {
 	});
 
 	test("no-ops on undefined/empty session key", () => {
-		// None of these should throw
 		recordPrompt(undefined, "test", undefined);
 		recordPrompt("", "test", undefined);
 		expect(shouldCheckpoint(undefined, defaultConfig)).toBe(false);
@@ -117,8 +113,6 @@ describe("continuity-state", () => {
 		expect(keys).toContain("a1");
 		expect(keys).toContain("a2");
 	});
-
-	// === Snippet tracking ===
 
 	describe("recordPrompt with snippets", () => {
 		afterEach(() => {
@@ -174,8 +168,6 @@ describe("continuity-state", () => {
 			const snap = consumeState(SESSION);
 			expect(snap?.pendingPromptSnippets).toEqual(["first prompt", "second prompt"]);
 			expect(snap?.promptCount).toBe(2);
-
-			// After consume, state should be reset
 			const s = getState(SESSION);
 			expect(s?.pendingPromptSnippets.length).toBe(0);
 			expect(s?.promptCount).toBe(0);
@@ -186,17 +178,11 @@ describe("continuity-state", () => {
 			recordPrompt(SESSION, undefined, "prompt 1");
 			recordPrompt(SESSION, undefined, "prompt 2");
 			recordPrompt(SESSION, undefined, "prompt 3");
-
-			// First consume — interval resets, total stays
 			const snap1 = consumeState(SESSION);
 			expect(snap1?.promptCount).toBe(3);
 			expect(snap1?.totalPromptCount).toBe(3);
-
-			// Record more prompts
 			recordPrompt(SESSION, undefined, "prompt 4");
 			recordPrompt(SESSION, undefined, "prompt 5");
-
-			// Second consume — interval is 2, total is 5
 			const snap2 = consumeState(SESSION);
 			expect(snap2?.promptCount).toBe(2);
 			expect(snap2?.totalPromptCount).toBe(5);

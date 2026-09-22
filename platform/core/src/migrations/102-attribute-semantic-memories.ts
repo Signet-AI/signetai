@@ -5,12 +5,6 @@ function hasColumn(db: MigrationDb, table: string, column: string): boolean {
 		(row) => row.name === column,
 	);
 }
-
-/**
- * Attribute rows are the canonical atomic semantic memories. Backfill their
- * retrievable memory projection with the same id, preserving the graph link
- * and avoiding raw episodic transcript rows in the memory surface.
- */
 export function up(db: MigrationDb): void {
 	const requiredMemoryColumns = [
 		"content_hash",

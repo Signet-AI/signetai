@@ -21,10 +21,6 @@ export interface ConcurrentExecutionOptions<T, R> {
 }
 
 export class ConcurrentExecutor {
-  /**
-   * Execute tasks concurrently in batches with rate limiting
-   * Throws on first error (fail-fast), but ensures in-flight operations complete
-   */
   static async executeBatched<T, R>(options: ConcurrentExecutionOptions<T, R>): Promise<R[]> {
     const {
       items,
@@ -101,10 +97,6 @@ export class ConcurrentExecutor {
 
     return allResults
   }
-
-  /**
-   * Simple concurrent execution without batching (for phases without rate limits)
-   */
   static async execute<T, R>(
     items: T[],
     concurrency: number,

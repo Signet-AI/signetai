@@ -1,10 +1,3 @@
-/**
- * Tests for session memory candidate recording and FTS hit tracking.
- *
- * Uses an in-memory SQLite database with full migrations so the schema
- * matches production exactly.
- */
-
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../core/src/migrations";
@@ -20,10 +13,6 @@ const { initDbAccessor, closeDbAccessor, getDbAccessor } = await import("./db-ac
 const { recordSessionCandidates, trackFtsHits, parseFeedback, recordAgentFeedbackInner } = await import(
 	"./session-memories"
 );
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 
 function ensureDir(path: string): void {
 	mkdirSync(path, { recursive: true });
@@ -98,10 +87,6 @@ function getSessionMemoryRows(
 	}>;
 }
 
-// ---------------------------------------------------------------------------
-// Setup / Teardown
-// ---------------------------------------------------------------------------
-
 let db: Database;
 
 beforeEach(async () => {
@@ -115,10 +100,6 @@ afterEach(async () => {
 	await closeDbAccessor();
 	if (existsSync(TEST_DIR)) rmSync(TEST_DIR, { recursive: true, force: true });
 });
-
-// ============================================================================
-// recordSessionCandidates
-// ============================================================================
 
 describe("recordSessionCandidates", () => {
 	it("inserts candidate rows with correct was_injected flags", async () => {
@@ -288,10 +269,6 @@ describe("recordSessionCandidates", () => {
 	});
 });
 
-// ============================================================================
-// trackFtsHits
-// ============================================================================
-
 describe("trackFtsHits", () => {
 	it("increments fts_hit_count for existing candidate rows", async () => {
 		await recordSessionCandidates(
@@ -426,10 +403,6 @@ describe("trackFtsHits", () => {
 	});
 });
 
-// ============================================================================
-// parseFeedback
-// ============================================================================
-
 describe("parseFeedback", () => {
 	it("returns null for null/undefined input", () => {
 		expect(parseFeedback(null)).toBeNull();
@@ -478,12 +451,6 @@ describe("parseFeedback", () => {
 		expect(result).toEqual({ valid: 0.8 });
 	});
 });
-
-// ============================================================================
-// recordAgentFeedbackInner (running mean accumulation)
-// ============================================================================
-
-/** Read feedback columns for a session memory. */
 function getFeedbackColumns(
 	testDb: Database,
 	sessionKey: string,
@@ -533,8 +500,6 @@ describe("recordAgentFeedbackInner", () => {
 
 		const result = getFeedbackColumns(testDb, "session-fb-2", "mem-aaa-111");
 		testDb.close();
-
-		// mean = (0.8 * 1 + 0.4) / 2 = 0.6
 		expect(result?.agent_relevance_score).toBeCloseTo(0.6, 6);
 		expect(result?.agent_feedback_count).toBe(2);
 	});
@@ -592,7 +557,6 @@ describe("recordAgentFeedbackInner", () => {
 		);
 
 		const testDb = openTestDb();
-		// mem-ghost doesn't exist — UPDATE matches 0 rows, no crash
 		recordAgentFeedbackInner(testDb, "session-fb-5", {
 			"mem-aaa-111": 0.5,
 			"mem-ghost": 0.9,
@@ -667,8 +631,6 @@ describe("recordAgentFeedbackInner", () => {
 
 		const result = getFeedbackColumns(testDb, "session-fb-7", "mem-aaa-111");
 		testDb.close();
-
-		// mean = (-0.8 * 1 + (-0.4)) / 2 = -0.6
 		expect(result?.agent_relevance_score).toBeCloseTo(-0.6, 6);
 		expect(result?.agent_feedback_count).toBe(2);
 	});

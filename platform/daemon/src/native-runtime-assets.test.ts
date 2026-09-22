@@ -68,9 +68,6 @@ describe("native-runtime-assets", () => {
 		expect(addonPath).toBeTruthy();
 		expect(addonPath?.endsWith(".node")).toBe(true);
 		expect(addonPath ? readFileSync(addonPath, "utf8") : "").toBe("fake-native-binding");
-
-		// Create every promise before awaiting so concurrent consumers enter the
-		// materializer in the same turn and converge on one published artifact.
 		const concurrentPaths = await Promise.all(
 			Array.from({ length: 16 }, () => Promise.resolve().then(() => materializeEmbeddedNativeAddon("napi-rs-keyring"))),
 		);

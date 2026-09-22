@@ -20,8 +20,6 @@ export interface ImportStoreOperation {
 export interface ImportStore {
 	readonly run: <Result>(operation: ImportStoreOperation) => Promise<Result>;
 }
-
-/** Prepare at most 25 retryable records; the generation fences concurrent controls. */
 export async function prepareTranscriptRetry(jobId: string, agentId: string, generation: number): Promise<boolean> {
 	const rows = await dbOwnerQuery<Array<{ id: string }>>(
 		{
@@ -64,8 +62,6 @@ export async function prepareTranscriptRetry(jobId: string, agentId: string, gen
 	);
 	return true;
 }
-
-/** Production facade: import ledger SQL is always submitted to the DB owner. */
 export function createOwnerTranscriptImportStore(): ImportStore {
 	return {
 		run: async <Result>(operation: ImportStoreOperation): Promise<Result> => {

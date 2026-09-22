@@ -1,9 +1,3 @@
-/**
- * Add-secret dialog — mockup .sec-modal, reusing the cs-* modal chrome from
- * connect-source-dialog (same visual spec). Name is normalized + validated
- * client-side (secret-names.ts mirrors the daemon's SECRET_NAME_RE); the value
- * is posted once and never read back.
- */
 import { useEffect, useState } from "react";
 import { Loader2, X } from "@/components/mingcute-icons";
 import { toast } from "sonner";

@@ -1,9 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 074: provenance links from aggregate recall memories to the
- * memory IDs used as evidence during synthesis.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS aggregate_memory_sources (

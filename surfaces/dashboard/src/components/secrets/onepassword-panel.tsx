@@ -1,9 +1,3 @@
-/**
- * 1Password integration panel — ported from the Svelte SecretsTab. Expandable
- * row under the vault hero: status, service-account connect/disconnect, vault
- * picker, and import with prefix/overwrite options. Backed by
- * /api/secrets/1password/* (secrets-routes.ts).
- */
 import { useCallback, useEffect, useState } from "react";
 import {
 	Check,
@@ -49,8 +43,6 @@ export function OnePasswordPanel({ onImported, compact = false }: { onImported: 
 	useEffect(() => {
 		void refresh();
 	}, [refresh]);
-
-	// Drop selections for vaults that disappeared after a refresh.
 	useEffect(() => {
 		const known = new Set(vaults.map((v) => v.id));
 		setSelected((prev) => {

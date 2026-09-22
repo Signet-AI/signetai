@@ -99,15 +99,12 @@ export class GeminiConnector extends BaseConnector {
 		} else {
 			configsPatched.push(this.getConfigPath());
 		}
-
-		// Generate GEMINI.md from identity files only when identity is managed
 		if (identityMode === "managed") {
 			const geminiMdPath = this.generateGeminiMd(expandedBasePath);
 			if (geminiMdPath) {
 				filesWritten.push(geminiMdPath);
 			}
 		} else {
-			// Clean up any previously Signet-generated GEMINI.md when identity is off/passthrough
 			const staleGeminiMd = this.getGeminiMdPath();
 			if (existsSync(staleGeminiMd)) {
 				try {
@@ -115,9 +112,7 @@ export class GeminiConnector extends BaseConnector {
 					if (isSignetGeneratedFile(raw)) {
 						rmSync(staleGeminiMd);
 					}
-				} catch {
-					// Non-fatal
-				}
+				} catch {}
 			}
 		}
 

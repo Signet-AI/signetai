@@ -1,11 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 068: Daily reflections.
- *
- * Stores generated daily narrative insights and user answers.
- * Each row represents one day's reflection for one agent.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS daily_reflections (

@@ -1,13 +1,3 @@
-/**
- * Fast source-run boot guard for the daemon's most dangerous failure mode:
- * startup completes neither liveness nor idle. The gate deliberately runs the
- * real daemon from TypeScript, then observes the real HTTP process and its OS
- * CPU usage instead of testing an in-process mock.
- *
- * Usage:
- *   bun tests/integration/boot-wedge/run.ts [--out DIR]
- */
-
 import { Database } from "bun:sqlite";
 import { spawn, type ChildProcess } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -254,9 +244,7 @@ async function waitForLive(origin: string, port: number, child: ChildProcess): P
 				signal: AbortSignal.timeout(LIVE_REQUEST_TIMEOUT_MS),
 			});
 			if (await isLiveResponse(response, child.pid, port)) return Date.now() - startedAt;
-		} catch {
-			// Startup is expected to refuse connections until the listener binds.
-		}
+		} catch {}
 		await Bun.sleep(100);
 	}
 	throw new Error(`daemon did not become live within ${BOOT_TIMEOUT_MS}ms`);
@@ -282,8 +270,6 @@ function processGroupAlive(processGroupId: number): boolean {
 }
 
 function signalProcessTree(child: ChildProcess, signal: "SIGTERM" | "SIGKILL", targets: ProcessTargets): void {
-	// Snapshot process groups before signalling. Detached descendants have their
-	// own groups and can be reparented as soon as the daemon exits.
 	if (process.platform !== "win32") {
 		for (const processGroupId of targets.processGroups) {
 			if (processGroupId <= 1) continue;
@@ -292,10 +278,6 @@ function signalProcessTree(child: ChildProcess, signal: "SIGTERM" | "SIGKILL", t
 			} catch {}
 		}
 	}
-
-	// Direct PID signals cover partially-created groups and the Windows path.
-	// Descendants are signalled before the parent so shutdown cannot orphan a
-	// DB-owner or worker process.
 	for (const pid of [...targets.pids].reverse()) {
 		try {
 			process.kill(pid, signal);
@@ -327,8 +309,6 @@ async function waitForStopped(
 	const deadline = Date.now() + timeoutMs;
 	let currentTargets = targets;
 	while (Date.now() < deadline) {
-		// Re-scan while the root is present, then retain every discovered target
-		// after it exits so detached descendants cannot disappear from tracking.
 		if (childIsAlive(child) && process.platform === "linux") {
 			currentTargets = mergeProcessTargets(currentTargets, snapshotProcessTargets(child.pid, readProcEntries()));
 		}

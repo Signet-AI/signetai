@@ -11,9 +11,7 @@ afterAll(() => {
 	for (const dir of leaked) {
 		try {
 			rmSync(dir, { recursive: true, force: true });
-		} catch {
-			// best-effort
-		}
+		} catch {}
 	}
 });
 
@@ -36,14 +34,9 @@ console.log("DIR2:" + secondDir);
 	);
 	return scriptPath;
 }
-
-// The exit/SIGTERM handler in test-temp-dir removes the dir when the
-// process is interrupted — this is the core of the leak fix. Simulate an
-// interrupted child process and assert the dir is gone.
 describe("test-temp-dir exit cleanup (interrupt simulation)", () => {
 	it("removes the temp dir on SIGTERM", async () => {
 		const scriptPath = childScript();
-		// Append keep-alive + the marker we assert on.
 		const fullScript = `${await Bun.file(scriptPath).text()}
 setInterval(() => {}, 1000);`;
 		writeFileSync(scriptPath, fullScript);
@@ -79,8 +72,6 @@ setInterval(() => {}, 1000);`;
 
 		proc.kill("SIGTERM");
 		await proc.exited;
-
-		// Give the exit handler a beat to run.
 		await new Promise((resolve) => setTimeout(resolve, 800));
 		expect(existsSync(dir)).toBe(false);
 		expect(existsSync(secondDir)).toBe(false);
@@ -124,9 +115,6 @@ process.exit(0);`;
 		expect(existsSync(secondDir)).toBe(false);
 	});
 });
-
-// Ensure the parent process's own registered dirs are cleaned even though
-// this suite runs in-process (keeps the suite hermetic).
 describe("test-temp-dir hermeticity", () => {
 	it("deregisters on explicit cleanup so exit handler does not double-remove", () => {
 		const dir = createTestTempDir("signet-test-tempdir-herm-");

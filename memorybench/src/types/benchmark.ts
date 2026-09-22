@@ -5,7 +5,6 @@ export interface BenchmarkConfig {
 }
 
 export interface QuestionFilter {
-  /** Filter by raw question type ids (benchmark-specific) */
   questionTypes?: string[]
   limit?: number
   offset?: number

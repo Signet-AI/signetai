@@ -315,10 +315,6 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 		}
 	} else {
 		const probe = report.daemon.probe;
-		// The process can be alive while /health is unreachable (event loop
-		// blocked by a wedged worker). Label that "unresponsive", not
-		// "stopped": a restart often re-triggers the same wedge, and the
-		// operator should look at the logs first (#1074).
 		const unresponsive = probe?.status === "listener-unhealthy" || probe?.status === "process-unhealthy";
 		if (unresponsive) {
 			console.log(`  ${chalk.yellow("◐")} Daemon ${chalk.yellow("unresponsive")}`);
@@ -335,9 +331,6 @@ export async function showStatus(options: { path?: string; json?: boolean }, dep
 			}
 		}
 	}
-
-	// Queue diagnostics include the live memory queue; legacy summary fields
-	// are retained as empty compatibility data for older daemon responses.
 	if (report.daemon.running) {
 		await renderPipelineQueuesBlock(deps, report.daemon.queue ?? undefined);
 		const daemonHealth = report.daemon.health;
@@ -450,9 +443,6 @@ export async function renderPipelineQueuesBlock(
 	deps: { defaultPort: number },
 	captured?: NonNullable<DaemonStatus["queue"]>,
 ): Promise<void> {
-	// Prefer the daemon's own /api/status queue block (always available when
-	// the daemon is up); fall back to the admin-guarded diagnostics endpoint
-	// for the richer age columns.
 	const report = captured
 		? ({
 				queues: {
@@ -482,9 +472,6 @@ export function getExtractionStatusNotice(
 ): { level: "warn" | "error"; title: string; detail: string } | null {
 	const extraction = daemon.extraction;
 	if (extraction && daemon.running && extraction.hasWorkloadState && !extraction.ready) {
-		// The legacy auto-extraction pipeline was deliberately retired in favor
-		// of Dreaming, which owns all semantic writes. Retired states are not a
-		// fault and are not surfaced as a pipeline notice at all.
 		if (!extraction.enabled && extraction.status === "disabled" && extraction.reason) {
 			return null;
 		}
@@ -673,10 +660,6 @@ function addReadinessFindings(report: StatusReport, findings: DoctorFinding[]): 
 			fix: "Inspect `signet status` and the failing readiness check before relying on automatic maintenance.",
 		});
 	}
-
-	// Readiness is a composite signal. The scheduler alone knows whether its
-	// latest deferred sweep yielded to queue pressure or higher-priority system
-	// pressure, so never infer its cause from readiness reasons or queue counts.
 	const scheduler = report.daemon.scheduler;
 	if (scheduler?.status !== "deferred" || scheduler.reason !== "queue_pressure") return;
 	const memory = report.daemon.queue?.memory;
@@ -690,14 +673,6 @@ function addReadinessFindings(report: StatusReport, findings: DoctorFinding[]): 
 		fix: "Inspect the queue in `signet status`; repair only identified jobs with `signet repair queue requeue --apply` or retire obsolete jobs with `signet repair queue cancel --apply`.",
 	});
 }
-
-/**
- * Surface the daemon's own last-exit record when it is down. A record stuck at
- * "starting"/"running" means the process died without writing a shutdown
- * marker — SIGKILL, OOM, or a hard crash — which is exactly the silent-death
- * class of issue #1148. The fix pointer routes the operator to the evidence:
- * the daemon log tail and the systemd transient unit's journald exit status.
- */
 function addDaemonLifecycleExitFindings(probe: NonNullable<DaemonStatus["probe"]>, findings: DoctorFinding[]): void {
 	const lastExit = probe.lastExit;
 	if (!lastExit) return;
@@ -720,11 +695,6 @@ function addDaemonLifecycleExitFindings(probe: NonNullable<DaemonStatus["probe"]
 		});
 		return;
 	}
-
-	// The record says the daemon was starting/running but never wrote a
-	// terminal state. That only means death if the recorded process is
-	// actually gone: a daemon on a custom port or still binding at boot would
-	// otherwise be misreported as "killed or crashed" against a live process.
 	if (isProcessAlive(lastExit.pid)) return;
 
 	findings.push({

@@ -207,13 +207,9 @@ export function registerUpdateCommands(program: Command, deps: UpdateDeps): void
 					try {
 						await deps.configureHarnessHooks(harness, deps.AGENTS_DIR);
 						console.log(chalk.green(`  ✓ hooks re-registered for ${harness}`));
-					} catch {
-						// best effort
-					}
+					} catch {}
 				}
-			} catch {
-				// best effort
-			}
+			} catch {}
 
 			if (data.restartRequired) {
 				console.log(chalk.cyan("\n  Restart daemon to apply: signet daemon restart"));

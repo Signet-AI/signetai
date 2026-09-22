@@ -18,8 +18,6 @@ if (!isMainThread && parentPort !== null) {
 	);
 	parentPort.close();
 } else if (process.env.SIGNET_HEALTH_INSPECTION !== undefined) {
-	// Keep this child process's event loop free even when native connector I/O
-	// blocks. Its own watchdog also bounds its life if the daemon is SIGKILLed.
 	const request = JSON.parse(process.env.SIGNET_HEALTH_INSPECTION) as HarnessHealthRequest;
 	setTimeout(() => process.exit(1), 5000);
 	let reported = false;

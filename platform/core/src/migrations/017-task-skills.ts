@@ -1,11 +1,3 @@
-/**
- * Migration 017: Task Skills
- *
- * Adds optional skill attachment to scheduled tasks.
- * Tasks can reference a skill by name and specify a mode
- * for how the skill content is integrated into the prompt.
- */
-
 import type { MigrationDb } from "./contract";
 
 export function up(db: MigrationDb): void {

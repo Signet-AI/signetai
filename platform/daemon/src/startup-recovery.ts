@@ -1,11 +1,3 @@
-/**
- * Startup recovery: automatically clean accumulated crash-loop damage.
- *
- * Recovery is scheduled without blocking daemon readiness. Each database batch
- * is admitted through the async accessor and yields between batches, so a large
- * backlog remains resumable while HTTP and worker traffic continue to run.
- */
-
 import type { DatabaseIntegrityStatus } from "./database-integrity";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
@@ -76,17 +68,8 @@ function yieldToEventLoop(): Promise<void> {
 }
 
 async function writeBatch<Result>(accessor: DbAccessor, processBatch: (db: WriteDb) => Result): Promise<Result> {
-	return accessor.withWriteTxAsync(processBatch, { siteToken: "startup-recovery.ts:79" });
+	return accessor.withWriteTxAsync(processBatch, { siteToken: "startup-recovery.ts:71" });
 }
-
-/**
- * Drain a bounded number of rows through async accessor jobs.
- *
- * The SQLite statements themselves remain short synchronous calls inside the
- * accessor. The async queue and macrotask yield are the important boundary:
- * no startup caller waits for the complete backlog, and no batch can starve
- * the event loop indefinitely.
- */
 async function drainBatchesAsync<Item>(
 	accessor: DbAccessor,
 	fetchBatch: (db: ReadDb, limit: number) => readonly Item[] | null,
@@ -99,7 +82,7 @@ async function drainBatchesAsync<Item>(
 	while (processed < maxTotal) {
 		const limit = Math.min(BATCH_SIZE, maxTotal - processed);
 		const batch = await accessor.withReadDbAsync(async (db) => fetchBatch(db, limit), {
-			siteToken: "startup-recovery.ts:101",
+			siteToken: "startup-recovery.ts:84",
 		});
 		if (!batch || batch.length === 0) return processed;
 		await writeBatch(accessor, (db) => processBatch(db, batch));
@@ -114,9 +97,6 @@ async function drainBatchesAsync<Item>(
 	});
 	return processed;
 }
-
-// cross-agent currently exposes only a synchronous helper. Keep this recovery
-// write on the async queue instead of reintroducing a synchronous bootstrap call.
 async function reconcileAcpDeliveriesAsync(accessor: DbAccessor, nowMs = Date.now()): Promise<number> {
 	const now = new Date(nowMs).toISOString();
 	const pendingCutoff = new Date(nowMs - ACP_PENDING_GRACE_MS).toISOString();
@@ -403,12 +383,6 @@ function pendingReport(): StartupRecoveryReport {
 		durationMs: 0,
 	};
 }
-
-/**
- * Run the complete recovery job and resolve when the bounded pass finishes.
- * Tests and explicit lifecycle callers can await this function. The daemon
- * uses runStartupRecovery() below so readiness never waits for the pass.
- */
 export function runStartupRecoveryAsync(
 	accessor: DbAccessor,
 	options: StartupRecoveryOptions = {},
@@ -426,8 +400,6 @@ export function runStartupRecoveryAsync(
 	trackedRun.then(clear, clear);
 	return trackedRun;
 }
-
-/** Return the current startup drain without starting a second recovery pass. */
 export function getStartupRecoveryCompletion(): Promise<StartupRecoveryReport> {
 	if (activeRecovery !== null) return activeRecovery;
 	return Promise.resolve(lastCompletedRecovery ?? pendingReport());
@@ -436,9 +408,6 @@ export function getStartupRecoveryCompletion(): Promise<StartupRecoveryReport> {
 async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerClient): Promise<StartupRecoveryReport> {
 	if (owner !== undefined) return await runOwnerStartupRecovery(owner);
 	const startedAt = Date.now();
-	// Pass timestamps are persisted with millisecond precision, but older rows
-	// and direct writers may still use SQLite's second precision. Round the
-	// cutoff down so a pass from the current second is never swept as orphaned.
 	const recoveryStartedAt = new Date(Math.floor(Date.now() / 1_000) * 1_000).toISOString();
 	logger.info("startup-recovery", "Running startup recovery asynchronously");
 
@@ -447,8 +416,6 @@ async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerC
 	try {
 		const now = new Date().toISOString();
 		const leaseRecovery = await writeBatch(accessor, (db) => {
-			// The daemon lock is held before recovery starts, so these leases belong
-			// to a process that is no longer alive.
 			const recovered = recoverStaleLeases(db, { now, jobType: "document_ingest" });
 			const prospectiveRecovered = recoverStaleLeases(db, { now, jobType: "prospective_index" });
 			if (recovered.dead > 0) {
@@ -530,7 +497,7 @@ async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerC
 					| undefined;
 				return state?.state === "building";
 			},
-			{ siteToken: "startup-recovery.ts:522" },
+			{ siteToken: "startup-recovery.ts:489" },
 		);
 
 		if (migrationInProgress) {
@@ -586,9 +553,6 @@ async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerC
 					   AND started_at IS NOT NULL
 					   AND julianday(started_at) < julianday(?)`,
 				)
-				// The status and cutoff predicates are evaluated in this write
-				// transaction. A pass created after recovery began, or completed
-				// before this update, cannot be turned into an orphan.
 				.run(recoveryStartedAt);
 			return result.changes;
 		});
@@ -635,12 +599,6 @@ async function runStartupRecoveryInternal(accessor: DbAccessor, owner?: DbOwnerC
 	}
 	return report;
 }
-
-/**
- * Schedule recovery and return immediately. This compatibility entrypoint is
- * called during daemon boot, before the HTTP server binds, so it must never
- * perform a database operation or await the backlog.
- */
 export function runStartupRecovery(accessor: DbAccessor, options: StartupRecoveryOptions = {}): StartupRecoveryReport {
 	const report = pendingReport();
 	logger.info("startup-recovery", "Deferring startup recovery until the event loop can serve requests");

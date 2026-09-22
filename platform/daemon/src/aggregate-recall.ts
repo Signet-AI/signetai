@@ -334,9 +334,7 @@ function parsePlannerQueries(raw: string): string[] {
 				return value.filter((item): item is string => typeof item === "string");
 			}
 		}
-	} catch {
-		// Fall through to line parsing for permissive model output.
-	}
+	} catch {}
 	return trimmed
 		.split(/\r?\n/)
 		.map((line) => line.replace(/^[-*\d.\s]+/, "").trim())
@@ -626,9 +624,6 @@ function refreshStaleAggregateMemory(
 		sourceId: input.existing.id,
 		content: input.content,
 	});
-	// The relation is an audit trail, not a cache: retain historical evidence
-	// pointers when this aggregate is re-derived. A future mutation of either
-	// the old or current evidence conservatively makes the snapshot stale again.
 	linkAggregateEvidenceSources(db, input.existing.id, input.evidenceSources, input.agentId, input.now);
 	insertHistoryEvent(db, {
 		memoryId: input.existing.id,
@@ -737,20 +732,14 @@ async function embedAggregateMemory(
 	cfg: EmbeddingConfig,
 	embedFn: EmbedFn,
 ): Promise<boolean> {
-	// Aggregate saves can originate from hooks with the desired config while a
-	// new index is staging. They must stay in the active vector space until
-	// promotion; the staging worker independently copies every active row.
 	const activeCfg = await getDbAccessor().withReadDbAsync((db) => resolveActiveEmbeddingConfig(db, cfg), {
-		siteToken: "aggregate-recall.ts:743",
+		siteToken: "aggregate-recall.ts:735",
 		operation: "aggregate-recall.resolve-active-embedding",
 	});
 	const vec = await embedFn(content, activeCfg, "document");
 	if (!vec || vec.length !== activeCfg.dimensions) return false;
 	const written = await getDbAccessor().withWriteTxAsync(
 		(db) => {
-			// Promotion can commit while the provider call above is in flight. Do
-			// not contaminate the new generation with an old-space vector; the
-			// normal tracker will enqueue this memory against the new active model.
 			if (!isActiveEmbeddingConfig(db, activeCfg)) return false;
 			const embId = randomUUID();
 			syncVecDeleteBySourceId(db, "memory", memoryId);
@@ -764,7 +753,7 @@ async function embedAggregateMemory(
 			db.prepare("UPDATE memories SET embedding_model = ? WHERE id = ?").run(activeCfg.model, memoryId);
 			return true;
 		},
-		{ siteToken: "aggregate-recall.ts:749" },
+		{ siteToken: "aggregate-recall.ts:741" },
 	);
 	return written;
 }
@@ -1088,7 +1077,7 @@ export async function aggregateRecall(
 						saved = true;
 						return loadAggregateMemory(db, id);
 					},
-					{ siteToken: "aggregate-recall.ts:1014" },
+					{ siteToken: "aggregate-recall.ts:1003" },
 				),
 		);
 		if (row && !deduped) {

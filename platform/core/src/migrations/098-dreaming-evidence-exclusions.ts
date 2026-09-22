@@ -1,9 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Records immutable episodic sources that Dreaming deliberately did not
- * process, without mutating or copying the underlying evidence.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS dreaming_evidence_exclusions (

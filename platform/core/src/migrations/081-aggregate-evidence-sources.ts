@@ -1,10 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/**
- * Migration 081: typed provenance links from aggregate recall memories to every
- * evidence row used during synthesis, including non-memory sources such as
- * ontology claims.
- */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS aggregate_evidence_sources (

@@ -446,7 +446,6 @@ describe("DB owner client", () => {
 		await client.start();
 		const ownerPid = client.health().pid;
 		if (ownerPid === null) throw new Error("owner did not publish a pid");
-		// Intentionally skip client.close(): this is the leaked-survivor path.
 		client = null;
 		try {
 			const spawnedPids = new Set([ownerPid]);

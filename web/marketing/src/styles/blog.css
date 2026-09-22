@@ -1,16 +1,9 @@
-/* ==========================================================================
-   BLOG LAYOUT
-   ========================================================================== */
 .blog-shell {
 	min-height: 100vh;
 	padding-top: 80px;
 	position: relative;
 	z-index: 1;
 }
-
-/* ==========================================================================
-   BLOG CONTENT GRID — 3-column: nav | content | toc (post pages)
-   ========================================================================== */
 .blog-content-grid {
 	max-width: 1440px;
 	width: 100%;
@@ -20,10 +13,6 @@
 	gap: 0;
 	padding: 0 20px;
 }
-
-/* ==========================================================================
-   BLOG LEFT RAIL — post navigation
-   ========================================================================== */
 .blog-nav-rail {
 	display: block;
 	border-right: 1px solid var(--color-border);
@@ -91,10 +80,6 @@
 	background: var(--color-highlight-dim);
 	border-color: var(--color-highlight-muted);
 }
-
-/* ==========================================================================
-   BLOG RIGHT RAIL — TOC + graph
-   ========================================================================== */
 .blog-toc-rail {
 	display: block;
 	border-left: 1px solid var(--color-border);
@@ -157,10 +142,6 @@
 	color: var(--color-accent);
 	font-weight: 600;
 }
-
-/* ==========================================================================
-   MAIN CONTENT AREA (post pages)
-   ========================================================================== */
 .blog-main {
 	min-width: 0;
 	padding: var(--space-xl) var(--space-2xl) var(--space-3xl);
@@ -218,10 +199,6 @@
 	font-size: 12px;
 	color: var(--color-text-muted);
 }
-
-/* ==========================================================================
-   BLOG INDEX HEADER
-   ========================================================================== */
 .blog-index-header {
 	margin-bottom: var(--space-2xl);
 }
@@ -234,10 +211,6 @@
 	line-height: 1;
 	color: var(--color-text-bright);
 }
-
-/* ==========================================================================
-   FEATURED POST (hero card)
-   ========================================================================== */
 .blog-featured {
 	display: grid;
 	grid-template-columns: 1.4fr 1fr;
@@ -297,10 +270,6 @@
 	text-transform: uppercase;
 	letter-spacing: 0.08em;
 }
-
-/* ==========================================================================
-   POST GRID (remaining posts)
-   ========================================================================== */
 .blog-grid {
 	display: grid;
 	grid-template-columns: repeat(3, 1fr);
@@ -359,10 +328,6 @@
 	text-transform: uppercase;
 	letter-spacing: 0.08em;
 }
-
-/* ==========================================================================
-   TAGS
-   ========================================================================== */
 .blog-card-tags,
 .blog-tags {
 	display: flex;
@@ -384,10 +349,6 @@
 .blog-tags {
 	margin-top: 16px;
 }
-
-/* ==========================================================================
-   SHARE BUTTONS
-   ========================================================================== */
 .blog-share {
 	display: flex;
 	align-items: center;
@@ -439,10 +400,6 @@
 	border-color: var(--color-accent);
 	background: var(--color-highlight-dim);
 }
-
-/* ==========================================================================
-   INLINE TOC (shown only when sidebar is hidden)
-   ========================================================================== */
 .blog-toc-inline {
 	display: none;
 	margin-bottom: 48px;
@@ -451,10 +408,6 @@
 	border-radius: 12px;
 	background: color-mix(in srgb, var(--color-surface) 30%, transparent);
 }
-
-/* ==========================================================================
-   RESPONSIVE
-   ========================================================================== */
 @media (max-width: 1280px) {
 	.blog-content-grid {
 		grid-template-columns: 260px 1fr;

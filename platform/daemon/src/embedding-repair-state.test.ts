@@ -54,15 +54,10 @@ describe("embedding repair state", () => {
 
 		const first = await acquireEmbeddingRepairLease(accessor, 60_000, 2, now);
 		expect(first.allowed).toBe(true);
-		// A second worker cannot claim the active batch.
 		expect(await acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 1_000)).toMatchObject({
 			allowed: false,
 			reason: "embedding repair already in progress",
 		});
-
-		// A restart remains blocked for the full hourly accounting window. Once
-		// it expires, a fresh process can begin the next hourly window without
-		// charging the crashed work as a completed repair.
 		expect(await acquireEmbeddingRepairLease(accessor, 60_000, 2, now + 30 * 60_000)).toMatchObject({
 			allowed: false,
 			reason: "embedding repair already in progress",

@@ -24,12 +24,10 @@ export function DropdownMenu({ items, align = "right" }: DropdownMenuProps) {
   const [position, setPosition] = useState({ top: 0, left: 0 })
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
-
-  // Calculate dropdown position
   useEffect(() => {
     if (open && triggerRef.current) {
       const rect = triggerRef.current.getBoundingClientRect()
-      const dropdownWidth = 192 // w-48 = 12rem = 192px
+      const dropdownWidth = 192
 
       setPosition({
         top: rect.bottom + 4,
@@ -37,8 +35,6 @@ export function DropdownMenu({ items, align = "right" }: DropdownMenuProps) {
       })
     }
   }, [open, align])
-
-  // Click outside handler
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       const target = event.target as Node
@@ -73,7 +69,7 @@ export function DropdownMenu({ items, align = "right" }: DropdownMenuProps) {
         </svg>
       </button>
 
-      {/* Dropdown - rendered via portal */}
+      {}
       {open &&
         typeof document !== "undefined" &&
         createPortal(

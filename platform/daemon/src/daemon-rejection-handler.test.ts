@@ -1,11 +1,3 @@
-/**
- * Subprocess proof for the daemon's process-level error handler (PR #1858
- * review, finding 1): the unhandledRejection handler must let the process
- * survive exactly the bounded DB owner availability codes and shut down on
- * every other DB owner failure. Each case runs in a spawned child that imports
- * the real daemon module, so the real handler — not a copy of it — decides the
- * outcome, and the suite stays free of process.exit side effects.
- */
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -52,8 +44,6 @@ function scenarioErrorExpression(scenario: Scenario): string {
 }
 
 const serializedCases: readonly Scenario[] = [
-	// Serialized owner-side failures re-emerge as DbOwnerError carrying the
-	// original error code; unknown codes must stay fatal, not survivable.
 	{ kind: "serialized", code: "SQLITE_CONSTRAINT" },
 	{ kind: "serialized", code: null },
 ];
@@ -62,9 +52,7 @@ const scenarios: readonly Scenario[] = [
 	...AVAILABILITY_CODES.map((code): Scenario => ({ kind: "code", code, survive: true })),
 	...FATAL_DB_OWNER_CODES.map((code): Scenario => ({ kind: "code", code, survive: false })),
 	...serializedCases,
-	// A DbOwnerError-shaped error with a completely unknown code is fatal.
 	{ kind: "code", code: "DB_OWNER_UNKNOWN_PROBE", survive: false },
-	// Rejections that are not DbOwnerErrors were always fatal.
 	{ kind: "plain", survive: false },
 ];
 
@@ -72,17 +60,12 @@ function runScenario(scenario: Scenario): { exitCode: number | null; lifecycleSt
 	const home = mkdtempSync(join(tmpdir(), "signet-rejection-probe-"));
 	const scriptPath = join(home, "probe.ts");
 	const raise = scenarioErrorExpression(scenario);
-	// The rejection must fire after daemon.ts's handler is registered but the
-	// probe must not wait on daemon startup: the handler is module-level, so an
-	// unhandled rejection raised from a later macrotask reaches it regardless.
 	const script = [
 		`import ${JSON.stringify(DAEMON_ENTRY)};`,
 		`import { DbOwnerError } from ${JSON.stringify(DB_OWNER_CLIENT)};`,
 		`setTimeout(() => {`,
 		`  Promise.reject(${raise});`,
 		`}, 20);`,
-		// A survivable rejection leaves the probe's own timer in charge; a
-		// fatal one makes daemon.ts request shutdown with exit code 1 first.
 		`setTimeout(() => process.exit(0), 1000);`,
 	].join("\n");
 	try {

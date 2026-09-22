@@ -1,6 +1,4 @@
 const lockTails = new Map<string, Promise<void>>();
-
-/** Serialize short transcript-import state transitions within this daemon process. */
 export async function withTranscriptImportOperationLock<Result>(
 	key: string,
 	operation: () => Promise<Result>,

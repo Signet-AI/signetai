@@ -21,19 +21,12 @@ export function normalizeSessionTranscript(
 	}
 
 	const result = normalizeJsonConversationTranscript(raw);
-	// null = not a JSON-line transcript, safe to return raw.
 	if (result === null) return stripInternalMemoryContext(raw);
-	// Empty string from a non-trivial transcript means all lines were
-	// non-conversational — notify caller so operators can add support for this schema.
 	if (result === "" && raw.length > 500) {
 		onEmptyJsonConversation?.({ harness, rawChars: raw.length });
 	}
 	return stripInternalMemoryContext(result);
 }
-
-// Returns null when input is not JSON-line format (below 60% threshold).
-// Returns string (possibly empty) when input IS JSON-line — empty means
-// all lines were non-conversational (tool calls, metadata, etc.).
 export function normalizeJsonConversationTranscript(raw: string): string | null {
 	const rawLines = raw
 		.split(/\r?\n/)
@@ -51,13 +44,9 @@ export function normalizeJsonConversationTranscript(raw: string): string | null 
 				parsedCount++;
 				continue;
 			}
-		} catch {
-			// Ignore parse errors; we only treat this as JSON if most lines parse.
-		}
+		} catch {}
 		parsedLines.push(null);
 	}
-
-	// Not a JSON-line transcript — caller should fall back to raw.
 	if (parsedCount < Math.ceil(rawLines.length * 0.6)) {
 		return null;
 	}
@@ -169,8 +158,6 @@ export function normalizeCodexTranscript(raw: string): string {
 		const event = parsed as Record<string, unknown>;
 
 		if (event.type === "session_meta") {
-			// Non-conversational metadata — omit to avoid leaking local
-			// paths (cwd) into downstream summaries.
 			continue;
 		}
 
@@ -178,9 +165,6 @@ export function normalizeCodexTranscript(raw: string): string {
 			const payload = event.payload;
 			if (typeof payload === "object" && payload !== null) {
 				const msg = payload as Record<string, unknown>;
-				// Only capture user messages here; assistant turns come from
-				// item.completed which is authoritative and avoids duplicating
-				// content that Codex emits in both streaming and completion events.
 				if (msg.type === "user_message" && typeof msg.message === "string") {
 					lines.push(`User: ${msg.message.trim().replace(/[\r\n]+/g, " ")}`);
 				}
@@ -197,8 +181,6 @@ export function normalizeCodexTranscript(raw: string): string {
 				}
 			}
 		}
-
-		// response_item events (tool calls/outputs) are intentionally omitted.
 	}
 
 	return stripInternalMemoryContext(lines.join("\n"));

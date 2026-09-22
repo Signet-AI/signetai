@@ -933,7 +933,6 @@ describe("getDaemonStatus", () => {
 
 		const status = await getDaemonStatus();
 		expect(status.running).toBe(true);
-		// The mock has no /health/ready route (older daemon): readiness is unknown, not a regression.
 		expect(status.probe.status).toBe("healthy");
 		expect(status.probe.readinessReasons).toBeUndefined();
 		expect(status.scheduler).toEqual({

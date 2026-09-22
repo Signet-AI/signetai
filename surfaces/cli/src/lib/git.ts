@@ -167,7 +167,5 @@ function killGitProcessTree(proc: ChildProcessWithoutNullStreams, signal: NodeJS
 			return;
 		}
 		proc.kill(signal);
-	} catch {
-		// Best effort.
-	}
+	} catch {}
 }

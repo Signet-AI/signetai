@@ -1,12 +1,3 @@
-/**
- * Prospective indexing worker — generates hypothetical future queries
- * ("hints") for each memory at write time. Hints are indexed in FTS5
- * so search matches memories by anticipated cue, bridging the semantic
- * gap between stored facts and natural language queries.
- *
- * Inspired by Kumiho (arXiv:2603.17244).
- */
-
 import { type LlmProvider, type PipelineHintsConfig, scanMemoryContent } from "@signet/core";
 import { DbWriteQueueFullError, type DbAccessor, type WriteDb } from "../db-accessor";
 import {
@@ -21,16 +12,7 @@ import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { logger } from "../logger";
 import type { PipelineV2Config } from "../memory-config";
 import { isSystemPressureHigh } from "../system-pressure";
-
-// A transient write can usually clear during one or two queue turns, but a
-// shutdown must not wait forever for an unavailable database. If recovery is
-// still pending after this grace period, the leased row remains durable and
-// startup/stale-lease recovery can release it on the next worker run.
 export const HINTS_WORKER_STOP_GRACE_MS = 250;
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
 
 export interface HintsWorkerHandle {
 	stop(): Promise<void>;
@@ -51,10 +33,6 @@ interface HintPayload {
 	readonly content: string;
 }
 
-// ---------------------------------------------------------------------------
-// Prompt
-// ---------------------------------------------------------------------------
-
 function buildPrompt(content: string, max: number): string {
 	return [
 		"Given this fact stored in a personal memory system:",
@@ -69,10 +47,6 @@ function buildPrompt(content: string, max: number): string {
 		"Return ONLY the questions, one per line. No numbering, no bullets.",
 	].join("\n");
 }
-
-// ---------------------------------------------------------------------------
-// Hint generation
-// ---------------------------------------------------------------------------
 
 const PROMPT_RESIDUE_PATTERNS = [
 	/\bhowever\b/i,
@@ -91,13 +65,10 @@ const GENERIC_LABEL_CUE_PATTERNS = [
 	/^(who requested|when|current status|what is the current status)\s*:/i,
 	/^(direct|temporal|relational|indirect|conversational)\s*:/i,
 ];
-
-/** Check if a line looks like a useful question or conversational cue (not prompt residue). */
 function isHintLine(line: string): boolean {
 	if (PROMPT_RESIDUE_PATTERNS.some((pattern) => pattern.test(line))) return false;
 	if (GENERIC_LABEL_CUE_PATTERNS.some((pattern) => pattern.test(line))) return false;
 	if (line.endsWith("?")) return true;
-	// Conversational cues: "Tell me about...", "Describe...", etc.
 	if (
 		/^(tell|describe|explain|show|what|who|where|when|why|how|which|does|did|is|are|can|could|has|have|will|would)/i.test(
 			line,
@@ -114,12 +85,10 @@ export async function generateHints(
 ): Promise<readonly string[]> {
 	if (!scanMemoryContent(content).contextEligible) return [];
 	const prompt = buildPrompt(content, cfg.max);
-	// Use higher token budget to accommodate thinking model overhead
 	const raw = await provider.generate(prompt, {
 		timeoutMs: cfg.timeout,
 		maxTokens: Math.max(cfg.maxTokens, 1024),
 	});
-	// Strip <think>...</think> blocks (qwen3, deepseek, etc.)
 	const stripped = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 	const lines = stripped
 		.split("\n")
@@ -137,10 +106,6 @@ export async function generateHints(
 	return lines;
 }
 
-// ---------------------------------------------------------------------------
-// Job leasing (same pattern as structural-classify)
-// ---------------------------------------------------------------------------
-
 async function leaseJob(
 	owner: import("../db-owner-client").DbOwnerClient,
 	maxAttempts: number,
@@ -152,8 +117,6 @@ async function leaseJob(
 		(await ownerWriteQueryOne<HintJobRow>(
 			owner,
 			"pipeline.prospective-index.lease",
-			// A lost owner result replays this request with the same lease token.
-			// Reconcile that token without incrementing attempts or changing timestamps.
 			`WITH selected AS (
 				 SELECT id
 				 FROM memory_jobs
@@ -263,15 +226,8 @@ async function recoverStaleLeasesOnOwner(
 }
 
 function isRetryableWriteAdmissionError(error: unknown): boolean {
-	// Queue admission pressure is the only error this worker can safely retry
-	// without changing the leased job's state. Callback, transaction, timeout,
-	// and cancellation errors must go through the job failure transition.
 	return error instanceof DbWriteQueueFullError || (error instanceof Error && error.name === "DbOwnerAdmissionError");
 }
-
-// ---------------------------------------------------------------------------
-// Worker loop
-// ---------------------------------------------------------------------------
 
 export function startHintsWorker(deps: {
 	readonly accessor: DbAccessor;
@@ -472,8 +428,6 @@ export function startHintsWorker(deps: {
 				await executePendingWrite(write);
 				return;
 			}
-
-			// Generate hints outside of any db lock
 			const hints = await generateHints(provider, payload.content, cfg);
 			if (!running) {
 				await releaseLeasedJob(j);
@@ -553,9 +507,6 @@ export function startHintsWorker(deps: {
 			if (running) {
 				schedule();
 			} else if (pendingWrite) {
-				// A bounded stop may return while inference is still unwinding. If
-				// that unwind creates a deferred lease recovery, keep draining it
-				// after the tick settles so a pause/resume cannot strand the lease.
 				startDeferredDrain();
 			}
 		}
@@ -580,9 +531,6 @@ export function startHintsWorker(deps: {
 	async function drainPendingWrite(deadlineAt: number, logExpired = true): Promise<void> {
 		while (pendingWrite && Date.now() < deadlineAt) {
 			const write = pendingWrite;
-			// Shutdown has its own short grace window. Do not inherit the normal
-			// poll cadence (production clamps it to 1s), or a deferred write would
-			// consume the entire drain without a single retry attempt.
 			const waitMs = Math.min(Math.max(0, write.retryAt - Date.now()), 25, Math.max(0, deadlineAt - Date.now()));
 			if (waitMs > 0) await new Promise((resolve) => setTimeout(resolve, waitMs));
 			if (pendingWrite !== write) continue;
@@ -628,8 +576,6 @@ export function startHintsWorker(deps: {
 		}
 		return settled;
 	}
-
-	// Start
 	if (recoverLeasesOnStart) {
 		void ownerPromise
 			.then((owner) => recoverStaleLeasesOnOwner(owner, new Date().toISOString()))
@@ -680,10 +626,6 @@ export function startHintsWorker(deps: {
 		},
 	};
 }
-
-// ---------------------------------------------------------------------------
-// Job enqueueing (called from extraction worker after memory write)
-// ---------------------------------------------------------------------------
 
 export function enqueueHintsJob(db: WriteDb, memoryId: string, content: string): void {
 	const id = crypto.randomUUID();
