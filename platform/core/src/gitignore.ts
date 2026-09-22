@@ -141,8 +141,9 @@ function buildSignetGitignoreBlock(): string {
 }
 
 export function mergeSignetGitignoreEntries(existingContent: string): string {
+	const newline = existingContent.includes("\r\n") ? "\r\n" : "\n";
 	const normalized = existingContent.replaceAll("\r\n", "\n");
-	const block = buildSignetGitignoreBlock();
+	const block = buildSignetGitignoreBlock().replaceAll("\n", newline);
 	const blockRe = new RegExp(
 		`${escapeRegExp(SIGNET_GITIGNORE_BLOCK_START)}[\\s\\S]*?${escapeRegExp(SIGNET_GITIGNORE_BLOCK_END)}\\n?`,
 	);

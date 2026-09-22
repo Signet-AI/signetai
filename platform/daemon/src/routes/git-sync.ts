@@ -1,11 +1,12 @@
 import { spawnHidden as spawn, type ChildProcessWithoutNullStreams } from "@signet/core";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
 	SIGNET_GIT_PROTECTED_PATHS,
 	isSignetGitProtectedPath,
 	isSignetGitTrackedPath,
-	mergeSignetGitignoreEntries,
+	managedGitignoreUpdate,
+	inspectRootGit,
 } from "@signet/core";
 import { logger } from "../logger";
 import { SecretKeyringError, getSecret, hasSecret } from "../secrets.js";
@@ -46,7 +47,7 @@ let consecutiveGitFailures = 0;
 let gitCircuitOpenUntil = 0;
 let lastGitFailureReason: string | undefined;
 
-let gitRepoProbe = (dir: string): boolean => existsSync(join(dir, ".git"));
+let gitRepoProbe = (dir: string): boolean => inspectRootGit(dir).mode === "shell";
 
 type CommandRunner = (cmd: string, args: string[], options?: CommandOptions) => Promise<CommandResult>;
 let commandRunner: CommandRunner = runBoundedCommand;
@@ -825,14 +826,8 @@ export function ensureWorkspaceGitignore(): boolean {
 }
 
 function ensureProtectedGitignore(dir: string): boolean {
-	const gitignorePath = join(dir, ".gitignore");
-	const existingContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
-	const nextContent = mergeSignetGitignoreEntries(existingContent);
-	if (nextContent !== existingContent) {
-		writeFileSync(gitignorePath, nextContent, "utf-8");
-		return true;
-	}
-	return false;
+	const result = managedGitignoreUpdate(dir);
+	return result.status === "updated" && result.content !== result.preimage;
 }
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
@@ -1031,7 +1026,7 @@ export function setGitCommandRunnerForTests(runner: CommandRunner | null): void 
 }
 
 export function setGitRepoProbeForTests(probe: ((dir: string) => boolean) | null): void {
-	gitRepoProbe = probe ?? ((dir: string): boolean => existsSync(join(dir, ".git")));
+	gitRepoProbe = probe ?? ((dir: string): boolean => inspectRootGit(dir).mode === "shell");
 }
 
 export function toRelativeGitPathForTests(dir: string, path: string): string | null {
