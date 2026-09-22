@@ -1,9 +1,12 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import test from "node:test";
 import { assertBunRuntime, platformVecPackage } from "./stage-runtime.mjs";
 
+const nodeExecutable = execFileSync("node", ["-p", "process.execPath"], { encoding: "utf8" }).trim();
+
 test("assertBunRuntime rejects Node even when platform and architecture match", () => {
-	assert.throws(() => assertBunRuntime(process.execPath, process.arch, process.platform), /Runtime is not Bun/);
+	assert.throws(() => assertBunRuntime(nodeExecutable, process.arch, process.platform), /Runtime is not Bun/);
 });
 
 test("platformVecPackage rejects unsupported target combinations", () => {
