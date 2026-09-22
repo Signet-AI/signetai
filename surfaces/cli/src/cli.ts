@@ -1134,4 +1134,6 @@ registerDefaultAction(program, {
 	signetBanner: () => signetBanner({ version: VERSION }),
 });
 
-program.parse();
+if (process.env.SIGNET_DAEMON_ENTRYPOINT !== "1") {
+	program.parse();
+}

@@ -18,6 +18,8 @@ describe("compiled native Docker entrypoint", () => {
 			encoding: "utf8",
 		});
 		expect(delegated.status).toBe(23);
+		expect(delegated.stdout).not.toContain("Usage: signet");
+		expect(delegated.stdout).not.toContain("Workspace found");
 		expect(delegated.stderr).not.toContain("daemon.js");
 		expect(Bun.file(marker).text()).resolves.toBe("native");
 
