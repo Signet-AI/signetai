@@ -7,7 +7,7 @@ import { MigrationEngine } from "./migration-engine.js";
 test("preflight is read-only and inventory reports required bytes", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
 	writeFileSync(join(root, "AGENTS.md"), "identity");
-	const destination = join(root, "new");
+	const destination = join(`${root}-new`);
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root, destination }) },
 		writers: { drain: async () => ({ owners: [] }) },
@@ -24,7 +24,7 @@ test("interrupted copy resumes and rollback is fenced after destination writes",
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
 	mkdirSync(join(root, "old"));
 	writeFileSync(join(root, "old", "one.txt"), "one");
-	const destination = join(root, "new");
+	const destination = join(`${root}-new`);
 	let copied = false;
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root: join(root, "old"), destination }), cutover: async () => {} },
@@ -54,10 +54,91 @@ test("escaping symlink is rejected without following it", async () => {
 	writeFileSync(join(outside, "secret"), "no");
 	symlinkSync(join(outside, "secret"), join(root, "link"));
 	const engine = new MigrationEngine({
-		resolver: { resolve: () => ({ version: 1, root, destination: join(root, "new") }) },
+		resolver: { resolve: () => ({ version: 1, root, destination: join(`${root}-new`) }) },
 		writers: { drain: async () => ({ owners: [] }) },
 		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
 		journalStateDir: join(root, "state"),
 	});
 	await expect(engine.run()).rejects.toThrow("escaping symlink");
+});
+
+test("run drains before inventory and rejects source mutation during preflight", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
+	writeFileSync(join(root, "one.txt"), "one");
+	const destination = join(`${root}-new`);
+	let drained = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: {
+			drain: async () => {
+				drained = true;
+				writeFileSync(join(root, "one.txt"), "changed");
+				return { owners: [] };
+			},
+		},
+		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		journalStateDir: join(root, "state"),
+	});
+	await expect(engine.run()).resolves.toMatchObject({ status: "completed" });
+	expect(drained).toBe(true);
+});
+
+test("cutover-pending resume reacquires lease and drains writers", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
+	writeFileSync(join(root, "one.txt"), "one");
+	const destination = join(`${root}-new`);
+	let acquired = 0;
+	let drained = 0;
+	const deps = {
+		resolver: {
+			resolve: () => ({ version: 1, root, destination }),
+			cutover: async () => {
+				throw new Error("cutover interrupted");
+			},
+		},
+		writers: {
+			drain: async () => {
+				drained++;
+				return { owners: [] };
+			},
+		},
+		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		journalStateDir: join(root, "state"),
+		lease: {
+			acquire: async () => {
+				acquired++;
+				return { release: async () => {} };
+			},
+		},
+	};
+	const first = new MigrationEngine(deps);
+	await expect(first.run()).rejects.toThrow("cutover interrupted");
+	const second = new MigrationEngine({
+		...deps,
+		resolver: { resolve: () => ({ version: 1, root, destination }), cutover: async () => {} },
+	});
+	await second.resume();
+	expect(acquired).toBe(2);
+	expect(drained).toBe(2);
+});
+
+test("rollback removes only the owned partial destination and can be rerun", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
+	writeFileSync(join(root, "one.txt"), "one");
+	const destination = join(`${root}-new`);
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterCopy: async () => {
+				throw new Error("interrupt");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupt");
+	await engine.rollback();
+	await expect(engine.status()).resolves.toMatchObject({ phase: "not-started" });
+	await expect(engine.run()).rejects.toThrow("interrupt");
 });

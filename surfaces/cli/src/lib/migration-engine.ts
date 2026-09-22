@@ -12,6 +12,7 @@ import {
 	openSync,
 	readFileSync,
 	readlinkSync,
+	rmSync,
 	readdirSync,
 	renameSync,
 	statfsSync,
@@ -89,7 +90,19 @@ export class MigrationEngine {
 		this.journalPath = join(deps.journalStateDir, `${workspaceId(l.root)}.json`);
 	}
 	async preflight(): Promise<MigrationPlan> {
-		const l = this.deps.resolver.resolve();
+		const lease = this.deps.lease ? await this.deps.lease.acquire() : undefined;
+		try {
+			await this.drainWriters();
+			return this.inventory(this.deps.resolver.resolve());
+		} finally {
+			await lease?.release();
+		}
+	}
+	private async drainWriters(): Promise<void> {
+		const d = await this.deps.writers.drain();
+		if (d.owners.length) throw new Error(`migration drain blocked by: ${d.owners.join(", ")}`);
+	}
+	private inventory(l: Layout): MigrationPlan {
 		validateLayout(l);
 		const i = scanInventory(l.root, l.root, l.destination);
 		ensureSpace(l.destination, i.bytes);
@@ -116,12 +129,11 @@ export class MigrationEngine {
 		if (j && j.phase !== "completed" && j.sourceIdentity !== identity(l.root))
 			throw new Error("source identity mismatch");
 		if (j?.phase === "completed") return { status: "completed", destination: l.destination, receipt: this.journalPath };
-		const plan = await this.preflight();
-		if (j?.phase === "cutover-pending") return this.finishCutover(l, j);
 		const lease = this.deps.lease ? await this.deps.lease.acquire() : undefined;
 		try {
-			const d = await this.deps.writers.drain();
-			if (d.owners.length) throw new Error(`migration drain blocked by: ${d.owners.join(", ")}`);
+			await this.drainWriters();
+			if (j?.phase === "cutover-pending") return this.finishCutover(l, j);
+			const plan = this.inventory(l);
 			j ??= {
 				version: 1,
 				workspaceId: workspaceId(l.root),
@@ -140,6 +152,8 @@ export class MigrationEngine {
 			j.phase = "drained";
 			saveJournal(this.journalPath, j);
 			mkdirSync(l.destination, { recursive: true, mode: 0o700 });
+			j.destinationIdentity = identity(l.destination);
+			saveJournal(this.journalPath, j);
 			const done = new Set(j.copied);
 			for (const rel of plan.components) {
 				if (done.has(rel)) continue;
@@ -173,6 +187,7 @@ export class MigrationEngine {
 			await lease?.release();
 		}
 	}
+
 	private async finishCutover(l: Layout, j: Journal): Promise<MigrationResult> {
 		if (!j.destinationWrites) {
 			j.phase = "cutover-pending";
@@ -219,13 +234,27 @@ export class MigrationEngine {
 		const j = readJournal(this.journalPath);
 		if (!j?.rollbackEligible || j.destinationWrites || j.phase === "completed")
 			throw new Error("rollback is no longer safe after destination writes");
+		if (existsSync(j.destination)) {
+			const s = lstatSync(j.destination);
+			if (
+				!s.isDirectory() ||
+				s.isSymbolicLink() ||
+				j.destinationIdentity === "missing" ||
+				identity(j.destination) !== j.destinationIdentity
+			)
+				throw new Error("refusing to remove unsafe migration destination");
+			rmSync(j.destination, { recursive: true, force: true });
+		}
 		if (existsSync(this.journalPath)) unlinkSync(this.journalPath);
 	}
 }
 
 function validateLayout(l: Layout) {
 	if (l.version !== 1) throw new Error(`unsupported layout version: ${l.version}`);
-	if (resolve(l.root) === resolve(l.destination)) throw new Error("destination must differ from source");
+	const source = resolve(l.root),
+		destination = resolve(l.destination);
+	if (source === destination) throw new Error("destination must differ from source");
+	if (destination.startsWith(`${source}${sep}`)) throw new Error("destination must not be nested inside source");
 	try {
 		const s = lstatSync(l.destination);
 		if (!s.isDirectory() || s.isSymbolicLink()) throw new Error("destination must be a real directory");

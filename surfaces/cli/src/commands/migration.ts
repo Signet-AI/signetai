@@ -27,13 +27,26 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		resolve: (): Layout => ({ version: 1, root: source, destination }),
 		cutover: async () => {
 			// Persist the canonical layout first; the pointer is published last.
+			const legacyDefaults = {
+				database: join(source, "memory", "memories.db"),
+				transcripts: join(source, "memory"),
+				runtime: join(source, ".daemon"),
+				cache: join(source, "memory", "cache"),
+				files: join(source, "files"),
+				imports: join(source, "memory", "imports"),
+				secrets: join(source, ".secrets"),
+				skills: join(source, "skills"),
+				data: join(source, "memory"),
+			} as const;
 			const overrides = Object.fromEntries(
-				(["database", "transcripts", "runtime", "cache", "files", "imports", "secrets", "skills", "data"] as const).map(
-					(key) => [
+				Object.entries(legacyDefaults)
+					.filter(([key, value]) => sourceLayout[key as keyof typeof legacyDefaults] !== value)
+					.map(([key]) => [
 						key,
-						sourceLayout[key].startsWith(source) ? sourceLayout[key].slice(source.length + 1) : sourceLayout[key],
-					],
-				),
+						sourceLayout[key as keyof typeof legacyDefaults].startsWith(source)
+							? sourceLayout[key as keyof typeof legacyDefaults].slice(source.length + 1)
+							: sourceLayout[key as keyof typeof legacyDefaults],
+					]),
 			);
 			persistWorkspaceLayout(destination, { version: 2, overrides });
 			writeConfiguredWorkspacePath(destination);
