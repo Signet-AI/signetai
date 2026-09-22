@@ -3,6 +3,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import ts from "typescript";
+import { scanTypeScriptCommentSpans } from "./strip-comments";
 
 const ROOT = resolve(import.meta.dir, "..");
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
@@ -27,6 +28,7 @@ const EXCLUDED_PARTS = new Set([
 ]);
 const SPDX_HEADER = /^SPDX-License-Identifier:\s*[A-Za-z0-9.-]+$/;
 const COPYRIGHT_HEADER = /^Copyright(?:\s+\(c\)|\s+©)?\s+\d{4}(?:-\d{4})?\s+\S.*$/;
+const DYNAMIC_SITE_TOKEN = /^DYNAMIC_SITE_TOKEN$/;
 
 export interface CommentSpan {
 	readonly allowed: boolean;
@@ -70,18 +72,16 @@ function isAllowedComment(source: string): boolean {
 				.trim(),
 		)
 		.filter(Boolean);
-	return lines.length > 0 && lines.every((line) => SPDX_HEADER.test(line) || COPYRIGHT_HEADER.test(line));
+	return (
+		lines.length > 0 &&
+		lines.every((line) => SPDX_HEADER.test(line) || COPYRIGHT_HEADER.test(line) || DYNAMIC_SITE_TOKEN.test(line))
+	);
 }
 
 export function scanTypeScriptComments(path: string, source: string): readonly CommentSpan[] {
-	const languageVariant = path.endsWith("x") ? ts.LanguageVariant.JSX : ts.LanguageVariant.Standard;
-	const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, languageVariant, source);
 	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, false);
 	const comments: CommentSpan[] = [];
-	for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
-		if (kind !== ts.SyntaxKind.SingleLineCommentTrivia && kind !== ts.SyntaxKind.MultiLineCommentTrivia) continue;
-		const start = scanner.getTokenPos();
-		const end = scanner.getTextPos();
+	for (const { start, end } of scanTypeScriptCommentSpans(source, path)) {
 		const startLine = sourceFile.getLineAndCharacterOfPosition(start).line + 1;
 		const endPosition = Math.max(start, end - 1);
 		const endLine = sourceFile.getLineAndCharacterOfPosition(endPosition).line + 1;

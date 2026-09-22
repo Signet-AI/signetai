@@ -129,7 +129,10 @@ function trimAdjacentBlankLine(source: string, span: Span): Span {
 	return span;
 }
 
-function typeScriptCommentSpans(source: string, path: string): readonly Span[] {
+export function scanTypeScriptCommentSpans(
+	source: string,
+	path: string,
+): readonly { readonly end: number; readonly start: number }[] {
 	let kind = ts.ScriptKind.TS;
 	if (/\.tsx$/i.test(path)) kind = ts.ScriptKind.TSX;
 	if (/\.jsx$/i.test(path)) kind = ts.ScriptKind.JSX;
@@ -453,7 +456,7 @@ function astroCommentSpans(source: string): readonly Span[] {
 			addEmbedded(
 				frontmatter[0].length,
 				match.index,
-				typeScriptCommentSpans(source.slice(frontmatter[0].length, match.index), "frontmatter.ts"),
+				scanTypeScriptCommentSpans(source.slice(frontmatter[0].length, match.index), "frontmatter.ts"),
 			);
 		}
 	}
@@ -466,7 +469,7 @@ function astroCommentSpans(source: string): readonly Span[] {
 			const end = start + (match[1]?.length ?? 0);
 			const comments =
 				tag === "script"
-					? typeScriptCommentSpans(source.slice(start, end), "embedded.ts")
+					? scanTypeScriptCommentSpans(source.slice(start, end), "embedded.ts")
 					: slashCommentSpans(source.slice(start, end), "embedded.css");
 			addEmbedded(start, end, comments);
 		}
@@ -615,7 +618,7 @@ function rewriteDatabaseSiteTokens(source: string, path: string): string {
 
 export function stripComments(source: string, path: string): StripResult {
 	let spans: readonly Span[];
-	if (/\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/i.test(path)) spans = typeScriptCommentSpans(source, path);
+	if (/\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/i.test(path)) spans = scanTypeScriptCommentSpans(source, path);
 	else if (/\.(?:ini|py|sh|toml|ya?ml)$/i.test(path) || path.endsWith("/agent.yaml.template"))
 		spans = hashCommentSpans(source, path);
 	else if (/\.(?:c|cc|cpp|cs|css|h|hh|hpp|jsonc|rs|sql)$/i.test(path)) spans = slashCommentSpans(source, path);
