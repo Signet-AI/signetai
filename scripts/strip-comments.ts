@@ -11,6 +11,7 @@ export interface StripResult {
 
 interface Span {
 	readonly end: number;
+	readonly replacement?: string;
 	readonly start: number;
 }
 
@@ -40,12 +41,30 @@ function isPreservedComment(source: string, span: Span): boolean {
 }
 
 function replacementFor(source: string, span: Span): string {
+	if (span.replacement !== undefined) return span.replacement;
 	const text = source.slice(span.start, span.end);
 	const lineBreaks = text.match(/\r\n|\r|\n/g);
 	if (lineBreaks !== null) return lineBreaks.join("");
 	const before = source[span.start - 1] ?? "";
 	const after = source[span.end] ?? "";
 	return /[\p{ID_Continue}$]/u.test(before) && /[\p{ID_Continue}$]/u.test(after) ? " " : "";
+}
+
+function normalizeCommentSpan(source: string, span: Span): Span {
+	const lineStart = source.lastIndexOf("\n", span.start - 1) + 1;
+	const newline = source.indexOf("\n", span.end);
+	const lineEnd = newline < 0 ? source.length : newline;
+	const before = source.slice(lineStart, span.start);
+	const after = source.slice(span.end, lineEnd);
+	if (before.trim().length === 0 && after.trim().length === 0) {
+		return { start: lineStart, end: newline < 0 ? lineEnd : lineEnd + 1, replacement: "" };
+	}
+	if (after.trim().length !== 0) return span;
+	let start = span.start;
+	while (start > lineStart && (source[start - 1] === " " || source[start - 1] === "	")) start -= 1;
+	let end = span.end;
+	while (end < lineEnd && (source[end] === " " || source[end] === "	")) end += 1;
+	return { start, end, replacement: "" };
 }
 
 function typeScriptCommentSpans(source: string, path: string): readonly Span[] {
@@ -280,7 +299,7 @@ export function stripComments(source: string, path: string): StripResult {
 	else if (/\.ps1$/i.test(path)) spans = powerShellCommentSpans(source, path);
 	else if (isCommentPurgePath(path)) spans = hashCommentSpans(source, path);
 	else throw new Error(`Unsupported comment syntax: ${path}`);
-	spans = spans.filter((span) => !isPreservedComment(source, span));
+	spans = spans.filter((span) => !isPreservedComment(source, span)).map((span) => normalizeCommentSpan(source, span));
 	return { content: applySpans(source, spans), removed: spans.length };
 }
 
