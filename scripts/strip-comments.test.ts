@@ -45,6 +45,21 @@ test("removes complete comment lines and adjacent trailing whitespace", () => {
 	expect(result.content.split("\n").some((line: string) => /\s+$/.test(line))).toBeFalse();
 });
 
+test("refreshes line-based database site tokens after comments shift source lines", () => {
+	const source = [
+		"// heading",
+		'getDbAccessor().withReadDb(() => value, "nested/example.ts:2");',
+		'getDbAccessor().withReadDbAsync(() => value, { siteToken: "nested/example.ts:3" });',
+		'const report = await readDiagnostics("nested/example.ts:4");',
+		'getDbAccessor().withWriteTxAsync(() => value, { siteToken: "db:stable.write" });',
+	].join("\n");
+	const result = stripComments(source, "platform/daemon/src/nested/example.ts");
+	expect(result.content).toContain('withReadDb(() => value, "nested/example.ts:1")');
+	expect(result.content).toContain('siteToken: "nested/example.ts:2"');
+	expect(result.content).toContain('readDiagnostics("nested/example.ts:3")');
+	expect(result.content).toContain('siteToken: "db:stable.write"');
+});
+
 test("does not leave extra blank lines at file boundaries or around removed sections", () => {
 	const cases = [
 		{ source: "[test]\n\n# explanation\n", path: "bunfig.toml", expected: "[test]\n" },
@@ -65,6 +80,7 @@ test("preserves semantic directives, shebangs, and legal notices", () => {
 		"legacyCall();",
 		"// biome-ignore lint/suspicious/noExplicitAny: boundary",
 		"const value: any = input;",
+		"// DYNAMIC_SITE_TOKEN: runtime caller attribution",
 		"//# sourceMappingURL=index.js.map",
 		"// Copyright 2026 Signet AI",
 		"const joined = left/* prose */right;",
@@ -73,6 +89,7 @@ test("preserves semantic directives, shebangs, and legal notices", () => {
 	expect(result.removed).toBe(1);
 	expect(result.content).toContain("@ts-expect-error LEGACY_SYNC_DB_ACCESS");
 	expect(result.content).toContain("biome-ignore lint/suspicious/noExplicitAny");
+	expect(result.content).toContain("DYNAMIC_SITE_TOKEN: runtime caller attribution");
 	expect(result.content).toContain("//# sourceMappingURL=index.js.map");
 	expect(result.content).toContain("// Copyright 2026 Signet AI");
 	expect(result.content).toContain("left right");

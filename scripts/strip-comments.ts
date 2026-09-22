@@ -18,11 +18,22 @@ interface Span {
 
 const TOOL_DIRECTIVE = /(?:@license\b|@preserve\b|biome-ignore|prettier-ignore)/i;
 const TYPESCRIPT_DIRECTIVE =
-	/(?:<reference\s|[@#]__(?:NO_SIDE_EFFECTS|PURE)__|@(?:jest|vitest)-environment|@ts-(?:check|expect-error|ignore|nocheck)|c8\s+ignore|deno-lint-ignore|eslint-(?:disable|enable)|istanbul\s+ignore|sourceMappingURL|sourceURL|webpack(?:Ignore|ChunkName)|vite-ignore|@jsx(?:ImportSource)?\b)/i;
+	/(?:<reference\s|[@#]__(?:NO_SIDE_EFFECTS|PURE)__|@(?:jest|vitest)-environment|@jsx|@ts-(?:check|expect-error|ignore|nocheck)|c8\s+ignore|deno-lint-ignore|DYNAMIC_SITE_TOKEN|eslint-(?:disable|enable)|istanbul\s+ignore|sourceMappingURL|sourceURL|vite-ignore|webpack(?:Ignore|ChunkName))/i;
 const PYTHON_DIRECTIVE =
 	/(?:coding[:=][^\S\r\n]*[-\w.]+|fmt:\s*(?:off|on|skip)|mypy:|noqa|pragma:\s*no cover|pylint:|pyright:|ruff:|type:\s*ignore)/i;
 const YAML_DIRECTIVE = /(?:actionlint|yaml-language-server|yamllint)/i;
 const C_DIRECTIVE = /(?:clang-format|NOLINT)/i;
+const ATTRIBUTED_DB_APIS = new Set([
+	"checkpointWalAsync",
+	"incrementalVacuumAsync",
+	"vacuumConversionAsync",
+	"withReadDb",
+	"withReadDbAsync",
+	"withWriteDbAsync",
+	"withWriteTx",
+	"withWriteTxAsync",
+]);
+const LEGACY_DB_APIS = new Set(["withReadDb", "withWriteTx"]);
 const LEGAL_NOTICE = /(?:SPDX-License-Identifier:|Copyright(?:\s+\(c\)|\s+©)?\s+\d{4})/i;
 const SUPPORTED_EXTENSION =
 	/\.(?:astro|c|cc|cjs|cpp|cs|css|cts|h|hh|hpp|html|ini|js|jsx|jsonc|mjs|mts|plist|ps1|py|rs|sh|sql|toml|ts|tsx|ya?ml)$/i;
@@ -339,6 +350,104 @@ function applySpans(source: string, spans: readonly Span[]): string {
 	return content + source.slice(cursor);
 }
 
+function rewriteDatabaseSiteTokens(source: string, path: string): string {
+	const prefix = "platform/daemon/src/";
+	if (!path.startsWith(prefix) || !/\.ts$/i.test(path)) return source;
+	const relativePath = path.slice(prefix.length);
+	const file = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const bindings = new Map<string, ts.Expression>();
+	const replacements = new Map<string, { readonly end: number; readonly start: number; readonly value: string }>();
+	const lineTokenPattern = new RegExp(`^${relativePath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:\\d+$`);
+	const queueReplacement = (token: ts.StringLiteralLike, value: string, priority: boolean): void => {
+		const replacement = { start: token.getStart(file) + 1, end: token.end - 1, value };
+		const key = `${replacement.start}:${replacement.end}`;
+		if (priority || !replacements.has(key)) replacements.set(key, replacement);
+	};
+	const unwrap = (expression: ts.Expression): ts.Expression => {
+		let current = expression;
+		while (
+			ts.isParenthesizedExpression(current) ||
+			ts.isAsExpression(current) ||
+			ts.isTypeAssertionExpression(current) ||
+			ts.isSatisfiesExpression(current)
+		) {
+			current = current.expression;
+		}
+		return current;
+	};
+	const literal = (expression: ts.Expression): ts.StringLiteralLike | undefined => {
+		const current = unwrap(expression);
+		if (ts.isStringLiteral(current) || ts.isNoSubstitutionTemplateLiteral(current)) return current;
+		if (!ts.isIdentifier(current)) return undefined;
+		const initializer = bindings.get(current.text);
+		return initializer === undefined ? undefined : literal(initializer);
+	};
+	const replaceLiteral = (expression: ts.Expression, expected: string): void => {
+		const token = literal(expression);
+		if (token === undefined || !lineTokenPattern.test(token.text)) return;
+		queueReplacement(token, expected, true);
+	};
+	const visit = (node: ts.Node): void => {
+		if ((ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) && lineTokenPattern.test(node.text)) {
+			const line = file.getLineAndCharacterOfPosition(node.getStart(file)).line + 1;
+			queueReplacement(node, `${relativePath}:${line}`, false);
+		}
+		if (
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.initializer !== undefined &&
+			ts.isVariableDeclarationList(node.parent) &&
+			(node.parent.flags & ts.NodeFlags.Const) !== 0
+		) {
+			bindings.set(node.name.text, node.initializer);
+		}
+		if (ts.isCallExpression(node)) {
+			const callee = node.expression;
+			const api = ts.isPropertyAccessExpression(callee)
+				? callee.name.text
+				: ts.isElementAccessExpression(callee) &&
+						callee.argumentExpression !== undefined &&
+						ts.isStringLiteralLike(callee.argumentExpression)
+					? callee.argumentExpression.text
+					: undefined;
+			if (api !== undefined && ATTRIBUTED_DB_APIS.has(api)) {
+				const position = ts.isPropertyAccessExpression(callee) ? callee.name.getStart(file) : callee.getStart(file);
+				const line = file.getLineAndCharacterOfPosition(position).line + 1;
+				const expected = `${relativePath}:${line}`;
+				if (LEGACY_DB_APIS.has(api)) {
+					const token = node.arguments[1];
+					if (token !== undefined) replaceLiteral(token, expected);
+				} else {
+					const options =
+						node.arguments[
+							api === "withReadDbAsync" || api === "withWriteTxAsync" || api === "withWriteDbAsync" ? 1 : 0
+						];
+					if (options !== undefined) {
+						const current = unwrap(options);
+						if (ts.isStringLiteralLike(current) || ts.isIdentifier(current)) replaceLiteral(current, expected);
+						if (ts.isObjectLiteralExpression(current)) {
+							for (const property of current.properties) {
+								if (!ts.isPropertyAssignment(property)) continue;
+								const name = property.name;
+								if ((ts.isIdentifier(name) || ts.isStringLiteral(name)) && name.text === "siteToken") {
+									replaceLiteral(property.initializer, expected);
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+		ts.forEachChild(node, visit);
+	};
+	visit(file);
+	let output = source;
+	for (const replacement of [...replacements.values()].sort((left, right) => right.start - left.start)) {
+		output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+	}
+	return output;
+}
+
 export function stripComments(source: string, path: string): StripResult {
 	let spans: readonly Span[];
 	if (/\.(?:cjs|cts|js|jsx|mjs|mts|ts|tsx)$/i.test(path)) spans = typeScriptCommentSpans(source, path);
@@ -354,7 +463,8 @@ export function stripComments(source: string, path: string): StripResult {
 	spans = mergeWholeLineSpans(removable.map((span) => normalizeCommentSpan(source, span))).map((span) =>
 		trimAdjacentBlankLine(source, span),
 	);
-	return { content: applySpans(source, spans), removed: removable.length };
+	const content = rewriteDatabaseSiteTokens(applySpans(source, spans), path);
+	return { content, removed: removable.length };
 }
 
 type Mode = "check" | "write";
