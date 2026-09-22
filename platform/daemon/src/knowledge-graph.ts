@@ -1489,7 +1489,18 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 		readonly minWeightAspectCount: number;
 	}>(
 		await getDbOwner(getDbAccessorPath()),
-		`SELECT
+		`WITH active_graph_attributes AS (
+			SELECT
+				COUNT(CASE WHEN attr.kind = 'attribute' THEN 1 END) AS attributeCount,
+				COUNT(CASE WHEN attr.kind = 'claim' THEN 1 END) AS claimCount,
+				COUNT(CASE WHEN attr.kind = 'constraint' THEN 1 END) AS constraintCount
+			FROM entity_attributes attr
+			JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
+			JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
+			WHERE attr.agent_id = ? AND attr.status = 'active'
+			AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active'
+		)
+		SELECT
 			(SELECT COUNT(DISTINCT mem.memory_id) FROM memory_entity_mentions mem
 			 JOIN entities e ON e.id = mem.entity_id AND e.agent_id = ?
 			 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0
@@ -1497,18 +1508,9 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 			(SELECT COUNT(*) FROM entities WHERE agent_id = ? AND COALESCE(status, 'active') = 'active') AS entityCount,
 			(SELECT COUNT(*) FROM entity_aspects asp JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS aspectCount,
-			(SELECT COUNT(*) FROM entity_attributes attr JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
-			 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
-			 WHERE attr.agent_id = ? AND attr.kind = 'attribute' AND attr.status = 'active'
-			 AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS attributeCount,
-			(SELECT COUNT(*) FROM entity_attributes attr JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
-			 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
-			 WHERE attr.agent_id = ? AND attr.kind = 'claim' AND attr.status = 'active'
-			 AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS claimCount,
-			(SELECT COUNT(*) FROM entity_attributes attr JOIN entity_aspects asp ON asp.id = attr.aspect_id AND asp.agent_id = attr.agent_id
-			 JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
-			 WHERE attr.agent_id = ? AND attr.kind = 'constraint' AND attr.status = 'active'
-			 AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS constraintCount,
+			active_graph_attributes.attributeCount,
+			active_graph_attributes.claimCount,
+			active_graph_attributes.constraintCount,
 			(SELECT COUNT(*) FROM entity_dependencies dep JOIN entities src ON src.id = dep.source_entity_id AND src.agent_id = dep.agent_id
 			 JOIN entities dst ON dst.id = dep.target_entity_id AND dst.agent_id = dep.agent_id
 			 WHERE dep.agent_id = ? AND COALESCE(dep.status, 'active') = 'active'
@@ -1525,9 +1527,10 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 			(SELECT COUNT(CASE WHEN weight >= 1.0 THEN 1 END) FROM entity_aspects asp JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS maxWeightAspectCount,
 			(SELECT COUNT(CASE WHEN weight <= 0.1 THEN 1 END) FROM entity_aspects asp JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
-			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS minWeightAspectCount`,
-		Array(12).fill(agentId),
-		{ operation: "knowledge.stats", deadlineMs: 5_000, estimatedWorkUnits: 12 },
+			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS minWeightAspectCount
+		FROM active_graph_attributes`,
+		Array(10).fill(agentId),
+		{ operation: "knowledge.stats", deadlineMs: 5_000, estimatedWorkUnits: 10 },
 	);
 	if (row === null) {
 		return {

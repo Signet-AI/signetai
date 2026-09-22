@@ -108,7 +108,7 @@ export function GraphView() {
 		};
 		const entities = graphQuery.data?.entities ?? [];
 		const maxMentions = Math.max(1, ...entities.map((e) => e.mentions));
-		const attributeNodeIds = new Map<string, string>();
+		const attributeNodeIds = new Set<string>();
 		const originNodeIds = new Map<string, string>();
 		const ensureOrigin = (params: {
 			sourceKind: string | null;
@@ -193,7 +193,7 @@ export function GraphView() {
 						metric: `${attr.kind} · ${percent(attr.confidence)} confidence · ${source ?? "unattributed"}`,
 					};
 					addNode(attributeNode);
-					attributeNodeIds.set(attr.id, attr.id);
+					attributeNodeIds.add(attr.id);
 					if (attr.claimKey) {
 						const claimSlotId = `claim-slot:${aspect.id}:${groupKey}:${attr.claimKey}`;
 						addNode({
@@ -229,10 +229,6 @@ export function GraphView() {
 						metric: `group · ${group.count} value${group.count === 1 ? "" : "s"}`,
 					});
 					addEdge(aspect.id, group.id, "organizes");
-					for (const attr of aspect.attributes) {
-						if ((attr.groupKey ?? "general") !== groupKey || attr.claimKey) continue;
-						addEdge(group.id, attr.id, "describes");
-					}
 				}
 			}
 		}

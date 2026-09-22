@@ -531,20 +531,15 @@ export function createGraphScene(container: HTMLElement, data: GraphSceneData): 
 	// every node, but only a small set of meaningful anchors gets a card at rest;
 	// hover still exposes every node's full semantic payload.
 	const labelIds = new Set<string>();
-	const edgeDegree = new Map<string, number>();
-	for (const edge of EDGES) {
-		edgeDegree.set(edge.from, (edgeDegree.get(edge.from) ?? 0) + 1);
-		edgeDegree.set(edge.to, (edgeDegree.get(edge.to) ?? 0) + 1);
-	}
 	const originLabelIds = new Set(
 		NODES.filter((n) => n.kind === "origin")
-			.sort((a, b) => (edgeDegree.get(b.id) ?? 0) - (edgeDegree.get(a.id) ?? 0) || a.id.localeCompare(b.id))
+			.sort((a, b) => (edgeCounts.get(b.id) ?? 0) - (edgeCounts.get(a.id) ?? 0) || a.id.localeCompare(b.id))
 			.slice(0, 4)
 			.map((n) => n.id),
 	);
 	const assertionLabelIds = new Set(
 		NODES.filter((n) => n.kind === "assertion")
-			.sort((a, b) => (edgeDegree.get(b.id) ?? 0) - (edgeDegree.get(a.id) ?? 0) || b.weight - a.weight)
+			.sort((a, b) => (edgeCounts.get(b.id) ?? 0) - (edgeCounts.get(a.id) ?? 0) || b.weight - a.weight)
 			.slice(0, 4)
 			.map((n) => n.id),
 	);
