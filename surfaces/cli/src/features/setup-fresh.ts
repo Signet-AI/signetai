@@ -335,7 +335,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			const special = plan.specialIdentityFiles.some((entry) => entry.path === name) ? " (special session)" : "";
 			console.log(chalk.dim(`    ├── ${name.padEnd(12)}${special}`));
 		}
-		console.log(chalk.dim("    └── memory/       database & vectors"));
+		console.log(chalk.dim("    └── data/         database & durable state"));
 
 		console.log();
 		console.log(chalk.dim("  Core plugins:"));
