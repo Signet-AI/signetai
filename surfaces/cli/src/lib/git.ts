@@ -2,10 +2,10 @@ import {
 	SIGNET_GIT_PROTECTED_PATHS,
 	isSignetGitProtectedPath,
 	isSignetGitTrackedPath,
-	mergeSignetGitignoreEntries,
+	managedGitignoreUpdate,
 	resolveLaunchdExecutable,
 } from "@signet/core";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { spawnHidden as spawn, type ChildProcessWithoutNullStreams } from "@signet/core";
 
@@ -25,8 +25,16 @@ export async function gitInit(dir: string): Promise<boolean> {
 	return (await runGit(dir, ["init"])).code === 0;
 }
 
+export async function initializeSkillsRepository(agentsDir: string): Promise<boolean> {
+	const skillsDir = join(agentsDir, "skills");
+	if (existsSync(join(skillsDir, ".git"))) return true;
+	if (!existsSync(skillsDir)) return false;
+	return (await runGit(skillsDir, ["init"])).code === 0;
+}
+
 export async function gitAddAndCommit(dir: string, message: string): Promise<boolean> {
-	ensureProtectedGitignore(dir);
+	const ignore = managedGitignoreUpdate(dir);
+	if (ignore.status === "refused") return false;
 	const stagedBefore = await listStagedPaths(dir);
 	if (stagedBefore === null) return false;
 	await gitUntrackProtectedFiles(dir);
@@ -62,15 +70,6 @@ export async function gitAddAndCommit(dir: string, message: string): Promise<boo
 			? ["commit", "-m", message]
 			: ["commit", "-m", message, "--", ...literalPathspecs(commitPaths)];
 	return (await runGit(dir, commitArgs)).code === 0;
-}
-
-function ensureProtectedGitignore(dir: string): void {
-	const path = join(dir, ".gitignore");
-	const prev = existsSync(path) ? readFileSync(path, "utf-8") : "";
-	const next = mergeSignetGitignoreEntries(prev);
-	if (next !== prev) {
-		writeFileSync(path, next, "utf-8");
-	}
 }
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {

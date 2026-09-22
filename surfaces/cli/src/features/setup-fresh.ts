@@ -89,6 +89,10 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		spinner.text = "Installing built-in skills...";
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), context.basePath);
+		if (plan.gitEnabled) {
+			const { initializeSkillsRepository } = await import("../lib/git.js");
+			await initializeSkillsRepository(context.basePath);
+		}
 
 		if (plan.identityMode === "managed") {
 			spinner.text = "Creating agent identity...";

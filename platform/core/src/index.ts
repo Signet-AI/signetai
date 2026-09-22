@@ -1,4 +1,6 @@
 export { Signet } from "./signet";
+export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
+export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
 export {
 	execFileHidden,
 	execFileSyncHidden,
