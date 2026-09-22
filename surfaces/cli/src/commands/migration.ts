@@ -1,9 +1,12 @@
 import type { Command } from "commander";
-import { existsSync, mkdirSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, statSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { persistWorkspaceLayout, resolveWorkspaceLayout } from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
-import { resolveAgentsDir } from "../lib/workspace.js";
+import { createDatabase } from "../sqlite.js";
+import { resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
+import { stopDaemon } from "../lib/runtime.js";
 
 export type MigrationCommandDeps = {
 	createEngine?: (options: { source?: string; destination?: string }) => MigrationEngine;
@@ -15,24 +18,68 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 	const destination = resolve(
 		options.destination ?? join(dirname(source), `${source.split("/").pop() ?? "workspace"}-v2`),
 	);
+	const sourceLayout = resolveWorkspaceLayout(source);
+	if (sourceLayout.version !== 1) throw new Error("workspace is not a v1 layout");
 	const state = process.env.XDG_STATE_HOME
 		? join(process.env.XDG_STATE_HOME, "signet", "migrations")
 		: join(homedir(), ".local", "state", "signet", "migrations");
 	const resolver = {
 		resolve: (): Layout => ({ version: 1, root: source, destination }),
-		cutover: async (layout: Layout) => {
-			mkdirSync(destination, { recursive: true });
-			writeFileSync(join(destination, ".signet-layout.json"), `${JSON.stringify({ version: 2, root: destination })}\n`);
-			// The configured workspace is the only pointer consumed by CLI startup.
-			writeFileSync(join(destination, ".migration-source"), `${layout.root}\n`);
+		cutover: async () => {
+			// Persist the canonical layout first; the pointer is published last.
+			const overrides = Object.fromEntries(
+				(["database", "transcripts", "runtime", "cache", "files", "imports", "secrets", "skills", "data"] as const).map(
+					(key) => [
+						key,
+						sourceLayout[key].startsWith(source) ? sourceLayout[key].slice(source.length + 1) : sourceLayout[key],
+					],
+				),
+			);
+			persistWorkspaceLayout(destination, { version: 2, overrides });
+			writeConfiguredWorkspacePath(destination);
 		},
+	};
+	const leasePath = join(state, `${source.replaceAll("/", "_")}.lease`);
+	const acquireLease = async () => {
+		mkdirSync(state, { recursive: true, mode: 0o700 });
+		let fd: number;
+		try {
+			fd = openSync(leasePath, "wx", 0o600);
+		} catch {
+			throw new Error("another migration is already running");
+		}
+		return {
+			release: async () => {
+				closeSync(fd);
+				unlinkSync(leasePath);
+			},
+		};
 	};
 	const deps: MigrationDeps = {
 		resolver,
-		writers: { drain: async () => ({ owners: [] }) },
+		lease: { acquire: acquireLease },
+		writers: { drain: async () => ((await stopDaemon(source)) ? { owners: [] } : { owners: ["daemon"] }) },
 		database: {
-			snapshot: async (path) => ({ path, bytes: statTree(path) }),
-			verify: async (path) => existsSync(path),
+			snapshot: async (path) => {
+				const target = join(path, "data", "signet.db");
+				mkdirSync(dirname(target), { recursive: true });
+				if (existsSync(sourceLayout.database)) {
+					const db = createDatabase(sourceLayout.database) as unknown as {
+						backup?: (path: string) => void;
+						close(): void;
+					};
+					if (typeof db.backup === "function") db.backup(target);
+					else throw new Error("SQLite backup API unavailable");
+					if (typeof db.close === "function") db.close();
+				}
+				return { path: target, bytes: statTree(target) };
+			},
+			verify: async (path) => {
+				const db = createDatabase(path);
+				const row = db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
+				db.close();
+				return row?.integrity_check === "ok";
+			},
 		},
 		journalStateDir: state,
 	};
