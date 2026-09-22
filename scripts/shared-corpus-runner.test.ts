@@ -91,20 +91,22 @@ describe("shared corpus admission", () => {
 		expect(result.crash).toBe(true);
 	});
 
-	test("rejects duplicate testcase identities and substituted expected identities", () => {
-		const xml = '<testsuite tests="2"><testcase classname="x" name="a"/><testcase classname="x" name="a"/></testsuite>';
-		const result = parseJUnitReport(xml, ["a.test.ts", "b.test.ts"]);
-		expect(result.incomplete).toBe(true);
-		expect(result.crash).toBe(true);
-		expect(result.failed).toBeGreaterThan(0);
-	});
-
-	test("rejects duplicate location-bearing testcase identities", () => {
+	test("accounts repeated testcase identities with occurrence disambiguation", () => {
 		const xml =
 			'<testsuite tests="2"><testcase classname="x" name="a" file="a.test.ts" line="10"/><testcase classname="x" name="a" file="a.test.ts" line="10"/></testsuite>';
 		const result = parseJUnitReport(xml, ["a.test.ts"]);
+		expect(result.tests).toBe(2);
+		expect(result.incomplete).toBe(false);
+		expect(result.crash).toBe(false);
+		expect(result.identityCollisions).toHaveLength(1);
+		expect(result.identityCollisions[0]?.count).toBe(2);
+	});
+
+	test("rejects testcase identities without a source file", () => {
+		const xml = '<testsuite tests="2"><testcase classname="x" name="a"/><testcase classname="x" name="a"/></testsuite>';
+		const result = parseJUnitReport(xml, ["a.test.ts"]);
 		expect(result.incomplete).toBe(true);
-		expect(result.crash).toBe(true);
+		expect(result.missingFiles).toEqual(["a.test.ts"]);
 	});
 
 	test("nonzero child status cannot be represented as passed", () => {

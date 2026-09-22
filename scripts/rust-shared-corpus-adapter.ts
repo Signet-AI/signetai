@@ -16,6 +16,7 @@ import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { buildExecutionManifest, currentManifest } from "./shared-corpus-runner";
 import { validateRustDaemonArtifact } from "./rust-shared-corpus-artifact";
+import { wrapRustJUnitReport } from "./rust-shared-corpus-report";
 
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
 const isForbiddenPath = (path: string) => FORBIDDEN.test(path.replaceAll("\\", "/"));
@@ -254,12 +255,8 @@ const infrastructureFailure =
 	missingIdentity ||
 	missingSelected.length > 0 ||
 	unexpectedFiles.length > 0;
-const failures = cases.filter((testcase) => /<failure\b/.test(testcase)).length;
-const errors = cases.filter((testcase) => /<error\b/.test(testcase)).length;
-writeFileSync(
-	report,
-	`<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" nativeEvidence="${nativeEvidence}" tests="${cases.length}" failures="${failures}" errors="${errors}" skipped="0">${cases.join("")}</testsuite>`,
-);
+const wrappedReport = wrapRustJUnitReport(reportXml, nativeEvidence);
+writeFileSync(report, wrappedReport.xml);
 if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
 if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
 console.error(

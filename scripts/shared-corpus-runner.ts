@@ -22,6 +22,7 @@ export type Accounting = {
 	skipped: number;
 	missingFiles: string[];
 	unexpectedFiles: string[];
+	identityCollisions: Array<{ key: string; count: number }>;
 	nativeEvidence: boolean;
 	crash: boolean;
 	incomplete: boolean;
@@ -246,6 +247,7 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 			skipped: 0,
 			missingFiles: [...expected],
 			unexpectedFiles: [],
+			identityCollisions: [],
 			nativeEvidence,
 			crash: true,
 			incomplete: true,
@@ -260,7 +262,11 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 		const name = attribute(c, "name");
 		return { file, line, key: `${file}\0${line}\0${classname}\0${name}` };
 	});
-	const duplicate = new Set(identities.map((identity) => identity.key)).size !== identities.length;
+	const identityCounts = new Map<string, number>();
+	for (const identity of identities) identityCounts.set(identity.key, (identityCounts.get(identity.key) ?? 0) + 1);
+	const identityCollisions = [...identityCounts.entries()]
+		.filter(([, count]) => count > 1)
+		.map(([key, count]) => ({ key, count }));
 	const expectedFiles = new Set(expected);
 	const observedFiles = new Set(identities.map((identity) => identity.file).filter(Boolean));
 	const missingFiles = expected.length > 0 ? expected.filter((file) => !observedFiles.has(file)) : [];
@@ -268,7 +274,6 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 	const missingIdentity = expected.length > 0 && identities.some((identity) => !identity.file);
 	const declared = suiteStats.declared ?? cases.length;
 	const incomplete =
-		duplicate ||
 		declared !== cases.length ||
 		(expected.length > 0 && cases.length < expected.length) ||
 		missingFiles.length > 0 ||
@@ -277,19 +282,19 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 	// Bun exits nonzero when assertions fail. A complete report with recorded
 	// failures is a failed test run, not a crashed runner. Preserve crash
 	// classification for nonzero exits that produced no reported test failure.
-	const crashed = childStatus !== 0 && failed === 0;
 	const suiteOnlyFailures = Math.max(0, suiteFailed - failed);
-	const duplicateFailures = duplicate ? 1 : 0;
-	const totalFailed = failed + suiteOnlyFailures + duplicateFailures;
+	const crashed = childStatus !== 0 && failed === 0 && suiteOnlyFailures === 0;
+	const totalFailed = failed + suiteOnlyFailures;
 	return {
 		tests: cases.length,
-		passed: Math.max(0, cases.length - failed - skipped - suiteOnlyFailures - duplicateFailures),
+		passed: Math.max(0, cases.length - failed - skipped - suiteOnlyFailures),
 		failed: totalFailed,
 		skipped,
 		missingFiles,
 		unexpectedFiles,
+		identityCollisions,
 		nativeEvidence,
-		crash: crashed || duplicate,
+		crash: crashed,
 		incomplete: incomplete || crashed,
 		status: crashed || totalFailed > 0 || incomplete ? "failed" : "passed",
 	};
