@@ -2,7 +2,6 @@ import { requestMemoryHead } from "./memory-head";
 import { budgetIdentityContent } from "./identity-context";
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { join } from "node:path";
 import {
 	type AgentRosterReadPolicy,
 	type PROMPT_CONTEXT_VERSION,
@@ -11,6 +10,7 @@ import {
 	identityModeReadsFiles,
 	loadIdentityMode,
 	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
 	resolveStartupIdentityFiles,
 	scanMemoryContent,
 } from "@signet/core";
@@ -163,7 +163,7 @@ function getAgentsDir(): string {
 }
 
 function getMemoryDbPath(): string {
-	return join(getAgentsDir(), "memory", "memories.db");
+	return resolveWorkspaceLayout(getAgentsDir()).database;
 }
 
 const deferredSessionEndWork = new Set<Promise<void>>();

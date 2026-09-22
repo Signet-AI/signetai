@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import type { DaemonRuntime } from "@signet/core";
 
 export type DaemonLifecycleState = "starting" | "running" | "clean" | "error";
@@ -122,7 +123,7 @@ export function previousExitTelemetryProperties(
 }
 
 export function lifecyclePath(agentsDir: string): string {
-	return join(agentsDir, ".daemon", "lifecycle.json");
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "lifecycle.json");
 }
 export function readDaemonLifecycle(agentsDir: string): DaemonLifecycle | null {
 	try {

@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { resolveDefaultBasePath } from "@signet/core";
+import { resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
 import { type WriteDb, getDbAccessor } from "./db-accessor";
 import { getDbOwner } from "./db-owner-runtime";
 import { DB_OWNER_MAX_TRANSACTION_STATEMENTS } from "./db-owner-protocol";
@@ -9,7 +8,7 @@ import { logger } from "./logger";
 
 function getMemoryDbPath(): string {
 	const agentsDir = resolveDefaultBasePath();
-	return join(agentsDir, "memory", "memories.db");
+	return resolveWorkspaceLayout(agentsDir).database;
 }
 
 export interface SessionMemoryCandidate {

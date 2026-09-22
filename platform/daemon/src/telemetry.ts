@@ -9,6 +9,7 @@ import {
 	type TelemetryDeploymentRole,
 	type TelemetryInstallChannel,
 	summarizeAccountingProvenance,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import { getDbAccessorPath, type DbAccessor } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
@@ -17,7 +18,7 @@ import { ownerChanges, ownerTransaction } from "./db-owner-maintenance";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { logger } from "./logger";
 export function defaultTelemetryLogPath(agentsDir: string): string {
-	return join(agentsDir, ".daemon", "telemetry", "events.jsonl");
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "telemetry", "events.jsonl");
 }
 export function parseTelemetryTimestamp(timestamp: string): number {
 	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(timestamp)

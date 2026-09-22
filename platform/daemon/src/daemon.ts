@@ -27,6 +27,7 @@ import {
 	preflightWorkspace,
 	formatWorkspacePreflightError,
 	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
 	routingTargetLocality,
 	scanMemoryContent,
 	stripSignetBlock,
@@ -1264,7 +1265,7 @@ async function* legacyMarkdownFiles(memoryDir: string): AsyncGenerator<string> {
 }
 
 async function importExistingMemoryFiles(): Promise<number> {
-	const memoryDir = join(AGENTS_DIR, "memory");
+	const memoryDir = resolveWorkspaceLayout(AGENTS_DIR).transcripts;
 	if (!existsSync(memoryDir)) {
 		logger.debug("daemon", "Memory directory does not exist, skipping initial import");
 		return 0;

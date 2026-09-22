@@ -1,6 +1,7 @@
 import { mkdir, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import { resolveDefaultBasePath } from "@signet/core";
 
 const MAX_AUDIT_PREVIEW_BYTES = 64 * 1024;
@@ -8,7 +9,7 @@ const MAX_AUDIT_BYTES = 64 * 1024 * 1024;
 const MAX_AUDIT_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function getTranscriptAuditDir(basePath: string): string {
-	return join(basePath, ".daemon", "logs", "transcripts");
+	return join(resolveWorkspaceLayout(basePath).runtime, "logs", "transcripts");
 }
 
 function isSafeAuditName(value: string): boolean {

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
 import { logger } from "./logger";
@@ -150,7 +151,7 @@ function basePathFor(input?: string): string {
 
 function sourceLockPath(basePath: string, agentId: string, sourceIdentity: string): string {
 	const token = sha256(`${agentId}\0${sourceIdentity}`).slice(0, 32);
-	return join(basePath, ".daemon", "locks", `transcript-capture-${token}`);
+	return join(resolveWorkspaceLayout(basePath).runtime, "locks", `transcript-capture-${token}`);
 }
 
 function sourceIdentityFor(input: TranscriptCaptureJobInput, sourcePath: string | null): string {

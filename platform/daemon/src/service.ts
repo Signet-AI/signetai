@@ -2,6 +2,7 @@ import { execSyncHidden as execSync, spawnHidden as spawn } from "@signet/core";
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import {
 	LOOPBACK_HOST,
 	buildLaunchdEnvironment,
@@ -12,7 +13,7 @@ import {
 } from "@signet/core";
 
 const AGENTS_DIR = resolveDefaultBasePath();
-const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
+const DAEMON_DIR = resolveWorkspaceLayout(AGENTS_DIR).runtime;
 const PID_FILE = join(DAEMON_DIR, "pid");
 const LOG_DIR = join(DAEMON_DIR, "logs");
 const DAEMON_PORT = 3850;

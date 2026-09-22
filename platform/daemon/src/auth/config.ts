@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import { z } from "zod";
 import { AUTH_MODES, type AuthMode } from "./types";
 import { DEFAULT_RATE_LIMITS, type RateLimitConfig } from "./rate-limiter";
@@ -70,7 +71,7 @@ export function parseAuthConfig(raw: unknown, agentsDir: string): AuthConfig {
 	const cfg = result.data;
 	return {
 		mode: cfg.mode,
-		secretPath: join(agentsDir, ".daemon", "auth-secret"),
+		secretPath: join(resolveWorkspaceLayout(agentsDir).runtime, "auth-secret"),
 		rateLimits: cfg.rateLimits,
 		defaultTokenTtlSeconds: cfg.defaultTokenTtlSeconds,
 		sessionTokenTtlSeconds: cfg.sessionTokenTtlSeconds,

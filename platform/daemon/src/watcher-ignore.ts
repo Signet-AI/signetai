@@ -1,7 +1,7 @@
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { basename, isAbsolute, join, normalize, relative, resolve } from "node:path";
-import { resolveWorkspaceSourceRepoPath } from "@signet/core";
+import { resolveWorkspaceSourceRepoPath, resolveWorkspaceLayout } from "@signet/core";
 const ARTIFACT_FILENAME_RE = /--(?:summary|transcript|compaction|manifest)\.md$/;
 const MEMORY_BACKUP_FILENAME_RE = /^MEMORY\.(?:backup|bak|pre)-.+\.md$/;
 const SIGNET_IGNORE_FILENAME = ".sigignore";
@@ -172,10 +172,10 @@ function createSigignoreMatcher(agentsDir: string): (normalizedPath: string) => 
 
 export function createAgentsWatcherIgnoreMatcher(agentsDir: string): (path: string) => boolean {
 	const agentRoot = resolveForComparison(join(agentsDir, "agents"));
-	const memoriesDb = resolveForComparison(join(agentsDir, "memory", "memories.db"));
-	const memoriesDbWal = resolveForComparison(join(agentsDir, "memory", "memories.db-wal"));
-	const memoriesDbShm = resolveForComparison(join(agentsDir, "memory", "memories.db-shm"));
-	const memoriesDbJournal = resolveForComparison(join(agentsDir, "memory", "memories.db-journal"));
+	const memoriesDb = resolveForComparison(resolveWorkspaceLayout(agentsDir).database);
+	const memoriesDbWal = resolveForComparison(`${resolveWorkspaceLayout(agentsDir).database}-wal`);
+	const memoriesDbShm = resolveForComparison(`${resolveWorkspaceLayout(agentsDir).database}-shm`);
+	const memoriesDbJournal = resolveForComparison(`${resolveWorkspaceLayout(agentsDir).database}-journal`);
 	const sourceRepoRoot = resolveForComparison(resolveWorkspaceSourceRepoPath(agentsDir));
 	const memoryDir = resolveForComparison(join(agentsDir, "memory"));
 	const isIgnoredByWorkspaceConfig = createSigignoreMatcher(agentsDir);

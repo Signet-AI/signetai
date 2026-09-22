@@ -83,7 +83,7 @@ function isAlive(pid: number): boolean {
 }
 
 function nativeSyncLockPath(basePath: string): string {
-	return join(basePath, ".daemon", NATIVE_SYNC_LOCK_FILENAME);
+	return join(resolveWorkspaceLayout(basePath).runtime, NATIVE_SYNC_LOCK_FILENAME);
 }
 
 function clearStaleNativeSyncLock(path: string): boolean {

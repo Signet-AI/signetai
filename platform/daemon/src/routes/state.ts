@@ -6,6 +6,7 @@ import {
 	normalizeLoopbackHost,
 	resolveDaemonRuntime,
 	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
 	resolveNetworkBinding,
 } from "@signet/core";
 import { createAnalyticsCollector } from "../analytics";
@@ -24,10 +25,11 @@ export let restartPipelineRuntimeRef:
 	| ((memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector) => Promise<void>)
 	| null = null;
 export const AGENTS_DIR = resolveDefaultBasePath();
-export const DAEMON_DIR = join(AGENTS_DIR, ".daemon");
+export const WORKSPACE_LAYOUT = resolveWorkspaceLayout(AGENTS_DIR);
+export const DAEMON_DIR = WORKSPACE_LAYOUT.runtime;
 export const PID_FILE = join(DAEMON_DIR, "pid");
 export const LOG_DIR = join(DAEMON_DIR, "logs");
-export const MEMORY_DB = join(AGENTS_DIR, "memory", "memories.db");
+export const MEMORY_DB = WORKSPACE_LAYOUT.database;
 export const SCRIPTS_DIR = join(AGENTS_DIR, "scripts");
 export const DAEMON_RUNTIME: DaemonRuntime | null = (() => {
 	try {
@@ -42,7 +44,7 @@ export function getCurrentAgentsDir(): string {
 }
 
 export function getCurrentMemoryDbPath(): string {
-	return join(getCurrentAgentsDir(), "memory", "memories.db");
+	return resolveWorkspaceLayout(getCurrentAgentsDir()).database;
 }
 export function readEnvTrimmed(key: string): string | undefined {
 	const raw = process.env[key];

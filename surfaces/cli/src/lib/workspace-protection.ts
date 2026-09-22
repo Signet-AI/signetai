@@ -149,7 +149,7 @@ export function defaultBackupRoot(basePath?: string): string {
 }
 
 function snapshotStatePath(basePath: string): string {
-	return join(resolve(basePath), ".daemon", "workspace-protection.json");
+	return join(resolveWorkspaceLayout(resolve(basePath)).runtime, "workspace-protection.json");
 }
 
 function legacySnapshotStatePath(basePath: string): string {
@@ -174,9 +174,9 @@ export function createWorkspaceSnapshot(basePath: string, backupRoot?: string): 
 		force: false,
 	});
 
-	const sourceDb = join(source, "memory", "memories.db");
+	const sourceDb = resolveWorkspaceLayout(source).database;
 	if (existsSync(sourceDb)) {
-		const targetDb = join(target, "memory", "memories.db");
+		const targetDb = resolveWorkspaceLayout(target).database;
 		rmSync(targetDb, { force: true });
 		rmSync(`${targetDb}-wal`, { force: true });
 		rmSync(`${targetDb}-shm`, { force: true });

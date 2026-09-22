@@ -1,7 +1,7 @@
 import { confirm } from "@inquirer/prompts";
 import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { loadSqliteVec } from "@signet/core";
+import { loadSqliteVec, resolveWorkspaceLayout } from "@signet/core";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
@@ -28,8 +28,8 @@ export function registerVectorCommands(program: Command, deps: VectorDeps): void
 		.option("--rollback", "Rollback to BLOB format (not implemented in Phase 1)")
 		.action(async (opts) => {
 			const root = deps.AGENTS_DIR;
-			const dir = join(root, "memory");
-			const dbPath = join(dir, "memories.db");
+			const layout = resolveWorkspaceLayout(root);
+			const dbPath = layout.database;
 
 			console.log(deps.signetLogo());
 			console.log(chalk.bold("  Vector Migration\n"));
@@ -222,7 +222,7 @@ export function registerVectorCommands(program: Command, deps: VectorDeps): void
 
 async function detectSources(root: string): Promise<Source[]> {
 	const out: Source[] = [];
-	const dir = join(root, "memory");
+	const dir = resolveWorkspaceLayout(root).data;
 	const zvec = join(dir, "vectors.zvec");
 
 	if (existsSync(zvec)) {
@@ -232,7 +232,7 @@ async function detectSources(root: string): Promise<Source[]> {
 		} catch {}
 	}
 
-	const dbPath = join(dir, "memories.db");
+	const dbPath = resolveWorkspaceLayout(root).database;
 	if (!existsSync(dbPath)) {
 		return out;
 	}

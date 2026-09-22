@@ -7,6 +7,7 @@ import {
 	importRelations,
 	loadSqliteVec,
 	runMigrations,
+	resolveWorkspaceLayout,
 	serializeExportData,
 } from "@signet/core";
 import chalk from "chalk";
@@ -26,7 +27,7 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 		.option("--json", "Output as JSON instead of ZIP")
 		.action(async (options) => {
 			const agentsDir = deps.AGENTS_DIR;
-			const dbPath = join(agentsDir, "memory", "memories.db");
+			const dbPath = resolveWorkspaceLayout(agentsDir).database;
 
 			if (!existsSync(dbPath)) {
 				console.error(chalk.red("  No memory database found. Nothing to export."));
@@ -87,7 +88,7 @@ export function registerPortableCommands(program: Command, deps: PortableDeps): 
 		.option("--json", "Input is a JSON file instead of a directory")
 		.action(async (importPath: string, options) => {
 			const agentsDir = deps.AGENTS_DIR;
-			const dbPath = join(agentsDir, "memory", "memories.db");
+			const dbPath = resolveWorkspaceLayout(agentsDir).database;
 
 			if (!existsSync(importPath)) {
 				console.error(chalk.red(`  Path not found: ${importPath}`));

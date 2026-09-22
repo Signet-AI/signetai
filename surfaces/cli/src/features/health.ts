@@ -8,6 +8,7 @@ import {
 	hasValidIdentity,
 	inactivePackageManagerInstallations,
 	loadIdentityMode,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";

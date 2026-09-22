@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import {
 	aggregateProtection,
 	buildProtectionEvidence,
@@ -23,19 +24,20 @@ export interface ProtectionRouteOptions {
 	readonly externalKeyringAvailable?: boolean;
 }
 
-export function saveRestoreReceipt(root: string, receipt: RestoreReceipt): void {
-	const dir = join(root, ".daemon");
+const receiptFile = (workspacePath: string): string =>
+	join(resolveWorkspaceLayout(workspacePath).runtime, "protection-restore-receipt.json");
+
+export function saveRestoreReceipt(workspacePath: string, receipt: RestoreReceipt): void {
+	const dir = resolveWorkspaceLayout(workspacePath).runtime;
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const tmp = join(dir, `.protection-restore-receipt.${process.pid}.tmp`);
 	writeFileSync(tmp, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
-	renameSync(tmp, join(dir, "protection-restore-receipt.json"));
+	renameSync(tmp, receiptFile(workspacePath));
 }
 
-export function readRestoreReceipt(root: string): RestoreReceipt | null {
+export function readRestoreReceipt(workspacePath: string): RestoreReceipt | null {
 	try {
-		const value = JSON.parse(
-			readFileSync(join(root, ".daemon", "protection-restore-receipt.json"), "utf8"),
-		) as RestoreReceipt;
+		const value = JSON.parse(readFileSync(receiptFile(workspacePath), "utf8")) as RestoreReceipt;
 		return typeof value.at === "string" && value.valid === true ? value : null;
 	} catch {
 		return null;

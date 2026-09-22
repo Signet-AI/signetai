@@ -681,7 +681,7 @@ function printLogEventBlock(eventBlock: string): void {
 }
 
 function readFileLogs(basePath: string, limit: number, options: LogOptions): void {
-	const logDir = join(basePath, ".daemon", "logs");
+	const logDir = join(resolveWorkspaceLayout(basePath).runtime, "logs");
 	const logFile = join(logDir, `signet-${new Date().toISOString().split("T")[0]}.log`);
 
 	if (!existsSync(logFile)) {

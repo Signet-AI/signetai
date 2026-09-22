@@ -17,7 +17,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
-import { resolveDefaultBasePath } from "@signet/core";
+import { resolveDefaultBasePath, resolveWorkspaceLayout } from "@signet/core";
 
 export type TranscriptRole = "user" | "assistant" | "unknown";
 export type TranscriptSourceFormat = "jsonl" | "markdown" | "db" | "live" | "normalized";
@@ -78,11 +78,14 @@ export function sanitizeHarnessPath(harness: string): string {
 }
 
 export function canonicalTranscriptRelativePath(harness: string): string {
-	return `memory/${sanitizeHarnessPath(harness)}/transcripts/transcript.jsonl`;
+	const root = resolveBasePath();
+	const transcriptRoot = resolveWorkspaceLayout(root).transcripts;
+	return `${transcriptRoot.slice(root.length + 1)}/${sanitizeHarnessPath(harness)}/transcript.jsonl`;
 }
 
 export function canonicalTranscriptPath(basePath: string | undefined, harness: string): string {
-	return join(resolveBasePath(basePath), canonicalTranscriptRelativePath(harness));
+	const root = resolveBasePath(basePath);
+	return join(resolveWorkspaceLayout(root).transcripts, sanitizeHarnessPath(harness), "transcript.jsonl");
 }
 
 function normalizeLf(text: string): string {

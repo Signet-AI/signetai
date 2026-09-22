@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import { extractAnchorTerms } from "./anchor-terms";
 import { type DbAccessor, type ReadDb, type WriteDb, getDbAccessor } from "./db-accessor";
 import { logger } from "./logger";
@@ -154,7 +155,7 @@ async function backfillMarkdownTranscriptArtifacts(
 	agentId: string | undefined,
 	getSeen: (harness: string) => Promise<BackfillSeen>,
 ): Promise<number> {
-	const memoryDir = join(basePath, "memory");
+	const memoryDir = resolveWorkspaceLayout(basePath).transcripts;
 	if (!existsSync(memoryDir)) return 0;
 	let failures = 0;
 	const liveOnlyReplacements = new Map<
@@ -330,7 +331,7 @@ function markerScope(agentId?: string): string {
 }
 
 function getMarkerPath(basePath: string, agentId?: string): string {
-	return join(basePath, "memory", `${BACKFILL_MARKER}.${markerScope(agentId)}`);
+	return join(resolveWorkspaceLayout(basePath).transcripts, `${BACKFILL_MARKER}.${markerScope(agentId)}`);
 }
 
 function markerMatches(path: string, agentId?: string): boolean {
