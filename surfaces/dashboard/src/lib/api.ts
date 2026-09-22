@@ -1,3 +1,4 @@
+import type { ProtectionStatus as DashboardProtectionReport } from "@signet/core";
 import { installDemoApi } from "./demo";
 
 const API_BASE = "";
@@ -504,7 +505,7 @@ export interface SourceImportsResponse {
 	readonly imports: readonly SourceImportJob[];
 }
 
-export type { ProtectionStatus as DashboardProtectionReport } from "@signet/core";
+export type { DashboardProtectionReport };
 export interface SourcesResponse {
 	version: number;
 	sources: SignetSource[];

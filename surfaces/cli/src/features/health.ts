@@ -165,6 +165,7 @@ interface StatusReport {
 	readonly openclawRuntime: OpenClawRuntimeState;
 	readonly openclawWorkspaceLinked: boolean;
 	readonly openclawWorkspaceUnprotected: boolean;
+	readonly protection?: unknown;
 }
 
 interface DoctorFinding {
@@ -188,6 +189,7 @@ interface StatusDeps {
 	readonly normalizeAgentPath: (pathValue: string) => string;
 	readonly signetLogo: () => string;
 	readonly detectInstallations?: () => SignetInstallationReport;
+	readonly fetchProtection?: (port: number) => Promise<unknown | null>;
 }
 
 export async function getStatusReport(basePath: string, deps: StatusDeps): Promise<StatusReport> {
@@ -209,6 +211,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 		typeof daemon.workspacePath === "string" && deps.normalizeAgentPath(daemon.workspacePath) === basePath
 			? (daemon.workspaceStats ?? null)
 			: null;
+	const protection = deps.fetchProtection ? await deps.fetchProtection(deps.defaultPort) : null;
 	const report: StatusReport = {
 		basePath,
 		installed,
@@ -233,6 +236,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 		openclawRuntime,
 		openclawWorkspaceLinked,
 		openclawWorkspaceUnprotected: openclawWorkspaceLinked && git.origin === null && snapshot === null,
+		...(protection ? { protection } : {}),
 	};
 
 	return report;

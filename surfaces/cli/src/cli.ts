@@ -856,6 +856,14 @@ const healthDeps = {
 	extractPathOption,
 	formatUptime,
 	getDaemonStatus,
+	fetchProtection: async (port: number): Promise<unknown | null> => {
+		try {
+			const response = await fetch(`http://127.0.0.1:${port}/api/protection`);
+			return response.ok ? await response.json() : null;
+		} catch {
+			return null;
+		}
+	},
 	normalizeAgentPath,
 	parseIntegerValue,
 	signetLogo,

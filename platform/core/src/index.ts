@@ -10,6 +10,8 @@ export type {
 	ProtectionStatus,
 	ProtectionAggregateOptions,
 } from "./protection";
+export { buildProtectionEvidence } from "./protection-evidence";
+export type { ProtectionEvidence, ProtectionEvidenceOptions } from "./protection-evidence";
 export {
 	execFileHidden,
 	execFileSyncHidden,

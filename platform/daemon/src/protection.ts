@@ -1,22 +1,28 @@
-import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
 	aggregateProtection,
+	buildProtectionEvidence,
 	PROTECTION_COMPONENT_IDS,
 	type ProtectionComponent,
 	type ProtectionStatus,
 } from "@signet/core";
 import type { Hono } from "hono";
+
 export interface RestoreReceipt {
 	readonly at: string;
 	readonly valid: boolean;
 	readonly id?: string;
+	readonly scope?: string;
 }
+
 export interface ProtectionRouteOptions {
 	readonly components?: readonly ProtectionComponent[];
 	readonly workspacePath?: string;
 	readonly restoreReceipt?: RestoreReceipt | null;
+	readonly externalKeyringAvailable?: boolean;
 }
+
 export function saveRestoreReceipt(root: string, receipt: RestoreReceipt): void {
 	const dir = join(root, ".daemon");
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -24,6 +30,7 @@ export function saveRestoreReceipt(root: string, receipt: RestoreReceipt): void 
 	writeFileSync(tmp, `${JSON.stringify(receipt)}\n`, { mode: 0o600 });
 	renameSync(tmp, join(dir, "protection-restore-receipt.json"));
 }
+
 export function readRestoreReceipt(root: string): RestoreReceipt | null {
 	try {
 		const value = JSON.parse(
@@ -34,21 +41,36 @@ export function readRestoreReceipt(root: string): RestoreReceipt | null {
 		return null;
 	}
 }
+
+function unknownComponents(): ProtectionComponent[] {
+	return PROTECTION_COMPONENT_IDS.map(
+		(id): ProtectionComponent => ({
+			id,
+			type: id,
+			authority: "unknown" as const,
+			location: "[redacted]",
+			mechanism: "unknown",
+			state: "unknown" as const,
+			required: id !== "runtime" && id !== "filesystem-cache",
+			intentionallyExcluded: id === "runtime" || id === "filesystem-cache",
+			reason: "not checked",
+		}),
+	);
+}
+
 export function mountProtectionRoutes(app: Hono, options: ProtectionRouteOptions = {}): void {
 	app.get("/api/protection", (c) => {
+		const receipt =
+			options.restoreReceipt ?? (options.workspacePath ? readRestoreReceipt(options.workspacePath) : null);
 		const components =
 			options.components ??
-			PROTECTION_COMPONENT_IDS.map((id) => ({
-				id,
-				type: "unknown",
-				authority: "unknown" as const,
-				location: "unknown",
-				mechanism: "unknown",
-				state: "unknown" as const,
-				required: true,
-				intentionallyExcluded: false,
-				reason: "not checked",
-			}));
+			(options.workspacePath
+				? buildProtectionEvidence(options.workspacePath, {
+						externalKeyringAvailable: options.externalKeyringAvailable,
+						restoreVerifiedAt: receipt?.valid ? receipt.at : undefined,
+						verifiedScope: receipt?.scope,
+					}).components
+				: unknownComponents());
 		const status: ProtectionStatus = aggregateProtection(components);
 		return c.json(status);
 	});
