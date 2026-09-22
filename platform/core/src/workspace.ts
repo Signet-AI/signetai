@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { resolveWorkspaceLayout } from "./workspace-layout";
 import {
 	closeSync,
 	existsSync,
@@ -240,17 +241,18 @@ export function preflightWorkspace(options: ResolveWorkspacePathOptions = {}): W
 
 	const hasAgentConfig =
 		existsSync(join(resolution.path, "agent.yaml")) || existsSync(join(resolution.path, "config.yaml"));
-	const hasMemoryDb = existsSync(join(resolution.path, "memory", "memories.db"));
-	if (hasAgentConfig && hasMemoryDb) {
+	const layout = resolveWorkspaceLayout(resolution.path);
+	const hasDatabase = existsSync(layout.database);
+	if (hasAgentConfig && hasDatabase) {
 		return { ...resolution, status: "ready", reasons };
 	}
 
-	if (!hasExplicitConfiguration && !hasAgentConfig && !hasMemoryDb) {
+	if (!hasExplicitConfiguration && !hasAgentConfig && !hasDatabase) {
 		return { ...resolution, status: "fresh", reasons };
 	}
 
 	if (!hasAgentConfig) reasons.push("workspace configuration is missing (agent.yaml or config.yaml)");
-	if (!hasMemoryDb) reasons.push("workspace database is missing (memory/memories.db)");
+	if (!hasDatabase) reasons.push(`workspace database is missing (${layout.database})`);
 	return { ...resolution, status: "incomplete", reasons };
 }
 

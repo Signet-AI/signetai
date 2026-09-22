@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { hasOhMyPiSetup } from "@signet/connector-oh-my-pi";
 import { hasPiSetup } from "@signet/connector-pi";
-import { IDENTITY_FILES, resolveHermesRepoPath, resolveKimiHomePath } from "@signet/core";
+import { IDENTITY_FILES, resolveHermesRepoPath, resolveKimiHomePath, resolveWorkspaceLayout } from "@signet/core";
 
 export interface SetupDetection {
 	basePath: string;
@@ -47,7 +47,8 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		}
 	}
 
-	const memoryDir = join(basePath, "memory");
+	const layout = resolveWorkspaceLayout(basePath);
+	const memoryDir = layout.data;
 	let memoryLogCount = 0;
 	if (existsSync(memoryDir)) {
 		try {
@@ -65,7 +66,7 @@ export function detectExistingSetup(basePath: string): SetupDetection {
 		agentYaml: existsSync(join(basePath, "agent.yaml")),
 		agentsMd: existsSync(join(basePath, "AGENTS.md")),
 		configYaml: existsSync(join(basePath, "config.yaml")),
-		memoryDb: existsSync(join(basePath, "memory", "memories.db")),
+		memoryDb: existsSync(layout.database),
 		identityFiles: foundFiles,
 		hasMemoryDir: existsSync(memoryDir),
 		memoryLogCount,

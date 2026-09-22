@@ -1,6 +1,5 @@
 import { stat } from "node:fs/promises";
-import { join } from "node:path";
-import { vectorSearchWithMetadata } from "@signet/core";
+import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { getDbAccessorPath, hasDbAccessor, resolveSqliteAgentsDir } from "./db-accessor";
 import { registerDbAccessorCloseParticipant } from "./db-accessor-lifecycle";
@@ -327,12 +326,12 @@ export async function startDbOwnerWithRole(
 	}
 }
 export async function startDbOwner(
-	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
+	dbPath = resolveWorkspaceLayout(resolveSqliteAgentsDir()).database,
 ): Promise<DbOwnerClient> {
 	return await startDbOwnerWithRole(dbPath, "generic");
 }
 export async function startDbRecallOwner(
-	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
+	dbPath = resolveWorkspaceLayout(resolveSqliteAgentsDir()).database,
 ): Promise<DbOwnerClient> {
 	return await startDbOwnerWithRole(dbPath, "recall");
 }
