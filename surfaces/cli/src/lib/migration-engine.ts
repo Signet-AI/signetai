@@ -70,6 +70,7 @@ export interface MigrationDeps {
 	};
 	writers: { drain(): Promise<{ owners: string[] }> };
 	database: {
+		inspect?: () => Promise<void>;
 		prepare(): Promise<{ sourceRoot: string; sourcePath: string; destinationPath: string; bytes: number } | undefined>;
 		verifySnapshot?: (sourceDatabase: string, destinationDatabase: string) => Promise<void>;
 	};
@@ -110,6 +111,7 @@ export class MigrationEngine {
 	async preflight(): Promise<MigrationPlan> {
 		const layout = this.deps.resolver.resolve();
 		validateLayout(layout);
+		await this.deps.database.inspect?.();
 		const source = await openDescriptorRoot(layout.root);
 		try {
 			return await inventory(layout, source, this.deps.journalStateDir, this.deps.mapDestinationPath);

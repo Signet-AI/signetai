@@ -51,7 +51,7 @@ signet migration rollback  [--source <v1-root>] [--destination <v2-root>]
 signet migration cleanup   --accept [--source <v1-root>] [--destination <v2-root>]
 ```
 
-- **preflight** is read-only. It resolves overrides, inventories ownership and Git state, checks space and writers, and produces a redacted plan.
+- **preflight** is read-only. It resolves overrides, inventories ownership and Git state, checks the configured source database read-only, reports required space, and produces a redacted plan. Writer draining occurs during `run`.
 - **run** acquires the migration lease, drains supported writers, copies regular files and in-boundary symlinks with hash verification, compares typed row values and counts for every table in the copied SQLite snapshot, then publishes v2 cutover. v1 harness transcript files and top-level transcript/manifest/summary/compaction artifacts move to `transcripts/`; unknown `memory/` payloads survive under `data/legacy-memory/` as retained, non-indexed material.
 - **resume** reruns the journaled operation idempotently; it does not duplicate evidence or reset Dreaming state.
 - **status** reports phase, copied count, blockers, destination-write state, and whether rollback remains eligible.

@@ -137,7 +137,29 @@ test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
 			'PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ("workspace-v2-ok")',
 		);
 		expect(existsSync(`${join(source, "memory", "memories.db")}-wal`)).toBe(true);
+		const databaseBefore = readFileSync(join(source, "memory", "memories.db"));
+		const walBefore = readFileSync(join(source, "memory", "memories.db-wal"));
 		const cli = join(import.meta.dir, "..", "cli.ts");
+		const preflight = spawnSync(
+			process.execPath,
+			[cli, "migration", "preflight", "--source", source, "--destination", destination],
+			{
+				cwd: join(import.meta.dir, "..", "..", "..", ".."),
+				encoding: "utf8",
+				env: {
+					...process.env,
+					HOME: home,
+					XDG_CONFIG_HOME: config,
+					XDG_STATE_HOME: state,
+					SIGNET_PATH: source,
+					SIGNET_DAEMON_ENTRYPOINT: "0",
+				},
+			},
+		);
+		expect(preflight.status).toBe(0);
+		expect(readFileSync(join(source, "memory", "memories.db"))).toEqual(databaseBefore);
+		expect(readFileSync(join(source, "memory", "memories.db-wal"))).toEqual(walBefore);
+		expect(existsSync(destination)).toBe(false);
 		const result = spawnSync(
 			process.execPath,
 			[cli, "migration", "run", "--source", source, "--destination", destination],
@@ -165,7 +187,7 @@ test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
-}, 30_000);
+}, 60_000);
 
 test("production CLI maps default v1 components into canonical v2 ownership", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-components-"));
@@ -396,6 +418,25 @@ test("production CLI blocks cutover when the configured source database is missi
 	writeDaemonConfig(source);
 	try {
 		const cli = join(import.meta.dir, "..", "cli.ts");
+		const preflight = spawnSync(
+			process.execPath,
+			[cli, "migration", "preflight", "--source", source, "--destination", destination],
+			{
+				cwd: join(import.meta.dir, "..", "..", "..", ".."),
+				encoding: "utf8",
+				env: {
+					...process.env,
+					HOME: home,
+					XDG_CONFIG_HOME: config,
+					XDG_STATE_HOME: state,
+					SIGNET_PATH: source,
+					SIGNET_DAEMON_ENTRYPOINT: "0",
+				},
+			},
+		);
+		expect(preflight.status).not.toBe(0);
+		expect(preflight.stderr).toContain("source database is missing");
+		expect(existsSync(destination)).toBe(false);
 		const result = spawnSync(
 			process.execPath,
 			[cli, "migration", "run", "--source", source, "--destination", destination],

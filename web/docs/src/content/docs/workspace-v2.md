@@ -46,7 +46,7 @@ signet migration rollback --source <v1-root> --destination <v2-root>
 signet migration cleanup --accept --source <v1-root> --destination <v2-root>
 ```
 
-- `preflight` makes no changes. It resolves custom paths, inventories ownership/Git/transcripts, checks space and writers, and returns a redacted plan.
+- `preflight` makes no changes. It resolves custom paths, inventories ownership and Git state, checks the configured source database read-only, reports required space, and returns a redacted plan. Writer draining occurs during `run`, not preflight.
 - `run` acquires an exclusive lease, drains supported writers, copies and verifies state, snapshots SQLite, and publishes the v2 resolver cutover.
 - `resume` continues from the durable journal without duplicate evidence, Sources, or Dreaming consumption.
 - `status` shows phase, copied count, blockers, destination writes, and rollback eligibility.

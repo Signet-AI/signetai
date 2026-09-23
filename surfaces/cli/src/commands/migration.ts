@@ -295,6 +295,17 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 			},
 		},
 		database: {
+			inspect: async () => {
+				if (!existsSync(sourceLayout.database)) throw new Error("source database is missing");
+				if (!statSync(sourceLayout.database).isFile()) throw new Error("source database is not a regular file");
+				const db = createDatabase(sourceLayout.database, { readonly: true });
+				try {
+					const row = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+					if (row?.quick_check !== "ok") throw new Error("source database integrity verification failed");
+				} finally {
+					db.close();
+				}
+			},
 			prepare: async () => {
 				if (!existsSync(sourceLayout.database)) throw new Error("source database is missing");
 				const db = createDatabase(sourceLayout.database);
