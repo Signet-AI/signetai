@@ -116,14 +116,15 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 				await remove(path).catch(() => {});
 				continue;
 			}
+			let published: ManualInboxDispatchResult | undefined;
 			try {
 				const dispatch = fileName.endsWith(".jsonl") ? options.dispatchTranscript : options.dispatchDocument;
 				if (!dispatch) throw new Error("no dispatcher configured");
-				const result = await dispatch(claimed);
-				const terminal = { ...claimed, status: result.status, sourceId: result.sourceId } as ManualInboxRow;
+				published = await dispatch(claimed);
+				const terminal = { ...claimed, status: published.status, sourceId: published.sourceId } as ManualInboxRow;
 				// A transient owner/DB failure must not turn a published import into a
 				// retryable dispatch. Retry only the terminal write; dispatch is never
-				// repeated after it has returned successfully.
+				// repeated after it has returned successfully in this pass.
 				try {
 					await options.admission.record(terminal);
 				} catch (recordError) {
@@ -134,6 +135,10 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 				await remove(path).catch(() => {});
 				counts.imported++;
 			} catch (error) {
+				// Publication crossed the durable document-import boundary. Keep the
+				// claim recoverable when terminal admission is unavailable; replay will
+				// hit the idempotent importer rather than recording a false failure.
+				if (published) continue;
 				await options.admission.record({
 					...claimed,
 					status: "failed",

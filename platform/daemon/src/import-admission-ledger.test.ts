@@ -23,9 +23,7 @@ beforeEach(async () => {
 	const db = new Database(path);
 	admissionMigration({
 		exec: (sql) => db.exec(sql),
-		prepare: () => {
-			throw new Error("prepare is not used by this migration");
-		},
+		prepare: (sql) => db.query(sql),
 	});
 	db.close(true);
 	await closeDbAccessor();
@@ -99,18 +97,20 @@ test("migration 158 upgrades the prior global-key fixture without losing rows or
 	);
 	admissionMigration({
 		exec: (sql) => db.exec(sql),
-		prepare: () => {
-			throw new Error("unused");
-		},
+		prepare: (sql) => db.query(sql),
 	});
 	admissionMigration({
 		exec: (sql) => db.exec(sql),
-		prepare: () => {
-			throw new Error("unused");
-		},
+		prepare: (sql) => db.query(sql),
 	});
-	expect(db.query("SELECT key, agent_id, workspace_id, file_name FROM import_admission_ledger").all()).toEqual([
+	db.exec(
+		"INSERT INTO import_admission_ledger (key, agent_id, workspace_id, file_name, status, original_path, sha256, size_bytes, created_at, updated_at) VALUES ('legacy','other-agent','other-workspace','new.txt','pending','/new','def',3,'t','t')",
+	);
+	expect(
+		db.query("SELECT key, agent_id, workspace_id, file_name FROM import_admission_ledger ORDER BY agent_id").all(),
+	).toEqual([
 		{ key: "legacy", agent_id: "", workspace_id: "", file_name: "old.txt" },
+		{ key: "legacy", agent_id: "other-agent", workspace_id: "other-workspace", file_name: "new.txt" },
 	]);
 	expect(db.query("SELECT admission_key, agent_id, workspace_id, event FROM import_admission_events").all()).toEqual([
 		{ admission_key: "legacy", agent_id: "", workspace_id: "", event: "admitted" },
