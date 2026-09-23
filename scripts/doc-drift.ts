@@ -120,21 +120,28 @@ function extractRoutesFromSource(): RouteEntry[] {
 		if (!fileExists(file)) continue;
 		const content = read(file);
 		const finiteArrays: Record<string, readonly string[]> = {};
-		for (const arrayMatch of content.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*\[([^\]]*)\]\s*(?:as const)?/g)) {
-			const values = [...arrayMatch[2]!.matchAll(/["']([^"']+)["']/g)].map((value) => value[1]!);
-			const residue = arrayMatch[2]!.replace(/["'][^"']*["']/g, "").replace(/[\s,]/g, "");
-			if (values.length > 0 && residue.length === 0) finiteArrays[arrayMatch[1]!] = values;
-		}
-		for (const loopMatch of content.matchAll(/for\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\s+\[([^\]]*)\]\s*(?:as const\s*)?\)/g)) {
-			const values = [...loopMatch[2]!.matchAll(/["']([^"']+)["']/g)].map((value) => value[1]!);
-			const residue = loopMatch[2]!.replace(/["'][^"']*["']/g, "").replace(/[\s,]/g, "");
-			if (values.length > 0 && residue.length === 0) finiteArrays[loopMatch[1]!] = values;
-		}
+		const captureFiniteArray = (match: RegExpMatchArray): void => {
+			const name = match[1];
+			const items = match[2];
+			if (name === undefined || items === undefined) return;
+			const values = [...items.matchAll(/["']([^"']+)["']/g)]
+				.map((value) => value[1])
+				.filter((value): value is string => value !== undefined);
+			const residue = items.replace(/["'][^"']*["']/g, "").replace(/[\s,]/g, "");
+			if (values.length > 0 && residue.length === 0) finiteArrays[name] = values;
+		};
+		for (const arrayMatch of content.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*\[([^\]]*)\]\s*(?:as const)?/g))
+			captureFiniteArray(arrayMatch);
+		for (const loopMatch of content.matchAll(
+			/for\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\s+\[([^\]]*)\]\s*(?:as const\s*)?\)/g,
+		))
+			captureFiniteArray(loopMatch);
 		routePattern.lastIndex = 0;
 		let match: RegExpExecArray | null = null;
 		while ((match = routePattern.exec(content)) !== null) {
-			const method = match[1].toUpperCase();
+			const method = match[1]?.toUpperCase();
 			const rawPath = match[3];
+			if (method === undefined || rawPath === undefined) continue;
 			const paths = expandRoutePattern(rawPath, finiteArrays);
 			for (const path of paths) {
 				if (path === "*" || path === "/*" || path === "/**" || path === "/") continue;

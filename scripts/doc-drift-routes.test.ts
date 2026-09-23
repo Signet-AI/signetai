@@ -9,12 +9,12 @@ describe("route drift normalization", () => {
 		expect(normalizeRoutePath("/api/sessions/:key{(?!summaries$)[^/]+}/transcript")).toBe("/api/sessions/:/transcript");
 	});
 	test("expands finite template expressions into real registered paths", () => {
-		expect(expandRoutePattern("/api/jobs/:id/${action}", { action: ["start", "pause"] })).toEqual([
+		expect(expandRoutePattern(`/api/jobs/:id/\${action}`, { action: ["start", "pause"] })).toEqual([
 			"/api/jobs/:id/start",
 			"/api/jobs/:id/pause",
 		]);
 	});
 	test("does not invent routes for unsupported dynamic expressions", () => {
-		expect(expandRoutePattern("/api/jobs/:id/${makeSuffix()}", {})).toEqual([]);
+		expect(expandRoutePattern(`/api/jobs/:id/\${makeSuffix()}`, {})).toEqual([]);
 	});
 });
