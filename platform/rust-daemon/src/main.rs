@@ -731,6 +731,9 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
         std::fs::write(&config, "auth:\n  mode: invalid\n").unwrap();
         assert!(super::update_auth_mode(&mode, &directory).is_err());
         assert_eq!(*mode.lock().unwrap(), "team");
+        std::fs::write(&config, "auth: [unterminated\n").unwrap();
+        assert!(super::read_auth_mode(&directory).is_err());
+        assert_eq!(*mode.lock().unwrap(), "team");
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -1734,47 +1737,49 @@ fn resolve_startup_workspace() -> Result<PathBuf, String> {
         .ok_or_else(|| "Signet cannot start: missing workspace (will not recreate it)".to_owned())
 }
 
-fn read_auth_mode(workspace: &FsPath) -> Result<String, String> {
+fn read_agent_config(workspace: &FsPath) -> Result<Option<(PathBuf, String)>, String> {
     let path = workspace.join("agent.yaml");
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let mut in_auth = false;
-    let mut mode = "local".to_owned();
-    for line in text.lines() {
-        if line.trim() == "auth:" {
-            in_auth = true;
-        } else if !line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty() {
-            in_auth = false;
-        } else if in_auth && line.trim_start().starts_with("mode:") {
-            mode = line.trim_start()[5..].trim().to_owned();
-        }
+    match std::fs::read_to_string(&path) {
+        Ok(text) => Ok(Some((path, text))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("{}: unable to read runtime configuration: {error}", path.display())),
     }
+}
+
+fn parse_runtime_auth_mode(path: &FsPath, text: &str) -> Result<String, String> {
+    let document: yaml_serde::Value = yaml_serde::from_str(text)
+        .map_err(|_| format!("{}: invalid YAML syntax", path.display()))?;
+    if !matches!(document, yaml_serde::Value::Mapping(_)) {
+        return Err(format!("{}: top-level document must be a mapping", path.display()));
+    }
+    let Some(auth) = document.get("auth") else {
+        return Ok("local".to_owned());
+    };
+    let yaml_serde::Value::Mapping(auth) = auth else {
+        return Err(format!("{}: auth must be a mapping", path.display()));
+    };
+    let Some(mode) = auth.get("mode") else {
+        return Ok("local".to_owned());
+    };
+    let yaml_serde::Value::String(mode) = mode else {
+        return Err(format!("{}: auth.mode is invalid", path.display()));
+    };
     if !matches!(mode.as_str(), "local" | "team" | "hybrid") {
         return Err(format!("{}: invalid auth mode", path.display()));
     }
-    Ok(mode)
+    Ok(mode.clone())
+}
+
+fn read_auth_mode(workspace: &FsPath) -> Result<String, String> {
+    match read_agent_config(workspace)? {
+        Some((path, text)) => parse_runtime_auth_mode(&path, &text),
+        None => Ok("local".to_owned()),
+    }
 }
 
 fn validate_startup_config(workspace: &FsPath) -> Result<(), String> {
-    let path = workspace.join("agent.yaml");
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
-    if text
-        .lines()
-        .any(|line| line.trim_start().starts_with("embedding: [") && !line.contains(']'))
-    {
-        return Err(format!("{}: invalid YAML syntax", path.display()));
-    }
-    let mut in_auth = false;
-    for line in text.lines() {
-        if line.trim() == "auth:" {
-            in_auth = true;
-        } else if !line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty() {
-            in_auth = false;
-        } else if in_auth && line.trim_start().starts_with("mode:") {
-            let mode = line.trim_start()[5..].trim();
-            if !matches!(mode, "local" | "team" | "hybrid") {
-                return Err(format!("{}: invalid auth mode", path.display()));
-            }
-        }
+    if let Some((path, text)) = read_agent_config(workspace)? {
+        parse_runtime_auth_mode(&path, &text).map(|_| ())?;
     }
     Ok(())
 }
