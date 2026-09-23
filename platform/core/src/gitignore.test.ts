@@ -39,7 +39,7 @@ describe("mergeSignetGitignoreEntries", () => {
 	it("normalizes CRLF content while preserving non-managed rules", () => {
 		const merged = mergeSignetGitignoreEntries("# Existing\r\n.venv/\r\n");
 
-		expect(merged.startsWith("# Existing\n.venv/\n\n# BEGIN Signet lightweight workspace")).toBe(true);
+		expect(merged.startsWith("# Existing\r\n.venv/\r\n\r\n# BEGIN Signet lightweight workspace")).toBe(true);
 	});
 
 	it("allows the managed gitignore but rejects database backups", () => {

@@ -22,7 +22,12 @@ export interface RootGitInventory {
 }
 export type ManagedGitignoreUpdate =
 	| { readonly status: "updated"; readonly preimage: string; readonly content: string }
-	| { readonly status: "refused"; readonly reason: "dirty" | "staged" };
+	| {
+			readonly status: "refused";
+			readonly reason: "dirty" | "staged";
+			readonly preimage: string;
+			readonly content: string;
+	  };
 
 function git(root: string, args: string[]): string {
 	const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -43,7 +48,7 @@ export function inspectRootGit(root: string): RootGitInventory {
 			worktreeChanged: false,
 			hooks: [],
 			localConfig: false,
-			isRepository: false,
+			isRepository,
 			branch: null,
 			remotes: [],
 			dirty: false,
@@ -80,19 +85,14 @@ export function inspectRootGit(root: string): RootGitInventory {
 
 export function managedGitignoreUpdate(root: string): ManagedGitignoreUpdate {
 	const path = join(root, ".gitignore");
-	const inventory = inspectRootGit(root);
-	if (
-		inventory.isRepository &&
-		inventory.staged &&
-		git(root, ["diff", "--cached", "--name-only"]).split("\n").includes(".gitignore")
-	) {
-		return { status: "refused", reason: "staged" };
-	}
-	if (inventory.isRepository && git(root, ["diff", "--name-only"]).split("\n").includes(".gitignore")) {
-		return { status: "refused", reason: "dirty" };
-	}
 	const preimage = existsSync(path) ? readFileSync(path, "utf8") : "";
 	const content = mergeSignetGitignoreEntries(preimage);
+	const inventory = inspectRootGit(root);
+	const stagedIgnore =
+		inventory.isRepository && git(root, ["diff", "--cached", "--name-only"]).split("\n").includes(".gitignore");
+	const dirtyIgnore = inventory.isRepository && git(root, ["diff", "--name-only"]).split("\n").includes(".gitignore");
+	if (stagedIgnore) return { status: "refused", reason: "staged", preimage, content };
+	if (dirtyIgnore) return { status: "refused", reason: "dirty", preimage, content };
 	if (content !== preimage) writeFileSync(path, content, "utf8");
 	return { status: "updated", preimage, content };
 }

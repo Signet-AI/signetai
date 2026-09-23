@@ -31,6 +31,21 @@ describe("root git transition", () => {
 		expect(managedGitignoreUpdate(root).status).toBe("updated");
 		spawnSync("git", ["add", ".gitignore"], { cwd: root });
 		writeFileSync(join(root, ".gitignore"), "# changed\n");
-		expect(managedGitignoreUpdate(root)).toEqual({ status: "refused", reason: "staged" });
+		const refused = managedGitignoreUpdate(root);
+		expect(refused.status).toBe("refused");
+		if (refused.status === "refused") {
+			expect(refused.reason).toBe("staged");
+			expect(refused.preimage).toBe("# changed\n");
+			expect(refused.content).toContain("# BEGIN Signet lightweight workspace");
+		}
+	});
+
+	it("preserves CRLF and a missing final newline", () => {
+		const root = repo();
+		writeFileSync(join(root, ".gitignore"), "# user\r\n*.tmp");
+		const result = managedGitignoreUpdate(root);
+		expect(result.status).toBe("updated");
+		expect(result.content.includes("\r\n")).toBe(true);
+		expect(result.content.endsWith("\r\n")).toBe(false);
 	});
 });
