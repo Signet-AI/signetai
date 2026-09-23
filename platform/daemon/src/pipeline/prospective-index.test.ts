@@ -1,3 +1,11 @@
+/**
+ * Tests for the prospective indexing (hints) pipeline.
+ *
+ * Uses a real in-memory SQLite database with full migrations.
+ * Mock providers simulate various LLM output formats (clean, thinking
+ * tags, chain-of-thought noise, empty responses).
+ */
+
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { PipelineHintsConfig } from "@signet/core";
@@ -7,6 +15,10 @@ import { DbOwnerDiedError } from "../db-owner-client";
 import { DEFAULT_PIPELINE_V2 } from "../memory-config";
 import { enqueueHintsJob, generateHints, HINTS_WORKER_STOP_GRACE_MS, startHintsWorker } from "./prospective-index";
 import type { LlmProvider } from "./provider";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
@@ -61,7 +73,7 @@ const HINTS_CFG: PipelineHintsConfig = {
 	max: 5,
 	timeout: 5000,
 	maxTokens: 256,
-	poll: 10,
+	poll: 10, // fast polling for tests
 };
 
 function getHints(db: Database, memoryId: string): string[] {
@@ -121,6 +133,8 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
 	}
 	throw new Error(`Condition not met within ${timeoutMs}ms`);
 }
+
+/** Shared pipeline config with hints enabled. */
 function pipelineCfg(hints = HINTS_CFG) {
 	return {
 		...DEFAULT_PIPELINE_V2,
@@ -148,6 +162,12 @@ function pipelineCfg(hints = HINTS_CFG) {
 		hints,
 	};
 }
+
+// ---------------------------------------------------------------------------
+// Mock providers
+// ---------------------------------------------------------------------------
+
+/** Clean question-per-line output (ideal LLM response). */
 function cleanProvider(): LlmProvider {
 	return {
 		name: "mock-clean",
@@ -165,6 +185,8 @@ function cleanProvider(): LlmProvider {
 		},
 	};
 }
+
+/** Response wrapped in think tags (qwen3 with thinking mode via tags). */
 function thinkingTagProvider(): LlmProvider {
 	return {
 		name: "mock-thinking-tags",
@@ -185,6 +207,8 @@ function thinkingTagProvider(): LlmProvider {
 		},
 	};
 }
+
+/** Response with chain-of-thought noise mixed in (thinking field fallback). */
 function cotNoiseProvider(): LlmProvider {
 	return {
 		name: "mock-cot-noise",
@@ -206,6 +230,8 @@ function cotNoiseProvider(): LlmProvider {
 		},
 	};
 }
+
+/** Response containing prompt scaffolding that can look query-shaped. */
 function promptResidueProvider(): LlmProvider {
 	return {
 		name: "mock-prompt-residue",
@@ -226,6 +252,8 @@ function promptResidueProvider(): LlmProvider {
 		},
 	};
 }
+
+/** Numbered list output (common LLM format). */
 function numberedProvider(): LlmProvider {
 	return {
 		name: "mock-numbered",
@@ -243,6 +271,8 @@ function numberedProvider(): LlmProvider {
 		},
 	};
 }
+
+/** Empty response (LLM returns nothing). */
 function emptyProvider(): LlmProvider {
 	return {
 		name: "mock-empty",
@@ -254,6 +284,8 @@ function emptyProvider(): LlmProvider {
 		},
 	};
 }
+
+/** Provider that throws (simulates timeout/error). */
 function throwingProvider(): LlmProvider {
 	return {
 		name: "mock-throw",
@@ -265,6 +297,10 @@ function throwingProvider(): LlmProvider {
 		},
 	};
 }
+
+// ---------------------------------------------------------------------------
+// Test suite
+// ---------------------------------------------------------------------------
 
 describe("prospective-index", () => {
 	let db: Database;
@@ -280,6 +316,10 @@ describe("prospective-index", () => {
 	afterEach(() => {
 		db.close();
 	});
+
+	// -----------------------------------------------------------------------
+	// generateHints — line parsing and filtering
+	// -----------------------------------------------------------------------
 
 	describe("generateHints", () => {
 		it("does not send hostile memory content to the hints provider", async () => {
@@ -315,6 +355,7 @@ describe("prospective-index", () => {
 			expect(hints.length).toBe(3);
 			expect(hints).toContain("Where does Caroline live now?");
 			expect(hints).toContain("Tell me about Caroline's move to Seattle");
+			// CoT lines inside think block should be gone
 			for (const h of hints) {
 				expect(h).not.toContain("I should generate");
 			}
@@ -322,10 +363,12 @@ describe("prospective-index", () => {
 
 		it("filters chain-of-thought noise from mixed output", async () => {
 			const hints = await generateHints(cotNoiseProvider(), "test", HINTS_CFG);
+			// Should keep only lines that look like questions or cues
 			expect(hints.length).toBe(4);
 			expect(hints).toContain("Where does Caroline live now?");
 			expect(hints).toContain("Who is Caroline's roommate in Seattle?");
 			expect(hints).toContain("Tell me about Caroline's relocation from Portland");
+			// Should NOT contain reasoning lines
 			for (const h of hints) {
 				expect(h).not.toContain("We are given");
 				expect(h).not.toContain("Let's craft");
@@ -382,6 +425,10 @@ describe("prospective-index", () => {
 		});
 	});
 
+	// -----------------------------------------------------------------------
+	// enqueueHintsJob — job creation
+	// -----------------------------------------------------------------------
+
 	describe("enqueueHintsJob", () => {
 		it("creates a pending prospective_index job", () => {
 			const mid = crypto.randomUUID();
@@ -397,6 +444,10 @@ describe("prospective-index", () => {
 			expect(job?.attempts).toBe(0);
 		});
 	});
+
+	// -----------------------------------------------------------------------
+	// startHintsWorker — full job lifecycle
+	// -----------------------------------------------------------------------
 
 	describe("startHintsWorker", () => {
 		it("leases prospective jobs in created order", async () => {
@@ -465,7 +516,9 @@ describe("prospective-index", () => {
 					} catch (error) {
 						try {
 							db.exec("ROLLBACK");
-						} catch {}
+						} catch {
+							// The simulated owner died after commit.
+						}
 						throw error;
 					}
 				},
@@ -956,6 +1009,8 @@ describe("prospective-index", () => {
 
 			await new Promise((r) => setTimeout(r, 200));
 			await handle.stop();
+
+			// FTS5 should find the hints
 			const ftsMatches = getHintsFts(db, '"Caroline" "live"');
 			expect(ftsMatches.length).toBeGreaterThan(0);
 			expect(ftsMatches[0]).toBe(mid);
@@ -1020,6 +1075,8 @@ describe("prospective-index", () => {
 		it("keeps retried hint indexing in the parent memory agent scope", async () => {
 			const mid = crypto.randomUUID();
 			insertMemory(db, mid, "test", "agent-b");
+
+			// Enqueue two jobs for the same memory
 			accessor.withWriteTx((wdb) => {
 				enqueueHintsJob(wdb, mid, "test");
 				enqueueHintsJob(wdb, mid, "test");
@@ -1033,6 +1090,10 @@ describe("prospective-index", () => {
 
 			await new Promise((r) => setTimeout(r, 400));
 			await handle.stop();
+
+			// Same hints should not duplicate due to UNIQUE(memory_id, hint), and
+			// every retry must re-read the parent memory's agent rather than use a
+			// worker-default scope.
 			const hints = getHints(db, mid);
 			expect(hints.length).toBe(5);
 			const agentIds = db.prepare("SELECT DISTINCT agent_id FROM memory_hints WHERE memory_id = ?").all(mid) as Array<{
@@ -1066,10 +1127,16 @@ describe("prospective-index", () => {
 		});
 	});
 
+	// -----------------------------------------------------------------------
+	// CASCADE delete — hints removed when parent memory deleted
+	// -----------------------------------------------------------------------
+
 	describe("cascade delete", () => {
 		it("deletes hints when parent memory is deleted", () => {
 			const mid = crypto.randomUUID();
 			insertMemory(db, mid, "test");
+
+			// Insert hints directly
 			const now = new Date().toISOString();
 			db.prepare(
 				`INSERT INTO memory_hints (id, memory_id, agent_id, hint, created_at)

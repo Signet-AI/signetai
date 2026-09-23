@@ -64,7 +64,7 @@ describe("Database memory CRUD", () => {
 				memory_kind: null,
 			});
 		} finally {
-			raw.close(true);
+			raw.close();
 		}
 	});
 });

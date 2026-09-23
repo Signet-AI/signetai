@@ -1,3 +1,4 @@
+/** Regression coverage for #1392: persisted telemetry drops must be visible as local data loss. */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { TelemetryHealthResponse } from "@/lib/api";
 import { Window } from "happy-dom";

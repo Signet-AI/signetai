@@ -95,7 +95,9 @@ memory:
 		closeDbAccessor?.();
 		try {
 			rmSync(dir, { recursive: true, force: true });
-		} catch {}
+		} catch {
+			// cleanup best-effort
+		}
 	});
 
 	it("returns 200 on valid recall request", async () => {
@@ -110,6 +112,9 @@ memory:
 				sessionKey: "valid-recall-fast",
 			}),
 		});
+
+		// The route should resolve without crashing (no cfg ReferenceError),
+		// even if the DB isn't fully initialized — the key contract is no 500.
 		expect(resp.status).toBe(200);
 		const body = await resp.json();
 		expect(body.error).not.toBe("Hook execution failed");

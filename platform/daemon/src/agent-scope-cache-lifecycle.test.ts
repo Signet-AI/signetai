@@ -1,3 +1,8 @@
+// Regression: agent-scope cache must not survive DB accessor replacement
+// (PR #1721 P2 — closeDbAccessor now invalidates the scope cache).
+// The second DB's row is seeded DIRECTLY (not via ensureAgentRegistered) so the
+// only thing standing between a stale cache and a wrong policy is the
+// closeDbAccessor invalidation this test pins.
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -16,10 +21,14 @@ describe("agent-scope cache lifecycle", () => {
 		const pathA = makeDbPath("a");
 		const pathB = makeDbPath("b");
 		try {
+			// DB A: reinit-agent is shared (populates the cache)
 			initDbAccessor(pathA);
 			await ensureAgentRegistered("reinit-agent", "shared");
 			expect((await getAgentScope("reinit-agent")).readPolicy).toBe("shared");
-			await closeDbAccessor();
+
+			// Replace the DB (same process). DB B already contains reinit-agent as
+			// isolated — seeded directly so NO registration-time invalidation fires.
+			await closeDbAccessor(); // must invalidate the scope cache
 			initDbAccessor(pathB);
 			await getDbAccessor().withWriteTxAsync(
 				(db) => {
@@ -28,7 +37,7 @@ describe("agent-scope cache lifecycle", () => {
 						 VALUES ('reinit-agent', 'reinit-agent', 'isolated', NULL, ?, ?)`,
 					).run(new Date().toISOString(), new Date().toISOString());
 				},
-				{ siteToken: "agent-scope-cache-lifecycle.test.ts:24", operation: "test.seed-agents" },
+				{ siteToken: "agent-scope-cache-lifecycle.test.ts:37", operation: "test.seed-agents" },
 			);
 
 			const scope = await getAgentScope("reinit-agent");

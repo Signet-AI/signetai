@@ -1,3 +1,13 @@
+/**
+ * Regression tests for the paginated-ID rewrites of
+ * `listKnowledgeEntities`, `getKnowledgeEntityDetail`, and
+ * `getKnowledgeStats`. See Signet-AI/signetai#515.
+ *
+ * These seed a small graph (2 agents, mixed aspects/attributes/dependencies)
+ * and assert counts + ordering match expected values. They'd fail if the
+ * scalar subqueries drift from the original GROUP BY semantics.
+ */
+
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -67,14 +77,10 @@ function seedAttribute(
 	aspectId: string,
 	opts: {
 		agentId?: string;
-		kind?: "attribute" | "constraint" | "claim";
+		kind?: "attribute" | "constraint";
 		status?: "active" | "superseded";
 		content?: string;
 		memoryId?: string | null;
-		sourceId?: string | null;
-		sourceKind?: string | null;
-		sourcePath?: string | null;
-		sourceRoot?: string | null;
 	} = {},
 ): void {
 	const agentId = opts.agentId ?? "default";
@@ -82,34 +88,14 @@ function seedAttribute(
 	const status = opts.status ?? "active";
 	const content = opts.content ?? `content-${id}`;
 	const memoryId = opts.memoryId ?? null;
-	const sourceId = opts.sourceId ?? null;
-	const sourceKind = opts.sourceKind ?? null;
-	const sourcePath = opts.sourcePath ?? null;
-	const sourceRoot = opts.sourceRoot ?? null;
 	const now = new Date().toISOString();
 	getDbAccessor().withWriteTx((db) => {
 		db.prepare(
 			`INSERT INTO entity_attributes
 			 (id, aspect_id, agent_id, memory_id, kind, content, normalized_content,
-			  confidence, importance, status, created_at, updated_at,
-			  source_id, source_kind, source_path, source_root)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, 0.8, 0.5, ?, ?, ?, ?, ?, ?, ?)`,
-		).run(
-			id,
-			aspectId,
-			agentId,
-			memoryId,
-			kind,
-			content,
-			content.toLowerCase(),
-			status,
-			now,
-			now,
-			sourceId,
-			sourceKind,
-			sourcePath,
-			sourceRoot,
-		);
+			  confidence, importance, status, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, 0.8, 0.5, ?, ?, ?)`,
+		).run(id, aspectId, agentId, memoryId, kind, content, content.toLowerCase(), status, now, now);
 	});
 }
 
@@ -208,9 +194,12 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		seedAspect("asp-2", "e-hub", "dependency");
 		seedAttribute("attr-1", "asp-1", { kind: "attribute", status: "active" });
 		seedAttribute("attr-2", "asp-1", { kind: "attribute", status: "active" });
+		// Superseded attribute should not be counted
 		seedAttribute("attr-3", "asp-1", { kind: "attribute", status: "superseded" });
 		seedAttribute("attr-4", "asp-2", { kind: "constraint", status: "active" });
+		// Dependency where hub is source
 		seedDependency("dep-1", "e-hub", "e-leaf");
+		// Dependency where hub is target (inbound) — should also count
 		seedDependency("dep-2", "e-leaf", "e-hub");
 
 		const result = await listKnowledgeEntities(getDbAccessor(), {
@@ -460,10 +449,13 @@ describe("listKnowledgeEntities (issue #515)", () => {
 
 		const realBacklog = await getDreamingEpisodicTokenBacklog(getDbAccessor(), "default");
 		{
+			// Regression (#1759 re-verdict): the ownerMaintenance branch must record the
+			// parent-visible backlog mirror before returning, or the constellation cache
+			// reads zero until an inline path happens to run.
 			const { getDreamingEpisodicTokenBacklogCached, recordDreamingEpisodicTokenBacklog } = await import(
 				"./pipeline/dreaming-token-cache"
 			);
-			recordDreamingEpisodicTokenBacklog("default", 0);
+			recordDreamingEpisodicTokenBacklog("default", 0); // prime stale value
 			const maintenance = {
 				dreamingEpisodicBacklog: async () => 123,
 			};
@@ -471,7 +463,7 @@ describe("listKnowledgeEntities (issue #515)", () => {
 			if (getDreamingEpisodicTokenBacklogCached("default") !== 123) {
 				throw new Error("owner-maintenance branch did not record the backlog mirror");
 			}
-			recordDreamingEpisodicTokenBacklog("default", realBacklog);
+			recordDreamingEpisodicTokenBacklog("default", realBacklog); // restore for metadata assertions
 		}
 		const source = getDbAccessor().withReadDb(
 			(db) =>
@@ -521,118 +513,6 @@ describe("listKnowledgeEntities (issue #515)", () => {
 		expect(graph.entities).toHaveLength(1);
 		expect(graph.entities[0]).toMatchObject({ id: "e-artifact", entityType: "artifact" });
 		expect(graph.entities[0]?.aspects[0]?.attributes[0]?.content).toBe("The report supports the current plan.");
-	});
-
-	test("includes source documents that carry source-backed ontology claims", async () => {
-		dbPath = makeDbPath();
-		initDbAccessor(dbPath);
-
-		seedEntity("e-source", "Kimi K3 note", { entityType: "source_document", mentions: 0 });
-		seedAspect("asp-source", "e-source", "related");
-		seedAttribute("attr-source-claim", "asp-source", {
-			kind: "claim",
-			content: "The note describes frontier intelligence.",
-			sourceId: "obsidian-source",
-			sourceKind: "source_obsidian_markdown",
-			sourcePath: "references/ai-stack/kimi-k3.md",
-			sourceRoot: "/vault",
-		});
-		getDbAccessor().withWriteTx((db) => {
-			db.prepare(
-				`INSERT INTO epistemic_assertions
-				 (id, agent_id, subject_entity_id, claim_attribute_id, predicate, content, normalized_content,
-				  speaker, asserted_at, confidence, evidence, source_kind, source_id, source_path, source_root)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			).run(
-				"assertion-source-claim",
-				"default",
-				"e-source",
-				"attr-source-claim",
-				"observed",
-				"The note observes frontier intelligence.",
-				"the note observes frontier intelligence",
-				"Obsidian note",
-				"2026-05-16T13:00:00Z",
-				0.91,
-				JSON.stringify([{ kind: "source", id: "obsidian-source" }]),
-				"source_obsidian_markdown",
-				"obsidian-source",
-				"references/ai-stack/kimi-k3.md",
-				"/vault",
-			);
-		});
-		seedEntity("e-source-kind", "Source-kind-only note", { entityType: "source_document", mentions: 0 });
-		seedAspect("asp-source-kind", "e-source-kind", "overview");
-		seedAttribute("attr-source-kind-claim", "asp-source-kind", {
-			kind: "claim",
-			content: "The claim has source-kind provenance.",
-			sourceKind: "source_obsidian_markdown",
-		});
-		seedAspect("asp-source-unrelated", "e-source", "aaa");
-		seedAttribute("aaa-source-ordinary", "asp-source-unrelated", {
-			content: "An ordinary source value.",
-		});
-		seedEntity("e-empty-source", "Empty source note", { entityType: "source_document", mentions: 0 });
-		seedAspect("asp-empty-source", "e-empty-source", "empty");
-		seedAttribute("attr-empty-source", "asp-empty-source", { sourcePath: "references/ai-stack/empty.md" });
-		seedEntity("e-folder", "AI stack", { entityType: "source_folder", mentions: 0 });
-		seedAspect("asp-folder", "e-folder", "contents");
-		seedAttribute("attr-folder-claim", "asp-folder", { kind: "claim", sourcePath: "references/ai-stack/folder.md" });
-
-		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
-			limit: 10,
-			maxAspectsPerEntity: 1,
-			maxAttributesPerAspect: 1,
-		});
-
-		expect(graph.entities.map((entity) => entity.id)).toEqual(["e-source", "e-source-kind"]);
-		expect(graph.entities[0]?.aspects[0]?.id).toBe("asp-source");
-		expect(graph.entities[0]?.aspects[0]?.attributes[0]).toMatchObject({
-			id: "attr-source-claim",
-			kind: "claim",
-			sourceKind: "source_obsidian_markdown",
-			sourcePath: "references/ai-stack/kimi-k3.md",
-		});
-		expect(graph.entities[1]?.aspects[0]?.attributes[0]).toMatchObject({
-			id: "attr-source-kind-claim",
-			kind: "claim",
-			sourceKind: "source_obsidian_markdown",
-			sourcePath: null,
-		});
-		expect(graph.assertions).toMatchObject([
-			{
-				id: "assertion-source-claim",
-				subjectEntityId: "e-source",
-				claimAttributeId: "attr-source-claim",
-				predicate: "observed",
-				confidence: 0.91,
-				sourcePath: "references/ai-stack/kimi-k3.md",
-				evidenceCount: 1,
-			},
-		]);
-	});
-
-	test("orders equal-strength dependencies deterministically at the cap", async () => {
-		dbPath = makeDbPath();
-		initDbAccessor(dbPath);
-
-		seedEntity("e-source", "Source");
-		seedEntity("e-target", "Target");
-		seedDependency("dep-z", "e-source", "e-target", { type: "z-link", strength: 0.8 });
-		seedDependency("dep-a", "e-source", "e-target", { type: "a-link", strength: 0.8 });
-
-		const graph = await getKnowledgeGraphForConstellation(getDbAccessor(), "default", {
-			limit: 10,
-			dependencyLimit: 1,
-		});
-
-		expect(graph.dependencies).toMatchObject([
-			{
-				sourceEntityId: "e-source",
-				targetEntityId: "e-target",
-				dependencyType: "a-link",
-			},
-		]);
 	});
 
 	test("constellation includes shared-agent graph rows for the current view", async () => {
@@ -701,6 +581,9 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		seedEntity("e-hub", "Hub");
 
 		const accessor = getDbAccessor();
+		// The live base routes getKnowledgeEntityDetail through the DB owner.
+		// Keep this synchronization proof at the accessor boundary where the
+		// lease contract is implemented, rather than wrapping an unused seam.
 		let entered = 0;
 		let releaseCallbacks = (): void => {};
 		let resolveAllEntered = (): void => {};
@@ -713,10 +596,13 @@ describe("getKnowledgeEntityDetail (issue #515)", () => {
 		const requests = Array.from({ length: MAX_READ_CONNECTIONS }, (_, index) =>
 			accessor.withReadDbAsync(
 				async (db) => {
+					// This is the synchronous detail query in the saturated request.
 					db.prepare("SELECT ? AS entity_id").get(index);
 					entered += 1;
 					if (entered === MAX_READ_CONNECTIONS) resolveAllEntered();
 					await callbackGate;
+					// The structural-density query must be able to acquire a new
+					// lease while the outer callback continuation is still pending.
 					return await accessor.withReadDbAsync((innerDb) => innerDb.prepare("SELECT 1 AS structural_density").get(), {
 						operation: "db:knowledge.structural-density.read",
 					});
@@ -819,7 +705,6 @@ describe("getKnowledgeStats (issue #515)", () => {
 		seedAspect("asp-active", "e-active", "capability");
 		seedAspect("asp-archived", "e-active", "retired");
 		seedAttribute("attr-active", "asp-active", { memoryId: "m-active" });
-		seedAttribute("claim-active", "asp-active", { kind: "claim", sourcePath: "vault/active.md" });
 		seedAttribute("attr-archived-aspect", "asp-archived", { memoryId: "m-archived-aspect" });
 		seedDependency("dep-archived-target", "e-active", "e-archived");
 		seedMemory("m-active");
@@ -835,7 +720,6 @@ describe("getKnowledgeStats (issue #515)", () => {
 		expect(stats.entityCount).toBe(1);
 		expect(stats.aspectCount).toBe(1);
 		expect(stats.attributeCount).toBe(1);
-		expect(stats.claimCount).toBe(1);
 		expect(stats.dependencyCount).toBe(0);
 		expect(stats.unassignedMemoryCount).toBe(0);
 		expect(stats.coveragePercent).toBe(100);

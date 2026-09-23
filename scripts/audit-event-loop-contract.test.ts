@@ -106,6 +106,7 @@ test("the ledger rejects a replacement call at the same path and API", () => {
 		];
 		const result = runAudit({ sourceRoot: root, baselineSites: baseline });
 		const kinds = result.violations.map((violation) => violation.kind);
+		// The replacement call is both beyond the ledger and unmarked.
 		expect(kinds).toContain("new-legacy-db-access");
 		expect(kinds).toContain("unmarked-legacy-db-access");
 		expect(result.violations[0]?.path).toBe("legacy.ts");
@@ -190,6 +191,7 @@ test("the scanner detects literal bracket access to legacy DB APIs", () => {
 		const result = runAudit({ sourceRoot: root });
 		expect(result.sites).toHaveLength(1);
 		expect(result.sites[0]?.api).toBe("withReadDb");
+		// Bracket access without a marker is both beyond the ledger and unmarked.
 		expect(result.violations).toHaveLength(2);
 		expect(result.violations.map((violation) => violation.kind)).toContain("new-legacy-db-access");
 		expect(result.violations.map((violation) => violation.kind)).toContain("unmarked-legacy-db-access");
@@ -335,6 +337,7 @@ test("the production TypeScript project cannot import the compatibility module",
 	const productionSourceRoot = resolve("platform/daemon/src");
 	const compatibilityModule = resolve("platform/daemon/legacy-sync/db-accessor-sync.ts");
 	expect(relative(productionSourceRoot, compatibilityModule).startsWith("..")).toBe(true);
+	expect(readFileSync(compatibilityModule, "utf8")).toContain("outside");
 	const root = mkdtempSync(join(tmpdir(), "signet-event-loop-type-boundary-"));
 	try {
 		mkdirSync(join(root, "src"));
@@ -376,17 +379,17 @@ test("the production TypeScript project cannot import the compatibility module",
 
 test("the generated report describes the type boundary and transitional counts", () => {
 	const baseline = loadBaseline(resolve("scripts/event-loop-contract-baseline.json"));
-	const report = renderReport(baseline, { total: 153, withWriteTx: 59, withReadDb: 94 });
+	const report = renderReport(baseline, { total: 169, withWriteTx: 65, withReadDb: 104 });
 	expect(report).toContain(`Exact ledger inventory: ${baseline.length} sites`);
-	expect(report).toContain("59 synchronous writes, 94 synchronous reads, and 169 async-named DB sites");
-	expect(report).toContain("Async-named ON-PARENT DB sites: 167");
+	expect(report).toContain("62 synchronous writes, 97 synchronous reads, and 159 async-named DB sites");
+	expect(report).toContain("Async-named ON-PARENT DB sites: 157");
 	expect(report).toContain("Async-named OFF-PARENT DB sites: 2");
 	expect(report).not.toContain("async-named parent DB sites");
 	expect(report).toContain(
-		"The async-named DB counts above separate the 167 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
+		"The async-named DB counts above separate the 157 ON-PARENT callbacks from the 2 OFF-PARENT callbacks.",
 	);
-	expect(report).toContain("Database accessor sites classified: 322");
-	expect(report).toContain("ON-PARENT callback execution: 320");
+	expect(report).toContain("Database accessor sites classified: 318");
+	expect(report).toContain("ON-PARENT callback execution: 316");
 	expect(report).toContain("OFF-PARENT callback execution: 2");
 	expect(report).toContain("- `db:recall.embedding.config.read` (withReadDbAsync)");
 	expect(report).toContain("- `db:recall.vector.search.read` (withReadDbAsync)");
@@ -467,6 +470,9 @@ test("a marker above the call line keeps the site marked, a distant marker does 
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+// Keep the production/public type distinction visible in source review. The
+// daemon typecheck is the executable proof that DbAccessor has no sync keys.
 const productionAccessorType = readFileSync(resolve("platform/daemon/src/db-accessor.ts"), "utf8");
 const syncAccessorType = readFileSync(resolve("platform/daemon/legacy-sync/db-accessor-sync.ts"), "utf8");
 expect(productionAccessorType).toContain("export interface DbAccessor extends AsyncDbAccessor {}");

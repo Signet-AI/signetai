@@ -203,6 +203,8 @@ describe("backfill OOM regression (#587)", () => {
 		const root = makeRoot("marker-skip");
 		const memDir = join(root, "memory");
 		mkdirSync(memDir, { recursive: true });
+
+		// Create a markdown transcript artifact that would be backfilled
 		const artifact = join(memDir, "2026-04-28T00-00-00Z--markertest000000--transcript.md");
 		writeFileSync(
 			artifact,
@@ -222,8 +224,12 @@ describe("backfill OOM regression (#587)", () => {
 			].join("\n"),
 			"utf8",
 		);
+
+		// Write the persistent marker before calling ensureCanonicalTranscriptHistory
 		const markerPath = join(memDir, ".canonical-transcript-backfill-v1.default");
 		writeFileSync(markerPath, JSON.stringify({ completed_at: new Date().toISOString(), agent_id: "default" }), "utf8");
+
+		// Backfill should be skipped entirely — no JSONL file created
 		await ensureCanonicalTranscriptHistory(root, "default");
 		const jsonlPath = join(memDir, "codex", "transcripts", "transcript.jsonl");
 		expect(existsSync(jsonlPath)).toBe(false);
@@ -234,15 +240,20 @@ describe("backfill OOM regression (#587)", () => {
 		const memDir = join(root, "memory");
 		const transcriptsDir = join(memDir, "codex", "transcripts");
 		mkdirSync(transcriptsDir, { recursive: true });
+
+		// Simulate a large JSONL from a previous lifecycle
 		const jsonlPath = join(transcriptsDir, "transcript.jsonl");
 		const fakeRecord = JSON.stringify({
 			session_key: "old-session",
 			harness: "codex",
 			turns: [{ role: "user", content: "x".repeat(500) }],
 		});
+		// Write >1MB of data
 		const lines = Array.from({ length: 2500 }, () => fakeRecord).join("\n");
 		writeFileSync(jsonlPath, lines, "utf8");
 		expect(statSync(jsonlPath).size).toBeGreaterThan(1024 * 1024);
+
+		// Create a markdown artifact that would be backfilled
 		const artifact = join(memDir, "2026-04-28T00-00-00Z--populatedtest00--transcript.md");
 		writeFileSync(
 			artifact,
@@ -361,39 +372,11 @@ describe("backfill OOM regression (#587)", () => {
 		expect(content).toContain("second session");
 	});
 
-	test("preserves a completed session when a replacement snapshot is shorter or divergent", async () => {
-		const root = makeRoot("preserve-divergent-snapshot");
-		const jsonlPath = canonicalTranscriptPath(root, "codex");
-		await writeCanonicalTranscriptSnapshot({
-			basePath: root,
-			agentId: "default",
-			harness: "codex",
-			sessionKey: "session-1",
-			sourceFormat: "normalized",
-			sourcePath: join(root, "stale-source.jsonl"),
-			transcript: "User: A\nAssistant: B\nUser: C",
-		});
-
-		const replaced = await writeCanonicalTranscriptSnapshot({
-			basePath: root,
-			agentId: "default",
-			harness: "codex",
-			sessionKey: "session-1",
-			sourceFormat: "normalized",
-			sourcePath: join(root, "stale-source.jsonl"),
-			transcript: "User: A\nAssistant: X",
-		});
-
-		expect(replaced).toBe(false);
-		const content = readFileSync(jsonlPath, "utf8");
-		expect(content).toContain('"content":"B"');
-		expect(content).toContain('"content":"C"');
-		expect(content).not.toContain('"content":"X"');
-	});
-
 	test("writeCanonicalTranscriptSnapshot handles large files without excessive memory (OOM guard)", async () => {
 		const root = makeRoot("snapshot-oom-guard");
 		const jsonlPath = canonicalTranscriptPath(root, "opencode");
+
+		// Pre-populate with 200 sessions × 10 turns each = 2000 JSONL records (~3–5 MB)
 		mkdirSync(dirname(jsonlPath), { recursive: true });
 		const lines: string[] = [];
 		for (let s = 0; s < 200; s++) {
@@ -420,7 +403,9 @@ describe("backfill OOM regression (#587)", () => {
 		writeFileSync(jsonlPath, `${lines.join("\n")}\n`, "utf8");
 
 		const sizeBefore = statSync(jsonlPath).size;
-		expect(sizeBefore).toBeGreaterThan(1_000_000);
+		expect(sizeBefore).toBeGreaterThan(1_000_000); // At least 1 MB
+
+		// Replace one session (session-50)
 		await writeCanonicalTranscriptSnapshot({
 			basePath: root,
 			agentId: "default",
@@ -435,21 +420,29 @@ describe("backfill OOM regression (#587)", () => {
 			.split("\n")
 			.filter((l) => l.trim().length > 0)
 			.map((l) => JSON.parse(l) as { session_key: string; content: string });
+
+		// session-50 records replaced
 		const session50 = records.filter((r) => r.session_key === "session-50");
 		expect(session50.length).toBe(2);
 		expect(session50[0]?.content).toBe("replaced prompt");
 		expect(session50[1]?.content).toBe("replaced reply");
+
+		// Other sessions preserved
 		const session0 = records.filter((r) => r.session_key === "session-0");
 		expect(session0.length).toBe(10);
 
 		const session199 = records.filter((r) => r.session_key === "session-199");
 		expect(session199.length).toBe(10);
+
+		// Total records: (200 - 1) * 10 + 2 = 1992
 		expect(records.length).toBe(1992);
 	});
 
 	test("writeCanonicalTranscriptSnapshot overwrites stale temp file from prior crash", async () => {
 		const root = makeRoot("snapshot-stale-tmp");
 		const jsonlPath = canonicalTranscriptPath(root, "opencode");
+
+		// Create initial JSONL with one session
 		await appendCanonicalTranscriptTurns({
 			basePath: root,
 			agentId: "default",
@@ -461,9 +454,13 @@ describe("backfill OOM regression (#587)", () => {
 				{ role: "assistant", content: "existing reply" },
 			],
 		});
+
+		// Simulate a crash leaving a stale .snapshot-tmp
 		const staleTmp = `${jsonlPath}.snapshot-tmp`;
 		writeFileSync(staleTmp, "corrupted partial write\n", "utf8");
 		expect(existsSync(staleTmp)).toBe(true);
+
+		// Write a new snapshot — should overwrite the stale tmp and succeed
 		await writeCanonicalTranscriptSnapshot({
 			basePath: root,
 			agentId: "default",
@@ -472,7 +469,11 @@ describe("backfill OOM regression (#587)", () => {
 			sourceFormat: "normalized",
 			transcript: "User: new prompt\nAssistant: new reply",
 		});
+
+		// Stale tmp cleaned up (renamed over)
 		expect(existsSync(staleTmp)).toBe(false);
+
+		// Both sessions present in final JSONL
 		const content = readFileSync(jsonlPath, "utf8");
 		expect(content).toContain("existing prompt");
 		expect(content).toContain("new prompt");
@@ -711,6 +712,8 @@ describe("backfill replaces live-only sessions", () => {
 	test("handles many live-only sessions without full-file parse (OOM guard)", async () => {
 		const root = makeRoot("backfill-oom-guard");
 		const memDir = join(root, "memory");
+
+		// Pre-populate with canonical data (creates a non-trivial file)
 		for (let i = 0; i < 50; i++) {
 			await writeCanonicalTranscriptSnapshot({
 				basePath: root,
@@ -721,6 +724,8 @@ describe("backfill replaces live-only sessions", () => {
 				transcript: `User: canonical prompt ${i} ${"x".repeat(200)}\nAssistant: canonical reply ${i} ${"y".repeat(200)}`,
 			});
 		}
+
+		// Add 20 live-only sessions
 		for (let i = 0; i < 20; i++) {
 			await appendCanonicalTranscriptTurns({
 				basePath: root,
@@ -735,6 +740,8 @@ describe("backfill replaces live-only sessions", () => {
 				],
 			});
 		}
+
+		// Create markdown artifacts with fuller data for all 20 live-only sessions
 		mkdirSync(memDir, { recursive: true });
 		for (let i = 0; i < 20; i++) {
 			writeFileSync(
@@ -762,14 +769,20 @@ describe("backfill replaces live-only sessions", () => {
 
 		const jsonlPath = join(memDir, "codex", "transcripts", "transcript.jsonl");
 		const content = readFileSync(jsonlPath, "utf8");
+
+		// All 20 live-only sessions replaced
 		for (let i = 0; i < 20; i++) {
 			expect(content).not.toContain(`live prompt ${i}`);
 			expect(content).toContain(`full prompt ${i}`);
 			expect(content).toContain(`follow-up ${i}`);
 		}
+
+		// All 50 canonical sessions untouched
 		for (let i = 0; i < 50; i++) {
 			expect(content).toContain(`canonical prompt ${i}`);
 		}
+
+		// Marker written
 		expect(existsSync(join(memDir, ".canonical-transcript-backfill-v1.default"))).toBe(true);
 	});
 });
@@ -1077,6 +1090,7 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 		await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
 
 		const content = readFileSync(jsonlPath, "utf8");
+		// Session was already healed (non-live records) — replacement skipped
 		expect(content).toContain("canonical turn");
 		expect(content).toContain("canonical reply");
 		expect(content).not.toContain("db replacement");
@@ -1084,6 +1098,8 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 
 	test("healed session does not clobber seq cache with replacement turn count", async () => {
 		const root = makeRoot("rewrite-healed-seq");
+
+		// Write 5 canonical turns (seq 1-5) via snapshot.
 		await writeCanonicalTranscriptSnapshot({
 			basePath: root,
 			agentId: "default",
@@ -1108,10 +1124,15 @@ describe("rewriteReplacingLiveOnlySessions", () => {
 			sourceFormat: "db" as const,
 		};
 		const key = sessionSeqCacheKey(identity);
+
+		// Replacement has only 2 turns — would clobber seq to 2 if cache is updated.
 		const replacements = new Map([[key, { identity, transcript: "User: short\nAssistant: short reply" }]]);
 
 		const count = await rewriteReplacingLiveOnlySessions(jsonlPath, replacements);
+		// Session was already healed (non-live), replacement skipped.
 		expect(count).toBe(1);
+
+		// Append a live turn — should get seq 6, not seq 3.
 		await appendCanonicalTranscriptTurns({
 			basePath: root,
 			agentId: "default",

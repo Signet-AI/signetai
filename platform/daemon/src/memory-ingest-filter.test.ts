@@ -1,3 +1,11 @@
+/**
+ * Regression tests for memory ingestion filtering.
+ *
+ * Verifies that generated backup/artifact markdown files are excluded from
+ * re-ingestion, and that short/degenerate chunks are filtered before
+ * hitting the memory API.
+ */
+
 import { describe, expect, it } from "bun:test";
 import { ARTIFACT_FILENAME_RE, MEMORY_BACKUP_FILENAME_RE } from "./daemon";
 
@@ -59,6 +67,9 @@ describe("memory ingest filename exclusion", () => {
 });
 
 describe("chunk content length gate", () => {
+	// Mirrors the filtering logic in ingestMemoryMarkdown: chunks with
+	// less than 80 chars of non-header body content should be skipped.
+
 	function bodyLength(text: string, header: string): number {
 		const body = header ? text.slice(header.length).trim() : text.trim();
 		return body.length;

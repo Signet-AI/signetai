@@ -72,7 +72,7 @@ beforeEach(async () => {
 	await owner.start();
 	registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: path, owner }));
 	await createJob({ jobId: scope.jobId, agentId: scope.agentId, files: [{ id: scope.fileId, name: "test.jsonl" }] });
-}, 20_000);
+});
 afterEach(async () => {
 	if (oldPath === undefined) delete process.env.SIGNET_PATH;
 	else process.env.SIGNET_PATH = oldPath;
@@ -89,7 +89,7 @@ afterEach(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
 	}
-}, 20_000);
+});
 
 test("owner persists chunks across restart, rejects cross-agent access and seals exact bytes", async () => {
 	expect(await dbOwnerQuery({ sql: "PRAGMA synchronous", result: "get", readonly: false }, options)).toEqual({
@@ -162,6 +162,7 @@ test("sealing batches chunk reads across the owner boundary while preserving exa
 	try {
 		const sealed = await sealTranscriptUpload(scope);
 		expect(sealed.content_hash).toBe(expected.digest("hex"));
+		// Bounded batch reads, two metadata reads, one sealing transaction.
 		expect(calls.mock.calls.length).toBe(Math.ceil((bytes.length * count) / TRANSCRIPT_READ_BYTES) + 3);
 	} finally {
 		calls.mockRestore();
@@ -545,6 +546,7 @@ test("export preserves array messages, filters scope and streams records larger 
 		{ role: "tool", content: `  exact\n${"x".repeat(1100 * 1024)}` },
 		{ role: "unknown", content: "" },
 	];
+	// Fill the row in bounded owner writes, as live transcript capture does.
 	await dbOwnerTransaction(
 		[
 			{

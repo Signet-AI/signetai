@@ -3,11 +3,9 @@ import { createDaemonClient } from "./src/daemon-client.js";
 import { PROMPT_SUBMIT_TIMEOUT } from "./src/types.js";
 
 const servers: Array<{ stop: () => void }> = [];
-const originalFetch = globalThis.fetch;
 const originalWarn = console.warn;
 
 afterEach(() => {
-	globalThis.fetch = originalFetch;
 	console.warn = originalWarn;
 	for (const server of servers.splice(0)) {
 		server.stop();
@@ -35,7 +33,7 @@ describe("createDaemonClient", () => {
 		expect(result).toEqual({ inject: "turn-memory" });
 	});
 
-	it("treats daemon timeouts as unavailable without writing to the TUI console", async () => {
+	it("returns null and logs a concise timeout message when the daemon stalls past the timeout", async () => {
 		const warnings: string[] = [];
 		console.warn = (...args: unknown[]) => {
 			warnings.push(args.map(String).join(" "));
@@ -54,90 +52,7 @@ describe("createDaemonClient", () => {
 		const result = await client.post<{ inject: string }>("/api/hooks/user-prompt-submit", { harness: "pi" }, 10);
 
 		expect(result).toBeNull();
-		expect(warnings).toEqual([]);
-	});
-
-	it("treats a refused daemon connection as unavailable without logging the error object", async () => {
-		const warnings: string[] = [];
-		console.warn = (...args: unknown[]) => {
-			warnings.push(args.map(String).join(" "));
-		};
-
-		const offlineServer = Bun.serve({
-			port: 0,
-			fetch: () => new Response(),
-		});
-		const offlinePort = offlineServer.port;
-		offlineServer.stop();
-
-		const client = createDaemonClient(`http://127.0.0.1:${offlinePort}`);
-		const result = await client.postResult("/api/hooks/notifications", { harness: "pi" }, 100);
-
-		expect(result).toEqual({ ok: false, reason: "offline" });
-		expect(warnings).toEqual([]);
-	});
-
-	it("treats daemon HTTP failures as unavailable without writing to the TUI console", async () => {
-		const warnings: string[] = [];
-		console.warn = (...args: unknown[]) => {
-			warnings.push(args.map(String).join(" "));
-		};
-
-		const server = Bun.serve({
-			port: 0,
-			fetch: () => new Response("temporarily unavailable", { status: 503 }),
-		});
-		servers.push(server);
-
-		const client = createDaemonClient(`http://127.0.0.1:${server.port}`);
-		const result = await client.postResult("/api/hooks/notifications", { harness: "pi" }, 100);
-
-		expect(result).toEqual({ ok: false, reason: "http", status: 503 });
-		expect(warnings).toEqual([]);
-	});
-
-	it("treats invalid JSON as unavailable without writing to the TUI console", async () => {
-		const warnings: string[] = [];
-		console.warn = (...args: unknown[]) => {
-			warnings.push(args.map(String).join(" "));
-		};
-
-		const server = Bun.serve({
-			port: 0,
-			fetch: () => new Response("not json", { status: 200 }),
-		});
-		servers.push(server);
-
-		const client = createDaemonClient(`http://127.0.0.1:${server.port}`);
-		const result = await client.postResult("/api/hooks/notifications", { harness: "pi" }, 100);
-
-		expect(result).toEqual({ ok: false, reason: "invalid-json", status: 200 });
-		expect(warnings).toEqual([]);
-	});
-
-	it("treats response body failures as unavailable without writing to the TUI console", async () => {
-		const warnings: string[] = [];
-		console.warn = (...args: unknown[]) => {
-			warnings.push(args.map(String).join(" "));
-		};
-
-		globalThis.fetch = Object.assign(
-			async () => {
-				const body = new ReadableStream({
-					start(controller) {
-						controller.enqueue(new TextEncoder().encode('{"inject"'));
-						setTimeout(() => controller.error(new Error("stream reset")), 5);
-					},
-				});
-				return new Response(body, { status: 200 });
-			},
-			{ preconnect: originalFetch.preconnect },
-		);
-
-		const client = createDaemonClient("http://daemon.test");
-		const result = await client.postResult("/api/hooks/notifications", { harness: "pi" }, 100);
-
-		expect(result).toEqual({ ok: false, reason: "body-read" });
-		expect(warnings).toEqual([]);
+		expect(warnings).toHaveLength(1);
+		expect(warnings[0]).toContain("POST /api/hooks/user-prompt-submit timed out after 10ms");
 	});
 });

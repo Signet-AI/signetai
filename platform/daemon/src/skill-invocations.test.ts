@@ -50,7 +50,10 @@ describe("recordSkillInvocation", () => {
 			sessionId: "sess-abc",
 			toolUseId: "tool-use-1",
 		};
+
+		// First call — should insert one row and bump use_count to 1.
 		recordSkillInvocation(base);
+		// Second identical call — dedupe index drops it; use_count must NOT increase.
 		recordSkillInvocation(base);
 
 		const invCount = (
@@ -66,6 +69,8 @@ describe("recordSkillInvocation", () => {
 			| { use_count: number }
 			| undefined;
 		expect(meta?.use_count).toBe(1);
+
+		// A genuinely new toolUseId counts as a new invocation.
 		recordSkillInvocation({ ...base, toolUseId: "tool-use-2" });
 
 		const metaAfter = db.prepare("SELECT use_count FROM skill_meta WHERE agent_id = ?").get("agent-scan") as

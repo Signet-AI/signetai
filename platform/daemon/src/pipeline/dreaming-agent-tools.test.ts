@@ -378,6 +378,10 @@ describe("dreaming-agent-tools", () => {
 	});
 
 	it("search_evidence scan-first ignores the time watermark and lists incomplete evidence (#1430)", async () => {
+		// Regression for #1430: a time watermark is only a newness frontier.
+		// A scan-first call must instead drain every source revision whose
+		// delivered offset is incomplete, including evidence older than the
+		// watermark. An explicit historical range stays available as well.
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
 				"owner",
@@ -397,7 +401,13 @@ describe("dreaming-agent-tools", () => {
 		const tools = createDreamingAgentTools({ accessor: getDbAccessor(), agentId: "owner", actor: "owner" });
 
 		const listed = readResult(
-			await findTool(tools, "search_evidence").execute("call", { agentId: "owner" }, undefined, undefined, {} as never),
+			await findTool(tools, "search_evidence").execute(
+				"call",
+				{ agentId: "owner" }, // scan-first listing: omit query and since
+				undefined,
+				undefined,
+				{} as never,
+			),
 		);
 		const refs = (listed.items as Array<{ sourceRef: string }>).map((item) => item.sourceRef);
 		expect(refs).toContain("memory:mem-new");
@@ -449,6 +459,7 @@ describe("dreaming-agent-tools", () => {
 				 VALUES ('run-checkpoint', 'mid-session checkpointed states', 'pi', null, 'owner',
 				  '2026-08-07T07:00:00.000Z', '2026-08-07T07:10:00.000Z')`,
 			).run();
+			// Session ended: summary job triggered and pending.
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, session_id, harness, project, agent_id, transcript,
@@ -458,6 +469,7 @@ describe("dreaming-agent-tools", () => {
 				  '2026-08-07T05:20:00.000Z', '2026-08-07T05:20:00.000Z', 'pending',
 				  '2026-08-07T05:20:00.000Z')`,
 			).run();
+			// Session ended but the summary failed/timed out: still settled.
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, session_id, harness, project, agent_id, transcript,
@@ -467,6 +479,7 @@ describe("dreaming-agent-tools", () => {
 				  '2026-08-07T04:30:00.000Z', null, 'failed',
 				  '2026-08-07T04:30:00.000Z')`,
 			).run();
+			// Mid-session checkpoint extract: not a session-end signal.
 			db.prepare(
 				`INSERT INTO summary_jobs
 				 (id, session_key, session_id, harness, project, agent_id, transcript,
@@ -492,11 +505,18 @@ describe("dreaming-agent-tools", () => {
 		expect(res.ok).toBe(true);
 		const items = res.items as Array<{ sourceRef: string; completed: boolean }>;
 		const byRef = new Map(items.map((item) => [item.sourceRef, item]));
+		// A session-end job was triggered: settled, even while pending.
 		expect(byRef.get("transcript:run-done")?.completed).toBe(true);
+		// A still-running transcript is not delivered at all.
 		expect(byRef.has("transcript:run-live")).toBe(false);
+		// A failed/timed-out summary job still proves the session ended.
 		expect(byRef.get("transcript:run-failed-summary")?.completed).toBe(true);
+		// A mid-session checkpoint transcript is not delivered either.
 		expect(byRef.has("transcript:run-checkpoint")).toBe(false);
+		// Memories are settled captures by construction.
 		expect(byRef.get("memory:mem-settled")?.completed).toBe(true);
+
+		// The fragment paging path carries the same flag.
 		const fragment = readResult(
 			await findTool(tools, "search_evidence").execute(
 				"call",
@@ -538,6 +558,7 @@ describe("dreaming-agent-tools", () => {
 				{} as never,
 			),
 		);
+		// A missing link surfaces as a clean tool error, not a crash.
 		expect(link.ok).toBe(false);
 		expect(typeof link.error).toBe("string");
 	});
@@ -666,6 +687,8 @@ describe("dreaming-agent-tools", () => {
 		const mintedItems = minted.items as Array<{ result?: { attentionId?: string } }>;
 		const attentionId = mintedItems[0]?.result?.attentionId;
 		if (attentionId === undefined) throw new Error("flag op did not surface an attention id");
+
+		// Declining from another scope fails closed: the record is untouched.
 		const otherScope = createDreamingAgentTools({
 			accessor: getDbAccessor(),
 			agentId: "intruder",
@@ -699,6 +722,8 @@ describe("dreaming-agent-tools", () => {
 			),
 		);
 		expect(stillPending.items as Array<unknown>).toHaveLength(1);
+
+		// The owning scope declines it once: resolved.
 		const declined = readResult(
 			await findTool(tools, "apply_ontology_ops").execute(
 				"call",
@@ -713,6 +738,8 @@ describe("dreaming-agent-tools", () => {
 		);
 		expect(declined.ok).toBe(true);
 		expect((declined.items as Array<{ ok: boolean }>)[0]?.ok).toBe(true);
+
+		// A flag is one-use: a second decline of the same record is rejected.
 		const twice = readResult(
 			await findTool(tools, "apply_ontology_ops").execute(
 				"call",
