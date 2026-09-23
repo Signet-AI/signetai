@@ -1,12 +1,15 @@
 {
 	"name": "@signet/daemon",
-	"version": "0.226.17",
-	"private": true,
+	"version": "0.226.18",
 	"license": "Apache-2.0",
 	"description": "Background daemon for Signet - serves dashboard, API, and memory system",
 	"type": "module",
 	"main": "./dist/index.js",
 	"types": "./dist/index.d.ts",
+	"bin": {
+		"signet-daemon": "./dist/daemon.js",
+		"signet-mcp": "./dist/mcp-stdio.js"
+	},
 	"exports": {
 		".": {
 			"import": "./dist/index.js",
@@ -25,13 +28,13 @@
 		"build:profile": "bun run prebuild && bun run build.ts --profile && bun run build:dashboard",
 		"build:types": "tsc --emitDeclarationOnly --outDir dist",
 		"typecheck": "tsc --noEmit",
-		"dev": "bun ../../scripts/run-native-daemon.ts",
-		"start": "bun ../../scripts/run-native-daemon.ts",
-		"install:service": "bun ../../scripts/native-daemon-service.ts install",
-		"uninstall:service": "bun ../../scripts/native-daemon-service.ts uninstall",
+		"dev": "bun --watch src/dev-daemon.ts",
+		"start": "cd ../core && bun run build && cd ../daemon && bun src/daemon.ts",
+		"install:service": "bun src/daemon.ts --install",
+		"uninstall:service": "bun src/daemon.ts --uninstall",
 		"test": "bun test",
 		"build:dashboard": "bun ../../scripts/prepare-dashboard-bundle.ts .",
-		"parity-only": "bun test"
+		"prepublishOnly": "bun run build"
 	},
 	"dependencies": {
 		"@1password/sdk": "^0.3.0",
