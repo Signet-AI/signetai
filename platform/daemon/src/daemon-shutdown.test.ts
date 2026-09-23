@@ -2,14 +2,19 @@ import { describe, expect, it } from "bun:test";
 import { closeDbOwnerDuringShutdown, createShutdownRequestGate } from "./daemon-shutdown";
 
 describe("daemon shutdown request gate", () => {
-	it("keeps a shutdown-time owner rejection from replacing the signal exit", () => {
+	it("escalates a clean shutdown to a fatal exit without replacing its primary reason", () => {
 		const gate = createShutdownRequestGate();
 		const signal = { reason: "signal:SIGTERM", exitCode: 0 } as const;
-		const ownerShutdown = { reason: "error:unhandledRejection", exitCode: 1 } as const;
+		const fatal = { reason: "error:uncaughtException", exitCode: 1 } as const;
 
-		expect(gate.begin(signal)).toBe(true);
-		expect(gate.begin(ownerShutdown)).toBe(false);
+		expect(gate.begin(signal)).toBe("begin");
+		expect(gate.begin({ reason: "signal:SIGINT", exitCode: 0 })).toBe("ignore");
+		expect(gate.begin(fatal)).toBe("fatal");
 		expect(gate.primary).toEqual(signal);
+		expect(gate.fatalRequest).toEqual(fatal);
+		expect(gate.begin({ reason: "error:unhandledRejection", exitCode: 1 })).toBe("fatal");
+		expect(gate.fatalRequest).toEqual(fatal);
+		expect(gate.exitCode).toBe(1);
 	});
 
 	it("closes the owner while maintenance leases drain", async () => {

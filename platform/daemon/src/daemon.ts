@@ -2087,6 +2087,7 @@ function buildLifecycleRecord(state: DaemonLifecycle["state"], extra: Partial<Da
 
 let exitFlushInFlight: Promise<void> | null = null;
 const shutdownRequestGate = createShutdownRequestGate();
+let shutdownFatalError: unknown;
 
 async function flushAndExit(exitCode: number): Promise<void> {
 	if (exitFlushInFlight) return exitFlushInFlight;
@@ -2099,7 +2100,7 @@ async function flushAndExit(exitCode: number): Promise<void> {
 			await Promise.race([telemetryRef.stop(), timeout]).catch(() => {});
 		}
 		logger.shutdown();
-		process.exit(exitCode);
+		process.exit(shutdownRequestGate.exitCode ?? exitCode);
 	})();
 	return exitFlushInFlight;
 }
@@ -2112,20 +2113,42 @@ function buildTerminalLifecycleRecord(reason: string, exitCode: number, error?: 
 		...(error !== undefined ? { error: error instanceof Error ? error.message : String(error) } : {}),
 	});
 }
+function buildShutdownTerminalRecord(reason: string, exitCode: number, error?: unknown): DaemonLifecycle {
+	const fatalRequest = shutdownRequestGate.fatalRequest;
+	return buildTerminalLifecycleRecord(
+		shutdownRequestGate.primary?.reason ?? reason,
+		shutdownRequestGate.exitCode ?? exitCode,
+		fatalRequest === null ? error : (shutdownFatalError ?? new Error(fatalRequest.reason)),
+	);
+}
 const SHUTDOWN_CLEANUP_DEADLINE_MS = 20_000;
 function requestShutdown(reason: string, exitCode: number, error?: unknown, runCleanup = true): void {
-	if (shuttingDown || !shutdownRequestGate.begin({ reason, exitCode })) {
-		logger.warn("daemon", "Ignoring additional shutdown request while cleanup is in progress", {
-			reason,
-			exitCode,
-			primaryRequest: shutdownRequestGate.primary,
-		});
+	const disposition = shutdownRequestGate.begin({ reason, exitCode });
+	if (exitCode !== 0 && shutdownFatalError === undefined) shutdownFatalError = error ?? new Error(reason);
+	if (shuttingDown || disposition !== "begin") {
+		const primaryRequest = shutdownRequestGate.primary;
+		if (exitCode !== 0) {
+			logger.error("daemon", "Fatal shutdown request arrived during cleanup; forcing exit", undefined, {
+				reason,
+				exitCode,
+				primaryRequest,
+			});
+			const fatalExitCode = shutdownRequestGate.exitCode ?? exitCode;
+			writeDaemonLifecycle(AGENTS_DIR, buildShutdownTerminalRecord(reason, fatalExitCode, error));
+			void flushAndExit(fatalExitCode);
+		} else {
+			logger.warn("daemon", "Ignoring additional shutdown request while cleanup is in progress", {
+				reason,
+				exitCode,
+				primaryRequest,
+			});
+		}
 		return;
 	}
 	setShuttingDown(true);
 	logger.info("daemon", `Received ${reason}; shutting down`, { exitCode });
 	if (!runCleanup) {
-		writeDaemonLifecycle(AGENTS_DIR, buildTerminalLifecycleRecord(reason, exitCode, error));
+		writeDaemonLifecycle(AGENTS_DIR, buildShutdownTerminalRecord(reason, exitCode, error));
 		void flushAndExit(exitCode);
 		return;
 	}
@@ -2135,14 +2158,14 @@ function requestShutdown(reason: string, exitCode: number, error?: unknown, runC
 			exitCode,
 			deadlineMs: SHUTDOWN_CLEANUP_DEADLINE_MS,
 		});
-		writeDaemonLifecycle(AGENTS_DIR, buildTerminalLifecycleRecord(reason, exitCode, error));
+		writeDaemonLifecycle(AGENTS_DIR, buildShutdownTerminalRecord(reason, exitCode, error));
 		void flushAndExit(exitCode);
 	}, SHUTDOWN_CLEANUP_DEADLINE_MS);
 	cleanup()
 		.catch(() => {})
 		.finally(() => {
 			clearTimeout(cleanupDeadline);
-			writeDaemonLifecycle(AGENTS_DIR, buildTerminalLifecycleRecord(reason, exitCode, error));
+			writeDaemonLifecycle(AGENTS_DIR, buildShutdownTerminalRecord(reason, exitCode, error));
 			void flushAndExit(exitCode);
 		});
 }
