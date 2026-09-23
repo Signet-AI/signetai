@@ -2,6 +2,7 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { expandRoutePattern, normalizeRoutePath } from "./doc-drift-routes";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
@@ -90,10 +91,7 @@ function sliceSection(content: string, heading: string): string {
 	return content.slice(start, end);
 }
 function normRoute(p: string): string {
-	return p
-		.replace(/\{[^}]+\}/g, "")
-		.replace(/\/+$/, "")
-		.toLowerCase();
+	return normalizeRoutePath(p);
 }
 
 function routeKey(method: string, path: string): string {
@@ -114,20 +112,34 @@ function extractRoutesFromSource(): RouteEntry[] {
 		...listTsFilesRecursive("platform/daemon/src/routes"),
 		"platform/daemon/src/mcp/route.ts",
 	];
-	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*["'`]([^"'`]+)["'`]/g;
+	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*([`"'])(.*?)\2/g;
 
 	const routes: RouteEntry[] = [];
 
 	for (const file of files) {
 		if (!fileExists(file)) continue;
 		const content = read(file);
+		const finiteArrays: Record<string, readonly string[]> = {};
+		for (const arrayMatch of content.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*\[([^\]]*)\]\s*(?:as const)?/g)) {
+			const values = [...arrayMatch[2]!.matchAll(/["']([^"']+)["']/g)].map((value) => value[1]!);
+			const residue = arrayMatch[2]!.replace(/["'][^"']*["']/g, "").replace(/[\s,]/g, "");
+			if (values.length > 0 && residue.length === 0) finiteArrays[arrayMatch[1]!] = values;
+		}
+		for (const loopMatch of content.matchAll(/for\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\s+\[([^\]]*)\]\s*(?:as const\s*)?\)/g)) {
+			const values = [...loopMatch[2]!.matchAll(/["']([^"']+)["']/g)].map((value) => value[1]!);
+			const residue = loopMatch[2]!.replace(/["'][^"']*["']/g, "").replace(/[\s,]/g, "");
+			if (values.length > 0 && residue.length === 0) finiteArrays[loopMatch[1]!] = values;
+		}
 		routePattern.lastIndex = 0;
 		let match: RegExpExecArray | null = null;
 		while ((match = routePattern.exec(content)) !== null) {
 			const method = match[1].toUpperCase();
-			const path = match[2];
-			if (path === "*" || path === "/*" || path === "/**" || path === "/") continue;
-			routes.push({ method, path, source: file });
+			const rawPath = match[3];
+			const paths = expandRoutePattern(rawPath, finiteArrays);
+			for (const path of paths) {
+				if (path === "*" || path === "/*" || path === "/**" || path === "/") continue;
+				routes.push({ method, path, source: file });
+			}
 		}
 	}
 	const seen = new Set<string>();

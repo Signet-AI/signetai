@@ -55,6 +55,12 @@ signet migration cleanup --accept --source <v1-root> --destination <v2-root>
 
 Migration refuses ambiguous ownership, insufficient space, inconsistent snapshots, unsafe symlinks or special files, active writers that cannot drain, and unsupported custom layouts. It preserves Source IDs and generations rather than disconnecting and reconnecting Sources.
 
+The daemon exposes `GET /api/workspace/migration-control` for the current
+writer-drain generation, state, and blockers. The migration CLI invokes
+`POST /api/workspace/migration-control/drain` to close admission and drain
+supported writers before copying. These are lifecycle coordination endpoints;
+use the CLI commands above rather than calling the daemon endpoints directly.
+
 ## Protection and restore status
 
 CLI, API, and dashboard protection surfaces use one component-aware contract. Components include root-authored files, skills, managed originals, SQLite, transcripts, external Sources, runtime, filesystem cache, and secrets. States include protected, missing, stale, degraded, unknown, external, unverified, and excluded-rebuildable. Overall `protected` requires current protection for required components and valid restore evidence. Git sync alone cannot produce that result.
