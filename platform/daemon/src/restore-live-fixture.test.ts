@@ -70,6 +70,7 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 			.join("\n");
 		const ontologyEntityId = "restore-ontology-entity";
 		const ontologyAspectId = "restore-ontology-aspect";
+		const ontologyOldAttributeId = "restore-ontology-claim-old";
 		const ontologyAttributeId = "restore-ontology-claim";
 		const ontologyAssertionId = "restore-ontology-assertion";
 		const dreamingFrontier = JSON.stringify({
@@ -122,9 +123,14 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				.run(ontologyAspectId, ontologyEntityId);
 			database
 				.prepare(`INSERT INTO entity_attributes
-				(id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, group_key, created_at, updated_at)
-				VALUES (?, ?, 'default', 'attribute', 'Cobalt lantern is stored in bay seven.', 'cobalt lantern in bay seven', 0.9, 0.8, 'active', 'restore-fixture', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
-				.run(ontologyAttributeId, ontologyAspectId);
+					(id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, group_key, claim_key, version, version_root_id, superseded_by, created_at, updated_at)
+					VALUES (?, ?, 'default', 'attribute', 'Cobalt lantern was kept in bay seven.', 'cobalt lantern was kept in bay seven', 0.9, 0.8, 'superseded', 'restore-fixture', 'cobalt_lantern_in_bay_seven', 1, ?, ?, '2025-12-31T00:00:00Z', '2026-01-01T00:00:00Z')`)
+				.run(ontologyOldAttributeId, ontologyAspectId, ontologyOldAttributeId, ontologyAttributeId);
+			database
+				.prepare(`INSERT INTO entity_attributes
+					(id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, group_key, claim_key, version, version_root_id, previous_attribute_id, created_at, updated_at)
+					VALUES (?, ?, 'default', 'attribute', 'Cobalt lantern is stored in bay seven.', 'cobalt lantern in bay seven', 0.9, 0.8, 'active', 'restore-fixture', 'cobalt_lantern_in_bay_seven', 2, ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+				.run(ontologyAttributeId, ontologyAspectId, ontologyOldAttributeId, ontologyOldAttributeId);
 			database
 				.prepare(`INSERT INTO epistemic_assertions
 				(id, agent_id, subject_entity_id, claim_attribute_id, predicate, content, normalized_content, asserted_at, confidence, status, source_kind, source_id, evidence, created_at, updated_at)
@@ -134,7 +140,12 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 					ontologyEntityId,
 					ontologyAttributeId,
 					transcriptKey,
-					JSON.stringify([{ quote: "cobalt lantern is stored in bay seven" }]),
+					JSON.stringify([
+						{
+							source_ref: `transcript:${transcriptKey}`,
+							quote: "the cobalt lantern is stored in bay seven.",
+						},
+					]),
 				);
 		} finally {
 			database.close();
@@ -144,6 +155,9 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 		let queriedDreaming = false;
 		let queriedMemory = false;
 		let queriedOntology = false;
+		let probeFailureMessage = "";
+		let tracedVersions: string[] = [];
+		let tracedEvidence: unknown = null;
 		const result = await executeDisposableRestore({
 			snapshotRoot: snapshot,
 			expected: {
@@ -165,7 +179,7 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				sources: [{ id: "source-1", generation: "generation-3" }],
 				recall: { current: true, scope: "default" },
 				dreaming: { frontier: dreamingFrontier, consumed: [consumedEvidence] },
-				ontology: { history: 1, evidenceLinks: 1 },
+				ontology: { history: 2, evidenceLinks: 1 },
 				harness: { identity: "default", skills: ["independent"] },
 			},
 			daemon: {
@@ -210,7 +224,7 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 					queriedOntology =
 						ontology?.id === ontologyAttributeId &&
 						ontology.evidence_links === 1 &&
-						history?.count === 1 &&
+						history?.count === 2 &&
 						evidence?.id === ontologyAssertionId;
 				} finally {
 					restoredDatabase.close();
@@ -290,9 +304,16 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 						signal: AbortSignal.timeout(5000),
 					},
 				);
-				if (!ontologyResponse.ok)
-					throw Object.assign(new Error("restored ontology history unavailable"), { component: "ontology" });
-				const ontologyBody = (await ontologyResponse.json()) as Record<string, unknown>;
+				if (!ontologyResponse.ok) {
+					probeFailureMessage = `restored ontology history unavailable (${ontologyResponse.status}): ${(await ontologyResponse.text()).slice(0, 240)}`;
+					throw Object.assign(new Error(probeFailureMessage), { component: "ontology" });
+				}
+				const ontologyBody = (await ontologyResponse.json()) as {
+					versions?: { items?: Array<{ attribute: { id: string } }> };
+					premises?: { items?: Array<{ evidence: unknown }> };
+				};
+				tracedVersions = ontologyBody.versions?.items?.map(({ attribute }) => attribute.id) ?? [];
+				tracedEvidence = ontologyBody.premises?.items?.[0]?.evidence ?? null;
 				if (
 					!JSON.stringify(ontologyBody).includes(ontologyAttributeId) ||
 					!JSON.stringify(ontologyBody).includes(ontologyAssertionId)
@@ -313,7 +334,7 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 							consumed: queriedDreaming ? [consumedEvidence] : [],
 						},
 						ontology: {
-							history: queriedOntology ? 1 : 0,
+							history: queriedOntology ? 2 : 0,
 							evidenceLinks: queriedOntology ? 1 : 0,
 						},
 						sources: body.sources.map(({ id, generation }) => ({ id, generation: generation ?? "" })),
@@ -325,10 +346,16 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				};
 			},
 		});
+		expect(probeFailureMessage).toBe("");
 		expect(queriedDaemon).toBe(true);
 		expect(queriedDatabase).toBe(true);
 		expect(queriedMemory).toBe(true);
 		expect(queriedOntology).toBe(true);
+		expect(tracedVersions).toEqual([ontologyAttributeId, ontologyOldAttributeId]);
+		expect(tracedEvidence).toMatchObject({
+			state: "available",
+			exactQuote: "the cobalt lantern is stored in bay seven.",
+		});
 		expect(queriedDreaming).toBe(true);
 		expect(result.failures.map((failure) => failure.component)).not.toContain("daemon");
 		expect(result.failures.map((failure) => failure.component)).not.toContain("database");
