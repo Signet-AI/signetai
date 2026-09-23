@@ -100,6 +100,17 @@ struct ClaimTraceQuery {
     session_key: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ClaimVersionsQuery {
+    #[serde(flatten)]
+    agent: AgentQuery,
+    entity: Option<String>,
+    aspect: Option<String>,
+    group: Option<String>,
+    claim: Option<String>,
+    kind: Option<String>,
+}
+
 fn parse_claim_kind(value: Option<&str>) -> Result<Option<String>, &'static str> {
     match value {
         None | Some("") => Ok(None),
@@ -215,7 +226,7 @@ pub(crate) fn router() -> Router<AppState> {
             get(unsupported_read),
         )
         .route("/api/ontology/claims/evidence", get(unsupported_read))
-        .route("/api/ontology/claims/versions", get(unsupported_read))
+        .route("/api/ontology/claims/versions", get(list_claim_versions))
         .route("/api/ontology/claims/version", get(unsupported_read))
         .route("/api/ontology/claims/explain", get(explain_claim))
         .route(
@@ -254,6 +265,46 @@ async fn unsupported_write(
     Err(ApiError::not_implemented(
         "ontology operation is unsupported by the fresh Rust boundary",
     ))
+}
+
+async fn list_claim_versions(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(mut q): Query<ClaimVersionsQuery>,
+) -> Result<Json<Value>, ClaimTraceError> {
+    let auth_query = OntologyQuery {
+        agent: std::mem::take(&mut q.agent),
+        workspace_id: None,
+        limit: None,
+        cursor: None,
+    };
+    require_ontology_auth(&state, &headers, &auth_query, "recall").await?;
+    let required = |value: &Option<String>, name: &str| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ApiError::bad_request(format!("{name} is required")))
+    };
+    let entity = required(&q.entity, "entity")?;
+    let aspect = required(&q.aspect, "aspect")?;
+    let group = required(&q.group, "group")?;
+    let claim = required(&q.claim, "claim")?;
+    let kind = parse_claim_kind(q.kind.as_deref()).map_err(ApiError::bad_request)?;
+    let request = signet_core_native::OntologyClaimVersionsRequest {
+        agent_id: agent(&headers, Some(&auth_query.agent), None)?,
+        entity,
+        aspect,
+        group_key: group,
+        claim_key: claim,
+        kind,
+    };
+    Ok(
+        execute(&state, Operation::OntologyClaimVersions { request })
+            .await
+            .map(Json)?,
+    )
 }
 
 async fn explain_claim(

@@ -14,6 +14,7 @@ use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime}
 use unicode_normalization::UnicodeNormalization;
 
 mod ontology_claim_trace;
+mod ontology_claim_versions;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -3211,6 +3212,9 @@ fn execute_operation(
         Operation::OntologyClaimTrace { request } => {
             ontology_claim_trace::execute(connection, request)
         }
+        Operation::OntologyClaimVersions { request } => {
+            ontology_claim_versions::execute(connection, request)
+        }
         Operation::KnowledgeEntityCreate {
             agent_id,
             workspace_id,
@@ -4364,6 +4368,16 @@ pub struct OntologyClaimTraceRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OntologyClaimVersionsRequest {
+    pub agent_id: String,
+    pub entity: String,
+    pub aspect: String,
+    pub group_key: String,
+    pub claim_key: String,
+    pub kind: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     LegacyMarkdownImport {
         agent_id: String,
@@ -4742,6 +4756,9 @@ pub enum Operation {
     },
     OntologyClaimTrace {
         request: OntologyClaimTraceRequest,
+    },
+    OntologyClaimVersions {
+        request: OntologyClaimVersionsRequest,
     },
     KnowledgeEntityCreate {
         agent_id: String,
