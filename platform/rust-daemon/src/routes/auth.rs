@@ -273,6 +273,29 @@ fn configured_credential() -> Option<String> {
                 .filter(|value| !value.is_empty())
         })
 }
+
+pub(crate) fn local_authentication_is_open() -> bool {
+    let local_mode = env::var("SIGNET_MODE")
+        .map(|mode| mode.eq_ignore_ascii_case("local"))
+        .unwrap_or(true);
+    local_mode && configured_credential().is_none()
+}
+
+pub(crate) fn local_claims(headers: &HeaderMap) -> Option<Value> {
+    if !local_authentication_is_open() || credential(headers).is_some() {
+        return None;
+    }
+    Some(json!({
+        "authenticated": true,
+        "agentId": headers
+            .get("x-signet-agent")
+            .and_then(|value| value.to_str().ok())
+            .filter(|value| !value.is_empty()),
+        "role": "admin",
+        "scope": {},
+    }))
+}
+
 pub(crate) async fn gate(state: &AppState, headers: &HeaderMap) -> Result<Value, ApiError> {
     let token = credential(headers).ok_or_else(|| {
         ApiError::unauthorized("valid Bearer token or x-signet-api-key is required")

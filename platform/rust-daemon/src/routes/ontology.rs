@@ -52,18 +52,6 @@ fn proposal_auth_error() -> ApiError {
     }
 }
 
-fn local_authentication_is_open() -> bool {
-    let local_mode = std::env::var("SIGNET_MODE")
-        .map(|mode| mode.eq_ignore_ascii_case("local"))
-        .unwrap_or(true);
-    let configured = ["SIGNET_API_KEY", "SIGNET_TOKEN"].into_iter().any(|name| {
-        std::env::var(name)
-            .ok()
-            .is_some_and(|value| !value.trim().is_empty())
-    });
-    local_mode && !configured
-}
-
 fn ontology_scope(headers: &HeaderMap, query: &OntologyQuery) -> Result<Value, ApiError> {
     Ok(json!({
         "agent": agent(headers, Some(&query.agent), None)?,
@@ -81,14 +69,11 @@ async fn require_ontology_auth(
     query: &OntologyQuery,
     permission: &str,
 ) -> Result<(), ApiError> {
-    let claims = match auth::gate(state, headers).await {
-        Ok(claims) => claims,
-        Err(_) if local_authentication_is_open() => json!({
-            "authenticated": true,
-            "role": "admin",
-            "scope": {},
-        }),
-        Err(_) => return Err(proposal_auth_error()),
+    let claims = match auth::local_claims(headers) {
+        Some(claims) => claims,
+        None => auth::gate(state, headers)
+            .await
+            .map_err(|_| proposal_auth_error())?,
     };
     let scope = ontology_scope(headers, query)?;
     if allows_ontology(&claims, &scope, permission) {
