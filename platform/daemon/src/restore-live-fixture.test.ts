@@ -40,9 +40,39 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				],
 			}),
 		);
+		const transcriptPath = join(snapshot, "transcripts", "fixture.jsonl");
+		mkdirSync(join(snapshot, "transcripts"), { recursive: true });
+		const transcriptRows = [
+			{
+				role: "user",
+				content: "Remember the cobalt lantern is stored in bay seven.",
+				timestamp: "2026-01-01T00:00:00Z",
+				provenance: "fixture-user",
+			},
+			{
+				role: "assistant",
+				content: "I will remember: the cobalt lantern is stored in bay seven.",
+				timestamp: "2026-01-01T00:00:01Z",
+				provenance: "fixture-assistant",
+			},
+		];
+		writeFileSync(transcriptPath, `${transcriptRows.map((row) => JSON.stringify(row)).join("\\n")}\\n`);
 		const dbPath = join(snapshot, "data", "signet.db");
 		initDbAccessor(dbPath, { agentsDir: snapshot });
 		await closeDbAccessor();
+		const memoryId = "snapshot-memory";
+		const memoryContent = "The cobalt lantern is stored in bay seven.";
+		const isolatedMemoryId = "isolated-memory";
+		const isolatedContent = "Only agent isolated-agent may recall the cedar compass in locker nine.";
+		const transcriptKey = "restored-completed-session";
+		const transcriptContent = transcriptRows
+			.map(({ role, content }) => `${role === "user" ? "User" : "Assistant"}: ${content}`)
+			.join("\\n");
+		const restoredRoot = join(root, "snapshot");
+		writeFileSync(
+			join(restoredRoot, ".restore-fixture-values.json"),
+			JSON.stringify({ memoryId, memoryContent, isolatedMemoryId, isolatedContent, transcriptKey, transcriptContent }),
+		);
 		const database = new Database(dbPath);
 		try {
 			database.exec("CREATE TABLE restore_witness (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
@@ -51,7 +81,20 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				.prepare(
 					"INSERT INTO memories (id, content, type, agent_id, visibility, created_at, updated_at, updated_by) VALUES (?, ?, 'fact', 'default', 'global', datetime('now'), datetime('now'), 'test')",
 				)
-				.run("snapshot-memory", "persisted memory from the snapshot");
+				.run(memoryId, memoryContent);
+			database
+				.prepare(
+					"INSERT INTO memories (id, content, type, agent_id, visibility, created_at, updated_at, updated_by) VALUES (?, ?, 'fact', 'isolated-agent', 'private', datetime('now'), datetime('now'), 'test')",
+				)
+				.run(isolatedMemoryId, isolatedContent);
+			database.exec(
+				"CREATE TABLE IF NOT EXISTS session_transcripts (session_key TEXT NOT NULL, content TEXT NOT NULL, harness TEXT, project TEXT, agent_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT, completed_at TEXT, content_hash TEXT, PRIMARY KEY (agent_id, session_key))",
+			);
+			database
+				.prepare(
+					"INSERT INTO session_transcripts (session_key, content, harness, agent_id, created_at, updated_at, completed_at) VALUES (?, ?, 'restore-fixture', 'default', ?, ?, ?)",
+				)
+				.run(transcriptKey, transcriptContent, "2026-01-01T00:00:00Z", "2026-01-01T00:00:02Z", "2026-01-01T00:00:02Z");
 		} finally {
 			database.close();
 		}
@@ -61,8 +104,21 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 		const result = await executeDisposableRestore({
 			snapshotRoot: snapshot,
 			expected: {
-				files: ["workspace-layout.json", "agent.yaml", "data/signet.db", "sources.json", "skills/independent/SKILL.md"],
-				transcripts: [],
+				files: [
+					"workspace-layout.json",
+					"agent.yaml",
+					"data/signet.db",
+					"sources.json",
+					"skills/independent/SKILL.md",
+					"transcripts/fixture.jsonl",
+				],
+				transcripts: [
+					{
+						path: "transcripts/fixture.jsonl",
+						roles: ["user", "assistant"],
+						provenance: ["fixture-user", "fixture-assistant"],
+					},
+				],
 				sources: [{ id: "source-1", generation: "generation-3" }],
 				recall: { current: true, scope: "default" },
 				dreaming: { frontier: "", consumed: [] },
@@ -103,12 +159,54 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				if (!statusResponse.ok) throw new Error(`restored status unavailable: ${statusResponse.status}`);
 				const status = (await statusResponse.json()) as { agentId: string; agentsDir: string; memoryDb: boolean };
 				queriedDaemon = queriedDaemon && status.agentsDir === restored && status.memoryDb;
-				const memoryResponse = await fetch(`http://127.0.0.1:${port}/api/memory/snapshot-memory`, {
+				const memoryResponse = await fetch(`http://127.0.0.1:${port}/api/memory/${encodeURIComponent(memoryId)}`, {
 					signal: AbortSignal.timeout(3000),
 				});
 				queriedMemory =
-					memoryResponse.ok &&
-					((await memoryResponse.json()) as { content?: string }).content === "persisted memory from the snapshot";
+					memoryResponse.ok && ((await memoryResponse.json()) as { content?: string }).content === memoryContent;
+				const transcriptResponse = await fetch(
+					`http://127.0.0.1:${port}/api/sessions/${encodeURIComponent(transcriptKey)}/transcript?agent_id=default`,
+					{ signal: AbortSignal.timeout(3000) },
+				);
+				if (!transcriptResponse.ok)
+					throw Object.assign(new Error("restored transcript unavailable"), { component: "transcripts" });
+				const transcriptBody = (await transcriptResponse.json()) as { content: string };
+				const parsedTranscript = transcriptBody.content.split("\\n").map((line) => {
+					const separator = line.indexOf(": ");
+					return { role: line.slice(0, separator).toLowerCase(), content: line.slice(separator + 2) };
+				});
+				if (
+					JSON.stringify(parsedTranscript) !==
+					JSON.stringify(transcriptRows.map(({ role, content }) => ({ role, content })))
+				)
+					throw Object.assign(new Error("restored transcript fidelity mismatch"), { component: "transcripts" });
+				const recallResponse = await fetch(`http://127.0.0.1:${port}/api/memory/recall`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ query: "cobalt lantern bay seven", agentId: "default", limit: 10 }),
+					signal: AbortSignal.timeout(5000),
+				});
+				if (!recallResponse.ok)
+					throw Object.assign(new Error("current-agent recall unavailable"), { component: "recall" });
+				const recallBody = (await recallResponse.json()) as {
+					results?: Array<{ id: string; content: string; agent_id?: string }>;
+				};
+				const recalled =
+					recallBody.results?.some(({ id, content }) => id === memoryId && content === memoryContent) === true;
+				const isolatedRecall = await fetch(`http://127.0.0.1:${port}/api/memory/recall`, {
+					method: "POST",
+					headers: { "content-type": "application/json" },
+					body: JSON.stringify({ query: "cedar compass locker nine", agentId: "default", limit: 10 }),
+					signal: AbortSignal.timeout(5000),
+				});
+				if (!isolatedRecall.ok)
+					throw Object.assign(new Error("cross-agent recall probe unavailable"), { component: "recall" });
+				const isolatedBody = (await isolatedRecall.json()) as { results?: Array<{ id: string; content: string }> };
+				const leaked =
+					isolatedBody.results?.some(({ id, content }) => id === isolatedMemoryId || content === isolatedContent) ===
+					true;
+				if (!recalled || leaked)
+					throw Object.assign(new Error("persisted-memory recall scope mismatch"), { component: "recall" });
 				const skillsResponse = await fetch(`http://127.0.0.1:${port}/api/skills`, {
 					signal: AbortSignal.timeout(3000),
 				});
