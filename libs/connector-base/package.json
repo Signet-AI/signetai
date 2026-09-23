@@ -30,7 +30,6 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@signet/core": "0.226.18",
 		"json5": "^2.2.3",
 		"jsonc-parser": "3.3.1"
 	},
