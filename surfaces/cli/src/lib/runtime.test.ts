@@ -1073,6 +1073,7 @@ describe("getDaemonStatus", () => {
 			{
 				read: () => currentRecord,
 				startAttemptId: "current-attempt",
+				attemptStartedAt: 0,
 			},
 		);
 
@@ -1109,12 +1110,50 @@ describe("getDaemonStatus", () => {
 			{
 				read: () => unrelatedTerminalRecord,
 				startAttemptId: "current-attempt",
+				attemptStartedAt: 0,
 				systemdUnitName: "signet-daemon-123",
 			},
 		);
 
 		expect(result).toBe(true);
 		expect(now).toBe(250);
+		expect(requests).toBeGreaterThan(0);
+	});
+
+	it("ignores a matching lifecycle record created before the current startup attempt", async () => {
+		let now = 1000;
+		let requests = 0;
+		globalThis.fetch = (async (_input: string | URL) => {
+			requests += 1;
+			return new Response("live", { status: 200 });
+		}) as typeof fetch;
+		const previousRecord = {
+			state: "clean" as const,
+			pid: 41,
+			version: "test",
+			startedAt: "1970-01-01T00:00:00.500Z",
+			exitedAt: "1970-01-01T00:00:00.600Z",
+			exitCode: 0,
+			reason: "signal:SIGTERM",
+			startAttemptId: "current-attempt",
+		};
+
+		const result = await waitForDaemonLiveness(
+			10_000,
+			() => false,
+			async (ms) => {
+				now += ms;
+			},
+			() => now,
+			{
+				read: () => previousRecord,
+				startAttemptId: "current-attempt",
+				attemptStartedAt: 1000,
+			},
+		);
+
+		expect(result).toBe(true);
+		expect(now).toBe(1250);
 		expect(requests).toBeGreaterThan(0);
 	});
 
@@ -1144,6 +1183,7 @@ describe("getDaemonStatus", () => {
 			{
 				read: () => legacyTerminalRecord,
 				startAttemptId: "current-attempt",
+				attemptStartedAt: 0,
 				systemdUnitName: "signet-daemon-123",
 			},
 		);
@@ -1177,7 +1217,7 @@ describe("getDaemonStatus", () => {
 				now += ms;
 			},
 			() => now,
-			{ read: () => previousRecord, startAttemptId: "current-attempt" },
+			{ read: () => previousRecord, startAttemptId: "current-attempt", attemptStartedAt: 0 },
 		);
 
 		expect(result).toBe(true);
