@@ -2,14 +2,8 @@ import { randomUUID } from "node:crypto";
 import type { DbAccessor } from "./db-accessor";
 import { runDbOwnerDomainOperation } from "./db-owner-runtime";
 import type { DbOwnerRequest, DbOwnerStatement } from "./db-owner-protocol";
-import type { ImportLedger, ImportRow, ImportStatus } from "./import-inbox";
-
-export class ImportAdmissionConflictError extends Error {
-	constructor(key: string) {
-		super(`import admission key conflict: ${key}`);
-		this.name = "ImportAdmissionConflictError";
-	}
-}
+import { ImportAdmissionConflictError, type ImportLedger, type ImportRow, type ImportStatus } from "./import-inbox";
+export { ImportAdmissionConflictError } from "./import-inbox";
 
 type Row = {
 	key: string;
@@ -85,29 +79,13 @@ export class DbOwnedImportAdmissionLedger implements ImportLedger {
 	}
 	async upsert(row: ImportRow): Promise<ImportRow> {
 		const fingerprint = `${row.fileName}\0${row.sha256}\0${row.size}`;
-		const existing = await this.request<Row | undefined>(
-			{
-				kind: "query",
-				statement: statement(
-					"SELECT * FROM import_admission_ledger WHERE key = ? AND agent_id = ? AND workspace_id = ?",
-					[row.key, this.scope.agentId, this.scope.workspaceId ?? ""],
-					"get",
-				),
-			},
-			"import-admission.lookup",
-		);
-		if (existing) {
-			if (existing.request_fingerprint && existing.request_fingerprint !== fingerprint)
-				throw new ImportAdmissionConflictError(row.key);
-			return this.row(existing);
-		}
 		const timestamp = now();
 		const req = {
 			kind: "transaction",
 			transaction: {
 				statements: [
 					statement(
-						"INSERT INTO import_admission_ledger (key,agent_id,workspace_id,file_name,status,original_path,sha256,size_bytes,request_fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+						"INSERT OR IGNORE INTO import_admission_ledger (key,agent_id,workspace_id,file_name,status,original_path,sha256,size_bytes,request_fingerprint,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
 						[
 							row.key,
 							this.scope.agentId,
@@ -124,15 +102,24 @@ export class DbOwnedImportAdmissionLedger implements ImportLedger {
 						"run",
 					),
 					statement(
-						"INSERT INTO import_admission_events (admission_key,event,created_at) VALUES (?,?,?)",
+						"INSERT INTO import_admission_events (admission_key,event,created_at) SELECT ?,?,? WHERE changes() > 0",
 						[row.key, "admitted", timestamp],
 						"run",
+					),
+					statement(
+						"SELECT * FROM import_admission_ledger WHERE key = ? AND agent_id = ? AND workspace_id = ?",
+						[row.key, this.scope.agentId, this.scope.workspaceId ?? ""],
+						"get",
 					),
 				],
 			},
 		} as DbOwnerRequest;
-		await this.request(req, "import-admission.upsert");
-		return row;
+		const results = await this.request<[unknown, unknown, Row | undefined]>(req, "import-admission.upsert");
+		const actual = results[2];
+		if (!actual) throw new Error(`missing import ${row.key}`);
+		if (actual.request_fingerprint && actual.request_fingerprint !== fingerprint)
+			throw new ImportAdmissionConflictError(row.key);
+		return this.row(actual);
 	}
 	async appendEvent(key: string, event: string): Promise<void> {
 		await this.request(

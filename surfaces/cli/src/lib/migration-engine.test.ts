@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MigrationEngine } from "./migration-engine.js";
@@ -18,6 +18,22 @@ test("preflight is read-only and inventory reports required bytes", async () => 
 	expect(plan.readOnly).toBe(true);
 	expect(plan.bytes).toBe(8);
 	expect(plan.components).toContain("AGENTS.md");
+});
+
+test("migration creates verified destination directories for nested files", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-nested-"));
+	const state = mkdtempSync(join(tmpdir(), "migration-nested-state-"));
+	mkdirSync(join(root, "memory"), { recursive: true });
+	writeFileSync(join(root, "memory", "memories.db"), "db");
+	const destination = `${root}-new`;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		journalStateDir: state,
+	});
+	await engine.run();
+	expect(readFileSync(join(destination, "memory", "memories.db"), "utf8")).toBe("db");
 });
 
 test("interrupted copy resumes and rollback is fenced after destination writes", async () => {
@@ -141,4 +157,28 @@ test("rollback removes only the owned partial destination and can be rerun", asy
 	await engine.rollback();
 	await expect(engine.status()).resolves.toMatchObject({ phase: "not-started" });
 	await expect(engine.run()).rejects.toThrow("interrupt");
+});
+
+test("resume reconciles a copied file left behind before its journal update", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
+	const journalStateDir = mkdtempSync(join(tmpdir(), "signet-migration-state-"));
+	writeFileSync(join(root, "one.txt"), "one");
+	const destination = join(`${root}-new`);
+	let interrupted = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }), cutover: async () => {} },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		journalStateDir,
+		hooks: {
+			afterEntryCopy: async () => {
+				if (!interrupted) {
+					interrupted = true;
+					throw new Error("crash after copy before journal");
+				}
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("crash after copy before journal");
+	expect(await engine.resume()).toMatchObject({ status: "completed" });
 });

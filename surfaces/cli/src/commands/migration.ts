@@ -1,5 +1,18 @@
 import type { Command } from "commander";
-import { closeSync, existsSync, mkdirSync, openSync, statSync, unlinkSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import {
+	closeSync,
+	constants,
+	existsSync,
+	fstatSync,
+	fsyncSync,
+	linkSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	statSync,
+	unlinkSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { persistWorkspaceLayout, resolveWorkspaceLayout } from "@signet/core";
@@ -77,13 +90,26 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 				const target = join(path, "data", "signet.db");
 				mkdirSync(dirname(target), { recursive: true });
 				if (existsSync(sourceLayout.database)) {
-					const db = createDatabase(sourceLayout.database) as unknown as {
-						backup?: (path: string) => void;
-						close(): void;
-					};
-					if (typeof db.backup === "function") db.backup(target);
-					else throw new Error("SQLite backup API unavailable");
-					if (typeof db.close === "function") db.close();
+					const temporary = join(dirname(target), `.signet.db.snapshot-${process.pid}-${randomUUID()}.tmp`);
+					const db = createDatabase(sourceLayout.database);
+					try {
+						const escaped = resolve(temporary).replaceAll("'", "''");
+						db.exec(`VACUUM INTO '${escaped}'`);
+					} finally {
+						db.close();
+					}
+					try {
+						fsyncFile(temporary);
+						try {
+							linkSync(temporary, target);
+						} catch (error) {
+							if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+							if (hashRegularFile(target) !== hashRegularFile(temporary))
+								throw new Error("destination database snapshot conflicts with source");
+						}
+					} finally {
+						if (existsSync(temporary)) unlinkSync(temporary);
+					}
 				}
 				return { path: target, bytes: statTree(target) };
 			},
@@ -97,6 +123,25 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		journalStateDir: state,
 	};
 	return new MigrationEngine(deps);
+}
+
+function fsyncFile(path: string): void {
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	try {
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+}
+
+function hashRegularFile(path: string): string {
+	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	try {
+		if (!fstatSync(fd).isFile()) throw new Error("database snapshot is not a regular file");
+		return createHash("sha256").update(readFileSync(fd)).digest("hex");
+	} finally {
+		closeSync(fd);
+	}
 }
 
 function statTree(path: string): number {

@@ -9,6 +9,8 @@ export interface ProtectionEvidence {
 export interface ProtectionEvidenceOptions {
 	readonly now?: Date;
 	readonly externalKeyringAvailable?: boolean;
+	readonly rootGitProtected?: boolean;
+	readonly skillsGitProtected?: boolean;
 }
 function component(
 	id: ProtectionComponentId,
@@ -20,6 +22,7 @@ function component(
 function present(path: string): boolean {
 	return existsSync(path);
 }
+const ROOT_AUTHORED_FILES = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "agent.yaml", ".sigignore"] as const;
 function hasVerifiedBackup(root: string, names: readonly string[]): boolean {
 	for (const name of names) {
 		const candidate = join(root, name);
@@ -42,13 +45,16 @@ function hasVerifiedBackup(root: string, names: readonly string[]): boolean {
 
 export function buildProtectionEvidence(rootPath: string, options: ProtectionEvidenceOptions = {}): ProtectionEvidence {
 	const layout = resolveWorkspaceLayout(rootPath);
-	const rootAuthored = present(layout.files) && present(layout.layoutFile);
-	const skills = present(layout.skills);
+	const rootAuthored =
+		present(layout.layoutFile) &&
+		ROOT_AUTHORED_FILES.every((file) => present(join(rootPath, file))) &&
+		options.rootGitProtected === true;
+	const skills = present(layout.skills) && options.skillsGitProtected === true;
 	const originals = hasVerifiedBackup(rootPath, ["backup", ".backup", "originals", "managed-originals"]);
 	const sqlite = present(layout.database) && hasVerifiedBackup(rootPath, ["backup", ".backup", "snapshots"]);
 	const transcripts =
 		present(layout.transcripts) && hasVerifiedBackup(rootPath, ["backup", ".backup", "transcript-backup", "snapshots"]);
-	const sourceOwner = present(join(layout.files, "sources.json"));
+	const sourceOwner = present(join(rootPath, "sources.json"));
 	const runtime = present(layout.runtime) && present(join(layout.runtime, ".recreate-proof"));
 	const keyring =
 		options.externalKeyringAvailable === true ||
@@ -83,8 +89,8 @@ export function buildProtectionEvidence(rootPath: string, options: ProtectionEvi
 			),
 			component(
 				"external-sources",
-				sourceOwner ? "protected" : "missing",
-				sourceOwner ? "external source owner is recorded" : "external source owner is missing",
+				sourceOwner ? "external" : "protected",
+				sourceOwner ? "external source ownership requires independent verification" : "no external sources configured",
 			),
 			component(
 				"runtime",
@@ -94,11 +100,11 @@ export function buildProtectionEvidence(rootPath: string, options: ProtectionEvi
 			component("filesystem-cache", "excluded-rebuildable", "filesystem cache is rebuildable from authoritative state"),
 			component(
 				"secrets",
-				keyring || present(layout.secrets) ? "protected" : "unverified",
+				keyring ? "protected" : "unverified",
 				keyring
 					? "external keyring is available"
 					: present(layout.secrets)
-						? "encrypted file provider is present"
+						? "encrypted file provider has no verified recovery evidence"
 						: "encrypted provider is unavailable",
 			),
 		],

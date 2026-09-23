@@ -2,7 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { admitImport, scanInbox, type ImportLedger, type ImportRow } from "./import-inbox";
+import {
+	admitImport,
+	ImportAdmissionConflictError,
+	scanInbox,
+	type ImportLedger,
+	type ImportRow,
+} from "./import-inbox";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -35,6 +41,46 @@ describe("durable import inbox admission", () => {
 		expect(first).toEqual(second);
 		expect(first.status).toBe("pending");
 		expect(await Bun.file(first.originalPath).arrayBuffer()).toEqual(bytes.buffer);
+	});
+
+	test("concurrent conflicting idempotency requests cannot replace the winning original", async () => {
+		const root = await fixture();
+		const rows = new Map<string, ImportRow>();
+		let findCount = 0;
+		let firstUpsertStarted: (() => void) | undefined;
+		let secondFindStarted: (() => void) | undefined;
+		const firstUpsert = new Promise<void>((resolve) => {
+			firstUpsertStarted = resolve;
+		});
+		const secondFind = new Promise<void>((resolve) => {
+			secondFindStarted = resolve;
+		});
+		const l: ImportLedger = {
+			find: (key) => {
+				findCount += 1;
+				if (findCount === 2) secondFindStarted?.();
+				return rows.get(key);
+			},
+			upsert: async (row) => {
+				if (rows.size === 0) {
+					firstUpsertStarted?.();
+					await secondFind;
+					rows.set(row.key, row);
+					return row;
+				}
+				const existing = rows.get(row.key);
+				if (existing?.sha256 !== row.sha256) throw new Error("conflicting idempotency key");
+				return existing ?? row;
+			},
+		};
+		const firstBytes = new TextEncoder().encode("first");
+		const secondBytes = new TextEncoder().encode("second");
+		const first = admitImport({ root, fileName: "note.txt", bytes: firstBytes, ledger: l, idempotencyKey: "same" });
+		await firstUpsert;
+		const second = admitImport({ root, fileName: "note.txt", bytes: secondBytes, ledger: l, idempotencyKey: "same" });
+		const winner = await first;
+		await expect(second).rejects.toBeInstanceOf(ImportAdmissionConflictError);
+		expect(new Uint8Array(await Bun.file(winner.originalPath).arrayBuffer())).toEqual(firstBytes);
 	});
 
 	test("bounded scan ignores temp files and rejects symlinks", async () => {

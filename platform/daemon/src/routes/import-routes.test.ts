@@ -22,19 +22,19 @@ describe("import routes", () => {
 	let previousPath: string | undefined;
 	let previousAgentId: string | undefined;
 
-	beforeEach(() => {
+	beforeEach(async () => {
 		dir = mkdtempSync(join(tmpdir(), "signet-import-routes-"));
 		mkdirSync(join(dir, "memory"), { recursive: true });
 		previousPath = process.env.SIGNET_PATH;
 		previousAgentId = process.env.SIGNET_AGENT_ID;
 		process.env.SIGNET_PATH = dir;
 		process.env.SIGNET_AGENT_ID = "import-test-agent";
-		closeDbAccessor();
+		await closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"));
 	});
 
-	afterEach(() => {
-		closeDbAccessor();
+	afterEach(async () => {
+		await closeDbAccessor();
 		if (previousPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousPath;
 		if (previousAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
@@ -286,7 +286,7 @@ describe("import routes", () => {
 				}),
 			})}\n`,
 		);
-		closeDbAccessor();
+		await closeDbAccessor();
 		initDbAccessor(join(dir, "memory", "memories.db"));
 
 		const retry = await app().request("/api/sources/import", {

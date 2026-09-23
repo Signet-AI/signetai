@@ -53,6 +53,7 @@ import { registerGraphiqCommands } from "./commands/graphiq.js";
 import { registerHookCommands } from "./commands/hook.js";
 import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMemoryCommands } from "./commands/memory.js";
+import { registerMigrationCommands } from "./commands/migration.js";
 import { registerOntologyCommands } from "./commands/ontology.js";
 import { registerPortableCommands } from "./commands/portable.js";
 import { registerRepairQueueCommands } from "./commands/repair-queue.js";
@@ -1061,6 +1062,7 @@ registerWorkspaceCommands(program, {
 	signetLogo,
 });
 
+registerMigrationCommands(program);
 registerHookCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonResult,

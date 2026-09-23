@@ -75,6 +75,7 @@ export interface MigrationDeps {
 	journalStateDir: string;
 	hooks?: {
 		afterCopy?: () => Promise<void>;
+		afterEntryCopy?: () => Promise<void>;
 		afterCutover?: () => Promise<void>;
 		verifyComponent?: (receipt: Receipt) => Promise<boolean>;
 	};
@@ -158,6 +159,7 @@ export class MigrationEngine {
 			for (const rel of plan.components) {
 				if (done.has(rel)) continue;
 				const r = copyEntry(l.root, l.destination, rel);
+				await this.deps.hooks?.afterEntryCopy?.();
 				j.receipts.push({ component: rel, phase: "accepted", fingerprint: r });
 				j.copied.push(rel);
 				j.phase = "copying";
@@ -362,12 +364,32 @@ function fingerprint(p: string, type: "file" | "symlink"): Fingerprint {
 		hash: createHash("sha256").update(h).digest("hex"),
 	};
 }
-function assertSafeParent(root: string, rel: string): void {
-	let current = resolve(root);
-	for (const part of relative(resolve(root), resolve(root, dirname(rel)))
-		.split(sep)
-		.filter(Boolean)) {
+function fsyncDirectory(path: string): void {
+	const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+	try {
+		fsyncSync(fd);
+	} finally {
+		closeSync(fd);
+	}
+}
+function ensureSafeParent(root: string, rel: string): void {
+	const resolvedRoot = resolve(root);
+	const parent = resolve(resolvedRoot, dirname(rel));
+	if (parent !== resolvedRoot && !parent.startsWith(`${resolvedRoot}${sep}`))
+		throw new Error(`escaping destination parent: ${rel}`);
+	const rootStat = lstatSync(resolvedRoot);
+	if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error(`unsafe destination root: ${rel}`);
+	let current = resolvedRoot;
+	for (const part of relative(resolvedRoot, parent).split(sep).filter(Boolean)) {
+		const previous = current;
 		current = join(current, part);
+		try {
+			mkdirSync(current, { mode: 0o700 });
+			fsyncDirectory(current);
+			fsyncDirectory(previous);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
 		const s = lstatSync(current);
 		if (!s.isDirectory() || s.isSymbolicLink()) throw new Error(`unsafe destination parent: ${rel}`);
 	}
@@ -375,7 +397,7 @@ function assertSafeParent(root: string, rel: string): void {
 function copyEntry(source: string, destination: string, rel: string): Fingerprint {
 	const src = join(source, rel),
 		dst = join(destination, rel);
-	assertSafeParent(destination, rel);
+	ensureSafeParent(destination, rel);
 	const before = lstatSync(src);
 	const f = fingerprint(src, before.isSymbolicLink() ? "symlink" : "file");
 	const destinationExists = (() => {
@@ -386,7 +408,19 @@ function copyEntry(source: string, destination: string, rel: string): Fingerprin
 			return false;
 		}
 	})();
-	if (destinationExists) throw new Error(`destination already exists: ${rel}`);
+	if (destinationExists) {
+		const destinationStat = lstatSync(dst);
+		const destinationType = destinationStat.isSymbolicLink()
+			? "symlink"
+			: destinationStat.isFile()
+				? "file"
+				: undefined;
+		if (!destinationType || destinationType !== f.type) throw new Error(`destination already exists: ${rel}`);
+		const existing = fingerprint(dst, destinationType);
+		if (existing.hash !== f.hash || existing.size !== f.size)
+			throw new Error(`destination conflict during resume: ${rel}`);
+		return { ...f, path: rel };
+	}
 	if (f.type === "symlink") {
 		const target = readlinkSync(src);
 		const targetPath = resolve(dirname(src), target);

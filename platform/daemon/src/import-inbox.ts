@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, rename, stat, lstat, unlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { copyFile, lstat, mkdir, open, readdir, stat, unlink } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { resolveWorkspaceLayout } from "@signet/core";
 import { withMigrationAdmission, type MigrationAdmission } from "./workspace-writer-barrier";
@@ -12,6 +13,12 @@ export type ImportStatus =
 	| "failed"
 	| "quarantined"
 	| "original_unavailable";
+export class ImportAdmissionConflictError extends Error {
+	constructor(key: string) {
+		super(`import admission key conflict: ${key}`);
+		this.name = "ImportAdmissionConflictError";
+	}
+}
 export interface ImportRow {
 	key: string;
 	fileName: string;
@@ -78,6 +85,17 @@ const keyFor = (bytes: Uint8Array, name: string, supplied?: string) =>
 	supplied ?? createHash("sha256").update(bytes).update("\0").update(name).digest("hex");
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
+async function readManagedOriginal(path: string): Promise<Uint8Array> {
+	const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+	try {
+		const info = await handle.stat();
+		if (!info.isFile()) throw new Error("managed original is not a regular file");
+		return new Uint8Array(await handle.readFile());
+	} finally {
+		await handle.close();
+	}
+}
+
 function paths(root: string, key: string, layout = resolveWorkspaceLayout(root)) {
 	const managed = join(resolve(layout.imports), key);
 	return { managed, original: join(managed, "original") };
@@ -108,7 +126,6 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	}
 	// Publish retained bytes before the durable row. A crash here leaves an
 	// inspectable orphan for reconciliation; the reverse ordering loses bytes.
-	await rename(tmp, target.original);
 	const row: ImportRow = {
 		key,
 		fileName: input.fileName,
@@ -117,6 +134,15 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 		sha256: digest(input.bytes),
 		size: input.bytes.byteLength,
 	};
+	try {
+		await copyFile(tmp, target.original, constants.COPYFILE_EXCL);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		const existing = await readManagedOriginal(target.original);
+		if (digest(existing) !== row.sha256) throw new ImportAdmissionConflictError(key);
+	} finally {
+		await unlink(tmp).catch(() => {});
+	}
 	const committed = await input.ledger.upsert(row);
 	return committed;
 }
