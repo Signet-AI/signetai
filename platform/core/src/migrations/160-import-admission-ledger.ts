@@ -43,7 +43,8 @@ function rebuildLedgerWithoutGlobalKeyPrimaryKey(db: MigrationDb): void {
 		.all()
 		.find((row) => row.name === "key");
 	if (!keyInfo || Number(keyInfo.pk) === 0) return;
-	db.exec("BEGIN");
+	const savepoint = "migration_158_rebuild_ledger";
+	db.exec(`SAVEPOINT ${savepoint}`);
 	try {
 		db.exec(`
 			CREATE TABLE import_admission_ledger_v158 (
@@ -58,9 +59,15 @@ function rebuildLedgerWithoutGlobalKeyPrimaryKey(db: MigrationDb): void {
 			DROP TABLE import_admission_ledger;
 			ALTER TABLE import_admission_ledger_v158 RENAME TO import_admission_ledger;
 		`);
-		db.exec("COMMIT");
+		db.exec(`RELEASE ${savepoint}`);
 	} catch (error) {
-		db.exec("ROLLBACK");
+		try {
+			db.exec(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+		} finally {
+			try {
+				db.exec(`RELEASE ${savepoint}`);
+			} catch {}
+		}
 		throw error;
 	}
 }
