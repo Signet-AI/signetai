@@ -109,12 +109,18 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 				bytes,
 			});
 			if (!claimed) continue;
+			if (claimed.status === "imported" || claimed.status === "duplicate") {
+				await unlink(path).catch(() => {});
+				continue;
+			}
 			try {
 				const dispatch = fileName.endsWith(".jsonl") ? options.dispatchTranscript : options.dispatchDocument;
 				if (!dispatch) throw new Error("no dispatcher configured");
 				const result = await dispatch(claimed);
-				await unlink(path);
 				await options.admission.record({ ...claimed, status: result.status, sourceId: result.sourceId });
+				await unlink(path).catch((error) => {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				});
 				counts.imported++;
 			} catch (error) {
 				await options.admission.record({

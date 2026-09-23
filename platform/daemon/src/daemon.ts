@@ -546,7 +546,15 @@ registerImportRoutes(app, {
 				idempotencyKey,
 				ledger: new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() }),
 			});
-			return { key: row.key, originalPath: row.originalPath, sha256: row.sha256, size: row.size };
+			return {
+				key: row.key,
+				originalPath: row.originalPath,
+				sha256: row.sha256,
+				size: row.size,
+				status: row.status,
+				sourceId: row.sourceId,
+				error: row.error,
+			};
 		},
 		begin: async (key) => {
 			const ledger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() });

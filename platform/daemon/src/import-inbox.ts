@@ -70,7 +70,15 @@ export interface DurableImportAdmission {
 		readonly bytes: Uint8Array;
 		readonly contentType?: string;
 		readonly idempotencyKey?: string;
-	}): Promise<{ readonly key: string; readonly originalPath: string; readonly sha256: string; readonly size: number }>;
+	}): Promise<{
+		readonly key: string;
+		readonly originalPath: string;
+		readonly sha256: string;
+		readonly size: number;
+		readonly status?: ImportStatus;
+		readonly sourceId?: string;
+		readonly error?: string;
+	}>;
 	begin(key: string): Promise<void>;
 	complete(input: {
 		readonly key: string;
@@ -114,7 +122,15 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	if (input.bytes.byteLength > max) throw new Error(`file exceeds ${max} bytes`);
 	const key = keyFor(input.bytes, input.fileName, input.idempotencyKey);
 	const prior = await input.ledger.find(key);
-	if (prior) return prior;
+	if (prior) {
+		if (
+			prior.fileName !== input.fileName ||
+			prior.sha256 !== digest(input.bytes) ||
+			prior.size !== input.bytes.byteLength
+		)
+			throw new ImportAdmissionConflictError(key);
+		return prior;
+	}
 	const target = paths(input.root, key, input.layout);
 	await mkdir(target.managed, { recursive: true });
 	const tmp = `${target.original}.tmp-${process.pid}-${Date.now()}`;

@@ -79,6 +79,30 @@ describe("import routes", () => {
 		expect(new TextDecoder().decode(seen[0])).toBe("hello");
 	});
 
+	it("threads a bounded idempotency key with a deterministic per-file suffix", async () => {
+		const seen: string[] = [];
+		const admission: DurableImportAdmission = {
+			admit: async ({ fileName, idempotencyKey }) => {
+				seen.push(`${fileName}:${idempotencyKey}`);
+				return { key: `k:${fileName}`, originalPath: `/durable/${fileName}`, sha256: "hash", size: 1 };
+			},
+			begin: async () => {},
+			complete: async () => {},
+		};
+		const instance = new Hono();
+		registerImportRoutes(instance, { durableImportAdmission: admission });
+		const form = new FormData();
+		form.append("files", new File(["a"], "a.txt"));
+		form.append("files", new File(["b"], "b.txt"));
+		const response = await instance.request("/api/sources/import", {
+			method: "POST",
+			headers: { "Idempotency-Key": "batch-key" },
+			body: form,
+		});
+		expect(response.status).toBe(201);
+		expect(seen).toEqual(["a.txt:batch-key:a.txt", "b.txt:batch-key:b.txt"]);
+	});
+
 	it("routes JSONL uploads to the transcript importer instead of generic import", async () => {
 		const response = await app().request("/api/sources/import", {
 			method: "POST",

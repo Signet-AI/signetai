@@ -102,8 +102,8 @@ export class DbOwnedImportAdmissionLedger implements ImportLedger {
 						"run",
 					),
 					statement(
-						"INSERT INTO import_admission_events (admission_key,event,created_at) SELECT ?,?,? WHERE changes() > 0",
-						[row.key, "admitted", timestamp],
+						"INSERT INTO import_admission_events (admission_key,agent_id,workspace_id,event,created_at) SELECT ?,?,?,?,? WHERE changes() > 0",
+						[row.key, this.scope.agentId, this.scope.workspaceId ?? "", "admitted", timestamp],
 						"run",
 					),
 					statement(
@@ -126,8 +126,8 @@ export class DbOwnedImportAdmissionLedger implements ImportLedger {
 			{
 				kind: "query",
 				statement: statement(
-					"INSERT INTO import_admission_events (admission_key,event,created_at) VALUES (?,?,?)",
-					[key, event, now()],
+					"INSERT INTO import_admission_events (admission_key,agent_id,workspace_id,event,created_at) VALUES (?,?,?,?,?)",
+					[key, this.scope.agentId, this.scope.workspaceId ?? "", event, now()],
 					"run",
 				),
 			},
@@ -166,8 +166,8 @@ export class DbOwnedImportAdmissionLedger implements ImportLedger {
 							requireChanges: true,
 						},
 						statement(
-							"INSERT INTO import_admission_events (admission_key,event,created_at) VALUES (?,?,?)",
-							[key, to, timestamp],
+							"INSERT INTO import_admission_events (admission_key,agent_id,workspace_id,event,created_at) VALUES (?,?,?,?,?)",
+							[key, this.scope.agentId, this.scope.workspaceId ?? "", to, timestamp],
 							"run",
 						),
 					],

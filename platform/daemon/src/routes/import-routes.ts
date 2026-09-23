@@ -39,6 +39,14 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 			return c.json({ error: "Filesystem path imports are only available on a local daemon" }, 400);
 		if (uploadedEntries.length + pathEntries.length === 0)
 			return c.json({ error: "At least one file is required" }, 400);
+		const requestIdempotencyKey = c.req.header("Idempotency-Key")?.trim();
+		if (
+			requestIdempotencyKey !== undefined &&
+			(!requestIdempotencyKey ||
+				requestIdempotencyKey.length > 256 ||
+				!/^[A-Za-z0-9._:-]+$/.test(requestIdempotencyKey))
+		)
+			return c.json({ error: "Invalid Idempotency-Key" }, 400);
 		// Transcript JSONL has a separate durable importer with byte-offset
 		// checkpoints and transcript-specific duplicate semantics. Never let the
 		// generic document normalizer create a second transcript path.
@@ -50,7 +58,10 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 		const duplicateModeValue = form.get("duplicateMode");
 		const duplicateMode =
 			duplicateModeValue === "replace" || duplicateModeValue === "reimport" ? duplicateModeValue : "skip";
-		const statuses: DocumentImportStatus[] = [];
+		const statuses: Array<
+			| DocumentImportStatus
+			| { readonly fileName: string; readonly status: "imported" | "duplicate"; readonly sourceId: string }
+		> = [];
 		const pathFiles: File[] = [];
 		const uploadedBytes = uploadedEntries.reduce((total, file) => total + file.size, 0);
 		let pathBytes = 0;
@@ -101,7 +112,12 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 					fileName: file.name,
 					bytes: fileBytes,
 					contentType: file.type,
+					idempotencyKey: requestIdempotencyKey ? `${requestIdempotencyKey}:${file.name}` : undefined,
 				});
+				if (admission.status === "imported" || admission.status === "duplicate") {
+					statuses.push({ fileName: file.name, status: admission.status, sourceId: admission.sourceId ?? "" });
+					continue;
+				}
 				await deps.durableImportAdmission.begin(admission.key);
 				const result = await importDocument({
 					fileName: file.name,
