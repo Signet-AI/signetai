@@ -1,7 +1,38 @@
 import { describe, expect, it } from "bun:test";
-import { closeDbOwnerDuringShutdown, createShutdownRequestGate } from "./daemon-shutdown";
+import { closeDbOwnerDuringShutdown, createShutdownRequestGate, forceExitDuringShutdownFlush } from "./daemon-shutdown";
 
 describe("daemon shutdown request gate", () => {
+	it("forces a fatal exit instead of waiting for an in-flight flush", () => {
+		const calls: string[] = [];
+		const flushInFlight = new Promise<void>(() => {});
+		const forced = forceExitDuringShutdownFlush(
+			flushInFlight,
+			1,
+			() => calls.push("logger"),
+			(code: number) => {
+				calls.push(`exit:${code}`);
+			},
+		);
+
+		expect(forced).toBe(true);
+		expect(calls).toEqual(["logger", "exit:1"]);
+	});
+
+	it("keeps a clean shutdown on its existing flush", () => {
+		const calls: string[] = [];
+		const forced = forceExitDuringShutdownFlush(
+			Promise.resolve(),
+			0,
+			() => calls.push("logger"),
+			(code: number) => {
+				calls.push(`exit:${code}`);
+			},
+		);
+
+		expect(forced).toBe(false);
+		expect(calls).toEqual([]);
+	});
+
 	it("escalates a clean shutdown to a fatal exit without replacing its primary reason", () => {
 		const gate = createShutdownRequestGate();
 		const signal = { reason: "signal:SIGTERM", exitCode: 0 } as const;

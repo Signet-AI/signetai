@@ -103,7 +103,7 @@ import {
 	createDeferredRuntimeScheduler,
 	releaseDeferredRuntimeGateIfSafe,
 } from "./deferred-runtime-gate";
-import { closeDbOwnerDuringShutdown, createShutdownRequestGate } from "./daemon-shutdown";
+import { closeDbOwnerDuringShutdown, createShutdownRequestGate, forceExitDuringShutdownFlush } from "./daemon-shutdown";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
@@ -2090,7 +2090,15 @@ const shutdownRequestGate = createShutdownRequestGate();
 let shutdownFatalError: unknown;
 
 async function flushAndExit(exitCode: number): Promise<void> {
-	if (exitFlushInFlight) return exitFlushInFlight;
+	if (exitFlushInFlight) {
+		forceExitDuringShutdownFlush(
+			exitFlushInFlight,
+			shutdownRequestGate.exitCode ?? exitCode,
+			() => logger.shutdown(),
+			(code) => process.exit(code),
+		);
+		return exitFlushInFlight;
+	}
 	exitFlushInFlight = (async () => {
 		if (telemetryRef) {
 			const timeout = new Promise<void>((resolve) => {
