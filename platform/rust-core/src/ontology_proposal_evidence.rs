@@ -311,6 +311,32 @@ fn resolve(db: &Connection, agent: &str, r: &Ref) -> Result<Value, CoreError> {
         json!({"kind":"unresolved","found":false,"sourceKind":r.source_kind,"sourceId":r.source_id,"sourcePath":r.source_path,"label":r.source_path.as_deref().or(r.source_id.as_deref()).or(r.memory_id.as_deref()).unwrap_or("unknown evidence"),"excerpt":"","reference":r.reference}),
     )
 }
+pub(crate) fn resolve_evidence_reference(
+    db: &Connection,
+    agent: &str,
+    reference: &Value,
+) -> Result<Value, CoreError> {
+    match parse_ref(reference) {
+        Some(reference) => resolve(db, agent, &reference),
+        None => Ok(json!({
+            "kind": "unresolved",
+            "found": false,
+            "sourceKind": null,
+            "sourceId": null,
+            "sourcePath": null,
+            "label": "unknown evidence",
+            "excerpt": "",
+            "reference": reference,
+        })),
+    }
+}
+
+pub(crate) fn evidence_reference_key(reference: &Value) -> String {
+    parse_ref(reference)
+        .map(|reference| key(&reference))
+        .unwrap_or_else(|| serde_json::to_string(reference).unwrap_or_default())
+}
+
 fn parse_json(value: &str, fallback: Value) -> Value {
     serde_json::from_str(value).unwrap_or(fallback)
 }

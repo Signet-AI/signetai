@@ -434,10 +434,10 @@ async fn authenticate_api(
     next: Next,
 ) -> Response {
     let expected = configured_api_key();
-    let explicitly_open = env::var("SIGNET_MODE")
+    let local_mode = env::var("SIGNET_MODE")
         .map(|mode| mode.eq_ignore_ascii_case("local"))
-        .unwrap_or(false);
-    if explicitly_open && expected.is_none() {
+        .unwrap_or(true);
+    if local_mode && expected.is_none() {
         return next.run(request).await;
     }
     let path = request.uri().path();

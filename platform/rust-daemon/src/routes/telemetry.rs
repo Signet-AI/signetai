@@ -1,13 +1,13 @@
 use super::auth;
-use crate::{ApiError, AppState, execute, non_empty, workspace_id};
+use crate::{execute, non_empty, workspace_id, ApiError, AppState};
 use axum::{
-    Json, Router,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     routing::get,
+    Json, Router,
 };
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 
 #[derive(Debug, Deserialize, Default)]
 struct QueryParams {
@@ -46,16 +46,14 @@ fn check(authority: &Value, agent: &str, workspace: &str) -> Result<(), ApiError
     }
     if let Some(scope) = authority.get("scope").and_then(Value::as_object) {
         for (key, requested) in [("agent", agent), ("workspace", workspace)] {
-            if scope
-                .get(key)
-                .and_then(Value::as_str)
-                .is_some_and(|value| value != requested)
-            {
-                return Err(ApiError {
-                    status: StatusCode::FORBIDDEN,
-                    code: "scope_forbidden",
-                    message: "telemetry scope does not permit this request".into(),
-                });
+            if let Some(value) = scope.get(key).and_then(Value::as_str) {
+                if value != requested {
+                    return Err(ApiError {
+                        status: StatusCode::FORBIDDEN,
+                        code: "scope_forbidden",
+                        message: "telemetry scope does not permit this request".into(),
+                    });
+                }
             }
         }
     }
@@ -91,22 +89,10 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/telemetry/events", get(events))
         .route("/api/telemetry/health", get(health))
-        .route("/api/telemetry/stats", get(stats))
-        .route("/api/telemetry/export", get(export))
+        .route("/api/telemetry/stats", get(unsupported))
+        .route("/api/telemetry/export", get(unsupported))
         .route("/api/telemetry/memory-search", get(unsupported))
         .route("/api/telemetry/memory-search/export", get(unsupported))
-}
-
-fn requested_agent(q: &QueryParams, authority: &Value) -> Result<String, ApiError> {
-    q.agent
-        .clone()
-        .or_else(|| {
-            authority
-                .get("agentId")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .ok_or_else(|| ApiError::bad_request("agent is required"))
 }
 
 async fn events(
@@ -115,7 +101,15 @@ async fn events(
     Query(q): Query<QueryParams>,
 ) -> Result<Json<Value>, ApiError> {
     let authority = authority(&state, &headers).await?;
-    let agent = requested_agent(&q, &authority)?;
+    let agent = q
+        .agent
+        .or_else(|| {
+            authority
+                .get("agentId")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .ok_or_else(|| ApiError::bad_request("agent is required"))?;
     let workspace = telemetry_workspace(&headers, q.workspace.as_deref())?;
     check(&authority, &agent, &workspace)?;
     let limit = q.limit.unwrap_or(100);
@@ -124,7 +118,7 @@ async fn events(
             "limit must be an integer from 1 to 10000",
         ));
     }
-    let mut response = execute(
+    let result = execute(
         &state,
         signet_core_native::Operation::TelemetryList {
             agent_id: agent,
@@ -137,97 +131,9 @@ async fn events(
         },
     )
     .await?;
+    let mut response = result;
     response["enabled"] = json!(true);
     Ok(Json(response))
-}
-
-async fn stats(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(q): Query<QueryParams>,
-) -> Result<Json<Value>, ApiError> {
-    let authority = authority(&state, &headers).await?;
-    let agent = requested_agent(&q, &authority)?;
-    let workspace = telemetry_workspace(&headers, q.workspace.as_deref())?;
-    check(&authority, &agent, &workspace)?;
-    let result = execute(
-        &state,
-        signet_core_native::Operation::TelemetryList {
-            agent_id: agent,
-            workspace_id: workspace,
-            event: None,
-            since: q.since,
-            until: None,
-            cursor: None,
-            limit: 10_000,
-        },
-    )
-    .await?;
-    let events = result
-        .get("events")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let mut counts = serde_json::Map::new();
-    for item in &events {
-        if let Some(name) = item.get("event").and_then(Value::as_str) {
-            let count = counts.entry(name.to_owned()).or_insert(json!(0));
-            *count = json!(count.as_u64().unwrap_or(0) + 1);
-        }
-    }
-    Ok(Json(
-        json!({"enabled":true,"totalEvents":events.len(),"eventsByType":counts,"aggregation":"partial","unsupported":["full TypeScript telemetry aggregation"]}),
-    ))
-}
-
-async fn export(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Query(q): Query<QueryParams>,
-) -> Result<
-    (
-        StatusCode,
-        [(axum::http::header::HeaderName, &'static str); 1],
-        String,
-    ),
-    ApiError,
-> {
-    let authority = authority(&state, &headers).await?;
-    let agent = requested_agent(&q, &authority)?;
-    let workspace = telemetry_workspace(&headers, q.workspace.as_deref())?;
-    check(&authority, &agent, &workspace)?;
-    let limit = q.limit.unwrap_or(10_000);
-    if !(1..=100_000).contains(&limit) {
-        return Err(ApiError::bad_request(
-            "limit must be an integer from 1 to 100000",
-        ));
-    }
-    let result = execute(
-        &state,
-        signet_core_native::Operation::TelemetryList {
-            agent_id: agent,
-            workspace_id: workspace,
-            event: q.event,
-            since: q.since,
-            until: q.until,
-            cursor: q.cursor,
-            limit: limit.min(10_000),
-        },
-    )
-    .await?;
-    let lines = result
-        .get("events")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .map(Value::to_string)
-        .collect::<Vec<_>>()
-        .join("\n");
-    Ok((
-        StatusCode::OK,
-        [(axum::http::header::CONTENT_TYPE, "application/x-ndjson")],
-        lines,
-    ))
 }
 
 async fn health(
@@ -244,12 +150,10 @@ async fn health(
     check(&authority, agent, &workspace)?;
     let db = execute(&state, signet_core_native::Operation::Health).await?;
     Ok(Json(
-        json!({"status":"healthy","enabled":true,"workspace":workspace,"events":{"enabled":true,"delivery":"unsupported","aggregation":"partial","export":"ndjson","memorySearch":"unsupported"},"database":db}),
+        json!({"status":"healthy","enabled":true,"workspace":workspace,"events":{"enabled":true,"delivery":"unsupported","aggregation":"unsupported","export":"unsupported","memorySearch":"unsupported"},"database":db}),
     ))
 }
 
 async fn unsupported() -> Result<(StatusCode, Json<Value>), ApiError> {
-    Err(ApiError::not_implemented(
-        "telemetry capability is not implemented in fresh Rust; unsupported_marker=telemetry_provider_boundary",
-    ))
+    Err(ApiError::not_implemented("telemetry capability is not implemented in fresh Rust; unsupported_marker=telemetry_provider_boundary"))
 }

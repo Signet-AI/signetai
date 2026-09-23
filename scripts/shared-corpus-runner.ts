@@ -377,7 +377,7 @@ export function run(
 	}
 	const command =
 		backend === "typescript"
-			? buildTypeScriptCommand(selected, report)
+			? buildTypeScriptCommand(selected ?? runnableManifestPaths(manifest.protectedCorpus), report)
 			: [
 					o.adapter ?? "",
 					"--core-driver",

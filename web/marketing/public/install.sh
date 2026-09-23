@@ -161,10 +161,11 @@ fi
 
 chmod +x "$binary_path"
 
-# Companion connector assets. Newer releases may ship a connector tarball in
-# the release manifest; older ones have no entry and silently skip it. The
-# tarball is passed to `signet install` so the native command can extract it
-# to the install location and point `SIGNET_DIR` at it.
+# Companion runtime assets. Newer releases ship connector and Bun JavaScript
+# daemon tarballs in the release manifest; older ones have no entries and
+# silently skip them. The tarballs are passed to `signet install` so the
+# native command can extract them to the install location and point
+# `SIGNET_DIR` at them.
 manifest_component_value() {
 	component="$1"
 	field="$2"
@@ -202,14 +203,45 @@ if [ -n "$connector_url" ] && [ -n "$connector_sha" ]; then
 	fi
 fi
 
-# `signet install` accepts the connector asset flag so it can verify and
-# extract the tarball next to the binary at its final install location.
-if [ -n "$connector_path" ]; then
+# Bun JavaScript daemon runtime assets. Releases that provide the selectable
+# runtime list a verified tarball under `components.daemonJs`.
+daemon_js_url="$(manifest_component_value daemonJs url)"
+daemon_js_sha="$(manifest_component_value daemonJs sha256)"
+
+daemon_js_path=""
+if [ -n "$daemon_js_url" ] && [ -n "$daemon_js_sha" ]; then
+	case "$daemon_js_url" in
+		http*) daemon_js_full="$daemon_js_url" ;;
+		*)     daemon_js_full="$DOWNLOAD_BASE/$daemon_js_url" ;;
+	esac
+	daemon_js_path="$DOWNLOAD_DIR/$(basename "$daemon_js_full")"
+	download_to "$daemon_js_full" "$daemon_js_path"
+	actual_daemon_js="$(sha256sum "$daemon_js_path" 2>/dev/null | awk '{print $1}')"
+	if [ -z "$actual_daemon_js" ]; then
+		actual_daemon_js="$(shasum -a 256 "$daemon_js_path" | awk '{print $1}')"
+	fi
+	if [ "$actual_daemon_js" != "$daemon_js_sha" ]; then
+		echo "Checksum verification failed for $(basename "$daemon_js_full")" >&2
+		rm -f "$daemon_js_path" "$binary_path"
+		exit 1
+	fi
+fi
+# `signet install` accepts connector and Bun daemon asset flags so it can
+# verify and extract the tarballs next to the binary at its final install
+# location.
+if [ -n "$connector_path" ] && [ -n "$daemon_js_path" ]; then
+	"$binary_path" install --force --connector-assets "$connector_path" --daemon-js-assets "$daemon_js_path" "$@"
+elif [ -n "$connector_path" ]; then
 	"$binary_path" install --force --connector-assets "$connector_path" "$@"
+elif [ -n "$daemon_js_path" ]; then
+	"$binary_path" install --force --daemon-js-assets "$daemon_js_path" "$@"
 else
 	"$binary_path" install --force "$@"
 fi
 rm -f "$binary_path"
 if [ -n "$connector_path" ]; then
 	rm -f "$connector_path"
+fi
+if [ -n "$daemon_js_path" ]; then
+	rm -f "$daemon_js_path"
 fi

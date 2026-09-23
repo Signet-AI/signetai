@@ -10,13 +10,14 @@ type FreshRustCoreEvidence = {
 };
 
 export function formatFreshRustCoreEvidence(driver: string, operation: string): string {
-	const record: FreshRustCoreEvidence = {
+	const record: FreshRustCoreEvidence & { marker: string } = {
 		backend: "fresh-rust",
 		artifact: "signet-core-test-driver",
 		process: "transport",
 		driver,
 		operation,
 		status: "ok",
+		marker: FRESH_RUST_CORE_EVIDENCE_MARKER,
 	};
 	return `${JSON.stringify(record)}\n`;
 }

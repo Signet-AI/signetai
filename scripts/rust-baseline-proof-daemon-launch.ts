@@ -1,6 +1,7 @@
 export type DaemonLaunchCommand = string[] | string;
 
-function isDaemonScriptArgument(value: string): boolean {
+function isDaemonScriptArgument(value: unknown): value is string {
+	if (typeof value !== "string") return false;
 	const normalized = value.replaceAll("\\", "/");
 	return (
 		normalized === "daemon.ts" ||

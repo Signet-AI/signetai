@@ -10,8 +10,11 @@ import {
 	realpathSync,
 	openSync,
 	closeSync,
+	mkdtempSync,
+	rmSync,
 } from "node:fs";
-import { resolve, basename, dirname, isAbsolute, relative, sep } from "node:path";
+import { tmpdir } from "node:os";
+import { resolve, basename, dirname, isAbsolute, relative, sep, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -24,6 +27,7 @@ import {
 	currentManifest,
 	discoverBaselinePaths,
 } from "./shared-corpus-runner";
+import { buildHermeticEnvironment } from "./run-hermetic-tests";
 import { validateRustDaemonArtifact } from "./rust-shared-corpus-artifact";
 import { wrapRustJUnitReport } from "./rust-shared-corpus-report";
 import { isFreshRustCoreEvidenceLine } from "./rust-baseline-proof-evidence";
@@ -184,40 +188,107 @@ const stderrPath = `${report}.stderr`;
 for (const path of [stdoutPath, stderrPath]) if (existsSync(path)) unlinkSync(path);
 const junitPath = `${report}.bun.xml`;
 if (existsSync(junitPath)) unlinkSync(junitPath);
-const stdoutFd = openSync(stdoutPath, "w");
-const stderrFd = openSync(stderrPath, "w");
+const hermeticRoot = mkdtempSync(join(tmpdir(), "signet-rust-test-run-"));
+const hermeticEnv = buildHermeticEnvironment(process.env, hermeticRoot);
+const processExitPattern = /\b(?:process\.exit|Bun\.exit|Deno\.exit|process\.kill|SIGTERM)\b/;
+const processExitSensitive = (entry: string): boolean => {
+	try {
+		return processExitPattern.test(readFileSync(resolve(entry), "utf8"));
+	} catch {
+		return true;
+	}
+};
+const batches: string[][] = [];
+const maxBatchSize = 16;
+let currentBatch: string[] = [];
+const flushBatch = () => {
+	if (currentBatch.length > 0) batches.push(currentBatch);
+	currentBatch = [];
+};
+for (const entry of selected) {
+	if (processExitSensitive(entry)) {
+		flushBatch();
+		batches.push([entry]);
+	} else {
+		currentBatch.push(entry);
+		if (currentBatch.length >= maxBatchSize) flushBatch();
+	}
+}
+flushBatch();
 let child: ReturnType<typeof spawnSync> | undefined;
 let spawnError: unknown;
-try {
-	child = spawnSync(
-		"bun",
-		[
-			"test",
-			"--preload",
-			resolve(import.meta.dir, "rust-shared-corpus-combined.preload.ts"),
-			"--reporter=junit",
-			`--reporter-outfile=${junitPath}`,
-			...selected,
-		],
-		{
-			cwd: process.cwd(),
-			env: {
-				...process.env,
-				SIGNET_RUST_DAEMON_BIN: artifact,
-				SIGNET_RUST_DAEMON_EVIDENCE_FILE: daemonEvidenceFile,
-				SIGNET_RUST_EVIDENCE_NONCE: evidenceNonce,
-				SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,
-				SIGNET_RUST_CORE_EVIDENCE_FILE: evidenceFile,
+const junitReports: string[] = [];
+const batchRecords: Array<{ selected: string[]; status: number | null; signal: string | null; error?: string }> = [];
+let anyBatchFailed = false;
+for (let index = 0; index < batches.length; index++) {
+	const entriesForBatch = batches[index];
+	if (!entriesForBatch) continue;
+	const batchRoot = mkdtempSync(join(tmpdir(), "signet-rust-test-batch-"));
+	const batchJUnit = join(batchRoot, "report.xml");
+	const batchEvidence = join(batchRoot, "core-evidence");
+	const batchDaemonEvidence = join(batchRoot, "daemon-evidence");
+	const batchEnv = buildHermeticEnvironment(hermeticEnv, join(batchRoot, "hermetic"));
+	const outFd = openSync(stdoutPath, "a");
+	const errFd = openSync(stderrPath, "a");
+	let result: ReturnType<typeof spawnSync> | undefined;
+	let error: unknown;
+	try {
+		result = spawnSync(
+			"bun",
+			[
+				"test",
+				"--preload",
+				resolve(import.meta.dir, "rust-shared-corpus-combined.preload.ts"),
+				"--reporter=junit",
+				`--reporter-outfile=${batchJUnit}`,
+				...entriesForBatch,
+			],
+			{
+				cwd: process.cwd(),
+				env: {
+					...batchEnv,
+					SIGNET_RUST_DAEMON_BIN: artifact,
+					SIGNET_RUST_DAEMON_EVIDENCE_FILE: batchDaemonEvidence,
+					SIGNET_RUST_EVIDENCE_NONCE: evidenceNonce,
+					SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,
+					SIGNET_RUST_CORE_EVIDENCE_FILE: batchEvidence,
+				},
+				stdio: ["ignore", outFd, errFd],
+				timeout: 120_000,
 			},
-			stdio: ["ignore", stdoutFd, stderrFd],
-		},
-	);
-} catch (error) {
-	spawnError = error;
-} finally {
-	closeSync(stdoutFd);
-	closeSync(stderrFd);
+		);
+	} catch (caught) {
+		error = caught;
+		spawnError ??= caught;
+	} finally {
+		closeSync(outFd);
+		closeSync(errFd);
+	}
+	child = result ?? child;
+	batchRecords.push({
+		selected: entriesForBatch,
+		status: result?.status ?? null,
+		signal: result?.signal ?? null,
+		...(error ? { error: String(error) } : {}),
+	});
+	if (result?.status !== 0 || result.signal || error) anyBatchFailed = true;
+	if (existsSync(batchJUnit)) {
+		const xml = readFileSync(batchJUnit, "utf8");
+		const fragment = xml.match(/<testsuite\b[^>]*>[\s\S]*?<\/testsuite>/)?.[0];
+		if (fragment) junitReports.push(fragment);
+	}
+	for (const [source, target] of [
+		[batchEvidence, evidenceFile],
+		[batchDaemonEvidence, daemonEvidenceFile],
+	] as const) {
+		if (existsSync(source))
+			writeFileSync(target, `${existsSync(target) ? readFileSync(target, "utf8") : ""}${readFileSync(source, "utf8")}`);
+	}
+	rmSync(batchRoot, { recursive: true, force: true });
 }
+rmSync(hermeticRoot, { recursive: true, force: true });
+const aggregate = `<?xml version="1.0" encoding="UTF-8"?><testsuites>${junitReports.join("")}</testsuites>`;
+if (junitReports.length) writeFileSync(junitPath, aggregate);
 if (!child) {
 	const message = spawnError instanceof Error ? spawnError.message : String(spawnError ?? "unknown spawn error");
 	fail(`Rust child could not start: ${message}`);
@@ -311,6 +382,7 @@ const missingIdentity = cases.some((testcase) => !attribute(testcase, "file"));
 const missingSelected = selected.filter((path) => !observedFiles.has(path));
 const unexpectedFiles = [...observedFiles].filter((path) => !selected.includes(path));
 const infrastructureFailure =
+	anyBatchFailed ||
 	!nativeEvidence ||
 	child.signal !== null ||
 	child.error !== undefined ||

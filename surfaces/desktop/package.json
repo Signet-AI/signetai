@@ -15,7 +15,7 @@
 		"stage:runtime": "node scripts/stage-runtime.mjs",
 		"verify:macos": "node scripts/verify-macos-release.mjs release",
 		"build": "bun run build:main",
-		"build:desktop": "bun run build:tray && bun run build:connectors && bun run build:dashboard && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder --publish never",
+		"build:desktop": "bun run build:core && bun run build:tray && bun run build:connectors && bun run build:dashboard && bun run build:daemon && bun run stage:runtime && bun run build:main && electron-builder --publish never",
 		"dev": "bun run build:tray && bun run build:dashboard && bun run build:main && electron .",
 		"typecheck": "bun run build:tray && tsc -p tsconfig.json --noEmit",
 		"test": "bun test"

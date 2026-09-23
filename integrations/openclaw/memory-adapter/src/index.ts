@@ -24,7 +24,10 @@ import {
 	stripInternalMemoryContext,
 	wrapMemoryContext,
 } from "./local-helpers.js";
+import type { RecallPayload as CoreRecallPayload, RecallRow as CoreRecallRow } from "@signet/core";
 import type { RecallPayload, RecallRow } from "./local-helpers.js";
+
+export type CoreRecallCompatibility = CoreRecallPayload | CoreRecallRow;
 import { SignetClient } from "@signet/sdk";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi, OpenClawToolResult } from "./openclaw-types.js";

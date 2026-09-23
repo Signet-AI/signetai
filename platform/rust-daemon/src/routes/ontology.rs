@@ -52,20 +52,46 @@ fn proposal_auth_error() -> ApiError {
     }
 }
 
+fn local_authentication_is_open() -> bool {
+    let local_mode = std::env::var("SIGNET_MODE")
+        .map(|mode| mode.eq_ignore_ascii_case("local"))
+        .unwrap_or(true);
+    let configured = ["SIGNET_API_KEY", "SIGNET_TOKEN"].into_iter().any(|name| {
+        std::env::var(name)
+            .ok()
+            .is_some_and(|value| !value.trim().is_empty())
+    });
+    local_mode && !configured
+}
+
+fn ontology_scope(headers: &HeaderMap, query: &OntologyQuery) -> Result<Value, ApiError> {
+    Ok(json!({
+        "agent": agent(headers, Some(&query.agent), None)?,
+        "workspace": source_workspace(headers, query.workspace_id.as_deref())?,
+    }))
+}
+
+fn allows_ontology(claims: &Value, scope: &Value, permission: &str) -> bool {
+    auth::authority_allows(claims, "agent", scope, &[permission.to_owned()])
+}
+
 async fn require_ontology_auth(
     state: &AppState,
     headers: &HeaderMap,
     query: &OntologyQuery,
     permission: &str,
 ) -> Result<(), ApiError> {
-    let claims = auth::gate(state, headers)
-        .await
-        .map_err(|_| proposal_auth_error())?;
-    let scope = json!({
-        "agent": agent(headers, Some(&query.agent), None)?,
-        "workspace": source_workspace(headers, query.workspace_id.as_deref())?,
-    });
-    if auth::authority_allows(&claims, "agent", &scope, &[permission.to_owned()]) {
+    let claims = match auth::gate(state, headers).await {
+        Ok(claims) => claims,
+        Err(_) if local_authentication_is_open() => json!({
+            "authenticated": true,
+            "role": "admin",
+            "scope": {},
+        }),
+        Err(_) => return Err(proposal_auth_error()),
+    };
+    let scope = ontology_scope(headers, query)?;
+    if allows_ontology(&claims, &scope, permission) {
         Ok(())
     } else {
         Err(proposal_auth_error())
@@ -78,7 +104,15 @@ async fn require_proposal_auth(
     query: &OntologyQuery,
     permission: &str,
 ) -> Result<(), ApiError> {
-    require_ontology_auth(state, headers, query, permission).await
+    let claims = auth::gate(state, headers)
+        .await
+        .map_err(|_| proposal_auth_error())?;
+    let scope = ontology_scope(headers, query)?;
+    if allows_ontology(&claims, &scope, permission) {
+        Ok(())
+    } else {
+        Err(proposal_auth_error())
+    }
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -243,6 +277,10 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/ontology/proposals/{id}/evidence",
             get(proposal_evidence),
         )
+        .route(
+            "/api/ontology/links/{id}/evidence",
+            get(link_evidence),
+        )
         .route("/api/ontology/claims/evidence", get(unsupported_read))
         .route("/api/ontology/claims/versions", get(list_claim_versions))
         .route("/api/ontology/claims/version", get(get_claim_version))
@@ -275,6 +313,22 @@ async fn proposal_evidence(
         id,
     };
     Ok(execute(&state, Operation::OntologyProposalEvidence { request })
+        .await
+        .map(Json)?)
+}
+
+async fn link_evidence(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Query(q): Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_ontology_auth(&state, &headers, &q, "recall").await?;
+    let request = signet_core_native::OntologyLinkEvidenceRequest {
+        agent_id: agent(&headers, Some(&q.agent), None)?,
+        id,
+    };
+    Ok(execute(&state, Operation::OntologyLinkEvidence { request })
         .await
         .map(Json)?)
 }

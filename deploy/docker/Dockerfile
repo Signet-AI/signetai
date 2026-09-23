@@ -2,6 +2,7 @@
 
 FROM oven/bun:1.4.0 AS build
 WORKDIR /app
+ENV ELECTRON_SKIP_BINARY_DOWNLOAD=1
 COPY package.json bun.lock bunfig.toml tsconfig.json ./
 COPY scripts ./scripts
 COPY integrations ./integrations
@@ -13,9 +14,20 @@ COPY surfaces ./surfaces
 COPY web ./web
 COPY dist ./dist
 RUN bun install --no-frozen-lockfile --force
+RUN bun install --frozen-lockfile --ignore-scripts --filter '@signet/core'
+RUN test -e platform/core/node_modules/better-sqlite3
+RUN bun run build:core
+RUN bun run build:connector-base
+RUN bun run build:opencode-plugin
 RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
+RUN bun run build:oh-my-pi-extension
+RUN bun run build:connector-oh-my-pi
+RUN bun run build:pi-extension
+RUN bun run build:connector-pi
+RUN bun run build:deps
 RUN bun run build:dashboard
-RUN bun run --filter '@signet/core' build && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:native-bun
+RUN bun run build:signetai
+RUN bun run build:native-bun
 ARG TARGETOS=linux
 ARG TARGETARCH
 RUN set -eux; \
@@ -42,7 +54,8 @@ RUN cargo build --release --manifest-path platform/rust-daemon/Cargo.toml \
 
 FROM debian:bookworm-slim AS runtime
 WORKDIR /app
-ENV NODE_ENV=production SIGNET_PATH=/data/agents SIGNET_BIND=0.0.0.0 SIGNET_PORT=3850 SIGNET_DAEMON_ENTRYPOINT=1 SIGNET_DAEMON_PATH=/app/bin/signet-daemon
+ENV NODE_ENV=production SIGNET_PATH=/data/agents SIGNET_BIND=0.0.0.0 SIGNET_PORT=3850 SIGNET_DAEMON_PATH=/app/bin/signet-daemon
+ENV SIGNET_DAEMON_ENTRYPOINT=1
 ENV SIGNET_VEC_PATH=/app/sqlite-vec/vec0.so
 RUN apt-get update \
 	&& apt-get install -y --no-install-recommends ca-certificates \
@@ -54,7 +67,7 @@ COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-daemon 
 COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-mcp ./bin/signet-mcp
 COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-healthcheck ./bin/signet-healthcheck
 COPY --from=build /app/surfaces/dashboard/build ./dist/signetai/runtime/rust-daemon/dashboard
-COPY dist/signetai/templates ./dist/signetai/templates
+COPY --from=build /app/dist/signetai/templates ./dist/signetai/templates
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY deploy/docker/scripts/create-token.mjs ./deploy/docker/scripts/create-token.mjs
 RUN chmod +x ./bin/signet ./bin/signet-mcp ./bin/signet-healthcheck ./deploy/docker/entrypoint.sh \

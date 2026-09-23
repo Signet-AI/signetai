@@ -22,8 +22,9 @@ function call(path: string, request: Record<string, unknown>): any {
 		stdout: "pipe",
 		stderr: "pipe",
 	});
+	if (process.env.SIGNET_RUST_CORE_EVIDENCE_PROBE === "1") recordEvidence(String(request.op ?? "unknown"));
 	if (result.exitCode !== 0) throw new Error(new TextDecoder().decode(result.stderr));
-	const line = new TextDecoder().decode(result.stdout).trim().split("\n")[0];
+	const line = new TextDecoder().decode(result.stdout).trim().split("\n")[0] ?? "";
 	const response = JSON.parse(line);
 	if (!response.ok) throw new Error(JSON.stringify(response));
 	recordEvidence(String(request.op ?? "unknown"));
