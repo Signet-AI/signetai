@@ -28,6 +28,18 @@ beforeAll(() => {
 		if (path.endsWith("/api/knowledge/stats")) {
 			return Response.json({ entityCount: 0 });
 		}
+		if (path.endsWith("/api/sources/imports")) {
+			return Response.json({ imports: [] });
+		}
+		if (path.endsWith("/api/protection")) {
+			return Response.json({
+				overall: "partial",
+				components: [],
+				missing: [],
+				degraded: [],
+				restoreReceipt: null,
+			});
+		}
 		if (path.endsWith("/api/sources")) {
 			return Response.json({ version: 1, sources: [] });
 		}
@@ -145,5 +157,18 @@ test("keeps the setup link while the harness check is pending", async () => {
 		await unmountHome(root);
 		container.remove();
 		globalThis.fetch = original;
+	}
+});
+
+test("renders protection and durable import status on the reachable home system surface", async () => {
+	harnessPayload = { harnesses: [], configuredHarnesses: [] };
+	const [container, root] = await renderHome();
+	try {
+		expect(container.querySelector('[aria-label="Protection recovery"]')).not.toBeNull();
+		expect(container.querySelector('[aria-label="Durable import status"]')).not.toBeNull();
+		expect(container.textContent).toContain("Durable imports");
+	} finally {
+		await unmountHome(root);
+		container.remove();
 	}
 });

@@ -62,6 +62,8 @@ export function validateRestoreReceipt(
 	const expiresAt = typeof receipt.expiresAt === "string" ? Date.parse(receipt.expiresAt) : Number.NaN;
 	const components = receipt.components;
 	const digests = receipt.digests;
+	const canonical = (value: unknown, parsed: number) =>
+		typeof value === "string" && value === new Date(parsed).toISOString();
 	if (
 		receipt.schema !== "signet.restore.v1" ||
 		receipt.valid !== true ||
@@ -70,11 +72,14 @@ export function validateRestoreReceipt(
 		receipt.workspace !== options.workspace ||
 		!Number.isFinite(at) ||
 		!Number.isFinite(expiresAt) ||
+		!canonical(receipt.at, at) ||
+		!canonical(receipt.expiresAt, expiresAt) ||
 		at > now ||
 		expiresAt <= now ||
 		expiresAt - at > RECEIPT_MAX_AGE_MS ||
 		!Array.isArray(components) ||
 		components.length === 0 ||
+		new Set(components).size !== components.length ||
 		components.some((id) => !PROTECTION_COMPONENT_IDS.includes(id as ProtectionComponentId)) ||
 		!digests ||
 		typeof digests !== "object" ||
@@ -91,11 +96,8 @@ export function validateRestoreReceipt(
 		)
 	)
 		return false;
-	if (
-		options.componentDigests &&
-		Object.entries(options.componentDigests).some(([key, digest]) => digestMap[key] !== digest)
-	)
-		return false;
+	if (Object.keys(digestMap).length !== components.length || components.some((id) => !(id in digestMap))) return false;
+	if (Object.entries(options.componentDigests ?? {}).some(([key, digest]) => digestMap[key] !== digest)) return false;
 	return true;
 }
 
