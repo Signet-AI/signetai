@@ -367,9 +367,9 @@ describe("dream trigger pass diagnostics", () => {
 
 describe("dream attach selection", () => {
 	it("reports an active-pass lookup timeout without claiming daemon outage", async () => {
-		const calls: string[] = [];
-		const fetchDaemonResult = mockFetch(async (path: string) => {
-			calls.push(path);
+		const calls: Array<{ readonly path: string; readonly options?: RequestInit & { timeout?: number } }> = [];
+		const fetchDaemonResult = mockFetch(async (path: string, options) => {
+			calls.push({ path, options });
 			return { ok: false, reason: "timeout" };
 		});
 		const program = new Command();
@@ -381,7 +381,7 @@ describe("dream attach selection", () => {
 		try {
 			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
 			const output = capture.errorLines.join("\n");
-			expect(calls).toEqual(["/api/dream/passes/active"]);
+			expect(calls).toEqual([{ path: "/api/dream/passes/active", options: { timeout: 35_000 } }]);
 			expect(output).toContain("Dreaming pass lookup timed out");
 			expect(output).toContain("/api/dream/passes/active");
 			expect(output).toContain("--pass-id <id>");

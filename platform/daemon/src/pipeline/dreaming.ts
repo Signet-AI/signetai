@@ -616,6 +616,10 @@ export interface DreamingPassScope extends DreamingPassRow {
 	readonly agentId: string;
 }
 
+interface DreamingPassReadOptions {
+	readonly signal?: AbortSignal;
+}
+
 function dreamingPassSelect(includeAgent = false): string {
 	return `SELECT ${includeAgent ? "agent_id AS agentId, " : ""}id, mode, status, started_at AS startedAt,
 				completed_at AS completedAt, tokens_consumed AS tokensConsumed,
@@ -633,6 +637,7 @@ export async function getDreamingPass(
 	accessor: DbAccessor,
 	agentId: string,
 	passId: string,
+	options: DreamingPassReadOptions = {},
 ): Promise<DreamingPassScope | null> {
 	return (
 		(await ownerQueryOne<DreamingPassScope>(
@@ -640,7 +645,7 @@ export async function getDreamingPass(
 			"dreaming.pass.read",
 			`${dreamingPassSelect(true)} WHERE agent_id = ? AND id = ? LIMIT 1`,
 			[agentId, passId],
-			{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
+			{ deadlineMs: 30_000, estimatedWorkUnits: 1, signal: options.signal },
 		)) ?? null
 	);
 }
@@ -648,13 +653,14 @@ export async function getDreamingPass(
 export async function getActiveDreamingPasses(
 	accessor: DbAccessor,
 	agentId: string,
+	options: DreamingPassReadOptions = {},
 ): Promise<readonly DreamingPassScope[]> {
 	return await ownerQueryAll<DreamingPassScope>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.passes.active",
 		`${dreamingPassSelect(true)} WHERE agent_id = ? AND status = 'running' ORDER BY started_at ASC, id ASC`,
 		[agentId],
-		{ deadlineMs: 30_000, estimatedWorkUnits: 10 },
+		{ deadlineMs: 30_000, estimatedWorkUnits: 10, signal: options.signal },
 	);
 }
 

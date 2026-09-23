@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
+import { getDbOwnerForAccessor } from "../db-owner-runtime";
 import { dreamingLiveEvents, publishDreamingAgentEvent } from "../pipeline/dreaming-live-events";
 import {
 	invalidateDreamingEpisodicTokenBacklog,
@@ -12,6 +13,23 @@ import {
 import { registerPipelineRoutes } from "./pipeline-routes";
 
 const originalAgentId = process.env.SIGNET_AGENT_ID;
+
+async function waitForOwnerState(predicate: () => boolean, description: string): Promise<void> {
+	const deadline = Date.now() + 2_000;
+	while (!predicate()) {
+		if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${description}`);
+		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+	}
+}
+
+async function ownerStateMatchesWithin(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
+	const deadline = Date.now() + timeoutMs;
+	while (!predicate()) {
+		if (Date.now() >= deadline) return false;
+		await new Promise<void>((resolve) => setTimeout(resolve, 5));
+	}
+	return true;
+}
 
 describe("Dreaming live routes", () => {
 	let agentsDir = "";
@@ -35,9 +53,9 @@ describe("Dreaming live routes", () => {
 		dreamingLiveEvents.reset();
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
 		dreamingLiveEvents.reset();
-		closeDbAccessor();
+		await closeDbAccessor();
 		rmSync(agentsDir, { recursive: true, force: true });
 		if (originalAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
 		else process.env.SIGNET_AGENT_ID = originalAgentId;
@@ -57,6 +75,74 @@ describe("Dreaming live routes", () => {
 		const crossAgentResponse = await app.request("/api/dream/passes/live-pass-b/events");
 		expect(crossAgentResponse.status).toBe(404);
 	});
+
+	it("completes active lookup and known-pass attach beyond the original five-second client deadline", async () => {
+		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
+		process.env.SIGNET_DB_OWNER_WORKER = "0";
+		try {
+			const app = new Hono();
+			registerPipelineRoutes(app);
+			expect((await app.request("/api/dream/passes/active")).status).toBe(200);
+			const owner = await getDbOwnerForAccessor(getDbAccessor());
+			expect(owner.health().pid).not.toBeNull();
+			expect(owner.health().pid).not.toBe(process.pid);
+			const blocker = owner.submit(
+				{ kind: "sleep", durationMs: 6_000 },
+				{ operation: "dream.attach-delayed-lookup-test", lane: "maintenance", deadlineMs: 10_000 },
+			);
+			void blocker.result.catch(() => undefined);
+			await waitForOwnerState(() => owner.health().activeJobId === blocker.job.id, "the delayed owner operation");
+			const startedAt = Date.now();
+			const [activeResponse, streamResponse] = await Promise.all([
+				app.request("/api/dream/passes/active", { signal: AbortSignal.timeout(35_000) }),
+				app.request("/api/dream/passes/live-pass-a/events", { signal: AbortSignal.timeout(35_000) }),
+			]);
+			expect(Date.now() - startedAt).toBeGreaterThan(5_000);
+			expect(activeResponse.status).toBe(200);
+			expect(streamResponse.status).toBe(200);
+			await streamResponse.body?.cancel();
+			await blocker.result;
+		} finally {
+			if (previousOwnerMode === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+			else process.env.SIGNET_DB_OWNER_WORKER = previousOwnerMode;
+		}
+	}, 15_000);
+
+	it("cancels queued owner reads when the requesting client aborts", async () => {
+		const previousOwnerMode = process.env.SIGNET_DB_OWNER_WORKER;
+		process.env.SIGNET_DB_OWNER_WORKER = "0";
+		try {
+			const app = new Hono();
+			registerPipelineRoutes(app);
+			expect((await app.request("/api/dream/passes/active")).status).toBe(200);
+			const owner = await getDbOwnerForAccessor(getDbAccessor());
+			const blocker = owner.submit(
+				{ kind: "sleep", durationMs: 4_000 },
+				{ operation: "dream.attach-cancel-blocker-test", lane: "maintenance", deadlineMs: 5_000 },
+			);
+			void blocker.result.catch(() => undefined);
+			await waitForOwnerState(() => owner.health().activeJobId === blocker.job.id, "the cancellation blocker");
+			const controllers = [new AbortController(), new AbortController()];
+			const paths = ["/api/dream/passes/active", "/api/dream/passes/live-pass-a/events"];
+			const responses = paths.map((path, index) => {
+				const controller = controllers[index];
+				if (!controller) throw new Error("Missing request controller");
+				return Promise.resolve(app.request(path, { signal: controller.signal })).catch(() => undefined);
+			});
+			await waitForOwnerState(() => owner.health().maintenanceQueuedJobs === 2, "both Dreaming reads to queue");
+			for (const controller of controllers) controller.abort();
+			const readsCancelled = await ownerStateMatchesWithin(() => owner.health().maintenanceQueuedJobs === 0, 2_000);
+			const blockerRemainedActive = owner.health().activeJobId === blocker.job.id;
+			await blocker.result;
+			const outcomes = await Promise.all(responses);
+			expect(readsCancelled).toBe(true);
+			expect(blockerRemainedActive).toBe(true);
+			expect(outcomes.map((response) => response?.status)).toEqual([499, 499]);
+		} finally {
+			if (previousOwnerMode === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_WORKER");
+			else process.env.SIGNET_DB_OWNER_WORKER = previousOwnerMode;
+		}
+	}, 10_000);
 
 	it("reads the cached backlog in the status response", async () => {
 		recordDreamingEpisodicTokenBacklog("agent-a", 12345);

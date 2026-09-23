@@ -8,6 +8,8 @@ import {
 	followDreamingPass,
 } from "../lib/dream-attach.js";
 
+const DREAM_ATTACH_REQUEST_TIMEOUT_MS = 35_000;
+
 interface DreamDeps {
 	readonly fetchFromDaemon: DaemonFetch;
 	readonly fetchDaemonResult: <T>(
@@ -263,7 +265,9 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 		.action(async (options: { passId?: string }) => {
 			let passId = options.passId?.trim() || undefined;
 			if (!passId) {
-				const activeResult = await deps.fetchDaemonResult<ActiveDreamingResponse>("/api/dream/passes/active");
+				const activeResult = await deps.fetchDaemonResult<ActiveDreamingResponse>("/api/dream/passes/active", {
+					timeout: DREAM_ATTACH_REQUEST_TIMEOUT_MS,
+				});
 				if (!activeResult.ok) {
 					switch (activeResult.reason) {
 						case "timeout":
@@ -346,6 +350,7 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 					fetchStream: deps.fetchDaemonStream,
 					view: liveView,
 					signal: abortController.signal,
+					streamTimeoutMs: DREAM_ATTACH_REQUEST_TIMEOUT_MS,
 				});
 			} catch (error) {
 				if (!abortController.signal.aborted) {

@@ -302,6 +302,7 @@ export interface FollowDreamingPassOptions {
 	readonly fetchStream: (path: string, opts?: RequestInit & { timeout?: number }) => Promise<DaemonStreamResult>;
 	readonly view: DreamingAttachView;
 	readonly signal: AbortSignal;
+	readonly streamTimeoutMs?: number;
 	readonly maxReconnects?: number;
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>;
 }
@@ -397,6 +398,7 @@ export async function followDreamingPass(options: FollowDreamingPassOptions): Pr
 				result = await options.fetchStream(path, {
 					signal: currentConnection.signal,
 					headers: { Accept: "text/event-stream" },
+					timeout: options.streamTimeoutMs,
 				});
 			} catch (error) {
 				options.signal.removeEventListener("abort", relayAbort);
