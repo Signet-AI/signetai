@@ -150,6 +150,13 @@ export async function verifyRestore(input: RestoreVerificationInput): Promise<Re
 	else if (!sameJson(input.observed.harness, input.expected.harness))
 		failures.push(failure("harness", "identity or skills discovery mismatch"));
 	const protection = input.protection?.encryptedProvider ?? "unverified";
+	if (protection !== "available")
+		failures.push(
+			failure(
+				"protection",
+				protection === "unavailable" ? "secret provider is unavailable" : "secret provider continuity is unverified",
+			),
+		);
 	const receipt: RestoreReceipt = {
 		schema: "signet.restore.v1",
 		ok: failures.length === 0,

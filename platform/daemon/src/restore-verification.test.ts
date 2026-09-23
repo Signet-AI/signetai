@@ -90,6 +90,40 @@ describe("verifyRestore", () => {
 		expect(result.receipt.fileDigests["MEMORY.md"]).toMatch(/^[a-f0-9]{64}$/);
 	});
 
+	it("fails closed and withholds an all-components receipt when secret continuity is unverified", async () => {
+		const snapshot = workspace();
+		const daemon = join(snapshot, "fake-daemon.ts");
+		writeFileSync(
+			daemon,
+			'import { createServer } from "node:http"; createServer((_req, res) => { res.setHeader("content-type", "application/json"); res.end(JSON.stringify({ ok: true })); }).listen(Number(process.env.SIGNET_RESTORE_PORT), "127.0.0.1");',
+		);
+		const result = await executeDisposableRestore({
+			snapshotRoot: snapshot,
+			expected,
+			daemon: { binary: process.execPath, args: [daemon] },
+			probe: async () => ({
+				database: { snapshotConsistent: true },
+				observed: {
+					sources: expected.sources,
+					recall: expected.recall,
+					dreaming: expected.dreaming,
+					ontology: expected.ontology,
+					harness: expected.harness,
+				},
+				protection: { encryptedProvider: "unverified" },
+			}),
+		});
+		expect(result.ok).toBe(false);
+		expect(result.receipt.ok).toBe(false);
+		expect(result.receipt.protection).toBe("unverified");
+		expect(result.failures).toContainEqual({
+			component: "protection",
+			reason: "secret provider continuity is unverified",
+		});
+		expect(existsSync(join(snapshot, ".signet", "restore-receipt.json"))).toBe(false);
+		expect(result.cleaned).toBe(true);
+	});
+
 	it("fails closed when transcript ordering or provenance changes", async () => {
 		const root = workspace();
 		writeFileSync(
