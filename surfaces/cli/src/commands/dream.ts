@@ -265,10 +265,34 @@ export function registerDreamCommands(program: Command, deps: DreamDeps): void {
 			if (!passId) {
 				const activeResult = await deps.fetchDaemonResult<ActiveDreamingResponse>("/api/dream/passes/active");
 				if (!activeResult.ok) {
-					if (activeResult.reason === "http" && activeResult.error) {
-						console.error(chalk.red(`Failed to find an active Dreaming pass: ${activeResult.error}`));
-					} else {
-						reportDaemonUnavailable(activeResult.reason, activeResult.status, "Failed to find an active Dreaming pass");
+					switch (activeResult.reason) {
+						case "timeout":
+							console.error(chalk.red("Active Dreaming pass lookup timed out (GET /api/dream/passes/active)."));
+							console.error(chalk.dim("  This does not establish that the daemon is offline or blocked."));
+							console.error(
+								chalk.dim(
+									"  Retry once, run `signet dream status`, or use `signet dream attach --pass-id <id>` if known.",
+								),
+							);
+							break;
+						case "http":
+							console.error(
+								chalk.red(
+									`Active Dreaming pass lookup failed: daemon returned HTTP ${activeResult.status ?? "error"}${activeResult.error ? `: ${activeResult.error}` : ""}.`,
+								),
+							);
+							break;
+						case "offline":
+							console.error(chalk.red("Could not reach the Signet daemon while looking up an active Dreaming pass."));
+							console.error(chalk.dim("  Check `signet daemon status`, then retry `signet dream attach`."));
+							break;
+						case "invalid-json":
+							console.error(
+								chalk.red(
+									`Active Dreaming pass lookup returned invalid JSON${activeResult.status ? ` (HTTP ${activeResult.status})` : ""}.`,
+								),
+							);
+							break;
 					}
 					process.exit(1);
 					return;

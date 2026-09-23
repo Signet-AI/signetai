@@ -366,6 +366,153 @@ describe("dream trigger pass diagnostics", () => {
 });
 
 describe("dream attach selection", () => {
+	it("reports an active-pass lookup timeout without claiming daemon outage", async () => {
+		const calls: string[] = [];
+		const fetchDaemonResult = mockFetch(async (path: string) => {
+			calls.push(path);
+			return { ok: false, reason: "timeout" };
+		});
+		const program = new Command();
+		registerDreamCommands(program, { ...makeDeps(), fetchDaemonResult });
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
+			const output = capture.errorLines.join("\n");
+			expect(calls).toEqual(["/api/dream/passes/active"]);
+			expect(output).toContain("Dreaming pass lookup timed out");
+			expect(output).toContain("/api/dream/passes/active");
+			expect(output).toContain("--pass-id <id>");
+			expect(output).toContain("Retry once");
+			expect(output).toContain("signet dream status");
+			expect(output).not.toContain("event loop may be blocked");
+			expect(output).not.toContain("is the daemon running?");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+
+	it("identifies an unreachable daemon during active-pass lookup", async () => {
+		const fetchDaemonResult = mockFetch(async () => ({ ok: false, reason: "offline" }));
+		const program = new Command();
+		registerDreamCommands(program, { ...makeDeps(), fetchDaemonResult });
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
+			expect(capture.errorLines.join("\n")).toContain("Could not reach the Signet daemon");
+			expect(capture.errorLines.join("\n")).not.toContain("lookup timed out");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+
+	it("preserves the daemon HTTP status and error for active-pass lookup failures", async () => {
+		const fetchDaemonResult = mockFetch(async () => httpError(503, "owner request timed out"));
+		const program = new Command();
+		registerDreamCommands(program, { ...makeDeps(), fetchDaemonResult });
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
+			const output = capture.errorLines.join("\n");
+			expect(output).toContain("HTTP 503");
+			expect(output).toContain("owner request timed out");
+			expect(output).not.toContain("is the daemon running?");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+
+	it("does not label an invalid daemon response as offline", async () => {
+		const fetchDaemonResult = mockFetch(async () => ({ ok: false, reason: "invalid-json", status: 200 }));
+		const program = new Command();
+		registerDreamCommands(program, { ...makeDeps(), fetchDaemonResult });
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
+			const output = capture.errorLines.join("\n");
+			expect(output).toContain("returned invalid JSON (HTTP 200)");
+			expect(output).not.toContain("Could not reach the Signet daemon");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+
+	it("uses a pass returned after a delay instead of reporting a lookup timeout", async () => {
+		const calls: string[] = [];
+		const fetchDaemonResult = mockFetch(async (path: string) => {
+			calls.push(path);
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			return okResult({
+				agentId: "agent-a",
+				items: [{ id: "pass-late", mode: "incremental", status: "running", startedAt: "2026-08-05T00:00:00.000Z" }],
+			});
+		});
+		const program = new Command();
+		registerDreamCommands(program, {
+			...makeDeps(),
+			fetchDaemonResult,
+			fetchDaemonStream: async () => ({ ok: true, response: new Response("") }),
+		});
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
+			expect(calls).toEqual(["/api/dream/passes/active"]);
+			const output = capture.errorLines.join("\n");
+			expect(output).toContain("requires an interactive terminal");
+			expect(output).not.toContain("lookup timed out");
+			expect(output).not.toContain("No Dreaming pass is currently active");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+
+	it("bypasses active-pass discovery when a pass ID is provided", async () => {
+		const calls: string[] = [];
+		const fetchDaemonResult = mockFetch(async (path: string) => {
+			calls.push(path);
+			return { ok: false, reason: "timeout" };
+		});
+		const program = new Command();
+		registerDreamCommands(program, {
+			...makeDeps(),
+			fetchDaemonResult,
+			fetchDaemonStream: async () => ({ ok: true, response: new Response("") }),
+		});
+		const capture = captureOutput();
+		const exitSpy = spyOn(process, "exit").mockImplementation(() => {
+			throw new Error("EXIT_1");
+		});
+		try {
+			await expect(
+				program.parseAsync(["node", "test", "dream", "attach", "--pass-id", "pass-explicit"]),
+			).rejects.toThrow("EXIT_1");
+			expect(calls).toEqual([]);
+			expect(capture.errorLines.join("\n")).toContain("requires an interactive terminal");
+		} finally {
+			exitSpy.mockRestore();
+			capture.restore();
+		}
+	});
+
 	it("refuses to open an empty view when no pass is active", async () => {
 		const calls: string[] = [];
 		const fetchDaemonResult = mockFetch(async (path: string) => {
@@ -381,7 +528,10 @@ describe("dream attach selection", () => {
 		try {
 			await expect(program.parseAsync(["node", "test", "dream", "attach"])).rejects.toThrow("EXIT_1");
 			expect(calls).toEqual(["/api/dream/passes/active"]);
-			expect(capture.errorLines.join("\n")).toContain("signet dream status");
+			const output = capture.errorLines.join("\n");
+			expect(output).toContain("No Dreaming pass is currently active.");
+			expect(output).toContain("signet dream status");
+			expect(output).not.toContain("lookup timed out");
 		} finally {
 			exitSpy.mockRestore();
 			capture.restore();
