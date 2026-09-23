@@ -1296,15 +1296,19 @@ interface DaemonStartProcessExit {
 interface DaemonStartLifecycleProbe {
 	readonly read: () => DaemonLastExit | null;
 	readonly startAttemptId: string;
+	readonly attemptStartedAt: number;
 	readonly systemdUnitName?: string;
 }
 
 function isDaemonLifecycleFromStartAttempt(
 	record: DaemonLastExit | null,
 	startAttemptId: string,
+	attemptStartedAt: number,
 	systemdUnitName?: string,
 ): record is DaemonLastExit {
 	if (record === null) return false;
+	const recordStartedAt = Date.parse(record.startedAt);
+	if (!Number.isFinite(recordStartedAt) || recordStartedAt < attemptStartedAt) return false;
 	if (record.startAttemptId !== undefined) return record.startAttemptId === startAttemptId;
 	return systemdUnitName !== undefined && record.systemdUnit === systemdUnitName;
 }
@@ -1312,9 +1316,10 @@ function isDaemonLifecycleFromStartAttempt(
 function isTerminalDaemonLifecycleFromStartAttempt(
 	record: DaemonLastExit | null,
 	startAttemptId: string,
+	attemptStartedAt: number,
 	systemdUnitName?: string,
 ): boolean {
-	if (!isDaemonLifecycleFromStartAttempt(record, startAttemptId, systemdUnitName)) return false;
+	if (!isDaemonLifecycleFromStartAttempt(record, startAttemptId, attemptStartedAt, systemdUnitName)) return false;
 	return record.state === "clean" || record.state === "error";
 }
 
@@ -1707,7 +1712,12 @@ export async function waitForDaemonLiveness(
 		if (shouldStop()) return false;
 		if (
 			lifecycle &&
-			isTerminalDaemonLifecycleFromStartAttempt(lifecycle.read(), lifecycle.startAttemptId, lifecycle.systemdUnitName)
+			isTerminalDaemonLifecycleFromStartAttempt(
+				lifecycle.read(),
+				lifecycle.startAttemptId,
+				lifecycle.attemptStartedAt,
+				lifecycle.systemdUnitName,
+			)
 		) {
 			return false;
 		}
@@ -1774,6 +1784,7 @@ export async function startDaemon(
 
 	const startupLogPath = join(logDir, "startup.log");
 	const systemdUnitName = `signet-daemon-${process.pid}`;
+	const attemptStartedAt = Date.now();
 	const startAttemptId = randomUUID();
 	let stderrFd: number | null = null;
 	let stderrTarget: "ignore" | number = "ignore";
@@ -1946,6 +1957,7 @@ export async function startDaemon(
 		? {
 				read: () => readDaemonLifecycleRecord(agentsDir),
 				startAttemptId,
+				attemptStartedAt,
 				...(process.platform === "linux" ? { systemdUnitName } : {}),
 			}
 		: undefined;
@@ -1957,6 +1969,7 @@ export async function startDaemon(
 		const lifecycleRecord = isDaemonLifecycleFromStartAttempt(
 			latestLifecycleRecord,
 			startAttemptId,
+			attemptStartedAt,
 			process.platform === "linux" ? systemdUnitName : undefined,
 		)
 			? latestLifecycleRecord
@@ -1966,6 +1979,7 @@ export async function startDaemon(
 			isTerminalDaemonLifecycleFromStartAttempt(
 				latestLifecycleRecord,
 				startAttemptId,
+				attemptStartedAt,
 				process.platform === "linux" ? systemdUnitName : undefined,
 			);
 		const diagnostics = readDaemonStartFailureDiagnostics({
