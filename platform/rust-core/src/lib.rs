@@ -5287,6 +5287,21 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "UPDATE entities SET agent_id='default' WHERE agent_id IS NULL OR trim(agent_id)=''",
         [],
     )?;
+    for table in [
+        "entities",
+        "entity_aspects",
+        "entity_attributes",
+        "entity_dependencies",
+        "memories",
+        "session_transcripts",
+    ] {
+        ensure_column(
+            &transaction,
+            table,
+            "workspace_id",
+            "TEXT NOT NULL DEFAULT 'default'",
+        )?;
+    }
     transaction.execute("UPDATE entities SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
     transaction.execute(
         "UPDATE entities SET status='active' WHERE status IS NULL OR trim(status)=''",

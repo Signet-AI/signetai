@@ -8,7 +8,80 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
     let path = workspace.path().join("legacy-lineage.sqlite");
     let db = Connection::open(&path).unwrap();
     db.execute_batch(
-        "CREATE TABLE memory_artifacts (
+        r#"CREATE TABLE entities (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            canonical_name TEXT,
+            entity_type TEXT NOT NULL DEFAULT 'person',
+            description TEXT,
+            mentions INTEGER DEFAULT 0,
+            pinned INTEGER DEFAULT 0,
+            pinned_at TEXT,
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE entity_aspects (
+            id TEXT PRIMARY KEY,
+            entity_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            canonical_name TEXT,
+            weight REAL NOT NULL DEFAULT 0.5,
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE entity_attributes (
+            id TEXT PRIMARY KEY,
+            aspect_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            memory_id TEXT,
+            kind TEXT NOT NULL,
+            content TEXT NOT NULL,
+            normalized_content TEXT,
+            group_key TEXT,
+            claim_key TEXT,
+            confidence REAL DEFAULT 0.5,
+            importance REAL DEFAULT 0.5,
+            status TEXT DEFAULT 'active',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE entity_dependencies (
+            id TEXT PRIMARY KEY,
+            source_entity_id TEXT NOT NULL,
+            target_entity_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            dependency_type TEXT NOT NULL,
+            strength REAL NOT NULL,
+            status TEXT DEFAULT 'active',
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE memories (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            deleted INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        CREATE TABLE session_transcripts (
+            session_key TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            harness TEXT NOT NULL,
+            project TEXT,
+            content TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            idempotency_key TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            completed_at TEXT,
+            PRIMARY KEY(agent_id, session_key)
+        );
+        CREATE TABLE memory_artifacts (
             agent_id TEXT NOT NULL DEFAULT 'default',
             source_path TEXT NOT NULL,
             source_sha256 TEXT NOT NULL,
@@ -44,7 +117,7 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
         CREATE TABLE aggregate_memory_sources (
             aggregate_memory_id TEXT NOT NULL,
             source_memory_id TEXT NOT NULL
-        );",
+        );"#,
     )
     .unwrap();
     drop(db);
@@ -102,6 +175,7 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
         )
         .unwrap();
     for column in [
+        "workspace_id",
         "version",
         "version_root_id",
         "previous_attribute_id",
