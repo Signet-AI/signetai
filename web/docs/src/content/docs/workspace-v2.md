@@ -69,7 +69,7 @@ use the CLI commands above rather than calling the daemon endpoints directly.
 
 CLI, API, and dashboard protection surfaces use one component-aware contract. Components include root-authored files, skills, managed originals, SQLite, transcripts, external Sources, runtime, filesystem cache, and secrets. States include protected, missing, stale, degraded, unknown, external, unverified, and excluded-rebuildable. Overall `protected` requires current protection for required components and valid restore evidence. Git sync alone cannot produce that result.
 
-A restore receipt records checks for files, SQLite consistency, daemon readiness, Source identities, transcript roles/provenance/order, recall scope, Dreaming frontier, ontology history/evidence, and harness identity/skills discovery. Secret continuity is verified through its provider or reported external/unverified. Restore evidence is bounded and does not make post-write rollback safe.
+The restore comparison checks supplied claims for files, SQLite, daemon health, Source identities, transcript roles/provenance/order, recall scope, Dreaming frontier, ontology history/evidence, and harness identity/skills discovery. It does not itself establish independent recovery evidence or issue a valid receipt. The disposable real-daemon fixture currently checks workspace/database health, a persisted SQLite row and integrity, a restored memory through the daemon API, Source ID/generation, and skill discovery. Recall, Dreaming, ontology, and encrypted-secret continuity still require independent recovery probes; until those exist, restore status remains unverified and no valid receipt is published. Restore evidence is bounded and does not make post-write rollback safe.
 
 ## Upgrades and downgrades
 

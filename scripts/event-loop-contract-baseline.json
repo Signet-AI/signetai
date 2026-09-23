@@ -3155,63 +3155,63 @@
     },
     {
       "path": "restore-verification.ts",
-      "line": 58,
+      "line": 52,
       "api": "readFileSync",
       "source": "return createHash(\"sha256\").update(readFileSync(path)).digest(\"hex\");",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 67,
+      "line": 61,
       "api": "lstatSync",
       "source": "if (lstatSync(resolved).isSymbolicLink()) return null;",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 98,
+      "line": 92,
       "api": "existsSync",
       "source": "if (!existsSync(path)) failures.push(failure(\"files\", `missing ${file}`));",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 119,
+      "line": 113,
       "api": "readFileSync",
       "source": "const rows = readFileSync(path, \"utf8\")",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 211,
+      "line": 199,
       "api": "existsSync",
       "source": "!existsSync(input.snapshotRoot) ||",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 212,
+      "line": 200,
       "api": "lstatSync",
       "source": "lstatSync(input.snapshotRoot).isSymbolicLink() ||",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 213,
+      "line": 201,
       "api": "lstatSync",
       "source": "!lstatSync(input.snapshotRoot).isDirectory()",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 294,
-      "api": "rmSync",
-      "source": "rmSync(root, { recursive: true, force: true });",
+      "line": 283,
+      "api": "existsSync",
+      "source": "if (existsSync(root)) await rm(root, { recursive: true, force: true });",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 295,
+      "line": 284,
       "api": "existsSync",
       "source": "cleaned = childStopped && !existsSync(root);",
       "category": "hot-path"

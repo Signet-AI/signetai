@@ -1,20 +1,15 @@
-import { createHash, randomUUID } from "node:crypto";
-import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
-import { computeProtectionDigests } from "@signet/core";
-import { saveRestoreReceipt } from "./protection";
 import { isAbsolute, join, relative, sep } from "node:path";
-
-export interface ProtectionReceipt {
-	readonly encryptedProvider?: "available" | "unavailable" | "unverified";
-}
 
 export interface RestoreExpectation {
 	readonly files: readonly string[];
 	readonly transcripts: readonly { path: string; roles: readonly string[]; provenance: readonly string[] }[];
-	readonly sources: readonly { id: string; generation: number }[];
+	readonly sources: readonly { id: string; generation: string | number }[];
 	readonly recall: { current: boolean; scope: string };
 	readonly dreaming: { frontier: string; consumed: readonly string[] };
 	readonly ontology: { history: number; evidenceLinks: number };
@@ -26,7 +21,6 @@ export interface RestoreVerificationInput {
 	readonly expected: RestoreExpectation;
 	readonly database: { snapshotConsistent: boolean };
 	readonly daemon: { ready: boolean };
-	readonly protection?: ProtectionReceipt;
 	readonly observed?: Partial<Pick<RestoreExpectation, "sources" | "recall" | "dreaming" | "ontology" | "harness">>;
 }
 
@@ -149,14 +143,9 @@ export async function verifyRestore(input: RestoreVerificationInput): Promise<Re
 	if (!input.observed?.harness) failures.push(failure("harness", "harness identity was not observed"));
 	else if (!sameJson(input.observed.harness, input.expected.harness))
 		failures.push(failure("harness", "identity or skills discovery mismatch"));
-	const protection = input.protection?.encryptedProvider ?? "unverified";
-	if (protection !== "available")
-		failures.push(
-			failure(
-				"protection",
-				protection === "unavailable" ? "secret provider is unavailable" : "secret provider continuity is unverified",
-			),
-		);
+	const protection = "unverified";
+	failures.push(failure("protection", "secret provider continuity is unverified"));
+	failures.push(failure("evidence", "independent restore verification is not yet available"));
 	const receipt: RestoreReceipt = {
 		schema: "signet.restore.v1",
 		ok: failures.length === 0,
@@ -171,14 +160,13 @@ export async function verifyRestore(input: RestoreVerificationInput): Promise<Re
 export interface DisposableRestoreInput {
 	readonly snapshotRoot: string;
 	readonly expected: RestoreExpectation;
-	readonly daemon: { readonly binary: string; readonly args?: readonly string[] };
+	readonly daemon: { readonly binary: string; readonly args?: readonly string[]; readonly env?: NodeJS.ProcessEnv };
 	readonly probe: (
 		root: string,
 		port: number,
 	) => Promise<{
 		readonly database: { snapshotConsistent: boolean };
 		readonly observed: RestoreVerificationInput["observed"];
-		readonly protection?: ProtectionReceipt;
 	}>;
 }
 
@@ -187,16 +175,16 @@ export interface DisposableRestoreResult extends RestoreVerificationResult {
 	readonly workspace: string;
 }
 
-async function waitForDaemonReady(child: ReturnType<typeof spawn>, port: number): Promise<void> {
+async function waitForDaemonReady(child: ReturnType<typeof spawn>, port: number, root: string): Promise<void> {
 	const deadline = Date.now() + 5000;
 	let lastError: unknown;
 	while (Date.now() < deadline) {
 		if (child.exitCode !== null || child.signalCode !== null) throw new Error("daemon exited before readiness");
 		try {
-			const response = await fetch(`http://127.0.0.1:${port}/api/health`);
+			const response = await fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) });
 			if (response.ok) {
-				const body = (await response.json()) as { status?: unknown; ok?: unknown };
-				if (body.ok === true || body.status === "ok" || body.status === "healthy") return;
+				const body = (await response.json()) as { status?: unknown; db?: unknown; workspace?: { path?: unknown } };
+				if (body.status === "healthy" && body.db === true && body.workspace?.path === root) return;
 			}
 		} catch (error) {
 			lastError = error;
@@ -215,6 +203,7 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 		throw new Error("restore snapshot must be an existing real directory");
 	const root = mkdtempSync(join(tmpdir(), "signet-restore-run-"));
 	let child: ReturnType<typeof spawn> | undefined;
+	let daemonReady = false;
 	let cleaned = false;
 	let result: RestoreVerificationResult;
 	try {
@@ -222,11 +211,20 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 		const server = await new Promise<{ child: ReturnType<typeof spawn>; port: number }>((resolveServer, reject) => {
 			const port = 30000 + Math.floor(Math.random() * 20000);
 			const proc = spawn(input.daemon.binary, [...(input.daemon.args ?? [])], {
-				env: { ...process.env, SIGNET_PATH: root, SIGNET_RESTORE_PORT: String(port) },
+				env: {
+					...(input.daemon.env ?? process.env),
+					SIGNET_PATH: root,
+					SIGNET_WORKSPACE: "",
+					SIGNET_PORT: String(port),
+					SIGNET_HOST: "127.0.0.1",
+					SIGNET_BIND: "127.0.0.1",
+					SIGNET_DAEMON_ENTRYPOINT: "1",
+					SIGNET_RESTORE_PORT: String(port),
+				},
 				stdio: "ignore",
 			});
 			child = proc;
-			void waitForDaemonReady(proc, port).then(() => resolveServer({ child: proc, port }), reject);
+			void waitForDaemonReady(proc, port, root).then(() => resolveServer({ child: proc, port }), reject);
 			proc.once("error", (error) => {
 				reject(error);
 			});
@@ -237,6 +235,7 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 			});
 		});
 		child = server.child;
+		daemonReady = true;
 		const observed = await input.probe(root, server.port);
 		result = await verifyRestore({
 			root,
@@ -244,38 +243,27 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 			daemon: { ready: true },
 			database: observed.database,
 			observed: observed.observed,
-			protection: observed.protection,
 		});
-		if (result.ok) {
-			const at = new Date().toISOString();
-			const digests = computeProtectionDigests(input.snapshotRoot);
-			saveRestoreReceipt(input.snapshotRoot, {
-				schema: "signet.restore.v1",
-				id: randomUUID(),
-				at,
-				expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-				valid: true,
-				workspace: input.snapshotRoot,
-				components: [
-					"root-authored",
-					"sqlite",
-					"transcripts",
-					"external-sources",
-					"runtime",
-					"skills",
-					"managed-originals",
-					"secrets",
-				],
-				digests,
-			});
-		}
-	} catch (_error) {
-		result = await verifyRestore({
+	} catch (error) {
+		const base = await verifyRestore({
 			root,
 			expected: input.expected,
-			daemon: { ready: false },
+			daemon: { ready: daemonReady },
 			database: { snapshotConsistent: false },
 		});
+		const component = !daemonReady
+			? "daemon"
+			: error instanceof Error &&
+					"component" in error &&
+					typeof error.component === "string" &&
+					["sources", "transcripts", "recall", "dreaming", "ontology", "harness", "database"].includes(error.component)
+				? error.component
+				: "probe";
+		const failures = [
+			...base.failures.filter((entry) => entry.component !== component),
+			failure(component, daemonReady ? "restore probe failed" : "daemon startup failed"),
+		];
+		result = { ok: false, failures, receipt: { ...base.receipt, ok: false, failures } };
 	} finally {
 		if (child) {
 			const exited = new Promise<boolean>((resolve) => {
@@ -291,7 +279,8 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 			if (!stopped || (child.exitCode === null && child.signalCode === null)) cleaned = false;
 		}
 		const childStopped = !child || child.exitCode !== null || child.signalCode !== null;
-		rmSync(root, { recursive: true, force: true });
+		await rm(root, { recursive: true, force: true });
+		if (existsSync(root)) await rm(root, { recursive: true, force: true });
 		cleaned = childStopped && !existsSync(root);
 	}
 	return { ...result, cleaned, workspace: "disposable" };
