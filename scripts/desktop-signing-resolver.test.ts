@@ -17,12 +17,17 @@ const signingSecrets = [
 	"WINDOWS_CERTIFICATE_PASSWORD",
 ] as const;
 
-function environment(mode: string, outputPath: string): Record<string, string> {
+function environment(
+	mode: string,
+	outputPath: string,
+	overrides: Readonly<Record<string, string>> = {},
+): Record<string, string> {
 	const result: Record<string, string> = {};
 	for (const [key, value] of Object.entries(process.env)) {
 		if (value !== undefined) result[key] = value;
 	}
 	for (const key of signingSecrets) result[key] = "";
+	Object.assign(result, overrides);
 	result.SIGNING_MODE_INPUT = mode;
 	result.RUNNER = "macos-14";
 	result.GITHUB_OUTPUT = outputPath;
@@ -45,11 +50,15 @@ function resolverScript(workflow: string): string {
 		.replaceAll("${{ matrix.runner }}", "${RUNNER}");
 }
 
-function runResolver(mode: string, script: string): { exitCode: number; output: string } {
+function runResolver(
+	mode: string,
+	script: string,
+	overrides: Readonly<Record<string, string>> = {},
+): { exitCode: number; output: string } {
 	const outputPath = `/tmp/signet-desktop-signing-${process.pid}-${Date.now()}`;
 	const result = Bun.spawnSync({
 		cmd: ["bash", "-c", script],
-		env: environment(mode, outputPath),
+		env: environment(mode, outputPath, overrides),
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -68,9 +77,26 @@ test("macOS tag auto signing falls back to self-signed when secrets are absent",
 	expect(result.output).toContain("::warning::Official signing secrets missing; using self-signed mode:");
 });
 
-test("explicit macOS official signing still fails when secrets are absent", async () => {
+test("macOS auto signing falls back safely with notarization credentials only", async () => {
 	const script = resolverScript(await Bun.file(workflowPath).text());
-	const result = runResolver("official", script);
+	const result = runResolver("auto", script, {
+		APPLE_ID: "apple@example.test",
+		APPLE_APP_SPECIFIC_PASSWORD: "not-a-real-password",
+		APPLE_TEAM_ID: "TEAM123456",
+	});
+	expect(result.exitCode).toBe(0);
+	expect(result.output).toContain("Desktop signing mode: self-signed");
+	expect(result.output).toContain("::warning::Official signing secrets missing; using self-signed mode:");
+});
+
+test("explicit macOS official signing reports missing certificates safely", async () => {
+	const script = resolverScript(await Bun.file(workflowPath).text());
+	const result = runResolver("official", script, {
+		APPLE_ID: "apple@example.test",
+		APPLE_APP_SPECIFIC_PASSWORD: "not-a-real-password",
+		APPLE_TEAM_ID: "TEAM123456",
+	});
 	expect(result.exitCode).not.toBe(0);
 	expect(result.output).toContain("signing_mode=official but required signing/notarization secrets are missing");
+	expect(result.output).not.toContain("unbound variable");
 });
