@@ -15,7 +15,9 @@ COPY dist ./dist
 RUN bun install --no-frozen-lockfile --force
 RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
 RUN bun run build:dashboard
-RUN bun run --filter '@signet/core' build && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:native-bun
+RUN bun run --filter '@signet/core' build
+RUN bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps
+RUN bun run build:native-bun
 ARG TARGETOS=linux
 ARG TARGETARCH
 RUN set -eux; \
