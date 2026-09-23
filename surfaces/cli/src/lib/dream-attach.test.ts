@@ -54,10 +54,15 @@ describe("Dreaming attach stream", () => {
 
 	it("reconnects from the latest cursor and stops on the terminal event", async () => {
 		const paths: string[] = [];
+		const timeouts: number[] = [];
 		const view = new DreamingAttachView(() => {});
 		const controller = new AbortController();
-		const fetchStream = async (path: string): Promise<DaemonStreamResult> => {
+		const fetchStream = async (
+			path: string,
+			options?: RequestInit & { timeout?: number },
+		): Promise<DaemonStreamResult> => {
 			paths.push(path);
+			timeouts.push(options?.timeout ?? 0);
 			if (paths.length === 1) {
 				return streamResult(
 					[
@@ -106,12 +111,14 @@ describe("Dreaming attach stream", () => {
 			fetchStream,
 			view,
 			signal: controller.signal,
+			streamTimeoutMs: 35_000,
 			maxReconnects: 1,
 			sleep: async () => {},
 		});
 
 		expect(terminal).toBe(true);
 		expect(paths).toEqual(["/api/dream/passes/pass-1/events", "/api/dream/passes/pass-1/events?after=2"]);
+		expect(timeouts).toEqual([35_000, 35_000]);
 		expect(view.cursor).toBe(3);
 	});
 

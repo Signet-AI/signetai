@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { parseSimpleYaml, readPipelinePauseState, setPipelinePaused } from "@signet/core";
 import type { Context, Hono } from "hono";
+import { DbOwnerCancelledError } from "../db-owner-client";
 import { resolveAgentId, resolveDaemonAgentId } from "../agent-id.js";
 import { requirePermission, requireRateLimit } from "../auth";
 import { getDbAccessor } from "../db-accessor.js";
@@ -130,7 +131,7 @@ export function pipelineQueueBlock(options: { readonly allowSynchronousRead?: bo
 				summary: snapshot.summary,
 				oldestDeadSummaryJob: snapshot.oldestDeadSummaryJob,
 			};
-		}, "routes/pipeline-routes.ts:126");
+		}, "routes/pipeline-routes.ts:127");
 	} catch {
 		return {
 			memory: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
@@ -511,7 +512,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					limit,
 					offset,
 				}),
-			"routes/pipeline-routes.ts:505",
+			"routes/pipeline-routes.ts:506",
 		);
 		return c.json({
 			agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
@@ -610,7 +611,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:613",
+				"routes/pipeline-routes.ts:614",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -762,17 +763,30 @@ export function registerPipelineRoutes(app: Hono): void {
 	app.get("/api/dream/passes/active", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
-		return c.json({
-			agentId: scopedAgent.agentId,
-			items: await getActiveDreamingPasses(getDbAccessor(), scopedAgent.agentId),
-		});
+		const requestSignal = c.req.raw.signal;
+		try {
+			return c.json({
+				agentId: scopedAgent.agentId,
+				items: await getActiveDreamingPasses(getDbAccessor(), scopedAgent.agentId, { signal: requestSignal }),
+			});
+		} catch (error) {
+			if (requestSignal.aborted && error instanceof DbOwnerCancelledError) return new Response(null, { status: 499 });
+			throw error;
+		}
 	});
 	app.get("/api/dream/passes/:passId/events", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const passId = c.req.param("passId").trim();
 		if (!passId) return c.json({ error: "Missing Dreaming pass id" }, 400);
-		const pass = await getDreamingPass(getDbAccessor(), scopedAgent.agentId, passId);
+		const requestSignal = c.req.raw.signal;
+		let pass: Awaited<ReturnType<typeof getDreamingPass>>;
+		try {
+			pass = await getDreamingPass(getDbAccessor(), scopedAgent.agentId, passId, { signal: requestSignal });
+		} catch (error) {
+			if (requestSignal.aborted && error instanceof DbOwnerCancelledError) return new Response(null, { status: 499 });
+			throw error;
+		}
 		if (!pass) return c.json({ error: "Dreaming pass not found" }, 404);
 
 		const cursorValue = c.req.query("after") ?? c.req.header("last-event-id");
@@ -796,7 +810,6 @@ export function registerPipelineRoutes(app: Hono): void {
 		let heartbeat: ReturnType<typeof setInterval> | undefined;
 		let subscription: ReturnType<typeof dreamingLiveEvents.subscribe> | null = null;
 		let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
-		const requestSignal = c.req.raw.signal;
 		const close = (): void => {
 			if (closed) return;
 			closed = true;
@@ -932,7 +945,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:935",
+						"routes/pipeline-routes.ts:948",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
