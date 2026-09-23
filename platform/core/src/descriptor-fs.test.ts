@@ -4,6 +4,7 @@ import {
 	existsSync,
 	linkSync,
 	lstatSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	readlinkSync,
@@ -152,6 +153,28 @@ describe("descriptor-rooted filesystem", () => {
 			await root.remove("nested", { recursive: true });
 			expect(existsSync(join(admitted, "nested"))).toBe(false);
 			expect(readFileSync(join(attacker, "keep.txt"), "utf8")).toBe("keep");
+		} finally {
+			await root.close();
+		}
+	});
+
+	test("refuses to remove a target entry replaced after recursive traversal", async () => {
+		const rootPath = temporaryRoot("descriptor-target-replacement");
+		const admitted = join(rootPath, "admitted");
+		await Bun.write(join(rootPath, "target", "remove.txt"), "remove");
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			await expect(
+				root.remove("target", {
+					recursive: true,
+					beforeMutation: async () => {
+						renameSync(join(rootPath, "target"), admitted);
+						mkdirSync(join(rootPath, "target"));
+					},
+				}),
+			).rejects.toThrow("descriptor removal target changed");
+			expect(existsSync(join(rootPath, "target"))).toBe(true);
+			expect(existsSync(admitted)).toBe(true);
 		} finally {
 			await root.close();
 		}

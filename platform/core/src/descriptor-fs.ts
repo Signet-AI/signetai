@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
-import { link, mkdir, open, opendir, readlink, rename, rmdir, symlink, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, opendir, readlink, rename, rmdir, symlink, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { relative, resolve, sep } from "node:path";
@@ -287,6 +287,10 @@ type EntryInspection = {
 	readonly gid: number;
 };
 
+function sameEntry(left: EntryInspection, right: EntryInspection): boolean {
+	return left.type === right.type && left.dev === right.dev && left.ino === right.ino;
+}
+
 async function inspectChild(parent: FileHandle, name: string): Promise<EntryInspection> {
 	try {
 		const directory = await openChild(parent, name, DIRECTORY_FLAGS);
@@ -339,17 +343,18 @@ async function inspectChild(parent: FileHandle, name: string): Promise<EntryInsp
 			throw fileError;
 	}
 	const target = await readlinkChild(parent, name);
+	const stat = await lstat(descriptorPath(parent.fd, name));
 	return {
 		type: "symlink",
 		target,
-		mode: 0o777,
-		mtimeMs: 0,
-		size: Buffer.byteLength(target),
-		dev: 0,
-		ino: 0,
-		nlink: 1,
-		uid: 0,
-		gid: 0,
+		mode: stat.mode & 0o7777,
+		mtimeMs: stat.mtimeMs,
+		size: stat.size,
+		dev: stat.dev,
+		ino: stat.ino,
+		nlink: stat.nlink,
+		uid: stat.uid,
+		gid: stat.gid,
 	};
 }
 
@@ -379,21 +384,29 @@ async function openDirectoryPath(root: FileHandle, pathParts: readonly string[],
 	}
 }
 
-async function removeTree(parent: FileHandle, name: string): Promise<void> {
+async function removeTree(
+	parent: FileHandle,
+	name: string,
+	recursive: boolean,
+	beforeMutation?: () => Promise<void>,
+): Promise<void> {
 	const entry = await inspectChild(parent, name);
-	if (entry.type !== "directory") {
+	if (entry.type === "directory" && recursive) {
+		const directory = entry.handle;
+		if (!directory) throw new Error("directory descriptor missing");
+		try {
+			for (const child of await listDirectory(directory)) await removeTree(directory, child, true);
+		} finally {
+			await directory.close();
+		}
+	} else {
 		await entry.handle?.close();
-		await unlinkChild(parent, name);
-		return;
 	}
-	const directory = entry.handle;
-	if (!directory) throw new Error("directory descriptor missing");
-	try {
-		for (const child of await listDirectory(directory)) await removeTree(directory, child);
-	} finally {
-		await directory.close();
-	}
-	await unlinkChild(parent, name, true);
+	await beforeMutation?.();
+	const current = await inspectChild(parent, name);
+	await current.handle?.close();
+	if (!sameEntry(entry, current)) throw new UnsafeDescriptorPathError("descriptor removal target changed");
+	await unlinkChild(parent, name, entry.type === "directory");
 }
 
 export class DescriptorRoot {
@@ -591,21 +604,17 @@ export class DescriptorRoot {
 		}
 	}
 
-	async remove(path: string, options: { readonly recursive?: boolean } = {}): Promise<void> {
+	async remove(
+		path: string,
+		options: { readonly recursive?: boolean; readonly beforeMutation?: () => Promise<void> } = {},
+	): Promise<void> {
 		this.requireOpen();
 		const pathParts = parts(path);
 		const name = pathParts.pop();
 		if (!name) throw new UnsafeDescriptorPathError("descriptor path is empty");
 		const parent = await openDirectoryPath(this.root, pathParts, false);
 		try {
-			const entry = await inspectChild(parent, name);
-			if (entry.type === "directory" && !options.recursive) {
-				await entry.handle?.close();
-				await unlinkChild(parent, name, true);
-			} else {
-				await entry.handle?.close();
-				await removeTree(parent, name);
-			}
+			await removeTree(parent, name, options.recursive ?? false, options.beforeMutation);
 			await parent.sync();
 		} finally {
 			await parent.close();
