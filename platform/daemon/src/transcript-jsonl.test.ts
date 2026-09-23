@@ -62,6 +62,51 @@ describe("canonical transcript JSONL", () => {
 			{ role: "assistant", content: "answer\n\nwith  spacing  ", captured_at: "2026-09-22T00:00:00.000Z" },
 		]);
 	});
+
+	test("v2 backfill retains migrated Markdown roles, multiline bytes, time, and original provenance", async () => {
+		const root = makeRoot("v2-markdown-upgrade");
+		const artifactName = "2026-04-28T00-00-00Z--migrationproof00--transcript.md";
+		mkdirSync(join(root, "transcripts"), { recursive: true });
+		writeFileSync(join(root, "workspace-layout.json"), JSON.stringify({ version: 2 }), "utf8");
+		writeFileSync(
+			join(root, "transcripts", artifactName),
+			[
+				"---",
+				'kind: "transcript"',
+				'agent_id: "default"',
+				'harness: "codex"',
+				'session_key: "migration-session"',
+				'captured_at: "2026-04-28T00:00:00.000Z"',
+				"---",
+				"User:  leading  spaces",
+				"line two",
+				"Assistant: complete reply",
+				"",
+			].join("\n"),
+		);
+		await ensureCanonicalTranscriptHistory(root, "default");
+		const records = readFileSync(canonicalTranscriptPath(root, "codex"), "utf8")
+			.trimEnd()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { role: string; content: string; captured_at: string; source_path: string });
+		expect(
+			records.map(({ role, content, captured_at, source_path }) => ({ role, content, captured_at, source_path })),
+		).toEqual([
+			{
+				role: "user",
+				content: " leading  spaces\nline two",
+				captured_at: "2026-04-28T00:00:00.000Z",
+				source_path: `memory/${artifactName}`,
+			},
+			{
+				role: "assistant",
+				content: "complete reply",
+				captured_at: "2026-04-28T00:00:00.000Z",
+				source_path: `memory/${artifactName}`,
+			},
+		]);
+	});
+
 	test("waits for the transcript file lock before writing live turns", async () => {
 		const root = makeRoot("lock");
 		const path = canonicalTranscriptPath(root, "codex");
