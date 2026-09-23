@@ -26,6 +26,7 @@ import {
 } from "./shared-corpus-runner";
 import { validateRustDaemonArtifact } from "./rust-shared-corpus-artifact";
 import { wrapRustJUnitReport } from "./rust-shared-corpus-report";
+import { isFreshRustCoreEvidenceLine } from "./rust-baseline-proof-evidence";
 
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
 const isForbiddenPath = (path: string) => FORBIDDEN.test(path.replaceAll("\\", "/"));
@@ -223,21 +224,50 @@ if (!child) {
 }
 const stderr = existsSync(stderrPath) ? readFileSync(stderrPath, "utf8") : "";
 const stdout = existsSync(stdoutPath) ? readFileSync(stdoutPath, "utf8") : "";
+const daemonEvidenceLines = existsSync(daemonEvidenceFile)
+	? readFileSync(daemonEvidenceFile, "utf8")
+			.split(/\r?\n/)
+			.filter((line) => line.length > 0)
+	: [];
+const daemonEvidenceRecords = daemonEvidenceLines.map((line) => {
+	try {
+		return JSON.parse(line) as {
+			backend?: string;
+			binary?: string;
+			nonce?: string;
+			transport?: string;
+			pid?: unknown;
+			exitCode?: unknown;
+			success?: unknown;
+			status?: string;
+		};
+	} catch {
+		return null;
+	}
+});
 const daemonEvidence =
-	existsSync(daemonEvidenceFile) &&
-	readFileSync(daemonEvidenceFile, "utf8")
-		.split(/\r?\n/)
-		.some((line) => {
-			try {
-				const value = JSON.parse(line) as { backend?: string; binary?: string; nonce?: string };
-				return value.backend === "rust-daemon" && value.binary === artifact && value.nonce === evidenceNonce;
-			} catch {
-				return false;
-			}
-		});
+	daemonEvidenceLines.length > 0 &&
+	daemonEvidenceRecords.every(
+		(value) =>
+			value !== null &&
+			value.backend === "rust-daemon" &&
+			value.binary === artifact &&
+			value.nonce === evidenceNonce &&
+			typeof value.pid === "number" &&
+			value.pid > 0 &&
+			((value.transport === "spawn" && value.status === "native-created" && value.success === null) ||
+				(value.transport === "spawnSync" &&
+					value.status === "native-completed" &&
+					typeof value.exitCode === "number" &&
+					typeof value.success === "boolean")),
+	);
+const coreEvidenceLines = existsSync(evidenceFile)
+	? readFileSync(evidenceFile, "utf8")
+			.split(/\r?\n/)
+			.filter((line) => line.length > 0)
+	: [];
 const coreEvidence =
-	existsSync(evidenceFile) &&
-	/backend=fresh-rust artifact=signet-core-test-driver process=transport/.test(readFileSync(evidenceFile, "utf8"));
+	coreEvidenceLines.length > 0 && coreEvidenceLines.every((line) => isFreshRustCoreEvidenceLine(line, coreDriver));
 // A Rust lane is authoritative only when both unchanged execution boundaries
 // were exercised: one direct-core transport and one daemon replacement.
 // Either signal alone can come from a partial/serialized batch and must fail closed.
@@ -252,8 +282,6 @@ if (!existsSync(junitPath)) {
 		report,
 		`<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" nativeEvidence="${nativeEvidence}" tests="0" failures="0" errors="1" skipped="0"/>`,
 	);
-	if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
-	if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
 	console.error(
 		JSON.stringify({
 			backend: "fresh-rust",
@@ -292,8 +320,6 @@ const infrastructureFailure =
 	unexpectedFiles.length > 0;
 const wrappedReport = wrapRustJUnitReport(reportXml, nativeEvidence);
 writeFileSync(report, wrappedReport.xml);
-if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
-if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
 console.error(
 	JSON.stringify({
 		backend: "fresh-rust",

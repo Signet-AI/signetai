@@ -1,6 +1,7 @@
 import { mock } from "bun:test";
 import { resolve } from "node:path";
-import { writeFileSync } from "node:fs";
+import { appendFileSync } from "node:fs";
+import { formatFreshRustCoreEvidence } from "./rust-baseline-proof-evidence";
 
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
 const driver = process.env.SIGNET_RUST_CORE_DRIVER_BIN;
@@ -9,15 +10,13 @@ const driverPath: string = driver;
 // biome-ignore lint/suspicious/noUndeclaredEnvVars: explicit native proof artifact
 const evidenceFile = process.env.SIGNET_RUST_CORE_EVIDENCE_FILE;
 
-function recordEvidence(): void {
+function recordEvidence(operation: string): void {
 	if (!evidenceFile) throw new Error("SIGNET_RUST_CORE_EVIDENCE_FILE is required");
-	const marker = "backend=fresh-rust artifact=signet-core-test-driver process=transport";
-	writeFileSync(evidenceFile, `${marker} pid=${process.pid}\n`, { flag: "a" });
+	appendFileSync(evidenceFile, formatFreshRustCoreEvidence(driverPath, operation));
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: transport JSON is intentionally dynamic.
 function call(path: string, request: Record<string, unknown>): any {
-	recordEvidence();
 	const result = Bun.spawnSync([driverPath, path], {
 		stdin: Buffer.from(`${JSON.stringify(request)}\n{"op":"close"}\n`),
 		stdout: "pipe",
@@ -27,6 +26,7 @@ function call(path: string, request: Record<string, unknown>): any {
 	const line = new TextDecoder().decode(result.stdout).trim().split("\n")[0];
 	const response = JSON.parse(line);
 	if (!response.ok) throw new Error(JSON.stringify(response));
+	recordEvidence(String(request.op ?? "unknown"));
 	return response.result;
 }
 
