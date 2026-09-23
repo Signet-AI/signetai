@@ -1,8 +1,19 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { Database } from "bun:sqlite";
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readlinkSync,
+	readdirSync,
+	renameSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildHermeticEnvironment } from "../../../scripts/run-hermetic-tests";
+import { runMigrations } from "../../core/src/migrations";
 
 const daemonScript = join(import.meta.dir, "daemon.ts");
 const tempDirs: string[] = [];
@@ -36,6 +47,23 @@ async function until(check: () => boolean | Promise<boolean>): Promise<void> {
 		await Bun.sleep(50);
 	}
 	throw new Error("daemon observation timed out");
+}
+
+function openDatabaseDescriptors(dbPath: string): string[] {
+	if (process.platform !== "linux") return [];
+	const descriptors: string[] = [];
+	for (const pid of readdirSync("/proc")) {
+		if (!/^[0-9]+$/.test(pid)) continue;
+		try {
+			for (const fd of readdirSync(join("/proc", pid, "fd"))) {
+				try {
+					const target = readlinkSync(join("/proc", pid, "fd", fd));
+					if (target.startsWith(dbPath)) descriptors.push(`${pid}:${fd}:${target}`);
+				} catch {}
+			}
+		} catch {}
+	}
+	return descriptors;
 }
 
 function startDaemon(env: NodeJS.ProcessEnv) {
@@ -165,6 +193,83 @@ describe("daemon workspace startup preflight", () => {
 		expect([0, 143]).toContain(await daemon.child.exited);
 		expect(Bun.file(join(workspace, ".daemon", "pid")).exists()).resolves.toBe(false);
 	}, 60_000);
+
+	it("stops post-ready conversion before closing the database owner on shutdown", async () => {
+		const root = mkdtempSync(join(tmpdir(), "signet-conversion-shutdown-"));
+		tempDirs.push(root);
+		const workspace = join(root, "workspace");
+		mkdirSync(join(workspace, "memory"), { recursive: true });
+		const dbPath = join(workspace, "memory", "memories.db");
+		const seededDb = new Database(dbPath);
+		seededDb.exec("PRAGMA auto_vacuum = NONE;");
+		runMigrations(seededDb as never);
+		seededDb.close();
+		const config = [
+			"version: 1",
+			"configVersion: 9",
+			"embedding:",
+			"  provider: none",
+			"auth:",
+			"  mode: team",
+			"capabilities:",
+			"  identity:",
+			"    mode: off",
+			"memory:",
+			"  pipelineV2:",
+			"    enabled: false",
+			"",
+		].join("\n");
+		writeFileSync(join(workspace, "agent.yaml"), config);
+		const activeFile = join(root, "vacuum-active");
+		const port = await freePort();
+		const daemon = startDaemon({
+			...runtimeEnv(root, workspace, port),
+			SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS: "5000",
+			SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE: activeFile,
+		});
+		try {
+			await until(async () => {
+				try {
+					return (await fetch(`http://127.0.0.1:${port}/health/live`, { signal: AbortSignal.timeout(500) })).ok;
+				} catch {
+					return false;
+				}
+			});
+			const conversionDeadline = Date.now() + 150_000;
+			while (
+				!(await Bun.file(activeFile).exists()) &&
+				daemon.child.exitCode === null &&
+				Date.now() < conversionDeadline
+			) {
+				await Bun.sleep(50);
+			}
+			expect(await Bun.file(activeFile).exists(), daemon.output().slice(-12_000)).toBe(true);
+			const live = await fetch(`http://127.0.0.1:${port}/health/live`, { signal: AbortSignal.timeout(1_000) });
+			expect(live.status).toBe(200);
+			const beforeShutdown = daemon.output();
+			expect(beforeShutdown).toContain("Incremental database integrity slice complete");
+			expect(beforeShutdown).toContain("FTS startup maintenance finished");
+			await daemon.stop();
+		} finally {
+			await daemon.stop();
+		}
+		const output = daemon.output();
+		expect(daemon.child.exitCode).toBe(0);
+		expect(output).not.toContain("Post-ready conversion worker failed");
+		expect(output).not.toContain("Post-ready conversion worker crashed");
+		expect(output.toLowerCase()).not.toContain("database is locked");
+		await until(() => openDatabaseDescriptors(dbPath).length === 0);
+		const db = new Database(dbPath, { readonly: true });
+		try {
+			expect(db.query("SELECT state, attempts FROM _signet_vacuum_conversion WHERE id = 1").get()).toEqual({
+				state: "running",
+				attempts: 1,
+			});
+			expect(db.query("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+		} finally {
+			db.close();
+		}
+	}, 180_000);
 
 	it("fails closed when the configured workspace is moved aside", async () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-workspace-startup-"));

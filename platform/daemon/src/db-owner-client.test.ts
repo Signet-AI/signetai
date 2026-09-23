@@ -89,10 +89,11 @@ describe("DB owner client", () => {
 	let directory: string | null = null;
 
 	afterEach(async () => {
-		await closeDbOwnerDuringShutdown(
-			() => closeRegisteredDbOwnerMaintenance(),
-			() => client?.close() ?? Promise.resolve(),
-		);
+		await closeDbOwnerDuringShutdown({
+			stopBackground: () => Promise.resolve(),
+			closeMaintenance: () => closeRegisteredDbOwnerMaintenance(),
+			closeOwner: () => client?.close() ?? Promise.resolve(),
+		});
 		client = null;
 		if (directory !== null)
 			for (let attempt = 0; ; attempt++) {
@@ -167,10 +168,11 @@ describe("DB owner client", () => {
 			await waitFor(() => existsSync(activeFile));
 
 			const closingStartedAt = Date.now();
-			await closeDbOwnerDuringShutdown(
-				() => closeRegisteredDbOwnerMaintenance(),
-				() => ownerClient.close(),
-			);
+			await closeDbOwnerDuringShutdown({
+				stopBackground: () => Promise.resolve(),
+				closeMaintenance: () => closeRegisteredDbOwnerMaintenance(),
+				closeOwner: () => ownerClient.close(),
+			});
 			expect(Date.now() - closingStartedAt).toBeLessThan(5_000);
 			expect(ownerClient.health().state).toBe("closed");
 			assertNoSurvivors(new Set([ownerPid]));
@@ -189,10 +191,11 @@ describe("DB owner client", () => {
 			).result;
 			expect(integrity).toEqual([{ integrity_check: "ok" }]);
 		} finally {
-			await closeDbOwnerDuringShutdown(
-				() => closeRegisteredDbOwnerMaintenance(),
-				() => client?.close() ?? Promise.resolve(),
-			);
+			await closeDbOwnerDuringShutdown({
+				stopBackground: () => Promise.resolve(),
+				closeMaintenance: () => closeRegisteredDbOwnerMaintenance(),
+				closeOwner: () => client?.close() ?? Promise.resolve(),
+			});
 			restoreEnvironment();
 		}
 	});

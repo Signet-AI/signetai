@@ -1516,10 +1516,6 @@ function readPipelineMode(cfg: ResolvedMemoryConfig["pipelineV2"]): string {
 }
 
 async function stopPipelineRuntime(): Promise<void> {
-	if (vacuumConversionHandle) {
-		vacuumConversionHandle.stop();
-		vacuumConversionHandle = null;
-	}
 	if (skillReconcilerHandle) {
 		try {
 			await Promise.resolve(skillReconcilerHandle.stop());
@@ -1940,6 +1936,9 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 queueMicrotask(() => setRestartPipelineRuntime(restartPipelineRuntime));
 
 async function cleanup() {
+	const vacuumConversionWorker = vacuumConversionHandle;
+	vacuumConversionHandle = null;
+	const vacuumConversionStop = vacuumConversionWorker?.stop() ?? Promise.resolve();
 	setShuttingDown(true);
 	bindAbort.abort();
 	await stopHarnessInstall();
@@ -2020,12 +2019,13 @@ async function cleanup() {
 	const ownerClient = dbOwnerClient;
 	dbOwnerMaintenanceHandle = null;
 	dbOwnerClient = null;
-	if (maintenanceHandle !== null || ownerClient !== null) {
+	if (maintenanceHandle !== null || ownerClient !== null || vacuumConversionWorker !== null) {
 		try {
-			await closeDbOwnerDuringShutdown(
-				() => (maintenanceHandle === null ? Promise.resolve() : closeRegisteredDbOwnerMaintenance()),
-				() => (ownerClient === null ? Promise.resolve() : ownerClient.close()),
-			);
+			await closeDbOwnerDuringShutdown({
+				stopBackground: () => vacuumConversionStop,
+				closeMaintenance: () => (maintenanceHandle === null ? Promise.resolve() : closeRegisteredDbOwnerMaintenance()),
+				closeOwner: () => (ownerClient === null ? Promise.resolve() : ownerClient.close()),
+			});
 		} catch (error) {
 			logger.error("daemon", "DB owner shutdown failed", undefined, {
 				error: error instanceof Error ? error.message : String(error),
