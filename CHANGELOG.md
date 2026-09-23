@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-23
+- Bug fixes: keep comment cleanup security-safe; parse production comments structurally; recognize shell comment operators; preserve scalar payload comments; refresh purge line tokens; preserve only active directives; normalize stripped comment whitespace.
+
 ### 2026-09-22
 - Bug fixes: refresh route site tokens; prevent label collisions; bound semantic hover work; track provenance roots; expose ontology semantics; show source claims in graph; close failed daemon responses; harden all daemon requests; silence daemon failures in TUI; close prepared SQLite statements on Windows.
 - Refactoring: simplify daemon request handling.
@@ -29,10 +32,22 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: remove stale render metric; bound session continuity context; remove owner route fallbacks.
 - Docs: warn against nightly production use.
 
-### 2026-09-13
-- Bug fixes: scope event provenance; normalize owner transport errors; fence dispatching owner jobs; close owner metrics fences; fence expired owner jobs.
-
 ## Release Ledger
+
+## [0.226.16] - 2026-09-23
+
+Release summary: 7 bug fixes.
+Tag range: `v0.226.15..v0.226.16`.
+
+### Bug Fixes
+
+- keep comment cleanup security-safe
+- parse production comments structurally
+- recognize shell comment operators
+- preserve scalar payload comments
+- refresh purge line tokens
+- preserve only active directives
+- normalize stripped comment whitespace
 
 ## [0.226.15] - 2026-09-22
 
