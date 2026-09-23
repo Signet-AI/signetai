@@ -297,3 +297,38 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
         .iter()
         .any(|index| index["name"] == "idx_epistemic_assertions_observer_entity"));
 }
+
+#[test]
+fn legacy_entities_receive_default_workspace_scope() {
+    let workspace = tempdir().unwrap();
+    let path = workspace.path().join("legacy-entities.sqlite");
+    let db = Connection::open(&path).unwrap();
+    db.execute_batch(
+        "CREATE TABLE entities (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            entity_type TEXT NOT NULL,
+            status TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+        INSERT INTO entities (id, agent_id, name, entity_type, status, created_at, updated_at)
+            VALUES ('legacy-entity', 'agent-a', 'Legacy Entity', 'person', 'active', '2026-09-22', '2026-09-22');",
+    )
+    .unwrap();
+    drop(db);
+
+    let core = Core::open(&path, 2).unwrap();
+    let entities = core
+        .database_sample(
+            "entities".into(),
+            10,
+            0,
+            Some("agent-a".into()),
+            Some("default".into()),
+        )
+        .unwrap();
+    assert_eq!(entities["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(entities["rows"][0]["id"], "legacy-entity");
+}
