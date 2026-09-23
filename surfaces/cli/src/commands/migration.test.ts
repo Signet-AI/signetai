@@ -80,6 +80,59 @@ test("migration drain reports named daemon writer blockers", async () => {
 	expect(blockers).toEqual(["transcript-capture"]);
 });
 
+test("migration does not drain a daemon serving another workspace", async () => {
+	const requests: string[] = [];
+	const source = join(tmpdir(), "workspace-being-migrated");
+	const result = await requestMigrationDrain(
+		"http://127.0.0.1:3850",
+		async (input) => {
+			requests.push(String(input));
+			return Response.json({ pid: process.pid, agentsDir: join(tmpdir(), "unrelated-workspace") });
+		},
+		source,
+	);
+	expect(result).toBeNull();
+	expect(requests).toEqual(["http://127.0.0.1:3850/api/status"]);
+});
+
+test("migration drains only a daemon with a matching workspace and managed PID", async () => {
+	const requests: string[] = [];
+	const source = join(tmpdir(), "workspace-being-migrated");
+	const pid = 1234;
+	const blockers = await requestMigrationDrain(
+		"http://127.0.0.1:3850",
+		async (input) => {
+			requests.push(String(input));
+			return String(input).endsWith("/api/status")
+				? Response.json({ pid, agentsDir: source })
+				: Response.json({ closed: true, blockers: [] });
+		},
+		source,
+		pid,
+	);
+	expect(blockers).toEqual([]);
+	expect(requests).toEqual([
+		"http://127.0.0.1:3850/api/status",
+		"http://127.0.0.1:3850/api/workspace/migration-control/drain",
+	]);
+});
+
+test("migration withholds drain when a daemon PID is not independently managed", async () => {
+	const requests: string[] = [];
+	const source = join(tmpdir(), "workspace-being-migrated");
+	const blockers = await requestMigrationDrain(
+		"http://127.0.0.1:3850",
+		async (input) => {
+			requests.push(String(input));
+			return Response.json({ pid: 1234, agentsDir: source });
+		},
+		source,
+		null,
+	);
+	expect(blockers).toEqual(["daemon:pid-unverified"]);
+	expect(requests).toEqual(["http://127.0.0.1:3850/api/status"]);
+});
+
 test("destination verification requires readiness rather than liveness", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-readiness-"));
 	const child = `

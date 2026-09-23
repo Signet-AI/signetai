@@ -10,7 +10,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { parseSimpleYaml } from "@signet/core";
+import { parseSimpleYaml, resolveWorkspaceLayout } from "@signet/core";
 import { sleep } from "./runtime.js";
 
 const NATIVE_SYNC_LOCK_FILENAME = "sync-native.lock";

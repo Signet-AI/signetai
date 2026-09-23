@@ -20,7 +20,8 @@ import {
 	resolveDaemonJsWasmPath,
 	resolveDaemonLaunchCommand,
 	resolveDaemonPathForRuntime,
-	stopDaemon,
+	readManagedDaemonPid,
+	stopManagedDaemonProcess,
 } from "../lib/runtime.js";
 
 export type MigrationCommandDeps = {
@@ -44,7 +45,27 @@ function withinDescriptorPath(parent: string, candidate: string): boolean {
 export async function requestMigrationDrain(
 	baseUrl: string,
 	fetchImpl: typeof fetch = fetch,
+	expectedWorkspace?: string,
+	expectedPid?: number | null,
 ): Promise<string[] | null> {
+	if (expectedWorkspace) {
+		let status: Response;
+		try {
+			status = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/status`, {
+				signal: AbortSignal.timeout(1500),
+			});
+		} catch {
+			return null;
+		}
+		if (!status.ok) throw new Error(`daemon workspace identity probe failed (${status.status})`);
+		const identity: unknown = await status.json();
+		if (!identity || typeof identity !== "object") throw new Error("daemon workspace identity is malformed");
+		const agentsDir = Reflect.get(identity, "agentsDir");
+		if (typeof agentsDir !== "string" || !agentsDir) throw new Error("daemon workspace identity is unavailable");
+		if (resolve(agentsDir) !== resolve(expectedWorkspace)) return null;
+		if (typeof expectedPid !== "number" || Reflect.get(identity, "pid") !== expectedPid)
+			return ["daemon:pid-unverified"];
+	}
 	let response: Response;
 	try {
 		response = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/workspace/migration-control/drain`, {
@@ -289,9 +310,18 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		lease: { acquire: acquireLease },
 		writers: {
 			drain: async () => {
-				const blockers = await requestMigrationDrain(process.env.SIGNET_DAEMON_URL ?? "http://127.0.0.1:3850");
+				const pid = readManagedDaemonPid(source);
+				const blockers = await requestMigrationDrain(
+					process.env.SIGNET_DAEMON_URL ?? "http://127.0.0.1:3850",
+					fetch,
+					source,
+					pid,
+				);
 				if (blockers && blockers.length > 0) return { owners: blockers };
-				return (await stopDaemon(source)) ? { owners: [] } : { owners: ["daemon"] };
+				if (pid === null) return { owners: [] };
+				if (blockers === null) return { owners: ["daemon:workspace-unverified"] };
+				await stopManagedDaemonProcess(pid);
+				return readManagedDaemonPid(source) === null ? { owners: [] } : { owners: ["daemon"] };
 			},
 		},
 		database: {
