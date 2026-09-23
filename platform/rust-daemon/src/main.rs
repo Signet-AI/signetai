@@ -734,6 +734,13 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
         std::fs::write(&config, "auth: [unterminated\n").unwrap();
         assert!(super::read_auth_mode(&directory).is_err());
         assert_eq!(*mode.lock().unwrap(), "team");
+        std::fs::remove_file(&config).unwrap();
+        let uppercase_config = directory.join("AGENT.yaml");
+        std::fs::write(&uppercase_config, "auth:\n  mode: hybrid\n").unwrap();
+        assert_eq!(super::read_auth_mode(&directory).unwrap(), "hybrid");
+        std::fs::remove_file(uppercase_config).unwrap();
+        std::fs::write(directory.join("config.yaml"), "auth:\n  mode: local\n").unwrap();
+        assert_eq!(super::read_auth_mode(&directory).unwrap(), "local");
         let _ = std::fs::remove_dir_all(directory);
     }
 
@@ -1738,12 +1745,20 @@ fn resolve_startup_workspace() -> Result<PathBuf, String> {
 }
 
 fn read_agent_config(workspace: &FsPath) -> Result<Option<(PathBuf, String)>, String> {
-    let path = workspace.join("agent.yaml");
-    match std::fs::read_to_string(&path) {
-        Ok(text) => Ok(Some((path, text))),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(format!("{}: unable to read runtime configuration: {error}", path.display())),
+    for name in ["agent.yaml", "AGENT.yaml", "config.yaml"] {
+        let path = workspace.join(name);
+        match std::fs::read_to_string(&path) {
+            Ok(text) => return Ok(Some((path, text))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => {
+                return Err(format!(
+                    "{}: unable to read runtime configuration: {error}",
+                    path.display()
+                ));
+            }
+        }
     }
+    Ok(None)
 }
 
 fn parse_runtime_auth_mode(path: &FsPath, text: &str) -> Result<String, String> {

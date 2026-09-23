@@ -77,12 +77,14 @@ const graphiqAssets = [
 	},
 ];
 const nativeEntry = join(buildDir, "cli-native.ts");
-mkdirSync(outDir, { recursive: true });
-mkdirSync(buildDir, { recursive: true });
-rmSync(outfile, { force: true });
-writeFileSync(
-	nativeEntry,
-	`import { join } from "node:path";
+// Bun.build's compile option is the programmatic form of `bun build --compile`.
+try {
+	mkdirSync(outDir, { recursive: true });
+	mkdirSync(buildDir, { recursive: true });
+	rmSync(outfile, { force: true });
+	writeFileSync(
+		nativeEntry,
+		`import { join } from "node:path";
 import { materializeEmbeddedAssetTree, materializeEmbeddedWasmAssets, registerNativeAssets } from ${JSON.stringify("../platform/daemon/src/native-runtime-assets")};
 import { runSecretKeyringChild } from ${JSON.stringify("../platform/core/src/secrets-keyring-child")};
 if (process.env.SIGNET_KEYRING_HELPER === "1") {
@@ -107,24 +109,24 @@ if (process.env.SIGNET_KEYRING_HELPER === "1") {
   await import(${JSON.stringify(join(root, "surfaces", "cli", "src", "cli.ts"))});
 }
 `,
-);
-// Bun.build's compile option is the programmatic form of `bun build --compile`.
-const result = await Bun.build({
-	entrypoints: [nativeEntry],
-	compile: {
-		target: target as "bun-linux-x64" | "bun-linux-arm64" | "bun-darwin-x64" | "bun-darwin-arm64" | "bun-windows-x64",
-		outfile,
-	},
-	external: ["better-sqlite3"],
-});
-if (!result.success) {
-	for (const log of result.logs) console.error(log);
+	);
+	const result = await Bun.build({
+		entrypoints: [nativeEntry],
+		compile: {
+			target: target as "bun-linux-x64" | "bun-linux-arm64" | "bun-darwin-x64" | "bun-darwin-arm64" | "bun-windows-x64",
+			outfile,
+		},
+		external: ["better-sqlite3"],
+	});
+	if (!result.success) {
+		for (const log of result.logs) console.error(log);
+		throw new Error("Native CLI build failed");
+	}
+	if (!existsSync(outfile)) throw new Error(`Native CLI build did not produce ${outfile}`);
+	if (platform() !== "win32") chmodSync(outfile, 0o755);
+} finally {
 	rmSync(buildDir, { recursive: true, force: true });
-	process.exit(1);
 }
-if (!existsSync(outfile)) throw new Error(`Native CLI build did not produce ${outfile}`);
-if (platform() !== "win32") chmodSync(outfile, 0o755);
-rmSync(buildDir, { recursive: true, force: true });
 if (!process.env.SIGNET_NATIVE_PLATFORM && platformKey === `${platform()}-${arch()}`) {
 	const localName = platform() === "win32" ? "signet.exe" : "signet";
 	const localPath = join(outDir, localName);

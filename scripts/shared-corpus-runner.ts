@@ -403,8 +403,6 @@ export function run(
 			? buildTypeScriptCommand(selected ?? runnableManifestPaths(manifest.protectedCorpus), report)
 			: [
 					o.adapter ?? "",
-					"--scope",
-					rustEvidenceScope(selected),
 					"--core-driver",
 					o.coreDriver ?? "",
 					"--artifact",
@@ -415,6 +413,8 @@ export function run(
 					JSON.stringify(expected),
 					"--report",
 					report ?? "",
+					"--scope",
+					rustEvidenceScope(selected),
 				];
 	const executable = command[0];
 	if (!executable) throw new Error("lane command is empty");
