@@ -270,3 +270,38 @@ it("matches the TypeScript conflict envelope, grouping, limits, isolation, and a
 	expect((await req(d, "/api/ontology/proposals/conflicts?workspace_id=ws-a&limit=1001")).r.status).toBe(400);
 	expect((await req(d, "/api/ontology/proposals/apply?workspace_id=ws-a")).r.status).toBe(404);
 });
+
+it("routes proposal evidence through the owner and preserves agent authorization", async () => {
+	let d = await start();
+	await stop(d);
+	ds.splice(ds.indexOf(d), 1);
+	seed(d.dir);
+	d = await start(d.dir);
+
+	const response = await req(d, "/api/ontology/proposals/p-new/evidence");
+	expect(response.r.status).toBe(200);
+	const evidence = response.body as {
+		proposal: { id: string };
+		count: number;
+		items: unknown;
+	};
+	expect(evidence.proposal.id).toBe("p-new");
+	expect(evidence.count).toBe(1);
+	expect(evidence.items).toEqual([
+		{
+			kind: "unresolved",
+			found: false,
+			sourceKind: null,
+			sourceId: "s1",
+			sourcePath: null,
+			label: "s1",
+			excerpt: "",
+			reference: { source: "s1" },
+		},
+	]);
+
+	const wrongAgent = await req(d, "/api/ontology/proposals/p-new/evidence", {}, "agent-b");
+	expect(wrongAgent.r.status).toBe(404);
+	expect(wrongAgent.body).toEqual({ error: "Proposal not found", code: "not_found" });
+	expect((await fetch(`${d.base}/api/ontology/proposals/p-new/evidence`)).status).toBe(401);
+});

@@ -241,7 +241,7 @@ pub(crate) fn router() -> Router<AppState> {
         )
         .route(
             "/api/ontology/proposals/{id}/evidence",
-            get(unsupported_read),
+            get(proposal_evidence),
         )
         .route("/api/ontology/claims/evidence", get(unsupported_read))
         .route("/api/ontology/claims/versions", get(list_claim_versions))
@@ -261,6 +261,22 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/constraints",
             get(list_constraints).post(create_constraint),
         )
+}
+
+async fn proposal_evidence(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    Query(q): Query<OntologyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_ontology_auth(&state, &headers, &q, "recall").await?;
+    let request = signet_core_native::OntologyProposalEvidenceRequest {
+        agent_id: agent(&headers, Some(&q.agent), None)?,
+        id,
+    };
+    Ok(execute(&state, Operation::OntologyProposalEvidence { request })
+        .await
+        .map(Json)?)
 }
 
 async fn unsupported_read(

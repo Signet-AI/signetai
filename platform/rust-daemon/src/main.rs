@@ -612,7 +612,7 @@ fn remote_core_error(response: &Value) -> CoreError {
         .unwrap_or("owner error")
         .to_owned();
     match response.get("errorKind").and_then(Value::as_str) {
-        Some("not_found") => CoreError::NotFound,
+        Some("not_found") => CoreError::NotFoundMessage(message),
         Some("forbidden") => CoreError::Forbidden(message),
         Some("conflict") => CoreError::Conflict(message),
         Some("invalid_input") => CoreError::InvalidInput(message),
@@ -673,6 +673,15 @@ mod migration_error_tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn not_found_owner_wire_preserves_specific_message() {
+        let response = json!({"errorKind":"not_found","error":"Proposal not found"});
+        assert!(matches!(
+            remote_core_error(&response),
+            CoreError::NotFoundMessage(message) if message == "Proposal not found"
+        ));
+    }
 
     #[cfg(unix)]
     #[test]
