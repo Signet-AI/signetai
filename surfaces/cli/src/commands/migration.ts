@@ -234,8 +234,10 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		if (customRoots.some((root) => withinDescriptorPath(root, path))) return path;
 		if (path.startsWith("memory/cache/")) return `cache/${path.slice("memory/cache/".length)}`;
 		if (path.startsWith("memory/imports/")) return `data/imports/${path.slice("memory/imports/".length)}`;
-		const transcript = /^memory\/([^/]+)\/transcripts\/transcript\.jsonl$/.exec(path);
-		if (transcript) return `transcripts/${transcript[1]}/transcript.jsonl`;
+		const harnessTranscript = /^memory\/([^/]+)\/transcripts\/(.+)$/.exec(path);
+		if (harnessTranscript) return `transcripts/${harnessTranscript[1]}/${harnessTranscript[2]}`;
+		if (/^memory\/[^/]+--(?:summary|transcript|compaction|manifest)\.md$/.test(path))
+			return `transcripts/${path.slice("memory/".length)}`;
 		if (path.startsWith("memory/")) return `data/legacy-memory/${path.slice("memory/".length)}`;
 		if (path.startsWith(".daemon/")) return `runtime/${path.slice(".daemon/".length)}`;
 		return path;

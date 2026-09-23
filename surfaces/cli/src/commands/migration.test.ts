@@ -183,7 +183,10 @@ test("production CLI maps default v1 components into canonical v2 ownership", ()
 	writeFileSync(join(source, "memory", "cache", "vectors.bin"), "cache");
 	writeFileSync(join(source, "memory", "imports", "original.md"), "import");
 	writeFileSync(join(source, "memory", "hermes", "transcripts", "transcript.jsonl"), '{"role":"user"}\n');
+	writeFileSync(join(source, "memory", "hermes", "transcripts", "capture.state"), "checkpoint");
 	writeFileSync(join(source, "memory", "legacy-note.md"), "legacy");
+	writeFileSync(join(source, "memory", "session--transcript.md"), "---\nkind: transcript\n---\nUser: hello\n");
+	writeFileSync(join(source, "memory", "session--manifest.md"), "---\nkind: manifest\n---\nlinks\n");
 	writeFileSync(join(source, ".daemon", "lifecycle.json"), '{"state":"clean"}\n');
 	writeFileSync(join(source, "files", "manual.md"), "manual");
 	writeFileSync(join(source, "AGENTS.md"), "authored");
@@ -214,7 +217,14 @@ test("production CLI maps default v1 components into canonical v2 ownership", ()
 		expect(readFileSync(join(destination, "transcripts", "hermes", "transcript.jsonl"), "utf8")).toBe(
 			'{"role":"user"}\n',
 		);
+		expect(readFileSync(join(destination, "transcripts", "hermes", "capture.state"), "utf8")).toBe("checkpoint");
 		expect(readFileSync(join(destination, "data", "legacy-memory", "legacy-note.md"), "utf8")).toBe("legacy");
+		expect(readFileSync(join(destination, "transcripts", "session--transcript.md"), "utf8")).toBe(
+			"---\nkind: transcript\n---\nUser: hello\n",
+		);
+		expect(readFileSync(join(destination, "transcripts", "session--manifest.md"), "utf8")).toBe(
+			"---\nkind: manifest\n---\nlinks\n",
+		);
 		expect(JSON.parse(readFileSync(join(destination, "runtime", "lifecycle.json"), "utf8"))).toMatchObject({
 			state: "clean",
 			exitCode: 0,
