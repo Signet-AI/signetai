@@ -1,4 +1,5 @@
 use serde_json::json;
+use signet_core_native::OntologyProposalEvidenceRequest;
 use signet_core_native::{
     Core, CoreError, OntologyClaimVersionRequest, OntologyClaimVersionsRequest, Operation,
 };
@@ -224,4 +225,33 @@ fn claim_versions_reject_empty_claim_and_invalid_kind_at_owner_boundary() {
         invalid_kind,
         Err(CoreError::InvalidInput(message)) if message == "kind is invalid"
     ));
+}
+
+#[test]
+fn proposal_evidence_is_scoped_by_agent_and_returns_proposal_projection() {
+    let (dir, core) = workspace();
+    let connection = rusqlite::Connection::open(dir.path().join("workspace.sqlite")).unwrap();
+    connection.execute_batch("CREATE TABLE ontology_proposals (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, operation TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, confidence REAL NOT NULL, rationale TEXT NOT NULL, evidence TEXT NOT NULL, risk TEXT, source_kind TEXT, source_id TEXT, source_path TEXT, source_root TEXT, created_by TEXT NOT NULL, applied_by TEXT, rejected_by TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, applied_at TEXT, rejected_at TEXT);").unwrap();
+    connection.execute("INSERT INTO ontology_proposals(id,agent_id,operation,status,payload,confidence,rationale,evidence,created_by,created_at,updated_at) VALUES('p1','agent-a','create','pending','{\"x\":1}',0.7,'because','[]','tester','created','updated')", []).unwrap();
+    drop(connection);
+    let request = OntologyProposalEvidenceRequest {
+        agent_id: "agent-a".into(),
+        id: "p1".into(),
+    };
+    let result = core
+        .submit(Operation::OntologyProposalEvidence { request })
+        .unwrap();
+    assert_eq!(result["proposal"]["id"], "p1");
+    assert_eq!(result["proposal"]["payload"]["x"], 1);
+    assert_eq!(result["items"], json!([]));
+    assert_eq!(result["count"], 0);
+    let missing = core.submit(Operation::OntologyProposalEvidence {
+        request: OntologyProposalEvidenceRequest {
+            agent_id: "agent-b".into(),
+            id: "p1".into(),
+        },
+    });
+    assert!(
+        matches!(missing, Err(CoreError::NotFoundMessage(message)) if message == "Proposal not found")
+    );
 }

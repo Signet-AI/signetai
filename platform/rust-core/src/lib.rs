@@ -16,6 +16,7 @@ use unicode_normalization::UnicodeNormalization;
 pub mod memory_content_safety;
 mod ontology_claim_trace;
 mod ontology_claim_versions;
+mod ontology_proposal_evidence;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
@@ -3219,6 +3220,9 @@ fn execute_operation(
         Operation::OntologyClaimVersion { request } => {
             ontology_claim_versions::execute_one(connection, request)
         }
+        Operation::OntologyProposalEvidence { request } => {
+            ontology_proposal_evidence::execute(connection, request)
+        }
         Operation::KnowledgeEntityCreate {
             agent_id,
             workspace_id,
@@ -4393,6 +4397,12 @@ pub struct OntologyClaimVersionsRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OntologyProposalEvidenceRequest {
+    pub agent_id: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     LegacyMarkdownImport {
         agent_id: String,
@@ -4777,6 +4787,9 @@ pub enum Operation {
     },
     OntologyClaimVersion {
         request: OntologyClaimVersionRequest,
+    },
+    OntologyProposalEvidence {
+        request: OntologyProposalEvidenceRequest,
     },
     KnowledgeEntityCreate {
         agent_id: String,
