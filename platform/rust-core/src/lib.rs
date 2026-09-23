@@ -3227,6 +3227,9 @@ fn execute_operation(
         Operation::OntologyLinkEvidence { request } => {
             ontology_link_evidence::execute(connection, request)
         }
+        Operation::OntologyClaimEvidence { request } => {
+            ontology_claim_trace::execute_evidence(connection, request)
+        }
         Operation::KnowledgeEntityCreate {
             agent_id,
             workspace_id,
@@ -4413,6 +4416,19 @@ pub struct OntologyLinkEvidenceRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OntologyClaimEvidenceRequest {
+    pub agent_id: String,
+    pub entity: String,
+    pub aspect: String,
+    pub group_key: String,
+    pub claim_key: String,
+    pub kind: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     LegacyMarkdownImport {
         agent_id: String,
@@ -4803,6 +4819,9 @@ pub enum Operation {
     },
     OntologyLinkEvidence {
         request: OntologyLinkEvidenceRequest,
+    },
+    OntologyClaimEvidence {
+        request: OntologyClaimEvidenceRequest,
     },
     KnowledgeEntityCreate {
         agent_id: String,

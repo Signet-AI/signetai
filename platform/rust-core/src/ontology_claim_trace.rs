@@ -3,7 +3,10 @@ use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::time::Instant;
 
-use crate::{CoreError, OntologyClaimTraceRequest};
+use crate::{
+    memory_content_safety::{is_memory_content_context_eligible, MemoryContentSafetySourceKind},
+    CoreError, OntologyClaimTraceRequest,
+};
 
 const MAX_VERSION_LIMIT: usize = 50;
 const MAX_PREMISE_LIMIT: usize = 100;
@@ -233,6 +236,75 @@ pub(crate) fn execute(
     }))
 }
 
+pub(crate) fn execute_evidence(
+    connection: &Connection,
+    request: crate::OntologyClaimEvidenceRequest,
+) -> Result<Value, CoreError> {
+    let agent_id = required_agent(&request.agent_id)?;
+    let limit = request.limit.unwrap_or(20).clamp(1, 200);
+    let offset = request.offset.unwrap_or(0).min(10_000);
+    let entity_query = canonical(&request.entity);
+    let aspect_query = canonical(&request.aspect);
+    let group_key = canonical(&request.group_key).replace(char::is_whitespace, "_");
+    let claim_key = canonical(&request.claim_key).replace(char::is_whitespace, "_");
+    let kind = request.kind.filter(|value| !value.trim().is_empty());
+    if let Some(kind) = kind.as_deref() {
+        if !matches!(kind, "attribute" | "constraint") {
+            return Err(CoreError::InvalidInput("kind is invalid".into()));
+        }
+    }
+    let status = request.status.filter(|value| !value.trim().is_empty());
+    if let Some(status) = status.as_deref() {
+        if !matches!(status, "active" | "superseded" | "deleted" | "all") {
+            return Err(CoreError::InvalidInput("status is invalid".into()));
+        }
+    }
+    let entity = resolve_entity(connection, &agent_id, &entity_query)?
+        .ok_or_else(|| CoreError::NotFoundMessage("Claim path not found".into()))?;
+    let aspect = resolve_aspect(
+        connection,
+        &agent_id,
+        entity["id"].as_str().unwrap_or_default(),
+        &aspect_query,
+    )?
+    .ok_or_else(|| CoreError::NotFoundMessage("Claim path not found".into()))?;
+    let rows = load_claim_attributes(
+        connection,
+        &agent_id,
+        aspect["id"].as_str().unwrap_or_default(),
+        if group_key.is_empty() {
+            "general"
+        } else {
+            &group_key
+        },
+        &claim_key,
+        kind.as_deref(),
+        status.as_deref(),
+        limit,
+        offset,
+    )?;
+    let mut items = Vec::with_capacity(rows.len());
+    for attribute in rows {
+        let evidence = claim_attribute_references(connection, &agent_id, &attribute)?
+            .into_iter()
+            .map(|reference| resolve_claim_evidence(connection, &agent_id, &reference))
+            .collect::<Result<Vec<_>, _>>()?;
+        items.push(json!({
+            "attribute": attribute,
+            "evidence": evidence,
+            "evidenceCount": evidence.len(),
+        }));
+    }
+    Ok(json!({
+        "entity": public_object(&entity),
+        "aspect": public_object(&aspect),
+        "groupKey": request.group_key,
+        "claimKey": request.claim_key,
+        "items": items,
+        "count": items.len(),
+    }))
+}
+
 fn required_agent(value: &str) -> Result<String, CoreError> {
     let value = value.trim();
     if value.is_empty() {
@@ -387,6 +459,496 @@ fn load_attributes(
         values.push(row?);
     }
     Ok(values)
+}
+
+fn load_claim_attributes(
+    connection: &Connection,
+    agent_id: &str,
+    aspect_id: &str,
+    group_key: &str,
+    claim_key: &str,
+    kind: Option<&str>,
+    status: Option<&str>,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<Value>, CoreError> {
+    let mut sql = String::from(
+        "SELECT id,aspect_id,agent_id,memory_id,kind,content,normalized_content,group_key,claim_key,confidence,importance,status,superseded_by,version,version_root_id,previous_attribute_id,archived_at,archived_by,archive_reason,source_kind,source_id,source_path,source_root,proposal_id,proposal_evidence,created_at,updated_at FROM entity_attributes WHERE aspect_id=? AND agent_id=? AND COALESCE(group_key,'general')=? AND claim_key=?",
+    );
+    if let Some(kind) = kind {
+        let _ = kind;
+        sql.push_str(" AND kind=?");
+    }
+    if let Some(status) = status {
+        if status != "all" {
+            sql.push_str(" AND status=?");
+        }
+    } else {
+        sql.push_str(" AND status='active'");
+    }
+    sql.push_str(" ORDER BY created_at DESC,importance DESC LIMIT ? OFFSET ?");
+    let mut bind: Vec<Box<dyn rusqlite::ToSql>> = vec![
+        Box::new(aspect_id.to_owned()),
+        Box::new(agent_id.to_owned()),
+        Box::new(group_key.to_owned()),
+        Box::new(claim_key.to_owned()),
+    ];
+    if let Some(kind) = kind {
+        bind.push(Box::new(kind.to_owned()));
+    }
+    if let Some(status) = status {
+        if status != "all" {
+            bind.push(Box::new(status.to_owned()));
+        }
+    }
+    bind.push(Box::new(limit as i64));
+    bind.push(Box::new(offset as i64));
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map(
+        rusqlite::params_from_iter(bind.iter().map(|value| value.as_ref())),
+        attribute_from_row,
+    )?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+fn claim_attribute_references(
+    connection: &Connection,
+    agent_id: &str,
+    attribute: &Value,
+) -> Result<Vec<Reference>, CoreError> {
+    let mut references = Vec::new();
+    let attribute_id = attribute["id"].as_str().unwrap_or_default();
+    if let Some(proposal_id) = attribute["proposalId"].as_str() {
+        references.push(Reference {
+            source_kind: Some("ontology_proposal".into()),
+            source_id: Some(proposal_id.to_owned()),
+            source_path: None,
+            quote: None,
+            strict: true,
+            derived_memory_id: None,
+            public: json!({"attribute_id":attribute_id,"proposal_id":proposal_id}),
+        });
+    }
+    if let Some(values) = attribute["proposalEvidence"].as_array() {
+        references.extend(values.iter().filter_map(parse_claim_reference));
+    }
+    let source_kind = attribute["sourceKind"].as_str().map(ToOwned::to_owned);
+    let source_id = attribute["sourceId"].as_str().map(ToOwned::to_owned);
+    let source_path = attribute["sourcePath"].as_str().map(ToOwned::to_owned);
+    if source_kind.is_some() || source_id.is_some() {
+        references.push(Reference {
+            source_kind: source_kind.clone(),
+            source_id: source_id.clone(),
+            source_path: None,
+            quote: None,
+            strict: false,
+            derived_memory_id: None,
+            public: json!({"attribute_id":attribute_id,"source_kind":source_kind,"source_id":source_id}),
+        });
+    }
+    if source_path.is_some() {
+        references.push(Reference {
+            source_kind: source_kind.clone(),
+            source_id: source_id.clone(),
+            source_path: source_path.clone(),
+            quote: None,
+            strict: false,
+            derived_memory_id: None,
+            public: json!({"attribute_id":attribute_id,"source_kind":source_kind,"source_id":source_id,"source_path":source_path,"source_root":attribute["sourceRoot"]}),
+        });
+    }
+    if let Some(memory_id) = attribute["memoryId"].as_str() {
+        references.push(Reference {
+            source_kind: None,
+            source_id: None,
+            source_path: None,
+            quote: None,
+            strict: false,
+            derived_memory_id: Some(memory_id.to_owned()),
+            public: json!({"attribute_id":attribute_id,"memory_id":memory_id}),
+        });
+    }
+    let mut seen = HashSet::new();
+    references.retain(|reference| {
+        let key = format!(
+            "{}\0{}\0{}\0{}\0{}",
+            reference.source_kind.as_deref().unwrap_or_default(),
+            reference.source_id.as_deref().unwrap_or_default(),
+            reference.source_path.as_deref().unwrap_or_default(),
+            reference.derived_memory_id.as_deref().unwrap_or_default(),
+            reference.quote.as_deref().unwrap_or_default(),
+        );
+        seen.insert(key)
+    });
+    let _ = connection;
+    let _ = agent_id;
+    Ok(references)
+}
+
+fn parse_claim_reference(value: &Value) -> Option<Reference> {
+    let object = value.as_object();
+    if let Some(proposal_id) = object
+        .and_then(|object| {
+            object
+                .get("proposal_id")
+                .or_else(|| object.get("proposalId"))
+        })
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return Some(Reference {
+            source_kind: Some("ontology_proposal".into()),
+            source_id: Some(proposal_id.to_owned()),
+            source_path: object
+                .and_then(|object| {
+                    object
+                        .get("source_path")
+                        .or_else(|| object.get("sourcePath"))
+                })
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            quote: object
+                .and_then(|object| object.get("quote"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            strict: true,
+            derived_memory_id: object
+                .and_then(|object| object.get("memory_id").or_else(|| object.get("memoryId")))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned),
+            public: value.clone(),
+        });
+    }
+    parse_reference(value)
+}
+
+fn claim_table_exists(connection: &Connection, table: &str) -> Result<bool, CoreError> {
+    Ok(connection
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+            [table],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+fn claim_columns_exist(
+    connection: &Connection,
+    table: &str,
+    columns: &[&str],
+) -> Result<bool, CoreError> {
+    if !claim_table_exists(connection, table)? {
+        return Ok(false);
+    }
+    let mut statement = connection.prepare(&format!("PRAGMA table_info({table})"))?;
+    let existing = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns
+        .iter()
+        .all(|column| existing.iter().any(|value| value == column)))
+}
+
+fn claim_source_id_candidates(value: Option<&str>) -> Vec<String> {
+    value.map(source_id_candidates).unwrap_or_default()
+}
+
+fn claim_artifact(
+    connection: &Connection,
+    agent_id: &str,
+    reference: &Reference,
+) -> Result<Option<(String, String, String, String)>, CoreError> {
+    let required = [
+        "agent_id",
+        "source_path",
+        "source_kind",
+        "session_id",
+        "session_key",
+        "session_token",
+        "source_node_id",
+        "content",
+        "captured_at",
+        "is_deleted",
+    ];
+    if !claim_columns_exist(connection, "memory_artifacts", &required)? {
+        return Ok(None);
+    }
+    let candidates = claim_source_id_candidates(reference.source_id.as_deref());
+    let (where_clause, mut bind): (String, Vec<Box<dyn rusqlite::ToSql>>) = if let Some(path) =
+        reference.source_path.as_deref()
+    {
+        ("source_path=?".into(), vec![Box::new(path.to_owned())])
+    } else if candidates.is_empty() {
+        return Ok(None);
+    } else {
+        let placeholders = candidates.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let clause = format!(
+            "(source_node_id IN ({placeholders}) OR session_id IN ({placeholders}) OR session_key IN ({placeholders}) OR session_token IN ({placeholders}) OR source_path IN ({placeholders}))"
+        );
+        let mut values = Vec::new();
+        for _ in 0..5 {
+            values.extend(
+                candidates
+                    .iter()
+                    .cloned()
+                    .map(|value| Box::new(value) as Box<dyn rusqlite::ToSql>),
+            );
+        }
+        (clause, values)
+    };
+    let sql = format!(
+        "SELECT source_path,source_kind,session_id,session_key,session_token,content FROM memory_artifacts WHERE agent_id=? AND COALESCE(is_deleted,0)=0 AND {where_clause} ORDER BY captured_at DESC LIMIT 1"
+    );
+    bind.insert(0, Box::new(agent_id.to_owned()));
+    let row = connection
+        .prepare(&sql)?
+        .query_row(
+            rusqlite::params_from_iter(bind.iter().map(|value| value.as_ref())),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((path, kind, session_id, session_key, session_token, content)) = row else {
+        return Ok(None);
+    };
+    let source_id = session_key
+        .or(session_id)
+        .or(session_token)
+        .unwrap_or_else(|| path.clone());
+    if !is_memory_content_context_eligible(
+        connection,
+        agent_id,
+        MemoryContentSafetySourceKind::Artifact,
+        &path,
+        &content,
+    )? {
+        return Ok(None);
+    }
+    Ok(Some((
+        path,
+        kind,
+        source_id,
+        claim_compact_excerpt(&content, reference.quote.as_deref()),
+    )))
+}
+
+fn claim_transcript(
+    connection: &Connection,
+    agent_id: &str,
+    reference: &Reference,
+) -> Result<Option<(String, String)>, CoreError> {
+    let required = ["agent_id", "session_key", "content", "created_at"];
+    if !claim_columns_exist(connection, "session_transcripts", &required)? {
+        return Ok(None);
+    }
+    let ids = claim_source_id_candidates(reference.source_id.as_deref());
+    if ids.is_empty() {
+        return Ok(None);
+    }
+    let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let order = if claim_columns_exist(connection, "session_transcripts", &["updated_at"])? {
+        "COALESCE(updated_at,created_at)"
+    } else {
+        "created_at"
+    };
+    let sql = format!("SELECT session_key,content FROM session_transcripts WHERE agent_id=? AND session_key IN ({placeholders}) ORDER BY {order} DESC LIMIT 1");
+    let mut bind: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(agent_id.to_owned())];
+    bind.extend(
+        ids.into_iter()
+            .map(|value| Box::new(value) as Box<dyn rusqlite::ToSql>),
+    );
+    let row = connection
+        .prepare(&sql)?
+        .query_row(
+            rusqlite::params_from_iter(bind.iter().map(|value| value.as_ref())),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )
+        .optional()?;
+    let Some((session_key, content)) = row else {
+        return Ok(None);
+    };
+    if !is_memory_content_context_eligible(
+        connection,
+        agent_id,
+        MemoryContentSafetySourceKind::Transcript,
+        &session_key,
+        &content,
+    )? {
+        return Ok(None);
+    }
+    Ok(Some((
+        session_key,
+        claim_compact_excerpt(&content, reference.quote.as_deref()),
+    )))
+}
+
+fn claim_memory(
+    connection: &Connection,
+    agent_id: &str,
+    reference: &Reference,
+) -> Result<Option<(String, Option<String>, Option<String>, String)>, CoreError> {
+    let required = [
+        "id",
+        "source_id",
+        "source_type",
+        "source_path",
+        "content",
+        "agent_id",
+        "is_deleted",
+    ];
+    if !claim_columns_exist(connection, "memories", &required)? {
+        return Ok(None);
+    }
+    let Some(memory_id) = reference.derived_memory_id.as_deref() else {
+        return Ok(None);
+    };
+    let row = connection
+        .query_row(
+            "SELECT id,source_id,source_type,source_path,content FROM memories WHERE id=? AND agent_id=? AND COALESCE(is_deleted,0)=0 LIMIT 1",
+            params![memory_id, agent_id],
+            |row| Ok((row.get::<_, String>(0)?,row.get::<_, Option<String>>(1)?,row.get::<_, Option<String>>(2)?,row.get::<_, Option<String>>(3)?,row.get::<_, String>(4)?)),
+        )
+        .optional()?;
+    let Some((id, source_id, source_type, _source_path, content)) = row else {
+        return Ok(None);
+    };
+    if !is_memory_content_context_eligible(
+        connection,
+        agent_id,
+        MemoryContentSafetySourceKind::Memory,
+        &id,
+        &content,
+    )? {
+        return Ok(None);
+    }
+    Ok(Some((
+        id,
+        source_id,
+        source_type,
+        claim_compact_excerpt(&content, reference.quote.as_deref()),
+    )))
+}
+
+fn claim_compact_excerpt(content: &str, quote: Option<&str>) -> String {
+    let text = content.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= MAX_EXCERPT_LENGTH {
+        return text;
+    }
+    let chars = text.chars().collect::<Vec<_>>();
+    if let Some(quote) = quote.map(str::trim).filter(|quote| !quote.is_empty()) {
+        let lower = text.to_lowercase();
+        if let Some(index) = lower.find(&quote.to_lowercase()) {
+            let start =
+                index.saturating_sub(MAX_EXCERPT_LENGTH.saturating_sub(quote.chars().count()) / 2);
+            let start_char = text[..start.min(text.len())].chars().count();
+            let end_char = (start_char + MAX_EXCERPT_LENGTH).min(chars.len());
+            return format!(
+                "{}{}{}",
+                if start_char > 0 { "..." } else { "" },
+                chars[start_char..end_char]
+                    .iter()
+                    .collect::<String>()
+                    .trim(),
+                if end_char < chars.len() { "..." } else { "" },
+            );
+        }
+    }
+    format!(
+        "{}...",
+        chars[..MAX_EXCERPT_LENGTH.saturating_sub(3)]
+            .iter()
+            .collect::<String>()
+            .trim()
+    )
+}
+
+fn resolve_claim_evidence(
+    connection: &Connection,
+    agent_id: &str,
+    reference: &Reference,
+) -> Result<Value, CoreError> {
+    if reference.source_kind.as_deref() == Some("ontology_proposal") {
+        let required = [
+            "id",
+            "operation",
+            "rationale",
+            "evidence",
+            "created_at",
+            "agent_id",
+        ];
+        if claim_columns_exist(connection, "ontology_proposals", &required)? {
+            if let Some((id, operation, rationale, evidence)) = connection
+                .query_row(
+                    "SELECT id,operation,rationale,evidence FROM ontology_proposals WHERE id=? AND agent_id=? LIMIT 1",
+                    params![reference.source_id.as_deref().unwrap_or_default(), agent_id],
+                    |row| Ok((row.get::<_, String>(0)?,row.get::<_, String>(1)?,row.get::<_, String>(2)?,row.get::<_, String>(3)?)),
+                )
+                .optional()?
+            {
+                let content = format!("{operation}\n{rationale}\n{evidence}");
+                if is_memory_content_context_eligible(connection, agent_id, MemoryContentSafetySourceKind::Artifact, &id, &content)? {
+                    return Ok(json!({"kind":"ontology_proposal","found":true,"sourceKind":"ontology_proposal","sourceId":id,"sourcePath":reference.source_path,"label":format!("proposal:{id}"),"excerpt":claim_compact_excerpt(&if reference.quote.is_some() { reference.quote.clone().unwrap_or_default() } else { rationale }, None),"reference":reference.public}));
+                }
+            }
+        }
+    }
+    if reference.source_path.is_some() {
+        if let Some((path, kind, source_id, excerpt)) =
+            claim_artifact(connection, agent_id, reference)?
+        {
+            return Ok(
+                json!({"kind":"memory_artifact","found":true,"sourceKind":kind,"sourceId":source_id,"sourcePath":path,"label":path,"excerpt":excerpt,"reference":reference.public}),
+            );
+        }
+    }
+    let looks_transcript = matches!(
+        reference.source_kind.as_deref(),
+        Some("transcript" | "session_transcript")
+    ) || reference
+        .source_id
+        .as_deref()
+        .is_some_and(|value| value.starts_with("transcript:") || value.starts_with("session:"));
+    if looks_transcript {
+        if let Some((session_key, excerpt)) = claim_transcript(connection, agent_id, reference)? {
+            return Ok(
+                json!({"kind":"session_transcript","found":true,"sourceKind":reference.source_kind.clone().unwrap_or_else(|| "transcript".into()),"sourceId":session_key,"sourcePath":reference.source_path,"label":format!("transcript:{session_key}"),"excerpt":excerpt,"reference":reference.public}),
+            );
+        }
+    }
+    if reference.source_path.is_none() {
+        if let Some((path, kind, source_id, excerpt)) =
+            claim_artifact(connection, agent_id, reference)?
+        {
+            return Ok(
+                json!({"kind":"memory_artifact","found":true,"sourceKind":kind,"sourceId":source_id,"sourcePath":path,"label":path,"excerpt":excerpt,"reference":reference.public}),
+            );
+        }
+    }
+    if let Some((id, source_id, source_type, excerpt)) =
+        claim_memory(connection, agent_id, reference)?
+    {
+        return Ok(
+            json!({"kind":"memory","found":true,"sourceKind":source_type,"sourceId":source_id.unwrap_or(id.clone()),"sourcePath":Value::Null,"label":format!("memory:{id}"),"excerpt":excerpt,"reference":reference.public}),
+        );
+    }
+    if let Some(quote) = reference.quote.as_deref() {
+        return Ok(
+            json!({"kind":"provided_quote","found":true,"sourceKind":reference.source_kind,"sourceId":reference.source_id,"sourcePath":reference.source_path,"label":"embedded quote","excerpt":claim_compact_excerpt(quote,None),"reference":reference.public}),
+        );
+    }
+    Ok(
+        json!({"kind":"unresolved","found":false,"sourceKind":reference.source_kind,"sourceId":reference.source_id,"sourcePath":reference.source_path,"label":reference.source_path.clone().or(reference.source_id.clone()).or(reference.derived_memory_id.clone()).unwrap_or_else(|| "unknown evidence".into()),"excerpt":"","reference":reference.public}),
+    )
 }
 
 fn attribute_from_row(row: &Row<'_>) -> rusqlite::Result<Value> {

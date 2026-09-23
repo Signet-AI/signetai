@@ -148,11 +148,35 @@ struct ClaimVersionQuery {
     kind: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ClaimEvidenceQuery {
+    #[serde(flatten)]
+    agent: AgentQuery,
+    entity: Option<String>,
+    aspect: Option<String>,
+    group: Option<String>,
+    claim: Option<String>,
+    kind: Option<String>,
+    status: Option<String>,
+    limit: Option<String>,
+    offset: Option<String>,
+}
+
 fn parse_claim_kind(value: Option<&str>) -> Result<Option<String>, &'static str> {
     match value {
         None | Some("") => Ok(None),
         Some("attribute") | Some("constraint") => Ok(value.map(str::to_owned)),
         Some(_) => Err("kind is invalid"),
+    }
+}
+
+fn parse_claim_status(value: Option<&str>) -> Result<Option<String>, &'static str> {
+    match value {
+        None | Some("") => Ok(None),
+        Some("active") | Some("superseded") | Some("deleted") | Some("all") => {
+            Ok(value.map(str::to_owned))
+        }
+        Some(_) => Err("status is invalid"),
     }
 }
 
@@ -263,7 +287,7 @@ pub(crate) fn router() -> Router<AppState> {
             get(proposal_evidence),
         )
         .route("/api/ontology/links/{id}/evidence", get(link_evidence))
-        .route("/api/ontology/claims/evidence", get(unsupported_read))
+        .route("/api/ontology/claims/evidence", get(claim_evidence))
         .route("/api/ontology/claims/versions", get(list_claim_versions))
         .route("/api/ontology/claims/version", get(get_claim_version))
         .route("/api/ontology/claims/explain", get(explain_claim))
@@ -315,6 +339,52 @@ async fn link_evidence(
     Ok(execute(&state, Operation::OntologyLinkEvidence { request })
         .await
         .map(Json)?)
+}
+
+async fn claim_evidence(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(mut q): Query<ClaimEvidenceQuery>,
+) -> Result<Json<Value>, ClaimTraceError> {
+    let auth_query = OntologyQuery {
+        agent: std::mem::take(&mut q.agent),
+        workspace_id: None,
+        limit: None,
+        cursor: None,
+    };
+    require_ontology_auth(&state, &headers, &auth_query, "recall").await?;
+    let required = |value: &Option<String>, name: &str| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ApiError::bad_request(format!("{name} is required")))
+    };
+    let entity = required(&q.entity, "entity")?;
+    let aspect = required(&q.aspect, "aspect")?;
+    let group = required(&q.group, "group")?;
+    let claim = required(&q.claim, "claim")?;
+    let kind = parse_claim_kind(q.kind.as_deref()).map_err(ApiError::bad_request)?;
+    let status = parse_claim_status(q.status.as_deref()).map_err(ApiError::bad_request)?;
+    let limit = parse_claim_limit(q.limit.as_deref(), 20, 1, 200)?;
+    let offset = parse_claim_limit(q.offset.as_deref(), 0, 0, 10_000)?;
+    let request = signet_core_native::OntologyClaimEvidenceRequest {
+        agent_id: agent(&headers, Some(&auth_query.agent), None)?,
+        entity,
+        aspect,
+        group_key: group,
+        claim_key: claim,
+        kind,
+        status,
+        limit: Some(limit),
+        offset: Some(offset),
+    };
+    Ok(
+        execute(&state, Operation::OntologyClaimEvidence { request })
+            .await
+            .map(Json)?,
+    )
 }
 
 async fn unsupported_read(
