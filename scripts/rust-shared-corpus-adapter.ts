@@ -29,7 +29,7 @@ import {
 } from "./shared-corpus-runner";
 import { buildHermeticEnvironment } from "./run-hermetic-tests";
 import { validateRustDaemonArtifact } from "./rust-shared-corpus-artifact";
-import { wrapRustJUnitReport } from "./rust-shared-corpus-report";
+import { normalizeObservedJUnitCounters, wrapRustJUnitReport } from "./rust-shared-corpus-report";
 import { isFreshRustCoreEvidenceLine } from "./rust-baseline-proof-evidence";
 
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
@@ -287,7 +287,9 @@ for (let index = 0; index < batches.length; index++) {
 	rmSync(batchRoot, { recursive: true, force: true });
 }
 rmSync(hermeticRoot, { recursive: true, force: true });
-const aggregate = `<?xml version="1.0" encoding="UTF-8"?><testsuites>${junitReports.join("")}</testsuites>`;
+const aggregate = normalizeObservedJUnitCounters(
+	`<?xml version="1.0" encoding="UTF-8"?><testsuites>${junitReports.join("")}</testsuites>`,
+);
 if (junitReports.length) writeFileSync(junitPath, aggregate);
 if (!child) {
 	const message = spawnError instanceof Error ? spawnError.message : String(spawnError ?? "unknown spawn error");

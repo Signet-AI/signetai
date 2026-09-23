@@ -1,6 +1,18 @@
 import { expect, test } from "bun:test";
 import { parseJUnitReport } from "./shared-corpus-runner";
-import { wrapRustJUnitReport } from "./rust-shared-corpus-report";
+import { normalizeObservedJUnitCounters, wrapRustJUnitReport } from "./rust-shared-corpus-report";
+
+test("normalizes aggregate counters from observed testcase elements", () => {
+	const child =
+		'<testsuites tests="99" failures="98" errors="97" skipped="96"><testsuite name="a" tests="7" failures="6">' +
+		'<testcase file="a.test.ts" name="one"/><testcase file="a.test.ts" name="two"><failure/></testcase></testsuite></testsuites>';
+	const normalized = normalizeObservedJUnitCounters(child);
+
+	expect(normalized).toContain('<testsuites tests="2" failures="1" errors="0" skipped="0">');
+	const wrapped = wrapRustJUnitReport(normalized, true);
+	expect(wrapped.xml).toContain('tests="2"');
+	expect(wrapped.xml).toContain('failures="1"');
+});
 
 test("preserves child-declared JUnit totals when wrapping native evidence", () => {
 	const child =

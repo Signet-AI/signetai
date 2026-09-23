@@ -13,6 +13,29 @@ export type WrappedRustJUnitReport = {
 	readonly caseCount: number;
 };
 
+function replaceNumericAttribute(attributes: string, name: string, value: number): string {
+	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	const pattern = new RegExp(`(\\b${escaped}\\s*=\\s*["'])\\d+(["'])`);
+	if (pattern.test(attributes)) return attributes.replace(pattern, `$1${value}$2`);
+	return `${attributes} ${name}="${value}"`;
+}
+
+/** Set aggregate JUnit counters from the testcase elements actually observed. */
+export function normalizeObservedJUnitCounters(reportXml: string): string {
+	const cases = reportXml.match(TESTCASE_PATTERN) ?? [];
+	const counters = {
+		tests: cases.length,
+		failures: cases.filter((testcase) => /<failure\b/.test(testcase)).length,
+		errors: cases.filter((testcase) => /<error\b/.test(testcase)).length,
+		skipped: cases.filter((testcase) => /<skipped\b/.test(testcase)).length,
+	};
+	return reportXml.replace(/<testsuites\b([^>]*?)>/, (_opening, attributes: string) => {
+		let normalized = attributes;
+		for (const [name, value] of Object.entries(counters)) normalized = replaceNumericAttribute(normalized, name, value);
+		return `<testsuites${normalized}>`;
+	});
+}
+
 function attribute(source: string, name: string): string {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	return source.match(new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(["'])(.*?)\\1`))?.[2] ?? "";
