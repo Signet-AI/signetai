@@ -2,7 +2,7 @@
 
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 
 const PROJECT_ID = "PVT_kwDOD4vxcc4BTHDc";
 const PROJECT_NUMBER = 1;
@@ -146,9 +146,17 @@ function parseYaml(raw: string): Spec[] {
 	return specs;
 }
 
+export function graphqlArgs(query: string): readonly [string, "api", "graphql", "-f", string] {
+	return ["gh", "api", "graphql", "-f", `query=${query}`];
+}
+
+export function graphqlString(value: string): string {
+	return JSON.stringify(value);
+}
+
 function gql(query: string): unknown {
-	const escaped = query.replace(/'/g, "'\\''");
-	const result = execSync(`gh api graphql -f query='${escaped}'`, {
+	const [file, ...args] = graphqlArgs(query);
+	const result = execFileSync(file, args, {
 		encoding: "utf8",
 		timeout: 30_000,
 	});
@@ -220,7 +228,7 @@ function addDraft(title: string): string {
 mutation {
   addProjectV2DraftIssue(input: {
     projectId: "${PROJECT_ID}"
-    title: "${title.replace(/"/g, '\\"')}"
+    title: ${graphqlString(title)}
   }) {
     projectItem { id }
   }
@@ -235,7 +243,7 @@ mutation {
     projectId: "${PROJECT_ID}"
     itemId: "${itemId}"
     fieldId: "${fieldId}"
-    value: { text: "${value.replace(/"/g, '\\"')}" }
+    value: { text: ${graphqlString(value)} }
   }) {
     projectV2Item { id }
   }
@@ -329,4 +337,4 @@ function main(): void {
 	console.log(`view: https://github.com/orgs/${ORG}/projects/${PROJECT_NUMBER}`);
 }
 
-main();
+if (import.meta.main) main();
