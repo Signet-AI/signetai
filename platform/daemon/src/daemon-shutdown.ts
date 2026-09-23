@@ -39,6 +39,18 @@ export function createShutdownRequestGate(): ShutdownRequestGate {
 	};
 }
 
+export function forceExitDuringShutdownFlush(
+	flushInFlight: Promise<void> | null,
+	exitCode: number,
+	flushLogs: () => void,
+	exit: (exitCode: number) => void,
+): boolean {
+	if (flushInFlight === null || exitCode === 0) return false;
+	flushLogs();
+	exit(exitCode);
+	return true;
+}
+
 export async function closeDbOwnerDuringShutdown(
 	closeMaintenance: () => Promise<void>,
 	closeOwner: () => Promise<void>,
