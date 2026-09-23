@@ -45,6 +45,8 @@ export function isCommentPurgePath(input: string): boolean {
 	if (/(?:^|[._-])generated(?:[._-]|$)/i.test(name)) return false;
 	if (/(?:^|\/)(?:license|notice|third_party_licenses\.md)$/i.test(path)) return false;
 	if (/\.lock$/i.test(path) || /(?:^|\/)scripts\/vector-repair-compiled-fixture\.ts$/i.test(path)) return false;
+	if (path === "web/marketing/public/redesign-home-mockup.html") return false;
+	if (path === "platform/core/src/child-process.ts") return false;
 	if (path.endsWith("/agent.yaml.template")) return true;
 	if (SUPPORTED_EXTENSION.test(path)) return true;
 	if (/^(?:Caddyfile|Dockerfile|_headers|_redirects)$/i.test(name)) return true;

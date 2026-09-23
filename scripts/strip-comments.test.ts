@@ -286,6 +286,8 @@ test("selects maintained source, tests, scripts, and configs only", () => {
 		"assets/style.css",
 		"image.png",
 		"web/public/logo.svg",
+		"web/marketing/public/redesign-home-mockup.html",
+		"platform/core/src/child-process.ts",
 		"src/generated-client.ts",
 		"generated.ts",
 	];

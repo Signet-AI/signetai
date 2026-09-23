@@ -13,6 +13,14 @@ type ProcessOptions = {
 	readonly windowsHide?: boolean | undefined;
 	readonly shell?: boolean | string | undefined;
 };
+
+/**
+ * Apply Signet's default for child-process console visibility.
+ *
+ * Callers may explicitly opt into a visible child for an interactive tool,
+ * but background and helper processes must not create a second Windows
+ * console by default.
+ */
 export function withWindowsHide<T extends ProcessOptions>(
 	options: T | null | undefined,
 ): T & { readonly windowsHide: boolean } {
