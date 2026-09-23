@@ -524,10 +524,13 @@ app.use("*", async (c, next) => {
 });
 const sqliteRuntime = resolveSqliteRuntimeConfig({ agentsDir: AGENTS_DIR });
 
-export function createRecallDbOwnerOptions(sqlitePath: string | undefined): DbOwnerClientOptions {
-	return { dbPath: MEMORY_DB, sqlitePath };
+export function createRecallDbOwnerOptions(
+	sqlitePath: string | undefined,
+	migrationControl: MigrationControlBoundary = daemonMigrationControl,
+): DbOwnerClientOptions {
+	return { dbPath: MEMORY_DB, sqlitePath, migrationControl };
 }
-const recallOwner = createDbOwnerClient(createRecallDbOwnerOptions(sqliteRuntime.choice?.path));
+const recallOwner = createDbOwnerClient(createRecallDbOwnerOptions(sqliteRuntime.choice?.path, daemonMigrationControl));
 recallDbOwner = recallOwner;
 
 registerGlobalMiddleware(app);

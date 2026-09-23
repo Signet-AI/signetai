@@ -289,7 +289,7 @@ async function dbIdentity(dbPath: string): Promise<string> {
 export async function startDbOwnerWithRole(
 	dbPath: string,
 	workerRole: "generic" | "recall",
-	options: Pick<DbOwnerClientOptions, "workerPath"> = {},
+	options: Pick<DbOwnerClientOptions, "workerPath" | "migrationControl"> = {},
 ): Promise<DbOwnerClient> {
 	const identity = await dbIdentity(dbPath);
 	const key = dbPath;
