@@ -723,6 +723,27 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
         let directory = env::temp_dir().join(format!("signet-auth-mode-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&directory).unwrap();
         let config = directory.join("agent.yaml");
+        let uppercase_config = directory.join("AGENT.yaml");
+        let fallback_config = directory.join("config.yaml");
+        std::fs::write(&config, "auth:\n  mode: team\n").unwrap();
+        std::fs::write(&uppercase_config, "auth:\n  mode: hybrid\n").unwrap();
+        std::fs::write(&fallback_config, "auth:\n  mode: local\n").unwrap();
+        assert_eq!(super::read_auth_mode(&directory).unwrap(), "team");
+        assert_eq!(super::runtime_config_signature(&directory).unwrap().0, config);
+        std::fs::remove_file(&config).unwrap();
+        assert_eq!(super::read_auth_mode(&directory).unwrap(), "hybrid");
+        assert_eq!(
+            super::runtime_config_signature(&directory).unwrap().0,
+            uppercase_config
+        );
+        std::fs::remove_file(&uppercase_config).unwrap();
+        assert_eq!(super::read_auth_mode(&directory).unwrap(), "local");
+        assert_eq!(
+            super::runtime_config_signature(&directory).unwrap().0,
+            fallback_config
+        );
+        std::fs::remove_file(&fallback_config).unwrap();
+        assert!(super::runtime_config_signature(&directory).is_none());
         let mode = Arc::new(Mutex::new(super::read_auth_mode(&directory).unwrap()));
         assert_eq!(*mode.lock().unwrap(), "local");
         std::fs::write(&config, "auth:\n  mode: team\n").unwrap();
