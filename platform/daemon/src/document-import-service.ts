@@ -112,18 +112,17 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 	);
 	if (added.ok === false)
 		return { status: { fileName: input.fileName, status: "failed", error: added.error }, persistedBytes };
-	if (
-		added.duplicate &&
-		duplicateMode === "skip" &&
-		added.source.lastIndexedAt !== undefined &&
-		hasIndexedSource(added.source.id, agentId)
-	)
+	const existingOutcome =
+		added.duplicate && duplicateMode === "skip" && added.source.lastIndexedAt !== undefined
+			? readImportedSourceOutcome(added.source.id, agentId)
+			: undefined;
+	if (existingOutcome !== undefined)
 		return {
 			status: {
 				fileName: input.fileName,
 				status: "duplicate",
 				sourceId: added.source.id,
-				extraction: readImportedSourceOutcome(added.source.id, agentId),
+				extraction: existingOutcome,
 			},
 			persistedBytes,
 		};
@@ -257,21 +256,6 @@ export async function importDocument(input: DocumentImportInput): Promise<Docume
 		});
 		return { status: { fileName: input.fileName, status: "failed", error: failure }, persistedBytes };
 	}
-}
-
-function hasIndexedSource(sourceId: string, agentId: string): boolean {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-		const row = db
-			.prepare(
-				`SELECT 1 AS present
-				 FROM memory_artifacts
-				 WHERE agent_id = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0
-				 LIMIT 1`,
-			)
-			.get(agentId, sourceId) as { present: number } | null | undefined;
-		return row != null;
-	}, "document-import-service.ts:264");
 }
 
 function persistedImportBytes(value: {

@@ -4,23 +4,23 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 771 sites
-- Synchronous `withWriteTx()` sites: 58
-- Synchronous `withReadDb()` sites: 92
+- Exact ledger inventory: 827 sites
+- Synchronous `withWriteTx()` sites: 59
+- Synchronous `withReadDb()` sites: 93
 - Async-named DB sites: 169
 - Async-named ON-PARENT DB sites: 167
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 452
-- Compile-visible legacy DB sites remaining: 150
-  - `withWriteTx`: 58
-  - `withReadDb`: 92
+- Synchronous filesystem/process sites: 506
+- Compile-visible legacy DB sites remaining: 152
+  - `withWriteTx`: 59
+  - `withReadDb`: 93
 
-The 771-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 58 synchronous writes, 92 synchronous reads, and 169 async-named DB sites are the complete database-call inventory; 150 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 167 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 827-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 59 synchronous writes, 93 synchronous reads, and 169 async-named DB sites are the complete database-call inventory; 152 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 167 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
-- Database accessor sites classified: 319
-- ON-PARENT callback execution: 317
+- Database accessor sites classified: 321
+- ON-PARENT callback execution: 319
 - OFF-PARENT callback execution: 2
 - Ratchet: new ON-PARENT async-named sites fail the audit; the campaign target is ON-PARENT → 0
 
@@ -59,7 +59,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:database.integrity.write` (withWriteTxAsync)
 - `db:database.integrity.read-checks` (withReadDbAsync)
 - `db:database.integrity.verify` (withReadDbAsync)
-- `db-accessor.ts:2734` (withWriteTxAsync)
+- `db-accessor.ts:2700` (withWriteTxAsync)
 - `db-vacuum.ts:303` (withReadDb)
 - `db-vacuum.ts:309` (withReadDbAsync)
 - `db-vacuum.ts:315` (withWriteTxAsync)
@@ -174,9 +174,9 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/dreaming-runbook.ts:193` (withWriteTx)
 - `pipeline/dreaming-runbook.ts:231` (withReadDb)
 - `pipeline/dreaming-worker.ts:102` (withReadDbAsync)
-- `pipeline/dreaming-worker.ts:152` (withReadDbAsync)
-- `pipeline/dreaming-worker.ts:210` (withReadDbAsync)
-- `pipeline/dreaming-worker.ts:230` (withReadDbAsync)
+- `pipeline/dreaming-worker.ts:146` (withReadDbAsync)
+- `pipeline/dreaming-worker.ts:204` (withReadDbAsync)
+- `pipeline/dreaming-worker.ts:224` (withReadDbAsync)
 - `pipeline/graph-traversal.ts:69` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:313` (withReadDbAsync)
@@ -219,14 +219,16 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:connectors.health.documents` (withReadDb)
 - `routes/database-diagnostics.ts:266` (withReadDbAsync)
 - `routes/database-diagnostics.ts:305` (withReadDbAsync)
-- `routes/hooks-routes.ts:1130` (withReadDb)
-- `routes/hooks-routes.ts:1160` (withWriteTx)
-- `routes/hooks-routes.ts:1285` (withWriteTx)
-- `db:imports.has-indexed-source` (withReadDb)
-- `routes/knowledge-routes.ts:314` (withReadDbAsync)
-- `routes/knowledge-routes.ts:487` (withReadDbAsync)
-- `routes/knowledge-routes.ts:504` (withReadDbAsync)
-- `routes/knowledge-routes.ts:609` (withReadDbAsync)
+- `routes/hooks-routes.ts:1128` (withReadDb)
+- `routes/hooks-routes.ts:1157` (withWriteTx)
+- `routes/hooks-routes.ts:1275` (withWriteTx)
+- `routes/knowledge-routes.ts:310` (withReadDbAsync)
+- `routes/knowledge-routes.ts:478` (withReadDbAsync)
+- `routes/knowledge-routes.ts:495` (withReadDbAsync)
+- `routes/knowledge-routes.ts:600` (withReadDbAsync)
+- `routes/marketplace.ts:1081` (withWriteTx)
+- `routes/mcp-analytics.ts:67` (withReadDb)
+- `routes/mcp-analytics.ts:138` (withReadDb)
 - `routes/memory-routes.ts:121` (withReadDbAsync)
 - `routes/memory-routes.ts:987` (withReadDbAsync)
 - `routes/memory-routes.ts:1061` (withReadDbAsync)
@@ -250,8 +252,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/memory-routes.ts:3758` (withReadDbAsync)
 - `routes/memory-routes.ts:3799` (withReadDbAsync)
 - `routes/memory-routes.ts:3802` (withReadDbAsync)
-- `routes/pipeline-routes.ts:128` (withReadDb)
-- `routes/pipeline-routes.ts:512` (withReadDb)
+- `routes/pipeline-routes.ts:127` (withReadDb)
+- `routes/pipeline-routes.ts:506` (withReadDb)
 - `routes/queue-diagnostics.ts:156` (withReadDb)
 - `routes/reflection-routes.ts:96` (withReadDb)
 - `routes/reflection-routes.ts:116` (withReadDb)
@@ -293,26 +295,26 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `session-claims.ts:140` (withWriteTx)
 - `session-claims.ts:152` (withReadDb)
 - `db:session-end.recovery.clear` (withWriteTxAsync)
-- `session-memories.ts:109` (withWriteTx)
-- `session-memories.ts:193` (withWriteTx)
-- `session-recall-dedupe.ts:231` (withWriteTx)
-- `session-recall-dedupe.ts:255` (withWriteTxAsync)
-- `session-recall-dedupe.ts:288` (withWriteTxAsync)
-- `session-recall-dedupe.ts:336` (withWriteTx)
-- `session-transcripts.ts:104` (withReadDb)
-- `session-transcripts.ts:116` (withReadDb)
-- `session-transcripts.ts:252` (withReadDb)
-- `session-transcripts.ts:396` (withReadDb)
-- `session-transcripts.ts:450` (withWriteTx)
-- `session-transcripts.ts:538` (withWriteTxAsync)
-- `session-transcripts.ts:647` (withWriteTx)
-- `session-transcripts.ts:679` (withReadDb)
-- `session-transcripts.ts:776` (withReadDbAsync)
-- `session-transcripts.ts:795` (withReadDb)
-- `session-transcripts.ts:826` (withReadDb)
-- `session-transcripts.ts:881` (withReadDb)
-- `session-transcripts.ts:926` (withReadDb)
-- `session-transcripts.ts:990` (withReadDb)
+- `session-memories.ts:108` (withWriteTx)
+- `session-memories.ts:192` (withWriteTx)
+- `session-recall-dedupe.ts:149` (withWriteTx)
+- `session-recall-dedupe.ts:233` (withWriteTxAsync)
+- `session-recall-dedupe.ts:324` (withWriteTxAsync)
+- `session-recall-dedupe.ts:372` (withWriteTx)
+- `session-transcripts.ts:105` (withReadDb)
+- `session-transcripts.ts:117` (withReadDb)
+- `session-transcripts.ts:253` (withReadDb)
+- `session-transcripts.ts:397` (withReadDb)
+- `session-transcripts.ts:451` (withWriteTx)
+- `session-transcripts.ts:539` (withWriteTxAsync)
+- `session-transcripts.ts:648` (withWriteTx)
+- `session-transcripts.ts:680` (withReadDb)
+- `session-transcripts.ts:777` (withReadDbAsync)
+- `session-transcripts.ts:796` (withReadDb)
+- `session-transcripts.ts:827` (withReadDb)
+- `session-transcripts.ts:882` (withReadDb)
+- `session-transcripts.ts:927` (withReadDb)
+- `session-transcripts.ts:991` (withReadDb)
 - `session-ttl-finalizer.ts:56` (withReadDbAsync)
 - `session-ttl-finalizer.ts:71` (withWriteTxAsync)
 - `skill-invocations.ts:48` (withWriteTx)
@@ -322,8 +324,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `startup-recovery.ts:71` (withWriteTxAsync)
 - `startup-recovery.ts:84` (withReadDbAsync)
 - `startup-recovery.ts:489` (withReadDbAsync)
-- `telemetry.ts:490` (withWriteTx)
-- `telemetry.ts:497` (withWriteTx)
+- `telemetry.ts:491` (withWriteTx)
+- `telemetry.ts:498` (withWriteTx)
 - `temporal-expand.ts:178` (withReadDb)
 - `temporal-fallback.ts:36` (withReadDb)
 - `temporal-fallback.ts:153` (withReadDb)
@@ -333,8 +335,8 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `db:transcript.capture.cleanup` (withReadDbAsync)
 - `db:transcript.capture.status` (withReadDbAsync)
 - `db:transcript.capture.receipt` (withReadDbAsync)
-- `transcript-health.ts:96` (withReadDbAsync)
-- `transcript-health.ts:114` (withReadDbAsync)
+- `transcript-health.ts:97` (withReadDbAsync)
+- `transcript-health.ts:115` (withReadDbAsync)
 - `db:transcript-recovery.scan.load-frontiers` (withReadDbAsync)
 - `db:transcript-recovery.scan.load-fingerprints` (withReadDbAsync)
 - `db:transcript-recovery.scan.save-frontier` (withWriteTxAsync)
@@ -366,4 +368,4 @@ The converted async sites are distributed as follows: document-worker (18), drea
 
 The structural boundary makes statically-resolved imports from the production source tree impossible: TypeScript reports TS6059 before aliases or computed member calls can use the compatibility type. The production bundle also only starts from source entrypoints, so this compatibility module is not a shipped production artifact.
 
-A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 150 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 58 write and 92 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.
+A runtime-computed require() or import() can still reach a source-tree file when a development process deliberately constructs the path. TypeScript cannot prove an unresolved runtime string, and the AST audit remains the supplementary guard for that source-execution residual. This Phase A boundary intentionally leaves the synchronous methods on the runtime accessor so the 152 transitional callers keep working. The deferred final cleanup is explicit: first land the six A3 caller-migration slices that convert all 59 write and 93 read markers to async, then remove the runtime synchronous methods and compatibility module in a follow-up.

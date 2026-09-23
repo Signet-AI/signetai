@@ -139,7 +139,7 @@ export function trackFtsHits(
 
 				stmt.run(...values);
 			}
-		}, "session-memories.ts:109");
+		}, "session-memories.ts:108");
 	} catch (e) {
 		logger.warn("session-memories", "Failed to track FTS hits", {
 			error: e instanceof Error ? e.message : String(e),
@@ -191,7 +191,7 @@ export function recordAgentFeedback(
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		getDbAccessor().withWriteTx((db: import("./db-accessor").WriteDb) => {
 			recordAgentFeedbackInner(db, sessionKey, feedback, agentId);
-		}, "session-memories.ts:193");
+		}, "session-memories.ts:192");
 
 		logger.debug("session-memories", "Recorded agent feedback", {
 			sessionKey,
