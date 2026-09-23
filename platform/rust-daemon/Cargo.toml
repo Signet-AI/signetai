@@ -1,6 +1,6 @@
 [package]
 name = "signet-daemon-native"
-version = "0.226.7"
+version = "0.226.17"
 edition = "2021"
 license = "Apache-2.0"
 description = "Fresh native Rust daemon for Signet"
