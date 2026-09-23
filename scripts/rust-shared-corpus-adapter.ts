@@ -199,7 +199,7 @@ const processExitSensitive = (entry: string): boolean => {
 	}
 };
 const batches: string[][] = [];
-const maxBatchSize = 16;
+const maxBatchSize = 1;
 let currentBatch: string[] = [];
 const flushBatch = () => {
 	if (currentBatch.length > 0) batches.push(currentBatch);
