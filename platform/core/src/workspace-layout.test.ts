@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import {
 	createFreshWorkspaceV2,
 	persistWorkspaceLayout,
@@ -81,6 +81,21 @@ describe("canonical workspace layout resolver", () => {
 			writeFileSync(join(files, "sources.json"), "manual");
 			createFreshWorkspaceV2(root, { env: env(join(root, "config")) });
 			expect(readFileSync(join(files, "sources.json"), "utf8")).toBe("manual");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("preserves persisted custom paths when fresh setup is resumed", () => {
+		const root = mkdtempSync(join(tmpdir(), "layout-resume-"));
+		try {
+			persistWorkspaceLayout(root, {
+				version: 2,
+				overrides: { database: "../durable/signet.db", transcripts: "../transcripts" },
+			});
+			const result = createFreshWorkspaceV2(root);
+			expect(result.database).toBe(resolve(root, "../durable/signet.db"));
+			expect(result.transcripts).toBe(resolve(root, "../transcripts"));
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

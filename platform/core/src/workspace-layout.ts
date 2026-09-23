@@ -105,7 +105,11 @@ export function createFreshWorkspaceV2(
 	options: { env?: NodeJS.ProcessEnv; overrides?: WorkspaceLayoutOverrides } = {},
 ): WorkspaceLayout {
 	const root = resolve(rootPath);
-	const file = persistWorkspaceLayout(root, { version: WORKSPACE_LAYOUT_V2, overrides: options.overrides });
+	// Re-running setup must not silently redirect an already-authoritative
+	// custom path back to the v2 defaults. Explicit overrides still win.
+	const existing = existsSync(layoutFile(root)) ? readPersisted(root) : undefined;
+	const overrides = options.overrides ?? (existing?.version === WORKSPACE_LAYOUT_V2 ? existing.overrides : undefined);
+	const file = persistWorkspaceLayout(root, { version: WORKSPACE_LAYOUT_V2, overrides });
 	const layout = resolveWorkspaceLayout(root, options);
 	for (const directory of [
 		layout.files,

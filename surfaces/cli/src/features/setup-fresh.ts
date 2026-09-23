@@ -1,6 +1,6 @@
 import { createDaemonClient } from "../lib/daemon.js";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	addObsidianSource,
@@ -125,7 +125,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				source: packageManager.source,
 			},
 			memory: {
-				database: "data/signet.db",
+				database: relative(context.basePath, workspaceLayout.database),
 				session_budget: plan.memorySessionBudget,
 				decay_rate: plan.memoryDecayRate,
 			},
