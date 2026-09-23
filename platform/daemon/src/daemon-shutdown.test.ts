@@ -73,24 +73,33 @@ describe("daemon shutdown request gate", () => {
 		expect(gate.exitCode).toBe(1);
 	});
 
-	it("closes the owner while maintenance leases drain", async () => {
+	it("stops background work before closing the owner while maintenance leases drain", async () => {
 		const calls: string[] = [];
+		let releaseBackground = (): void => {};
 		let releaseMaintenance = (): void => {};
+		const backgroundDrain = new Promise<void>((resolve) => {
+			releaseBackground = resolve;
+		});
 		const maintenanceDrain = new Promise<void>((resolve) => {
 			releaseMaintenance = resolve;
 		});
 
-		await closeDbOwnerDuringShutdown(
-			() => {
+		await closeDbOwnerDuringShutdown({
+			stopBackground: () => {
+				calls.push("background");
+				return backgroundDrain;
+			},
+			closeMaintenance: () => {
 				calls.push("maintenance");
 				return maintenanceDrain;
 			},
-			async () => {
+			closeOwner: async () => {
 				calls.push("owner");
+				releaseBackground();
 				releaseMaintenance();
 			},
-		);
+		});
 
-		expect(calls).toEqual(["maintenance", "owner"]);
+		expect(calls).toEqual(["background", "maintenance", "owner"]);
 	});
 });

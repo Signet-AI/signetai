@@ -20,7 +20,7 @@ export interface IncrementalReclaimOptions {
 
 export interface VacuumConversionHandle {
 	readonly running: boolean;
-	stop(): void;
+	stop(): Promise<void>;
 	run(): Promise<VacuumConversionStatus>;
 }
 export async function reclaimIncrementalVacuum(
@@ -76,29 +76,35 @@ export function startVacuumConversionWorker(
 		if (inFlight) return inFlight;
 		const cycle = (async (): Promise<VacuumConversionStatus> => {
 			const before = await getVacuumConversionStatusAsync(accessor);
-			if (before.state !== "pending" || before.attempts >= before.maxAttempts) return before;
+			if (!active || before.state !== "pending" || before.attempts >= before.maxAttempts) return before;
 
 			await markVacuumConversionRunning(accessor);
 			const running = await getVacuumConversionStatusAsync(accessor);
-			if (running.state !== "running") return running;
+			if (!active || running.state !== "running") return running;
 			logger.info("db-vacuum", "Post-ready conversion worker started", {
 				attempt: running.attempts,
 				maxAttempts: running.maxAttempts,
 			});
 
 			try {
+				if (!active) return running;
 				await dbOwnerVacuumConversion(opts.owner);
+				if (!active) return running;
 				await markVacuumConversionCompleted(accessor);
 				logger.info("db-vacuum", "Post-ready conversion worker completed");
 			} catch (error) {
+				if (!active) return running;
 				const message = error instanceof Error ? error.message : String(error);
 				await markVacuumConversionFailed(accessor, message);
-				logger.error(
-					"db-vacuum",
-					"Post-ready conversion worker failed; retry is available on a later startup while the attempt budget remains",
-					error instanceof Error ? error : undefined,
-				);
+				if (active) {
+					logger.error(
+						"db-vacuum",
+						"Post-ready conversion worker failed; retry is available on a later startup while the attempt budget remains",
+						error instanceof Error ? error : undefined,
+					);
+				}
 			}
+			if (!active) return running;
 			return await getVacuumConversionStatusAsync(accessor);
 		})();
 		inFlight = cycle;
@@ -117,7 +123,9 @@ export function startVacuumConversionWorker(
 		timer = setTimeout(() => {
 			if (!active) return;
 			void run().catch((error) => {
-				logger.error("db-vacuum", "Post-ready conversion worker crashed", error instanceof Error ? error : undefined);
+				if (active) {
+					logger.error("db-vacuum", "Post-ready conversion worker crashed", error instanceof Error ? error : undefined);
+				}
 			});
 		}, 0);
 	}
@@ -126,10 +134,16 @@ export function startVacuumConversionWorker(
 		get running(): boolean {
 			return active;
 		},
-		stop(): void {
+		stop(): Promise<void> {
 			active = false;
-			if (timer) clearTimeout(timer);
+			if (timer !== null) clearTimeout(timer);
 			timer = null;
+			const cycle = inFlight;
+			if (cycle === null) return Promise.resolve();
+			return cycle.then(
+				() => undefined,
+				() => undefined,
+			);
 		},
 		run,
 	};

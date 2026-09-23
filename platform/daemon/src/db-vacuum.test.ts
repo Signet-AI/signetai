@@ -285,6 +285,50 @@ describe("deferred vacuum conversion (#1493)", () => {
 		}
 	});
 
+	it("does not persist a failed state when shutdown stops an active conversion", async () => {
+		const db = legacyDbPath();
+		dir = db.dir;
+		initDbAccessor(db.path);
+		const owner = createDbOwnerClient({ dbPath: db.path });
+		const previousPause = process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS;
+		const previousActiveFile = process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE;
+		const activeFile = join(db.dir, "vacuum-active");
+		process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = "5000";
+		process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE = activeFile;
+		await owner.start();
+		try {
+			const worker = startVacuumConversionWorker(getDbAccessor(), { owner, startImmediately: false });
+			const running = worker.run();
+			const deadline = Date.now() + 2000;
+			while (!existsSync(activeFile) && Date.now() < deadline) await Bun.sleep(5);
+			expect(existsSync(activeFile)).toBe(true);
+
+			const stopping = Promise.resolve(worker.stop());
+			const closing = owner.close().catch(() => undefined);
+			const results = await Promise.allSettled([running, stopping, closing]);
+			expect(results[0].status).toBe("fulfilled");
+			const closeDeadline = Date.now() + 2000;
+			while (owner.health().pid !== null && Date.now() < closeDeadline) await Bun.sleep(5);
+			expect(owner.health().pid).toBeNull();
+			expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({ state: "running", attempts: 1 });
+			closeDbAccessor();
+			initDbAccessor(db.path);
+			expect(getVacuumConversionStatus(getDbAccessor())).toMatchObject({ state: "pending", attempts: 1 });
+			const integrity = new Database(db.path, { readonly: true });
+			expect((integrity.prepare("PRAGMA integrity_check").get() as { integrity_check: string }).integrity_check).toBe(
+				"ok",
+			);
+			integrity.close();
+		} finally {
+			if (previousPause === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS");
+			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = previousPause;
+			if (previousActiveFile === undefined)
+				Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE");
+			else process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE = previousActiveFile;
+			await Promise.race([owner.close().catch(() => undefined), Bun.sleep(5000)]);
+		}
+	});
+
 	it("recovers safely when the real VACUUM owner is SIGKILLed", async () => {
 		const db = legacyDbPath();
 		dir = db.dir;

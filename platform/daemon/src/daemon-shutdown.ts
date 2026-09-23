@@ -64,25 +64,30 @@ export async function runShutdownCleanup(
 	onSettled(cleanupError);
 }
 
-export async function closeDbOwnerDuringShutdown(
-	closeMaintenance: () => Promise<void>,
-	closeOwner: () => Promise<void>,
-): Promise<void> {
-	let maintenanceClose: Promise<void>;
-	try {
-		maintenanceClose = closeMaintenance();
-	} catch (error) {
-		maintenanceClose = Promise.reject(error);
-	}
+export interface DbOwnerShutdownOptions {
+	readonly stopBackground: () => Promise<void>;
+	readonly closeMaintenance: () => Promise<void>;
+	readonly closeOwner: () => Promise<void>;
+}
 
-	let ownerClose: Promise<void>;
+function startShutdownAction(action: () => Promise<void>): Promise<void> {
 	try {
-		ownerClose = closeOwner();
+		return action();
 	} catch (error) {
-		ownerClose = Promise.reject(error);
+		return Promise.reject(error);
 	}
+}
 
-	const [maintenanceResult, ownerResult] = await Promise.allSettled([maintenanceClose, ownerClose]);
+export async function closeDbOwnerDuringShutdown(options: DbOwnerShutdownOptions): Promise<void> {
+	const backgroundStop = startShutdownAction(options.stopBackground);
+	const maintenanceClose = startShutdownAction(options.closeMaintenance);
+	const ownerClose = startShutdownAction(options.closeOwner);
+	const [backgroundResult, maintenanceResult, ownerResult] = await Promise.allSettled([
+		backgroundStop,
+		maintenanceClose,
+		ownerClose,
+	]);
 	if (ownerResult.status === "rejected") throw ownerResult.reason;
 	if (maintenanceResult.status === "rejected") throw maintenanceResult.reason;
+	if (backgroundResult.status === "rejected") throw backgroundResult.reason;
 }
