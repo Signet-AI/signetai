@@ -1,8 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { saveRestoreReceipt } from "./protection";
 import { isAbsolute, join, relative, sep } from "node:path";
 
 export interface ProtectionReceipt {
@@ -239,6 +240,38 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 			observed: observed.observed,
 			protection: observed.protection,
 		});
+		if (result.ok) {
+			const at = new Date().toISOString();
+			const digest = createHash("sha256").update(JSON.stringify(result.receipt.fileDigests)).digest("hex");
+			saveRestoreReceipt(input.snapshotRoot, {
+				schema: "signet.restore.v1",
+				id: randomUUID(),
+				at,
+				expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+				valid: true,
+				workspace: input.snapshotRoot,
+				components: [
+					"root-authored",
+					"sqlite",
+					"transcripts",
+					"external-sources",
+					"runtime",
+					"skills",
+					"managed-originals",
+					"secrets",
+				],
+				digests: {
+					"root-authored": digest,
+					sqlite: digest,
+					transcripts: digest,
+					"external-sources": digest,
+					runtime: digest,
+					skills: digest,
+					"managed-originals": digest,
+					secrets: digest,
+				},
+			});
+		}
 	} catch (_error) {
 		result = await verifyRestore({
 			root,
@@ -247,18 +280,22 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 			database: { snapshotConsistent: false },
 		});
 	} finally {
-		if (child && !child.killed) {
-			child.kill("SIGTERM");
-			await new Promise<void>((resolve) => {
-				const timer = setTimeout(resolve, 500);
-				child?.once("close", () => {
-					clearTimeout(timer);
-					resolve();
-				});
+		if (child) {
+			const exited = new Promise<boolean>((resolve) => {
+				if (child?.exitCode !== null || child?.signalCode !== null) return resolve(true);
+				child?.once("close", () => resolve(true));
 			});
+			child.kill("SIGTERM");
+			let stopped = await Promise.race([exited, sleep(500).then(() => false)]);
+			if (!stopped) {
+				child.kill("SIGKILL");
+				stopped = await Promise.race([exited, sleep(500).then(() => false)]);
+			}
+			if (!stopped || (child.exitCode === null && child.signalCode === null)) cleaned = false;
 		}
+		const childStopped = !child || child.exitCode !== null || child.signalCode !== null;
 		rmSync(root, { recursive: true, force: true });
-		cleaned = true;
+		cleaned = childStopped && !existsSync(root);
 	}
 	return { ...result, cleaned, workspace: "disposable" };
 }

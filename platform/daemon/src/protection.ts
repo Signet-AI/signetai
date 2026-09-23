@@ -6,14 +6,15 @@ import {
 	buildProtectionEvidence,
 	PROTECTION_COMPONENT_IDS,
 	resolveWorkspaceLayout,
+	validateRestoreReceipt,
+	type RestoreReceiptInput,
 	type ProtectionComponent,
-	type RestoreReceipt,
 } from "@signet/core";
 import type { Hono } from "hono";
 
 export interface ProtectionRouteOptions {
 	readonly components?: readonly ProtectionComponent[];
-	readonly restoreReceipt?: RestoreReceipt | null;
+	readonly restoreReceipt?: RestoreReceiptInput | null;
 	readonly workspacePath?: string;
 	readonly externalKeyringAvailable?: boolean;
 }
@@ -21,7 +22,7 @@ export interface ProtectionRouteOptions {
 const receiptFile = (workspacePath: string): string =>
 	join(resolveWorkspaceLayout(workspacePath).runtime, "protection-restore-receipt.json");
 
-export function saveRestoreReceipt(workspacePath: string, receipt: RestoreReceipt): void {
+export function saveRestoreReceipt(workspacePath: string, receipt: RestoreReceiptInput): void {
 	const dir = resolveWorkspaceLayout(workspacePath).runtime;
 	mkdirSync(dir, { recursive: true, mode: 0o700 });
 	const tmp = join(dir, `.protection-restore-receipt.${process.pid}.tmp`);
@@ -29,10 +30,10 @@ export function saveRestoreReceipt(workspacePath: string, receipt: RestoreReceip
 	renameSync(tmp, receiptFile(workspacePath));
 }
 
-export function readRestoreReceipt(workspacePath: string): RestoreReceipt | null {
+export function readRestoreReceipt(workspacePath: string): import("@signet/core").RestoreReceipt | null {
 	try {
-		const parsed = JSON.parse(readFileSync(receiptFile(workspacePath), "utf8")) as RestoreReceipt;
-		return typeof parsed.at === "string" && parsed.valid === true ? parsed : null;
+		const parsed: unknown = JSON.parse(readFileSync(receiptFile(workspacePath), "utf8"));
+		return validateRestoreReceipt(parsed, { workspace: workspacePath }) ? parsed : null;
 	} catch {
 		return null;
 	}
@@ -134,7 +135,7 @@ export function mountProtectionRoutes(app: Hono, options: ProtectionRouteOptions
 					})));
 		const receipt =
 			options.restoreReceipt ?? (options.workspacePath ? readRestoreReceipt(options.workspacePath) : null);
-		const status = aggregateProtection(components, { restoreReceipt: receipt });
+		const status = aggregateProtection(components, { restoreReceipt: receipt, workspacePath: options.workspacePath });
 		return c.json({ ...status, components: status.components.map(safeComponent) });
 	});
 }

@@ -1,13 +1,14 @@
 export { Signet } from "./signet";
 export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
 export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
-export { aggregateProtection, PROTECTION_COMPONENT_IDS } from "./protection";
+export { aggregateProtection, PROTECTION_COMPONENT_IDS, validateRestoreReceipt } from "./protection";
 export type {
 	ProtectionComponent,
 	ProtectionComponentId,
 	ProtectionComponentStatus,
 	ProtectionStatus,
 	RestoreReceipt,
+	RestoreReceiptInput,
 } from "./protection";
 export { buildProtectionEvidence } from "./protection-evidence";
 export type { ProtectionEvidence, ProtectionEvidenceOptions } from "./protection-evidence";

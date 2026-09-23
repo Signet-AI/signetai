@@ -31,14 +31,72 @@ export interface ProtectionComponent {
 }
 
 export interface RestoreReceipt {
+	readonly schema: "signet.restore.v1";
+	readonly id: string;
 	readonly at: string;
-	readonly valid: boolean;
-	readonly id?: string;
-	readonly workspace?: string;
-	readonly schema?: string;
-	readonly snapshot?: string;
-	readonly components?: readonly string[];
-	readonly expiresAt?: string;
+	readonly expiresAt: string;
+	readonly valid: true;
+	readonly workspace: string;
+	readonly components: readonly ProtectionComponentId[];
+	readonly digests: Readonly<Record<string, string>>;
+}
+export type RestoreReceiptInput =
+	| RestoreReceipt
+	| { readonly at: string; readonly valid: boolean; readonly [key: string]: unknown };
+
+const RECEIPT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+const DIGEST = /^[a-f0-9]{64}$/;
+
+export function validateRestoreReceipt(
+	value: unknown,
+	options: {
+		readonly workspace: string;
+		readonly now?: Date;
+		readonly componentDigests?: Readonly<Record<string, string>>;
+	},
+): value is RestoreReceipt {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+	const receipt = value as Record<string, unknown>;
+	const now = (options.now ?? new Date()).getTime();
+	const at = typeof receipt.at === "string" ? Date.parse(receipt.at) : Number.NaN;
+	const expiresAt = typeof receipt.expiresAt === "string" ? Date.parse(receipt.expiresAt) : Number.NaN;
+	const components = receipt.components;
+	const digests = receipt.digests;
+	if (
+		receipt.schema !== "signet.restore.v1" ||
+		receipt.valid !== true ||
+		typeof receipt.id !== "string" ||
+		!/^[A-Za-z0-9._-]{1,128}$/.test(receipt.id) ||
+		receipt.workspace !== options.workspace ||
+		!Number.isFinite(at) ||
+		!Number.isFinite(expiresAt) ||
+		at > now ||
+		expiresAt <= now ||
+		expiresAt - at > RECEIPT_MAX_AGE_MS ||
+		!Array.isArray(components) ||
+		components.length === 0 ||
+		components.some((id) => !PROTECTION_COMPONENT_IDS.includes(id as ProtectionComponentId)) ||
+		!digests ||
+		typeof digests !== "object" ||
+		Array.isArray(digests)
+	)
+		return false;
+	const digestMap = digests as Record<string, unknown>;
+	if (
+		Object.keys(digestMap).some(
+			(key) =>
+				!PROTECTION_COMPONENT_IDS.includes(key as ProtectionComponentId) ||
+				typeof digestMap[key] !== "string" ||
+				!DIGEST.test(digestMap[key] as string),
+		)
+	)
+		return false;
+	if (
+		options.componentDigests &&
+		Object.entries(options.componentDigests).some(([key, digest]) => digestMap[key] !== digest)
+	)
+		return false;
+	return true;
 }
 
 export interface ProtectionStatus {
@@ -61,7 +119,13 @@ const BLOCKING = new Set<ProtectionComponentStatus>(["missing", "stale", "degrad
 
 export function aggregateProtection(
 	components: readonly ProtectionComponent[],
-	options: { readonly restoreReceipt?: RestoreReceipt | null; readonly gitSynchronized?: boolean } = {},
+	options: {
+		readonly restoreReceipt?: RestoreReceiptInput | null;
+		readonly gitSynchronized?: boolean;
+		readonly workspacePath?: string;
+		readonly now?: Date;
+		readonly componentDigests?: Readonly<Record<string, string>>;
+	} = {},
 ): ProtectionStatus {
 	const ordered = [...components].sort(
 		(a, b) => (ORDER.get(a.id) ?? Number.MAX_SAFE_INTEGER) - (ORDER.get(b.id) ?? Number.MAX_SAFE_INTEGER),
@@ -73,9 +137,14 @@ export function aggregateProtection(
 		ordered.length > 0 &&
 		ordered.every((component) => component.status === "protected" || component.status === "excluded-rebuildable");
 	const receiptUsable =
-		receipt?.valid === true &&
-		(receipt.schema === undefined || receipt.schema === "signet.restore.v1") &&
-		(receipt.expiresAt === undefined || Date.parse(receipt.expiresAt) > Date.now());
+		receipt !== null &&
+		validateRestoreReceipt(receipt, {
+			workspace: options.workspacePath ?? "",
+			now: options.now,
+			componentDigests: options.componentDigests,
+		}) &&
+		new Set(receipt.components).size === receipt.components.length &&
+		receipt.components.every((id) => ordered.some((component) => component.id === id));
 	const protectedNow = allProtected && receiptUsable;
 	const hasRequired = ordered.some((component) => component.status !== "excluded-rebuildable");
 	const missing = ordered.filter((component) => component.status === "missing").map((component) => component.id);
@@ -91,6 +160,15 @@ export function aggregateProtection(
 				: hasUnknown
 					? "unknown"
 					: "unverified";
+	const receiptForStatus =
+		receipt !== null &&
+		validateRestoreReceipt(receipt, {
+			workspace: options.workspacePath ?? "",
+			now: options.now,
+			componentDigests: options.componentDigests,
+		})
+			? receipt
+			: null;
 	return {
 		status,
 		overall: !hasRequired ? "none" : protectedNow ? "protected" : "partial",
@@ -98,7 +176,7 @@ export function aggregateProtection(
 		components: ordered,
 		missing,
 		degraded,
-		restoreReceipt: receipt,
+		restoreReceipt: receiptForStatus,
 		privacy: { pathsRedacted: true, secretsRedacted: true, contentIncluded: false },
 	};
 }
