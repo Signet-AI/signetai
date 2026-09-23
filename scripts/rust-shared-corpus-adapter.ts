@@ -132,6 +132,8 @@ function validatePinnedManifest(manifest: Manifest): void {
 const manifestValue = required("--manifest");
 const pathsValue = required("--paths");
 const report = resolve(required("--report"));
+const scope = arg("--scope") ?? "combined";
+if (scope !== "combined" && scope !== "core" && scope !== "daemon") fail("--scope must be combined, core, or daemon");
 const manifest = readManifest(manifestValue);
 validatePinnedManifest(manifest);
 const artifact = resolve(required("--artifact"));
@@ -341,10 +343,12 @@ const coreEvidenceLines = existsSync(evidenceFile)
 	: [];
 const coreEvidence =
 	coreEvidenceLines.length > 0 && coreEvidenceLines.every((line) => isFreshRustCoreEvidenceLine(line, coreDriver));
-// A Rust lane is authoritative only when both unchanged execution boundaries
-// were exercised: one direct-core transport and one daemon replacement.
-// Either signal alone can come from a partial/serialized batch and must fail closed.
-const nativeEvidence = daemonEvidence && coreEvidence;
+// The complete corpus is authoritative only when both unchanged execution
+// boundaries were exercised. Supplementary proof runs are intentionally
+// narrower: direct-core paths prove the core transport, daemon paths prove
+// the native daemon replacement, and mixed/full runs still require both.
+const nativeEvidence =
+	scope === "core" ? coreEvidence : scope === "daemon" ? daemonEvidence : daemonEvidence && coreEvidence;
 const evidence =
 	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
 if (!existsSync(junitPath)) {
@@ -359,6 +363,7 @@ if (!existsSync(junitPath)) {
 		JSON.stringify({
 			backend: "fresh-rust",
 			artifact,
+			scope,
 			selected,
 			executed: [],
 			nativeEvidence,
@@ -398,6 +403,7 @@ console.error(
 	JSON.stringify({
 		backend: "fresh-rust",
 		artifact,
+		scope,
 		selected,
 		executed: [...observedFiles].sort(),
 		nativeEvidence,

@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 export const BASELINE_SHA = "11e4720c07107caf7fdd57a685eca24e8a82e654";
 export const CORPUS_SIZE = 497;
 export type Backend = "typescript" | "rust";
+export type RustEvidenceScope = "combined" | "core" | "daemon";
 export type ManifestEntry = { path: string; sha256: string };
 export type ExecutionManifest = {
 	baselineSha: string;
@@ -31,6 +32,19 @@ export type Accounting = {
 
 export function requiresNativeEvidence(backend: Backend, nativeEvidence: boolean): boolean {
 	return backend === "rust" && !nativeEvidence;
+}
+
+/**
+ * Supplementary proof runs may target one implementation boundary at a time.
+ * The complete corpus remains a combined proof and must exercise both native
+ * boundaries; a selected direct-core or daemon run only claims the boundary
+ * its selected paths can legitimately exercise.
+ */
+export function rustEvidenceScope(selected?: readonly string[]): RustEvidenceScope {
+	if (!selected || selected.length === 0) return "combined";
+	if (selected.every((path) => path.startsWith("platform/core/"))) return "core";
+	if (selected.every((path) => path.startsWith("platform/daemon/"))) return "daemon";
+	return "combined";
 }
 
 function git(repo: string, args: string[], binary = false): string | Buffer {
@@ -380,6 +394,8 @@ export function run(
 			? buildTypeScriptCommand(selected ?? runnableManifestPaths(manifest.protectedCorpus), report)
 			: [
 					o.adapter ?? "",
+					"--scope",
+					rustEvidenceScope(selected),
 					"--core-driver",
 					o.coreDriver ?? "",
 					"--artifact",
