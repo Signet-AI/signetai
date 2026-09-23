@@ -7,6 +7,8 @@ export {
 	restoreVerifiedRootGitArchive,
 } from "./git-archive-retirement";
 export type { RootGitArchive, RootGitArchivePlan, RootGitArchiveVerification } from "./git-archive-retirement";
+export { captureGitMetadata, restoreGitMetadata } from "./git-migration";
+export type { GitMetadataCapture } from "./git-migration";
 export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
 export { aggregateProtection, PROTECTION_COMPONENT_IDS, validateRestoreReceipt } from "./protection";
 export type {

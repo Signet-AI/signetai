@@ -89,8 +89,9 @@ export function planRootGitArchive(root: string, directory: string): RootGitArch
 	if (!inventory.isRootRepository) throw new Error("refusing archive: target is not the repository root");
 	if (runGit(resolvedRoot, ["rev-parse", "--is-bare-repository"]) === "true")
 		throw new Error("refusing archive: bare repository");
-	const nested = nestedRepositories(resolvedRoot);
-	if (nested.length) throw new Error(`refusing archive: nested repositories detected (${nested.join(", ")})`);
+	// Nested repositories are part of the migration contract. Git metadata is
+	// captured by the migration-specific read-only capture path instead.
+	nestedRepositories(resolvedRoot);
 	const archive = makeArchivePaths(resolvedRoot, directory);
 	return { inventory, archive, redactedPaths: [".git/objects", ".git/logs", ".git/credentials"] };
 }
