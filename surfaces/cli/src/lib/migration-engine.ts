@@ -182,6 +182,7 @@ export class MigrationEngine {
 				throw new Error("destination parent identity mismatch");
 			journal.destinationIdentity = destination.identity;
 			journal.destinationParentIdentity = destination.parentIdentity;
+			journal.destinationWrites = true;
 			await saveJournal(state, this.journalName, journal);
 			await this.deps.hooks?.afterDestinationAdmitted?.();
 
@@ -196,7 +197,6 @@ export class MigrationEngine {
 					journal.receipts.push({ component, phase: "accepted", fingerprint });
 					journal.copied.push(component);
 					journal.phase = "copying";
-					journal.destinationWrites = true;
 					await saveJournal(state, this.journalName, journal);
 				} else await verifyDestinationEntry(destination.root, fingerprint);
 			}
@@ -261,8 +261,6 @@ export class MigrationEngine {
 				} finally {
 					await snapshotSource.close();
 				}
-				journal.destinationWrites = true;
-				await saveJournal(state, this.journalName, journal);
 			}
 			if (this.deps.gitignoreBytes) {
 				let existing = "";
@@ -274,15 +272,11 @@ export class MigrationEngine {
 				const merged = this.deps.gitignoreBytes(existing);
 				if (new TextDecoder().decode(merged) !== existing)
 					await destination.root.replaceFileAtomic(".gitignore", merged, { mode: 0o644 });
-				journal.destinationWrites = true;
-				await saveJournal(state, this.journalName, journal);
 			}
 			if (this.deps.layoutBytes) {
 				await destination.root.replaceFileAtomic("workspace-layout.json", this.deps.layoutBytes(layout), {
 					mode: 0o600,
 				});
-				journal.destinationWrites = true;
-				await saveJournal(state, this.journalName, journal);
 			}
 			journal.phase = "verified";
 			await saveJournal(state, this.journalName, journal);

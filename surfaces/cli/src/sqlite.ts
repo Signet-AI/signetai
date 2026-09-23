@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { loadSqliteVec } from "@signet/core";
 
 interface SQLiteDatabase {
 	pragma(pragma: string): void;
@@ -64,6 +65,8 @@ export function verifyMigrationDatabaseRows(sourcePath: string, destinationPath:
 	try {
 		const destination = createDatabase(destinationPath, { readonly: true });
 		try {
+			loadSqliteVec(source);
+			loadSqliteVec(destination);
 			const sourceTables = tableNames(source);
 			const destinationTables = tableNames(destination);
 			if (JSON.stringify(sourceTables) !== JSON.stringify(destinationTables))

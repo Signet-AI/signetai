@@ -158,6 +158,54 @@ test("interrupted copy resumes and rollback is fenced after destination writes",
 	await expect(engine.rollback()).rejects.toThrow("rollback is no longer safe");
 });
 
+test("journal records destination staging writes before a copied entry receives a receipt", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-staging-write-source-"));
+	const state = mkdtempSync(join(tmpdir(), "migration-staging-write-state-"));
+	const destination = `${source}-new`;
+	writeFileSync(join(source, "one.txt"), "preserved");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+		hooks: {
+			afterEntryCopy: async () => {
+				throw new Error("interrupted before receipt");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupted before receipt");
+	expect(readFileSync(join(destination, "one.txt"), "utf8")).toBe("preserved");
+	expect(await engine.status()).toMatchObject({ destinationWrites: true, copied: 0 });
+});
+
+test("journal records database-only destination writes before semantic verification", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-db-only-write-source-"));
+	const state = mkdtempSync(join(tmpdir(), "migration-db-only-write-state-"));
+	const destination = `${source}-new`;
+	writeFileSync(join(source, "memories.db"), "consistent snapshot");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => ({
+				sourceRoot: source,
+				sourcePath: "memories.db",
+				destinationPath: "data/signet.db",
+				bytes: 19,
+			}),
+			verifySnapshot: async () => {
+				throw new Error("interrupted before database receipt");
+			},
+		},
+		mapDestinationPath: (path) => (path === "memories.db" ? undefined : path),
+		journalStateDir: state,
+	});
+	await expect(engine.run()).rejects.toThrow("interrupted before database receipt");
+	expect(readFileSync(join(destination, "data", "signet.db"), "utf8")).toBe("consistent snapshot");
+	expect(await engine.status()).toMatchObject({ destinationWrites: true, copied: 0 });
+});
+
 test("escaping symlink is rejected without following it", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
 	writeFileSync(join(root, "secret"), "no");

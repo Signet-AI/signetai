@@ -26,6 +26,7 @@ import {
 
 export type MigrationCommandDeps = {
 	createEngine?: (options: { source?: string; destination?: string }) => MigrationEngine;
+	hooks?: MigrationDeps["hooks"];
 	stdout?: Pick<Console, "log" | "error">;
 };
 
@@ -207,7 +208,10 @@ export async function verifyDestinationDaemon(
 	if (verificationError) throw verificationError;
 }
 
-function defaultEngine(options: { source?: string; destination?: string }): MigrationEngine {
+function defaultEngine(
+	options: { source?: string; destination?: string },
+	hooks?: MigrationDeps["hooks"],
+): MigrationEngine {
 	const source = resolve(options.source ?? resolveAgentsDir().path);
 	const destination = resolve(
 		options.destination ?? join(dirname(source), `${source.split("/").pop() ?? "workspace"}-v2`),
@@ -369,13 +373,15 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		mapDestinationPath,
 		layoutBytes: () => serializeWorkspaceLayout({ version: 2, overrides }),
 		journalStateDir: state,
+		...(hooks ? { hooks } : {}),
 	};
 	return new MigrationEngine(deps);
 }
 
 export function registerMigrationCommands(program: Command, deps: MigrationCommandDeps = {}): void {
 	const out = deps.stdout ?? console;
-	const factory = deps.createEngine ?? defaultEngine;
+	const factory =
+		deps.createEngine ?? ((options: { source?: string; destination?: string }) => defaultEngine(options, deps.hooks));
 	const migration = program.command("migration").description("Manage the v1 to v2 workspace migration");
 	const options = (cmd: Command) =>
 		cmd.option("--source <path>", "v1 workspace root").option("--destination <path>", "v2 workspace root");

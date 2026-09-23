@@ -14,9 +14,10 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { requestMigrationDrain, verifyDestinationDaemon } from "./migration";
-import { resolveWorkspaceLayout } from "@signet/core";
+import { Database as CoreDatabase, addObsidianSource, loadSourcesConfig, resolveWorkspaceLayout } from "@signet/core";
 
 function runGit(root: string, ...args: string[]): string {
 	const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
@@ -237,6 +238,201 @@ test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
 		const migrated = new Database(layout.database, { readonly: true });
 		expect(migrated.query("SELECT value FROM proof").get()).toEqual({ value: "workspace-v2-ok" });
 		migrated.close();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 60_000);
+
+test("production migration resumes a copied-but-unreceipted source without changing its identity", async () => {
+	const commandsDir = dirname(fileURLToPath(import.meta.url));
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-source-resume-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const vault = join(root, "vault");
+	const home = join(root, "home");
+	mkdirSync(join(source, "memory"), { recursive: true });
+	mkdirSync(vault);
+	mkdirSync(home);
+	writeDaemonConfig(source);
+	const note = join(vault, "evidence.md");
+	writeFileSync(note, "# Durable evidence\nThe source remains attributable.\n");
+	writeFileSync(join(source, "user-note.md"), "Source-owned bytes stay unchanged.\n");
+	try {
+		const added = addObsidianSource(
+			{ root: vault, name: "Migration acceptance", now: "2026-01-01T00:00:00.000Z" },
+			source,
+		);
+		if (!added.ok) throw new Error(added.error);
+		const original = loadSourcesConfig(source).sources.find((entry) => entry.id === added.source.id);
+		expect(original).toBeDefined();
+		expect(original?.generation).toMatch(/^[0-9a-f-]{36}$/i);
+		const configBytes = readFileSync(join(source, "sources.json"));
+		const dbPath = join(source, "memory", "memories.db");
+		const db = new CoreDatabase(dbPath);
+		await db.init();
+		const memoryId = db.addMemory({
+			type: "fact",
+			content: "The source remains attributable.",
+			confidence: 1,
+			sourceId: original?.id,
+			sourceType: "obsidian",
+			sourcePath: note,
+			tags: ["migration-acceptance"],
+			updatedBy: "migration-fixture",
+			vectorClock: {},
+			manualOverride: false,
+		});
+		db.close();
+		const cli = join(commandsDir, "..", "cli.ts");
+		const cwd = join(commandsDir, "..", "..", "..", "..");
+		const env = {
+			...process.env,
+			HOME: home,
+			XDG_CONFIG_HOME: join(root, "config"),
+			XDG_STATE_HOME: join(root, "state"),
+			SIGNET_PATH: source,
+			SIGNET_WORKSPACE: "",
+			SIGNET_DAEMON_URL: "http://127.0.0.1:1",
+			SIGNET_DAEMON_ENTRYPOINT: "0",
+			SIGNET_DAEMON_RUNTIME: "bun-js",
+			SIGNET_DAEMON_JS_PATH: join(cwd, "platform", "daemon", "dist", "daemon.js"),
+		};
+		const args = ["migration", "run", "--source", source, "--destination", destination];
+		const injectedRunner = [
+			`import { Command } from ${JSON.stringify(pathToFileURL(join(commandsDir, "..", "..", "node_modules", "commander", "esm.mjs")).href)};`,
+			`import { registerMigrationCommands } from ${JSON.stringify(pathToFileURL(join(commandsDir, "migration.ts")).href)};`,
+			"const program = new Command();",
+			'registerMigrationCommands(program, { hooks: { afterEntryCopy: async () => { throw new Error("interrupted after destination copy"); } } });',
+			'await program.parseAsync(process.argv.slice(1), { from: "user" });',
+		].join("\n");
+		const interrupted = spawnSync(process.execPath, ["-e", injectedRunner, ...args], { cwd, env, encoding: "utf8" });
+		expect(interrupted.status).not.toBe(0);
+		expect(interrupted.stderr).toContain("interrupted after destination copy");
+		const status = spawnSync(
+			process.execPath,
+			[cli, "migration", "status", "--source", source, "--destination", destination],
+			{
+				cwd,
+				env,
+				encoding: "utf8",
+			},
+		);
+		expect(status.status).toBe(0);
+		expect(JSON.parse(status.stdout)).toMatchObject({ destinationWrites: true, rollbackEligible: true, copied: 0 });
+		expect(readFileSync(join(source, "sources.json"))).toEqual(configBytes);
+		const resumed = spawnSync(
+			process.execPath,
+			[cli, "migration", "resume", "--source", source, "--destination", destination],
+			{
+				cwd,
+				env,
+				encoding: "utf8",
+				timeout: 60_000,
+			},
+		);
+		if (resumed.status !== 0) throw new Error(`migration resume failed: ${resumed.stderr.slice(-2000)}`);
+		expect(JSON.parse(resumed.stdout)).toMatchObject({ status: "completed", destination });
+		const destinationSource = loadSourcesConfig(destination).sources.find((entry) => entry.id === original?.id);
+		expect(destinationSource).toMatchObject(original ?? {});
+		expect(readFileSync(join(source, "sources.json"))).toEqual(configBytes);
+		expect(readFileSync(join(destination, "user-note.md"))).toEqual(readFileSync(join(source, "user-note.md")));
+		const migrated = new Database(resolveWorkspaceLayout(destination).database, { readonly: true });
+		expect(migrated.query("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
+		expect(migrated.query("SELECT id, source_id, content FROM memories WHERE id = ?").get(memoryId)).toEqual({
+			id: memoryId,
+			source_id: original?.id,
+			content: "The source remains attributable.",
+		});
+		migrated.close();
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 90_000);
+
+test("production migration rollback preserves a source after the first destination copy", async () => {
+	const commandsDir = dirname(fileURLToPath(import.meta.url));
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-source-rollback-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const vault = join(root, "vault");
+	mkdirSync(join(source, "memory"), { recursive: true });
+	mkdirSync(vault);
+	mkdirSync(join(root, "home"));
+	writeDaemonConfig(source);
+	const note = join(vault, "evidence.md");
+	writeFileSync(note, "User-owned source evidence\n");
+	try {
+		const added = addObsidianSource({ root: vault, name: "Rollback acceptance" }, source);
+		if (!added.ok) throw new Error(added.error);
+		const original = loadSourcesConfig(source).sources.find((entry) => entry.id === added.source.id);
+		expect(original).toBeDefined();
+		const configBytes = readFileSync(join(source, "sources.json"));
+		const noteBytes = readFileSync(note);
+		const dbPath = join(source, "memory", "memories.db");
+		const db = new CoreDatabase(dbPath);
+		await db.init();
+		db.addMemory({
+			type: "fact",
+			content: "User-owned source evidence",
+			confidence: 1,
+			sourceId: original?.id,
+			sourceType: "obsidian",
+			sourcePath: note,
+			tags: [],
+			updatedBy: "rollback-fixture",
+			vectorClock: {},
+			manualOverride: false,
+		});
+		db.close();
+		const dbBytes = readFileSync(dbPath);
+		const cli = join(commandsDir, "..", "cli.ts");
+		const cwd = join(commandsDir, "..", "..", "..", "..");
+		const env = {
+			...process.env,
+			HOME: join(root, "home"),
+			XDG_CONFIG_HOME: join(root, "config"),
+			XDG_STATE_HOME: join(root, "state"),
+			SIGNET_PATH: source,
+			SIGNET_WORKSPACE: "",
+			SIGNET_DAEMON_URL: "http://127.0.0.1:1",
+			SIGNET_DAEMON_ENTRYPOINT: "0",
+		};
+		const injectedRunner = [
+			`import { Command } from ${JSON.stringify(pathToFileURL(join(commandsDir, "..", "..", "node_modules", "commander", "esm.mjs")).href)};`,
+			`import { registerMigrationCommands } from ${JSON.stringify(pathToFileURL(join(commandsDir, "migration.ts")).href)};`,
+			"const program = new Command();",
+			'registerMigrationCommands(program, { hooks: { afterEntryCopy: async () => { throw new Error("interrupted after destination copy"); } } });',
+			'await program.parseAsync(process.argv.slice(1), { from: "user" });',
+		].join("\n");
+		const interrupted = spawnSync(
+			process.execPath,
+			["-e", injectedRunner, "migration", "run", "--source", source, "--destination", destination],
+			{ cwd, env, encoding: "utf8" },
+		);
+		expect(interrupted.stderr).toContain("interrupted after destination copy");
+		expect(existsSync(destination)).toBe(true);
+		const rollback = spawnSync(
+			process.execPath,
+			[cli, "migration", "rollback", "--source", source, "--destination", destination],
+			{ cwd, env, encoding: "utf8" },
+		);
+		if (rollback.status !== 0) throw new Error(`migration rollback failed: ${rollback.stderr.slice(-2000)}`);
+		expect(JSON.parse(rollback.stdout)).toEqual({ status: "rolled-back" });
+		expect(existsSync(destination)).toBe(false);
+		expect(readFileSync(join(source, "sources.json"))).toEqual(configBytes);
+		expect(loadSourcesConfig(source).sources.find((entry) => entry.id === original?.id)).toMatchObject(original ?? {});
+		expect(readFileSync(note)).toEqual(noteBytes);
+		expect(readFileSync(dbPath)).toEqual(dbBytes);
+		const status = spawnSync(
+			process.execPath,
+			[cli, "migration", "status", "--source", source, "--destination", destination],
+			{
+				cwd,
+				env,
+				encoding: "utf8",
+			},
+		);
+		expect(JSON.parse(status.stdout)).toMatchObject({ phase: "not-started", copied: 0 });
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
