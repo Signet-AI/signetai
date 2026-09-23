@@ -5576,12 +5576,39 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "TEXT NOT NULL DEFAULT 'default'",
     )?;
     ensure_column(&transaction, "entity_dependencies", "aspect_id", "TEXT")?;
-    ensure_column(&transaction, "entity_dependencies", "reason", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "entity_dependencies",
+        "confidence",
+        "REAL DEFAULT 0.7",
+    )?;
+    for (column, definition) in [
+        ("source_id", "TEXT"),
+        ("source_kind", "TEXT"),
+        ("source_path", "TEXT"),
+        ("source_root", "TEXT"),
+        ("proposal_id", "TEXT"),
+        ("proposal_evidence", "TEXT NOT NULL DEFAULT '[]'"),
+    ] {
+        ensure_column(&transaction, "entity_dependencies", column, definition)?;
+    }
+    ensure_column(
+        &transaction,
+        "entity_dependencies",
+        "reason",
+        "TEXT",
+    )?;
     ensure_column(
         &transaction,
         "entity_dependencies",
         "status",
         "TEXT NOT NULL DEFAULT 'active'",
+    )?;
+    ensure_column(
+        &transaction,
+        "entity_dependencies",
+        "created_at",
+        "TEXT NOT NULL DEFAULT ''",
     )?;
     ensure_column(
         &transaction,
