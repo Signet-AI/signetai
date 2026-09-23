@@ -1744,15 +1744,30 @@ fn resolve_startup_workspace() -> Result<PathBuf, String> {
         .ok_or_else(|| "Signet cannot start: missing workspace (will not recreate it)".to_owned())
 }
 
+const RUNTIME_CONFIG_NAMES: [&str; 3] = ["agent.yaml", "AGENT.yaml", "config.yaml"];
+
+fn runtime_config_path(workspace: &FsPath) -> Option<PathBuf> {
+    RUNTIME_CONFIG_NAMES
+        .iter()
+        .map(|name| workspace.join(name))
+        .find(|path| path.is_file())
+}
+
+fn runtime_config_signature(workspace: &FsPath) -> Option<(PathBuf, Option<std::time::SystemTime>)> {
+    let path = runtime_config_path(workspace)?;
+    let modified = std::fs::metadata(&path).and_then(|metadata| metadata.modified()).ok();
+    Some((path, modified))
+}
+
 fn read_agent_config(workspace: &FsPath) -> Result<Option<(PathBuf, String)>, String> {
-    for name in ["agent.yaml", "AGENT.yaml", "config.yaml"] {
+    for name in RUNTIME_CONFIG_NAMES {
         let path = workspace.join(name);
         match std::fs::read_to_string(&path) {
             Ok(text) => return Ok(Some((path, text))),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
             Err(error) => {
                 return Err(format!(
-                    "{}: unable to read runtime configuration: {error}",
+                    "{}: unable to read runtime config: {error}",
                     path.display()
                 ));
             }
@@ -1806,18 +1821,18 @@ fn update_auth_mode(mode: &Arc<Mutex<String>>, workspace: &FsPath) -> Result<(),
 }
 
 fn start_runtime_config_watcher(workspace: &FsPath, auth_mode: Arc<Mutex<String>>) {
-    let path = workspace.join("agent.yaml");
-    let initial = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let workspace = workspace.to_path_buf();
+    let initial = runtime_config_signature(&workspace);
     std::thread::spawn(move || {
         let mut last = initial;
         loop {
             std::thread::sleep(std::time::Duration::from_millis(50));
-            let current = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-            if current.is_some() && current != last {
+            let current = runtime_config_signature(&workspace);
+            if current != last {
                 last = current;
-                if let Err(error) = validate_startup_config(path.parent().unwrap_or(FsPath::new("."))) {
+                if let Err(error) = validate_startup_config(&workspace) {
                     eprintln!("Rejected runtime config change: {error}");
-                } else if let Err(error) = update_auth_mode(&auth_mode, path.parent().unwrap_or(FsPath::new("."))) {
+                } else if let Err(error) = update_auth_mode(&auth_mode, &workspace) {
                     eprintln!("Rejected runtime config change: {error}");
                 }
             }
