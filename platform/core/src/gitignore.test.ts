@@ -50,6 +50,7 @@ describe("mergeSignetGitignoreEntries", () => {
 
 	it("allows the managed gitignore but rejects database backups", () => {
 		expect(isSignetGitTrackedPath(".gitignore")).toBe(true);
+		expect(isSignetGitTrackedPath(".sigignore")).toBe(true);
 		expect(isSignetGitTrackedPath("AGENTS.md")).toBe(true);
 		expect(isSignetGitTrackedPath("memory/session.jsonl")).toBe(true);
 		expect(isSignetGitTrackedPath("memory/memories.db.bak-v1-1")).toBe(false);

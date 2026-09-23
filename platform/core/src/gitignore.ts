@@ -54,7 +54,7 @@ export const SIGNET_GIT_TRACKED_PATHS = [
 export function isSignetGitTrackedPath(path: string): boolean {
 	const normalized = normalizeGitPath(path);
 	if (!normalized || isSignetGitProtectedPath(normalized)) return false;
-	if (normalized === ".gitignore") return true;
+	if (normalized === ".gitignore" || normalized === ".sigignore") return true;
 	if (SIGNET_GIT_ALLOWED_DIRECTORIES.some((dir) => normalized === dir || normalized.startsWith(`${dir}/`))) {
 		return true;
 	}
@@ -142,6 +142,7 @@ function buildSignetGitignoreBlock(): string {
 		"*",
 		"!*/",
 		"!.gitignore",
+		"!.sigignore",
 		"!*.md",
 		"!**/*.md",
 		"!*.json",
@@ -172,8 +173,13 @@ export function mergeSignetGitignoreEntries(existingContent: string): string {
 		`${escapeRegExp(SIGNET_GITIGNORE_BLOCK_START)}[\\s\\S]*?${escapeRegExp(SIGNET_GITIGNORE_BLOCK_END)}(?:\\r?\\n)?`,
 	);
 
-	const withoutOldBlock = normalized.replace(blockRe, "").trim();
-	const merged = withoutOldBlock.length > 0 ? `${withoutOldBlock}\n\n${block}` : block;
+	const hadBlock = blockRe.test(normalized);
+	const withoutOldBlock = normalized.replace(blockRe, "");
+	const merged = withoutOldBlock.length > 0
+		? hadBlock
+			? `${withoutOldBlock}${block}`
+			: `${withoutOldBlock}${withoutOldBlock.endsWith("\n") ? "" : "\n"}\n${block}`
+		: block;
 	const withStyle = merged.replaceAll("\n", newline);
 	return hadFinalNewline || existingContent.length === 0 ? withStyle : withStyle.replace(/(?:\r\n|\n)$/, "");
 }

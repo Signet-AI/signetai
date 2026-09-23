@@ -24,7 +24,7 @@ export type ManagedGitignoreUpdate =
 	| { readonly status: "updated"; readonly preimage: string; readonly content: string }
 	| {
 			readonly status: "refused";
-			readonly reason: "dirty" | "staged";
+			readonly reason: "dirty" | "staged" | "unmanaged";
 			readonly preimage: string;
 			readonly content: string;
 	  };
@@ -88,11 +88,14 @@ export function managedGitignoreUpdate(root: string): ManagedGitignoreUpdate {
 	const preimage = existsSync(path) ? readFileSync(path, "utf8") : "";
 	const content = mergeSignetGitignoreEntries(preimage);
 	const inventory = inspectRootGit(root);
+	const ignoreStatus = inventory.isRepository ? git(root, ["status", "--porcelain", "--", ".gitignore"]) : "";
+	if (ignoreStatus.startsWith("??")) return { status: "refused", reason: "dirty", preimage, content };
 	const stagedIgnore =
 		inventory.isRepository && git(root, ["diff", "--cached", "--name-only"]).split("\n").includes(".gitignore");
 	const dirtyIgnore = inventory.isRepository && git(root, ["diff", "--name-only"]).split("\n").includes(".gitignore");
 	if (stagedIgnore) return { status: "refused", reason: "staged", preimage, content };
 	if (dirtyIgnore) return { status: "refused", reason: "dirty", preimage, content };
+	if (inventory.mode === "unmanaged") return { status: "refused", reason: "unmanaged", preimage, content };
 	if (content !== preimage) writeFileSync(path, content, "utf8");
 	return { status: "updated", preimage, content };
 }

@@ -113,7 +113,7 @@ export function createFreshWorkspaceV2(
 	// Re-running setup must not silently redirect an already-authoritative
 	// custom path back to the v2 defaults. Explicit overrides still win.
 	const existing = existsSync(layoutFile(root)) ? readPersisted(root) : undefined;
-	const overrides = options.overrides ?? (existing?.version === WORKSPACE_LAYOUT_V2 ? existing.overrides : undefined);
+	const overrides = { ...existing?.overrides, ...options.overrides };
 	const file = persistWorkspaceLayout(root, { version: WORKSPACE_LAYOUT_V2, overrides });
 	const layout = resolveWorkspaceLayout(root, options);
 	for (const directory of [
