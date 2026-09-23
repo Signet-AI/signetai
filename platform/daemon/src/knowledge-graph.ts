@@ -15,7 +15,8 @@ import { getDbAccessorPath, type DbAccessor, type ReadDb } from "./db-accessor";
 import { dbOwnerQuery, getDbOwner } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import { runWriteTxAsync } from "./db-accessor";
-import { getDreamingEpisodicTokenBacklogCached } from "./pipeline/dreaming-token-cache";
+import type { DreamingEpisodicBacklogProbe } from "./pipeline/dreaming";
+import { getDreamingEpisodicTokenBacklogCachedOrNull } from "./pipeline/dreaming-token-cache";
 
 function toCanonicalName(raw: string): string {
 	return raw.trim().toLowerCase().replace(/\s+/g, " ");
@@ -1717,8 +1718,13 @@ export interface ConstellationProposal {
 	readonly preview: string | null;
 }
 
+export interface ConstellationBacklogProbeSummary {
+	readonly kind: DreamingEpisodicBacklogProbe["kind"];
+}
+
 export interface ConstellationDreamingSummary {
-	readonly episodicTokensPending: number;
+	readonly episodicTokensPending: number | null;
+	readonly episodicBacklogProbe: ConstellationBacklogProbeSummary | null;
 	readonly consecutiveFailures: number;
 	readonly lastPassAt: string | null;
 	readonly lastPassId: string | null;
@@ -1757,6 +1763,7 @@ export interface ConstellationGraphOptions {
 	readonly maxAttributesPerAspect?: number;
 	readonly dependencyLimit?: number;
 	readonly assertionLimit?: number;
+	readonly backlogProbe?: DreamingEpisodicBacklogProbe;
 }
 
 function boundedInteger(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -1821,7 +1828,11 @@ function resolveProposalTargetEntity(
 	return { id: entitiesByName.get(toCanonicalName(name)) ?? null, name };
 }
 
-function getConstellationDreamingSummary(db: ReadDb, agentId: string): ConstellationDreamingSummary {
+function getConstellationDreamingSummary(
+	db: ReadDb,
+	agentId: string,
+	backlogProbe?: DreamingEpisodicBacklogProbe,
+): ConstellationDreamingSummary {
 	let state:
 		| {
 				consecutive_failures: number;
@@ -1863,7 +1874,17 @@ function getConstellationDreamingSummary(db: ReadDb, agentId: string): Constella
 	}
 
 	return {
-		episodicTokensPending: getDreamingEpisodicTokenBacklogCached(agentId),
+		episodicTokensPending:
+			backlogProbe === undefined
+				? getDreamingEpisodicTokenBacklogCachedOrNull(agentId)
+				: backlogProbe.kind === "exact"
+					? backlogProbe.tokens
+					: null,
+		episodicBacklogProbe: backlogProbe
+			? {
+					kind: backlogProbe.kind,
+				}
+			: null,
 		consecutiveFailures: Math.max(0, state?.consecutive_failures ?? 0),
 		lastPassAt: state?.last_pass_at ?? null,
 		lastPassId: state?.last_pass_id ?? null,
@@ -1988,7 +2009,7 @@ export async function getKnowledgeGraphForConstellation(
 					assertions: [],
 					proposals: [],
 					metadata: {
-						dreaming: getConstellationDreamingSummary(db, agentId),
+						dreaming: getConstellationDreamingSummary(db, agentId, options.backlogProbe),
 						proposals: getConstellationProposalSummary(db, agentId),
 					},
 				};
@@ -2242,7 +2263,7 @@ export async function getKnowledgeGraphForConstellation(
 				assertions,
 				proposals,
 				metadata: {
-					dreaming: getConstellationDreamingSummary(db, agentId),
+					dreaming: getConstellationDreamingSummary(db, agentId, options.backlogProbe),
 					proposals: getConstellationProposalSummary(db, agentId),
 				},
 			};

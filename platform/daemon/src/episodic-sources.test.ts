@@ -206,6 +206,45 @@ describe("episodic source selection", () => {
 		).toBe(hostile);
 	});
 
+	it("keeps uncapped newest-first ordering across source kinds and equivalent timezone offsets", () => {
+		getDbAccessor().withWriteTx((db) => {
+			db.prepare(
+				`INSERT INTO memories
+				 (id, content, type, importance, agent_id, visibility, memory_kind, created_at, updated_at)
+				 VALUES ('a-memory', 'memory evidence', 'fact', 0.8, 'ant', 'global', 'episodic',
+				 '2026-08-01T02:30:00-04:00', '2026-08-01T02:30:00-04:00')`,
+			).run();
+			db.prepare(
+				`INSERT INTO memory_artifacts
+				 (agent_id, source_path, source_sha256, source_kind, session_id, session_token, captured_at, content, updated_at, is_deleted)
+				 VALUES ('ant', 'z-artifact.md', 'sha-newest-tie', 'source_markdown', 'session-tie', 'token-tie',
+				 '2026-08-01T06:30:00Z', 'artifact evidence', '2026-08-01T06:30:00Z', 0)`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_transcripts
+				 (session_key, content, harness, project, agent_id, created_at, updated_at, completed_at)
+				 VALUES ('transcript', 'transcript evidence', 'pi', '/repo', 'ant',
+				 '2026-08-01T05:00:00Z', '2026-08-01T05:00:00Z', '2026-08-01T05:00:00Z')`,
+			).run();
+			db.prepare(
+				`INSERT INTO session_summaries
+				 (id, agent_id, content, token_count, depth, kind, source_type, earliest_at, latest_at, created_at)
+				 VALUES ('latest-summary', 'ant', 'summary evidence', 2, 0, 'session', 'summary',
+				 '2026-08-01T08:00:00Z', '2026-08-01T08:00:00Z', '2026-08-01T08:00:00Z')`,
+			).run();
+		});
+
+		const sources = getDbAccessor().withReadDb((db) =>
+			readRecentEpisodicSources(db, "ant", null, undefined, null, "newest"),
+		);
+		expect(sources.map((source) => `${source.kind}:${source.id}`)).toEqual([
+			"summary:latest-summary",
+			"artifact:z-artifact.md",
+			"memory:a-memory",
+			"transcript:transcript",
+		]);
+	});
+
 	it("orders timezone-less artifact timestamps like SQLite's UTC cursor", () => {
 		getDbAccessor().withWriteTx((db) => {
 			db.prepare(

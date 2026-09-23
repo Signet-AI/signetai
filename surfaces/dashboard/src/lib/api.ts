@@ -342,7 +342,17 @@ export interface KnowledgeConstellation {
 		assertedAt: string;
 	}>;
 	proposals: Array<{ id: string }>;
-	metadata: { proposals: { pending: number } };
+	metadata: {
+		proposals: { pending: number };
+		dreaming?: {
+			episodicTokensPending: number | null;
+			episodicBacklogProbe?: KnowledgeConstellationBacklogProbe | null;
+		};
+	};
+}
+
+export interface KnowledgeConstellationBacklogProbe {
+	readonly kind: "exact" | "threshold-reached" | "indeterminate";
 }
 
 export interface OntologyProposal {

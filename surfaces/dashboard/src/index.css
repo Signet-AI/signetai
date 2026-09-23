@@ -734,9 +734,11 @@
 .graph-node-label--entity .graph-node-label__meta, .graph-node-label--source .graph-node-label__meta, .graph-node-label--origin .graph-node-label__meta { display: none; }
 .graph-node-label--entity, .graph-node-label--source { min-width: 92px; }
 .graph-node-label--claim, .graph-node-label--constraint, .graph-node-label--assertion, .graph-node-label--origin { min-width: 125px; }
-.graph-hud { position: absolute; top: 12px; left: 16px; z-index: 4; display: flex; align-items: center; gap: 10px;
-	font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); pointer-events: none; }
+.graph-hud { position: absolute; top: 12px; left: 16px; z-index: 4; display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
+	max-width: calc(100% - 72px); font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); pointer-events: none; }
 .graph-hud b { color: var(--foreground); font-weight: 600; }
+.graph-hud__cap { display: inline-flex; align-items: center; padding: 2px 6px; border: 1px solid color-mix(in oklch, #f59e0b 34%, transparent); border-radius: 999px; background: color-mix(in oklch, #f59e0b 11%, var(--background)); color: #fbbf24; font-weight: 600; white-space: nowrap; }
+:root:not(.dark) .graph-hud__cap { border-color: color-mix(in oklch, #92400e 28%, transparent); color: #92400e; }
 .graph-hud__sep { color: oklch(0.4 0 0); }
 :root:not(.dark) .graph-hud__sep { color: oklch(0.6 0 0); }
 .graph-legend-btn { position: absolute; top: 12px; right: 16px; z-index: 4; width: 30px; height: 30px; border-radius: 8px;

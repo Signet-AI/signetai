@@ -4,6 +4,11 @@ import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import type { GraphSceneData, GraphSceneHandle, SceneEdge, SceneEdgeKind, SceneNode } from "@/lib/graph-scene";
+import {
+	capGraphSceneData,
+	MAX_CONSTELLATION_ENTITY_LIMIT,
+	MAX_VISIBLE_CONSTELLATION_NODES,
+} from "@/lib/constellation-display";
 
 const LEGEND = [
 	{ color: "#ffffff", label: "subject" },
@@ -16,7 +21,6 @@ const LEGEND = [
 	{ color: "#22d3ee", label: "evidence" },
 	{ color: "#38bdf8", label: "source" },
 ] as const;
-const ENTITY_LIMIT_MAX = 1000;
 
 interface EntityDetail {
 	id: string;
@@ -284,6 +288,7 @@ export function GraphView() {
 		}
 		return { nodes, edges };
 	}, [graphQuery.data, sources]);
+	const limitedScene = useMemo(() => capGraphSceneData(sceneData), [sceneData]);
 	const dataSig = useMemo(() => {
 		const entities = graphQuery.data?.entities ?? [];
 		let h = entityLimit * 31 + entities.length + (sources?.length ?? 0) * 7;
@@ -342,7 +347,7 @@ export function GraphView() {
 	}, [graphQuery.data, sources, entityLimit]);
 	useEffect(() => {
 		const stage = stageRef.current;
-		if (!stage || sceneData.nodes.length === 0) return;
+		if (!stage || limitedScene.data.nodes.length === 0) return;
 		if (sceneRef.current) {
 			if (builtSigRef.current === dataSig) return;
 			sceneRef.current.dispose();
@@ -353,7 +358,7 @@ export function GraphView() {
 		void import("@/lib/graph-scene")
 			.then(({ createGraphScene }) => {
 				if (cancelled || sceneRef.current || !stageRef.current) return;
-				sceneRef.current = createGraphScene(stageRef.current, sceneData);
+				sceneRef.current = createGraphScene(stageRef.current, limitedScene.data);
 				builtSigRef.current = dataSig;
 				setSliderPct(null);
 			})
@@ -364,7 +369,7 @@ export function GraphView() {
 		return () => {
 			cancelled = true;
 		};
-	}, [sceneData, dataSig]);
+	}, [limitedScene, dataSig]);
 	useEffect(
 		() => () => {
 			if (densityTimerRef.current) clearTimeout(densityTimerRef.current);
@@ -383,15 +388,18 @@ export function GraphView() {
 	const shownEntities = Math.max(1, graphQuery.data?.entities.length ?? 48);
 	const nodesPerEntity = Math.max(1, sceneData.nodes.length / shownEntities);
 	const maxPct =
-		totalNodes > 0 ? Math.max(2, Math.min(20, ((ENTITY_LIMIT_MAX * nodesPerEntity) / totalNodes) * 100)) : 5;
-	const shownPct = totalNodes > 0 ? (sceneData.nodes.length / totalNodes) * 100 : 0;
+		totalNodes > 0
+			? Math.max(2, Math.min(20, ((MAX_CONSTELLATION_ENTITY_LIMIT * nodesPerEntity) / totalNodes) * 100))
+			: 5;
+	const shownPct = totalNodes > 0 ? (limitedScene.data.nodes.length / totalNodes) * 100 : 0;
 	const displayPct = sliderPct ?? shownPct;
+	const backlogProbe = graphQuery.data?.metadata.dreaming?.episodicBacklogProbe;
 	const onDensityChange = (pct: number) => {
 		setSliderPct(pct);
 		if (densityTimerRef.current) clearTimeout(densityTimerRef.current);
 		densityTimerRef.current = setTimeout(() => {
 			const targetNodes = (pct / 100) * totalNodes;
-			const limit = Math.max(8, Math.min(ENTITY_LIMIT_MAX, Math.round(targetNodes / nodesPerEntity)));
+			const limit = Math.max(8, Math.min(MAX_CONSTELLATION_ENTITY_LIMIT, Math.round(targetNodes / nodesPerEntity)));
 			setEntityLimit(limit);
 		}, 350);
 	};
@@ -448,11 +456,27 @@ export function GraphView() {
 			{}
 			<div className="graph-hud">
 				<span>
-					<b>{sceneData.nodes.length.toLocaleString()}</b> nodes
+					<b>{limitedScene.data.nodes.length.toLocaleString()}</b> nodes
 				</span>
+				{limitedScene.capped && (
+					<>
+						<span className="graph-hud__sep">/</span>
+						<span className="graph-hud__cap" role="status">
+							node display capped at {MAX_VISIBLE_CONSTELLATION_NODES.toLocaleString()}
+						</span>
+					</>
+				)}
+				{backlogProbe && backlogProbe.kind !== "exact" && (
+					<>
+						<span className="graph-hud__sep">/</span>
+						<span className="graph-hud__cap" role="status">
+							backlog count incomplete
+						</span>
+					</>
+				)}
 				<span className="graph-hud__sep">/</span>
 				<span>
-					<b>{sceneData.edges.length.toLocaleString()}</b> edges
+					<b>{limitedScene.data.edges.length.toLocaleString()}</b> edges
 				</span>
 				<span className="graph-hud__sep">/</span>
 				<span>
@@ -513,7 +537,7 @@ export function GraphView() {
 					Loading constellation…
 				</span>
 			)}
-			{!graphQuery.loading && sceneData.nodes.length === 0 && (
+			{!graphQuery.loading && limitedScene.data.nodes.length === 0 && (
 				<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
 					No graph nodes are available yet.
 				</span>

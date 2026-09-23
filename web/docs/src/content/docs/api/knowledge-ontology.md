@@ -110,6 +110,20 @@ omitted, the daemon uses the configured daemon agent ID (`SIGNET_AGENT_ID`, or
 `read_policy` is `shared`, and clamps limits so dashboard navigation cannot
 load the entire knowledge graph into one read response.
 
+The dashboard entity limit is capped at 300, matching the server limit. The
+3D view also renders no more than 5,000 nodes at once and labels the view when
+that display cap is reached; this is a client rendering limit, not a claim that
+the returned graph is complete.
+
+The route probes the Dreaming episodic backlog using the configured token
+threshold and tokenizes at most 50 entries (with one additional source row as
+a lookahead). In `metadata.dreaming`,
+`episodicTokensPending` is an exact number only when
+`episodicBacklogProbe.kind` is `exact`; it is `null` for a threshold result or
+an incomplete scan. The probe exposes its status, not a partial token count.
+The dashboard labels incomplete backlog counts rather than displaying them as
+exact.
+
 Defaults: `limit=150`, `max_aspects_per_entity=6`,
 `max_attributes_per_aspect=4`, and `dependency_limit=500`.
 

@@ -1,4 +1,4 @@
-import { Database } from "bun:sqlite";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
@@ -108,6 +108,39 @@ function wrapDb(db: Database): DbAccessor {
 			}
 		},
 	} as unknown as DbAccessor;
+}
+
+type CapturedQuery = { readonly sql: string; readonly parameters: SQLQueryBindings[] };
+
+function captureSqliteQueries(database: Database): { readonly readDb: ReadDb; readonly queries: CapturedQuery[] } {
+	const queries: CapturedQuery[] = [];
+	const readDb = {
+		prepare(sql: string) {
+			const statement = database.prepare(sql);
+			return {
+				run: (...parameters: SQLQueryBindings[]) => statement.run(...parameters),
+				get: (...parameters: SQLQueryBindings[]) => statement.get(...parameters),
+				all: (...parameters: SQLQueryBindings[]) => {
+					queries.push({ sql, parameters });
+					return statement.all(...parameters);
+				},
+			};
+		},
+	} as unknown as ReadDb;
+	return { readDb, queries };
+}
+
+function explainSqliteQueryPlan(
+	database: Database,
+	query: CapturedQuery,
+): Array<{
+	readonly parent: number;
+	readonly detail: string;
+}> {
+	return database.prepare(`EXPLAIN QUERY PLAN ${query.sql}`).all(...query.parameters) as Array<{
+		readonly parent: number;
+		readonly detail: string;
+	}>;
 }
 
 function captureTelemetry(): { readonly collector: TelemetryCollector; readonly events: TelemetryEvent[] } {
@@ -1180,6 +1213,130 @@ describe("Dreaming", () => {
 		expect(Number.isFinite(exact)).toBe(true);
 	});
 
+	it("does not claim an exact backlog after the bounded probe exhausts reviewed candidates", async () => {
+		const agentId = "bounded-reviewed-candidates";
+		const capturedAt = "2026-08-01T00:00:00.000Z";
+		for (let index = 0; index < 51; index += 1) {
+			const path = `imports/a-reviewed-${String(index).padStart(3, "0")}.md`;
+			const revision = `reviewed-${String(index).padStart(3, "0")}`;
+			seedArtifact(db, path, `reviewed source ${index}`, revision, capturedAt, agentId);
+			db.prepare(
+				`INSERT INTO dreaming_evidence_reviews
+				 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, reason, pass_id)
+				 VALUES (?, 'artifact', ?, ?, '', ?, 'reviewed', 'review-pass')`,
+			).run(agentId, path, capturedAt, revision);
+		}
+		seedArtifact(
+			db,
+			"imports/z-pending.md",
+			"pending source beyond the scan cap",
+			"zz-pending-revision",
+			capturedAt,
+			agentId,
+		);
+
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
+
+		expect(probe.kind).toBe("indeterminate");
+		if (probe.kind !== "indeterminate") throw new Error("expected an indeterminate backlog probe");
+		expect(probe.tokenLowerBound).toBe(0);
+		expect(probe.hasBacklog).toBeNull();
+		expect(probe.sourcesScanned).toBe(0);
+	});
+
+	it("does not claim an exact legacy backlog after the bounded probe exhausts ineligible sources", async () => {
+		const agentId = "bounded-legacy-candidates";
+		db.exec("DROP TABLE dreaming_evidence_consumption");
+		db.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(
+			agentId,
+			"2026-08-01T12:00:00.000Z",
+		);
+		for (let index = 0; index < 51; index += 1) {
+			seedTranscript(
+				db,
+				`a-before-watermark-${String(index).padStart(3, "0")}`,
+				`older transcript ${index}`,
+				"2026-08-01T00:00:00.000Z",
+				agentId,
+			);
+		}
+		seedTranscript(db, "z-pending", "completed source beyond the scan cap", "2026-08-02T00:00:00.000Z", agentId);
+
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
+
+		expect(probe.kind).toBe("indeterminate");
+		if (probe.kind !== "indeterminate") throw new Error("expected an indeterminate backlog probe");
+		expect(probe.tokenLowerBound).toBe(0);
+		expect(probe.hasBacklog).toBeNull();
+		expect(probe.sourcesScanned).toBe(0);
+	});
+
+	it("avoids a backlog-wide sort when sampling a bounded probe", async () => {
+		const agentId = "bounded-query-plan";
+		for (let index = 0; index < 51; index += 1) {
+			seedArtifact(
+				db,
+				`imports/${agentId}-${index}.md`,
+				`pending source ${index}`,
+				`${agentId}-${index}`,
+				"2026-08-01T00:00:00.000Z",
+				agentId,
+			);
+		}
+		const captured = captureSqliteQueries(db);
+		await probeDreamingEpisodicBacklogInDb(captured.readDb, agentId, 100_000, 50);
+		const query = captured.queries.find(
+			(entry) =>
+				entry.sql.includes("SELECT 'memory' AS kind, id") &&
+				entry.sql.includes("FROM memory_artifacts") &&
+				entry.sql.includes("FROM session_transcripts") &&
+				entry.sql.includes("LIMIT ?"),
+		);
+		if (query === undefined) throw new Error("expected the bounded backlog candidate scan");
+		const plan = explainSqliteQueryPlan(db, query);
+
+		expect(query.parameters[query.parameters.length - 1]).toBe(51);
+		expect(plan.some((row) => row.detail.includes("idx_memories_agent_kind"))).toBe(true);
+		expect(plan.some((row) => row.detail.includes("SEARCH memory_artifacts"))).toBe(true);
+		expect(plan.some((row) => row.detail.includes("SEARCH session_transcripts"))).toBe(true);
+		expect(plan.some((row) => row.detail.includes("USE TEMP B-TREE"))).toBe(false);
+		const filteredSearch = captured.queries.find(
+			(entry) => entry.sql.includes("ma.source_sha256") && entry.sql.includes("ma.source_path IN"),
+		);
+		if (filteredSearch === undefined) throw new Error("expected the candidate-filtered source search");
+		const filteredPlan = explainSqliteQueryPlan(db, filteredSearch);
+		expect(filteredPlan.some((row) => row.detail.includes("sqlite_autoindex_memory_artifacts_1"))).toBe(true);
+		expect(filteredPlan.some((row) => row.detail.includes("idx_memory_artifacts_agent_sha"))).toBe(true);
+		expect(filteredPlan.some((row) => row.detail.includes("USE TEMP B-TREE FOR ORDER BY"))).toBe(false);
+	});
+
+	it("avoids per-table sorts when sampling a legacy-schema backlog", async () => {
+		const agentId = "legacy-bounded-query-plan";
+		seedArtifact(
+			db,
+			`imports/${agentId}.md`,
+			"pending source",
+			`${agentId}-revision`,
+			"2026-08-01T00:00:00.000Z",
+			agentId,
+		);
+		seedTranscript(db, `${agentId}-transcript`, "pending transcript", "2026-08-01T00:00:00.000Z", agentId);
+		db.exec("DROP TABLE dreaming_evidence_consumption");
+		const captured = captureSqliteQueries(db);
+		await probeDreamingEpisodicBacklogInDb(captured.readDb, agentId, 100_000, 50);
+		const queries = captured.queries.filter(
+			(entry) =>
+				entry.sql.includes("FROM memories") ||
+				entry.sql.includes("FROM memory_artifacts AS ma") ||
+				entry.sql.includes("FROM session_transcripts AS st"),
+		);
+		expect(queries).toHaveLength(3);
+		for (const query of queries) {
+			const plan = explainSqliteQueryPlan(db, query);
+			expect(plan.some((row) => row.detail.includes("USE TEMP B-TREE FOR ORDER BY"))).toBe(false);
+		}
+	});
+
 	it("does not treat a bounded full page as a threshold crossing", async () => {
 		for (let index = 0; index < 51; index += 1) {
 			seedArtifact(
@@ -1382,7 +1539,7 @@ describe("Dreaming", () => {
 		expect(existenceInputs).toEqual([{ agentId }]);
 	});
 
-	it("uses backlog existence for max-interval liveness with an indeterminate probe", async () => {
+	it("uses an unknown backlog state from an indeterminate probe for max-interval liveness", async () => {
 		const agentId = "max-interval-indeterminate";
 		const now = Date.now();
 		accessor.withWriteTx((tx) => {
@@ -1394,7 +1551,7 @@ describe("Dreaming", () => {
 		const probe: DreamingEpisodicBacklogProbe = {
 			kind: "indeterminate",
 			tokenLowerBound: 3,
-			hasBacklog: true,
+			hasBacklog: null,
 			sourcesScanned: 50,
 		};
 
@@ -1409,7 +1566,7 @@ describe("Dreaming", () => {
 		).toEqual({ trigger: true, reason: "max-interval" });
 	});
 
-	it("labels first-run backfill from real backlog existence", async () => {
+	it("treats an unknown backlog as potential work on first-run backfill", async () => {
 		const agentId = "first-run-backfill";
 		expect(
 			await evaluateDreamingTrigger(
@@ -1419,7 +1576,7 @@ describe("Dreaming", () => {
 				{
 					kind: "indeterminate",
 					tokenLowerBound: 0,
-					hasBacklog: true,
+					hasBacklog: null,
 					sourcesScanned: 50,
 				},
 			),

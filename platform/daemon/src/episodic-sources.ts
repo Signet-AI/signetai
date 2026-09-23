@@ -32,6 +32,16 @@ export interface EpisodicSourceRecord {
 	readonly completed: boolean;
 }
 
+export interface EpisodicSourceCandidateRef {
+	readonly kind: Exclude<EpisodicSourceKind, "summary">;
+	readonly id: string;
+}
+
+export interface EpisodicSourceCandidateScan {
+	readonly refs: readonly EpisodicSourceCandidateRef[];
+	readonly complete: boolean;
+}
+
 export interface ReadEpisodicSourceOptions {
 	readonly agentId: string;
 	readonly from: string;
@@ -105,6 +115,58 @@ function tableHasColumn(db: ReadDb, table: string, column: string): boolean {
 	} catch {
 		return false;
 	}
+}
+
+export function scanEpisodicSourceCandidates(
+	db: ReadDb,
+	agentId: string,
+	maxCandidates: number,
+): EpisodicSourceCandidateScan {
+	if (!Number.isSafeInteger(maxCandidates) || maxCandidates < 1 || maxCandidates > 50) {
+		throw new RangeError("Episodic source candidate limit must be an integer between 1 and 50");
+	}
+	const rows = db
+		.prepare(
+			`SELECT kind, id
+			 FROM (
+				SELECT 'memory' AS kind, id
+				FROM memories
+				WHERE agent_id = ? AND memory_kind = 'episodic'
+				UNION ALL
+				SELECT 'artifact' AS kind, source_path AS id
+				FROM memory_artifacts
+				WHERE agent_id = ?
+				UNION ALL
+				SELECT 'transcript' AS kind, session_key AS id
+				FROM session_transcripts
+				WHERE agent_id = ?
+			 )
+			 LIMIT ?`,
+		)
+		.all(agentId, agentId, agentId, maxCandidates + 1);
+	const refs = rows.map((candidate): EpisodicSourceCandidateRef => {
+		if (typeof candidate !== "object" || candidate === null || Array.isArray(candidate)) {
+			throw new Error("Unexpected episodic source candidate row");
+		}
+		const kind = Reflect.get(candidate, "kind");
+		const id = Reflect.get(candidate, "id");
+		if ((kind !== "memory" && kind !== "artifact" && kind !== "transcript") || typeof id !== "string") {
+			throw new Error("Unexpected episodic source candidate row");
+		}
+		return { kind, id };
+	});
+	return { refs, complete: refs.length <= maxCandidates };
+}
+
+function candidateRefFilter(
+	refs: readonly EpisodicSourceCandidateRef[] | undefined,
+	kind: EpisodicSourceKind,
+	column: string,
+): { readonly sql: string; readonly args: readonly string[] } {
+	if (refs === undefined) return { sql: "", args: [] };
+	const ids = refs.filter((ref) => ref.kind === kind).map((ref) => ref.id);
+	if (ids.length === 0) return { sql: "AND 0", args: [] };
+	return { sql: `AND ${column} IN (${ids.map(() => "?").join(", ")})`, args: ids };
 }
 
 function episodicContentIsEligible(
@@ -372,12 +434,15 @@ export function readRecentEpisodicSources(
 	limit: number | null,
 	kinds?: readonly EpisodicSourceKind[],
 	newerThan?: string | null,
-	order: "newest" | "oldest" = "newest",
+	order: "newest" | "oldest" | "none" = "newest",
 	cursor?: EpisodicCursor | null,
+	candidateRefs?: readonly EpisodicSourceCandidateRef[],
 ): EpisodicSourceRecord[] {
 	const boundedLimit = limit === null ? -1 : Math.max(1, Math.min(Math.floor(limit), 500));
 	const newer = newerThan?.trim() || null;
 	const direction = order === "oldest" ? "ASC" : "DESC";
+	const sourceOrder = (timestamp: string, tieBreaker: string): string =>
+		order === "none" ? "" : `ORDER BY julianday(${timestamp}) ${direction}, ${tieBreaker} ${direction}`;
 	const memoryCursor = cursorPredicate("created_at", "id", "memory", newer, cursor);
 	const artifactCursor = cursorPredicate("captured_at", "source_path", "artifact", newer, cursor);
 	const transcriptHasUpdated = tableHasColumn(db, "session_transcripts", "updated_at");
@@ -397,7 +462,13 @@ export function readRecentEpisodicSources(
 	const transcriptCursor = cursorPredicate(transcriptTime, "session_key", "transcript", newer, cursor);
 	const summaryCursor = cursorPredicate("latest_at", "id", "summary", newer, cursor);
 	const allowedKinds = kinds ? new Set(kinds) : null;
-	const wants = (kind: EpisodicSourceKind): boolean => allowedKinds === null || allowedKinds.has(kind);
+	const candidateKinds =
+		candidateRefs === undefined ? null : new Set<EpisodicSourceKind>(candidateRefs.map((ref) => ref.kind));
+	const wants = (kind: EpisodicSourceKind): boolean =>
+		(allowedKinds === null || allowedKinds.has(kind)) && (candidateKinds === null || candidateKinds.has(kind));
+	const memoryCandidate = candidateRefFilter(candidateRefs, "memory", "id");
+	const artifactCandidate = candidateRefFilter(candidateRefs, "artifact", "source_path");
+	const transcriptCandidate = candidateRefFilter(candidateRefs, "transcript", "st.session_key");
 	const hasExclusions = (() => {
 		try {
 			return Boolean(
@@ -437,10 +508,11 @@ export function readRecentEpisodicSources(
 				   -- but their temporal-DAG node is the one canonical Dreaming input.
 				   AND COALESCE(type, '') != 'session_summary'
 				   AND (${memoryCursor.sql} OR ${memoryRequeue})
-				 ORDER BY julianday(created_at) ${direction}, id ${direction}
+				   ${memoryCandidate.sql}
+				 ${sourceOrder("created_at", "id")}
 				 LIMIT ?`,
 				)
-				.all(agentId, ...memoryCursor.args, ...requeueArgs, boundedLimit)
+				.all(agentId, ...memoryCursor.args, ...requeueArgs, ...memoryCandidate.args, boundedLimit)
 				.map((row) => {
 					const memory = row as {
 						readonly id: string;
@@ -507,11 +579,12 @@ export function readRecentEpisodicSources(
 			       )
 			     )
 			   )
-				   AND (${artifactCursor.sql} OR ${artifactRequeue})
-			 ORDER BY julianday(captured_at) ${direction}, source_path ${direction}
-			 LIMIT ?`,
+			   AND (${artifactCursor.sql} OR ${artifactRequeue})
+			   ${artifactCandidate.sql}
+			   ${sourceOrder("captured_at", "source_path")}
+			   LIMIT ?`,
 				)
-				.all(agentId, ...artifactCursor.args, ...requeueArgs, boundedLimit)
+				.all(agentId, ...artifactCursor.args, ...requeueArgs, ...artifactCandidate.args, boundedLimit)
 				.map((row) => {
 					const artifact = row as {
 						readonly source_path: string;
@@ -557,10 +630,11 @@ export function readRecentEpisodicSources(
 				 WHERE st.agent_id = ?
 				   AND ${transcriptCompleted}
 				   AND (${transcriptCursor.sql} OR ${transcriptRequeue})
-				 ORDER BY julianday(${transcriptTime}) ${direction}, st.session_key ${direction}
+				   ${transcriptCandidate.sql}
+				 ${sourceOrder(transcriptTime, "st.session_key")}
 				 LIMIT ?`,
 				)
-				.all(agentId, ...transcriptCursor.args, ...requeueArgs, boundedLimit)
+				.all(agentId, ...transcriptCursor.args, ...requeueArgs, ...transcriptCandidate.args, boundedLimit)
 				.map((row) => {
 					const transcript = row as {
 						readonly session_key: string;
@@ -606,7 +680,7 @@ export function readRecentEpisodicSources(
 			   AND depth = 0
 			   AND COALESCE(source_type, 'summary') IN ('summary', 'compaction', 'checkpoint')
 			   AND (${summaryCursor.sql} OR ${summaryRequeue})
-			 ORDER BY julianday(latest_at) ${direction}, id ${direction}
+			 ${sourceOrder("latest_at", "id")}
 			 LIMIT ?`,
 				)
 				.all(agentId, ...summaryCursor.args, ...requeueArgs, boundedLimit)
@@ -637,17 +711,16 @@ export function readRecentEpisodicSources(
 					} satisfies EpisodicSourceRecord;
 				})
 		: [];
-	return [...memories, ...artifacts, ...transcripts, ...summaries]
-		.filter((source) =>
-			episodicContentIsEligible(db, {
-				agentId,
-				sourceKind: source.kind,
-				sourceId: source.id,
-				content: source.content,
-			}),
-		)
-		.sort((a, b) => compareEpisodicSources(a, b, order))
-		.slice(0, boundedLimit < 0 ? undefined : boundedLimit);
+	const sources = [...memories, ...artifacts, ...transcripts, ...summaries].filter((source) =>
+		episodicContentIsEligible(db, {
+			agentId,
+			sourceKind: source.kind,
+			sourceId: source.id,
+			content: source.content,
+		}),
+	);
+	if (order !== "none") sources.sort((a, b) => compareEpisodicSources(a, b, order));
+	return sources.slice(0, boundedLimit < 0 ? undefined : boundedLimit);
 }
 export function readEpisodicSource(db: ReadDb, options: ReadEpisodicSourceOptions): EpisodicSourceRecord | null {
 	const from = options.from.trim();
@@ -762,6 +835,8 @@ export function searchEpisodicSources(
 		readonly kind?: "memory" | "artifact" | "transcript" | "summary";
 		readonly excludeDelivered?: boolean;
 		readonly limit?: number | null;
+		readonly order?: "newest" | "none";
+		readonly candidateRefs?: readonly EpisodicSourceCandidateRef[];
 	},
 ): EpisodicSourceRecord[] {
 	const query = params.query.trim();
@@ -821,9 +896,20 @@ export function searchEpisodicSources(
 			: "session_transcripts.created_at";
 	const transcriptCompleted = transcriptHasCompletedAt ? "session_transcripts.completed_at IS NOT NULL" : "0";
 	const commonArgs = [params.agentId, ...contentArgs, ...sinceArgs, ...beforeArgs, ...deliveredArgs, ...reviewedArgs];
+	const candidateKinds =
+		params.candidateRefs === undefined
+			? null
+			: new Set<EpisodicSourceKind>(params.candidateRefs.map((ref) => ref.kind));
+	const wants = (kind: EpisodicSourceKind): boolean =>
+		(kind === "summary" ? params.kind === "summary" : params.kind === undefined || params.kind === kind) &&
+		(candidateKinds === null || candidateKinds.has(kind));
+	const memoryCandidate = candidateRefFilter(params.candidateRefs, "memory", "id");
+	const artifactCandidate = candidateRefFilter(params.candidateRefs, "artifact", "ma.source_path");
+	const transcriptCandidate = candidateRefFilter(params.candidateRefs, "transcript", "session_key");
+	const summaryCandidate = candidateRefFilter(params.candidateRefs, "summary", "id");
 
 	const branches: Array<{ sql: string; args: unknown[] }> = [];
-	if (params.kind === undefined || params.kind === "memory") {
+	if (wants("memory")) {
 		branches.push({
 			sql: `SELECT 'memory' AS kind, id, created_at AS captured_at
 			      FROM memories
@@ -833,11 +919,12 @@ export function searchEpisodicSources(
 			        ${params.since ? "AND (julianday(created_at) >= julianday(?) OR julianday(created_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(created_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("memory", "id", "created_at", "''", "created_at")}
-			        ${reviewedPredicate("memory", "id", "created_at", "''", "created_at")}`,
-			args: commonArgs,
+			        ${reviewedPredicate("memory", "id", "created_at", "''", "created_at")}
+			        ${memoryCandidate.sql}`,
+			args: [...commonArgs, ...memoryCandidate.args],
 		});
 	}
-	if (params.kind === undefined || params.kind === "artifact") {
+	if (wants("artifact")) {
 		branches.push({
 			sql: `SELECT 'artifact' AS kind, ma.source_path AS id, ma.captured_at AS captured_at
 			      FROM memory_artifacts ma
@@ -855,11 +942,12 @@ export function searchEpisodicSources(
 			                 AND COALESCE(ma2.source_id, '') = COALESCE(ma.source_id, '')
 			               ORDER BY ma2.captured_at DESC, ma2.source_path ASC
 			               LIMIT 1
-			             ))`,
-			args: commonArgs,
+			             ))
+			        ${artifactCandidate.sql}`,
+			args: [...commonArgs, ...artifactCandidate.args],
 		});
 	}
-	if (params.kind === undefined || params.kind === "transcript") {
+	if (wants("transcript")) {
 		branches.push({
 			sql: `SELECT 'transcript' AS kind, session_key AS id, ${transcriptSearchTime} AS captured_at
 			      FROM session_transcripts
@@ -867,11 +955,12 @@ export function searchEpisodicSources(
 			        ${params.since ? `AND (julianday(${transcriptSearchTime}) >= julianday(?) OR julianday(${transcriptSearchTime}) < julianday(?))` : ""}
 			        ${params.before ? `AND julianday(${transcriptSearchTime}) <= julianday(?)` : ""}
 			        ${deliveredPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}
-			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}`,
-			args: commonArgs,
+			        ${reviewedPredicate("transcript", "session_key", transcriptSearchTime, "''", transcriptSearchTime)}
+			        ${transcriptCandidate.sql}`,
+			args: [...commonArgs, ...transcriptCandidate.args],
 		});
 	}
-	if (params.kind === "summary") {
+	if (wants("summary")) {
 		branches.push({
 			sql: `SELECT 'summary' AS kind, id, latest_at AS captured_at
 			      FROM session_summaries
@@ -881,19 +970,22 @@ export function searchEpisodicSources(
 			        ${params.since ? "AND (julianday(latest_at) >= julianday(?) OR julianday(latest_at) < julianday(?))" : ""}
 			        ${params.before ? "AND julianday(latest_at) <= julianday(?)" : ""}
 			        ${deliveredPredicate("summary", "id", "latest_at", "''", "latest_at")}
-			        ${reviewedPredicate("summary", "id", "latest_at", "''", "latest_at")}`,
-			args: commonArgs,
+			        ${reviewedPredicate("summary", "id", "latest_at", "''", "latest_at")}
+			        ${summaryCandidate.sql}`,
+			args: [...commonArgs, ...summaryCandidate.args],
 		});
 	}
 
+	if (branches.length === 0) return [];
 	const union = branches.map((branch) => branch.sql).join("\nUNION ALL\n");
+	const orderBy = params.order === "none" ? "" : "ORDER BY julianday(captured_at) DESC, kind ASC, id ASC";
 	const rows = db
 		.prepare(
 			`SELECT kind, id
 			 FROM (
 			 ${union}
 			 )
-			 ORDER BY julianday(captured_at) DESC, kind ASC, id ASC
+			 ${orderBy}
 			 LIMIT ${limit === null ? -1 : "?"}`,
 		)
 		.all(...branches.flatMap((branch) => branch.args), ...(limit === null ? [] : [limit])) as Array<{

@@ -264,7 +264,7 @@ implementation.
 Signet uses SQLite in WAL mode. Migrations are numbered sequentially under
 `platform/core/src/migrations/`, run in order, and recorded in
 `schema_migrations` with checksum and timing data in
-`schema_migrations_audit`. The latest migration is `155-source-sync-failures.ts`.
+`schema_migrations_audit`. The latest migration is `158-dreaming-candidate-scan-index.ts`.
 
 ### Evidence and semantic state
 
@@ -274,7 +274,8 @@ provenance fields, and lifecycle state. Pipeline-era columns such as
 `content_hash`, `normalized_content`, `is_deleted`, `deleted_at`,
 `extraction_status`, embedding/extraction model metadata, and update counters
 remain part of the schema for compatibility and lifecycle management. A scoped
-partial uniqueness rule prevents duplicate non-deleted content hashes.
+partial uniqueness rule prevents duplicate non-deleted content hashes. The
+`(agent_id, memory_kind)` index supports bounded episodic-source candidate scans.
 
 **`memory_history`** is the immutable audit trail for memory lifecycle events,
 including created, updated, deleted, recovered, and proposal/observation events.

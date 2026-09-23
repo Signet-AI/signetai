@@ -36,6 +36,7 @@ import { DB_OWNER_MAX_WORK_UNITS } from "../db-owner-protocol";
 import { getDbOwnerForAccessor, runDbOwnerDomainOperation } from "../db-owner-runtime";
 import {
 	EPISODIC_CAPTURED_AT_FLOOR,
+	scanEpisodicSourceCandidates,
 	type EpisodicCursor,
 	type EpisodicSourceRecord,
 	readEpisodicSource,
@@ -106,7 +107,7 @@ export type DreamingEpisodicBacklogProbe =
 	| {
 			readonly kind: "indeterminate";
 			readonly tokenLowerBound: number;
-			readonly hasBacklog: boolean;
+			readonly hasBacklog: boolean | null;
 			readonly sourcesScanned: number;
 	  };
 
@@ -2069,7 +2070,7 @@ export async function isDreamingHaltActive(
 
 interface DreamingBacklogRead {
 	readonly entries: readonly DreamingBacklogTokenEntry[];
-	readonly hasBacklog: boolean;
+	readonly hasBacklog: boolean | null;
 	readonly complete: boolean;
 	readonly sourcesScanned: number;
 }
@@ -2120,7 +2121,21 @@ function backlogReadFromSources(
 	};
 }
 
+function withCandidateScanResult(
+	read: DreamingBacklogRead,
+	candidateScan: { readonly complete: boolean } | null,
+): DreamingBacklogRead {
+	if (candidateScan === null || candidateScan.complete) return read;
+	return {
+		...read,
+		hasBacklog: read.hasBacklog === true ? true : null,
+		complete: false,
+	};
+}
+
 function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimit: number | null): DreamingBacklogRead {
+	const candidateScan = sourceLimit === null ? null : scanEpisodicSourceCandidates(db, agentId, sourceLimit);
+	const candidateRefs = candidateScan?.refs;
 	const hasConsumption =
 		db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'dreaming_evidence_consumption'").get() !=
 		null;
@@ -2130,9 +2145,12 @@ function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimi
 			query: "",
 			excludeDelivered: true,
 			limit: sourceLimit === null ? null : sourceLimit + 1,
+			order: sourceLimit === null ? "newest" : "none",
+			candidateRefs,
 		});
-		return backlogReadFromSources(queued, sourceLimit, (source) =>
-			validDreamingBacklogEntry(db, agentId, source, true),
+		return withCandidateScanResult(
+			backlogReadFromSources(queued, sourceLimit, (source) => validDreamingBacklogEntry(db, agentId, source, true)),
+			candidateScan,
 		);
 	}
 
@@ -2143,8 +2161,9 @@ function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimi
 		sourceLimit === null ? null : sourceLimit + 1,
 		DREAMING_EVIDENCE_KINDS,
 		state.evidenceCursor ? null : state.lastPassAt,
-		"newest",
+		sourceLimit === null ? "newest" : "none",
 		state.evidenceCursor,
+		candidateRefs,
 	);
 	const resumed =
 		state.evidenceCursor?.fragmentOffset !== undefined && state.evidenceCursor.kind !== null
@@ -2159,13 +2178,14 @@ function readDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string, sourceLimi
 	const resumedSource = resumedEntry !== null && resumed !== null && !resumedIsQueued ? resumed : null;
 	const resumedKey = resumedSource === null ? null : sourceRecordKey(resumedSource);
 	const availableSources = resumedSource === null ? queued : [resumedSource, ...queued];
-	return backlogReadFromSources(availableSources, sourceLimit, (source) => {
+	const read = backlogReadFromSources(availableSources, sourceLimit, (source) => {
 		const offset =
 			resumedKey !== null && sourceRecordKey(source) === resumedKey
 				? (state.evidenceCursor?.fragmentOffset ?? 0)
 				: undefined;
 		return validDreamingBacklogEntry(db, agentId, source, false, offset);
 	});
+	return withCandidateScanResult(read, candidateScan);
 }
 export function getDreamingEpisodicTokenBacklogInDb(db: ReadDb, agentId: string): Promise<number> {
 	const read = readDreamingEpisodicBacklogInDb(db, agentId, null);
@@ -2189,7 +2209,7 @@ export function probeDreamingEpisodicBacklogInDb(
 	const read = readDreamingEpisodicBacklogInDb(db, agentId, sourceLimit);
 	return countDreamingBacklogTokenEntries(agentId, read.entries, read.complete ? undefined : threshold).then(
 		(result) => {
-			if (read.complete) {
+			if (read.complete && read.hasBacklog !== null) {
 				return {
 					kind: "exact",
 					tokens: result.tokens,
@@ -2215,7 +2235,7 @@ export function probeDreamingEpisodicBacklogInDb(
 	);
 }
 export function hasDreamingEpisodicBacklogInDb(db: ReadDb, agentId: string): boolean {
-	return readDreamingEpisodicBacklogInDb(db, agentId, 1).hasBacklog;
+	return readDreamingEpisodicBacklogInDb(db, agentId, 1).hasBacklog ?? true;
 }
 
 export async function getDreamingEpisodicTokenBacklog(
@@ -2317,7 +2337,7 @@ export async function evaluateDreamingTrigger(
 
 	if (hasAttention) return { trigger: true, reason: "attention" };
 	if (cfg.backfillOnFirstRun && state.lastPassAt === null) {
-		return backlog.hasBacklog ? { trigger: true, reason: "first-run" } : { trigger: false };
+		return backlog.hasBacklog !== false ? { trigger: true, reason: "first-run" } : { trigger: false };
 	}
 	const consumptionTable = await ownerQueryOne<{ present: number }>(
 		await getDbOwnerForAccessor(accessor),
@@ -2365,7 +2385,7 @@ export async function evaluateDreamingTrigger(
 		if (hasContinuation) return { trigger: true, reason: "continuation" };
 	}
 	const lastPassMs = state.lastPassAt === null ? Number.NaN : Date.parse(state.lastPassAt);
-	if (backlog.hasBacklog && Number.isFinite(lastPassMs) && nowMs - lastPassMs >= cfg.maxInterval) {
+	if (backlog.hasBacklog !== false && Number.isFinite(lastPassMs) && nowMs - lastPassMs >= cfg.maxInterval) {
 		return { trigger: true, reason: "max-interval" };
 	}
 	return { trigger: false };
