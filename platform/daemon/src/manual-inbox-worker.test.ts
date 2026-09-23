@@ -30,6 +30,11 @@ function admission(): ManualInboxAdmission & { rows: Map<string, ManualInboxRow>
 			calls.push(`claim:${input.fileName}`);
 			const prior = [...this.rows.values()].find((row) => row.fileName === input.fileName);
 			if (prior?.status === "imported" || prior?.status === "duplicate") return prior;
+			if (prior?.status === "processing" && prior.sourceId) {
+				const terminal = { ...prior, status: "imported" as const };
+				this.rows.set(input.key, terminal);
+				return terminal;
+			}
 			const row = {
 				key: input.key,
 				fileName: input.fileName,
@@ -42,6 +47,10 @@ function admission(): ManualInboxAdmission & { rows: Map<string, ManualInboxRow>
 		},
 		async record(row) {
 			this.rows.set(row.key, row);
+		},
+		async recordPublication(row) {
+			const prior = this.rows.get(row.key);
+			if (prior) this.rows.set(row.key, { ...prior, sourceId: row.sourceId });
 		},
 	};
 }
@@ -133,6 +142,48 @@ describe("manual inbox worker", () => {
 		expect(dispatches).toBe(1);
 		expect(records).toBe(2);
 		expect([...a.rows.values()][0]).toMatchObject({ status: "imported", sourceId: "source:one" });
+	});
+	test("reconciles a published outcome after restart when terminal persistence stays unavailable", async () => {
+		const r = await root();
+		const a = admission();
+		let dispatches = 0;
+		a.record = async () => {
+			throw new Error("terminal persistence unavailable");
+		};
+		const w = startManualInboxWorker({
+			root: r,
+			admission: a,
+			pollMs: 10,
+			settleMs: 0,
+			dispatchDocument: async () => {
+				dispatches++;
+				return { status: "imported", sourceId: "source:durable" };
+			},
+		});
+		await new Promise((x) => setTimeout(x, 20));
+		await Bun.write(join(r, "files", "durable.md"), "durable");
+		w.nudge();
+		await new Promise((x) => setTimeout(x, 40));
+		await w.stop();
+		a.record = async (row) => {
+			a.rows.set(row.key, row);
+		};
+		a.enabled = true;
+		const w2 = startManualInboxWorker({
+			root: r,
+			admission: a,
+			pollMs: 10,
+			settleMs: 0,
+			dispatchDocument: async () => {
+				dispatches++;
+				return { status: "imported", sourceId: "source:durable" };
+			},
+		});
+		await new Promise((x) => setTimeout(x, 50));
+		await w2.stop();
+		expect(dispatches).toBe(1);
+		expect([...a.rows.values()][0]).toMatchObject({ status: "imported", sourceId: "source:durable" });
+		expect(await Bun.file(join(r, "files", "durable.md")).exists()).toBe(false);
 	});
 	test("keeps terminal state when unlink fails and removes it on restart", async () => {
 		const r = await root();

@@ -25,6 +25,8 @@ export interface ManualInboxAdmission {
 		bytes: Uint8Array;
 	}): Promise<ManualInboxRow | null>;
 	record(row: ManualInboxRow): Promise<void>;
+	/** Persist publication identity before terminal admission state. */
+	recordPublication?(row: ManualInboxRow): Promise<void>;
 	reconcile?(): Promise<void>;
 }
 export interface ManualInboxWorkerOptions {
@@ -113,6 +115,7 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 			});
 			if (!claimed) continue;
 			if (claimed.status === "imported" || claimed.status === "duplicate") {
+				await options.admission.record(claimed).catch(() => {});
 				await remove(path).catch(() => {});
 				continue;
 			}
@@ -122,6 +125,7 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 				if (!dispatch) throw new Error("no dispatcher configured");
 				published = await dispatch(claimed);
 				const terminal = { ...claimed, status: published.status, sourceId: published.sourceId } as ManualInboxRow;
+				await options.admission.recordPublication?.(terminal);
 				// A transient owner/DB failure must not turn a published import into a
 				// retryable dispatch. Retry only the terminal write; dispatch is never
 				// repeated after it has returned successfully in this pass.

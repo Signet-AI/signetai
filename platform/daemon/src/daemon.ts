@@ -2859,6 +2859,7 @@ async function main() {
 				claim: async ({ key, fileName, bytes }) => {
 					const row = await importLedger.find(key);
 					if (row?.status === "imported" || row?.status === "duplicate") return null;
+					if (row?.status === "processing" && row.sourceId) return { ...row, status: "imported" };
 					const admitted =
 						row ??
 						(await admitImport({
@@ -2875,6 +2876,9 @@ async function main() {
 				},
 				record: async (row) => {
 					await importLedger.transition(row.key, "processing", row.status, row.error, { sourceId: row.sourceId });
+				},
+				recordPublication: async (row) => {
+					await importLedger.recordPublication(row);
 				},
 				reconcile: async () => {
 					await importLedger.recoverExpiredLeases();

@@ -134,6 +134,19 @@ export class DbOwnedImportAdmissionLedger implements ImportLedger {
 			"import-admission.event",
 		);
 	}
+	async recordPublication(row: Pick<ImportRow, "key" | "sourceId">): Promise<void> {
+		await this.request(
+			{
+				kind: "query",
+				statement: statement(
+					"UPDATE import_admission_ledger SET source_id = ?, error = NULL, updated_at = ? WHERE key = ? AND agent_id = ? AND workspace_id = ? AND status = 'processing'",
+					[row.sourceId ?? null, now(), row.key, this.scope.agentId, this.scope.workspaceId ?? ""],
+					"run",
+				),
+			},
+			"import-admission.publication",
+		);
+	}
 	async transition(
 		key: string,
 		from: ImportStatus | ImportStatus[],
