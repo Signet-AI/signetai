@@ -5303,6 +5303,164 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         [],
     )?;
     transaction.execute("CREATE INDEX IF NOT EXISTS entity_dependencies_scope ON entity_dependencies(agent_id,workspace_id,source_entity_id,target_entity_id)", [])?;
+    // Reconcile the additive ontology control-plane schema owned by TypeScript migrations 067/070/071.
+    for table in ["entity_aspects", "entity_dependencies"] {
+        ensure_column(&transaction, table, "archived_at", "TEXT")?;
+        ensure_column(&transaction, table, "archived_by", "TEXT")?;
+        ensure_column(&transaction, table, "archive_reason", "TEXT")?;
+    }
+    for table in ["entities", "entity_aspects"] {
+        ensure_column(&transaction, table, "proposal_id", "TEXT")?;
+        ensure_column(&transaction, table, "proposal_evidence", "TEXT NOT NULL DEFAULT '[]'")?;
+    }
+    // Older workspaces may contain the pre-scoped entity_attributes shape.
+    // Reconcile its columns before creating scoped ontology indexes.
+    for (column, definition) in [
+        ("aspect_id", "TEXT"),
+        ("agent_id", "TEXT NOT NULL DEFAULT 'default'"),
+        ("workspace_id", "TEXT NOT NULL DEFAULT 'default'"),
+        ("content", "TEXT NOT NULL DEFAULT ''"),
+        ("normalized_content", "TEXT NOT NULL DEFAULT ''"),
+        ("group_key", "TEXT"),
+        ("claim_key", "TEXT"),
+        ("confidence", "REAL NOT NULL DEFAULT 0"),
+        ("importance", "REAL NOT NULL DEFAULT 0.5"),
+        ("status", "TEXT NOT NULL DEFAULT 'active'"),
+        ("superseded_by", "TEXT"),
+        ("created_at", "TEXT NOT NULL DEFAULT ''"),
+        ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        ensure_column(&transaction, "entity_attributes", column, definition)?;
+    }
+    ensure_column(&transaction, "entity_attributes", "version", "INTEGER NOT NULL DEFAULT 1")?;
+    ensure_column(&transaction, "entity_attributes", "version_root_id", "TEXT")?;
+    ensure_column(&transaction, "entity_attributes", "previous_attribute_id", "TEXT")?;
+    ensure_column(&transaction, "entity_attributes", "archived_at", "TEXT")?;
+    ensure_column(&transaction, "entity_attributes", "archived_by", "TEXT")?;
+    ensure_column(&transaction, "entity_attributes", "archive_reason", "TEXT")?;
+    transaction.execute("UPDATE entity_attributes SET version_root_id=id WHERE version_root_id IS NULL", [])?;
+    transaction.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(agent_id,status,updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_entity_aspects_status ON entity_aspects(agent_id,entity_id,status);
+         CREATE INDEX IF NOT EXISTS idx_entity_attributes_version_root ON entity_attributes(agent_id,version_root_id,version DESC);
+         CREATE INDEX IF NOT EXISTS idx_entity_attributes_claim_version ON entity_attributes(agent_id,aspect_id,group_key,claim_key,version DESC);
+         CREATE INDEX IF NOT EXISTS idx_entity_dependencies_status ON entity_dependencies(agent_id,status,updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_entities_proposal ON entities(agent_id,proposal_id);
+         CREATE INDEX IF NOT EXISTS idx_entity_aspects_proposal ON entity_aspects(agent_id,proposal_id);
+         CREATE TABLE IF NOT EXISTS epistemic_assertions (
+            id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default',
+            subject_entity_id TEXT NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
+            claim_attribute_id TEXT REFERENCES entity_attributes(id) ON DELETE SET NULL,
+            predicate TEXT NOT NULL CHECK (predicate IN ('claims','believes','observed','decided','prefers','denies','questions')),
+            content TEXT NOT NULL, normalized_content TEXT NOT NULL, speaker TEXT,
+            asserted_at TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0.0 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+            evidence TEXT NOT NULL DEFAULT '[]', source_kind TEXT, source_id TEXT, source_path TEXT, source_root TEXT,
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','archived','superseded')),
+            supersedes_assertion_id TEXT REFERENCES epistemic_assertions(id) ON DELETE SET NULL,
+            archived_at TEXT, archived_by TEXT, archive_reason TEXT,
+            created_by TEXT NOT NULL DEFAULT 'operator', created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+         );
+         CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_agent_entity ON epistemic_assertions(agent_id,subject_entity_id,status,asserted_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_agent_speaker ON epistemic_assertions(agent_id,speaker,asserted_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_agent_predicate ON epistemic_assertions(agent_id,predicate,status,asserted_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_agent_source ON epistemic_assertions(agent_id,source_kind,source_id);
+         CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_claim ON epistemic_assertions(agent_id,claim_attribute_id);",
+    )?;
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS memory_artifacts (
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            source_path TEXT NOT NULL,
+            source_sha256 TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            session_id TEXT NOT NULL,
+            session_key TEXT,
+            session_token TEXT NOT NULL,
+            project TEXT,
+            harness TEXT,
+            captured_at TEXT NOT NULL,
+            started_at TEXT,
+            ended_at TEXT,
+            manifest_path TEXT,
+            source_node_id TEXT,
+            memory_sentence TEXT,
+            memory_sentence_quality TEXT,
+            content TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (agent_id, source_path)
+         );
+         CREATE TABLE IF NOT EXISTS memory_artifact_tombstones (
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            session_token TEXT NOT NULL,
+            removed_at TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            removed_paths TEXT NOT NULL,
+            PRIMARY KEY (agent_id, session_token)
+         );
+         CREATE TABLE IF NOT EXISTS derived_memory_sources (
+            derived_memory_id TEXT NOT NULL,
+            source_kind TEXT NOT NULL,
+            source_id TEXT NOT NULL,
+            source_path TEXT,
+            agent_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (derived_memory_id, source_kind, source_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_derived_memory_sources_derived ON derived_memory_sources(agent_id,derived_memory_id);
+         CREATE INDEX IF NOT EXISTS idx_derived_memory_sources_source ON derived_memory_sources(agent_id,source_kind,source_id);",
+    )?;
+    // Older workspaces may have the pre-051 artifact shape. Add the fields
+    // needed by the authoritative artifact lineage indexes before creating them.
+    for (column, definition) in [
+        ("session_key", "TEXT"),
+        ("project", "TEXT"),
+        ("harness", "TEXT"),
+        ("captured_at", "TEXT NOT NULL DEFAULT ''"),
+        ("started_at", "TEXT"),
+        ("ended_at", "TEXT"),
+        ("manifest_path", "TEXT"),
+        ("source_node_id", "TEXT"),
+        ("memory_sentence", "TEXT"),
+        ("memory_sentence_quality", "TEXT"),
+        ("content", "TEXT NOT NULL DEFAULT ''"),
+        ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+    ] {
+        ensure_column(&transaction, "memory_artifacts", column, definition)?;
+    }
+    transaction.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_memory_artifacts_agent_kind ON memory_artifacts(agent_id,source_kind,captured_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_memory_artifacts_agent_session ON memory_artifacts(agent_id,session_token,captured_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_memory_artifacts_agent_membership ON memory_artifacts(agent_id,COALESCE(ended_at,captured_at) DESC);",
+    )?;
+    for (column, definition) in [
+        ("source_id", "TEXT"),
+        ("source_root", "TEXT"),
+        ("source_external_id", "TEXT"),
+        ("source_parent_path", "TEXT"),
+        ("source_meta_json", "TEXT"),
+    ] {
+        ensure_column(&transaction, "memory_artifacts", column, definition)?;
+    }
+    transaction.execute("CREATE INDEX IF NOT EXISTS idx_memory_artifacts_agent_source ON memory_artifacts(agent_id,source_id,source_external_id)", [])?;
+    transaction.execute("CREATE INDEX IF NOT EXISTS idx_memory_artifacts_agent_source_root ON memory_artifacts(agent_id,source_id,source_root)", [])?;
+    if has_table(&transaction, "aggregate_evidence_sources")? {
+        transaction.execute(
+            "INSERT OR IGNORE INTO derived_memory_sources
+             (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
+             SELECT aggregate_memory_id, source_kind, source_id, source_path, agent_id, created_at
+             FROM aggregate_evidence_sources",
+            [],
+        )?;
+    }
+    if has_table(&transaction, "aggregate_memory_sources")? {
+        transaction.execute(
+            "INSERT OR IGNORE INTO derived_memory_sources
+             (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
+             SELECT aggregate_memory_id, 'memory', source_memory_id, NULL, agent_id, created_at
+             FROM aggregate_memory_sources",
+            [],
+        )?;
+    }
     ensure_column(&transaction, "schema_migrations", "applied_at", "TEXT")?;
     ensure_column(
         &transaction,
