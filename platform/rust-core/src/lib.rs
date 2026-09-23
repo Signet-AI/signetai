@@ -5165,6 +5165,34 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     ensure_column(&transaction, "memories", "is_deleted", "INTEGER NOT NULL DEFAULT 0")?;
     ensure_column(&transaction, "memories", "superseded_by", "TEXT")?;
     ensure_column(&transaction, "memories", "stale_at", "TEXT")?;
+    // Additive compatibility with the TypeScript baseline and semantic-memory migrations.
+    for (column, definition) in [
+        ("content_hash", "TEXT"),
+        ("normalized_content", "TEXT"),
+        ("type", "TEXT NOT NULL DEFAULT 'fact'"),
+        ("category", "TEXT"),
+        ("confidence", "REAL DEFAULT 1.0"),
+        ("importance", "REAL DEFAULT 0.5"),
+        ("source_id", "TEXT"),
+        ("source_type", "TEXT"),
+        ("source_path", "TEXT"),
+        ("tags", "TEXT"),
+        ("who", "TEXT"),
+        ("why", "TEXT"),
+        ("project", "TEXT"),
+        ("updated_by", "TEXT NOT NULL DEFAULT 'system'"),
+        ("last_accessed", "TEXT"),
+        ("access_count", "INTEGER DEFAULT 0"),
+        ("vector_clock", "TEXT NOT NULL DEFAULT '{}'"),
+        ("version", "INTEGER DEFAULT 1"),
+        ("manual_override", "INTEGER DEFAULT 0"),
+        ("pinned", "INTEGER DEFAULT 0"),
+        ("visibility", "TEXT DEFAULT 'global'"),
+        ("memory_kind", "TEXT"),
+        ("extraction_status", "TEXT DEFAULT 'none'"),
+    ] {
+        ensure_column(&transaction, "memories", column, definition)?;
+    }
     ensure_column(&transaction, "session_memories", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
     ensure_column(&transaction, "session_memories", "path_json", "TEXT")?;
     ensure_column(&transaction, "session_memories", "predictor_score", "REAL")?;
@@ -5347,6 +5375,12 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         ("superseded_by", "TEXT"),
         ("created_at", "TEXT NOT NULL DEFAULT ''"),
         ("updated_at", "TEXT NOT NULL DEFAULT ''"),
+        ("source_id", "TEXT"),
+        ("source_kind", "TEXT"),
+        ("source_path", "TEXT"),
+        ("source_root", "TEXT"),
+        ("proposal_id", "TEXT"),
+        ("proposal_evidence", "TEXT NOT NULL DEFAULT '[]'"),
     ] {
         ensure_column(&transaction, "entity_attributes", column, definition)?;
     }
@@ -6088,5 +6122,60 @@ mod daily_log_date_tests {
         ] {
             assert!(!valid_daily_log_date(name), "accepted {name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod owner_schema_reconciliation_tests {
+    use super::Core;
+    use rusqlite::Connection;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn preserves_legacy_rows_and_is_idempotent() {
+        let db = NamedTempFile::new().unwrap();
+        let path = db.path().to_path_buf();
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE memories (id TEXT PRIMARY KEY, content TEXT NOT NULL, metadata TEXT NOT NULL);
+                     INSERT INTO memories(id, content, metadata) VALUES ('m1', 'legacy memory', '{\"source\":\"old\"}');
+                     CREATE TABLE entity_attributes (id TEXT PRIMARY KEY, content TEXT NOT NULL, source_path TEXT);
+                     INSERT INTO entity_attributes(id, content, source_path) VALUES ('a1', 'legacy claim', '/old/path.md');",
+                )
+                .unwrap();
+        }
+
+        drop(Core::open(&path, 8).unwrap());
+        let expected_memory_columns = [
+            "content_hash", "normalized_content", "type", "category", "confidence",
+            "importance", "source_id", "source_type", "source_path", "tags", "who", "why",
+            "project", "updated_by", "last_accessed", "access_count", "vector_clock", "version",
+            "manual_override", "pinned", "visibility", "memory_kind", "extraction_status",
+        ];
+        let expected_attribute_columns = [
+            "source_id", "source_kind", "source_path", "source_root", "proposal_id", "proposal_evidence",
+        ];
+        let connection = Connection::open(&path).unwrap();
+        for (table, columns) in [("memories", &expected_memory_columns[..]), ("entity_attributes", &expected_attribute_columns[..])] {
+            let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
+            let names: Vec<String> = statement
+                .query_map([], |row| row.get(1))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            for column in columns {
+                assert!(names.iter().any(|name| name == column), "missing {table}.{column}");
+            }
+        }
+        assert_eq!(connection.query_row("SELECT content, metadata FROM memories WHERE id='m1'", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap(), ("legacy memory".into(), "{\"source\":\"old\"}".into()));
+        assert_eq!(connection.query_row("SELECT content, source_path FROM entity_attributes WHERE id='a1'", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap(), ("legacy claim".into(), "/old/path.md".into()));
+        drop(connection);
+
+        drop(Core::open(&path, 8).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(connection.query_row("SELECT content, metadata FROM memories WHERE id='m1'", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap().0, "legacy memory");
+        assert_eq!(connection.query_row("SELECT content, source_path FROM entity_attributes WHERE id='a1'", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap().1, "/old/path.md");
     }
 }
