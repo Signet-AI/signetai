@@ -129,10 +129,26 @@ export class MigrationEngine {
 		const layout = this.deps.resolver.resolve();
 		validateLayout(layout);
 		const lease = this.deps.lease ? await this.deps.lease.acquire() : undefined;
-		const state = await openOrCreateRoot(this.deps.journalStateDir);
-		const source = await openDescriptorRoot(layout.root);
+		let state: DescriptorRoot | undefined;
+		let source: DescriptorRoot | undefined;
+		let journal: Journal | null | undefined;
+		try {
+			state = await openOrCreateRoot(this.deps.journalStateDir);
+			source = await openDescriptorRoot(layout.root);
+			journal = await readJournal(state, this.journalName);
+		} catch (error) {
+			try {
+				await source?.close();
+			} finally {
+				try {
+					await state?.close();
+				} finally {
+					await lease?.release();
+				}
+			}
+			throw error;
+		}
 		let destination: AdmittedDestination | undefined;
-		let journal = await readJournal(state, this.journalName);
 		try {
 			validateJournalIdentity(journal, layout);
 			const sourceIdentity = await source.identity();
@@ -290,11 +306,23 @@ export class MigrationEngine {
 			}
 			throw error;
 		} finally {
-			await destination?.root.close();
-			await destination?.parent.close();
-			await source.close();
-			await state.close();
-			await lease?.release();
+			try {
+				await destination?.root.close();
+			} finally {
+				try {
+					await destination?.parent.close();
+				} finally {
+					try {
+						await source.close();
+					} finally {
+						try {
+							await state.close();
+						} finally {
+							await lease?.release();
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -383,7 +411,9 @@ export class MigrationEngine {
 	async cleanup(accepted: boolean): Promise<void> {
 		if (!accepted) throw new Error("cleanup requires explicit acceptance (--accept)");
 		const state = await openDescriptorRoot(this.deps.journalStateDir);
+		let lease: { release(): Promise<void> } | undefined;
 		try {
+			lease = await this.deps.lease?.acquire();
 			const journal = await readJournal(state, this.journalName);
 			if (journal?.phase !== "completed") throw new Error("cleanup requires a completed migration");
 			await assertPathIdentity(journal.destination, journal.destinationIdentity);
@@ -416,14 +446,20 @@ export class MigrationEngine {
 			}
 			await state.remove(this.journalName);
 		} finally {
-			await state.close();
+			try {
+				await state.close();
+			} finally {
+				await lease?.release();
+			}
 		}
 	}
 
 	async rollback(): Promise<void> {
 		const state = await openExistingRoot(this.deps.journalStateDir);
 		if (!state) return;
+		let lease: { release(): Promise<void> } | undefined;
 		try {
+			lease = await this.deps.lease?.acquire();
 			const journal = await readJournal(state, this.journalName);
 			if (!journal) return;
 			if (!journal.rollbackEligible || journal.phase === "completed")
@@ -445,7 +481,11 @@ export class MigrationEngine {
 			}
 			await state.remove(this.journalName);
 		} finally {
-			await state.close();
+			try {
+				await state.close();
+			} finally {
+				await lease?.release();
+			}
 		}
 	}
 }

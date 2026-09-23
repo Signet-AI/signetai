@@ -158,6 +158,92 @@ test("interrupted copy resumes and rollback is fenced after destination writes",
 	await expect(engine.rollback()).rejects.toThrow("rollback is no longer safe");
 });
 
+test("run releases its lease when source setup fails before a journal is opened", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-run-setup-lease-"));
+	const source = join(root, "missing-v1");
+	const destination = join(root, "v2");
+	let released = 0;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+		lease: {
+			acquire: async () => ({
+				release: async () => {
+					released++;
+				},
+			}),
+		},
+	});
+	await expect(engine.run()).rejects.toThrow();
+	expect(released).toBe(1);
+});
+
+test("rollback cannot delete a destination while another migration holds the lease", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-rollback-lease-source-"));
+	const state = mkdtempSync(join(tmpdir(), "migration-rollback-lease-state-"));
+	const destination = `${source}-new`;
+	writeFileSync(join(source, "one.txt"), "preserved");
+	let held = false;
+	let acquired = 0;
+	let released = 0;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+		lease: {
+			acquire: async () => {
+				acquired++;
+				if (held) throw new Error("migration lease held");
+				return {
+					release: async () => {
+						released++;
+					},
+				};
+			},
+		},
+		hooks: {
+			afterEntryCopy: async () => {
+				throw new Error("interrupt after copy");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupt after copy");
+	expect(readFileSync(join(destination, "one.txt"), "utf8")).toBe("preserved");
+	held = true;
+	await expect(engine.rollback()).rejects.toThrow("migration lease held");
+	expect(readFileSync(join(destination, "one.txt"), "utf8")).toBe("preserved");
+	expect(acquired).toBe(2);
+	expect(released).toBe(1);
+});
+
+test("cleanup cannot retire the migration journal while another migration holds the lease", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-cleanup-lease-source-"));
+	const state = mkdtempSync(join(tmpdir(), "migration-cleanup-lease-state-"));
+	const destination = `${source}-new`;
+	writeFileSync(join(source, "one.txt"), "preserved");
+	let held = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+		lease: {
+			acquire: async () => {
+				if (held) throw new Error("migration lease held");
+				return { release: async () => undefined };
+			},
+		},
+	});
+	await engine.run();
+	held = true;
+	await expect(engine.cleanup(true)).rejects.toThrow("migration lease held");
+	expect(existsSync(join(destination, ".signet-migration-receipt.json"))).toBe(false);
+	expect((await engine.status()).phase).toBe("completed");
+});
+
 test("journal records destination staging writes before a copied entry receives a receipt", async () => {
 	const source = mkdtempSync(join(tmpdir(), "migration-staging-write-source-"));
 	const state = mkdtempSync(join(tmpdir(), "migration-staging-write-state-"));

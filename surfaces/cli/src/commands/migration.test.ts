@@ -16,7 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { requestMigrationDrain, verifyDestinationDaemon } from "./migration";
+import { initializeMigrationLeaseFile, requestMigrationDrain, verifyDestinationDaemon } from "./migration";
 import { Database as CoreDatabase, addObsidianSource, loadSourcesConfig, resolveWorkspaceLayout } from "@signet/core";
 
 function runGit(root: string, ...args: string[]): string {
@@ -175,6 +175,108 @@ test("production CLI registers the workspace migration lifecycle", () => {
 		expect(result.stdout).toContain(command);
 });
 
+test("migration refuses an ambiguous legacy lease instead of racing an older writer", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-legacy-lease-"));
+	const commandsDir = dirname(fileURLToPath(import.meta.url));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const state = join(root, "state");
+	const leaseDir = join(state, "signet", "migrations");
+	mkdirSync(join(source, "memory"), { recursive: true });
+	mkdirSync(leaseDir, { recursive: true });
+	writeDaemonConfig(source);
+	writeFileSync(join(leaseDir, `${source.replaceAll("/", "_")}.lease`), "");
+	try {
+		const result = spawnSync(
+			process.execPath,
+			[join(commandsDir, "..", "cli.ts"), "migration", "run", "--source", source, "--destination", destination],
+			{
+				cwd: join(commandsDir, "..", "..", "..", ".."),
+				encoding: "utf8",
+				timeout: 5_000,
+				env: {
+					...process.env,
+					HOME: join(root, "home"),
+					XDG_CONFIG_HOME: join(root, "config"),
+					XDG_STATE_HOME: state,
+					SIGNET_PATH: source,
+					SIGNET_WORKSPACE: "",
+					SIGNET_DAEMON_ENTRYPOINT: "0",
+					SIGNET_DAEMON_URL: "http://127.0.0.1:1",
+				},
+			},
+		);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("legacy migration lease");
+		expect(existsSync(destination)).toBe(false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("migration publishes only initialized SQLite lease files and leaves interrupted staging private", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-lease-publish-"));
+	const lease = join(root, "migration.lease");
+	const interruptedStage = join(root, "migration.lease.init-interrupted");
+	writeFileSync(interruptedStage, "");
+	try {
+		initializeMigrationLeaseFile(lease);
+		const db = new Database(lease, { readonly: true });
+		try {
+			expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(1);
+		} finally {
+			db.close();
+		}
+		if (process.platform !== "win32") expect(statSync(lease).mode & 0o777).toBe(0o600);
+		expect(readdirSync(root).sort()).toEqual(["migration.lease", "migration.lease.init-interrupted"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("migration leaves an active lease owner in control", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-active-lease-"));
+	const commandsDir = dirname(fileURLToPath(import.meta.url));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const state = join(root, "state");
+	const leaseDir = join(state, "signet", "migrations");
+	mkdirSync(join(source, "memory"), { recursive: true });
+	mkdirSync(leaseDir, { recursive: true });
+	writeDaemonConfig(source);
+	const owner = new Database(join(leaseDir, `${source.replaceAll("/", "_")}.lease`));
+	owner.exec("PRAGMA user_version = 1");
+	owner.exec("BEGIN IMMEDIATE");
+	try {
+		const result = spawnSync(
+			process.execPath,
+			[join(commandsDir, "..", "cli.ts"), "migration", "run", "--source", source, "--destination", destination],
+			{
+				cwd: join(commandsDir, "..", "..", "..", ".."),
+				encoding: "utf8",
+				timeout: 5_000,
+				env: {
+					...process.env,
+					HOME: join(root, "home"),
+					XDG_CONFIG_HOME: join(root, "config"),
+					XDG_STATE_HOME: state,
+					SIGNET_PATH: source,
+					SIGNET_WORKSPACE: "",
+					SIGNET_DAEMON_ENTRYPOINT: "0",
+					SIGNET_DAEMON_URL: "http://127.0.0.1:1",
+				},
+			},
+		);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("another migration is already running");
+		expect(existsSync(destination)).toBe(false);
+	} finally {
+		owner.exec("ROLLBACK");
+		owner.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-cli-"));
 	const source = join(root, "v1");
@@ -243,7 +345,7 @@ test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
 	}
 }, 60_000);
 
-test("production migration resumes a copied-but-unreceipted source without changing its identity", async () => {
+test("migration resumes copied-but-unreceipted bytes after a hard subprocess exit", async () => {
 	const commandsDir = dirname(fileURLToPath(import.meta.url));
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-source-resume-"));
 	const source = join(root, "v1");
@@ -283,8 +385,8 @@ test("production migration resumes a copied-but-unreceipted source without chang
 			manualOverride: false,
 		});
 		db.close();
-		const cli = join(commandsDir, "..", "cli.ts");
 		const cwd = join(commandsDir, "..", "..", "..", "..");
+		const cli = join(cwd, "surfaces", "cli", "dist", "cli.js");
 		const env = {
 			...process.env,
 			HOME: home,
@@ -297,17 +399,20 @@ test("production migration resumes a copied-but-unreceipted source without chang
 			SIGNET_DAEMON_RUNTIME: "bun-js",
 			SIGNET_DAEMON_JS_PATH: join(cwd, "platform", "daemon", "dist", "daemon.js"),
 		};
-		const args = ["migration", "run", "--source", source, "--destination", destination];
 		const injectedRunner = [
 			`import { Command } from ${JSON.stringify(pathToFileURL(join(commandsDir, "..", "..", "node_modules", "commander", "esm.mjs")).href)};`,
 			`import { registerMigrationCommands } from ${JSON.stringify(pathToFileURL(join(commandsDir, "migration.ts")).href)};`,
 			"const program = new Command();",
-			'registerMigrationCommands(program, { hooks: { afterEntryCopy: async () => { throw new Error("interrupted after destination copy"); } } });',
+			"registerMigrationCommands(program, { hooks: { afterEntryCopy: async () => { process.exit(73); } } });",
 			'await program.parseAsync(process.argv.slice(1), { from: "user" });',
 		].join("\n");
-		const interrupted = spawnSync(process.execPath, ["-e", injectedRunner, ...args], { cwd, env, encoding: "utf8" });
-		expect(interrupted.status).not.toBe(0);
-		expect(interrupted.stderr).toContain("interrupted after destination copy");
+		const interrupted = spawnSync(
+			process.execPath,
+			["-e", injectedRunner, "migration", "run", "--source", source, "--destination", destination],
+			{ cwd, env, encoding: "utf8" },
+		);
+		expect(interrupted.status).toBe(73);
+		expect(existsSync(destination)).toBe(true);
 		const status = spawnSync(
 			process.execPath,
 			[cli, "migration", "status", "--source", source, "--destination", destination],
@@ -349,7 +454,7 @@ test("production migration resumes a copied-but-unreceipted source without chang
 	}
 }, 90_000);
 
-test("production migration rollback preserves a source after the first destination copy", async () => {
+test("production migration rollback preserves a source after a hard exit following destination copy", async () => {
 	const commandsDir = dirname(fileURLToPath(import.meta.url));
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-source-rollback-"));
 	const source = join(root, "v1");
@@ -385,8 +490,8 @@ test("production migration rollback preserves a source after the first destinati
 		});
 		db.close();
 		const dbBytes = readFileSync(dbPath);
-		const cli = join(commandsDir, "..", "cli.ts");
 		const cwd = join(commandsDir, "..", "..", "..", "..");
+		const cli = join(cwd, "surfaces", "cli", "dist", "cli.js");
 		const env = {
 			...process.env,
 			HOME: join(root, "home"),
@@ -401,7 +506,7 @@ test("production migration rollback preserves a source after the first destinati
 			`import { Command } from ${JSON.stringify(pathToFileURL(join(commandsDir, "..", "..", "node_modules", "commander", "esm.mjs")).href)};`,
 			`import { registerMigrationCommands } from ${JSON.stringify(pathToFileURL(join(commandsDir, "migration.ts")).href)};`,
 			"const program = new Command();",
-			'registerMigrationCommands(program, { hooks: { afterEntryCopy: async () => { throw new Error("interrupted after destination copy"); } } });',
+			"registerMigrationCommands(program, { hooks: { afterEntryCopy: async () => { process.exit(73); } } });",
 			'await program.parseAsync(process.argv.slice(1), { from: "user" });',
 		].join("\n");
 		const interrupted = spawnSync(
@@ -409,7 +514,7 @@ test("production migration rollback preserves a source after the first destinati
 			["-e", injectedRunner, "migration", "run", "--source", source, "--destination", destination],
 			{ cwd, env, encoding: "utf8" },
 		);
-		expect(interrupted.stderr).toContain("interrupted after destination copy");
+		expect(interrupted.status).toBe(73);
 		expect(existsSync(destination)).toBe(true);
 		const rollback = spawnSync(
 			process.execPath,

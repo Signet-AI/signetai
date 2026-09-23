@@ -1,6 +1,18 @@
 import type { Command } from "commander";
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, fstatSync, mkdirSync, openSync, statSync, unlinkSync } from "node:fs";
+import { randomUUID } from "node:crypto";
+import {
+	chmodSync,
+	closeSync,
+	existsSync,
+	fsyncSync,
+	linkSync,
+	lstatSync,
+	mkdirSync,
+	openSync,
+	statSync,
+	unlinkSync,
+} from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -29,6 +41,36 @@ export type MigrationCommandDeps = {
 	hooks?: MigrationDeps["hooks"];
 	stdout?: Pick<Console, "log" | "error">;
 };
+
+export function initializeMigrationLeaseFile(leasePath: string): void {
+	// A hard exit must never expose a new-format lease before its marker is on disk.
+	const stagedPath = `${leasePath}.init-${randomUUID()}`;
+	try {
+		const staged = createDatabase(stagedPath);
+		try {
+			staged.exec("PRAGMA user_version = 1");
+		} finally {
+			staged.close();
+		}
+		chmodSync(stagedPath, 0o600);
+		const fd = openSync(stagedPath, "r");
+		try {
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		// Hard linking publishes the complete inode only if the lease name is absent.
+		linkSync(stagedPath, leasePath);
+	} catch (error) {
+		try {
+			unlinkSync(stagedPath);
+		} catch {
+			// Preserve the initialization error; an orphan staging name is not a lease.
+		}
+		throw error;
+	}
+	unlinkSync(stagedPath);
+}
 
 function contained(base: string, candidate: string): boolean {
 	const r = relative(resolve(base), resolve(candidate));
@@ -291,20 +333,31 @@ function defaultEngine(
 	const leasePath = join(state, `${source.replaceAll("/", "_")}.lease`);
 	const acquireLease = async () => {
 		mkdirSync(state, { recursive: true, mode: 0o700 });
-		let fd: number;
 		try {
-			fd = openSync(leasePath, "wx", 0o600);
-		} catch {
-			throw new Error("another migration is already running");
+			initializeMigrationLeaseFile(leasePath);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		}
+		if (!lstatSync(leasePath).isFile()) throw new Error("legacy migration lease is not a regular file");
+		const db = createDatabase(leasePath);
+		try {
+			const row = db.prepare("PRAGMA user_version").get() as { user_version?: number } | undefined;
+			if (row?.user_version !== 1)
+				throw new Error("legacy migration lease cannot be reclaimed without verifying its owner");
+			db.exec("PRAGMA busy_timeout = 0");
+			db.exec("BEGIN IMMEDIATE");
+		} catch (error) {
+			db.close();
+			if ((error as { code?: string }).code === "SQLITE_BUSY")
+				throw new Error("another migration is already running", { cause: error });
+			throw error;
 		}
 		return {
 			release: async () => {
 				try {
-					const current = statSync(leasePath);
-					const owned = fstatSync(fd);
-					if (current.dev === owned.dev && current.ino === owned.ino) unlinkSync(leasePath);
+					db.exec("ROLLBACK");
 				} finally {
-					closeSync(fd);
+					db.close();
 				}
 			},
 		};
