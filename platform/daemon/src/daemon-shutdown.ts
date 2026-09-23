@@ -5,19 +5,36 @@ export interface ShutdownRequest {
 
 export interface ShutdownRequestGate {
 	readonly primary: ShutdownRequest | null;
-	begin(request: ShutdownRequest): boolean;
+	readonly fatalRequest: ShutdownRequest | null;
+	readonly exitCode: number | null;
+	begin(request: ShutdownRequest): "begin" | "ignore" | "fatal";
 }
 
 export function createShutdownRequestGate(): ShutdownRequestGate {
 	let primary: ShutdownRequest | null = null;
+	let fatalRequest: ShutdownRequest | null = null;
+	let exitCode: number | null = null;
 	return {
 		get primary(): ShutdownRequest | null {
 			return primary;
 		},
-		begin(request): boolean {
-			if (primary !== null) return false;
+		get fatalRequest(): ShutdownRequest | null {
+			return fatalRequest;
+		},
+		get exitCode(): number | null {
+			return exitCode;
+		},
+		begin(request): "begin" | "ignore" | "fatal" {
+			if (primary !== null) {
+				if (request.exitCode === 0) return "ignore";
+				if (exitCode === 0) exitCode = request.exitCode;
+				fatalRequest ??= request;
+				return "fatal";
+			}
 			primary = request;
-			return true;
+			exitCode = request.exitCode;
+			if (request.exitCode !== 0) fatalRequest = request;
+			return "begin";
 		},
 	};
 }
