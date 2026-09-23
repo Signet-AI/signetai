@@ -25,7 +25,7 @@ export type {
 	RestoreReceipt,
 	RestoreReceiptInput,
 } from "./protection";
-export { buildProtectionEvidence } from "./protection-evidence";
+export { buildProtectionEvidence, computeProtectionDigests } from "./protection-evidence";
 export type { ProtectionEvidence, ProtectionEvidenceOptions } from "./protection-evidence";
 export {
 	execFileHidden,

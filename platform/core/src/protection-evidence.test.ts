@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { buildProtectionEvidence } from "./protection-evidence";
+import { buildProtectionEvidence, computeProtectionDigests } from "./protection-evidence";
 
 describe("protection evidence", () => {
 	it("fails closed when directories exist without their protection authorities", () => {
@@ -55,6 +55,26 @@ describe("protection evidence", () => {
 			expect(result.components.every((c) => c.status !== "unknown")).toBe(true);
 			expect(result.components.find((c) => c.id === "filesystem-cache")?.status).toBe("excluded-rebuildable");
 			expect(JSON.stringify(result)).not.toContain(root);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("changes protected component digests when current content is modified or deleted", () => {
+		const root = mkdtempSync(join(tmpdir(), "protection-digests-"));
+		try {
+			writeFileSync(join(root, "workspace-layout.json"), JSON.stringify({ version: 2 }));
+			mkdirSync(join(root, "data"), { recursive: true });
+			mkdirSync(join(root, "transcripts"));
+			writeFileSync(join(root, "data", "signet.db"), "one");
+			writeFileSync(join(root, "transcripts", "a.jsonl"), "one");
+			const before = computeProtectionDigests(root);
+			writeFileSync(join(root, "data", "signet.db"), "two");
+			const modified = computeProtectionDigests(root);
+			expect(modified.sqlite).not.toBe(before.sqlite);
+			rmSync(join(root, "transcripts", "a.jsonl"));
+			const deleted = computeProtectionDigests(root);
+			expect(deleted.transcripts).not.toBe(before.transcripts);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

@@ -1,10 +1,46 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync, statSync, lstatSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { resolveWorkspaceLayout } from "./workspace-layout";
 import type { ProtectionComponent, ProtectionComponentId } from "./protection";
 
 export interface ProtectionEvidence {
 	readonly components: readonly ProtectionComponent[];
+}
+const DIGEST_LIMIT = 20_000;
+function canonicalDigest(paths: readonly string[]): string {
+	const hash = createHash("sha256");
+	let count = 0;
+	const visit = (path: string, relativePath: string) => {
+		if (count++ >= DIGEST_LIMIT) return;
+		try {
+			if (lstatSync(path).isSymbolicLink()) return;
+			if (statSync(path).isDirectory()) {
+				for (const name of readdirSync(path).sort()) visit(join(path, name), join(relativePath, name));
+			} else hash.update(`file:${relativePath}:`).update(readFileSync(path)).update("\\0");
+		} catch {
+			hash.update(`missing:${relativePath}\\0`);
+		}
+	};
+	for (const path of paths) visit(path, path);
+	return hash.digest("hex");
+}
+
+/** Hashes only authoritative current content; runtime receipts and rebuildable cache are excluded. */
+export function computeProtectionDigests(rootPath: string): Readonly<Record<string, string>> {
+	const layout = resolveWorkspaceLayout(rootPath);
+	const originalDirs = ["backup", ".backup", "originals", "managed-originals"].map((name) => join(rootPath, name));
+	const snapshotDirs = ["backup", ".backup", "snapshots"].map((name) => join(rootPath, name));
+	return {
+		"root-authored": canonicalDigest([layout.layoutFile, ...ROOT_AUTHORED_FILES.map((file) => join(rootPath, file))]),
+		skills: canonicalDigest([layout.skills]),
+		"managed-originals": canonicalDigest(originalDirs),
+		sqlite: canonicalDigest([layout.database, ...snapshotDirs]),
+		transcripts: canonicalDigest([layout.transcripts, ...snapshotDirs]),
+		"external-sources": canonicalDigest([join(rootPath, "sources.json")]),
+		runtime: canonicalDigest([join(layout.runtime, ".recreate-proof")]),
+		secrets: canonicalDigest([layout.secrets]),
+	};
 }
 export interface ProtectionEvidenceOptions {
 	readonly now?: Date;

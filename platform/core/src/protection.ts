@@ -138,6 +138,9 @@ export function aggregateProtection(
 	const allProtected =
 		ordered.length > 0 &&
 		ordered.every((component) => component.status === "protected" || component.status === "excluded-rebuildable");
+	const applicable = ordered
+		.filter((component) => component.status !== "excluded-rebuildable")
+		.map((component) => component.id);
 	const receiptUsable =
 		receipt !== null &&
 		validateRestoreReceipt(receipt, {
@@ -146,7 +149,8 @@ export function aggregateProtection(
 			componentDigests: options.componentDigests,
 		}) &&
 		new Set(receipt.components).size === receipt.components.length &&
-		receipt.components.every((id) => ordered.some((component) => component.id === id));
+		receipt.components.length === applicable.length &&
+		applicable.every((id) => receipt.components.includes(id));
 	const protectedNow = allProtected && receiptUsable;
 	const hasRequired = ordered.some((component) => component.status !== "excluded-rebuildable");
 	const missing = ordered.filter((component) => component.status === "missing").map((component) => component.id);

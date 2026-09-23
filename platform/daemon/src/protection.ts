@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import {
 	aggregateProtection,
 	buildProtectionEvidence,
+	computeProtectionDigests,
 	PROTECTION_COMPONENT_IDS,
 	resolveWorkspaceLayout,
 	validateRestoreReceipt,
@@ -135,7 +136,12 @@ export function mountProtectionRoutes(app: Hono, options: ProtectionRouteOptions
 					})));
 		const receipt =
 			options.restoreReceipt ?? (options.workspacePath ? readRestoreReceipt(options.workspacePath) : null);
-		const status = aggregateProtection(components, { restoreReceipt: receipt, workspacePath: options.workspacePath });
+		const componentDigests = options.workspacePath ? computeProtectionDigests(options.workspacePath) : undefined;
+		const status = aggregateProtection(components, {
+			restoreReceipt: receipt,
+			workspacePath: options.workspacePath,
+			componentDigests,
+		});
 		return c.json({ ...status, components: status.components.map(safeComponent) });
 	});
 }

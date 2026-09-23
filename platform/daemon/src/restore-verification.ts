@@ -3,6 +3,7 @@ import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync,
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { setTimeout as sleep } from "node:timers/promises";
+import { computeProtectionDigests } from "@signet/core";
 import { saveRestoreReceipt } from "./protection";
 import { isAbsolute, join, relative, sep } from "node:path";
 
@@ -242,7 +243,7 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 		});
 		if (result.ok) {
 			const at = new Date().toISOString();
-			const digest = createHash("sha256").update(JSON.stringify(result.receipt.fileDigests)).digest("hex");
+			const digests = computeProtectionDigests(input.snapshotRoot);
 			saveRestoreReceipt(input.snapshotRoot, {
 				schema: "signet.restore.v1",
 				id: randomUUID(),
@@ -260,16 +261,7 @@ export async function executeDisposableRestore(input: DisposableRestoreInput): P
 					"managed-originals",
 					"secrets",
 				],
-				digests: {
-					"root-authored": digest,
-					sqlite: digest,
-					transcripts: digest,
-					"external-sources": digest,
-					runtime: digest,
-					skills: digest,
-					"managed-originals": digest,
-					secrets: digest,
-				},
+				digests,
 			});
 		}
 	} catch (_error) {
