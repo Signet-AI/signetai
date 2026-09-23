@@ -46,7 +46,8 @@ describe("incremental database integrity maintenance (#1683)", () => {
 		expect(nextIncrementalIntegrityRetryDelay("timed_out", 1_000)).toBe(2_000);
 		expect(nextIncrementalIntegrityRetryDelay("unavailable", 16_000)).toBe(30_000);
 		expect(nextIncrementalIntegrityRetryDelay("timed_out", 30_000)).toBe(30_000);
-		expect(nextIncrementalIntegrityRetryDelay("running", 8_000)).toBe(0);
+		expect(nextIncrementalIntegrityRetryDelay("running", 0)).toBe(1_000);
+		expect(nextIncrementalIntegrityRetryDelay("running", 8_000)).toBe(1_000);
 		expect(nextIncrementalIntegrityRetryDelay("complete", 8_000)).toBe(0);
 	});
 

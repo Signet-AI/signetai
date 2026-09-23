@@ -103,6 +103,7 @@ import {
 	createDeferredRuntimeScheduler,
 	releaseDeferredRuntimeGateIfSafe,
 } from "./deferred-runtime-gate";
+import { createShutdownRequestGate } from "./daemon-shutdown";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
@@ -2077,6 +2078,7 @@ function buildLifecycleRecord(state: DaemonLifecycle["state"], extra: Partial<Da
 }
 
 let exitFlushInFlight: Promise<void> | null = null;
+const shutdownRequestGate = createShutdownRequestGate();
 
 async function flushAndExit(exitCode: number): Promise<void> {
 	if (exitFlushInFlight) return exitFlushInFlight;
@@ -2104,8 +2106,12 @@ function buildTerminalLifecycleRecord(reason: string, exitCode: number, error?: 
 }
 const SHUTDOWN_CLEANUP_DEADLINE_MS = 20_000;
 function requestShutdown(reason: string, exitCode: number, error?: unknown, runCleanup = true): void {
-	if (shuttingDown) {
-		void flushAndExit(exitCode);
+	if (shuttingDown || !shutdownRequestGate.begin({ reason, exitCode })) {
+		logger.warn("daemon", "Ignoring additional shutdown request while cleanup is in progress", {
+			reason,
+			exitCode,
+			primaryRequest: shutdownRequestGate.primary,
+		});
 		return;
 	}
 	setShuttingDown(true);
@@ -2845,17 +2851,40 @@ async function main() {
 		}
 		if (!migrationIntegrityWritesBlocked) {
 			deferredRuntimeScheduler.scheduleMaintenance(async (): Promise<void> => {
+				const integrityHealthy = await deferredRuntimeGate.waitForVerifiedIntegrity();
+				const migrationBackupPending = pendingMigrationBackupPath(MEMORY_DB) !== null;
+				if (!integrityHealthy || migrationIntegrityWritesBlocked || migrationBackupPending || shuttingDown) {
+					logger.warn("startup-recovery", "Skipping FTS startup recovery because integrity is not verified healthy", {
+						integrityHealthy,
+						migrationIntegrityWritesBlocked,
+						migrationBackupPending,
+						shuttingDown,
+					});
+					return;
+				}
 				const maintenance = dbOwnerMaintenanceHandle;
 				if (maintenance === null) throw new Error("DB owner maintenance is unavailable for FTS startup recovery");
 				const result = await completeFtsStartupRecovery({
 					backfill: maintenance.backfillFts,
 					backfillOptions: { checkpointKey: "fts.memories.startup" },
-					scheduleContinuation: (callback): void => {
-						const timer = setTimeout(callback, 0);
+					scheduleContinuation: (callback, delayMs): void => {
+						const timer = setTimeout(callback, delayMs);
 						timer.unref?.();
 					},
 				});
 				logger.info("daemon", "FTS startup maintenance finished", { ...result });
+				if (
+					result.status !== "complete" ||
+					migrationIntegrityWritesBlocked ||
+					shuttingDown ||
+					pendingMigrationBackupPath(MEMORY_DB) !== null
+				)
+					return;
+				const owner = dbOwnerClient;
+				if (owner === null) throw new Error("DB owner is unavailable for vacuum conversion");
+				if (vacuumConversionHandle === null) {
+					vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor(), { owner });
+				}
 			});
 		}
 		let retainedCorruptMaintenanceLogged = false;
@@ -2868,6 +2897,7 @@ async function main() {
 						"Skipping all mutating post-ready maintenance because database corruption is retained",
 					);
 				}
+				deferredRuntimeGate.completeVerifiedIntegrity(false);
 				deferredRuntimeGate.completeIntegrity();
 				return;
 			}
@@ -2885,11 +2915,6 @@ async function main() {
 			}
 			const migrationBackupPending = migrationBackupPath !== null;
 			if (owner === null) throw new Error("DB owner is unavailable for incremental integrity maintenance");
-			const startVacuumConversion = (): void => {
-				if (vacuumConversionHandle !== null) return;
-				vacuumConversionHandle = startVacuumConversionWorker(getDbAccessor(), { owner });
-			};
-			if (!migrationBackupPending) startVacuumConversion();
 			let integritySliceTimer: ReturnType<typeof setTimeout> | null = null;
 			let integritySlicePending = false;
 			let integrityRetryDelayMs = 0;
@@ -3028,8 +3053,6 @@ async function main() {
 								setTimeout(() => {
 									requestShutdown("migration-verify-complete-restart", 0, undefined, false);
 								}, 0);
-							} else {
-								startVacuumConversion();
 							}
 						} else if (result.phase === "parked" || result.phase === "failed" || result.phase === "terminal") {
 							logger.warn("startup-recovery", "Migration verification retained the rollback backup; VACUUM deferred", {
@@ -3070,6 +3093,7 @@ async function main() {
 							"Skipping incremental integrity maintenance because database corruption is retained",
 						);
 					}
+					deferredRuntimeGate.completeVerifiedIntegrity(false);
 					integritySlicePending = false;
 					return;
 				}
@@ -3110,6 +3134,9 @@ async function main() {
 						});
 					}
 					scheduleIntegritySlice(integrityRetryDelayMs);
+				}
+				if (result.phase !== "running" && result.phase !== "timed_out" && result.phase !== "unavailable") {
+					deferredRuntimeGate.completeVerifiedIntegrity(result.phase === "complete" && result.failedObjects === 0);
 				}
 				if (!migrationIntegrityGateActive && !integrityGateCompleted) {
 					integrityGateCompleted = true;
