@@ -56,7 +56,7 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				provenance: "fixture-assistant",
 			},
 		];
-		writeFileSync(transcriptPath, `${transcriptRows.map((row) => JSON.stringify(row)).join("\\n")}\\n`);
+		writeFileSync(transcriptPath, `${transcriptRows.map((row) => JSON.stringify(row)).join("\n")}\n`);
 		const dbPath = join(snapshot, "data", "signet.db");
 		initDbAccessor(dbPath, { agentsDir: snapshot });
 		await closeDbAccessor();
@@ -67,12 +67,7 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 		const transcriptKey = "restored-completed-session";
 		const transcriptContent = transcriptRows
 			.map(({ role, content }) => `${role === "user" ? "User" : "Assistant"}: ${content}`)
-			.join("\\n");
-		const restoredRoot = join(root, "snapshot");
-		writeFileSync(
-			join(restoredRoot, ".restore-fixture-values.json"),
-			JSON.stringify({ memoryId, memoryContent, isolatedMemoryId, isolatedContent, transcriptKey, transcriptContent }),
-		);
+			.join("\n");
 		const database = new Database(dbPath);
 		try {
 			database.exec("CREATE TABLE restore_witness (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
@@ -87,9 +82,6 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 					"INSERT INTO memories (id, content, type, agent_id, visibility, created_at, updated_at, updated_by) VALUES (?, ?, 'fact', 'isolated-agent', 'private', datetime('now'), datetime('now'), 'test')",
 				)
 				.run(isolatedMemoryId, isolatedContent);
-			database.exec(
-				"CREATE TABLE IF NOT EXISTS session_transcripts (session_key TEXT NOT NULL, content TEXT NOT NULL, harness TEXT, project TEXT, agent_id TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT, completed_at TEXT, content_hash TEXT, PRIMARY KEY (agent_id, session_key))",
-			);
 			database
 				.prepare(
 					"INSERT INTO session_transcripts (session_key, content, harness, agent_id, created_at, updated_at, completed_at) VALUES (?, ?, 'restore-fixture', 'default', ?, ?, ?)",
@@ -171,7 +163,7 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				if (!transcriptResponse.ok)
 					throw Object.assign(new Error("restored transcript unavailable"), { component: "transcripts" });
 				const transcriptBody = (await transcriptResponse.json()) as { content: string };
-				const parsedTranscript = transcriptBody.content.split("\\n").map((line) => {
+				const parsedTranscript = transcriptBody.content.split("\n").map((line) => {
 					const separator = line.indexOf(": ");
 					return { role: line.slice(0, separator).toLowerCase(), content: line.slice(separator + 2) };
 				});
@@ -230,6 +222,7 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 		expect(result.failures.map((failure) => failure.component)).not.toContain("daemon");
 		expect(result.failures.map((failure) => failure.component)).not.toContain("database");
 		expect(result.failures.map((failure) => failure.component)).not.toContain("sources");
+		expect(result.failures.map((failure) => failure.component)).not.toContain("transcripts");
 		expect(result.failures.map((failure) => failure.component)).not.toContain("harness");
 		expect(result.ok).toBe(false);
 		for (const component of ["recall", "dreaming", "ontology", "protection"]) {
