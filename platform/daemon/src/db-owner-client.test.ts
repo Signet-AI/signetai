@@ -27,6 +27,7 @@ import {
 import { shouldRecordDbOwnerCancellation } from "./db-owner-worker";
 import { findSqliteVecExtension } from "@signet/core";
 import { closeDbAccessor, initDbAccessor } from "./db-accessor";
+import { closeDbOwnerDuringShutdown } from "./daemon-shutdown";
 import {
 	closeRegisteredDbOwnerMaintenance,
 	createDbOwnerMaintenance,
@@ -34,7 +35,7 @@ import {
 	runOwnerMaintenanceWithRetry,
 } from "./db-owner-maintenance";
 import { recallThroughDbOwner } from "./db-owner-recall";
-import { dbOwnerQuery, startDbOwnerWithRole } from "./db-owner-runtime";
+import { dbOwnerQuery, dbOwnerVacuumConversion, getDbOwner, startDbOwnerWithRole } from "./db-owner-runtime";
 
 function makeDb(): { readonly directory: string; readonly path: string } {
 	const directory = mkdtempSync(join(tmpdir(), "signet-db-owner-"));
@@ -88,8 +89,10 @@ describe("DB owner client", () => {
 	let directory: string | null = null;
 
 	afterEach(async () => {
-		await closeRegisteredDbOwnerMaintenance();
-		await client?.close();
+		await closeDbOwnerDuringShutdown(
+			() => closeRegisteredDbOwnerMaintenance(),
+			() => client?.close() ?? Promise.resolve(),
+		);
 		client = null;
 		if (directory !== null)
 			for (let attempt = 0; ; attempt++) {
@@ -129,6 +132,70 @@ describe("DB owner client", () => {
 			throw new Error(`DB owner survivor(s) detected: ${survivors.join(", ")}`);
 		}
 	}
+
+	test("closes the owner during maintenance drain without waiting for the job deadline", async () => {
+		if (process.platform === "win32") return;
+		const database = makeDb();
+		directory = database.directory;
+		const activeFile = join(database.directory, "vacuum-active");
+		const previousPause = process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS;
+		const previousActiveFile = process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE;
+		let restoreEnvironment = (): void => {};
+		try {
+			process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = "60000";
+			process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE = activeFile;
+			restoreEnvironment = (): void => {
+				if (previousPause === undefined) Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS");
+				else process.env.SIGNET_TEST_DB_OWNER_VACUUM_PAUSE_MS = previousPause;
+				if (previousActiveFile === undefined)
+					Reflect.deleteProperty(process.env, "SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE");
+				else process.env.SIGNET_TEST_DB_OWNER_VACUUM_ACTIVE_FILE = previousActiveFile;
+			};
+			client = createDbOwnerClient({ dbPath: database.path });
+			const ownerClient = client;
+			await ownerClient.start();
+			const ownerPid = ownerClient.health().pid;
+			if (ownerPid === null) throw new Error("DB owner did not publish its pid");
+			registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: database.path, owner: ownerClient }));
+
+			const owner = await getDbOwner(database.path);
+			const vacuum = dbOwnerVacuumConversion(owner, { deadlineMs: 60_000 });
+			const vacuumOutcome = vacuum.then(
+				(value) => ({ status: "completed" as const, value }),
+				(error: unknown) => ({ status: "rejected" as const, error }),
+			);
+			await waitFor(() => existsSync(activeFile));
+
+			const closingStartedAt = Date.now();
+			await closeDbOwnerDuringShutdown(
+				() => closeRegisteredDbOwnerMaintenance(),
+				() => ownerClient.close(),
+			);
+			expect(Date.now() - closingStartedAt).toBeLessThan(5_000);
+			expect(ownerClient.health().state).toBe("closed");
+			assertNoSurvivors(new Set([ownerPid]));
+			const outcome = await vacuumOutcome;
+			expect(outcome.status).toBe("rejected");
+			if (outcome.status === "rejected") {
+				if (!(outcome.error instanceof DbOwnerDiedError)) throw new Error("expected an unknown DB owner outcome");
+				expect(outcome.error.message).toContain("outcome may be unknown");
+			}
+
+			client = createDbOwnerClient({ dbPath: database.path });
+			await client.start();
+			const integrity = await client.submit<readonly { readonly integrity_check: string }[]>(
+				{ kind: "query", statement: { sql: "PRAGMA integrity_check", result: "all" } },
+				{ operation: "verify-owner-close-recovery", lane: "read", deadlineMs: 5_000 },
+			).result;
+			expect(integrity).toEqual([{ integrity_check: "ok" }]);
+		} finally {
+			await closeDbOwnerDuringShutdown(
+				() => closeRegisteredDbOwnerMaintenance(),
+				() => client?.close() ?? Promise.resolve(),
+			);
+			restoreEnvironment();
+		}
+	});
 
 	test("keeps owner IPC clean while running vector backfill slices", async () => {
 		const database = makeDb();

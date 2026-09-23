@@ -103,7 +103,7 @@ import {
 	createDeferredRuntimeScheduler,
 	releaseDeferredRuntimeGateIfSafe,
 } from "./deferred-runtime-gate";
-import { createShutdownRequestGate } from "./daemon-shutdown";
+import { closeDbOwnerDuringShutdown, createShutdownRequestGate } from "./daemon-shutdown";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
@@ -2011,9 +2011,21 @@ async function cleanup() {
 	}
 	await stopPipelineRuntime();
 
-	if (dbOwnerMaintenanceHandle !== null) {
-		await closeRegisteredDbOwnerMaintenance().catch(() => {});
-		dbOwnerMaintenanceHandle = null;
+	const maintenanceHandle = dbOwnerMaintenanceHandle;
+	const ownerClient = dbOwnerClient;
+	dbOwnerMaintenanceHandle = null;
+	dbOwnerClient = null;
+	if (maintenanceHandle !== null || ownerClient !== null) {
+		try {
+			await closeDbOwnerDuringShutdown(
+				() => (maintenanceHandle === null ? Promise.resolve() : closeRegisteredDbOwnerMaintenance()),
+				() => (ownerClient === null ? Promise.resolve() : ownerClient.close()),
+			);
+		} catch (error) {
+			logger.error("daemon", "DB owner shutdown failed", undefined, {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	try {
@@ -2042,10 +2054,6 @@ async function cleanup() {
 		});
 	}
 
-	if (dbOwnerClient !== null) {
-		await dbOwnerClient.close();
-		dbOwnerClient = null;
-	}
 	await recallDbOwner?.close();
 	recallDbOwner = null;
 	closeDbAccessor();
