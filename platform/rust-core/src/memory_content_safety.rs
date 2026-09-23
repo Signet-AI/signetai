@@ -1,7 +1,95 @@
 use regex::{Regex, RegexBuilder};
+use rusqlite::{params, Connection, OptionalExtension};
 use unicode_normalization::UnicodeNormalization;
 
+use crate::CoreError;
+
 pub const MEMORY_CONTENT_SAFETY_POLICY_VERSION: &str = "memory-content-safety-v1";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryContentSafetySourceKind {
+    Memory,
+    Artifact,
+    Transcript,
+    Summary,
+    SourceChunk,
+}
+
+impl MemoryContentSafetySourceKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Memory => "memory",
+            Self::Artifact => "artifact",
+            Self::Transcript => "transcript",
+            Self::Summary => "summary",
+            Self::SourceChunk => "source_chunk",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MemoryContentSafetyRow {
+    pub agent_id: String,
+    pub source_kind: MemoryContentSafetySourceKind,
+    pub source_id: String,
+    pub status: String,
+    pub context_eligible: i64,
+    pub reasons_json: String,
+    pub policy_version: String,
+    pub scanned_at: String,
+}
+
+pub fn memory_content_safety_table_exists(db: &Connection) -> Result<bool, CoreError> {
+    Ok(db
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            ["memory_content_safety"],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some())
+}
+
+pub fn read_memory_content_safety(
+    db: &Connection,
+    agent_id: &str,
+    source_kind: MemoryContentSafetySourceKind,
+    source_id: &str,
+) -> Result<Option<MemoryContentSafetyRow>, CoreError> {
+    if !memory_content_safety_table_exists(db)? {
+        return Ok(None);
+    }
+    let agent_id = agent_id.trim();
+    let agent_id = if agent_id.is_empty() {
+        "default"
+    } else {
+        agent_id
+    };
+    Ok(db.query_row(
+        "SELECT agent_id, source_kind, source_id, status, context_eligible, reasons_json, policy_version, scanned_at FROM memory_content_safety WHERE agent_id = ?1 AND source_kind = ?2 AND source_id = ?3",
+        params![agent_id, source_kind.as_str(), source_id],
+        |row| Ok(MemoryContentSafetyRow {
+            agent_id: row.get(0)?, source_kind, source_id: row.get(2)?, status: row.get(3)?,
+            context_eligible: row.get(4)?, reasons_json: row.get(5)?, policy_version: row.get(6)?, scanned_at: row.get(7)?,
+        }),
+    ).optional()?)
+}
+
+pub fn is_memory_content_context_eligible(
+    db: &Connection,
+    agent_id: &str,
+    source_kind: MemoryContentSafetySourceKind,
+    source_id: &str,
+    content: &str,
+) -> Result<bool, CoreError> {
+    if !scan_memory_content(content).context_eligible {
+        return Ok(false);
+    }
+    Ok(
+        read_memory_content_safety(db, agent_id, source_kind, source_id)?
+            .is_none_or(|row| row.status == "clean" && row.context_eligible == 1),
+    )
+}
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum MemoryContentSafetyStatus {
     Clean,
