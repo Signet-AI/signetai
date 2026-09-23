@@ -26,7 +26,6 @@ export interface ProtectionComponent {
 	readonly status: ProtectionComponentStatus;
 	readonly detail?: string;
 	readonly checkedAt?: string;
-	/** A path is never returned; this is only a safe, caller-provided label. */
 	readonly label?: string;
 }
 

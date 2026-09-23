@@ -104,7 +104,6 @@ export interface DbOwnerClient {
 	cancel(jobId: string): void;
 	health(): DbOwnerHealth;
 	close(): Promise<void>;
-	/** Migration control for the same process/descriptor owner. */
 	migrationControl(): MigrationControlBoundary;
 }
 
@@ -185,7 +184,6 @@ export interface DbOwnerClientOptions {
 	readonly sqlitePath?: string;
 	readonly startupTimeoutMs?: number;
 	readonly workerRole?: "generic" | "recall";
-	/** Shared daemon admission control for generation-aware writer fencing. */
 	readonly migrationControl?: MigrationControlBoundary;
 }
 

@@ -175,11 +175,12 @@ export function mergeSignetGitignoreEntries(existingContent: string): string {
 
 	const hadBlock = blockRe.test(normalized);
 	const withoutOldBlock = normalized.replace(blockRe, "");
-	const merged = withoutOldBlock.length > 0
-		? hadBlock
-			? `${withoutOldBlock}${block}`
-			: `${withoutOldBlock}${withoutOldBlock.endsWith("\n") ? "" : "\n"}\n${block}`
-		: block;
+	const merged =
+		withoutOldBlock.length > 0
+			? hadBlock
+				? `${withoutOldBlock}${block}`
+				: `${withoutOldBlock}${withoutOldBlock.endsWith("\n") ? "" : "\n"}\n${block}`
+			: block;
 	const withStyle = merged.replaceAll("\n", newline);
 	return hadFinalNewline || existingContent.length === 0 ? withStyle : withStyle.replace(/(?:\r\n|\n)$/, "");
 }

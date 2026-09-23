@@ -66,10 +66,6 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			const date = new Date().toISOString().split("T")[0];
 			await deps.gitAddAndCommit(context.basePath, `${date}_pre-signet-backup`);
 		}
-
-		// v2 workspaces must not recreate the v1 `memory/` tree. Legacy memory
-		// scripts and requirements are migration-only assets and are deliberately
-		// not installed by fresh setup.
 		mkdirSync(join(context.basePath, "harnesses"), { recursive: true });
 
 		spinner.text = "Installing memory system...";

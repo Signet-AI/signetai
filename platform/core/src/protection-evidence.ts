@@ -25,8 +25,6 @@ function canonicalDigest(paths: readonly string[]): string {
 	for (const path of paths) visit(path, path);
 	return hash.digest("hex");
 }
-
-/** Hashes only authoritative current content; runtime receipts and rebuildable cache are excluded. */
 export function computeProtectionDigests(rootPath: string): Readonly<Record<string, string>> {
 	const layout = resolveWorkspaceLayout(rootPath);
 	const originalDirs = ["backup", ".backup", "originals", "managed-originals"].map((name) => join(rootPath, name));
@@ -72,9 +70,7 @@ function hasVerifiedBackup(root: string, names: readonly string[]): boolean {
 			};
 			if (parsed.workspace === root && typeof parsed.checksum === "string" && Array.isArray(parsed.components))
 				return true;
-		} catch {
-			// Unverified directories are not protection evidence.
-		}
+		} catch {}
 	}
 	return false;
 }

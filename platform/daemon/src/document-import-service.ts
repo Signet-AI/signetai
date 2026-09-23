@@ -47,11 +47,6 @@ export interface DocumentImportResult {
 	readonly status: DocumentImportStatus;
 	readonly persistedBytes: number;
 }
-
-/**
- * Shared document importer for HTTP uploads and manual inbox drops.
- * Exact originals must already be durably admitted before this function runs.
- */
 export async function importDocument(input: DocumentImportInput): Promise<DocumentImportResult> {
 	if (input.bytes.byteLength === 0)
 		return { status: { fileName: input.fileName, status: "failed", error: "File is empty" }, persistedBytes: 0 };

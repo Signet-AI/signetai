@@ -32,7 +32,6 @@ export interface ImportRow {
 export interface ImportLedger {
 	upsert(row: ImportRow): Promise<ImportRow> | ImportRow;
 	find(key: string): Promise<ImportRow | undefined> | ImportRow | undefined;
-	/** Durable lifecycle operations are implemented by the database owner. */
 	appendEvent?(key: string, event: string): Promise<void> | void;
 	transition?(
 		key: string,
@@ -45,7 +44,6 @@ export interface ImportLedger {
 }
 export interface InboxOptions {
 	root: string;
-	/** Resolved layout is supplied by the owner; root is retained for compatibility. */
 	layout?: ReturnType<typeof resolveWorkspaceLayout>;
 	ledger: ImportLedger;
 	maxFiles?: number;
@@ -62,8 +60,6 @@ export interface Admission {
 	maxFileBytes?: number;
 	migration?: MigrationAdmission;
 }
-
-/** Durable boundary used by HTTP upload routes before normalization. */
 export interface DurableImportAdmission {
 	admit(input: {
 		readonly fileName: string;
@@ -108,8 +104,6 @@ function paths(root: string, key: string, layout = resolveWorkspaceLayout(root))
 	const managed = join(resolve(layout.imports), key);
 	return { managed, original: join(managed, "original") };
 }
-
-/** The sole admission boundary shared by uploads and inbox drops. */
 export async function admitImport(input: Admission): Promise<ImportRow> {
 	return withMigrationAdmission(input.migration, "import-admission", () => admitImportInGeneration(input));
 }
@@ -137,8 +131,6 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 		await unlink(tmp).catch(() => {});
 		throw new Error("original verification failed");
 	}
-	// Publish retained bytes before the durable row. A crash here leaves an
-	// inspectable orphan for reconciliation; the reverse ordering loses bytes.
 	const row: ImportRow = {
 		key,
 		fileName: input.fileName,
@@ -159,8 +151,6 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	const committed = await input.ledger.upsert(row);
 	return committed;
 }
-
-/** Inventory only the configured inbox; never follows links or scans parents. */
 export async function scanInbox(input: InboxOptions): Promise<ImportRow[]> {
 	return withMigrationAdmission(input.migration, "import-inbox", () => scanInboxInGeneration(input));
 }
@@ -171,7 +161,6 @@ async function scanInboxInGeneration(input: InboxOptions): Promise<ImportRow[]> 
 	await mkdir(inbox, { recursive: true });
 	const entries = await readdir(inbox, { withFileTypes: true });
 	const out: ImportRow[] = [];
-	// Filter first, then bound work; temp files must not starve valid entries.
 	const candidates = entries.filter(
 		(entry) => !entry.name.startsWith(".") && !entry.name.endsWith(".tmp") && !entry.name.endsWith(".part"),
 	);

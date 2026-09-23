@@ -26,8 +26,6 @@ export interface TranscriptImportAdmissionResult {
 }
 
 const checksum = (bytes: Uint8Array): string => createHash("sha256").update(bytes).digest("hex");
-
-/** Stage exact JSONL bytes through the canonical transcript import state machine. */
 export async function stageTranscriptImport(
 	input: TranscriptImportAdmissionInput,
 ): Promise<TranscriptImportAdmissionResult> {

@@ -25,7 +25,6 @@ export interface ManualInboxAdmission {
 		bytes: Uint8Array;
 	}): Promise<ManualInboxRow | null>;
 	record(row: ManualInboxRow): Promise<void>;
-	/** Persist publication identity before terminal admission state. */
 	recordPublication?(row: ManualInboxRow): Promise<void>;
 	reconcile?(): Promise<void>;
 }
@@ -38,7 +37,6 @@ export interface ManualInboxWorkerOptions {
 	pollMs?: number;
 	settleMs?: number;
 	maxFiles?: number;
-	/** Testable filesystem seam; production defaults to unlink. */
 	unlinkFile?: (path: string) => Promise<void>;
 }
 export interface ManualInboxWorkerHandle {
@@ -79,7 +77,6 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 		await mkdir(inbox, { recursive: true });
 		const names = (await readdir(inbox)).filter((name) => !temporary(name)).slice(0, options.maxFiles ?? 10);
 		const enabled = await options.admission.isEnabled();
-		// An existing inbox is inert by default. Only an empty inbox establishes the opt-in marker.
 		if (!enabled) {
 			if (names.length === 0) await options.admission.enable();
 			else return;
@@ -126,9 +123,6 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 				published = await dispatch(claimed);
 				const terminal = { ...claimed, status: published.status, sourceId: published.sourceId } as ManualInboxRow;
 				await options.admission.recordPublication?.(terminal);
-				// A transient owner/DB failure must not turn a published import into a
-				// retryable dispatch. Retry only the terminal write; dispatch is never
-				// repeated after it has returned successfully in this pass.
 				try {
 					await options.admission.record(terminal);
 				} catch (recordError) {
@@ -139,9 +133,6 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 				await remove(path).catch(() => {});
 				counts.imported++;
 			} catch (error) {
-				// Publication crossed the durable document-import boundary. Keep the
-				// claim recoverable when terminal admission is unavailable; replay will
-				// hit the idempotent importer rather than recording a false failure.
 				if (published) continue;
 				await options.admission.record({
 					...claimed,

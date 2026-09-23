@@ -22,8 +22,6 @@ let gitSyncInProgress = false;
 let gitSyncPromise: Promise<unknown> | null = null;
 let gitSyncQueued = false;
 let migrationControl: MigrationControlBoundary | null = null;
-
-/** Attach the daemon migration fence to Git's durable writer. */
 export function setGitMigrationControl(control: MigrationControlBoundary | null): void {
 	migrationControl = control;
 	if (control && control.state !== "open") stopGitSyncTimer();

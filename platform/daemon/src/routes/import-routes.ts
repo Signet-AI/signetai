@@ -47,9 +47,6 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 				!/^[A-Za-z0-9._:-]+$/.test(requestIdempotencyKey))
 		)
 			return c.json({ error: "Invalid Idempotency-Key" }, 400);
-		// Transcript JSONL has a separate durable importer with byte-offset
-		// checkpoints and transcript-specific duplicate semantics. Never let the
-		// generic document normalizer create a second transcript path.
 		if ([...uploadedEntries.map((file) => file.name), ...pathEntries].some((name) => /\.jsonl$/i.test(name)))
 			return c.json({ error: "Transcript JSONL must be uploaded through /api/sources/imports" }, 400);
 		if (uploadedEntries.length + pathEntries.length > IMPORT_MAX_FILES)

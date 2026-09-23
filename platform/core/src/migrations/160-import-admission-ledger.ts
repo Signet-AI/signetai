@@ -1,6 +1,4 @@
 import type { MigrationDb } from "./contract";
-
-/** Durable admission ledger for dashboard uploads and the workspace inbox. */
 const ledgerColumns = [
 	"key",
 	"agent_id",
@@ -71,8 +69,6 @@ function rebuildLedgerWithoutGlobalKeyPrimaryKey(db: MigrationDb): void {
 		throw error;
 	}
 }
-
-/** Durable admission ledger for dashboard uploads and the workspace inbox. */
 export function up(db: MigrationDb): void {
 	db.exec(`
 		CREATE TABLE IF NOT EXISTS import_admission_ledger (

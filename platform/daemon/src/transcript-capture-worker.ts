@@ -529,8 +529,6 @@ async function processTranscriptCaptureJob(
 		return captureResult(await writeCaptureAudit(basePath, job, resolved), resolved);
 	}
 	const sourceBacked = Boolean(job.transcriptPath);
-	// Canonical JSONL is the durable completion boundary. No database evidence,
-	// indexing, or audit may be committed before this succeeds.
 	const canonicalWasWritten = await writeCanonicalTranscriptFromSnapshot({
 		basePath,
 		agentId: job.agentId,

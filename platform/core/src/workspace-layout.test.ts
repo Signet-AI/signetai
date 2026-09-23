@@ -78,7 +78,10 @@ describe("canonical workspace layout resolver", () => {
 	it("preserves v1 overrides and merges explicit overrides during upgrade", () => {
 		const root = mkdtempSync(join(tmpdir(), "layout-upgrade-overrides-"));
 		try {
-			persistWorkspaceLayout(root, { version: 1, overrides: { database: "../db", transcripts: "../transcripts", runtime: "../runtime" } });
+			persistWorkspaceLayout(root, {
+				version: 1,
+				overrides: { database: "../db", transcripts: "../transcripts", runtime: "../runtime" },
+			});
 			const result = createFreshWorkspaceV2(root, { overrides: { cache: "../cache" } });
 			expect(result.database).toBe(resolve(root, "../db"));
 			expect(result.transcripts).toBe(resolve(root, "../transcripts"));

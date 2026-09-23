@@ -198,8 +198,6 @@ async function waitForDaemonReady(child: ReturnType<typeof spawn>, port: number)
 	}
 	throw new Error(`daemon did not become ready on dynamic port${lastError ? `: ${String(lastError)}` : ""}`);
 }
-
-/** Execute recovery in an isolated copy; callers cannot assert readiness or semantics. */
 export async function executeDisposableRestore(input: DisposableRestoreInput): Promise<DisposableRestoreResult> {
 	if (
 		!isAbsolute(input.snapshotRoot) ||

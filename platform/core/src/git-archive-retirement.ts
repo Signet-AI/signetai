@@ -81,16 +81,12 @@ function trackedAndUntracked(root: string, archiveDir: string): string[] {
 		.map((line) => line.slice(3))
 		.filter((p) => !p.startsWith(relative(root, archiveDir)));
 }
-
-/** Build an archive plan only; it performs no Git mutation. */
 export function planRootGitArchive(root: string, directory: string): RootGitArchivePlan {
 	const resolvedRoot = resolve(root);
 	const inventory = inspectRootGit(resolvedRoot);
 	if (!inventory.isRootRepository) throw new Error("refusing archive: target is not the repository root");
 	if (runGit(resolvedRoot, ["rev-parse", "--is-bare-repository"]) === "true")
 		throw new Error("refusing archive: bare repository");
-	// Nested repositories are part of the migration contract. Git metadata is
-	// captured by the migration-specific read-only capture path instead.
 	nestedRepositories(resolvedRoot);
 	const archive = makeArchivePaths(resolvedRoot, directory);
 	return { inventory, archive, redactedPaths: [".git/objects", ".git/logs", ".git/credentials"] };
@@ -118,7 +114,6 @@ export function prepareRootGitArchive(root: string, directory: string): RootGitA
 	try {
 		const worktree = join(stage, "worktree");
 		mkdirSync(worktree, { recursive: true });
-		// Copy the complete checkout, including ignored and untracked state, but never the output.
 		for (const entry of readdirSync(root))
 			if (entry !== ".git" && resolve(join(root, entry)) !== archive.directory)
 				copyTree(join(root, entry), join(worktree, entry));
@@ -142,7 +137,6 @@ export function prepareRootGitArchive(root: string, directory: string): RootGitA
 		liveArchive: digest(readFileSync(archive.liveArchivePath)),
 	};
 	writeFileSync(archive.manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-	// Keep the archive artifact outside the repository's tracked working set.
 	const excludePath = join(gitDir(root), "info", "exclude");
 	mkdirSync(dirname(excludePath), { recursive: true });
 	const exclude = existsSync(excludePath) ? readFileSync(excludePath, "utf8") : "";

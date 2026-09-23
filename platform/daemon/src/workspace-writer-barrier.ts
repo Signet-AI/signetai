@@ -54,8 +54,6 @@ export interface DrainResult {
 }
 
 type Writer = { active: number; queued: number };
-
-/** Daemon-owned admission gate for every durable workspace writer. */
 export class WorkspaceAdmissionBarrier {
 	readonly generation: string;
 	private _state: AdmissionState = "open";
@@ -130,8 +128,6 @@ export interface MigrationControlSnapshot {
 	readonly state: AdmissionState;
 	readonly blockers: DrainBlockerReceipt[];
 }
-
-/** Control-plane facade used by IPC/HTTP migration commands. */
 export class MigrationControlBoundary {
 	private barrier: WorkspaceAdmissionBarrier;
 	private readonly timeoutMs: number;
@@ -148,7 +144,6 @@ export class MigrationControlBoundary {
 	admit(owner: string, generation = this.generation): () => void {
 		return this.barrier.admit(owner, generation);
 	}
-	/** Admit one durable operation and return a generation-fenced lease. */
 	acquireWriter(owner: string, generation = this.generation): WriterLease {
 		const release = this.admit(owner, generation);
 		return new WriterLease(this, generation, release);

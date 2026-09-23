@@ -27,7 +27,10 @@ describe("root git transition", () => {
 	});
 	it("updates a clean ignore file and refuses dirty or staged edits", () => {
 		const root = repo();
-		writeFileSync(join(root, ".gitignore"), "# user\n# BEGIN Signet lightweight workspace\n# END Signet lightweight workspace\n");
+		writeFileSync(
+			join(root, ".gitignore"),
+			"# user\n# BEGIN Signet lightweight workspace\n# END Signet lightweight workspace\n",
+		);
 		spawnSync("git", ["add", ".gitignore"], { cwd: root });
 		spawnSync("git", ["commit", "-qm", "init"], { cwd: root });
 		expect(managedGitignoreUpdate(root).status).toBe("updated");
@@ -74,7 +77,10 @@ describe("root git transition", () => {
 
 	it("preserves CRLF and a missing final newline", () => {
 		const root = repo();
-		writeFileSync(join(root, ".gitignore"), "# user\r\n*.tmp\r\n# BEGIN Signet lightweight workspace\r\n# END Signet lightweight workspace");
+		writeFileSync(
+			join(root, ".gitignore"),
+			"# user\r\n*.tmp\r\n# BEGIN Signet lightweight workspace\r\n# END Signet lightweight workspace",
+		);
 		spawnSync("git", ["add", ".gitignore"], { cwd: root });
 		spawnSync("git", ["commit", "-qm", "init"], { cwd: root });
 		const result = managedGitignoreUpdate(root);
