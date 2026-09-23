@@ -68,6 +68,16 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 		const transcriptContent = transcriptRows
 			.map(({ role, content }) => `${role === "user" ? "User" : "Assistant"}: ${content}`)
 			.join("\n");
+		const ontologyEntityId = "restore-ontology-entity";
+		const ontologyAspectId = "restore-ontology-aspect";
+		const ontologyAttributeId = "restore-ontology-claim";
+		const ontologyAssertionId = "restore-ontology-assertion";
+		const dreamingFrontier = JSON.stringify({
+			capturedAt: "2026-01-01T00:00:00Z",
+			kind: "transcript",
+			id: "restore-frontier-session",
+		});
+		const consumedEvidence = "restore-consumed-transcript";
 		const database = new Database(dbPath);
 		try {
 			database.exec("CREATE TABLE restore_witness (id TEXT PRIMARY KEY, value TEXT NOT NULL)");
@@ -87,12 +97,53 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 					"INSERT INTO session_transcripts (session_key, content, harness, agent_id, created_at, updated_at, completed_at) VALUES (?, ?, 'restore-fixture', 'default', ?, ?, ?)",
 				)
 				.run(transcriptKey, transcriptContent, "2026-01-01T00:00:00Z", "2026-01-01T00:00:02Z", "2026-01-01T00:00:02Z");
+			database
+				.prepare("INSERT INTO dreaming_state (agent_id, evidence_cursor) VALUES ('default', ?)")
+				.run(dreamingFrontier);
+			database
+				.prepare(
+					"INSERT INTO dreaming_passes (id, agent_id, mode, status) VALUES ('restore-pass', 'default', 'incremental-content', 'completed')",
+				)
+				.run();
+			database
+				.prepare(`INSERT INTO dreaming_evidence_consumption
+				(agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, delivered_offset, source_length, pass_id, updated_at)
+				VALUES ('default', 'transcript', ?, '2026-01-01T00:00:00Z', ?, 'restore-revision', 12, 12, 'restore-pass', '2026-01-01T00:00:03Z')`)
+				.run(transcriptKey, consumedEvidence);
+			database
+				.prepare(
+					"INSERT INTO entities (id, name, entity_type, agent_id, created_at, updated_at) VALUES (?, 'Restore Lantern', 'object', 'default', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+				)
+				.run(ontologyEntityId);
+			database
+				.prepare(
+					"INSERT INTO entity_aspects (id, entity_id, name, canonical_name, agent_id) VALUES (?, ?, 'storage', 'storage', 'default')",
+				)
+				.run(ontologyAspectId, ontologyEntityId);
+			database
+				.prepare(`INSERT INTO entity_attributes
+				(id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, group_key, created_at, updated_at)
+				VALUES (?, ?, 'default', 'attribute', 'Cobalt lantern is stored in bay seven.', 'cobalt lantern in bay seven', 0.9, 0.8, 'active', 'restore-fixture', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+				.run(ontologyAttributeId, ontologyAspectId);
+			database
+				.prepare(`INSERT INTO epistemic_assertions
+				(id, agent_id, subject_entity_id, claim_attribute_id, predicate, content, normalized_content, asserted_at, confidence, status, source_kind, source_id, evidence, created_at, updated_at)
+				VALUES (?, 'default', ?, ?, 'claims', 'Cobalt lantern is stored in bay seven.', 'cobalt lantern is stored in bay seven', '2026-01-01T00:00:00Z', 0.9, 'active', 'transcript', ?, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`)
+				.run(
+					ontologyAssertionId,
+					ontologyEntityId,
+					ontologyAttributeId,
+					transcriptKey,
+					JSON.stringify([{ quote: "cobalt lantern is stored in bay seven" }]),
+				);
 		} finally {
 			database.close();
 		}
 		let queriedDaemon = false;
 		let queriedDatabase = false;
+		let queriedDreaming = false;
 		let queriedMemory = false;
+		let queriedOntology = false;
 		const result = await executeDisposableRestore({
 			snapshotRoot: snapshot,
 			expected: {
@@ -113,8 +164,8 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				],
 				sources: [{ id: "source-1", generation: "generation-3" }],
 				recall: { current: true, scope: "default" },
-				dreaming: { frontier: "", consumed: [] },
-				ontology: { history: 0, evidenceLinks: 0 },
+				dreaming: { frontier: dreamingFrontier, consumed: [consumedEvidence] },
+				ontology: { history: 1, evidenceLinks: 1 },
 				harness: { identity: "default", skills: ["independent"] },
 			},
 			daemon: {
@@ -137,6 +188,30 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 						.get("snapshot-row") as { value: string } | null;
 					const integrity = restoredDatabase.query("PRAGMA quick_check").get() as { quick_check: string };
 					queriedDatabase = row?.value === "persisted-before-restore" && integrity.quick_check === "ok";
+					const dreaming = restoredDatabase
+						.prepare("SELECT evidence_cursor FROM dreaming_state WHERE agent_id = 'default'")
+						.get() as { evidence_cursor: string } | null;
+					const consumed = restoredDatabase
+						.prepare("SELECT source_entry_id FROM dreaming_evidence_consumption WHERE pass_id = 'restore-pass'")
+						.get() as { source_entry_id: string } | null;
+					queriedDreaming =
+						dreaming?.evidence_cursor === dreamingFrontier && consumed?.source_entry_id === consumedEvidence;
+					const ontology = restoredDatabase
+						.prepare(
+							"SELECT a.id, COUNT(ea.id) AS evidence_links FROM entity_attributes a LEFT JOIN epistemic_assertions ea ON ea.claim_attribute_id = a.id WHERE a.id = ? GROUP BY a.id",
+						)
+						.get(ontologyAttributeId) as { id: string; evidence_links: number } | null;
+					const history = restoredDatabase
+						.prepare("SELECT COUNT(*) AS count FROM entity_attributes WHERE aspect_id = ?")
+						.get(ontologyAspectId) as { count: number } | null;
+					const evidence = restoredDatabase
+						.prepare("SELECT id FROM epistemic_assertions WHERE subject_entity_id = ? AND claim_attribute_id = ?")
+						.get(ontologyEntityId, ontologyAttributeId) as { id: string } | null;
+					queriedOntology =
+						ontology?.id === ontologyAttributeId &&
+						ontology.evidence_links === 1 &&
+						history?.count === 1 &&
+						evidence?.id === ontologyAssertionId;
 				} finally {
 					restoredDatabase.close();
 				}
@@ -199,6 +274,32 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 					true;
 				if (!recalled || leaked)
 					throw Object.assign(new Error("persisted-memory recall scope mismatch"), { component: "recall" });
+				const dreamingResponse = await fetch(`http://127.0.0.1:${port}/api/dream/status?agent_id=default`, {
+					signal: AbortSignal.timeout(5000),
+				});
+				if (!dreamingResponse.ok)
+					throw Object.assign(new Error("restored dreaming state unavailable"), { component: "dreaming" });
+				const dreamingBody = (await dreamingResponse.json()) as {
+					state?: { evidenceCursor?: unknown; lastPassId?: string };
+				};
+				if (JSON.stringify(dreamingBody.state?.evidenceCursor) !== dreamingFrontier)
+					throw Object.assign(new Error("restored dreaming frontier mismatch"), { component: "dreaming" });
+				const ontologyResponse = await fetch(
+					`http://127.0.0.1:${port}/api/ontology/claims/explain?entity=Restore%20Lantern&aspect=storage&group=restore-fixture&claim=cobalt%20lantern%20in%20bay%20seven&agent_id=default`,
+					{
+						signal: AbortSignal.timeout(5000),
+					},
+				);
+				if (!ontologyResponse.ok)
+					throw Object.assign(new Error("restored ontology history unavailable"), { component: "ontology" });
+				const ontologyBody = (await ontologyResponse.json()) as Record<string, unknown>;
+				if (
+					!JSON.stringify(ontologyBody).includes(ontologyAttributeId) ||
+					!JSON.stringify(ontologyBody).includes(ontologyAssertionId)
+				)
+					throw Object.assign(new Error("restored ontology claim or evidence link mismatch"), {
+						component: "ontology",
+					});
 				const skillsResponse = await fetch(`http://127.0.0.1:${port}/api/skills`, {
 					signal: AbortSignal.timeout(3000),
 				});
@@ -207,6 +308,14 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 				return {
 					database: { snapshotConsistent: queriedDatabase },
 					observed: {
+						dreaming: {
+							frontier: queriedDreaming ? JSON.stringify(dreamingBody.state?.evidenceCursor) : "",
+							consumed: queriedDreaming ? [consumedEvidence] : [],
+						},
+						ontology: {
+							history: queriedOntology ? 1 : 0,
+							evidenceLinks: queriedOntology ? 1 : 0,
+						},
 						sources: body.sources.map(({ id, generation }) => ({ id, generation: generation ?? "" })),
 						harness: {
 							identity: status.agentId,
@@ -219,13 +328,17 @@ it("starts the real daemon on a restored v2 database and reads persisted state i
 		expect(queriedDaemon).toBe(true);
 		expect(queriedDatabase).toBe(true);
 		expect(queriedMemory).toBe(true);
+		expect(queriedOntology).toBe(true);
+		expect(queriedDreaming).toBe(true);
 		expect(result.failures.map((failure) => failure.component)).not.toContain("daemon");
 		expect(result.failures.map((failure) => failure.component)).not.toContain("database");
 		expect(result.failures.map((failure) => failure.component)).not.toContain("sources");
 		expect(result.failures.map((failure) => failure.component)).not.toContain("transcripts");
 		expect(result.failures.map((failure) => failure.component)).not.toContain("harness");
 		expect(result.ok).toBe(false);
-		for (const component of ["recall", "dreaming", "ontology", "protection"]) {
+		expect(result.failures.map((failure) => failure.component)).not.toContain("dreaming");
+		expect(result.failures.map((failure) => failure.component)).not.toContain("ontology");
+		for (const component of ["recall", "protection"]) {
 			expect(result.failures.map((failure) => failure.component)).toContain(component);
 		}
 		expect(result.receipt.ok).toBe(false);
