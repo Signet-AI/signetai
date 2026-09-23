@@ -5282,12 +5282,35 @@ fn reflection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     let transaction = connection.transaction()?;
     const NATIVE_SCHEMA_COMPATIBILITY_VERSION: i64 = 155;
-    let max_schema_version: Option<i64> = if has_table(&transaction, "schema_migrations")? {
+    let had_entity_dependency_history = has_table(&transaction, "entity_dependency_history")?;
+    let has_migration_050_artifacts = had_entity_dependency_history
+        && has_trigger(
+            &transaction,
+            "trg_entity_dependencies_related_to_reason_insert",
+        )?
+        && has_trigger(
+            &transaction,
+            "trg_entity_dependencies_related_to_reason_update",
+        )?
+        && has_trigger(&transaction, "trg_entity_dependencies_audit_insert")?
+        && has_trigger(&transaction, "trg_entity_dependencies_audit_update")?
+        && has_trigger(&transaction, "trg_entity_dependencies_audit_delete")?;
+    let has_schema_migrations = has_table(&transaction, "schema_migrations")?;
+    let max_schema_version: Option<i64> = if has_schema_migrations {
         transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
             row.get(0)
         })?
     } else {
         None
+    };
+    let migration_050_recorded = if has_schema_migrations {
+        transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 50)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? != 0
+    } else {
+        false
     };
     if let Some(version) =
         max_schema_version.filter(|version| *version > NATIVE_SCHEMA_COMPATIBILITY_VERSION)
@@ -5296,7 +5319,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
             "version {version} exceeds native compatibility version {NATIVE_SCHEMA_COMPATIBILITY_VERSION}"
         )));
     }
-    let migration_050_applied = max_schema_version.is_some_and(|version| version >= 50);
+    let migration_050_applied = migration_050_recorded && has_migration_050_artifacts;
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT);
          CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');
@@ -6527,6 +6550,14 @@ fn has_table(transaction: &Transaction<'_>, table: &str) -> Result<bool, CoreErr
     )? != 0)
 }
 
+fn has_trigger(transaction: &Transaction<'_>, trigger: &str) -> Result<bool, CoreError> {
+    Ok(transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?)",
+        [trigger],
+        |row| row.get::<_, i64>(0),
+    )? != 0)
+}
+
 fn has_column(transaction: &Transaction<'_>, table: &str, column: &str) -> Result<bool, CoreError> {
     let sql = format!("PRAGMA table_info({table})");
     let mut statement = transaction.prepare(&sql)?;
@@ -6818,6 +6849,20 @@ mod owner_schema_reconciliation_tests {
                     );
                     INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (50, '2026-09-23', 'migration-050');
+                    CREATE TABLE entity_dependency_history (
+                        id TEXT PRIMARY KEY,
+                        dependency_id TEXT NOT NULL,
+                        source_entity_id TEXT NOT NULL,
+                        target_entity_id TEXT NOT NULL,
+                        agent_id TEXT NOT NULL DEFAULT 'default',
+                        dependency_type TEXT NOT NULL,
+                        event TEXT NOT NULL,
+                        changed_by TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        previous_reason TEXT,
+                        metadata TEXT,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
                     CREATE TABLE entity_dependencies (
                         id TEXT PRIMARY KEY,
                         source_entity_id TEXT NOT NULL,
@@ -6835,7 +6880,16 @@ mod owner_schema_reconciliation_tests {
                     ) VALUES (
                         'post-migration', 'source', 'target', 'agent-a',
                         'supports', 0.5, 'created-after-migration', '2026-09-23', '2026-09-23'
-                    );",
+                    );
+                    CREATE TRIGGER trg_entity_dependencies_related_to_reason_insert BEFORE INSERT ON entity_dependencies
+                    WHEN NEW.dependency_type = 'related_to' AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0)
+                    BEGIN SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason'); END;
+                    CREATE TRIGGER trg_entity_dependencies_related_to_reason_update BEFORE UPDATE OF dependency_type, reason ON entity_dependencies
+                    WHEN NEW.dependency_type = 'related_to' AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0)
+                    BEGIN SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason'); END;
+                    CREATE TRIGGER trg_entity_dependencies_audit_insert AFTER INSERT ON entity_dependencies BEGIN SELECT 1; END;
+                    CREATE TRIGGER trg_entity_dependencies_audit_update AFTER UPDATE ON entity_dependencies BEGIN SELECT 1; END;
+                    CREATE TRIGGER trg_entity_dependencies_audit_delete AFTER DELETE ON entity_dependencies BEGIN SELECT 1; END;",
                 )
                 .unwrap();
         }
@@ -6851,6 +6905,82 @@ mod owner_schema_reconciliation_tests {
                 )
                 .unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn recorded_migration_050_with_missing_triggers_repairs_artifact_at_version_51() {
+        let db = NamedTempFile::new().unwrap();
+        let path = db.path().to_path_buf();
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at TEXT,
+                        checksum TEXT
+                    );
+                    INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (50, '2026-09-23', 'migration-050'),
+                           (51, '2026-09-23', 'migration-051');
+                    CREATE TABLE entity_dependency_history (
+                        id TEXT PRIMARY KEY,
+                        dependency_id TEXT NOT NULL,
+                        source_entity_id TEXT NOT NULL,
+                        target_entity_id TEXT NOT NULL,
+                        agent_id TEXT NOT NULL DEFAULT 'default',
+                        dependency_type TEXT NOT NULL,
+                        event TEXT NOT NULL,
+                        changed_by TEXT NOT NULL,
+                        reason TEXT NOT NULL,
+                        previous_reason TEXT,
+                        metadata TEXT,
+                        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    );
+                    CREATE TABLE entity_dependencies (
+                        id TEXT PRIMARY KEY,
+                        source_entity_id TEXT NOT NULL,
+                        target_entity_id TEXT NOT NULL,
+                        agent_id TEXT NOT NULL,
+                        dependency_type TEXT NOT NULL,
+                        strength REAL NOT NULL,
+                        reason TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT INTO entity_dependencies (
+                        id, source_entity_id, target_entity_id, agent_id,
+                        dependency_type, strength, reason, created_at, updated_at
+                    ) VALUES (
+                        'missing-050', 'source', 'target', 'agent-a',
+                        'related_to', 0.5, NULL, '2026-09-23', '2026-09-23'
+                    );",
+                )
+                .unwrap();
+        }
+
+        drop(Core::open(&path, 4).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM entity_dependency_history WHERE dependency_id='missing-050' AND event='backfill'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT reason FROM entity_dependencies WHERE id='missing-050'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "legacy-unattributed related_to edge"
         );
     }
 }
