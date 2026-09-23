@@ -142,12 +142,18 @@ export async function getDreamingWorkerAgentIds(
 	 UNION ALL
 	 SELECT DISTINCT agent_id AS id FROM entities`;
 	const rows = ownerMaintenance?.owner
-		? await ownerQueryAll<{ id: string | null }>(ownerMaintenance.owner, "pipeline/dreaming-worker.agent-scopes", sql)
+		? await ownerQueryAll<{ id: string | null }>(
+				ownerMaintenance.owner,
+				"pipeline/dreaming-worker.agent-scopes",
+				sql,
+				[],
+				{ waitForOwnerCompletionOnDeadline: true },
+			)
 		: await accessor.withReadDbAsync(
 				(db) => {
 					return db.prepare(sql).all() as Array<{ id: string | null }>;
 				},
-				{ siteToken: "pipeline/dreaming-worker.ts:146", operation: "dreaming.worker.agent-scopes" },
+				{ siteToken: "pipeline/dreaming-worker.ts:152", operation: "dreaming.worker.agent-scopes" },
 			);
 	const ids = new Set<string>([defaultAgentId]);
 	for (const row of rows) {
@@ -202,7 +208,7 @@ export async function selectDreamingCheckMode(
 							[scope, "hygiene"],
 						).then((row) => row != null)
 					: accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]), {
-							siteToken: "pipeline/dreaming-worker.ts:204",
+							siteToken: "pipeline/dreaming-worker.ts:210",
 							operation: "dreaming.worker.hygiene-attention",
 						}),
 			),
@@ -224,7 +230,7 @@ export async function selectDreamingCheckMode(
 					: accessor.withReadDbAsync(
 							(db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
 							{
-								siteToken: "pipeline/dreaming-worker.ts:224",
+								siteToken: "pipeline/dreaming-worker.ts:230",
 								operation: "dreaming.worker.content-attention",
 							},
 						),
@@ -458,43 +464,57 @@ export function startDreamingWorker(
 			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
 			active = true;
 			activeAgent = runAgentId;
-			let passId: string;
-			try {
-				passId = options.ownerMaintenance
-					? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode)
-					: await createDreamingPass(accessor, runAgentId, mode);
-			} catch (error) {
-				active = false;
-				activeAgent = null;
-				throw error;
-			}
-			const p = runDreamingAgentPass(
-				accessor,
-				executorForAgent(runAgentId),
-				cfg,
-				agentsDir,
-				runAgentId,
-				await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance),
-				mode,
-				passId,
-				caps,
-				undefined,
-				options.ownerMaintenance,
-			);
-			activePassPromise = p;
-			p.catch((e) => {
-				recordDreamingFailure(accessor, runAgentId);
-				logger.error("dreaming-worker", "Async trigger failed", undefined, {
-					agentId: runAgentId,
-					passId,
-					error: e instanceof Error ? e.message : String(e),
-				});
-			}).finally(() => {
+			let resolveActivePass: (() => void) | null = null;
+			let rejectActivePass: ((error: unknown) => void) | null = null;
+			const activeAttempt = new Promise<void>((resolve, reject) => {
+				resolveActivePass = resolve;
+				rejectActivePass = reject;
+			});
+			void activeAttempt.catch(() => undefined);
+			activePassPromise = activeAttempt;
+			const finish = (): void => {
 				active = false;
 				activeAgent = null;
 				activePassPromise = null;
-			});
-			return passId;
+				const resolve = resolveActivePass;
+				resolveActivePass = null;
+				resolve?.();
+			};
+			try {
+				const passScopes = await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance);
+				const executor = executorForAgent(runAgentId);
+				const passId = options.ownerMaintenance
+					? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode)
+					: await createDreamingPass(accessor, runAgentId, mode);
+				const p = runDreamingAgentPass(
+					accessor,
+					executor,
+					cfg,
+					agentsDir,
+					runAgentId,
+					passScopes,
+					mode,
+					passId,
+					caps,
+					undefined,
+					options.ownerMaintenance,
+				);
+				void p
+					.catch((error) => {
+						recordDreamingFailure(accessor, runAgentId);
+						logger.error("dreaming-worker", "Async trigger failed", undefined, {
+							agentId: runAgentId,
+							passId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+						rejectActivePass?.(error);
+					})
+					.finally(finish);
+				return passId;
+			} catch (error) {
+				finish();
+				throw error;
+			}
 		},
 
 		get running() {
