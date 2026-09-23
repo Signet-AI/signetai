@@ -3,15 +3,17 @@ import type { FtsBackfillOptions, FtsBackfillResult } from "./db-owner-maintenan
 export interface FtsStartupRecoveryOptions {
 	readonly backfill: (options?: FtsBackfillOptions) => Promise<FtsBackfillResult>;
 	readonly backfillOptions?: FtsBackfillOptions;
-	readonly scheduleContinuation: (callback: () => void) => void;
+	readonly scheduleContinuation: (callback: () => void, delayMs: number) => void;
 	readonly onPass?: (result: FtsBackfillResult) => void;
 }
+
+const FTS_STARTUP_CONTINUATION_DELAY_MS = 1_000;
 
 function scheduleBackfillPass(options: FtsStartupRecoveryOptions): Promise<FtsBackfillResult> {
 	return new Promise<FtsBackfillResult>((resolve, reject) => {
 		options.scheduleContinuation(() => {
 			void options.backfill(options.backfillOptions).then(resolve, reject);
-		});
+		}, FTS_STARTUP_CONTINUATION_DELAY_MS);
 	});
 }
 

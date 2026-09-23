@@ -60,7 +60,10 @@ prevents committing a verified repair, the default remains fail-closed.
 The incremental integrity check also runs in bounded slices. It continues past
 FTS5 virtual tables and reports those objects as `unverifiable` without marking
 the rest of the database unhealthy. A schema change resets its saved position
-so new objects are not skipped.
+so new objects are not skipped. FTS startup recovery and legacy `VACUUM` conversion
+start only after the sweep completes without integrity failures and no migration
+backup is pending. Unavailable verification or retained corruption keeps those
+writes deferred, as does a shutdown already in progress.
 
 Examples:
 

@@ -28,6 +28,7 @@ export type IncrementalIntegrityPhase = "running" | "complete" | "cancelled" | "
 const INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS = 1_000;
 const INCREMENTAL_INTEGRITY_RETRY_MAX_DELAY_MS = 30_000;
 export function nextIncrementalIntegrityRetryDelay(phase: IncrementalIntegrityPhase, previousDelayMs: number): number {
+	if (phase === "running") return INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS;
 	if (phase !== "timed_out" && phase !== "unavailable") return 0;
 	const previous =
 		Number.isFinite(previousDelayMs) && previousDelayMs >= INCREMENTAL_INTEGRITY_RETRY_BASE_DELAY_MS

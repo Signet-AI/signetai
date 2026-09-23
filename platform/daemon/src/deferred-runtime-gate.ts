@@ -1,6 +1,8 @@
 export interface DeferredRuntimeGate {
 	readonly waitForIntegrity: () => Promise<void>;
 	readonly completeIntegrity: () => void;
+	readonly waitForVerifiedIntegrity: () => Promise<boolean>;
+	readonly completeVerifiedIntegrity: (healthy: boolean) => void;
 }
 
 export interface DeferredRuntimeScheduleOptions {
@@ -41,10 +43,21 @@ export function createDeferredRuntimeGate(): DeferredRuntimeGate {
 	const integrityComplete = new Promise<void>((resolve) => {
 		resolveIntegrity = resolve;
 	});
+	let resolveVerifiedIntegrity: (healthy: boolean) => void = () => {};
+	const verifiedIntegrity = new Promise<boolean>((resolve) => {
+		resolveVerifiedIntegrity = resolve;
+	});
+	let verifiedIntegrityCompleted = false;
 	return {
 		waitForIntegrity: async (): Promise<void> => await integrityComplete,
 		completeIntegrity: (): void => {
 			resolveIntegrity();
+		},
+		waitForVerifiedIntegrity: async (): Promise<boolean> => await verifiedIntegrity,
+		completeVerifiedIntegrity: (healthy): void => {
+			if (verifiedIntegrityCompleted) return;
+			verifiedIntegrityCompleted = true;
+			resolveVerifiedIntegrity(healthy);
 		},
 	};
 }
@@ -55,6 +68,7 @@ export function createDeferredRuntimeScheduler(options: DeferredRuntimeScheduler
 		try {
 			(options.onIntegrityFailure ?? options.onMaintenanceError)(error);
 		} finally {
+			options.gate.completeVerifiedIntegrity(false);
 			options.gate.completeIntegrity();
 		}
 	};
