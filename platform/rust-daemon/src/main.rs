@@ -390,6 +390,7 @@ pub(crate) struct AppState {
     pub(crate) config_dir: Result<Arc<File>, String>,
     pub(crate) dashboard: Option<PathBuf>,
     pub(crate) auth_secret: Option<Vec<u8>>,
+    pub(crate) auth_mode: Arc<Mutex<String>>,
     pub(crate) cancellation: Arc<CancellationRuntime>,
 }
 
@@ -434,9 +435,7 @@ async fn authenticate_api(
     next: Next,
 ) -> Response {
     let expected = configured_api_key();
-    let local_mode = env::var("SIGNET_MODE")
-        .map(|mode| mode.eq_ignore_ascii_case("local"))
-        .unwrap_or(true);
+    let local_mode = state.auth_mode.lock().map(|mode| mode.as_str() == "local").unwrap_or(false);
     if local_mode && expected.is_none() {
         return next.run(request).await;
     }
@@ -717,6 +716,22 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
             Err(CoreError::UnsupportedMigrationHistory(message))
                 if message == "version 153 is newer than 2"
         ));
+    }
+
+    #[test]
+    fn auth_mode_defaults_to_local_and_rejected_reload_keeps_last_accepted_mode() {
+        let directory = env::temp_dir().join(format!("signet-auth-mode-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let config = directory.join("agent.yaml");
+        let mode = Arc::new(Mutex::new(super::read_auth_mode(&directory).unwrap()));
+        assert_eq!(*mode.lock().unwrap(), "local");
+        std::fs::write(&config, "auth:\n  mode: team\n").unwrap();
+        super::update_auth_mode(&mode, &directory).unwrap();
+        assert_eq!(*mode.lock().unwrap(), "team");
+        std::fs::write(&config, "auth:\n  mode: invalid\n").unwrap();
+        assert!(super::update_auth_mode(&mode, &directory).is_err());
+        assert_eq!(*mode.lock().unwrap(), "team");
+        let _ = std::fs::remove_dir_all(directory);
     }
 
     #[test]
@@ -1719,6 +1734,26 @@ fn resolve_startup_workspace() -> Result<PathBuf, String> {
         .ok_or_else(|| "Signet cannot start: missing workspace (will not recreate it)".to_owned())
 }
 
+fn read_auth_mode(workspace: &FsPath) -> Result<String, String> {
+    let path = workspace.join("agent.yaml");
+    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut in_auth = false;
+    let mut mode = "local".to_owned();
+    for line in text.lines() {
+        if line.trim() == "auth:" {
+            in_auth = true;
+        } else if !line.starts_with(' ') && !line.starts_with('\t') && !line.trim().is_empty() {
+            in_auth = false;
+        } else if in_auth && line.trim_start().starts_with("mode:") {
+            mode = line.trim_start()[5..].trim().to_owned();
+        }
+    }
+    if !matches!(mode.as_str(), "local" | "team" | "hybrid") {
+        return Err(format!("{}: invalid auth mode", path.display()));
+    }
+    Ok(mode)
+}
+
 fn validate_startup_config(workspace: &FsPath) -> Result<(), String> {
     let path = workspace.join("agent.yaml");
     let text = std::fs::read_to_string(&path).unwrap_or_default();
@@ -1744,7 +1779,13 @@ fn validate_startup_config(workspace: &FsPath) -> Result<(), String> {
     Ok(())
 }
 
-fn start_runtime_config_watcher(workspace: &FsPath) {
+fn update_auth_mode(mode: &Arc<Mutex<String>>, workspace: &FsPath) -> Result<(), String> {
+    let candidate = read_auth_mode(workspace)?;
+    *mode.lock().map_err(|_| "auth mode state unavailable".to_owned())? = candidate;
+    Ok(())
+}
+
+fn start_runtime_config_watcher(workspace: &FsPath, auth_mode: Arc<Mutex<String>>) {
     let path = workspace.join("agent.yaml");
     let initial = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     std::thread::spawn(move || {
@@ -1754,9 +1795,9 @@ fn start_runtime_config_watcher(workspace: &FsPath) {
             let current = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
             if current.is_some() && current != last {
                 last = current;
-                if let Err(error) =
-                    validate_startup_config(path.parent().unwrap_or(FsPath::new(".")))
-                {
+                if let Err(error) = validate_startup_config(path.parent().unwrap_or(FsPath::new("."))) {
+                    eprintln!("Rejected runtime config change: {error}");
+                } else if let Err(error) = update_auth_mode(&auth_mode, path.parent().unwrap_or(FsPath::new("."))) {
                     eprintln!("Rejected runtime config change: {error}");
                 }
             }
@@ -1864,6 +1905,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err(message.into());
         }
     };
+    let auth_mode = read_auth_mode(&workspace).map_err(|message| {
+        eprintln!("{message}");
+        message
+    })?;
+    let auth_mode = Arc::new(Mutex::new(auth_mode));
     validate_startup_config(&workspace).map_err(|message| {
         eprintln!("{message}");
         message
@@ -1889,13 +1935,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             return Err(error.into());
         }
     });
-    start_runtime_config_watcher(&workspace);
+    start_runtime_config_watcher(&workspace, auth_mode.clone());
     let config_dir = routes::git_sync::admit_config_dir(&workspace);
     let state = AppState {
         owner,
         started_at: now_seconds(),
         dashboard: resolve_dashboard_path(),
         auth_secret: routes::auth::load_secret(&workspace),
+        auth_mode,
         workspace,
         config_dir,
         cancellation: Arc::new(CancellationRuntime::default()),

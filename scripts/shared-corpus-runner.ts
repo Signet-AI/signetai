@@ -175,8 +175,17 @@ export type SetupCommand = (command: string, args: string[], cwd: string, env: N
 
 export function prepareTypeScriptLane(
 	worktree: string,
-	execute: SetupCommand = (command, args, cwd, env) =>
-		spawnSync(command, args, { cwd, env, encoding: "utf8", stdio: "inherit" }).status,
+	execute: SetupCommand = (command, args, cwd, env) => {
+		const result = spawnSync(command, args, {
+			cwd,
+			env,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		if (result.stdout) process.stderr.write(result.stdout);
+		if (result.stderr) process.stderr.write(result.stderr);
+		return result.status;
+	},
 	env: NodeJS.ProcessEnv = { ...process.env },
 ): TypeScriptSetupResult {
 	for (const [step, args] of [
