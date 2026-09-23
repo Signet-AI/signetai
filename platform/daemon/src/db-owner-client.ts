@@ -34,6 +34,8 @@ export const MAX_DB_OWNER_WORK_UNITS = DB_OWNER_MAX_WORK_UNITS;
 export const MAX_DB_OWNER_DEADLINE_MS = DB_OWNER_MAX_DEADLINE_MS;
 export const MAX_DB_OWNER_RESULT_BYTES = DB_OWNER_MAX_RESULT_BYTES;
 const dbOwnerWallClockNow = Date.now.bind(Date);
+const DB_OWNER_CLOSE_WAIT_MS = 1_000;
+const DB_OWNER_CLOSE_FORCE_KILL_AFTER_MS = 250;
 
 export interface DbOwnerLaneHealth {
 	readonly state: DbOwnerHealthState;
@@ -248,6 +250,7 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let startupResolve: (() => void) | null = null;
 	let startupReject: ((error: unknown) => void) | null = null;
 	let closed = false;
+	let closePromise: Promise<void> | null = null;
 	let generation = 0;
 	let state: DbOwnerHealthState = "dead";
 	let pid: number | null = null;
@@ -485,6 +488,9 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 			activeJobId = null;
 			input = "";
 			startPromise = null;
+			state = "closed";
+			lastError = null;
+			unlinkCancellationRegistry();
 			return;
 		}
 		const message = signal === null ? `DB owner exited with code ${code ?? "unknown"}` : `DB owner killed by ${signal}`;
@@ -802,31 +808,67 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 		});
 	}
 
-	async function close(): Promise<void> {
+	function close(): Promise<void> {
+		if (closePromise !== null) return closePromise;
 		const owner = child;
 		const ownerClose = activeChildClose;
-		closed = true;
-		if (owner !== null) {
-			void write(owner, { type: "shutdown" }).catch(() => {});
-			const forceKillTimer = setTimeout(() => {
-				try {
-					owner.kill("SIGKILL");
-				} catch {}
-			}, 250);
-			if (ownerClose !== null) await ownerClose;
-			clearTimeout(forceKillTimer);
-		}
 		const retiredClose = retiredChildClose;
-		if (retiredClose !== null) await retiredClose;
-		if (retiredChildClose === retiredClose) retiredChildClose = null;
-		state = "closed";
-		rejectAll(new DbOwnerDiedError("DB owner client closed"));
+		closed = true;
+		state = "failed";
+		lastError = "DB owner client is closing; active job outcome may be unknown";
+		rejectAll(new DbOwnerDiedError(lastError));
 		for (const resolveMetrics of abandonedMetrics.values()) resolveMetrics(undefined);
 		abandonedMetrics.clear();
 		abandonedWorkloadClasses.clear();
-		try {
-			unlinkSync(cancellationRegistryPath);
-		} catch {}
+		if (owner !== null) {
+			void write(owner, { type: "shutdown" }).catch(() => {});
+		}
+		const closeEvents = [ownerClose, retiredClose].filter((event): event is Promise<void> => event !== null);
+		const completion = (async (): Promise<void> => {
+			let forceKillTimer: ReturnType<typeof setTimeout> | null = null;
+			let closeWaitTimer: ReturnType<typeof setTimeout> | null = null;
+			if (owner !== null) {
+				forceKillTimer = setTimeout(() => {
+					try {
+						owner.kill("SIGKILL");
+					} catch {}
+				}, DB_OWNER_CLOSE_FORCE_KILL_AFTER_MS);
+			}
+			const exited = await Promise.race([
+				Promise.all(closeEvents).then(() => true),
+				new Promise<boolean>((resolve) => {
+					closeWaitTimer = setTimeout(() => resolve(false), DB_OWNER_CLOSE_WAIT_MS);
+				}),
+			]);
+			if (forceKillTimer !== null) clearTimeout(forceKillTimer);
+			if (closeWaitTimer !== null) clearTimeout(closeWaitTimer);
+			if (!exited) {
+				try {
+					owner?.kill("SIGKILL");
+				} catch {}
+				const message = `DB owner process ${owner?.pid ?? pid ?? "unknown"} did not exit within ${DB_OWNER_CLOSE_WAIT_MS}ms after shutdown; the database lock remains held until it exits`;
+				lastError = message;
+				void Promise.all(closeEvents)
+					.then(() => {
+						if (retiredChildClose === retiredClose) retiredChildClose = null;
+						if (child === null && retiredChildClose === null) {
+							state = "closed";
+							pid = null;
+							lastError = null;
+							unlinkCancellationRegistry();
+						}
+					})
+					.catch(() => {});
+				throw new DbOwnerDiedError(message);
+			}
+			if (retiredChildClose === retiredClose) retiredChildClose = null;
+			state = "closed";
+			pid = null;
+			lastError = null;
+			unlinkCancellationRegistry();
+		})();
+		closePromise = completion;
+		return completion;
 	}
 
 	async function initialize(agentsDir?: string): Promise<DbOwnerInitializationResult> {

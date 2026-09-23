@@ -21,3 +21,26 @@ export function createShutdownRequestGate(): ShutdownRequestGate {
 		},
 	};
 }
+
+export async function closeDbOwnerDuringShutdown(
+	closeMaintenance: () => Promise<void>,
+	closeOwner: () => Promise<void>,
+): Promise<void> {
+	let maintenanceClose: Promise<void>;
+	try {
+		maintenanceClose = closeMaintenance();
+	} catch (error) {
+		maintenanceClose = Promise.reject(error);
+	}
+
+	let ownerClose: Promise<void>;
+	try {
+		ownerClose = closeOwner();
+	} catch (error) {
+		ownerClose = Promise.reject(error);
+	}
+
+	const [maintenanceResult, ownerResult] = await Promise.allSettled([maintenanceClose, ownerClose]);
+	if (ownerResult.status === "rejected") throw ownerResult.reason;
+	if (maintenanceResult.status === "rejected") throw maintenanceResult.reason;
+}

@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { connect } from "node:net";
+import { connect, createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import {
 	DAEMON_JS_WORKER_FILES,
 	buildLaunchdDaemonPlist,
@@ -34,6 +34,7 @@ import {
 	resolveDaemonPathForRuntime,
 	resolveDaemonRuntimeCommand,
 	stopManagedDaemonProcess,
+	startDaemon,
 	waitForDaemonLiveness,
 } from "./runtime.js";
 
@@ -628,6 +629,160 @@ describe("readDaemonStartFailureDiagnostics", () => {
 			"May 13 signet-daemon-123: ENOSPC",
 		]);
 	});
+
+	it("reports a new lifecycle exit and its SIGTERM reason before journal details", () => {
+		const lines = readDaemonStartFailureDiagnostics(
+			{
+				startupLogPath: "/tmp/startup.log",
+				platform: "linux",
+				systemdUnitName: "signet-daemon-123",
+				failureKind: "process-exited",
+				startupDeadlineMs: 60_000,
+				processExit: null,
+				lifecycleRecord: {
+					state: "clean",
+					pid: 42,
+					version: "test",
+					startedAt: "2026-09-23T04:00:00.000Z",
+					exitedAt: "2026-09-23T04:00:02.000Z",
+					exitCode: 0,
+					reason: "signal:SIGTERM",
+				},
+			},
+			{
+				existsSync: () => false,
+				readFileSync: () => "",
+				spawnSync: () => ({ stdout: "unit stopped\n" }),
+			},
+		);
+
+		expect(lines[0]).toBe("Daemon process exited before becoming live.");
+		expect(lines[1]).toContain("state=clean");
+		expect(lines[1]).toContain("reason=signal:SIGTERM");
+		expect(lines[2]).toBe("Daemon failed to start. journalctl for signet-daemon-123:");
+	});
+
+	it("distinguishes a startup deadline from an observed process exit", () => {
+		const lines = readDaemonStartFailureDiagnostics(
+			{
+				startupLogPath: "/tmp/startup.log",
+				failureKind: "deadline",
+				startupDeadlineMs: 2_000,
+				processExit: null,
+				lifecycleRecord: {
+					state: "running",
+					pid: 43,
+					version: "test",
+					startedAt: "2026-09-23T04:00:00.000Z",
+				},
+			},
+			{
+				existsSync: () => false,
+				readFileSync: () => "",
+				spawnSync: () => ({ stdout: "" }),
+			},
+		);
+
+		expect(lines[0]).toBe("Daemon did not become live before the 2-second startup deadline.");
+		expect(lines[1]).toContain("state=running");
+		expect(lines).toContain("No startup diagnostics were captured.");
+	});
+});
+
+describe("startDaemon startup diagnostics", () => {
+	it("stops waiting when a systemd-launched process records an early SIGTERM", async () => {
+		if (process.platform !== "linux") return;
+		const previousEnv = {
+			PATH: process.env.PATH,
+			SIGNET_PATH: process.env.SIGNET_PATH,
+			SIGNET_PORT: process.env.SIGNET_PORT,
+			SIGNET_DAEMON_URL: process.env.SIGNET_DAEMON_URL,
+			SIGNET_HOST: process.env.SIGNET_HOST,
+			SIGNET_BIND: process.env.SIGNET_BIND,
+			SIGNET_DAEMON_RUNTIME: process.env.SIGNET_DAEMON_RUNTIME,
+			BUN_INSPECT: process.env.BUN_INSPECT,
+		};
+		const previousConsoleError = console.error;
+		const errors: string[] = [];
+		let root: string | null = null;
+		const restoreEnvironment = (key: string, value: string | undefined): void => {
+			if (value === undefined) delete process.env[key];
+			if (value !== undefined) process.env[key] = value;
+		};
+
+		try {
+			const server = createServer();
+			const port = await new Promise<number>((resolve, reject) => {
+				server.once("error", reject);
+				server.listen(0, "127.0.0.1", () => {
+					const address = server.address();
+					if (address === null || typeof address === "string") {
+						server.close();
+						reject(new Error("failed to reserve an ephemeral port"));
+						return;
+					}
+					const selectedPort = address.port;
+					server.close((error) => (error ? reject(error) : resolve(selectedPort)));
+				});
+			});
+			root = mkdtempSync(join(tmpdir(), "signet-startup-diagnostics-"));
+			const agentsDir = join(root, "workspace");
+			const memoryDir = join(agentsDir, "memory");
+			const binDir = join(root, "bin");
+			mkdirSync(memoryDir, { recursive: true });
+			mkdirSync(binDir, { recursive: true });
+			writeFileSync(join(agentsDir, "agent.yaml"), "name: test\n");
+			writeFileSync(join(memoryDir, "memories.db"), "");
+			const daemonPath = join(root, "fake-signet");
+			writeFileSync(daemonPath, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+			const systemdRunPath = join(binDir, "systemd-run");
+			writeFileSync(
+				systemdRunPath,
+				[
+					"#!/bin/sh",
+					"set -eu",
+					'mkdir -p "$SIGNET_PATH/.daemon"',
+					"started=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')",
+					`printf '{"state":"clean","pid":4242,"version":"test","startedAt":"%s","exitedAt":"%s","exitCode":0,"reason":"signal:SIGTERM"}\\n' "$started" "$started" > "$SIGNET_PATH/.daemon/lifecycle.json"`,
+					"exit 0",
+					"",
+				].join("\n"),
+				{ mode: 0o755 },
+			);
+			const journalPath = join(binDir, "journalctl");
+			writeFileSync(journalPath, "#!/bin/sh\nprintf 'synthetic systemd journal\\n'\n", { mode: 0o755 });
+			process.env.PATH = `${binDir}${delimiter}${previousEnv.PATH ?? ""}`;
+			process.env.SIGNET_PATH = agentsDir;
+			process.env.SIGNET_PORT = String(port);
+			process.env.SIGNET_DAEMON_URL = `http://127.0.0.1:${port}`;
+			process.env.SIGNET_HOST = "127.0.0.1";
+			process.env.SIGNET_BIND = "127.0.0.1";
+			process.env.SIGNET_DAEMON_RUNTIME = "compiled";
+			process.env.BUN_INSPECT = "";
+			console.error = (...values: unknown[]) => errors.push(values.map(String).join(" "));
+
+			const startedAt = performance.now();
+			const started = await startDaemon(agentsDir, "compiled", daemonPath);
+			const elapsedMs = performance.now() - startedAt;
+
+			expect(started).toBe(false);
+			expect(elapsedMs).toBeLessThan(5_000);
+			expect(errors.join("\n")).toContain("Daemon process exited before becoming live.");
+			expect(errors.join("\n")).toContain("reason=signal:SIGTERM");
+			expect(errors.join("\n")).toContain("synthetic systemd journal");
+		} finally {
+			console.error = previousConsoleError;
+			restoreEnvironment("PATH", previousEnv.PATH);
+			restoreEnvironment("SIGNET_PATH", previousEnv.SIGNET_PATH);
+			restoreEnvironment("SIGNET_PORT", previousEnv.SIGNET_PORT);
+			restoreEnvironment("SIGNET_DAEMON_URL", previousEnv.SIGNET_DAEMON_URL);
+			restoreEnvironment("SIGNET_HOST", previousEnv.SIGNET_HOST);
+			restoreEnvironment("SIGNET_BIND", previousEnv.SIGNET_BIND);
+			restoreEnvironment("SIGNET_DAEMON_RUNTIME", previousEnv.SIGNET_DAEMON_RUNTIME);
+			restoreEnvironment("BUN_INSPECT", previousEnv.BUN_INSPECT);
+			if (root !== null) rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("readManagedDaemonPid", () => {
@@ -871,6 +1026,76 @@ describe("getDaemonStatus", () => {
 		expect(result).toBe(true);
 		expect(now).toBe(750);
 		expect(requests).toBe(6);
+	});
+
+	it("stops startup polling when the current attempt records a terminal lifecycle", async () => {
+		let now = 0;
+		let requests = 0;
+		globalThis.fetch = (async (_input: string | URL) => {
+			requests += 1;
+			return new Response("not live", { status: 503 });
+		}) as typeof fetch;
+		const previousRecord = {
+			state: "running" as const,
+			pid: 41,
+			version: "test",
+			startedAt: "1970-01-01T00:00:01.000Z",
+		};
+		const currentRecord = {
+			state: "clean" as const,
+			pid: 42,
+			version: "test",
+			startedAt: "1970-01-01T00:00:02.000Z",
+			exitedAt: "1970-01-01T00:00:03.000Z",
+			exitCode: 0,
+			reason: "signal:SIGTERM",
+		};
+
+		const result = await waitForDaemonLiveness(
+			10_000,
+			() => false,
+			async (ms) => {
+				now += ms;
+			},
+			() => now,
+			{ read: () => currentRecord, previous: previousRecord, startedAtMs: 1500 },
+		);
+
+		expect(result).toBe(false);
+		expect(now).toBe(250);
+		expect(requests).toBe(0);
+	});
+
+	it("does not mistake a previous terminal lifecycle record for the current startup", async () => {
+		let now = 0;
+		let requests = 0;
+		globalThis.fetch = (async (_input: string | URL) => {
+			requests += 1;
+			return new Response("live", { status: 200 });
+		}) as typeof fetch;
+		const previousRecord = {
+			state: "clean" as const,
+			pid: 41,
+			version: "test",
+			startedAt: "1970-01-01T00:00:01.000Z",
+			exitedAt: "1970-01-01T00:00:03.000Z",
+			exitCode: 0,
+			reason: "signal:SIGTERM",
+		};
+
+		const result = await waitForDaemonLiveness(
+			10_000,
+			() => false,
+			async (ms) => {
+				now += ms;
+			},
+			() => now,
+			{ read: () => previousRecord, previous: previousRecord, startedAtMs: 0 },
+		);
+
+		expect(result).toBe(true);
+		expect(now).toBe(250);
+		expect(requests).toBeGreaterThan(0);
 	});
 
 	it("parses extraction provider degradation from /api/status", async () => {

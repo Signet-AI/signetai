@@ -1283,6 +1283,48 @@ const daemonStartDiagnosticsDeps: DaemonStartDiagnosticsDeps = {
 	spawnSync,
 };
 
+type DaemonStartFailureKind = "process-exited" | "deadline";
+
+interface DaemonStartProcessExit {
+	readonly code: number | null;
+	readonly signal: NodeJS.Signals | null;
+}
+
+interface DaemonStartLifecycleProbe {
+	readonly read: () => DaemonLastExit | null;
+	readonly previous: DaemonLastExit | null;
+	readonly startedAtMs: number;
+}
+
+function isDaemonLifecycleFromStartAttempt(
+	record: DaemonLastExit | null,
+	previous: DaemonLastExit | null,
+	startedAtMs: number,
+): record is DaemonLastExit {
+	if (record === null) return false;
+	if (previous?.pid === record.pid && previous.startedAt === record.startedAt) return false;
+	const recordStartedAtMs = Date.parse(record.startedAt);
+	return Number.isFinite(recordStartedAtMs) && recordStartedAtMs >= startedAtMs;
+}
+
+function isTerminalDaemonLifecycleFromStartAttempt(
+	record: DaemonLastExit | null,
+	previous: DaemonLastExit | null,
+	startedAtMs: number,
+): boolean {
+	if (!isDaemonLifecycleFromStartAttempt(record, previous, startedAtMs)) return false;
+	return record.state === "clean" || record.state === "error";
+}
+
+function formatDaemonLifecycleDiagnostic(record: DaemonLastExit): string {
+	const fields = [`state=${record.state}`, `pid=${record.pid}`, `startedAt=${record.startedAt}`];
+	if (record.exitCode !== undefined) fields.push(`exitCode=${record.exitCode}`);
+	if (record.reason) fields.push(`reason=${record.reason.replace(/\s+/g, "_")}`);
+	if (record.exitedAt) fields.push(`exitedAt=${record.exitedAt}`);
+	if (record.error) fields.push(`error=${JSON.stringify(record.error.replace(/\s+/g, " ").slice(0, 500))}`);
+	return `Daemon lifecycle: ${fields.join(" ")}`;
+}
+
 function tailNonEmptyLines(value: string, max: number): string[] {
 	return value
 		.split("\n")
@@ -1296,14 +1338,33 @@ export function readDaemonStartFailureDiagnostics(
 		readonly startupLogPath: string;
 		readonly platform?: NodeJS.Platform;
 		readonly systemdUnitName?: string;
+		readonly failureKind?: DaemonStartFailureKind;
+		readonly startupDeadlineMs?: number;
+		readonly processExit?: DaemonStartProcessExit | null;
+		readonly lifecycleRecord?: DaemonLastExit | null;
 	},
 	deps: DaemonStartDiagnosticsDeps = daemonStartDiagnosticsDeps,
 ): string[] {
+	const diagnostics: string[] = [];
+	if (input.failureKind === "process-exited") diagnostics.push("Daemon process exited before becoming live.");
+	if (input.failureKind === "deadline") {
+		const seconds = Math.ceil((input.startupDeadlineMs ?? 60_000) / 1000);
+		diagnostics.push(`Daemon did not become live before the ${seconds}-second startup deadline.`);
+	}
+	if (input.processExit) {
+		const exitDetails: string[] = [];
+		if (input.processExit.code !== null) exitDetails.push(`code=${input.processExit.code}`);
+		if (input.processExit.signal !== null) exitDetails.push(`signal=${input.processExit.signal}`);
+		if (exitDetails.length > 0) diagnostics.push(`Process exit: ${exitDetails.join(" ")}`);
+	}
+	if (input.lifecycleRecord) diagnostics.push(formatDaemonLifecycleDiagnostic(input.lifecycleRecord));
+
 	if (deps.existsSync(input.startupLogPath)) {
 		try {
 			const startupLines = tailNonEmptyLines(deps.readFileSync(input.startupLogPath, "utf-8"), 20);
 			if (startupLines.length > 0) {
-				return ["Daemon failed to start. stderr output:", ...startupLines];
+				const heading = input.failureKind ? "Daemon startup stderr:" : "Daemon failed to start. stderr output:";
+				return [...diagnostics, heading, ...startupLines];
 			}
 		} catch {}
 	}
@@ -1327,14 +1388,17 @@ export function readDaemonStartFailureDiagnostics(
 		const journal = result.stdout ?? "";
 		const journalLines = tailNonEmptyLines(journal, 20);
 		if (journalLines.length > 0) {
-			return [`Daemon failed to start. journalctl for ${input.systemdUnitName}:`, ...journalLines];
+			return [...diagnostics, `Daemon failed to start. journalctl for ${input.systemdUnitName}:`, ...journalLines];
 		}
 	}
 
-	return [
-		"Daemon failed to start, and no startup diagnostics were captured.",
-		`Startup log checked: ${input.startupLogPath}`,
-	];
+	const missingDiagnostics = input.failureKind
+		? ["No startup diagnostics were captured.", `Startup log checked: ${input.startupLogPath}`]
+		: [
+				"Daemon failed to start, and no startup diagnostics were captured.",
+				`Startup log checked: ${input.startupLogPath}`,
+			];
+	return [...diagnostics, ...missingDiagnostics];
 }
 
 function findExecutableOnPath(name: string, pathValue: string | undefined = process.env.PATH): string | null {
@@ -1633,10 +1697,17 @@ export async function waitForDaemonLiveness(
 	shouldStop: () => boolean = () => false,
 	pause: (ms: number) => Promise<void> = sleep,
 	now: () => number = Date.now,
+	lifecycle?: DaemonStartLifecycleProbe,
 ): Promise<boolean> {
 	while (now() < deadline) {
 		await pause(250);
 		if (shouldStop()) return false;
+		if (
+			lifecycle &&
+			isTerminalDaemonLifecycleFromStartAttempt(lifecycle.read(), lifecycle.previous, lifecycle.startedAtMs)
+		) {
+			return false;
+		}
 		if (await isDaemonRunning()) return true;
 	}
 	return false;
@@ -1700,6 +1771,8 @@ export async function startDaemon(
 
 	const startupLogPath = join(logDir, "startup.log");
 	const systemdUnitName = `signet-daemon-${process.pid}`;
+	const lifecycleBeforeStart = readDaemonLifecycleRecord(agentsDir);
+	const startAttemptedAtMs = Date.now();
 	let stderrFd: number | null = null;
 	let stderrTarget: "ignore" | number = "ignore";
 	try {
@@ -1722,6 +1795,7 @@ export async function startDaemon(
 		BUN_INSPECT: inspectorForwarding.childInspector,
 	};
 	let procExited = false;
+	let processExit: DaemonStartProcessExit | null = null;
 	let startedByServiceManager = false;
 	if (process.platform === "linux") {
 		const systemdArgs = buildSystemdDaemonStartArgs({
@@ -1844,8 +1918,9 @@ export async function startDaemon(
 				appendFileSync(startupLogPath, `[spawn error] ${err.message}\n`);
 			} catch {}
 		});
-		proc.on("exit", () => {
+		proc.on("exit", (code, signal) => {
 			procExited = true;
+			processExit = { code, signal };
 		});
 
 		if (typeof proc.pid === "number") {
@@ -1860,14 +1935,37 @@ export async function startDaemon(
 	if (stderrFd !== null) {
 		closeSync(stderrFd);
 	}
-	const deadline = Date.now() + 60_000;
-	const ready = await waitForDaemonLiveness(deadline, () => procExited);
+	const startupDeadlineMs = 60_000;
+	const deadline = Date.now() + startupDeadlineMs;
+	const lifecycleProbe: DaemonStartLifecycleProbe | undefined = startedByServiceManager
+		? {
+				read: () => readDaemonLifecycleRecord(agentsDir),
+				previous: lifecycleBeforeStart,
+				startedAtMs: startAttemptedAtMs,
+			}
+		: undefined;
+	const ready = await waitForDaemonLiveness(deadline, () => procExited, sleep, Date.now, lifecycleProbe);
 	if (ready) return true;
 
 	try {
+		const latestLifecycleRecord = readDaemonLifecycleRecord(agentsDir);
+		const lifecycleRecord = isDaemonLifecycleFromStartAttempt(
+			latestLifecycleRecord,
+			lifecycleBeforeStart,
+			startAttemptedAtMs,
+		)
+			? latestLifecycleRecord
+			: null;
+		const processExitedDuringStart =
+			procExited ||
+			isTerminalDaemonLifecycleFromStartAttempt(latestLifecycleRecord, lifecycleBeforeStart, startAttemptedAtMs);
 		const diagnostics = readDaemonStartFailureDiagnostics({
 			startupLogPath,
 			systemdUnitName: process.platform === "linux" ? systemdUnitName : undefined,
+			failureKind: processExitedDuringStart ? "process-exited" : "deadline",
+			startupDeadlineMs,
+			processExit,
+			lifecycleRecord,
 		});
 		if (diagnostics.length > 0) {
 			console.error(chalk.red(`\n${diagnostics[0]}`));
