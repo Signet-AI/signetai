@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { resolveNativeBinaryPath } from "./native-platforms.js";
+import { detectNativePlatform, nativePlatforms } from "./native-platforms.js";
 
 const packageDir = dirname(dirname(fileURLToPath(import.meta.url)));
 const require = createRequire(import.meta.url);
@@ -16,7 +16,10 @@ const connectorAssetsPath = join(packageDir, "runtime", "connectors");
 const connectorMarkerPath = join(connectorAssetsPath, ".signet-connectors-version");
 
 function resolveNativePackageBinaryPath() {
-	return resolveNativeBinaryPath({ packageDir, require });
+	const platform = detectNativePlatform();
+	const nativePackage = nativePlatforms[platform];
+	const packageJsonPath = require.resolve(`${nativePackage.packageName}/package.json`);
+	return join(dirname(packageJsonPath), "bin", nativePackage.binaryName);
 }
 
 function resolveBinaryPath() {
