@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { verifyMigrationDatabaseRows } from "./migration-database-verification";
+import { verifyMigrationDatabaseRows } from "../sqlite";
 
 test("migration semantic verifier rejects altered transcript role and provenance", () => {
 	const root = mkdtempSync(join(tmpdir(), "migration-semantic-"));

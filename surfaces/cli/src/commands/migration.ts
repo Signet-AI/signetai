@@ -13,8 +13,7 @@ import {
 	serializeWorkspaceLayout,
 } from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
-import { verifyMigrationDatabaseRows } from "../lib/migration-database-verification.js";
-import { createDatabase } from "../sqlite.js";
+import { createDatabase, verifyMigrationDatabaseRows } from "../sqlite.js";
 import { readConfiguredWorkspacePath, resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
 import {
 	resolveDaemonJsNodePath,
