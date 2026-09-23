@@ -22,6 +22,7 @@ export function up(db: MigrationDb): void {
 		);
 	`);
 	for (const column of [
+		"agent_id TEXT NOT NULL DEFAULT ''",
 		"workspace_id TEXT NOT NULL DEFAULT ''",
 		"request_fingerprint TEXT NOT NULL DEFAULT ''",
 		"source_id TEXT",

@@ -36,6 +36,8 @@ export interface ManualInboxWorkerOptions {
 	pollMs?: number;
 	settleMs?: number;
 	maxFiles?: number;
+	/** Testable filesystem seam; production defaults to unlink. */
+	unlinkFile?: (path: string) => Promise<void>;
 }
 export interface ManualInboxWorkerHandle {
 	readonly running: boolean;
@@ -54,6 +56,7 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 	let wake: (() => void) | undefined;
 	let loop: Promise<void>;
 	const counts = { scanned: 0, imported: 0, failed: 0, quarantined: 0 };
+	const remove = options.unlinkFile ?? ((path: string) => unlink(path));
 	const wait = () =>
 		new Promise<void>((resolveWait) => {
 			const timer = setTimeout(
@@ -110,17 +113,25 @@ export function startManualInboxWorker(options: ManualInboxWorkerOptions): Manua
 			});
 			if (!claimed) continue;
 			if (claimed.status === "imported" || claimed.status === "duplicate") {
-				await unlink(path).catch(() => {});
+				await remove(path).catch(() => {});
 				continue;
 			}
 			try {
 				const dispatch = fileName.endsWith(".jsonl") ? options.dispatchTranscript : options.dispatchDocument;
 				if (!dispatch) throw new Error("no dispatcher configured");
 				const result = await dispatch(claimed);
-				await options.admission.record({ ...claimed, status: result.status, sourceId: result.sourceId });
-				await unlink(path).catch((error) => {
-					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-				});
+				const terminal = { ...claimed, status: result.status, sourceId: result.sourceId } as ManualInboxRow;
+				// A transient owner/DB failure must not turn a published import into a
+				// retryable dispatch. Retry only the terminal write; dispatch is never
+				// repeated after it has returned successfully.
+				try {
+					await options.admission.record(terminal);
+				} catch (recordError) {
+					await options.admission.record(terminal).catch(() => {
+						throw recordError;
+					});
+				}
+				await remove(path).catch(() => {});
 				counts.imported++;
 			} catch (error) {
 				await options.admission.record({
