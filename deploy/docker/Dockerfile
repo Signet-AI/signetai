@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM oven/bun:1.3.11 AS build
+FROM oven/bun:1.4.0 AS build
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml tsconfig.json ./
 COPY scripts ./scripts
@@ -14,6 +14,7 @@ COPY web ./web
 COPY dist ./dist
 RUN bun install --no-frozen-lockfile --force
 RUN SIGNET_SKIP_NATIVE_BUILD=1 bun run build:native
+RUN bun run build:dashboard
 RUN bun run --filter '@signet/core' build && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:native-bun
 ARG TARGETOS=linux
 ARG TARGETARCH
@@ -42,7 +43,7 @@ COPY --from=build /app/dist/docker-sqlite-vec ./sqlite-vec
 COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-daemon ./bin/signet-daemon
 COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-mcp ./bin/signet-mcp
 COPY --from=daemon-build /app/platform/rust-daemon/target/release/signet-healthcheck ./bin/signet-healthcheck
-COPY surfaces/dashboard/build ./dist/signetai/runtime/rust-daemon/dashboard
+COPY --from=build /app/surfaces/dashboard/build ./dist/signetai/runtime/rust-daemon/dashboard
 COPY dist/signetai/templates ./dist/signetai/templates
 COPY deploy/docker/entrypoint.sh ./deploy/docker/entrypoint.sh
 COPY deploy/docker/scripts/create-token.mjs ./deploy/docker/scripts/create-token.mjs

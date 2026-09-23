@@ -25,6 +25,15 @@ const manifest = join(root, "platform", "rust-daemon", "Cargo.toml");
 const daemonName = platformKey.startsWith("win32-") ? "signet-daemon.exe" : "signet-daemon";
 const daemonBinary = join(root, "platform", "rust-daemon", "target", target, "release", daemonName);
 
+function sourceRevision(): string {
+	const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+	const advertised = process.env.GITHUB_SHA?.trim();
+	if (advertised && advertised !== head) {
+		throw new Error(`[signet] GITHUB_SHA ${advertised} does not match checkout HEAD ${head}`);
+	}
+	return head;
+}
+
 if (!existsSync(manifest)) throw new Error(`Rust daemon manifest is missing: ${manifest}`);
 mkdirSync(outDir, { recursive: true });
 rmSync(outfile, { force: true });
@@ -45,6 +54,7 @@ if (!existsSync(daemonBinary)) {
 	process.exit(1);
 }
 
+const sourceRevisionValue = sourceRevision();
 copyFileSync(daemonBinary, outfile);
 if (platform() !== "win32") chmodSync(outfile, 0o755);
 const checksum = createHash("sha256").update(readFileSync(outfile)).digest("hex");
@@ -64,8 +74,7 @@ writeFileSync(
 				.update(readFileSync(join(root, "platform/rust-daemon/Cargo.lock")))
 				.digest("hex"),
 			executableIdentity: execFileSync("file", ["-b", outfile], { encoding: "utf8" }).trim(),
-			sourceRevision:
-				process.env.GITHUB_SHA ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim(),
+			sourceRevision: sourceRevisionValue,
 		},
 		null,
 		2,

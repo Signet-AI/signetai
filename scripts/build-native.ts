@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { arch, platform } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const nativeDir = join(root, "platform", "native");
@@ -50,7 +50,12 @@ function executable(path: string): void {
 	}
 }
 function revision(): string {
-	return process.env.GITHUB_SHA ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+	const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+	const advertised = process.env.GITHUB_SHA?.trim();
+	if (advertised && advertised !== head) {
+		fail(`GITHUB_SHA ${advertised} does not match checkout HEAD ${head}`);
+	}
+	return head;
 }
 
 function commandNotFound(error: unknown): boolean {
@@ -64,7 +69,6 @@ if (process.env.SIGNET_SKIP_NATIVE_BUILD === "1") {
 	process.exit(0);
 }
 if (!existsSync(nativeDir) || !existsSync(manifest)) fail("native Rust build inputs are missing");
-if (!existsSync(join(dashboard, "index.html"))) fail(`dashboard build is missing: ${join(dashboard, "index.html")}`);
 const locator = platform() === "win32" ? "where" : "which";
 let cargoLocated = false;
 let locatedCargoPath = "";
@@ -95,6 +99,8 @@ try {
 	});
 	executable(source);
 	executable(sourceMcp);
+	if (!existsSync(join(dashboard, "index.html"))) fail(`dashboard build is missing: ${join(dashboard, "index.html")}`);
+	const sourceRevision = revision();
 	const stagedDir = join(staging, platformKey);
 	mkdirSync(stagedDir, { recursive: true });
 	cpSync(source, join(stagedDir, exe));
@@ -122,15 +128,28 @@ try {
 					.update(readFileSync(join(root, "platform/rust-daemon/Cargo.lock")))
 					.digest("hex"),
 				executableIdentity: execFileSync("file", ["-b", join(stagedDir, exe)], { encoding: "utf8" }).trim(),
-				sourceRevision: revision(),
+				sourceRevision,
 			},
 			null,
 			2,
 		) + "\n",
 	);
-	rmSync(runtime, { recursive: true, force: true });
-	mkdirSync(runtime, { recursive: true });
-	renameSync(staging, runtime);
+	const backup = `${runtime}.previous-${process.pid}`;
+	mkdirSync(dirname(runtime), { recursive: true });
+	rmSync(backup, { recursive: true, force: true });
+	let movedPrevious = false;
+	try {
+		if (existsSync(runtime)) {
+			renameSync(runtime, backup);
+			movedPrevious = true;
+		}
+		renameSync(staging, runtime);
+		if (movedPrevious) rmSync(backup, { recursive: true, force: true });
+	} catch (error) {
+		if (existsSync(runtime)) rmSync(runtime, { recursive: true, force: true });
+		if (movedPrevious && existsSync(backup)) renameSync(backup, runtime);
+		throw error;
+	}
 	console.log(`[signet] staged Rust daemon for ${target}: ${join(stage, exe)}`);
 } catch (error) {
 	rmSync(staging, { recursive: true, force: true });
