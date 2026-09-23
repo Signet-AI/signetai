@@ -5176,6 +5176,8 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         ("source_id", "TEXT"),
         ("source_type", "TEXT"),
         ("source_path", "TEXT"),
+        ("source_section", "TEXT"),
+        ("scope", "TEXT DEFAULT NULL"),
         ("tags", "TEXT"),
         ("who", "TEXT"),
         ("why", "TEXT"),
@@ -5190,6 +5192,11 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         ("visibility", "TEXT DEFAULT 'global'"),
         ("memory_kind", "TEXT"),
         ("extraction_status", "TEXT DEFAULT 'none'"),
+        ("deleted_at", "TEXT"),
+        ("embedding_model", "TEXT"),
+        ("extraction_model", "TEXT"),
+        ("update_count", "INTEGER DEFAULT 0"),
+        ("evidence_meta", "TEXT"),
     ] {
         ensure_column(&transaction, "memories", column, definition)?;
     }
@@ -6150,9 +6157,11 @@ mod owner_schema_reconciliation_tests {
         drop(Core::open(&path, 8).unwrap());
         let expected_memory_columns = [
             "content_hash", "normalized_content", "type", "category", "confidence",
-            "importance", "source_id", "source_type", "source_path", "tags", "who", "why",
-            "project", "updated_by", "last_accessed", "access_count", "vector_clock", "version",
-            "manual_override", "pinned", "visibility", "memory_kind", "extraction_status",
+            "importance", "source_id", "source_type", "source_path", "source_section", "tags",
+            "who", "why", "project", "scope", "updated_by", "last_accessed", "access_count",
+            "vector_clock", "version", "manual_override", "pinned", "visibility", "memory_kind",
+            "extraction_status", "deleted_at", "embedding_model", "extraction_model", "update_count",
+            "evidence_meta",
         ];
         let expected_attribute_columns = [
             "source_id", "source_kind", "source_path", "source_root", "proposal_id", "proposal_evidence",
