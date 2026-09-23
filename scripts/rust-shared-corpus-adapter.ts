@@ -238,7 +238,10 @@ const daemonEvidence =
 const coreEvidence =
 	existsSync(evidenceFile) &&
 	/backend=fresh-rust artifact=signet-core-test-driver process=transport/.test(readFileSync(evidenceFile, "utf8"));
-const nativeEvidence = daemonEvidence || coreEvidence;
+// A Rust lane is authoritative only when both unchanged execution boundaries
+// were exercised: one direct-core transport and one daemon replacement.
+// Either signal alone can come from a partial/serialized batch and must fail closed.
+const nativeEvidence = daemonEvidence && coreEvidence;
 const evidence =
 	stderr.trim() || stdout.trim() || `child status=${child.status ?? "null"} signal=${child.signal ?? "none"}`;
 if (!existsSync(junitPath)) {
@@ -280,6 +283,7 @@ const missingIdentity = cases.some((testcase) => !attribute(testcase, "file"));
 const missingSelected = selected.filter((path) => !observedFiles.has(path));
 const unexpectedFiles = [...observedFiles].filter((path) => !selected.includes(path));
 const infrastructureFailure =
+	!nativeEvidence ||
 	child.signal !== null ||
 	child.error !== undefined ||
 	!cases.length ||
@@ -295,7 +299,7 @@ console.error(
 		backend: "fresh-rust",
 		artifact,
 		selected,
-		executed: selected,
+		executed: [...observedFiles].sort(),
 		nativeEvidence,
 		childStatus: child.status,
 		childSignal: child.signal,

@@ -1,8 +1,9 @@
-use crate::{agent, execute, source_workspace, AgentQuery, ApiError, AppState};
 use crate::routes::auth;
+use crate::{agent, execute, source_workspace, AgentQuery, ApiError, AppState};
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
@@ -12,12 +13,28 @@ use signet_core_native::Operation;
 
 #[cfg(test)]
 mod auth_contract_tests {
-    use super::proposal_auth_error;
+    use super::{parse_claim_kind, parse_claim_limit, proposal_auth_error};
 
     #[test]
     fn unauthenticated_proposal_access_is_forbidden() {
         let error = proposal_auth_error();
         assert_eq!(error.status, axum::http::StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn claim_trace_kind_and_limits_match_typescript_fallbacks() {
+        assert_eq!(parse_claim_kind(Some("other")), Err("kind is invalid"));
+        assert_eq!(
+            parse_claim_kind(Some(" attribute ")),
+            Err("kind is invalid")
+        );
+        assert_eq!(parse_claim_limit(Some("-2"), 20, 1, 50).ok(), Some(1));
+        assert_eq!(
+            parse_claim_limit(Some("999999999999999999999"), 20, 1, 50).ok(),
+            Some(50)
+        );
+        assert_eq!(parse_claim_limit(Some("nope"), 20, 1, 50).ok(), Some(20));
+        assert_eq!(parse_claim_limit(Some(" 12abc"), 20, 1, 50).ok(), Some(12));
     }
 }
 
@@ -29,16 +46,32 @@ fn proposal_auth_error() -> ApiError {
     }
 }
 
-async fn require_ontology_auth(state: &AppState, headers: &HeaderMap, query: &OntologyQuery, permission: &str) -> Result<(), ApiError> {
-    let claims = auth::gate(state, headers).await.map_err(|_| proposal_auth_error())?;
+async fn require_ontology_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: &OntologyQuery,
+    permission: &str,
+) -> Result<(), ApiError> {
+    let claims = auth::gate(state, headers)
+        .await
+        .map_err(|_| proposal_auth_error())?;
     let scope = json!({
         "agent": agent(headers, Some(&query.agent), None)?,
         "workspace": source_workspace(headers, query.workspace_id.as_deref())?,
     });
-    if auth::authority_allows(&claims, "agent", &scope, &[permission.to_owned()]) { Ok(()) } else { Err(proposal_auth_error()) }
+    if auth::authority_allows(&claims, "agent", &scope, &[permission.to_owned()]) {
+        Ok(())
+    } else {
+        Err(proposal_auth_error())
+    }
 }
 
-async fn require_proposal_auth(state: &AppState, headers: &HeaderMap, query: &OntologyQuery, permission: &str) -> Result<(), ApiError> {
+async fn require_proposal_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+    query: &OntologyQuery,
+    permission: &str,
+) -> Result<(), ApiError> {
     require_ontology_auth(state, headers, query, permission).await
 }
 
@@ -49,6 +82,75 @@ pub(crate) struct OntologyQuery {
     pub workspace_id: Option<String>,
     pub limit: Option<usize>,
     pub cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ClaimTraceQuery {
+    #[serde(flatten)]
+    agent: AgentQuery,
+    entity: Option<String>,
+    aspect: Option<String>,
+    group: Option<String>,
+    claim: Option<String>,
+    kind: Option<String>,
+    version_limit: Option<String>,
+    premise_limit: Option<String>,
+    reverse_limit: Option<String>,
+    max_depth: Option<String>,
+    session_key: Option<String>,
+}
+
+fn parse_claim_kind(value: Option<&str>) -> Result<Option<String>, &'static str> {
+    match value {
+        None | Some("") => Ok(None),
+        Some("attribute") | Some("constraint") => Ok(value.map(str::to_owned)),
+        Some(_) => Err("kind is invalid"),
+    }
+}
+
+fn parse_claim_limit(
+    value: Option<&str>,
+    fallback: usize,
+    min: usize,
+    max: usize,
+) -> Result<usize, ApiError> {
+    let parsed = value.and_then(|raw| {
+        let raw = raw.trim_start();
+        let (negative, digits) = match raw.as_bytes().first() {
+            Some(b'-') => (true, &raw[1..]),
+            Some(b'+') => (false, &raw[1..]),
+            _ => (false, raw),
+        };
+        let digit_count = digits.bytes().take_while(u8::is_ascii_digit).count();
+        if digit_count == 0 {
+            return None;
+        }
+        let number = &digits[..digit_count];
+        let signed = if negative {
+            format!("-{number}")
+        } else {
+            number.to_owned()
+        };
+        let number = signed.parse::<f64>().ok()?;
+        number.is_finite().then_some(number)
+    });
+    Ok(parsed.map_or(fallback, |number| {
+        number.clamp(min as f64, max as f64) as usize
+    }))
+}
+
+struct ClaimTraceError(ApiError);
+
+impl From<ApiError> for ClaimTraceError {
+    fn from(error: ApiError) -> Self {
+        Self(error)
+    }
+}
+
+impl IntoResponse for ClaimTraceError {
+    fn into_response(self) -> Response {
+        (self.0.status, Json(json!({"error": self.0.message}))).into_response()
+    }
 }
 
 fn validated_kind(kind: &str) -> Result<String, ApiError> {
@@ -108,12 +210,18 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/ontology/proposals/repair/merge-plan",
             axum::routing::post(unsupported_write),
         )
-        .route("/api/ontology/proposals/{id}/evidence", get(unsupported_read))
+        .route(
+            "/api/ontology/proposals/{id}/evidence",
+            get(unsupported_read),
+        )
         .route("/api/ontology/claims/evidence", get(unsupported_read))
         .route("/api/ontology/claims/versions", get(unsupported_read))
         .route("/api/ontology/claims/version", get(unsupported_read))
-        .route("/api/ontology/claims/explain", get(unsupported_read))
-        .route("/api/ontology/extract", axum::routing::post(unsupported_write))
+        .route("/api/ontology/claims/explain", get(explain_claim))
+        .route(
+            "/api/ontology/extract",
+            axum::routing::post(unsupported_write),
+        )
         .route(
             "/api/ontology/consolidate",
             axum::routing::post(unsupported_write),
@@ -146,6 +254,88 @@ async fn unsupported_write(
     Err(ApiError::not_implemented(
         "ontology operation is unsupported by the fresh Rust boundary",
     ))
+}
+
+async fn explain_claim(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(q): Query<ClaimTraceQuery>,
+) -> Result<Json<Value>, ClaimTraceError> {
+    let required = |value: &Option<String>, name: &str| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ApiError::bad_request(format!("{name} is required")))
+    };
+    let entity = required(&q.entity, "entity")?;
+    let aspect = required(&q.aspect, "aspect")?;
+    let group = required(&q.group, "group")?;
+    let claim = required(&q.claim, "claim")?;
+    let kind = parse_claim_kind(q.kind.as_deref()).map_err(ApiError::bad_request)?;
+    let query_session = q
+        .session_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    let header_session = headers
+        .get("x-signet-session-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    if query_session.is_some() && header_session.is_some() && query_session != header_session {
+        return Err(
+            ApiError::bad_request("session_key conflicts with x-signet-session-key").into(),
+        );
+    }
+    let session_key = query_session.or(header_session).map(str::to_owned);
+    let auth_claims = auth::gate(&state, &headers)
+        .await
+        .map_err(|_| proposal_auth_error())?;
+    let auth_query = OntologyQuery {
+        agent: q.agent,
+        workspace_id: None,
+        limit: None,
+        cursor: None,
+    };
+    require_ontology_auth(&state, &headers, &auth_query, "recall").await?;
+    if let Some(session_key) = session_key.as_deref() {
+        execute(
+            &state,
+            Operation::SessionValidate {
+                agent_id: agent(&headers, Some(&auth_query.agent), None)?,
+                key: session_key.to_owned(),
+            },
+        )
+        .await?;
+    }
+    let project = if auth_claims.get("role").and_then(Value::as_str) == Some("admin") {
+        None
+    } else {
+        auth_claims
+            .get("scope")
+            .and_then(|v| v.get("project"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
+    let request = signet_core_native::OntologyClaimTraceRequest {
+        agent_id: agent(&headers, Some(&auth_query.agent), None)?,
+        entity,
+        aspect,
+        group_key: group,
+        claim_key: claim,
+        kind,
+        version_limit: Some(parse_claim_limit(q.version_limit.as_deref(), 20, 1, 50)?),
+        premise_limit: Some(parse_claim_limit(q.premise_limit.as_deref(), 50, 1, 100)?),
+        reverse_limit: Some(parse_claim_limit(q.reverse_limit.as_deref(), 50, 1, 100)?),
+        max_depth: Some(parse_claim_limit(q.max_depth.as_deref(), 3, 0, 3)?),
+        session_key,
+        project,
+    };
+    Ok(execute(&state, Operation::OntologyClaimTrace { request })
+        .await
+        .map(Json)?)
 }
 
 async fn list_conflicts(

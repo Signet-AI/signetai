@@ -3818,6 +3818,26 @@ fn execute_operation(
             tx.commit()?;
             Ok(json!({"key":key,"status":"ended"}))
         }
+        Operation::SessionValidate { agent_id, key } => {
+            let agent_id = required_agent(&agent_id)?;
+            let key = required_id(&key)?;
+            let row: Option<(String, String)> = connection.query_row(
+                "SELECT agent_id,status FROM sessions WHERE key=? ORDER BY started_at DESC LIMIT 1",
+                params![key], |r| Ok((r.get(0)?, r.get(1)?)))
+                .optional()?;
+            match row {
+                None => Err(CoreError::Forbidden(
+                    "session_key is not an active session".into(),
+                )),
+                Some((owner, _status)) if owner != agent_id => Err(CoreError::Forbidden(
+                    "session_key belongs to a different agent".into(),
+                )),
+                Some((_owner, status)) if status != "active" => Err(CoreError::Forbidden(
+                    "session_key is not an active session".into(),
+                )),
+                Some(_) => Ok(json!({"valid": true})),
+            }
+        }
         Operation::SessionList { agent_id, limit } => {
             let agent_id = required_agent(&agent_id)?;
             let mut s=connection.prepare("SELECT key,agent_id,harness,runtime_path,project,status,started_at,ended_at FROM sessions WHERE agent_id=? ORDER BY started_at DESC LIMIT ?")?;
@@ -4883,6 +4903,10 @@ pub enum Operation {
         project: Option<String>,
     },
     SessionEnd {
+        agent_id: String,
+        key: String,
+    },
+    SessionValidate {
         agent_id: String,
         key: String,
     },

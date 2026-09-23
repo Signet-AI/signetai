@@ -121,6 +121,25 @@ fn owner_claim_trace_returns_history_premises_assertions_and_reverse_lineage() {
 }
 
 #[test]
+fn owner_claim_trace_excludes_cross_project_reverse_lineage() {
+    let (core, dir) = seeded(
+        json!([{"source_ref":"memory:memory-current","quote":"canonical quote"}]),
+        false,
+        "memory",
+    );
+    let connection = Connection::open(dir.path().join("claim-trace.sqlite")).unwrap();
+    connection.execute(
+        "UPDATE memories SET project='project-b' WHERE id='memory-dependent'",
+        [],
+    ).unwrap();
+    drop(connection);
+
+    let result = run(&core, request(Some("project-a"), None)).unwrap();
+    assert!(!result["reverse"]["items"].as_array().unwrap().iter()
+        .any(|item| item["memoryId"] == "memory-dependent"));
+}
+
+#[test]
 fn owner_claim_trace_rejects_project_and_session_scope_crossings() {
     let (core, _dir) = seeded(
         json!([{"source_ref":"memory:memory-current","quote":"canonical quote"}]),
@@ -331,4 +350,51 @@ fn owner_claim_trace_preserves_caller_path_keys() {
     let result = run(&core, req).unwrap();
     assert_eq!(result["path"]["groupKey"], "General");
     assert_eq!(result["path"]["claimKey"], "Status");
+}
+
+#[test]
+fn owner_session_validation_uses_forbidden_for_missing_and_inactive_sessions() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("session-validation.sqlite");
+    let core = Core::open(&path, 2).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO sessions(key,agent_id,harness,status,started_at,ended_at)
+             VALUES('ended-session','agent-a','test','ended',datetime('now','-1 minute'),datetime('now'));
+             INSERT INTO sessions(key,agent_id,harness,status,started_at)
+             VALUES('other-session','agent-b','test','active',datetime('now'));",
+        )
+        .unwrap();
+    drop(connection);
+
+    let missing = core.submit(Operation::SessionValidate {
+        agent_id: "agent-a".into(),
+        key: "missing-session".into(),
+    });
+    assert!(matches!(
+        missing,
+        Err(signet_core_native::CoreError::Forbidden(message))
+            if message == "session_key is not an active session"
+    ));
+
+    let inactive = core.submit(Operation::SessionValidate {
+        agent_id: "agent-a".into(),
+        key: "ended-session".into(),
+    });
+    assert!(matches!(
+        inactive,
+        Err(signet_core_native::CoreError::Forbidden(message))
+            if message == "session_key is not an active session"
+    ));
+
+    let other = core.submit(Operation::SessionValidate {
+        agent_id: "agent-a".into(),
+        key: "other-session".into(),
+    });
+    assert!(matches!(
+        other,
+        Err(signet_core_native::CoreError::Forbidden(message))
+            if message == "session_key belongs to a different agent"
+    ));
 }
