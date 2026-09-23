@@ -9,6 +9,13 @@ export {
 export type { RootGitArchive, RootGitArchivePlan, RootGitArchiveVerification } from "./git-archive-retirement";
 export { captureGitMetadata, restoreGitMetadata } from "./git-migration";
 export type { GitMetadataCapture } from "./git-migration";
+export {
+	DescriptorRoot,
+	openDescriptorRoot,
+	UnsafeDescriptorPathError,
+	UnsupportedDescriptorFilesystemError,
+} from "./descriptor-fs";
+export type { DescriptorEntry, DescriptorWriteOptions } from "./descriptor-fs";
 export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
 export { aggregateProtection, PROTECTION_COMPONENT_IDS, validateRestoreReceipt } from "./protection";
 export type {
