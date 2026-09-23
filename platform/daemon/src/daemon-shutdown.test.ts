@@ -1,5 +1,10 @@
 import { describe, expect, it } from "bun:test";
-import { closeDbOwnerDuringShutdown, createShutdownRequestGate, forceExitDuringShutdownFlush } from "./daemon-shutdown";
+import {
+	closeDbOwnerDuringShutdown,
+	createShutdownRequestGate,
+	forceExitDuringShutdownFlush,
+	runShutdownCleanup,
+} from "./daemon-shutdown";
 
 describe("daemon shutdown request gate", () => {
 	it("forces a fatal exit instead of waiting for an in-flight flush", () => {
@@ -31,6 +36,26 @@ describe("daemon shutdown request gate", () => {
 
 		expect(forced).toBe(false);
 		expect(calls).toEqual([]);
+	});
+
+	it("delivers a cleanup rejection to finalization without escalating a clean shutdown", async () => {
+		const gate = createShutdownRequestGate();
+		const cleanupError = new Error("database owner close failed");
+		let settledError: unknown = null;
+		expect(gate.begin({ reason: "signal:SIGTERM", exitCode: 0 })).toBe("begin");
+
+		await runShutdownCleanup(
+			async () => {
+				throw cleanupError;
+			},
+			(error) => {
+				settledError = error;
+			},
+		);
+
+		expect(settledError).toBe(cleanupError);
+		expect(gate.exitCode).toBe(0);
+		expect(gate.fatalRequest).toBeNull();
 	});
 
 	it("escalates a clean shutdown to a fatal exit without replacing its primary reason", () => {

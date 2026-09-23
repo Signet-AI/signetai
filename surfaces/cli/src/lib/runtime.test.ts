@@ -364,6 +364,23 @@ describe("buildSystemdDaemonStartArgs", () => {
 		expect(args).toContain("--setenv=BUN_OPTIONS=--cpu-prof --cpu-prof-dir=/tmp/signet-profile");
 	});
 
+	it("forwards a startup attempt identifier through service-manager boundaries", () => {
+		const input = {
+			daemonPath: "/opt/signet/dist/daemon.js",
+			agentsDir: "/home/user/.agents",
+			port: 3850,
+			host: "127.0.0.1",
+			bind: "0.0.0.0",
+			startupLogPath: "/home/user/.agents/.daemon/logs/startup.log",
+			startAttemptId: "current-attempt",
+		};
+
+		expect(buildSystemdDaemonStartArgs(input)).toContain("--setenv=SIGNET_DAEMON_START_ATTEMPT_ID=current-attempt");
+		expect(buildLaunchdDaemonPlist(input)).toMatch(
+			/<key>SIGNET_DAEMON_START_ATTEMPT_ID<\/key>\s*<string>current-attempt<\/string>/,
+		);
+	});
+
 	it("forwards only allowlisted telemetry variables through service-manager boundaries", () => {
 		const input = {
 			daemonPath: "/opt/signet/dist/daemon.js",
@@ -743,7 +760,7 @@ describe("startDaemon startup diagnostics", () => {
 					"set -eu",
 					'mkdir -p "$SIGNET_PATH/.daemon"',
 					"started=$(date -u '+%Y-%m-%dT%H:%M:%S.%3NZ')",
-					`printf '{"state":"clean","pid":4242,"version":"test","startedAt":"%s","exitedAt":"%s","exitCode":0,"reason":"signal:SIGTERM"}\\n' "$started" "$started" > "$SIGNET_PATH/.daemon/lifecycle.json"`,
+					`printf '{"state":"clean","pid":4242,"version":"test","startAttemptId":"%s","startedAt":"%s","exitedAt":"%s","exitCode":0,"reason":"signal:SIGTERM"}\\n' "$SIGNET_DAEMON_START_ATTEMPT_ID" "$started" "$started" > "$SIGNET_PATH/.daemon/lifecycle.json"`,
 					"exit 0",
 					"",
 				].join("\n"),
@@ -1035,17 +1052,12 @@ describe("getDaemonStatus", () => {
 			requests += 1;
 			return new Response("not live", { status: 503 });
 		}) as typeof fetch;
-		const previousRecord = {
-			state: "running" as const,
-			pid: 41,
-			version: "test",
-			startedAt: "1970-01-01T00:00:01.000Z",
-		};
 		const currentRecord = {
 			state: "clean" as const,
 			pid: 42,
 			version: "test",
 			startedAt: "1970-01-01T00:00:02.000Z",
+			startAttemptId: "current-attempt",
 			exitedAt: "1970-01-01T00:00:03.000Z",
 			exitCode: 0,
 			reason: "signal:SIGTERM",
@@ -1058,7 +1070,82 @@ describe("getDaemonStatus", () => {
 				now += ms;
 			},
 			() => now,
-			{ read: () => currentRecord, previous: previousRecord, startedAtMs: 1500 },
+			{
+				read: () => currentRecord,
+				startAttemptId: "current-attempt",
+			},
+		);
+
+		expect(result).toBe(false);
+		expect(now).toBe(250);
+		expect(requests).toBe(0);
+	});
+
+	it("ignores terminal lifecycle records from another startup attempt", async () => {
+		let now = 0;
+		let requests = 0;
+		globalThis.fetch = (async (_input: string | URL) => {
+			requests += 1;
+			return new Response("live", { status: 200 });
+		}) as typeof fetch;
+		const unrelatedTerminalRecord = {
+			state: "error" as const,
+			pid: 42,
+			version: "test",
+			startedAt: "1970-01-01T00:00:02.000Z",
+			startAttemptId: "other-attempt",
+			systemdUnit: "signet-daemon-123",
+			exitedAt: "1970-01-01T00:00:03.000Z",
+			exitCode: 1,
+		};
+
+		const result = await waitForDaemonLiveness(
+			10_000,
+			() => false,
+			async (ms) => {
+				now += ms;
+			},
+			() => now,
+			{
+				read: () => unrelatedTerminalRecord,
+				startAttemptId: "current-attempt",
+				systemdUnitName: "signet-daemon-123",
+			},
+		);
+
+		expect(result).toBe(true);
+		expect(now).toBe(250);
+		expect(requests).toBeGreaterThan(0);
+	});
+
+	it("uses the exact systemd unit for lifecycle records from older daemon artifacts", async () => {
+		let now = 0;
+		let requests = 0;
+		globalThis.fetch = (async (_input: string | URL) => {
+			requests += 1;
+			return new Response("not live", { status: 503 });
+		}) as typeof fetch;
+		const legacyTerminalRecord = {
+			state: "error" as const,
+			pid: 42,
+			version: "test",
+			startedAt: "1970-01-01T00:00:02.000Z",
+			systemdUnit: "signet-daemon-123",
+			exitCode: 1,
+		};
+
+		const result = await waitForDaemonLiveness(
+			10_000,
+			() => false,
+			async (ms) => {
+				now += ms;
+			},
+			() => now,
+			{
+				read: () => legacyTerminalRecord,
+				startAttemptId: "current-attempt",
+				systemdUnitName: "signet-daemon-123",
+			},
 		);
 
 		expect(result).toBe(false);
@@ -1090,7 +1177,7 @@ describe("getDaemonStatus", () => {
 				now += ms;
 			},
 			() => now,
-			{ read: () => previousRecord, previous: previousRecord, startedAtMs: 0 },
+			{ read: () => previousRecord, startAttemptId: "current-attempt" },
 		);
 
 		expect(result).toBe(true);

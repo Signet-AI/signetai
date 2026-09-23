@@ -103,7 +103,12 @@ import {
 	createDeferredRuntimeScheduler,
 	releaseDeferredRuntimeGateIfSafe,
 } from "./deferred-runtime-gate";
-import { closeDbOwnerDuringShutdown, createShutdownRequestGate, forceExitDuringShutdownFlush } from "./daemon-shutdown";
+import {
+	closeDbOwnerDuringShutdown,
+	createShutdownRequestGate,
+	forceExitDuringShutdownFlush,
+	runShutdownCleanup,
+} from "./daemon-shutdown";
 import { dbOwnerBatch, dbOwnerQuery, ownerStatement } from "./db-owner-runtime";
 import { ownerReadOne } from "./db-owner-sql";
 import type { QueuePressureSnapshot } from "./diagnostics-queue";
@@ -2081,6 +2086,7 @@ function buildLifecycleRecord(state: DaemonLifecycle["state"], extra: Partial<Da
 		startedAt: lifecycleStartedAt,
 		...(DAEMON_RUNTIME === null ? {} : { runtime: DAEMON_RUNTIME }),
 		systemdUnit: process.env.SIGNET_DAEMON_UNIT || undefined,
+		startAttemptId: process.env.SIGNET_DAEMON_START_ATTEMPT_ID || undefined,
 		...extra,
 	};
 }
@@ -2088,6 +2094,7 @@ function buildLifecycleRecord(state: DaemonLifecycle["state"], extra: Partial<Da
 let exitFlushInFlight: Promise<void> | null = null;
 const shutdownRequestGate = createShutdownRequestGate();
 let shutdownFatalError: unknown;
+let shutdownCleanupError: Error | null = null;
 
 async function flushAndExit(exitCode: number): Promise<void> {
 	if (exitFlushInFlight) {
@@ -2123,10 +2130,12 @@ function buildTerminalLifecycleRecord(reason: string, exitCode: number, error?: 
 }
 function buildShutdownTerminalRecord(reason: string, exitCode: number, error?: unknown): DaemonLifecycle {
 	const fatalRequest = shutdownRequestGate.fatalRequest;
+	const terminalError =
+		fatalRequest === null ? (error ?? shutdownCleanupError) : (shutdownFatalError ?? new Error(fatalRequest.reason));
 	return buildTerminalLifecycleRecord(
 		shutdownRequestGate.primary?.reason ?? reason,
 		shutdownRequestGate.exitCode ?? exitCode,
-		fatalRequest === null ? error : (shutdownFatalError ?? new Error(fatalRequest.reason)),
+		terminalError,
 	);
 }
 const SHUTDOWN_CLEANUP_DEADLINE_MS = 20_000;
@@ -2169,13 +2178,16 @@ function requestShutdown(reason: string, exitCode: number, error?: unknown, runC
 		writeDaemonLifecycle(AGENTS_DIR, buildShutdownTerminalRecord(reason, exitCode, error));
 		void flushAndExit(exitCode);
 	}, SHUTDOWN_CLEANUP_DEADLINE_MS);
-	cleanup()
-		.catch(() => {})
-		.finally(() => {
-			clearTimeout(cleanupDeadline);
-			writeDaemonLifecycle(AGENTS_DIR, buildShutdownTerminalRecord(reason, exitCode, error));
-			void flushAndExit(exitCode);
-		});
+	void runShutdownCleanup(cleanup, (cleanupError) => {
+		if (cleanupError !== null) {
+			shutdownCleanupError ??= cleanupError;
+			logger.error("daemon", "Shutdown cleanup failed", cleanupError, { reason });
+		}
+		clearTimeout(cleanupDeadline);
+		const finalExitCode = shutdownRequestGate.exitCode ?? exitCode;
+		writeDaemonLifecycle(AGENTS_DIR, buildShutdownTerminalRecord(reason, finalExitCode, error));
+		void flushAndExit(finalExitCode);
+	});
 }
 
 process.on("SIGINT", () => {

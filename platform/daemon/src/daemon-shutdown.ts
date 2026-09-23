@@ -51,6 +51,19 @@ export function forceExitDuringShutdownFlush(
 	return true;
 }
 
+export async function runShutdownCleanup(
+	cleanup: () => Promise<void>,
+	onSettled: (cleanupError: Error | null) => void,
+): Promise<void> {
+	let cleanupError: Error | null = null;
+	try {
+		await cleanup();
+	} catch (error) {
+		cleanupError = error instanceof Error ? error : new Error(String(error));
+	}
+	onSettled(cleanupError);
+}
+
 export async function closeDbOwnerDuringShutdown(
 	closeMaintenance: () => Promise<void>,
 	closeOwner: () => Promise<void>,
