@@ -174,6 +174,15 @@ mod tests {
                 proposal_evidence TEXT, created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE session_transcripts (
+                session_key TEXT NOT NULL, agent_id TEXT NOT NULL,
+                content TEXT NOT NULL, created_at TEXT NOT NULL,
+                updated_at TEXT
+            );
+            INSERT INTO session_transcripts
+                (session_key,agent_id,content,created_at,updated_at)
+            VALUES
+                ('session-1','agent-a','source-backed link evidence','created','updated');
             INSERT INTO entity_dependencies
                 (id,source_entity_id,target_entity_id,agent_id,dependency_type,strength,
                  confidence,status,source_kind,source_id,proposal_evidence,created_at,updated_at)
@@ -200,7 +209,13 @@ mod tests {
         assert_eq!(result["dependency"]["id"], "link-a");
         assert_eq!(result["dependency"]["agentId"], "agent-a");
         assert_eq!(result["count"], 1);
-        assert_eq!(result["items"][0]["kind"], "unresolved");
+        assert_eq!(result["items"][0]["kind"], "session_transcript");
+        assert_eq!(result["items"][0]["found"], true);
+        assert_eq!(result["items"][0]["sourceId"], "session-1");
+        assert!(result["items"][0]["excerpt"]
+            .as_str()
+            .unwrap()
+            .contains("source-backed link evidence"));
         assert!(matches!(
             execute(
                 &db,

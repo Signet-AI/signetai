@@ -66,6 +66,11 @@ function seed(dir: string) {
     VALUES ('entity-a', 'agent-a', 'ws-a', 'Source', 'source', 'project', 'active', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z');
     INSERT INTO entities (id, agent_id, workspace_id, name, canonical_name, entity_type, status, created_at, updated_at)
     VALUES ('entity-b', 'agent-a', 'ws-a', 'Target', 'target', 'project', 'active', '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z');
+    INSERT INTO session_transcripts
+      (session_key, agent_id, harness, project, content, content_hash, idempotency_key, created_at, updated_at)
+    VALUES
+      ('session-a', 'agent-a', 'contract', NULL, 'The transcript contains source-backed link evidence.', 'hash-a', 'idem-a',
+       '2026-09-23T00:00:00.000Z', '2026-09-23T00:00:00.000Z');
     INSERT INTO entity_dependencies
       (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, confidence, status,
        source_kind, source_id, created_at, updated_at)
@@ -95,7 +100,10 @@ it("returns scoped link evidence and preserves auth and missing-link errors", as
 	expect(success.body.dependency.id).toBe("link-a");
 	expect(success.body.dependency.agentId).toBe("agent-a");
 	expect(success.body.count).toBe(1);
-	expect(success.body.items[0].kind).toBe("unresolved");
+	expect(success.body.items[0].kind).toBe("session_transcript");
+	expect(success.body.items[0].found).toBe(true);
+	expect(success.body.items[0].sourceId).toBe("session-a");
+	expect(success.body.items[0].excerpt).toContain("source-backed link evidence");
 
 	expect((await request(daemon, "/api/ontology/links/link-a/evidence", "agent-b")).response.status).toBe(404);
 	expect((await request(daemon, "/api/ontology/links/missing/evidence")).response.status).toBe(404);

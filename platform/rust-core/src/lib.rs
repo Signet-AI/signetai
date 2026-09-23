@@ -5282,19 +5282,21 @@ fn reflection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     let transaction = connection.transaction()?;
     const NATIVE_SCHEMA_COMPATIBILITY_VERSION: i64 = 155;
-    if has_table(&transaction, "schema_migrations")? {
-        let max_schema_version: Option<i64> =
-            transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
-                row.get(0)
-            })?;
-        if let Some(version) =
-            max_schema_version.filter(|version| *version > NATIVE_SCHEMA_COMPATIBILITY_VERSION)
-        {
-            return Err(CoreError::UnsupportedMigrationHistory(format!(
-                "version {version} exceeds native compatibility version {NATIVE_SCHEMA_COMPATIBILITY_VERSION}"
-            )));
-        }
+    let max_schema_version: Option<i64> = if has_table(&transaction, "schema_migrations")? {
+        transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+            row.get(0)
+        })?
+    } else {
+        None
+    };
+    if let Some(version) =
+        max_schema_version.filter(|version| *version > NATIVE_SCHEMA_COMPATIBILITY_VERSION)
+    {
+        return Err(CoreError::UnsupportedMigrationHistory(format!(
+            "version {version} exceeds native compatibility version {NATIVE_SCHEMA_COMPATIBILITY_VERSION}"
+        )));
     }
+    let migration_050_applied = max_schema_version.is_some_and(|version| version >= 50);
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT);
          CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');
@@ -5592,12 +5594,134 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     ] {
         ensure_column(&transaction, "entity_dependencies", column, definition)?;
     }
-    ensure_column(
-        &transaction,
-        "entity_dependencies",
-        "reason",
-        "TEXT",
+    ensure_column(&transaction, "entity_dependencies", "reason", "TEXT")?;
+    transaction.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS entity_dependency_history (
+            id                TEXT PRIMARY KEY,
+            dependency_id     TEXT NOT NULL,
+            source_entity_id  TEXT NOT NULL,
+            target_entity_id  TEXT NOT NULL,
+            agent_id          TEXT NOT NULL DEFAULT 'default',
+            dependency_type   TEXT NOT NULL,
+            event             TEXT NOT NULL,
+            changed_by        TEXT NOT NULL,
+            reason            TEXT NOT NULL,
+            previous_reason   TEXT,
+            metadata          TEXT,
+            created_at        TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_dep
+            ON entity_dependency_history(dependency_id);
+        CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_agent
+            ON entity_dependency_history(agent_id);
+        CREATE INDEX IF NOT EXISTS idx_entity_dependency_history_created
+            ON entity_dependency_history(created_at DESC);
+
+        DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_insert;
+        DROP TRIGGER IF EXISTS trg_entity_dependencies_related_to_reason_update;
+        DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_insert;
+        DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_update;
+        DROP TRIGGER IF EXISTS trg_entity_dependencies_audit_delete;
+
+        CREATE TRIGGER trg_entity_dependencies_related_to_reason_insert
+        BEFORE INSERT ON entity_dependencies
+        FOR EACH ROW
+        WHEN NEW.dependency_type = 'related_to'
+          AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0)
+        BEGIN
+            SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason');
+        END;
+
+        CREATE TRIGGER trg_entity_dependencies_related_to_reason_update
+        BEFORE UPDATE OF dependency_type, reason ON entity_dependencies
+        FOR EACH ROW
+        WHEN NEW.dependency_type = 'related_to'
+          AND (NEW.reason IS NULL OR length(trim(NEW.reason)) = 0)
+        BEGIN
+            SELECT RAISE(ABORT, 'related_to dependencies require a non-empty reason');
+        END;
+
+        CREATE TRIGGER trg_entity_dependencies_audit_insert
+        AFTER INSERT ON entity_dependencies
+        FOR EACH ROW
+        BEGIN
+            INSERT INTO entity_dependency_history (
+                id, dependency_id, source_entity_id, target_entity_id, agent_id,
+                dependency_type, event, changed_by, reason, previous_reason,
+                metadata, created_at
+            ) VALUES (
+                lower(hex(randomblob(16))), NEW.id, NEW.source_entity_id,
+                NEW.target_entity_id, NEW.agent_id, NEW.dependency_type,
+                'created', 'db-trigger', COALESCE(NEW.reason, 'created without reason'),
+                NULL, '{"source":"trg_entity_dependencies_audit_insert"}', datetime('now')
+            );
+        END;
+
+        CREATE TRIGGER trg_entity_dependencies_audit_update
+        AFTER UPDATE ON entity_dependencies
+        FOR EACH ROW
+        BEGIN
+            INSERT INTO entity_dependency_history (
+                id, dependency_id, source_entity_id, target_entity_id, agent_id,
+                dependency_type, event, changed_by, reason, previous_reason,
+                metadata, created_at
+            ) VALUES (
+                lower(hex(randomblob(16))), NEW.id, NEW.source_entity_id,
+                NEW.target_entity_id, NEW.agent_id, NEW.dependency_type,
+                'updated', 'db-trigger', COALESCE(NEW.reason, 'updated without reason'),
+                OLD.reason, '{"source":"trg_entity_dependencies_audit_update"}', datetime('now')
+            );
+        END;
+
+        CREATE TRIGGER trg_entity_dependencies_audit_delete
+        AFTER DELETE ON entity_dependencies
+        FOR EACH ROW
+        BEGIN
+            INSERT INTO entity_dependency_history (
+                id, dependency_id, source_entity_id, target_entity_id, agent_id,
+                dependency_type, event, changed_by, reason, previous_reason,
+                metadata, created_at
+            ) VALUES (
+                lower(hex(randomblob(16))), OLD.id, OLD.source_entity_id,
+                OLD.target_entity_id, OLD.agent_id, OLD.dependency_type,
+                'deleted', 'db-trigger', COALESCE(OLD.reason, 'deleted without reason'),
+                NULL, '{"source":"trg_entity_dependencies_audit_delete"}', datetime('now')
+            );
+        END;
+
+        "#,
     )?;
+    if !migration_050_applied {
+        transaction.execute_batch(
+            r#"
+            INSERT INTO entity_dependency_history (
+                id, dependency_id, source_entity_id, target_entity_id, agent_id,
+                dependency_type, event, changed_by, reason, previous_reason,
+                metadata, created_at
+            )
+            SELECT
+                lower(hex(randomblob(16))), d.id, d.source_entity_id, d.target_entity_id,
+                d.agent_id, d.dependency_type, 'backfill', 'migration-050',
+                CASE
+                    WHEN d.reason IS NULL OR length(trim(d.reason)) = 0
+                        THEN 'legacy dependency without recorded reason'
+                    ELSE d.reason
+                END,
+                NULL, '{"source":"migration-050"}', datetime('now')
+            FROM entity_dependencies d
+            WHERE NOT EXISTS (
+                SELECT 1 FROM entity_dependency_history h
+                WHERE h.dependency_id = d.id AND h.event = 'backfill'
+            );
+
+            UPDATE entity_dependencies
+            SET reason = 'legacy-unattributed related_to edge'
+            WHERE dependency_type = 'related_to'
+              AND (reason IS NULL OR length(trim(reason)) = 0);
+            "#,
+        )?;
+    }
     ensure_column(
         &transaction,
         "entity_dependencies",
@@ -6584,6 +6708,149 @@ mod owner_schema_reconciliation_tests {
                 .unwrap()
                 .1,
             "/old/path.md"
+        );
+    }
+
+    #[test]
+    fn reconciles_related_to_reason_history_and_write_invariant() {
+        let db = NamedTempFile::new().unwrap();
+        let path = db.path().to_path_buf();
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE entities (
+                        id TEXT PRIMARY KEY,
+                        agent_id TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'active'
+                    );
+                    CREATE TABLE entity_dependencies (
+                        id TEXT PRIMARY KEY,
+                        source_entity_id TEXT NOT NULL,
+                        target_entity_id TEXT NOT NULL,
+                        agent_id TEXT NOT NULL,
+                        dependency_type TEXT NOT NULL,
+                        strength REAL NOT NULL,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT INTO entity_dependencies (
+                        id, source_entity_id, target_entity_id, agent_id,
+                        dependency_type, strength, created_at, updated_at
+                    ) VALUES (
+                        'legacy-related', 'source', 'target', 'agent-a',
+                        'related_to', 0.5, '2026-01-01', '2026-01-01'
+                    );",
+                )
+                .unwrap();
+        }
+
+        drop(Core::open(&path, 4).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT reason FROM entity_dependencies WHERE id='legacy-related'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "legacy-unattributed related_to edge"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT event FROM entity_dependency_history WHERE dependency_id='legacy-related'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap(),
+            "backfill"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type='trigger' AND name='trg_entity_dependencies_related_to_reason_insert'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        assert!(connection
+            .execute(
+                "INSERT INTO entity_dependencies (
+                    id, source_entity_id, target_entity_id, agent_id,
+                    dependency_type, strength, reason, created_at, updated_at
+                ) VALUES ('invalid-related', 'source', 'target', 'agent-a', 'related_to', 0.5, NULL, 'now', 'now')",
+                [],
+            )
+            .is_err());
+
+        drop(connection);
+        drop(Core::open(&path, 4).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM entity_dependency_history WHERE dependency_id='legacy-related' AND event='backfill'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn does_not_backfill_dependencies_created_after_migration_050() {
+        let db = NamedTempFile::new().unwrap();
+        let path = db.path().to_path_buf();
+        {
+            let connection = Connection::open(&path).unwrap();
+            connection
+                .execute_batch(
+                    "CREATE TABLE schema_migrations (
+                        version INTEGER PRIMARY KEY,
+                        applied_at TEXT,
+                        checksum TEXT
+                    );
+                    INSERT INTO schema_migrations(version, applied_at, checksum)
+                    VALUES (50, '2026-09-23', 'migration-050');
+                    CREATE TABLE entity_dependencies (
+                        id TEXT PRIMARY KEY,
+                        source_entity_id TEXT NOT NULL,
+                        target_entity_id TEXT NOT NULL,
+                        agent_id TEXT NOT NULL,
+                        dependency_type TEXT NOT NULL,
+                        strength REAL NOT NULL,
+                        reason TEXT,
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    );
+                    INSERT INTO entity_dependencies (
+                        id, source_entity_id, target_entity_id, agent_id,
+                        dependency_type, strength, reason, created_at, updated_at
+                    ) VALUES (
+                        'post-migration', 'source', 'target', 'agent-a',
+                        'supports', 0.5, 'created-after-migration', '2026-09-23', '2026-09-23'
+                    );",
+                )
+                .unwrap();
+        }
+
+        drop(Core::open(&path, 4).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM entity_dependency_history WHERE dependency_id='post-migration' AND event='backfill'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
         );
     }
 }
