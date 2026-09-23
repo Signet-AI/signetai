@@ -32,13 +32,13 @@ fn re(pattern: &str) -> Regex {
         .expect("valid policy regex")
 }
 fn defensive(content: &str, start: usize, end: usize) -> bool {
+    let before_limit = start.saturating_sub(120);
     let before_start = content
         .char_indices()
         .map(|(i, _)| i)
-        .filter(|i| *i <= start)
+        .take_while(|i| *i <= before_limit)
         .last()
-        .unwrap_or(0)
-        .max(start.saturating_sub(120));
+        .unwrap_or(0);
     let before = &content[before_start..start];
     let after_end = content
         .char_indices()
@@ -97,7 +97,6 @@ pub fn scan_memory_content(content: &str) -> MemoryContentSafetyAssessment {
     let creds = [
         r"\b(?:enter|paste|provide|share|send|give|submit|type|hand over)\b[\s\S]{0,80}\b(?:password|api\s*key|token|secret|credential|private\s+key)\b",
     ];
-    let shell = r"\b(?:curl|wget)\b[^\n]{0,240}\|\s*(?:ba|z|fi)?sh\b|\brm\s+-rf\s+(?:/|~|\.ssh)[^\n]{0,240}|\b(?:cat|head|tail)\s+~/?\.ssh/(?:id_[a-z]+|authorized_keys)\b|\b(?:printenv|env)\b[^\n]{0,120}\b(?:curl|wget|send|upload|post)\b";
     let mut reasons = Vec::new();
     if invisible.is_match(content) {
         reasons.push(MemoryContentSafetyReason::InvisibleUnicode);
