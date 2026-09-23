@@ -1,5 +1,5 @@
 import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type SpawnSyncReturns } from "@signet/core";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -91,6 +91,7 @@ export interface DaemonLastExit {
 	readonly startedAt: string;
 	readonly runtime?: DaemonRuntime;
 	readonly systemdUnit?: string;
+	readonly startAttemptId?: string;
 	readonly exitedAt?: string;
 	readonly exitCode?: number;
 	readonly reason?: string;
@@ -1150,6 +1151,7 @@ export interface DaemonStartArgsInput {
 	readonly bind: string;
 	readonly startupLogPath: string;
 	readonly unitName?: string;
+	readonly startAttemptId?: string;
 	readonly bunInspect?: string;
 	readonly bunOptions?: string;
 	readonly telemetryEnv?: NodeJS.ProcessEnv;
@@ -1255,6 +1257,7 @@ export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput):
 		...(nodePath ? [`--setenv=NODE_PATH=${appendNodePath(nodePath, sourceEnvironment.NODE_PATH)}`] : []),
 		...(wasmPath ? [`--setenv=SIGNET_TIKTOKEN_WASM_PATH=${wasmPath}`] : []),
 		"--setenv=SIGNET_DAEMON_ENTRYPOINT=1",
+		...(input.startAttemptId ? [`--setenv=SIGNET_DAEMON_START_ATTEMPT_ID=${input.startAttemptId}`] : []),
 		`--setenv=BUN_INSPECT=${input.bunInspect ?? ""}`,
 		`--setenv=BUN_OPTIONS=${input.bunOptions ?? ""}`,
 		...Object.entries(resolveTelemetryEnvironment(sourceEnvironment)).map(([key, value]) => `--setenv=${key}=${value}`),
@@ -1292,27 +1295,26 @@ interface DaemonStartProcessExit {
 
 interface DaemonStartLifecycleProbe {
 	readonly read: () => DaemonLastExit | null;
-	readonly previous: DaemonLastExit | null;
-	readonly startedAtMs: number;
+	readonly startAttemptId: string;
+	readonly systemdUnitName?: string;
 }
 
 function isDaemonLifecycleFromStartAttempt(
 	record: DaemonLastExit | null,
-	previous: DaemonLastExit | null,
-	startedAtMs: number,
+	startAttemptId: string,
+	systemdUnitName?: string,
 ): record is DaemonLastExit {
 	if (record === null) return false;
-	if (previous?.pid === record.pid && previous.startedAt === record.startedAt) return false;
-	const recordStartedAtMs = Date.parse(record.startedAt);
-	return Number.isFinite(recordStartedAtMs) && recordStartedAtMs >= startedAtMs;
+	if (record.startAttemptId !== undefined) return record.startAttemptId === startAttemptId;
+	return systemdUnitName !== undefined && record.systemdUnit === systemdUnitName;
 }
 
 function isTerminalDaemonLifecycleFromStartAttempt(
 	record: DaemonLastExit | null,
-	previous: DaemonLastExit | null,
-	startedAtMs: number,
+	startAttemptId: string,
+	systemdUnitName?: string,
 ): boolean {
-	if (!isDaemonLifecycleFromStartAttempt(record, previous, startedAtMs)) return false;
+	if (!isDaemonLifecycleFromStartAttempt(record, startAttemptId, systemdUnitName)) return false;
 	return record.state === "clean" || record.state === "error";
 }
 
@@ -1621,6 +1623,7 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 			SIGNET_BIND: input.bind,
 			SIGNET_PATH: input.agentsDir,
 			SIGNET_DAEMON_ENTRYPOINT: "1",
+			...(input.startAttemptId ? { SIGNET_DAEMON_START_ATTEMPT_ID: input.startAttemptId } : {}),
 			SIGNET_DAEMON_RUNTIME: runtime,
 			...(nodePath ? { NODE_PATH: appendNodePath(nodePath, sourceEnvironment.NODE_PATH) } : {}),
 			...(wasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: wasmPath } : {}),
@@ -1704,7 +1707,7 @@ export async function waitForDaemonLiveness(
 		if (shouldStop()) return false;
 		if (
 			lifecycle &&
-			isTerminalDaemonLifecycleFromStartAttempt(lifecycle.read(), lifecycle.previous, lifecycle.startedAtMs)
+			isTerminalDaemonLifecycleFromStartAttempt(lifecycle.read(), lifecycle.startAttemptId, lifecycle.systemdUnitName)
 		) {
 			return false;
 		}
@@ -1771,8 +1774,7 @@ export async function startDaemon(
 
 	const startupLogPath = join(logDir, "startup.log");
 	const systemdUnitName = `signet-daemon-${process.pid}`;
-	const lifecycleBeforeStart = readDaemonLifecycleRecord(agentsDir);
-	const startAttemptedAtMs = Date.now();
+	const startAttemptId = randomUUID();
 	let stderrFd: number | null = null;
 	let stderrTarget: "ignore" | number = "ignore";
 	try {
@@ -1792,6 +1794,7 @@ export async function startDaemon(
 		...(nodePath ? { NODE_PATH: appendNodePath(nodePath, process.env.NODE_PATH) } : {}),
 		...(tokenizerWasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: tokenizerWasmPath } : {}),
 		SIGNET_DAEMON_ENTRYPOINT: "1",
+		SIGNET_DAEMON_START_ATTEMPT_ID: startAttemptId,
 		BUN_INSPECT: inspectorForwarding.childInspector,
 	};
 	let procExited = false;
@@ -1807,6 +1810,7 @@ export async function startDaemon(
 			bind: net.bind,
 			startupLogPath,
 			unitName: systemdUnitName,
+			startAttemptId,
 			bunInspect: inspectorForwarding.childInspector,
 			bunOptions: process.env.BUN_OPTIONS,
 			telemetryEnv: process.env,
@@ -1867,6 +1871,7 @@ export async function startDaemon(
 				host: net.host,
 				bind: net.bind,
 				startupLogPath,
+				startAttemptId,
 				bunInspect: inspectorForwarding.childInspector,
 				telemetryEnv: process.env,
 			}),
@@ -1940,8 +1945,8 @@ export async function startDaemon(
 	const lifecycleProbe: DaemonStartLifecycleProbe | undefined = startedByServiceManager
 		? {
 				read: () => readDaemonLifecycleRecord(agentsDir),
-				previous: lifecycleBeforeStart,
-				startedAtMs: startAttemptedAtMs,
+				startAttemptId,
+				...(process.platform === "linux" ? { systemdUnitName } : {}),
 			}
 		: undefined;
 	const ready = await waitForDaemonLiveness(deadline, () => procExited, sleep, Date.now, lifecycleProbe);
@@ -1951,14 +1956,18 @@ export async function startDaemon(
 		const latestLifecycleRecord = readDaemonLifecycleRecord(agentsDir);
 		const lifecycleRecord = isDaemonLifecycleFromStartAttempt(
 			latestLifecycleRecord,
-			lifecycleBeforeStart,
-			startAttemptedAtMs,
+			startAttemptId,
+			process.platform === "linux" ? systemdUnitName : undefined,
 		)
 			? latestLifecycleRecord
 			: null;
 		const processExitedDuringStart =
 			procExited ||
-			isTerminalDaemonLifecycleFromStartAttempt(latestLifecycleRecord, lifecycleBeforeStart, startAttemptedAtMs);
+			isTerminalDaemonLifecycleFromStartAttempt(
+				latestLifecycleRecord,
+				startAttemptId,
+				process.platform === "linux" ? systemdUnitName : undefined,
+			);
 		const diagnostics = readDaemonStartFailureDiagnostics({
 			startupLogPath,
 			systemdUnitName: process.platform === "linux" ? systemdUnitName : undefined,

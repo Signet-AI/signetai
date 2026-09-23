@@ -11,6 +11,7 @@ export interface DaemonLifecycle {
 	readonly startedAt: string;
 	readonly runtime?: DaemonRuntime;
 	readonly systemdUnit?: string;
+	readonly startAttemptId?: string;
 	readonly exitedAt?: string;
 	readonly exitCode?: number;
 	readonly reason?: string;

@@ -41,8 +41,10 @@ describe("daemon lifecycle record (#1148)", () => {
 				version: "0.222.0",
 				startedAt: "2026-09-09T00:00:00.000Z",
 				runtime: "bun-js",
+				startAttemptId: "test-start-attempt",
 			});
 			expect(readDaemonLifecycle(root)?.runtime).toBe("bun-js");
+			expect(readDaemonLifecycle(root)?.startAttemptId).toBe("test-start-attempt");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
