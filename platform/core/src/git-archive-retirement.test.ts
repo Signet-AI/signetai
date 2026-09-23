@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
@@ -50,14 +50,29 @@ describe("verified root git archive retirement", () => {
 		expect(readFileSync(join(destination, "untracked"), "utf8")).toBe("untracked\n");
 		expect(readFileSync(join(destination, ".git", "hooks", "pre-commit"), "utf8")).toContain("exit 0");
 		expect(spawnSync("git", ["-C", destination, "diff", "--cached", "--quiet"], { encoding: "utf8" }).status).toBe(1);
-		expect(spawnSync("git", ["-C", destination, "status", "--porcelain=v1"], { encoding: "utf8" }).stdout).toContain("untracked");
-		expect(spawnSync("git", ["-C", destination, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim()).toBe(destination);
+		expect(spawnSync("git", ["-C", destination, "status", "--porcelain=v1"], { encoding: "utf8" }).stdout).toContain(
+			"untracked",
+		);
+		expect(
+			spawnSync("git", ["-C", destination, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim(),
+		).toBe(destination);
 	});
 
-	it("refuses nested repositories and non-root repositories", () => {
+	it("preserves nested repositories and refuses non-root repositories", () => {
 		const root = repo();
 		const nested = join(root, "nested");
 		spawnSync("git", ["init", "-q", nested]);
-		expect(() => prepareRootGitArchive(root, join(root, "retirement"))).toThrow(/nested/i);
+		writeFileSync(join(nested, "nested-file"), "nested\n");
+		const archive = prepareRootGitArchive(root, join(root, "retirement"));
+		const destination = join(root, "restored-nested");
+		restoreVerifiedRootGitArchive(archive, destination);
+		expect(
+			spawnSync("git", ["-C", join(destination, "nested"), "rev-parse", "--show-toplevel"], { encoding: "utf8" })
+				.status,
+		).toBe(0);
+		expect(readFileSync(join(destination, "nested", "nested-file"), "utf8")).toBe("nested\n");
+		const nonRoot = join(root, "plain-directory");
+		mkdirSync(nonRoot);
+		expect(() => prepareRootGitArchive(nonRoot, join(root, "non-root-retirement"))).toThrow(/root/i);
 	});
 });
