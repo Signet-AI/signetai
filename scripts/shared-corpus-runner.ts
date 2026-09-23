@@ -146,11 +146,35 @@ export function resolveReportPath(backend: Backend, _repo: string, report?: stri
 	if (report) return resolve(report);
 	return backend === "rust" ? undefined : undefined;
 }
+export function clearReport(report?: string): void {
+	if (report && existsSync(report)) unlinkSync(report);
+}
 export function buildTypeScriptCommand(selected?: string[], report?: string): string[] {
 	if (selected && report)
 		return ["bun", resolve(import.meta.dir, "typescript-shared-corpus-launcher.ts"), "--report", report, ...selected];
 	return selected ? ["bun", "run", "test:hermetic", ...selected] : ["bun", "run", "test:workspace"];
 }
+export type TypeScriptSetupResult =
+	| { status: "ready" }
+	| { status: "failed"; step: "install" | "build"; exitCode: number | null };
+export type SetupCommand = (command: string, args: string[], cwd: string, env: NodeJS.ProcessEnv) => number | null;
+
+export function prepareTypeScriptLane(
+	worktree: string,
+	execute: SetupCommand = (command, args, cwd, env) =>
+		spawnSync(command, args, { cwd, env, encoding: "utf8", stdio: "inherit" }).status,
+	env: NodeJS.ProcessEnv = { ...process.env },
+): TypeScriptSetupResult {
+	for (const [step, args] of [
+		["install", ["install", "--frozen-lockfile"]],
+		["build", ["run", "build"]],
+	] as const) {
+		const exitCode = execute("bun", [...args], worktree, { ...env });
+		if (exitCode !== 0) return { status: "failed", step, exitCode };
+	}
+	return { status: "ready" };
+}
+
 export function buildExecutionManifest(repo: string): ExecutionManifest {
 	const packageJson = String(git(repo, ["show", `${BASELINE_SHA}:package.json`]));
 	const pkg = JSON.parse(packageJson);
@@ -330,6 +354,27 @@ export function run(
 	const selected = o.paths ? runnableSelectedPaths(o.paths, manifest.protectedCorpus) : undefined;
 	const expected = selected ?? runnableManifestPaths(manifest.protectedCorpus);
 	const report = resolveReportPath(backend, repo, o.report);
+	clearReport(report);
+	const setup = backend === "typescript" ? prepareTypeScriptLane(o.worktree as string) : { status: "ready" as const };
+	if (setup.status !== "ready") {
+		return {
+			baselineSha: BASELINE_SHA,
+			backend,
+			execution: selected ? "supplementary-selected" : "full-baseline-selection",
+			manifest,
+			command: buildTypeScriptCommand(selected, report),
+			reportPath: report,
+			worktree: o.worktree,
+			tests: 0,
+			passed: 0,
+			failed: 0,
+			skipped: 0,
+			crash: true,
+			incomplete: true,
+			status: "failed",
+			setup,
+		};
+	}
 	const command =
 		backend === "typescript"
 			? buildTypeScriptCommand(selected, report)
@@ -348,7 +393,7 @@ export function run(
 				];
 	const executable = command[0];
 	if (!executable) throw new Error("lane command is empty");
-	if (report && existsSync(report)) unlinkSync(report);
+	clearReport(report);
 	const child = spawnSync(executable, command.slice(1), {
 		cwd: backend === "typescript" ? o.worktree : repo,
 		env: { ...process.env },

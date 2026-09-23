@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import {
@@ -7,6 +7,8 @@ import {
 	parseJUnitReport,
 	runnableSelectedPaths,
 	buildTypeScriptCommand,
+	prepareTypeScriptLane,
+	clearReport,
 	resolveReportPath,
 	validateBaselineWorktree,
 	validateManifest,
@@ -74,6 +76,48 @@ describe("shared corpus admission", () => {
 	test("TypeScript accepts its CLI's default report contract", () => {
 		expect(() => validateLaneOptions("typescript", { worktree: "/tmp/not-a-worktree" })).toThrow(/pinned/i);
 		expect(resolveReportPath("typescript", "/repo")).toBeUndefined();
+	});
+
+	test("runs canonical pinned TypeScript setup before the launcher", () => {
+		const calls: string[] = [];
+		const result = prepareTypeScriptLane(
+			"/baseline",
+			(command, args, cwd, env) => {
+				calls.push(`${command} ${args.join(" ")} @ ${cwd} isolated=${env.SIGNET_TEST_ROOT}`);
+				return 0;
+			},
+			{ ...process.env, SIGNET_TEST_ROOT: "/isolated" },
+		);
+		expect(result).toEqual({ status: "ready" });
+		expect(calls).toEqual([
+			"bun install --frozen-lockfile @ /baseline isolated=/isolated",
+			"bun run build @ /baseline isolated=/isolated",
+		]);
+	});
+
+	test("stops pinned setup when installation fails", () => {
+		const calls: string[] = [];
+		const result = prepareTypeScriptLane(
+			"/baseline",
+			(command, args) => {
+				calls.push(`${command} ${args.join(" ")}`);
+				return 1;
+			},
+			process.env,
+		);
+		expect(result).toEqual({ status: "failed", step: "install", exitCode: 1 });
+		expect(calls).toEqual(["bun install --frozen-lockfile"]);
+	});
+
+	test("clears a stale report before setup can fail", () => {
+		const report = `/mnt/work/hermes-scratch/shared-runner-stale-report-${process.pid}.xml`;
+		writeFileSync(report, "stale report");
+		try {
+			clearReport(report);
+			expect(existsSync(report)).toBe(false);
+		} finally {
+			rmSync(report, { force: true });
+		}
 	});
 
 	test("selected mode builds a command containing the selected paths", () => {
