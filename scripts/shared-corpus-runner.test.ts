@@ -11,6 +11,7 @@ import {
 	validateBaselineWorktree,
 	validateManifest,
 	validateLaneOptions,
+	requiresNativeEvidence,
 	type ManifestEntry,
 } from "./shared-corpus-runner";
 
@@ -192,6 +193,12 @@ describe("shared corpus admission", () => {
 			0,
 		);
 		expect(result.nativeEvidence).toBe(true);
+	});
+
+	test("requires native evidence for every Rust lane, including selected runs", () => {
+		expect(requiresNativeEvidence("rust", false)).toBe(true);
+		expect(requiresNativeEvidence("rust", true)).toBe(false);
+		expect(requiresNativeEvidence("typescript", false)).toBe(false);
 	});
 
 	test("adapter rejects a forged pinned manifest before launching tests", () => {

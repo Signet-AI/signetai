@@ -29,6 +29,10 @@ export type Accounting = {
 	status?: "passed" | "failed";
 };
 
+export function requiresNativeEvidence(backend: Backend, nativeEvidence: boolean): boolean {
+	return backend === "rust" && !nativeEvidence;
+}
+
 function git(repo: string, args: string[], binary = false): string | Buffer {
 	const r = spawnSync("git", args, { cwd: repo, encoding: binary ? "buffer" : "utf8" });
 	if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
@@ -373,7 +377,7 @@ export function run(
 	}
 	const accounting = parseJUnitReport(readFileSync(report, "utf8"), expected, child.status);
 	const infrastructureCrash = child.signal !== null || child.error !== undefined;
-	const nativeEvidenceGap = backend === "rust" && selected === undefined && !accounting.nativeEvidence;
+	const nativeEvidenceGap = requiresNativeEvidence(backend, accounting.nativeEvidence);
 	const crash = infrastructureCrash || accounting.crash;
 	const incomplete = accounting.incomplete || accounting.tests === 0 || infrastructureCrash || nativeEvidenceGap;
 	return {
