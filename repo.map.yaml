@@ -1,5 +1,5 @@
 version: 1
-updated_at: "2026-04-19"
+updated_at: "2026-09-23"
 
 areas:
   platform:
@@ -39,10 +39,16 @@ areas:
         name: "@signet/connector-claude-code"
       - path: integrations/codex/connector
         name: "@signet/connector-codex"
+      - path: integrations/codex/plugin
+        name: "@signet/codex-plugin"
+      - path: integrations/forge/connector
+        name: "@signet/connector-forge"
       - path: integrations/gemini/connector
         name: "@signet/connector-gemini"
       - path: integrations/hermes-agent/connector
         name: "@signet/connector-hermes-agent"
+      - path: integrations/kimi/connector
+        name: "@signet/connector-kimi"
       - path: integrations/oh-my-pi/connector
         name: "@signet/connector-oh-my-pi"
       - path: integrations/oh-my-pi/extension
