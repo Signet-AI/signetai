@@ -6,7 +6,7 @@ import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor } from "../db-accessor";
-import type { DbOwnerClient } from "../db-owner-client";
+import { DbOwnerDeadlineError, type DbOwnerClient } from "../db-owner-client";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import type { DbOwnerRequest } from "../db-owner-protocol";
 import { reportEventLoopLag, resetPressureState } from "../system-pressure";
@@ -174,6 +174,39 @@ describe("dreaming worker agent scope", () => {
 		} finally {
 			accessor.withReadDbAsync = originalRead;
 		}
+	});
+
+	it("waits for owner work to settle after an agent-scope deadline", async () => {
+		const metricsGate = { release: (): void => {} };
+		const metrics = new Promise<void>((resolve) => {
+			metricsGate.release = resolve;
+		});
+		const owner = {
+			submit() {
+				return {
+					job: {} as never,
+					result: Promise.reject(new DbOwnerDeadlineError("scope-query")),
+					metrics,
+					cancel: (): void => {},
+				};
+			},
+		} as unknown as DbOwnerClient;
+		const pending = getDreamingWorkerAgentIds(accessor, "default", { owner } as DbOwnerMaintenance);
+		let settled = false;
+		void pending.then(
+			() => {
+				settled = true;
+			},
+			() => {
+				settled = true;
+			},
+		);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(settled).toBe(false);
+
+		metricsGate.release();
+		await expect(pending).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+		expect(settled).toBe(true);
 	});
 
 	it("serves the agent-scope union from a snapshot refreshed on a cadence", async () => {
@@ -348,6 +381,62 @@ describe("dreaming worker agent scope", () => {
 					count: number;
 				},
 			).toEqual({ count: 0 });
+		} finally {
+			worker.stop();
+		}
+	});
+
+	it("releases a failed async preflight and admits the next trigger", async () => {
+		db.prepare(
+			`INSERT INTO session_transcripts
+			 (session_key, agent_id, content, harness, created_at, updated_at, completed_at)
+			 VALUES ('async-preflight', 'default', 'Fixture evidence for a completed pass.', 'pi',
+			         datetime('now'), datetime('now'), datetime('now'))`,
+		).run();
+		let rejectNextRead = false;
+		const triggerAccessor = {
+			...accessor,
+			withReadDbAsync: <Result>(fn: (db: Database) => Result): Promise<Result> => {
+				if (rejectNextRead) {
+					rejectNextRead = false;
+					return Promise.reject(new DbOwnerDeadlineError("fixture-agent-scopes"));
+				}
+				return Promise.resolve(fn(db));
+			},
+		} as unknown as DbAccessor;
+		const worker = startDreamingWorker(triggerAccessor, defaultCfg({ tokenThreshold: 1 }), agentsDir, "default", {
+			checkIntervalMs: 60_000,
+			executorFactory: () => ({
+				async run() {
+					return { summary: "Controlled executor fixture completed." };
+				},
+			}),
+		});
+		try {
+			const controlId = await worker.triggerAsync("incremental");
+			const control = worker.activePass;
+			if (control !== null) await control;
+			expect(db.prepare("SELECT status FROM dreaming_passes WHERE id = ?").get(controlId)).toMatchObject({
+				status: "completed",
+			});
+
+			rejectNextRead = true;
+			const failedTrigger = worker.triggerAsync("incremental");
+			expect(worker.activePass).not.toBeNull();
+			await expect(failedTrigger).rejects.toBeInstanceOf(DbOwnerDeadlineError);
+			await waitFor(() => !worker.running, 2_000);
+			expect(worker.activePass).toBeNull();
+			expect(db.prepare("SELECT COUNT(*) AS count FROM dreaming_passes WHERE status = 'running'").get()).toEqual({
+				count: 0,
+			});
+
+			const recoveryId = await worker.triggerAsync("incremental");
+			const recovery = worker.activePass;
+			if (recovery !== null) await recovery;
+			await waitFor(() => !worker.running, 2_000);
+			expect(db.prepare("SELECT status FROM dreaming_passes WHERE id = ?").get(recoveryId)).toMatchObject({
+				status: "completed",
+			});
 		} finally {
 			worker.stop();
 		}

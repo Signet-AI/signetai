@@ -2564,21 +2564,21 @@
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 146,
+      "line": 152,
       "api": "withReadDbAsync",
       "source": ": await accessor.withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 204,
+      "line": 210,
       "api": "withReadDbAsync",
       "source": ": accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, [\"hygiene\"]), {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-worker.ts",
-      "line": 224,
+      "line": 230,
       "api": "withReadDbAsync",
       "source": ": accessor.withReadDbAsync(",
       "category": "hot-path"
