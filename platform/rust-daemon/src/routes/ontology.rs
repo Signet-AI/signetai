@@ -262,10 +262,7 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/ontology/proposals/{id}/evidence",
             get(proposal_evidence),
         )
-        .route(
-            "/api/ontology/links/{id}/evidence",
-            get(link_evidence),
-        )
+        .route("/api/ontology/links/{id}/evidence", get(link_evidence))
         .route("/api/ontology/claims/evidence", get(unsupported_read))
         .route("/api/ontology/claims/versions", get(list_claim_versions))
         .route("/api/ontology/claims/version", get(get_claim_version))
@@ -297,9 +294,11 @@ async fn proposal_evidence(
         agent_id: agent(&headers, Some(&q.agent), None)?,
         id,
     };
-    Ok(execute(&state, Operation::OntologyProposalEvidence { request })
-        .await
-        .map(Json)?)
+    Ok(
+        execute(&state, Operation::OntologyProposalEvidence { request })
+            .await
+            .map(Json)?,
+    )
 }
 
 async fn link_evidence(
