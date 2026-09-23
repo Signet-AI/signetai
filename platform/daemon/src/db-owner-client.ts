@@ -185,6 +185,8 @@ export interface DbOwnerClientOptions {
 	readonly sqlitePath?: string;
 	readonly startupTimeoutMs?: number;
 	readonly workerRole?: "generic" | "recall";
+	/** Shared daemon admission control for generation-aware writer fencing. */
+	readonly migrationControl?: MigrationControlBoundary;
 }
 
 const DEFAULT_DB_OWNER_START_TIMEOUT_MS = 15_000;
@@ -264,7 +266,8 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	let input = "";
 	let stderr = "";
 	let writeBlocked = false;
-	const migrationControl = new MigrationControlBoundary(`db-owner:${options.dbPath}:${process.pid}`);
+	const migrationControl =
+		options.migrationControl ?? new MigrationControlBoundary(`db-owner:${options.dbPath}:${process.pid}`);
 	sweepStaleCancellationRegistries(dirname(options.dbPath));
 	const cancellationRegistryPath = join(
 		dirname(options.dbPath),
