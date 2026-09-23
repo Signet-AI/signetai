@@ -737,9 +737,18 @@ printf '%s\n' '{"ready":false,"errorKind":"unsupported_migration_history","error
         std::fs::remove_file(&config).unwrap();
         let uppercase_config = directory.join("AGENT.yaml");
         std::fs::write(&uppercase_config, "auth:\n  mode: hybrid\n").unwrap();
+        assert_eq!(
+            super::runtime_config_signature(&directory).unwrap().0,
+            uppercase_config
+        );
         assert_eq!(super::read_auth_mode(&directory).unwrap(), "hybrid");
-        std::fs::remove_file(uppercase_config).unwrap();
-        std::fs::write(directory.join("config.yaml"), "auth:\n  mode: local\n").unwrap();
+        std::fs::remove_file(&uppercase_config).unwrap();
+        let fallback_config = directory.join("config.yaml");
+        std::fs::write(&fallback_config, "auth:\n  mode: local\n").unwrap();
+        assert_eq!(
+            super::runtime_config_signature(&directory).unwrap().0,
+            fallback_config
+        );
         assert_eq!(super::read_auth_mode(&directory).unwrap(), "local");
         let _ = std::fs::remove_dir_all(directory);
     }
