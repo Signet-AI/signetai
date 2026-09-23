@@ -13,6 +13,7 @@ use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 use unicode_normalization::UnicodeNormalization;
 
+pub mod memory_content_safety;
 mod ontology_claim_trace;
 mod ontology_claim_versions;
 
