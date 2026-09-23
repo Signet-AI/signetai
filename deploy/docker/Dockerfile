@@ -18,7 +18,17 @@ RUN bun run build:dashboard
 RUN bun run --filter '@signet/core' build && bun run build:connector-base && bun run build:opencode-plugin && bun run build:oh-my-pi-extension && bun run build:connector-oh-my-pi && bun run build:pi-extension && bun run build:connector-pi && bun run build:deps && bun run build:native-bun
 ARG TARGETOS=linux
 ARG TARGETARCH
-RUN set -eux; arch="${TARGETARCH:-$(uname -m)}"; pkg="sqlite-vec-${TARGETOS}-${arch}"; mkdir -p dist/docker-sqlite-vec; touch dist/docker-sqlite-vec/vec0.so; test -n "$pkg"
+RUN set -eux; \
+	arch="${TARGETARCH:-$(uname -m)}"; \
+	case "$arch" in \
+		amd64|x86_64) arch="x64" ;; \
+		aarch64) arch="arm64" ;; \
+	esac; \
+	pkg="sqlite-vec-${TARGETOS}-${arch}"; \
+	vec_path="$(find node_modules -path "*/${pkg}/vec0.so" -type f | head -n 1)"; \
+	test -n "$vec_path"; \
+	mkdir -p dist/docker-sqlite-vec; \
+	cp "$vec_path" dist/docker-sqlite-vec/vec0.so
 
 FROM rust:1.88-bookworm AS daemon-build
 WORKDIR /app
