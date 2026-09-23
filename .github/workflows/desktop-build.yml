@@ -150,7 +150,7 @@ jobs:
           fi
 
           if [ "${mode}" = "official" ] && [ "${requires_signing}" -eq 1 ] && [ "${has_official}" -ne 1 ]; then
-            printf '::error::signing_mode=official but required signing/notarization secrets are missing: %s %s\n' "${missing[*]}" "${notarization_missing[*]}"
+            printf '::error::signing_mode=official but required signing/notarization secrets are missing: %s %s\n' "${missing[*]-}" "${notarization_missing[*]-}"
             exit 1
           fi
 
@@ -159,7 +159,7 @@ jobs:
               mode="official"
             else
               mode="self-signed"
-              printf '::warning::Official signing secrets missing; using self-signed mode: %s %s\n' "${missing[*]}" "${notarization_missing[*]}"
+              printf '::warning::Official signing secrets missing; using self-signed mode: %s %s\n' "${missing[*]-}" "${notarization_missing[*]-}"
             fi
           fi
           if [ "${mode}" != "official" ] && [ "${mode}" != "self-signed" ]; then
