@@ -13,6 +13,12 @@ describe("mergeSignetGitignoreEntries", () => {
 		expect(merged).toContain("!tools/**");
 		expect(merged).toContain("!dreaming/**");
 		expect(merged).toContain("memory/memories.db*");
+		expect(merged).toContain("data/");
+		expect(merged).toContain("runtime/");
+		expect(merged).toContain("cache/");
+		expect(merged).toContain("files/");
+		expect(merged).toContain(".secrets/");
+		expect(merged).toContain("workspace-layout.json");
 		expect(merged).toContain("memory/backups/");
 		expect(merged).toContain("*.db");
 		expect(merged).toContain("signetai/");

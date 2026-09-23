@@ -7,8 +7,7 @@ export {
 	restoreVerifiedRootGitArchive,
 } from "./git-archive-retirement";
 export type { RootGitArchive, RootGitArchivePlan, RootGitArchiveVerification } from "./git-archive-retirement";
-export { captureGitMetadata, restoreGitMetadata } from "./git-migration";
-export type { GitMetadataCapture } from "./git-migration";
+
 export {
 	DescriptorRoot,
 	openDescriptorRoot,
@@ -249,6 +248,7 @@ export {
 	createFreshWorkspaceV2,
 	persistWorkspaceLayout,
 	resolveWorkspaceLayout,
+	serializeWorkspaceLayout,
 	WORKSPACE_LAYOUT_V1,
 	WORKSPACE_LAYOUT_V2,
 	type WorkspaceLayout,

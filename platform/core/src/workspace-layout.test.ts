@@ -6,6 +6,7 @@ import {
 	createFreshWorkspaceV2,
 	persistWorkspaceLayout,
 	resolveWorkspaceLayout,
+	serializeWorkspaceLayout,
 	type WorkspaceLayoutOverrides,
 } from "./workspace-layout";
 
@@ -63,6 +64,7 @@ describe("canonical workspace layout resolver", () => {
 		try {
 			const result = createFreshWorkspaceV2(root, { env: env(join(root, "config")) });
 			expect(result.version).toBe(2);
+			expect(result.cache).toBe(join(root, "cache"));
 			for (const directory of ["files", "data", "transcripts", "runtime", "cache", ".secrets", "skills"]) {
 				expect(existsSync(join(root, directory))).toBe(true);
 			}
@@ -99,5 +101,12 @@ describe("canonical workspace layout resolver", () => {
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+
+	it("serializes canonical layout bytes without writing the destination", () => {
+		const bytes = serializeWorkspaceLayout({ version: 2, overrides: { database: "custom.db" } });
+		expect(new TextDecoder().decode(bytes)).toBe(
+			'{\n  "version": 2,\n  "overrides": {\n    "database": "custom.db"\n  }\n}\n',
+		);
 	});
 });

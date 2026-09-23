@@ -6,7 +6,13 @@ export const SIGNET_GIT_ALLOWED_DIRECTORIES = ["skills", "tools", "dreaming"] as
 
 export const SIGNET_GIT_PROTECTED_PATHS = [
 	".daemon",
+	".secrets",
 	".shadow",
+	"cache",
+	"data",
+	"files",
+	"runtime",
+	"workspace-layout.json",
 	"node_modules",
 	":(glob)**/node_modules/**",
 	`${SIGNET_SOURCE_CHECKOUT_DIRNAME}`,
@@ -62,8 +68,19 @@ export function isSignetGitProtectedPath(path: string): boolean {
 	return (
 		lower === ".daemon" ||
 		lower.startsWith(".daemon/") ||
+		lower === ".secrets" ||
+		lower.startsWith(".secrets/") ||
 		lower === ".shadow" ||
 		lower.startsWith(".shadow/") ||
+		lower === "cache" ||
+		lower.startsWith("cache/") ||
+		lower === "data" ||
+		lower.startsWith("data/") ||
+		lower === "files" ||
+		lower.startsWith("files/") ||
+		lower === "runtime" ||
+		lower.startsWith("runtime/") ||
+		lower === "workspace-layout.json" ||
 		lower === "node_modules" ||
 		lower.startsWith("node_modules/") ||
 		lower.includes("/node_modules/") ||
@@ -91,7 +108,13 @@ const SIGNET_GITIGNORE_BLOCK_END = "# END Signet lightweight workspace";
 
 const SIGNET_GITIGNORE_PROTECTED_PATTERNS = [
 	".daemon/",
+	".secrets/",
 	".shadow/",
+	"cache/",
+	"data/",
+	"files/",
+	"runtime/",
+	"workspace-layout.json",
 	"node_modules/",
 	`${SIGNET_SOURCE_CHECKOUT_DIRNAME}/`,
 	"memory/memories.db*",

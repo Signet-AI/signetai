@@ -37,6 +37,15 @@ interface PersistedLayout {
 	overrides?: WorkspaceLayoutOverrides;
 }
 
+export function serializeWorkspaceLayout(input: {
+	version: WorkspaceLayoutVersion;
+	overrides?: WorkspaceLayoutOverrides;
+}): Uint8Array {
+	return new TextEncoder().encode(
+		`${JSON.stringify({ version: input.version, ...(input.overrides ? { overrides: input.overrides } : {}) }, null, 2)}\n`,
+	);
+}
+
 const layoutFile = (root: string) => join(root, "workspace-layout.json");
 const absolute = (root: string, value: string) => resolve(root, value);
 
@@ -68,11 +77,7 @@ export function persistWorkspaceLayout(
 	mkdirSync(root, { recursive: true });
 	const file = layoutFile(root);
 	const temp = `${file}.tmp-${process.pid}`;
-	writeFileSync(
-		temp,
-		`${JSON.stringify({ version: input.version, ...(input.overrides ? { overrides: input.overrides } : {}) }, null, 2)}\n`,
-		{ mode: 0o600 },
-	);
+	writeFileSync(temp, serializeWorkspaceLayout(input), { mode: 0o600 });
 	renameSync(temp, file);
 	return file;
 }
@@ -90,7 +95,7 @@ export function resolveWorkspaceLayout(rootPath: string, _options: { env?: NodeJ
 		database: custom.database ? absolute(root, custom.database) : join(data, v2 ? "signet.db" : "memories.db"),
 		transcripts: custom.transcripts ? absolute(root, custom.transcripts) : join(root, v2 ? "transcripts" : "memory"),
 		runtime: custom.runtime ? absolute(root, custom.runtime) : join(root, v2 ? "runtime" : ".daemon"),
-		cache: custom.cache ? absolute(root, custom.cache) : join(root, v2 ? "cache" : "memory", "cache"),
+		cache: custom.cache ? absolute(root, custom.cache) : v2 ? join(root, "cache") : join(root, "memory", "cache"),
 		files: custom.files ? absolute(root, custom.files) : join(root, "files"),
 		imports: custom.imports ? absolute(root, custom.imports) : join(data, "imports"),
 		secrets: custom.secrets ? absolute(root, custom.secrets) : join(root, ".secrets"),

@@ -1,30 +1,12 @@
 import { createHash } from "node:crypto";
-import {
-	closeSync,
-	copyFileSync,
-	constants,
-	fsyncSync,
-	existsSync,
-	fchmodSync,
-	futimesSync,
-	lstatSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	readlinkSync,
-	rmSync,
-	readdirSync,
-	renameSync,
-	statfsSync,
-	symlinkSync,
-	unlinkSync,
-	writeFileSync,
-} from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { lstatSync, statfsSync } from "node:fs";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { type DescriptorEntry, type DescriptorRoot, openDescriptorRoot, UnsafeDescriptorPathError } from "@signet/core";
 
 export type Layout = { version: number; root: string; destination: string };
 export type Fingerprint = {
 	path: string;
+	destinationPath?: string;
 	type: "file" | "symlink";
 	size: number;
 	mtimeMs: number;
@@ -38,6 +20,7 @@ export type Journal = {
 	source: string;
 	destination: string;
 	sourceIdentity: string;
+	destinationParentIdentity: string;
 	destinationIdentity: string;
 	phase: "preflight" | "drained" | "copying" | "snapshotting" | "verified" | "cutover-pending" | "completed" | "failed";
 	destinationWrites: boolean;
@@ -47,6 +30,9 @@ export type Journal = {
 	fingerprints: Fingerprint[];
 	requiredBytes: number;
 	error?: string;
+	cutoverPreimage?: string | null;
+	pointerPublished?: boolean;
+	destinationVerified?: boolean;
 };
 export type MigrationPlan = {
 	readOnly: true;
@@ -55,6 +41,7 @@ export type MigrationPlan = {
 	source: string;
 	destination: string;
 	fingerprints?: Fingerprint[];
+	hardlinks?: string[][];
 };
 export type MigrationResult = { status: "completed"; destination: string; receipt: string };
 export type MigrationStatus = {
@@ -66,88 +53,94 @@ export type MigrationStatus = {
 	journal?: string;
 };
 export interface MigrationDeps {
-	resolver: { resolve(): Layout; cutover?: (layout: Layout) => Promise<void> };
+	resolver: {
+		resolve(): Layout;
+		capture?: () => Promise<string | undefined>;
+		current?: () => Promise<string | undefined>;
+		cutover?: (layout: Layout) => Promise<void>;
+		restore?: (preimage: string | undefined) => Promise<void>;
+		verifyDestination?: (layout: Layout) => Promise<void>;
+	};
 	writers: { drain(): Promise<{ owners: string[] }> };
 	database: {
-		snapshot(destination: string): Promise<{ path: string; bytes: number }>;
-		verify(path: string): Promise<boolean>;
+		prepare(): Promise<{ sourceRoot: string; sourcePath: string; destinationPath: string; bytes: number } | undefined>;
 	};
+	layoutBytes?: (layout: Layout) => Uint8Array;
+	gitignoreBytes?: (existing: string) => Uint8Array;
+	mapDestinationPath?: (sourcePath: string, type: "file" | "symlink") => string | undefined;
 	journalStateDir: string;
 	hooks?: {
 		afterCopy?: () => Promise<void>;
 		afterEntryCopy?: () => Promise<void>;
 		afterCutover?: () => Promise<void>;
+		afterPointerPublished?: () => Promise<void>;
+		afterDestinationAdmitted?: () => Promise<void>;
 		verifyComponent?: (receipt: Receipt) => Promise<boolean>;
 	};
 	lease?: { acquire(): Promise<{ release(): Promise<void> }> };
-	rootGit?: {
-		prepare(source: string, archiveDirectory: string): unknown;
-		verify(archive: unknown): boolean;
-		restore(archive: unknown, destination: string): void;
-	};
 }
+
+type AdmittedDestination = {
+	readonly parent: DescriptorRoot;
+	readonly root: DescriptorRoot;
+	readonly parentIdentity: string;
+	readonly identity: string;
+};
 
 export class MigrationEngine {
 	private readonly deps: MigrationDeps;
+	private readonly journalName: string;
 	private readonly journalPath: string;
+
 	constructor(deps: MigrationDeps) {
 		this.deps = deps;
-		const l = deps.resolver.resolve();
-		this.journalPath = join(deps.journalStateDir, `${workspaceId(l.root)}.json`);
+		const layout = deps.resolver.resolve();
+		this.journalName = `${workspaceId(layout.root)}.json`;
+		this.journalPath = join(deps.journalStateDir, this.journalName);
 	}
+
 	async preflight(): Promise<MigrationPlan> {
-		const lease = this.deps.lease ? await this.deps.lease.acquire() : undefined;
+		const layout = this.deps.resolver.resolve();
+		validateLayout(layout);
+		const source = await openDescriptorRoot(layout.root);
 		try {
-			await this.drainWriters();
-			return this.inventory(this.deps.resolver.resolve());
+			return await inventory(layout, source, this.deps.journalStateDir, this.deps.mapDestinationPath);
 		} finally {
-			await lease?.release();
+			await source.close();
 		}
 	}
+
 	private async drainWriters(): Promise<void> {
-		const d = await this.deps.writers.drain();
-		if (d.owners.length) throw new Error(`migration drain blocked by: ${d.owners.join(", ")}`);
+		const drained = await this.deps.writers.drain();
+		if (drained.owners.length) throw new Error(`migration drain blocked by: ${drained.owners.join(", ")}`);
 	}
-	private inventory(l: Layout): MigrationPlan {
-		validateLayout(l);
-		const i = scanInventory(l.root, l.root, l.destination);
-		ensureSpace(l.destination, i.bytes);
-		return {
-			readOnly: true,
-			bytes: i.bytes,
-			components: i.components,
-			source: l.root,
-			destination: l.destination,
-			fingerprints: i.fingerprints,
-		};
-	}
+
 	async run(): Promise<MigrationResult> {
-		const l = this.deps.resolver.resolve();
-		validateLayout(l);
-		let j = readJournal(this.journalPath);
-		if (
-			j &&
-			(j.workspaceId !== workspaceId(l.root) ||
-				j.source !== resolve(l.root) ||
-				j.destination !== resolve(l.destination))
-		)
-			throw new Error("journal identity mismatch");
-		if (j && j.phase !== "completed" && j.sourceIdentity !== identity(l.root))
-			throw new Error("source identity mismatch");
-		if (j?.phase === "completed") return { status: "completed", destination: l.destination, receipt: this.journalPath };
+		const layout = this.deps.resolver.resolve();
+		validateLayout(layout);
 		const lease = this.deps.lease ? await this.deps.lease.acquire() : undefined;
+		const state = await openOrCreateRoot(this.deps.journalStateDir);
+		const source = await openDescriptorRoot(layout.root);
+		let destination: AdmittedDestination | undefined;
+		let journal = await readJournal(state, this.journalName);
 		try {
+			validateJournalIdentity(journal, layout);
+			const sourceIdentity = await source.identity();
+			if (journal && journal.phase !== "completed" && journal.sourceIdentity !== sourceIdentity)
+				throw new Error("source identity mismatch");
+			if (journal?.phase === "completed")
+				return { status: "completed", destination: layout.destination, receipt: this.journalPath };
 			await this.drainWriters();
-			if (j?.phase === "cutover-pending") return this.finishCutover(l, j);
-			const plan = this.inventory(l);
-			if (j) verifyJournalSources(l.root, j);
-			j ??= {
+			const plan = await inventory(layout, source, this.deps.journalStateDir, this.deps.mapDestinationPath);
+			if (journal) await verifyJournalSources(source, journal);
+			journal ??= {
 				version: 1,
-				workspaceId: workspaceId(l.root),
-				source: resolve(l.root),
-				destination: resolve(l.destination),
-				sourceIdentity: identity(l.root),
-				destinationIdentity: identity(l.destination),
+				workspaceId: workspaceId(layout.root),
+				source: resolve(layout.root),
+				destination: resolve(layout.destination),
+				sourceIdentity,
+				destinationParentIdentity: "missing",
+				destinationIdentity: "missing",
 				phase: "preflight",
 				destinationWrites: false,
 				rollbackEligible: true,
@@ -156,72 +149,151 @@ export class MigrationEngine {
 				fingerprints: plan.fingerprints ?? [],
 				requiredBytes: plan.bytes,
 			};
-			j.phase = "drained";
-			saveJournal(this.journalPath, j);
-			mkdirSync(l.destination, { recursive: true, mode: 0o700 });
-			j.destinationIdentity = identity(l.destination);
-			saveJournal(this.journalPath, j);
-			if (this.deps.rootGit && !j.copied.includes(".git")) {
-				const archiveDirectory = join(this.deps.journalStateDir, `${j.workspaceId}-root-git`);
-				const archive = this.deps.rootGit.prepare(l.root, archiveDirectory);
-				if (!this.deps.rootGit.verify(archive)) throw new Error("root Git archive verification failed");
-				this.deps.rootGit.restore(archive, l.destination);
+			journal.phase = "drained";
+			await saveJournal(state, this.journalName, journal);
+			destination = await admitDestination(layout.destination);
+			if (journal.destinationIdentity !== "missing" && journal.destinationIdentity !== destination.identity)
+				throw new Error("destination identity mismatch");
+			if (
+				journal.destinationParentIdentity !== "missing" &&
+				journal.destinationParentIdentity !== destination.parentIdentity
+			)
+				throw new Error("destination parent identity mismatch");
+			journal.destinationIdentity = destination.identity;
+			journal.destinationParentIdentity = destination.parentIdentity;
+			await saveJournal(state, this.journalName, journal);
+			await this.deps.hooks?.afterDestinationAdmitted?.();
+
+			const expected = new Map((plan.fingerprints ?? []).map((fingerprint) => [fingerprint.path, fingerprint]));
+			const copied = new Set(journal.copied);
+			for (const component of plan.components) {
+				const fingerprint = expected.get(component);
+				if (!fingerprint) throw new Error(`missing source fingerprint: ${component}`);
+				if (!copied.has(component)) {
+					await copyEntry(source, destination.root, fingerprint);
+					await this.deps.hooks?.afterEntryCopy?.();
+					journal.receipts.push({ component, phase: "accepted", fingerprint });
+					journal.copied.push(component);
+					journal.phase = "copying";
+					journal.destinationWrites = true;
+					await saveJournal(state, this.journalName, journal);
+				} else await verifyDestinationEntry(destination.root, fingerprint);
 			}
-			const done = new Set(j.copied);
-			for (const rel of plan.components) {
-				if (done.has(rel)) continue;
-				const r = copyEntry(l.root, l.destination, rel);
-				await this.deps.hooks?.afterEntryCopy?.();
-				j.receipts.push({ component: rel, phase: "accepted", fingerprint: r });
-				j.copied.push(rel);
-				j.phase = "copying";
-				saveJournal(this.journalPath, j);
-			}
-			for (const r of j.receipts) {
-				if (!((await this.deps.hooks?.verifyComponent?.(r)) ?? true))
-					throw new Error(`semantic verification failed: ${r.component}`);
-				r.phase = "verified";
+			await verifyJournalSources(source, journal);
+			for (const receipt of journal.receipts) {
+				if (!((await this.deps.hooks?.verifyComponent?.(receipt)) ?? true))
+					throw new Error(`semantic verification failed: ${receipt.component}`);
+				receipt.phase = "verified";
 			}
 			await this.deps.hooks?.afterCopy?.();
-			j.phase = "snapshotting";
-			saveJournal(this.journalPath, j);
-			const snap = await this.deps.database.snapshot(l.destination);
-			if (!(await this.deps.database.verify(snap.path))) throw new Error("database integrity verification failed");
-			j.phase = "verified";
-			saveJournal(this.journalPath, j);
-			return this.finishCutover(l, j);
-		} catch (e) {
-			if (j) {
-				j.phase = "failed";
-				j.error = e instanceof Error ? e.message : String(e);
-				saveJournal(this.journalPath, j);
+			journal.phase = "snapshotting";
+			await saveJournal(state, this.journalName, journal);
+			const snapshot = await this.deps.database.prepare();
+			if (snapshot) {
+				const snapshotSource = await openDescriptorRoot(snapshot.sourceRoot);
+				try {
+					const sourceHash = await snapshotSource.hashFile(snapshot.sourcePath);
+					const existing = (await destination.root.inventory()).find(
+						(entry) => entry.path === snapshot.destinationPath,
+					);
+					if (existing) {
+						if (existing.type !== "file" || (await destination.root.hashFile(snapshot.destinationPath)) !== sourceHash)
+							throw new Error("destination database snapshot conflicts with source");
+					} else {
+						await destination.root.copyFileFrom(snapshotSource, snapshot.sourcePath, {}, snapshot.destinationPath);
+					}
+					if ((await destination.root.hashFile(snapshot.destinationPath)) !== sourceHash)
+						throw new Error("database integrity verification failed");
+				} finally {
+					await snapshotSource.close();
+				}
+				journal.destinationWrites = true;
+				await saveJournal(state, this.journalName, journal);
 			}
-			throw e;
+			if (this.deps.gitignoreBytes) {
+				let existing = "";
+				try {
+					existing = new TextDecoder().decode(await destination.root.readFile(".gitignore"));
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				}
+				const merged = this.deps.gitignoreBytes(existing);
+				if (new TextDecoder().decode(merged) !== existing)
+					await destination.root.replaceFileAtomic(".gitignore", merged, { mode: 0o644 });
+				journal.destinationWrites = true;
+				await saveJournal(state, this.journalName, journal);
+			}
+			if (this.deps.layoutBytes) {
+				await destination.root.replaceFileAtomic("workspace-layout.json", this.deps.layoutBytes(layout), {
+					mode: 0o600,
+				});
+				journal.destinationWrites = true;
+				await saveJournal(state, this.journalName, journal);
+			}
+			journal.phase = "verified";
+			await saveJournal(state, this.journalName, journal);
+			await assertPathIdentity(layout.destination, journal.destinationIdentity);
+			return await this.finishCutover(layout, journal, state);
+		} catch (error) {
+			if (journal) {
+				if (journal.phase !== "verified" && journal.phase !== "cutover-pending") journal.phase = "failed";
+				journal.error = error instanceof Error ? error.message : String(error);
+				await saveJournal(state, this.journalName, journal);
+			}
+			throw error;
 		} finally {
+			await destination?.root.close();
+			await destination?.parent.close();
+			await source.close();
+			await state.close();
 			await lease?.release();
 		}
 	}
 
-	private async finishCutover(l: Layout, j: Journal): Promise<MigrationResult> {
-		if (!j.destinationWrites) {
-			j.phase = "cutover-pending";
-			j.rollbackEligible = false;
-			saveJournal(this.journalPath, j);
+	private async finishCutover(layout: Layout, journal: Journal, state: DescriptorRoot): Promise<MigrationResult> {
+		if (journal.cutoverPreimage === undefined) journal.cutoverPreimage = (await this.deps.resolver.capture?.()) ?? null;
+		journal.phase = "cutover-pending";
+		journal.rollbackEligible = false;
+		await saveJournal(state, this.journalName, journal);
+		const current = await this.deps.resolver.current?.();
+		const expectedPreimage = journal.cutoverPreimage ?? layout.root;
+		if (current !== undefined && current !== layout.destination && current !== expectedPreimage)
+			throw new Error("workspace pointer changed during migration cutover");
+		if (current !== layout.destination) {
+			if (this.deps.resolver.cutover) await this.deps.resolver.cutover({ ...layout, version: 2 });
+			journal.pointerPublished = true;
+			await saveJournal(state, this.journalName, journal);
+			await this.deps.hooks?.afterPointerPublished?.();
+		} else if (!journal.pointerPublished) {
+			journal.pointerPublished = true;
+			await saveJournal(state, this.journalName, journal);
 		}
-		if (this.deps.resolver.cutover) await this.deps.resolver.cutover({ ...l, version: 2 });
-		j.destinationWrites = true;
-		j.rollbackEligible = false;
+		try {
+			await this.deps.resolver.verifyDestination?.({ ...layout, version: 2 });
+			journal.destinationVerified = true;
+		} catch (error) {
+			if (!this.deps.resolver.restore) throw error;
+			await this.deps.resolver.restore(journal.cutoverPreimage ?? undefined);
+			journal.pointerPublished = false;
+			journal.destinationVerified = false;
+			journal.phase = "verified";
+			await saveJournal(state, this.journalName, journal);
+			throw error;
+		}
 		await this.deps.hooks?.afterCutover?.();
-		j.phase = "completed";
-		saveJournal(this.journalPath, j);
-		return { status: "completed", destination: l.destination, receipt: this.journalPath };
+		journal.phase = "completed";
+		journal.error = undefined;
+		await saveJournal(state, this.journalName, journal);
+		return { status: "completed", destination: layout.destination, receipt: this.journalPath };
 	}
+
 	async resume(): Promise<MigrationResult> {
 		return this.run();
 	}
+
 	async status(): Promise<MigrationStatus> {
-		const journal = readJournal(this.journalPath);
-		if (!journal)
+		const state = await openExistingRoot(this.deps.journalStateDir);
+		if (!state)
 			return {
 				phase: "not-started",
 				rollbackEligible: false,
@@ -230,73 +302,203 @@ export class MigrationEngine {
 				blocked: [],
 				journal: this.journalPath,
 			};
-		return {
-			phase: journal.phase,
-			rollbackEligible: journal.rollbackEligible,
-			destinationWrites: journal.destinationWrites,
-			copied: journal.copied.length,
-			blocked: journal.error ? [redactBlocker(journal.error)] : [],
-			journal: this.journalPath,
-		};
+		try {
+			const journal = await readJournal(state, this.journalName);
+			if (!journal)
+				return {
+					phase: "not-started",
+					rollbackEligible: false,
+					destinationWrites: false,
+					copied: 0,
+					blocked: [],
+					journal: this.journalPath,
+				};
+			return {
+				phase: journal.phase,
+				rollbackEligible: journal.rollbackEligible,
+				destinationWrites: journal.destinationWrites,
+				copied: journal.copied.length,
+				blocked: journal.error ? [redactBlocker(journal.error)] : [],
+				journal: this.journalPath,
+			};
+		} finally {
+			await state.close();
+		}
 	}
+
 	async cleanup(accepted: boolean): Promise<void> {
 		if (!accepted) throw new Error("cleanup requires explicit acceptance (--accept)");
-		const journal = readJournal(this.journalPath);
-		if (journal?.phase !== "completed") throw new Error("cleanup requires a completed migration");
-		const receipt = join(journal.destination, ".signet-migration-receipt.json");
-		const fd = openSync(receipt, "w", 0o600);
+		const state = await openDescriptorRoot(this.deps.journalStateDir);
 		try {
-			writeFileSync(
-				fd,
-				`${JSON.stringify(
-					{
-						version: 1,
-						workspaceId: journal.workspaceId,
-						phase: journal.phase,
-						sourceVersion: 1,
-						destinationVersion: 2,
-						rollbackBoundary: "destination-writes-fenced",
-						components: journal.receipts.map((r) => ({ component: r.component, verified: r.phase === "verified" })),
-					},
-					null,
-					2,
-				)}\n`,
-			);
-			fsyncSync(fd);
+			const journal = await readJournal(state, this.journalName);
+			if (journal?.phase !== "completed") throw new Error("cleanup requires a completed migration");
+			await assertPathIdentity(journal.destination, journal.destinationIdentity);
+			const destination = await openDescriptorRoot(journal.destination);
+			try {
+				await destination.writeFileAtomic(
+					".signet-migration-receipt.json",
+					Buffer.from(
+						`${JSON.stringify(
+							{
+								version: 1,
+								workspaceId: journal.workspaceId,
+								phase: journal.phase,
+								sourceVersion: 1,
+								destinationVersion: 2,
+								rollbackBoundary: "cutover-published",
+								components: journal.receipts.map((receipt) => ({
+									component: receipt.component,
+									verified: receipt.phase === "verified",
+								})),
+							},
+							null,
+							2,
+						)}\n`,
+					),
+					{ mode: 0o600 },
+				);
+			} finally {
+				await destination.close();
+			}
+			await state.remove(this.journalName);
 		} finally {
-			closeSync(fd);
+			await state.close();
 		}
-		fsyncDirectory(journal.destination);
-		unlinkSync(this.journalPath);
 	}
+
 	async rollback(): Promise<void> {
-		const j = readJournal(this.journalPath);
-		if (!j?.rollbackEligible || j.destinationWrites || j.phase === "completed")
-			throw new Error("rollback is no longer safe after destination writes");
-		if (existsSync(j.destination)) {
-			const s = lstatSync(j.destination);
-			if (
-				!s.isDirectory() ||
-				s.isSymbolicLink() ||
-				j.destinationIdentity === "missing" ||
-				identity(j.destination) !== j.destinationIdentity
-			)
-				throw new Error("refusing to remove unsafe migration destination");
-			rmSync(j.destination, { recursive: true, force: true });
+		const state = await openExistingRoot(this.deps.journalStateDir);
+		if (!state) return;
+		try {
+			const journal = await readJournal(state, this.journalName);
+			if (!journal) return;
+			if (!journal.rollbackEligible || journal.phase === "completed")
+				throw new Error("rollback is no longer safe after cutover begins");
+			const parent = await openDescriptorRoot(dirname(journal.destination));
+			try {
+				if ((await parent.identity()) !== journal.destinationParentIdentity)
+					throw new Error("refusing to remove unsafe migration destination parent");
+				const destination = await parent.openDirectory(basename(journal.destination));
+				try {
+					if ((await destination.identity()) !== journal.destinationIdentity)
+						throw new Error("refusing to remove unsafe migration destination");
+				} finally {
+					await destination.close();
+				}
+				await parent.remove(basename(journal.destination), { recursive: true });
+			} finally {
+				await parent.close();
+			}
+			await state.remove(this.journalName);
+		} finally {
+			await state.close();
 		}
-		if (existsSync(this.journalPath)) unlinkSync(this.journalPath);
 	}
 }
 
-function contained(base: string, candidate: string): boolean {
-	const r = relative(resolve(base), resolve(candidate));
-	return r === "" || (!r.startsWith(`..${sep}`) && r !== "..");
+async function openOrCreateRoot(path: string): Promise<DescriptorRoot> {
+	const parent = await openDescriptorRoot(dirname(path));
+	try {
+		await parent.createDirectory(basename(path), 0o700);
+		return await parent.openDirectory(basename(path));
+	} finally {
+		await parent.close();
+	}
 }
-function verifyJournalSources(root: string, journal: Journal): void {
+
+async function openExistingRoot(path: string): Promise<DescriptorRoot | undefined> {
+	try {
+		return await openDescriptorRoot(path);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+}
+
+async function admitDestination(path: string): Promise<AdmittedDestination> {
+	const parent = await openDescriptorRoot(dirname(path));
+	try {
+		const parentIdentity = await parent.identity();
+		await parent.createDirectory(basename(path), 0o700);
+		const root = await parent.openDirectory(basename(path));
+		return { parent, root, parentIdentity, identity: await root.identity() };
+	} catch (error) {
+		await parent.close();
+		throw error;
+	}
+}
+
+async function inventory(
+	layout: Layout,
+	source: DescriptorRoot,
+	journalStateDir: string,
+	mapDestinationPath?: (sourcePath: string, type: "file" | "symlink") => string | undefined,
+): Promise<MigrationPlan> {
+	const stateRelative = contained(layout.root, journalStateDir)
+		? relative(resolve(layout.root), resolve(journalStateDir))
+		: undefined;
+	const entries = (await source.inventory()).filter(
+		(entry) => !stateRelative || (entry.path !== stateRelative && !entry.path.startsWith(`${stateRelative}${sep}`)),
+	);
+	const fingerprints: Fingerprint[] = [];
+	const hardlinkPaths = new Map<string, string[]>();
+	let bytes = 0;
+	for (const entry of entries) {
+		if (entry.type === "directory") continue;
+		const mappedPath = mapDestinationPath?.(entry.path, entry.type);
+		if (mapDestinationPath && mappedPath === undefined) continue;
+		const destinationPath = mappedPath ?? entry.path;
+		if (entry.type === "file" && entry.nlink > 1) {
+			const key = `${entry.dev}:${entry.ino}`;
+			const paths = hardlinkPaths.get(key) ?? [];
+			paths.push(entry.path);
+			hardlinkPaths.set(key, paths);
+		}
+		if (entry.type === "symlink") validateSymlink(layout.root, entry);
+		const fingerprint = { ...(await fingerprintEntry(source, entry)), destinationPath };
+		fingerprints.push(fingerprint);
+		bytes += entry.type === "file" ? entry.size : 0;
+	}
+	ensureSpace(layout.destination, bytes);
+	return {
+		readOnly: true,
+		bytes,
+		components: fingerprints.map((fingerprint) => fingerprint.path),
+		source: layout.root,
+		destination: layout.destination,
+		fingerprints,
+		hardlinks: [...hardlinkPaths.values()].filter((paths) => paths.length > 1).map((paths) => paths.sort()),
+	};
+}
+
+function validateSymlink(root: string, entry: DescriptorEntry): void {
+	const target = entry.target ?? "";
+	const resolved = resolve(root, dirname(entry.path), target);
+	if (!contained(root, resolved)) throw new Error(`escaping symlink: ${entry.path}`);
+}
+
+async function fingerprintEntry(root: DescriptorRoot, entry: DescriptorEntry): Promise<Fingerprint> {
+	if (entry.type === "directory") throw new Error(`cannot fingerprint directory: ${entry.path}`);
+	const bytes = entry.type === "symlink" ? Buffer.from(entry.target ?? "") : await root.readFile(entry.path);
+	return {
+		path: entry.path,
+		type: entry.type,
+		size: entry.size,
+		mtimeMs: entry.mtimeMs,
+		mode: entry.mode,
+		hash: createHash("sha256").update(bytes).digest("hex"),
+	};
+}
+
+async function readFingerprint(root: DescriptorRoot, expected: Fingerprint): Promise<Fingerprint> {
+	const entry = (await root.inventory()).find((candidate) => candidate.path === expected.path);
+	if (!entry || entry.type === "directory") throw new Error(`missing migration entry: ${expected.path}`);
+	return fingerprintEntry(root, entry);
+}
+
+async function verifyJournalSources(source: DescriptorRoot, journal: Journal): Promise<void> {
 	for (const expected of journal.fingerprints) {
-		const currentPath = join(root, expected.path);
-		if (!existsSync(currentPath)) throw new Error(`source changed during migration: ${expected.path}`);
-		const actual = fingerprint(currentPath, expected.type);
+		const actual = await readFingerprint(source, expected);
 		if (
 			actual.type !== expected.type ||
 			actual.hash !== expected.hash ||
@@ -307,17 +509,104 @@ function verifyJournalSources(root: string, journal: Journal): void {
 	}
 }
 
-function validateLayout(l: Layout) {
-	if (l.version !== 1) throw new Error(`unsupported layout version: ${l.version}`);
-	const source = resolve(l.root),
-		destination = resolve(l.destination);
+async function copyEntry(source: DescriptorRoot, destination: DescriptorRoot, fingerprint: Fingerprint): Promise<void> {
+	try {
+		await verifyDestinationEntry(destination, fingerprint);
+		return;
+	} catch (error) {
+		if (!String((error as Error).message).startsWith("missing migration entry")) throw error;
+	}
+	if (fingerprint.type === "symlink") {
+		await destination.createSymlink(
+			fingerprint.destinationPath ?? fingerprint.path,
+			await source.readSymlink(fingerprint.path),
+		);
+	} else {
+		await destination.copyFileFrom(
+			source,
+			fingerprint.path,
+			{
+				mode: fingerprint.mode,
+				mtimeMs: fingerprint.mtimeMs,
+			},
+			fingerprint.destinationPath ?? fingerprint.path,
+		);
+	}
+	await verifyDestinationEntry(destination, fingerprint);
+}
+
+async function verifyDestinationEntry(destination: DescriptorRoot, expected: Fingerprint): Promise<void> {
+	const destinationPath = expected.destinationPath ?? expected.path;
+	const actual = await readFingerprint(destination, { ...expected, path: destinationPath });
+	if (
+		actual.type !== expected.type ||
+		actual.hash !== expected.hash ||
+		actual.size !== expected.size ||
+		actual.mode !== expected.mode
+	)
+		throw new Error(`destination conflict during resume: ${destinationPath}`);
+}
+
+async function saveJournal(state: DescriptorRoot, name: string, journal: Journal): Promise<void> {
+	await state.replaceFileAtomic(name, Buffer.from(`${JSON.stringify(journal)}\n`), { mode: 0o600 });
+}
+
+async function readJournal(state: DescriptorRoot, name: string): Promise<Journal | undefined> {
+	let bytes: Uint8Array;
+	try {
+		bytes = await state.readFile(name);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+		throw error;
+	}
+	const journal = JSON.parse(new TextDecoder().decode(bytes)) as Journal;
+	if (journal.version !== 1 || !Array.isArray(journal.copied) || !Array.isArray(journal.receipts))
+		throw new Error("invalid migration journal");
+	return journal;
+}
+
+function validateJournalIdentity(journal: Journal | undefined, layout: Layout): void {
+	if (
+		journal &&
+		(journal.workspaceId !== workspaceId(layout.root) ||
+			journal.source !== resolve(layout.root) ||
+			journal.destination !== resolve(layout.destination))
+	)
+		throw new Error("journal identity mismatch");
+}
+
+async function assertPathIdentity(path: string, expected: string): Promise<void> {
+	let root: DescriptorRoot;
+	try {
+		root = await openDescriptorRoot(path);
+	} catch (error) {
+		if (error instanceof UnsafeDescriptorPathError || (error as NodeJS.ErrnoException).code === "ENOENT")
+			throw new Error("destination identity changed");
+		throw error;
+	}
+	try {
+		if ((await root.identity()) !== expected) throw new Error("destination identity changed");
+	} finally {
+		await root.close();
+	}
+}
+
+function contained(base: string, candidate: string): boolean {
+	const value = relative(resolve(base), resolve(candidate));
+	return value === "" || (!value.startsWith(`..${sep}`) && value !== "..");
+}
+
+function validateLayout(layout: Layout): void {
+	if (layout.version !== 1) throw new Error(`unsupported layout version: ${layout.version}`);
+	const source = resolve(layout.root);
+	const destination = resolve(layout.destination);
 	if (source === destination) throw new Error("destination must differ from source");
 	if (contained(source, destination)) throw new Error("destination must not be nested inside source");
 	try {
-		const s = lstatSync(l.destination);
-		if (!s.isDirectory() || s.isSymbolicLink()) throw new Error("destination must be a real directory");
-	} catch (e) {
-		if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+		const stat = lstatSync(layout.destination);
+		if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("destination must be a real directory");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 	}
 }
 
@@ -331,188 +620,13 @@ function redactBlocker(message: string): string {
 function workspaceId(root: string): string {
 	return createHash("sha256").update(resolve(root)).digest("hex").slice(0, 32);
 }
-function identity(p: string) {
-	if (!existsSync(p)) return "missing";
-	const s = lstatSync(p);
-	return `${s.dev}:${s.ino}:${s.mode}`;
-}
-function ensureSpace(destination: string, bytes: number) {
+
+function ensureSpace(destination: string, bytes: number): void {
 	try {
-		const b = statfsSync(dirname(destination)).bavail * statfsSync(dirname(destination)).bsize;
-		if (b < bytes) throw new Error(`insufficient disk space: need ${bytes} bytes`);
-	} catch (e) {
-		if (e instanceof Error && e.message.startsWith("insufficient")) throw e;
+		const stat = statfsSync(dirname(destination));
+		const available = stat.bavail * stat.bsize;
+		if (available < bytes) throw new Error(`insufficient disk space: need ${bytes} bytes`);
+	} catch (error) {
+		if (error instanceof Error && error.message.startsWith("insufficient")) throw error;
 	}
-}
-function saveJournal(path: string, j: Journal) {
-	mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-	const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
-	const fd = openSync(tmp, "w", 0o600);
-	try {
-		writeFileSync(fd, `${JSON.stringify(j)}\n`);
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-	renameSync(tmp, path);
-	const d = openSync(dirname(path), "r");
-	try {
-		fsyncSync(d);
-	} finally {
-		closeSync(d);
-	}
-}
-function readJournal(path: string): Journal | undefined {
-	if (!existsSync(path)) return;
-	const j = JSON.parse(readFileSync(path, "utf8")) as Journal;
-	if (j.version !== 1 || !Array.isArray(j.copied) || !Array.isArray(j.receipts))
-		throw new Error("invalid migration journal");
-	return j;
-}
-function scanInventory(
-	root: string,
-	base: string,
-	destination?: string,
-): { bytes: number; components: string[]; fingerprints: Fingerprint[] } {
-	let bytes = 0;
-	const components: string[] = [],
-		fingerprints: Fingerprint[] = [];
-	for (const e of readdirSync(root, { withFileTypes: true })) {
-		if (e.name === ".git") continue;
-		const abs = join(root, e.name),
-			rel = relative(base, abs);
-		if (destination && resolve(abs) === resolve(destination)) continue;
-		const s = lstatSync(abs);
-		if (e.isSymbolicLink()) {
-			const target = readlinkSync(abs);
-			const resolved = resolve(root, target);
-			if (!contained(base, resolved)) throw new Error(`escaping symlink: ${rel}`);
-			const f = fingerprint(abs, "symlink");
-			components.push(rel);
-			fingerprints.push({ ...f, path: rel });
-			continue;
-		}
-		if (e.isDirectory()) {
-			const n = scanInventory(abs, base, destination);
-			bytes += n.bytes;
-			components.push(...n.components);
-			fingerprints.push(...n.fingerprints);
-			continue;
-		}
-		if (!e.isFile()) throw new Error(`unsupported special file: ${rel}`);
-		bytes += s.size;
-		components.push(rel);
-		fingerprints.push({ ...fingerprint(abs, "file"), path: rel });
-	}
-	return { bytes, components, fingerprints };
-}
-function fingerprint(p: string, type: "file" | "symlink"): Fingerprint {
-	const s = lstatSync(p);
-	if (type === "file" && s.nlink > 1) throw new Error(`unsupported hardlink: ${p}`);
-	const h = type === "symlink" ? readlinkSync(p) : readFileSync(p);
-	return {
-		path: p,
-		type,
-		size: s.size,
-		mtimeMs: s.mtimeMs,
-		mode: s.mode,
-		hash: createHash("sha256").update(h).digest("hex"),
-	};
-}
-function fsyncDirectory(path: string): void {
-	const fd = openSync(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-	try {
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-}
-function ensureSafeParent(root: string, rel: string): void {
-	const resolvedRoot = resolve(root);
-	const parent = resolve(resolvedRoot, dirname(rel));
-	if (parent !== resolvedRoot && !parent.startsWith(`${resolvedRoot}${sep}`))
-		throw new Error(`escaping destination parent: ${rel}`);
-	const rootStat = lstatSync(resolvedRoot);
-	if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error(`unsafe destination root: ${rel}`);
-	let current = resolvedRoot;
-	for (const part of relative(resolvedRoot, parent).split(sep).filter(Boolean)) {
-		const previous = current;
-		current = join(current, part);
-		try {
-			mkdirSync(current, { mode: 0o700 });
-			fsyncDirectory(current);
-			fsyncDirectory(previous);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-		}
-		const s = lstatSync(current);
-		if (!s.isDirectory() || s.isSymbolicLink()) throw new Error(`unsafe destination parent: ${rel}`);
-	}
-}
-function copyEntry(source: string, destination: string, rel: string): Fingerprint {
-	const src = join(source, rel),
-		dst = join(destination, rel);
-	ensureSafeParent(destination, rel);
-	const before = lstatSync(src);
-	const f = fingerprint(src, before.isSymbolicLink() ? "symlink" : "file");
-	const destinationExists = (() => {
-		try {
-			lstatSync(dst);
-			return true;
-		} catch {
-			return false;
-		}
-	})();
-	if (destinationExists) {
-		const destinationStat = lstatSync(dst);
-		const destinationType = destinationStat.isSymbolicLink()
-			? "symlink"
-			: destinationStat.isFile()
-				? "file"
-				: undefined;
-		if (!destinationType || destinationType !== f.type) throw new Error(`destination already exists: ${rel}`);
-		const existing = fingerprint(dst, destinationType);
-		if (existing.hash !== f.hash || existing.size !== f.size)
-			throw new Error(`destination conflict during resume: ${rel}`);
-		return { ...f, path: rel };
-	}
-	if (f.type === "symlink") {
-		const target = readlinkSync(src);
-		const targetPath = resolve(dirname(src), target);
-		if (!(targetPath === resolve(source) || targetPath.startsWith(`${resolve(source)}${sep}`)))
-			throw new Error(`escaping symlink: ${rel}`);
-		symlinkSync(target, dst);
-		if (readlinkSync(src) !== target || readlinkSync(dst) !== target)
-			throw new Error(`concurrent mutation during copy: ${rel}`);
-		return { ...f, path: rel };
-	}
-	const fd = openSync(
-		dst,
-		constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | constants.O_NOFOLLOW,
-		f.mode & 0o777,
-	);
-	try {
-		copyFileSync(src, dst);
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-	const out = lstatSync(dst);
-	const modeFd = openSync(dst, constants.O_WRONLY | constants.O_NOFOLLOW);
-	try {
-		fchmodSync(modeFd, f.mode & 0o777);
-		futimesSync(modeFd, f.mtimeMs / 1000, f.mtimeMs / 1000);
-	} finally {
-		closeSync(modeFd);
-	}
-	const after = lstatSync(src);
-	if (
-		!after.isFile() ||
-		after.size !== f.size ||
-		after.mtimeMs !== f.mtimeMs ||
-		fingerprint(src, "file").hash !== fingerprint(dst, "file").hash ||
-		out.size !== f.size
-	)
-		throw new Error(`concurrent mutation during copy: ${rel}`);
-	return { ...f, path: rel };
 }

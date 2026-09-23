@@ -1,5 +1,14 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	linkSync,
+	mkdtempSync,
+	mkdirSync,
+	readFileSync,
+	renameSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MigrationEngine } from "./migration-engine.js";
@@ -8,16 +17,31 @@ test("preflight is read-only and inventory reports required bytes", async () => 
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
 	writeFileSync(join(root, "AGENTS.md"), "identity");
 	const destination = join(`${root}-new`);
+	let drains = 0;
+	let leases = 0;
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root, destination }) },
-		writers: { drain: async () => ({ owners: [] }) },
-		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		writers: {
+			drain: async () => {
+				drains++;
+				return { owners: [] };
+			},
+		},
+		database: { prepare: async () => undefined },
+		lease: {
+			acquire: async () => {
+				leases++;
+				return { release: async () => undefined };
+			},
+		},
 		journalStateDir: join(root, "state"),
 	});
 	const plan = await engine.preflight();
 	expect(plan.readOnly).toBe(true);
 	expect(plan.bytes).toBe(8);
 	expect(plan.components).toContain("AGENTS.md");
+	expect(drains).toBe(0);
+	expect(leases).toBe(0);
 });
 
 test("migration creates verified destination directories for nested files", async () => {
@@ -29,11 +53,62 @@ test("migration creates verified destination directories for nested files", asyn
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root, destination }) },
 		writers: { drain: async () => ({ owners: [] }) },
-		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		database: { prepare: async () => undefined },
 		journalStateDir: state,
 	});
 	await engine.run();
 	expect(readFileSync(join(destination, "memory", "memories.db"), "utf8")).toBe("db");
+});
+
+test("destination writes remain rooted in the admitted parent after pathname replacement", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-admitted-source-"));
+	const destinationParent = mkdtempSync(join(tmpdir(), "migration-admitted-parent-"));
+	const admittedParent = `${destinationParent}-admitted`;
+	const attacker = mkdtempSync(join(tmpdir(), "migration-admitted-attacker-"));
+	const state = mkdtempSync(join(tmpdir(), "migration-admitted-state-"));
+	writeFileSync(join(source, "one.txt"), "one");
+	const destination = join(destinationParent, "workspace");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+		hooks: {
+			afterDestinationAdmitted: async () => {
+				renameSync(destinationParent, admittedParent);
+				symlinkSync(attacker, destinationParent);
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("destination identity changed");
+	expect(readFileSync(join(admittedParent, "workspace", "one.txt"), "utf8")).toBe("one");
+	expect(existsSync(join(attacker, "workspace", "one.txt"))).toBe(false);
+});
+
+test("migration preserves root and nested Git metadata while reporting hardlinks", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-git-source-"));
+	const state = mkdtempSync(join(tmpdir(), "migration-git-state-"));
+	const destination = `${source}-new`;
+	mkdirSync(join(source, ".git", "hooks"), { recursive: true });
+	mkdirSync(join(source, "skills", "nested", ".git"), { recursive: true });
+	writeFileSync(join(source, ".git", "config"), "root-config");
+	writeFileSync(join(source, ".git", "hooks", "pre-commit"), "hook");
+	writeFileSync(join(source, "skills", "nested", ".git", "config"), "nested-config");
+	writeFileSync(join(source, "payload"), "same");
+	linkSync(join(source, "payload"), join(source, "payload-link"));
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+	});
+	const plan = await engine.preflight();
+	expect(plan.hardlinks).toEqual([["payload", "payload-link"]]);
+	await engine.run();
+	expect(readFileSync(join(destination, ".git", "config"), "utf8")).toBe("root-config");
+	expect(readFileSync(join(destination, ".git", "hooks", "pre-commit"), "utf8")).toBe("hook");
+	expect(readFileSync(join(destination, "skills", "nested", ".git", "config"), "utf8")).toBe("nested-config");
+	expect(readFileSync(join(destination, "payload-link"), "utf8")).toBe("same");
 });
 
 test("interrupted copy resumes and rollback is fenced after destination writes", async () => {
@@ -45,7 +120,7 @@ test("interrupted copy resumes and rollback is fenced after destination writes",
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root: join(root, "old"), destination }), cutover: async () => {} },
 		writers: { drain: async () => ({ owners: [] }) },
-		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		database: { prepare: async () => undefined },
 		journalStateDir: join(root, "state"),
 		hooks: {
 			afterCopy: async () => {
@@ -72,7 +147,7 @@ test("escaping symlink is rejected without following it", async () => {
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root, destination: join(`${root}-new`) }) },
 		writers: { drain: async () => ({ owners: [] }) },
-		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		database: { prepare: async () => undefined },
 		journalStateDir: join(root, "state"),
 	});
 	await expect(engine.run()).rejects.toThrow("escaping symlink");
@@ -92,7 +167,7 @@ test("run drains before inventory and rejects source mutation during preflight",
 				return { owners: [] };
 			},
 		},
-		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		database: { prepare: async () => undefined },
 		journalStateDir: join(root, "state"),
 	});
 	await expect(engine.run()).resolves.toMatchObject({ status: "completed" });
@@ -118,7 +193,7 @@ test("cutover-pending resume reacquires lease and drains writers", async () => {
 				return { owners: [] };
 			},
 		},
-		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		database: { prepare: async () => undefined },
 		journalStateDir: join(root, "state"),
 		lease: {
 			acquire: async () => {
@@ -138,6 +213,74 @@ test("cutover-pending resume reacquires lease and drains writers", async () => {
 	expect(drained).toBe(2);
 });
 
+test("cutover verification failure restores the pointer preimage and resume completes", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-cutover-verify-"));
+	const source = join(root, "old");
+	const destination = join(root, "new");
+	mkdirSync(source);
+	writeFileSync(join(source, "one.txt"), "one");
+	let pointer = source;
+	let failVerification = true;
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root: source, destination }),
+			capture: async () => pointer,
+			current: async () => pointer,
+			cutover: async () => {
+				pointer = destination;
+			},
+			restore: async (preimage) => {
+				pointer = preimage ?? source;
+			},
+			verifyDestination: async () => {
+				if (failVerification) throw new Error("destination startup failed");
+			},
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+	});
+	await expect(engine.run()).rejects.toThrow("destination startup failed");
+	expect(pointer).toBe(source);
+	failVerification = false;
+	await expect(engine.resume()).resolves.toMatchObject({ status: "completed" });
+	expect(pointer).toBe(destination);
+});
+
+test("resume completes a cutover interrupted after pointer publication", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-cutover-crash-"));
+	const source = join(root, "old");
+	const destination = join(root, "new");
+	mkdirSync(source);
+	writeFileSync(join(source, "one.txt"), "one");
+	let pointer = source;
+	let crash = true;
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root: source, destination }),
+			capture: async () => pointer,
+			current: async () => pointer,
+			cutover: async () => {
+				pointer = destination;
+			},
+			verifyDestination: async () => {},
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterPointerPublished: async () => {
+				if (crash) throw new Error("crash after pointer");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("crash after pointer");
+	expect(pointer).toBe(destination);
+	crash = false;
+	await expect(engine.resume()).resolves.toMatchObject({ status: "completed" });
+	expect(pointer).toBe(destination);
+});
+
 test("rollback removes only the owned partial destination and can be rerun", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
 	writeFileSync(join(root, "one.txt"), "one");
@@ -145,7 +288,7 @@ test("rollback removes only the owned partial destination and can be rerun", asy
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root, destination }) },
 		writers: { drain: async () => ({ owners: [] }) },
-		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		database: { prepare: async () => undefined },
 		journalStateDir: join(root, "state"),
 		hooks: {
 			afterCopy: async () => {
@@ -160,25 +303,25 @@ test("rollback removes only the owned partial destination and can be rerun", asy
 });
 
 test("cleanup writes a durable redacted receipt with verified components", async () => {
-const root = mkdtempSync(join(tmpdir(), "signet-migration-receipt-"));
-writeFileSync(join(root, "one.txt"), "one");
-const destination = join(`${root}-new`);
-const state = join(root, "state");
-const engine = new MigrationEngine({
-	resolver: { resolve: () => ({ version: 1, root, destination }) },
-	writers: { drain: async () => ({ owners: [] }) },
-	database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
-	journalStateDir: state,
-});
-await engine.run();
-await engine.cleanup(true);
-const receipt = JSON.parse(readFileSync(join(destination, ".signet-migration-receipt.json"), "utf8"));
-expect(existsSync(join(destination, ".signet-migration-receipt.json"))).toBe(true);
-expect(receipt.components).toEqual([{ component: "one.txt", verified: true }]);
-expect(receipt.rollbackBoundary).toBe("destination-writes-fenced");
-expect(receipt.sourceVersion).toBe(1);
-expect(receipt.destinationVersion).toBe(2);
-expect(JSON.stringify(receipt)).not.toContain(root);
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-receipt-"));
+	writeFileSync(join(root, "one.txt"), "one");
+	const destination = join(`${root}-new`);
+	const state = join(root, "state");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+	});
+	await engine.run();
+	await engine.cleanup(true);
+	const receipt = JSON.parse(readFileSync(join(destination, ".signet-migration-receipt.json"), "utf8"));
+	expect(existsSync(join(destination, ".signet-migration-receipt.json"))).toBe(true);
+	expect(receipt.components).toEqual([{ component: "one.txt", verified: true }]);
+	expect(receipt.rollbackBoundary).toBe("cutover-published");
+	expect(receipt.sourceVersion).toBe(1);
+	expect(receipt.destinationVersion).toBe(2);
+	expect(JSON.stringify(receipt)).not.toContain(root);
 });
 
 test("resume reconciles a copied file left behind before its journal update", async () => {
@@ -190,7 +333,7 @@ test("resume reconciles a copied file left behind before its journal update", as
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root, destination }), cutover: async () => {} },
 		writers: { drain: async () => ({ owners: [] }) },
-		database: { snapshot: async () => ({ path: join(root, "db"), bytes: 0 }), verify: async () => true },
+		database: { prepare: async () => undefined },
 		journalStateDir,
 		hooks: {
 			afterEntryCopy: async () => {

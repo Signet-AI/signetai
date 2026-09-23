@@ -1,25 +1,24 @@
 import type { Command } from "commander";
-import { createHash, randomUUID } from "node:crypto";
-import {
-	closeSync,
-	constants,
-	existsSync,
-	fstatSync,
-	fsyncSync,
-	lstatSync,
-	linkSync,
-	mkdirSync,
-	openSync,
-	readFileSync,
-	statSync,
-	unlinkSync,
-} from "node:fs";
+import { spawn } from "node:child_process";
+import { closeSync, existsSync, mkdirSync, openSync, statSync, unlinkSync } from "node:fs";
+import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { persistWorkspaceLayout, resolveWorkspaceLayout, captureGitMetadata, restoreGitMetadata } from "@signet/core";
+import { setTimeout as sleep } from "node:timers/promises";
+import {
+	inspectRootGit,
+	mergeSignetGitignoreEntries,
+	resolveWorkspaceLayout,
+	serializeWorkspaceLayout,
+} from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
 import { createDatabase } from "../sqlite.js";
-import { resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
+import {
+	clearConfiguredWorkspacePath,
+	readConfiguredWorkspacePath,
+	resolveAgentsDir,
+	writeConfiguredWorkspacePath,
+} from "../lib/workspace.js";
 import { stopDaemon } from "../lib/runtime.js";
 
 export type MigrationCommandDeps = {
@@ -32,43 +31,205 @@ function contained(base: string, candidate: string): boolean {
 	return r === "" || (!r.startsWith(`..${sep}`) && r !== "..");
 }
 
+function descriptorRelative(base: string, candidate: string): string {
+	return relative(resolve(base), resolve(candidate)).split(sep).join("/");
+}
+
+function withinDescriptorPath(parent: string, candidate: string): boolean {
+	return candidate === parent || candidate.startsWith(`${parent}/`);
+}
+
+export async function requestMigrationDrain(
+	baseUrl: string,
+	fetchImpl: typeof fetch = fetch,
+): Promise<string[] | null> {
+	let response: Response;
+	try {
+		response = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/workspace/migration-control/drain`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: "{}",
+			signal: AbortSignal.timeout(35_000),
+		});
+	} catch {
+		return null;
+	}
+	if (response.status === 404) return null;
+	if (!response.ok) throw new Error(`daemon migration drain failed (${response.status})`);
+	const body: unknown = await response.json();
+	if (!body || typeof body !== "object") throw new Error("daemon migration drain returned malformed JSON");
+	const blockersValue = Reflect.get(body, "blockers");
+	if (!Array.isArray(blockersValue)) throw new Error("daemon migration drain omitted blockers");
+	const blockers = blockersValue.map((entry) => {
+		if (!entry || typeof entry !== "object") throw new Error("daemon migration drain returned malformed blocker");
+		const owner = Reflect.get(entry, "owner");
+		if (typeof owner !== "string" || owner.length === 0)
+			throw new Error("daemon migration drain returned malformed blocker owner");
+		return owner;
+	});
+	const closed = Reflect.get(body, "closed");
+	if (closed !== true && blockers.length === 0) return ["daemon:drain-incomplete"];
+	return blockers;
+}
+
+async function reserveLoopbackPort(): Promise<number> {
+	return await new Promise<number>((resolvePort, reject) => {
+		const server = createServer();
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			if (!address || typeof address === "string") {
+				server.close();
+				reject(new Error("failed to reserve a loopback port"));
+				return;
+			}
+			server.close((error) => (error ? reject(error) : resolvePort(address.port)));
+		});
+	});
+}
+
+async function verifyDestinationDaemon(destination: string): Promise<void> {
+	const port = await reserveLoopbackPort();
+	const entrypoint = process.argv[1];
+	const command = [process.execPath, ...(entrypoint && /\.(?:[cm]?[jt]s)$/.test(entrypoint) ? [entrypoint] : [])];
+	const child = spawn(command[0], command.slice(1), {
+		cwd: process.cwd(),
+		env: {
+			...process.env,
+			SIGNET_PATH: destination,
+			SIGNET_WORKSPACE: "",
+			SIGNET_PORT: String(port),
+			SIGNET_HOST: "127.0.0.1",
+			SIGNET_BIND: "127.0.0.1",
+			SIGNET_DAEMON_ENTRYPOINT: "1",
+			SIGNET_EMBEDDING_WARM_NATIVE: "false",
+			SIGNET_TELEMETRY_OPTOUT: "1",
+			SIGNET_ANALYTICS_DISABLED: "1",
+		},
+		stdio: ["ignore", "pipe", "pipe"],
+	});
+	let output = "";
+	child.stdout?.on("data", (chunk: Buffer) => {
+		output += chunk.toString();
+	});
+	child.stderr?.on("data", (chunk: Buffer) => {
+		output += chunk.toString();
+	});
+	const exited = new Promise<void>((resolveExit) => child.once("close", () => resolveExit()));
+	let verificationError: unknown;
+	let stopped = false;
+	try {
+		const deadline = Date.now() + 20_000;
+		let live = false;
+		while (Date.now() < deadline) {
+			if (child.exitCode !== null)
+				throw new Error(`destination daemon exited before readiness (${child.exitCode}): ${output.slice(-2000)}`);
+			try {
+				const response = await fetch(`http://127.0.0.1:${port}/health/live`, {
+					signal: AbortSignal.timeout(500),
+				});
+				if (response.ok) {
+					live = true;
+					break;
+				}
+			} catch {}
+			await sleep(50);
+		}
+		if (!live) throw new Error(`destination daemon readiness timed out: ${output.slice(-2000)}`);
+		const status = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(5_000) });
+		if (!status.ok) throw new Error(`destination daemon status verification failed (${status.status})`);
+		const body: unknown = await status.json();
+		if (!body || typeof body !== "object") throw new Error("destination daemon status returned malformed JSON");
+	} catch (error) {
+		verificationError = error;
+	} finally {
+		if (child.exitCode === null) child.kill("SIGTERM");
+		stopped = await Promise.race([exited.then(() => true), sleep(5_000).then(() => false)]);
+		if (!stopped) {
+			child.kill("SIGKILL");
+			stopped = await Promise.race([exited.then(() => true), sleep(5_000).then(() => false)]);
+		}
+	}
+	if (!stopped) throw new Error("destination daemon did not terminate after verification");
+	if (verificationError) throw verificationError;
+}
+
 function defaultEngine(options: { source?: string; destination?: string }): MigrationEngine {
 	const source = resolve(options.source ?? resolveAgentsDir().path);
 	const destination = resolve(
 		options.destination ?? join(dirname(source), `${source.split("/").pop() ?? "workspace"}-v2`),
 	);
 	const sourceLayout = resolveWorkspaceLayout(source);
+	const rootGitMode = inspectRootGit(source).mode;
 	if (sourceLayout.version !== 1) throw new Error("workspace is not a v1 layout");
 	const state = process.env.XDG_STATE_HOME
 		? join(process.env.XDG_STATE_HOME, "signet", "migrations")
 		: join(homedir(), ".local", "state", "signet", "migrations");
+	const legacyDefaults = {
+		database: join(source, "memory", "memories.db"),
+		transcripts: join(source, "memory"),
+		runtime: join(source, ".daemon"),
+		cache: join(source, "memory", "cache"),
+		files: join(source, "files"),
+		imports: join(source, "memory", "imports"),
+		secrets: join(source, ".secrets"),
+		skills: join(source, "skills"),
+		data: join(source, "memory"),
+	} as const;
+	const overrides = Object.fromEntries(
+		Object.entries(legacyDefaults)
+			.filter(([key, value]) => sourceLayout[key as keyof typeof legacyDefaults] !== value)
+			.map(([key]) => [
+				key,
+				contained(source, sourceLayout[key as keyof typeof legacyDefaults])
+					? relative(source, sourceLayout[key as keyof typeof legacyDefaults])
+					: sourceLayout[key as keyof typeof legacyDefaults],
+			]),
+	);
+	const databasePath = contained(source, sourceLayout.database)
+		? descriptorRelative(source, sourceLayout.database)
+		: undefined;
+	const customRoots = Object.entries(legacyDefaults)
+		.filter(([key, value]) => key !== "database" && sourceLayout[key as keyof typeof legacyDefaults] !== value)
+		.map(([key]) => sourceLayout[key as keyof typeof legacyDefaults])
+		.filter((value) => contained(source, value))
+		.map((value) => descriptorRelative(source, value));
+	const mapDestinationPath = (path: string): string | undefined => {
+		if (path === "workspace-layout.json") return undefined;
+		if (databasePath && (path === databasePath || path === `${databasePath}-wal` || path === `${databasePath}-shm`))
+			return undefined;
+		if (customRoots.some((root) => withinDescriptorPath(root, path))) return path;
+		if (path.startsWith("memory/cache/")) return `cache/${path.slice("memory/cache/".length)}`;
+		if (path.startsWith("memory/imports/")) return `data/imports/${path.slice("memory/imports/".length)}`;
+		const transcript = /^memory\/([^/]+)\/transcripts\/transcript\.jsonl$/.exec(path);
+		if (transcript) return `transcripts/${transcript[1]}/transcript.jsonl`;
+		if (path.startsWith("memory/")) return `data/legacy-memory/${path.slice("memory/".length)}`;
+		if (path.startsWith(".daemon/")) return `runtime/${path.slice(".daemon/".length)}`;
+		return path;
+	};
 	const resolver = {
 		resolve: (): Layout => ({ version: 1, root: source, destination }),
+		capture: async () => readConfiguredWorkspacePath() ?? undefined,
+		current: async () => readConfiguredWorkspacePath() ?? source,
 		cutover: async () => {
-			// Persist the canonical layout first; the pointer is published last.
-			const legacyDefaults = {
-				database: join(source, "memory", "memories.db"),
-				transcripts: join(source, "memory"),
-				runtime: join(source, ".daemon"),
-				cache: join(source, "memory", "cache"),
-				files: join(source, "files"),
-				imports: join(source, "memory", "imports"),
-				secrets: join(source, ".secrets"),
-				skills: join(source, "skills"),
-				data: join(source, "memory"),
-			} as const;
-			const overrides = Object.fromEntries(
-				Object.entries(legacyDefaults)
-					.filter(([key, value]) => sourceLayout[key as keyof typeof legacyDefaults] !== value)
-					.map(([key]) => [
-						key,
-						contained(source, sourceLayout[key as keyof typeof legacyDefaults])
-							? relative(source, sourceLayout[key as keyof typeof legacyDefaults])
-							: sourceLayout[key as keyof typeof legacyDefaults],
-					]),
-			);
-			persistWorkspaceLayout(destination, { version: 2, overrides });
 			writeConfiguredWorkspacePath(destination);
+		},
+		restore: async (preimage: string | undefined) => {
+			if (preimage === undefined) clearConfiguredWorkspacePath();
+			else writeConfiguredWorkspacePath(preimage);
+		},
+		verifyDestination: async () => {
+			const layout = resolveWorkspaceLayout(destination);
+			if (layout.version !== 2) throw new Error("destination layout verification failed");
+			if (!existsSync(layout.database)) return;
+			const db = createDatabase(layout.database);
+			try {
+				const row = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+				if (row?.quick_check !== "ok") throw new Error("destination database verification failed");
+			} finally {
+				db.close();
+			}
+			await verifyDestinationDaemon(destination);
 		},
 	};
 	const leasePath = join(state, `${source.replaceAll("/", "_")}.lease`);
@@ -90,84 +251,46 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 	const deps: MigrationDeps = {
 		resolver,
 		lease: { acquire: acquireLease },
-		writers: { drain: async () => ((await stopDaemon(source)) ? { owners: [] } : { owners: ["daemon"] }) },
+		writers: {
+			drain: async () => {
+				const blockers = await requestMigrationDrain(process.env.SIGNET_DAEMON_URL ?? "http://127.0.0.1:3850");
+				if (blockers && blockers.length > 0) return { owners: blockers };
+				return (await stopDaemon(source)) ? { owners: [] } : { owners: ["daemon"] };
+			},
+		},
 		database: {
-			snapshot: async (path) => {
-				const dataDir = join(path, "data");
+			prepare: async () => {
+				if (!existsSync(sourceLayout.database)) return undefined;
+				const db = createDatabase(sourceLayout.database);
 				try {
-					const dataStat = lstatSync(dataDir);
-					if (!dataStat.isDirectory() || dataStat.isSymbolicLink())
-						throw new Error("destination data directory must be real");
-				} catch (error) {
-					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+					const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy?: number } | undefined;
+					if (checkpoint?.busy !== 0) throw new Error("database checkpoint is blocked by an active writer");
+					const row = db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
+					if (row?.integrity_check !== "ok") throw new Error("source database integrity verification failed");
+				} finally {
+					db.close();
 				}
-				const target = join(dataDir, "signet.db");
-				mkdirSync(dataDir, { recursive: true });
-				if (existsSync(sourceLayout.database)) {
-					const temporary = join(dirname(target), `.signet.db.snapshot-${process.pid}-${randomUUID()}.tmp`);
-					const db = createDatabase(sourceLayout.database);
-					try {
-						const escaped = resolve(temporary).replaceAll("'", "''");
-						db.exec(`VACUUM INTO '${escaped}'`);
-					} finally {
-						db.close();
-					}
-					try {
-						fsyncFile(temporary);
-						try {
-							linkSync(temporary, target);
-						} catch (error) {
-							if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-							if (hashRegularFile(target) !== hashRegularFile(temporary))
-								throw new Error("destination database snapshot conflicts with source");
-						}
-					} finally {
-						if (existsSync(temporary)) unlinkSync(temporary);
-					}
-				}
-				return { path: target, bytes: statTree(target) };
-			},
-			verify: async (path) => {
-				const db = createDatabase(path);
-				const row = db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
-				db.close();
-				return row?.integrity_check === "ok";
+				if (!contained(source, sourceLayout.database)) return undefined;
+				const legacyDatabase = join(source, "memory", "memories.db");
+				return {
+					sourceRoot: dirname(sourceLayout.database),
+					sourcePath: sourceLayout.database.split(sep).pop() ?? "memories.db",
+					destinationPath:
+						resolve(sourceLayout.database) === resolve(legacyDatabase)
+							? join("data", "signet.db")
+							: relative(source, sourceLayout.database),
+					bytes: statSync(sourceLayout.database).size,
+				};
 			},
 		},
+		...(rootGitMode === "shell"
+			? { gitignoreBytes: (existing: string) => new TextEncoder().encode(mergeSignetGitignoreEntries(existing)) }
+			: {}),
+		mapDestinationPath,
+		layoutBytes: () => serializeWorkspaceLayout({ version: 2, overrides }),
 		journalStateDir: state,
-		rootGit: {
-			prepare: (root, directory) => captureGitMetadata(root, directory),
-			verify: () => true,
-			restore: (capture, target) => restoreGitMetadata(capture as Parameters<typeof restoreGitMetadata>[0], target),
-		},
 	};
 	return new MigrationEngine(deps);
-}
-
-function fsyncFile(path: string): void {
-	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-	try {
-		fsyncSync(fd);
-	} finally {
-		closeSync(fd);
-	}
-}
-
-function hashRegularFile(path: string): string {
-	const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-	try {
-		if (!fstatSync(fd).isFile()) throw new Error("database snapshot is not a regular file");
-		return createHash("sha256").update(readFileSync(fd)).digest("hex");
-	} finally {
-		closeSync(fd);
-	}
-}
-
-function statTree(path: string): number {
-	if (!existsSync(path)) return 0;
-	const stat = statSync(path);
-	if (stat.isFile()) return stat.size;
-	return 0;
 }
 
 export function registerMigrationCommands(program: Command, deps: MigrationCommandDeps = {}): void {
@@ -192,7 +315,7 @@ export function registerMigrationCommands(program: Command, deps: MigrationComma
 	options(migration.command("status").description("Show migration progress and blockers")).action(async (opts) => {
 		out.log(JSON.stringify(await factory(opts).status()));
 	});
-	options(migration.command("rollback").description("Rollback before destination writes")).action(async (opts) => {
+	options(migration.command("rollback").description("Rollback before cutover begins")).action(async (opts) => {
 		await factory(opts).rollback();
 		out.log(JSON.stringify({ status: "rolled-back" }));
 	});

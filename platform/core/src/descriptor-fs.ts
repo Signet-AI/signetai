@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { link, mkdir, open, opendir, readlink, rename, rmdir, symlink, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -407,6 +408,17 @@ export class DescriptorRoot {
 		if (this.closed) throw new Error("descriptor root is closed");
 	}
 
+	async openDirectory(path: string, create = false): Promise<DescriptorRoot> {
+		this.requireOpen();
+		return new DescriptorRoot(await openDirectoryPath(this.root, parts(path), create));
+	}
+
+	async identity(): Promise<string> {
+		this.requireOpen();
+		const stat = await this.root.stat();
+		return `${stat.dev}:${stat.ino}:${stat.mode}`;
+	}
+
 	async inventory(): Promise<DescriptorEntry[]> {
 		this.requireOpen();
 		const result: DescriptorEntry[] = [];
@@ -452,6 +464,35 @@ export class DescriptorRoot {
 				const stat = await file.stat();
 				if (!stat.isFile()) throw new UnsafeDescriptorPathError("descriptor path is not a regular file");
 				return new Uint8Array(await file.readFile());
+			} finally {
+				await file.close();
+			}
+		} finally {
+			await parent.close();
+		}
+	}
+
+	async hashFile(path: string): Promise<string> {
+		this.requireOpen();
+		const pathParts = parts(path);
+		const name = pathParts.pop();
+		if (!name) throw new UnsafeDescriptorPathError("descriptor path is empty");
+		const parent = await openDirectoryPath(this.root, pathParts, false);
+		try {
+			const file = await openChild(parent, name, FILE_FLAGS);
+			try {
+				const stat = await file.stat();
+				if (!stat.isFile()) throw new UnsafeDescriptorPathError("descriptor path is not a regular file");
+				const hash = createHash("sha256");
+				const buffer = Buffer.allocUnsafe(1024 * 1024);
+				let position = 0;
+				for (;;) {
+					const { bytesRead } = await file.read(buffer, 0, buffer.length, position);
+					if (bytesRead === 0) break;
+					hash.update(buffer.subarray(0, bytesRead));
+					position += bytesRead;
+				}
+				return hash.digest("hex");
 			} finally {
 				await file.close();
 			}
@@ -571,13 +612,18 @@ export class DescriptorRoot {
 		}
 	}
 
-	async copyFileFrom(source: DescriptorRoot, path: string, options: DescriptorWriteOptions = {}): Promise<void> {
+	async copyFileFrom(
+		source: DescriptorRoot,
+		sourcePath: string,
+		options: DescriptorWriteOptions = {},
+		destinationPath = sourcePath,
+	): Promise<void> {
 		this.requireOpen();
 		source.requireOpen();
-		const sourceParts = parts(path);
+		const sourceParts = parts(sourcePath);
 		const sourceName = sourceParts.pop();
 		if (!sourceName) throw new UnsafeDescriptorPathError("descriptor path is empty");
-		const destinationParts = parts(path);
+		const destinationParts = parts(destinationPath);
 		const destinationName = destinationParts.pop();
 		if (!destinationName) throw new UnsafeDescriptorPathError("descriptor path is empty");
 		const sourceParent = await openDirectoryPath(source.root, sourceParts, false);
