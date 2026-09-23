@@ -5287,13 +5287,16 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "UPDATE entities SET agent_id='default' WHERE agent_id IS NULL OR trim(agent_id)=''",
         [],
     )?;
+    // Keep session_transcripts agent/session scoped, matching the TypeScript
+    // migration 047 primary key and all existing transcript operations. Adding
+    // an unused workspace column would create a scope boundary the owner does
+    // not enforce.
     for table in [
         "entities",
         "entity_aspects",
         "entity_attributes",
         "entity_dependencies",
         "memories",
-        "session_transcripts",
     ] {
         ensure_column(
             &transaction,

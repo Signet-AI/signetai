@@ -11,6 +11,7 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
         r#"CREATE TABLE entities (
             id TEXT PRIMARY KEY,
             agent_id TEXT NOT NULL,
+            workspace_id TEXT NOT NULL DEFAULT 'default',
             name TEXT NOT NULL,
             canonical_name TEXT,
             entity_type TEXT NOT NULL DEFAULT 'person',
@@ -81,6 +82,19 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
             completed_at TEXT,
             PRIMARY KEY(agent_id, session_key)
         );
+        INSERT INTO entities (id, agent_id, workspace_id, name, entity_type, created_at, updated_at)
+            VALUES ('entity-a', 'agent-a', 'preserved-workspace', 'Entity A', 'person', '2026-09-22', '2026-09-22');
+        INSERT INTO entity_aspects (id, entity_id, agent_id, name, created_at, updated_at)
+            VALUES ('aspect-a', 'entity-a', 'agent-a', 'identity', '2026-09-22', '2026-09-22');
+        INSERT INTO entity_attributes (id, aspect_id, agent_id, kind, content, created_at, updated_at)
+            VALUES ('attribute-a', 'aspect-a', 'agent-a', 'fact', 'content', '2026-09-22', '2026-09-22');
+        INSERT INTO entity_dependencies (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, updated_at)
+            VALUES ('dependency-a', 'entity-a', 'entity-a', 'agent-a', 'related', 1.0, '2026-09-22');
+        INSERT INTO memories (id, agent_id, content, created_at, updated_at)
+            VALUES ('memory-a', 'agent-a', 'memory', '2026-09-22', '2026-09-22');
+        INSERT INTO session_transcripts
+            (session_key, agent_id, harness, content, content_hash, idempotency_key, created_at, updated_at)
+            VALUES ('session-a', 'agent-a', 'test', 'transcript', 'hash', 'idem-a', '2026-09-22', '2026-09-22');
         CREATE TABLE memory_artifacts (
             agent_id TEXT NOT NULL DEFAULT 'default',
             source_path TEXT NOT NULL,
@@ -164,6 +178,59 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
     assert_eq!(derived["rows"][0]["derived_memory_id"], "derived-a");
     assert_eq!(derived["rows"][0]["source_kind"], "artifact");
     assert_eq!(derived["rows"][0]["source_id"], "artifact-a");
+
+    let preserved_entity = core
+        .database_sample(
+            "entities".into(),
+            10,
+            0,
+            Some("agent-a".into()),
+            Some("preserved-workspace".into()),
+        )
+        .unwrap();
+    assert_eq!(preserved_entity["rows"].as_array().unwrap().len(), 1);
+    assert_eq!(preserved_entity["rows"][0]["id"], "entity-a");
+
+    for table in [
+        "entity_aspects",
+        "entity_attributes",
+        "entity_dependencies",
+        "memories",
+    ] {
+        let sample = core
+            .database_sample(
+                table.into(),
+                10,
+                0,
+                Some("agent-a".into()),
+                Some("default".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            sample["rows"].as_array().unwrap().len(),
+            1,
+            "legacy {table} row must receive the additive default workspace"
+        );
+    }
+
+    let transcripts = core
+        .database_sample(
+            "session_transcripts".into(),
+            10,
+            0,
+            Some("agent-a".into()),
+            None,
+        )
+        .unwrap();
+    assert_eq!(transcripts["rows"].as_array().unwrap().len(), 1);
+    assert!(
+        !transcripts["columns"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|value| value == "workspace_id"),
+        "session transcripts remain agent/session scoped; do not add an unused workspace boundary"
+    );
 
     let attributes = core
         .database_sample(
