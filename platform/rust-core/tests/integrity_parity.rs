@@ -69,7 +69,7 @@ fn integrity_reports_skipped_fts_objects_and_restarts_after_schema_change() {
         .as_array()
         .unwrap()
         .iter()
-        .all(|object| object.as_str().unwrap().contains("memories_fts")));
+        .all(|object| object.as_str().unwrap().ends_with("_fts")));
     let actual_schema_version: i64 = Connection::open(&path)
         .unwrap()
         .query_row("PRAGMA schema_version", [], |row| row.get(0))

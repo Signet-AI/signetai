@@ -5365,7 +5365,8 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_agent_speaker ON epistemic_assertions(agent_id,speaker,asserted_at DESC);
          CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_agent_predicate ON epistemic_assertions(agent_id,predicate,status,asserted_at DESC);
          CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_agent_source ON epistemic_assertions(agent_id,source_kind,source_id);
-         CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_claim ON epistemic_assertions(agent_id,claim_attribute_id);",
+         CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_claim ON epistemic_assertions(agent_id,claim_attribute_id);
+         CREATE INDEX IF NOT EXISTS idx_epistemic_assertions_observer_entity ON epistemic_assertions(agent_id,subject_entity_id,status,asserted_at DESC,created_at DESC);",
     )?;
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS memory_artifacts (
@@ -5422,6 +5423,9 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         ("source_node_id", "TEXT"),
         ("memory_sentence", "TEXT"),
         ("memory_sentence_quality", "TEXT"),
+        ("source_mtime_ms", "REAL"),
+        ("is_deleted", "INTEGER NOT NULL DEFAULT 0"),
+        ("deleted_at", "TEXT"),
         ("content", "TEXT NOT NULL DEFAULT ''"),
         ("updated_at", "TEXT NOT NULL DEFAULT ''"),
     ] {
@@ -5443,7 +5447,43 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     }
     transaction.execute("CREATE INDEX IF NOT EXISTS idx_memory_artifacts_agent_source ON memory_artifacts(agent_id,source_id,source_external_id)", [])?;
     transaction.execute("CREATE INDEX IF NOT EXISTS idx_memory_artifacts_agent_source_root ON memory_artifacts(agent_id,source_id,source_root)", [])?;
-    if has_table(&transaction, "aggregate_evidence_sources")? {
+    let had_memory_artifacts_fts = has_table(&transaction, "memory_artifacts_fts")?;
+    transaction.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS memory_artifacts_fts USING fts5(
+            content, source_path, content='memory_artifacts', content_rowid='rowid'
+         );
+         CREATE TRIGGER IF NOT EXISTS memory_artifacts_fts_ai AFTER INSERT ON memory_artifacts BEGIN
+            INSERT INTO memory_artifacts_fts(rowid,content,source_path)
+            VALUES (new.rowid,new.content,new.source_path);
+         END;
+         CREATE TRIGGER IF NOT EXISTS memory_artifacts_fts_ad AFTER DELETE ON memory_artifacts BEGIN
+            INSERT INTO memory_artifacts_fts(memory_artifacts_fts,rowid,content,source_path)
+            VALUES ('delete',old.rowid,old.content,old.source_path);
+         END;
+         CREATE TRIGGER IF NOT EXISTS memory_artifacts_fts_au AFTER UPDATE ON memory_artifacts BEGIN
+            INSERT INTO memory_artifacts_fts(memory_artifacts_fts,rowid,content,source_path)
+            VALUES ('delete',old.rowid,old.content,old.source_path);
+            INSERT INTO memory_artifacts_fts(rowid,content,source_path)
+            VALUES (new.rowid,new.content,new.source_path);
+         END;",
+    )?;
+    if !had_memory_artifacts_fts {
+        transaction.execute(
+            "INSERT INTO memory_artifacts_fts(memory_artifacts_fts) VALUES ('rebuild')",
+            [],
+        )?;
+    }
+    // Copy only rows from the canonical aggregate schemas. Older workspaces
+    // may retain an incomplete historical table; do not invent scope or time
+    // values when its provenance columns are absent.
+    if has_table(&transaction, "aggregate_evidence_sources")?
+        && has_column(&transaction, "aggregate_evidence_sources", "aggregate_memory_id")?
+        && has_column(&transaction, "aggregate_evidence_sources", "source_kind")?
+        && has_column(&transaction, "aggregate_evidence_sources", "source_id")?
+        && has_column(&transaction, "aggregate_evidence_sources", "source_path")?
+        && has_column(&transaction, "aggregate_evidence_sources", "agent_id")?
+        && has_column(&transaction, "aggregate_evidence_sources", "created_at")?
+    {
         transaction.execute(
             "INSERT OR IGNORE INTO derived_memory_sources
              (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)
@@ -5452,7 +5492,12 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
             [],
         )?;
     }
-    if has_table(&transaction, "aggregate_memory_sources")? {
+    if has_table(&transaction, "aggregate_memory_sources")?
+        && has_column(&transaction, "aggregate_memory_sources", "aggregate_memory_id")?
+        && has_column(&transaction, "aggregate_memory_sources", "source_memory_id")?
+        && has_column(&transaction, "aggregate_memory_sources", "agent_id")?
+        && has_column(&transaction, "aggregate_memory_sources", "created_at")?
+    {
         transaction.execute(
             "INSERT OR IGNORE INTO derived_memory_sources
              (derived_memory_id, source_kind, source_id, source_path, agent_id, created_at)

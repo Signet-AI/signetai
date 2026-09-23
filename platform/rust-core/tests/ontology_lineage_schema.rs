@@ -40,7 +40,11 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
             (aggregate_memory_id, source_kind, source_id, source_path, agent_id, created_at)
         VALUES
             ('derived-a', 'artifact', 'artifact-a', 'session.md', 'agent-a',
-             '2026-09-22T00:00:00Z');",
+             '2026-09-22T00:00:00Z');
+        CREATE TABLE aggregate_memory_sources (
+            aggregate_memory_id TEXT NOT NULL,
+            source_memory_id TEXT NOT NULL
+        );",
     )
     .unwrap();
     drop(db);
@@ -62,6 +66,9 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
         "source_external_id",
         "source_parent_path",
         "source_meta_json",
+        "source_mtime_ms",
+        "is_deleted",
+        "deleted_at",
     ] {
         assert!(
             artifact_columns.iter().any(|value| value == column),
@@ -136,4 +143,16 @@ fn ontology_claim_lineage_schema_is_additive_and_owner_scoped() {
             "missing epistemic assertion column {column}"
         );
     }
+    let schema = core.database_schema().unwrap();
+    let assertion_table = schema["tables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|table| table["name"] == "epistemic_assertions")
+        .expect("epistemic_assertions table missing");
+    assert!(assertion_table["indexes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|index| index["name"] == "idx_epistemic_assertions_observer_entity"));
 }
