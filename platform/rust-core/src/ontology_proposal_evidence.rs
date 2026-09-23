@@ -32,6 +32,24 @@ fn column_exists(db: &Connection, table: &str, column: &str) -> Result<bool, Cor
         .collect::<Result<Vec<_>, _>>()?;
     Ok(names.iter().any(|name| name == column))
 }
+
+fn require_columns(db: &Connection, table: &str, columns: &[&str]) -> Result<(), CoreError> {
+    let mut missing = Vec::new();
+    for column in columns {
+        if !column_exists(db, table, column)? {
+            missing.push(*column);
+        }
+    }
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(CoreError::UnsupportedMigrationHistory(format!(
+            "{table} is missing required proposal-evidence columns: {}",
+            missing.join(", ")
+        )))
+    }
+}
+
 fn string(value: &Value, key: &str) -> Option<String> {
     value
         .get(key)
@@ -137,11 +155,28 @@ fn artifact(
     db: &Connection,
     agent: &str,
     r: &Ref,
-) -> Result<Option<(String, String, String, Option<String>, String)>, CoreError> {
+) -> Result<Option<(String, String, String, Option<String>, String, String)>, CoreError> {
     if !table_exists(db, "memory_artifacts")? {
         return Ok(None);
     }
     let candidates = ids(r.source_id.as_deref());
+    if r.source_path.is_some() || !candidates.is_empty() {
+        let mut required = vec![
+            "agent_id",
+            "source_path",
+            "source_kind",
+            "session_id",
+            "session_key",
+            "session_token",
+            "content",
+            "captured_at",
+            "is_deleted",
+        ];
+        if r.source_path.is_none() {
+            required.push("source_node_id");
+        }
+        require_columns(db, "memory_artifacts", &required)?;
+    }
     let mut filters = vec!["agent_id=?".to_owned(), "COALESCE(is_deleted,0)=0".into()];
     let mut args: Vec<String> = vec![agent.into()];
     if let Some(path) = &r.source_path {
@@ -156,7 +191,7 @@ fn artifact(
     } else {
         return Ok(None);
     }
-    let sql=format!("SELECT source_path,source_kind,session_id,session_key,content FROM memory_artifacts WHERE {} ORDER BY captured_at DESC LIMIT 1",filters.join(" AND "));
+    let sql=format!("SELECT source_path,source_kind,session_id,session_key,session_token,content FROM memory_artifacts WHERE {} ORDER BY captured_at DESC LIMIT 1",filters.join(" AND "));
     let row = db
         .query_row(&sql, rusqlite::params_from_iter(args.iter()), |row| {
             Ok((
@@ -165,10 +200,11 @@ fn artifact(
                 row.get::<_, String>(2)?,
                 row.get::<_, Option<String>>(3)?,
                 row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
             ))
         })
         .optional()?;
-    if let Some((p, _k, _s, _key, c)) = &row {
+    if let Some((p, _k, _s, _key, _token, c)) = &row {
         if !is_memory_content_context_eligible(
             db,
             agent,
@@ -190,9 +226,9 @@ fn resolve(db: &Connection, agent: &str, r: &Ref) -> Result<Value, CoreError> {
         }
     }
     if r.source_path.is_some() {
-        if let Some((path, kind, session, key, content)) = artifact(db, agent, r)? {
+        if let Some((path, kind, session, key, token, content)) = artifact(db, agent, r)? {
             return Ok(
-                json!({"kind":"memory_artifact","found":true,"sourceKind":kind,"sourceId":key.or(Some(session)),"sourcePath":path,"label":path,"excerpt":compact(&content,r.quote.as_deref()),"reference":r.reference}),
+                json!({"kind":"memory_artifact","found":true,"sourceKind":kind,"sourceId":key.or(Some(session)).or(Some(token)),"sourcePath":path,"label":path,"excerpt":compact(&content,r.quote.as_deref()),"reference":r.reference}),
             );
         }
     }
@@ -204,6 +240,11 @@ fn resolve(db: &Connection, agent: &str, r: &Ref) -> Result<Value, CoreError> {
             .as_deref()
             .is_some_and(|s| s.starts_with("transcript:") || s.starts_with("session:"));
     if is_transcript && table_exists(db, "session_transcripts")? {
+        require_columns(
+            db,
+            "session_transcripts",
+            &["agent_id", "session_key", "content", "created_at"],
+        )?;
         let c = column_exists(db, "session_transcripts", "updated_at")?;
         let order = if c {
             "COALESCE(updated_at,created_at)"
@@ -237,14 +278,27 @@ fn resolve(db: &Connection, agent: &str, r: &Ref) -> Result<Value, CoreError> {
         }
     }
     if r.source_path.is_none() {
-        if let Some((path, kind, session, key, content)) = artifact(db, agent, r)? {
+        if let Some((path, kind, session, key, token, content)) = artifact(db, agent, r)? {
             return Ok(
-                json!({"kind":"memory_artifact","found":true,"sourceKind":kind,"sourceId":key.or(Some(session)),"sourcePath":path,"label":path,"excerpt":compact(&content,r.quote.as_deref()),"reference":r.reference}),
+                json!({"kind":"memory_artifact","found":true,"sourceKind":kind,"sourceId":key.or(Some(session)).or(Some(token)),"sourcePath":path,"label":path,"excerpt":compact(&content,r.quote.as_deref()),"reference":r.reference}),
             );
         }
     }
     if let Some(id) = &r.memory_id {
         if table_exists(db, "memories")? {
+            require_columns(
+                db,
+                "memories",
+                &[
+                    "id",
+                    "agent_id",
+                    "source_id",
+                    "source_type",
+                    "source_path",
+                    "content",
+                    "is_deleted",
+                ],
+            )?;
             if let Some((mid,source_id,source_type,path,content))=db.query_row("SELECT id,source_id,source_type,source_path,content FROM memories WHERE id=? AND agent_id=? AND COALESCE(is_deleted,0)=0 LIMIT 1",params![id,agent],|row|Ok((row.get::<_,String>(0)?,row.get::<_,Option<String>>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,Option<String>>(3)?,row.get::<_,String>(4)?))).optional()?{if is_memory_content_context_eligible(db,agent,MemoryContentSafetySourceKind::Memory,&mid,&content)?{return Ok(json!({"kind":"memory","found":true,"sourceKind":source_type,"sourceId":source_id.unwrap_or_else(||mid.clone()),"sourcePath":path,"label":format!("memory:{mid}"),"excerpt":compact(&content,r.quote.as_deref()),"reference":r.reference}))}}
         }
     }

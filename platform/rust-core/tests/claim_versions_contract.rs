@@ -12,6 +12,41 @@ fn workspace() -> (tempfile::TempDir, Core) {
     (dir, core)
 }
 
+fn proposal_workspace() -> (tempfile::TempDir, Core) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.sqlite");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch("CREATE TABLE ontology_proposals (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, operation TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, confidence REAL NOT NULL, rationale TEXT NOT NULL, evidence TEXT NOT NULL, risk TEXT, source_kind TEXT, source_id TEXT, source_path TEXT, source_root TEXT, created_by TEXT NOT NULL, applied_by TEXT, rejected_by TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, applied_at TEXT, rejected_at TEXT);")
+        .unwrap();
+    connection
+        .execute("INSERT INTO ontology_proposals(id,agent_id,operation,status,payload,confidence,rationale,evidence,created_by,created_at,updated_at) VALUES('p1','agent-a','create','pending','{\"x\":1}',0.7,'because','[]','tester','created','updated')", [])
+        .unwrap();
+    drop(connection);
+    let core = Core::open(&path, 8).unwrap();
+    core.initialize().unwrap();
+    (dir, core)
+}
+
+fn artifact_proposal_workspace() -> (tempfile::TempDir, Core) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("workspace.sqlite");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    connection
+        .execute_batch("CREATE TABLE ontology_proposals (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, operation TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, confidence REAL NOT NULL, rationale TEXT NOT NULL, evidence TEXT NOT NULL, risk TEXT, source_kind TEXT, source_id TEXT, source_path TEXT, source_root TEXT, created_by TEXT NOT NULL, applied_by TEXT, rejected_by TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, applied_at TEXT, rejected_at TEXT); CREATE TABLE memory_artifacts (agent_id TEXT NOT NULL, source_path TEXT NOT NULL, source_kind TEXT NOT NULL, session_id TEXT NOT NULL, session_key TEXT, session_token TEXT NOT NULL, source_node_id TEXT, content TEXT NOT NULL, captured_at TEXT NOT NULL, is_deleted INTEGER NOT NULL DEFAULT 0);")
+        .unwrap();
+    connection
+        .execute("INSERT INTO ontology_proposals(id,agent_id,operation,status,payload,confidence,rationale,evidence,created_by,created_at,updated_at) VALUES('p2','agent-a','create','pending','{}',0.7,'','[{\"source_id\":\"artifact-session\"}]','tester','created','updated')", [])
+        .unwrap();
+    connection
+        .execute("INSERT INTO memory_artifacts(agent_id,source_path,source_kind,session_id,session_key,session_token,source_node_id,content,captured_at,is_deleted) VALUES('agent-a','artifact.md','markdown','artifact-session',NULL,'artifact-token',NULL,'artifact content','captured',0)", [])
+        .unwrap();
+    drop(connection);
+    let core = Core::open(&path, 8).unwrap();
+    core.initialize().unwrap();
+    (dir, core)
+}
+
 fn create_path(
     core: &Core,
     agent_id: &str,
@@ -229,11 +264,7 @@ fn claim_versions_reject_empty_claim_and_invalid_kind_at_owner_boundary() {
 
 #[test]
 fn proposal_evidence_is_scoped_by_agent_and_returns_proposal_projection() {
-    let (dir, core) = workspace();
-    let connection = rusqlite::Connection::open(dir.path().join("workspace.sqlite")).unwrap();
-    connection.execute_batch("CREATE TABLE ontology_proposals (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, operation TEXT NOT NULL, status TEXT NOT NULL, payload TEXT NOT NULL, confidence REAL NOT NULL, rationale TEXT NOT NULL, evidence TEXT NOT NULL, risk TEXT, source_kind TEXT, source_id TEXT, source_path TEXT, source_root TEXT, created_by TEXT NOT NULL, applied_by TEXT, rejected_by TEXT, result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, applied_at TEXT, rejected_at TEXT);").unwrap();
-    connection.execute("INSERT INTO ontology_proposals(id,agent_id,operation,status,payload,confidence,rationale,evidence,created_by,created_at,updated_at) VALUES('p1','agent-a','create','pending','{\"x\":1}',0.7,'because','[]','tester','created','updated')", []).unwrap();
-    drop(connection);
+    let (_dir, core) = proposal_workspace();
     let request = OntologyProposalEvidenceRequest {
         agent_id: "agent-a".into(),
         id: "p1".into(),
@@ -254,4 +285,22 @@ fn proposal_evidence_is_scoped_by_agent_and_returns_proposal_projection() {
     assert!(
         matches!(missing, Err(CoreError::NotFoundMessage(message)) if message == "Proposal not found")
     );
+}
+
+#[test]
+fn proposal_evidence_artifact_uses_session_id_when_session_key_is_null() {
+    let (_dir, core) = artifact_proposal_workspace();
+    let result = core
+        .submit(Operation::OntologyProposalEvidence {
+            request: OntologyProposalEvidenceRequest {
+                agent_id: "agent-a".into(),
+                id: "p2".into(),
+            },
+        })
+        .unwrap();
+    let item = &result["items"][0];
+    assert_eq!(item["kind"], "memory_artifact");
+    assert_eq!(item["sourceId"], "artifact-session");
+    assert_eq!(item["sourcePath"], "artifact.md");
+    assert_eq!(item["excerpt"], "artifact content");
 }
