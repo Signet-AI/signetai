@@ -31,32 +31,30 @@ fn re(pattern: &str) -> Regex {
         .build()
         .expect("valid policy regex")
 }
+fn utf16_windows(content: &str, start: usize, end: usize) -> (String, String) {
+    let units: Vec<u16> = content.encode_utf16().collect();
+    let start_units = content[..start].encode_utf16().count();
+    let end_units = content[..end].encode_utf16().count();
+    let before_start = start_units.saturating_sub(120);
+    let after_end = (end_units + 160).min(units.len());
+    (
+        String::from_utf16_lossy(&units[before_start..start_units]),
+        String::from_utf16_lossy(&units[end_units..after_end]),
+    )
+}
 fn defensive(content: &str, start: usize, end: usize) -> bool {
-    let before_limit = start.saturating_sub(120);
-    let before_start = content
-        .char_indices()
-        .map(|(i, _)| i)
-        .take_while(|i| *i <= before_limit)
-        .last()
-        .unwrap_or(0);
-    let before = &content[before_start..start];
-    let after_end = content
-        .char_indices()
-        .map(|(i, _)| i)
-        .find(|i| *i >= end + 160)
-        .unwrap_or(content.len());
-    let after = &content[end..after_end];
+    let (before, after) = utf16_windows(content, start, end);
     let strong = r"\b(?:security\s+(?:guidance|discussion|analysis)|threat\s+model|defensive)\b";
     let reporting = r"\b(?:example|illustrat\w*|sample|quote|quoted|detector|scanner|classif\w*)\b";
     let reporting_before = r"\b(?:example|illustrat\w*|sample|quote|quoted|detector|scanner|classif\w*)\b[\s\S]{0,80}\b(?:say\w*|read\w*|show\w*|flag\w*|detect\w*|describ\w*|demonstrat\w*|contain\w*|match\w*|pattern)\b";
     let reporting_after = r"\b(?:detector|scanner|classif\w*|flag\w*|pattern|dangerous|unsafe|malicious|hostile|should|would|must|never|do not|don't|avoid|quoted)\b";
     let negated = r"\b(?:never|do not|don't|should not|must not|cannot|can't|avoid|prevent|detect|mitigat\w*)\b[\s\S]{0,80}$";
     re(strong).is_match(&content[start..end])
-        || re(negated).is_match(before)
-        || re(strong).is_match(before)
-        || re(strong).is_match(after)
-        || re(reporting_before).is_match(before)
-        || (re(reporting).is_match(before) && re(reporting_after).is_match(after))
+        || re(negated).is_match(&before)
+        || re(strong).is_match(&before)
+        || re(strong).is_match(&after)
+        || re(reporting_before).is_match(&before)
+        || (re(reporting).is_match(&before) && re(reporting_after).is_match(&after))
 }
 fn actionable(content: &str, pattern: &str) -> bool {
     re(pattern)
