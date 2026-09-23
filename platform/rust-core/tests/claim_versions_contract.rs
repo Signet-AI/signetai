@@ -1,5 +1,7 @@
 use serde_json::json;
-use signet_core_native::{Core, CoreError, OntologyClaimVersionsRequest, Operation};
+use signet_core_native::{
+    Core, CoreError, OntologyClaimVersionRequest, OntologyClaimVersionsRequest, Operation,
+};
 
 fn workspace() -> (tempfile::TempDir, Core) {
     let dir = tempfile::tempdir().unwrap();
@@ -54,6 +56,52 @@ fn versions(
             kind: kind.map(str::to_owned),
         },
     })
+}
+
+fn version(
+    core: &Core,
+    agent_id: &str,
+    entity: &str,
+    aspect: &str,
+    version: i64,
+) -> Result<serde_json::Value, CoreError> {
+    core.submit(Operation::OntologyClaimVersion {
+        request: OntologyClaimVersionRequest {
+            agent_id: agent_id.into(),
+            entity: entity.into(),
+            aspect: aspect.into(),
+            group_key: " General ".into(),
+            claim_key: "Favorite Color".into(),
+            kind: None,
+            version,
+        },
+    })
+}
+
+#[test]
+fn claim_version_returns_item_and_null_for_missing_version_through_owner() {
+    let (_dir, core) = workspace();
+    let (_entity_id, aspect_id) = create_path(&core, "agent-a", "Person", "Facts");
+    core.submit(Operation::KnowledgeAttributeCreate {
+        agent_id: "agent-a".into(),
+        workspace_id: "default".into(),
+        aspect_id,
+        kind: "attribute".into(),
+        content: "Blue".into(),
+        claim_key: Some("favorite_color".into()),
+        group_key: Some("general".into()),
+        confidence: 0.75,
+        importance: 0.5,
+        memory_id: None,
+    })
+    .unwrap();
+    let item = version(&core, "agent-a", "Person", "Facts", 1).unwrap();
+    assert_eq!(item["version"], 1);
+    assert_eq!(item["content"], "Blue");
+    assert_eq!(
+        version(&core, "agent-a", "Person", "Facts", 2).unwrap(),
+        serde_json::Value::Null
+    );
 }
 
 #[test]

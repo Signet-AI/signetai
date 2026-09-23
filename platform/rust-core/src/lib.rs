@@ -3215,6 +3215,9 @@ fn execute_operation(
         Operation::OntologyClaimVersions { request } => {
             ontology_claim_versions::execute(connection, request)
         }
+        Operation::OntologyClaimVersion { request } => {
+            ontology_claim_versions::execute_one(connection, request)
+        }
         Operation::KnowledgeEntityCreate {
             agent_id,
             workspace_id,
@@ -4352,6 +4355,17 @@ pub struct SessionRecord {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OntologyClaimVersionRequest {
+    pub agent_id: String,
+    pub entity: String,
+    pub aspect: String,
+    pub group_key: String,
+    pub claim_key: String,
+    pub kind: Option<String>,
+    pub version: i64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OntologyClaimTraceRequest {
     pub agent_id: String,
     pub entity: String,
@@ -4759,6 +4773,9 @@ pub enum Operation {
     },
     OntologyClaimVersions {
         request: OntologyClaimVersionsRequest,
+    },
+    OntologyClaimVersion {
+        request: OntologyClaimVersionRequest,
     },
     KnowledgeEntityCreate {
         agent_id: String,

@@ -1,4 +1,7 @@
-use crate::{canonical_key, required_agent, CoreError, OntologyClaimVersionsRequest, Value};
+use crate::{
+    canonical_key, required_agent, CoreError, OntologyClaimVersionRequest,
+    OntologyClaimVersionsRequest, Value,
+};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::json;
 
@@ -119,10 +122,10 @@ fn claim_version_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
     }))
 }
 
-pub fn execute(
+fn query_items(
     connection: &Connection,
     request: OntologyClaimVersionsRequest,
-) -> Result<Value, CoreError> {
+) -> Result<Vec<Value>, CoreError> {
     let agent_id = required_agent(&request.agent_id)?;
     let entity_selector = request.entity.trim();
     if entity_selector.is_empty() {
@@ -190,8 +193,42 @@ pub fn execute(
             claim_version_row,
         )?
         .collect::<Result<Vec<_>, _>>()?;
+    Ok(items)
+}
+
+pub fn execute(
+    connection: &Connection,
+    request: OntologyClaimVersionsRequest,
+) -> Result<Value, CoreError> {
+    let items = query_items(connection, request)?;
     let count = items.len();
     Ok(json!({"items": items, "count": count}))
+}
+
+pub fn execute_one(
+    connection: &Connection,
+    request: OntologyClaimVersionRequest,
+) -> Result<Value, CoreError> {
+    if request.version < 1 || request.version > 1_000_000 {
+        return Err(CoreError::InvalidInput(
+            "version must be between 1 and 1000000".into(),
+        ));
+    }
+    let items = query_items(
+        connection,
+        OntologyClaimVersionsRequest {
+            agent_id: request.agent_id,
+            entity: request.entity,
+            aspect: request.aspect,
+            group_key: request.group_key,
+            claim_key: request.claim_key,
+            kind: request.kind,
+        },
+    )?;
+    Ok(items
+        .into_iter()
+        .find(|item| item.get("version").and_then(Value::as_i64) == Some(request.version))
+        .unwrap_or(Value::Null))
 }
 
 #[cfg(test)]

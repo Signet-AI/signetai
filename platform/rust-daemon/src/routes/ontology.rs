@@ -35,6 +35,12 @@ mod auth_contract_tests {
         );
         assert_eq!(parse_claim_limit(Some("nope"), 20, 1, 50).ok(), Some(20));
         assert_eq!(parse_claim_limit(Some(" 12abc"), 20, 1, 50).ok(), Some(12));
+        assert_eq!(parse_claim_limit(None, 0, 1, 1_000_000).ok(), Some(0));
+        assert_eq!(parse_claim_limit(Some("0"), 0, 1, 1_000_000).ok(), Some(1));
+        assert_eq!(
+            parse_claim_limit(Some("1000001"), 0, 1, 1_000_000).ok(),
+            Some(1_000_000)
+        );
     }
 }
 
@@ -108,6 +114,18 @@ struct ClaimVersionsQuery {
     aspect: Option<String>,
     group: Option<String>,
     claim: Option<String>,
+    kind: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ClaimVersionQuery {
+    #[serde(flatten)]
+    agent: AgentQuery,
+    entity: Option<String>,
+    aspect: Option<String>,
+    group: Option<String>,
+    claim: Option<String>,
+    version: Option<String>,
     kind: Option<String>,
 }
 
@@ -227,7 +245,7 @@ pub(crate) fn router() -> Router<AppState> {
         )
         .route("/api/ontology/claims/evidence", get(unsupported_read))
         .route("/api/ontology/claims/versions", get(list_claim_versions))
-        .route("/api/ontology/claims/version", get(unsupported_read))
+        .route("/api/ontology/claims/version", get(get_claim_version))
         .route("/api/ontology/claims/explain", get(explain_claim))
         .route(
             "/api/ontology/extract",
@@ -305,6 +323,51 @@ async fn list_claim_versions(
             .await
             .map(Json)?,
     )
+}
+
+async fn get_claim_version(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(mut q): Query<ClaimVersionQuery>,
+) -> Result<Json<Value>, ClaimTraceError> {
+    let auth_query = OntologyQuery {
+        agent: std::mem::take(&mut q.agent),
+        workspace_id: None,
+        limit: None,
+        cursor: None,
+    };
+    require_ontology_auth(&state, &headers, &auth_query, "recall").await?;
+    let required = |value: &Option<String>, name: &str| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| ApiError::bad_request(format!("{name} is required")))
+    };
+    let entity = required(&q.entity, "entity")?;
+    let aspect = required(&q.aspect, "aspect")?;
+    let group = required(&q.group, "group")?;
+    let claim = required(&q.claim, "claim")?;
+    let version = parse_claim_limit(q.version.as_deref(), 0, 1, 1_000_000)?;
+    if version == 0 {
+        return Err(ApiError::bad_request("version is required").into());
+    }
+    let kind = parse_claim_kind(q.kind.as_deref()).map_err(ApiError::bad_request)?;
+    let request = signet_core_native::OntologyClaimVersionRequest {
+        agent_id: agent(&headers, Some(&auth_query.agent), None)?,
+        entity,
+        aspect,
+        group_key: group,
+        claim_key: claim,
+        kind,
+        version: version as i64,
+    };
+    let item = execute(&state, Operation::OntologyClaimVersion { request }).await?;
+    if item.is_null() {
+        return Err(ApiError::not_found("Claim version not found").into());
+    }
+    Ok(Json(item))
 }
 
 async fn explain_claim(
