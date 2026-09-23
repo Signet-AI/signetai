@@ -163,6 +163,14 @@ export function verifyRootGitArchive(archive: RootGitArchive): RootGitArchiveVer
 			digest(readFileSync(archive.liveArchivePath)) !== manifest.liveArchive
 		)
 			return { verified: false, reason: "archive checksum mismatch" };
+		if (digest(archive.root) !== manifest.repository)
+			return { verified: false, reason: "repository identity mismatch" };
+		if (runGit(archive.root, ["rev-parse", "HEAD"]) !== manifest.head)
+			return { verified: false, reason: "repository head mismatch" };
+		if (digest(runGit(archive.root, ["show-ref", "--head"])) !== manifest.refs)
+			return { verified: false, reason: "repository refs mismatch" };
+		if (JSON.stringify(trackedAndUntracked(archive.root, archive.directory)) !== JSON.stringify(manifest.status))
+			return { verified: false, reason: "repository status mismatch" };
 		writeFileSync(archive.verificationPath, `${new Date().toISOString()}\n`);
 		return { verified: true };
 	} catch (error) {

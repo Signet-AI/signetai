@@ -135,6 +135,7 @@ export class MigrationEngine {
 			await this.drainWriters();
 			if (j?.phase === "cutover-pending") return this.finishCutover(l, j);
 			const plan = this.inventory(l);
+			if (j) verifyJournalSources(l.root, j);
 			j ??= {
 				version: 1,
 				workspaceId: workspaceId(l.root),
@@ -193,6 +194,7 @@ export class MigrationEngine {
 	private async finishCutover(l: Layout, j: Journal): Promise<MigrationResult> {
 		if (!j.destinationWrites) {
 			j.phase = "cutover-pending";
+			j.rollbackEligible = false;
 			saveJournal(this.journalPath, j);
 		}
 		if (this.deps.resolver.cutover) await this.deps.resolver.cutover({ ...l, version: 2 });
@@ -230,6 +232,16 @@ export class MigrationEngine {
 		if (!accepted) throw new Error("cleanup requires explicit acceptance (--accept)");
 		const journal = readJournal(this.journalPath);
 		if (journal?.phase !== "completed") throw new Error("cleanup requires a completed migration");
+		const receipt = join(journal.destination, ".signet-migration-receipt.json");
+		writeFileSync(
+			receipt,
+			`${JSON.stringify(
+				{ version: 1, workspaceId: journal.workspaceId, phase: journal.phase, copied: journal.copied.length },
+				null,
+				2,
+			)}\n`,
+			{ mode: 0o600 },
+		);
 		unlinkSync(this.journalPath);
 	}
 	async rollback(): Promise<void> {
@@ -251,12 +263,31 @@ export class MigrationEngine {
 	}
 }
 
+function contained(base: string, candidate: string): boolean {
+	const r = relative(resolve(base), resolve(candidate));
+	return r === "" || (!r.startsWith(`..${sep}`) && r !== "..");
+}
+function verifyJournalSources(root: string, journal: Journal): void {
+	for (const expected of journal.fingerprints) {
+		const currentPath = join(root, expected.path);
+		if (!existsSync(currentPath)) throw new Error(`source changed during migration: ${expected.path}`);
+		const actual = fingerprint(currentPath, expected.type);
+		if (
+			actual.type !== expected.type ||
+			actual.hash !== expected.hash ||
+			actual.size !== expected.size ||
+			actual.mode !== expected.mode
+		)
+			throw new Error(`source changed during migration: ${expected.path}`);
+	}
+}
+
 function validateLayout(l: Layout) {
 	if (l.version !== 1) throw new Error(`unsupported layout version: ${l.version}`);
 	const source = resolve(l.root),
 		destination = resolve(l.destination);
 	if (source === destination) throw new Error("destination must differ from source");
-	if (destination.startsWith(`${source}${sep}`)) throw new Error("destination must not be nested inside source");
+	if (contained(source, destination)) throw new Error("destination must not be nested inside source");
 	try {
 		const s = lstatSync(l.destination);
 		if (!s.isDirectory() || s.isSymbolicLink()) throw new Error("destination must be a real directory");
@@ -330,8 +361,7 @@ function scanInventory(
 		if (e.isSymbolicLink()) {
 			const target = readlinkSync(abs);
 			const resolved = resolve(root, target);
-			if (!(resolved === resolve(base) || resolved.startsWith(`${resolve(base)}${sep}`)))
-				throw new Error(`escaping symlink: ${rel}`);
+			if (!contained(base, resolved)) throw new Error(`escaping symlink: ${rel}`);
 			const f = fingerprint(abs, "symlink");
 			components.push(rel);
 			fingerprints.push({ ...f, path: rel });

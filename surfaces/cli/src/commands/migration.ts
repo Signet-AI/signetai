@@ -6,6 +6,7 @@ import {
 	existsSync,
 	fstatSync,
 	fsyncSync,
+	lstatSync,
 	linkSync,
 	mkdirSync,
 	openSync,
@@ -14,7 +15,7 @@ import {
 	unlinkSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { persistWorkspaceLayout, resolveWorkspaceLayout } from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
 import { createDatabase } from "../sqlite.js";
@@ -25,6 +26,11 @@ export type MigrationCommandDeps = {
 	createEngine?: (options: { source?: string; destination?: string }) => MigrationEngine;
 	stdout?: Pick<Console, "log" | "error">;
 };
+
+function contained(base: string, candidate: string): boolean {
+	const r = relative(resolve(base), resolve(candidate));
+	return r === "" || (!r.startsWith(`..${sep}`) && r !== "..");
+}
 
 function defaultEngine(options: { source?: string; destination?: string }): MigrationEngine {
 	const source = resolve(options.source ?? resolveAgentsDir().path);
@@ -56,8 +62,8 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 					.filter(([key, value]) => sourceLayout[key as keyof typeof legacyDefaults] !== value)
 					.map(([key]) => [
 						key,
-						sourceLayout[key as keyof typeof legacyDefaults].startsWith(source)
-							? sourceLayout[key as keyof typeof legacyDefaults].slice(source.length + 1)
+						contained(source, sourceLayout[key as keyof typeof legacyDefaults])
+							? relative(source, sourceLayout[key as keyof typeof legacyDefaults])
 							: sourceLayout[key as keyof typeof legacyDefaults],
 					]),
 			);
@@ -87,8 +93,16 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		writers: { drain: async () => ((await stopDaemon(source)) ? { owners: [] } : { owners: ["daemon"] }) },
 		database: {
 			snapshot: async (path) => {
-				const target = join(path, "data", "signet.db");
-				mkdirSync(dirname(target), { recursive: true });
+				const dataDir = join(path, "data");
+				try {
+					const dataStat = lstatSync(dataDir);
+					if (!dataStat.isDirectory() || dataStat.isSymbolicLink())
+						throw new Error("destination data directory must be real");
+				} catch (error) {
+					if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+				}
+				const target = join(dataDir, "signet.db");
+				mkdirSync(dataDir, { recursive: true });
 				if (existsSync(sourceLayout.database)) {
 					const temporary = join(dirname(target), `.signet.db.snapshot-${process.pid}-${randomUUID()}.tmp`);
 					const db = createDatabase(sourceLayout.database);
