@@ -277,6 +277,15 @@ function relativeArtifactPath(capturedAt: string, sessionToken: string, kind: Ar
 	return `${memoryRelativePrefix()}${artifactFileName(capturedAt, sessionToken, kind)}`;
 }
 
+function storedArtifactRelativePath(path: string): string {
+	if (
+		memoryRelativePrefix() === "transcripts/" &&
+		/^memory\/[^/]+--(?:summary|transcript|compaction|manifest)\.md$/.test(path)
+	)
+		return `transcripts/${path.slice("memory/".length)}`;
+	return path;
+}
+
 function wikilink(path: string, label?: string): string {
 	return label ? `[[${path}|${label}]]` : `[[${path}]]`;
 }
@@ -1202,7 +1211,7 @@ function isValidArtifact(path: string, frontmatter: Record<string, unknown>, bod
 
 	if (kind !== "manifest") {
 		const manifestPath = readString(frontmatter, "manifest_path");
-		if (!manifestPath?.startsWith(memoryRelativePrefix())) return false;
+		if (!manifestPath || !storedArtifactRelativePath(manifestPath).startsWith(memoryRelativePrefix())) return false;
 	}
 
 	const rel = relativePath(path);
@@ -1302,7 +1311,7 @@ async function findExistingManifest(agentId: string, sessionId: string): Promise
 			{ siteToken: "db:memory.manifest.find" },
 		);
 		if (!row) return null;
-		return loadManifest(join(getAgentsDir(), row.source_path));
+		return loadManifest(join(getAgentsDir(), storedArtifactRelativePath(row.source_path)));
 	} catch {
 		return null;
 	}
@@ -2259,7 +2268,7 @@ export async function removeCanonicalSession(agentId: string, sessionToken: stri
 		db.prepare("DELETE FROM memory_artifacts WHERE agent_id = ? AND session_token = ?").run(agentId, sessionToken);
 	});
 	for (const path of paths) {
-		rmSync(join(getAgentsDir(), path), { force: true });
+		rmSync(join(getAgentsDir(), storedArtifactRelativePath(path)), { force: true });
 	}
 }
 

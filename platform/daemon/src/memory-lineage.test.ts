@@ -71,8 +71,8 @@ describe("memory-lineage", () => {
 		resetEmbeddingCircuitBreakers();
 	});
 
-	afterAll(() => {
-		closeDbAccessor();
+	afterAll(async () => {
+		await closeDbAccessor();
 		cleanupTestTempDir(dir);
 		if (prev === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
