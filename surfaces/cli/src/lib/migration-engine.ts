@@ -233,15 +233,29 @@ export class MigrationEngine {
 		const journal = readJournal(this.journalPath);
 		if (journal?.phase !== "completed") throw new Error("cleanup requires a completed migration");
 		const receipt = join(journal.destination, ".signet-migration-receipt.json");
-		writeFileSync(
-			receipt,
-			`${JSON.stringify(
-				{ version: 1, workspaceId: journal.workspaceId, phase: journal.phase, copied: journal.copied.length },
-				null,
-				2,
-			)}\n`,
-			{ mode: 0o600 },
-		);
+		const fd = openSync(receipt, "w", 0o600);
+		try {
+			writeFileSync(
+				fd,
+				`${JSON.stringify(
+					{
+						version: 1,
+						workspaceId: journal.workspaceId,
+						phase: journal.phase,
+						sourceVersion: 1,
+						destinationVersion: 2,
+						rollbackBoundary: "destination-writes-fenced",
+						components: journal.receipts.map((r) => ({ component: r.component, verified: r.phase === "verified" })),
+					},
+					null,
+					2,
+				)}\n`,
+			);
+			fsyncSync(fd);
+		} finally {
+			closeSync(fd);
+		}
+		fsyncDirectory(journal.destination);
 		unlinkSync(this.journalPath);
 	}
 	async rollback(): Promise<void> {

@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { prepareRootGitArchive, verifyRootGitArchive } from "./git-archive-retirement";
+import { prepareRootGitArchive, restoreVerifiedRootGitArchive, verifyRootGitArchive } from "./git-archive-retirement";
 
 function run(root: string, args: string[]) {
 	const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
@@ -32,6 +32,26 @@ describe("verified root git archive retirement", () => {
 		expect(statSync(archive.liveArchivePath).isFile()).toBe(true);
 		expect(readFileSync(archive.manifestPath, "utf8")).not.toContain("private");
 		expect(spawnSync("git", ["status", "--porcelain=v1"], { cwd: root, encoding: "utf8" }).stdout).toBe(before);
+	});
+
+	it("restores staged, unstaged, untracked, hooks, config, and repository identity", () => {
+		const root = repo();
+		writeFileSync(join(root, "tracked"), "staged\n");
+		run(root, ["add", "tracked"]);
+		writeFileSync(join(root, "tracked"), "unstaged\n");
+		writeFileSync(join(root, "untracked"), "untracked\n");
+		const hook = join(root, ".git", "hooks", "pre-commit");
+		writeFileSync(hook, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+		const archive = prepareRootGitArchive(root, join(root, "retirement"));
+		expect(verifyRootGitArchive(archive)).toMatchObject({ verified: true });
+		const destination = join(root, "restored");
+		restoreVerifiedRootGitArchive(archive, destination);
+		expect(readFileSync(join(destination, "tracked"), "utf8")).toBe("unstaged\n");
+		expect(readFileSync(join(destination, "untracked"), "utf8")).toBe("untracked\n");
+		expect(readFileSync(join(destination, ".git", "hooks", "pre-commit"), "utf8")).toContain("exit 0");
+		expect(spawnSync("git", ["-C", destination, "diff", "--cached", "--quiet"], { encoding: "utf8" }).status).toBe(1);
+		expect(spawnSync("git", ["-C", destination, "status", "--porcelain=v1"], { encoding: "utf8" }).stdout).toContain("untracked");
+		expect(spawnSync("git", ["-C", destination, "rev-parse", "--show-toplevel"], { encoding: "utf8" }).stdout.trim()).toBe(destination);
 	});
 
 	it("refuses nested repositories and non-root repositories", () => {

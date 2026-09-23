@@ -178,6 +178,23 @@ export function verifyRootGitArchive(archive: RootGitArchive): RootGitArchiveVer
 	}
 }
 
+export function restoreVerifiedRootGitArchive(archive: RootGitArchive, destination: string): void {
+	if (!verifyRootGitArchive(archive).verified) throw new Error("archive must be verified before restore");
+	const target = resolve(destination);
+	mkdirSync(target, { recursive: true });
+	const stage = join(tmpdir(), `signet-retirement-restore-${process.pid}-${Date.now()}`);
+	mkdirSync(stage, { recursive: true });
+	try {
+		const extracted = spawnSync("tar", ["-xf", archive.liveArchivePath, "-C", stage], { encoding: "utf8" });
+		if (extracted.status !== 0) throw new Error(extracted.stderr || "live archive restore failed");
+		for (const entry of readdirSync(join(stage, "worktree")))
+			copyTree(join(stage, "worktree", entry), join(target, entry));
+		copyTree(join(stage, "git"), join(target, ".git"));
+	} finally {
+		rmSync(stage, { recursive: true, force: true });
+	}
+}
+
 export function retireVerifiedRootGit(archive: RootGitArchive, confirmation: string): void {
 	if (confirmation !== "RETIRE ROOT GIT") throw new Error("explicit confirmation required: RETIRE ROOT GIT");
 	if (!existsSync(archive.verificationPath)) throw new Error("archive must be verified before retirement");
