@@ -11,6 +11,7 @@ import {
 	renameSync,
 	rmSync,
 	symlinkSync,
+	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -29,6 +30,27 @@ afterEach(() => {
 });
 
 describe("descriptor-rooted filesystem", () => {
+	test("refuses a file or directory mode the destination filesystem cannot preserve", async () => {
+		const rootPath = temporaryRoot("descriptor-mode");
+		const probe = join(rootPath, "permission-probe");
+		writeFileSync(probe, "probe", { mode: 0o600 });
+		chmodSync(probe, 0o600);
+		const preservesMode = (lstatSync(probe).mode & 0o777) === 0o600;
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			const write = root.writeFileAtomic("nested/secret", new TextEncoder().encode("private"), { mode: 0o600 });
+			if (preservesMode) {
+				await write;
+				expect(lstatSync(join(rootPath, "nested", "secret")).mode & 0o777).toBe(0o600);
+			} else {
+				await expect(write).rejects.toThrow("mode not preserved");
+				expect(existsSync(join(rootPath, "nested", "secret"))).toBe(false);
+			}
+		} finally {
+			await root.close();
+		}
+	});
+
 	test("retains the admitted root when its pathname is replaced", async () => {
 		const parent = temporaryRoot("descriptor-root");
 		const rootPath = join(parent, "root");

@@ -8,6 +8,8 @@ import { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
 function repo(): string {
 	const root = mkdtempSync(join(tmpdir(), "git-transition-"));
 	spawnSync("git", ["init", "-q"], { cwd: root });
+	spawnSync("git", ["config", "user.name", "Signet Test"], { cwd: root });
+	spawnSync("git", ["config", "user.email", "test@example.invalid"], { cwd: root });
 	return root;
 }
 

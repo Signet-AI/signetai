@@ -155,6 +155,11 @@ async function closeQuietly(handle: FileHandle): Promise<void> {
 	} catch {}
 }
 
+async function requirePreservedMode(handle: FileHandle, mode: number): Promise<void> {
+	if (((await handle.stat()).mode & 0o7777) !== mode)
+		throw new UnsupportedDescriptorFilesystemError("descriptor mode not preserved by destination filesystem");
+}
+
 async function duplicateDarwinDescriptor(fd: number, flags: number): Promise<FileHandle> {
 	const api = loadDarwinApi();
 	if (!api) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
@@ -363,16 +368,24 @@ async function openDirectoryPath(root: FileHandle, pathParts: readonly string[],
 	try {
 		for (const component of pathParts) {
 			let next: FileHandle;
+			let created = false;
 			try {
 				next = await openChild(current, component, DIRECTORY_FLAGS);
 			} catch (error) {
 				if (!create || (error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
 				try {
 					await mkdirChild(current, component, 0o700);
+					created = true;
 				} catch (mkdirError) {
 					if ((mkdirError as NodeJS.ErrnoException).code !== "EEXIST") throw mkdirError;
 				}
 				next = await openChild(current, component, DIRECTORY_FLAGS);
+			}
+			try {
+				if (created) await requirePreservedMode(next, 0o700);
+			} catch (error) {
+				await next.close();
+				throw error;
 			}
 			await closeQuietly(current);
 			current = next;
@@ -532,6 +545,7 @@ export class DescriptorRoot {
 		const directory = await openDirectoryPath(this.root, parts(path), true);
 		try {
 			await directory.chmod(mode);
+			await requirePreservedMode(directory, mode);
 			await directory.sync();
 		} finally {
 			await directory.close();
@@ -570,6 +584,7 @@ export class DescriptorRoot {
 			try {
 				await file.writeFile(bytes);
 				await file.chmod(options.mode ?? 0o600);
+				await requirePreservedMode(file, options.mode ?? 0o600);
 				if (options.mtimeMs !== undefined) await file.utimes(options.mtimeMs / 1000, options.mtimeMs / 1000);
 				await file.sync();
 			} finally {
@@ -666,6 +681,7 @@ export class DescriptorRoot {
 						position += bytesRead;
 					}
 					await destinationFile.chmod(options.mode ?? stat.mode & 0o7777);
+					await requirePreservedMode(destinationFile, options.mode ?? stat.mode & 0o7777);
 					const mtimeMs = options.mtimeMs ?? stat.mtimeMs;
 					await destinationFile.utimes(mtimeMs / 1000, mtimeMs / 1000);
 					await destinationFile.sync();
