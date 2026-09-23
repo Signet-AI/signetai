@@ -45,6 +45,27 @@ test("preflight is read-only and inventory reports required bytes", async () => 
 	expect(leases).toBe(0);
 });
 
+test("migration refuses to cut over a database without semantic verification", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-unverified-db-"));
+	const state = mkdtempSync(join(tmpdir(), "migration-unverified-db-state-"));
+	const destination = `${source}-new`;
+	writeFileSync(join(source, "memories.db"), "database fixture");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => ({
+				sourceRoot: source,
+				sourcePath: "memories.db",
+				destinationPath: "data/signet.db",
+				bytes: 16,
+			}),
+		},
+		journalStateDir: state,
+	});
+	await expect(engine.run()).rejects.toThrow("semantic database verifier is not configured");
+});
+
 test("migration creates verified destination directories for nested files", async () => {
 	const root = mkdtempSync(join(tmpdir(), "migration-nested-"));
 	const state = mkdtempSync(join(tmpdir(), "migration-nested-state-"));
@@ -385,6 +406,7 @@ test("resume rejects a database snapshot whose source disappeared before cutover
 					bytes: 15,
 				};
 			},
+			verifySnapshot: async () => undefined,
 		},
 		mapDestinationPath: (path) => (path === "memories.db" ? undefined : path),
 		journalStateDir: join(root, "state"),

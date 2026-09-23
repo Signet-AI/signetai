@@ -13,6 +13,7 @@ import {
 	serializeWorkspaceLayout,
 } from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
+import { verifyMigrationDatabaseRows } from "../lib/migration-database-verification.js";
 import { createDatabase } from "../sqlite.js";
 import { readConfiguredWorkspacePath, resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
 import {
@@ -315,6 +316,9 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 							: relative(source, sourceLayout.database),
 					bytes: statSync(sourceLayout.database).size,
 				};
+			},
+			verifySnapshot: async (sourceDatabase, destinationDatabase) => {
+				verifyMigrationDatabaseRows(sourceDatabase, destinationDatabase);
 			},
 		},
 		...(rootGitMode === "shell"

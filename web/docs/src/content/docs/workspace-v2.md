@@ -51,7 +51,9 @@ signet migration cleanup --accept --source <v1-root> --destination <v2-root>
 - `resume` continues from the durable journal without duplicate evidence, Sources, or Dreaming consumption.
 - `status` shows phase, copied count, blockers, destination writes, and rollback eligibility.
 - `rollback` is available only before destination durable writes. After that, reconcile forward; the old directory is not a safe rollback target.
-- `cleanup` requires explicit acceptance after destination startup and semantic verification. It removes the migration journal, not necessarily legacy Markdown/manifests; retain or quarantine them while consumers exist.
+- `cleanup` requires explicit acceptance after destination startup and verification. It removes the migration journal, not necessarily legacy Markdown/manifests; retain or quarantine them while consumers exist.
+
+Before cutover, copied files are hash-checked and the SQLite snapshot is compared table by table against the stopped v1 database, including row counts and typed row values. This checks stored Source identities/scopes, transcript fields, and Dreaming/evidence links where those records exist. Unknown v1 `memory/` payloads are preserved under `data/legacy-memory/`; they are not silently imported or made searchable by the v2 daemon.
 
 Migration refuses ambiguous ownership, insufficient space, inconsistent snapshots, unsafe symlinks or special files, active writers that cannot drain, and unsupported custom layouts. It preserves Source IDs and generations rather than disconnecting and reconnecting Sources.
 

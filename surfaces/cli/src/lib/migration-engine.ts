@@ -71,6 +71,7 @@ export interface MigrationDeps {
 	writers: { drain(): Promise<{ owners: string[] }> };
 	database: {
 		prepare(): Promise<{ sourceRoot: string; sourcePath: string; destinationPath: string; bytes: number } | undefined>;
+		verifySnapshot?: (sourceDatabase: string, destinationDatabase: string) => Promise<void>;
 	};
 	layoutBytes?: (layout: Layout) => Uint8Array;
 	gitignoreBytes?: (existing: string) => Uint8Array;
@@ -248,6 +249,13 @@ export class MigrationEngine {
 					}
 					if ((await destination.root.hashFile(snapshot.destinationPath)) !== sourceHash)
 						throw new Error("database integrity verification failed");
+					if (!this.deps.database.verifySnapshot) throw new Error("semantic database verifier is not configured");
+					await this.deps.database.verifySnapshot(
+						join(snapshot.sourceRoot, snapshot.sourcePath),
+						join(layout.destination, snapshot.destinationPath),
+					);
+					if ((await destination.root.hashFile(snapshot.destinationPath)) !== sourceHash)
+						throw new Error("destination database changed during semantic verification");
 				} finally {
 					await snapshotSource.close();
 				}
