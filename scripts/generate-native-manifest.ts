@@ -33,6 +33,10 @@ function platformFromName(name: string): string | null {
 	if (
 		name === "native-manifest.json" ||
 		name.endsWith(".sha256") ||
+		// Rust daemon binaries are staged inside each platform npm package and
+		// are not wrapper-resolved manifest assets. Keep the manifest keyed to
+		// the CLI assets that match native-platforms.js.
+		name.startsWith("signet-daemon-") ||
 		// Connector-asset tarball is a component, not a binary. Skip it
 		// from the `assets` listing so the install-time platform lookup
 		// doesn't accidentally match `connectors-<version>.tar.gz`.

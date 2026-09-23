@@ -19,7 +19,14 @@ const targetByPlatform: Record<string, string> = {
 const target = targetByPlatform[platformKey];
 if (!target)
 	throw new Error(`Unsupported native target ${platformKey}; choose an explicit supported platform/architecture`);
-const binaryName = platformKey.startsWith("win32-") ? `signet-${platformKey}.exe` : `signet-${platformKey}`;
+const artifactKind = process.env.SIGNET_NATIVE_ARTIFACT_KIND?.trim() || "cli";
+if (artifactKind !== "cli" && artifactKind !== "daemon") {
+	throw new Error(`Unsupported native artifact kind ${artifactKind}; choose cli or daemon`);
+}
+const artifactPrefix = artifactKind === "daemon" ? "signet-daemon" : "signet";
+const binaryName = platformKey.startsWith("win32-")
+	? `${artifactPrefix}-${platformKey}.exe`
+	: `${artifactPrefix}-${platformKey}`;
 const outfile = join(outDir, binaryName);
 const manifest = join(root, "platform", "rust-daemon", "Cargo.toml");
 const daemonName = platformKey.startsWith("win32-") ? "signet-daemon.exe" : "signet-daemon";

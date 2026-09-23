@@ -254,24 +254,30 @@ jobs:
           - os: ubuntu-latest
             platform: linux-x64
             asset: signet-linux-x64
+            daemon_asset: signet-daemon-linux-x64
           - os: ubuntu-24.04-arm
             platform: linux-arm64
             asset: signet-linux-arm64
+            daemon_asset: signet-daemon-linux-arm64
           - os: macos-15-intel
             platform: darwin-x64
             asset: signet-darwin-x64
+            daemon_asset: signet-daemon-darwin-x64
           - os: macos-14
             platform: darwin-arm64
             asset: signet-darwin-arm64
+            daemon_asset: signet-daemon-darwin-arm64
           - os: windows-latest
             platform: win32-x64
             asset: signet-win32-x64.exe
+            daemon_asset: signet-daemon-win32-x64.exe
     runs-on: ${{ matrix.os }}
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
       RELEASE_VERSION: ${{ needs.release.outputs.version }}
       SIGNET_NATIVE_PLATFORM: ${{ matrix.platform }}
       RELEASE_ASSET: ${{ matrix.asset }}
+      DAEMON_RELEASE_ASSET: ${{ matrix.daemon_asset }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -289,15 +295,22 @@ jobs:
         run: bun run build:dashboard
 
       - name: Build native Signet binary
+        run: bun run build:native-bun
+
+      - name: Build native Rust daemon
+        env:
+          SIGNET_NATIVE_ARTIFACT_KIND: daemon
         run: bun run build:native-cli
 
-      - name: Smoke native binary
+      - name: Smoke native CLI binary
         shell: bash
         run: env -i HOME="$HOME" PATH=/usr/bin:/bin ./dist/native/"$RELEASE_ASSET" --help > /dev/null
 
-      - name: Verify native binary artifact
+      - name: Verify native artifacts
         shell: bash
-        run: test -s ./dist/native/"$RELEASE_ASSET"
+        run: |
+          test -s ./dist/native/"$RELEASE_ASSET"
+          test -s ./dist/native/"$DAEMON_RELEASE_ASSET"
 
       - name: Native release runtime smoke
         shell: bash
@@ -333,10 +346,12 @@ jobs:
         run: |
           STAGING="${RUNNER_TEMP}/upload"
           mkdir -p "${STAGING}"
-          cp "dist/native/${RELEASE_ASSET}" "${STAGING}/${RELEASE_ASSET}"
-          openssl dgst -sha256 -hex "${STAGING}/${RELEASE_ASSET}" | awk '{print $NF}' > "${STAGING}/${RELEASE_ASSET}.sha256"
-          gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}" --clobber
-          gh release upload "v${RELEASE_VERSION}" "${STAGING}/${RELEASE_ASSET}.sha256" --clobber
+          for asset in "$RELEASE_ASSET" "$DAEMON_RELEASE_ASSET"; do
+            cp "dist/native/${asset}" "${STAGING}/${asset}"
+            openssl dgst -sha256 -hex "${STAGING}/${asset}" | awk '{print $NF}' > "${STAGING}/${asset}.sha256"
+            gh release upload "v${RELEASE_VERSION}" "${STAGING}/${asset}" --clobber
+            gh release upload "v${RELEASE_VERSION}" "${STAGING}/${asset}.sha256" --clobber
+          done
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -392,14 +407,24 @@ jobs:
           expected=(
             signet-linux-x64
             signet-linux-x64.sha256
+            signet-daemon-linux-x64
+            signet-daemon-linux-x64.sha256
             signet-linux-arm64
             signet-linux-arm64.sha256
+            signet-daemon-linux-arm64
+            signet-daemon-linux-arm64.sha256
             signet-darwin-arm64
             signet-darwin-arm64.sha256
+            signet-daemon-darwin-arm64
+            signet-daemon-darwin-arm64.sha256
             signet-darwin-x64
             signet-darwin-x64.sha256
+            signet-daemon-darwin-x64
+            signet-daemon-darwin-x64.sha256
             signet-win32-x64.exe
             signet-win32-x64.exe.sha256
+            signet-daemon-win32-x64.exe
+            signet-daemon-win32-x64.exe.sha256
             signet-connectors-${NEW_VERSION}.tar.gz
             native-manifest.json
           )
@@ -421,10 +446,34 @@ jobs:
             local platform="$1"
             local asset="$2"
             local binary="$3"
+            local daemon_asset="signet-daemon-${asset#signet-}"
+            local daemon_binary
+            if [[ "$platform" == win32-* ]]; then
+              daemon_binary="signet-daemon.exe"
+            else
+              daemon_binary="signet-daemon"
+            fi
+            local os="${platform%-*}"
+            local cpu="${platform#*-}"
             local package_dir="dist/signetai-${platform}"
-            mkdir -p "${package_dir}/bin"
+            rm -rf "${package_dir}"
+            mkdir -p "${package_dir}/bin" "${package_dir}/runtime/rust-daemon/${platform}"
             cp "dist/native/${asset}" "${package_dir}/bin/${binary}"
-            chmod 755 "${package_dir}/bin/${binary}"
+            cp "dist/native/${daemon_asset}" "${package_dir}/runtime/rust-daemon/${platform}/${daemon_binary}"
+            chmod 755 "${package_dir}/bin/${binary}" "${package_dir}/runtime/rust-daemon/${platform}/${daemon_binary}"
+            cat > "${package_dir}/package.json" <<EOF
+          {
+            "name": "signetai-${platform}",
+            "version": "${NEW_VERSION}",
+            "description": "Signet native CLI and Rust daemon for ${platform}",
+            "license": "Apache-2.0",
+            "os": ["${os}"],
+            "cpu": ["${cpu}"],
+            "bin": {"signet": "bin/${binary}"},
+            "files": ["bin", "runtime"],
+            "publishConfig": {"access": "public"}
+          }
+          EOF
             npm pack "./${package_dir}" --pack-destination dist/native-packages
           }
 

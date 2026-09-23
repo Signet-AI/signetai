@@ -40,6 +40,7 @@ type NativePlatformPackage = {
 	readonly platform: string;
 	readonly packageName: string;
 	readonly binaryName: string;
+	readonly daemonName?: string;
 };
 
 type NativeManifestAsset = {
@@ -201,12 +202,13 @@ export function parseSupportedNativePlatforms(installerSource: string): string[]
 export function parseNativePlatformPackages(installerSource: string): NativePlatformPackage[] {
 	return Array.from(
 		installerSource.matchAll(
-			/^\s*"([^"]+)":\s*\{\s*[\s\S]*?binaryName:\s*"([^"]+)"\s*,\s*packageName:\s*"([^"]+)"\s*,?\s*\}/gm,
+			/^\s*"([^"]+)":\s*\{\s*[\s\S]*?binaryName:\s*"([^"]+)"\s*,\s*packageName:\s*"([^"]+)"\s*,?(?:\s*daemonName:\s*"([^"]+)"\s*,?)?\s*\}/gm,
 		),
-		([, platform, binaryName, packageName]) => ({
-			platform,
-			binaryName,
-			packageName,
+		([, platform, binaryName, packageName, daemonName]) => ({
+			platform: platform as string,
+			binaryName: binaryName as string,
+			packageName: packageName as string,
+			...(daemonName ? { daemonName } : {}),
 		}),
 	).sort((a, b) => a.platform.localeCompare(b.platform));
 }
@@ -308,6 +310,18 @@ export function collectNativeReleasePackageIssues(targets: readonly string[]): N
 			}
 			if (!statSync(binaryFile).isFile()) {
 				issues.push({ file, reason: `native package binary is not a file: ${binaryFile}` });
+			}
+
+			if (platformPackage.daemonName) {
+				const daemonFile = file.replace(
+					"dist/signetai/package.json",
+					`dist/${platformPackage.packageName}/runtime/rust-daemon/${platformPackage.platform}/${platformPackage.daemonName}`,
+				);
+				if (!existsSync(daemonFile)) {
+					issues.push({ file, reason: `missing native package Rust daemon ${daemonFile}` });
+				} else if (!statSync(daemonFile).isFile()) {
+					issues.push({ file, reason: `native package Rust daemon is not a file: ${daemonFile}` });
+				}
 			}
 		}
 	}

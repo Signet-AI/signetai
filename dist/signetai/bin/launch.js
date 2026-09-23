@@ -14,12 +14,14 @@ const binaryName = process.platform === "win32" ? "signet.exe" : "signet";
 const binaryPath = join(packageDir, "native", binaryName);
 const connectorAssetsPath = join(packageDir, "runtime", "connectors");
 const connectorMarkerPath = join(connectorAssetsPath, ".signet-connectors-version");
+let resolvedNativePackageDir = null;
 
 function resolveNativePackageBinaryPath() {
 	const platform = detectNativePlatform();
 	const nativePackage = nativePlatforms[platform];
 	const packageJsonPath = require.resolve(`${nativePackage.packageName}/package.json`);
-	return join(dirname(packageJsonPath), "bin", nativePackage.binaryName);
+	resolvedNativePackageDir = dirname(packageJsonPath);
+	return join(resolvedNativePackageDir, "bin", nativePackage.binaryName);
 }
 
 function resolveBinaryPath() {
@@ -108,8 +110,14 @@ export function launchSignet() {
 		// Preserve an operator override for source, container, or CI launches.
 		SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "package-manager",
 	};
-	if (!env.SIGNET_DIR && existsSync(join(packageDir, "runtime", "connectors"))) {
-		env.SIGNET_DIR = packageDir;
+	const runtimeDir = resolvedBinaryPath === binaryPath ? packageDir : resolvedNativePackageDir;
+	if (
+		!env.SIGNET_DIR &&
+		runtimeDir &&
+		(existsSync(join(runtimeDir, "runtime", "connectors")) ||
+			existsSync(join(runtimeDir, "runtime", "rust-daemon", `${process.platform}-${process.arch}`)))
+	) {
+		env.SIGNET_DIR = runtimeDir;
 	}
 
 	const args = process.argv.slice(2);

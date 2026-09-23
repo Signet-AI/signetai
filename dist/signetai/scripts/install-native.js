@@ -152,37 +152,52 @@ async function main() {
 
 	if (!existsSync(source)) {
 		console.error(`Signet native binary is missing from ${nativePackage.packageName}: ${source}`);
+		const nativePackageDir = dirname(dirname(source));
+		const daemonName = process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon";
+		const daemonSource = join(nativePackageDir, "runtime", "rust-daemon", `${process.platform}-${process.arch}`, daemonName);
+		if (existsSync(daemonSource)) {
+			console.error(`Rust daemon is present but cannot be linked because the native CLI is missing: ${daemonSource}`);
+		} else {
+			console.error(`Rust daemon is also missing from ${nativePackage.packageName}: ${daemonSource}`);
+		}
 		await installRuntimeAssets();
 		return;
 	}
 
+	const nativePackageDir = dirname(dirname(source));
+	const daemonName = process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon";
+	const daemonSource = join(nativePackageDir, "runtime", "rust-daemon", `${process.platform}-${process.arch}`, daemonName);
+	const daemonAvailable = existsSync(daemonSource);
+	if (!daemonAvailable) {
+		console.error(`Rust daemon is missing from ${nativePackage.packageName}: ${daemonSource}`);
+		console.error("The native package is incomplete; runtime operations will fail closed until it is reinstalled.");
+	}
+
 	const installDir = join(packageDir, "native");
+	const daemonInstallDir = join(packageDir, "runtime", "rust-daemon", `${process.platform}-${process.arch}`);
 	mkdirSync(installDir, { recursive: true });
+	if (daemonAvailable) mkdirSync(daemonInstallDir, { recursive: true });
 	const destination = join(installDir, process.platform === "win32" ? "signet.exe" : "signet");
+	const daemonDestination = join(daemonInstallDir, daemonName);
 	try {
 		placeBinary(source, destination);
+		if (daemonAvailable) placeBinary(daemonSource, daemonDestination);
 		if (process.platform !== "win32") {
 			await chmod(destination, 0o755);
+			if (daemonAvailable) await chmod(daemonDestination, 0o755);
 		}
-		console.log(`Linked Signet native binary for ${platform}`);
+		console.log(daemonAvailable ? `Linked Signet native binary and Rust daemon for ${platform}` : `Linked Signet native binary for ${platform}`);
 		if (process.platform === "darwin") {
 			console.log("macOS Gatekeeper tip: browser-downloaded unsigned binaries may require right-click Open or Open Anyway. Only bypass Gatekeeper for a trusted official Signet binary. See https://docs.signetai.sh/getting-started/install/");
 		}
 	} catch (err) {
 		rmSync(destination, { force: true });
+		if (daemonAvailable) rmSync(daemonDestination, { force: true });
 		throw err;
 	}
 
-	// Connector plugin payloads ship separately; the Rust daemon is included
-	// directly in the package's installed-like runtime tree.
-	const daemonPath = join(
-		packageDir,
-		"runtime",
-		"rust-daemon",
-		`${process.platform}-${process.arch}`,
-		process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon",
-	);
-	if (!existsSync(daemonPath)) throw new Error(`Rust daemon is missing from package runtime: ${daemonPath}`);
+	// Connector plugin payloads ship separately; the Rust daemon is linked
+	// from the matching optional native package into the wrapper runtime tree.
 	await installRuntimeAssets();
 }
 
