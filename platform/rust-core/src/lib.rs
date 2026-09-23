@@ -13,6 +13,8 @@ use thiserror::Error;
 use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime};
 use unicode_normalization::UnicodeNormalization;
 
+mod ontology_claim_trace;
+
 #[derive(Debug, Error)]
 pub enum CoreError {
     #[error("sqlite: {0}")]
@@ -25,9 +27,15 @@ pub enum CoreError {
     OwnerStopped,
     #[error("record not found")]
     NotFound,
+    #[error("not found: {0}")]
+    NotFoundMessage(String),
 
     #[error("invalid input: {0}")]
     InvalidInput(String),
+    #[error("forbidden: {0}")]
+    Forbidden(String),
+    #[error("conflict: {0}")]
+    Conflict(String),
     #[error("unsupported migration history: {0}")]
     UnsupportedMigrationHistory(String),
     #[error("remote owner error: {0}")]
@@ -1441,9 +1449,12 @@ fn execute_operation(
                 "UPDATE integrity_checkpoints SET project_id='' WHERE project_id IS NULL",
                 [],
             )?;
-            let schema_version: i64 = connection.query_row("PRAGMA schema_version", [], |r| r.get(0))?;
+            let schema_version: i64 =
+                connection.query_row("PRAGMA schema_version", [], |r| r.get(0))?;
             let old: Option<(String, i64, i64)> = connection.query_row("SELECT schema_hash,completed,schema_version FROM integrity_checkpoints WHERE agent_id=? AND workspace_id=? AND project_id=? AND visibility=?", params![agent_id, workspace_id, project_key, visibility], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
-            let reset = old.as_ref().is_none_or(|(hash, _, version)| hash != &schema_hash || *version != schema_version);
+            let reset = old.as_ref().is_none_or(|(hash, _, version)| {
+                hash != &schema_hash || *version != schema_version
+            });
             let tables = ["documents", "memories", "jobs"];
             let start = if reset {
                 0
@@ -2408,8 +2419,12 @@ fn execute_operation(
                  WHERE COALESCE(agent_id, 'default') = ? AND is_deleted = 0 AND superseded_by IS NULL AND content LIKE ? ESCAPE '\\'
                  ORDER BY rowid DESC LIMIT 1000",
             )?;
-            let escaped_query = query.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
-            let rows = statement.query_map(params![agent_id, format!("%{escaped_query}%")], memory_row)?;
+            let escaped_query = query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_");
+            let rows =
+                statement.query_map(params![agent_id, format!("%{escaped_query}%")], memory_row)?;
             Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
         }
         Operation::MemorySearch {
@@ -2417,7 +2432,13 @@ fn execute_operation(
             query,
             limit,
         } => execute_memory_search(connection, agent_id, query, limit),
-        Operation::SessionCandidatesRecord { agent_id, workspace_id, session_key, candidates, injected_ids } => {
+        Operation::SessionCandidatesRecord {
+            agent_id,
+            workspace_id,
+            session_key,
+            candidates,
+            injected_ids,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
             let session_key = required_id(&session_key)?;
@@ -2425,25 +2446,55 @@ fn execute_operation(
             let injected: std::collections::HashSet<String> = injected_ids.into_iter().collect();
             let tx = connection.transaction()?;
             for (rank, candidate) in candidates.into_iter().enumerate() {
-                let memory_id = candidate.get("id").and_then(Value::as_str).ok_or_else(|| CoreError::InvalidInput("candidate id is required".into()))?;
-                let source = candidate.get("source").and_then(Value::as_str).unwrap_or("effective");
-                let effective = candidate.get("effScore").or_else(|| candidate.get("effectiveScore")).and_then(Value::as_f64).unwrap_or(0.0);
-                let final_score = candidate.get("finalScore").and_then(Value::as_f64).unwrap_or(effective);
+                let memory_id = candidate
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| CoreError::InvalidInput("candidate id is required".into()))?;
+                let source = candidate
+                    .get("source")
+                    .and_then(Value::as_str)
+                    .unwrap_or("effective");
+                let effective = candidate
+                    .get("effScore")
+                    .or_else(|| candidate.get("effectiveScore"))
+                    .and_then(Value::as_f64)
+                    .unwrap_or(0.0);
+                let final_score = candidate
+                    .get("finalScore")
+                    .and_then(Value::as_f64)
+                    .unwrap_or(effective);
                 let relevance_score = candidate.get("relevanceScore").and_then(Value::as_f64);
-                let fts_hit_count = candidate.get("ftsHitCount").and_then(Value::as_i64).unwrap_or(0);
+                let fts_hit_count = candidate
+                    .get("ftsHitCount")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0);
                 let entity_slot = candidate.get("entitySlot").and_then(Value::as_i64);
                 let aspect_slot = candidate.get("aspectSlot").and_then(Value::as_i64);
-                let is_constraint = candidate.get("isConstraint").and_then(Value::as_bool).unwrap_or(false);
+                let is_constraint = candidate
+                    .get("isConstraint")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let structural_density = candidate.get("structuralDensity").and_then(Value::as_i64);
                 let predictor_score = candidate.get("predictorScore").and_then(Value::as_f64);
                 let agent_preference = candidate.get("agentPreference").and_then(Value::as_str);
-                let path_json = candidate.get("pathJson").and_then(|v| if v.is_null() { None } else { Some(v.to_string()) });
+                let path_json = candidate.get("pathJson").and_then(|v| {
+                    if v.is_null() {
+                        None
+                    } else {
+                        Some(v.to_string())
+                    }
+                });
                 tx.execute("INSERT OR IGNORE INTO session_memories (id,session_key,agent_id,workspace_id,memory_id,source,effective_score,predictor_score,final_score,rank,was_injected,relevance_score,fts_hit_count,entity_slot,aspect_slot,is_constraint,structural_density,agent_preference,created_at,path_json) VALUES (lower(hex(randomblob(16))),?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),?)", params![session_key, agent_id, workspace_id, memory_id, source, effective, predictor_score, final_score, rank as i64, if injected.contains(memory_id) {1} else {0}, relevance_score, fts_hit_count, entity_slot, aspect_slot, if is_constraint {1} else {0}, structural_density, agent_preference, path_json])?;
             }
             tx.commit()?;
             Ok(json!({"recorded": true, "count": count}))
         }
-        Operation::SessionCandidatesAssemble { agent_id, workspace_id, session_key, token_budget } => {
+        Operation::SessionCandidatesAssemble {
+            agent_id,
+            workspace_id,
+            session_key,
+            token_budget,
+        } => {
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
             let session_key = required_id(&session_key)?;
@@ -2454,10 +2505,48 @@ fn execute_operation(
             let mut stmt = connection.prepare("SELECT sm.memory_id,m.content,sm.source,sm.effective_score,sm.final_score,sm.rank,sm.was_injected,sm.path_json,sm.relevance_score,sm.fts_hit_count,sm.entity_slot,sm.aspect_slot,sm.is_constraint,sm.structural_density,sm.predictor_score,sm.agent_preference FROM session_memories sm JOIN memories m ON m.id=sm.memory_id AND COALESCE(m.agent_id,'default')=sm.agent_id WHERE sm.session_key=? AND sm.agent_id=? AND sm.workspace_id=? AND sm.was_injected=1 AND COALESCE(m.is_deleted,0)=0 AND COALESCE(m.deleted,0)=0 AND m.superseded_by IS NULL AND json_valid(COALESCE(m.metadata,'{}'))=1 AND COALESCE(json_extract(m.metadata,'$.supersededBy'),json_extract(m.metadata,'$.superseded_by')) IS NULL AND m.stale_at IS NULL AND COALESCE(json_extract(m.metadata,'$.staleAt'),json_extract(m.metadata,'$.stale_at')) IS NULL AND COALESCE(m.source_type,'') != 'aggregate-recall' ORDER BY sm.rank ASC")?;
             let mut used = 0i64;
             let mut items = Vec::new();
-            for row in stmt.query_map(params![session_key,agent_id,workspace_id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,Option<f64>>(3)?,r.get::<_,f64>(4)?,r.get::<_,i64>(5)?,r.get::<_,i64>(6)?,r.get::<_,Option<String>>(7)?,r.get::<_,Option<f64>>(8)?,r.get::<_,i64>(9)?,r.get::<_,Option<i64>>(10)?,r.get::<_,Option<i64>>(11)?,r.get::<_,i64>(12)?,r.get::<_,Option<i64>>(13)?,r.get::<_,Option<f64>>(14)?,r.get::<_,Option<String>>(15)?)))? {
-                let (id, content, source, effective, final_score, rank, was_injected, path_json, relevance, fts, entity, aspect, constraint, density, predictor, preference) = row?;
+            for row in stmt.query_map(params![session_key, agent_id, workspace_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Option<f64>>(3)?,
+                    r.get::<_, f64>(4)?,
+                    r.get::<_, i64>(5)?,
+                    r.get::<_, i64>(6)?,
+                    r.get::<_, Option<String>>(7)?,
+                    r.get::<_, Option<f64>>(8)?,
+                    r.get::<_, i64>(9)?,
+                    r.get::<_, Option<i64>>(10)?,
+                    r.get::<_, Option<i64>>(11)?,
+                    r.get::<_, i64>(12)?,
+                    r.get::<_, Option<i64>>(13)?,
+                    r.get::<_, Option<f64>>(14)?,
+                    r.get::<_, Option<String>>(15)?,
+                ))
+            })? {
+                let (
+                    id,
+                    content,
+                    source,
+                    effective,
+                    final_score,
+                    rank,
+                    was_injected,
+                    path_json,
+                    relevance,
+                    fts,
+                    entity,
+                    aspect,
+                    constraint,
+                    density,
+                    predictor,
+                    preference,
+                ) = row?;
                 let tokens = content.split_whitespace().count() as i64;
-                if used + tokens > budget { break; }
+                if used + tokens > budget {
+                    break;
+                }
                 used += tokens;
                 items.push(json!({"memoryId":id,"content":content,"source":source,"effectiveScore":effective,"finalScore":final_score,"rank":rank,"wasInjected":was_injected,"pathJson":path_json,"relevanceScore":relevance,"ftsHitCount":fts,"entitySlot":entity,"aspectSlot":aspect,"isConstraint":constraint,"structuralDensity":density,"predictorScore":predictor,"agentPreference":preference}));
             }
@@ -3118,6 +3207,9 @@ fn execute_operation(
                 })
                 .collect();
             Ok(json!({"items":items,"count":items.len()}))
+        }
+        Operation::OntologyClaimTrace { request } => {
+            ontology_claim_trace::execute(connection, request)
         }
         Operation::KnowledgeEntityCreate {
             agent_id,
@@ -4236,6 +4328,22 @@ pub struct SessionRecord {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OntologyClaimTraceRequest {
+    pub agent_id: String,
+    pub entity: String,
+    pub aspect: String,
+    pub group_key: String,
+    pub claim_key: String,
+    pub kind: Option<String>,
+    pub version_limit: Option<usize>,
+    pub premise_limit: Option<usize>,
+    pub reverse_limit: Option<usize>,
+    pub max_depth: Option<usize>,
+    pub session_key: Option<String>,
+    pub project: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     LegacyMarkdownImport {
         agent_id: String,
@@ -4611,6 +4719,9 @@ pub enum Operation {
         agent_id: String,
         workspace_id: String,
         limit: Option<usize>,
+    },
+    OntologyClaimTrace {
+        request: OntologyClaimTraceRequest,
     },
     KnowledgeEntityCreate {
         agent_id: String,
@@ -5068,12 +5179,13 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     let transaction = connection.transaction()?;
     const NATIVE_SCHEMA_COMPATIBILITY_VERSION: i64 = 155;
     if has_table(&transaction, "schema_migrations")? {
-        let max_schema_version: Option<i64> = transaction.query_row(
-            "SELECT MAX(version) FROM schema_migrations",
-            [],
-            |row| row.get(0),
-        )?;
-        if let Some(version) = max_schema_version.filter(|version| *version > NATIVE_SCHEMA_COMPATIBILITY_VERSION) {
+        let max_schema_version: Option<i64> =
+            transaction.query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })?;
+        if let Some(version) =
+            max_schema_version.filter(|version| *version > NATIVE_SCHEMA_COMPATIBILITY_VERSION)
+        {
             return Err(CoreError::UnsupportedMigrationHistory(format!(
                 "version {version} exceeds native compatibility version {NATIVE_SCHEMA_COMPATIBILITY_VERSION}"
             )));
@@ -5132,12 +5244,42 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
          SELECT 1;",
     )?;
     if has_table(&transaction, "transcript_capture_jobs")? {
-        ensure_column(&transaction, "transcript_capture_jobs", "source_identity", "TEXT")?;
-        ensure_column(&transaction, "transcript_capture_jobs", "source_sha256", "TEXT")?;
-        ensure_column(&transaction, "transcript_capture_jobs", "source_size_bytes", "INTEGER")?;
-        ensure_column(&transaction, "transcript_capture_jobs", "source_mtime_ms", "REAL")?;
-        ensure_column(&transaction, "transcript_capture_jobs", "source_format", "TEXT")?;
-        ensure_column(&transaction, "transcript_capture_jobs", "audit_path", "TEXT")?;
+        ensure_column(
+            &transaction,
+            "transcript_capture_jobs",
+            "source_identity",
+            "TEXT",
+        )?;
+        ensure_column(
+            &transaction,
+            "transcript_capture_jobs",
+            "source_sha256",
+            "TEXT",
+        )?;
+        ensure_column(
+            &transaction,
+            "transcript_capture_jobs",
+            "source_size_bytes",
+            "INTEGER",
+        )?;
+        ensure_column(
+            &transaction,
+            "transcript_capture_jobs",
+            "source_mtime_ms",
+            "REAL",
+        )?;
+        ensure_column(
+            &transaction,
+            "transcript_capture_jobs",
+            "source_format",
+            "TEXT",
+        )?;
+        ensure_column(
+            &transaction,
+            "transcript_capture_jobs",
+            "audit_path",
+            "TEXT",
+        )?;
         transaction.execute("CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_source_identity ON transcript_capture_jobs(agent_id, source_identity, status)", [])?;
         transaction.execute("CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_source_digest ON transcript_capture_jobs(agent_id, source_sha256)", [])?;
     }
@@ -5162,7 +5304,12 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
             ON source_sync_failures(agent_id, source_key, phase, item_path)
             WHERE resolved_at IS NULL;",
     )?;
-    ensure_column(&transaction, "memories", "is_deleted", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        &transaction,
+        "memories",
+        "is_deleted",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(&transaction, "memories", "superseded_by", "TEXT")?;
     ensure_column(&transaction, "memories", "stale_at", "TEXT")?;
     // Additive compatibility with the TypeScript baseline and semantic-memory migrations.
@@ -5200,15 +5347,35 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     ] {
         ensure_column(&transaction, "memories", column, definition)?;
     }
-    ensure_column(&transaction, "session_memories", "workspace_id", "TEXT NOT NULL DEFAULT 'default'")?;
+    ensure_column(
+        &transaction,
+        "session_memories",
+        "workspace_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
     ensure_column(&transaction, "session_memories", "path_json", "TEXT")?;
     ensure_column(&transaction, "session_memories", "predictor_score", "REAL")?;
     ensure_column(&transaction, "session_memories", "relevance_score", "REAL")?;
-    ensure_column(&transaction, "session_memories", "fts_hit_count", "INTEGER NOT NULL DEFAULT 0")?;
+    ensure_column(
+        &transaction,
+        "session_memories",
+        "fts_hit_count",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
     ensure_column(&transaction, "session_memories", "entity_slot", "INTEGER")?;
     ensure_column(&transaction, "session_memories", "aspect_slot", "INTEGER")?;
-    ensure_column(&transaction, "session_memories", "is_constraint", "INTEGER NOT NULL DEFAULT 0")?;
-    ensure_column(&transaction, "session_memories", "structural_density", "INTEGER")?;
+    ensure_column(
+        &transaction,
+        "session_memories",
+        "is_constraint",
+        "INTEGER NOT NULL DEFAULT 0",
+    )?;
+    ensure_column(
+        &transaction,
+        "session_memories",
+        "structural_density",
+        "INTEGER",
+    )?;
     ensure_column(&transaction, "session_memories", "agent_preference", "TEXT")?;
     transaction.execute("CREATE UNIQUE INDEX IF NOT EXISTS session_memories_scope_unique ON session_memories(session_key,agent_id,workspace_id,memory_id)", [])?;
     let _max_schema_version: Option<i64> =
@@ -5364,7 +5531,12 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     }
     for table in ["entities", "entity_aspects"] {
         ensure_column(&transaction, table, "proposal_id", "TEXT")?;
-        ensure_column(&transaction, table, "proposal_evidence", "TEXT NOT NULL DEFAULT '[]'")?;
+        ensure_column(
+            &transaction,
+            table,
+            "proposal_evidence",
+            "TEXT NOT NULL DEFAULT '[]'",
+        )?;
     }
     // Older workspaces may contain the pre-scoped entity_attributes shape.
     // Reconcile its columns before creating scoped ontology indexes.
@@ -5391,13 +5563,26 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     ] {
         ensure_column(&transaction, "entity_attributes", column, definition)?;
     }
-    ensure_column(&transaction, "entity_attributes", "version", "INTEGER NOT NULL DEFAULT 1")?;
+    ensure_column(
+        &transaction,
+        "entity_attributes",
+        "version",
+        "INTEGER NOT NULL DEFAULT 1",
+    )?;
     ensure_column(&transaction, "entity_attributes", "version_root_id", "TEXT")?;
-    ensure_column(&transaction, "entity_attributes", "previous_attribute_id", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "entity_attributes",
+        "previous_attribute_id",
+        "TEXT",
+    )?;
     ensure_column(&transaction, "entity_attributes", "archived_at", "TEXT")?;
     ensure_column(&transaction, "entity_attributes", "archived_by", "TEXT")?;
     ensure_column(&transaction, "entity_attributes", "archive_reason", "TEXT")?;
-    transaction.execute("UPDATE entity_attributes SET version_root_id=id WHERE version_root_id IS NULL", [])?;
+    transaction.execute(
+        "UPDATE entity_attributes SET version_root_id=id WHERE version_root_id IS NULL",
+        [],
+    )?;
     transaction.execute_batch(
         "CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(agent_id,status,updated_at DESC);
          CREATE INDEX IF NOT EXISTS idx_entity_aspects_status ON entity_aspects(agent_id,entity_id,status);
@@ -5536,7 +5721,11 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     // may retain an incomplete historical table; do not invent scope or time
     // values when its provenance columns are absent.
     if has_table(&transaction, "aggregate_evidence_sources")?
-        && has_column(&transaction, "aggregate_evidence_sources", "aggregate_memory_id")?
+        && has_column(
+            &transaction,
+            "aggregate_evidence_sources",
+            "aggregate_memory_id",
+        )?
         && has_column(&transaction, "aggregate_evidence_sources", "source_kind")?
         && has_column(&transaction, "aggregate_evidence_sources", "source_id")?
         && has_column(&transaction, "aggregate_evidence_sources", "source_path")?
@@ -5552,7 +5741,11 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         )?;
     }
     if has_table(&transaction, "aggregate_memory_sources")?
-        && has_column(&transaction, "aggregate_memory_sources", "aggregate_memory_id")?
+        && has_column(
+            &transaction,
+            "aggregate_memory_sources",
+            "aggregate_memory_id",
+        )?
         && has_column(&transaction, "aggregate_memory_sources", "source_memory_id")?
         && has_column(&transaction, "aggregate_memory_sources", "agent_id")?
         && has_column(&transaction, "aggregate_memory_sources", "created_at")?
@@ -6156,35 +6349,110 @@ mod owner_schema_reconciliation_tests {
 
         drop(Core::open(&path, 8).unwrap());
         let expected_memory_columns = [
-            "content_hash", "normalized_content", "type", "category", "confidence",
-            "importance", "source_id", "source_type", "source_path", "source_section", "tags",
-            "who", "why", "project", "scope", "updated_by", "last_accessed", "access_count",
-            "vector_clock", "version", "manual_override", "pinned", "visibility", "memory_kind",
-            "extraction_status", "deleted_at", "embedding_model", "extraction_model", "update_count",
+            "content_hash",
+            "normalized_content",
+            "type",
+            "category",
+            "confidence",
+            "importance",
+            "source_id",
+            "source_type",
+            "source_path",
+            "source_section",
+            "tags",
+            "who",
+            "why",
+            "project",
+            "scope",
+            "updated_by",
+            "last_accessed",
+            "access_count",
+            "vector_clock",
+            "version",
+            "manual_override",
+            "pinned",
+            "visibility",
+            "memory_kind",
+            "extraction_status",
+            "deleted_at",
+            "embedding_model",
+            "extraction_model",
+            "update_count",
             "evidence_meta",
         ];
         let expected_attribute_columns = [
-            "source_id", "source_kind", "source_path", "source_root", "proposal_id", "proposal_evidence",
+            "source_id",
+            "source_kind",
+            "source_path",
+            "source_root",
+            "proposal_id",
+            "proposal_evidence",
         ];
         let connection = Connection::open(&path).unwrap();
-        for (table, columns) in [("memories", &expected_memory_columns[..]), ("entity_attributes", &expected_attribute_columns[..])] {
-            let mut statement = connection.prepare(&format!("PRAGMA table_info({table})")).unwrap();
+        for (table, columns) in [
+            ("memories", &expected_memory_columns[..]),
+            ("entity_attributes", &expected_attribute_columns[..]),
+        ] {
+            let mut statement = connection
+                .prepare(&format!("PRAGMA table_info({table})"))
+                .unwrap();
             let names: Vec<String> = statement
                 .query_map([], |row| row.get(1))
                 .unwrap()
                 .map(Result::unwrap)
                 .collect();
             for column in columns {
-                assert!(names.iter().any(|name| name == column), "missing {table}.{column}");
+                assert!(
+                    names.iter().any(|name| name == column),
+                    "missing {table}.{column}"
+                );
             }
         }
-        assert_eq!(connection.query_row("SELECT content, metadata FROM memories WHERE id='m1'", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap(), ("legacy memory".into(), "{\"source\":\"old\"}".into()));
-        assert_eq!(connection.query_row("SELECT content, source_path FROM entity_attributes WHERE id='a1'", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap(), ("legacy claim".into(), "/old/path.md".into()));
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT content, metadata FROM memories WHERE id='m1'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                )
+                .unwrap(),
+            ("legacy memory".into(), "{\"source\":\"old\"}".into())
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT content, source_path FROM entity_attributes WHERE id='a1'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                )
+                .unwrap(),
+            ("legacy claim".into(), "/old/path.md".into())
+        );
         drop(connection);
 
         drop(Core::open(&path, 8).unwrap());
         let connection = Connection::open(&path).unwrap();
-        assert_eq!(connection.query_row("SELECT content, metadata FROM memories WHERE id='m1'", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap().0, "legacy memory");
-        assert_eq!(connection.query_row("SELECT content, source_path FROM entity_attributes WHERE id='a1'", [], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))).unwrap().1, "/old/path.md");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT content, metadata FROM memories WHERE id='m1'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                )
+                .unwrap()
+                .0,
+            "legacy memory"
+        );
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT content, source_path FROM entity_attributes WHERE id='a1'",
+                    [],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                )
+                .unwrap()
+                .1,
+            "/old/path.md"
+        );
     }
 }

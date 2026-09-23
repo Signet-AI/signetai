@@ -512,6 +512,14 @@ impl ApiError {
         }
     }
 
+    pub(crate) fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "conflict",
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn unauthorized(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::UNAUTHORIZED,
@@ -578,7 +586,10 @@ impl From<CoreError> for ApiError {
     fn from(error: CoreError) -> Self {
         match error {
             CoreError::NotFound => Self::not_found("record not found"),
+            CoreError::NotFoundMessage(message) => Self::not_found(message),
             CoreError::InvalidInput(message) => Self::bad_request(message),
+            CoreError::Forbidden(message) => Self::forbidden(message),
+            CoreError::Conflict(message) => Self::conflict(message),
             CoreError::QueueFull { capacity } => Self::unavailable(format!(
                 "database owner queue is saturated (capacity {capacity})"
             )),
@@ -602,6 +613,8 @@ fn remote_core_error(response: &Value) -> CoreError {
         .to_owned();
     match response.get("errorKind").and_then(Value::as_str) {
         Some("not_found") => CoreError::NotFound,
+        Some("forbidden") => CoreError::Forbidden(message),
+        Some("conflict") => CoreError::Conflict(message),
         Some("invalid_input") => CoreError::InvalidInput(message),
         Some("queue_full") => CoreError::QueueFull {
             capacity: response
@@ -619,8 +632,17 @@ fn remote_core_error(response: &Value) -> CoreError {
 fn wire_core_error(error: &CoreError) -> Value {
     match error {
         CoreError::NotFound => json!({"errorKind":"not_found","error":error.to_string()}),
+        CoreError::NotFoundMessage(message) => {
+            json!({"errorKind":"not_found","error":message})
+        }
         CoreError::InvalidInput(message) => {
             json!({"errorKind":"invalid_input","error":message})
+        }
+        CoreError::Forbidden(message) => {
+            json!({"errorKind":"forbidden","error":message})
+        }
+        CoreError::Conflict(message) => {
+            json!({"errorKind":"conflict","error":message})
         }
         CoreError::QueueFull { capacity } => {
             json!({"errorKind":"queue_full","capacity":capacity,"error":error.to_string()})
