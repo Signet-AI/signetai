@@ -16,7 +16,13 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
-import { persistWorkspaceLayout, resolveWorkspaceLayout } from "@signet/core";
+import {
+	persistWorkspaceLayout,
+	resolveWorkspaceLayout,
+	prepareRootGitArchive,
+	verifyRootGitArchive,
+	restoreVerifiedRootGitArchive,
+} from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
 import { createDatabase } from "../sqlite.js";
 import { resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
@@ -135,6 +141,12 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 			},
 		},
 		journalStateDir: state,
+		rootGit: {
+			prepare: (root, directory) => prepareRootGitArchive(root, directory),
+			verify: (archive) => verifyRootGitArchive(archive as Parameters<typeof verifyRootGitArchive>[0]).verified,
+			restore: (archive, target) =>
+				restoreVerifiedRootGitArchive(archive as Parameters<typeof restoreVerifiedRootGitArchive>[0], target),
+		},
 	};
 	return new MigrationEngine(deps);
 }

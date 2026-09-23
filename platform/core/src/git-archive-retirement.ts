@@ -187,9 +187,14 @@ export function restoreVerifiedRootGitArchive(archive: RootGitArchive, destinati
 	try {
 		const extracted = spawnSync("tar", ["-xf", archive.liveArchivePath, "-C", stage], { encoding: "utf8" });
 		if (extracted.status !== 0) throw new Error(extracted.stderr || "live archive restore failed");
-		for (const entry of readdirSync(join(stage, "worktree")))
-			copyTree(join(stage, "worktree", entry), join(target, entry));
-		copyTree(join(stage, "git"), join(target, ".git"));
+		for (const entry of readdirSync(join(stage, "worktree"))) {
+			const targetEntry = join(target, entry);
+			if (existsSync(targetEntry)) throw new Error(`restore target already exists: ${entry}`);
+			copyTree(join(stage, "worktree", entry), targetEntry);
+		}
+		const gitTarget = join(target, ".git");
+		if (existsSync(gitTarget)) throw new Error("restore target already contains .git");
+		copyTree(join(stage, "git"), gitTarget);
 	} finally {
 		rmSync(stage, { recursive: true, force: true });
 	}

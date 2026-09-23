@@ -80,6 +80,11 @@ export interface MigrationDeps {
 		verifyComponent?: (receipt: Receipt) => Promise<boolean>;
 	};
 	lease?: { acquire(): Promise<{ release(): Promise<void> }> };
+	rootGit?: {
+		prepare(source: string, archiveDirectory: string): unknown;
+		verify(archive: unknown): boolean;
+		restore(archive: unknown, destination: string): void;
+	};
 }
 
 export class MigrationEngine {
@@ -156,6 +161,12 @@ export class MigrationEngine {
 			mkdirSync(l.destination, { recursive: true, mode: 0o700 });
 			j.destinationIdentity = identity(l.destination);
 			saveJournal(this.journalPath, j);
+			if (this.deps.rootGit && !j.copied.includes(".git")) {
+				const archiveDirectory = join(this.deps.journalStateDir, `${j.workspaceId}-root-git`);
+				const archive = this.deps.rootGit.prepare(l.root, archiveDirectory);
+				if (!this.deps.rootGit.verify(archive)) throw new Error("root Git archive verification failed");
+				this.deps.rootGit.restore(archive, l.destination);
+			}
 			const done = new Set(j.copied);
 			for (const rel of plan.components) {
 				if (done.has(rel)) continue;

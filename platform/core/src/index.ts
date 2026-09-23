@@ -1,5 +1,12 @@
 export { Signet } from "./signet";
 export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
+export {
+	prepareRootGitArchive,
+	planRootGitArchive,
+	verifyRootGitArchive,
+	restoreVerifiedRootGitArchive,
+} from "./git-archive-retirement";
+export type { RootGitArchive, RootGitArchivePlan, RootGitArchiveVerification } from "./git-archive-retirement";
 export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
 export { aggregateProtection, PROTECTION_COMPONENT_IDS, validateRestoreReceipt } from "./protection";
 export type {
