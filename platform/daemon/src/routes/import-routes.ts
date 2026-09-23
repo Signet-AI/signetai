@@ -5,7 +5,7 @@ import type { Hono } from "hono";
 import { getPeerAddress } from "../auth/middleware";
 import { type DocumentImportStatus, importDocument } from "../document-import-service";
 import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_FILE_BYTES } from "../import-normalizer";
-import type { DurableImportAdmission } from "../import-inbox";
+import { ImportAdmissionConflictError, type DurableImportAdmission } from "../import-inbox";
 
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD;
@@ -137,6 +137,8 @@ export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 				statuses.push(result.status);
 				if (result.status.status === "imported") imported++;
 			} catch (error) {
+				if (error instanceof ImportAdmissionConflictError)
+					return c.json({ error: "Import admission key conflicts with different content" }, 409);
 				const message = error instanceof Error ? error.message : "durable import failed";
 				if (admission)
 					await deps.durableImportAdmission

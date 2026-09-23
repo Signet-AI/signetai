@@ -8,7 +8,7 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "../db-accessor";
 import { IMPORT_MAX_BATCH_BYTES } from "../import-normalizer";
 import { purgeSourceArtifactStructureInTx } from "../source-artifact-graph";
 import { registerImportRoutes } from "./import-routes";
-import type { DurableImportAdmission } from "../import-inbox";
+import { ImportAdmissionConflictError, type DurableImportAdmission } from "../import-inbox";
 
 function formWithFile(file: File, duplicateMode = "skip"): FormData {
 	const form = new FormData();
@@ -451,6 +451,36 @@ describe("import routes", () => {
 		expect(successResult).toBeGreaterThan(cleanupFailure);
 		expect(source.slice(cleanupFailure, successResult)).toContain("throw new Error");
 		expect(source.slice(cleanupFailure, successResult)).not.toContain("logger.warn");
+	});
+
+	it("maps an explicit idempotency conflict to 409 without beginning publication", async () => {
+		let began = false;
+		let completed = false;
+		const instance = new Hono();
+		registerImportRoutes(instance, {
+			durableImportAdmission: {
+				admit: async ({ idempotencyKey }) => {
+					throw new ImportAdmissionConflictError(idempotencyKey ?? "missing");
+				},
+				begin: async () => {
+					began = true;
+				},
+				complete: async () => {
+					completed = true;
+				},
+			},
+		});
+		const form = formWithFile(new File(["different"], "note.txt"));
+		const response = await instance.request("/api/sources/import", {
+			method: "POST",
+			headers: { "Idempotency-Key": "same-key" },
+			body: form,
+		});
+
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({ error: "Import admission key conflicts with different content" });
+		expect(began).toBe(false);
+		expect(completed).toBe(false);
 	});
 
 	it("rejects a batch that exceeds the file-count boundary", async () => {

@@ -121,13 +121,10 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	if (input.bytes.byteLength === 0) throw new Error("file is empty");
 	if (input.bytes.byteLength > max) throw new Error(`file exceeds ${max} bytes`);
 	const key = keyFor(input.bytes, input.fileName, input.idempotencyKey);
+	const inputDigest = digest(input.bytes);
 	const prior = await input.ledger.find(key);
 	if (prior) {
-		if (
-			prior.fileName !== input.fileName ||
-			prior.sha256 !== digest(input.bytes) ||
-			prior.size !== input.bytes.byteLength
-		)
+		if (prior.fileName !== input.fileName || prior.sha256 !== inputDigest || prior.size !== input.bytes.byteLength)
 			throw new ImportAdmissionConflictError(key);
 		return prior;
 	}
@@ -136,7 +133,7 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 	const tmp = `${target.original}.tmp-${process.pid}-${Date.now()}`;
 	await Bun.write(tmp, input.bytes);
 	const written = new Uint8Array(await Bun.file(tmp).arrayBuffer());
-	if (digest(written) !== digest(input.bytes)) {
+	if (digest(written) !== inputDigest) {
 		await unlink(tmp).catch(() => {});
 		throw new Error("original verification failed");
 	}
@@ -147,7 +144,7 @@ async function admitImportInGeneration(input: Admission): Promise<ImportRow> {
 		fileName: input.fileName,
 		status: "pending",
 		originalPath: target.original,
-		sha256: digest(input.bytes),
+		sha256: inputDigest,
 		size: input.bytes.byteLength,
 	};
 	try {
