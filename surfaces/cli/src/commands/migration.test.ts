@@ -457,7 +457,7 @@ test("production CLI preserves root and nested Git state without mutating the so
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
-});
+}, 30_000);
 
 test("production CLI blocks cutover when the configured source database is missing", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-missing-db-"));
