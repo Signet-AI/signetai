@@ -805,56 +805,56 @@
     },
     {
       "path": "db-owner-client.ts",
-      "line": 198,
+      "line": 196,
       "api": "readdirSync",
       "source": "entries = readdirSync(directory);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 206,
+      "line": 204,
       "api": "statSync",
       "source": "if (statSync(path).mtimeMs < cutoff) unlinkSync(path);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 206,
+      "line": 204,
       "api": "unlinkSync",
       "source": "if (statSync(path).mtimeMs < cutoff) unlinkSync(path);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 230,
+      "line": 228,
       "api": "existsSync",
       "source": "return [existsSync(bundled) ? bundled : join(directory, \"db-owner-worker.ts\")];",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 237,
+      "line": 235,
       "api": "readFileSync",
       "source": "const status = readFileSync(`/proc/${owner.pid}/status`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 279,
+      "line": 277,
       "api": "unlinkSync",
       "source": "unlinkSync(cancellationRegistryPath);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 285,
+      "line": 283,
       "api": "appendFileSync",
       "source": "appendFileSync(cancellationRegistryPath, `${jobId}\\n`);",
       "category": "hot-path"
     },
     {
       "path": "db-owner-client.ts",
-      "line": 845,
+      "line": 843,
       "api": "unlinkSync",
       "source": "unlinkSync(cancellationRegistryPath);",
       "category": "hot-path"
@@ -3183,35 +3183,35 @@
     },
     {
       "path": "restore-verification.ts",
-      "line": 206,
+      "line": 211,
       "api": "existsSync",
       "source": "!existsSync(input.snapshotRoot) ||",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 207,
+      "line": 212,
       "api": "lstatSync",
       "source": "lstatSync(input.snapshotRoot).isSymbolicLink() ||",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 208,
+      "line": 213,
       "api": "lstatSync",
       "source": "!lstatSync(input.snapshotRoot).isDirectory()",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 289,
+      "line": 294,
       "api": "rmSync",
       "source": "rmSync(root, { recursive: true, force: true });",
       "category": "hot-path"
     },
     {
       "path": "restore-verification.ts",
-      "line": 290,
+      "line": 295,
       "api": "existsSync",
       "source": "cleaned = childStopped && !existsSync(root);",
       "category": "hot-path"
@@ -3382,7 +3382,7 @@
     },
     {
       "path": "routes/git-sync.ts",
-      "line": 900,
+      "line": 898,
       "api": "existsSync",
       "source": "if (parent !== absolute && existsSync(parent)) {",
       "category": "hot-path"
@@ -5285,7 +5285,7 @@
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 655,
+      "line": 653,
       "api": "withReadDbAsync",
       "source": "const rows = await dbAccessor.withReadDbAsync(",
       "category": "hot-path",
@@ -5293,21 +5293,21 @@
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 682,
+      "line": 680,
       "api": "existsSync",
       "source": "return Boolean(row.has_session_source) || Boolean(path && (existsSync(path) || existsSync(join(basePath, path))));",
       "category": "hot-path"
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 682,
+      "line": 680,
       "api": "existsSync",
       "source": "return Boolean(row.has_session_source) || Boolean(path && (existsSync(path) || existsSync(join(basePath, path))));",
       "category": "hot-path"
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 831,
+      "line": 829,
       "api": "withReadDbAsync",
       "source": "return await dbAccessor.withReadDbAsync(",
       "category": "hot-path",
@@ -5315,7 +5315,7 @@
     },
     {
       "path": "transcript-capture-worker.ts",
-      "line": 868,
+      "line": 866,
       "api": "withReadDbAsync",
       "source": "return await dbAccessor.withReadDbAsync(",
       "category": "hot-path",
@@ -5792,56 +5792,56 @@
     },
     {
       "path": "workspace-writer-barrier.ts",
-      "line": 211,
+      "line": 206,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "workspace-writer-barrier.ts",
-      "line": 220,
+      "line": 215,
       "api": "writeFileSync",
       "source": "writeFileSync(fd, JSON.stringify(record), { encoding: \"utf8\" });",
       "category": "hot-path"
     },
     {
       "path": "workspace-writer-barrier.ts",
-      "line": 223,
+      "line": 218,
       "api": "statSync",
       "source": "const current = statSync(path);",
       "category": "hot-path"
     },
     {
       "path": "workspace-writer-barrier.ts",
-      "line": 225,
+      "line": 220,
       "api": "unlinkSync",
       "source": "if (current.dev === owned.dev && current.ino === owned.ino) unlinkSync(path);",
       "category": "hot-path"
     },
     {
       "path": "workspace-writer-barrier.ts",
-      "line": 234,
+      "line": 229,
       "api": "statSync",
       "source": "const current = statSync(this.path);",
       "category": "hot-path"
     },
     {
       "path": "workspace-writer-barrier.ts",
-      "line": 236,
+      "line": 231,
       "api": "unlinkSync",
       "source": "if (current.dev === owned.dev && current.ino === owned.ino) unlinkSync(this.path);",
       "category": "hot-path"
     },
     {
       "path": "workspace-writer-barrier.ts",
-      "line": 244,
+      "line": 239,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return undefined;",
       "category": "hot-path"
     },
     {
       "path": "workspace-writer-barrier.ts",
-      "line": 245,
+      "line": 240,
       "api": "readFileSync",
       "source": "return JSON.parse(readFileSync(path, \"utf8\"));",
       "category": "hot-path"
