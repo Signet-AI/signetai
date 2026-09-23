@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { requestMigrationDrain } from "./migration";
+import { requestMigrationDrain, verifyDestinationDaemon } from "./migration";
 import { resolveWorkspaceLayout } from "@signet/core";
 
 function runGit(root: string, ...args: string[]): string {
@@ -78,6 +78,34 @@ test("migration drain reports named daemon writer blockers", async () => {
 		},
 	);
 	expect(blockers).toEqual(["transcript-capture"]);
+});
+
+test("destination verification requires readiness rather than liveness", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-readiness-"));
+	const child = `
++const server = Bun.serve({
++  hostname: process.env.SIGNET_HOST,
++  port: Number(process.env.SIGNET_PORT),
++  fetch(request) {
++    const path = new URL(request.url).pathname;
++    if (path === "/health/live") return Response.json({ status: "alive" });
++    if (path === "/api/status") return Response.json({ status: "ok" });
++    if (path === "/health/ready") return Response.json({ status: "not_ready", reasons: ["blocked"] }, { status: 503 });
++    return new Response("missing", { status: 404 });
++  },
++});
++process.on("SIGTERM", () => { server.stop(true); process.exit(0); });
++`.replace(/^\+/gm, "");
+	try {
+		await expect(
+			verifyDestinationDaemon(root, {
+				launchCommand: [process.execPath, "-e", child],
+				readinessTimeoutMs: 500,
+			}),
+		).rejects.toThrow("blocked");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
 
 test("production CLI registers the workspace migration lifecycle", () => {

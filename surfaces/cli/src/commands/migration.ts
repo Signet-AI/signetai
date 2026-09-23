@@ -8,6 +8,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import {
 	inspectRootGit,
 	mergeSignetGitignoreEntries,
+	resolveDaemonRuntime,
 	resolveWorkspaceLayout,
 	serializeWorkspaceLayout,
 } from "@signet/core";
@@ -19,7 +20,13 @@ import {
 	resolveAgentsDir,
 	writeConfiguredWorkspacePath,
 } from "../lib/workspace.js";
-import { stopDaemon } from "../lib/runtime.js";
+import {
+	resolveDaemonJsNodePath,
+	resolveDaemonJsWasmPath,
+	resolveDaemonLaunchCommand,
+	resolveDaemonPathForRuntime,
+	stopDaemon,
+} from "../lib/runtime.js";
 
 export type MigrationCommandDeps = {
 	createEngine?: (options: { source?: string; destination?: string }) => MigrationEngine;
@@ -88,10 +95,26 @@ async function reserveLoopbackPort(): Promise<number> {
 	});
 }
 
-async function verifyDestinationDaemon(destination: string): Promise<void> {
+export async function verifyDestinationDaemon(
+	destination: string,
+	options: {
+		readonly launchCommand?: readonly string[];
+		readonly readinessTimeoutMs?: number;
+	} = {},
+): Promise<void> {
 	const port = await reserveLoopbackPort();
 	const entrypoint = process.argv[1];
-	const command = [process.execPath, ...(entrypoint && /\.(?:[cm]?[jt]s)$/.test(entrypoint) ? [entrypoint] : [])];
+	const runtime = resolveDaemonRuntime(undefined, process.env);
+	const daemonPath = resolveDaemonPathForRuntime(runtime, process.env);
+	const sourceCommand = [process.execPath, ...(entrypoint && /\.(?:[cm]?[jt]s)$/.test(entrypoint) ? [entrypoint] : [])];
+	const command =
+		options.launchCommand ??
+		(daemonPath ? resolveDaemonLaunchCommand(daemonPath, process.env, runtime) : sourceCommand);
+	if (!command[0]) throw new Error("destination daemon launch command is empty");
+	if (!options.launchCommand && !daemonPath && sourceCommand.length === 1)
+		throw new Error("destination daemon artifact is unavailable");
+	const nodePath = daemonPath ? resolveDaemonJsNodePath(daemonPath) : null;
+	const wasmPath = daemonPath ? resolveDaemonJsWasmPath(daemonPath) : null;
 	const child = spawn(command[0], command.slice(1), {
 		cwd: process.cwd(),
 		env: {
@@ -102,9 +125,12 @@ async function verifyDestinationDaemon(destination: string): Promise<void> {
 			SIGNET_HOST: "127.0.0.1",
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_DAEMON_ENTRYPOINT: "1",
+			SIGNET_DAEMON_RUNTIME: runtime,
 			SIGNET_EMBEDDING_WARM_NATIVE: "false",
 			SIGNET_TELEMETRY_OPTOUT: "1",
 			SIGNET_ANALYTICS_DISABLED: "1",
+			...(nodePath ? { NODE_PATH: nodePath } : {}),
+			...(wasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: wasmPath } : {}),
 		},
 		stdio: ["ignore", "pipe", "pipe"],
 	});
@@ -119,27 +145,31 @@ async function verifyDestinationDaemon(destination: string): Promise<void> {
 	let verificationError: unknown;
 	let stopped = false;
 	try {
-		const deadline = Date.now() + 20_000;
-		let live = false;
+		const deadline = Date.now() + (options.readinessTimeoutMs ?? 20_000);
+		let ready = false;
+		let readinessReasons: string[] = [];
 		while (Date.now() < deadline) {
 			if (child.exitCode !== null)
 				throw new Error(`destination daemon exited before readiness (${child.exitCode}): ${output.slice(-2000)}`);
 			try {
-				const response = await fetch(`http://127.0.0.1:${port}/health/live`, {
+				const response = await fetch(`http://127.0.0.1:${port}/health/ready`, {
 					signal: AbortSignal.timeout(500),
 				});
-				if (response.ok) {
-					live = true;
+				const body: unknown = await response.json();
+				if (response.ok && body && typeof body === "object" && Reflect.get(body, "status") === "ready") {
+					ready = true;
 					break;
 				}
+				const reasons = body && typeof body === "object" ? Reflect.get(body, "reasons") : undefined;
+				if (Array.isArray(reasons))
+					readinessReasons = reasons.filter((reason): reason is string => typeof reason === "string");
 			} catch {}
 			await sleep(50);
 		}
-		if (!live) throw new Error(`destination daemon readiness timed out: ${output.slice(-2000)}`);
-		const status = await fetch(`http://127.0.0.1:${port}/api/status`, { signal: AbortSignal.timeout(5_000) });
-		if (!status.ok) throw new Error(`destination daemon status verification failed (${status.status})`);
-		const body: unknown = await status.json();
-		if (!body || typeof body !== "object") throw new Error("destination daemon status returned malformed JSON");
+		if (!ready) {
+			const reasons = readinessReasons.length > 0 ? readinessReasons.join(", ") : output.slice(-2000);
+			throw new Error(`destination daemon readiness timed out: ${reasons}`);
+		}
 	} catch (error) {
 		verificationError = error;
 	} finally {
