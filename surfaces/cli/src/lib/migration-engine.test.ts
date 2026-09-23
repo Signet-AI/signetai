@@ -6,6 +6,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	renameSync,
+	rmSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -213,7 +214,7 @@ test("cutover-pending resume reacquires lease and drains writers", async () => {
 	expect(drained).toBe(2);
 });
 
-test("cutover verification failure restores the pointer preimage and resume completes", async () => {
+test("cutover verification failure keeps the published pointer and resume completes", async () => {
 	const root = mkdtempSync(join(tmpdir(), "migration-cutover-verify-"));
 	const source = join(root, "old");
 	const destination = join(root, "new");
@@ -229,9 +230,6 @@ test("cutover verification failure restores the pointer preimage and resume comp
 			cutover: async () => {
 				pointer = destination;
 			},
-			restore: async (preimage) => {
-				pointer = preimage ?? source;
-			},
 			verifyDestination: async () => {
 				if (failVerification) throw new Error("destination startup failed");
 			},
@@ -241,7 +239,7 @@ test("cutover verification failure restores the pointer preimage and resume comp
 		journalStateDir: join(root, "state"),
 	});
 	await expect(engine.run()).rejects.toThrow("destination startup failed");
-	expect(pointer).toBe(source);
+	expect(pointer).toBe(destination);
 	failVerification = false;
 	await expect(engine.resume()).resolves.toMatchObject({ status: "completed" });
 	expect(pointer).toBe(destination);
@@ -255,6 +253,9 @@ test("resume completes a cutover interrupted after pointer publication", async (
 	writeFileSync(join(source, "one.txt"), "one");
 	let pointer = source;
 	let crash = true;
+	let preparations = 0;
+	let copies = 0;
+	let verifications = 0;
 	const engine = new MigrationEngine({
 		resolver: {
 			resolve: () => ({ version: 1, root: source, destination }),
@@ -263,12 +264,22 @@ test("resume completes a cutover interrupted after pointer publication", async (
 			cutover: async () => {
 				pointer = destination;
 			},
-			verifyDestination: async () => {},
+			verifyDestination: async () => {
+				verifications++;
+			},
 		},
 		writers: { drain: async () => ({ owners: [] }) },
-		database: { prepare: async () => undefined },
+		database: {
+			prepare: async () => {
+				preparations++;
+				return undefined;
+			},
+		},
 		journalStateDir: join(root, "state"),
 		hooks: {
+			afterEntryCopy: async () => {
+				copies++;
+			},
 			afterPointerPublished: async () => {
 				if (crash) throw new Error("crash after pointer");
 			},
@@ -276,9 +287,15 @@ test("resume completes a cutover interrupted after pointer publication", async (
 	});
 	await expect(engine.run()).rejects.toThrow("crash after pointer");
 	expect(pointer).toBe(destination);
+	expect(preparations).toBe(1);
+	expect(copies).toBe(1);
+	expect(verifications).toBe(0);
 	crash = false;
 	await expect(engine.resume()).resolves.toMatchObject({ status: "completed" });
 	expect(pointer).toBe(destination);
+	expect(preparations).toBe(1);
+	expect(copies).toBe(1);
+	expect(verifications).toBe(1);
 });
 
 test("rollback removes only the owned partial destination and can be rerun", async () => {
@@ -322,6 +339,68 @@ test("cleanup writes a durable redacted receipt with verified components", async
 	expect(receipt.sourceVersion).toBe(1);
 	expect(receipt.destinationVersion).toBe(2);
 	expect(JSON.stringify(receipt)).not.toContain(root);
+});
+
+test("resume fails closed when a new source entry appears after the journaled inventory", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-source-inventory-"));
+	const journalStateDir = mkdtempSync(join(tmpdir(), "signet-migration-source-state-"));
+	writeFileSync(join(root, "one.txt"), "one");
+	const destination = join(`${root}-new`);
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir,
+		hooks: {
+			afterCopy: async () => {
+				throw new Error("interrupt before verification");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupt before verification");
+	writeFileSync(join(root, "late.txt"), "late");
+	await expect(engine.resume()).rejects.toThrow("source inventory changed");
+	expect(existsSync(join(destination, "late.txt"))).toBe(false);
+});
+
+test("resume rejects a database snapshot whose source disappeared before cutover", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-db-resume-"));
+	const source = join(root, "source");
+	const destination = join(root, "destination");
+	mkdirSync(source);
+	writeFileSync(join(source, "memories.db"), "stable database");
+	let preparation = 0;
+	let interrupted = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => {
+				preparation++;
+				if (!existsSync(join(source, "memories.db"))) return undefined;
+				return {
+					sourceRoot: source,
+					sourcePath: "memories.db",
+					destinationPath: "data/signet.db",
+					bytes: 15,
+				};
+			},
+		},
+		mapDestinationPath: (path) => (path === "memories.db" ? undefined : path),
+		journalStateDir: join(root, "state"),
+		gitignoreBytes: (existing) => {
+			if (!interrupted) {
+				interrupted = true;
+				throw new Error("interrupt after snapshot");
+			}
+			return new TextEncoder().encode(existing);
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupt after snapshot");
+	expect(existsSync(join(destination, "data", "signet.db"))).toBe(true);
+	rmSync(join(source, "memories.db"));
+	await expect(engine.resume()).rejects.toThrow("database snapshot source changed or disappeared");
+	expect(preparation).toBe(2);
 });
 
 test("resume reconciles a copied file left behind before its journal update", async () => {

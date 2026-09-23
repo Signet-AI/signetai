@@ -14,12 +14,7 @@ import {
 } from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
 import { createDatabase } from "../sqlite.js";
-import {
-	clearConfiguredWorkspacePath,
-	readConfiguredWorkspacePath,
-	resolveAgentsDir,
-	writeConfiguredWorkspacePath,
-} from "../lib/workspace.js";
+import { readConfiguredWorkspacePath, resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
 import {
 	resolveDaemonJsNodePath,
 	resolveDaemonJsWasmPath,
@@ -251,10 +246,6 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		cutover: async () => {
 			writeConfiguredWorkspacePath(destination);
 		},
-		restore: async (preimage: string | undefined) => {
-			if (preimage === undefined) clearConfiguredWorkspacePath();
-			else writeConfiguredWorkspacePath(preimage);
-		},
 		verifyDestination: async () => {
 			const layout = resolveWorkspaceLayout(destination);
 			if (layout.version !== 2) throw new Error("destination layout verification failed");
@@ -303,7 +294,7 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		},
 		database: {
 			prepare: async () => {
-				if (!existsSync(sourceLayout.database)) return undefined;
+				if (!existsSync(sourceLayout.database)) throw new Error("source database is missing");
 				const db = createDatabase(sourceLayout.database);
 				try {
 					const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy?: number } | undefined;

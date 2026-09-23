@@ -14,6 +14,13 @@ export type Fingerprint = {
 	hash: string;
 };
 export type Receipt = { component: string; phase: "accepted" | "verified"; fingerprint: Fingerprint };
+export type DatabaseSnapshot = {
+	sourceRoot: string;
+	sourcePath: string;
+	destinationPath: string;
+	bytes: number;
+	hash: string;
+};
 export type Journal = {
 	version: 1;
 	workspaceId: string;
@@ -30,6 +37,7 @@ export type Journal = {
 	fingerprints: Fingerprint[];
 	requiredBytes: number;
 	error?: string;
+	databaseSnapshot?: DatabaseSnapshot | null;
 	cutoverPreimage?: string | null;
 	pointerPublished?: boolean;
 	destinationVerified?: boolean;
@@ -58,7 +66,6 @@ export interface MigrationDeps {
 		capture?: () => Promise<string | undefined>;
 		current?: () => Promise<string | undefined>;
 		cutover?: (layout: Layout) => Promise<void>;
-		restore?: (preimage: string | undefined) => Promise<void>;
 		verifyDestination?: (layout: Layout) => Promise<void>;
 	};
 	writers: { drain(): Promise<{ owners: string[] }> };
@@ -128,11 +135,22 @@ export class MigrationEngine {
 			const sourceIdentity = await source.identity();
 			if (journal && journal.phase !== "completed" && journal.sourceIdentity !== sourceIdentity)
 				throw new Error("source identity mismatch");
-			if (journal?.phase === "completed")
+			if (journal?.phase === "completed") {
+				await this.verifyPublishedDestination(layout, journal);
 				return { status: "completed", destination: layout.destination, receipt: this.journalPath };
+			}
+			if (journal?.phase === "cutover-pending") {
+				const current = await this.deps.resolver.current?.();
+				if (journal.pointerPublished || current === layout.destination) {
+					await this.finishCutover(layout, journal, state);
+					return { status: "completed", destination: layout.destination, receipt: this.journalPath };
+				}
+			}
 			await this.drainWriters();
 			const plan = await inventory(layout, source, this.deps.journalStateDir, this.deps.mapDestinationPath);
 			if (journal) await verifyJournalSources(source, journal);
+			if (journal && !sameSourceInventory(plan.fingerprints ?? [], journal.fingerprints))
+				throw new Error("source inventory changed during migration");
 			journal ??= {
 				version: 1,
 				workspaceId: workspaceId(layout.root),
@@ -188,11 +206,37 @@ export class MigrationEngine {
 			await this.deps.hooks?.afterCopy?.();
 			journal.phase = "snapshotting";
 			await saveJournal(state, this.journalName, journal);
-			const snapshot = await this.deps.database.prepare();
-			if (snapshot) {
+			const prepared = await this.deps.database.prepare();
+			if (journal.databaseSnapshot === undefined) {
+				if (!prepared) {
+					journal.databaseSnapshot = null;
+				} else {
+					const sourceRoot = await openDescriptorRoot(prepared.sourceRoot);
+					try {
+						journal.databaseSnapshot = {
+							...prepared,
+							hash: await sourceRoot.hashFile(prepared.sourcePath),
+						};
+					} finally {
+						await sourceRoot.close();
+					}
+				}
+				await saveJournal(state, this.journalName, journal);
+			}
+			const snapshot = journal.databaseSnapshot;
+			if (snapshot && !prepared) throw new Error("database snapshot source changed or disappeared");
+			if (!snapshot && prepared) throw new Error("database source appeared during migration");
+			if (snapshot && prepared) {
+				if (
+					resolve(snapshot.sourceRoot) !== resolve(prepared.sourceRoot) ||
+					snapshot.sourcePath !== prepared.sourcePath ||
+					snapshot.destinationPath !== prepared.destinationPath
+				)
+					throw new Error("database snapshot source changed or disappeared");
 				const snapshotSource = await openDescriptorRoot(snapshot.sourceRoot);
 				try {
 					const sourceHash = await snapshotSource.hashFile(snapshot.sourcePath);
+					if (sourceHash !== snapshot.hash) throw new Error("database snapshot source changed or disappeared");
 					const existing = (await destination.root.inventory()).find(
 						(entry) => entry.path === snapshot.destinationPath,
 					);
@@ -250,7 +294,15 @@ export class MigrationEngine {
 		}
 	}
 
+	private async verifyPublishedDestination(layout: Layout, journal: Journal): Promise<void> {
+		if (!journal.pointerPublished) throw new Error("completed migration journal has no published pointer");
+		await assertPathIdentity(layout.destination, journal.destinationIdentity);
+		await this.deps.resolver.verifyDestination?.({ ...layout, version: 2 });
+		journal.destinationVerified = true;
+	}
+
 	private async finishCutover(layout: Layout, journal: Journal, state: DescriptorRoot): Promise<MigrationResult> {
+		await assertPathIdentity(layout.destination, journal.destinationIdentity);
 		if (journal.cutoverPreimage === undefined) journal.cutoverPreimage = (await this.deps.resolver.capture?.()) ?? null;
 		journal.phase = "cutover-pending";
 		journal.rollbackEligible = false;
@@ -272,11 +324,9 @@ export class MigrationEngine {
 			await this.deps.resolver.verifyDestination?.({ ...layout, version: 2 });
 			journal.destinationVerified = true;
 		} catch (error) {
-			if (!this.deps.resolver.restore) throw error;
-			await this.deps.resolver.restore(journal.cutoverPreimage ?? undefined);
-			journal.pointerPublished = false;
 			journal.destinationVerified = false;
-			journal.phase = "verified";
+			journal.phase = "cutover-pending";
+			journal.error = error instanceof Error ? error.message : String(error);
 			await saveJournal(state, this.journalName, journal);
 			throw error;
 		}
@@ -494,6 +544,21 @@ async function readFingerprint(root: DescriptorRoot, expected: Fingerprint): Pro
 	const entry = (await root.inventory()).find((candidate) => candidate.path === expected.path);
 	if (!entry || entry.type === "directory") throw new Error(`missing migration entry: ${expected.path}`);
 	return fingerprintEntry(root, entry);
+}
+
+function sameSourceInventory(actual: Fingerprint[], expected: Fingerprint[]): boolean {
+	if (actual.length !== expected.length) return false;
+	const byPath = new Map(expected.map((fingerprint) => [fingerprint.path, fingerprint]));
+	return actual.every((fingerprint) => {
+		const prior = byPath.get(fingerprint.path);
+		return (
+			prior !== undefined &&
+			prior.type === fingerprint.type &&
+			prior.hash === fingerprint.hash &&
+			prior.size === fingerprint.size &&
+			prior.mode === fingerprint.mode
+		);
+	});
 }
 
 async function verifyJournalSources(source: DescriptorRoot, journal: Journal): Promise<void> {

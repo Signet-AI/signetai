@@ -374,6 +374,42 @@ test("production CLI preserves root and nested Git state without mutating the so
 	}
 });
 
+test("production CLI blocks cutover when the configured source database is missing", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-missing-db-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const home = join(root, "home");
+	const config = join(root, "config");
+	const state = join(root, "state");
+	mkdirSync(source, { recursive: true });
+	mkdirSync(home, { recursive: true });
+	writeDaemonConfig(source);
+	try {
+		const cli = join(import.meta.dir, "..", "cli.ts");
+		const result = spawnSync(
+			process.execPath,
+			[cli, "migration", "run", "--source", source, "--destination", destination],
+			{
+				cwd: join(import.meta.dir, "..", "..", "..", ".."),
+				encoding: "utf8",
+				env: {
+					...process.env,
+					HOME: home,
+					XDG_CONFIG_HOME: config,
+					XDG_STATE_HOME: state,
+					SIGNET_PATH: source,
+					SIGNET_DAEMON_ENTRYPOINT: "0",
+				},
+			},
+		);
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("source database is missing");
+		expect(existsSync(join(destination, "workspace-layout.json"))).toBe(false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 30_000);
+
 test("production CLI resumes when a matching descriptor snapshot exists before its journal update", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-snapshot-resume-"));
 	const source = join(root, "v1");
