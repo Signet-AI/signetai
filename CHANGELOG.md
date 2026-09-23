@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-23
-- Bug fixes: stop vacuum work on shutdown; reject stale lifecycle records; harden lifecycle attribution; force fatal exit during flush; preserve fatal shutdowns; bound startup recovery and shutdown; pace startup recovery and shutdown; tolerate slow Dream attach lookups; clarify dream attach timeout errors; keep comment cleanup security-safe; parse production comments structurally; recognize shell comment operators; preserve scalar payload comments; refresh purge line tokens; preserve only active directives; normalize stripped comment whitespace.
+- Bug fixes: handle empty signing arrays; stop vacuum work on shutdown; reject stale lifecycle records; harden lifecycle attribution; force fatal exit during flush; preserve fatal shutdowns; bound startup recovery and shutdown; pace startup recovery and shutdown; tolerate slow Dream attach lookups; clarify dream attach timeout errors; keep comment cleanup security-safe; parse production comments structurally; recognize shell comment operators; preserve scalar payload comments; refresh purge line tokens; preserve only active directives; normalize stripped comment whitespace.
 
 ### 2026-09-22
 - Bug fixes: refresh route site tokens; prevent label collisions; bound semantic hover work; track provenance roots; expose ontology semantics; show source claims in graph; close failed daemon responses; harden all daemon requests; silence daemon failures in TUI; close prepared SQLite statements on Windows.
@@ -33,6 +33,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: warn against nightly production use.
 
 ## Release Ledger
+
+## [0.226.19] - 2026-09-23
+
+Release summary: 1 bug fix.
+Tag range: `v0.226.18..v0.226.19`.
+
+### Bug Fixes
+
+- **ci**: handle empty signing arrays
 
 ## [0.226.18] - 2026-09-23
 
