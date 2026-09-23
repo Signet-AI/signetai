@@ -1,4 +1,14 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	fstatSync,
+	mkdirSync,
+	openSync,
+	readFileSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { dirname } from "node:path";
 
 export type AdmissionState = "open" | "draining" | "closed";
@@ -209,18 +219,25 @@ export class MigrationLease {
 		try {
 			writeFileSync(fd, JSON.stringify(record), { encoding: "utf8" });
 		} catch (error) {
+			try {
+				const current = statSync(path);
+				const owned = fstatSync(fd);
+				if (current.dev === owned.dev && current.ino === owned.ino) unlinkSync(path);
+			} catch {}
 			closeSync(fd);
-			unlinkSync(path);
 			throw error;
 		}
 		return new MigrationLease(path, fd);
 	}
 	async release(): Promise<void> {
-		closeSync(this.fd);
 		try {
-			unlinkSync(this.path);
+			const current = statSync(this.path);
+			const owned = fstatSync(this.fd);
+			if (current.dev === owned.dev && current.ino === owned.ino) unlinkSync(this.path);
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		} finally {
+			closeSync(this.fd);
 		}
 	}
 	static inspect(path: string): (MigrationLeaseMetadata & { pid: number; acquiredAt: string }) | undefined {

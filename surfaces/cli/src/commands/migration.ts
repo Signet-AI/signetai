@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, statSync, unlinkSync } from "node:fs";
+import { closeSync, existsSync, fstatSync, mkdirSync, openSync, statSync, unlinkSync } from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -106,12 +106,15 @@ export async function verifyDestinationDaemon(
 	const entrypoint = process.argv[1];
 	const runtime = resolveDaemonRuntime(undefined, process.env);
 	const daemonPath = resolveDaemonPathForRuntime(runtime, process.env);
-	const sourceCommand = [process.execPath, ...(entrypoint && /\.(?:[cm]?[jt]s)$/.test(entrypoint) ? [entrypoint] : [])];
+	const sourceTestCommand =
+		process.env.SIGNET_DAEMON_ENTRYPOINT === "0" && entrypoint && /\.(?:[cm]?[jt]s)$/.test(entrypoint)
+			? [process.execPath, entrypoint]
+			: [];
 	const command =
 		options.launchCommand ??
-		(daemonPath ? resolveDaemonLaunchCommand(daemonPath, process.env, runtime) : sourceCommand);
+		(daemonPath ? resolveDaemonLaunchCommand(daemonPath, process.env, runtime) : sourceTestCommand);
 	if (!command[0]) throw new Error("destination daemon launch command is empty");
-	if (!options.launchCommand && !daemonPath && sourceCommand.length === 1)
+	if (!options.launchCommand && !daemonPath && sourceTestCommand.length === 0)
 		throw new Error("destination daemon artifact is unavailable");
 	const nodePath = daemonPath ? resolveDaemonJsNodePath(daemonPath) : null;
 	const wasmPath = daemonPath ? resolveDaemonJsWasmPath(daemonPath) : null;
@@ -133,6 +136,7 @@ export async function verifyDestinationDaemon(
 			...(wasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: wasmPath } : {}),
 		},
 		stdio: ["ignore", "pipe", "pipe"],
+		detached: true,
 	});
 	let output = "";
 	child.stdout?.on("data", (chunk: Buffer) => {
@@ -141,7 +145,7 @@ export async function verifyDestinationDaemon(
 	child.stderr?.on("data", (chunk: Buffer) => {
 		output += chunk.toString();
 	});
-	const exited = new Promise<void>((resolveExit) => child.once("close", () => resolveExit()));
+	const exited = new Promise<void>((resolveExit) => child.once("exit", () => resolveExit()));
 	let verificationError: unknown;
 	let stopped = false;
 	try {
@@ -173,10 +177,13 @@ export async function verifyDestinationDaemon(
 	} catch (error) {
 		verificationError = error;
 	} finally {
-		if (child.exitCode === null) child.kill("SIGTERM");
+		const childPid = child.pid;
+		if (child.exitCode === null && childPid !== undefined) process.kill(-childPid, "SIGTERM");
 		stopped = await Promise.race([exited.then(() => true), sleep(5_000).then(() => false)]);
 		if (!stopped) {
-			child.kill("SIGKILL");
+			try {
+				if (childPid !== undefined) process.kill(-childPid, "SIGKILL");
+			} catch {}
 			stopped = await Promise.race([exited.then(() => true), sleep(5_000).then(() => false)]);
 		}
 	}
@@ -251,13 +258,14 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		verifyDestination: async () => {
 			const layout = resolveWorkspaceLayout(destination);
 			if (layout.version !== 2) throw new Error("destination layout verification failed");
-			if (!existsSync(layout.database)) return;
-			const db = createDatabase(layout.database);
-			try {
-				const row = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
-				if (row?.quick_check !== "ok") throw new Error("destination database verification failed");
-			} finally {
-				db.close();
+			if (existsSync(layout.database)) {
+				const db = createDatabase(layout.database);
+				try {
+					const row = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+					if (row?.quick_check !== "ok") throw new Error("destination database verification failed");
+				} finally {
+					db.close();
+				}
 			}
 			await verifyDestinationDaemon(destination);
 		},
@@ -273,8 +281,13 @@ function defaultEngine(options: { source?: string; destination?: string }): Migr
 		}
 		return {
 			release: async () => {
-				closeSync(fd);
-				unlinkSync(leasePath);
+				try {
+					const current = statSync(leasePath);
+					const owned = fstatSync(fd);
+					if (current.dev === owned.dev && current.ino === owned.ino) unlinkSync(leasePath);
+				} finally {
+					closeSync(fd);
+				}
 			},
 		};
 	};

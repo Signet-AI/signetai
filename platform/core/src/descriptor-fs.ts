@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import { link, lstat, mkdir, open, opendir, readlink, rename, rmdir, symlink, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
@@ -557,7 +557,7 @@ export class DescriptorRoot {
 		const name = pathParts.pop();
 		if (!name) throw new UnsafeDescriptorPathError("descriptor path is empty");
 		const parent = await openDirectoryPath(this.root, pathParts, true);
-		const temporary = `.${name}.${process.pid}.${crypto.randomUUID()}.tmp`;
+		const temporary = `.${name}.${process.pid}.${randomUUID()}.tmp`;
 		let published = false;
 		try {
 			await options.beforeMutation?.();
@@ -637,7 +637,7 @@ export class DescriptorRoot {
 		if (!destinationName) throw new UnsafeDescriptorPathError("descriptor path is empty");
 		const sourceParent = await openDirectoryPath(source.root, sourceParts, false);
 		const destinationParent = await openDirectoryPath(this.root, destinationParts, true);
-		const temporary = `.${destinationName}.${process.pid}.${crypto.randomUUID()}.tmp`;
+		const temporary = `.${destinationName}.${process.pid}.${randomUUID()}.tmp`;
 		let published = false;
 		try {
 			const sourceFile = await openChild(sourceParent, sourceName, FILE_FLAGS);
