@@ -262,6 +262,7 @@ import {
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
+import { MigrationControlBoundary } from "./workspace-writer-barrier";
 import { createOwnerTranscriptImportStore } from "./transcript-import-store";
 import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
 import { admitImport } from "./import-inbox";
@@ -293,6 +294,7 @@ import {
 	scheduleAutoCommit,
 	startGitSyncTimer,
 	stopGitSyncTimer,
+	setGitMigrationControl,
 } from "./routes/git-sync.js";
 import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
 import { mountHealthRoutes } from "./routes/health.js";
@@ -491,6 +493,20 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 }
 
 export const app = new Hono();
+export const daemonMigrationControl = new MigrationControlBoundary(`daemon:${process.pid}:${randomUUID()}`);
+
+app.get("/api/workspace/migration-control", (c) =>
+	c.json({
+		generation: daemonMigrationControl.generation,
+		state: daemonMigrationControl.state,
+		blockers: daemonMigrationControl.blockers(),
+	}),
+);
+app.post("/api/workspace/migration-control/drain", async (c) => {
+	const started = daemonMigrationControl.beginDrain();
+	const result = await daemonMigrationControl.close();
+	return c.json({ ...started, ...result, blockers: daemonMigrationControl.blockers() });
+});
 app.use("*", async (c, next) => {
 	if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return await next();
 	if (!migrationIntegrityWritesBlocked) return await next();
@@ -515,6 +531,7 @@ const recallOwner = createDbOwnerClient(createRecallDbOwnerOptions(sqliteRuntime
 recallDbOwner = recallOwner;
 
 registerGlobalMiddleware(app);
+setGitMigrationControl(daemonMigrationControl);
 getOrCreateInferenceRouter(resolveDefaultBasePath());
 
 mountHealthRoutes(app);
@@ -1968,6 +1985,9 @@ async function cleanup() {
 	vacuumConversionHandle = null;
 	const vacuumConversionStop = vacuumConversionWorker?.stop() ?? Promise.resolve();
 	setShuttingDown(true);
+	daemonMigrationControl.beginDrain();
+	const writerDrain = await daemonMigrationControl.close();
+	if (!writerDrain.closed) logger.warn("daemon", "Workspace writer drain timed out", writerDrain);
 	bindAbort.abort();
 	await stopHarnessInstall();
 	await stopHarnessHealth();
