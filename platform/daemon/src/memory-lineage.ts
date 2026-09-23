@@ -61,6 +61,10 @@ const BASE32 = "abcdefghijklmnopqrstuvwxyz234567";
 const purgeSeen = new Set<string>();
 const artifactIndexCache = new Map<string, Map<string, string>>();
 const lastChangedManifestsByAgent = new Map<string, Set<string>>();
+
+function reindexStateKey(agentId?: string): string {
+	return `${getAgentsDir()}\0${agentId?.trim() || "*"}`;
+}
 const prevLedgerRefsByAgent = new Map<string, Set<string>>();
 
 export type ArtifactKind = "summary" | "transcript" | "compaction" | "manifest";
@@ -903,7 +907,7 @@ const reindexFlights = new Map<string, Promise<void>>();
 let reindexTail: Promise<void> = Promise.resolve();
 
 export async function reindexMemoryArtifacts(agentId?: string): Promise<void> {
-	const key = agentId?.trim() || "*";
+	const key = reindexStateKey(agentId);
 	const existing = reindexFlights.get(key);
 	if (existing) return existing;
 
@@ -929,7 +933,7 @@ async function doReindex(agentId?: string): Promise<void> {
 	const files = await listCanonicalFiles();
 	const t0 = performance.now();
 	const stopTimer = logger.time("resources", "reindexMemoryArtifacts");
-	const cacheKey = scope ?? "*";
+	const cacheKey = reindexStateKey(scope ?? undefined);
 	const cache = artifactIndexCache.get(cacheKey) ?? new Map<string, string>();
 	const changedPaths = new Set<string>();
 	interface PendingUpsert {
@@ -1025,17 +1029,20 @@ async function doReindex(agentId?: string): Promise<void> {
 		return;
 	}
 
+	const fileSet = new Set(files);
 	if (cache.size === 0) {
 		const dbPaths = await getDbAccessor().withReadDbAsync(
 			async (db) => {
 				const rows = scope
 					? (db
-							.prepare("SELECT source_path, source_mtime_ms FROM memory_artifacts WHERE agent_id = ?")
+							.prepare("SELECT agent_id, source_path, source_mtime_ms FROM memory_artifacts WHERE agent_id = ?")
 							.all(scope) as Array<{
+							agent_id: string;
 							source_path: string;
 							source_mtime_ms?: number | null;
 						}>)
-					: (db.prepare("SELECT source_path, source_mtime_ms FROM memory_artifacts").all() as Array<{
+					: (db.prepare("SELECT agent_id, source_path, source_mtime_ms FROM memory_artifacts").all() as Array<{
+							agent_id: string;
 							source_path: string;
 							source_mtime_ms?: number | null;
 						}>);
@@ -1045,9 +1052,34 @@ async function doReindex(agentId?: string): Promise<void> {
 		);
 		if (dbPaths.length > 0) {
 			const root = getAgentsDir();
+			const occupied = new Set(dbPaths.map((row) => `${row.agent_id}\0${row.source_path}`));
+			const relocated = dbPaths.flatMap((row) => {
+				const target = storedArtifactRelativePath(row.source_path);
+				if (target === row.source_path) return [];
+				if (occupied.has(`${row.agent_id}\0${target}`)) {
+					throw new Error(`Migrated artifact path already indexed: ${target}`);
+				}
+				if (!fileSet.has(join(root, target))) {
+					throw new Error(`Migrated artifact is missing: ${target}`);
+				}
+				return [
+					ownerStatement("UPDATE memory_artifacts SET source_path = ? WHERE agent_id = ? AND source_path = ?", [
+						target,
+						row.agent_id,
+						row.source_path,
+					]),
+				];
+			});
+			for (let offset = 0; offset < relocated.length; offset += REINDEX_BATCH_SIZE) {
+				await dbOwnerBatch(relocated.slice(offset, offset + REINDEX_BATCH_SIZE), {
+					operation: "sources.reindex.migrated-artifact-paths",
+					lane: "write",
+					workloadClass: "maintenance",
+					estimatedWorkUnits: Math.min(REINDEX_BATCH_SIZE, relocated.length - offset),
+				});
+			}
 			for (const row of dbPaths) {
-				const absPath = join(root, row.source_path);
-				cache.set(absPath, "0");
+				cache.set(join(root, storedArtifactRelativePath(row.source_path)), "0");
 			}
 			for (const path of files) {
 				if (!cache.has(path)) cache.set(path, "0");
@@ -1086,7 +1118,6 @@ async function doReindex(agentId?: string): Promise<void> {
 		);
 	}
 
-	const fileSet = new Set(files);
 	const baseYielder = yieldEvery(REINDEX_BATCH_SIZE);
 	let itemsSinceYield = 0;
 	const yielder = async (): Promise<void> => {
@@ -2170,8 +2201,8 @@ export async function renderMemoryProjection(agentId = "default"): Promise<{
 	indexBlock: string;
 }> {
 	await reindexMemoryArtifacts(agentId);
-	const changedManifests = lastChangedManifestsByAgent.get(agentId);
-	lastChangedManifestsByAgent.delete(agentId);
+	const changedManifests = lastChangedManifestsByAgent.get(reindexStateKey(agentId));
+	lastChangedManifestsByAgent.delete(reindexStateKey(agentId));
 	const memories = await readTopMemories(agentId);
 	const threadHeads = await readThreadHeads(agentId);
 	const nodes = await readTemporalNodes(agentId);

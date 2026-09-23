@@ -33,6 +33,8 @@ Root Git history, remotes, branches, index, and working state are not rewritten 
 
 JSONL is the canonical transcript file representation. Normal capture does not create Markdown transcript copies. Markdown is available only through explicit export or view generation. Signet retains the indexed `session_transcripts` representation while episodic evidence, Dreaming, recall, or recovery use it. A mismatch is an explicit diagnostic state; richer evidence is never silently normalized away.
 
+On historical backfill, completed JSONL turns are the authority for the same session. Signet compares ordered roles and content from legacy Markdown and DB rows, retains divergent sources unchanged, logs the disagreement, and withholds the completion marker until reconciled. Identical turns do not duplicate the JSONL record. Live-only turns can still be replaced by a fuller completed snapshot; later disagreements do not silently complete the backfill. Malformed JSONL rows and non-increasing session sequence numbers encountered during comparison also prevent the marker from being written until repaired.
+
 ## Migrate v1 to v2
 
 Migration is stopped, drained, copy-and-verify, journaled, and resumable:

@@ -38,6 +38,8 @@ Transcript JSONL uses the dedicated transcript importer and canonical transcript
 
 JSONL is the canonical transcript file representation. Normal capture does not generate ordinary Markdown transcript copies. Markdown is explicit/on-demand export or view output. The indexed `session_transcripts` representation remains while episodic evidence, Dreaming, recall, recovery, or other consumers require it; it is not silently discarded. Reconciliation must state which representation is authoritative, preserve fidelity and provenance, and surface disagreement rather than normalize away richer evidence.
 
+During historical backfill, an existing completed JSONL session remains authoritative for its own ordered roles and content. Markdown and DB turns are compared against it; divergent source artifacts and rows are retained unchanged, a diagnostic identifies the source, and the backfill completion marker is withheld for reconciliation. Matching representations do not duplicate JSONL turns. Live-only JSONL turns may still be promoted to a fuller completed Markdown or DB snapshot; a later divergent source cannot silently settle the marker. Malformed JSONL records or non-increasing session sequence numbers encountered during comparison also withhold the marker until the canonical file is repaired.
+
 ## Migration lifecycle
 
 Migration is stopped, drained, copy-and-verify, resumable, and journaled outside both workspaces. The journal records component progress, fingerprints, receipts, cutover, rollback eligibility, cleanup acceptance, and redacted errors.

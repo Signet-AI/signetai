@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, type Hash } from "node:crypto";
 import {
 	appendFileSync,
 	closeSync,
@@ -42,11 +42,24 @@ export interface CanonicalTranscriptRecord {
 export interface TranscriptSessionKeyClassification {
 	readonly canonicalKeys: Set<string>;
 	readonly liveOnlyKeys: Set<string>;
+	readonly completedDigests: Map<string, string>;
 }
 
 export interface TranscriptTurn {
 	readonly role: TranscriptRole;
 	readonly content: string;
+}
+
+function updateTranscriptDigest(hash: Hash, turn: TranscriptTurn): void {
+	const role = Buffer.from(turn.role, "utf8");
+	const content = Buffer.from(turn.content, "utf8");
+	hash.update(`${role.length}:`).update(role).update(`${content.length}:`).update(content);
+}
+
+export function digestTranscriptTurns(turns: ReadonlyArray<TranscriptTurn>): string {
+	const hash = createHash("sha256");
+	for (const turn of turns) updateTranscriptDigest(hash, turn);
+	return hash.digest("hex");
 }
 
 export interface TranscriptIdentity {
@@ -366,40 +379,67 @@ export async function readCanonicalTranscriptSessionKeys(input: {
 	const path = canonicalTranscriptPath(input.basePath, input.harness);
 	const canonicalKeys = new Set<string>();
 	const liveOnlyKeys = new Set<string>();
-	if (!existsSync(path)) return { canonicalKeys, liveOnlyKeys };
+	const completedHashes = new Map<string, Hash>();
+	const lastSeqByKey = new Map<string, number>();
+	if (!existsSync(path)) return { canonicalKeys, liveOnlyKeys, completedDigests: new Map() };
 	const agentId = input.agentId?.trim() || null;
+	const stream = createReadStream(path, { encoding: "utf8" });
 	const lines = createInterface({
-		input: createReadStream(path, { encoding: "utf8" }),
+		input: stream,
 		crlfDelay: Number.POSITIVE_INFINITY,
 	});
 	try {
 		for await (const line of lines) {
 			const trimmed = line.trim();
 			if (trimmed.length === 0) continue;
+			let parsed: Partial<CanonicalTranscriptRecord>;
 			try {
-				const parsed = JSON.parse(trimmed) as Partial<CanonicalTranscriptRecord>;
-				if (parsed.schema !== "signet.transcript.v1" || typeof parsed.content !== "string") continue;
-				const record = parsed as CanonicalTranscriptRecord;
-				if (agentId !== null && record.agent_id !== agentId) continue;
-				const key = recordSeqCacheKey(record);
-				if (record.source_format !== "live") {
-					canonicalKeys.add(key);
-					liveOnlyKeys.delete(key);
-					continue;
-				}
-				if (!canonicalKeys.has(key)) liveOnlyKeys.add(key);
-			} catch {}
+				parsed = JSON.parse(trimmed) as Partial<CanonicalTranscriptRecord>;
+			} catch {
+				throw new Error("Invalid canonical transcript JSONL record");
+			}
+			if (
+				parsed?.schema !== "signet.transcript.v1" ||
+				typeof parsed.content !== "string" ||
+				(parsed.role !== "user" && parsed.role !== "assistant" && parsed.role !== "unknown") ||
+				typeof parsed.agent_id !== "string" ||
+				typeof parsed.harness !== "string"
+			) {
+				throw new Error("Invalid canonical transcript JSONL record");
+			}
+			const record = parsed as CanonicalTranscriptRecord;
+			const key = recordSeqCacheKey(record);
+			if (!Number.isSafeInteger(record.seq) || record.seq <= (lastSeqByKey.get(key) ?? 0)) {
+				throw new Error("Invalid canonical transcript JSONL sequence");
+			}
+			lastSeqByKey.set(key, record.seq);
+			if (agentId !== null && record.agent_id !== agentId) continue;
+			if (record.source_format !== "live") {
+				canonicalKeys.add(key);
+				liveOnlyKeys.delete(key);
+				const hash = completedHashes.get(key) ?? createHash("sha256");
+				updateTranscriptDigest(hash, record);
+				completedHashes.set(key, hash);
+				continue;
+			}
+			if (!canonicalKeys.has(key)) liveOnlyKeys.add(key);
 		}
 	} finally {
 		lines.close();
+		stream.destroy();
 	}
-	return { canonicalKeys, liveOnlyKeys };
+	return {
+		canonicalKeys,
+		liveOnlyKeys,
+		completedDigests: new Map([...completedHashes].map(([key, hash]) => [key, hash.digest("hex")])),
+	};
 }
 
 async function hasSessionRecord(path: string, input: TranscriptIdentity): Promise<boolean> {
 	if (!existsSync(path)) return false;
+	const stream = createReadStream(path, { encoding: "utf8" });
 	const lines = createInterface({
-		input: createReadStream(path, { encoding: "utf8" }),
+		input: stream,
 		crlfDelay: Number.POSITIVE_INFINITY,
 	});
 	try {
@@ -419,6 +459,7 @@ async function hasSessionRecord(path: string, input: TranscriptIdentity): Promis
 		}
 	} finally {
 		lines.close();
+		stream.destroy();
 	}
 	return false;
 }

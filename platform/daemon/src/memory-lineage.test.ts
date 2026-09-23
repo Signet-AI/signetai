@@ -510,9 +510,9 @@ describe("memory-lineage", () => {
 			expect(after.count).toBe(baseline.count + 2);
 		});
 
-		it("scoped reindex does not delete rows for another agent with the same source_path", async () => {
+		it("scoped reindex keeps another agent's row at a shared source_path", async () => {
 			const stamp = new Date(Date.now() - 60_000).toISOString();
-			await writeSummaryArtifact({
+			const written = await writeSummaryArtifact({
 				agentId: "other-agent",
 				sessionId: "other-agent-session",
 				sessionKey: "other-agent-session",
@@ -524,9 +524,29 @@ describe("memory-lineage", () => {
 				summary:
 					"Resolved projection pressure for other-agent-session in platform/daemon/src/memory-lineage.ts and verified scoped reindex deletes stayed isolated.",
 			});
+			await getDbAccessor().withWriteTxAsync((db) =>
+				db
+					.prepare(
+						`INSERT INTO memory_artifacts
+						 (agent_id, source_path, source_sha256, source_kind, session_id, session_key,
+						  session_token, captured_at, content, updated_at)
+						 SELECT ?, source_path, source_sha256, source_kind, session_id, session_key,
+						        session_token, captured_at, content, updated_at
+						 FROM memory_artifacts WHERE agent_id = ? AND source_path = ?`,
+					)
+					.run("default", "other-agent", written.summaryPath),
+			);
+			const sharedRows = () =>
+				getDbAccessor().withReadDbAsync(
+					async (db) =>
+						db
+							.prepare("SELECT agent_id FROM memory_artifacts WHERE source_path = ? ORDER BY agent_id")
+							.all(written.summaryPath) as Array<{ agent_id: string }>,
+				);
+			expect((await sharedRows()).map((row) => row.agent_id)).toEqual(["default", "other-agent"]);
 
-			const before = getDbAccessor().withReadDb(
-				(db) =>
+			const before = await getDbAccessor().withReadDbAsync(
+				async (db) =>
 					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("other-agent") as {
 						count: number;
 					},
@@ -535,13 +555,14 @@ describe("memory-lineage", () => {
 
 			await reindexMemoryArtifacts("default");
 
-			const after = getDbAccessor().withReadDb(
-				(db) =>
+			const after = await getDbAccessor().withReadDbAsync(
+				async (db) =>
 					db.prepare("SELECT COUNT(*) AS count FROM memory_artifacts WHERE agent_id = ?").get("other-agent") as {
 						count: number;
 					},
 			);
 			expect(after.count).toBe(before.count);
+			expect((await sharedRows()).map((row) => row.agent_id)).toEqual(["other-agent"]);
 		});
 
 		it("deleted file → removed from DB", async () => {

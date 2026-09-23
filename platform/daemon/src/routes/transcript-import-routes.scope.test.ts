@@ -14,8 +14,10 @@ function claims(agent: string): TokenClaims {
 }
 
 describe("transcript import agent scope", () => {
-	it("does not let unauthenticated local requests select an agent", () => {
-		expect(resolveTranscriptImportAgent(null, "local", "agent-b", "default")).toBe("default");
+	it("rejects a conflicting unauthenticated local agent while accepting the daemon agent", () => {
+		expect(resolveTranscriptImportAgent(null, "local", "agent-b", "default")).toBeNull();
+		expect(resolveTranscriptImportAgent(null, "local", "default", "default")).toBe("default");
+		expect(resolveTranscriptImportAgent(null, "local", undefined, "default")).toBe("default");
 	});
 
 	it("accepts the authenticated agent and rejects conflicting aliases", () => {

@@ -49,6 +49,13 @@ export function resolveTranscriptImportAgent(
 	requestedAgentId: string | undefined,
 	fallbackAgentId: string,
 ): string | null {
+	if (
+		claims === null &&
+		authMode === "local" &&
+		requestedAgentId?.trim() &&
+		requestedAgentId.trim() !== fallbackAgentId
+	)
+		return null;
 	const scoped = resolveScopedAgent(
 		claims,
 		authMode,
