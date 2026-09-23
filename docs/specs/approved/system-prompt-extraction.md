@@ -192,7 +192,7 @@ Could be done as aliases first, deprecating the old names.
 | `integrations/openclaw/connector/src/index.ts` | Same as above |
 | `integrations/codex/connector/src/index.ts` | Same as above |
 | `integrations/oh-my-pi/connector/src/index.ts` | Apply the same legacy block cleanup during install |
-| `platform/daemon-rs/crates/signet-daemon/src/routes/hooks.rs` | Mirror session-start system prompt injection to keep shadow parity |
+| `platform/rust-daemon/src/routes/hooks.rs` | Keep session-start system prompt injection in the fresh Rust daemon |
 
 
 ## Implementation Decisions (This Phase)

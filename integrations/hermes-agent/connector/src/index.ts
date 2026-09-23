@@ -1,11 +1,50 @@
-import { spawnSyncHidden as spawnSync } from "@signet/core";
 import { createHash } from "node:crypto";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BaseConnector, type InstallResult, type UninstallResult, resolveSignetApiKey } from "@signet/connector-base";
-import { expandHome, resolveHermesHomePath, resolveHermesRepoPath } from "@signet/core";
+
+function expandHome(value: string): string {
+	const home = process.env.HOME?.trim() || homedir();
+	return value === "~" ? home : value.startsWith("~/") || value.startsWith("~\\") ? join(home, value.slice(2)) : value;
+}
+
+function resolveHermesHomePath(): string {
+	return process.env.HERMES_HOME?.trim() || join(process.env.HOME?.trim() || homedir(), ".hermes");
+}
+
+function resolveHermesRepoPath(): string | null {
+	const home = process.env.HOME?.trim() || homedir();
+	const hermesHome = resolveHermesHomePath();
+	const candidates = [
+		process.env.HERMES_REPO?.trim(),
+		hermesHome,
+		join(hermesHome, "hermes-agent"),
+		join(home, "hermes-agent"),
+		join(home, ".local", "share", "hermes-agent"),
+		join(home, "src", "hermes-agent"),
+		"/opt/hermes-agent",
+	].filter((value): value is string => Boolean(value));
+	for (const candidate of candidates) {
+		if (existsSync(join(candidate, "plugins", "memory"))) return candidate;
+	}
+	try {
+		const hermesPath = execFileSync("which", ["hermes"], {
+			encoding: "utf-8",
+			stdio: ["ignore", "pipe", "ignore"],
+			timeout: 3000,
+		}).trim();
+		if (hermesPath) {
+			const repoDir = dirname(realpathSync(hermesPath));
+			if (existsSync(join(repoDir, "plugins", "memory"))) return repoDir;
+		}
+	} catch {
+		// Hermes is optional and may not be installed.
+	}
+	return null;
+}
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 function getPluginSourceDir(): string {

@@ -33,7 +33,7 @@ setup and `plugin/` for the runtime plugin loaded by OpenCode.
 | Package or area | Location |
 |---|---|
 | `@signet/core` | `platform/core/` |
-| `@signet/daemon` | `platform/daemon/` |
+| `@signet/daemon-native` | `platform/rust-daemon/` |
 | `@signet/native` | `platform/native/` |
 | `@signet/cli` | `surfaces/cli/` |
 | `signet-dashboard` | `surfaces/dashboard/` |

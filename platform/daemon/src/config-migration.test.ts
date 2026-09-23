@@ -10,7 +10,9 @@ function setupDir(): string {
 	return dir;
 }
 
-afterEach(() => {});
+afterEach(() => {
+	// each test cleans its own dir
+});
 
 describe("migrateInferenceProviders (#947)", () => {
 	it("rewrites folded harness executors to acpx with the mapped agent", () => {
@@ -51,17 +53,22 @@ inference:
 			);
 			migrateInferenceProviders(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			// claude-code -> acpx + agent: claude
 			expect(after).toContain("executor: acpx");
 			expect(after).not.toContain("executor: claude-code");
 			expect(after).not.toContain("executor: codex");
 			expect(after).not.toContain("executor: opencode");
+			// agent blocks added
 			expect(after).toMatch(/acpx:\s*\n\s*agent: claude\b/);
 			expect(after).toMatch(/agent: codex\b/);
 			expect(after).toMatch(/agent: opencode\b/);
 			expect(after).toMatch(/agent: kimi\b/);
+			// anthropic untouched
 			expect(after).toContain("executor: anthropic");
+			// comments preserved
 			expect(after).toContain("# leading comment");
 			expect(after).toContain("# claude target");
+			// version stamped
 			expect(after).toMatch(/^configVersion: 3/m);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -87,7 +94,9 @@ inference:
 			migrateInferenceProviders(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
 			expect(after).toContain("executor: acpx");
+			// only one acpx block
 			expect(after.match(/acpx:/g)).toHaveLength(1);
+			// user's existing agent value preserved (comment may have spacing normalized)
 			expect(after).toMatch(/agent: claude.*user already configured/);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -116,8 +125,10 @@ inference:
 			);
 			migrateInferenceProviders(dir);
 			const after = readFileSync(join(dir, "agent.yaml"), "utf-8");
+			// command and legacy provider are NOT migrated
 			expect(after).toContain("executor: command");
 			expect(after).toContain("provider: claude-code");
+			// but version still stamped so we don't re-parse every startup
 			expect(after).toMatch(/^configVersion: 3/m);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
@@ -172,6 +183,7 @@ inference:
 
 	it("skips when there is no agent.yaml", () => {
 		const dir = setupDir();
+		// no agent.yaml written — must not throw
 		expect(() => migrateInferenceProviders(dir)).not.toThrow();
 	});
 

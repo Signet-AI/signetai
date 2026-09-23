@@ -1,9 +1,10 @@
-import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type ChildProcess } from "@signet/core";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { LOOPBACK_HOST } from "@signet/core";
+
+const LOOPBACK_HOST = "127.0.0.1";
 import { type WorkspaceMismatch, healthWorkspaceMismatch } from "./daemon-workspace.js";
-import { bunPath, daemonEntry, daemonRoot } from "./paths.js";
+import { daemonEntry, daemonRoot } from "./paths.js";
 
 export type DaemonMode = "attached" | "bundled" | "none";
 export type DaemonStartupErrorCode = "bundled-runtime-enoent" | "bundled-spawn-failed";
@@ -253,6 +254,19 @@ export class DaemonManager {
 			});
 		});
 	}
+	/**
+	 * Spawn the bundled Rust native daemon directly.
+	 *
+	 * FD-race fix (issue #606): createWriteStream opens the file lazily — the
+	 * underlying fd is not available until the 'open' event fires, which happens
+	 * asynchronously. Node's child_process.spawn validates stdio descriptors
+	 * synchronously at call time, so passing a WriteStream whose fd is still
+	 * undefined produces:
+	 *   TypeError: stream must have an underlying descriptor
+	 *
+	 * Using openSync returns a real integer fd immediately. We pass that fd
+	 * directly to spawn's stdio array, which satisfies the sync validation.
+	 */
 	#spawnBundled(): void {
 		const entry = daemonEntry();
 		if (!existsSync(entry)) {
@@ -265,7 +279,7 @@ export class DaemonManager {
 		this.#stdoutFd = openSync(join(logDir, "daemon.out.log"), "a");
 		this.#stderrFd = openSync(join(logDir, "daemon.err.log"), "a");
 
-		this.#child = spawn(bunPath(), [entry], {
+		this.#child = spawn(entry, [], {
 			cwd: daemonRoot(),
 			detached: false,
 			stdio: ["ignore", this.#stdoutFd, this.#stderrFd],
@@ -275,9 +289,9 @@ export class DaemonManager {
 				SIGNET_PATH: this.#workspacePath,
 				SIGNET_WORKSPACE: this.#workspacePath,
 				SIGNET_DESKTOP: "1",
-				SIGNET_DAEMON_RUNTIME: "bun-js",
-				SIGNET_DAEMON_JS_PATH: daemonEntry(),
-				SIGNET_TIKTOKEN_WASM_PATH: join(daemonRoot(), "node_modules", "tiktoken", "tiktoken_bg.wasm"),
+
+				// On-disk connector assets (hermes-agent Python plugin) staged by
+				// stage-runtime; connectors resolve them through this variable.
 				SIGNET_CONNECTOR_ASSETS_DIR: process.env.SIGNET_CONNECTOR_ASSETS_DIR ?? join(daemonRoot(), "connectors"),
 				SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "desktop",
 			},
@@ -289,7 +303,7 @@ export class DaemonManager {
 			const code: DaemonStartupErrorCode = error.code === "ENOENT" ? "bundled-runtime-enoent" : "bundled-spawn-failed";
 			const message =
 				code === "bundled-runtime-enoent"
-					? `Signet could not start the bundled daemon because its Bun runtime is missing or not executable. Reinstall the desktop app or install Bun at ~/.bun/bin/bun, /opt/homebrew/bin/bun, or /usr/local/bin/bun, then reopen Signet. (${error.message})`
+					? `Signet could not start the bundled Rust daemon because it is missing or not executable. Reinstall the desktop app. (${error.message})`
 					: `Signet could not start the bundled daemon: ${error.message}`;
 			this.#startupError = { code, message };
 			this.#child = null;

@@ -1,7 +1,15 @@
-import { resolveSignetDaemonUrl } from "@signet/core";
-import { buildRecallRequestBody } from "@signet/core/recall";
+/**
+ * @signet/sdk — HTTP client for the Signet daemon API.
+ * No native dependencies (no SQLite).
+ */
+
+import {
+	applyNativeRecallScoreThreshold,
+	buildNativeRecallRequestBody,
+	resolveNativeDaemonUrl,
+} from "./native-contract.js";
 import { SignetClientP2 } from "./client-p2.js";
-import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
+import { SignetClientHelpers } from "./helpers.js";
 import { SignetTransport } from "./transport.js";
 import type {
 	BatchModifyResponse,
@@ -76,6 +84,9 @@ export interface SignetClientConfig {
 	readonly actor?: string;
 	readonly actorType?: string;
 	readonly token?: string;
+	readonly agentId?: string;
+	readonly agentType?: string;
+	readonly workspaceId?: string;
 }
 
 // biome-ignore lint/suspicious/noUnsafeDeclarationMerging: P2 methods are mixed into SignetClient below for compatibility.
@@ -91,9 +102,12 @@ export class SignetClient extends SignetClientHelpers {
 		if (config?.actorType) {
 			headers["x-signet-actor-type"] = config.actorType;
 		}
+		if (config?.agentId) headers["x-signet-agent-id"] = config.agentId;
+		if (config?.agentType) headers["x-signet-agent-type"] = config.agentType;
+		if (config?.workspaceId) headers["x-signet-workspace"] = config.workspaceId;
 
 		const transport = new SignetTransport({
-			baseUrl: config?.daemonUrl ?? resolveSignetDaemonUrl({ env: {} }),
+			baseUrl: config?.daemonUrl ?? resolveNativeDaemonUrl({}),
 			timeoutMs: config?.timeoutMs ?? 10_000,
 			retries: config?.retries ?? 2,
 			headers: Object.keys(headers).length > 0 ? headers : undefined,
@@ -132,10 +146,10 @@ export class SignetClient extends SignetClientHelpers {
 
 	async recall(query: string, opts?: SdkRecallOptions): Promise<RecallResponse> {
 		const { minScore, ...requestOptions } = opts ?? {};
-		return applyRecallMinScore(
+		return applyNativeRecallScoreThreshold(
 			await this.transport.post<RecallResponse>(
 				"/api/memory/recall",
-				buildRecallRequestBody(query, { ...requestOptions, minScore }),
+				buildNativeRecallRequestBody(query, { ...requestOptions, minScore }),
 			),
 			minScore,
 		);

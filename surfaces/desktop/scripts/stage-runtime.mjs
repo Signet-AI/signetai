@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
 	chmodSync,
@@ -8,8 +7,8 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
+	readdirSync,
 	rmSync,
 	renameSync,
 	statSync,
@@ -17,40 +16,16 @@ import {
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { spawnSync } from "node:child_process";
 
-const hostWin = process.platform === "win32";
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
 const repoRoot = resolve(desktopRoot, "../..");
 const resources = resolve(desktopRoot, "resources");
-const daemonPkgPath = resolve(repoRoot, "platform/daemon/package.json");
-const corePkgPath = resolve(repoRoot, "platform/core/package.json");
+const nativeRuntime = resolve(repoRoot, "dist/signetai/runtime/rust-daemon");
+const dashboardBuild = resolve(repoRoot, "surfaces/dashboard/build");
 const resourceLockOwnerGracePeriodMs = 60_000;
-
-function readJson(path) {
-	return JSON.parse(readFileSync(path, "utf8"));
-}
-
-function pathLookup(cmd) {
-	try {
-		const out = execFileSync(hostWin ? "where" : "which", [cmd], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		return out.trim().split(/\r?\n/)[0] || null;
-	} catch {
-		return null;
-	}
-}
-
-function bunRuntime() {
-	const candidates = [process.env.BUN_RUNTIME, process.execPath, pathLookup("bun")].filter(Boolean);
-	for (const candidate of candidates) {
-		const name = basename(candidate).toLowerCase();
-		if ((name === "bun" || name === "bun.exe") && existsSync(candidate)) return resolve(candidate);
-	}
-	throw new Error("Unable to locate Bun runtime. Run this script with bun or set BUN_RUNTIME.");
-}
 
 function normalizeArch(value) {
 	if (value === "arm") return "arm64";
@@ -69,26 +44,18 @@ function targetArch() {
 	return normalizeArch(process.env.ELECTRON_BUILDER_ARCH ?? process.env.npm_config_arch ?? process.arch);
 }
 
-function targetPlatform() {
-	return normalizePlatform(process.env.ELECTRON_BUILDER_PLATFORM ?? process.platform);
-}
-
 function probeBunRuntime(runtimePath) {
-	const output = execFileSync(
+	const result = spawnSync(
 		runtimePath,
-		["-e", "console.log(JSON.stringify({ platform: process.platform, arch: process.arch }))"],
-		{ encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+		["--print", "JSON.stringify({ platform: process.platform, arch: process.arch, bun: process.versions.bun })"],
+		{ encoding: "utf8" },
 	);
-	const result = JSON.parse(output.trim());
-	if (
-		typeof result !== "object" ||
-		result === null ||
-		typeof result.platform !== "string" ||
-		typeof result.arch !== "string"
-	) {
+	if (result.status !== 0) throw new Error("Bun runtime probe failed");
+	try {
+		return JSON.parse(result.stdout.trim());
+	} catch {
 		throw new Error("Bun runtime probe returned an invalid result");
 	}
-	return { platform: normalizePlatform(result.platform), arch: normalizeArch(result.arch) };
 }
 
 export function assertBunRuntime(
@@ -99,13 +66,10 @@ export function assertBunRuntime(
 ) {
 	const arch = normalizeArch(expectedArch);
 	const platform = normalizePlatform(expectedPlatform);
-	if (!existsSync(runtimePath) || !statSync(runtimePath).isFile()) {
+	if (!existsSync(runtimePath) || !statSync(runtimePath).isFile())
 		throw new Error(`Bun runtime is not a regular file: ${runtimePath}`);
-	}
-	if (platform !== "win32" && (statSync(runtimePath).mode & 0o111) === 0) {
+	if (platform !== "win32" && (statSync(runtimePath).mode & 0o111) === 0)
 		throw new Error(`Bun runtime is not executable: ${runtimePath}`);
-	}
-
 	let runtime;
 	try {
 		runtime = probe(runtimePath);
@@ -113,22 +77,17 @@ export function assertBunRuntime(
 		const detail = error instanceof Error ? error.message : String(error);
 		throw new Error(`Unable to execute Bun runtime at ${runtimePath}: ${detail}`);
 	}
-
-	if (runtime.platform !== platform) {
+	if (runtime.platform !== platform)
 		throw new Error(`Bun runtime platform mismatch: expected ${platform}, got ${runtime.platform} (${runtimePath})`);
-	}
-	if (runtime.arch !== arch) {
+	if (runtime.arch !== arch)
 		throw new Error(`Bun runtime architecture mismatch: expected ${arch}, got ${runtime.arch} (${runtimePath})`);
-	}
+	if (typeof runtime.bun !== "string" || runtime.bun.length === 0)
+		throw new Error(`Runtime is not Bun: ${runtimePath}`);
+	return runtime;
 }
 
-export function platformVecPackage(platform, arch) {
-	const os = platform === "win32" ? "windows" : platform;
-	return `sqlite-vec-${os}-${arch}`;
-}
-
-function pkgVersion(pkg, name) {
-	return pkg.dependencies?.[name] ?? pkg.optionalDependencies?.[name] ?? pkg.devDependencies?.[name] ?? null;
+function targetPlatform() {
+	return normalizePlatform(process.env.ELECTRON_BUILDER_PLATFORM ?? process.platform);
 }
 
 function resourceLockPath(target) {
@@ -218,6 +177,34 @@ export function removeStaging(stagedResources, remove = rmSync) {
 	}
 }
 
+export function nativeDaemonPath(platform, arch) {
+	const executable = platform === "win32" ? "signet-daemon.exe" : "signet-daemon";
+	return resolve(nativeRuntime, `${platform}-${arch}`, executable);
+}
+
+export function assertNativeDaemon(path) {
+	if (!existsSync(path) || !statSync(path).isFile())
+		throw new Error(`Rust daemon artifact not found: ${path}. Run build:native first.`);
+	if (process.platform !== "win32" && (statSync(path).mode & 0o111) === 0)
+		throw new Error(`Rust daemon artifact is not executable: ${path}`);
+}
+
+export function platformVecPackage(platform, arch) {
+	const normalizedPlatform = normalizePlatform(platform);
+	const normalizedArch = normalizeArch(arch);
+	const supported =
+		(normalizedPlatform === "darwin" || normalizedPlatform === "linux") &&
+		(normalizedArch === "x64" || normalizedArch === "arm64");
+	if (normalizedPlatform === "win32" && normalizedArch !== "x64") {
+		throw new Error(`Unsupported sqlite-vec target: ${normalizedPlatform}/${normalizedArch}`);
+	}
+	if (!supported && normalizedPlatform !== "win32") {
+		throw new Error(`Unsupported sqlite-vec target: ${normalizedPlatform}/${normalizedArch}`);
+	}
+	const os = normalizedPlatform === "win32" ? "windows" : normalizedPlatform;
+	return `sqlite-vec-${os}-${normalizedArch}`;
+}
+
 export function replaceResources(target, staged, rename = renameSync, remove = rmSync) {
 	const lockPath = acquireResourceLock(target);
 	let failure;
@@ -273,73 +260,64 @@ export function replaceResources(target, staged, rename = renameSync, remove = r
 }
 
 export function stageRuntime() {
-	const bunArch = targetArch();
+	const arch = targetArch();
 	const target = targetPlatform();
+	const vecPackage = platformVecPackage(target, arch);
 	const hostPlatform = normalizePlatform(process.platform);
 	const hostArch = normalizeArch(process.arch);
-	if (target !== hostPlatform || bunArch !== hostArch) {
+	if (target !== hostPlatform || arch !== hostArch) {
 		throw new Error(
-			`Desktop runtime staging requires a native ${target}/${bunArch} build runner; host is ${hostPlatform}/${hostArch}.`,
+			`Desktop runtime staging requires a native ${target}/${arch} build runner; host is ${hostPlatform}/${hostArch}.`,
 		);
 	}
-
-	const bunSrc = bunRuntime();
-	assertBunRuntime(bunSrc, bunArch, target);
-
 	const stagedResources = mkdtempSync(join(desktopRoot, ".resources-stage-"));
+	const executable = target === "win32" ? "signet-daemon.exe" : "signet-daemon";
+	const daemonSource = nativeDaemonPath(target, arch);
 	try {
-		const daemonOut = resolve(stagedResources, "daemon");
-		const runtimeOut = resolve(stagedResources, "runtime");
+		assertNativeDaemon(daemonSource);
+		if (!existsSync(resolve(dashboardBuild, "index.html")))
+			throw new Error(`Dashboard build not found: ${dashboardBuild}`);
+		const daemonOut = resolve(stagedResources, "rust-daemon", `${target}-${arch}`);
 		mkdirSync(daemonOut, { recursive: true });
-		mkdirSync(runtimeOut, { recursive: true });
-
-		const bunDest = resolve(runtimeOut, target === "win32" ? "bun.exe" : "bun");
-		cpSync(bunSrc, bunDest);
-		if (target !== "win32") chmodSync(bunDest, 0o755);
-		mkdirSync(resolve(daemonOut, "dist"), { recursive: true });
+		cpSync(daemonSource, resolve(daemonOut, executable));
+		if (target !== "win32") chmodSync(resolve(daemonOut, executable), 0o755);
+		cpSync(dashboardBuild, resolve(stagedResources, "rust-daemon", "dashboard"), { recursive: true });
+		// Preserve the complete daemon distribution and its native dependency assets
+		// for compatibility consumers; production launch remains the Rust binary.
+		const daemonRootOut = resolve(stagedResources, "rust-daemon");
 		const daemonDist = resolve(repoRoot, "platform/daemon/dist");
+		if (!existsSync(daemonDist)) throw new Error(`Daemon distribution not found: ${daemonDist}`);
+		// The build output is authoritative: worker entrypoints and nested assets
+		// are loaded by name at runtime, so do not reduce it to a file extension list.
 		for (const entry of readdirSync(daemonDist)) {
-			if (/\.(js|node|wasm)$/.test(entry)) {
-				cpSync(join(daemonDist, entry), resolve(daemonOut, "dist", entry));
-			}
+			if (!entry) throw new Error(`Invalid daemon distribution entry: ${daemonDist}`);
 		}
-		cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
-		cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
-		const connectorsOut = resolve(daemonOut, "connectors");
+		cpSync(daemonDist, resolve(daemonRootOut, "dist"), { recursive: true });
+
+		const daemonSkills = resolve(repoRoot, "platform/daemon/skills");
+		if (!existsSync(daemonSkills))
+			throw new Error(`Daemon skills not found: ${daemonSkills}. Run the daemon prebuild first.`);
+		cpSync(daemonSkills, resolve(daemonRootOut, "skills"), { recursive: true });
+
+		// Resolve from the daemon package's actual Bun/Node resolution root. The
+		// daemon is intentionally excluded from root workspaces, so these packages
+		// are not guaranteed to be under repoRoot/node_modules.
+		const requireFromDaemon = createRequire(resolve(repoRoot, "platform/daemon/package.json"));
+		const packageSources = [
+			["tiktoken", requireFromDaemon.resolve("tiktoken/package.json")],
+			[vecPackage, requireFromDaemon.resolve(`${vecPackage}/package.json`)],
+		];
+		for (const [name, packageManifest] of packageSources) {
+			const source = dirname(packageManifest);
+			if (!existsSync(source)) throw new Error(`Required daemon package not found: ${source}`);
+			cpSync(source, resolve(daemonRootOut, "node_modules", name), { recursive: true });
+		}
+
+		// The native runtime still needs the hermes-agent Python plugin during harness install.
+		const connectorsOut = resolve(stagedResources, "rust-daemon", "connectors");
 		const hermesPluginSrc = resolve(repoRoot, "integrations/hermes-agent/connector/hermes-plugin");
-		if (existsSync(hermesPluginSrc)) {
-			cpSync(hermesPluginSrc, resolve(connectorsOut, "hermes-agent", "hermes-plugin"), { recursive: true });
-		} else {
-			throw new Error(`Hermes connector plugin source not found: ${hermesPluginSrc}`);
-		}
-
-		const daemonPkg = readJson(daemonPkgPath);
-		const corePkg = readJson(corePkgPath);
-		const vecPkg = platformVecPackage(target, bunArch);
-		const vecVersion = pkgVersion(corePkg, vecPkg);
-		if (vecVersion === null) {
-			throw new Error(`No sqlite-vec binary package is available for ${target}/${bunArch}`);
-		}
-		const dependencies = {};
-		for (const name of ["@firecrawl/anydoc", "tiktoken"]) {
-			const version = pkgVersion(daemonPkg, name);
-			if (version) dependencies[name] = version;
-		}
-		for (const name of ["sqlite-vec", vecPkg]) {
-			const version = pkgVersion(corePkg, name);
-			if (version) dependencies[name] = version;
-		}
-
-		writeFileSync(
-			resolve(daemonOut, "package.json"),
-			`${JSON.stringify({ private: true, type: "module", dependencies }, null, "	")}\n`,
-		);
-
-		execFileSync(bunSrc, ["install", "--production"], {
-			cwd: daemonOut,
-			stdio: "inherit",
-			env: { ...process.env, npm_config_audit: "false", npm_config_fund: "false" },
-		});
+		if (!existsSync(hermesPluginSrc)) throw new Error(`Hermes connector plugin source not found: ${hermesPluginSrc}`);
+		cpSync(hermesPluginSrc, resolve(connectorsOut, "hermes-agent", "hermes-plugin"), { recursive: true });
 
 		replaceResources(resources, stagedResources);
 		console.log(`Staged Electron desktop resources in ${resources}`);

@@ -38,6 +38,6 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: "1"
         run: bun install --frozen-lockfile
       - name: Build connector dependencies
-        run: bun run --filter "@signet/core" --filter "@signet/connector-base" build
+        run: bun run --filter "@signet/connector-base" build
       - name: Run Codex connector tests
         run: bun test --max-concurrency=1 integrations/codex

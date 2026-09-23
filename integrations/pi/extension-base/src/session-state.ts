@@ -1,4 +1,4 @@
-import { escapeMemoryContextForFence } from "@signet/core";
+import { escapeMemoryContextForFence } from "./native-helpers.js";
 import { readTrimmedString } from "./helpers.js";
 
 export const MAX_PENDING_SESSIONS = 64;

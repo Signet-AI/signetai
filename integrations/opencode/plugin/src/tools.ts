@@ -4,7 +4,7 @@ import {
 	buildRecallRequestBody,
 	buildRememberRequestBody,
 	formatRecallText,
-} from "@signet/core";
+} from "./local-helpers.js";
 import type { DaemonClient } from "./daemon-client.js";
 import { HARNESS, READ_TIMEOUT, WRITE_TIMEOUT } from "./types.js";
 import type { MemoryRecord } from "./types.js";

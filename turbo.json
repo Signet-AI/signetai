@@ -48,7 +48,6 @@
 		},
 		"signetai#build": {
 			"dependsOn": [
-				"@signet/core#build",
 				"@signet/connector-base#build",
 				"@signet/connector-claude-code#build",
 				"@signet/connector-codex#build",
@@ -58,8 +57,7 @@
 				"@signet/connector-oh-my-pi#build",
 				"@signet/connector-openclaw#build",
 				"@signet/connector-opencode#build",
-				"@signet/connector-pi#build",
-				"@signet/daemon#build"
+				"@signet/connector-pi#build"
 			],
 			"outputs": ["dist/**", "build/**", "dashboard/**", "target/**", "!.svelte-kit/**"]
 		}

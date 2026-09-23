@@ -1,10 +1,9 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	readStaticIdentity,
 	resolveSessionStartTimeoutMs,
-} from "@signet/core";
+	resolveSignetPath,
+} from "./static-identity.js";
 import {
 	type LifecycleConfig,
 	type LifecycleDeps,
@@ -59,7 +58,7 @@ export const OMP_LIFECYCLE_CONFIG: LifecycleConfig = {
 			readTrimmedRuntimeEnv(SESSION_START_TIMEOUT_ENV) ?? readTrimmedRuntimeEnv(FETCH_TIMEOUT_ENV),
 		),
 	staticFallback: (reason: "offline" | "timeout"): string => {
-		const signetPath = readTrimmedRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
+		const signetPath = readTrimmedRuntimeEnv("SIGNET_PATH") ?? resolveSignetPath();
 		if (reason === "timeout") {
 			return readStaticIdentity(signetPath, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS) ?? "";
 		}

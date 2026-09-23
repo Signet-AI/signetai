@@ -77,6 +77,7 @@ describe("synthesis-worker", () => {
 	});
 
 	afterEach(async () => {
+		// Remove persisted last-synthesis state between tests.
 		rmSync(join(agentsDir, ".daemon"), { recursive: true, force: true });
 	});
 

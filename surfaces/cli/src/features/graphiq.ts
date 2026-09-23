@@ -14,7 +14,7 @@ import {
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
-import { materializeEmbeddedAssetTree } from "../../../../platform/daemon/src/native-runtime-assets.js";
+import { materializeEmbeddedAssetTree } from "../lib/native-assets.js";
 import { readSetupCorePluginEnabled, writeSetupCorePluginRegistry } from "./setup-plugins.js";
 
 export interface GraphiqDeps {

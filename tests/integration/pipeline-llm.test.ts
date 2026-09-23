@@ -1,3 +1,20 @@
+/**
+ * LLM Pipeline Integration Tests
+ *
+ * Verifies that prompts sent to local LLMs (qwen3:4b via Ollama)
+ * produce structurally valid and semantically reasonable output.
+ *
+ * Requirements:
+ *   - Ollama running locally on port 11434
+ *   - qwen3:4b model pulled
+ *
+ * Run:  bun test tests/integration/pipeline-llm.test.ts
+ *
+ * These tests are NON-DETERMINISTIC by design. Each prompt is run
+ * multiple times and statistical assertions are used (at least N of M
+ * attempts must succeed). This accounts for LLM output variability.
+ */
+
 import { describe, test, expect, beforeAll } from "bun:test";
 import {
 	SMALL_TRANSCRIPT,
@@ -7,11 +24,19 @@ import {
 	UNICODE_TRANSCRIPT,
 } from "./fixtures/transcripts";
 
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
 const OLLAMA_BASE = "http://localhost:11434";
 const MODEL = "qwen3:4b";
 const TIMEOUT_MS = 180_000;
 const RUNS_PER_TEST = 3;
-const MIN_SUCCESSES = 2;
+const MIN_SUCCESSES = 2; // at least 2/3 must pass
+
+// ---------------------------------------------------------------------------
+// Ollama availability check
+// ---------------------------------------------------------------------------
 
 let ollamaAvailable = false;
 let modelAvailable = false;
@@ -46,8 +71,15 @@ async function generate(
 			model: MODEL,
 			prompt,
 			stream: false,
+			// Force JSON output mode -- prevents the model from generating
+			// long prose preambles before the JSON object.
 			format: "json",
+			// Disable qwen3's thinking mode to avoid long <think> blocks
+			// that waste inference time on structured output tasks.
+			// The production pipeline strips <think> blocks post-hoc, but
+			// for testing we skip them entirely to keep runtimes reasonable.
 			think: false,
+			// Cap output length to prevent runaway generation on verbose models
 			options: { num_predict: 2048 },
 		};
 
@@ -82,6 +114,10 @@ async function generate(
 	}
 }
 
+// ---------------------------------------------------------------------------
+// JSON parsing helpers (mirroring extraction.ts logic)
+// ---------------------------------------------------------------------------
+
 const THINK_RE = /<think>[\s\S]*?<\/think>\s*/g;
 const FENCE_RE = /```(?:json)?\s*([\s\S]*?)```/;
 
@@ -91,6 +127,12 @@ function cleanLlmOutput(raw: string): string {
 	if (fenceMatch) cleaned = fenceMatch[1];
 	return cleaned.trim();
 }
+
+/**
+ * Extract the outermost balanced JSON object from a string.
+ * Handles cases where the model outputs prose before/after the JSON.
+ * Mirrors extractBalancedJsonObject() from extraction.ts.
+ */
 function extractBalancedJsonObject(raw: string): string | null {
 	const start = raw.indexOf("{");
 	if (start < 0) return null;
@@ -137,6 +179,9 @@ function extractBalancedJsonObject(raw: string): string | null {
 function tryParseJson(raw: string): unknown | null {
 	const cleaned = cleanLlmOutput(raw);
 	if (!cleaned) return null;
+
+	// Build candidate list: cleaned text, balanced extraction from cleaned,
+	// balanced extraction from raw (handles think blocks the regex missed)
 	const candidates: string[] = [cleaned];
 
 	const cleanedObj = extractBalancedJsonObject(cleaned);
@@ -150,15 +195,22 @@ function tryParseJson(raw: string): unknown | null {
 	}
 
 	for (const candidate of candidates) {
+		// Try as-is, then with trailing comma fix
 		const attempts = [candidate, candidate.replace(/,\s*([}\]])/g, "$1")];
 		for (const attempt of attempts) {
 			try {
 				return JSON.parse(attempt);
-			} catch {}
+			} catch {
+				// continue
+			}
 		}
 	}
 	return null;
 }
+
+// ---------------------------------------------------------------------------
+// Statistical runner
+// ---------------------------------------------------------------------------
 
 interface RunResult<T> {
 	successes: number;
@@ -200,7 +252,12 @@ function logTimings(label: string, results: RunResult<unknown>): void {
 	);
 }
 
+// ---------------------------------------------------------------------------
+// Prompt builders (extracted from pipeline source)
+// ---------------------------------------------------------------------------
+
 function buildExtractionPrompt(content: string): string {
+	// Truncate to match pipeline behavior
 	const trimmed = content.trim().replace(/\s+/g, " ");
 	const truncated = trimmed.length > 12000 ? `${trimmed.slice(0, 12000)}\n[truncated]` : trimmed;
 
@@ -328,6 +385,10 @@ Examples of contradictions:
 - "The API uses REST" vs "The API endpoint returns JSON" → does NOT contradict (complementary info)`;
 }
 
+// ---------------------------------------------------------------------------
+// Validators
+// ---------------------------------------------------------------------------
+
 const VALID_FACT_TYPES = new Set([
 	"fact",
 	"preference",
@@ -335,6 +396,7 @@ const VALID_FACT_TYPES = new Set([
 	"rationale",
 	"procedural",
 	"semantic",
+	// summary worker also allows these:
 	"learning",
 	"rule",
 	"issue",
@@ -392,6 +454,7 @@ function validateExtractionOutput(parsed: unknown): {
 			errors.push(`Fact content too short or missing: "${fact.content}"`);
 			continue;
 		}
+		// type is optional (defaults to "fact" in pipeline), confidence optional
 		facts.push({
 			content: fact.content,
 			type: typeof fact.type === "string" ? fact.type : "fact",
@@ -517,9 +580,13 @@ function validateSummaryOutput(parsed: unknown): {
 	};
 }
 
+// ===================================================================
+// Tests
+// ===================================================================
+
 beforeAll(async () => {
 	modelAvailable = await checkOllama();
-	ollamaAvailable = modelAvailable;
+	ollamaAvailable = modelAvailable; // checkOllama already verifies the model
 
 	if (!ollamaAvailable) {
 		console.log(
@@ -530,6 +597,10 @@ beforeAll(async () => {
 		);
 	}
 });
+
+// ===================================================================
+// Extraction Quality
+// ===================================================================
 
 describe("Extraction Quality", () => {
 	test(
@@ -551,9 +622,15 @@ describe("Extraction Quality", () => {
 
 			logTimings("extraction/small", result);
 			expect(result.successes).toBeGreaterThanOrEqual(MIN_SUCCESSES);
+
+			// Check content quality on successful runs
 			for (const r of result.results) {
 				if (!r.ok || !r.value) continue;
+				// Should find at least 2 facts from a transcript about
+				// database migration + user preferences
 				expect(r.value.facts.length).toBeGreaterThanOrEqual(2);
+
+				// At least one fact should mention PostgreSQL or MongoDB
 				const mentionsDb = r.value.facts.some(
 					(f) =>
 						f.content.toLowerCase().includes("postgresql") ||
@@ -588,6 +665,7 @@ describe("Extraction Quality", () => {
 
 			for (const r of result.results) {
 				if (!r.ok || !r.value) continue;
+				// Medium transcript has ~5 distinct topics
 				expect(r.value.facts.length).toBeGreaterThanOrEqual(3);
 				expect(r.value.facts.length).toBeLessThanOrEqual(20);
 			}
@@ -637,6 +715,7 @@ describe("Extraction Quality", () => {
 				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
+				// Every fact type should be a recognized type
 				for (const fact of validation.output.facts) {
 					if (!VALID_FACT_TYPES.has(fact.type)) {
 						throw new Error(`Unknown fact type: "${fact.type}"`);
@@ -665,6 +744,7 @@ describe("Extraction Quality", () => {
 				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
+				// Entities should have non-empty source, relationship, target
 				for (const entity of validation.output.entities) {
 					if (!entity.source || !entity.target) {
 						throw new Error(`Entity missing source/target: ${JSON.stringify(entity)}`);
@@ -713,6 +793,10 @@ describe("Extraction Quality", () => {
 	);
 });
 
+// ===================================================================
+// Decision Quality
+// ===================================================================
+
 describe("Decision Quality", () => {
 	test(
 		"recommends 'add' for a novel fact with no matching candidates",
@@ -750,6 +834,8 @@ describe("Decision Quality", () => {
 
 			logTimings("decision/add-novel", result);
 			expect(result.successes).toBeGreaterThanOrEqual(MIN_SUCCESSES);
+
+			// Most runs should recommend "add" since the fact is unrelated to candidates
 			const addCount = result.results.filter((r) => r.ok && r.value?.action === "add").length;
 			expect(addCount).toBeGreaterThanOrEqual(MIN_SUCCESSES);
 		},
@@ -787,6 +873,8 @@ describe("Decision Quality", () => {
 
 			logTimings("decision/duplicate", result);
 			expect(result.successes).toBeGreaterThanOrEqual(MIN_SUCCESSES);
+
+			// Should recommend "none" (already covered) or "update" (refinement)
 			const correctCount = result.results.filter(
 				(r) => r.ok && (r.value?.action === "none" || r.value?.action === "update"),
 			).length;
@@ -816,6 +904,7 @@ describe("Decision Quality", () => {
 				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
+				// Verify all required fields are present and well-formed
 				const output = validation.output;
 				if (output.reason.length < 5) {
 					throw new Error(`Reason too short: "${output.reason}"`);
@@ -832,6 +921,10 @@ describe("Decision Quality", () => {
 		TIMEOUT_MS * RUNS_PER_TEST + 10_000,
 	);
 });
+
+// ===================================================================
+// Summary Quality
+// ===================================================================
 
 describe("Summary Quality", () => {
 	test(
@@ -856,8 +949,11 @@ describe("Summary Quality", () => {
 
 			for (const r of result.results) {
 				if (!r.ok || !r.value) continue;
+				// Summary should be substantial (JSON mode can produce
+				// tighter summaries, so threshold is conservative)
 				expect(r.value.summary.length).toBeGreaterThan(40);
 				expect(r.value.summary.length).toBeLessThan(5000);
+				// Should extract at least some facts
 				expect(r.value.facts.length).toBeGreaterThanOrEqual(1);
 				expect(r.value.facts.length).toBeLessThanOrEqual(15);
 			}
@@ -879,6 +975,7 @@ describe("Summary Quality", () => {
 				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
+				// Summary should contain markdown headings
 				const hasHeading = /^#/m.test(validation.output.summary);
 				if (!hasHeading) {
 					throw new Error("Summary missing markdown headings");
@@ -906,6 +1003,7 @@ describe("Summary Quality", () => {
 				if (!validation.valid || !validation.output) {
 					throw new Error(`Validation failed: ${validation.errors.join(", ")}`);
 				}
+				// Each fact content should be at least 20 chars (meaningful sentence)
 				for (const fact of validation.output.facts) {
 					if (fact.content.length < 15) {
 						throw new Error(`Fact too short: "${fact.content}"`);
@@ -920,6 +1018,10 @@ describe("Summary Quality", () => {
 		TIMEOUT_MS * RUNS_PER_TEST + 10_000,
 	);
 });
+
+// ===================================================================
+// Contradiction Detection
+// ===================================================================
 
 describe("Contradiction Detection", () => {
 	test(
@@ -945,6 +1047,8 @@ describe("Contradiction Detection", () => {
 
 			logTimings("contradiction/detected", result);
 			expect(result.successes).toBeGreaterThanOrEqual(MIN_SUCCESSES);
+
+			// Most runs should detect the contradiction
 			const detectedCount = result.results.filter(
 				(r) => r.ok && (r.value as { contradicts: boolean })?.contradicts === true,
 			).length;
@@ -973,6 +1077,8 @@ describe("Contradiction Detection", () => {
 
 			logTimings("contradiction/complementary", result);
 			expect(result.successes).toBeGreaterThanOrEqual(MIN_SUCCESSES);
+
+			// Most runs should NOT flag this as a contradiction
 			const noContradictionCount = result.results.filter(
 				(r) => r.ok && (r.value as { contradicts: boolean })?.contradicts === false,
 			).length;
@@ -981,6 +1087,10 @@ describe("Contradiction Detection", () => {
 		TIMEOUT_MS * RUNS_PER_TEST + 10_000,
 	);
 });
+
+// ===================================================================
+// Prompt Robustness / Edge Cases
+// ===================================================================
 
 describe("Prompt Robustness", () => {
 	test(
@@ -1007,9 +1117,17 @@ describe("Prompt Robustness", () => {
 	);
 
 	test("extraction prompt fits within context window", () => {
+		// qwen3:4b has a ~32k token context window
+		// Rough estimate: 1 token ~= 4 chars for English text
+		// The extraction prompt truncates input at 12000 chars
+		// Plus prompt framing is ~2000 chars = ~14000 chars max
+		// ~3500 tokens -- well within 32k
+
 		const prompt = buildExtractionPrompt(LARGE_TRANSCRIPT);
 		const estimatedTokens = Math.ceil(prompt.length / 4);
 		expect(estimatedTokens).toBeLessThan(32000);
+
+		// Also check with max-length input (12000 char limit)
 		const maxInput = "x".repeat(12000);
 		const maxPrompt = buildExtractionPrompt(maxInput);
 		const maxTokens = Math.ceil(maxPrompt.length / 4);
@@ -1026,6 +1144,8 @@ describe("Prompt Robustness", () => {
 		"handles very short (but valid) transcript gracefully",
 		async () => {
 			if (!ollamaAvailable) return;
+
+			// The pipeline rejects input < 20 chars, so use something just above
 			const shortButValid =
 				"User: We decided to use Rust for the predictor sidecar because of performance requirements.";
 			const prompt = buildExtractionPrompt(shortButValid);
@@ -1035,6 +1155,7 @@ describe("Prompt Robustness", () => {
 				const parsed = tryParseJson(text);
 				if (parsed === null) throw new Error("Failed to parse JSON");
 				const validation = validateExtractionOutput(parsed);
+				// For very short input, we accept zero facts as valid too
 				if (typeof parsed !== "object") {
 					throw new Error("Output is not an object");
 				}
@@ -1051,6 +1172,10 @@ describe("Prompt Robustness", () => {
 		TIMEOUT_MS * RUNS_PER_TEST + 10_000,
 	);
 });
+
+// ===================================================================
+// Schema Compliance (parsing logic tests -- no LLM needed)
+// ===================================================================
 
 describe("Schema Compliance (parsing)", () => {
 	test("cleanLlmOutput strips <think> blocks", () => {

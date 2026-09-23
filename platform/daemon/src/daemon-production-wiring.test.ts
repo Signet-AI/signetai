@@ -1,3 +1,4 @@
+/** Behavioral coverage for the production migration startup seams. */
 import { describe, expect, it } from "bun:test";
 import {
 	readRetainedMigrationVerifyStatus,

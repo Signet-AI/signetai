@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { expandHome } from "@signet/core";
+function expandHome(value: string, home: string): string {
+	return value === "~" ? home : value.startsWith("~/") || value.startsWith("~\\") ? join(home, value.slice(2)) : value;
+}
 
 export interface AgentDirConfig {
 	readonly configFileName: string;

@@ -1,13 +1,11 @@
 import {
 	deleteLocalSecret,
 	execWithSecrets,
-	getSecretKeyring,
 	listLocalSecretNames,
 	normalizeSecretExecTimeoutMs,
 	parseLocalSecretName,
 	putLocalSecret,
 	type DaemonApiCall,
-	type SecretKeyringResult,
 } from "@signet/core";
 
 function errorResponse(error: string): { readonly ok: false; readonly data: { readonly error: string } } {
@@ -40,6 +38,8 @@ function stringRecord(value: unknown): Record<string, string> | null {
 	}
 	return result;
 }
+
+/** Use @signet/core directly for local secrets when the daemon is unavailable. */
 export function createOfflineSecretApiCall(): DaemonApiCall {
 	return async (method, path, body) => {
 		if (method === "GET" && path === "/api/secrets") {
@@ -91,34 +91,20 @@ export function createOfflineSecretApiCall(): DaemonApiCall {
 interface SecretCommandApiOptions {
 	readonly daemonApiCall: DaemonApiCall;
 	readonly offlineApiCall: DaemonApiCall;
-	readonly isDaemonRunning: () => Promise<boolean>;
-	readonly agentsDir: string;
-	readonly readKeyring?: () => Promise<SecretKeyringResult>;
+	/** Retained for API compatibility; native-only dispatch does not probe them. */
+	readonly isDaemonRunning?: () => Promise<boolean>;
+	readonly agentsDir?: string;
+	readonly readKeyring?: () => Promise<unknown>;
 }
 
-function isLocalSecretOperation(method: string, path: string): boolean {
-	if (method === "GET" && path === "/api/secrets") return true;
-	if (method === "POST" && path === "/api/secrets/exec") return true;
-	return (method === "POST" || method === "DELETE") && /^\/api\/secrets\/[^/]+$/.test(path);
-}
-
-function isUnavailableKeyring(result: SecretKeyringResult): boolean {
-	return result.state === "unavailable" || result.state === "unsupported";
-}
+/**
+ * Prefer the daemon and its native keyring, but use the shared encrypted store
+ * for local operations when the native keyring cannot exist in this session.
+ * Locked, corrupt, and permission-denied keyrings stay on the daemon path so
+ * they retain their existing fail-closed classifications.
+ */
 export function createSecretCommandApiCall(options: SecretCommandApiOptions): DaemonApiCall {
-	const readKeyring = options.readKeyring ?? (() => getSecretKeyring(`workspace:${options.agentsDir}`).get());
-
-	return async (method, path, body, timeoutMs) => {
-		if (!(await options.isDaemonRunning())) return options.offlineApiCall(method, path, body, timeoutMs);
-		if (!isLocalSecretOperation(method, path)) return options.daemonApiCall(method, path, body, timeoutMs);
-
-		let keyring: SecretKeyringResult | null = null;
-		try {
-			keyring = await readKeyring();
-		} catch {}
-		if (keyring !== null && isUnavailableKeyring(keyring)) {
-			return options.offlineApiCall(method, path, body, timeoutMs);
-		}
-		return options.daemonApiCall(method, path, body, timeoutMs);
-	};
+	// Secrets are daemon-owned. Never switch to the TypeScript/core keyring or
+	// execute commands locally when the native daemon is unavailable.
+	return options.daemonApiCall;
 }

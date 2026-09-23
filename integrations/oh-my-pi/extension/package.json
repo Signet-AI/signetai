@@ -18,7 +18,6 @@
 		"dev": "bun --watch src/index.ts"
 	},
 	"dependencies": {
-		"@signet/core": "workspace:*",
 		"@signet/pi-extension-base": "workspace:*"
 	},
 	"devDependencies": {

@@ -11,7 +11,7 @@ stopped daemon and run this single profile-enabled headless launch:
 profile_dir=$(mktemp -d)
 BUN_OPTIONS="--cpu-prof --cpu-prof-dir=$profile_dir" \
   SIGNET_INSPECTOR_PUBLIC=127.0.0.1:9229/json \
-  signet daemon restart --no-sync --runtime=bun-js
+  signet daemon restart --no-sync --runtime=compiled
 ```
 
 `SIGNET_INSPECTOR_PUBLIC` keeps `127.0.0.1:9229` as the public inspector
@@ -22,7 +22,7 @@ the discovery routes that are missing from the Bun inspector in the current
 runtime. `restart --no-sync` makes the profile-enabled invocation replace any
 stale daemon without running an unrelated workspace sync.
 
-`--runtime=bun-js` selects the production JavaScript bundle. It does not use
+`--runtime=compiled` selects the production JavaScript bundle. It does not use
 `src/daemon.ts` or watch mode, and it fails before launch if the bundle, worker
 bundles, dashboard, skills, or external runtime dependencies are missing. Omit
 `--runtime` (or pass `--runtime=compiled`) to profile the compiled daemon.
@@ -34,24 +34,24 @@ explicitly:
 cd platform/daemon
 bun run build:profile
 cd ../..
-bun run build:daemon-js-assets
+bun run build:native-cli
 ```
 
 Select the bundle you just built when restarting:
 
 ```bash
-signet daemon restart --no-sync --runtime bun-js \
-  --daemon-js-path ./dist/signetai/runtime/daemon-js/daemon.js
+signet daemon restart --no-sync --runtime compiled \
+  --daemon-path ./dist/signetai/runtime/rust-daemon/linux-x64/signet-daemon
 ```
 
-`--daemon-js-path` overrides `SIGNET_DAEMON_JS_PATH`; relative paths resolve from
-the current directory. It requires `bun-js`, validates before shutdown, and prints
+`--daemon-path` overrides `SIGNET_DAEMON_PATH`; relative paths resolve from
+the current directory. It requires `compiled`, validates before shutdown, and prints
 the selected path at startup. It does not build, sync, or save a preference: repeat
 the flag on later launches, including the profiling command above. On `start`, an
-explicit path restarts an existing daemon even if it already uses `bun-js`.
+explicit path restarts an existing daemon even if it already uses `compiled`.
 
 The profile build emits `.map` files beside the daemon and worker bundles. Keep the
-compiled and `bun-js` runs comparable: use the same commit, workspace,
+compiled and `compiled` runs comparable: use the same commit, workspace,
 configuration, model, workload, Bun version, and warm-up period.
 
 | Metric | Measure | Keep comparable |

@@ -1,3 +1,24 @@
+/**
+ * @signet/connector-opencode
+ *
+ * Signet connector for OpenCode - installs hooks and generates config
+ * during 'signet install'.
+ *
+ * This connector:
+ *   - Writes a bundled signet.mjs plugin to ~/.config/opencode/plugins/
+ *     (OpenCode auto-discovers plugins from that directory)
+ *   - Generates ~/.config/opencode/AGENTS.md from identity files
+ *   - Migrates away from the legacy memory.mjs approach on install/uninstall
+ *
+ * @example
+ * ```typescript
+ * import { OpenCodeConnector } from '@signet/connector-opencode'
+ *
+ * const connector = new OpenCodeConnector()
+ * await connector.install('/home/user/.agents')
+ * ```
+ */
+
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
@@ -15,15 +36,31 @@ import {
 	resolveSignetMcpCommand,
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
-import {
-	OPENCODE_PIPELINE_AGENT,
-	OPENCODE_PIPELINE_SYSTEM_PROMPT,
-	expandHome,
-	hasValidIdentity,
-	loadIdentityMode,
-} from "@signet/core";
 import { applyEdits, modify } from "jsonc-parser/lib/esm/main.js";
 import { PLUGIN_BUNDLE } from "./plugin-bundle.js";
+
+const OPENCODE_PIPELINE_AGENT = "signet-pipeline";
+const OPENCODE_PIPELINE_SYSTEM_PROMPT =
+	"You are a structured data extraction system. Return ONLY valid JSON matching the requested schema. No explanations, no markdown, no code fences.";
+function expandHome(value: string): string {
+	return value === "~" ? homedir() : value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
+}
+function loadIdentityMode(basePath: string): "managed" | "passthrough" | undefined {
+	try {
+		const raw = readFileSync(join(basePath, "identity.json"), "utf8");
+		const mode = JSON.parse(raw).mode;
+		return mode === "passthrough" ? "passthrough" : "managed";
+	} catch {
+		return existsSync(join(basePath, "AGENTS.md")) ? "managed" : undefined;
+	}
+}
+function hasValidIdentity(basePath: string): boolean {
+	return loadIdentityMode(basePath) !== undefined;
+}
+
+// ============================================================================
+// Types
+// ============================================================================
 
 type JsonObject = Record<string, unknown>;
 
@@ -67,6 +104,17 @@ function writeConfigValue(configPath: string, path: readonly (string | number)[]
 function configuredDaemonUrl(): string | undefined {
 	return resolveRemoteDaemonUrl() ?? undefined;
 }
+
+// ============================================================================
+// OpenCode Connector
+// ============================================================================
+
+/**
+ * OpenCode connector for Signet
+ *
+ * Implements the connector pattern for setting up OpenCode integration.
+ * Run during 'signet install' to write the plugin bundle and AGENTS.md.
+ */
 export class OpenCodeConnector extends BaseConnector {
 	readonly name = "OpenCode";
 	readonly harnessId = "opencode";
@@ -104,6 +152,16 @@ export class OpenCodeConnector extends BaseConnector {
 	private getPluginConfigEntry(opencodePath: string): string {
 		return `./${relative(opencodePath, this.getPluginFilePath(opencodePath)).replaceAll("\\", "/")}`;
 	}
+
+	/**
+	 * Install OpenCode integration
+	 *
+	 * Writes:
+	 *   - ~/.config/opencode/plugins/signet.mjs  — bundled plugin
+	 *   - ~/.config/opencode/AGENTS.md            — agent instructions
+	 *
+	 * Also migrates away from the legacy memory.mjs approach.
+	 */
 	async install(basePath: string): Promise<InstallResult> {
 		const filesWritten: string[] = [];
 		const expandedBasePath = expandHome(basePath || join(homedir(), ".agents"));
@@ -121,6 +179,10 @@ export class OpenCodeConnector extends BaseConnector {
 
 		const opencodePath = this.getOpenCodePath();
 		const pluginsPath = this.getPluginsPath(opencodePath);
+
+		// OpenCode parses every global config layer. Validate all of them before
+		// mutating anything so a malformed lower-precedence file cannot leave a
+		// partial install or make the effective integration unloadable.
 		this.validateConfigCandidates(opencodePath);
 
 		if (identityAvailable) {
@@ -137,7 +199,13 @@ export class OpenCodeConnector extends BaseConnector {
 		if (!existsSync(pluginsPath)) {
 			mkdirSync(pluginsPath, { recursive: true });
 		}
+
+		// Migrate away from legacy memory.mjs before writing new plugin
 		this.migrateFromLegacy(opencodePath);
+
+		// Keep remote credentials out of the world-readable config and plugin.
+		// OpenCode expands the file token while loading config, and the lifecycle
+		// plugin reads the same mode-0600 file at runtime.
 		const apiKey = readTrimmedEnv("SIGNET_API_KEY") ?? readTrimmedEnv("SIGNET_TOKEN");
 		const apiKeyFilePath = this.getApiKeyFilePath(opencodePath);
 		if (apiKey) {
@@ -146,17 +214,25 @@ export class OpenCodeConnector extends BaseConnector {
 		} else if (existsSync(apiKeyFilePath)) {
 			rmSync(apiKeyFilePath);
 		}
+
+		// Write bundled plugin and register it in config so runtime loading
+		// does not depend on undocumented auto-discovery behavior.
 		const pluginFilePath = this.getPluginFilePath(opencodePath);
 		writeFileSync(pluginFilePath, buildPluginBundle(apiKey ? apiKeyFilePath : undefined));
 		filesWritten.push(pluginFilePath);
 		this.ensureConfigFile(opencodePath);
 		this.registerPlugin(opencodePath);
+
+		// Generate AGENTS.md only from an available managed identity. Remote-only
+		// installs do not synthesize a local workspace or identity files.
 		if (identityMode === "managed") {
 			const agentsMdPath = await this.generateAgentsMd(expandedBasePath);
 			if (agentsMdPath) {
 				filesWritten.push(agentsMdPath);
 			}
 		} else {
+			// Clean up any previously Signet-generated AGENTS.md when identity is
+			// unavailable, off, or passthrough. User-owned files are untouched.
 			const staleAgentsMd = join(this.getOpenCodePath(), "AGENTS.md");
 			if (existsSync(staleAgentsMd)) {
 				try {
@@ -164,11 +240,20 @@ export class OpenCodeConnector extends BaseConnector {
 					if (isSignetGeneratedFile(raw)) {
 						rmSync(staleAgentsMd);
 					}
-				} catch {}
+				} catch {
+					// Non-fatal
+				}
 			}
 		}
+
+		// Explicit daemon URLs use OpenCode's remote Streamable HTTP MCP client.
+		// Local installs retain the packaged signet-mcp stdio behavior.
 		this.registerMcpServer(opencodePath, daemonUrl, apiKey ? `./plugins/${API_KEY_FILE_NAME}` : undefined);
+
+		// Register pipeline agent for lightweight extraction sessions
 		this.registerPipelineAgent(opencodePath);
+
+		// Symlink skills directory
 		const skillsSource = join(expandedBasePath, "skills");
 		const skillsDest = join(opencodePath, "skills");
 		if (identityAvailable && existsSync(skillsSource)) {
@@ -181,6 +266,10 @@ export class OpenCodeConnector extends BaseConnector {
 			filesWritten,
 		};
 	}
+
+	/**
+	 * Remove Signet integration from OpenCode
+	 */
 	async uninstall(): Promise<UninstallResult> {
 		const opencodePath = this.getOpenCodePath();
 		const filesRemoved: string[] = [];
@@ -205,7 +294,9 @@ export class OpenCodeConnector extends BaseConnector {
 					rmSync(agentsMdPath);
 					filesRemoved.push(agentsMdPath);
 				}
-			} catch {}
+			} catch {
+				// Non-fatal — leave file in place
+			}
 		}
 
 		this.migrateFromLegacy(opencodePath);
@@ -215,9 +306,17 @@ export class OpenCodeConnector extends BaseConnector {
 
 		return { filesRemoved };
 	}
+
+	/**
+	 * Check if Signet integration is already set up for OpenCode
+	 */
 	isInstalled(): boolean {
 		return existsSync(this.getPluginFilePath(this.getOpenCodePath()));
 	}
+
+	/**
+	 * Check if OpenCode is installed on the system
+	 */
 	static isHarnessInstalled(): boolean {
 		const opencodePath = join(homedir(), ".config", "opencode");
 		const candidates = [
@@ -234,6 +333,14 @@ export class OpenCodeConnector extends BaseConnector {
 
 		return false;
 	}
+
+	// ============================================================================
+	// Migration
+	// ============================================================================
+
+	/**
+	 * Remove legacy memory.mjs installation artifacts.
+	 */
 	private migrateFromLegacy(opencodePath: string): void {
 		const legacyPluginPath = join(opencodePath, "memory.mjs");
 		if (existsSync(legacyPluginPath)) rmSync(legacyPluginPath);
@@ -248,6 +355,10 @@ export class OpenCodeConnector extends BaseConnector {
 			}
 		}
 	}
+
+	// ============================================================================
+	// Internal helpers
+	// ============================================================================
 
 	private readConfig(configPath: string): JsonObject {
 		try {
@@ -321,6 +432,8 @@ export class OpenCodeConnector extends BaseConnector {
 	}
 
 	private registerMcpServer(opencodePath: string, daemonUrl?: string, apiKeyFile?: string): void {
+		// Remove old local/remote Signet entries from every precedence layer first.
+		// Otherwise OpenCode's deep merge can retain incompatible local fields.
 		this.removeMcpServer(opencodePath);
 		const configPath = this.getConfigPath();
 		this.readConfig(configPath);
@@ -400,12 +513,19 @@ export class OpenCodeConnector extends BaseConnector {
 	}
 
 	private getConfigCandidates(opencodePath: string): string[] {
+		// OpenCode loads config.json, opencode.json, then opencode.jsonc in
+		// increasing precedence. List candidates highest-first so a later file
+		// cannot replace Signet's plugin array.
 		return [
 			join(opencodePath, "opencode.jsonc"),
 			join(opencodePath, "opencode.json"),
 			join(opencodePath, "config.json"),
 		];
 	}
+
+	/**
+	 * Generate AGENTS.md for OpenCode from identity files
+	 */
 	private async generateAgentsMd(basePath: string): Promise<string | null> {
 		const sourcePath = join(basePath, "AGENTS.md");
 
@@ -416,6 +536,8 @@ export class OpenCodeConnector extends BaseConnector {
 		const raw = readFileSync(sourcePath, "utf-8");
 		const userContent = this.stripSignetBlock(raw);
 		const header = this.generateHeader(sourcePath);
+
+		// Compose additional identity files
 		const extras = this.composeIdentityExtras(basePath);
 
 		const destPath = join(this.getOpenCodePath(), "AGENTS.md");
@@ -424,6 +546,10 @@ export class OpenCodeConnector extends BaseConnector {
 		return destPath;
 	}
 }
+
+// ============================================================================
+// Exports
+// ============================================================================
 
 export const opencodeConnector = new OpenCodeConnector();
 export default OpenCodeConnector;

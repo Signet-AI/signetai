@@ -43,6 +43,8 @@ function makeState(overrides: Partial<ContinuityState> = {}): ContinuityState {
 		...overrides,
 	};
 }
+
+// Minimal DbAccessor wrapping a real bun:sqlite Database
 function createTestDbAccessor(dbPath: string): DbAccessor {
 	const db = new Database(dbPath);
 	db.run("PRAGMA journal_mode = WAL");
@@ -152,6 +154,7 @@ describe("session-checkpoints", () => {
 		}
 		const rows = getCheckpointsBySession(dbAcc, "sess-1");
 		expect(rows.length).toBe(3);
+		// newest first
 		expect(rows[0].prompt_count).toBe(4);
 	});
 
@@ -162,12 +165,15 @@ describe("session-checkpoints", () => {
 		const result = getLatestCheckpoint(dbAcc, "/tmp/project", 60_000);
 		expect(result).toBeDefined();
 		expect(result?.project_normalized).toBe("/tmp/project");
+
+		// No match for different project
 		const noMatch = getLatestCheckpoint(dbAcc, "/tmp/missing", 60_000);
 		expect(noMatch).toBeUndefined();
 	});
 
 	test("getLatestCheckpoint returns undefined for expired checkpoints", () => {
 		writeCheckpoint(dbAcc, makeParams(), 50);
+		// Query with 0ms window — everything is "expired"
 		const result = getLatestCheckpoint(dbAcc, "/tmp/project", 0);
 		expect(result).toBeUndefined();
 	});
@@ -311,7 +317,7 @@ describe("formatPeriodicDigest", () => {
 			lastCheckpointAt: Date.now(),
 			pendingQueries: ["typescript", "auth"],
 			pendingPromptSnippets: [],
-			startedAt: Date.now() - 600_000,
+			startedAt: Date.now() - 600_000, // 10 min ago
 			structuralSnapshot: undefined,
 		};
 
@@ -534,11 +540,15 @@ describe("debounce merge", () => {
 		await flushPendingCheckpoints();
 		const rows = getCheckpointsBySession(dbAcc, "merge-test");
 		expect(rows.length).toBe(1);
+		// Prompt counts summed
 		expect(rows[0].prompt_count).toBe(8);
+		// Digest takes latest
 		expect(rows[0].digest).toBe("second digest");
+		// Queries merged
 		if (!rows[0].memory_queries || !rows[0].recent_remembers) throw new Error("merged JSON fields missing");
 		const queries = JSON.parse(rows[0].memory_queries);
 		expect(queries).toEqual(["query-a", "query-b"]);
+		// Remembers merged
 		const remembers = JSON.parse(rows[0].recent_remembers);
 		expect(remembers).toEqual(["rem-a", "rem-b"]);
 	});

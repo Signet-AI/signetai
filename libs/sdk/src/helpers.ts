@@ -1,4 +1,14 @@
-import { applyRecallScoreThreshold, buildRecallRequestBody } from "@signet/core/recall";
+/**
+ * Manual helper methods for SignetClient
+ *
+ * These provide conveniences beyond the auto-generated API coverage:
+ * - Polling utilities
+ * - Composite operations
+ * - Progress callbacks
+ * - Error shortcuts
+ */
+
+import { applyNativeRecallScoreThreshold, buildNativeRecallRequestBody } from "./native-contract.js";
 import { SignetApiError } from "./errors.js";
 import type { SignetTransport } from "./transport.js";
 import type { DocumentRecord, JobStatus, MemoryRecord, RecallResponse, SdkRecallOptions } from "./types.js";
@@ -14,7 +24,7 @@ export interface BatchModifyProgress {
 }
 
 export function applyRecallMinScore(result: RecallResponse, minScore?: number): RecallResponse {
-	return applyRecallScoreThreshold(result, minScore) as RecallResponse;
+	return applyNativeRecallScoreThreshold(result, minScore);
 }
 
 export class SignetClientHelpers {
@@ -75,7 +85,7 @@ export class SignetClientHelpers {
 		const result = applyRecallMinScore(
 			await this.transport.post<RecallResponse>(
 				"/api/memory/recall",
-				buildRecallRequestBody(query, { ...requestOptions, minScore }),
+				buildNativeRecallRequestBody(query, { ...requestOptions, minScore }),
 			),
 			minScore,
 		);

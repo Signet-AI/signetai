@@ -9,7 +9,14 @@ import {
 	isJsonObject,
 } from "@signet/connector-base";
 import { parseLenientJsonObject } from "@signet/connector-base/lenient-json";
-import { LOOPBACK_HOST, expandHome } from "@signet/core";
+
+const LOOPBACK_HOST = "localhost";
+
+function expandHome(path: string, home: string): string {
+	if (path === "~") return home;
+	if (path.startsWith("~/")) return join(home, path.slice(2));
+	return path;
+}
 
 type JsonObject = Record<string, unknown>;
 const OPENCLAW_PARSE_OPTIONS = { label: "OpenClaw config" } as const;
@@ -842,23 +849,11 @@ async function fetchDaemon(path, body) {
   return res.json();
 }
 
-let sharedRecallFormatter;
 async function recallMessage(data) {
   if (typeof data?.message === "string") return data.message;
   const rows = Array.isArray(data?.results) ? data.results : [];
   if (rows.length === 0) {
     return "No matching memories found.";
-  }
-
-  try {
-    sharedRecallFormatter ??= (await import("@signet/core")).formatRecallText;
-    if (typeof sharedRecallFormatter === "function") {
-      return sharedRecallFormatter(data);
-    }
-  } catch {
-    // Older standalone hook installs may not have @signet/core resolvable.
-    // Keep a compact compatibility path instead of dumping raw JSON into
-    // the prompt.
   }
 
   const method = typeof data?.method === "string" ? data.method : "hybrid";

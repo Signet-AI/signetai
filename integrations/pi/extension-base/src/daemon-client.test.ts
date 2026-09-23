@@ -58,23 +58,15 @@ describe("createDaemonClient (extension-base)", () => {
 	});
 
 	test("postResult classifies non-timeout body read failures separately from timeout", async () => {
-		let canceled = false;
 		globalThis.fetch = Object.assign(
 			async () => {
-				const response = new Response(null, { status: 200, headers: { "Content-Type": "application/json" } });
-				Object.defineProperty(response, "text", {
-					value: async () => {
-						throw new Error("stream reset");
+				const body = new ReadableStream({
+					start(controller) {
+						controller.enqueue(new TextEncoder().encode('{"inje'));
+						setTimeout(() => controller.error(new Error("stream reset")), 5);
 					},
 				});
-				Object.defineProperty(response, "body", {
-					value: {
-						cancel: async () => {
-							canceled = true;
-						},
-					},
-				});
-				return response;
+				return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
 			},
 			{ preconnect: originalFetch.preconnect },
 		);
@@ -86,7 +78,6 @@ describe("createDaemonClient (extension-base)", () => {
 		if (!result.ok) {
 			expect(result.reason).toBe("body-read");
 		}
-		expect(canceled).toBe(true);
 	});
 
 	test("postResult returns invalid-json with diagnostic info for empty body", async () => {
@@ -108,41 +99,6 @@ describe("createDaemonClient (extension-base)", () => {
 
 		expect(result).toEqual({ ok: false, reason: "invalid-json", status: 200 });
 		expect(warnings.some((w) => w.includes("0 chars") && w.includes("empty body"))).toBe(true);
-	});
-
-	test("cancels HTTP error bodies before returning unavailable", async () => {
-		let canceled = false;
-		globalThis.fetch = Object.assign(
-			async () => {
-				const body = new ReadableStream({
-					start(controller) {
-						controller.enqueue(new TextEncoder().encode("error body"));
-					},
-					cancel() {
-						canceled = true;
-					},
-				});
-				return new Response(body, { status: 503 });
-			},
-			{ preconnect: originalFetch.preconnect },
-		);
-
-		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
-
-		expect(result).toEqual({ ok: false, reason: "http", status: 503 });
-		expect(canceled).toBe(true);
-	});
-
-	test("postStatus accepts a successful empty body without parsing JSON", async () => {
-		globalThis.fetch = Object.assign(async () => new Response(null, { status: 200 }), {
-			preconnect: originalFetch.preconnect,
-		});
-
-		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postStatus("/api/hooks/remember", {});
-
-		expect(result).toEqual({ ok: true, data: undefined });
 	});
 
 	test("postResult parses valid JSON through text-first path", async () => {

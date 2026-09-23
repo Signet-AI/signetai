@@ -33,8 +33,8 @@ export function withPath(cmd: Command): Command {
 
 export function withRuntime(cmd: Command): Command {
 	return cmd
-		.option("--runtime <runtime>", "Daemon runtime: compiled or bun-js")
-		.option("--daemon-js-path <path>", "Built daemon.js to run with bun-js (overrides SIGNET_DAEMON_JS_PATH)");
+		.option("--runtime <runtime>", "Daemon runtime (compiled only)")
+		.option("--daemon-js-path <path>", "Unsupported JavaScript daemon path");
 }
 
 export function withJson(cmd: Command): Command {

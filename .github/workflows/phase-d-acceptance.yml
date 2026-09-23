@@ -3,66 +3,52 @@ name: Phase D Stability Acceptance
 on:
   pull_request:
     paths:
-      - "platform/daemon/src/**"
-      - "platform/core/src/**"
-      - "tests/integration/acceptance/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
+      - "scripts/build-native-cli.ts"
+      - "scripts/native-packaged-acceptance.test.ts"
+      - "scripts/native-artifact-provenance.ts"
+      - "scripts/native-artifact-provenance.test.ts"
       - ".github/workflows/phase-d-acceptance.yml"
   push:
     branches: [main]
     paths:
-      - "platform/daemon/src/**"
-      - "platform/core/src/**"
-      - "tests/integration/acceptance/**"
+      - "platform/rust-daemon/**"
+      - "platform/rust-core/**"
+      - "scripts/build-native-cli.ts"
+      - "scripts/native-packaged-acceptance.test.ts"
+      - "scripts/native-artifact-provenance.ts"
+      - "scripts/native-artifact-provenance.test.ts"
       - ".github/workflows/phase-d-acceptance.yml"
   schedule:
     - cron: "15 7 * * *"
   workflow_dispatch:
-    inputs:
-      scale:
-        description: "Harness scale"
-        required: false
-        default: "smoke"
-        type: choice
-        options: ["smoke", "full"]
 
 permissions:
   contents: read
 
 jobs:
   smoke:
-    name: Smoke (${{ github.event_name == 'schedule' && 'nightly → full' || 'PR/main' }})
+    name: Fresh Rust daemon acceptance
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Build fresh Rust daemon
+        run: cargo build --manifest-path platform/rust-daemon/Cargo.toml
       - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version-file: package.json
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-      - name: Build @signet/core and @signet/daemon
+      - name: Build packaged Rust daemon
+        run: bun run build:native-cli
+      - name: Run Rust daemon contract tests
+        run: bun test platform/rust-daemon/contract.test.ts
+      - name: Packaged Rust acceptance without Bun or Node
+        shell: bash
         run: |
-          bun run --filter '@signet/core' --filter '@signet/connector-base' build
-          bun run build:opencode-plugin
-          bun run build:oh-my-pi-extension
-          bun run build:pi-extension
-          bun run --filter '@signet/connector-*' build
-          bun run --filter '@signet/daemon' build
-      - name: Run Phase D acceptance harness
-        run: |
-          if [ "${{ github.event_name }}" = "schedule" ]; then
-            SCALE=full
-          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            SCALE=${{ inputs.scale }}
-          else
-            SCALE=smoke
-          fi
-          echo "Running Phase D acceptance at scale=$SCALE"
-          bun tests/integration/acceptance/run.ts --scale "$SCALE" --out "$GITHUB_WORKSPACE/phase-d-artifacts"
-      - name: Upload acceptance artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: phase-d-acceptance-${{ github.run_id }}
-          path: phase-d-artifacts/
-          if-no-files-found: ignore
+          set -euo pipefail
+          platform="$(uname -s | tr '[:upper:]' '[:lower:]')"
+          arch="$(uname -m)"
+          case "$platform-$arch" in linux-x86_64) key=linux-x64 ;; linux-aarch64) key=linux-arm64 ;; darwin-x86_64) key=darwin-x64 ;; darwin-arm64) key=darwin-arm64 ;; *) echo "unsupported runner target: $platform-$arch" >&2; exit 1 ;; esac
+          artifact="$GITHUB_WORKSPACE/dist/native/signet-$key"
+          provenance="$artifact.provenance.json"
+          test -s "$artifact" && test -s "$provenance"
+          env -i HOME="$HOME" PATH=/usr/bin:/bin SIGNET_NATIVE_ACCEPTANCE_BINARY="$artifact" SIGNET_NATIVE_PROVENANCE="$provenance" bun test scripts/native-packaged-acceptance.test.ts

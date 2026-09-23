@@ -3,6 +3,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { OpenClawMemoryCapability, OpenClawPluginApi, OpenClawToolDefinition } from "./openclaw-types";
+
+// Import directly; tests seed a real temporary SIGNET_PATH instead of
+// mocking @signet/core globally, which otherwise leaks into later suites.
 const signet = await import("./index");
 const signetPlugin = signet.default;
 const { memoryRecall, memoryStore, sessionSearch, _resetRegistration, _sanitization, cleanupTimedMap } = signet;
@@ -91,11 +94,15 @@ function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 		},
 		registrationMode: "full",
 		logger: {
-			info() {},
+			info() {
+				// no-op in tests
+			},
 			warn(message) {
 				warnMessages.push(String(message));
 			},
-			error() {},
+			error() {
+				// no-op in tests
+			},
 		},
 		registerTool(tool) {
 			tools.push(tool);
@@ -103,7 +110,9 @@ function createMockApi(overrides?: Partial<OpenClawPluginApi>): {
 		registerMemoryCapability(capability) {
 			memoryCapabilities.push(capability);
 		},
-		registerCli() {},
+		registerCli() {
+			// no-op
+		},
 		registerService(service) {
 			registeredServices.push(service);
 		},
@@ -1028,12 +1037,19 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
+	// ======================================================================
+	// Clean message extraction (prefer event.messages over bloated prompt)
+	// ======================================================================
+
 	it("extracts clean user message from event.messages instead of metadata-wrapped prompt", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
 		const beforePromptBuild = hooks.get("before_prompt_build");
 		expect(beforePromptBuild).toBeDefined();
+
+		// Simulate a Discord message: prompt is bloated with metadata,
+		// but messages array has the clean structured conversation.
 		const bloatedPrompt = [
 			'```json\n{"message_id": "1486955833333121055","sender_id": "212290903174283264","conversation_label": "Guild #supervisors","sender": "Nicholai"}\n```',
 			'```json\n{"label": "Nicholai (212290903174283264)","id": "212290903174283264","name": "Nicholai","username": "nicholai.exe","tag": "nicholai.exe"}\n```',
@@ -1275,6 +1291,10 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		);
 	});
 
+	// ======================================================================
+	// resolveCtx dual-source resolution (typed ctx vs legacy event extras)
+	// ======================================================================
+
 	it("prefers ctx.sessionKey over event.sessionKey when both are present", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -1360,6 +1380,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		const agentEnd = hooks.get("agent_end");
 		expect(agentEnd).toBeDefined();
+
+		// No ctx.workspaceDir, no event.cwd -- falls to event.project
 		await agentEnd?.(
 			{
 				project: "/tmp/event-project",
@@ -1382,6 +1404,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		const agentEnd = hooks.get("agent_end");
 		expect(agentEnd).toBeDefined();
+
+		// Future OpenClaw: typed ctx has all fields, event has none of the extras
 		await agentEnd?.(
 			{
 				messages: [{ role: "user", content: "done" }],
@@ -1411,6 +1435,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		const agentEnd = hooks.get("agent_end");
 		expect(agentEnd).toBeDefined();
+
+		// Legacy OpenClaw: no typed ctx fields, everything on event
 		await agentEnd?.(
 			{
 				messages: [],
@@ -1476,6 +1502,10 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		});
 	});
 
+	// ==================================================================
+	// Mid-session checkpoint extraction (turn-count trigger)
+	// ==================================================================
+
 	it("fires checkpoint extract after turn threshold and resets counter", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -1484,6 +1514,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(beforePromptBuild).toBeDefined();
 
 		const ctx = { sessionKey: "long-session", agentId: "agent-1" };
+
+		// Fire 20 turns (the threshold) — checkpoint should fire on the 20th
 		for (let i = 0; i < 20; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1493,8 +1525,12 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				ctx,
 			);
 		}
+
+		// Flush fire-and-forget checkpoint fetch
 		await Bun.sleep(0);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+
+		// Counter should have reset — fire another 20 to confirm it fires again
 		for (let i = 0; i < 20; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1519,6 +1555,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(agentEnd).toBeDefined();
 
 		const ctx = { sessionKey: "short-session", agentId: "agent-1" };
+
+		// Fire only 5 turns (well below threshold)
 		for (let i = 0; i < 5; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1528,6 +1566,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				ctx,
 			);
 		}
+
+		// End session normally
 		await agentEnd?.({ cwd: "/tmp/short", sessionKey: "short-session" }, ctx);
 
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(0);
@@ -1543,6 +1583,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(agentEnd).toBeDefined();
 
 		const ctx = { sessionKey: "cleanup-session", agentId: "agent-1" };
+
+		// Fire 15 turns (below threshold, but count accumulated)
 		for (let i = 0; i < 15; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1552,7 +1594,12 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				ctx,
 			);
 		}
+
+		// End session — counter should be cleaned up
 		await agentEnd?.({ cwd: "/tmp/cleanup", sessionKey: "cleanup-session" }, ctx);
+
+		// Start a new session with the same key and fire only 5 turns
+		// (should not trigger checkpoint since counter was reset on agent_end)
 		for (let i = 0; i < 5; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1576,6 +1623,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(afterCompaction).toBeDefined();
 
 		const ctx = { sessionKey: "compact-dedup-session", agentId: "agent-1" };
+
+		// Fire 5 pre-compaction turns — sets lastMsgCount to 5
 		for (let i = 0; i < 5; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1585,7 +1634,15 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				ctx,
 			);
 		}
+
+		// Compaction fires — messages reset back to low count.
+		// The after_compaction handler resets checkpointTurns even when no
+		// summary is available (it deletes the entry before the summary check).
 		await afterCompaction?.({ messageCount: 4, compactedCount: 2 }, ctx);
+
+		// Post-compaction: message count starts at 1 again (same as early pre-compaction).
+		// Without the fix, lastMsgCount=1 would be seen as a dup and the turn skipped.
+		// With the fix, checkpointTurns is reset and the counter increments normally.
 		for (let i = 0; i < 20; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1597,6 +1654,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		}
 
 		await Bun.sleep(0);
+		// 20 post-compaction turns should trigger exactly one checkpoint
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
@@ -1608,6 +1666,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(beforeAgentStart).toBeDefined();
 
 		const ctx = { sessionKey: "legacy-long", agentId: "agent-legacy" };
+
+		// Fire 20 turns via the legacy hook path
 		for (let i = 0; i < 20; i++) {
 			await beforeAgentStart?.(
 				{
@@ -1623,6 +1683,9 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 	});
 
 	it("deduplicates turns when messages field absent (legacy OpenClaw)", async () => {
+		// Older OpenClaw builds omit event.messages entirely. When both
+		// before_prompt_build and before_agent_start fire without it, only
+		// one of the two should count as a turn (time-window dedup path).
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
@@ -1632,16 +1695,24 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(beforeAgentStart).toBeDefined();
 
 		const ctx = { sessionKey: "legacy-no-messages", agentId: "agent-nm" };
+
+		// Fire 20 full turns: each turn fires both hooks without messages field.
+		// With time-window dedup, each pair counts as 1 turn → 20 turns total.
 		for (let i = 0; i < 20; i++) {
 			await beforePromptBuild?.({ prompt: `Turn ${i + 1}` }, ctx);
+			// Fire before_agent_start immediately after (same turn, within window).
 			await beforeAgentStart?.({ prompt: `Turn ${i + 1}` }, ctx);
 		}
 
 		await Bun.sleep(0);
+		// Exactly 1 checkpoint at turn 20 — no double-counting from the pair.
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
 	it("sends inline transcript when sessionFile absent (typed-only ctx)", async () => {
+		// Future OpenClaw: ctx carries sessionKey/agentId but event has no sessionFile.
+		// The adapter must serialize event.messages as JSONL inline transcript so the
+		// daemon always has a transcript source for checkpoint delta extraction.
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
 
@@ -1649,6 +1720,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(beforePromptBuild).toBeDefined();
 
 		const ctx = { sessionKey: "typed-session", agentId: "typed-agent" };
+		// Fire 20 turns with typed-only ctx — no sessionFile on event.
+		// Messages grow each turn so the message-count dedup doesn't collapse them.
 		let lastMsgs: Array<{ role: string; content: string }> = [];
 		for (let i = 0; i < 20; i++) {
 			lastMsgs = Array.from({ length: i + 1 }, (_, j) => ({
@@ -1660,6 +1733,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 
 		await Bun.sleep(0);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+		// The body should carry an inline transcript (JSONL of the messages array)
+		// since no sessionFile was present on the event.
 		const body = lastCheckpointBody as Record<string, unknown>;
 		expect(body.transcriptPath).toBeUndefined();
 		expect(typeof body.transcript).toBe("string");
@@ -1669,6 +1744,10 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 	});
 
 	it("restores counter on skipped:true so next turn retries (CAS guard)", async () => {
+		// When the daemon returns skipped:true (delta too small, no transcript,
+		// bypassed), the counter is restored to threshold-1 so the next turn retries.
+		// CAS guard: restoration only happens if no new turns arrived during the
+		// async round-trip (prevents a stale callback from overwriting newer count).
 		checkpointResponse = { skipped: true };
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -1677,6 +1756,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(beforePromptBuild).toBeDefined();
 
 		const ctx = { sessionKey: "retry-session", agentId: "retry-agent" };
+
+		// Fire 20 turns — checkpoint fires but returns skipped:true
 		for (let i = 0; i < 20; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1688,6 +1769,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		}
 		await Bun.sleep(0);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+
+		// Counter was restored to threshold-1, so one more turn should trigger retry
 		checkpointResponse = { queued: true, jobId: "retry-1" };
 		await beforePromptBuild?.(
 			{
@@ -1701,6 +1784,9 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 	});
 
 	it("does NOT restore counter on queued success responses", async () => {
+		// Treating successful checkpoint responses as success (no counter
+		// restoration) prevents per-turn checkpoint spam once a session exceeds
+		// 20 turns.
 		checkpointResponse = { queued: true, jobId: "checkpoint-job" };
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -1709,6 +1795,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(beforePromptBuild).toBeDefined();
 
 		const ctx = { sessionKey: "checkpoint-success-session", agentId: "rust-agent" };
+
+		// Fire 20 turns — checkpoint fires and returns a successful queue response.
 		for (let i = 0; i < 20; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1720,6 +1808,8 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		}
 		await Bun.sleep(0);
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
+
+		// Counter left at 0 (success path) — next 19 turns should NOT fire
 		for (let i = 0; i < 19; i++) {
 			await beforePromptBuild?.(
 				{
@@ -1730,6 +1820,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			);
 		}
 		await Bun.sleep(0);
+		// Still 1 hit — no spam from the success path
 		expect(getHits("/api/hooks/session-checkpoint-extract")).toBe(1);
 	});
 
@@ -1927,6 +2018,10 @@ describe("registration guard (#422)", () => {
 	});
 });
 
+// ===========================================================================
+// Request normalization (routing metadata only)
+// ===========================================================================
+
 describe("injectBillingBlock", () => {
 	const { injectBillingBlock, BILLING_BLOCK } = _sanitization;
 
@@ -2036,7 +2131,9 @@ describe("sanitizeRequest", () => {
 		expect(sanitizeRequest(request)).toBeTrue();
 		const parsed = JSON.parse(request.body as string) as Record<string, unknown>;
 		const blocks = parsed.system as Array<{ type: string; text: string }>;
+		// Billing block injected as first element
 		expect(blocks[0].text).toContain("x-anthropic-billing-header");
+		// Product and prompt text are not rewritten.
 		expect(request.body).toContain("OpenClaw");
 		expect(request.body).toContain("running inside");
 	});
@@ -2075,6 +2172,8 @@ describe("sanitizeRequest", () => {
 				],
 			}),
 		};
+		// Even with billing already present, sanitizeRequest returns false
+		// since no injection needed and no triggers found
 		expect(sanitizeRequest(request)).toBeFalse();
 	});
 
@@ -2157,9 +2256,12 @@ describe("installFetchSanitizer", () => {
 			expect(capturedBodies).toHaveLength(1);
 			const sent = JSON.parse(capturedBodies[0]) as Record<string, unknown>;
 			const blocks = sent.system as Array<{ type: string; text: string }>;
+			// Billing block injected
 			expect(blocks[0].text).toContain("x-anthropic-billing-header");
+			// Product and prompt text are not rewritten.
 			expect(capturedBodies[0]).toContain("OpenClaw");
 			expect(capturedBodies[0]).toContain("running inside");
+			// Beta headers merged
 			expect(capturedHeaders[0]["anthropic-beta"]).toContain("oauth-2025-04-20");
 		} finally {
 			remove();
@@ -2196,6 +2298,7 @@ describe("installFetchSanitizer", () => {
 				}),
 			});
 			expect(capturedHeaders).toHaveLength(1);
+			// No OAuth token in test env → original x-api-key must be preserved
 			expect(capturedHeaders[0]["x-api-key"] ?? capturedHeaders[0].authorization).toBeDefined();
 		} finally {
 			remove();

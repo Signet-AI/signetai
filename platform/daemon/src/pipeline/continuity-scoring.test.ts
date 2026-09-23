@@ -1,7 +1,25 @@
+/**
+ * Tests for enhanced continuity scoring in summary-worker.
+ *
+ * Validates that:
+ * - session_memories table has the right schema
+ * - loadInjectedMemories query works correctly
+ * - writePerMemoryRelevance maps 8-char prefixes to full IDs
+ * - session_scores new columns work (confidence, continuity_reasoning)
+ * - memories_recalled is populated from actual injected count
+ * - Backward compat: sessions without session_memories still score
+ *
+ * Uses an in-memory SQLite database with full migrations.
+ */
+
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "../../../core/src/migrations";
 import type { DbAccessor, WriteDb, ReadDb } from "../db-accessor";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function makeAccessor(db: Database): DbAccessor {
 	return {
@@ -72,6 +90,10 @@ function insertSessionMemory(
 	);
 }
 
+// ---------------------------------------------------------------------------
+// DB setup
+// ---------------------------------------------------------------------------
+
 let db: Database;
 let accessor: DbAccessor;
 
@@ -84,6 +106,10 @@ beforeEach(() => {
 afterEach(() => {
 	db.close();
 });
+
+// ============================================================================
+// session_memories table schema
+// ============================================================================
 
 describe("session_memories table", () => {
 	it("has all required columns", () => {
@@ -142,6 +168,10 @@ describe("session_memories table", () => {
 		expect(count.cnt).toBe(2);
 	});
 });
+
+// ============================================================================
+// session_scores extended columns
+// ============================================================================
 
 describe("session_scores extensions", () => {
 	it("has confidence and continuity_reasoning columns", () => {
@@ -203,6 +233,10 @@ describe("session_scores extensions", () => {
 		expect(row.continuity_reasoning).toBeNull();
 	});
 });
+
+// ============================================================================
+// loadInjectedMemories query
+// ============================================================================
 
 describe("injected memory loading", () => {
 	it("joins session_memories with memories to get content", () => {
@@ -275,6 +309,10 @@ describe("injected memory loading", () => {
 		expect(rows.length).toBe(0);
 	});
 });
+
+// ============================================================================
+// per-memory relevance writing
+// ============================================================================
 
 describe("per-memory relevance writing", () => {
 	it("maps 8-char prefix to full ID and writes relevance_score", () => {
@@ -362,6 +400,10 @@ describe("per-memory relevance writing", () => {
 		expect(row.relevance_score).toBe(1.0);
 	});
 });
+
+// ============================================================================
+// Full continuity scoring round-trip
+// ============================================================================
 
 describe("continuity scoring round-trip", () => {
 	it("writes memories_recalled from actual injected count", () => {
@@ -495,8 +537,13 @@ describe("continuity scoring round-trip", () => {
 	});
 });
 
+// ============================================================================
+// scoreContinuity simulation — exact sequence the real function performs
+// ============================================================================
+
 describe("scoreContinuity full simulation", () => {
 	it("processes a mock LLM response and writes all outputs correctly", () => {
+		// --- Setup: 3 injected memories, 1 candidate-only ---
 		const memIds = [
 			"a1b2c3d4-e5f6-7890-abcd-111111111111",
 			"b2c3d4e5-f6a7-8901-bcde-222222222222",
@@ -512,6 +559,8 @@ describe("scoreContinuity full simulation", () => {
 		insertSessionMemory(db, "sim-session", memIds[1], { wasInjected: 1, rank: 1, effectiveScore: 0.82 });
 		insertSessionMemory(db, "sim-session", memIds[2], { wasInjected: 1, rank: 2, effectiveScore: 0.71 });
 		insertSessionMemory(db, "sim-session", memIds[3], { wasInjected: 0, rank: 3, effectiveScore: 0.4 });
+
+		// --- Step 1: loadInjectedMemories ---
 		const injectedMemories = accessor.withReadDb((rdb) =>
 			rdb
 				.prepare(
@@ -530,6 +579,8 @@ describe("scoreContinuity full simulation", () => {
 		}>;
 
 		expect(injectedMemories.length).toBe(3);
+
+		// --- Step 2: Simulate LLM JSON response ---
 		const mockLlmResponse = JSON.stringify({
 			score: 0.78,
 			confidence: 0.85,
@@ -542,6 +593,8 @@ describe("scoreContinuity full simulation", () => {
 				{ id: memIds[2].slice(0, 8), relevance: 0.15 },
 			],
 		});
+
+		// --- Step 3: Parse (same logic as scoreContinuity) ---
 		let jsonStr = mockLlmResponse.trim();
 		const fenceMatch = jsonStr.match(/```(?:json)?\s*([\s\S]*?)```/);
 		if (fenceMatch) jsonStr = fenceMatch[1].trim();
@@ -571,6 +624,8 @@ describe("scoreContinuity full simulation", () => {
 			reasoning: typeof parsed.reasoning === "string" ? parsed.reasoning : "",
 			per_memory: perMemory,
 		};
+
+		// --- Step 4: writePerMemoryRelevance ---
 		const prefixMap = new Map<string, string>();
 		for (const mem of injectedMemories) {
 			prefixMap.set(mem.memory_id.slice(0, 8), mem.memory_id);
@@ -587,6 +642,8 @@ describe("scoreContinuity full simulation", () => {
 				stmt.run(Math.max(0, Math.min(1, entry.relevance)), "sim-session", fullId);
 			}
 		});
+
+		// --- Step 5: Write session_scores ---
 		const now = new Date().toISOString();
 		accessor.withWriteTx((wdb) => {
 			wdb
@@ -612,6 +669,10 @@ describe("scoreContinuity full simulation", () => {
 					now,
 				);
 		});
+
+		// --- Verify all outputs ---
+
+		// 1. session_scores row
 		const scoreRow = db.prepare("SELECT * FROM session_scores WHERE id = ?").get("score-sim-1") as Record<
 			string,
 			unknown
@@ -619,10 +680,12 @@ describe("scoreContinuity full simulation", () => {
 
 		expect(scoreRow.score).toBeCloseTo(0.78, 2);
 		expect(scoreRow.confidence).toBeCloseTo(0.85, 2);
-		expect(scoreRow.memories_recalled).toBe(3);
+		expect(scoreRow.memories_recalled).toBe(3); // NOT 0
 		expect(scoreRow.memories_used).toBe(2);
 		expect(scoreRow.novel_context_count).toBe(1);
 		expect(scoreRow.continuity_reasoning).toContain("Dark mode preference");
+
+		// 2. Per-memory relevance scores
 		const mem0 = db
 			.prepare("SELECT relevance_score FROM session_memories WHERE session_key = ? AND memory_id = ?")
 			.get("sim-session", memIds[0]) as { relevance_score: number };
@@ -637,6 +700,8 @@ describe("scoreContinuity full simulation", () => {
 			.prepare("SELECT relevance_score FROM session_memories WHERE session_key = ? AND memory_id = ?")
 			.get("sim-session", memIds[2]) as { relevance_score: number };
 		expect(mem2.relevance_score).toBeCloseTo(0.15, 2);
+
+		// 3. Non-injected candidate should NOT have relevance_score
 		const mem3 = db
 			.prepare("SELECT relevance_score FROM session_memories WHERE session_key = ? AND memory_id = ?")
 			.get("sim-session", memIds[3]) as { relevance_score: number | null };
@@ -673,6 +738,8 @@ describe("scoreContinuity full simulation", () => {
 
 		const parsed = JSON.parse(minimalResponse) as Record<string, unknown>;
 		expect(typeof parsed.score).toBe("number");
+
+		// Simulate the fallback logic
 		const result = {
 			score: Math.max(0, Math.min(1, parsed.score as number)),
 			confidence: typeof parsed.confidence === "number" ? parsed.confidence : 0,
@@ -692,6 +759,8 @@ describe("scoreContinuity full simulation", () => {
 	it("rejects non-numeric score", () => {
 		const badResponse = '{"score": "high", "confidence": 0.5}';
 		const parsed = JSON.parse(badResponse) as Record<string, unknown>;
+
+		// scoreContinuity returns early if score isn't a number
 		expect(typeof parsed.score).not.toBe("number");
 	});
 

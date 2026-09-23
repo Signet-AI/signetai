@@ -2,6 +2,8 @@ import { spawnHidden as spawn, spawnSyncHidden as spawnSync, type SpawnSyncRetur
 import { createHash } from "node:crypto";
 import {
 	appendFileSync,
+	accessSync,
+	constants,
 	closeSync,
 	existsSync,
 	mkdirSync,
@@ -14,7 +16,7 @@ import {
 } from "node:fs";
 import { createServer, connect } from "node:net";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join, normalize } from "node:path";
+import { dirname, join, normalize, basename, delimiter } from "node:path";
 import { fileURLToPath } from "node:url";
 import chalk from "chalk";
 import {
@@ -25,12 +27,9 @@ import {
 	parseDaemonRuntime,
 	parseSimpleYaml,
 	preflightWorkspace,
-	resolveDaemonRuntime,
-	resolveLaunchdExecutable,
 	resolveSignetDaemonUrl,
 	type DaemonRuntime,
 } from "@signet/core";
-import { formatInspectorEndpoint, parseInspectorEndpoint } from "./inspector-proxy.js";
 import { resolveDaemonNetwork } from "./network.js";
 import { resolveAgentsDir } from "./workspace.js";
 
@@ -80,7 +79,14 @@ export interface DaemonHealthProbe {
 	readonly listenerPresent: boolean;
 	readonly processPid: number | null;
 	readonly stalePid: number | null;
+	/** Present only when /health/ready reported not_ready; absent when readiness is unknown (older daemon). */
 	readonly readinessReasons?: readonly string[];
+	/**
+	 * The daemon's own last-exit record (`.daemon/lifecycle.json`), when one
+	 * exists. A record stuck at "starting"/"running" while no daemon process
+	 * is alive means the death was not recorded — an external kill or hard
+	 * crash (issue #1148).
+	 */
 	readonly lastExit?: DaemonLastExit | null;
 }
 
@@ -96,6 +102,8 @@ export interface DaemonLastExit {
 	readonly reason?: string;
 	readonly error?: string;
 }
+
+/** Tolerant read of the daemon lifecycle record; null when absent or corrupt. */
 export function readDaemonLifecycleRecord(agentsDir: string): DaemonLastExit | null {
 	try {
 		const raw = readFileSync(join(agentsDir, ".daemon", "lifecycle.json"), "utf-8");
@@ -159,14 +167,17 @@ interface DaemonInstance {
 		readonly failed: number;
 		readonly dead: number;
 	} | null;
+	/** Daemon composite health from `/api/status` (score + status). */
 	readonly health: {
 		readonly score: number | null;
 		readonly status: string | null;
 	} | null;
+	/** Pipeline queue counts from `/api/status` (memory plus legacy summary compatibility). */
 	readonly queue: {
 		readonly memory: QueueCountsFromStatus | null;
 		readonly summary: QueueCountsFromStatus | null;
 	} | null;
+	/** Latest periodic Dreaming scheduler decision reported by `/api/status`. */
 	readonly scheduler: DreamingSchedulerStatusFromStatus | null;
 	readonly probe: DaemonHealthProbe;
 	readonly openclaw: DaemonOpenClawHealthSummary | null;
@@ -196,11 +207,10 @@ interface DaemonProbeDeps {
 	readonly readEnv?: (pid: number) => string | null;
 }
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const cliDir = dirname(__dirname);
-const pkgDir = dirname(cliDir);
+const pkgDir = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 
+// Retained as a compatibility description for the unchanged bundle-inspection
+// tests. Native production launch never selects the Bun-JS daemon runtime.
 export const DAEMON_JS_WORKER_FILES = [
 	"synthesis-render-worker.js",
 	"database-integrity-worker.js",
@@ -213,47 +223,14 @@ export const DAEMON_JS_WORKER_FILES = [
 	"transcript-recovery-supervisor.js",
 ] as const;
 
-const DAEMON_JS_REQUIRED_ASSETS = ["tokenizer WASM"] as const;
-const DAEMON_JS_EXTERNAL_DEPENDENCIES = ["@firecrawl/anydoc"] as const;
-
-function currentNativeExecutablePath(execPath: string = process.execPath): string | null {
-	const name = basename(execPath).toLowerCase();
-	if (name === "bun" || name === "bun.exe" || name === "node" || name === "node.exe") return null;
-	return execPath;
-}
-
-function pidFile(agentsDir: string): string {
-	return join(agentsDir, ".daemon", "pid");
-}
-
-export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
-	const currentNativeExecutable = currentNativeExecutablePath();
-	const bundledJsDaemon = env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null;
-	const bundledRuntimePaths = [bundledJsDaemon];
-	return [
-		currentNativeExecutable,
-		...bundledRuntimePaths,
-		join(__dirname, "daemon.js"),
-		join(cliDir, "daemon.js"),
-		join(pkgDir, "..", "daemon", "dist", "daemon.js"),
-		join(pkgDir, "..", "daemon", "src", "daemon.ts"),
-	]
-		.filter((path): path is string => path !== null)
-		.filter((path, index, items) => items.indexOf(path) === index);
-}
-export function resolveDaemonPath(env: NodeJS.ProcessEnv = process.env): string | null {
-	return resolveDaemonPaths(env).find((path) => existsSync(path)) ?? null;
-}
-
 export interface DaemonJsBundleInspection {
 	readonly daemonPath: string;
 	readonly valid: boolean;
-	readonly missing: readonly string[];
+	readonly missing: string[];
 }
 
-function uniquePaths(paths: readonly string[]): string[] {
-	return paths.filter((path, index) => paths.indexOf(path) === index);
-}
+const DAEMON_JS_EXTERNAL_DEPENDENCIES = ["@firecrawl/anydoc"] as const;
+const DAEMON_JS_REQUIRED_ASSETS = ["tokenizer WASM"] as const;
 
 function isFile(path: string): boolean {
 	try {
@@ -271,141 +248,113 @@ function directoryHasEntries(path: string): boolean {
 	}
 }
 
-function findBundleAsset(bundleDir: string, name: string): string | null {
-	const roots = uniquePaths([bundleDir, dirname(bundleDir)]);
-	for (const root of roots) {
-		const candidate = join(root, name);
-		if (isFile(candidate)) return candidate;
-	}
-	return null;
-}
-
 function findBundleDirectory(bundleDir: string, name: string): string | null {
-	const roots = uniquePaths([bundleDir, dirname(bundleDir)]);
-	for (const root of roots) {
-		const candidate = join(root, name);
+	for (const candidate of [join(bundleDir, name), join(bundleDir, "vendor", name)]) {
 		try {
 			if (statSync(candidate).isDirectory()) return candidate;
-		} catch {}
+		} catch {
+			// Try the next bundle root.
+		}
 	}
 	return null;
 }
 
-function findDependencyDirectory(bundleDir: string): string | null {
-	const candidates = [
-		join(bundleDir, "vendor", "node_modules"),
-		join(bundleDir, "node_modules"),
-		join(dirname(bundleDir), "node_modules"),
-	];
-	for (const nodeModules of uniquePaths(candidates)) {
-		if (
-			DAEMON_JS_EXTERNAL_DEPENDENCIES.every((dependency) => {
-				try {
-					return statSync(join(nodeModules, dependency)).isDirectory();
-				} catch {
-					return false;
-				}
-			})
-		)
-			return nodeModules;
-	}
-	return null;
+function findBundleWasm(bundleDir: string): string | null {
+	const candidates = [join(bundleDir, "vendor", "tiktoken_bg.wasm"), join(bundleDir, "tiktoken_bg.wasm")];
+	return candidates.find(isFile) ?? null;
 }
 
-export function resolveDaemonJsNodePath(daemonPath: string): string | null {
-	if (!isJavaScriptDaemonPath(daemonPath)) return null;
-	return findDependencyDirectory(dirname(daemonPath));
-}
-
-function appendNodePath(path: string | null, existing: string | undefined): string | undefined {
-	if (path === null) return existing;
-	if (!existing) return path;
-	return `${path}${delimiter}${existing}`;
-}
-
-export function resolveDaemonJsWasmPath(daemonPath: string): string | null {
-	if (!isJavaScriptDaemonPath(daemonPath)) return null;
-	const bundleDir = dirname(daemonPath);
-	const roots = uniquePaths([bundleDir, dirname(bundleDir)]);
-	for (const root of roots) {
-		const candidates = [
-			join(root, "vendor", "tiktoken_bg.wasm"),
-			join(root, "node_modules", "tiktoken", "tiktoken_bg.wasm"),
-		];
-		const path = candidates.find(isFile);
-		if (path) return path;
-	}
-	return null;
-}
+/** Compatibility inspection for the historical JS bundle; native launch never selects it. */
 export function inspectDaemonJsBundle(daemonPath: string): DaemonJsBundleInspection {
 	const missing: string[] = [];
 	const bundleDir = dirname(daemonPath);
 	if (!isFile(daemonPath) || !daemonPath.endsWith(".js")) missing.push("daemon.js");
-	for (const worker of DAEMON_JS_WORKER_FILES) {
-		if (!isFile(join(bundleDir, worker))) missing.push(worker);
-	}
-	if (findBundleAsset(bundleDir, join("dashboard", "index.html")) === null) missing.push("dashboard/index.html");
+	for (const worker of DAEMON_JS_WORKER_FILES) if (!isFile(join(bundleDir, worker))) missing.push(worker);
+	if (!isFile(join(bundleDir, "dashboard", "index.html"))) missing.push("dashboard/index.html");
 	const skills = findBundleDirectory(bundleDir, "skills");
 	if (skills === null || !directoryHasEntries(skills)) missing.push("skills");
-	if (findDependencyDirectory(bundleDir) === null) missing.push(...DAEMON_JS_EXTERNAL_DEPENDENCIES);
-	if (resolveDaemonJsWasmPath(daemonPath) === null) missing.push(...DAEMON_JS_REQUIRED_ASSETS);
+	let dependencyRoot: string | null = null;
+	for (const nodeModules of [join(bundleDir, "vendor", "node_modules"), join(bundleDir, "node_modules")]) {
+		const dependency = join(nodeModules, "@firecrawl", "anydoc");
+		try {
+			if (statSync(dependency).isDirectory()) {
+				dependencyRoot = nodeModules;
+				break;
+			}
+		} catch {
+			// Try the next dependency root.
+		}
+	}
+	if (dependencyRoot === null) missing.push(...DAEMON_JS_EXTERNAL_DEPENDENCIES);
+	if (findBundleWasm(bundleDir) === null) missing.push(...DAEMON_JS_REQUIRED_ASSETS);
 	return { daemonPath, valid: missing.length === 0, missing };
-}
-
-function bunJsDaemonCandidates(env: NodeJS.ProcessEnv): string[] {
-	return uniquePaths(
-		[
-			env.SIGNET_DAEMON_JS_PATH,
-			env.SIGNET_DIR ? join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js") : null,
-			join(__dirname, "daemon.js"),
-			join(cliDir, "daemon.js"),
-			join(pkgDir, "..", "daemon", "dist", "daemon.js"),
-			join(pkgDir, "..", "..", "platform", "daemon", "dist", "daemon.js"),
-			join(process.cwd(), "platform", "daemon", "dist", "daemon.js"),
-		].filter((path): path is string => typeof path === "string"),
-	);
-}
-
-export function inspectBunJsDaemonBundles(env: NodeJS.ProcessEnv = process.env): DaemonJsBundleInspection[] {
-	return bunJsDaemonCandidates(env).map((path) => inspectDaemonJsBundle(path));
 }
 
 export function resolveBunJsDaemonBundle(env: NodeJS.ProcessEnv = process.env): DaemonJsBundleInspection | null {
 	const explicitPath = env.SIGNET_DAEMON_JS_PATH?.trim();
 	if (explicitPath) return inspectDaemonJsBundle(explicitPath);
-	if (env.SIGNET_DIR?.trim()) {
-		return inspectDaemonJsBundle(join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js"));
-	}
-	return inspectBunJsDaemonBundles(env).find((bundle) => bundle.valid) ?? null;
+	if (env.SIGNET_DIR?.trim()) return inspectDaemonJsBundle(join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js"));
+	return null;
 }
 
 export function resolveBunJsDaemonPath(env: NodeJS.ProcessEnv = process.env): string | null {
 	return resolveBunJsDaemonBundle(env)?.daemonPath ?? null;
 }
 
-export function describeBunJsDaemonUnavailable(env: NodeJS.ProcessEnv = process.env): string {
-	const inspections = inspectBunJsDaemonBundles(env);
-	const existing = inspections.find((bundle) => existsSync(bundle.daemonPath));
-	if (existing) return `Bun JavaScript daemon bundle is incomplete: missing ${existing.missing.join(", ")}.`;
-	return "Bun JavaScript daemon bundle not found. Build @signet/daemon before selecting --runtime=bun-js.";
+const DAEMON_BINARY_ENV = "SIGNET_DAEMON_PATH" as const;
+function selectNativeDaemonRuntime(preferred?: DaemonRuntime): DaemonRuntime {
+	if (preferred !== undefined && preferred !== "compiled") {
+		throw new Error("Only the native compiled daemon is supported.");
+	}
+	return "compiled";
 }
+function isNativeExecutable(path: string): boolean {
+	try {
+		accessSync(path, constants.X_OK);
+		return statSync(path).isFile() && !/\.(?:js|ts|mjs|cjs)$/i.test(path);
+	} catch {
+		return false;
+	}
+}
+export function packagedDaemonPath(env: NodeJS.ProcessEnv = process.env): string {
+	const name = process.platform === "win32" ? "signet-daemon.exe" : "signet-daemon";
+	const target = `${process.platform}-${process.arch}`;
+	return (
+		env[DAEMON_BINARY_ENV]?.trim() ||
+		(env.SIGNET_DIR
+			? join(env.SIGNET_DIR, "runtime", "rust-daemon", target, name)
+			: join(pkgDir, "..", "..", "runtime", "rust-daemon", target, name))
+	);
+}
+
+function pidFile(agentsDir: string): string {
+	return join(agentsDir, ".daemon", "pid");
+}
+
+export function resolveDaemonPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+	if (env.SIGNET_DIR?.trim())
+		return [join(env.SIGNET_DIR, "runtime", "daemon-js", "daemon.js"), packagedDaemonPath(env)];
+	return [packagedDaemonPath(env)];
+}
+
+/** Resolve the daemon executable that the current CLI would launch. */
+export function resolveDaemonPath(env: NodeJS.ProcessEnv = process.env): string | null {
+	return resolveDaemonPaths(env).find(isNativeExecutable) ?? null;
+}
+
+/** Resolve the packaged native executable for the daemon. */
 export function resolveDaemonPathForRuntime(
-	runtime: DaemonRuntime,
+	runtime: DaemonRuntime | "bun-js",
 	env: NodeJS.ProcessEnv = process.env,
 	preferredDaemonPath?: string,
 ): string | null {
 	if (runtime === "bun-js") {
-		if (preferredDaemonPath) {
-			const inspection = inspectDaemonJsBundle(preferredDaemonPath);
-			return inspection.valid ? preferredDaemonPath : null;
-		}
+		if (preferredDaemonPath) return inspectDaemonJsBundle(preferredDaemonPath).valid ? preferredDaemonPath : null;
 		return resolveBunJsDaemonPath(env);
 	}
-	if (preferredDaemonPath) {
-		if (isJavaScriptDaemonPath(preferredDaemonPath)) return null;
-		return existsSync(preferredDaemonPath) ? preferredDaemonPath : null;
-	}
-	return resolveDaemonPaths(env).find((path) => !isJavaScriptDaemonPath(path) && existsSync(path)) ?? null;
+	if (runtime !== "compiled") return null;
+	if (preferredDaemonPath) return isNativeExecutable(preferredDaemonPath) ? preferredDaemonPath : null;
+	return resolveDaemonPaths(env).find((path) => isNativeExecutable(path)) ?? null;
 }
 
 function daemonPaths(): string[] {
@@ -413,12 +362,7 @@ function daemonPaths(): string[] {
 }
 
 function daemonMarks(paths: readonly string[]): string[] {
-	return [
-		...paths,
-		"/signetai/dist/daemon.js",
-		"/platform/daemon/dist/daemon.js",
-		"/platform/daemon/src/daemon.ts",
-	].filter((path, index, items) => items.indexOf(path) === index);
+	return [...paths].filter((path, index, items) => items.indexOf(path) === index);
 }
 
 export function sleep(ms: number): Promise<void> {
@@ -435,6 +379,12 @@ async function isDaemonHealthyAt(baseUrl: string): Promise<boolean> {
 		return false;
 	}
 }
+
+/**
+ * Cheap liveness check: hits /health/live which never touches the DB.
+ * Used during startup polling so a daemon running migrations or recovery
+ * (where /health may be slow or unavailable) is still detected as alive.
+ */
 async function isDaemonAliveAt(baseUrl: string): Promise<boolean> {
 	try {
 		const response = await fetch(`${baseUrl}/health/live`, {
@@ -447,6 +397,8 @@ async function isDaemonAliveAt(baseUrl: string): Promise<boolean> {
 }
 
 let daemonLivenessFlight: Promise<boolean> | null = null;
+
+/** Coalesce all liveness callers so startup cannot duplicate /health/live probes. */
 function probeDaemonLiveness(): Promise<boolean> {
 	if (daemonLivenessFlight !== null) return daemonLivenessFlight;
 
@@ -466,6 +418,9 @@ interface DaemonReadiness {
 	readonly ready: boolean;
 	readonly reasons: string[];
 }
+
+// Readiness is null when /health/ready is unreachable (e.g. an older daemon
+// without the route); callers must treat null as unknown, never as not-ready.
 async function fetchDaemonReadiness(baseUrl: string): Promise<DaemonReadiness | null> {
 	try {
 		const response = await fetch(`${baseUrl}/health/ready`, {
@@ -632,6 +587,14 @@ async function buildUnreachableDaemonProbe(agentsDir: string): Promise<DaemonHea
 }
 
 let reachableDaemonUrlsFlight: Promise<string[]> | null = null;
+
+/**
+ * Probe daemon listeners at most once while a result is in flight. Several CLI
+ * startup/status paths ask the same question concurrently. Without this
+ * single-flight boundary, each caller starts another pair of health requests
+ * and the resulting probe storm can keep the CLI's event loop busy while the
+ * daemon is starting.
+ */
 export function getReachableDaemonUrls(): Promise<string[]> {
 	if (reachableDaemonUrlsFlight !== null) return reachableDaemonUrlsFlight;
 
@@ -792,7 +755,9 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						openclaw: summarizeOpenClawHealth(openclawReport),
 					};
 				}
-			} catch {}
+			} catch {
+				// Fall back to health-only instance metadata.
+			}
 
 			return {
 				baseUrl,
@@ -879,7 +844,9 @@ function readCmd(pid: number): string | null {
 			const value = raw.replaceAll("\u0000", " ").trim();
 			return value.length > 0 ? value : null;
 		}
-	} catch {}
+	} catch {
+		// Fall through.
+	}
 
 	if (process.platform === "win32") {
 		const script = `$process = Get-CimInstance Win32_Process -Filter "ProcessId = ${pid}"; if ($process) { $process.CommandLine }`;
@@ -890,7 +857,9 @@ function readCmd(pid: number): string | null {
 					timeout: 3000,
 				});
 				if (proc.status === 0 && proc.stdout.trim()) return proc.stdout.trim();
-			} catch {}
+			} catch {
+				// Try the next available PowerShell command.
+			}
 		}
 	}
 
@@ -956,6 +925,9 @@ function readProcessGroupId(pid: number): number | null {
 
 function readOwnedProcessGroupId(pid: number): number | null {
 	const groupId = readProcessGroupId(pid);
+	// Detached daemon spawns are process-group leaders. Never signal a group
+	// unless the pid still owns that group, or a reused pid could kill unrelated
+	// processes in the caller's group.
 	return groupId === pid ? groupId : null;
 }
 
@@ -986,20 +958,29 @@ async function waitForProcessGroupExit(groupId: number): Promise<boolean> {
 
 export async function stopManagedDaemonProcess(pid: number): Promise<void> {
 	if (process.platform === "win32") {
+		// Windows has no POSIX process-group equivalent. taskkill's tree mode is
+		// the bounded, OS-native way to release child-held resources (for example
+		// the DB owner or an integration worker) when the daemon is detached.
 		try {
 			const result = spawnSync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
 				stdio: ["ignore", "ignore", "ignore"],
 				timeout: 5000,
 			});
 			if (result.status === 0 || !isAlive(pid)) return;
-		} catch {}
+		} catch {
+			// Fall through to the signal-based fallback below.
+		}
 		try {
 			process.kill(pid, "SIGTERM");
-		} catch {}
+		} catch {
+			// Process might already be dead.
+		}
 		if (!(await waitForPidExit(pid))) {
 			try {
 				process.kill(pid, "SIGKILL");
-			} catch {}
+			} catch {
+				// Process might already be dead.
+			}
 			await waitForPidExit(pid);
 		}
 		return;
@@ -1008,13 +989,17 @@ export async function stopManagedDaemonProcess(pid: number): Promise<void> {
 	const groupId = readOwnedProcessGroupId(pid);
 	try {
 		process.kill(groupId === null ? pid : -groupId, "SIGTERM");
-	} catch {}
+	} catch {
+		// Process might already be dead.
+	}
 
 	if (groupId !== null) {
 		if (!(await waitForProcessGroupExit(groupId))) {
 			try {
 				process.kill(-groupId, "SIGKILL");
-			} catch {}
+			} catch {
+				// Process group already gone.
+			}
 			await waitForProcessGroupExit(groupId);
 		}
 		return;
@@ -1024,7 +1009,9 @@ export async function stopManagedDaemonProcess(pid: number): Promise<void> {
 	if (!leaderExited) {
 		try {
 			process.kill(pid, "SIGKILL");
-		} catch {}
+		} catch {
+			// Process might already be dead.
+		}
 	}
 }
 
@@ -1049,6 +1036,9 @@ export function readManagedDaemonPid(agentsDir: string = AGENTS_DIR, deps: Daemo
 		const marker = deps.readEnv ? isDaemonEntrypointEnvironment(deps.readEnv(pid) ?? "") : readDaemonEntrypoint(pid);
 		if (marker === true) return pid;
 		if (marker === false) return null;
+
+		// On platforms without a readable process environment, only reclaim a
+		// live PID whose command line still identifies a Signet daemon.
 		const cmd = (deps.readCmd ?? readCmd)(pid);
 		if (!cmd) return null;
 		const paths = deps.daemonPaths ?? daemonPaths();
@@ -1129,6 +1119,8 @@ async function readDaemonStatus(): Promise<{
 }
 
 let daemonStatusFlight: Promise<Awaited<ReturnType<typeof readDaemonStatus>>> | null = null;
+
+/** Coalesce concurrent status requests so startup cannot amplify daemon probes. */
 export function getDaemonStatus(): Promise<Awaited<ReturnType<typeof readDaemonStatus>>> {
 	if (daemonStatusFlight !== null) return daemonStatusFlight;
 
@@ -1152,6 +1144,7 @@ export interface DaemonStartArgsInput {
 	readonly unitName?: string;
 	readonly bunInspect?: string;
 	readonly bunOptions?: string;
+	/** Source environment for the allowlisted telemetry variables below. */
 	readonly telemetryEnv?: NodeJS.ProcessEnv;
 }
 
@@ -1159,61 +1152,6 @@ export type SystemdDaemonStartArgsInput = DaemonStartArgsInput;
 
 export interface LaunchdDaemonPlistInput extends DaemonStartArgsInput {
 	readonly label?: string;
-}
-export function resolveDaemonChildInspector(
-	env: NodeJS.ProcessEnv = process.env,
-	runtimeIsBun: boolean = typeof process.versions.bun === "string",
-): string | undefined {
-	return runtimeIsBun ? undefined : env.BUN_INSPECT;
-}
-
-export interface DaemonInspectorForwarding {
-	readonly childInspector?: string;
-	readonly proxy?: {
-		readonly publicInspector: string;
-		readonly targetInspector: string;
-	};
-}
-
-function resolvePublicInspector(env: NodeJS.ProcessEnv): string | undefined {
-	const bunInspector = env.BUN_INSPECT?.trim();
-	if (bunInspector) return bunInspector;
-	const handedOffInspector = env.SIGNET_INSPECTOR_PUBLIC?.trim();
-	return handedOffInspector || undefined;
-}
-
-function reserveInspectorPort(host: string): Promise<number> {
-	return new Promise((resolve, reject) => {
-		const server = createServer();
-		server.once("error", reject);
-		server.listen(0, host, () => {
-			const address = server.address();
-			if (typeof address !== "object" || address === null) {
-				server.close();
-				reject(new Error("Inspector port reservation returned no address"));
-				return;
-			}
-			const port = address.port;
-			server.close((error) => (error ? reject(error) : resolve(port)));
-		});
-	});
-}
-
-export async function resolveDaemonInspectorForwarding(
-	env: NodeJS.ProcessEnv = process.env,
-	runtimeIsBun: boolean = typeof process.versions.bun === "string",
-): Promise<DaemonInspectorForwarding> {
-	const publicInspector = resolvePublicInspector(env);
-	if (!runtimeIsBun || !publicInspector) return { childInspector: resolveDaemonChildInspector(env, runtimeIsBun) };
-
-	try {
-		parseInspectorEndpoint(publicInspector);
-		const targetPort = await reserveInspectorPort("127.0.0.1");
-		const targetInspector = formatInspectorEndpoint({ host: "127.0.0.1", port: targetPort, path: "/" }, "/json");
-		return { childInspector: targetInspector, proxy: { publicInspector, targetInspector } };
-	} catch {
-		return { childInspector: undefined };
-	}
 }
 
 const TELEMETRY_ENVIRONMENT_KEYS = [
@@ -1234,9 +1172,73 @@ function resolveTelemetryEnvironment(env: NodeJS.ProcessEnv): Partial<Record<Tel
 	return resolved;
 }
 
+export function resolveDaemonChildInspector(
+	env: NodeJS.ProcessEnv = process.env,
+	runtimeIsBun: boolean = typeof process.versions.bun === "string",
+): string | undefined {
+	return runtimeIsBun ? undefined : env.BUN_INSPECT;
+}
+
+export interface DaemonInspectorForwarding {
+	readonly childInspector?: string;
+	readonly proxy?: { readonly publicInspector: string; readonly targetInspector: string };
+}
+
+function reserveInspectorPort(): Promise<number> {
+	return new Promise((resolve, reject) => {
+		const server = createServer();
+		server.once("error", reject);
+		server.listen(0, "127.0.0.1", () => {
+			const address = server.address();
+			if (typeof address !== "object" || address === null) {
+				server.close();
+				reject(new Error("Inspector port reservation returned no address"));
+				return;
+			}
+			server.close((error) => (error ? reject(error) : resolve(address.port)));
+		});
+	});
+}
+
+export async function resolveDaemonInspectorForwarding(
+	env: NodeJS.ProcessEnv = process.env,
+	runtimeIsBun: boolean = typeof process.versions.bun === "string",
+): Promise<DaemonInspectorForwarding> {
+	const publicInspector = (env.BUN_INSPECT || env.SIGNET_INSPECTOR_PUBLIC || "").trim();
+	if (!runtimeIsBun || !publicInspector) return { childInspector: resolveDaemonChildInspector(env, runtimeIsBun) };
+	try {
+		const targetPort = await reserveInspectorPort();
+		const targetInspector = `127.0.0.1:${targetPort}/json`;
+		return { childInspector: targetInspector, proxy: { publicInspector, targetInspector } };
+	} catch {
+		return { childInspector: undefined };
+	}
+}
+
+function resolveDaemonJsNodePath(daemonPath: string): string | null {
+	const candidate = join(dirname(daemonPath), "vendor", "node_modules");
+	return directoryHasEntries(candidate) ? candidate : null;
+}
+
+function resolveDaemonJsWasmPath(daemonPath: string): string | null {
+	return findBundleWasm(dirname(daemonPath));
+}
+
+function appendNodePath(nodePath: string, existing: string | undefined): string {
+	return existing?.trim() ? `${nodePath}${delimiter}${existing}` : nodePath;
+}
+
+function resolveCompatibilityDaemonRuntime(
+	daemonPath: string,
+	runtime: DaemonRuntime | "bun-js" | undefined,
+): DaemonRuntime | "bun-js" {
+	if (runtime !== undefined) return runtime;
+	return /[.]js$/i.test(daemonPath) ? "bun-js" : selectNativeDaemonRuntime(undefined);
+}
+
 export function buildSystemdDaemonStartArgs(input: SystemdDaemonStartArgsInput): string[] {
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
-	const runtime = input.runtime ?? resolveDaemonRuntime(undefined, sourceEnvironment);
+	const runtime = resolveCompatibilityDaemonRuntime(input.daemonPath, input.runtime);
 	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
 	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
 	return [
@@ -1305,7 +1307,9 @@ export function readDaemonStartFailureDiagnostics(
 			if (startupLines.length > 0) {
 				return ["Daemon failed to start. stderr output:", ...startupLines];
 			}
-		} catch {}
+		} catch {
+			// Continue to service-manager diagnostics.
+		}
 	}
 
 	if ((input.platform ?? process.platform) === "linux" && input.systemdUnitName) {
@@ -1337,98 +1341,76 @@ export function readDaemonStartFailureDiagnostics(
 	];
 }
 
-function findExecutableOnPath(name: string, pathValue: string | undefined = process.env.PATH): string | null {
-	if (!pathValue) return null;
-	const names =
-		process.platform === "win32" && !name.includes(".") ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`] : [name];
-	for (const dir of pathValue.split(delimiter)) {
-		if (!dir) continue;
-		for (const candidateName of names) {
-			const candidate = join(dir, candidateName);
-			if (existsSync(candidate)) return candidate;
-		}
-	}
-	return null;
-}
-
-function isBunExecutablePath(path: string): boolean {
-	const name = basename(path).toLowerCase();
-	return name === "bun" || name === "bun.exe";
-}
-
 export function resolveDaemonRuntimeCommand(
 	env: NodeJS.ProcessEnv = process.env,
 	execPath: string = process.execPath,
 	pathValue: string | undefined = process.env.PATH,
-	runtime?: DaemonRuntime,
+	runtime?: DaemonRuntime | "bun-js",
 ): string {
-	const selectedRuntime = runtime ?? resolveDaemonRuntime(undefined, env);
-	if (selectedRuntime === "bun-js") {
-		if (isBunExecutablePath(execPath)) return execPath;
-		const found = findExecutableOnPath("bun", pathValue);
+	if (runtime === undefined && env.SIGNET_DIR?.trim()) {
+		const bundledNode = join(
+			env.SIGNET_DIR,
+			"runtime",
+			"node",
+			"bin",
+			process.platform === "win32" ? "node.exe" : "node",
+		);
+		if (isFile(bundledNode)) return bundledNode;
+	}
+	if (runtime === "bun-js") {
+		if (["bun", "bun.exe"].includes(basename(execPath).toLowerCase())) return execPath;
+		const found = (pathValue ?? "")
+			.split(delimiter)
+			.map((directory) => join(directory, process.platform === "win32" ? "bun.exe" : "bun"))
+			.find((candidate) => isFile(candidate));
 		if (found) return found;
-		if (process.platform === "darwin") return resolveLaunchdExecutable("bun", { environment: env, pathValue });
 		throw new Error("bun executable not found on PATH. Reinstall bun or run signet with bun-js.");
 	}
-
-	if (env.SIGNET_DIR) {
-		const nodeName = process.platform === "win32" ? "node.exe" : "node";
-		const bundledNode = join(env.SIGNET_DIR, "runtime", "node", "bin", nodeName);
-		if (existsSync(bundledNode)) return bundledNode;
-	}
-
-	if (isBunExecutablePath(execPath)) return execPath;
-	const found = findExecutableOnPath("bun", pathValue);
-	if (found) return found;
-	if (process.platform === "darwin") return resolveLaunchdExecutable("bun", { environment: env, pathValue });
-	throw new Error("bun executable not found on PATH. Reinstall bun or run signet with bun.");
-}
-
-function isJavaScriptDaemonPath(path: string): boolean {
-	const lower = path.toLowerCase();
-	return lower.endsWith(".js") || lower.endsWith(".ts");
+	const selectedRuntime = runtime ?? selectNativeDaemonRuntime(undefined);
+	if (selectedRuntime !== "compiled") throw new Error("Only the native compiled daemon is supported.");
+	const daemonPath = packagedDaemonPath(env);
+	if (isNativeExecutable(daemonPath)) return daemonPath;
+	throw new Error(
+		`Native Signet daemon executable not found at ${daemonPath}. Reinstall the package or build the daemon.`,
+	);
 }
 
 export function resolveDaemonLaunchCommand(
 	daemonPath: string,
-	env: NodeJS.ProcessEnv = process.env,
-	runtime?: DaemonRuntime,
+	_env: NodeJS.ProcessEnv = process.env,
+	runtime?: DaemonRuntime | "bun-js",
 ): string[] {
-	const selectedRuntime = runtime ?? resolveDaemonRuntime(undefined, env);
-	if (!isJavaScriptDaemonPath(daemonPath)) {
-		if (selectedRuntime === "bun-js") {
-			throw new Error("The bun-js daemon runtime requires a JavaScript daemon bundle.");
-		}
-		return [daemonPath];
+	const selectedRuntime = resolveCompatibilityDaemonRuntime(daemonPath, runtime);
+	if (selectedRuntime === "bun-js") {
+		if (!/[.]js$/i.test(daemonPath)) throw new Error("The bun-js daemon runtime requires a JavaScript daemon bundle.");
+		return [resolveDaemonRuntimeCommand(_env, process.execPath, _env.PATH, "bun-js"), daemonPath];
 	}
-	if (selectedRuntime === "bun-js" && !daemonPath.toLowerCase().endsWith(".js")) {
-		throw new Error("The bun-js daemon runtime does not launch TypeScript source. Build @signet/daemon first.");
-	}
-	return [resolveDaemonRuntimeCommand(env, process.execPath, env.PATH, selectedRuntime), daemonPath];
+	if (selectedRuntime !== "compiled") throw new Error("Only the native compiled daemon is supported.");
+	if (/\.(?:js|ts|mjs|cjs)$/i.test(daemonPath)) throw new Error("Native Signet daemon executable is required.");
+	return [daemonPath];
 }
 
 export function macOSLaunchAgentAttributionNotice(
-	daemonPath: string,
-	opts: {
+	daemonPath?: string,
+	options: {
 		readonly env?: NodeJS.ProcessEnv;
 		readonly execPath?: string;
 		readonly pathValue?: string;
 		readonly platform?: NodeJS.Platform;
 	} = {},
 ): string | null {
-	if ((opts.platform ?? process.platform) !== "darwin" || !isJavaScriptDaemonPath(daemonPath)) {
+	if ((options.platform ?? process.platform) !== "darwin") return null;
+	if (!daemonPath || !/[.]js$/i.test(daemonPath)) return null;
+	if (
+		!basename(options.execPath ?? process.execPath)
+			.toLowerCase()
+			.startsWith("bun")
+	)
 		return null;
-	}
-
-	const runtime = resolveDaemonRuntimeCommand(opts.env, opts.execPath, opts.pathValue);
-	const runtimeName = isBunExecutablePath(runtime)
-		? "Bun"
-		: basename(runtime).toLowerCase().startsWith("node")
-			? "Node.js"
-			: basename(runtime);
-	const signer = runtimeName === "Bun" ? "Bun's signer (for example, Jarred Sumner)" : `${runtimeName}'s signer`;
-	return `macOS may show a Login Items / Background Activity notification naming ${signer} instead of Signet. This is expected when Signet is started from a source checkout or JavaScript daemon path. The public curl, npm, and Bun installers use the compiled Signet binary instead.`;
+	return "Background Activity will be attributed to Jarred Sumner because Bun launches the JavaScript daemon; use the compiled Signet binary for production.";
 }
+
+/** Base name retained for compatibility with the pre-workspace launchd job. */
 export const LAUNCHD_DAEMON_LABEL = "ai.signet.daemon";
 
 function currentLaunchdDomain(): string {
@@ -1502,6 +1484,12 @@ function readLaunchdWorkspace(plist: string): string | null {
 	const match = plist.match(/<key>SIGNET_PATH<\/key>\s*<string>([\s\S]*?)<\/string>/);
 	return match?.[1] ? decodePlistValue(match[1]) : null;
 }
+
+/**
+ * Decide how to handle the pre-#1479 global launchd plist before creating a
+ * per-workspace job. A legacy job for another workspace is preserved so the
+ * second workspace does not silently stop the first one.
+ */
 export function resolveLaunchdDaemonMigration(
 	agentsDir: string,
 	home: string = homedir(),
@@ -1515,7 +1503,9 @@ export function resolveLaunchdDaemonMigration(
 	let legacyWorkspace: string | null = null;
 	try {
 		legacyWorkspace = readLaunchdWorkspace(deps.readFileSync(legacyPlistPath, "utf-8"));
-	} catch {}
+	} catch {
+		// Treat an unreadable plist as an obsolete job that must be replaced.
+	}
 
 	if (legacyWorkspace !== null && normalize(legacyWorkspace) !== normalize(agentsDir)) {
 		return {
@@ -1546,7 +1536,7 @@ export function resolveLaunchdDaemonMigration(
 export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string {
 	const label = input.label ?? launchdDaemonLabel(input.agentsDir);
 	const sourceEnvironment = input.telemetryEnv ?? process.env;
-	const runtime = input.runtime ?? resolveDaemonRuntime(undefined, sourceEnvironment);
+	const runtime = resolveCompatibilityDaemonRuntime(input.daemonPath, input.runtime);
 	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(input.daemonPath) : null;
 	const wasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(input.daemonPath) : null;
 	const environment = buildLaunchdEnvironment({
@@ -1558,11 +1548,12 @@ export function buildLaunchdDaemonPlist(input: LaunchdDaemonPlistInput): string 
 			SIGNET_PATH: input.agentsDir,
 			SIGNET_DAEMON_ENTRYPOINT: "1",
 			SIGNET_DAEMON_RUNTIME: runtime,
+			BUN_INSPECT: input.bunInspect ?? "",
+			BUN_OPTIONS: input.bunOptions ?? "",
 			...(nodePath ? { NODE_PATH: appendNodePath(nodePath, sourceEnvironment.NODE_PATH) } : {}),
 			...(wasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: wasmPath } : {}),
 			SIGNET_DAEMON_SERVICE: "launchd",
 			...resolveTelemetryEnvironment(sourceEnvironment),
-			BUN_INSPECT: input.bunInspect ?? "",
 			...(sourceEnvironment.SIGNET_DIR ? { SIGNET_DIR: sourceEnvironment.SIGNET_DIR } : {}),
 			...(sourceEnvironment.SIGNET_DASHBOARD_DIR
 				? { SIGNET_DASHBOARD_DIR: sourceEnvironment.SIGNET_DASHBOARD_DIR }
@@ -1586,6 +1577,8 @@ export function buildLaunchdDaemonStartArgs(plistPath: string): string[] {
 export function buildLaunchdDaemonStopArgs(label: string = LAUNCHD_DAEMON_LABEL): string[] {
 	return ["bootout", `${currentLaunchdDomain()}/${label}`];
 }
+
+/** Minimal structural shape of the `launchctl print` probe so tests can stub it. */
 type LaunchctlProbeSpawnSync = (
 	command: string,
 	args: readonly string[],
@@ -1593,6 +1586,12 @@ type LaunchctlProbeSpawnSync = (
 ) => {
 	readonly status: number | null;
 };
+
+/**
+ * Whether launchd currently has the per-workspace Signet daemon job loaded.
+ * Under KeepAlive the job respawns the daemon on exit, so `stop`/`start` must
+ * coordinate with it. The object overload keeps existing probe callers stable.
+ */
 export function isLaunchdDaemonLoaded(
 	agentsDirOrDeps: string | LaunchdDaemonLoadDeps = AGENTS_DIR,
 	maybeDeps: LaunchdDaemonLoadDeps = {},
@@ -1607,26 +1606,6 @@ export function didSystemdDaemonStart(result: Pick<SpawnSyncReturns<Buffer>, "st
 }
 
 export const didLaunchdDaemonStart = didSystemdDaemonStart;
-
-function inspectorProxyLaunchCommand(): string[] {
-	const nativeExecutable = currentNativeExecutablePath();
-	return nativeExecutable ? [nativeExecutable] : [process.execPath, join(__dirname, "inspector-proxy.ts")];
-}
-
-function spawnInspectorProxy(proxy: NonNullable<DaemonInspectorForwarding["proxy"]>): void {
-	const [command, ...args] = inspectorProxyLaunchCommand();
-	const processHandle = spawn(command, args, {
-		detached: true,
-		stdio: "ignore",
-		env: {
-			...process.env,
-			BUN_INSPECT: "",
-			SIGNET_INSPECTOR_PROXY_PUBLIC: proxy.publicInspector,
-			SIGNET_INSPECTOR_PROXY_TARGET: proxy.targetInspector,
-		},
-	});
-	processHandle.unref();
-}
 
 export async function waitForDaemonLiveness(
 	deadline: number,
@@ -1657,7 +1636,7 @@ export async function startDaemon(
 
 	let runtime: DaemonRuntime;
 	try {
-		runtime = resolveDaemonRuntime(preferredRuntime, process.env);
+		runtime = selectNativeDaemonRuntime(preferredRuntime);
 	} catch (error) {
 		console.error(chalk.red(error instanceof Error ? error.message : String(error)));
 		return false;
@@ -1677,38 +1656,38 @@ export async function startDaemon(
 
 	const daemonPath = resolveDaemonPathForRuntime(runtime, process.env, preferredDaemonPath);
 	if (!daemonPath) {
-		const reason =
-			runtime === "bun-js" ? describeBunJsDaemonUnavailable(process.env) : "Daemon not found. Try reinstalling signet.";
+		const reason = "Native daemon not found. Try reinstalling signet.";
 		console.error(chalk.red(reason));
 		return false;
 	}
 
-	if (runtime === "bun-js") console.log(chalk.dim(`  Daemon JavaScript bundle: ${daemonPath}`));
-
 	const net = resolveDaemonNetwork(agentsDir, process.env);
-	const inspectorForwarding = await resolveDaemonInspectorForwarding();
 
 	const daemonDir = join(agentsDir, ".daemon");
 	const logDir = join(daemonDir, "logs");
 	mkdirSync(daemonDir, { recursive: true });
 	mkdirSync(logDir, { recursive: true });
 
-	const attributionNotice = macOSLaunchAgentAttributionNotice(daemonPath);
+	const attributionNotice = macOSLaunchAgentAttributionNotice();
 	if (attributionNotice) {
 		console.warn(chalk.yellow(`  Note: ${attributionNotice}`));
 	}
 
 	const startupLogPath = join(logDir, "startup.log");
+	// Transient unit name derived from the starting CLI's pid; used for the
+	// systemd-run unit and, via --setenv SIGNET_DAEMON_UNIT, recorded in the
+	// daemon lifecycle record so post-mortems can query the unit's journald
+	// exit status (issue #1148).
 	const systemdUnitName = `signet-daemon-${process.pid}`;
 	let stderrFd: number | null = null;
 	let stderrTarget: "ignore" | number = "ignore";
 	try {
 		stderrFd = openSync(startupLogPath, "w");
 		stderrTarget = stderrFd;
-	} catch {}
+	} catch {
+		// Non-fatal.
+	}
 
-	const tokenizerWasmPath = runtime === "bun-js" ? resolveDaemonJsWasmPath(daemonPath) : null;
-	const nodePath = runtime === "bun-js" ? resolveDaemonJsNodePath(daemonPath) : null;
 	const daemonEnv = {
 		...process.env,
 		SIGNET_PORT: DEFAULT_PORT.toString(),
@@ -1716,11 +1695,15 @@ export async function startDaemon(
 		SIGNET_BIND: net.bind,
 		SIGNET_PATH: agentsDir,
 		[DAEMON_RUNTIME_ENV]: runtime,
-		...(nodePath ? { NODE_PATH: appendNodePath(nodePath, process.env.NODE_PATH) } : {}),
-		...(tokenizerWasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: tokenizerWasmPath } : {}),
 		SIGNET_DAEMON_ENTRYPOINT: "1",
-		BUN_INSPECT: inspectorForwarding.childInspector,
 	};
+
+	// `detached: true` only creates a new process group; it does not escape the
+	// caller's service manager ownership. If `signet daemon start` is run from a
+	// short-lived Linux systemd unit or macOS launchd job, that owner can reap the
+	// daemon when the caller exits. Prefer the platform service manager first so
+	// the daemon is owned independently, then fall back to detached spawn on
+	// platforms or environments where that is unavailable.
 	let procExited = false;
 	let startedByServiceManager = false;
 	if (process.platform === "linux") {
@@ -1733,8 +1716,6 @@ export async function startDaemon(
 			bind: net.bind,
 			startupLogPath,
 			unitName: systemdUnitName,
-			bunInspect: inspectorForwarding.childInspector,
-			bunOptions: process.env.BUN_OPTIONS,
 			telemetryEnv: process.env,
 		});
 		const result = spawnSync("systemd-run", systemdArgs, {
@@ -1749,7 +1730,9 @@ export async function startDaemon(
 					startupLogPath,
 					`[systemd-run fallback] status=${result.status ?? "null"} error=${result.error?.message ?? ""}\n`,
 				);
-			} catch {}
+			} catch {
+				// Best effort.
+			}
 		}
 	} else if (process.platform === "darwin") {
 		const migration = resolveLaunchdDaemonMigration(agentsDir);
@@ -1793,10 +1776,14 @@ export async function startDaemon(
 				host: net.host,
 				bind: net.bind,
 				startupLogPath,
-				bunInspect: inspectorForwarding.childInspector,
 				telemetryEnv: process.env,
 			}),
 		);
+		// Boot out any loaded job before (re)bootstrap. When no job is loaded
+		// (fresh start, or a restart that already booted it out), launchctl
+		// exits 3 with "Boot-out failed: 3: No such process" — launchd handoff
+		// noise, not a start failure. Skip the bootout in that case so the
+		// message never pollutes the startup log (#1074).
 		let bootout: SpawnSyncReturns<Buffer> | null = null;
 		if (isLaunchdDaemonLoaded(agentsDir)) {
 			bootout = spawnSync("launchctl", buildLaunchdDaemonStopArgs(launchdDaemonLabel(agentsDir)), {
@@ -1826,7 +1813,9 @@ export async function startDaemon(
 						`[launchd fallback] bootoutStatus=${bootout ? (bootout.status ?? "null") : "skipped"} bootstrapStatus=${bootstrap.status ?? "null"} kickstartStatus=${kickstart.status ?? "null"} bootoutError=${bootout?.error?.message ?? ""} bootstrapError=${bootstrap.error?.message ?? ""} kickstartError=${kickstart.error?.message ?? ""}
 `,
 					);
-				} catch {}
+				} catch {
+					// Best effort.
+				}
 			}
 		}
 	}
@@ -1842,8 +1831,14 @@ export async function startDaemon(
 		proc.on("error", (err) => {
 			try {
 				appendFileSync(startupLogPath, `[spawn error] ${err.message}\n`);
-			} catch {}
+			} catch {
+				// Best effort.
+			}
 		});
+
+		// Track process exit so the poll loop can short-circuit on fast failures
+		// (port conflict, missing binary, bad config) rather than waiting the
+		// full deadline.
 		proc.on("exit", () => {
 			procExited = true;
 		});
@@ -1851,15 +1846,23 @@ export async function startDaemon(
 		if (typeof proc.pid === "number") {
 			try {
 				writeFileSync(pidFile(agentsDir), `${proc.pid}\n`);
-			} catch {}
+			} catch {
+				// Best effort.
+			}
 		}
 
 		proc.unref();
 	}
-	if (inspectorForwarding.proxy) spawnInspectorProxy(inspectorForwarding.proxy);
 	if (stderrFd !== null) {
 		closeSync(stderrFd);
 	}
+
+	// Use wall-clock deadline instead of iteration count so the budget
+	// is always sufficient regardless of how long each health probe takes.
+	// A large/legacy workspace may need 30-40s for migrations + startup
+	// recovery before the HTTP server binds. 60s covers the worst case
+	// while still failing fast on a genuinely broken daemon.
+	// If the spawned process exits early (fast failure), break immediately.
 	const deadline = Date.now() + 60_000;
 	const ready = await waitForDaemonLiveness(deadline, () => procExited);
 	if (ready) return true;
@@ -1875,7 +1878,9 @@ export async function startDaemon(
 				console.error(chalk.dim(line));
 			}
 		}
-	} catch {}
+	} catch {
+		// Best effort.
+	}
 
 	return false;
 }
@@ -1920,7 +1925,9 @@ export async function stopDaemon(agentsDir: string = AGENTS_DIR, preferredPid?: 
 	if (existsSync(path)) {
 		try {
 			rmSync(path, { force: true });
-		} catch {}
+		} catch {
+			// Ignore.
+		}
 	}
 
 	return !(await isDaemonRunning());

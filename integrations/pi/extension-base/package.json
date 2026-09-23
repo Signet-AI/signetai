@@ -7,11 +7,12 @@
 	"types": "./src/index.ts",
 	"exports": {
 		".": "./src/index.ts",
-		"./agent-dir": "./src/agent-dir.ts"
+		"./agent-dir": "./src/agent-dir.ts",
+		"./native-helpers": "./src/native-helpers.ts"
 	},
 	"dependencies": {
 		"@signet/connector-base": "workspace:*",
-		"@signet/core": "workspace:*",
+
 		"@signet/lifecycle-proof": "workspace:*"
 	},
 	"files": [

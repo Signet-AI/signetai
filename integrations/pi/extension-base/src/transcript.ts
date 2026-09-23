@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { stripInternalMemoryContext } from "@signet/core";
+import { stripInternalMemoryContext } from "./native-helpers.js";
 import { isRecord, readTrimmedString } from "./helpers.js";
 import type { BaseSessionEntry, BaseSessionHeader } from "./types.js";
 

@@ -93,5 +93,6 @@ Arch.
   quarantined copy through `spctl` before upload. Electron-builder's
   pre-notarization Gatekeeper assessment stays disabled so the post-notarization
   verifier is the authoritative Gatekeeper check.
-- `platform/daemon-rs` remains the shadow daemon rewrite. Desktop sidecar usage is intentionally bound to the current Bun daemon.
-  `daemon-rs` remains separate parity work until cutover is approved.
+- Desktop sidecar usage is bound to the staged Rust daemon executable under
+  `runtime/rust-daemon/<platform>-<arch>`; no Bun or Node process is used for
+  daemon work in the packaged application.

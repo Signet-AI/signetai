@@ -7,7 +7,6 @@ import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	getEntityAspectsByName,
 	getEntityKnowledgeTree,
-	getAttributesForAspectFiltered,
 	listEntityAttributesByPath,
 	listEntityClaims,
 	listEntityGroups,
@@ -41,7 +40,7 @@ function seedAttribute(input: {
 	readonly claimKey: string;
 	readonly content: string;
 	readonly status?: "active" | "superseded";
-	readonly kind?: "attribute" | "constraint" | "claim";
+	readonly kind?: "attribute" | "constraint";
 	readonly updatedAt?: string;
 }): void {
 	const updatedAt = input.updatedAt ?? "2026-04-19T00:00:00.000Z";
@@ -190,36 +189,6 @@ describe("knowledge graph navigation", () => {
 			entity: "Nicholai",
 		});
 		expect(result?.items[0]?.attributeCount).toBe(1);
-	});
-
-	test("filters claim attributes without broadening to all kinds", async () => {
-		dbPath = makeDbPath();
-		initDbAccessor(dbPath);
-		seedEntity();
-		seedAttribute({
-			id: "attr-claim",
-			groupKey: "restaurants",
-			claimKey: "favorite_restaurant",
-			content: "Nicholai currently prefers Temaki Den.",
-			kind: "claim",
-		});
-		seedAttribute({
-			id: "attr-constraint",
-			groupKey: "dietary_constraints",
-			claimKey: "shellfish_allergy",
-			content: "Nicholai has no known shellfish allergy.",
-			kind: "constraint",
-		});
-
-		const claims = await getAttributesForAspectFiltered(getDbAccessor(), {
-			entityId: "entity-nicholai",
-			aspectId: "aspect-food",
-			agentId: "default",
-			kind: "claim",
-			limit: 10,
-			offset: 0,
-		});
-		expect(claims.map((attribute) => attribute.id)).toEqual(["attr-claim"]);
 	});
 
 	test("returns a compact tree for agent-visible graph browsing", async () => {

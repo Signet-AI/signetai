@@ -64,7 +64,7 @@ function makeKeyring(initial: SecretKeyringResult): SecretKeyringAdapter & { set
 			next = { state: "found", value };
 			return next;
 		},
-		async getStatus(): Promise<SecretKeyringResult> {
+		getStatus(): SecretKeyringResult {
 			return stored === undefined ? next : { state: "found", value: stored };
 		},
 	};
@@ -328,6 +328,8 @@ describe("local secrets provider", () => {
 		if (process.platform !== "win32") {
 			expect(statSync(machineIdFile()).mode & 0o777).toBe(0o600);
 		}
+
+		// Re-derive the key as a fresh process would, after the platform resolver recovers.
 		setMachineIdResolverForTests(() => "ioreg-id-after-transient-failure");
 		expect(await getSecret("OPENAI_API_KEY")).toBe("«redacted:sk-…»");
 		expect(readFileSync(machineIdFile(), "utf-8")).toBe(persistedMachineId);
@@ -522,18 +524,14 @@ describe("local secrets provider", () => {
 		expect(readFileSync(secretsFile(), "utf-8")).toBe(mismatchedStore);
 	});
 
-	test("default signet.secrets plugin discovery does not wait for provider health", async () => {
+	test("default signet.secrets plugin degrades when the local provider is unhealthy", () => {
 		mkdirSync(join(agentsDir, ".secrets"), { recursive: true });
 		writeFileSync(secretsFile(), "not-json", { mode: 0o600 });
 		resetDefaultPluginHostForTests();
 		resetSecretExecJobsForTests();
 
-		const host = getDefaultPluginHost();
-		expect(host.get(SIGNET_SECRETS_PLUGIN_ID)?.state).toBe("active");
-		expect(host.get(SIGNET_SECRETS_PLUGIN_ID)?.health).toBeUndefined();
+		const plugin = getDefaultPluginHost().get(SIGNET_SECRETS_PLUGIN_ID);
 
-		await Bun.sleep(0);
-		const plugin = host.get(SIGNET_SECRETS_PLUGIN_ID);
 		expect(plugin?.state).toBe("degraded");
 		expect(plugin?.health?.status).toBe("unhealthy");
 		expect(plugin?.stateReason).toContain("Failed to read secrets store");

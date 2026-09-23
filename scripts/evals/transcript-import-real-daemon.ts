@@ -7,13 +7,14 @@ import { Database } from "bun:sqlite";
 import { ensureUnifiedSchema } from "../../platform/core/src/migration";
 import { runMigrations } from "../../platform/core/src/migrations/index";
 import { createHash } from "node:crypto";
+import { resolveFreshRustDaemon } from "../lib/fresh-rust-daemon";
 
 const root = await mkdtemp(join(tmpdir(), "signet-transcript-import-eval-"));
 const port = 43000 + Math.floor(Math.random() * 1000);
 const origin = `http://127.0.0.1:${port}`;
 const agent = "eval-target-agent";
 const foreignAgent = "embedded-foreign-agent";
-const daemonScript = join(import.meta.dir, "../../platform/daemon/src/daemon.ts");
+const daemonBinary = resolveFreshRustDaemon(join(import.meta.dir, "../.."));
 let daemon: ChildProcess | undefined;
 const stdout: string[] = [],
 	stderr: string[] = [];
@@ -88,7 +89,7 @@ async function waitLive(child: ChildProcess) {
 	throw new Error("daemon did not become live");
 }
 async function start(env: Record<string, string> = {}) {
-	daemon = spawn(process.execPath, [daemonScript], {
+	daemon = spawn(daemonBinary, [], {
 		cwd: join(import.meta.dir, "../.."),
 		env: {
 			...process.env,

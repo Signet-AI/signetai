@@ -26,7 +26,6 @@
 	},
 	"dependencies": {
 		"@signet/connector-base": "0.226.17",
-		"@signet/core": "0.226.17",
 		"jsonc-parser": "3.3.1"
 	},
 	"devDependencies": {

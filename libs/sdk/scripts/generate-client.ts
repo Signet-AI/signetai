@@ -1,178 +1,63 @@
 #!/usr/bin/env bun
-
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DAEMON_PATH = join(__dirname, "../../../platform/daemon/src/daemon.ts");
-const OUTPUT_DIR = join(__dirname, "../src/generated");
-
-type RouteMethod = "get" | "post" | "put" | "patch" | "delete";
-
-interface Route {
-	readonly method: RouteMethod;
+/** Generate SDK methods from the checked-in native HTTP route contract. */
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+const DIR = dirname(fileURLToPath(import.meta.url));
+const OUTPUT = join(DIR, "../src/generated/client.ts");
+export type Method = "get" | "post" | "put" | "patch" | "delete";
+export interface Route {
+	readonly method: Method;
 	readonly path: string;
-	readonly line: number;
 }
-function extractRoutes(daemonCode: string): readonly Route[] {
-	const routes: Route[] = [];
-	const lines = daemonCode.split("\n");
-	const routeRegex = /^\s*app\.(get|post|put|patch|delete)\s*\(\s*["']([^"']+)["']/;
-
-	for (let i = 0; i < lines.length; i++) {
-		const match = lines[i].match(routeRegex);
-		if (!match) {
-			continue;
-		}
-		const [, method, path] = match;
-		routes.push({
-			method: method as RouteMethod,
-			path,
-			line: i + 1,
-		});
-	}
-
+export function loadRoutes(): readonly Route[] {
+	const routes = JSON.parse(readFileSync(join(DIR, "routes.json"), "utf8")) as Route[];
+	if (!Array.isArray(routes) || routes.length === 0) throw new Error("Native route contract is empty");
 	return routes;
 }
-
-function toPascalCase(segment: string): string {
-	const cleaned = segment.replace(/^:+/, "");
-	const parts = cleaned.split(/[-_]+/g).filter((part) => part.length > 0);
-	if (parts.length === 0) {
-		return "Unknown";
-	}
-	return parts.map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join("");
+function pascal(value: string): string {
+	return (
+		value
+			.replace(/[{}:]/g, "")
+			.split(/[-_]+/)
+			.filter(Boolean)
+			.map((x) => x[0].toUpperCase() + x.slice(1))
+			.join("") || "Unknown"
+	);
 }
-
-function toMethodName(route: Route): string {
-	const segments = route.path.split("/").filter(Boolean);
-	const methodPrefix = route.method;
-	const suffix = segments
-		.map((segment) => {
-			if (segment.startsWith(":")) {
-				return `By${toPascalCase(segment.slice(1))}`;
-			}
-			return toPascalCase(segment);
+function params(path: string): string[] {
+	return [...path.matchAll(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g)].map((m) => m[1]);
+}
+function methodName(route: Route): string {
+	return (
+		route.method +
+		route.path
+			.split("/")
+			.filter(Boolean)
+			.map((part) => (part.startsWith("{") ? `By${pascal(part)}` : pascal(part)))
+			.join("")
+	);
+}
+function renderMethod(route: Route, name: string): string {
+	const pathParams = params(route.path);
+	const query = route.method === "get" || route.method === "delete";
+	const args = pathParams.map((param) => `${param}: string`);
+	args.push(`${query ? "query" : "opts"}?: Record<string, unknown>`);
+	let path = route.path;
+	for (const param of pathParams) path = path.replace(`{${param}}`, `\${${param}}`);
+	const transport = route.method === "delete" ? "del" : route.method;
+	return `  async ${name}(${args.join(", ")}): Promise<unknown> {\n    return this.transport.${transport}<unknown>(\`${path}\`, ${query ? "query" : "opts"});\n  }`;
+}
+export function generateClient(routes: readonly Route[]): string {
+	const seen = new Map<string, number>();
+	const methods = routes
+		.map((route) => {
+			const base = methodName(route);
+			const count = seen.get(base) ?? 0;
+			seen.set(base, count + 1);
+			return renderMethod(route, count ? `${base}${count + 1}` : base);
 		})
-		.join("");
-	const raw = `${methodPrefix}${suffix}`;
-	return raw.charAt(0).toLowerCase() + raw.slice(1);
+		.join("\n\n");
+	return `/** AUTO-GENERATED — DO NOT EDIT. Source: scripts/routes.json native HTTP contract. */\nexport class GeneratedClient {\n  constructor(private readonly transport: {\n    readonly get: <T>(path: string, query?: Record<string, unknown>) => Promise<T>;\n    readonly post: <T>(path: string, body?: unknown) => Promise<T>;\n    readonly put: <T>(path: string, body?: unknown) => Promise<T>;\n    readonly patch: <T>(path: string, body?: unknown) => Promise<T>;\n    readonly del: <T>(path: string, query?: Record<string, unknown>) => Promise<T>;\n  }) {}\n\n${methods}\n}\n`;
 }
-function extractParams(path: string): readonly string[] {
-	const params: string[] = [];
-	const regex = /:([a-zA-Z_][a-zA-Z0-9_]*)/g;
-	let match: RegExpExecArray | null;
-	while ((match = regex.exec(path)) !== null) {
-		params.push(match[1]);
-	}
-	return params;
-}
-function buildMethodNames(routes: readonly Route[]): readonly string[] {
-	const used = new Map<string, number>();
-	return routes.map((route) => {
-		const baseName = toMethodName(route);
-		const seen = used.get(baseName) ?? 0;
-		used.set(baseName, seen + 1);
-		if (seen === 0) {
-			return baseName;
-		}
-		return `${baseName}${seen + 1}`;
-	});
-}
-function generateMethod(route: Route, methodName: string): string {
-	const params = extractParams(route.path);
-
-	const paramList: string[] = [];
-	for (const param of params) {
-		paramList.push(`${param}: string`);
-	}
-
-	if (route.method === "post" || route.method === "patch" || route.method === "put") {
-		paramList.push("opts?: Record<string, unknown>");
-	}
-
-	if (route.method === "get" || route.method === "delete") {
-		paramList.push("query?: Record<string, unknown>");
-	}
-
-	const signature = `${methodName}(${paramList.join(", ")}): Promise<unknown>`;
-
-	let urlPath = route.path;
-	for (const param of params) {
-		urlPath = urlPath.replace(`:${param}`, `\${${param}}`);
-	}
-	const url = params.length > 0 ? `\`${urlPath}\`` : `"${urlPath}"`;
-
-	let body = "";
-	if (route.method === "get") {
-		body = `return this.transport.get<unknown>(${url}, query);`;
-	} else if (route.method === "delete") {
-		body = `return this.transport.del<unknown>(${url}, query);`;
-	} else if (route.method === "post") {
-		body = `return this.transport.post<unknown>(${url}, opts);`;
-	} else if (route.method === "patch") {
-		body = `return this.transport.patch<unknown>(${url}, opts);`;
-	} else {
-		body = `return this.transport.put<unknown>(${url}, opts);`;
-	}
-
-	return `  async ${signature} {\n    ${body}\n  }`;
-}
-function generateClient(routes: readonly Route[]): string {
-	const methodNames = buildMethodNames(routes);
-	const methods = routes.map((route, index) => generateMethod(route, methodNames[index])).join("\n\n");
-
-	return `/**
- * AUTO-GENERATED FILE — DO NOT EDIT
- * Generated from daemon.ts routes by scripts/generate-client.ts
- *
- * This file provides broad coverage of daemon endpoints.
- * Manual helpers live in ../helpers.ts
- */
-
-export class GeneratedClient {
-  constructor(
-    private readonly transport: {
-      readonly get: <T>(path: string, query?: Record<string, unknown>) => Promise<T>;
-      readonly post: <T>(path: string, body?: unknown) => Promise<T>;
-      readonly put: <T>(path: string, body?: unknown) => Promise<T>;
-      readonly patch: <T>(path: string, body?: unknown) => Promise<T>;
-      readonly del: <T>(path: string, query?: Record<string, unknown>) => Promise<T>;
-    },
-  ) {}
-
-${methods}
-}
-`;
-}
-function main(): void {
-	console.log("Reading daemon.ts...");
-	if (!existsSync(DAEMON_PATH)) {
-		console.error(`Error: daemon.ts not found at ${DAEMON_PATH}`);
-		process.exit(1);
-	}
-	const daemonCode = readFileSync(DAEMON_PATH, "utf-8");
-
-	console.log("Extracting routes...");
-	const routes = extractRoutes(daemonCode);
-	console.log(`Found ${routes.length} routes`);
-
-	console.log("Generating client...");
-	const clientCode = generateClient(routes);
-
-	if (!existsSync(OUTPUT_DIR)) {
-		mkdirSync(OUTPUT_DIR, { recursive: true });
-	}
-
-	const outputPath = join(OUTPUT_DIR, "client.ts");
-	console.log(`Writing to ${outputPath}...`);
-	writeFileSync(outputPath, clientCode, "utf-8");
-
-	console.log("✓ Generated SDK client methods for all daemon routes");
-	console.log(`  Total methods: ${routes.length}`);
-}
-
-if (import.meta.main) {
-	main();
-}
+if (import.meta.main) writeFileSync(OUTPUT, generateClient(loadRoutes()));
