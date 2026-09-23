@@ -1469,7 +1469,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 789,
+      "line": 790,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -1477,7 +1477,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 1919,
+      "line": 1940,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -2662,14 +2662,14 @@
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 856,
+      "line": 857,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return { content: \"\", unreadable: false };",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 858,
+      "line": 859,
       "api": "readFileSync",
       "source": "const raw = readFileSync(path, \"utf-8\").trim();",
       "category": "hot-path"
@@ -3424,21 +3424,21 @@
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 478,
+      "line": 483,
       "api": "withReadDbAsync",
       "source": "const hasSessionSummaries = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 495,
+      "line": 500,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"
     },
     {
       "path": "routes/knowledge-routes.ts",
-      "line": 600,
+      "line": 605,
       "api": "withReadDbAsync",
       "source": "const result = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path"

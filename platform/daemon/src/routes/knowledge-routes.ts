@@ -25,7 +25,7 @@ import {
 	resolveNamedEntity,
 } from "../knowledge-graph";
 import { getKnowledgeHygieneReport } from "../knowledge-graph-hygiene";
-import { getDreamingEpisodicTokenBacklog } from "../pipeline/dreaming";
+import { probeDreamingEpisodicBacklog } from "../pipeline/dreaming";
 import { loadMemoryConfig } from "../memory-config";
 import { isMemoryContentContextEligible } from "../memory-content-safety";
 import { OntologyProposalError, applyOntologyOperation } from "../ontology-proposals";
@@ -339,7 +339,11 @@ export function registerKnowledgeRoutes(app: Hono): void {
 	app.get("/api/knowledge/constellation", async (c) => {
 		const agentId = c.req.query("agent_id") ?? resolveDaemonAgentId();
 		const accessor = getDbAccessor();
-		await getDreamingEpisodicTokenBacklog(accessor, agentId);
+		const backlogProbe = await probeDreamingEpisodicBacklog(
+			accessor,
+			agentId,
+			loadMemoryConfig(AGENTS_DIR).dreaming.tokenThreshold,
+		);
 		return c.json(
 			await getKnowledgeGraphForConstellation(accessor, agentId, {
 				limit: parseNavigationLimit(c.req.query("limit"), 150, 1000),
@@ -347,6 +351,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 				maxAttributesPerAspect: parseNavigationLimit(c.req.query("max_attributes_per_aspect"), 4, 250),
 				dependencyLimit: parseNavigationLimit(c.req.query("dependency_limit"), 500, 2000),
 				assertionLimit: parseNavigationLimit(c.req.query("assertion_limit"), 250, 1000),
+				backlogProbe,
 			}),
 		);
 	});
@@ -482,7 +487,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:478" },
+			{ siteToken: "routes/knowledge-routes.ts:483" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -580,7 +585,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: safeRows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:495" },
+			{ siteToken: "routes/knowledge-routes.ts:500" },
 		);
 	});
 
@@ -599,7 +604,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:600" },
+			{ siteToken: "routes/knowledge-routes.ts:605" },
 		);
 		return c.json(result);
 	});
