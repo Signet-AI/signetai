@@ -4254,35 +4254,35 @@
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1011,
+      "line": 1004,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1013,
+      "line": 1006,
       "api": "readFileSync",
       "source": "const parsed = JSON.parse(readFileSync(path, \"utf8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1023,
+      "line": 1016,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(path), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1025,
+      "line": 1018,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, `${JSON.stringify(tombstones, null, 2)}\\n`, \"utf8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/sources-routes.ts",
-      "line": 1026,
+      "line": 1019,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"
