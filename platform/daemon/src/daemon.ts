@@ -235,7 +235,9 @@ import {
 	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
 	pauseSourceIndexJob,
+	trackSourceIndexRun,
 	updateSourceIndexJobProgress,
+	waitForSourceIndexRuns,
 } from "./source-index-progress";
 import {
 	flushPendingSourceLifecycleTelemetry,
@@ -314,6 +316,7 @@ import { mountSkillAnalyticsRoutes } from "./routes/skill-analytics.js";
 import { mountSkillsRoutes, setFetchEmbedding } from "./routes/skills.js";
 import {
 	cleanupSourceDeletionTombstones,
+	finalizeCancelledSourceIndexJob,
 	registerSourcesRoutes,
 	stopSourceIndexJobs,
 } from "./routes/sources-routes.js";
@@ -579,6 +582,7 @@ let acpDeliveryReconciliationTimer: ReturnType<typeof setInterval> | null = null
 let memoryImportInFlight = false;
 
 let syncTimer: ReturnType<typeof setTimeout> | null = null;
+let startupSourceSyncTimer: ReturnType<typeof setTimeout> | null = null;
 const SYNC_DEBOUNCE_MS = 2000;
 
 async function syncHarnessConfigs() {
@@ -1967,6 +1971,10 @@ async function cleanup() {
 		clearTimeout(syncTimer);
 		syncTimer = null;
 	}
+	if (startupSourceSyncTimer) {
+		clearTimeout(startupSourceSyncTimer);
+		startupSourceSyncTimer = null;
+	}
 	stopMemoryImportPoller();
 	stopStaleSessionSweeper();
 	stopAcpDeliveryReconciliation();
@@ -1975,6 +1983,7 @@ async function cleanup() {
 		await nativeMemoryBridge.close();
 		nativeMemoryBridge = null;
 	}
+	await waitForSourceIndexRuns();
 
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
@@ -3248,12 +3257,18 @@ async function main() {
 			startStaleSessionSweeper();
 			startAcpDeliveryReconciliation();
 
-			setTimeout(() => {
+			startupSourceSyncTimer = setTimeout(() => {
+				startupSourceSyncTimer = null;
 				if (!nativeMemoryBridge) {
+					const configuredSources = loadSourcesConfig(AGENTS_DIR).sources;
 					const startupSourceJobs = new Map<string, string>();
-					for (const source of loadSourcesConfig(AGENTS_DIR).sources) {
+					const startupSources = new Map<string, (typeof configuredSources)[number]>();
+					const startupLifecycleWrites: Promise<void>[] = [];
+					const startupAgentId = resolveDaemonAgentId();
+					for (const source of configuredSources) {
 						if (!source.enabled || source.kind !== "obsidian") continue;
-						void trackSourceLifecycleWrite(recordSourceConnected(source, resolveDaemonAgentId()));
+						startupSources.set(source.id, source);
+						startupLifecycleWrites.push(trackSourceLifecycleWrite(recordSourceConnected(source, startupAgentId)));
 						const job = beginSourceIndexJob(source.id, "source-startup");
 						startupSourceJobs.set(source.id, job.id);
 						markSourceIndexInFlight(source.id);
@@ -3282,8 +3297,8 @@ async function main() {
 							});
 						},
 					});
-					nativeMemoryBridge
-						.syncExisting()
+					const startupRun = Promise.resolve()
+						.then(() => nativeMemoryBridge?.syncExisting())
 						.then(() => {
 							const syncResult = nativeMemoryBridge?.getLastSyncResult?.();
 							for (const [sourceId, jobId] of startupSourceJobs) {
@@ -3301,24 +3316,26 @@ async function main() {
 								const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
 								const job = getSourceIndexJob(sourceId);
 								if (source) {
-									void trackSourceLifecycleWrite(
-										recordSourceIndexOperation({
-											source,
-											agentId: resolveDaemonAgentId(),
-											discovered: job?.scanned ?? 0,
-											accepted: job?.indexed ?? 0,
-											durationMs:
-												job?.startedAt && job.finishedAt
-													? Math.max(0, Date.parse(job.finishedAt) - Date.parse(job.startedAt))
-													: 0,
-											outcome: syncResult?.status === "paused" && paused ? "partial" : "success",
-											failureClass:
-												syncResult?.status === "paused" && paused
-													? sourceFailureClass(new Error("network provider unavailable"))
-													: undefined,
-											updateFreshness: syncResult?.status === "paused" && paused ? false : undefined,
-											searchable: syncResult?.status === "paused" && paused ? (job?.indexed ?? 0) > 0 : undefined,
-										}),
+									startupLifecycleWrites.push(
+										trackSourceLifecycleWrite(
+											recordSourceIndexOperation({
+												source,
+												agentId: startupAgentId,
+												discovered: job?.scanned ?? 0,
+												accepted: job?.indexed ?? 0,
+												durationMs:
+													job?.startedAt && job.finishedAt
+														? Math.max(0, Date.parse(job.finishedAt) - Date.parse(job.startedAt))
+														: 0,
+												outcome: syncResult?.status === "paused" && paused ? "partial" : "success",
+												failureClass:
+													syncResult?.status === "paused" && paused
+														? sourceFailureClass(new Error("network provider unavailable"))
+														: undefined,
+												updateFreshness: syncResult?.status === "paused" && paused ? false : undefined,
+												searchable: syncResult?.status === "paused" && paused ? (job?.indexed ?? 0) > 0 : undefined,
+											}),
+										),
 									);
 								}
 							}
@@ -3328,18 +3345,20 @@ async function main() {
 								const source = loadSourcesConfig(AGENTS_DIR).sources.find((entry) => entry.id === sourceId);
 								const job = getSourceIndexJob(sourceId);
 								if (source) {
-									void trackSourceLifecycleWrite(
-										recordSourceIndexOperation({
-											source,
-											agentId: resolveDaemonAgentId(),
-											discovered: job?.scanned ?? 0,
-											accepted: job?.indexed ?? 0,
-											failed: 1,
-											durationMs: job?.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0,
-											outcome: (job?.indexed ?? 0) > 0 ? "partial" : "failed",
-											failureClass: sourceFailureClass(e),
-											searchable: (job?.indexed ?? 0) > 0,
-										}),
+									startupLifecycleWrites.push(
+										trackSourceLifecycleWrite(
+											recordSourceIndexOperation({
+												source,
+												agentId: startupAgentId,
+												discovered: job?.scanned ?? 0,
+												accepted: job?.indexed ?? 0,
+												failed: 1,
+												durationMs: job?.startedAt ? Math.max(0, Date.now() - Date.parse(job.startedAt)) : 0,
+												outcome: (job?.indexed ?? 0) > 0 ? "partial" : "failed",
+												failureClass: sourceFailureClass(e),
+												searchable: (job?.indexed ?? 0) > 0,
+											}),
+										),
 									);
 								}
 								failSourceIndexJob(sourceId, jobId, e);
@@ -3347,11 +3366,35 @@ async function main() {
 							const errDetails = e instanceof Error ? { message: e.message, stack: e.stack } : { error: String(e) };
 							logger.error("daemon", "Failed to sync native memory sources", undefined, errDetails);
 						})
-						.finally(() => {
-							for (const sourceId of startupSourceJobs.keys()) clearSourceIndexInFlight(sourceId);
+						.finally(async () => {
+							await Promise.allSettled(startupLifecycleWrites);
+							for (const [sourceId, jobId] of startupSourceJobs) {
+								try {
+									const source = startupSources.get(sourceId);
+									if (source) {
+										await finalizeCancelledSourceIndexJob({
+											source,
+											jobId,
+											agentsDir: AGENTS_DIR,
+											agentId: startupAgentId,
+										});
+									}
+								} catch (error) {
+									logger.warn("system", `Startup source-index finalization failed for source ${sourceId}`, {
+										error: error instanceof Error ? error.message : String(error),
+									});
+								} finally {
+									clearSourceIndexInFlight(sourceId);
+								}
+							}
 						});
+					for (const [sourceId, jobId] of startupSourceJobs) {
+						trackSourceIndexRun({ sourceId, jobId, kind: "startup", run: startupRun });
+					}
+					void startupRun;
 				}
 			}, 30_000);
+			startupSourceSyncTimer.unref?.();
 
 			const startupCfg = loadMemoryConfig(AGENTS_DIR);
 			const shouldPreloadNative =

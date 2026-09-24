@@ -26,9 +26,39 @@ export interface SourceIndexProgressEvent {
 	readonly statusMessage?: string;
 }
 
+export type SourceIndexRunKind = "route" | "startup";
+
+export interface TrackedSourceIndexRun {
+	readonly sourceId: string;
+	readonly jobId: string;
+	readonly kind: SourceIndexRunKind;
+	readonly run: Promise<void>;
+}
+
 const sourceIndexJobs = new Map<string, SourceIndexJob>();
 const sourceIndexInFlight = new Set<string>();
 const canceledSourceIndexJobs = new Set<string>();
+const sourceIndexRuns = new Set<TrackedSourceIndexRun>();
+
+export function trackSourceIndexRun(input: TrackedSourceIndexRun): void {
+	sourceIndexRuns.add(input);
+	void input.run.then(
+		() => sourceIndexRuns.delete(input),
+		() => sourceIndexRuns.delete(input),
+	);
+}
+
+export function getSourceIndexRuns(sourceId: string): readonly TrackedSourceIndexRun[] {
+	return [...sourceIndexRuns].filter((run) => run.sourceId === sourceId);
+}
+
+export async function waitForSourceIndexRuns(kind?: SourceIndexRunKind): Promise<void> {
+	while (true) {
+		const runs = [...sourceIndexRuns].filter((run) => kind === undefined || run.kind === kind).map((run) => run.run);
+		if (runs.length === 0) return;
+		await Promise.allSettled(runs);
+	}
+}
 
 export function getSourceIndexJob(sourceId: string): SourceIndexJob | undefined {
 	return sourceIndexJobs.get(sourceId);
@@ -163,4 +193,5 @@ export function clearSourceIndexProgressForTests(): void {
 	sourceIndexJobs.clear();
 	sourceIndexInFlight.clear();
 	canceledSourceIndexJobs.clear();
+	sourceIndexRuns.clear();
 }

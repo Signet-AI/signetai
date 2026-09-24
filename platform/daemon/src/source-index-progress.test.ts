@@ -6,7 +6,9 @@ import {
 	getSourceIndexJob,
 	markSourceIndexJobRunning,
 	pauseSourceIndexJob,
+	trackSourceIndexRun,
 	updateSourceIndexJobProgress,
+	waitForSourceIndexRuns,
 } from "./source-index-progress";
 
 describe("source index progress", () => {
@@ -72,5 +74,31 @@ describe("source index progress", () => {
 			pauseReason: "provider_unavailable",
 			resumeFrontier: "/vault/permanent/First.md",
 		});
+	});
+
+	test("drains route runs before bridge close and startup runs after", async () => {
+		clearSourceIndexProgressForTests();
+		let resolveRouteRun = () => {};
+		let resolveStartupRun = () => {};
+		const routeRun = new Promise<void>((resolve) => {
+			resolveRouteRun = resolve;
+		});
+		const startupRun = new Promise<void>((resolve) => {
+			resolveStartupRun = resolve;
+		});
+		trackSourceIndexRun({ sourceId: "route-source", jobId: "route-job", kind: "route", run: routeRun });
+		trackSourceIndexRun({ sourceId: "startup-source", jobId: "startup-job", kind: "startup", run: startupRun });
+		let allRunsFinished = false;
+		const waitForAll = waitForSourceIndexRuns().then(() => {
+			allRunsFinished = true;
+		});
+
+		resolveRouteRun();
+		await waitForSourceIndexRuns("route");
+
+		expect(allRunsFinished).toBe(false);
+		resolveStartupRun();
+		await waitForAll;
+		expect(allRunsFinished).toBe(true);
 	});
 });
