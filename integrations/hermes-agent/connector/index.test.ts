@@ -1973,6 +1973,8 @@ describe("HermesAgentConnector.uninstall()", () => {
 		const moved = join(tmpRoot, "moved-target");
 		const replacement = join(tmpRoot, "replacement-target");
 		const sentinel = join(tmpRoot, "target-race-triggered");
+		const ownedFile = join(target, "owned.txt");
+		writeFileSync(ownedFile, "preserve after target moves");
 		mkdirSync(replacement);
 		const launcher = join(tmpRoot, "python-race-launcher.py");
 		const python = resolveTestPythonPath();
@@ -1985,7 +1987,7 @@ describe("HermesAgentConnector.uninstall()", () => {
 				`moved = ${JSON.stringify(moved)}`,
 				`replacement = ${JSON.stringify(replacement)}`,
 				`sentinel = ${JSON.stringify(sentinel)}`,
-				"if len(sys.argv) > 6 and sys.argv[5] == 'directory' and sys.argv[6] == 'signet' and not os.path.exists(sentinel):",
+				"if len(sys.argv) > 6 and sys.argv[5] in ('verify', 'directory') and sys.argv[6] == 'signet' and not os.path.exists(sentinel):",
 				"    os.rename(target, moved)",
 				"    os.rename(replacement, target)",
 				"    open(sentinel, 'w').close()",
@@ -1999,6 +2001,93 @@ describe("HermesAgentConnector.uninstall()", () => {
 		await expect(connector.uninstall()).rejects.toThrow(/directory entry changed/);
 		expect(existsSync(target)).toBe(true);
 		expect(existsSync(moved)).toBe(true);
+		expect(readFileSync(join(moved, "owned.txt"), "utf8")).toBe("preserve after target moves");
+	});
+
+	it("preserves nested contents when a plugin directory moves during recursive removal", async () => {
+		const hermesHome = join(tmpRoot, "nested-target-replacement-home");
+		process.env.HERMES_HOME = hermesHome;
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+
+		const plugin = join(hermesHome, "plugins", "signet");
+		const target = join(plugin, "nested");
+		const ownedFile = join(target, "owned.txt");
+		const moved = join(tmpRoot, "moved-nested-target");
+		const replacement = join(tmpRoot, "replacement-nested-target");
+		const sentinel = join(tmpRoot, "nested-target-race-triggered");
+		mkdirSync(target);
+		writeFileSync(ownedFile, "preserve after nested target moves");
+		mkdirSync(replacement);
+		const launcher = join(tmpRoot, "python-nested-race-launcher.py");
+		const python = resolveTestPythonPath();
+		writeFileSync(
+			launcher,
+			[
+				"#!/usr/bin/env python3",
+				"import os, sys",
+				`target = ${JSON.stringify(target)}`,
+				`moved = ${JSON.stringify(moved)}`,
+				`replacement = ${JSON.stringify(replacement)}`,
+				`sentinel = ${JSON.stringify(sentinel)}`,
+				"if len(sys.argv) > 6 and sys.argv[5] in ('verify', 'directory') and sys.argv[6] == 'nested' and not os.path.exists(sentinel):",
+				"    os.rename(target, moved)",
+				"    os.rename(replacement, target)",
+				"    open(sentinel, 'w').close()",
+				`os.execv(${JSON.stringify(python)}, [${JSON.stringify(python)}] + sys.argv[1:])`,
+				"",
+			].join("\n"),
+		);
+		chmodSync(launcher, 0o755);
+		process.env.PYTHON = launcher;
+
+		await expect(connector.uninstall()).rejects.toThrow(/directory entry changed/);
+		expect(existsSync(target)).toBe(true);
+		expect(existsSync(moved)).toBe(true);
+		expect(readFileSync(join(moved, "owned.txt"), "utf8")).toBe("preserve after nested target moves");
+	});
+
+	it("preserves child contents when an opened parent directory moves during removal", async () => {
+		const hermesHome = join(tmpRoot, "nested-parent-replacement-home");
+		process.env.HERMES_HOME = hermesHome;
+		const connector = new HermesAgentConnector();
+		await connector.install(tmpRoot);
+
+		const plugin = join(hermesHome, "plugins", "signet");
+		const target = join(plugin, "nested");
+		const ownedFile = join(target, "owned.txt");
+		const moved = join(tmpRoot, "moved-open-parent");
+		const replacement = join(tmpRoot, "replacement-open-parent");
+		const sentinel = join(tmpRoot, "open-parent-race-triggered");
+		mkdirSync(target);
+		writeFileSync(ownedFile, "preserve after parent moves");
+		mkdirSync(replacement);
+		const launcher = join(tmpRoot, "python-open-parent-race-launcher.py");
+		const python = resolveTestPythonPath();
+		writeFileSync(
+			launcher,
+			[
+				"#!/usr/bin/env python3",
+				"import os, sys",
+				`target = ${JSON.stringify(target)}`,
+				`moved = ${JSON.stringify(moved)}`,
+				`replacement = ${JSON.stringify(replacement)}`,
+				`sentinel = ${JSON.stringify(sentinel)}`,
+				"if len(sys.argv) > 6 and sys.argv[5] == 'file' and sys.argv[6] == 'owned.txt' and not os.path.exists(sentinel):",
+				"    os.rename(target, moved)",
+				"    os.rename(replacement, target)",
+				"    open(sentinel, 'w').close()",
+				`os.execv(${JSON.stringify(python)}, [${JSON.stringify(python)}] + sys.argv[1:])`,
+				"",
+			].join("\n"),
+		);
+		chmodSync(launcher, 0o755);
+		process.env.PYTHON = launcher;
+
+		await expect(connector.uninstall()).rejects.toThrow(/directory entry changed/);
+		expect(existsSync(target)).toBe(true);
+		expect(existsSync(moved)).toBe(true);
+		expect(readFileSync(join(moved, "owned.txt"), "utf8")).toBe("preserve after parent moves");
 	});
 
 	it("does not remove a replacement file after the target identity changes", async () => {

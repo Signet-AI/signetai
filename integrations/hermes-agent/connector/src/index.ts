@@ -152,6 +152,10 @@ const SECURE_REMOVAL_SCRIPT = [
 	"expected_ino = int(sys.argv[2])",
 	"operation = sys.argv[3]",
 	"name = sys.argv[4]",
+	"expected_parent = sys.argv[5]",
+	"descriptor_root = sys.argv[6]",
+	"if os.path.realpath(os.path.join(descriptor_root, '3')) != expected_parent:",
+	"    raise SystemExit(75)",
 	"try:",
 	"    current = os.stat(name, dir_fd=3, follow_symlinks=False)",
 	"except FileNotFoundError:",
@@ -161,8 +165,10 @@ const SECURE_REMOVAL_SCRIPT = [
 	"try:",
 	"    if operation == 'directory':",
 	"        os.rmdir(name, dir_fd=3)",
-	"    else:",
+	"    elif operation == 'file':",
 	"        os.unlink(name, dir_fd=3)",
+	"    elif operation != 'verify':",
+	"        raise SystemExit(76)",
 	"except FileNotFoundError:",
 	"    raise SystemExit(75)",
 ].join("\n");
@@ -181,13 +187,15 @@ function getPythonCandidates(): readonly { readonly command: string; readonly ar
 			];
 }
 
-function removeEntryNoFollow(
+function runSecureEntryOperation(
 	parentFd: number,
+	parentPath: string,
 	name: string,
 	expectedDev: number,
 	expectedIno: number,
-	directory: boolean,
+	operation: "verify" | "directory" | "file",
 ): void {
+	if (DESCRIPTOR_ROOT === null) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
 	const errors: string[] = [];
 	for (const candidate of getPythonCandidates()) {
 		const result = spawnSync(
@@ -198,8 +206,10 @@ function removeEntryNoFollow(
 				SECURE_REMOVAL_SCRIPT,
 				String(expectedDev),
 				String(expectedIno),
-				directory ? "directory" : "file",
+				operation,
 				name,
+				parentPath,
+				DESCRIPTOR_ROOT,
 			],
 			{
 				encoding: "utf-8",
@@ -219,6 +229,27 @@ function removeEntryNoFollow(
 		errors.push(`${candidate.command}: exited ${result.status ?? "without a status"}`);
 	}
 	throw new Error(`${DESCRIPTOR_WRITE_UNAVAILABLE_ERROR}: ${errors.join("; ") || "No Python interpreter found"}`);
+}
+
+function assertEntryIdentityNoFollow(
+	parentFd: number,
+	parentPath: string,
+	name: string,
+	expectedDev: number,
+	expectedIno: number,
+): void {
+	runSecureEntryOperation(parentFd, parentPath, name, expectedDev, expectedIno, "verify");
+}
+
+function removeEntryNoFollow(
+	parentFd: number,
+	parentPath: string,
+	name: string,
+	expectedDev: number,
+	expectedIno: number,
+	directory: boolean,
+): void {
+	runSecureEntryOperation(parentFd, parentPath, name, expectedDev, expectedIno, directory ? "directory" : "file");
 }
 
 function sameStatIdentity(
@@ -417,22 +448,36 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 	return candidate;
 }
 
-function removeDirectoryContentsNoFollow(directoryFd: number): void {
+function removeDirectoryContentsNoFollow(directoryFd: number, expectedDirectoryPath: string): void {
+	if (realpathSync(descriptorPath(directoryFd)) !== expectedDirectoryPath) {
+		throw new Error(`Hermes target directory changed during secure removal: ${expectedDirectoryPath}`);
+	}
 	for (const entry of readdirSync(descriptorPath(directoryFd), { withFileTypes: true })) {
 		const childPath = join(descriptorPath(directoryFd), entry.name);
+		const expectedChildPath = join(expectedDirectoryPath, entry.name);
 		if (entry.isDirectory() && !entry.isSymbolicLink()) {
 			const childFd = openDirectoryNoFollow(childPath);
 			try {
 				const childIdentity = fstatSync(childFd);
-				removeDirectoryContentsNoFollow(childFd);
-				removeEntryNoFollow(directoryFd, entry.name, childIdentity.dev, childIdentity.ino, true);
+				if (realpathSync(descriptorPath(childFd)) !== expectedChildPath) {
+					throw new Error(`Hermes target directory changed during secure removal: ${expectedChildPath}`);
+				}
+				assertEntryIdentityNoFollow(
+					directoryFd,
+					expectedDirectoryPath,
+					entry.name,
+					childIdentity.dev,
+					childIdentity.ino,
+				);
+				removeDirectoryContentsNoFollow(childFd, expectedChildPath);
+				removeEntryNoFollow(directoryFd, expectedDirectoryPath, entry.name, childIdentity.dev, childIdentity.ino, true);
 			} finally {
 				closeDirectory(childFd);
 			}
 			continue;
 		}
 		const childIdentity = lstatSync(childPath);
-		removeEntryNoFollow(directoryFd, entry.name, childIdentity.dev, childIdentity.ino, false);
+		removeEntryNoFollow(directoryFd, expectedDirectoryPath, entry.name, childIdentity.dev, childIdentity.ino, false);
 	}
 }
 
@@ -486,8 +531,9 @@ function removeContainedDirectory(
 					`Refusing to uninstall unowned Hermes plugin path: ${targetPath} (missing or invalid ${INSTALL_MARKER_FILE})`,
 				);
 			}
-			removeDirectoryContentsNoFollow(targetFd);
-			removeEntryNoFollow(parentFd, targetName, targetIdentity.dev, targetIdentity.ino, true);
+			assertEntryIdentityNoFollow(parentFd, expected, targetName, targetIdentity.dev, targetIdentity.ino);
+			removeDirectoryContentsNoFollow(targetFd, expectedTarget);
+			removeEntryNoFollow(parentFd, expected, targetName, targetIdentity.dev, targetIdentity.ino, true);
 		} finally {
 			closeDirectory(targetFd);
 		}
@@ -528,7 +574,7 @@ function removeContainedFile(targetPath: string, targetRoot: string): void {
 			parentFd = childFd;
 		}
 		const targetFile = lstatSync(join(descriptorPath(parentFd), fileName));
-		removeEntryNoFollow(parentFd, fileName, targetFile.dev, targetFile.ino, false);
+		removeEntryNoFollow(parentFd, expected, fileName, targetFile.dev, targetFile.ino, false);
 	} finally {
 		closeDirectory(parentFd);
 	}
