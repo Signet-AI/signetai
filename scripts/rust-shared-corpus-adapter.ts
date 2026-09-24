@@ -258,6 +258,9 @@ for (let index = 0; index < batches.length; index++) {
 				env: {
 					...batchEnv,
 					SIGNET_RUST_DAEMON_BIN: artifact,
+					// Service-generation tests resolve the same explicit native artifact via
+					// the production service-path override; never fall back to JS/TS.
+					SIGNET_DAEMON_PATH: artifact,
 					SIGNET_RUST_MCP_BIN: mcpArtifact,
 					SIGNET_RUST_DAEMON_EVIDENCE_FILE: batchDaemonEvidence,
 					SIGNET_RUST_EVIDENCE_NONCE: evidenceNonce,
