@@ -332,6 +332,37 @@ pub(crate) async fn gate(state: &AppState, headers: &HeaderMap) -> Result<Value,
         ))
     }
 }
+pub(crate) async fn session_agent_scope_error(
+    state: &AppState,
+    headers: &HeaderMap,
+    agent_id: &str,
+) -> Result<Option<String>, ApiError> {
+    let local_mode = state
+        .auth_mode
+        .lock()
+        .map(|mode| mode.as_str() == "local")
+        .unwrap_or(false);
+    if local_mode && configured_credential().is_none() {
+        return Ok(None);
+    }
+    let claims = gate(state, headers).await?;
+    if claims.get("role").and_then(Value::as_str) == Some("admin") {
+        return Ok(None);
+    }
+    let Some(scope) = claims.get("scope").and_then(Value::as_object) else {
+        return Err(ApiError::unauthorized("token scope is invalid"));
+    };
+    if scope.is_empty() {
+        return Ok(None);
+    }
+    match scope.get("agent") {
+        Some(Value::String(scoped_agent)) if scoped_agent != agent_id => {
+            Ok(Some(format!("scope restricted to agent '{scoped_agent}'")))
+        }
+        Some(Value::String(_)) | None => Ok(None),
+        Some(_) => Ok(Some("agent scope is invalid".to_owned())),
+    }
+}
 async fn methods() -> Json<Value> {
     Json(json!({
         "mode": "local",

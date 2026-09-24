@@ -1396,9 +1396,9 @@ fn execute_operation(
             let agent_id = required_agent(&agent_id)?;
             let alias = canonicalize_transcript_lookup(&session_key);
             let row = connection.query_row(
-                "SELECT session_key,agent_id,harness,project,created_at,updated_at FROM session_transcripts WHERE agent_id=? AND session_key IN (?,?) ORDER BY CASE WHEN session_key=? THEN 0 ELSE 1 END, COALESCE(updated_at,created_at) DESC LIMIT 1",
+                "SELECT session_key,agent_id,harness,project,created_at,COALESCE(updated_at,created_at) FROM session_transcripts WHERE agent_id=? AND session_key IN (?,?) ORDER BY CASE WHEN session_key=? THEN 0 ELSE 1 END, COALESCE(updated_at,created_at) DESC LIMIT 1",
                 params![agent_id, session_key, alias, session_key],
-                |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,Option<String>>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?)),
+                |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,Option<String>>(2)?,row.get::<_,Option<String>>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?)),
             ).optional()?;
             Ok(row.map(|(session_key,agent_id,harness,project,created_at,updated_at)| json!({"sessionKey":session_key,"agentId":agent_id,"harness":harness,"project":project,"createdAt":created_at,"updatedAt":updated_at})).unwrap_or(Value::Null))
         }
