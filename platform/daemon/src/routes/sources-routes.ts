@@ -559,9 +559,6 @@ export function registerSourcesRoutes(app: Hono, deps: RegisterSourcesRoutesDeps
 		}
 		let deferRelease = false;
 		try {
-			// Keep the configured source until lifecycle state and provider artifacts
-			// are gone. The config is the durable retry handle when an owner or purge
-			// operation fails partway through deletion.
 			cancelSourceIndexJob(source.id);
 			recordSourceDeletionTombstone(source, sourceAgentId, agentsDir);
 			const provider = getSourceProvider(source.kind);
@@ -929,10 +926,6 @@ export async function cleanupSourceDeletionTombstones(
 				(source: SignetSourceEntry) => source.id === tombstone.source.id,
 			);
 			if (configured !== undefined && configured.generation !== tombstone.source.generation) {
-				// Artifact purge is keyed by source id rather than generation. Retain
-				// every tombstone while that id is configured: this avoids deleting a
-				// deliberately re-added source, while generation-specific route
-				// filtering leaves a newer source generation visible.
 				remaining.push(tombstone);
 				continue;
 			}

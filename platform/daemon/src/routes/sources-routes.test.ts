@@ -932,9 +932,6 @@ describe("Sources routes", () => {
 			}),
 		).not.toThrow();
 		expect(runtimePurges).toBe(1);
-
-		// Startup cleanup must defer while the route still owns the source
-		// deletion lease for its in-flight index finalizer.
 		await cleanupSourceDeletionTombstones(dir, () => {
 			startupPurges++;
 			return 1;

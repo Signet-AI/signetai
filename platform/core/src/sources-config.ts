@@ -134,7 +134,6 @@ export interface AddImportedSourceInput {
 	readonly format: string;
 	readonly agentId?: string;
 	readonly duplicateMode?: ImportedSourceDuplicateMode;
-	/** Source id reserved by the daemon before source-owned writes begin. */
 	readonly sourceId?: string;
 	readonly now?: string;
 }

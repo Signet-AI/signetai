@@ -1119,7 +1119,6 @@ export const api = {
 			return { ok: false, error: "daemon unreachable" };
 		}
 	},
-	/** DELETE /api/sources/:id — removes config and purges indexed artifacts; 202 means cleanup is deferred for retry. */
 	removeSource: async (id: string): Promise<{ ok: boolean; error?: string }> => {
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(id)}`, {
