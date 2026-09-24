@@ -17,10 +17,19 @@ function safeError(error: unknown): string {
 }
 
 function classify(error: unknown): string {
-	const detail = safeError(error).toLowerCase();
+	const code =
+		typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
+	const detail = `${code} ${safeError(error)}`.toLowerCase();
 	if (/noentry|no entry|no such item|item.*not found|credential.*missing|does not exist/.test(detail)) return "missing";
 	if (/locked|interaction|required|authfailed|authentication|islocked|prompt/.test(detail)) return "locked";
 	if (/permission|access denied|denied/.test(detail)) return "permission-denied";
+	if (
+		code === "MODULE_NOT_FOUND" ||
+		code === "ERR_MODULE_NOT_FOUND" ||
+		code === "ERR_DLOPEN_FAILED" ||
+		/cannot find (?:module|package|native binding)/.test(detail)
+	)
+		return "unavailable";
 	if (/unsupported|not implemented|dbus|secret service|keyutils|connection|unavailable|no such file/.test(detail))
 		return "unavailable";
 	return "corrupt";
