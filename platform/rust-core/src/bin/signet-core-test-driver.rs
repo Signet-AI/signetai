@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use signet_core_native::{Core, Operation};
 use std::{
     env,
@@ -37,6 +37,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 agent_id: request["agentId"].as_str().unwrap_or("default").into(),
                 id: request["id"].as_str().ok_or("id required")?.into(),
             })?,
+            Some("ontologyContradictionList") => {
+                core.submit(Operation::OntologyContradictionList {
+                    request: signet_core_native::OntologyContradictionListRequest {
+                        agent_id: request["agentId"].as_str().unwrap_or("default").into(),
+                        entity: request["entity"].as_str().map(str::to_owned),
+                        entity_id: request["entityId"].as_str().map(str::to_owned),
+                        aspect_id: request["aspectId"].as_str().map(str::to_owned),
+                        group_key: request["groupKey"].as_str().map(str::to_owned),
+                        claim_key: request["claimKey"].as_str().map(str::to_owned),
+                        source_id: request["sourceId"].as_str().map(str::to_owned),
+                        status: request["status"].as_str().map(str::to_owned),
+                        limit: request["limit"].as_u64().map(|value| value as usize),
+                        offset: request["offset"].as_u64().map(|value| value as usize),
+                    },
+                })?
+            }
+            Some("ontologyContradictionGet") => {
+                core.submit(Operation::OntologyContradictionGet {
+                    request: signet_core_native::OntologyContradictionGetRequest {
+                        agent_id: request["agentId"].as_str().unwrap_or("default").into(),
+                        id: request["id"].as_str().ok_or("id required")?.into(),
+                    },
+                })?
+            }
             Some("close") => break,
             _ => return Err("unknown operation".into()),
         };

@@ -14,6 +14,7 @@ use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime}
 use unicode_normalization::UnicodeNormalization;
 
 pub mod memory_content_safety;
+mod ontology_contradictions;
 mod ontology_claim_trace;
 mod ontology_claim_versions;
 mod ontology_link_evidence;
@@ -3230,6 +3231,12 @@ fn execute_operation(
         Operation::OntologyClaimEvidence { request } => {
             ontology_claim_trace::execute_evidence(connection, request)
         }
+        Operation::OntologyContradictionList { request } => {
+            ontology_contradictions::execute_list(connection, request)
+        }
+        Operation::OntologyContradictionGet { request } => {
+            ontology_contradictions::execute_get(connection, request)
+        }
         Operation::KnowledgeEntityCreate {
             agent_id,
             workspace_id,
@@ -4429,6 +4436,26 @@ pub struct OntologyClaimEvidenceRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OntologyContradictionListRequest {
+    pub agent_id: String,
+    pub entity: Option<String>,
+    pub entity_id: Option<String>,
+    pub aspect_id: Option<String>,
+    pub group_key: Option<String>,
+    pub claim_key: Option<String>,
+    pub source_id: Option<String>,
+    pub status: Option<String>,
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct OntologyContradictionGetRequest {
+    pub agent_id: String,
+    pub id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Operation {
     LegacyMarkdownImport {
         agent_id: String,
@@ -4822,6 +4849,12 @@ pub enum Operation {
     },
     OntologyClaimEvidence {
         request: OntologyClaimEvidenceRequest,
+    },
+    OntologyContradictionList {
+        request: OntologyContradictionListRequest,
+    },
+    OntologyContradictionGet {
+        request: OntologyContradictionGetRequest,
     },
     KnowledgeEntityCreate {
         agent_id: String,
@@ -5370,6 +5403,50 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
 
          CREATE TABLE IF NOT EXISTS api_keys (id TEXT PRIMARY KEY, prefix TEXT NOT NULL UNIQUE, name TEXT NOT NULL, key_hash TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'agent', scope_json TEXT NOT NULL DEFAULT '{}', permissions_json TEXT NOT NULL DEFAULT '[]', connector TEXT, harness TEXT, agent_id TEXT, allowed_projects_json TEXT, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT, expires_at TEXT);
          CREATE TABLE IF NOT EXISTS secrets (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, workspace_id TEXT NOT NULL, name TEXT NOT NULL, provider TEXT NOT NULL, value TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(agent_id,workspace_id,name));
+         CREATE TABLE IF NOT EXISTS ontology_contradictions (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL DEFAULT 'default',
+            entity_id TEXT,
+            entity_name TEXT NOT NULL,
+            aspect_id TEXT,
+            aspect_name TEXT NOT NULL,
+            group_key TEXT NOT NULL DEFAULT 'general',
+            claim_key TEXT NOT NULL,
+            left_attribute_id TEXT,
+            right_attribute_id TEXT,
+            left_content TEXT NOT NULL,
+            right_content TEXT NOT NULL,
+            left_confidence REAL NOT NULL DEFAULT 0.0 CHECK (left_confidence >= 0.0 AND left_confidence <= 1.0),
+            right_confidence REAL NOT NULL DEFAULT 0.0 CHECK (right_confidence >= 0.0 AND right_confidence <= 1.0),
+            left_scope TEXT,
+            right_scope TEXT,
+            left_visibility TEXT,
+            right_visibility TEXT,
+            left_source_kind TEXT,
+            left_source_id TEXT,
+            left_source_path TEXT,
+            left_source_root TEXT,
+            right_source_kind TEXT,
+            right_source_id TEXT,
+            right_source_path TEXT,
+            right_source_root TEXT,
+            left_evidence TEXT NOT NULL DEFAULT '[]',
+            right_evidence TEXT NOT NULL DEFAULT '[]',
+            detector TEXT NOT NULL CHECK (detector IN ('lexical', 'semantic', 'manual')),
+            reason TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0.0 CHECK (confidence >= 0.0 AND confidence <= 1.0),
+            status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'resolved')),
+            detected_at TEXT NOT NULL,
+            resolved_at TEXT,
+            resolution_reason TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(agent_id, left_attribute_id, right_attribute_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_ontology_contradictions_agent_status ON ontology_contradictions(agent_id,status,updated_at DESC);
+         CREATE INDEX IF NOT EXISTS idx_ontology_contradictions_agent_slot ON ontology_contradictions(agent_id,entity_id,aspect_id,group_key,claim_key,status);
+         CREATE INDEX IF NOT EXISTS idx_ontology_contradictions_attributes ON ontology_contradictions(agent_id,left_attribute_id,right_attribute_id);
+         CREATE INDEX IF NOT EXISTS idx_ontology_contradictions_sources ON ontology_contradictions(agent_id,left_source_id,right_source_id);
          SELECT 1;",
     )?;
     if has_table(&transaction, "transcript_capture_jobs")? {

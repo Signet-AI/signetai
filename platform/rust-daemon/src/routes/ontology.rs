@@ -162,6 +162,36 @@ struct ClaimEvidenceQuery {
     offset: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ContradictionQuery {
+    #[serde(flatten)]
+    agent: AgentQuery,
+    entity: Option<String>,
+    #[serde(alias = "entityId")]
+    entity_id: Option<String>,
+    #[serde(alias = "aspectId")]
+    aspect_id: Option<String>,
+    #[serde(alias = "groupKey")]
+    group_key: Option<String>,
+    #[serde(alias = "claimKey")]
+    claim_key: Option<String>,
+    #[serde(alias = "sourceId")]
+    source_id: Option<String>,
+    status: Option<String>,
+    limit: Option<String>,
+    offset: Option<String>,
+}
+
+fn parse_contradiction_status(value: Option<&str>) -> Option<String> {
+    match value.map(str::trim).filter(|value| !value.is_empty()) {
+        Some("all") | Some("active") | Some("resolved") => value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned),
+        _ => None,
+    }
+}
+
 fn parse_claim_kind(value: Option<&str>) -> Result<Option<String>, &'static str> {
     match value {
         None | Some("") => Ok(None),
@@ -299,7 +329,11 @@ pub(crate) fn router() -> Router<AppState> {
             "/api/ontology/consolidate",
             axum::routing::post(unsupported_write),
         )
-        .route("/api/ontology/contradictions", get(unsupported_read))
+        .route("/api/ontology/contradictions", get(list_contradictions))
+        .route(
+            "/api/ontology/contradictions/{id}",
+            get(get_contradiction),
+        )
         .route("/api/claims", get(list_claims).post(create_claim))
         .route(
             "/api/constraints",
@@ -387,15 +421,54 @@ async fn claim_evidence(
     )
 }
 
-async fn unsupported_read(
+async fn list_contradictions(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(mut q): Query<ContradictionQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let auth_query = OntologyQuery {
+        agent: std::mem::take(&mut q.agent),
+        workspace_id: None,
+        limit: None,
+        cursor: None,
+    };
+    require_ontology_auth(&state, &headers, &auth_query, "recall").await?;
+    let status = parse_contradiction_status(q.status.as_deref());
+    let limit = parse_claim_limit(q.limit.as_deref(), 50, 1, 200)?;
+    let offset = parse_claim_limit(q.offset.as_deref(), 0, 0, 10_000)?;
+    let request = signet_core_native::OntologyContradictionListRequest {
+        agent_id: agent(&headers, Some(&auth_query.agent), None)?,
+        entity: q.entity,
+        entity_id: q.entity_id,
+        aspect_id: q.aspect_id,
+        group_key: q.group_key,
+        claim_key: q.claim_key,
+        source_id: q.source_id,
+        status,
+        limit: Some(limit),
+        offset: Some(offset),
+    };
+    Ok(execute(&state, Operation::OntologyContradictionList { request })
+        .await
+        .map(Json)?)
+}
+
+async fn get_contradiction(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
     headers: HeaderMap,
     Query(q): Query<OntologyQuery>,
 ) -> Result<Json<Value>, ApiError> {
     require_ontology_auth(&state, &headers, &q, "recall").await?;
-    Err(ApiError::not_implemented(
-        "ontology operation is unsupported by the fresh Rust boundary",
-    ))
+    let request = signet_core_native::OntologyContradictionGetRequest {
+        agent_id: agent(&headers, Some(&q.agent), None)?,
+        id,
+    };
+    let value = execute(&state, Operation::OntologyContradictionGet { request }).await?;
+    if value.is_null() {
+        return Err(ApiError::not_found("ontology contradiction not found"));
+    }
+    Ok(Json(value))
 }
 
 async fn unsupported_write(
