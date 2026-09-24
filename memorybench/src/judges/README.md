@@ -30,7 +30,7 @@ interface Judge {
 
 **Use these helpers from `./base.ts`:**
 - `buildJudgePrompt(input)` - Builds full prompt from JudgeInput
-- `parseJudgeResponse(text)` - Extracts JudgeResult from LLM response
+- `parseJudgeResponse(text)` - Parses a valid JSON verdict and rejects malformed, out-of-range, contradictory, or incorrectly typed fields
 
 ## Models
 

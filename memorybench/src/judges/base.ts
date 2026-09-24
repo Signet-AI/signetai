@@ -27,26 +27,42 @@ ${groundTruthLabel}: ${input.groundTruth}
 System's Hypothesis: ${input.hypothesis}`
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
 export function parseJudgeResponse(response: string): JudgeResult {
+  const jsonMatch = response.match(/\{[\s\S]*\}/)
+  if (!jsonMatch) {
+    throw new Error("Judge response did not include a JSON object")
+  }
+
+  let parsed: unknown
   try {
-    const jsonMatch = response.match(/\{[\s\S]*\}/)
-    if (!jsonMatch) {
-      throw new Error("No JSON found in response")
-    }
-    const parsed = JSON.parse(jsonMatch[0])
-    return {
-      score: parsed.score === 1 ? 1 : 0,
-      label: parsed.label === "correct" ? "correct" : "incorrect",
-      explanation: parsed.explanation || "",
-    }
+    parsed = JSON.parse(jsonMatch[0])
   } catch {
-    const isCorrect =
-      response.toLowerCase().includes('"correct"') &&
-      !response.toLowerCase().includes('"incorrect"')
-    return {
-      score: isCorrect ? 1 : 0,
-      label: isCorrect ? "correct" : "incorrect",
-      explanation: "Failed to parse judge response",
-    }
+    throw new Error("Judge response contained invalid JSON")
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error("Judge response JSON must be an object")
+  }
+  if (parsed.score !== 0 && parsed.score !== 1) {
+    throw new Error("Judge response score must be 0 or 1")
+  }
+  if (parsed.label !== "correct" && parsed.label !== "incorrect") {
+    throw new Error("Judge response label must be correct or incorrect")
+  }
+  if ((parsed.score === 1) !== (parsed.label === "correct")) {
+    throw new Error("Judge response score and label disagree")
+  }
+  if (parsed.explanation !== undefined && typeof parsed.explanation !== "string") {
+    throw new Error("Judge response explanation must be a string")
+  }
+
+  return {
+    score: parsed.score,
+    label: parsed.label,
+    explanation: parsed.explanation ?? "",
   }
 }
