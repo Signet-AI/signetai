@@ -7603,9 +7603,21 @@ mod transcript_lookup_tests {
 
     #[test]
     fn canonicalizes_only_typescript_uuid_like_transcript_aliases() {
-        assert_eq!(canonicalize_transcript_lookup("123e4567-e89b-12d3-a456-426614174000"), "123e4567-e89b-12d3-a456-426614174000");
-        assert_eq!(canonicalize_transcript_lookup("123e4567-e89b:12d3:a456-426614174000"), "123e4567-e89b-12d3-a456-426614174000");
-        assert_eq!(canonicalize_transcript_lookup("session:123e4567-e89b:12d3:a456-426614174000"), "session:123e4567-e89b-12d3-a456-426614174000");
-        assert_eq!(canonicalize_transcript_lookup("not-a-uuid:123e4567"), "not-a-uuid:123e4567");
+        assert_eq!(
+            canonicalize_transcript_lookup("123e4567-e89b-12d3-a456-426614174000"),
+            "123e4567-e89b-12d3-a456-426614174000"
+        );
+        assert_eq!(
+            canonicalize_transcript_lookup("123e4567-e89b:12d3:a456-426614174000"),
+            "123e4567-e89b-12d3-a456-426614174000"
+        );
+        assert_eq!(
+            canonicalize_transcript_lookup("session:123e4567-e89b:12d3:a456-426614174000"),
+            "session:123e4567-e89b-12d3-a456-426614174000"
+        );
+        assert_eq!(
+            canonicalize_transcript_lookup("not-a-uuid:123e4567"),
+            "not-a-uuid:123e4567"
+        );
     }
 }

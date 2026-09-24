@@ -1,4 +1,4 @@
-use crate::{agent, execute, ApiError, AppState};
+use crate::{agent, execute, AgentQuery, ApiError, AppState};
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
@@ -62,48 +62,14 @@ pub async fn search(
     Ok(Json(filtered))
 }
 
-#[derive(Deserialize)]
-pub struct TranscriptQuery {
-    pub agent_id: Option<String>,
-    #[serde(rename = "agentId")]
-    pub agent_id_camel: Option<String>,
-}
-
 pub async fn get_transcript(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(key): Path<String>,
-    Query(query): Query<TranscriptQuery>,
+    Query(query): Query<AgentQuery>,
 ) -> Result<Response, ApiError> {
     let key = canonicalize_transcript_lookup(&key);
-    let agent_id = match (
-        query
-            .agent_id
-            .as_deref()
-            .or(query.agent_id_camel.as_deref()),
-        headers
-            .get("x-signet-agent-id")
-            .or_else(|| headers.get("x-signet-agent")),
-    ) {
-        (Some(query), Some(header))
-            if header
-                .to_str()
-                .ok()
-                .is_some_and(|value| !value.trim().is_empty() && value.trim() != query.trim()) =>
-        {
-            return Err(ApiError::bad_request("conflicting agent identities"))
-        }
-        (Some(query), _) => {
-            let value = query.trim();
-            if value.is_empty() {
-                return Err(ApiError::unauthorized(
-                    "an agent identity is required (x-signet-agent-id or agent_id)",
-                ));
-            }
-            value.to_owned()
-        }
-        (None, _) => agent(&headers, None, Some(&key))?,
-    };
+    let agent_id = agent(&headers, Some(&query), None)?;
     let result = execute(
         &state,
         Operation::TranscriptGet {
@@ -126,8 +92,9 @@ pub async fn get_session(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(key): Path<String>,
+    Query(query): Query<AgentQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let agent_id = agent(&headers, None, None)?;
+    let agent_id = agent(&headers, Some(&query), None)?;
     let key = key.trim();
     if key.is_empty() || key.len() > 512 {
         return Err(ApiError::bad_request("session key must be 1-512 bytes"));
@@ -157,7 +124,7 @@ pub async fn get_session(
     )
     .await?;
     if stored.is_null() {
-        return Err(ApiError::not_found("session not found"));
+        return Err(ApiError::not_found("Session not found"));
     }
     Ok(Json(serde_json::json!({
         "key": format!("session:{}", stored["sessionKey"].as_str().unwrap_or(lookup)),

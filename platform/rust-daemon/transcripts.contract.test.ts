@@ -124,5 +124,5 @@ it("retrieves stored session metadata over HTTP, scoped by agent", async () => {
 	expect(body).toEqual({ key: `session:${key}`, sessionKey: key, agentId: "agent-a", harness: "codex", project: "project-a", runtimePath: "transcript", provider: "session_transcripts", startedAt: expect.any(String), lastSeenAt: expect.any(String), status: "stored" });
 	const denied = await fetch(s.origin + `/api/sessions/${key}`, { headers: { ...headers, "x-signet-agent-id": "agent-b" } });
 	expect(denied.status).toBe(404);
-	expect(await denied.json()).toEqual({ error: "Session not found" });
+	expect(await denied.json()).toEqual({ code: "not_found", error: "Session not found" });
 });
