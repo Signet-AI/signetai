@@ -285,6 +285,412 @@ fn core() -> Core {
 }
 
 #[test]
+fn typescript_memory_history_shape_is_reconciled_without_losing_rows() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("typescript-history.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch(
+        "CREATE TABLE memories (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            deleted INTEGER NOT NULL DEFAULT 0,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+         );
+         CREATE TABLE memory_history (
+            id TEXT PRIMARY KEY,
+            memory_id TEXT NOT NULL,
+            event TEXT NOT NULL,
+            old_content TEXT,
+            new_content TEXT,
+            changed_by TEXT NOT NULL,
+            reason TEXT,
+            metadata TEXT,
+            created_at TEXT NOT NULL
+         );
+         CREATE INDEX memory_history_scope_idx ON memory_history(memory_id);
+         INSERT INTO memories(id,agent_id,content,created_at,updated_at)
+         VALUES ('legacy-memory','ts-agent','legacy',datetime('now'),datetime('now'));
+         INSERT INTO memories(id,agent_id,content,created_at,updated_at)
+         VALUES ('review-memory','ts-agent','review',datetime('now'),datetime('now'));
+         INSERT INTO memories(id,agent_id,content,created_at,updated_at)
+         VALUES ('supersede-memory','ts-agent','supersede',datetime('now'),datetime('now'));
+         INSERT INTO memories(id,agent_id,content,created_at,updated_at)
+         VALUES ('replacement-memory','ts-agent','replacement',datetime('now'),datetime('now'));
+         INSERT INTO memory_history
+             (id,memory_id,event,old_content,new_content,changed_by,reason,metadata,created_at)
+         VALUES ('legacy-history','legacy-memory','deleted',NULL,NULL,'typescript','legacy reason',NULL,datetime('now'));
+         INSERT INTO memory_history
+             (id,memory_id,event,old_content,new_content,changed_by,reason,metadata,created_at)
+         VALUES ('orphan-history','orphan-memory','updated',NULL,'orphan','typescript',NULL,NULL,datetime('now'));
+         INSERT INTO memory_history
+             (id,memory_id,event,old_content,new_content,changed_by,reason,metadata,created_at)
+         VALUES ('review-history','review-memory','REVIEW_NEEDED',NULL,'review','typescript',NULL,NULL,datetime('now'));",
+    )
+    .unwrap();
+    drop(db);
+
+    let _workspace = Box::leak(Box::new(d));
+    let owner = Core::open(&p, 2).unwrap();
+    let before = owner.history("ts-agent", "legacy-memory").unwrap();
+    assert_eq!(before.len(), 1);
+    assert_eq!(before[0]["id"], "legacy-history");
+    assert_eq!(before[0]["operation"], "deleted");
+    assert_eq!(before[0]["event"], "deleted");
+    assert_eq!(before[0].as_object().unwrap().len(), 8);
+    assert!(owner.history("default", "orphan-memory").unwrap().is_empty());
+    let review_queue = owner
+        .submit(Operation::MemoryAdvanced {
+            agent_id: "ts-agent".into(),
+            action: "review-queue".into(),
+            id: None,
+            payload: serde_json::json!({}),
+        })
+        .unwrap();
+    assert_eq!(review_queue["items"][0]["eventId"], "review-history");
+    let timeline = owner
+        .submit(Operation::MemoryAdvanced {
+            agent_id: "ts-agent".into(),
+            action: "timeline".into(),
+            id: None,
+            payload: serde_json::json!({}),
+        })
+        .unwrap();
+    assert!(timeline["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["memoryId"] == "review-memory"));
+    owner
+        .submit(Operation::MemoryAdvanced {
+            agent_id: "ts-agent".into(),
+            action: "modify".into(),
+            id: Some("review-memory".into()),
+            payload: serde_json::json!({"content":"review-updated"}),
+        })
+        .unwrap();
+    owner
+        .submit(Operation::MemoryAdvanced {
+            agent_id: "ts-agent".into(),
+            action: "forget".into(),
+            id: Some("review-memory".into()),
+            payload: serde_json::json!({"reason":"review cleanup"}),
+        })
+        .unwrap();
+    owner
+        .submit(Operation::MemoryAdvanced {
+            agent_id: "ts-agent".into(),
+            action: "supersede".into(),
+            id: Some("supersede-memory".into()),
+            payload: serde_json::json!({
+                "supersededBy":"replacement-memory",
+                "reason":"newer"
+            }),
+        })
+        .unwrap();
+
+    owner
+        .update(
+            "ts-agent",
+            "legacy-memory",
+            UpdateMemory {
+                content: "updated".into(),
+                metadata: serde_json::json!({}),
+            },
+        )
+        .unwrap();
+    let updated = owner.history("ts-agent", "legacy-memory").unwrap();
+    assert_eq!(updated.len(), 2);
+    assert_eq!(updated[1]["operation"], "update");
+    assert_eq!(updated[1]["event"], "update");
+
+    owner.delete("ts-agent", "legacy-memory").unwrap();
+    let after = owner.history("ts-agent", "legacy-memory").unwrap();
+    assert_eq!(after.len(), 3);
+    assert_eq!(after[2]["operation"], "delete");
+    assert_eq!(after[2]["event"], "delete");
+    assert_eq!(after[2]["changedBy"], "native-owner");
+    let operation_history = owner
+        .submit(Operation::History {
+            agent_id: "ts-agent".into(),
+            id: "legacy-memory".into(),
+        })
+        .unwrap();
+    assert_eq!(operation_history[0]["id"], "legacy-history");
+    assert_eq!(operation_history[1]["operation"], "update");
+    assert_eq!(operation_history[2]["operation"], "delete");
+    assert_eq!(operation_history[0].as_object().unwrap().len(), 5);
+    assert!(operation_history[2].get("event").is_none());
+    let lineage = owner
+        .submit(Operation::MemoryAdvanced {
+            agent_id: "ts-agent".into(),
+            action: "lineage".into(),
+            id: Some("legacy-memory".into()),
+            payload: serde_json::json!({}),
+        })
+        .unwrap();
+    assert_eq!(lineage["items"].as_array().unwrap().len(), 3);
+    drop(owner);
+    let db = Connection::open(&p).unwrap();
+    let old_content: Option<String> = db
+        .query_row(
+            "SELECT old_content FROM memory_history
+             WHERE memory_id = 'legacy-memory' AND event = 'delete'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(old_content.as_deref(), Some("updated"));
+    let update_contents: (Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT old_content, new_content FROM memory_history
+             WHERE memory_id = 'legacy-memory' AND event = 'update'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(update_contents.0.as_deref(), Some("legacy"));
+    assert_eq!(update_contents.1.as_deref(), Some("updated"));
+    let advanced_modify_contents: (Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT old_content, new_content FROM memory_history
+             WHERE memory_id = 'review-memory' AND event = 'modify'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(advanced_modify_contents.0.as_deref(), Some("review"));
+    assert_eq!(advanced_modify_contents.1.as_deref(), Some("review-updated"));
+    let advanced_tombstone_contents: (Option<String>, Option<String>) = db
+        .query_row(
+            "SELECT old_content, new_content FROM memory_history
+             WHERE memory_id = 'review-memory' AND event = 'tombstone'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(advanced_tombstone_contents.0.as_deref(), Some("review-updated"));
+    assert_eq!(advanced_tombstone_contents.1, None);
+    let advanced_tombstone_legacy_content: Option<String> = db
+        .query_row(
+            "SELECT content FROM memory_history
+             WHERE memory_id = 'review-memory' AND event = 'tombstone'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(advanced_tombstone_legacy_content.as_deref(), Some("review cleanup"));
+    let advanced_supersede_old_content: Option<String> = db
+        .query_row(
+            "SELECT old_content FROM memory_history
+             WHERE memory_id = 'supersede-memory' AND event = 'supersede'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(advanced_supersede_old_content.as_deref(), Some("supersede"));
+    let advanced_supersede_legacy_content: Option<String> = db
+        .query_row(
+            "SELECT content FROM memory_history
+             WHERE memory_id = 'supersede-memory' AND event = 'supersede'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(advanced_supersede_legacy_content.as_deref(), Some("newer"));
+    let native_index: String = db
+        .query_row(
+            "SELECT name FROM sqlite_master
+             WHERE type = 'index' AND name = 'native_memory_history_scope_v1'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(native_index, "native_memory_history_scope_v1");
+}
+
+#[test]
+fn typeless_memory_history_primary_key_is_treated_as_text() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("typeless-history.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch(
+        "CREATE TABLE memories (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            deleted INTEGER NOT NULL DEFAULT 0,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+         );
+         CREATE TABLE memory_history (
+            id PRIMARY KEY,
+            memory_id TEXT NOT NULL,
+            event TEXT NOT NULL,
+            old_content TEXT,
+            new_content TEXT,
+            changed_by TEXT NOT NULL,
+            reason TEXT,
+            metadata TEXT,
+            created_at TEXT NOT NULL
+         );
+         INSERT INTO memories(id,agent_id,content,created_at,updated_at)
+         VALUES ('memory-1','agent-1','before',datetime('now'),datetime('now'));
+         INSERT INTO memory_history
+             (id,memory_id,event,old_content,new_content,changed_by,created_at)
+         VALUES ('history-1','memory-1','updated','before','before','typescript',datetime('now'));",
+    )
+    .unwrap();
+    drop(db);
+
+    let owner = Core::open(&p, 2).unwrap();
+    owner.delete("agent-1", "memory-1").unwrap();
+    let history = owner.history("agent-1", "memory-1").unwrap();
+    assert_eq!(history.len(), 2);
+    assert!(history[0]["id"].is_string());
+    assert!(history[1]["id"].is_string());
+}
+
+#[test]
+fn native_integer_memory_history_ids_preserve_numeric_shape_and_order() {
+    let owner = core();
+    let memory_id = owner
+        .remember(
+            "native-agent",
+            NewMemory {
+                content: "before".into(),
+                metadata: serde_json::json!({}),
+            },
+        )
+        .unwrap();
+    owner
+        .update(
+            "native-agent",
+            &memory_id,
+            UpdateMemory {
+                content: "after".into(),
+                metadata: serde_json::json!({}),
+            },
+        )
+        .unwrap();
+
+    let history = owner.history("native-agent", &memory_id).unwrap();
+    assert_eq!(history.len(), 2);
+    assert!(history[0]["id"].is_number());
+    assert!(history[1]["id"].is_number());
+    assert!(history[0]["id"].as_i64().unwrap() < history[1]["id"].as_i64().unwrap());
+    assert_eq!(history[0].as_object().unwrap().len(), 5);
+    assert_eq!(history[1].as_object().unwrap().len(), 5);
+
+    let operation_history = owner
+        .submit(Operation::History {
+            agent_id: "native-agent".into(),
+            id: memory_id,
+        })
+        .unwrap();
+    assert!(operation_history[0]["id"].is_number());
+    assert!(operation_history[1]["id"].is_number());
+    assert_eq!(operation_history[1]["operation"], "update");
+}
+
+#[test]
+fn memory_history_rejects_ambiguous_and_conflicting_owners() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("ambiguous-history.sqlite");
+    let db = Connection::open(&p).unwrap();
+    db.execute_batch(
+        "CREATE TABLE memories (
+            id TEXT NOT NULL,
+            agent_id TEXT,
+            content TEXT NOT NULL,
+            metadata TEXT NOT NULL DEFAULT '{}',
+            deleted INTEGER NOT NULL DEFAULT 0,
+            is_deleted INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            version INTEGER NOT NULL DEFAULT 1
+         );
+         CREATE TABLE memory_history (
+            id TEXT PRIMARY KEY,
+            memory_id TEXT NOT NULL,
+            event TEXT NOT NULL,
+            old_content TEXT,
+            new_content TEXT,
+            changed_by TEXT NOT NULL,
+            reason TEXT,
+            metadata TEXT,
+            created_at TEXT NOT NULL
+         );
+         INSERT INTO memories(id,agent_id,content,created_at,updated_at)
+         VALUES ('mixed-memory','agent-a','a',datetime('now'),datetime('now')),
+                ('mixed-memory','   ','default-like',datetime('now'),datetime('now')),
+                ('foreign-memory','other-agent','foreign',datetime('now'),datetime('now'));
+         INSERT INTO memory_history
+             (id,memory_id,event,old_content,new_content,changed_by,created_at)
+         VALUES ('mixed-history','mixed-memory','updated','before','after','typescript',datetime('now'));",
+    )
+    .unwrap();
+    drop(db);
+
+    let owner = Core::open(&p, 2).unwrap();
+    assert!(owner.history("agent-a", "mixed-memory").unwrap().is_empty());
+    assert!(owner.history("default", "mixed-memory").unwrap().is_empty());
+    drop(owner);
+
+    let db = Connection::open(&p).unwrap();
+    let backfilled_agent: Option<String> = db
+        .query_row(
+            "SELECT agent_id FROM memory_history WHERE id = 'mixed-history'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(backfilled_agent.is_none());
+    db.execute(
+        "INSERT INTO memory_history
+             (id,memory_id,agent_id,event,new_content,changed_by,created_at)
+         VALUES ('conflicting-history','foreign-memory','agent-a','REVIEW_NEEDED','wrong owner','native',datetime('now'))",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO memory_history
+             (id,memory_id,agent_id,event,new_content,changed_by,created_at)
+         VALUES ('orphan-history','missing-memory','agent-a','REVIEW_NEEDED','orphan','native',datetime('now'))",
+        [],
+    )
+    .unwrap();
+    drop(db);
+
+    let owner = Core::open(&p, 2).unwrap();
+    let timeline = owner
+        .submit(Operation::MemoryAdvanced {
+            agent_id: "agent-a".into(),
+            action: "timeline".into(),
+            id: None,
+            payload: serde_json::json!({}),
+        })
+        .unwrap();
+    assert!(timeline["items"].as_array().unwrap().is_empty());
+    assert!(owner.history("agent-a", "missing-memory").unwrap().is_empty());
+    let review_queue = owner
+        .submit(Operation::MemoryAdvanced {
+            agent_id: "agent-a".into(),
+            action: "review-queue".into(),
+            id: None,
+            payload: serde_json::json!({}),
+        })
+        .unwrap();
+    assert!(review_queue["items"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn reflections_support_legacy_typescript_schema_and_preserve_insert_semantics() {
     let d = tempdir().unwrap();
     let p = d.path().join("legacy-reflections.sqlite");
@@ -1938,18 +2344,15 @@ fn workspace_submit_supports_all_durable_operation_variants() {
             .unwrap()["deleted"],
         true
     );
-    assert_eq!(
-        owner
-            .submit(Operation::History {
-                agent_id: "agent".into(),
-                id: id.clone()
-            })
-            .unwrap()
-            .as_array()
-            .unwrap()
-            .len(),
-        3
-    );
+    let history = owner
+        .submit(Operation::History {
+            agent_id: "agent".into(),
+            id: id.clone(),
+        })
+        .unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 3);
+    assert!(history[0]["id"].is_number());
+    assert_eq!(history[0].as_object().unwrap().len(), 5);
     assert_eq!(
         owner
             .submit(Operation::Recover {

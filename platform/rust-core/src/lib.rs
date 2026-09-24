@@ -272,6 +272,15 @@ impl Core {
         self.call(move |connection| {
             let metadata = serde_json::to_string(&memory.metadata)?;
             let transaction = connection.transaction()?;
+            let old_content: String = transaction
+                .query_row(
+                    "SELECT content FROM memories
+                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
+                    params![id, agent],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)?;
             let changed = transaction.execute(
                 "UPDATE memories SET content = ?, metadata = ?, updated_at = datetime('now')
                  WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
@@ -280,7 +289,15 @@ impl Core {
             if changed == 0 {
                 return Err(CoreError::NotFound);
             }
-            record_history(&transaction, &id, &agent, "update", Some(&memory.content))?;
+            record_history_with_contents(
+                &transaction,
+                &id,
+                &agent,
+                "update",
+                Some(&old_content),
+                Some(&memory.content),
+                None,
+            )?;
             transaction.commit()?;
             Ok(())
         })
@@ -291,6 +308,15 @@ impl Core {
         let id = required_id(id)?;
         self.call(move |connection| {
             let transaction = connection.transaction()?;
+            let old_content: String = transaction
+                .query_row(
+                    "SELECT content FROM memories
+                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
+                    params![id, agent],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)?;
             let changed = transaction.execute(
                 "UPDATE memories SET deleted = 1, is_deleted = 1, updated_at = datetime('now')
                  WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
@@ -299,7 +325,15 @@ impl Core {
             if changed == 0 {
                 return Err(CoreError::NotFound);
             }
-            record_history(&transaction, &id, &agent, "delete", None)?;
+            record_history_with_contents(
+                &transaction,
+                &id,
+                &agent,
+                "delete",
+                Some(&old_content),
+                None,
+                None,
+            )?;
             transaction.commit()?;
             Ok(())
         })
@@ -327,24 +361,7 @@ impl Core {
     pub fn history(&self, agent: &str, id: &str) -> Result<Vec<Value>, CoreError> {
         let agent = required_agent(agent)?;
         let id = required_id(id)?;
-        self.call(move |connection| {
-            let mut statement = connection.prepare(
-                "SELECT id, memory_id, operation, content, created_at
-                 FROM memory_history
-                 WHERE memory_id = ? AND agent_id = ?
-                 ORDER BY id ASC LIMIT 1000",
-            )?;
-            let rows = statement.query_map(params![id, agent], |row| {
-                Ok(serde_json::json!({
-                    "id": row.get::<_, i64>(0)?,
-                    "memoryId": row.get::<_, String>(1)?,
-                    "operation": row.get::<_, String>(2)?,
-                    "content": row.get::<_, Option<String>>(3)?,
-                    "createdAt": row.get::<_, String>(4)?,
-                }))
-            })?;
-            Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })
+        self.call(move |connection| history_rows(connection, &agent, &id, true))
     }
 
     pub fn admit(&self, agent: &str, payload: &str) -> Result<(), CoreError> {
@@ -2017,16 +2034,28 @@ fn execute_operation(
                 "forget" | "tombstone" => {
                     let memory_id =
                         id.ok_or_else(|| CoreError::InvalidInput("memory id is required".into()))?;
+                    let old_content: Option<String> = tx
+                        .query_row(
+                            "SELECT content FROM memories
+                             WHERE id=? AND agent_id=? AND deleted=0",
+                            params![memory_id, agent_id],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
                     let changed = tx.execute("UPDATE memories SET deleted=1, updated_at=datetime('now') WHERE id=? AND agent_id=? AND deleted=0", params![memory_id, agent_id])?;
                     if changed == 0 {
                         return Err(CoreError::NotFound);
                     }
-                    record_history(
+                    let reason = payload.get("reason").and_then(Value::as_str);
+                    record_history_with_legacy_content(
                         &tx,
                         &memory_id,
                         &agent_id,
                         "tombstone",
-                        payload.get("reason").and_then(Value::as_str),
+                        reason,
+                        old_content.as_deref(),
+                        None,
+                        reason,
                     )?;
                     json!({"id":memory_id,"status":"tombstoned"})
                 }
@@ -2040,14 +2069,32 @@ fn execute_operation(
                     if content.trim().is_empty() {
                         return Err(CoreError::InvalidInput("content must not be empty".into()));
                     }
+                    let old_content: Option<String> = tx
+                        .query_row(
+                            "SELECT content FROM memories
+                             WHERE id=? AND agent_id=? AND deleted=0",
+                            params![memory_id, agent_id],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
                     let changed = tx.execute("UPDATE memories SET content=?, updated_at=datetime('now') WHERE id=? AND agent_id=? AND deleted=0", params![content, memory_id, agent_id])?;
                     if changed == 0 {
                         return Err(CoreError::NotFound);
                     }
-                    record_history(&tx, &memory_id, &agent_id, "modify", Some(content))?;
+                    record_history_with_contents(
+                        &tx,
+                        &memory_id,
+                        &agent_id,
+                        "modify",
+                        old_content.as_deref(),
+                        Some(content),
+                        None,
+                    )?;
                     json!({"id":memory_id,"content":content})
                 }
                 "timeline" | "lineage" | "review" => {
+                    let id_is_text = history_id_is_text(&tx)?;
+                    let order_clause = if id_is_text { "rowid ASC" } else { "id ASC" };
                     if let Some(memory_id) = id {
                         let exists: i64 = tx.query_row(
                             "SELECT count(*) FROM memories WHERE id=? AND agent_id=?",
@@ -2057,20 +2104,88 @@ fn execute_operation(
                         if exists == 0 {
                             return Err(CoreError::NotFound);
                         }
-                        let mut stmt = tx.prepare("SELECT operation,content,created_at FROM memory_history WHERE memory_id=? AND agent_id=? ORDER BY id")?;
-                        let rows = stmt.query_map(params![memory_id, agent_id], |r| Ok(json!({"operation":r.get::<_,String>(0)?,"content":r.get::<_,Option<String>>(1)?,"createdAt":r.get::<_,String>(2)?})))?;
+                        let query = format!(
+                            "SELECT COALESCE(NULLIF(operation, ''), event),
+                                    COALESCE(content, new_content), created_at
+                             FROM memory_history
+                             WHERE memory_id=? AND agent_id=?
+                               AND EXISTS (
+                                   SELECT 1 FROM memories m
+                                   WHERE m.id = memory_history.memory_id
+                                     AND COALESCE(NULLIF(trim(m.agent_id), ''), 'default') =
+                                         COALESCE(NULLIF(trim(memory_history.agent_id), ''), 'default')
+                               )
+                             ORDER BY {order_clause}"
+                        );
+                        let mut stmt = tx.prepare(&query)?;
+                        let rows = stmt.query_map(params![memory_id, agent_id], |r| {
+                            Ok(json!({
+                                "operation": r.get::<_, String>(0)?,
+                                "content": r.get::<_, Option<String>>(1)?,
+                                "createdAt": r.get::<_, String>(2)?,
+                            }))
+                        })?;
                         json!({"id":memory_id,"items":rows.collect::<Result<Vec<_>,_>>()?})
                     } else if action == "timeline" {
-                        let mut stmt = tx.prepare("SELECT memory_id,operation,content,created_at FROM memory_history WHERE agent_id=? ORDER BY id DESC LIMIT 1000")?;
-                        let rows = stmt.query_map(params![agent_id], |r| Ok(json!({"memoryId":r.get::<_,String>(0)?,"operation":r.get::<_,String>(1)?,"content":r.get::<_,Option<String>>(2)?,"createdAt":r.get::<_,String>(3)?})))?;
+                        let order_clause = if id_is_text { "rowid DESC" } else { "id DESC" };
+                        let query = format!(
+                            "SELECT memory_id,
+                                    COALESCE(NULLIF(operation, ''), event),
+                                    COALESCE(content, new_content), created_at
+                             FROM memory_history
+                             WHERE agent_id=?
+                               AND EXISTS (
+                                   SELECT 1 FROM memories m
+                                   WHERE m.id = memory_history.memory_id
+                                     AND COALESCE(NULLIF(trim(m.agent_id), ''), 'default') =
+                                         COALESCE(NULLIF(trim(memory_history.agent_id), ''), 'default')
+                               )
+                             ORDER BY {order_clause} LIMIT 1000"
+                        );
+                        let mut stmt = tx.prepare(&query)?;
+                        let rows = stmt.query_map(params![agent_id], |r| {
+                            Ok(json!({
+                                "memoryId": r.get::<_, String>(0)?,
+                                "operation": r.get::<_, String>(1)?,
+                                "content": r.get::<_, Option<String>>(2)?,
+                                "createdAt": r.get::<_, String>(3)?,
+                            }))
+                        })?;
                         json!({"items":rows.collect::<Result<Vec<_>,_>>()?})
                     } else {
                         return Err(CoreError::InvalidInput("memory id is required".into()));
                     }
                 }
                 "review-queue" => {
-                    let mut stmt = tx.prepare("SELECT h.id,h.memory_id,h.operation,h.content,h.created_at FROM memory_history h WHERE h.agent_id=? AND h.operation IN ('DEDUP','REVIEW_NEEDED','BLOCKED_DESTRUCTIVE') ORDER BY h.id DESC LIMIT 100")?;
-                    let rows = stmt.query_map(params![agent_id], |r| Ok(json!({"eventId":r.get::<_,i64>(0)?,"memoryId":r.get::<_,String>(1)?,"event":r.get::<_,String>(2)?,"content":r.get::<_,Option<String>>(3)?,"createdAt":r.get::<_,String>(4)?})))?;
+                    let id_is_text = history_id_is_text(&tx)?;
+                    let order_clause = if id_is_text { "rowid DESC" } else { "id DESC" };
+                    let query = format!(
+                        "SELECT CAST(h.id AS TEXT), h.memory_id,
+                                COALESCE(NULLIF(h.operation, ''), h.event),
+                                COALESCE(h.content, h.new_content), h.created_at
+                         FROM memory_history h
+                         WHERE h.agent_id=?
+                           AND EXISTS (
+                               SELECT 1 FROM memories m
+                               WHERE m.id = h.memory_id
+                                 AND COALESCE(NULLIF(trim(m.agent_id), ''), 'default') =
+                                     COALESCE(NULLIF(trim(h.agent_id), ''), 'default')
+                           )
+                           AND COALESCE(NULLIF(h.operation, ''), h.event)
+                               IN ('DEDUP','REVIEW_NEEDED','BLOCKED_DESTRUCTIVE')
+                         ORDER BY h.{order_clause} LIMIT 100"
+                    );
+                    let mut stmt = tx.prepare(&query)?;
+                    let rows = stmt.query_map(params![agent_id], |r| {
+                        let raw_id = r.get::<_, String>(0)?;
+                        Ok(json!({
+                            "eventId": history_id_value(raw_id, id_is_text),
+                            "memoryId": r.get::<_, String>(1)?,
+                            "event": r.get::<_, String>(2)?,
+                            "content": r.get::<_, Option<String>>(3)?,
+                            "createdAt": r.get::<_, String>(4)?,
+                        }))
+                    })?;
                     json!({"items":rows.collect::<Result<Vec<_>,_>>()?})
                 }
                 "supersede" => {
@@ -2095,6 +2210,14 @@ fn execute_operation(
                     if target_exists == 0 {
                         return Err(CoreError::NotFound);
                     }
+                    let old_content: Option<String> = tx
+                        .query_row(
+                            "SELECT content FROM memories
+                             WHERE id=? AND agent_id=? AND deleted=0",
+                            params![old_id, agent_id],
+                            |r| r.get(0),
+                        )
+                        .optional()?;
                     let changed = tx.execute("UPDATE memories SET deleted=1, superseded_by=?, superseded_at=datetime('now'), superseded_reason=?, updated_at=datetime('now') WHERE id=? AND agent_id=? AND deleted=0", params![new_id, payload.get("reason").or_else(||payload.get("supersededReason")).and_then(Value::as_str), old_id, agent_id])?;
                     if changed == 0 {
                         return Err(CoreError::NotFound);
@@ -2103,12 +2226,15 @@ fn execute_operation(
                         .get("reason")
                         .or_else(|| payload.get("supersededReason"))
                         .and_then(Value::as_str);
-                    record_history(
+                    record_history_with_legacy_content(
                         &tx,
                         &old_id,
                         &agent_id,
                         "supersede",
                         reason.or(Some(new_id)),
+                        old_content.as_deref(),
+                        None,
+                        reason,
                     )?;
                     let superseded_at: String = tx.query_row(
                         "SELECT superseded_at FROM memories WHERE id=? AND agent_id=?",
@@ -2348,6 +2474,15 @@ fn execute_operation(
             let memory_kind =
                 classify_memory_kind(metadata_value.get("sourceType").and_then(Value::as_str));
             let transaction = connection.transaction()?;
+            let old_content: String = transaction
+                .query_row(
+                    "SELECT content FROM memories
+                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
+                    params![id, agent_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)?;
             let changed = transaction.execute(
                 "UPDATE memories SET content = ?, metadata = ?, source_id = ?, source_type = ?, source_path = ?, runtime_path = ?, idempotency_key = ?, memory_kind = ?, updated_at = datetime('now')
                  WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
@@ -2356,7 +2491,15 @@ fn execute_operation(
             if changed == 0 {
                 return Err(CoreError::NotFound);
             }
-            record_history(&transaction, &id, &agent_id, "update", Some(&content))?;
+            record_history_with_contents(
+                &transaction,
+                &id,
+                &agent_id,
+                "update",
+                Some(&old_content),
+                Some(&content),
+                None,
+            )?;
             transaction.commit()?;
             Ok(json!({ "updated": true }))
         }
@@ -2364,6 +2507,15 @@ fn execute_operation(
             let agent_id = required_agent(&agent_id)?;
             let id = required_id(&id)?;
             let transaction = connection.transaction()?;
+            let old_content: String = transaction
+                .query_row(
+                    "SELECT content FROM memories
+                     WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
+                    params![id, agent_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or(CoreError::NotFound)?;
             let changed = transaction.execute(
                 "UPDATE memories SET deleted = 1, is_deleted = 1, updated_at = datetime('now')
                  WHERE id = ? AND COALESCE(agent_id, 'default') = ? AND is_deleted = 0",
@@ -2372,7 +2524,15 @@ fn execute_operation(
             if changed == 0 {
                 return Err(CoreError::NotFound);
             }
-            record_history(&transaction, &id, &agent_id, "delete", None)?;
+            record_history_with_contents(
+                &transaction,
+                &id,
+                &agent_id,
+                "delete",
+                Some(&old_content),
+                None,
+                None,
+            )?;
             transaction.commit()?;
             Ok(json!({ "deleted": true }))
         }
@@ -2395,22 +2555,12 @@ fn execute_operation(
         Operation::History { agent_id, id } => {
             let agent_id = required_agent(&agent_id)?;
             let id = required_id(&id)?;
-            let mut statement = connection.prepare(
-                "SELECT id, memory_id, operation, content, created_at
-                 FROM memory_history
-                 WHERE memory_id = ? AND agent_id = ?
-                 ORDER BY id ASC LIMIT 1000",
-            )?;
-            let rows = statement.query_map(params![id, agent_id], |row| {
-                Ok(json!({
-                    "id": row.get::<_, i64>(0)?,
-                    "memoryId": row.get::<_, String>(1)?,
-                    "operation": row.get::<_, String>(2)?,
-                    "content": row.get::<_, Option<String>>(3)?,
-                    "createdAt": row.get::<_, String>(4)?,
-                }))
-            })?;
-            Ok(serde_json::to_value(rows.collect::<Result<Vec<_>, _>>()?)?)
+            Ok(serde_json::to_value(history_rows(
+                connection,
+                &agent_id,
+                &id,
+                false,
+            )?)?)
         }
         Operation::Recall { agent_id, query } => {
             let agent_id = required_agent(&agent_id)?;
@@ -6595,6 +6745,65 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "UPDATE queue SET created_at = datetime('now') WHERE created_at IS NULL OR trim(created_at) = ''",
         [],
     )?;
+    // Keep the owner history API readable across the fresh-Rust and pinned
+    // TypeScript table shapes. The native table has operation/content and an
+    // integer id; TypeScript has event/old_content/new_content and a UUID id.
+    // These nullable additive columns let the owner dual-write without
+    // rebuilding either existing table or discarding its rows.
+    for (column, definition) in [
+        ("agent_id", "TEXT"),
+        ("operation", "TEXT"),
+        ("content", "TEXT"),
+        ("event", "TEXT"),
+        ("old_content", "TEXT"),
+        ("new_content", "TEXT"),
+        ("changed_by", "TEXT"),
+        ("reason", "TEXT"),
+        ("metadata", "TEXT"),
+    ] {
+        ensure_column(&transaction, "memory_history", column, definition)?;
+    }
+    transaction.execute(
+        "UPDATE memory_history
+         SET agent_id = (
+             SELECT CASE
+                 WHEN COUNT(*) > 0
+                   AND COUNT(*) = COUNT(NULLIF(trim(m.agent_id), ''))
+                   AND COUNT(DISTINCT NULLIF(trim(m.agent_id), '')) = 1
+                 THEN MAX(NULLIF(trim(m.agent_id), ''))
+             END
+             FROM memories m
+             WHERE m.id = memory_history.memory_id
+         )
+         WHERE (agent_id IS NULL OR trim(agent_id) = '' OR agent_id = 'default')
+           AND (
+               SELECT COUNT(*)
+               FROM memories m
+               WHERE m.id = memory_history.memory_id
+           ) = (
+               SELECT COUNT(NULLIF(trim(m.agent_id), ''))
+               FROM memories m
+               WHERE m.id = memory_history.memory_id
+           )
+           AND (
+               SELECT COUNT(DISTINCT NULLIF(trim(m.agent_id), ''))
+               FROM memories m
+               WHERE m.id = memory_history.memory_id
+           ) = 1",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE memory_history
+         SET operation = COALESCE(NULLIF(trim(operation), ''), event)
+         WHERE operation IS NULL OR trim(operation) = ''",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE memory_history
+         SET event = COALESCE(NULLIF(trim(event), ''), operation)
+         WHERE event IS NULL OR trim(event) = ''",
+        [],
+    )?;
     transaction.execute_batch(
         "CREATE TABLE IF NOT EXISTS document_memories (
             document_id TEXT NOT NULL REFERENCES documents(id),
@@ -6607,7 +6816,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     )?;
     transaction.execute_batch(
         "CREATE INDEX IF NOT EXISTS memories_agent_idx ON memories(agent_id, deleted);
-         CREATE INDEX IF NOT EXISTS memory_history_scope_idx ON memory_history(memory_id, agent_id, id);
+         CREATE INDEX IF NOT EXISTS native_memory_history_scope_v1 ON memory_history(memory_id, agent_id, id);
          CREATE INDEX IF NOT EXISTS queue_created_idx ON queue(created_at);",
     )?;
     let _max_schema_version: Option<i64> =
@@ -6630,11 +6839,264 @@ fn record_history(
     operation: &str,
     content: Option<&str>,
 ) -> Result<(), CoreError> {
-    transaction.execute(
-        "INSERT INTO memory_history (memory_id, agent_id, operation, content, created_at) VALUES (?, ?, ?, ?, datetime('now'))",
-        params![memory_id, agent_id, operation, content],
+    record_history_event(
+        transaction,
+        memory_id,
+        agent_id,
+        operation,
+        content,
+        None,
+        content,
+        None,
+    )
+}
+
+fn record_history_with_contents(
+    transaction: &Transaction<'_>,
+    memory_id: &str,
+    agent_id: &str,
+    operation: &str,
+    old_content: Option<&str>,
+    new_content: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), CoreError> {
+    record_history_event(
+        transaction,
+        memory_id,
+        agent_id,
+        operation,
+        new_content,
+        old_content,
+        new_content,
+        reason,
+    )
+}
+
+fn record_history_with_legacy_content(
+    transaction: &Transaction<'_>,
+    memory_id: &str,
+    agent_id: &str,
+    operation: &str,
+    legacy_content: Option<&str>,
+    old_content: Option<&str>,
+    new_content: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), CoreError> {
+    record_history_event(
+        transaction,
+        memory_id,
+        agent_id,
+        operation,
+        legacy_content,
+        old_content,
+        new_content,
+        reason,
+    )
+}
+
+fn history_rows(
+    connection: &Connection,
+    agent_id: &str,
+    memory_id: &str,
+    include_details: bool,
+) -> Result<Vec<Value>, CoreError> {
+    let id_info: Option<(Option<String>, i64)> = connection
+        .query_row(
+            "SELECT type, pk FROM pragma_table_info('memory_history') WHERE name = 'id'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let id_is_text = id_info
+        .as_ref()
+        .map(|(kind, primary_key)| history_id_type_is_text(kind.as_deref(), *primary_key))
+        .unwrap_or(true);
+    let order_clause = if id_is_text { "rowid ASC" } else { "id ASC" };
+    let query = format!(
+        "SELECT CAST(id AS TEXT), memory_id,
+                COALESCE(NULLIF(operation, ''), event),
+                COALESCE(content, new_content), created_at,
+                event, reason, changed_by
+         FROM memory_history
+         WHERE memory_id = ? AND agent_id = ?
+           AND EXISTS (
+               SELECT 1 FROM memories m
+               WHERE m.id = memory_history.memory_id
+                 AND COALESCE(NULLIF(trim(m.agent_id), ''), 'default') =
+                     COALESCE(NULLIF(trim(memory_history.agent_id), ''), 'default')
+           )
+         ORDER BY {order_clause} LIMIT 1000"
+    );
+    let mut statement = connection.prepare(
+        &query,
     )?;
+    let rows = statement.query_map(params![memory_id, agent_id], move |row| {
+        let raw_id = row.get::<_, String>(0)?;
+        let id = history_id_value(raw_id, id_is_text);
+        let mut value = serde_json::json!({
+            "id": id,
+            "memoryId": row.get::<_, String>(1)?,
+            "operation": row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+            "content": row.get::<_, Option<String>>(3)?,
+            "createdAt": row.get::<_, String>(4)?,
+            "event": row.get::<_, Option<String>>(5)?,
+            "reason": row.get::<_, Option<String>>(6)?,
+            "changedBy": row.get::<_, Option<String>>(7)?,
+        });
+        if !include_details || !id_is_text {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("event");
+                object.remove("reason");
+                object.remove("changedBy");
+            }
+        }
+        Ok(value)
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+}
+
+fn history_id_value(raw_id: String, id_is_text: bool) -> Value {
+    if id_is_text {
+        Value::String(raw_id)
+    } else {
+        raw_id
+            .parse::<i64>()
+            .map(Value::from)
+            .unwrap_or_else(|_| Value::String(raw_id))
+    }
+}
+
+fn record_history_event(
+    transaction: &Transaction<'_>,
+    memory_id: &str,
+    agent_id: &str,
+    operation: &str,
+    legacy_content: Option<&str>,
+    old_content: Option<&str>,
+    new_content: Option<&str>,
+    reason: Option<&str>,
+) -> Result<(), CoreError> {
+    let has_operation = has_column(transaction, "memory_history", "operation")?;
+    let has_event = has_column(transaction, "memory_history", "event")?;
+    let has_agent = has_column(transaction, "memory_history", "agent_id")?;
+    let has_content = has_column(transaction, "memory_history", "content")?;
+    let has_old_content = has_column(transaction, "memory_history", "old_content")?;
+    let has_new_content = has_column(transaction, "memory_history", "new_content")?;
+    let has_changed_by = has_column(transaction, "memory_history", "changed_by")?;
+    let has_reason = has_column(transaction, "memory_history", "reason")?;
+    let has_metadata = has_column(transaction, "memory_history", "metadata")?;
+    let has_created_at = has_column(transaction, "memory_history", "created_at")?;
+    let id_is_text = history_id_is_text(transaction)?;
+    if !has_operation && !has_event {
+        return Err(CoreError::UnsupportedMigrationHistory(
+            "memory_history requires operation or event".into(),
+        ));
+    }
+
+    let mut columns = Vec::new();
+    let mut expressions = Vec::new();
+    let mut values = Vec::new();
+    if id_is_text {
+        columns.push("id");
+        expressions.push("?");
+        values.push(SqlValue::Text(uuid::Uuid::new_v4().to_string()));
+    }
+    columns.push("memory_id");
+    expressions.push("?");
+    values.push(SqlValue::Text(memory_id.to_owned()));
+    if has_agent {
+        columns.push("agent_id");
+        expressions.push("?");
+        values.push(SqlValue::Text(agent_id.to_owned()));
+    }
+    if has_operation {
+        columns.push("operation");
+        expressions.push("?");
+        values.push(SqlValue::Text(operation.to_owned()));
+    }
+    if has_content {
+        columns.push("content");
+        expressions.push("?");
+        values.push(
+            legacy_content
+                .map(|value| SqlValue::Text(value.to_owned()))
+                .unwrap_or(SqlValue::Null),
+        );
+    }
+    if has_event {
+        columns.push("event");
+        expressions.push("?");
+        values.push(SqlValue::Text(operation.to_owned()));
+    }
+    if has_old_content {
+        columns.push("old_content");
+        expressions.push("?");
+        values.push(
+            old_content
+                .map(|value| SqlValue::Text(value.to_owned()))
+                .unwrap_or(SqlValue::Null),
+        );
+    }
+    if has_new_content {
+        columns.push("new_content");
+        expressions.push("?");
+        values.push(
+            new_content
+                .map(|value| SqlValue::Text(value.to_owned()))
+                .unwrap_or(SqlValue::Null),
+        );
+    }
+    if has_changed_by {
+        columns.push("changed_by");
+        expressions.push("?");
+        values.push(SqlValue::Text("native-owner".into()));
+    }
+    if has_reason {
+        columns.push("reason");
+        expressions.push("?");
+        values.push(
+            reason
+                .map(|value| SqlValue::Text(value.to_owned()))
+                .unwrap_or(SqlValue::Null),
+        );
+    }
+    if has_metadata {
+        columns.push("metadata");
+        expressions.push("?");
+        values.push(SqlValue::Null);
+    }
+    if has_created_at {
+        columns.push("created_at");
+        expressions.push("datetime('now')");
+    }
+    let sql = format!(
+        "INSERT INTO memory_history ({}) VALUES ({})",
+        columns.join(", "),
+        expressions.join(", ")
+    );
+    transaction.execute(&sql, rusqlite::params_from_iter(values))?;
     Ok(())
+}
+
+fn history_id_is_text(transaction: &Transaction<'_>) -> Result<bool, CoreError> {
+    let id_info: Option<(Option<String>, i64)> = transaction
+        .query_row(
+            "SELECT type, pk FROM pragma_table_info('memory_history') WHERE name = 'id'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    Ok(id_info
+        .as_ref()
+        .map(|(kind, primary_key)| history_id_type_is_text(kind.as_deref(), *primary_key))
+        .unwrap_or(true))
+}
+
+fn history_id_type_is_text(kind: Option<&str>, primary_key: i64) -> bool {
+    !(primary_key == 1
+        && kind
+            .map(|value| value.trim().eq_ignore_ascii_case("INTEGER"))
+            .unwrap_or(false))
 }
 
 fn has_table(transaction: &Transaction<'_>, table: &str) -> Result<bool, CoreError> {
