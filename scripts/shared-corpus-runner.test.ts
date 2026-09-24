@@ -17,6 +17,17 @@ import {
 	requiresNativeEvidence,
 	type ManifestEntry,
 } from "./shared-corpus-runner";
+import { resolveJUnitCaseIdentities } from "./shared-corpus-identities";
+
+function withTestSource(source: string, run: (sourceRoot: string) => void, fileName = "a.test.ts"): void {
+	const sourceRoot = mkdtempSync(join(tmpdir(), "shared-corpus-source-"));
+	try {
+		writeFileSync(join(sourceRoot, fileName), source);
+		run(sourceRoot);
+	} finally {
+		rmSync(sourceRoot, { recursive: true, force: true });
+	}
+}
 
 describe("shared corpus admission", () => {
 	test("rejects a manifest that is not the pinned 497-path baseline", () => {
@@ -160,16 +171,16 @@ describe("shared corpus admission", () => {
 				'import { describe, test } from "bun:test";',
 				'describe("policy suite", () => {',
 				"	test.each([",
-				'		["same", "system"],',
-				'		["same", "service"],',
+				'		["system", "system"],',
+				'		["service", "service"],',
 				'	])("allows %s", () => {});',
 				"});",
 			].join(String.fromCharCode(10)),
 		);
 		const xml =
 			'<testsuite tests="2">' +
-			'<testcase file="src/identity.test.ts" line="6" classname="policy suite" name="allows same"/>' +
-			'<testcase file="src/identity.test.ts" line="6" classname="policy suite" name="allows same"/>' +
+			'<testcase file="src/identity.test.ts" line="6" classname="policy suite" name="allows system"/>' +
+			'<testcase file="src/identity.test.ts" line="6" classname="policy suite" name="allows service"/>' +
 			"</testsuite>";
 
 		try {
@@ -177,16 +188,175 @@ describe("shared corpus admission", () => {
 			expect(result.tests).toBe(2);
 			expect(result.identityCollisions).toEqual([]);
 			expect(result.incomplete).toBe(false);
-			expect(result.caseIdentities.map((identity) => identity.name)).toEqual(["allows same", "allows same"]);
+			expect(result.caseIdentities.map((identity) => identity.name)).toEqual(["allows system", "allows service"]);
 			expect(result.caseIdentities.map((identity) => identity.suitePath)).toEqual([["policy suite"], ["policy suite"]]);
 			expect(result.caseIdentities.map((identity) => identity.parameters)).toEqual([
-				["same", "system"],
-				["same", "service"],
+				["system", "system"],
+				["service", "service"],
 			]);
 			expect(new Set(result.caseIdentities.map((identity) => identity.key)).size).toBe(2);
 		} finally {
 			rmSync(sourceRoot, { recursive: true, force: true });
 		}
+	});
+
+	test("does not infer duplicate test.each rows from concurrent JUnit completion order", () => {
+		withTestSource(
+			'test.concurrent.each([["same", "slow"], ["same", "fast"]])("case %s", async () => {});',
+			(sourceRoot) => {
+				const xml =
+					'<testsuite tests="2" failures="1">' +
+					'<testcase file="a.test.ts" line="1" classname="" name="case same"/>' +
+					'<testcase file="a.test.ts" line="1" classname="" name="case same"><failure/></testcase>' +
+					"</testsuite>";
+				const result = parseJUnitReport(xml, ["a.test.ts"], 0, sourceRoot);
+
+				expect(result.failed).toBe(1);
+				expect(result.passed).toBe(1);
+				expect(result.unresolvedIdentityCount).toBe(2);
+				expect(result.caseIdentities.every((identity) => identity.parameters === undefined)).toBe(true);
+				expect(result.incomplete).toBe(true);
+			},
+		);
+	});
+
+	test("maps duplicate non-concurrent test.each titles in Bun's registration order", () => {
+		withTestSource('test.each([["same", "slow"], ["same", "fast"]])("case %s", async () => {});', (sourceRoot) => {
+			const xml =
+				'<testsuite tests="2" failures="1">' +
+				'<testcase file="a.test.ts" line="1" classname="" name="case same"><failure/></testcase>' +
+				'<testcase file="a.test.ts" line="1" classname="" name="case same"/>' +
+				"</testsuite>";
+			const result = parseJUnitReport(xml, ["a.test.ts"], 0, sourceRoot);
+
+			expect(result.unresolvedIdentityCount).toBe(0);
+			expect(result.caseIdentities.map((identity) => identity.parameters)).toEqual([
+				["same", "slow"],
+				["same", "fast"],
+			]);
+			expect(result.incomplete).toBe(false);
+		});
+	});
+
+	test("matches Bun's rendered integer and object test.each names", () => {
+		withTestSource(
+			'test.each([[2.8]])("integer %i", () => {});\ntest.each([[{ a: 1 }]])("single object %s", () => {});',
+			(sourceRoot) => {
+				const xml =
+					'<testsuite tests="2">' +
+					'<testcase file="a.test.ts" line="1" classname="" name="integer %i"/>' +
+					'<testcase file="a.test.ts" line="2" classname="" name="single object %s"/>' +
+					"</testsuite>";
+				const result = parseJUnitReport(xml, ["a.test.ts"], 0, sourceRoot);
+
+				expect(result.unresolvedIdentityCount).toBe(0);
+				expect(result.caseIdentities.map((identity) => identity.parameters)).toEqual([[2.8], [{ a: 1 }]]);
+				expect(result.incomplete).toBe(false);
+			},
+		);
+	});
+
+	test("does not attribute one afterAll marker to an earlier beforeAll", () => {
+		withTestSource('describe("suite", () => { beforeAll(() => {}); afterAll(() => {}); });', (sourceRoot) => {
+			const marker = '<testcase file="a.test.ts" classname="suite" name="(unnamed)"><failure/></testcase>';
+			const result = resolveJUnitCaseIdentities([marker], sourceRoot);
+
+			expect(result.suiteHookIdentities).toEqual([]);
+			expect(result.unresolvedIdentityCount).toBe(1);
+		});
+	});
+
+	test("rejects ambiguous forward and reversed nested suite classnames", () => {
+		withTestSource(
+			'describe("a > b", () => { test("works", () => {}); }); describe("b", () => { describe("a", () => { test("works", () => {}); }); });',
+			(sourceRoot) => {
+				const xml =
+					'<testsuite tests="2">' +
+					'<testcase file="a.test.ts" line="1" classname="a &gt; b" name="works"/>' +
+					'<testcase file="a.test.ts" line="1" classname="a &gt; b" name="works"/>' +
+					"</testsuite>";
+				const result = parseJUnitReport(xml, ["a.test.ts"], 0, sourceRoot);
+
+				expect(result.unresolvedIdentityCount).toBe(2);
+				expect(result.incomplete).toBe(true);
+			},
+		);
+	});
+
+	test("indexes a local conditional describe alias", () => {
+		withTestSource(
+			'import { describe, test } from "bun:test";\nconst native = true;\nconst describeNative = native ? describe : describe.skip;\ndescribeNative("native suite", () => {\n  test("works", () => {});\n});',
+			(sourceRoot) => {
+				const result = parseJUnitReport(
+					'<testsuite tests="1"><testcase file="a.test.ts" line="5" classname="native suite" name="works"/></testsuite>',
+					["a.test.ts"],
+					0,
+					sourceRoot,
+				);
+				expect(result.unresolvedIdentityCount).toBe(0);
+				expect(result.caseIdentities[0]?.suitePath).toEqual(["native suite"]);
+				expect(result.incomplete).toBe(false);
+			},
+		);
+	});
+
+	test("indexes a local conditional test alias", () => {
+		withTestSource(
+			'import { describe, test } from "bun:test";\ndescribe("smoke suite", () => {\n  const enabled = true;\n  const smoke = enabled ? test : test.skip;\n  smoke("works", () => {});\n});',
+			(sourceRoot) => {
+				const result = parseJUnitReport(
+					'<testsuite tests="1"><testcase file="a.test.ts" line="5" classname="smoke suite" name="works"/></testsuite>',
+					["a.test.ts"],
+					0,
+					sourceRoot,
+				);
+				expect(result.unresolvedIdentityCount).toBe(0);
+				expect(result.incomplete).toBe(false);
+			},
+		);
+	});
+
+	test("indexes a runtime-named conditional suite from its JUnit classname", () => {
+		withTestSource(
+			[
+				'import { describe, test } from "bun:test";',
+				'const dynamicName = "runtime";',
+				"describe.skipIf(true)(`create $" + "{dynamicName}`, () => {",
+				'test("works", () => {});',
+				"});",
+			].join("\n"),
+			(sourceRoot) => {
+				const result = parseJUnitReport(
+					'<testsuite tests="1" skipped="1"><testcase file="a.test.ts" line="4" classname="create runtime" name="works"><skipped/></testcase></testsuite>',
+					["a.test.ts"],
+					0,
+					sourceRoot,
+				);
+				expect(result.tests).toBe(1);
+				expect(result.skipped).toBe(1);
+				expect(result.unresolvedIdentityCount).toBe(0);
+				expect(result.caseIdentities[0]?.suitePath).toEqual(["create runtime"]);
+				expect(result.incomplete).toBe(false);
+			},
+		);
+	});
+
+	test("indexes test declarations in TSX source files", () => {
+		withTestSource(
+			'import { describe, test } from "bun:test";\ndescribe("tsx suite", () => {\n  test("renders", () => { const element = <div />; void element; });\n});',
+			(sourceRoot) => {
+				const result = parseJUnitReport(
+					'<testsuite tests="1"><testcase file="a.test.tsx" line="3" classname="tsx suite" name="renders"/></testsuite>',
+					["a.test.tsx"],
+					0,
+					sourceRoot,
+				);
+				expect(result.unresolvedIdentityCount).toBe(0);
+				expect(result.caseIdentities[0]?.suitePath).toEqual(["tsx suite"]);
+				expect(result.incomplete).toBe(false);
+			},
+			"a.test.tsx",
+		);
 	});
 
 	test("maps dynamic test names to their unique source suite", () => {
@@ -394,17 +564,23 @@ describe("shared corpus admission", () => {
 	});
 
 	test("complete JUnit output with assertion failures is not misreported as a crash", () => {
-		const result = parseJUnitReport(
-			'<testsuite tests="2" failures="1"><testcase file="a.test.ts" line="1" classname="x" name="passes"/><testcase file="a.test.ts" line="2" classname="x" name="fails"><failure/></testcase></testsuite>',
-			["a.test.ts"],
-			1,
+		withTestSource(
+			'describe("x", () => {\n  test("passes", () => {});\n  test("fails", () => {});\n});',
+			(sourceRoot) => {
+				const result = parseJUnitReport(
+					'<testsuite tests="2" failures="1"><testcase file="a.test.ts" line="2" classname="x" name="passes"/><testcase file="a.test.ts" line="3" classname="x" name="fails"><failure/></testcase></testsuite>',
+					["a.test.ts"],
+					1,
+					sourceRoot,
+				);
+				expect(result.tests).toBe(2);
+				expect(result.passed).toBe(1);
+				expect(result.failed).toBe(1);
+				expect(result.crash).toBe(false);
+				expect(result.incomplete).toBe(false);
+				expect(result.status).toBe("failed");
+			},
 		);
-		expect(result.tests).toBe(2);
-		expect(result.passed).toBe(1);
-		expect(result.failed).toBe(1);
-		expect(result.crash).toBe(false);
-		expect(result.incomplete).toBe(false);
-		expect(result.status).toBe("failed");
 	});
 
 	test("rejects complete counts whose testcase files do not match the selected paths", () => {
@@ -432,29 +608,35 @@ describe("shared corpus admission", () => {
 	});
 
 	test("preserves nested JUnit suite errors", () => {
-		const result = parseJUnitReport(
-			'<testsuites><testsuite tests="1" errors="1"><testcase file="a.test.ts" line="1" classname="x" name="a"/></testsuite></testsuites>',
-			["a.test.ts"],
-			0,
-		);
-		expect(result.tests).toBe(1);
-		expect(result.failed).toBe(0);
-		expect(result.suiteFailures).toBe(1);
-		expect(result.incomplete).toBe(false);
-		expect(result.status).toBe("failed");
+		withTestSource('describe("x", () => {\n  test("a", () => {});\n});', (sourceRoot) => {
+			const result = parseJUnitReport(
+				'<testsuites><testsuite tests="1" errors="1"><testcase file="a.test.ts" line="2" classname="x" name="a"/></testsuite></testsuites>',
+				["a.test.ts"],
+				0,
+				sourceRoot,
+			);
+			expect(result.tests).toBe(1);
+			expect(result.failed).toBe(0);
+			expect(result.suiteFailures).toBe(1);
+			expect(result.incomplete).toBe(false);
+			expect(result.status).toBe("failed");
+		});
 	});
 
 	test("preserves errors from a nested suite under a testsuite root", () => {
-		const result = parseJUnitReport(
-			'<testsuite tests="1" failures="0"><testsuite tests="1" errors="1"><testcase file="a.test.ts" line="1" classname="x" name="a"/></testsuite></testsuite>',
-			["a.test.ts"],
-			0,
-		);
-		expect(result.tests).toBe(1);
-		expect(result.failed).toBe(0);
-		expect(result.suiteFailures).toBe(1);
-		expect(result.incomplete).toBe(false);
-		expect(result.status).toBe("failed");
+		withTestSource('describe("x", () => {\n  test("a", () => {});\n});', (sourceRoot) => {
+			const result = parseJUnitReport(
+				'<testsuite tests="1" failures="0"><testsuite tests="1" errors="1"><testcase file="a.test.ts" line="2" classname="x" name="a"/></testsuite></testsuite>',
+				["a.test.ts"],
+				0,
+				sourceRoot,
+			);
+			expect(result.tests).toBe(1);
+			expect(result.failed).toBe(0);
+			expect(result.suiteFailures).toBe(1);
+			expect(result.incomplete).toBe(false);
+			expect(result.status).toBe("failed");
+		});
 	});
 
 	test("accepts equivalent native evidence attribute serialization", () => {

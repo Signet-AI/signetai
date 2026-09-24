@@ -1,4 +1,7 @@
 #!/usr/bin/env bun
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildExecutionManifest, runnableManifestPaths, parseJUnitReport } from "./shared-corpus-runner";
 
 const repo = process.argv[2] ?? ".";
@@ -13,13 +16,21 @@ const actualOnly = parseJUnitReport(
 );
 if (actualOnly.tests !== 1 || actualOnly.passed !== 1 || !actualOnly.incomplete)
 	throw new Error("actual-case parser accepted a synthetic or missing testcase");
-const separateFiles = parseJUnitReport(
-	'<testsuite tests="2"><testcase file="a.test.ts" line="1" classname="same" name="case"/><testcase file="b.test.ts" line="1" classname="same" name="case"/></testsuite>',
-	[],
-	0,
-);
-if (separateFiles.tests !== 2 || separateFiles.incomplete || separateFiles.crash)
-	throw new Error("file-qualified testcase identities were treated as duplicates");
+const sourceRoot = mkdtempSync(join(tmpdir(), "shared-corpus-probe-"));
+try {
+	writeFileSync(join(sourceRoot, "a.test.ts"), 'test("case", () => {});');
+	writeFileSync(join(sourceRoot, "b.test.ts"), 'test("case", () => {});');
+	const separateFiles = parseJUnitReport(
+		'<testsuite tests="2"><testcase file="a.test.ts" line="1" classname="" name="case"/><testcase file="b.test.ts" line="1" classname="" name="case"/></testsuite>',
+		[],
+		0,
+		sourceRoot,
+	);
+	if (separateFiles.tests !== 2 || separateFiles.incomplete || separateFiles.crash)
+		throw new Error("file-qualified testcase identities were treated as duplicates");
+} finally {
+	rmSync(sourceRoot, { recursive: true, force: true });
+}
 console.log(
 	JSON.stringify({
 		protectedCorpus: manifest.protectedCorpus.length,

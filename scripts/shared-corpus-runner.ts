@@ -295,8 +295,8 @@ export function parseJUnitReport(
 				const parent = stack.at(-1);
 				if (parent) parent.childSuites += 1;
 				else roots.push(node);
+				if (node.kind === "testsuite") suites.push(node);
 				if (match[3] !== "/") stack.push(node);
-				else if (node.kind === "testsuite") suites.push(node);
 				continue;
 			}
 			const closing = match[4] as "testsuites" | "testsuite" | undefined;

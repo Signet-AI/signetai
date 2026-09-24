@@ -52,6 +52,8 @@ type SourceTest = {
 	readonly suitePath: readonly string[];
 	readonly name: string | undefined;
 	readonly parameterRows: readonly unknown[] | null | undefined;
+	readonly concurrent: boolean;
+	readonly dynamicSuitePath: boolean;
 };
 
 type SourceHook = {
@@ -113,16 +115,16 @@ function unwrap(node: ts.Expression): ts.Expression {
 	return current;
 }
 
-function callRoot(
-	expression: ts.Expression,
-): { readonly root: string; readonly methods: readonly string[] } | undefined {
+type CallRoot = { readonly root: string; readonly methods: readonly string[] };
+
+function callRoot(expression: ts.Expression, aliases?: ReadonlyMap<string, CallRoot>): CallRoot | undefined {
 	const value = unwrap(expression);
-	if (ts.isIdentifier(value)) return { root: value.text, methods: [] };
+	if (ts.isIdentifier(value)) return aliases?.get(value.text) ?? { root: value.text, methods: [] };
 	if (ts.isPropertyAccessExpression(value)) {
-		const parent = callRoot(value.expression);
+		const parent = callRoot(value.expression, aliases);
 		return parent ? { root: parent.root, methods: [...parent.methods, value.name.text] } : undefined;
 	}
-	if (ts.isCallExpression(value)) return callRoot(value.expression);
+	if (ts.isCallExpression(value)) return callRoot(value.expression, aliases);
 	return undefined;
 }
 
@@ -204,13 +206,17 @@ function formatEachName(pattern: string, row: unknown, index: number): string | 
 				return token;
 			}
 		}
-		if (token === "%d" || token === "%i" || token === "%f") {
+		if (token === "%i") {
+			return typeof value === "number" && Number.isInteger(value) ? String(value) : token;
+		}
+		if (token === "%d" || token === "%f") {
 			if (typeof value !== "number") {
 				supported = false;
 				return token;
 			}
 			return String(value);
 		}
+		if (token === "%s" && typeof value === "object" && value !== null) return token;
 		if (value === undefined || typeof value === "string" || typeof value === "number" || typeof value === "boolean")
 			return String(value);
 		supported = false;
@@ -219,10 +225,13 @@ function formatEachName(pattern: string, row: unknown, index: number): string | 
 	return supported ? name : undefined;
 }
 
-function parameterRows(call: ts.CallExpression): readonly unknown[] | null | undefined {
+function parameterRows(
+	call: ts.CallExpression,
+	aliases?: ReadonlyMap<string, CallRoot>,
+): readonly unknown[] | null | undefined {
 	const expression = unwrap(call.expression);
 	if (!ts.isCallExpression(expression)) return undefined;
-	const each = callRoot(expression.expression);
+	const each = callRoot(expression.expression, aliases);
 	if (!each || !["test", "it"].includes(each.root) || !each.methods.includes("each")) return undefined;
 	const table = expression.arguments[0];
 	if (!table) return null;
@@ -244,19 +253,68 @@ function sourceIndex(sourceRoot: string, file: string): SourceIndex | undefined 
 	if (!existsSync(path)) return undefined;
 
 	const text = readFileSync(path, "utf8");
-	const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+	const scriptKind = path.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS;
+	const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true, scriptKind);
+	const aliasableRoots = new Set(["describe", "test", "it"]);
+	const resolveAlias = (
+		expression: ts.Expression | undefined,
+		aliases: ReadonlyMap<string, CallRoot>,
+	): CallRoot | undefined => {
+		if (!expression) return undefined;
+		const value = unwrap(expression);
+		if (ts.isConditionalExpression(value)) {
+			const whenTrue = resolveAlias(value.whenTrue, aliases);
+			const whenFalse = resolveAlias(value.whenFalse, aliases);
+			return whenTrue && whenFalse && whenTrue.root === whenFalse.root
+				? { root: whenTrue.root, methods: [] }
+				: undefined;
+		}
+		return callRoot(value, aliases);
+	};
+	const collectAliases = (
+		statements: readonly ts.Statement[],
+		parent: ReadonlyMap<string, CallRoot>,
+	): Map<string, CallRoot> => {
+		const aliases = new Map(parent);
+		const declarations = statements.flatMap((statement) =>
+			ts.isVariableStatement(statement) ? [...statement.declarationList.declarations] : [],
+		);
+		for (let pass = 0; pass < declarations.length; pass += 1) {
+			let changed = false;
+			for (const declaration of declarations) {
+				if (!ts.isIdentifier(declaration.name) || aliases.has(declaration.name.text)) continue;
+				const alias = resolveAlias(declaration.initializer, aliases);
+				if (alias && aliasableRoots.has(alias.root)) {
+					aliases.set(declaration.name.text, alias);
+					changed = true;
+				}
+			}
+			if (!changed) break;
+		}
+		return aliases;
+	};
 	const tests: SourceTest[] = [];
 	const hooks: SourceHook[] = [];
 	const hookNames = new Set(["beforeAll", "afterAll", "beforeEach", "afterEach"]);
 
-	const visit = (node: ts.Node, suitePath: readonly string[]): void => {
+	const visit = (
+		node: ts.Node,
+		suitePath: readonly string[],
+		concurrent: boolean,
+		aliases: ReadonlyMap<string, CallRoot>,
+		dynamicSuitePath: boolean,
+	): void => {
 		if (ts.isCallExpression(node)) {
-			const info = callRoot(node.expression);
+			const info = callRoot(node.expression, aliases);
 			if (info?.root === "describe") {
 				const name = stringLiteral(node.arguments[0]);
 				const callback = node.arguments[node.arguments.length - 1];
-				if (name !== undefined && callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) {
-					visit(callback, [...suitePath, name]);
+				if (callback && (ts.isArrowFunction(callback) || ts.isFunctionExpression(callback))) {
+					const childConcurrent = info.methods.includes("sequential")
+						? false
+						: concurrent || info.methods.includes("concurrent");
+					const childSuitePath = name === undefined ? suitePath : [...suitePath, name];
+					visit(callback, childSuitePath, childConcurrent, aliases, dynamicSuitePath || name === undefined);
 					return;
 				}
 			}
@@ -265,11 +323,16 @@ function sourceIndex(sourceRoot: string, file: string): SourceIndex | undefined 
 				const name = stringLiteral(nameArgument);
 				if (nameArgument) {
 					const line = source.getLineAndCharacterOfPosition(nameArgument.getStart(source)).line + 1;
+					const testConcurrent = info.methods.includes("sequential")
+						? false
+						: concurrent || info.methods.includes("concurrent");
 					tests.push({
 						line,
 						suitePath,
 						name,
-						parameterRows: parameterRows(node),
+						parameterRows: parameterRows(node, aliases),
+						concurrent: testConcurrent,
+						dynamicSuitePath,
 					});
 				}
 				return;
@@ -280,9 +343,14 @@ function sourceIndex(sourceRoot: string, file: string): SourceIndex | undefined 
 				return;
 			}
 		}
-		ts.forEachChild(node, (child) => visit(child, suitePath));
+		if (ts.isBlock(node)) {
+			const scopedAliases = collectAliases(node.statements, aliases);
+			ts.forEachChild(node, (child) => visit(child, suitePath, concurrent, scopedAliases, dynamicSuitePath));
+			return;
+		}
+		ts.forEachChild(node, (child) => visit(child, suitePath, concurrent, aliases, dynamicSuitePath));
 	};
-	visit(source, []);
+	visit(source, [], false, collectAliases(source.statements, new Map()), false);
 	return { tests, hooks };
 }
 
@@ -319,8 +387,13 @@ function resolveTestcaseSources(
 		if (!source) continue;
 		const line = Number(testcase.line);
 		const declarations = source.tests.filter(
-			(declaration) => declaration.line === line && matchesSuiteClassname(declaration.suitePath, testcase.classname),
+			(declaration) =>
+				declaration.line === line &&
+				(declaration.dynamicSuitePath
+					? declaration.name === undefined || declaration.name === testcase.name
+					: matchesSuiteClassname(declaration.suitePath, testcase.classname)),
 		);
+		let ambiguousParameterRows = false;
 		let matches: SourceCaseMatch[] = declarations.flatMap((declaration) => {
 			if (declaration.parameterRows !== undefined || declaration.name !== testcase.name) return [];
 			return [{ source: declaration }];
@@ -329,12 +402,15 @@ function resolveTestcaseSources(
 			...declarations.flatMap((declaration) => {
 				const name = declaration.name;
 				if (!declaration.parameterRows || name === undefined) return [];
-				return declaration.parameterRows.flatMap((row, rowIndex) => {
+				const rowMatches = declaration.parameterRows.flatMap((row, rowIndex) => {
 					const renderedName = formatEachName(name, row, rowIndex);
 					return renderedName === testcase.name ? [{ source: declaration, parameter: { row, rowIndex } }] : [];
 				});
+				if (rowMatches.length > 1 && declaration.concurrent) ambiguousParameterRows = true;
+				return rowMatches;
 			}),
 		);
+		if (ambiguousParameterRows) continue;
 		if (matches.length === 0 && indexes.length === 1) {
 			const dynamicDeclarations = declarations.filter(
 				(declaration) => declaration.parameterRows === null || declaration.name === undefined,
@@ -418,7 +494,7 @@ export function resolveJUnitCaseIdentities(caseXml: readonly string[], sourceRoo
 			continue;
 		}
 		const sourceCase = sourceCases.get(index);
-		const suitePath = sourceCase?.source.suitePath ?? [];
+		const suitePath = sourceCase?.source.dynamicSuitePath ? [testcase.classname] : (sourceCase?.source.suitePath ?? []);
 		const parameter = sourceCase?.parameter;
 		const parameterDigest = parameter
 			? createHash("sha256").update(canonicalValue(parameter.row)).digest("hex")

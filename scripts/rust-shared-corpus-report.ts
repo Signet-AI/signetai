@@ -49,6 +49,7 @@ function replaceNumericAttribute(attributes: string, name: string, value: number
 /** Set aggregate JUnit counters from the testcase elements actually observed. */
 export function normalizeObservedJUnitCounters(reportXml: string): string {
 	const cases = reportXml.match(TESTCASE_PATTERN) ?? [];
+	assertDeclaredTestcaseCounts(reportXml, cases.length);
 	const counters = {
 		tests: cases.length,
 		failures: cases.filter((testcase) => /<failure\b/.test(testcase)).length,
@@ -70,6 +71,47 @@ function attribute(source: string, name: string): string {
 function numericAttribute(source: string, name: string): number | undefined {
 	const value = attribute(source, name);
 	return /^\d+$/.test(value) ? Number(value) : undefined;
+}
+
+function assertDeclaredTestcaseCounts(reportXml: string, observedCount: number): void {
+	type Suite = { readonly declaredTests: number | undefined; directCases: number; readonly children: Suite[] };
+	const roots: Suite[] = [];
+	const stack: Suite[] = [];
+	const tags =
+		/<(testsuites|testsuite)\b([^>]*?)(\/?)>|<\/(testsuites|testsuite)\s*>|<testcase\b[^>]*\/>|<testcase\b[^>]*>[\s\S]*?<\/testcase>/g;
+	for (const match of reportXml.matchAll(tags)) {
+		if (match[1] !== undefined) {
+			const suite: Suite = {
+				declaredTests: numericAttribute(match[2] ?? "", "tests"),
+				directCases: 0,
+				children: [],
+			};
+			const parent = stack.at(-1);
+			if (parent) parent.children.push(suite);
+			else roots.push(suite);
+			if (match[3] !== "/") stack.push(suite);
+			continue;
+		}
+		if (match[4] !== undefined) {
+			stack.pop();
+			continue;
+		}
+		const current = stack.at(-1);
+		if (current) current.directCases += 1;
+	}
+	const validate = (suite: Suite): number => {
+		const observed = suite.directCases + suite.children.reduce((count, child) => count + validate(child), 0);
+		if (suite.declaredTests !== undefined && suite.declaredTests !== observed) {
+			throw new Error(
+				`Declared JUnit testcase count ${suite.declaredTests} does not match ${observed} observed records`,
+			);
+		}
+		return observed;
+	};
+	const suiteObserved = roots.reduce((count, suite) => count + validate(suite), 0);
+	if (suiteObserved !== observedCount) {
+		throw new Error(`JUnit suite testcase count ${suiteObserved} does not match ${observedCount} observed records`);
+	}
 }
 
 function suiteCounters(attributes: string): SuiteCounters {
@@ -120,6 +162,7 @@ function outputCounter(source: string, name: keyof SuiteCounters, fallback: numb
 export function wrapRustJUnitReport(reportXml: string, nativeEvidence: boolean): WrappedRustJUnitReport {
 	const cases = reportXml.match(TESTCASE_PATTERN) ?? [];
 	if (cases.length === 0) throw new Error("Rust child produced no real testcase identities");
+	assertDeclaredTestcaseCounts(reportXml, cases.length);
 	const rootOpening = reportXml.match(/<testsuites\b[^>]*>/)?.[0] ?? reportXml.match(/<testsuite\b[^>]*>/)?.[0] ?? "";
 	const aggregate = aggregateLeafSuiteCounters(reportXml);
 	const observedFailures = cases.filter((testcase) => /<failure\b/.test(testcase)).length;
