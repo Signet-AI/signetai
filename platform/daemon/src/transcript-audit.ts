@@ -3,9 +3,16 @@ import { createHash, randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { resolveDefaultBasePath } from "@signet/core";
 
+const MAX_AUDIT_TRANSCRIPT_CHARS = 8 * 1024 * 1024;
 const MAX_AUDIT_PREVIEW_BYTES = 64 * 1024;
 const MAX_AUDIT_BYTES = 64 * 1024 * 1024;
 const MAX_AUDIT_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
+export function capTranscriptAuditContent(raw: string): string {
+	if (raw.length <= MAX_AUDIT_TRANSCRIPT_CHARS) return raw;
+	const omitted = raw.length - MAX_AUDIT_TRANSCRIPT_CHARS;
+	return `${raw.slice(0, MAX_AUDIT_TRANSCRIPT_CHARS)}\n... [audit transcript truncated at ${MAX_AUDIT_TRANSCRIPT_CHARS} chars; ${omitted} chars omitted] ...\n`;
+}
 
 function getTranscriptAuditDir(basePath: string): string {
 	return join(basePath, ".daemon", "logs", "transcripts");
@@ -13,6 +20,20 @@ function getTranscriptAuditDir(basePath: string): string {
 
 function isSafeAuditName(value: string): boolean {
 	return value.length > 0 && /^[A-Za-z0-9._-]+$/.test(value);
+}
+
+function fsTimestamp(iso: string): string {
+	return Array.from(iso, (char) => (/^[A-Za-z0-9._-]$/.test(char) ? char : "-")).join("");
+}
+
+function buildAuditPath(dir: string, fileName: string): string {
+	if (!isSafeAuditName(fileName)) throw new Error("invalid transcript audit file name");
+	return join(dir, fileName);
+}
+
+function resolveAuditToken(agentId: string, sessionId: string, sessionKey: string | null, raw: string): string {
+	const scoped = sessionId.trim() || sessionKey?.trim() || createHash("sha256").update(raw, "utf8").digest("hex");
+	return createHash("sha256").update(`${agentId}:${scoped}`, "utf8").digest("hex").slice(0, 16);
 }
 
 function boundedPreview(value: string | undefined): string | null {
@@ -31,9 +52,19 @@ function auditToken(agentId: string, sourceIdentity: string, sourceSha256: strin
 
 export interface TranscriptAuditWrite {
 	readonly latestPath: string;
+	readonly finalPath?: string;
 }
 
-export async function writeTranscriptAudit(params: {
+type LegacyTranscriptAuditWrite = {
+	readonly basePath?: string;
+	readonly agentId: string;
+	readonly sessionId: string;
+	readonly sessionKey: string | null;
+	readonly rawTranscript: string;
+	readonly capturedAt?: string;
+};
+
+type SourceBackedTranscriptAuditWrite = {
 	readonly basePath?: string;
 	readonly agentId: string;
 	readonly sourceIdentity: string;
@@ -45,7 +76,31 @@ export async function writeTranscriptAudit(params: {
 	readonly sessionKey: string | null;
 	readonly preview?: string;
 	readonly capturedAt?: string;
-}): Promise<TranscriptAuditWrite> {
+};
+
+export function writeTranscriptAudit(params: LegacyTranscriptAuditWrite): Promise<TranscriptAuditWrite | null>;
+export function writeTranscriptAudit(params: SourceBackedTranscriptAuditWrite): Promise<TranscriptAuditWrite>;
+export async function writeTranscriptAudit(
+	params: LegacyTranscriptAuditWrite | SourceBackedTranscriptAuditWrite,
+): Promise<TranscriptAuditWrite | null> {
+	if ("rawTranscript" in params) {
+		if (params.rawTranscript.trim().length === 0) return null;
+		const basePath = params.basePath ?? process.env.SIGNET_PATH ?? resolveDefaultBasePath();
+		const dir = getTranscriptAuditDir(basePath);
+		await mkdir(dir, { recursive: true });
+		const token = resolveAuditToken(params.agentId, params.sessionId, params.sessionKey, params.rawTranscript);
+		const content = capTranscriptAuditContent(params.rawTranscript);
+		const latestPath = buildAuditPath(dir, `${token}--latest.log`);
+		await writeFile(latestPath, content, "utf8");
+		if (!params.capturedAt) return { latestPath };
+		const finalPath = buildAuditPath(dir, `${fsTimestamp(params.capturedAt)}--${token}--raw-transcript.log`);
+		try {
+			await rename(latestPath, finalPath);
+		} catch {
+			await writeFile(finalPath, content, "utf8");
+		}
+		return { latestPath, finalPath };
+	}
 	const basePath = params.basePath ?? process.env.SIGNET_PATH ?? resolveDefaultBasePath();
 	const dir = getTranscriptAuditDir(basePath);
 	await mkdir(dir, { recursive: true });
