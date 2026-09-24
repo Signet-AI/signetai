@@ -231,9 +231,7 @@ function parameterRows(call: ts.CallExpression): readonly unknown[] | null | und
 }
 
 function matchesSuiteClassname(suitePath: readonly string[], classname: string): boolean {
-	return [suitePath.at(-1), suitePath.join(" > "), [...suitePath].reverse().join(" > ")].some(
-		(candidate) => candidate === classname,
-	);
+	return [suitePath.join(" > "), [...suitePath].reverse().join(" > ")].some((candidate) => candidate === classname);
 }
 
 function sourceIndex(sourceRoot: string, file: string): SourceIndex | undefined {
@@ -444,7 +442,7 @@ export function resolveJUnitCaseIdentities(caseXml: readonly string[], sourceRoo
 					}
 				: {}),
 		});
-		if (!testcase.file || !testcase.line) unresolvedIdentityCount += 1;
+		if (!testcase.file || !testcase.line || !sourceCase) unresolvedIdentityCount += 1;
 	}
 	const counts = new Map<string, number>();
 	for (const identity of identities) counts.set(identity.key, (counts.get(identity.key) ?? 0) + 1);

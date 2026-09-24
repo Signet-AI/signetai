@@ -295,8 +295,8 @@ export function parseJUnitReport(
 				const parent = stack.at(-1);
 				if (parent) parent.childSuites += 1;
 				else roots.push(node);
-				suites.push(node);
 				if (match[3] !== "/") stack.push(node);
+				else if (node.kind === "testsuite") suites.push(node);
 				continue;
 			}
 			const closing = match[4] as "testsuites" | "testsuite" | undefined;
@@ -320,7 +320,7 @@ export function parseJUnitReport(
 		const leafFailures = sum(leaves.map((suite) => failureCount(suite.stats)));
 		return {
 			declared: leafTests ?? rootStats,
-			failed: leafFailures ?? rootFailures ?? 0,
+			failed: Math.max(leafFailures ?? 0, rootFailures ?? 0),
 		};
 	})();
 	const identityResolution = resolveJUnitCaseIdentities(cases, sourceRoot);

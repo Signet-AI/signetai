@@ -252,6 +252,31 @@ describe("shared corpus admission", () => {
 		}
 	});
 
+	test("does not map a leaf-only classname shared by nested suites", () => {
+		const sourceRoot = mkdtempSync(join(tmpdir(), "signet-shared-corpus-ambiguous-suite-"));
+		const file = "src/nested.test.ts";
+		mkdirSync(join(sourceRoot, "src"), { recursive: true });
+		writeFileSync(
+			join(sourceRoot, file),
+			[
+				'import { describe, test } from "bun:test";',
+				'describe("outer", () => { describe("leaf", () => { test("works", () => {}); }); });',
+			].join("\n"),
+		);
+		try {
+			const result = parseJUnitReport(
+				'<testsuite tests="1"><testcase file="src/nested.test.ts" line="1" classname="leaf" name="works"/></testsuite>',
+				[file],
+				0,
+				sourceRoot,
+			);
+			expect(result.incomplete).toBe(true);
+			expect(result.caseIdentities[0]?.suitePath).toEqual([]);
+		} finally {
+			rmSync(sourceRoot, { recursive: true, force: true });
+		}
+	});
+
 	test("classifies skipped suite hooks separately from testcases", () => {
 		const sourceRoot = mkdtempSync(join(tmpdir(), "signet-shared-corpus-hooks-"));
 		const file = "src/hooks.test.ts";
@@ -349,6 +374,15 @@ describe("shared corpus admission", () => {
 		expect(result.incomplete).toBe(true);
 	});
 
+	test("fails closed for testcases with no source line", () => {
+		const result = parseJUnitReport(
+			'<testsuite tests="1"><testcase file="a.test.ts" classname="x" name="a"/></testsuite>',
+			["a.test.ts"],
+		);
+		expect(result.unresolvedIdentityCount).toBe(1);
+		expect(result.incomplete).toBe(true);
+	});
+
 	test("nonzero child status cannot be represented as passed", () => {
 		const result = parseJUnitReport(
 			'<testsuite tests="1"><testcase classname="x" name="a"/></testsuite>',
@@ -437,6 +471,15 @@ describe("shared corpus admission", () => {
 		expect(requiresNativeEvidence("rust", "batch")).toBe(true);
 		expect(requiresNativeEvidence("rust", "per-case")).toBe(false);
 		expect(requiresNativeEvidence("typescript", "none")).toBe(false);
+	});
+
+	test("root suite failures remain visible even when leaf counters exist", () => {
+		const result = parseJUnitReport(
+			'<testsuites tests="1" failures="1"><testsuite tests="1" failures="0"><testcase file="a.test.ts" line="1" classname="x" name="ok"/></testsuite></testsuites>',
+			["a.test.ts"],
+		);
+		expect(result.suiteFailures).toBe(1);
+		expect(result.status).toBe("failed");
 	});
 
 	test("adapter rejects a forged pinned manifest before launching tests", () => {
