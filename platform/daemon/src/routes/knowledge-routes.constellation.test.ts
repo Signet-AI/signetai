@@ -11,6 +11,36 @@ import {
 } from "../pipeline/dreaming-token-cache";
 import { registerKnowledgeRoutes } from "./knowledge-routes";
 
+async function seedKnowledgeNavigation(): Promise<void> {
+	await runWriteTxAsync(getDbAccessor(), (db) => {
+		const now = "2026-09-23T00:00:00.000Z";
+		db.prepare(
+			`INSERT INTO entities
+			 (id, name, canonical_name, entity_type, agent_id, mentions, created_at, updated_at)
+			 VALUES ('entity-navigation', 'Knowledge', 'knowledge', 'topic', 'default', 1, ?, ?)`,
+		).run(now, now);
+		db.prepare(
+			`INSERT INTO entity_aspects
+			 (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+			 VALUES ('aspect-navigation', 'entity-navigation', 'default', 'food', 'food', 1, ?, ?)`,
+		).run(now, now);
+		const insert = db.prepare(
+			`INSERT INTO entity_attributes
+			 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
+			  confidence, importance, status, created_at, updated_at)
+			 VALUES (?, 'aspect-navigation', 'default', 'attribute', ?, ?, ?, ?, 1, 1, 'active', ?, ?)`,
+		);
+		for (const [id, group, claim] of [
+			["nav-rest-a", "restaurants", "favorite"],
+			["nav-rest-b", "restaurants", "visited"],
+			["nav-diet-a", "dietary", "allergy"],
+			["nav-diet-b", "dietary", "avoid_nuts"],
+		] as const) {
+			insert.run(id, claim, claim, group, claim, now, now);
+		}
+	});
+}
+
 async function seedEpisodicSources(count: number): Promise<void> {
 	await runWriteTxAsync(getDbAccessor(), (db) => {
 		const insert = db.prepare(
@@ -100,6 +130,31 @@ describe("GET /api/knowledge/constellation backlog measurement", () => {
 
 		expect(graph.metadata.dreaming.episodicTokensPending).toBeNull();
 		expect(graph.metadata.dreaming.episodicBacklogProbe?.kind).toBe("indeterminate");
+	});
+
+	test("pages tree claim summaries through the registered navigation routes", async () => {
+		await seedKnowledgeNavigation();
+		const app = new Hono();
+		registerKnowledgeRoutes(app);
+
+		const treeResponse = await app.request("/api/knowledge/navigation/tree?entity=Knowledge&max_total_claims=2");
+		expect(treeResponse.status).toBe(200);
+		const tree = await treeResponse.json();
+		expect(tree.limits.maxTotalClaims).toBe(2);
+		const groups = tree.items[0].groups;
+		expect(groups.map((group: { readonly claims: readonly unknown[] }) => group.claims.length)).toEqual([1, 1]);
+		expect(groups.every((group: { readonly claimsHasMore: boolean }) => group.claimsHasMore)).toBe(true);
+
+		const claimsResponse = await app.request(
+			"/api/knowledge/navigation/claims?entity=Knowledge&aspect=food&group=restaurants&limit=1&offset=1",
+		);
+		expect(claimsResponse.status).toBe(200);
+		expect(await claimsResponse.json()).toMatchObject({
+			items: [expect.any(Object)],
+			limit: 1,
+			offset: 1,
+			hasMore: false,
+		});
 	});
 
 	test("uses the exact token total from the current probe", async () => {

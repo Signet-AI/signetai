@@ -102,6 +102,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 			maxAspects: parseNavigationLimit(c.req.query("max_aspects"), 20, 100),
 			maxGroups: parseNavigationLimit(c.req.query("max_groups"), 20, 100),
 			maxClaims: parseNavigationLimit(c.req.query("max_claims"), 50, 200),
+			maxTotalClaims: parseNavigationLimit(c.req.query("max_total_claims"), 1_000, 10_000),
 			depth: parseNavigationLimit(c.req.query("depth"), 3, 3),
 		});
 		if (!result) return c.json({ error: "Entity not found" }, 404);
@@ -136,7 +137,10 @@ export function registerKnowledgeRoutes(app: Hono): void {
 		if (!entity) return c.json({ error: "entity is required" }, 400);
 		if (!aspect) return c.json({ error: "aspect is required" }, 400);
 		if (!group) return c.json({ error: "group is required" }, 400);
-		const result = await listEntityClaims(getDbAccessor(), { agentId, entity, aspect, group });
+		const limit = parseNavigationLimit(c.req.query("limit"), 50, 200);
+		const offsetParam = Number.parseInt(c.req.query("offset") ?? "0", 10);
+		const offset = Number.isFinite(offsetParam) ? Math.min(Math.max(offsetParam, 0), Number.MAX_SAFE_INTEGER) : 0;
+		const result = await listEntityClaims(getDbAccessor(), { agentId, entity, aspect, group, limit, offset });
 		if (!result) return c.json({ error: "Entity or aspect not found" }, 404);
 		return c.json(result);
 	});
@@ -325,7 +329,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					updated_at: string;
 				}>;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:310" },
+			{ siteToken: "routes/knowledge-routes.ts:314" },
 		);
 		return c.json({ items: rows, count: rows.length });
 	});
@@ -487,7 +491,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					.get() as { name: string } | undefined;
 				return tbl !== undefined;
 			},
-			{ siteToken: "routes/knowledge-routes.ts:483" },
+			{ siteToken: "routes/knowledge-routes.ts:487" },
 		);
 		if (!hasSessionSummaries) return c.json({ entityName, summaries: [], total: 0 });
 
@@ -585,7 +589,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 					total: safeRows.length,
 				});
 			},
-			{ siteToken: "routes/knowledge-routes.ts:500" },
+			{ siteToken: "routes/knowledge-routes.ts:504" },
 		);
 	});
 
@@ -604,7 +608,7 @@ export function registerKnowledgeRoutes(app: Hono): void {
 
 		const result = await getDbAccessor().withReadDbAsync(
 			async (db) => walkImpact(db, { entityId, direction, maxDepth, timeoutMs: 200 }),
-			{ siteToken: "routes/knowledge-routes.ts:605" },
+			{ siteToken: "routes/knowledge-routes.ts:609" },
 		);
 		return c.json(result);
 	});

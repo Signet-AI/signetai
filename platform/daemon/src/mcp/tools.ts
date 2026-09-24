@@ -2145,6 +2145,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		max_aspects: z.number().optional().describe("Max aspects/rooms to return, default 20"),
 		max_groups: z.number().optional().describe("Max groups/dressers per aspect, default 20"),
 		max_claims: z.number().optional().describe("Max claims/drawers per group, default 50"),
+		max_total_claims: z.number().optional().describe("Max claim summaries across the tree, default 1000"),
 		agent_id: z.string().optional().describe("Agent scope, default default"),
 	});
 	const listEntitiesInput = z.object({
@@ -2171,6 +2172,8 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		entity: z.string().describe("Entity name"),
 		aspect: z.string().describe("Aspect/room name"),
 		group: z.string().describe("Group/dresser key, e.g. restaurants"),
+		limit: z.number().optional().describe("Max claims to return, default 50"),
+		offset: z.number().optional().describe("Pagination offset, default 0"),
 		agent_id: z.string().optional().describe("Agent scope, default default"),
 	});
 	const listAttributesInput = z.object({
@@ -2215,6 +2218,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		max_aspects,
 		max_groups,
 		max_claims,
+		max_total_claims,
 		agent_id,
 	}: z.infer<typeof knowledgeTreeInput>) => {
 		const params = new URLSearchParams();
@@ -2228,6 +2232,7 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		if (max_aspects !== undefined) params.set("max_aspects", String(max_aspects));
 		if (max_groups !== undefined) params.set("max_groups", String(max_groups));
 		if (max_claims !== undefined) params.set("max_claims", String(max_claims));
+		if (max_total_claims !== undefined) params.set("max_total_claims", String(max_total_claims));
 		if (agent_id) params.set("agent_id", agent_id);
 		return fetchNavigation("/api/knowledge/navigation/tree", params, "Knowledge tree");
 	};
@@ -2255,8 +2260,10 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		if (agent_id) params.set("agent_id", agent_id);
 		return fetchNavigation("/api/knowledge/navigation/groups", params, "Entity groups");
 	};
-	const listClaims = async ({ entity, aspect, group, agent_id }: z.infer<typeof listClaimsInput>) => {
+	const listClaims = async ({ entity, aspect, group, limit, offset, agent_id }: z.infer<typeof listClaimsInput>) => {
 		const params = new URLSearchParams({ entity, aspect, group });
+		if (limit !== undefined) params.set("limit", String(limit));
+		if (offset !== undefined) params.set("offset", String(offset));
 		if (agent_id) params.set("agent_id", agent_id);
 		return fetchNavigation("/api/knowledge/navigation/claims", params, "Entity claims");
 	};

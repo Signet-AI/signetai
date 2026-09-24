@@ -542,14 +542,33 @@ describe("createMcpServer", () => {
 			max_aspects: 4,
 			max_groups: 5,
 			max_claims: 6,
+			max_total_claims: 12,
 			agent_id: "default",
 		});
 
 		expect(cap.url).toBe(
-			"http://localhost:3850/api/knowledge/navigation/tree?entity=Nicholai&depth=2&max_aspects=4&max_groups=5&max_claims=6&agent_id=default",
+			"http://localhost:3850/api/knowledge/navigation/tree?entity=Nicholai&depth=2&max_aspects=4&max_groups=5&max_claims=6&max_total_claims=12&agent_id=default",
 		);
 		expect(result.isError).toBeUndefined();
 		expect(result.content[0]?.text).toContain("Nicholai");
+	});
+
+	it("passes pagination bounds to knowledge claim listing", async () => {
+		const cap: { url?: string } = {};
+		mockFetch(200, { items: [], limit: 2, offset: 3, hasMore: true }, cap);
+
+		const result = await callTool(server, "knowledge_list_claims", {
+			entity: "Nicholai",
+			aspect: "food",
+			group: "restaurants",
+			limit: 2,
+			offset: 3,
+		});
+
+		expect(cap.url).toBe(
+			"http://localhost:3850/api/knowledge/navigation/claims?entity=Nicholai&aspect=food&group=restaurants&limit=2&offset=3",
+		);
+		expect(result.isError).toBeUndefined();
 	});
 
 	it("registers a report-only knowledge hygiene tool", async () => {
