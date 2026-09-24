@@ -350,7 +350,8 @@ The Dreaming subsystem persists its own state rather than hiding it in logs:
 
 - `dreaming_state` stores per-agent cursor, failure, and last-pass state;
 - `dreaming_passes` stores mode, status, usage, mutation counts, summaries, and
-  errors;
+  errors. The pass ID is allocated once per creation attempt and reused for
+  owner retries and reconciliation after a late or lost reply;
 - `dreaming_attention` stores bounded hygiene, review, evidence-retry, and
   surprisal work;
 - `dreaming_tool_calls` stores the ordered tool-call trace for a pass;

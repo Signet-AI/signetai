@@ -68,7 +68,7 @@ function submitOptions(
 	};
 }
 
-async function runOwnerJob<Result>(
+export async function runOwnerJob<Result>(
 	owner: DbOwnerClient,
 	request: DbOwnerRequest,
 	operation: string,

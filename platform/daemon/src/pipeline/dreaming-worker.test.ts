@@ -1,8 +1,17 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readdirSync,
+	readFileSync,
+	readlinkSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
 import { closeDbAccessor, getDbAccessor, initDbAccessor, type DbAccessor } from "../db-accessor";
@@ -101,12 +110,16 @@ async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<voi
 interface ScopeDelayOwner {
 	readonly client: DbOwnerClient;
 	arm(durationMs: number): void;
+	limitPassCreate(deadlineMs: number): void;
+	passCreateJobId(): string | null;
 	blocker(): DbOwnerJobHandle<{ readonly sleptMs: number }> | null;
 }
 
 function createScopeDelayOwner(owner: DbOwnerClient): ScopeDelayOwner {
 	let armed = false;
 	let durationMs = 0;
+	let passCreateDeadlineMs: number | null = null;
+	let currentPassCreateJobId: string | null = null;
 	let blocker: DbOwnerJobHandle<{ readonly sleptMs: number }> | null = null;
 	const client: DbOwnerClient = {
 		start: () => owner.start(),
@@ -124,7 +137,13 @@ function createScopeDelayOwner(owner: DbOwnerClient): ScopeDelayOwner {
 					},
 				);
 			}
-			return owner.submit<Result>(request, options);
+			const submitOptions =
+				options.operation === "dreaming.pass.create" && passCreateDeadlineMs !== null
+					? { ...options, deadlineMs: passCreateDeadlineMs }
+					: options;
+			const handle = owner.submit<Result>(request, submitOptions);
+			if (options.operation === "dreaming.pass.create") currentPassCreateJobId = handle.job.id;
+			return handle;
 		},
 		setWriteBlocked: (blocked: boolean) => owner.setWriteBlocked(blocked),
 		awaitResult: <Result>(handle: DbOwnerJobHandle<Result>, timeoutMs?: number) => owner.awaitResult(handle, timeoutMs),
@@ -139,6 +158,11 @@ function createScopeDelayOwner(owner: DbOwnerClient): ScopeDelayOwner {
 			blocker = null;
 			armed = true;
 		},
+		limitPassCreate(deadlineMs: number) {
+			passCreateDeadlineMs = deadlineMs;
+			currentPassCreateJobId = null;
+		},
+		passCreateJobId: () => currentPassCreateJobId,
 		blocker: () => blocker,
 	};
 }
@@ -175,13 +199,30 @@ interface RealOwnerTriggerFixture {
 	readonly scopeDelay: ScopeDelayOwner;
 	readonly maintenance: DbOwnerMaintenance;
 	readonly worker: ReturnType<typeof startDreamingWorker>;
+	readonly ownerCommitMarker: string;
+	readonly ownerCommitResultGate: string;
+
 	readonly previousSignetPath: string | undefined;
+	readonly previousCommitMarker: string | undefined;
+	readonly previousCommitPause: string | undefined;
+	readonly previousCommitResultPause: string | undefined;
+	readonly previousCommitResultGate: string | undefined;
 }
 
-async function createRealOwnerTriggerFixture(): Promise<RealOwnerTriggerFixture> {
+async function createRealOwnerTriggerFixture(
+	options: { readonly commitPauseMs?: number; readonly commitResultPauseMs?: number } = {},
+): Promise<RealOwnerTriggerFixture> {
 	const agentsDir = mkdtempSync(join(tmpdir(), "dreaming-owner-trigger-"));
 	const dbPath = join(agentsDir, "memory", "memories.db");
+	const ownerCommitMarker = join(agentsDir, "owner-commit-started");
+	const ownerCommitResultGate = join(agentsDir, "owner-commit-result-gate");
+
 	const previousSignetPath = process.env.SIGNET_PATH;
+	const previousCommitMarker = process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED;
+	const previousCommitPause = process.env.SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS;
+	const previousCommitResultPause = process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS;
+	const previousCommitResultGate = process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_GATE;
+
 	let owner: DbOwnerClient | null = null;
 	let worker: ReturnType<typeof startDreamingWorker> | null = null;
 	let registered = false;
@@ -200,18 +241,44 @@ async function createRealOwnerTriggerFixture(): Promise<RealOwnerTriggerFixture>
 		});
 		accessor.close();
 
-		owner = createDbOwnerClient({ dbPath });
+		process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = ownerCommitMarker;
+		if (options.commitPauseMs !== undefined) {
+			process.env.SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS = String(options.commitPauseMs);
+		} else Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS");
+		if (options.commitResultPauseMs !== undefined) {
+			process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS = String(options.commitResultPauseMs);
+		} else Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS");
+		process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_GATE = ownerCommitResultGate;
+
+		owner = createDbOwnerClient({ dbPath, workerPath: resolve(import.meta.dir, "../db-owner-worker.ts") });
 		const scopeDelay = createScopeDelayOwner(owner);
 		const maintenance = createDbOwnerMaintenance({ dbPath, owner: scopeDelay.client });
 		await owner.start();
-		await owner.initialize(agentsDir);
+		if (options.commitPauseMs === undefined && options.commitResultPauseMs === undefined)
+			await owner.initialize(agentsDir);
 		registerDbOwnerMaintenance(maintenance);
 		registered = true;
 		worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default", {
 			checkIntervalMs: 60_000,
 			ownerMaintenance: maintenance,
 		});
-		return { agentsDir, dbPath, accessor, owner, scopeDelay, maintenance, worker, previousSignetPath };
+		return {
+			agentsDir,
+			dbPath,
+			accessor,
+			owner,
+			scopeDelay,
+			maintenance,
+			worker,
+			ownerCommitMarker,
+			ownerCommitResultGate,
+
+			previousSignetPath,
+			previousCommitMarker,
+			previousCommitPause,
+			previousCommitResultPause,
+			previousCommitResultGate,
+		};
 	} catch (error) {
 		worker?.stop();
 		await owner?.close();
@@ -219,6 +286,17 @@ async function createRealOwnerTriggerFixture(): Promise<RealOwnerTriggerFixture>
 		await closeDbAccessor();
 		if (previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = previousSignetPath;
+		if (previousCommitMarker === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_STARTED");
+		else process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = previousCommitMarker;
+		if (previousCommitPause === undefined) Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS");
+		else process.env.SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS = previousCommitPause;
+		if (previousCommitResultPause === undefined)
+			Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS");
+		else process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS = previousCommitResultPause;
+		if (previousCommitResultGate === undefined)
+			Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_RESULT_GATE");
+		else process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_GATE = previousCommitResultGate;
+
 		rmSync(agentsDir, { recursive: true, force: true });
 		throw error;
 	}
@@ -230,14 +308,31 @@ async function closeRealOwnerTriggerFixture(fixture: RealOwnerTriggerFixture): P
 		await fixture.owner.close();
 	} finally {
 		try {
-			await closeRegisteredDbOwnerMaintenance();
+			await fixture.worker.activePass?.catch(() => {});
 		} finally {
 			try {
-				await closeDbAccessor();
+				await closeRegisteredDbOwnerMaintenance();
 			} finally {
-				if (fixture.previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
-				else process.env.SIGNET_PATH = fixture.previousSignetPath;
-				rmSync(fixture.agentsDir, { recursive: true, force: true });
+				try {
+					await closeDbAccessor();
+				} finally {
+					if (fixture.previousSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
+					else process.env.SIGNET_PATH = fixture.previousSignetPath;
+					if (fixture.previousCommitMarker === undefined)
+						Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_STARTED");
+					else process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED = fixture.previousCommitMarker;
+					if (fixture.previousCommitPause === undefined)
+						Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS");
+					else process.env.SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS = fixture.previousCommitPause;
+					if (fixture.previousCommitResultPause === undefined)
+						Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS");
+					else process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS = fixture.previousCommitResultPause;
+					if (fixture.previousCommitResultGate === undefined)
+						Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_RESULT_GATE");
+					else process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_GATE = fixture.previousCommitResultGate;
+
+					rmSync(fixture.agentsDir, { recursive: true, force: true });
+				}
 			}
 		}
 	}
@@ -898,13 +993,13 @@ describe("dreaming worker async trigger with a real DB owner", () => {
 
 	beforeEach(async () => {
 		fixture = await createRealOwnerTriggerFixture();
-	});
+	}, 30_000);
 
 	afterEach(async () => {
 		if (fixture === null) return;
 		await closeRealOwnerTriggerFixture(fixture);
 		fixture = null;
-	});
+	}, 30_000);
 
 	it("holds a timed-out scope trigger until owner work settles, then permits a completed pass", async () => {
 		const current = fixture;
@@ -993,6 +1088,172 @@ describe("dreaming worker async trigger with a real DB owner", () => {
 		expect(runningRows).toEqual([]);
 		expect(recoveryOutcome.kind).toBe("resolved");
 		expect(recoveryRows).toEqual([{ status: "completed" }]);
+	}, 30_000);
+
+	it("holds the trigger fence through a timed-out pass-create commit", async () => {
+		const initial = fixture;
+		if (initial === null) throw new Error("real owner trigger fixture was not initialized");
+		await closeRealOwnerTriggerFixture(initial);
+		fixture = await createRealOwnerTriggerFixture({ commitPauseMs: 1_000 });
+		const current = fixture;
+		const { maintenance, owner, ownerCommitMarker, scopeDelay, worker } = current;
+		scopeDelay.limitPassCreate(100);
+		let firstSettled = false;
+		let secondTrigger: Promise<TriggerOutcome> | null = null;
+		let firstOutcome: TriggerOutcome | null = null;
+		let secondOutcomeBeforeRelease: TriggerOutcome | null = null;
+		let protectedBeforeRelease = false;
+		let commitGateObserved = false;
+		let triggerSettledBeforeRelease = false;
+		let workerRunningBeforeRelease = false;
+		let activePassMatchesBeforeRelease = false;
+		let ownerAliveBeforeRelease = false;
+		let commitWorkSettled = false;
+		let passRows: readonly {
+			readonly id: string;
+			readonly status: string;
+		}[] = [];
+		const firstTrigger = observeTrigger(worker.triggerAsync("incremental")).then((outcome) => {
+			firstSettled = true;
+			return outcome;
+		});
+		const firstAttempt = worker.activePass;
+		try {
+			await waitFor(() => {
+				const jobId = scopeDelay.passCreateJobId();
+				return (
+					jobId !== null &&
+					existsSync(ownerCommitMarker) &&
+					readFileSync(ownerCommitMarker, "utf8").includes("waiting") &&
+					owner.health().activeJobId === jobId
+				);
+			}, 5_000);
+			commitGateObserved = readFileSync(ownerCommitMarker, "utf8").includes("waiting");
+			await new Promise<void>((resolve) => setTimeout(resolve, 250));
+			triggerSettledBeforeRelease = firstSettled;
+			workerRunningBeforeRelease = worker.running;
+			activePassMatchesBeforeRelease = worker.activePass === firstAttempt;
+			ownerAliveBeforeRelease = owner.health().state === "ready";
+			protectedBeforeRelease =
+				!triggerSettledBeforeRelease &&
+				workerRunningBeforeRelease &&
+				activePassMatchesBeforeRelease &&
+				ownerAliveBeforeRelease &&
+				commitGateObserved;
+			secondTrigger = observeTrigger(worker.triggerAsync("incremental"));
+			secondOutcomeBeforeRelease = await Promise.race([
+				secondTrigger,
+				new Promise<null>((resolve) => setTimeout(() => resolve(null), 50)),
+			]);
+		} finally {
+			firstOutcome = await firstTrigger;
+			if (secondTrigger !== null) await secondTrigger;
+			await waitFor(() => readFileSync(ownerCommitMarker, "utf8").includes("completed"), 5_000);
+			commitWorkSettled = true;
+			await worker.activePass?.catch(() => {});
+			passRows = await recallThroughDbOwner<{
+				readonly id: string;
+				readonly status: string;
+			}>(maintenance.owner, "SELECT id, status FROM dreaming_passes ORDER BY created_at, id");
+		}
+		const createdRows = passRows;
+		expect({
+			commitWorkSettled,
+			protectedBeforeRelease,
+			commitGateObserved,
+			triggerSettledBeforeRelease,
+			workerRunningBeforeRelease,
+			activePassMatchesBeforeRelease,
+			ownerAliveBeforeRelease,
+			secondOutcomeBeforeRelease: secondOutcomeBeforeRelease?.kind,
+			secondOutcomeError:
+				secondOutcomeBeforeRelease?.kind === "rejected"
+					? secondOutcomeBeforeRelease.error instanceof Error
+						? secondOutcomeBeforeRelease.error.name
+						: String(secondOutcomeBeforeRelease.error)
+					: null,
+			firstOutcome: firstOutcome?.kind,
+			newPassCount: createdRows.length,
+			runningPassCount: createdRows.filter((row) => row.status === "running").length,
+			createdPassStatus: createdRows[0]?.status,
+			passId: createdRows[0]?.id,
+		}).toMatchObject({
+			commitWorkSettled: true,
+			protectedBeforeRelease: true,
+			commitGateObserved: true,
+			triggerSettledBeforeRelease: false,
+			workerRunningBeforeRelease: true,
+			activePassMatchesBeforeRelease: true,
+			ownerAliveBeforeRelease: true,
+			secondOutcomeBeforeRelease: "rejected",
+			secondOutcomeError: "AlreadyRunningError",
+			firstOutcome: "resolved",
+			newPassCount: 1,
+			runningPassCount: 0,
+			createdPassStatus: "completed",
+			passId: expect.any(String),
+		});
+	}, 30_000);
+
+	it("reconciles a committed pass by pass ID after the owner exits before the trigger sees its result", async () => {
+		if (process.platform === "win32") return;
+		const initial = fixture;
+		if (initial === null) throw new Error("real owner trigger fixture was not initialized");
+		await closeRealOwnerTriggerFixture(initial);
+		fixture = await createRealOwnerTriggerFixture({ commitResultPauseMs: 30_000 });
+		const current = fixture;
+		const { maintenance, owner, ownerCommitMarker, ownerCommitResultGate, scopeDelay, worker } = current;
+		writeFileSync(ownerCommitResultGate, "pause-next-committed-result\n");
+		const triggerOutcomePromise = observeTrigger(worker.triggerAsync("incremental"));
+		const activeAttempt = worker.activePass;
+		await waitFor(
+			() => existsSync(ownerCommitMarker) && readFileSync(ownerCommitMarker, "utf8").includes("result-wait"),
+			10_000,
+		);
+		const ownerPid = owner.health().pid;
+		if (ownerPid === null) throw new Error("DB owner did not publish its pid");
+		const passCreateJobId = scopeDelay.passCreateJobId();
+		const protectedWhileResultHeld =
+			worker.running &&
+			worker.activePass === activeAttempt &&
+			passCreateJobId !== null &&
+			owner.health().activeJobId === passCreateJobId;
+		const duplicateTrigger = await observeTrigger(worker.triggerAsync("incremental"));
+		const generationBeforeRetirement = owner.health().generation;
+		process.kill(ownerPid, "SIGKILL");
+		await waitFor(
+			() => owner.health().state === "ready" && owner.health().generation > generationBeforeRetirement,
+			10_000,
+		);
+		const triggerOutcome = await triggerOutcomePromise;
+		await activeAttempt?.catch(() => {});
+		const ownerRecovered = owner.health().state === "ready" && owner.health().pid !== ownerPid;
+		const passRows = await recallThroughDbOwner<{
+			readonly id: string;
+			readonly status: string;
+		}>(maintenance.owner, "SELECT id, status FROM dreaming_passes ORDER BY created_at, id");
+		const nextTriggerOutcome = await observeTrigger(worker.triggerAsync("incremental"));
+		await worker.activePass?.catch(() => {});
+		const settledPassRows = await recallThroughDbOwner<{
+			readonly id: string;
+			readonly status: string;
+		}>(maintenance.owner, "SELECT id, status FROM dreaming_passes ORDER BY created_at, id");
+
+		expect(protectedWhileResultHeld).toBe(true);
+		expect(duplicateTrigger.kind).toBe("rejected");
+		if (duplicateTrigger.kind === "rejected") expect(duplicateTrigger.error).toBeInstanceOf(AlreadyRunningError);
+		expect(triggerOutcome.kind).toBe("resolved");
+		expect(ownerRecovered).toBe(true);
+		expect(owner.health().generation).toBeGreaterThan(generationBeforeRetirement);
+		expect(passRows).toHaveLength(1);
+		expect(passRows[0]).toMatchObject({ status: "completed" });
+		if (triggerOutcome.kind === "resolved") expect(passRows[0]?.id).toBe(triggerOutcome.passId);
+		expect(nextTriggerOutcome.kind).toBe("resolved");
+		expect(settledPassRows).toHaveLength(2);
+		expect(settledPassRows.every((row) => row.status === "completed")).toBe(true);
+		if (triggerOutcome.kind === "resolved" && nextTriggerOutcome.kind === "resolved") {
+			expect(triggerOutcome.passId).not.toBe(nextTriggerOutcome.passId);
+		}
 	}, 30_000);
 
 	it("releases the deadline fence after owner retirement and completes the next pass after restart", async () => {
