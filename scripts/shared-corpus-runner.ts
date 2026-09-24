@@ -2,6 +2,12 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+import {
+	resolveJUnitCaseIdentities,
+	type JUnitCaseIdentity,
+	type JUnitIdentityCollision,
+	type SuiteHookIdentity,
+} from "./shared-corpus-identities";
 
 export const BASELINE_SHA = "11e4720c07107caf7fdd57a685eca24e8a82e654";
 export const CORPUS_SIZE = 497;
@@ -16,22 +22,31 @@ export type ExecutionManifest = {
 	excludedDisabledCases: string[];
 	protectedCorpus: ManifestEntry[];
 };
+export type NativeEvidenceScope = "none" | "batch" | "per-case";
 export type Accounting = {
 	tests: number;
 	passed: number;
 	failed: number;
+	suiteFailures: number;
 	skipped: number;
+	reportedRecords: number;
+	suiteHookMarkers: number;
+	suiteHookIdentities: SuiteHookIdentity[];
+	caseIdentities: JUnitCaseIdentity[];
+	unresolvedIdentityCount: number;
 	missingFiles: string[];
+	unreportedFiles: string[];
 	unexpectedFiles: string[];
-	identityCollisions: Array<{ key: string; count: number }>;
+	identityCollisions: JUnitIdentityCollision[];
 	nativeEvidence: boolean;
+	nativeEvidenceScope: NativeEvidenceScope;
 	crash: boolean;
 	incomplete: boolean;
 	status?: "passed" | "failed";
 };
 
-export function requiresNativeEvidence(backend: Backend, nativeEvidence: boolean): boolean {
-	return backend === "rust" && !nativeEvidence;
+export function requiresNativeEvidence(backend: Backend, scope: NativeEvidenceScope): boolean {
+	return backend === "rust" && scope !== "per-case";
 }
 
 /**
@@ -239,8 +254,13 @@ export function runnableManifestPaths(manifest: ManifestEntry[]): string[] {
 		.filter(isTestEntrypoint)
 		.sort();
 }
-export function parseJUnitReport(xml: string, expected: string[] = [], childStatus: number | null = 0): Accounting {
-	const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map((m) => m[0]);
+export function parseJUnitReport(
+	xml: string,
+	expected: string[] = [],
+	childStatus: number | null = 0,
+	sourceRoot?: string,
+): Accounting {
+	const cases = [...xml.matchAll(/<testcase\b[^>]*?(?:\/>|>[\s\S]*?<\/testcase>)/g)].map((match) => match[0]);
 	const attribute = (source: string, name: string): string => {
 		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 		return source.match(new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(["'])(.*?)\\1`))?.[2] ?? "";
@@ -248,6 +268,7 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 	const nativeEvidence = [...xml.matchAll(/<testsuite\b[^>]*>/g)].some(
 		(match) => attribute(match[0], "nativeEvidence") === "true",
 	);
+	const nativeEvidenceScope: NativeEvidenceScope = nativeEvidence ? "batch" : "none";
 	const suiteStats = (() => {
 		type Stats = { tests?: number; failures?: number; errors?: number };
 		type SuiteNode = { kind: "testsuites" | "testsuite"; stats: Stats; childSuites: number };
@@ -302,65 +323,53 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 			failed: leafFailures ?? rootFailures ?? 0,
 		};
 	})();
-	const suiteFailed = suiteStats.failed;
-	if (!cases.length)
-		return {
-			tests: 0,
-			passed: 0,
-			failed: Math.max(1, suiteFailed),
-			skipped: 0,
-			missingFiles: [...expected],
-			unexpectedFiles: [],
-			identityCollisions: [],
-			nativeEvidence,
-			crash: true,
-			incomplete: true,
-			status: "failed",
-		};
-	const failed = cases.filter((c) => /<(?:failure|error)\b/.test(c)).length;
-	const skipped = cases.filter((c) => /<skipped\b/.test(c)).length;
-	const identities = cases.map((c) => {
-		const file = attribute(c, "file");
-		const line = attribute(c, "line");
-		const classname = attribute(c, "classname");
-		const name = attribute(c, "name");
-		return { file, line, key: `${file}\0${line}\0${classname}\0${name}` };
-	});
-	const identityCounts = new Map<string, number>();
-	for (const identity of identities) identityCounts.set(identity.key, (identityCounts.get(identity.key) ?? 0) + 1);
-	const identityCollisions = [...identityCounts.entries()]
-		.filter(([, count]) => count > 1)
-		.map(([key, count]) => ({ key, count }));
+	const identityResolution = resolveJUnitCaseIdentities(cases, sourceRoot);
+	const caseIdentities = [...identityResolution.caseIdentities];
+	const suiteHookIdentities = [...identityResolution.suiteHookIdentities];
+	const suiteHookMarkers = suiteHookIdentities.length;
+	const suiteFailures = Math.max(
+		0,
+		suiteStats.failed - cases.filter((testcase) => /<(?:failure|error)\b/.test(testcase)).length,
+	);
+	const failed = caseIdentities.filter((identity) => identity.status === "failed").length;
+	const skipped = caseIdentities.filter((identity) => identity.status === "skipped").length;
+	const hookFailures = suiteHookIdentities.filter((identity) => identity.status === "failed").length;
+	const observedFiles = new Set(caseIdentities.map((identity) => identity.file).filter(Boolean));
 	const expectedFiles = new Set(expected);
-	const observedFiles = new Set(identities.map((identity) => identity.file).filter(Boolean));
 	const missingFiles = expected.length > 0 ? expected.filter((file) => !observedFiles.has(file)) : [];
 	const unexpectedFiles = expected.length > 0 ? [...observedFiles].filter((file) => !expectedFiles.has(file)) : [];
-	const missingIdentity = identities.some((identity) => !identity.file);
 	const declared = suiteStats.declared ?? cases.length;
+	const adjustedDeclared = Math.max(0, declared - suiteHookMarkers);
+	const tests = caseIdentities.length;
+	const crashed = tests === 0 || (childStatus !== 0 && failed === 0 && suiteFailures === 0 && hookFailures === 0);
 	const incomplete =
 		declared !== cases.length ||
-		(expected.length > 0 && cases.length < expected.length) ||
+		adjustedDeclared !== tests ||
+		cases.length === 0 ||
 		missingFiles.length > 0 ||
 		unexpectedFiles.length > 0 ||
-		missingIdentity;
-	// Bun exits nonzero when assertions fail. A complete report with recorded
-	// failures is a failed test run, not a crashed runner. Preserve crash
-	// classification for nonzero exits that produced no reported test failure.
-	const suiteOnlyFailures = Math.max(0, suiteFailed - failed);
-	const crashed = childStatus !== 0 && failed === 0 && suiteOnlyFailures === 0;
-	const totalFailed = failed + suiteOnlyFailures;
+		identityResolution.unresolvedIdentityCount > 0 ||
+		identityResolution.identityCollisions.length > 0;
 	return {
-		tests: cases.length,
-		passed: Math.max(0, cases.length - failed - skipped - suiteOnlyFailures),
-		failed: totalFailed,
+		tests,
+		passed: Math.max(0, tests - failed - skipped),
+		failed,
+		suiteFailures,
 		skipped,
+		reportedRecords: cases.length,
+		suiteHookMarkers,
+		suiteHookIdentities,
+		caseIdentities,
+		unresolvedIdentityCount: identityResolution.unresolvedIdentityCount,
 		missingFiles,
+		unreportedFiles: [...missingFiles],
 		unexpectedFiles,
-		identityCollisions,
+		identityCollisions: [...identityResolution.identityCollisions],
 		nativeEvidence,
+		nativeEvidenceScope,
 		crash: crashed,
 		incomplete: incomplete || crashed,
-		status: crashed || totalFailed > 0 || incomplete ? "failed" : "passed",
+		status: crashed || failed > 0 || suiteFailures > 0 || hookFailures > 0 || incomplete ? "failed" : "passed",
 	};
 }
 
@@ -464,9 +473,28 @@ export function run(
 			status: "incomplete",
 		};
 	}
-	const accounting = parseJUnitReport(readFileSync(report, "utf8"), expected, child.status);
+	const accounting = parseJUnitReport(
+		readFileSync(report, "utf8"),
+		expected,
+		child.status,
+		backend === "typescript" ? o.worktree : repo,
+	);
+	const sourceHashes = new Map(manifest.protectedCorpus.map((entry) => [entry.path, entry.sha256]));
+	const caseBackendEvidence = accounting.caseIdentities.map((identity) => ({
+		identity: identity.key,
+		file: identity.file,
+		line: identity.line,
+		sourceSha256: sourceHashes.get(identity.file) ?? null,
+		status: identity.status,
+		backend: backend === "typescript" ? "typescript" : "unverified",
+	}));
+	const caseBackendCounts = {
+		typescript: caseBackendEvidence.filter((evidence) => evidence.backend === "typescript").length,
+		rust: caseBackendEvidence.filter((evidence) => evidence.backend === "rust").length,
+		unverified: caseBackendEvidence.filter((evidence) => evidence.backend === "unverified").length,
+	};
 	const infrastructureCrash = child.signal !== null || child.error !== undefined;
-	const nativeEvidenceGap = requiresNativeEvidence(backend, accounting.nativeEvidence);
+	const nativeEvidenceGap = requiresNativeEvidence(backend, accounting.nativeEvidenceScope);
 	const crash = infrastructureCrash || accounting.crash;
 	const incomplete = accounting.incomplete || accounting.tests === 0 || infrastructureCrash || nativeEvidenceGap;
 	return {
@@ -479,9 +507,18 @@ export function run(
 		worktree: o.worktree,
 		artifact: o.artifact,
 		...accounting,
+		caseBackendEvidence,
+		caseBackendCounts,
 		crash,
 		incomplete,
-		status: crash || accounting.failed || incomplete ? "failed" : "passed",
+		status:
+			crash ||
+			accounting.failed > 0 ||
+			accounting.suiteFailures > 0 ||
+			accounting.suiteHookIdentities.some((identity) => identity.status === "failed") ||
+			incomplete
+				? "failed"
+				: "passed",
 	};
 }
 if (import.meta.main) {

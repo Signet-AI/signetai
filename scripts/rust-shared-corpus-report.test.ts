@@ -72,12 +72,13 @@ test("uses aggregate counters from a testsuites root", () => {
 test("preserves leaf suite failures when aggregate counters are absent", () => {
 	const child =
 		'<testsuites><testsuite name="a" tests="1" failures="1">' +
-		'<testcase file="a.test.ts" name="one"/></testsuite></testsuites>';
+		'<testcase file="a.test.ts" line="1" classname="a" name="one"/></testsuite></testsuites>';
 	const wrapped = wrapRustJUnitReport(child, false);
 	const accounting = parseJUnitReport(wrapped.xml, ["a.test.ts"]);
 
 	expect(wrapped.xml).toContain('failures="1"');
-	expect(accounting.failed).toBe(1);
+	expect(accounting.failed).toBe(0);
+	expect(accounting.suiteFailures).toBe(1);
 	expect(accounting.status).toBe("failed");
 	expect(accounting.incomplete).toBe(false);
 });
@@ -85,12 +86,13 @@ test("preserves leaf suite failures when aggregate counters are absent", () => {
 test("preserves nested suite errors when aggregate counters are absent", () => {
 	const child =
 		'<testsuite><testsuite name="a" tests="1" errors="1">' +
-		'<testcase file="a.test.ts" name="one"/></testsuite></testsuite>';
+		'<testcase file="a.test.ts" line="1" classname="a" name="one"/></testsuite></testsuite>';
 	const wrapped = wrapRustJUnitReport(child, false);
 	const accounting = parseJUnitReport(wrapped.xml, ["a.test.ts"]);
 
 	expect(wrapped.xml).toContain('errors="1"');
-	expect(accounting.failed).toBe(1);
+	expect(accounting.failed).toBe(0);
+	expect(accounting.suiteFailures).toBe(1);
 	expect(accounting.status).toBe("failed");
 	expect(accounting.incomplete).toBe(false);
 });

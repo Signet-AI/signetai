@@ -14,7 +14,7 @@ const actualOnly = parseJUnitReport(
 if (actualOnly.tests !== 1 || actualOnly.passed !== 1 || !actualOnly.incomplete)
 	throw new Error("actual-case parser accepted a synthetic or missing testcase");
 const separateFiles = parseJUnitReport(
-	'<testsuite tests="2"><testcase file="a.test.ts" classname="same" name="case"/><testcase file="b.test.ts" classname="same" name="case"/></testsuite>',
+	'<testsuite tests="2"><testcase file="a.test.ts" line="1" classname="same" name="case"/><testcase file="b.test.ts" line="1" classname="same" name="case"/></testsuite>',
 	[],
 	0,
 );

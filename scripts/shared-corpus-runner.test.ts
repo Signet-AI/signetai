@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import {
 	discoverPaths,
 	parseJUnitReport,
@@ -136,15 +137,204 @@ describe("shared corpus admission", () => {
 		expect(result.crash).toBe(true);
 	});
 
-	test("accounts repeated testcase identities with occurrence disambiguation", () => {
+	test("fails closed when repeated testcase identities lack source parameter metadata", () => {
 		const xml =
 			'<testsuite tests="2"><testcase classname="x" name="a" file="a.test.ts" line="10"/><testcase classname="x" name="a" file="a.test.ts" line="10"/></testsuite>';
 		const result = parseJUnitReport(xml, ["a.test.ts"]);
+
 		expect(result.tests).toBe(2);
-		expect(result.incomplete).toBe(false);
+		expect(result.incomplete).toBe(true);
 		expect(result.crash).toBe(false);
 		expect(result.identityCollisions).toHaveLength(1);
 		expect(result.identityCollisions[0]?.count).toBe(2);
+	});
+
+	test("uses suite, source, and actual test.each parameters without changing original names", () => {
+		const sourceRoot = mkdtempSync(join(tmpdir(), "signet-shared-corpus-identities-"));
+		const file = "src/identity.test.ts";
+		const sourcePath = join(sourceRoot, file);
+		mkdirSync(join(sourceRoot, "src"), { recursive: true });
+		writeFileSync(
+			sourcePath,
+			[
+				'import { describe, test } from "bun:test";',
+				'describe("policy suite", () => {',
+				"	test.each([",
+				'		["same", "system"],',
+				'		["same", "service"],',
+				'	])("allows %s", () => {});',
+				"});",
+			].join(String.fromCharCode(10)),
+		);
+		const xml =
+			'<testsuite tests="2">' +
+			'<testcase file="src/identity.test.ts" line="6" classname="policy suite" name="allows same"/>' +
+			'<testcase file="src/identity.test.ts" line="6" classname="policy suite" name="allows same"/>' +
+			"</testsuite>";
+
+		try {
+			const result = parseJUnitReport(xml, [file], 0, sourceRoot);
+			expect(result.tests).toBe(2);
+			expect(result.identityCollisions).toEqual([]);
+			expect(result.incomplete).toBe(false);
+			expect(result.caseIdentities.map((identity) => identity.name)).toEqual(["allows same", "allows same"]);
+			expect(result.caseIdentities.map((identity) => identity.suitePath)).toEqual([["policy suite"], ["policy suite"]]);
+			expect(result.caseIdentities.map((identity) => identity.parameters)).toEqual([
+				["same", "system"],
+				["same", "service"],
+			]);
+			expect(new Set(result.caseIdentities.map((identity) => identity.key)).size).toBe(2);
+		} finally {
+			rmSync(sourceRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("maps dynamic test names to their unique source suite", () => {
+		const sourceRoot = mkdtempSync(join(tmpdir(), "signet-shared-corpus-dynamic-suite-"));
+		const file = "src/dynamic.test.ts";
+		mkdirSync(join(sourceRoot, "src"), { recursive: true });
+		writeFileSync(
+			join(sourceRoot, file),
+			[
+				'import { describe, test } from "bun:test";',
+				'describe("dynamic suite", () => {',
+				'	for (const name of ["first", "second"]) {',
+				"		test(name, () => {});",
+				"	}",
+				"});",
+			].join(String.fromCharCode(10)),
+		);
+		const xml =
+			'<testsuite tests="2">' +
+			'<testcase file="src/dynamic.test.ts" line="4" classname="dynamic suite" name="first"/>' +
+			'<testcase file="src/dynamic.test.ts" line="4" classname="dynamic suite" name="second"/>' +
+			"</testsuite>";
+
+		try {
+			const result = parseJUnitReport(xml, [file], 0, sourceRoot);
+			expect(result.caseIdentities.map((identity) => identity.suitePath)).toEqual([
+				["dynamic suite"],
+				["dynamic suite"],
+			]);
+			expect(new Set(result.caseIdentities.map((identity) => identity.key)).size).toBe(2);
+			expect(result.incomplete).toBe(false);
+		} finally {
+			rmSync(sourceRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("includes the full nested source suite path in a static testcase identity", () => {
+		const sourceRoot = mkdtempSync(join(tmpdir(), "signet-shared-corpus-nested-suite-"));
+		const file = "src/nested.test.ts";
+		mkdirSync(join(sourceRoot, "src"), { recursive: true });
+		writeFileSync(
+			join(sourceRoot, file),
+			[
+				'import { describe, test } from "bun:test";',
+				'describe("outer suite", () => {',
+				'	describe("inner suite", () => {',
+				'		test("works", () => {});',
+				"	});",
+				"});",
+			].join(String.fromCharCode(10)),
+		);
+		const xml =
+			'<testsuite tests="1"><testcase file="src/nested.test.ts" line="4" classname="inner suite &gt; outer suite" name="works"/></testsuite>';
+
+		try {
+			const result = parseJUnitReport(xml, [file], 0, sourceRoot);
+			expect(result.incomplete).toBe(false);
+			expect(result.identityCollisions).toEqual([]);
+			expect(result.caseIdentities[0]?.suitePath).toEqual(["outer suite", "inner suite"]);
+			expect(result.caseIdentities[0]?.key).toContain(["outer suite", "inner suite"].join(String.fromCharCode(0)));
+		} finally {
+			rmSync(sourceRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("classifies skipped suite hooks separately from testcases", () => {
+		const sourceRoot = mkdtempSync(join(tmpdir(), "signet-shared-corpus-hooks-"));
+		const file = "src/hooks.test.ts";
+		mkdirSync(join(sourceRoot, "src"), { recursive: true });
+		writeFileSync(
+			join(sourceRoot, file),
+			[
+				'import { afterAll, afterEach, beforeAll, beforeEach, describe, test } from "bun:test";',
+				'describe.skip("retired suite", () => {',
+				"	beforeAll(() => {});",
+				"	afterAll(() => {});",
+				"	beforeEach(() => {});",
+				"	afterEach(() => {});",
+				'	test("real skipped case", () => {});',
+				"});",
+			].join(String.fromCharCode(10)),
+		);
+		const xml =
+			'<testsuite tests="3" skipped="3">' +
+			'<testcase file="src/hooks.test.ts" classname="retired suite" name="(unnamed)" assertions="0"><skipped/></testcase>' +
+			'<testcase file="src/hooks.test.ts" classname="retired suite" name="real skipped case" line="7" assertions="0"><skipped/></testcase>' +
+			'<testcase file="src/hooks.test.ts" classname="retired suite" name="(unnamed)" assertions="0"><skipped/></testcase>' +
+			"</testsuite>";
+
+		try {
+			const result = parseJUnitReport(xml, [file], 0, sourceRoot);
+			expect(result.reportedRecords).toBe(3);
+			expect(result.tests).toBe(1);
+			expect(result.skipped).toBe(1);
+			expect(result.suiteHookMarkers).toBe(2);
+			expect(result.suiteHookIdentities.map((identity) => identity.hook)).toEqual(["beforeAll", "afterAll"]);
+			expect(result.caseIdentities).toHaveLength(1);
+			expect(result.identityCollisions).toEqual([]);
+			expect(result.incomplete).toBe(false);
+		} finally {
+			rmSync(sourceRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("maps nested suite hook markers from Bun's reversed classname path", () => {
+		const sourceRoot = mkdtempSync(join(tmpdir(), "signet-shared-corpus-nested-hooks-"));
+		const file = "src/nested-hooks.test.ts";
+		mkdirSync(join(sourceRoot, "src"), { recursive: true });
+		writeFileSync(
+			join(sourceRoot, file),
+			[
+				'import { beforeAll, describe, test } from "bun:test";',
+				'describe("outer suite", () => {',
+				'	describe("inner suite", () => {',
+				"		beforeAll(() => {});",
+				'		test("works", () => {});',
+				"	});",
+				"});",
+			].join(String.fromCharCode(10)),
+		);
+		const xml =
+			'<testsuite tests="2" failures="1">' +
+			'<testcase file="src/nested-hooks.test.ts" classname="inner suite &gt; outer suite" name="(unnamed)"><failure/></testcase>' +
+			'<testcase file="src/nested-hooks.test.ts" classname="inner suite &gt; outer suite" name="works" line="5"/>' +
+			"</testsuite>";
+
+		try {
+			const result = parseJUnitReport(xml, [file], 0, sourceRoot);
+			expect(result.suiteHookMarkers).toBe(1);
+			expect(result.suiteHookIdentities[0]?.hook).toBe("beforeAll");
+			expect(result.suiteHookIdentities[0]?.suitePath).toEqual(["outer suite", "inner suite"]);
+			expect(result.caseIdentities[0]?.suitePath).toEqual(["outer suite", "inner suite"]);
+			expect(result.incomplete).toBe(false);
+		} finally {
+			rmSync(sourceRoot, { recursive: true, force: true });
+		}
+	});
+
+	test("reports selected entrypoints without JUnit cases as unreported, never skipped", () => {
+		const result = parseJUnitReport(
+			'<testsuite tests="1"><testcase file="other.test.ts" line="1" classname="suite" name="runs"/></testsuite>',
+			["platform/daemon/src/pipeline/pi-provider.live.test.ts"],
+		);
+
+		expect(result.tests).toBe(1);
+		expect(result.skipped).toBe(0);
+		expect(result.unreportedFiles).toEqual(["platform/daemon/src/pipeline/pi-provider.live.test.ts"]);
+		expect(result.incomplete).toBe(true);
 	});
 
 	test("rejects testcase identities without a source file", () => {
@@ -204,6 +394,7 @@ describe("shared corpus admission", () => {
 		);
 		expect(result.tests).toBe(1);
 		expect(result.nativeEvidence).toBe(true);
+		expect(result.nativeEvidenceScope).toBe("batch");
 	});
 
 	test("preserves nested JUnit suite errors", () => {
@@ -213,7 +404,8 @@ describe("shared corpus admission", () => {
 			0,
 		);
 		expect(result.tests).toBe(1);
-		expect(result.failed).toBe(1);
+		expect(result.failed).toBe(0);
+		expect(result.suiteFailures).toBe(1);
 		expect(result.incomplete).toBe(false);
 		expect(result.status).toBe("failed");
 	});
@@ -225,7 +417,8 @@ describe("shared corpus admission", () => {
 			0,
 		);
 		expect(result.tests).toBe(1);
-		expect(result.failed).toBe(1);
+		expect(result.failed).toBe(0);
+		expect(result.suiteFailures).toBe(1);
 		expect(result.incomplete).toBe(false);
 		expect(result.status).toBe("failed");
 	});
@@ -239,10 +432,11 @@ describe("shared corpus admission", () => {
 		expect(result.nativeEvidence).toBe(true);
 	});
 
-	test("requires native evidence for every Rust lane, including selected runs", () => {
-		expect(requiresNativeEvidence("rust", false)).toBe(true);
-		expect(requiresNativeEvidence("rust", true)).toBe(false);
-		expect(requiresNativeEvidence("typescript", false)).toBe(false);
+	test("requires per-case native evidence for every Rust lane, including selected runs", () => {
+		expect(requiresNativeEvidence("rust", "none")).toBe(true);
+		expect(requiresNativeEvidence("rust", "batch")).toBe(true);
+		expect(requiresNativeEvidence("rust", "per-case")).toBe(false);
+		expect(requiresNativeEvidence("typescript", "none")).toBe(false);
 	});
 
 	test("adapter rejects a forged pinned manifest before launching tests", () => {
