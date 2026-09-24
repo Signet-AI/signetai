@@ -307,12 +307,13 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 			return { ok: true, source: duplicate, created: false, duplicate: true };
 		}
 
-		const ownerSuffix = agentId ? `:${createHash("sha256").update(agentId).digest("hex").slice(0, 8)}` : "";
 		const sourceId =
 			duplicate && mode === "replace"
 				? duplicate.id
 				: input.sourceId?.trim() ||
-					`import:${contentHash.slice(0, 16)}${mode === "reimport" ? `:${randomUUID().slice(0, 8)}` : ownerSuffix}`;
+					(mode === "reimport"
+						? `import:${contentHash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
+						: deterministicImportedSourceId(contentHash, agentId));
 		const source: SignetSourceEntry = {
 			id: sourceId,
 			generation: newSourceGeneration(),
@@ -338,6 +339,14 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 		saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources }, agentsDir);
 		return { ok: true, source, created: !duplicate || mode === "reimport", duplicate: Boolean(duplicate) };
 	});
+}
+
+export function deterministicImportedSourceId(contentHash: string, agentId?: string): string {
+	const normalizedAgentId = agentId?.trim() || undefined;
+	const ownerSuffix = normalizedAgentId
+		? `:${createHash("sha256").update(normalizedAgentId).digest("hex").slice(0, 8)}`
+		: "";
+	return `import:${contentHash.trim().toLowerCase().slice(0, 16)}${ownerSuffix}`;
 }
 
 function addDiscordSourceUnlocked(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {

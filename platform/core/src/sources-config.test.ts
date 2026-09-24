@@ -12,6 +12,7 @@ import {
 	addImportedSource,
 	addObsidianSource,
 	addWebSource,
+	deterministicImportedSourceId,
 	getSourcesConfigPath,
 	loadSourcesConfig,
 	markSourceIndexed,
@@ -663,6 +664,7 @@ describe("sources-config", () => {
 			contentHash: input.contentHash,
 			format: "json",
 		});
+		expect(first.source.id).toBe(deterministicImportedSourceId(input.contentHash));
 
 		const skipped = addImportedSource({ ...input, duplicateMode: "skip" }, agentsDir);
 		expect(skipped).toEqual({ ok: true, source: first.source, created: false, duplicate: true });

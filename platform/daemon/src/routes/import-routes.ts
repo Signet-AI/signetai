@@ -1,7 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
-import { addImportedSource, loadSourcesConfig, markSourceIndexed, removeSourceIfGeneration } from "@signet/core";
+import {
+	addImportedSource,
+	deterministicImportedSourceId,
+	loadSourcesConfig,
+	markSourceIndexed,
+	removeSourceIfGeneration,
+} from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
@@ -339,11 +345,6 @@ export function registerImportRoutes(app: Hono): void {
 		const failed = statuses.filter((status) => status.status === "failed").length;
 		return c.json({ imported, failed, files: statuses }, failed > 0 ? 207 : 201);
 	});
-}
-
-function deterministicImportedSourceId(contentHash: string, agentId: string): string {
-	const ownerSuffix = createHash("sha256").update(agentId.trim()).digest("hex").slice(0, 8);
-	return `import:${contentHash.trim().toLowerCase().slice(0, 16)}:${ownerSuffix}`;
 }
 
 function isLoopbackRequest(c: Context): boolean {
