@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import ts from "typescript";
 import { createDbAccessorLifecycle } from "./db-accessor-lifecycle";
 
 function source(relativePath: string): string {
@@ -102,7 +103,25 @@ describe("owner transport purity", () => {
 
 	it("keeps the knowledge graph independent of Dreaming composition", () => {
 		const graph = source("./knowledge-graph.ts");
+		const sourceFile = ts.createSourceFile("knowledge-graph.ts", graph, ts.ScriptTarget.Latest, true);
+		const importsDreamingAtRuntime = sourceFile.statements.some((statement) => {
+			if (
+				!ts.isImportDeclaration(statement) ||
+				!ts.isStringLiteral(statement.moduleSpecifier) ||
+				statement.moduleSpecifier.text !== "./pipeline/dreaming"
+			) {
+				return false;
+			}
+			const importClause = statement.importClause;
+			if (importClause === undefined) return true;
+			if (importClause.isTypeOnly) return false;
+			if (importClause.name !== undefined) return true;
+			const bindings = importClause.namedBindings;
+			if (bindings === undefined) return false;
+			if (ts.isNamespaceImport(bindings)) return true;
+			return bindings.elements.some((specifier) => !specifier.isTypeOnly);
+		});
 
-		expect(graph).not.toContain('from "./pipeline/dreaming"');
+		expect(importsDreamingAtRuntime).toBe(false);
 	});
 });
