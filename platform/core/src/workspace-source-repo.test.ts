@@ -52,7 +52,9 @@ function seedRemote(): { remoteDir: string; workDir: string; remoteUrl: string }
 	runGit(["config", "user.name", "Signet Test"], workDir);
 	runGit(["config", "user.email", "signet@example.com"], workDir);
 	writeFileSync(join(workDir, "README.md"), "# signet\n");
-	runGit(["add", "README.md"], workDir);
+	mkdirSync(join(workDir, "integrations", "forge", "connector", "dist"), { recursive: true });
+	writeFileSync(join(workDir, "integrations", "forge", "connector", "dist", "index.js"), "committed build output");
+	runGit(["add", "-A"], workDir);
 	runGit(["commit", "-m", "initial"], workDir);
 	runGit(["remote", "add", "origin", remoteDir], workDir);
 	runGit(["push", "-u", "origin", "main"], workDir);
@@ -65,9 +67,17 @@ function seedRemote(): { remoteDir: string; workDir: string; remoteUrl: string }
 	};
 }
 
-function pushRemoteChange(workDir: string, content: string, message: string): void {
+function pushRemoteChange(
+	workDir: string,
+	content: string,
+	message: string,
+	additionalFiles: Readonly<Record<string, string>> = {},
+): void {
 	writeFileSync(join(workDir, "README.md"), content);
-	runGit(["add", "README.md"], workDir);
+	for (const [path, fileContent] of Object.entries(additionalFiles)) {
+		writeFileSync(join(workDir, path), fileContent);
+	}
+	runGit(["add", "--", "README.md", ...Object.keys(additionalFiles)], workDir);
 	runGit(["commit", "-m", message], workDir);
 	runGit(["push", "origin", "main"], workDir);
 }
@@ -160,11 +170,14 @@ describe("syncWorkspaceSourceRepo", () => {
 		mkdirSync(join(repoPath, "surfaces", "desktop", "release"), { recursive: true });
 		mkdirSync(join(repoPath, "surfaces", "desktop", "resources", "daemon"), { recursive: true });
 		mkdirSync(join(repoPath, "dist", "signetai", "hermes-plugin"), { recursive: true });
+		mkdirSync(join(repoPath, "integrations", "forge", "connector", "dist"), { recursive: true });
 		mkdirSync(join(repoPath, "platform", "daemon"), { recursive: true });
 		writeFileSync(join(repoPath, "surfaces", "desktop", "release", "Signet-0.1.0-linux-x64.AppImage"), "app");
 		writeFileSync(join(repoPath, "surfaces", "desktop", "resources", "daemon", "daemon.js"), "daemon");
 		writeFileSync(join(repoPath, "dist", "signetai", "hermes-plugin", "plugin.py"), "plugin");
 		writeFileSync(join(repoPath, "platform", "daemon", "anydoc.win32-x64-msvc-gs7ezvas.node"), "native addon");
+		writeFileSync(join(repoPath, "integrations", "forge", "connector", "dist", "index.js"), "built connector");
+		writeFileSync(join(repoPath, "platform", "daemon", "anydoc.darwin-x64-5cemdyhc.node"), "native addon");
 		pushRemoteChange(workDir, "# signet\n\nremote build fix\n", "remote build fix");
 
 		const result = syncWorkspace(workspaceDir, remoteUrl);
@@ -177,6 +190,24 @@ describe("syncWorkspaceSourceRepo", () => {
 		expect(readFileSync(join(repoPath, "platform", "daemon", "anydoc.win32-x64-msvc-gs7ezvas.node"), "utf-8")).toBe(
 			"native addon",
 		);
+	});
+
+	it("resets locally modified tracked build output before pulling its upstream change", () => {
+		const { remoteUrl, workDir } = seedRemote();
+		const workspaceDir = makeTempDir("signet-source-workspace-");
+
+		expect(syncWorkspace(workspaceDir, remoteUrl).status).toBe("cloned");
+		const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir);
+		const connectorPath = "integrations/forge/connector/dist/index.js";
+		writeFileSync(join(repoPath, connectorPath), "local build output");
+		pushRemoteChange(workDir, "# signet\n\nupstream connector update\n", "upstream connector update", {
+			[connectorPath]: "upstream build output",
+		});
+
+		const result = syncWorkspace(workspaceDir, remoteUrl);
+
+		expect(result.status).toBe("pulled");
+		expect(readFileSync(join(repoPath, connectorPath), "utf-8")).toBe("upstream build output");
 	});
 
 	it("fetches but does not pull over local workspace changes", () => {
@@ -202,10 +233,14 @@ describe("syncWorkspaceSourceRepo", () => {
 		expect(syncWorkspace(workspaceDir, remoteUrl).status).toBe("cloned");
 		const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir);
 		mkdirSync(join(repoPath, "platform", "daemon"), { recursive: true });
+		const connectorPath = "integrations/forge/connector/dist/index.js";
+		writeFileSync(join(repoPath, connectorPath), "local connector output");
 		writeFileSync(join(repoPath, "platform", "daemon", "anydoc.win32-x64-msvc-gs7ezvas.node"), "generated addon\n");
 		writeFileSync(join(repoPath, "README.md"), "# local edits\n");
 		writeFileSync(join(repoPath, "local-notes.txt"), "keep this\n");
-		pushRemoteChange(workDir, "# signet\n\nremote change\n", "remote change");
+		pushRemoteChange(workDir, "# signet\n\nremote change\n", "remote change", {
+			[connectorPath]: "remote connector output",
+		});
 
 		const result = syncWorkspace(workspaceDir, remoteUrl, { localChanges: "stash" });
 
@@ -214,6 +249,7 @@ describe("syncWorkspaceSourceRepo", () => {
 		expect(result.stashRef).toMatch(/^[0-9a-f]{40}$/);
 		expect(result.message).toContain(`local changes were preserved in stash ${result.stashRef}`);
 		expect(readFileSync(join(repoPath, "README.md"), "utf-8")).toContain("remote change");
+		expect(readFileSync(join(repoPath, connectorPath), "utf-8")).toBe("remote connector output");
 		expect(existsSync(join(repoPath, "local-notes.txt"))).toBe(false);
 		expect(existsSync(join(repoPath, "platform", "daemon", "anydoc.win32-x64-msvc-gs7ezvas.node"))).toBe(true);
 		expect(runGit(["stash", "list", "--format=%H %s"], repoPath)).toContain(
