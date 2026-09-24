@@ -1,6 +1,22 @@
 import { expect, test } from "bun:test";
 import { parseJUnitReport } from "./shared-corpus-runner";
-import { normalizeObservedJUnitCounters, wrapRustJUnitReport } from "./rust-shared-corpus-report";
+import {
+	extractTestsuiteFragment,
+	normalizeObservedJUnitCounters,
+	wrapRustJUnitReport,
+} from "./rust-shared-corpus-report";
+
+test("extracts all nested Bun describe suites from one file", () => {
+	const child =
+		'<testsuites><testsuite name="file" tests="2">' +
+		'<testsuite name="first" tests="1"><testcase file="a.test.ts" name="one"/></testsuite>' +
+		'<testsuite name="second" tests="1"><testcase file="a.test.ts" name="two"/></testsuite>' +
+		"</testsuite></testsuites>";
+	const fragment = extractTestsuiteFragment(child);
+
+	expect(fragment).toContain('name="second"');
+	expect(fragment?.match(/<testcase\b/g)?.length).toBe(2);
+});
 
 test("normalizes aggregate counters from observed testcase elements", () => {
 	const child =

@@ -29,7 +29,11 @@ import {
 } from "./shared-corpus-runner";
 import { buildHermeticEnvironment } from "./run-hermetic-tests";
 import { validateRustDaemonArtifact } from "./rust-shared-corpus-artifact";
-import { normalizeObservedJUnitCounters, wrapRustJUnitReport } from "./rust-shared-corpus-report";
+import {
+	extractTestsuiteFragment,
+	normalizeObservedJUnitCounters,
+	wrapRustJUnitReport,
+} from "./rust-shared-corpus-report";
 import { isFreshRustCoreEvidenceLine } from "./rust-baseline-proof-evidence";
 
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
@@ -276,7 +280,7 @@ for (let index = 0; index < batches.length; index++) {
 	if (result?.status !== 0 || result.signal || error) anyBatchFailed = true;
 	if (existsSync(batchJUnit)) {
 		const xml = readFileSync(batchJUnit, "utf8");
-		const fragment = xml.match(/<testsuite\b[^>]*>[\s\S]*?<\/testsuite>/)?.[0];
+		const fragment = extractTestsuiteFragment(xml);
 		if (fragment) junitReports.push(fragment);
 	}
 	for (const [source, target] of [

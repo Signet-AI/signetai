@@ -13,6 +13,32 @@ export type WrappedRustJUnitReport = {
 	readonly caseCount: number;
 };
 
+/**
+ * Extract one complete Bun JUnit testsuite, including nested describe suites.
+ * A non-greedy `.*?</testsuite>` only keeps the first describe block and
+ * silently drops the rest of a file's testcases.
+ */
+export function extractTestsuiteFragment(reportXml: string): string | null {
+	const tags = /<\/?testsuite\b[^>]*>/g;
+	let start = -1;
+	let depth = 0;
+	for (const match of reportXml.matchAll(tags)) {
+		const tag = match[0];
+		const isClosing = tag.startsWith("</");
+		const isSelfClosing = /\/\s*>$/.test(tag);
+		if (isClosing) {
+			if (depth === 0) continue;
+			depth -= 1;
+			if (depth === 0 && start >= 0) return reportXml.slice(start, (match.index ?? 0) + tag.length);
+			continue;
+		}
+		if (depth === 0) start = match.index ?? 0;
+		if (!isSelfClosing) depth += 1;
+		if (isSelfClosing && depth === 0) return tag;
+	}
+	return null;
+}
+
 function replaceNumericAttribute(attributes: string, name: string, value: number): string {
 	const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 	const pattern = new RegExp(`(\\b${escaped}\\s*=\\s*["'])\\d+(["'])`);
