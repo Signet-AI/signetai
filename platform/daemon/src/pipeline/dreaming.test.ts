@@ -35,6 +35,8 @@ import {
 	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
+import { searchDreamingEvidenceInDb } from "./dreaming-capabilities";
+import { selectDreamingCheckMode } from "./dreaming-worker";
 import {
 	enqueueDreamingAttentionInTx,
 	getDreamingAttention,
@@ -1269,6 +1271,109 @@ describe("Dreaming", () => {
 		expect(probe.tokenLowerBound).toBe(0);
 		expect(probe.hasBacklog).toBeNull();
 		expect(probe.sourcesScanned).toBe(0);
+
+		const repeatedProbe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
+		expect(repeatedProbe).toMatchObject({ kind: "indeterminate", hasBacklog: null, sourcesScanned: 0 });
+		const evidence = searchDreamingEvidenceInDb(db as unknown as ReadDb, { agentId, limit: 20 });
+		expect(evidence.ok).toBe(true);
+		expect(JSON.stringify(evidence)).toContain("transcript:z-pending");
+	});
+
+	it("schedules an indeterminate backlog and surfaces distinct evidence beyond a duplicate reviewed page", async () => {
+		const agentId = "bounded-reviewed-pass";
+		const capturedAt = "2026-08-01T00:00:00.000Z";
+		for (let index = 0; index < 51; index += 1) {
+			const path = `imports/a-reviewed-${String(index).padStart(3, "0")}.md`;
+			const revision = "shared-reviewed-content";
+			seedArtifact(db, path, "same reviewed source content", revision, capturedAt, agentId);
+			db.prepare(
+				`INSERT INTO dreaming_evidence_reviews
+				 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision, reason, pass_id)
+				 VALUES (?, 'artifact', ?, ?, '', ?, 'reviewed', 'review-pass')`,
+			).run(agentId, path, capturedAt, revision);
+		}
+		seedArtifact(
+			db,
+			"imports/z-pending.md",
+			"eligible source beyond the candidate page",
+			"z-pending",
+			capturedAt,
+			agentId,
+		);
+		const now = Date.now();
+		const lastPassAt = new Date(now - 7 * 60 * 60 * 1_000).toISOString();
+		const cfg = defaultCfg({ tokenThreshold: 100_000, maxInterval: 6 * 60 * 60 * 1_000, backfillOnFirstRun: false });
+		accessor.withWriteTx((tx) => {
+			tx.prepare("INSERT INTO dreaming_state (agent_id, last_pass_at) VALUES (?, ?)").run(agentId, lastPassAt);
+			enqueueDreamingAttentionInTx(tx, {
+				agentId,
+				kind: "hygiene",
+				subjectRef: "entity:concurrent-hygiene",
+			});
+		});
+
+		const probe = await probeDreamingEpisodicBacklogInDb(db as unknown as ReadDb, agentId, 100_000, 50);
+		expect(probe).toMatchObject({ kind: "indeterminate", hasBacklog: null, sourcesScanned: 0 });
+		expect(await evaluateDreamingTrigger(accessor, cfg, agentId, probe, now)).toEqual({
+			trigger: true,
+			reason: "attention",
+		});
+
+		const hygieneMode = await selectDreamingCheckMode(accessor, [agentId], null);
+		expect(hygieneMode).toBe("incremental-hygiene");
+		const attention = getDreamingAttentionSnapshots(accessor, agentId);
+		expect(attention).toHaveLength(1);
+		accessor.withWriteTx((tx) => resolveDreamingAttentionInTx(tx, agentId, "resolved-before-pass", attention));
+		const hygieneNoOp = await runDreamingAgentPass(
+			accessor,
+			{
+				async run() {
+					throw new Error("A hygiene no-op must not invoke the agent");
+				},
+			},
+			cfg,
+			process.cwd(),
+			agentId,
+			[agentId],
+			hygieneMode,
+		);
+		expect(hygieneNoOp.summary).toBe("No hygiene attention to process");
+		expect((await getDreamingState(accessor, agentId)).lastPassAt).toBe(lastPassAt);
+		expect(await evaluateDreamingTrigger(accessor, cfg, agentId, probe, now)).toEqual({
+			trigger: true,
+			reason: "max-interval",
+		});
+
+		const contentMode = await selectDreamingCheckMode(accessor, [agentId], "hygiene");
+		expect(contentMode).toBe("incremental-content");
+
+		let surfacedRefs: string[] = [];
+		const result = await runDreamingAgentPass(
+			accessor,
+			{
+				async run(input) {
+					const search = input.tools.find((tool) => tool.name === "search_evidence");
+					if (!search) throw new Error("Missing search_evidence");
+					const response = (await search.execute("call", { agentId }, undefined, undefined, {} as never)) as {
+						content?: Array<{ text?: string }>;
+					};
+					const text = response.content?.[0]?.text;
+					if (text === undefined) throw new Error("Missing search_evidence result");
+					const listed = JSON.parse(text) as { items?: Array<{ sourceRef?: unknown }> };
+					surfacedRefs =
+						listed.items?.flatMap((item) => (typeof item.sourceRef === "string" ? [item.sourceRef] : [])) ?? [];
+					return { summary: "Reviewed pending evidence" };
+				},
+			},
+			cfg,
+			process.cwd(),
+			agentId,
+			[agentId],
+			contentMode,
+		);
+
+		expect(result.summary).toContain("Reviewed pending evidence");
+		expect(surfacedRefs).toContain("artifact:imports/z-pending.md");
 	});
 
 	it("avoids a backlog-wide sort when sampling a bounded probe", async () => {
