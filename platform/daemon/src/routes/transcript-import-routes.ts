@@ -1,7 +1,13 @@
 import { controlImport, createJob, createOwnerTranscriptImportStore } from "../transcript-import-store";
 import { DbOwnerError } from "../db-owner-client";
 import { randomUUID } from "node:crypto";
-import { addImportedSource, resolveDefaultBasePath, buildExportTranscriptRecord } from "@signet/core";
+import {
+	addImportedSource,
+	buildExportTranscriptRecord,
+	deterministicImportedSourceId,
+	loadSourcesConfig,
+	resolveDefaultBasePath,
+} from "@signet/core";
 import { Hono, type Context } from "hono";
 import { resolveDaemonAgentId } from "../agent-id";
 import { authConfig } from "./state";
@@ -321,9 +327,27 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 				{ operation: "sources.import.finalize.file", lane: "read" },
 			);
 			if (!file) return c.json({ error: "import is no longer staging" }, 409);
-			const releaseSourceMutation = beginSourceMutation(file.source_id);
+			const importKey = `${upload.jobId}:${upload.fileId}:${upload.generation}`;
+			const sources = loadSourcesConfig(resolveDefaultBasePath()).sources;
+			const replay = sources.find(
+				(source) =>
+					source.kind === "import" &&
+					source.providerSettings?.agentId === upload.agentId &&
+					source.providerSettings?.importKey === importKey,
+			);
+			const duplicate = sources.find(
+				(source) =>
+					source.kind === "import" &&
+					source.providerSettings?.agentId === upload.agentId &&
+					source.providerSettings?.contentHash === file.content_hash,
+			);
+			const sourceId =
+				replay?.id ??
+				(file.duplicate_mode === "reimport"
+					? `import:${file.content_hash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
+					: (duplicate?.id ?? deterministicImportedSourceId(file.content_hash, upload.agentId)));
+			const releaseSourceMutation = beginSourceMutation(sourceId);
 			if (releaseSourceMutation === undefined) return c.json({ error: SOURCE_OPERATION_IN_PROGRESS_ERROR }, 409);
-			let releaseAddedSourceMutation: (() => void) | undefined;
 			try {
 				const added = addImportedSource(
 					{
@@ -332,15 +356,13 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 						format: "jsonl",
 						agentId: upload.agentId,
 						duplicateMode: file.duplicate_mode,
-						importKey: `${upload.jobId}:${upload.fileId}:${upload.generation}`,
+						importKey,
+						sourceId,
 					},
 					resolveDefaultBasePath(),
 				);
 				if (!added.ok) return c.json({ error: added.error }, 400);
-				if (added.source.id !== file.source_id) {
-					releaseAddedSourceMutation = beginSourceMutation(added.source.id);
-					if (releaseAddedSourceMutation === undefined) throw new Error(SOURCE_OPERATION_IN_PROGRESS_ERROR);
-				}
+				if (added.source.id !== sourceId) throw new Error("Imported Source identity changed during finalization");
 				await bindTranscriptSource(upload, added.source.id);
 				return c.json(
 					{
@@ -352,7 +374,6 @@ export function registerTranscriptImportRoutes(parent: Hono): void {
 					201,
 				);
 			} finally {
-				releaseAddedSourceMutation?.();
 				releaseSourceMutation();
 			}
 		});

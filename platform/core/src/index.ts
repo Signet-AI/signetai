@@ -368,6 +368,7 @@ export {
 	addImportedSource,
 	addObsidianSource,
 	addWebSource,
+	deterministicImportedSourceId,
 	DEFAULT_DISCORD_DESKTOP_CACHE_PATH,
 	DEFAULT_DISCORD_MAX_ATTACHMENT_TEXT_BYTES,
 	DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL,
