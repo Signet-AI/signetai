@@ -17,7 +17,6 @@ export type WorkspaceSourceRepoLocalChanges = "none" | "generated-only" | "left-
 export interface WorkspaceSourceRepoSyncOptions {
 	readonly cloneIfMissing?: boolean;
 	readonly gitTimeoutMs?: number;
-	/** Preserve user-owned local changes in a verified Git stash before updating. */
 	readonly localChanges?: "skip" | "stash";
 	readonly remoteUrl?: string;
 	readonly repoDirName?: string;
