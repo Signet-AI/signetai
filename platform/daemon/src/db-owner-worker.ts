@@ -1,7 +1,7 @@
 import { dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { Database as BunDatabase } from "bun:sqlite";
 import { findSqliteVecExtension, vectorSearchWithMetadata } from "@signet/core";
 import {
@@ -195,9 +195,32 @@ export function runDbOwnerWorker(): void {
 			throw new DbOwnerCancellationRequested();
 		}
 		const commitMarker = process.env.SIGNET_DB_OWNER_TEST_COMMIT_STARTED;
-		if (commitMarker !== undefined) writeFileSync(commitMarker, "started\n");
+		const commitPauseMs = Number.parseInt(process.env.SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS ?? "0", 10);
+		const commitResultPauseMs = Number.parseInt(process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS ?? "0", 10);
+		const commitResultGate = process.env.SIGNET_DB_OWNER_TEST_COMMIT_RESULT_GATE;
+
+		if (commitMarker !== undefined) writeFileSync(commitMarker, commitPauseMs > 0 ? "waiting\n" : "started\n");
+		if (Number.isFinite(commitPauseMs) && commitPauseMs > 0) {
+			Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_PAUSE_MS");
+			wait(Math.min(commitPauseMs, 60_000));
+		}
 		db.exec("COMMIT");
 		if (context !== undefined) context.committed = true;
+		if (commitMarker !== undefined && Number.isFinite(commitPauseMs) && commitPauseMs > 0) {
+			writeFileSync(commitMarker, "completed\n");
+			Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_STARTED");
+		}
+		if (
+			Number.isFinite(commitResultPauseMs) &&
+			commitResultPauseMs > 0 &&
+			commitResultGate !== undefined &&
+			existsSync(commitResultGate)
+		) {
+			rmSync(commitResultGate, { force: true });
+			Reflect.deleteProperty(process.env, "SIGNET_DB_OWNER_TEST_COMMIT_RESULT_PAUSE_MS");
+			if (commitMarker !== undefined) writeFileSync(commitMarker, "result-wait\n");
+			wait(Math.min(commitResultPauseMs, 60_000));
+		}
 	};
 	const withBusyRetry = <Result>(operation: () => Result, context?: JobExecutionContext): Result => {
 		for (let attempt = 0; ; attempt += 1) {

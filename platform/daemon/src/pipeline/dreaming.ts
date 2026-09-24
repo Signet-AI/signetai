@@ -29,9 +29,11 @@ import {
 	ownerQueryAll,
 	ownerQueryOne,
 	ownerRunStatement,
+	runOwnerJob,
 	ownerChanges,
 	type DbOwnerMaintenance,
 } from "../db-owner-maintenance";
+import { DbOwnerDeadlineError, DbOwnerDiedError } from "../db-owner-client";
 import { DB_OWNER_MAX_WORK_UNITS } from "../db-owner-protocol";
 import { getDbOwnerForAccessor, runDbOwnerDomainOperation } from "../db-owner-runtime";
 import {
@@ -552,21 +554,46 @@ export async function createDreamingPassThroughOwner(
 	mode: DreamingMode,
 ): Promise<string> {
 	const id = randomUUID();
-	const handle = maintenance.owner.submit<{ readonly changes: number }>(
-		{
-			kind: "query",
-			statement: {
-				sql: `INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
-				 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))`,
-				params: [id, agentId, mode],
-				result: "run",
-			},
+	const request = {
+		kind: "query" as const,
+		statement: {
+			sql: `INSERT INTO dreaming_passes (id, agent_id, mode, status, started_at, created_at)
+			 VALUES (?, ?, ?, 'running', strftime('%Y-%m-%d %H:%M:%f', 'now'), strftime('%Y-%m-%d %H:%M:%f', 'now'))
+			 ON CONFLICT(id) DO NOTHING`,
+			params: [id, agentId, mode],
+			result: "run" as const,
 		},
-		{ operation: "dreaming.pass.create", lane: "maintenance", deadlineMs: 10_000, estimatedWorkUnits: 1 },
-	);
-	await handle.result;
-	dreamingLiveEvents.startPass({ passId: id, agentId, mode });
-	return id;
+	};
+	let creationError: DbOwnerDeadlineError | DbOwnerDiedError | undefined;
+	for (let attempt = 0; attempt < 2; attempt++) {
+		creationError = undefined;
+		try {
+			await runOwnerJob<{ readonly changes: number }>(
+				maintenance.owner,
+				request,
+				"dreaming.pass.create",
+				"maintenance",
+				{ deadlineMs: 10_000, estimatedWorkUnits: 1, waitForOwnerCompletionOnDeadline: true },
+			);
+		} catch (error) {
+			if (!(error instanceof DbOwnerDeadlineError || error instanceof DbOwnerDiedError)) throw error;
+			creationError = error;
+		}
+		const persisted = await ownerQueryOne<{ readonly id: string }>(
+			maintenance.owner,
+			"dreaming.pass.create.reconcile",
+			"SELECT id FROM dreaming_passes WHERE id = ?",
+			[id],
+			{ deadlineMs: 10_000, estimatedWorkUnits: 1 },
+		);
+		if (persisted !== undefined) {
+			dreamingLiveEvents.startPass({ passId: persisted.id, agentId, mode });
+			return persisted.id;
+		}
+		if (creationError === undefined) throw new Error("Dreaming pass creation did not persist its pass ID");
+		if (attempt === 1) throw creationError;
+	}
+	throw new Error("Dreaming pass creation exhausted its replay budget");
 }
 
 async function failDreamingPass(accessor: DbAccessor, passId: string, error: string): Promise<void> {
