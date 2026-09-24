@@ -31,7 +31,7 @@ export function buildBlogSearchItems(post: CollectionEntry<"blog">): SearchItem[
 			sectionTitle: "",
 			slug: post.id,
 			url: `/blog/${post.id}/`,
-			excerpt: normalizeText(post.body).slice(0, 300),
+			excerpt: normalizeText(post.body ?? "").slice(0, 300),
 		},
 	];
 }
