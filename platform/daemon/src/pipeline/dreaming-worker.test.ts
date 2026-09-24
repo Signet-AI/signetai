@@ -112,6 +112,11 @@ interface ScopeDelayOwner {
 	arm(durationMs: number): void;
 	limitPassCreate(deadlineMs: number): void;
 	passCreateJobId(): string | null;
+	delayPassCreateReconcile(deadlineMs: number, blockerDurationMs: number): void;
+	passCreateResult(): "pending" | "resolved" | "rejected" | null;
+	passCreateResults(): readonly ("pending" | "resolved" | "rejected")[];
+	passCreateIds(): readonly string[];
+	passCreateReconcileJobId(): string | null;
 	blocker(): DbOwnerJobHandle<{ readonly sleptMs: number }> | null;
 }
 
@@ -119,7 +124,13 @@ function createScopeDelayOwner(owner: DbOwnerClient): ScopeDelayOwner {
 	let armed = false;
 	let durationMs = 0;
 	let passCreateDeadlineMs: number | null = null;
+	let reconcileDelay: { readonly deadlineMs: number; readonly blockerDurationMs: number } | null = null;
+	let reconcileBlockerQueued = false;
 	let currentPassCreateJobId: string | null = null;
+	let currentPassCreateResult: "pending" | "resolved" | "rejected" | null = null;
+	let passCreateResults: Array<"pending" | "resolved" | "rejected"> = [];
+	let passCreateIds: string[] = [];
+	let currentReconcileJobId: string | null = null;
 	let blocker: DbOwnerJobHandle<{ readonly sleptMs: number }> | null = null;
 	const client: DbOwnerClient = {
 		start: () => owner.start(),
@@ -140,9 +151,46 @@ function createScopeDelayOwner(owner: DbOwnerClient): ScopeDelayOwner {
 			const submitOptions =
 				options.operation === "dreaming.pass.create" && passCreateDeadlineMs !== null
 					? { ...options, deadlineMs: passCreateDeadlineMs }
-					: options;
+					: options.operation === "dreaming.pass.create.reconcile" && reconcileDelay !== null
+						? { ...options, deadlineMs: reconcileDelay.deadlineMs }
+						: options;
 			const handle = owner.submit<Result>(request, submitOptions);
-			if (options.operation === "dreaming.pass.create") currentPassCreateJobId = handle.job.id;
+			if (options.operation === "dreaming.pass.create") {
+				currentPassCreateJobId = handle.job.id;
+				currentPassCreateResult = "pending";
+				const resultIndex = passCreateResults.push("pending") - 1;
+				if (request.kind === "query") {
+					const passId = request.statement.params?.[0];
+					if (typeof passId === "string") passCreateIds.push(passId);
+				}
+				void handle.result.then(
+					() => {
+						currentPassCreateResult = "resolved";
+						passCreateResults[resultIndex] = "resolved";
+					},
+					() => {
+						currentPassCreateResult = "rejected";
+						passCreateResults[resultIndex] = "rejected";
+					},
+				);
+				if (reconcileDelay !== null && !reconcileBlockerQueued) {
+					const delay = reconcileDelay;
+					reconcileBlockerQueued = true;
+					blocker = owner.submit<{ readonly sleptMs: number }>(
+						{ kind: "sleep", durationMs: delay.blockerDurationMs },
+						{
+							operation: "maintenance.test.dreaming-pass-reconcile-blocker",
+							lane: "maintenance",
+							workloadClass: "maintenance",
+							deadlineMs: delay.blockerDurationMs + 5_000,
+						},
+					);
+				}
+			}
+			if (options.operation === "dreaming.pass.create.reconcile") {
+				currentReconcileJobId = handle.job.id;
+				reconcileDelay = null;
+			}
 			return handle;
 		},
 		setWriteBlocked: (blocked: boolean) => owner.setWriteBlocked(blocked),
@@ -158,10 +206,23 @@ function createScopeDelayOwner(owner: DbOwnerClient): ScopeDelayOwner {
 			blocker = null;
 			armed = true;
 		},
-		limitPassCreate(deadlineMs: number) {
+		limitPassCreate(deadlineMs) {
 			passCreateDeadlineMs = deadlineMs;
 			currentPassCreateJobId = null;
 		},
+		delayPassCreateReconcile(deadlineMs, blockerDurationMs) {
+			reconcileDelay = { deadlineMs, blockerDurationMs };
+			reconcileBlockerQueued = false;
+			currentPassCreateResult = null;
+			passCreateResults = [];
+			passCreateIds = [];
+			currentReconcileJobId = null;
+			blocker = null;
+		},
+		passCreateResult: () => currentPassCreateResult,
+		passCreateResults: () => [...passCreateResults],
+		passCreateIds: () => [...passCreateIds],
+		passCreateReconcileJobId: () => currentReconcileJobId,
 		passCreateJobId: () => currentPassCreateJobId,
 		blocker: () => blocker,
 	};
@@ -1192,6 +1253,124 @@ describe("dreaming worker async trigger with a real DB owner", () => {
 			runningPassCount: 0,
 			createdPassStatus: "completed",
 			passId: expect.any(String),
+		});
+	}, 30_000);
+
+	it("returns an acknowledged pass without a reconciliation read", async () => {
+		const current = fixture;
+		if (current === null) throw new Error("real owner trigger fixture was not initialized");
+		const { maintenance, owner, scopeDelay, worker } = current;
+		scopeDelay.delayPassCreateReconcile(100, 500);
+		const firstOutcomePromise = observeTrigger(worker.triggerAsync("incremental"));
+		await waitFor(() => {
+			const blocker = scopeDelay.blocker();
+			return (
+				scopeDelay.passCreateResult() === "resolved" &&
+				blocker !== null &&
+				owner.health().activeJobId === blocker.job.id
+			);
+		}, 5_000);
+		const firstOutcome = await firstOutcomePromise;
+		const firstPassCreateResults = scopeDelay.passCreateResults();
+		const firstPassCreateIds = scopeDelay.passCreateIds();
+		const firstReconcileSubmitted = scopeDelay.passCreateReconcileJobId() !== null;
+		await worker.activePass?.catch(() => {});
+		const firstRows = await recallThroughDbOwner<{ readonly id: string; readonly status: string }>(
+			maintenance.owner,
+			"SELECT id, status FROM dreaming_passes ORDER BY created_at, id",
+		);
+
+		const secondOutcome = await observeTrigger(worker.triggerAsync("incremental"));
+		await worker.activePass?.catch(() => {});
+		const allRows = await recallThroughDbOwner<{ readonly id: string; readonly status: string }>(
+			maintenance.owner,
+			"SELECT id, status FROM dreaming_passes ORDER BY created_at, id",
+		);
+
+		expect({
+			passCreateResults: firstPassCreateResults,
+			passCreateIds: firstPassCreateIds,
+			reconcileSubmitted: firstReconcileSubmitted,
+			firstOutcome: firstOutcome.kind,
+			firstPassStatuses: firstRows.map((row) => row.status),
+			secondOutcome: secondOutcome.kind,
+			passCount: allRows.length,
+			runningPassCount: allRows.filter((row) => row.status === "running").length,
+			passIdsAreDistinct: allRows.length === 2 && allRows[0]?.id !== allRows[1]?.id,
+		}).toMatchObject({
+			passCreateResults: ["resolved"],
+			passCreateIds: [expect.any(String)],
+			reconcileSubmitted: false,
+			firstOutcome: "resolved",
+			firstPassStatuses: [expect.not.stringContaining("running")],
+			secondOutcome: "resolved",
+			passCount: 2,
+			runningPassCount: 0,
+			passIdsAreDistinct: true,
+		});
+	}, 30_000);
+
+	it("keeps a late-committed pass owned when its reconciliation read times out", async () => {
+		const initial = fixture;
+		if (initial === null) throw new Error("real owner trigger fixture was not initialized");
+		await closeRealOwnerTriggerFixture(initial);
+		fixture = await createRealOwnerTriggerFixture({ commitPauseMs: 1_000 });
+		const current = fixture;
+		const { maintenance, owner, ownerCommitMarker, scopeDelay, worker } = current;
+		scopeDelay.limitPassCreate(100);
+		scopeDelay.delayPassCreateReconcile(100, 500);
+		const firstOutcomePromise = observeTrigger(worker.triggerAsync("incremental"));
+		await waitFor(() => {
+			const blocker = scopeDelay.blocker();
+			return (
+				blocker !== null &&
+				scopeDelay.passCreateReconcileJobId() !== null &&
+				owner.health().activeJobId === blocker.job.id &&
+				existsSync(ownerCommitMarker) &&
+				readFileSync(ownerCommitMarker, "utf8").includes("completed")
+			);
+		}, 10_000);
+		const firstOutcome = await firstOutcomePromise;
+		const firstPassCreateResults = scopeDelay.passCreateResults();
+		const firstPassCreateIds = scopeDelay.passCreateIds();
+		const firstReconcileSubmitted = scopeDelay.passCreateReconcileJobId() !== null;
+		await worker.activePass?.catch(() => {});
+		const firstRows = await recallThroughDbOwner<{ readonly id: string; readonly status: string }>(
+			maintenance.owner,
+			"SELECT id, status FROM dreaming_passes ORDER BY created_at, id",
+		);
+
+		const secondOutcome = await observeTrigger(worker.triggerAsync("incremental"));
+		await worker.activePass?.catch(() => {});
+		const allRows = await recallThroughDbOwner<{ readonly id: string; readonly status: string }>(
+			maintenance.owner,
+			"SELECT id, status FROM dreaming_passes ORDER BY created_at, id",
+		);
+
+		expect({
+			passCreateResults: firstPassCreateResults,
+			passCreateIds: firstPassCreateIds,
+			passCreateIdsAreSame:
+				firstPassCreateIds.length === 2 && firstPassCreateIds.every((id) => id === firstPassCreateIds[0]),
+			reconcileSubmitted: firstReconcileSubmitted,
+			commitCompleted: existsSync(ownerCommitMarker) && readFileSync(ownerCommitMarker, "utf8").includes("completed"),
+			firstOutcome: firstOutcome.kind,
+			firstPassStatuses: firstRows.map((row) => row.status),
+			secondOutcome: secondOutcome.kind,
+			passCount: allRows.length,
+			runningPassCount: allRows.filter((row) => row.status === "running").length,
+			passIdsAreDistinct: allRows.length === 2 && allRows[0]?.id !== allRows[1]?.id,
+		}).toMatchObject({
+			passCreateResults: ["rejected", "resolved"],
+			passCreateIds: [expect.any(String), expect.any(String)],
+			passCreateIdsAreSame: true,
+			commitCompleted: true,
+			firstOutcome: "resolved",
+			firstPassStatuses: [expect.not.stringContaining("running")],
+			secondOutcome: "resolved",
+			passCount: 2,
+			runningPassCount: 0,
+			passIdsAreDistinct: true,
 		});
 	}, 30_000);
 
