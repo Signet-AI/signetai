@@ -45,6 +45,24 @@ function fixedKeyring(state: SecretKeyringState): SecretKeyringAdapter {
 	};
 }
 
+async function useNativeModule(directory: string, modulePath: string): Promise<void> {
+	const busctl = join(directory, "busctl");
+	const helperPath = join(directory, "keyring-helper.ts");
+	await writeFile(busctl, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+	const childModule = new URL("./secrets-keyring-child.ts", import.meta.url).href;
+	await writeFile(
+		helperPath,
+		[
+			`import { runSecretKeyringChild } from ${JSON.stringify(childModule)};`,
+			`process.env.PATH = ${JSON.stringify(directory)} + ${JSON.stringify(delimiter)} + (process.env.PATH ?? "");`,
+			'process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/signet-test";',
+			`process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH = ${JSON.stringify(modulePath)};`,
+			"await runSecretKeyringChild();",
+		].join("\n"),
+	);
+	setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 2_000 });
+}
+
 describe("native secret keyring containment", () => {
 	test("kills and reaps a helper that blocks native keyring work without blocking timers", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-helper-"));
@@ -93,27 +111,27 @@ Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-missing-module-"));
 		directories.push(directory);
 		process.env.SIGNET_PATH = directory;
-		const busctl = join(directory, "busctl");
-		const helperPath = join(directory, "missing-module-helper.ts");
-		await writeFile(busctl, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-		const childModule = new URL("./secrets-keyring-child.ts", import.meta.url).href;
-		await writeFile(
-			helperPath,
-			[
-				`import { runSecretKeyringChild } from ${JSON.stringify(childModule)};`,
-				`process.env.PATH = ${JSON.stringify(directory)} + ${JSON.stringify(delimiter)} + (process.env.PATH ?? "");`,
-				'process.env.DBUS_SESSION_BUS_ADDRESS = "unix:path=/signet-test";',
-				`process.env.SIGNET_KEYRING_NATIVE_MODULE_PATH = ${JSON.stringify(join(directory, "missing-keyring.node"))};`,
-				"await runSecretKeyringChild();",
-			].join("\n"),
-		);
-		setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 2_000 });
+		await useNativeModule(directory, join(directory, "missing-keyring.node"));
 
 		const result = await getSecretKeyring(directory).get();
 		expect(result).toMatchObject({ state: "unavailable" });
 		await putLocalSecret("MISSING_MODULE_KEY", "local-value");
 		expect(await getLocalSecretValue("MISSING_MODULE_KEY")).toBe("local-value");
 		expect(await getLocalSecretProviderHealth()).toMatchObject({ status: "degraded" });
+	});
+
+	test("treats native module loader failures as unavailable before parsing their message", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-loader-error-"));
+		directories.push(directory);
+		const modulePath = join(directory, "misleading-keyring-module.cjs");
+		await writeFile(
+			modulePath,
+			'const error = new Error("native keyring module does not exist"); error.code = "MODULE_NOT_FOUND"; throw error;\n',
+		);
+		await useNativeModule(directory, modulePath);
+
+		const result = await getSecretKeyring(directory).get();
+		expect(result).toMatchObject({ state: "unavailable" });
 	});
 
 	test("keeps keyring-backed stores closed when the keyring is unavailable", async () => {
