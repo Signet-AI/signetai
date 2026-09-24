@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-24
-- Bug fixes: bound constellation work.
+- Bug fixes: preserve source changes during sync; bound constellation work.
 
 ### 2026-09-23
 - Bug fixes: handle empty signing arrays; stop vacuum work on shutdown; reject stale lifecycle records; harden lifecycle attribution; force fatal exit during flush; preserve fatal shutdowns; bound startup recovery and shutdown; pace startup recovery and shutdown; tolerate slow Dream attach lookups; clarify dream attach timeout errors; keep comment cleanup security-safe; parse production comments structurally; recognize shell comment operators; preserve scalar payload comments; refresh purge line tokens; preserve only active directives; normalize stripped comment whitespace.
@@ -31,6 +31,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: await workload diagnostics routes; persist search across navigation.
 
 ## Release Ledger
+
+## [0.226.21] - 2026-09-24
+
+Release summary: 1 bug fix.
+Tag range: `v0.226.20..v0.226.21`.
+
+### Bug Fixes
+
+- **desktop**: preserve source changes during sync
 
 ## [0.226.20] - 2026-09-24
 
