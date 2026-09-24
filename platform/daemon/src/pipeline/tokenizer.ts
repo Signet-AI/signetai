@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { get_encoding, init } from "tiktoken/init";
 
 const tokenizerWasmOverride = process.env.SIGNET_TIKTOKEN_WASM_PATH?.trim();
+const allowMissingTokenizer = process.env.SIGNET_MCP_STDIO === "1";
 const bundledTokenizerWasmPath = join(dirname(fileURLToPath(import.meta.url)), "tiktoken_bg.wasm");
 let tokenizerWasmPath = "";
 let tok: ReturnType<typeof get_encoding> | null = null;
@@ -25,12 +26,10 @@ if (tokenizerWasmPath) {
 	await init(async (imports) => WebAssembly.instantiate(await readFile(tokenizerWasmPath), imports));
 	tok = get_encoding("cl100k_base");
 } else {
+	if (!allowMissingTokenizer) throw new Error("Exact tokenization is unavailable: tiktoken WASM is not installed");
 	// The MCP stdio adapter can answer its protocol handshake without the
 	// optional tokenizer asset. Operations that require exact tokenization
 	// fail explicitly through requireTokenizer() below.
-	//
-	// Do not catch initialization or WASM errors: a present but broken asset is
-	// a startup failure, not an unsupported optional dependency.
 	tokenizerWasmPath = "";
 }
 const decoder = new TextDecoder("utf-8", { fatal: true });

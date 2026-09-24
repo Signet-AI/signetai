@@ -14,7 +14,7 @@
  * adapter itself is plain JavaScript and has no Bun-specific imports.
  */
 
-import { copyFileSync, existsSync } from "node:fs";
+import { copyFileSync, existsSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
@@ -41,4 +41,8 @@ if (!existsSync(outfile)) {
 	process.exit(1);
 }
 copyFileSync(tokenizerWasmSource, tokenizerWasm);
+if (!existsSync(tokenizerWasm) || !statSync(tokenizerWasm).isFile() || statSync(tokenizerWasm).size === 0) {
+	console.error(`build-signet-mcp: tokenizer WASM was not staged at ${tokenizerWasm}`);
+	process.exit(1);
+}
 console.log(`Built signet-mcp stdio bundle: ${outfile}`);
