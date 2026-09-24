@@ -47,13 +47,16 @@ import {
 	consumeCanceledSourceIndexJob,
 	failSourceIndexJob,
 	getSourceIndexJob,
+	getSourceIndexRuns,
 	invalidateSourceIndexJob,
 	isCurrentSourceIndexJob,
 	isSourceIndexInFlight,
 	markSourceIndexInFlight,
 	markSourceIndexJobRunning,
 	pauseSourceIndexJob,
+	trackSourceIndexRun,
 	updateSourceIndexJobProgress,
+	waitForSourceIndexRuns,
 } from "../source-index-progress";
 import {
 	recordSourceConnected,
@@ -165,7 +168,6 @@ export interface RegisterSourcesRoutesDeps {
 	readonly importSourceSnapshot?: typeof importSourceSnapshot;
 }
 
-const sourceIndexRuns = new Set<{ readonly sourceId: string; readonly jobId: string; readonly run: Promise<void> }>();
 const sourceIndexTimers = new Set<ReturnType<typeof setTimeout>>();
 const routeSourceJobs = new Map<string, { readonly job: SourceIndexJob; readonly input: SourceIndexJobInput }>();
 let sourceIndexStopping = false;
@@ -188,8 +190,7 @@ export async function stopSourceIndexJobs(): Promise<void> {
 		});
 		invalidateSourceIndexJob(sourceId);
 	}
-	await Promise.allSettled([...sourceIndexRuns].map(({ run }) => run));
-	sourceIndexRuns.clear();
+	await waitForSourceIndexRuns("route");
 	routeSourceJobs.clear();
 }
 
@@ -647,14 +648,53 @@ function sourceIdForGitHub(repos: readonly string[]): string {
 }
 
 function releaseSourceDeletionAfterIndexRuns(sourceId: string, release: () => void): void {
-	const runs = [...sourceIndexRuns]
-		.filter((activeRun) => activeRun.sourceId === sourceId)
-		.map((activeRun) => activeRun.run);
+	const runs = getSourceIndexRuns(sourceId).map((activeRun) => activeRun.run);
 	if (runs.length === 0) {
 		release();
 		return;
 	}
 	void Promise.allSettled(runs).then(release);
+}
+
+export async function finalizeCancelledSourceIndexJob(input: {
+	readonly source: SignetSourceEntry;
+	readonly jobId: string;
+	readonly agentsDir: string;
+	readonly agentId: string;
+	readonly purgeNativeSource?: typeof purgeNativeMemorySourceArtifacts;
+}): Promise<void> {
+	if (!consumeCanceledSourceIndexJob(input.jobId) || sourceIndexStopping) return;
+	const tombstone = loadSourceDeletionTombstones(input.agentsDir).find(
+		(entry) =>
+			entry.source.id === input.source.id &&
+			entry.source.generation === input.source.generation &&
+			entry.agentId === input.agentId,
+	);
+	if (!tombstone) return;
+	const configuredSource = loadSourcesConfig(input.agentsDir).sources.find(
+		(configured) => configured.id === input.source.id,
+	);
+	if (configuredSource !== undefined && configuredSource.generation !== input.source.generation) return;
+	const provider = getSourceProvider(input.source.kind);
+	try {
+		await removeSourceLifecycleState(input.source, input.agentId);
+		await purgeSourceOwnedRows({ sourceId: input.source.id, agentId: input.agentId });
+		if (provider) {
+			await purgeSource(
+				provider,
+				input.source,
+				input.agentId,
+				input.purgeNativeSource ?? purgeNativeMemorySourceArtifacts,
+			);
+		}
+		const removed = removeSourceIfGeneration(input.source.id, input.source.generation, input.agentsDir);
+		if (!removed.ok) throw new Error(removed.error);
+		clearSourceDeletionTombstone(input.source, input.agentId, input.agentsDir);
+	} catch (error) {
+		logger.warn("system", `Source deletion finalization failed for source ${input.source.id}; deferring to next boot`, {
+			error: error instanceof Error ? error.message : String(error),
+		});
+	}
 }
 
 function findConfiguredSource(
@@ -876,17 +916,17 @@ async function runSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob
 		});
 	} finally {
 		await bridge?.close().catch(() => undefined);
-		if (consumeCanceledSourceIndexJob(job.id) && !sourceIndexStopping) {
-			const configuredSource = loadSourcesConfig(input.agentsDir).sources.find(
-				(configured) => configured.id === input.source.id,
-			);
-			if (configuredSource === undefined || configuredSource.generation === input.source.generation) {
-				const provider = getSourceProvider(input.source.kind);
-				if (provider) await purgeSource(provider, input.source, resolveDaemonAgentId(), input.purgeNativeSource);
-				clearSourceDeletionTombstone(input.source, resolveDaemonAgentId(), input.agentsDir);
-			}
+		try {
+			await finalizeCancelledSourceIndexJob({
+				source: input.source,
+				jobId: job.id,
+				agentsDir: input.agentsDir,
+				agentId,
+				purgeNativeSource: input.purgeNativeSource,
+			});
+		} finally {
+			clearSourceIndexInFlight(input.source.id);
 		}
-		clearSourceIndexInFlight(input.source.id);
 	}
 }
 
@@ -896,11 +936,7 @@ function scheduleSourceIndexJob(input: SourceIndexJobInput, job: SourceIndexJob,
 		sourceIndexTimers.delete(timer);
 		if (!isCurrentSourceIndexJob(input.source.id, job.id)) return;
 		const run = runSourceIndexJob(input, job);
-		const activeRun = { sourceId: input.source.id, jobId: job.id, run };
-		sourceIndexRuns.add(activeRun);
-		void run.finally(() => {
-			sourceIndexRuns.delete(activeRun);
-		});
+		trackSourceIndexRun({ sourceId: input.source.id, jobId: job.id, kind: "route", run });
 	}, delayMs);
 	sourceIndexTimers.add(timer);
 	timer.unref?.();
