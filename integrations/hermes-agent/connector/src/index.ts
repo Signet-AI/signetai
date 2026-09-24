@@ -142,14 +142,10 @@ function openDirectoryNoFollow(path: string): number {
 function closeDirectory(fd: number): void {
 	try {
 		closeSync(fd);
-	} catch {
-		// Preserve the original filesystem error when cleanup also fails.
-	}
+	} catch {}
 }
 
 const SECURE_REMOVAL_CHANGED_STATUS = 75;
-// Node exposes descriptor-relative reads poorly and has no unlinkat/rmdirat wrapper.
-// Python's dir_fd APIs provide the atomic parent-relative removal primitive needed here.
 const SECURE_REMOVAL_SCRIPT = [
 	"import os, sys",
 	"expected_dev = int(sys.argv[1])",
@@ -987,9 +983,7 @@ function parseInstallMarker(content: string): InstallMarker | null {
 		) {
 			return parsed as InstallMarker;
 		}
-	} catch {
-		// Invalid marker contents are treated as unowned.
-	}
+	} catch {}
 	return null;
 }
 
