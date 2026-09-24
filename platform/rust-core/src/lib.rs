@@ -2920,6 +2920,7 @@ fn execute_operation(
             workspace_id,
             source_id,
         } => {
+            let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
             let generation: Option<i64> = None;
             let tx = connection.transaction()?;
@@ -2955,6 +2956,7 @@ fn execute_operation(
             source_id,
             generation,
         } => {
+            let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
             let tx = connection.transaction()?;
             let current: Option<i64> = tx
