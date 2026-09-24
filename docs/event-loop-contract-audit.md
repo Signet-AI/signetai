@@ -222,7 +222,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/hooks-routes.ts:1130` (withReadDb)
 - `routes/hooks-routes.ts:1160` (withWriteTx)
 - `routes/hooks-routes.ts:1285` (withWriteTx)
-- `routes/import-routes.ts:334` (withReadDb)
+- `db:imports.has-indexed-source` (withReadDb)
 - `routes/knowledge-routes.ts:314` (withReadDbAsync)
 - `routes/knowledge-routes.ts:487` (withReadDbAsync)
 - `routes/knowledge-routes.ts:504` (withReadDbAsync)
