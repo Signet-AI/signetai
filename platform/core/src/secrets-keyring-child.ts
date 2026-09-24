@@ -17,19 +17,10 @@ function safeError(error: unknown): string {
 }
 
 function classify(error: unknown): string {
-	const code =
-		typeof error === "object" && error !== null && "code" in error && typeof error.code === "string" ? error.code : "";
-	const detail = `${code} ${safeError(error)}`.toLowerCase();
+	const detail = safeError(error).toLowerCase();
 	if (/noentry|no entry|no such item|item.*not found|credential.*missing|does not exist/.test(detail)) return "missing";
 	if (/locked|interaction|required|authfailed|authentication|islocked|prompt/.test(detail)) return "locked";
 	if (/permission|access denied|denied/.test(detail)) return "permission-denied";
-	if (
-		code === "MODULE_NOT_FOUND" ||
-		code === "ERR_MODULE_NOT_FOUND" ||
-		code === "ERR_DLOPEN_FAILED" ||
-		/cannot find (?:module|package|native binding)/.test(detail)
-	)
-		return "unavailable";
 	if (/unsupported|not implemented|dbus|secret service|keyutils|connection|unavailable|no such file/.test(detail))
 		return "unavailable";
 	return "corrupt";
@@ -87,7 +78,12 @@ async function readRequest(): Promise<SecretKeyringChildRequest> {
 async function execute(request: SecretKeyringChildRequest): Promise<unknown> {
 	const unavailable = linuxAvailability();
 	if (unavailable !== null) return unavailable;
-	const module = loadModule();
+	let module: typeof import("@napi-rs/keyring");
+	try {
+		module = loadModule();
+	} catch (error) {
+		return { state: "unavailable", message: safeError(error) };
+	}
 	const entry = new (module.AsyncEntry as typeof AsyncEntry)(request.service, request.account);
 	if (request.op === "set") {
 		await entry.setPassword(request.value ?? "");
