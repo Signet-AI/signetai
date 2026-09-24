@@ -69,6 +69,7 @@ interface WorkingTreeStatus {
 	readonly hasGeneratedChanges: boolean;
 	readonly hasUnmergedChanges: boolean;
 	readonly userPaths: readonly string[];
+	readonly generatedPaths: readonly string[];
 }
 
 interface LocalChangesMetadata {
@@ -292,7 +293,23 @@ function finalizeFetchedRepoWith(
 		};
 
 		if (!workingTree.hasUserChanges) {
-			return continueFetchedRepoWith(run, repoPath, state, timeoutMs, generatedOnlyMetadata);
+			return continueFetchedRepoWith(
+				run,
+				repoPath,
+				state,
+				timeoutMs,
+				generatedOnlyMetadata,
+				workingTree.hasGeneratedChanges
+					? () =>
+							prepareGeneratedChangesForUpdateWith(
+								run,
+								repoPath,
+								timeoutMs,
+								workingTree.generatedPaths,
+								generatedOnlyMetadata,
+							)
+					: undefined,
+			);
 		}
 
 		if (localChangesMode !== "stash") {
@@ -323,7 +340,7 @@ function finalizeFetchedRepoWith(
 		}
 
 		return continueFetchedRepoWith(run, repoPath, state, timeoutMs, localChangesMetadata, () =>
-			prepareLocalChangesForUpdateWith(run, repoPath, timeoutMs, workingTree.userPaths),
+			prepareLocalChangesForUpdateWith(run, repoPath, timeoutMs, workingTree.userPaths, workingTree.generatedPaths),
 		);
 	});
 }
@@ -421,6 +438,7 @@ function prepareLocalChangesForUpdateWith(
 	repoPath: string,
 	timeoutMs: number,
 	userPaths: readonly string[],
+	generatedPaths: readonly string[],
 ): MaybePromise<LocalChangesPreparation> {
 	return flatMapMaybePromise(createAutoStashWith(run, repoPath, timeoutMs, userPaths), (stash) => {
 		if (stash.ok === false) {
@@ -435,18 +453,46 @@ function prepareLocalChangesForUpdateWith(
 			localChanges: "stashed",
 			stashRef: stash.stashRef,
 		};
-		return flatMapMaybePromise(readWorkingTreeStatusWith(run, repoPath, timeoutMs), (afterStash) => {
-			if (!afterStash.statusReadable || afterStash.hasUserChanges) {
-				return {
-					ok: false,
-					message: `verified local-change stash ${stash.stashRef} did not leave the source checkout clean; the stash was kept`,
-					metadata: stashedMetadata,
-				};
-			}
+		return flatMapMaybePromise(
+			prepareGeneratedChangesForUpdateWith(run, repoPath, timeoutMs, generatedPaths, stashedMetadata),
+			(preparation) => {
+				if (!preparation.ok) return preparation;
+				return flatMapMaybePromise(readWorkingTreeStatusWith(run, repoPath, timeoutMs), (afterStash) => {
+					if (!afterStash.statusReadable || afterStash.hasUserChanges || afterStash.generatedPaths.length > 0) {
+						return {
+							ok: false,
+							message: `verified local-change stash ${stash.stashRef} did not leave the source checkout clean; the stash was kept`,
+							metadata: stashedMetadata,
+						};
+					}
 
-			return { ok: true, metadata: stashedMetadata };
-		});
+					return { ok: true, metadata: stashedMetadata };
+				});
+			},
+		);
 	});
+}
+
+function prepareGeneratedChangesForUpdateWith(
+	run: GitRunner,
+	repoPath: string,
+	timeoutMs: number,
+	generatedPaths: readonly string[],
+	metadata: LocalChangesMetadata,
+): MaybePromise<LocalChangesPreparation> {
+	const pathspecs = generatedPaths.map((path) => `:(literal)${path}`);
+	if (pathspecs.length === 0) return { ok: true, metadata };
+	return mapMaybePromise(
+		run(["restore", "--source=HEAD", "--staged", "--worktree", "--", ...pathspecs], repoPath, timeoutMs),
+		(result) =>
+			result.ok
+				? { ok: true, metadata }
+				: {
+						ok: false,
+						message: `failed to reset generated build outputs before updating Signet source checkout: ${readGitError(result, timeoutMs)}`,
+						metadata,
+					},
+	);
 }
 
 function isGitAvailable(timeoutMs: number): boolean {
@@ -1020,6 +1066,7 @@ function readWorkingTreeStatusWith(
 					hasGeneratedChanges: false,
 					hasUnmergedChanges: false,
 					userPaths: [],
+					generatedPaths: [],
 				};
 			}
 
@@ -1028,6 +1075,7 @@ function readWorkingTreeStatusWith(
 			let hasGeneratedChanges = false;
 			let hasUnmergedChanges = false;
 			const userPaths: string[] = [];
+			const generatedPaths: string[] = [];
 			for (const line of result.stdout
 				.split("\n")
 				.map((line) => line.trimEnd())
@@ -1039,6 +1087,8 @@ function readWorkingTreeStatusWith(
 				}
 				if (isGeneratedSourceRepoStatusLine(line)) {
 					hasGeneratedChanges = true;
+					const path = parsePorcelainStatusPath(line);
+					if (path && line.slice(0, 2) !== "??") generatedPaths.push(path);
 					continue;
 				}
 				hasUserChanges = true;
@@ -1050,7 +1100,7 @@ function readWorkingTreeStatusWith(
 				}
 			}
 
-			return { statusReadable, hasUserChanges, hasGeneratedChanges, hasUnmergedChanges, userPaths };
+			return { statusReadable, hasUserChanges, hasGeneratedChanges, hasUnmergedChanges, userPaths, generatedPaths };
 		},
 	);
 }
@@ -1064,6 +1114,7 @@ const GENERATED_SOURCE_REPO_PATH_PREFIXES = [
 	"surfaces/desktop/dist/",
 	"surfaces/desktop/release/",
 	"surfaces/desktop/resources/",
+	"integrations/forge/connector/dist/",
 ];
 
 const GENERATED_SOURCE_REPO_PATH_PATTERNS = [/^platform\/daemon\/anydoc\.[^/]+\.node$/];
