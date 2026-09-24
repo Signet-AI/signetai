@@ -43,6 +43,7 @@ function seedAttribute(input: {
 	readonly status?: "active" | "superseded";
 	readonly kind?: "attribute" | "constraint" | "claim";
 	readonly updatedAt?: string;
+	readonly importance?: number;
 }): void {
 	const updatedAt = input.updatedAt ?? "2026-04-19T00:00:00.000Z";
 	getDbAccessor().withWriteTx((db) => {
@@ -50,7 +51,7 @@ function seedAttribute(input: {
 			`INSERT INTO entity_attributes
 			 (id, aspect_id, agent_id, kind, content, normalized_content, group_key, claim_key,
 			  confidence, importance, status, created_at, updated_at)
-			 VALUES (?, 'aspect-food', 'default', ?, ?, ?, ?, ?, 0.9, 0.7, ?, ?, ?)`,
+			 VALUES (?, 'aspect-food', 'default', ?, ?, ?, ?, ?, 0.9, ?, ?, ?, ?)`,
 		).run(
 			input.id,
 			input.kind ?? "attribute",
@@ -58,6 +59,7 @@ function seedAttribute(input: {
 			input.content.toLowerCase(),
 			input.groupKey,
 			input.claimKey,
+			input.importance ?? 0.7,
 			input.status ?? "active",
 			updatedAt,
 			updatedAt,
@@ -292,7 +294,7 @@ describe("knowledge graph navigation", () => {
 		expect(tree?.items[0]?.groups[0]?.claims[0]?.preview).toBe("Nicholai currently prefers Temaki Den.");
 	});
 
-	test("merges null and explicit general-group claim previews", async () => {
+	test("merges null and explicit general-group claim previews in tree and paged lists", async () => {
 		dbPath = makeDbPath();
 		initDbAccessor(dbPath);
 		seedEntity();
@@ -300,15 +302,16 @@ describe("knowledge graph navigation", () => {
 			id: "attr-general-null",
 			groupKey: null,
 			claimKey: "favorite_general",
-			content: "Older general-group value",
-			updatedAt: "2026-04-18T00:00:00.000Z",
+			content: "Newer lower-priority general-group value",
+			updatedAt: "2026-04-19T00:00:00.000Z",
 		});
 		seedAttribute({
 			id: "attr-general-explicit",
 			groupKey: "general",
 			claimKey: "favorite_general",
-			content: "Newer general-group value",
-			updatedAt: "2026-04-19T00:00:00.000Z",
+			content: "Higher-priority explicit general-group value",
+			updatedAt: "2026-04-18T00:00:00.000Z",
+			importance: 0.95,
 		});
 
 		const tree = await getEntityKnowledgeTree(getDbAccessor(), {
@@ -323,7 +326,19 @@ describe("knowledge graph navigation", () => {
 		const general = tree?.items[0]?.groups.find((group) => group.groupKey === "general");
 		expect(general?.claims).toHaveLength(1);
 		expect(general?.claims[0]?.attributeCount).toBe(2);
-		expect(general?.claims[0]?.preview).toBe("Newer general-group value");
+		expect(general?.claims[0]?.preview).toBe("Higher-priority explicit general-group value");
+
+		const claims = await listEntityClaims(getDbAccessor(), {
+			agentId: "default",
+			entity: "Nicholai",
+			aspect: "food",
+			group: "general",
+			limit: 50,
+			offset: 0,
+		});
+		expect(claims?.items).toHaveLength(1);
+		expect(claims?.items[0]?.attributeCount).toBe(2);
+		expect(claims?.items[0]?.preview).toBe("Higher-priority explicit general-group value");
 	});
 
 	test("loads aspects, groups, and claims in a fixed number of read statements", async () => {
