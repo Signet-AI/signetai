@@ -503,6 +503,7 @@ export interface EntityTreeGroup {
 	readonly claimCount: number;
 	readonly latestUpdatedAt: string | null;
 	readonly claims: readonly EntityTreeClaim[];
+	readonly claimsHasMore: boolean;
 }
 
 export interface EntityTreeAspect {
@@ -521,6 +522,7 @@ export interface EntityKnowledgeTree {
 		readonly maxAspects: number;
 		readonly maxGroups: number;
 		readonly maxClaims: number;
+		readonly maxTotalClaims: number;
 		readonly depth: number;
 	};
 }
@@ -776,6 +778,210 @@ export async function getEntityAspectsByName(
 	};
 }
 
+type MutableEntityTreeGroup = {
+	groupKey: string;
+	attributeCount: number;
+	constraintCount: number;
+	claimCount: number;
+	latestUpdatedAt: string | null;
+	claims: EntityTreeClaim[];
+};
+
+function readEntityTreeGroups(
+	db: ReadDb,
+	params: {
+		readonly agentId: string;
+		readonly aspectRows: readonly Record<string, unknown>[];
+		readonly maxGroups: number;
+		readonly maxClaims: number;
+		readonly maxTotalClaims: number;
+		readonly depth: number;
+	},
+): ReadonlyMap<string, readonly EntityTreeGroup[]> {
+	if (params.depth < 2 || params.aspectRows.length === 0) return new Map<string, readonly EntityTreeGroup[]>();
+	const groupsByAspect = new Map<string, Map<string, MutableEntityTreeGroup>>();
+
+	const aspectValues = params.aspectRows.map(() => "(?, ?)").join(", ");
+	const aspectParams = params.aspectRows.flatMap((row, index) => [row.id, index]);
+	const groupCtes = `WITH selected_aspects(aspect_id, aspect_rank) AS (VALUES ${aspectValues}),
+		group_stats AS (
+			SELECT
+				sa.aspect_rank,
+				ea.aspect_id,
+				COALESCE(ea.group_key, 'general') AS group_key,
+				COUNT(DISTINCT CASE WHEN ea.kind = 'attribute' AND ea.status = 'active' THEN ea.id END) AS attribute_count,
+				COUNT(DISTINCT CASE WHEN ea.kind = 'constraint' AND ea.status = 'active' THEN ea.id END) AS constraint_count,
+				COUNT(DISTINCT ea.claim_key) AS claim_count,
+				MAX(ea.updated_at) AS latest_updated_at
+			FROM selected_aspects sa
+			JOIN entity_attributes ea ON ea.aspect_id = sa.aspect_id
+			WHERE ea.agent_id = ? AND ea.status != 'deleted'
+			GROUP BY sa.aspect_rank, ea.aspect_id, COALESCE(ea.group_key, 'general')
+		),
+		ranked_groups AS (
+			SELECT group_stats.*,
+				ROW_NUMBER() OVER (
+					PARTITION BY aspect_id
+					ORDER BY attribute_count DESC, constraint_count DESC, claim_count DESC, group_key ASC
+				) AS group_rank
+			FROM group_stats
+		),
+		selected_groups AS (
+			SELECT * FROM ranked_groups WHERE group_rank <= ?
+		)`;
+	const groupSelect = `SELECT
+		sg.aspect_id,
+		sg.group_key,
+		sg.attribute_count AS group_attribute_count,
+		sg.constraint_count AS group_constraint_count,
+		sg.claim_count AS group_claim_count,
+		sg.latest_updated_at AS group_latest_updated_at`;
+	const rows =
+		params.depth >= 3
+			? (db
+					.prepare(
+						`${groupCtes},
+						 claim_stats AS (
+							SELECT
+								ea.aspect_id,
+								COALESCE(ea.group_key, 'general') AS group_key,
+								ea.claim_key,
+								COUNT(DISTINCT CASE WHEN ea.kind = 'attribute' THEN ea.id END) AS attribute_count,
+								COUNT(DISTINCT CASE WHEN ea.kind = 'constraint' THEN ea.id END) AS constraint_count,
+								COUNT(DISTINCT CASE WHEN ea.status = 'active' THEN ea.id END) AS active_count,
+								COUNT(DISTINCT CASE WHEN ea.status = 'superseded' THEN ea.id END) AS superseded_count,
+								MAX(ea.updated_at) AS latest_updated_at
+							FROM entity_attributes ea
+							JOIN selected_groups sg ON sg.aspect_id = ea.aspect_id
+								AND sg.group_key = COALESCE(ea.group_key, 'general')
+							WHERE ea.agent_id = ?
+								AND ea.aspect_id IN (SELECT aspect_id FROM selected_aspects)
+								AND ea.claim_key IS NOT NULL
+								AND ea.status != 'deleted'
+							GROUP BY ea.aspect_id, COALESCE(ea.group_key, 'general'), ea.claim_key
+						),
+						claim_previews AS (
+							SELECT aspect_id, group_key, claim_key, content
+							FROM (
+								SELECT
+									ea.aspect_id,
+									COALESCE(ea.group_key, 'general') AS group_key,
+									ea.claim_key,
+									ea.content,
+									ROW_NUMBER() OVER (
+										PARTITION BY ea.aspect_id, COALESCE(ea.group_key, 'general'), ea.claim_key
+										ORDER BY ea.importance DESC, ea.updated_at DESC, ea.id ASC
+									) AS preview_rank
+								FROM entity_attributes ea
+								JOIN selected_groups sg ON sg.aspect_id = ea.aspect_id
+									AND sg.group_key = COALESCE(ea.group_key, 'general')
+								WHERE ea.agent_id = ?
+									AND ea.aspect_id IN (SELECT aspect_id FROM selected_aspects)
+									AND ea.claim_key IS NOT NULL
+									AND ea.status = 'active'
+							)
+							WHERE preview_rank = 1
+						),
+						ranked_claims AS (
+							SELECT claim_stats.*, claim_previews.content AS preview,
+								ROW_NUMBER() OVER (
+									PARTITION BY claim_stats.aspect_id, claim_stats.group_key
+									ORDER BY claim_stats.active_count DESC, claim_stats.latest_updated_at DESC, claim_stats.claim_key ASC
+								) AS claim_rank
+							FROM claim_stats
+							LEFT JOIN claim_previews ON claim_previews.aspect_id = claim_stats.aspect_id
+								AND claim_previews.group_key = claim_stats.group_key
+								AND claim_previews.claim_key = claim_stats.claim_key
+						),
+						prioritized_claims AS (
+							SELECT
+								rc.*,
+								ROW_NUMBER() OVER (
+									ORDER BY rc.claim_rank ASC, sg.aspect_rank ASC, sg.group_rank ASC, rc.claim_key ASC
+								) AS response_rank
+							FROM ranked_claims rc
+							JOIN selected_groups sg ON sg.aspect_id = rc.aspect_id AND sg.group_key = rc.group_key
+							WHERE rc.claim_rank <= ?
+						),
+						budgeted_claims AS (
+							SELECT * FROM prioritized_claims WHERE response_rank <= ?
+						)
+					${groupSelect},
+					bc.claim_key,
+					bc.attribute_count AS claim_attribute_count,
+					bc.constraint_count AS claim_constraint_count,
+					bc.active_count,
+					bc.superseded_count,
+					bc.latest_updated_at AS claim_latest_updated_at,
+					bc.preview
+					FROM selected_groups sg
+					LEFT JOIN budgeted_claims bc ON bc.aspect_id = sg.aspect_id AND bc.group_key = sg.group_key
+					ORDER BY sg.aspect_rank ASC, sg.group_rank ASC, bc.claim_rank ASC`,
+					)
+					.all(
+						...aspectParams,
+						params.agentId,
+						params.maxGroups,
+						params.agentId,
+						params.agentId,
+						params.maxClaims,
+						params.maxTotalClaims,
+					) as Array<Record<string, unknown>>)
+			: (db
+					.prepare(
+						`${groupCtes}
+						 ${groupSelect}, NULL AS claim_key, NULL AS claim_attribute_count,
+						 NULL AS claim_constraint_count, NULL AS active_count,
+						 NULL AS superseded_count, NULL AS claim_latest_updated_at, NULL AS preview
+						 FROM selected_groups sg
+						 ORDER BY sg.aspect_rank ASC, sg.group_rank ASC`,
+					)
+					.all(...aspectParams, params.agentId, params.maxGroups) as Array<Record<string, unknown>>);
+
+	for (const row of rows) {
+		const aspectId = row.aspect_id as string;
+		const groupKey = row.group_key as string;
+		let groups = groupsByAspect.get(aspectId);
+		if (!groups) {
+			groups = new Map();
+			groupsByAspect.set(aspectId, groups);
+		}
+		let group = groups.get(groupKey);
+		if (!group) {
+			group = {
+				groupKey,
+				attributeCount: Number(row.group_attribute_count ?? 0),
+				constraintCount: Number(row.group_constraint_count ?? 0),
+				claimCount: Number(row.group_claim_count ?? 0),
+				latestUpdatedAt: typeof row.group_latest_updated_at === "string" ? row.group_latest_updated_at : null,
+				claims: [],
+			};
+			groups.set(groupKey, group);
+		}
+		if (typeof row.claim_key === "string") {
+			group.claims.push({
+				claimKey: row.claim_key,
+				attributeCount: Number(row.claim_attribute_count ?? 0),
+				constraintCount: Number(row.claim_constraint_count ?? 0),
+				activeCount: Number(row.active_count ?? 0),
+				supersededCount: Number(row.superseded_count ?? 0),
+				latestUpdatedAt: typeof row.claim_latest_updated_at === "string" ? row.claim_latest_updated_at : null,
+				preview: typeof row.preview === "string" ? row.preview : null,
+			});
+		}
+	}
+
+	return new Map(
+		Array.from(groupsByAspect, ([aspectId, groups]) => [
+			aspectId,
+			Array.from(groups.values(), (group) => ({
+				...group,
+				claimsHasMore: group.claims.length < group.claimCount,
+			})),
+		]),
+	);
+}
+
 export async function getEntityKnowledgeTree(
 	accessor: DbAccessor,
 	params: {
@@ -784,6 +990,7 @@ export async function getEntityKnowledgeTree(
 		readonly maxAspects: number;
 		readonly maxGroups: number;
 		readonly maxClaims: number;
+		readonly maxTotalClaims: number;
 		readonly depth: number;
 	},
 ): Promise<EntityKnowledgeTree | null> {
@@ -822,6 +1029,14 @@ export async function getEntityKnowledgeTree(
 				 LIMIT ?`,
 				)
 				.all(entity.id, params.agentId, params.maxAspects) as Array<Record<string, unknown>>;
+			const groupsByAspect = readEntityTreeGroups(db, {
+				agentId: params.agentId,
+				aspectRows,
+				maxGroups: params.maxGroups,
+				maxClaims: params.maxClaims,
+				maxTotalClaims: params.maxTotalClaims,
+				depth: params.depth,
+			});
 
 			return {
 				entity,
@@ -829,36 +1044,12 @@ export async function getEntityKnowledgeTree(
 					maxAspects: params.maxAspects,
 					maxGroups: params.maxGroups,
 					maxClaims: params.maxClaims,
+					maxTotalClaims: params.maxTotalClaims,
 					depth: params.depth,
 				},
 				items: aspectRows.map((aspectRow) => {
 					const aspect = rowToAspect(aspectRow);
-					const groupRows =
-						params.depth >= 2
-							? (db
-									.prepare(
-										`SELECT
-									   COALESCE(ea.group_key, 'general') AS group_key,
-									   COUNT(DISTINCT CASE
-									     WHEN ea.kind = 'attribute' AND ea.status = 'active' THEN ea.id
-									   END) AS attribute_count,
-									   COUNT(DISTINCT CASE
-									     WHEN ea.kind = 'constraint' AND ea.status = 'active' THEN ea.id
-									   END) AS constraint_count,
-									   COUNT(DISTINCT CASE
-									     WHEN ea.claim_key IS NOT NULL THEN ea.claim_key
-									   END) AS claim_count,
-									   MAX(ea.updated_at) AS latest_updated_at
-									 FROM entity_attributes ea
-									 WHERE ea.aspect_id = ?
-									   AND ea.agent_id = ?
-									   AND ea.status != 'deleted'
-									 GROUP BY COALESCE(ea.group_key, 'general')
-									 ORDER BY attribute_count DESC, constraint_count DESC, claim_count DESC, group_key ASC
-									 LIMIT ?`,
-									)
-									.all(aspect.id, params.agentId, params.maxGroups) as Array<Record<string, unknown>>)
-							: [];
+					const groupRows = groupsByAspect.get(aspect.id) ?? [];
 
 					return {
 						aspect,
@@ -866,60 +1057,7 @@ export async function getEntityKnowledgeTree(
 						constraintCount: Number(aspectRow.constraint_count ?? 0),
 						groupCount: Number(aspectRow.group_count ?? 0),
 						claimCount: Number(aspectRow.claim_count ?? 0),
-						groups: groupRows.map((groupRow) => {
-							const groupKey = groupRow.group_key as string;
-							const claimRows =
-								params.depth >= 3
-									? (db
-											.prepare(
-												`SELECT
-											   ea.claim_key,
-											   COUNT(DISTINCT CASE WHEN ea.kind = 'attribute' THEN ea.id END) AS attribute_count,
-											   COUNT(DISTINCT CASE WHEN ea.kind = 'constraint' THEN ea.id END) AS constraint_count,
-											   COUNT(DISTINCT CASE WHEN ea.status = 'active' THEN ea.id END) AS active_count,
-											   COUNT(DISTINCT CASE WHEN ea.status = 'superseded' THEN ea.id END) AS superseded_count,
-											   MAX(ea.updated_at) AS latest_updated_at,
-											   (
-											     SELECT inner_attr.content
-											     FROM entity_attributes inner_attr
-											     WHERE inner_attr.aspect_id = ea.aspect_id
-											       AND inner_attr.agent_id = ea.agent_id
-											       AND COALESCE(inner_attr.group_key, 'general') = COALESCE(ea.group_key, 'general')
-											       AND inner_attr.claim_key = ea.claim_key
-											       AND inner_attr.status = 'active'
-											     ORDER BY inner_attr.importance DESC, inner_attr.updated_at DESC
-											     LIMIT 1
-											   ) AS preview
-											 FROM entity_attributes ea
-											 WHERE ea.aspect_id = ?
-											   AND ea.agent_id = ?
-											   AND COALESCE(ea.group_key, 'general') = ?
-											   AND ea.claim_key IS NOT NULL
-											   AND ea.status != 'deleted'
-											 GROUP BY ea.claim_key, COALESCE(ea.group_key, 'general')
-											 ORDER BY active_count DESC, latest_updated_at DESC, ea.claim_key ASC
-											 LIMIT ?`,
-											)
-											.all(aspect.id, params.agentId, groupKey, params.maxClaims) as Array<Record<string, unknown>>)
-									: [];
-
-							return {
-								groupKey,
-								attributeCount: Number(groupRow.attribute_count ?? 0),
-								constraintCount: Number(groupRow.constraint_count ?? 0),
-								claimCount: Number(groupRow.claim_count ?? 0),
-								latestUpdatedAt: typeof groupRow.latest_updated_at === "string" ? groupRow.latest_updated_at : null,
-								claims: claimRows.map((claimRow) => ({
-									claimKey: claimRow.claim_key as string,
-									attributeCount: Number(claimRow.attribute_count ?? 0),
-									constraintCount: Number(claimRow.constraint_count ?? 0),
-									activeCount: Number(claimRow.active_count ?? 0),
-									supersededCount: Number(claimRow.superseded_count ?? 0),
-									latestUpdatedAt: typeof claimRow.latest_updated_at === "string" ? claimRow.latest_updated_at : null,
-									preview: typeof claimRow.preview === "string" ? claimRow.preview : null,
-								})),
-							};
-						}),
+						groups: groupRows,
 					};
 				}),
 			};
@@ -993,11 +1131,16 @@ export async function listEntityClaims(
 		readonly entity: string;
 		readonly aspect: string;
 		readonly group: string;
+		readonly limit: number;
+		readonly offset: number;
 	},
 ): Promise<{
 	readonly entity: Entity;
 	readonly aspect: EntityAspect;
 	readonly items: readonly EntityClaimSummary[];
+	readonly limit: number;
+	readonly offset: number;
+	readonly hasMore: boolean;
 } | null> {
 	const entity = await resolveEntityByNameOnOwner(accessor, { agentId: params.agentId, name: params.entity });
 	if (!entity) return null;
@@ -1008,6 +1151,10 @@ export async function listEntityClaims(
 	});
 	if (!aspect) return null;
 	const group = toCanonicalName(params.group).replace(/\s+/g, "_");
+	const limit = Number.isFinite(params.limit) ? Math.min(Math.max(Math.trunc(params.limit), 1), 200) : 50;
+	const offset = Number.isFinite(params.offset)
+		? Math.min(Math.max(Math.trunc(params.offset), 0), Number.MAX_SAFE_INTEGER)
+		: 0;
 	const rows = await dbOwnerQuery<Array<Record<string, unknown>>>(
 		{
 			sql: `SELECT
@@ -1036,8 +1183,9 @@ export async function listEntityClaims(
 				   AND ea.claim_key IS NOT NULL
 				   AND ea.status != 'deleted'
 				 GROUP BY ea.claim_key, COALESCE(ea.group_key, 'general')
-				 ORDER BY active_count DESC, latest_updated_at DESC, ea.claim_key ASC`,
-			params: [aspect.id, params.agentId, group.length > 0 ? group : "general"],
+				 ORDER BY active_count DESC, latest_updated_at DESC, ea.claim_key ASC
+				 LIMIT ? OFFSET ?`,
+			params: [aspect.id, params.agentId, group.length > 0 ? group : "general", limit + 1, offset],
 			result: "all",
 		},
 		{ operation: "db:knowledge.entity-claims.read", deadlineMs: 2_000 },
@@ -1045,7 +1193,7 @@ export async function listEntityClaims(
 	return {
 		entity,
 		aspect,
-		items: rows.map((row) => ({
+		items: rows.slice(0, limit).map((row) => ({
 			claimKey: row.claim_key as string,
 			groupKey: typeof row.group_key === "string" ? row.group_key : null,
 			attributeCount: Number(row.attribute_count ?? 0),
@@ -1055,6 +1203,9 @@ export async function listEntityClaims(
 			latestUpdatedAt: typeof row.latest_updated_at === "string" ? row.latest_updated_at : null,
 			preview: typeof row.preview === "string" ? row.preview : null,
 		})),
+		limit,
+		offset,
+		hasMore: rows.length > limit,
 	};
 }
 

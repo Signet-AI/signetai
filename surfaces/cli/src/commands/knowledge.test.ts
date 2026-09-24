@@ -39,7 +39,8 @@ describe("registerKnowledgeCommands", () => {
 										groupKey: "restaurants",
 										attributeCount: 2,
 										constraintCount: 0,
-										claimCount: 1,
+										claimCount: 3,
+										claimsHasMore: true,
 										claims: [
 											{
 												claimKey: "favorite_restaurant",
@@ -71,6 +72,8 @@ describe("registerKnowledgeCommands", () => {
 			"5",
 			"--max-claims",
 			"6",
+			"--max-total-claims",
+			"2",
 			"--agent",
 			"default",
 		]);
@@ -78,11 +81,12 @@ describe("registerKnowledgeCommands", () => {
 		expect(calls).toEqual([
 			{
 				method: "GET",
-				path: "/api/knowledge/navigation/tree?entity=Nicholai&depth=3&max_aspects=4&max_groups=5&max_claims=6&agent_id=default",
+				path: "/api/knowledge/navigation/tree?entity=Nicholai&depth=3&max_aspects=4&max_groups=5&max_claims=6&max_total_claims=2&agent_id=default",
 			},
 		]);
 		expect(lines.join("\n")).toContain("Knowledge Tree");
 		expect(lines.join("\n")).toContain("favorite_restaurant");
+		expect(lines.join("\n")).toContain("2 more claims available");
 	});
 
 	test("knowledge tree without an entity lists entities", async () => {
@@ -105,6 +109,50 @@ describe("registerKnowledgeCommands", () => {
 		await program.parseAsync(["node", "test", "knowledge", "tree", "--max-aspects", "7"]);
 
 		expect(capturedPath).toBe("/api/knowledge/navigation/entities?limit=7");
+	});
+
+	test("claims forwards pagination and reports the next offset", async () => {
+		const lines: string[] = [];
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
+		let capturedPath = "";
+		const program = new Command();
+		program.exitOverride();
+		registerKnowledgeCommands(program, {
+			ensureDaemonForSecrets: async () => true,
+			secretApiCall: async (_method, path) => {
+				capturedPath = path;
+				return {
+					ok: true,
+					data: {
+						items: [{ claimKey: "favorite_restaurant", activeCount: 1, supersededCount: 0 }],
+						limit: 2,
+						offset: 3,
+						hasMore: true,
+					},
+				};
+			},
+		});
+
+		await program.parseAsync([
+			"node",
+			"test",
+			"knowledge",
+			"claims",
+			"Nicholai",
+			"food",
+			"restaurants",
+			"--limit",
+			"2",
+			"--offset",
+			"3",
+		]);
+
+		expect(capturedPath).toBe(
+			"/api/knowledge/navigation/claims?entity=Nicholai&aspect=food&group=restaurants&limit=2&offset=3",
+		);
+		expect(lines.join("\\n")).toContain("continue with --offset 4");
 	});
 
 	test("attributes forwards path filters and json output", async () => {

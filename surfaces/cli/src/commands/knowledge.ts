@@ -46,6 +46,7 @@ interface TreeGroup {
 	readonly constraintCount?: number;
 	readonly claimCount?: number;
 	readonly claims?: readonly TreeClaim[];
+	readonly claimsHasMore?: boolean;
 }
 
 interface TreeAspect {
@@ -190,6 +191,14 @@ function printTree(data: unknown): void {
 				console.log(`      ${claim.claimKey ?? "unknown"} ${chalk.dim(`${claim.activeCount ?? 0} active${history}`)}`);
 				if (claim.preview) console.log(chalk.dim(`        ${claim.preview}`));
 			}
+			if (group.claimsHasMore) {
+				const remaining = Math.max((group.claimCount ?? 0) - (group.claims?.length ?? 0), 0);
+				console.log(
+					chalk.dim(
+						`      ${remaining} more claim${remaining === 1 ? "" : "s"} available; use knowledge claims for this group starting at offset ${group.claims?.length ?? 0}.`,
+					),
+				);
+			}
 		}
 	}
 	console.log();
@@ -287,7 +296,8 @@ export function registerKnowledgeCommands(program: Command, deps: KnowledgeDeps)
 			.option("--depth <n>", "Depth: 1=aspects, 2=groups, 3=claims", Number.parseInt)
 			.option("--max-aspects <n>", "Max aspects to return", Number.parseInt)
 			.option("--max-groups <n>", "Max groups per aspect", Number.parseInt)
-			.option("--max-claims <n>", "Max claims per group", Number.parseInt),
+			.option("--max-claims <n>", "Max claims per group", Number.parseInt)
+			.option("--max-total-claims <n>", "Max claim summaries across the tree", Number.parseInt),
 	).action(async (entity: string | undefined, options) => {
 		if (!(await deps.ensureDaemonForSecrets())) return;
 		const params = new URLSearchParams();
@@ -304,6 +314,7 @@ export function registerKnowledgeCommands(program: Command, deps: KnowledgeDeps)
 		if (options.maxAspects !== undefined) params.set("max_aspects", String(options.maxAspects));
 		if (options.maxGroups !== undefined) params.set("max_groups", String(options.maxGroups));
 		if (options.maxClaims !== undefined) params.set("max_claims", String(options.maxClaims));
+		if (options.maxTotalClaims !== undefined) params.set("max_total_claims", String(options.maxTotalClaims));
 		appendAgent(params, options.agent);
 		const data = await apiGet(deps, "/api/knowledge/navigation/tree", params);
 		if (options.json) console.log(JSON.stringify(data, null, 2));
@@ -392,10 +403,14 @@ export function registerKnowledgeCommands(program: Command, deps: KnowledgeDeps)
 			.description("List claim slots under an entity/aspect/group path")
 			.argument("<entity>", "Entity name")
 			.argument("<aspect>", "Aspect name")
-			.argument("<group>", "Group key"),
+			.argument("<group>", "Group key")
+			.option("-l, --limit <n>", "Max claims to return", Number.parseInt)
+			.option("--offset <n>", "Pagination offset", Number.parseInt),
 	).action(async (entity: string, aspect: string, group: string, options) => {
 		if (!(await deps.ensureDaemonForSecrets())) return;
 		const params = new URLSearchParams({ entity, aspect, group });
+		if (options.limit !== undefined) params.set("limit", String(options.limit));
+		if (options.offset !== undefined) params.set("offset", String(options.offset));
 		appendAgent(params, options.agent);
 		const data = await apiGet(deps, "/api/knowledge/navigation/claims", params);
 		if (options.json) console.log(JSON.stringify(data, null, 2));
@@ -406,6 +421,12 @@ export function registerKnowledgeCommands(program: Command, deps: KnowledgeDeps)
 				(item) => item.claimKey ?? "unknown",
 				(item) => `${item.activeCount ?? 0} active · ${item.supersededCount ?? 0} old`,
 			);
+			const response = asRecord(data);
+			if (response?.hasMore === true) {
+				const offset = typeof response.offset === "number" ? response.offset : 0;
+				const itemCount = Array.isArray(response.items) ? response.items.length : 0;
+				console.log(chalk.dim(`  More claims available; continue with --offset ${offset + itemCount}`));
+			}
 		}
 	});
 

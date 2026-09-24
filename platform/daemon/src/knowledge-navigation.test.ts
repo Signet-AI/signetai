@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { DbAccessor, ReadDb } from "./db-accessor";
+import type { DbAccessor, ReadAdmissionOptions, ReadDb } from "./db-accessor";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import {
 	getEntityAspectsByName,
@@ -37,7 +37,7 @@ function seedEntity(): void {
 
 function seedAttribute(input: {
 	readonly id: string;
-	readonly groupKey: string;
+	readonly groupKey: string | null;
 	readonly claimKey: string;
 	readonly content: string;
 	readonly status?: "active" | "superseded";
@@ -63,6 +63,35 @@ function seedAttribute(input: {
 			updatedAt,
 		);
 	});
+}
+
+function countPreparedStatements(accessor: DbAccessor): {
+	readonly accessor: DbAccessor;
+	readonly count: () => number;
+	readonly statements: () => readonly string[];
+} {
+	let count = 0;
+	const statements: string[] = [];
+	return {
+		accessor: {
+			...accessor,
+			async withReadDbAsync<T>(fn: (db: ReadDb) => T | Promise<T>, options?: ReadAdmissionOptions): Promise<T> {
+				return await accessor.withReadDbAsync(
+					(db) =>
+						fn({
+							prepare(sql) {
+								count += 1;
+								statements.push(sql);
+								return db.prepare(sql);
+							},
+						}),
+					options,
+				);
+			},
+		},
+		count: () => count,
+		statements: () => statements,
+	};
 }
 
 function rejectNestedReads(accessor: DbAccessor): DbAccessor {
@@ -141,6 +170,8 @@ describe("knowledge graph navigation", () => {
 			entity: "Nicholai",
 			aspect: "food",
 			group: "restaurants",
+			limit: 50,
+			offset: 0,
 		});
 		expect(claims?.items.map((item) => item.claimKey)).toEqual([
 			"favorite_restaurant",
@@ -245,11 +276,13 @@ describe("knowledge graph navigation", () => {
 			maxAspects: 20,
 			maxGroups: 20,
 			maxClaims: 50,
+			maxTotalClaims: 1_000,
 			depth: 3,
 		});
 
 		expect(tree?.entity.name).toBe("Nicholai");
 		expect(tree?.limits.depth).toBe(3);
+		expect(tree?.limits.maxTotalClaims).toBe(1_000);
 		expect(tree?.items[0]?.aspect.canonicalName).toBe("food");
 		expect(tree?.items[0]?.groups[0]?.groupKey).toBe("restaurants");
 		expect(tree?.items[0]?.groups[0]?.claims.map((item) => item.claimKey)).toEqual([
@@ -257,6 +290,144 @@ describe("knowledge graph navigation", () => {
 			"korean_restaurants_tried_count",
 		]);
 		expect(tree?.items[0]?.groups[0]?.claims[0]?.preview).toBe("Nicholai currently prefers Temaki Den.");
+	});
+
+	test("merges null and explicit general-group claim previews", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity();
+		seedAttribute({
+			id: "attr-general-null",
+			groupKey: null,
+			claimKey: "favorite_general",
+			content: "Older general-group value",
+			updatedAt: "2026-04-18T00:00:00.000Z",
+		});
+		seedAttribute({
+			id: "attr-general-explicit",
+			groupKey: "general",
+			claimKey: "favorite_general",
+			content: "Newer general-group value",
+			updatedAt: "2026-04-19T00:00:00.000Z",
+		});
+
+		const tree = await getEntityKnowledgeTree(getDbAccessor(), {
+			agentId: "default",
+			entity: "Nicholai",
+			maxAspects: 20,
+			maxGroups: 20,
+			maxClaims: 50,
+			maxTotalClaims: 1_000,
+			depth: 3,
+		});
+		const general = tree?.items[0]?.groups.find((group) => group.groupKey === "general");
+		expect(general?.claims).toHaveLength(1);
+		expect(general?.claims[0]?.attributeCount).toBe(2);
+		expect(general?.claims[0]?.preview).toBe("Newer general-group value");
+	});
+
+	test("loads aspects, groups, and claims in a fixed number of read statements", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity();
+		seedAttribute({ id: "attr-food-a", groupKey: "restaurants", claimKey: "favorite", content: "A" });
+		seedAttribute({ id: "attr-food-b", groupKey: "dietary", claimKey: "allergy", content: "B" });
+		seedAttribute({ id: "attr-food-c", groupKey: "cafes", claimKey: "favorite_cafe", content: "C" });
+		seedAttribute({ id: "attr-food-d", groupKey: "groceries", claimKey: "favorite_market", content: "D" });
+		const counted = countPreparedStatements(getDbAccessor());
+
+		const tree = await getEntityKnowledgeTree(counted.accessor, {
+			agentId: "default",
+			entity: "Nicholai",
+			maxAspects: 20,
+			maxGroups: 20,
+			maxClaims: 50,
+			maxTotalClaims: 1_000,
+			depth: 3,
+		});
+
+		expect(tree?.items).toHaveLength(1);
+		expect(tree?.items[0]?.groups).toHaveLength(4);
+		expect(tree?.items.flatMap((item) => item.groups.flatMap((group) => group.claims))).toHaveLength(4);
+		expect(counted.count()).toBeLessThanOrEqual(3);
+
+		const groupQuery = counted.statements().find((sql) => sql.includes("claim_stats AS"));
+		if (!groupQuery) throw new Error("Batched tree query was not captured");
+		const plan = await getDbAccessor().withReadDbAsync(
+			(db) =>
+				db
+					.prepare(`EXPLAIN QUERY PLAN ${groupQuery}`)
+					.all("aspect-food", 0, "default", 20, "default", "default", 50, 1_000) as Array<{ detail: string }>,
+		);
+		const scopedAttributeLookups = plan.filter(
+			(row) => row.detail.startsWith("SEARCH ea USING INDEX") && row.detail.includes("aspect_id=?"),
+		);
+		expect(scopedAttributeLookups.length).toBeGreaterThanOrEqual(2);
+		expect(plan.some((row) => row.detail.startsWith("CORRELATED SCALAR SUBQUERY"))).toBe(false);
+	});
+
+	test("keeps branches represented under the total claims budget and exposes claim pages", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity();
+		seedAttribute({ id: "attr-rest-a", groupKey: "restaurants", claimKey: "favorite", content: "A" });
+		seedAttribute({ id: "attr-rest-b", groupKey: "restaurants", claimKey: "visited", content: "B" });
+		seedAttribute({ id: "attr-diet-a", groupKey: "dietary", claimKey: "allergy", content: "C" });
+		seedAttribute({ id: "attr-diet-b", groupKey: "dietary", claimKey: "avoid_nuts", content: "D" });
+
+		const tree = await getEntityKnowledgeTree(getDbAccessor(), {
+			agentId: "default",
+			entity: "Nicholai",
+			maxAspects: 20,
+			maxGroups: 20,
+			maxClaims: 50,
+			maxTotalClaims: 2,
+			depth: 3,
+		});
+		const groups = tree?.items[0]?.groups ?? [];
+		expect(groups.map((group) => group.claims.length)).toEqual([1, 1]);
+		expect(groups.every((group) => group.claimsHasMore)).toBe(true);
+
+		const path = { agentId: "default", entity: "Nicholai", aspect: "food", group: "restaurants" };
+		const firstPage = await listEntityClaims(getDbAccessor(), Object.assign({}, path, { limit: 1, offset: 0 }));
+		const secondPage = await listEntityClaims(getDbAccessor(), Object.assign({}, path, { limit: 1, offset: 1 }));
+		expect(firstPage?.items).toHaveLength(1);
+		expect(firstPage?.hasMore).toBe(true);
+		expect(secondPage?.items).toHaveLength(1);
+		expect(secondPage?.hasMore).toBe(false);
+		expect(firstPage?.items[0]?.claimKey).not.toBe(secondPage?.items[0]?.claimKey);
+	});
+
+	test("clamps claim page bounds before issuing the owner query", async () => {
+		dbPath = makeDbPath();
+		initDbAccessor(dbPath);
+		seedEntity();
+		seedAttribute({ id: "attr-claim-a", groupKey: "restaurants", claimKey: "favorite", content: "A" });
+		seedAttribute({ id: "attr-claim-b", groupKey: "restaurants", claimKey: "visited", content: "B" });
+
+		const firstPage = await listEntityClaims(getDbAccessor(), {
+			agentId: "default",
+			entity: "Nicholai",
+			aspect: "food",
+			group: "restaurants",
+			limit: -5,
+			offset: -1,
+		});
+		const beyondMaximum = await listEntityClaims(getDbAccessor(), {
+			agentId: "default",
+			entity: "Nicholai",
+			aspect: "food",
+			group: "restaurants",
+			limit: 1_000,
+			offset: Number.MAX_SAFE_INTEGER + 1,
+		});
+
+		expect(firstPage?.limit).toBe(1);
+		expect(firstPage?.offset).toBe(0);
+		expect(firstPage?.items).toHaveLength(1);
+		expect(firstPage?.hasMore).toBe(true);
+		expect(beyondMaximum?.limit).toBe(200);
+		expect(beyondMaximum?.offset).toBe(Number.MAX_SAFE_INTEGER);
 	});
 
 	test("tree depth can stop before claims", async () => {
@@ -276,6 +447,7 @@ describe("knowledge graph navigation", () => {
 			maxAspects: 20,
 			maxGroups: 20,
 			maxClaims: 50,
+			maxTotalClaims: 1_000,
 			depth: 2,
 		});
 

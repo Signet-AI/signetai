@@ -41,7 +41,15 @@ Resolve one entity by name.
 Return a compact entity outline for agent browsing. The tree includes aspects,
 groups, claim slots, counts, and active previews so agents can decide where to
 drill next without loading the full constellation graph. Query parameters:
-`entity`, `depth`, `max_aspects`, `max_groups`, `max_claims`.
+`entity`, `depth`, `max_aspects`, `max_groups`, `max_claims`, and
+`max_total_claims` (default `1000`, maximum `10000`). `max_claims` caps previews
+per group. `max_total_claims` caps claim summaries across the whole tree; previews
+are allocated across groups by claim rank so one large group cannot consume the
+entire budget. Groups with omitted claims return `claimsHasMore: true`.
+
+This budget limits only claims embedded in the tree. It does not change search
+results or claim-list pages. Use `GET /api/knowledge/navigation/claims` to read
+remaining claims for a group.
 
 Depth controls how far the outline expands: `1` returns aspects, `2` returns
 aspects and groups, and `3` returns aspects, groups, and claim slots.
@@ -69,10 +77,15 @@ List groups under an entity aspect. Attributes without `group_key` appear under
 
 ### GET /api/knowledge/navigation/claims
 
-List claim slots under an entity/aspect/group path.
+List claim slots under an entity/aspect/group path. Query parameters: `entity`,
+`aspect`, `group`, `limit`, and `offset`. The default page size is `50`, the
+maximum is `200`, and negative offsets are treated as `0`; larger offsets are
+clamped to JavaScript's maximum safe integer. The response
+includes `limit`, `offset`, and `hasMore`; when `hasMore` is `true`, request the
+next page with `offset` increased by the number of returned items.
 
 ```text
-/api/knowledge/navigation/claims?entity=Nicholai&aspect=food&group=restaurants
+/api/knowledge/navigation/claims?entity=Nicholai&aspect=food&group=restaurants&limit=50&offset=0
 ```
 
 ### GET /api/knowledge/navigation/attributes
@@ -90,11 +103,12 @@ CLI equivalents:
 
 ```bash
 signet knowledge tree Nicholai
+signet knowledge tree Nicholai --max-total-claims 1000
 signet knowledge entities --query Nicholai
 signet knowledge entity Nicholai
 signet knowledge aspects Nicholai
 signet knowledge groups Nicholai food
-signet knowledge claims Nicholai food restaurants
+signet knowledge claims Nicholai food restaurants --limit 50 --offset 0
 signet knowledge attributes Nicholai food restaurants favorite_restaurant
 signet knowledge attributes Nicholai food restaurants favorite_restaurant --status all
 signet knowledge hygiene
