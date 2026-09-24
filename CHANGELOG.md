@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-24
+- Bug fixes: bound constellation work.
+
 ### 2026-09-23
 - Bug fixes: handle empty signing arrays; stop vacuum work on shutdown; reject stale lifecycle records; harden lifecycle attribution; force fatal exit during flush; preserve fatal shutdowns; bound startup recovery and shutdown; pace startup recovery and shutdown; tolerate slow Dream attach lookups; clarify dream attach timeout errors; keep comment cleanup security-safe; parse production comments structurally; recognize shell comment operators; preserve scalar payload comments; refresh purge line tokens; preserve only active directives; normalize stripped comment whitespace.
 
@@ -27,12 +30,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 ### 2026-09-16
 - Bug fixes: await workload diagnostics routes; persist search across navigation.
 
-### 2026-09-15
-- Bug fixes: harden owner-routed graph recall; refresh event-loop baseline; address review feedback; avoid budget scan allocation; enforce session-start budget; fence health during owner close; fence retired owner operations; reject retired owner close; fence stale owner proxies; lease all owner operations; drain db owner health leases; unify db owner health authority; bound connector rows and clarify unverified health; handle invalid agent rosters; restore transcript agent imports.
-- Refactoring: remove stale render metric; bound session continuity context; remove owner route fallbacks.
-- Docs: warn against nightly production use.
-
 ## Release Ledger
+
+## [0.226.20] - 2026-09-24
+
+Release summary: 1 bug fix.
+Tag range: `v0.226.19..v0.226.20`.
+
+### Bug Fixes
+
+- **graph**: bound constellation work
 
 ## [0.226.19] - 2026-09-23
 
