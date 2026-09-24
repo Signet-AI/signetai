@@ -558,9 +558,6 @@ export const MIGRATIONS: readonly Migration[] = [
 		version: 52,
 		name: "mcp-invocations",
 		up: mcpInvocations,
-		artifacts: {
-			tables: ["mcp_invocations"],
-		},
 	},
 	{
 		version: 53,
