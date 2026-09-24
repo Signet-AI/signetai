@@ -564,9 +564,8 @@ export async function createDreamingPassThroughOwner(
 			result: "run" as const,
 		},
 	};
-	let creationError: DbOwnerDeadlineError | DbOwnerDiedError | undefined;
-	for (let attempt = 0; attempt < 2; attempt++) {
-		creationError = undefined;
+	let creationMayHaveCommitted = false;
+	for (;;) {
 		try {
 			await runOwnerJob<{ readonly changes: number }>(
 				maintenance.owner,
@@ -575,25 +574,32 @@ export async function createDreamingPassThroughOwner(
 				"maintenance",
 				{ deadlineMs: 10_000, estimatedWorkUnits: 1, waitForOwnerCompletionOnDeadline: true },
 			);
+			dreamingLiveEvents.startPass({ passId: id, agentId, mode });
+			return id;
 		} catch (error) {
-			if (!(error instanceof DbOwnerDeadlineError || error instanceof DbOwnerDiedError)) throw error;
-			creationError = error;
+			const uncertain = error instanceof DbOwnerDeadlineError || error instanceof DbOwnerDiedError;
+			if (!uncertain && !creationMayHaveCommitted) throw error;
+			creationMayHaveCommitted ||= uncertain;
+			let persisted: { readonly id: string } | undefined;
+			try {
+				persisted = await ownerQueryOne<{ readonly id: string }>(
+					maintenance.owner,
+					"dreaming.pass.create.reconcile",
+					"SELECT id FROM dreaming_passes WHERE id = ?",
+					[id],
+					{ deadlineMs: 10_000, estimatedWorkUnits: 1, waitForOwnerCompletionOnDeadline: true },
+				);
+			} catch {
+				await new Promise<void>((resolve) => setTimeout(resolve, 100));
+				continue;
+			}
+			if (persisted !== undefined) {
+				dreamingLiveEvents.startPass({ passId: persisted.id, agentId, mode });
+				return persisted.id;
+			}
+			if (!uncertain) throw error;
 		}
-		const persisted = await ownerQueryOne<{ readonly id: string }>(
-			maintenance.owner,
-			"dreaming.pass.create.reconcile",
-			"SELECT id FROM dreaming_passes WHERE id = ?",
-			[id],
-			{ deadlineMs: 10_000, estimatedWorkUnits: 1 },
-		);
-		if (persisted !== undefined) {
-			dreamingLiveEvents.startPass({ passId: persisted.id, agentId, mode });
-			return persisted.id;
-		}
-		if (creationError === undefined) throw new Error("Dreaming pass creation did not persist its pass ID");
-		if (attempt === 1) throw creationError;
 	}
-	throw new Error("Dreaming pass creation exhausted its replay budget");
 }
 
 async function failDreamingPass(accessor: DbAccessor, passId: string, error: string): Promise<void> {
