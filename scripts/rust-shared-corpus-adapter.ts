@@ -141,6 +141,7 @@ if (scope !== "combined" && scope !== "core" && scope !== "daemon") fail("--scop
 const manifest = readManifest(manifestValue);
 validatePinnedManifest(manifest);
 const artifact = resolve(required("--artifact"));
+const mcpArtifact = resolve(required("--mcp-artifact"));
 const coreDriver = resolve(required("--core-driver"));
 function validateElf(value: string, identity: string, label: string): void {
 	if (!existsSync(value) || !statSync(value).isFile() || (statSync(value).mode & 0o111) === 0)
@@ -152,6 +153,9 @@ function validateElf(value: string, identity: string, label: string): void {
 }
 validateElf(artifact, "signet-daemon", "daemon artifact");
 validateElf(coreDriver, "signet-core-test-driver", "core driver artifact");
+validateElf(mcpArtifact, "signet-mcp", "MCP artifact");
+if (!isFreshTargetArtifact(mcpArtifact, "rust-daemon"))
+	fail("MCP artifact is stale or outside the fresh Rust daemon target");
 if (!isFreshTargetArtifact(coreDriver, "rust-core"))
 	fail("core driver artifact is stale or outside the fresh Rust core target");
 try {
@@ -163,7 +167,7 @@ try {
 } catch (error) {
 	fail(error instanceof Error ? error.message : String(error));
 }
-if (isForbiddenPath(coreDriver) || isForbiddenPath(artifact))
+if (isForbiddenPath(coreDriver) || isForbiddenPath(artifact) || isForbiddenPath(mcpArtifact))
 	fail("forbidden archived daemon/source path in execution boundary");
 /* Keep the daemon checks explicit and unchanged in meaning. */
 if (!existsSync(artifact) || !statSync(artifact).isFile() || (statSync(artifact).mode & 0o111) === 0)
@@ -254,6 +258,7 @@ for (let index = 0; index < batches.length; index++) {
 				env: {
 					...batchEnv,
 					SIGNET_RUST_DAEMON_BIN: artifact,
+					SIGNET_RUST_MCP_BIN: mcpArtifact,
 					SIGNET_RUST_DAEMON_EVIDENCE_FILE: batchDaemonEvidence,
 					SIGNET_RUST_EVIDENCE_NONCE: evidenceNonce,
 					SIGNET_RUST_CORE_DRIVER_BIN: coreDriver,

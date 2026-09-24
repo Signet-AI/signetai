@@ -11,6 +11,7 @@ describe("shared corpus runner CLI exit contract", () => {
 		const adapter = join(temp, "failing-adapter.sh");
 		const artifact = join(temp, "artifact");
 		const coreDriver = join(temp, "core-driver");
+		const mcpArtifact = join(temp, "mcp-artifact");
 		const report = join(temp, "report.xml");
 		try {
 			writeFileSync(
@@ -20,6 +21,7 @@ describe("shared corpus runner CLI exit contract", () => {
 			chmodSync(adapter, 0o755);
 			writeFileSync(artifact, "placeholder");
 			writeFileSync(coreDriver, "placeholder");
+			writeFileSync(mcpArtifact, "placeholder");
 			const result = spawnSync(
 				process.execPath,
 				[
@@ -34,6 +36,8 @@ describe("shared corpus runner CLI exit contract", () => {
 					coreDriver,
 					"--report",
 					report,
+					"--mcp-artifact",
+					mcpArtifact,
 				],
 				{ cwd: repo, encoding: "utf8" },
 			);

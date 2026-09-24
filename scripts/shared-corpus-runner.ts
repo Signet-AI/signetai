@@ -136,7 +136,14 @@ export function validateBaselineWorktree(worktree: string): void {
 }
 export function validateLaneOptions(
 	backend: Backend,
-	o: { worktree?: string; artifact?: string; coreDriver?: string; adapter?: string; report?: string },
+	o: {
+		worktree?: string;
+		artifact?: string;
+		mcpArtifact?: string;
+		coreDriver?: string;
+		adapter?: string;
+		report?: string;
+	},
 ): void {
 	if (backend === "typescript") {
 		if (!o.worktree) throw new Error("typescript lane requires an explicit pinned reference worktree");
@@ -153,6 +160,8 @@ export function validateLaneOptions(
 			throw new Error("rust lane requires a faithful executable adapter");
 		if (!o.coreDriver || !existsSync(o.coreDriver) || !statSync(o.coreDriver).isFile())
 			throw new Error("rust lane requires a real Rust core driver");
+		if (!o.mcpArtifact || !existsSync(o.mcpArtifact) || !statSync(o.mcpArtifact).isFile())
+			throw new Error("rust lane requires a real Rust MCP artifact");
 		if (!o.report) throw new Error("rust lane requires a report location");
 	}
 }
@@ -358,7 +367,15 @@ export function parseJUnitReport(xml: string, expected: string[] = [], childStat
 export function run(
 	repo: string,
 	backend: Backend,
-	o: { worktree?: string; artifact?: string; coreDriver?: string; adapter?: string; report?: string; paths?: string[] },
+	o: {
+		worktree?: string;
+		artifact?: string;
+		mcpArtifact?: string;
+		coreDriver?: string;
+		adapter?: string;
+		report?: string;
+		paths?: string[];
+	},
 ): Record<string, unknown> {
 	validateLaneOptions(backend, o);
 	const manifest = buildExecutionManifest(repo);
@@ -415,6 +432,8 @@ export function run(
 					report ?? "",
 					"--scope",
 					rustEvidenceScope(selected),
+					"--mcp-artifact",
+					o.mcpArtifact ?? "",
 				];
 	const executable = command[0];
 	if (!executable) throw new Error("lane command is empty");
@@ -475,6 +494,7 @@ if (import.meta.main) {
 		artifact: value("--artifact"),
 		adapter: value("--adapter"),
 		coreDriver: value("--core-driver"),
+		mcpArtifact: value("--mcp-artifact"),
 		report: value("--report"),
 		paths: value("--paths") ? JSON.parse(value("--paths") as string) : undefined,
 	});
