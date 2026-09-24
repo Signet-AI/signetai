@@ -1288,10 +1288,25 @@ fn document_chunks_read_durable_links_with_scope_order_and_deleted_filtering() {
             limit: 1,
         })
         .unwrap();
-    assert_eq!(limited["count"], 1);
+    assert_eq!(limited["count"], 2);
     assert_eq!(limited["chunks"][0]["id"], "memory-early");
     assert_eq!(limited["chunks"][0]["chunk_index"], 0);
     assert_eq!(limited["chunks"][0]["type"], "document_chunk");
+
+    let db = Connection::open(&p).unwrap();
+    for index in 0..105_i64 {
+        let memory_id = format!("memory-many-{index:03}");
+        db.execute(
+            "INSERT INTO memories (id,agent_id,content,metadata,deleted,is_deleted,type,project,created_at) VALUES (?,?,?,?,0,0,?,?,?)",
+            params![memory_id, "agent-a", format!("chunk-{index}"), "{}", "document_chunk", Option::<String>::None, "2026-02-01"],
+        ).unwrap();
+        db.execute(
+            "INSERT INTO document_memories (document_id,memory_id,chunk_index) VALUES (?,?,?)",
+            params![document_id, memory_id, index + 2],
+        )
+        .unwrap();
+    }
+    drop(db);
 
     let all = owner
         .submit(Operation::DocumentChunks {
@@ -1301,16 +1316,20 @@ fn document_chunks_read_durable_links_with_scope_order_and_deleted_filtering() {
             limit: 100,
         })
         .unwrap();
-    assert_eq!(all["count"], 2);
+    assert_eq!(all["count"], 107);
     assert_eq!(
         all["chunks"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|chunk| chunk["id"].as_str().unwrap())
+            .map(|chunk| chunk["id"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>(),
-        vec!["memory-early", "memory-late"]
+        std::iter::once("memory-early".to_owned())
+            .chain(std::iter::once("memory-late".to_owned()))
+            .chain((0..105).map(|index| format!("memory-many-{index:03}")))
+            .collect::<Vec<_>>()
     );
+    assert_eq!(all["chunks"].as_array().unwrap().len(), 107);
 
     let db = Connection::open(&p).unwrap();
     db.execute(

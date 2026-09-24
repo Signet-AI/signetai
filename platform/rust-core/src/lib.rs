@@ -2729,12 +2729,11 @@ fn execute_operation(
             agent_id,
             workspace_id,
             id,
-            limit,
+            limit: _,
         } => {
             let id = required_id(&id)?;
             let agent_id = required_agent(&agent_id)?;
             let workspace_id = canonical_workspace(&workspace_id)?;
-            let limit = limit.clamp(1, 100);
             let mut statement = connection.prepare(
                 "SELECT m.id,m.content,COALESCE(m.type,json_extract(m.metadata,'$.type')),m.created_at,dm.chunk_index
                  FROM documents d
@@ -2742,13 +2741,12 @@ fn execute_operation(
                  JOIN memories m ON m.id=dm.memory_id
                  WHERE d.id=? AND d.agent_id=? AND d.workspace_id=? AND d.status != 'deleted'
                    AND COALESCE(m.agent_id,'default')=? AND m.is_deleted=0
-                 ORDER BY dm.chunk_index ASC LIMIT ?",
+                 ORDER BY dm.chunk_index ASC",
             )?;
-            let rows = statement.query_map(params![id,agent_id,workspace_id,agent_id,limit as i64], |row| {
+            let rows = statement.query_map(params![id,agent_id,workspace_id,agent_id], |row| {
                 Ok(json!({"id":row.get::<_,String>(0)?,"content":row.get::<_,String>(1)?,"type":row.get::<_,Option<String>>(2)?,"created_at":row.get::<_,Option<String>>(3)?,"chunk_index":row.get::<_,Option<i64>>(4)?}))
             })?;
             let chunks = rows.collect::<Result<Vec<_>,_>>()?;
-            // The existing Rust route is a bounded page; count describes the returned page.
             let count = chunks.len();
             Ok(json!({"chunks":chunks,"count":count}))
         }

@@ -1649,7 +1649,7 @@ async fn document_chunks(
                 agent_id,
                 workspace_id,
                 id,
-                limit: query.limit.unwrap_or(100).min(100),
+                limit: query.limit.unwrap_or(100),
             },
         )
         .await?,
