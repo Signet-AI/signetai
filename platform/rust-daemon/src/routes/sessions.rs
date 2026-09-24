@@ -2,12 +2,13 @@ use crate::{agent, execute, ApiError, AppState};
 use axum::{
     extract::{Path, Query, State},
     http::HeaderMap,
+    response::{IntoResponse, Response},
     routing::get as route_get,
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::Value;
-use signet_core_native::Operation;
+use signet_core_native::{canonicalize_transcript_lookup, Operation};
 
 #[derive(Deserialize)]
 pub struct ListQuery {
@@ -61,6 +62,66 @@ pub async fn search(
     Ok(Json(filtered))
 }
 
+#[derive(Deserialize)]
+pub struct TranscriptQuery {
+    pub agent_id: Option<String>,
+    #[serde(rename = "agentId")]
+    pub agent_id_camel: Option<String>,
+}
+
+pub async fn get_transcript(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(key): Path<String>,
+    Query(query): Query<TranscriptQuery>,
+) -> Result<Response, ApiError> {
+    let key = canonicalize_transcript_lookup(&key);
+    let agent_id = match (
+        query
+            .agent_id
+            .as_deref()
+            .or(query.agent_id_camel.as_deref()),
+        headers
+            .get("x-signet-agent-id")
+            .or_else(|| headers.get("x-signet-agent")),
+    ) {
+        (Some(query), Some(header))
+            if header
+                .to_str()
+                .ok()
+                .is_some_and(|value| !value.trim().is_empty() && value.trim() != query.trim()) =>
+        {
+            return Err(ApiError::bad_request("conflicting agent identities"))
+        }
+        (Some(query), _) => {
+            let value = query.trim();
+            if value.is_empty() {
+                return Err(ApiError::unauthorized(
+                    "an agent identity is required (x-signet-agent-id or agent_id)",
+                ));
+            }
+            value.to_owned()
+        }
+        (None, _) => agent(&headers, None, Some(&key))?,
+    };
+    let result = execute(
+        &state,
+        Operation::TranscriptGet {
+            agent_id,
+            session_key: key,
+        },
+    )
+    .await?;
+    if result.is_null() || result["content"].as_str().is_none() {
+        return Ok((
+            axum::http::StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error":"Transcript not found"})),
+        )
+            .into_response());
+    }
+    Ok(Json(result).into_response())
+}
+
 pub async fn get_session(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -74,22 +135,48 @@ pub async fn get_session(
     let result = execute(
         &state,
         Operation::SessionList {
-            agent_id,
+            agent_id: agent_id.clone(),
             limit: 500,
         },
     )
     .await?;
-    result["sessions"]
+    if let Some(session) = result["sessions"]
         .as_array()
         .and_then(|rows| rows.iter().find(|row| row["key"] == key))
         .cloned()
-        .map(Json)
-        .ok_or_else(|| ApiError::not_found("session not found"))
+    {
+        return Ok(Json(session));
+    }
+    let lookup = key.strip_prefix("session:").unwrap_or(key);
+    let stored = execute(
+        &state,
+        Operation::TranscriptInfoGet {
+            agent_id,
+            session_key: lookup.to_owned(),
+        },
+    )
+    .await?;
+    if stored.is_null() {
+        return Err(ApiError::not_found("session not found"));
+    }
+    Ok(Json(serde_json::json!({
+        "key": format!("session:{}", stored["sessionKey"].as_str().unwrap_or(lookup)),
+        "sessionKey": stored["sessionKey"],
+        "agentId": stored["agentId"],
+        "harness": stored["harness"],
+        "project": stored["project"],
+        "runtimePath": "transcript",
+        "provider": "session_transcripts",
+        "startedAt": stored["createdAt"],
+        "lastSeenAt": stored["updatedAt"],
+        "status": "stored"
+    })))
 }
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/api/sessions", route_get(list))
         .route("/api/sessions/search", route_get(search))
+        .route("/api/sessions/{key}/transcript", route_get(get_transcript))
         .route("/api/sessions/{key}", route_get(get_session))
 }

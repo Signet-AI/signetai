@@ -2,21 +2,29 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-const bin =
-	// biome-ignore lint/suspicious/noUndeclaredEnvVars: test-only binary override
-	process.env.SIGNET_RUST_DAEMON_BIN ?? join(import.meta.dir, "target/release/signet-daemon");
+// biome-ignore lint/suspicious/noUndeclaredEnvVars: test-only binary override
+const bin = process.env.SIGNET_RUST_DAEMON_BIN ?? join(import.meta.dir, "target/release/signet-daemon");
 type Session = { origin: string; workspace: string; child: ReturnType<typeof Bun.spawn> };
 const sessions: Session[] = [];
+async function reservePort(): Promise<number> {
+	const server = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+	const port = server.port;
+	server.stop(true);
+	return port;
+}
 async function start() {
 	const workspace = mkdtempSync(join(tmpdir(), "signet-transcript-"));
-	const port = 38791 + Math.floor(Math.random() * 100);
+	const port = await reservePort();
 	const child = Bun.spawn([bin], {
 		env: {
 			...process.env,
 			SIGNET_PATH: workspace,
+			SIGNET_DAEMON_BIN: bin,
 			SIGNET_PORT: String(port),
 			SIGNET_BIND: "127.0.0.1",
 			SIGNET_AGENT_ID: "",
+			SIGNET_AUTH_MODE: "local",
+			SIGNET_API_KEY: "",
 		},
 		stdout: "ignore",
 		stderr: "pipe",
@@ -86,4 +94,35 @@ describe("fresh rust transcript contracts", () => {
 		sessions.splice(sessions.indexOf(s), 1);
 		rmSync(s.workspace, { recursive: true, force: true });
 	});
+});
+
+it("serves stored session transcript through owner-scoped HTTP lookup", async () => {
+	const s = await start();
+	const headers = { "content-type": "application/json", "x-signet-agent-id": "agent-a" };
+	const write = await fetch(s.origin + "/api/transcripts", { method: "POST", headers: { ...headers, "idempotency-key": "read-test" }, body: JSON.stringify({ sessionKey: "123e4567-e89b-12d3-a456-426614174000", harness: "bun", content: "stored transcript", idempotency_key: "read-test" }) });
+	expect(write.status).toBe(200);
+	const read = await fetch(s.origin + "/api/sessions/123e4567-e89b-12d3-a456-426614174000/transcript", { headers });
+	expect(read.status).toBe(200);
+	expect(await read.json()).toEqual({ sessionKey: "123e4567-e89b-12d3-a456-426614174000", agentId: "agent-a", content: "stored transcript" });
+	const denied = await fetch(s.origin + "/api/sessions/123e4567-e89b-12d3-a456-426614174000/transcript", { headers: { ...headers, "x-signet-agent-id": "agent-b" } });
+	expect(denied.status).toBe(404);
+	expect(await denied.json()).toEqual({ error: "Transcript not found" });
+	const missing = await fetch(s.origin + "/api/sessions/missing/transcript", { headers });
+	expect(missing.status).toBe(404);
+	expect(await missing.json()).toEqual({ error: "Transcript not found" });
+});
+
+it("retrieves stored session metadata over HTTP, scoped by agent", async () => {
+	const s = await start();
+	const headers = { "content-type": "application/json", "x-signet-agent-id": "agent-a" };
+	const key = "stored-session-meta";
+	const write = await fetch(s.origin + "/api/transcripts", { method: "POST", headers: { ...headers, "idempotency-key": "meta-test" }, body: JSON.stringify({ sessionKey: key, harness: "codex", project: "project-a", content: "metadata transcript", idempotency_key: "meta-test" }) });
+	expect(write.status).toBe(200);
+	const response = await fetch(s.origin + `/api/sessions/${key}`, { headers });
+	expect(response.status).toBe(200);
+	const body = await response.json();
+	expect(body).toEqual({ key: `session:${key}`, sessionKey: key, agentId: "agent-a", harness: "codex", project: "project-a", runtimePath: "transcript", provider: "session_transcripts", startedAt: expect.any(String), lastSeenAt: expect.any(String), status: "stored" });
+	const denied = await fetch(s.origin + `/api/sessions/${key}`, { headers: { ...headers, "x-signet-agent-id": "agent-b" } });
+	expect(denied.status).toBe(404);
+	expect(await denied.json()).toEqual({ error: "Session not found" });
 });

@@ -14,9 +14,33 @@ use time::{format_description::well_known::Rfc3339, Date, Month, OffsetDateTime}
 use unicode_normalization::UnicodeNormalization;
 
 pub mod memory_content_safety;
-mod ontology_contradictions;
+
+pub fn canonicalize_transcript_lookup(value: &str) -> String {
+    let trimmed = value.trim();
+    let (prefix, key) = trimmed
+        .strip_prefix("session:")
+        .map(|key| ("session:", key))
+        .unwrap_or(("", trimmed));
+    let bytes = key.as_bytes();
+    let uuid_like = bytes.len() == 36
+        && (bytes[8] == b'-' || bytes[8] == b':')
+        && (bytes[13] == b'-' || bytes[13] == b':')
+        && (bytes[18] == b'-' || bytes[18] == b':')
+        && bytes[23] == b'-'
+        && bytes
+            .iter()
+            .enumerate()
+            .all(|(i, b)| [8, 13, 18, 23].contains(&i) || b.is_ascii_hexdigit());
+    if uuid_like {
+        let canonical = key.replace(':', "-");
+        format!("{prefix}{canonical}")
+    } else {
+        trimmed.to_owned()
+    }
+}
 mod ontology_claim_trace;
 mod ontology_claim_versions;
+mod ontology_contradictions;
 mod ontology_link_evidence;
 mod ontology_proposal_evidence;
 
@@ -1365,6 +1389,32 @@ fn execute_operation(
                 json!({"sessionKey":session_key,"agentId":agent_id,"contentHash":hash,"state":"stored"}),
             )
         }
+        Operation::TranscriptInfoGet {
+            agent_id,
+            session_key,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let alias = canonicalize_transcript_lookup(&session_key);
+            let row = connection.query_row(
+                "SELECT session_key,agent_id,harness,project,created_at,updated_at FROM session_transcripts WHERE agent_id=? AND session_key IN (?,?) ORDER BY CASE WHEN session_key=? THEN 0 ELSE 1 END, COALESCE(updated_at,created_at) DESC LIMIT 1",
+                params![agent_id, session_key, alias, session_key],
+                |row| Ok((row.get::<_,String>(0)?,row.get::<_,String>(1)?,row.get::<_,String>(2)?,row.get::<_,Option<String>>(3)?,row.get::<_,String>(4)?,row.get::<_,String>(5)?)),
+            ).optional()?;
+            Ok(row.map(|(session_key,agent_id,harness,project,created_at,updated_at)| json!({"sessionKey":session_key,"agentId":agent_id,"harness":harness,"project":project,"createdAt":created_at,"updatedAt":updated_at})).unwrap_or(Value::Null))
+        }
+        Operation::TranscriptGet {
+            agent_id,
+            session_key,
+        } => {
+            let agent_id = required_agent(&agent_id)?;
+            let lookup = canonicalize_transcript_lookup(&session_key);
+            let row = connection.query_row(
+                "SELECT session_key, agent_id, content FROM session_transcripts WHERE agent_id=? AND session_key IN (?,?) ORDER BY CASE WHEN session_key=? THEN 0 ELSE 1 END, COALESCE(updated_at, created_at) DESC LIMIT 1",
+                params![agent_id, session_key, lookup, session_key],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+            ).optional()?;
+            Ok(row.map(|(session_key, agent_id, content)| json!({"sessionKey":session_key,"agentId":agent_id,"content":content})).unwrap_or(Value::Null))
+        }
         Operation::TranscriptList { agent_id, limit } => {
             let mut s=connection.prepare("SELECT json_object('sessionKey',session_key,'agentId',agent_id,'harness',harness,'project',project,'content',content,'contentHash',content_hash,'createdAt',created_at,'updatedAt',updated_at,'completedAt',completed_at) FROM session_transcripts WHERE agent_id=? ORDER BY created_at DESC LIMIT ?")?;
             let rows = s.query_map(
@@ -2556,10 +2606,7 @@ fn execute_operation(
             let agent_id = required_agent(&agent_id)?;
             let id = required_id(&id)?;
             Ok(serde_json::to_value(history_rows(
-                connection,
-                &agent_id,
-                &id,
-                false,
+                connection, &agent_id, &id, false,
             )?)?)
         }
         Operation::Recall { agent_id, query } => {
@@ -2896,7 +2943,7 @@ fn execute_operation(
             let rows = statement.query_map(params![id,agent_id,workspace_id,agent_id], |row| {
                 Ok(json!({"id":row.get::<_,String>(0)?,"content":row.get::<_,String>(1)?,"type":row.get::<_,Option<String>>(2)?,"created_at":row.get::<_,Option<String>>(3)?,"chunk_index":row.get::<_,Option<i64>>(4)?}))
             })?;
-            let chunks = rows.collect::<Result<Vec<_>,_>>()?;
+            let chunks = rows.collect::<Result<Vec<_>, _>>()?;
             let count = chunks.len();
             Ok(json!({"chunks":chunks,"count":count}))
         }
@@ -4875,6 +4922,14 @@ pub enum Operation {
         project: Option<String>,
         content: String,
         idempotency_key: String,
+    },
+    TranscriptGet {
+        agent_id: String,
+        session_key: String,
+    },
+    TranscriptInfoGet {
+        agent_id: String,
+        session_key: String,
     },
     TranscriptList {
         agent_id: String,
@@ -6929,9 +6984,7 @@ fn history_rows(
            )
          ORDER BY {order_clause} LIMIT 1000"
     );
-    let mut statement = connection.prepare(
-        &query,
-    )?;
+    let mut statement = connection.prepare(&query)?;
     let rows = statement.query_map(params![memory_id, agent_id], move |row| {
         let raw_id = row.get::<_, String>(0)?;
         let id = history_id_value(raw_id, id_is_text);
@@ -7541,5 +7594,18 @@ mod owner_schema_reconciliation_tests {
                 .unwrap(),
             "legacy-unattributed related_to edge"
         );
+    }
+}
+
+#[cfg(test)]
+mod transcript_lookup_tests {
+    use super::canonicalize_transcript_lookup;
+
+    #[test]
+    fn canonicalizes_only_typescript_uuid_like_transcript_aliases() {
+        assert_eq!(canonicalize_transcript_lookup("123e4567-e89b-12d3-a456-426614174000"), "123e4567-e89b-12d3-a456-426614174000");
+        assert_eq!(canonicalize_transcript_lookup("123e4567-e89b:12d3:a456-426614174000"), "123e4567-e89b-12d3-a456-426614174000");
+        assert_eq!(canonicalize_transcript_lookup("session:123e4567-e89b:12d3:a456-426614174000"), "session:123e4567-e89b-12d3-a456-426614174000");
+        assert_eq!(canonicalize_transcript_lookup("not-a-uuid:123e4567"), "not-a-uuid:123e4567");
     }
 }
