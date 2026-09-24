@@ -14,11 +14,15 @@
  * adapter itself is plain JavaScript and has no Bun-specific imports.
  */
 
-import { existsSync } from "node:fs";
+import { copyFileSync, existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 
 const root = join(import.meta.dir, "..");
 const outfile = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
+const tokenizerWasm = join(root, "dist", "signetai", "dist", "tiktoken_bg.wasm");
+const daemonRequire = createRequire(join(root, "platform", "daemon", "package.json"));
+const tokenizerWasmSource = daemonRequire.resolve("tiktoken/tiktoken_bg.wasm");
 const entry = join(root, "platform", "daemon", "src", "mcp-stdio.ts");
 const result = await Bun.build({
 	entrypoints: [entry],
@@ -36,4 +40,5 @@ if (!existsSync(outfile)) {
 	console.error(`build-signet-mcp: expected ${outfile} was not produced`);
 	process.exit(1);
 }
+copyFileSync(tokenizerWasmSource, tokenizerWasm);
 console.log(`Built signet-mcp stdio bundle: ${outfile}`);
