@@ -2731,23 +2731,26 @@ fn execute_operation(
             id,
             limit,
         } => {
-            let content: String = connection
-                .query_row(
-                    "SELECT content FROM documents WHERE id=? AND agent_id=? AND workspace_id=?",
-                    params![
-                        required_id(&id)?,
-                        required_agent(&agent_id)?,
-                        canonical_workspace(&workspace_id)?
-                    ],
-                    |row| row.get(0),
-                )
-                .optional()?
-                .ok_or(CoreError::NotFound)?;
+            let id = required_id(&id)?;
+            let agent_id = required_agent(&agent_id)?;
+            let workspace_id = canonical_workspace(&workspace_id)?;
             let limit = limit.clamp(1, 100);
-            let items = content.as_bytes().chunks(4096).take(limit).enumerate().map(|(index, bytes)| json!({"index":index,"content":String::from_utf8_lossy(bytes)})).collect::<Vec<_>>();
-            Ok(
-                json!({"items":items,"limit":limit,"complete":true,"unsupported":{"persistentChunks":true}}),
-            )
+            let mut statement = connection.prepare(
+                "SELECT m.id,m.content,COALESCE(m.type,json_extract(m.metadata,'$.type')),m.created_at,dm.chunk_index
+                 FROM documents d
+                 JOIN document_memories dm ON dm.document_id=d.id
+                 JOIN memories m ON m.id=dm.memory_id
+                 WHERE d.id=? AND d.agent_id=? AND d.workspace_id=? AND d.status != 'deleted'
+                   AND COALESCE(m.agent_id,'default')=? AND m.is_deleted=0
+                 ORDER BY dm.chunk_index ASC LIMIT ?",
+            )?;
+            let rows = statement.query_map(params![id,agent_id,workspace_id,agent_id,limit as i64], |row| {
+                Ok(json!({"id":row.get::<_,String>(0)?,"content":row.get::<_,String>(1)?,"type":row.get::<_,Option<String>>(2)?,"created_at":row.get::<_,Option<String>>(3)?,"chunk_index":row.get::<_,Option<i64>>(4)?}))
+            })?;
+            let chunks = rows.collect::<Result<Vec<_>,_>>()?;
+            // The existing Rust route is a bounded page; count describes the returned page.
+            let count = chunks.len();
+            Ok(json!({"chunks":chunks,"count":count}))
         }
         Operation::DocumentDelete {
             agent_id,
@@ -6383,6 +6386,13 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "workspace_id",
         "TEXT DEFAULT 'default'",
     )?;
+    ensure_column(&transaction, "documents", "project", "TEXT")?;
+    ensure_column(
+        &transaction,
+        "documents",
+        "status",
+        "TEXT NOT NULL DEFAULT 'queued'",
+    )?;
     const DOCUMENT_SCOPE_BACKFILL_CHECKSUM: &str = "document-workspace-backfill-v1";
     let document_scope_backfill: Option<String> = transaction
         .query_row(
@@ -6586,6 +6596,16 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     transaction.execute(
         "UPDATE queue SET created_at = datetime('now') WHERE created_at IS NULL OR trim(created_at) = ''",
         [],
+    )?;
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS document_memories (
+            document_id TEXT NOT NULL REFERENCES documents(id),
+            memory_id TEXT NOT NULL REFERENCES memories(id),
+            chunk_index INTEGER,
+            PRIMARY KEY(document_id, memory_id)
+         );
+         CREATE INDEX IF NOT EXISTS document_memories_memory
+             ON document_memories(memory_id, document_id);",
     )?;
     transaction.execute_batch(
         "CREATE INDEX IF NOT EXISTS memories_agent_idx ON memories(agent_id, deleted);

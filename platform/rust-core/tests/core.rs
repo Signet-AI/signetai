@@ -1,4 +1,4 @@
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use signet_core_native::{
     Core, CoreError, DocumentInput, NewMemory, Operation, UpdateMemory, WorkspaceOwner,
 };
@@ -1174,20 +1174,16 @@ fn blank_document_workspaces_are_default_scoped_across_all_operations() {
             })
             .unwrap();
         assert!(!document.is_null());
-        assert_eq!(
-            owner
-                .submit(Operation::DocumentChunks {
-                    agent_id: "default".into(),
-                    workspace_id: "default".into(),
-                    id: id.clone(),
-                    limit: 10,
-                })
-                .unwrap()["items"]
-                .as_array()
-                .unwrap()
-                .len(),
-            1
-        );
+        let chunks = owner
+            .submit(Operation::DocumentChunks {
+                agent_id: "default".into(),
+                workspace_id: "default".into(),
+                id: id.clone(),
+                limit: 10,
+            })
+            .unwrap();
+        assert_eq!(chunks["chunks"], serde_json::json!([]));
+        assert_eq!(chunks["count"], 0);
     }
     let deleted = owner
         .submit(Operation::DocumentDelete {
@@ -1217,6 +1213,122 @@ fn blank_document_workspaces_are_default_scoped_across_all_operations() {
     assert_eq!(deleted_source["documentsDeleted"], 2);
     owner.initialize().unwrap();
     owner.initialize().unwrap();
+}
+
+#[test]
+fn document_chunks_read_durable_links_with_scope_order_and_deleted_filtering() {
+    let d = tempdir().unwrap();
+    let p = d.path().join("document-chunks.sqlite");
+    let owner = Core::open(&p, 4).unwrap();
+    let source = owner
+        .submit(Operation::CreateSource {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            kind: "folder".into(),
+            name: "chunks".into(),
+            source_id: None,
+            config: serde_json::json!({}),
+        })
+        .unwrap();
+    let source_id = source["id"].as_str().unwrap().to_owned();
+    let document = owner
+        .submit(Operation::IngestDocument {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            source_id,
+            path: "linked.md".into(),
+            content: "must not be synthesized".into(),
+            metadata: serde_json::json!({}),
+        })
+        .unwrap();
+    let document_id = document["id"].as_str().unwrap().to_owned();
+    drop(owner);
+
+    let db = Connection::open(&p).unwrap();
+    db.execute(
+        "INSERT INTO memories (id,agent_id,content,metadata,deleted,is_deleted,type,project,created_at) VALUES (?,?,?,?,0,0,?,?,?)",
+        params!["memory-early", "agent-a", "early", "{}", "document_chunk", Option::<String>::None, "2026-01-01"],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO memories (id,agent_id,content,metadata,deleted,is_deleted,type,project,created_at) VALUES (?,?,?,?,0,0,?,?,?)",
+        params!["memory-late", "agent-a", "late", "{}", "document_chunk", Option::<String>::None, "2026-01-02"],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO memories (id,agent_id,content,metadata,deleted,is_deleted,type,project,created_at) VALUES (?,?,?,?,0,1,?,?,?)",
+        params!["memory-deleted", "agent-a", "deleted", "{}", "document_chunk", Option::<String>::None, "2026-01-03"],
+    )
+    .unwrap();
+    db.execute(
+        "INSERT INTO memories (id,agent_id,content,metadata,deleted,is_deleted,type,project,created_at) VALUES (?,?,?,?,0,0,?,?,?)",
+        params!["memory-other-agent", "agent-b", "other agent", "{}", "document_chunk", Option::<String>::None, "2026-01-04"],
+    )
+    .unwrap();
+    for (memory_id, chunk_index) in [
+        ("memory-late", 2_i64),
+        ("memory-early", 0_i64),
+        ("memory-deleted", 1_i64),
+        ("memory-other-agent", 3_i64),
+    ] {
+        db.execute(
+            "INSERT INTO document_memories (document_id,memory_id,chunk_index) VALUES (?,?,?)",
+            params![document_id, memory_id, chunk_index],
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    let owner = Core::open(&p, 4).unwrap();
+    let limited = owner
+        .submit(Operation::DocumentChunks {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            id: document_id.clone(),
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(limited["count"], 1);
+    assert_eq!(limited["chunks"][0]["id"], "memory-early");
+    assert_eq!(limited["chunks"][0]["chunk_index"], 0);
+    assert_eq!(limited["chunks"][0]["type"], "document_chunk");
+
+    let all = owner
+        .submit(Operation::DocumentChunks {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            id: document_id.clone(),
+            limit: 100,
+        })
+        .unwrap();
+    assert_eq!(all["count"], 2);
+    assert_eq!(
+        all["chunks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|chunk| chunk["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["memory-early", "memory-late"]
+    );
+
+    let db = Connection::open(&p).unwrap();
+    db.execute(
+        "UPDATE documents SET status='deleted' WHERE id=?",
+        params![document_id],
+    )
+    .unwrap();
+    drop(db);
+    let deleted = owner
+        .submit(Operation::DocumentChunks {
+            agent_id: "agent-a".into(),
+            workspace_id: "workspace-a".into(),
+            id: document_id,
+            limit: 100,
+        })
+        .unwrap();
+    assert_eq!(deleted["chunks"], serde_json::json!([]));
+    assert_eq!(deleted["count"], 0);
 }
 
 #[test]
