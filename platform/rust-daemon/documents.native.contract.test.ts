@@ -1,11 +1,15 @@
 // biome-ignore-all lint/suspicious/noExplicitAny: Native compatibility payloads are intentionally dynamic.
 import { afterEach, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const root = process.cwd();
-const bin = join(root, "platform/rust-daemon/target/debug/signet-daemon");
+const configuredBinary = Reflect.get(process.env, "SIGNET_RUST_DAEMON_BIN");
+const bin =
+	(typeof configuredBinary === "string" ? configuredBinary.trim() : undefined) ||
+	join(root, "platform/rust-daemon/target/debug/signet-daemon");
 const children: Array<{
 	kill: (signal?: string) => void;
 	exited: Promise<number>;
@@ -155,13 +159,44 @@ test("native document compatibility routes are real, scoped, durable, and explic
 	expect(typeof record.updatedAt).toBe("string");
 
 	const chunks = await body(await fetch(`${daemon.origin}/api/documents/${documentId}/chunks`, { headers: h }));
-	expect(chunks).toMatchObject({ complete: true, limit: 100, unsupported: { persistentChunks: true } });
-	expect(Array.isArray(chunks.items)).toBe(true);
-	expect(chunks.items.map((chunk: any) => chunk.index)).toEqual(
-		[...chunks.items].sort((a: any, b: any) => a.index - b.index).map((chunk: any) => chunk.index),
-	);
-	for (const chunk of chunks.items)
-		expect(chunk).toMatchObject({ content: expect.any(String), index: expect.any(Number) });
+	expect(chunks).toMatchObject({ chunks: [], count: 0 });
+	expect(Array.isArray(chunks.chunks)).toBe(true);
+
+	await stop(daemon.child);
+	children.splice(children.indexOf(daemon.child), 1);
+	const database = new Database(join(workspace, "memory", "memories.db"));
+	try {
+		database.run(
+			"INSERT INTO memories (id,agent_id,content,metadata,deleted,is_deleted,type,project,created_at) VALUES (?,?,?,?,0,0,?,?,?)",
+			["native-chunk-early", agent, "durable early", "{}", "document_chunk", null, "2026-01-01"],
+		);
+		database.run(
+			"INSERT INTO memories (id,agent_id,content,metadata,deleted,is_deleted,type,project,created_at) VALUES (?,?,?,?,0,0,?,?,?)",
+			["native-chunk-late", agent, "durable late", "{}", "document_chunk", null, "2026-01-02"],
+		);
+		database.run("INSERT INTO document_memories (document_id,memory_id,chunk_index) VALUES (?,?,?)", [
+			documentId,
+			"native-chunk-late",
+			2,
+		]);
+		database.run("INSERT INTO document_memories (document_id,memory_id,chunk_index) VALUES (?,?,?)", [
+			documentId,
+			"native-chunk-early",
+			0,
+		]);
+	} finally {
+		database.close();
+	}
+
+	daemon = await start(workspace, agent, workspaceId);
+	const linkedChunks = await body(await fetch(`${daemon.origin}/api/documents/${documentId}/chunks`, { headers: h }));
+	expect(linkedChunks).toMatchObject({
+		count: 2,
+		chunks: [
+			{ id: "native-chunk-early", content: "durable early", type: "document_chunk", chunk_index: 0 },
+			{ id: "native-chunk-late", content: "durable late", type: "document_chunk", chunk_index: 2 },
+		],
+	});
 
 	const malformed = await fetch(`${daemon.origin}/api/documents`, { method: "POST", headers: h, body: "{" });
 	expect(malformed.status).toBeGreaterThanOrEqual(400);
@@ -182,9 +217,11 @@ test("native document compatibility routes are real, scoped, durable, and explic
 	for (const requestHeaders of [wrongAgent, wrongWorkspace]) {
 		expect((await fetch(`${daemon.origin}/api/documents`, { headers: requestHeaders })).status).toBe(200);
 		expect((await fetch(`${daemon.origin}/api/documents/${documentId}`, { headers: requestHeaders })).status).toBe(404);
-		expect(
-			(await fetch(`${daemon.origin}/api/documents/${documentId}/chunks`, { headers: requestHeaders })).status,
-		).toBe(404);
+		const forbiddenChunks = await fetch(`${daemon.origin}/api/documents/${documentId}/chunks`, {
+			headers: requestHeaders,
+		});
+		expect(forbiddenChunks.status).toBe(200);
+		expect(await forbiddenChunks.json()).toMatchObject({ chunks: [], count: 0 });
 	}
 	const privateList = await body(await fetch(`${daemon.origin}/api/documents`, { headers: wrongAgent }));
 	expect(JSON.stringify(privateList)).not.toContain(content);
