@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-25
-- Bug fixes: preserve legacy MCP records; validate tokenizer wasm path; sync retired ledger artifacts; drop exports for removed OS types; clear stale binary outputs; stabilize Node WASM names; externalize Bun FFI fallback; stabilize daemon asset builds; keep worker bundles single-file; make stdio bundle portable; remove stale retirement references; externalize native keyring; retire legacy invocation slot; await startup source cleanup; lease transcript import target; refresh sync DB audit ledger; serialize source mutations; accept deferred removal.
+- Bug fixes: preserve request deadlines and cancellation; validate plugin manifest values; handle missing proposal evidence; reject invalid judge verdicts; keep attempt fenced on read errors; reconcile late pass creation; release trigger on scope failure; preserve legacy MCP records; validate tokenizer wasm path; sync retired ledger artifacts; drop exports for removed OS types; clear stale binary outputs; stabilize Node WASM names; externalize Bun FFI fallback; stabilize daemon asset builds; keep worker bundles single-file; make stdio bundle portable; remove stale retirement references; externalize native keyring; retire legacy invocation slot; await startup source cleanup; lease transcript import target; refresh sync DB audit ledger; serialize source mutations; accept deferred removal.
 - Refactoring: remove external server surface.
 - Docs: update latest schema reference.
 
@@ -34,6 +34,21 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: deduplicate vector repair policy.
 
 ## Release Ledger
+
+## [0.226.28] - 2026-09-25
+
+Release summary: 7 bug fixes.
+Tag range: `v0.226.27..v0.226.28`.
+
+### Bug Fixes
+
+- **sdk**: preserve request deadlines and cancellation
+- **daemon**: validate plugin manifest values
+- **ontology**: handle missing proposal evidence
+- **memorybench**: reject invalid judge verdicts
+- **dreaming**: keep attempt fenced on read errors
+- **dreaming**: reconcile late pass creation
+- **dreaming**: release trigger on scope failure
 
 ## [0.226.27] - 2026-09-25
 
