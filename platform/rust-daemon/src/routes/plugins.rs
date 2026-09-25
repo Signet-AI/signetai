@@ -8,9 +8,11 @@ use axum::{
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd};
 use std::{
     fs,
-    fs::OpenOptions,
+    fs::{File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::PathBuf,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -92,11 +94,267 @@ fn iso_now() -> String {
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".into())
 }
-fn registry_path(state: &AppState) -> PathBuf {
-    state.workspace.join(".daemon/plugins/registry-v1.json")
+#[cfg(unix)]
+fn plugin_path_error(error: std::io::Error) -> ApiError {
+    if matches!(
+        error.raw_os_error(),
+        Some(libc::ELOOP) | Some(libc::ENOTDIR)
+    ) {
+        ApiError::conflict("plugin state path must not contain symlinks")
+    } else {
+        ApiError::internal(error.to_string())
+    }
 }
-fn audit_path(state: &AppState) -> PathBuf {
-    state.workspace.join(".daemon/plugins/audit-v1.ndjson")
+
+#[cfg(unix)]
+fn open_child_directory(parent: &File, name: &str, create: bool) -> Result<Option<File>, ApiError> {
+    use std::ffi::CString;
+
+    let name = CString::new(name).unwrap();
+    let mut fd = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound && create {
+            if unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o700) } != 0 {
+                let mkdir_error = std::io::Error::last_os_error();
+                if mkdir_error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(plugin_path_error(mkdir_error));
+                }
+            }
+            fd = unsafe {
+                libc::openat(
+                    parent.as_raw_fd(),
+                    name.as_ptr(),
+                    libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                )
+            };
+            if fd < 0 {
+                return Err(plugin_path_error(std::io::Error::last_os_error()));
+            }
+        } else if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        } else {
+            return Err(plugin_path_error(error));
+        }
+    }
+    Ok(Some(unsafe { File::from_raw_fd(fd) }))
+}
+
+#[cfg(unix)]
+fn plugin_directory(state: &AppState, create: bool) -> Result<Option<File>, ApiError> {
+    // Keep reads and writes anchored to the startup-admitted directory object.
+    let root = state
+        .config_dir
+        .as_ref()
+        .map_err(|_| ApiError::unavailable("workspace cannot be safely opened"))?;
+    let daemon = open_child_directory(root, ".daemon", false)?
+        .ok_or_else(|| ApiError::conflict("daemon state directory is unavailable"))?;
+    open_child_directory(&daemon, "plugins", create)
+}
+
+#[cfg(unix)]
+fn plugin_read_file(directory: &File, name: &str) -> Result<Option<File>, ApiError> {
+    use std::ffi::CString;
+
+    let name = CString::new(name).unwrap();
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::NotFound {
+            return Ok(None);
+        }
+        return Err(plugin_path_error(error));
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    if !file
+        .metadata()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .file_type()
+        .is_file()
+    {
+        return Err(ApiError::conflict(
+            "plugin state file must be a regular file",
+        ));
+    }
+    Ok(Some(file))
+}
+
+#[cfg(unix)]
+fn plugin_append_file(directory: &File, name: &str) -> Result<File, ApiError> {
+    use std::ffi::CString;
+
+    let name = CString::new(name).unwrap();
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            libc::O_WRONLY
+                | libc::O_APPEND
+                | libc::O_CREAT
+                | libc::O_NOFOLLOW
+                | libc::O_NONBLOCK
+                | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(plugin_path_error(std::io::Error::last_os_error()));
+    }
+    let file = unsafe { File::from_raw_fd(fd) };
+    if !file
+        .metadata()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .file_type()
+        .is_file()
+    {
+        return Err(ApiError::conflict(
+            "plugin audit file must be a regular file",
+        ));
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn plugin_directory(_state: &AppState, _create: bool) -> Result<Option<File>, ApiError> {
+    Err(ApiError::not_implemented(
+        "descriptor-anchored plugin state is unsupported on this platform",
+    ))
+}
+
+#[cfg(not(unix))]
+fn plugin_read_file(_directory: &File, _name: &str) -> Result<Option<File>, ApiError> {
+    Err(ApiError::not_implemented(
+        "descriptor-anchored plugin state is unsupported on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn append_audit(state: &AppState, event: &Value) -> Result<(), ApiError> {
+    let directory = plugin_directory(state, true)?
+        .ok_or_else(|| ApiError::conflict("plugin state directory is unavailable"))?;
+    let mut file = plugin_append_file(&directory, "audit-v1.ndjson")?;
+    writeln!(file, "{event}").map_err(|error| ApiError::internal(error.to_string()))?;
+    file.sync_all()
+        .map_err(|error| ApiError::internal(error.to_string()))
+}
+
+#[cfg(not(unix))]
+fn append_audit(_state: &AppState, _event: &Value) -> Result<(), ApiError> {
+    Err(ApiError::not_implemented(
+        "descriptor-anchored plugin state is unsupported on this platform",
+    ))
+}
+
+#[cfg(unix)]
+fn save(state: &AppState, value: &Value) -> Result<(), ApiError> {
+    use std::ffi::CString;
+
+    let directory = plugin_directory(state, true)?
+        .ok_or_else(|| ApiError::conflict("plugin state directory is unavailable"))?;
+    let bytes =
+        serde_json::to_vec_pretty(value).map_err(|error| ApiError::internal(error.to_string()))?;
+    let mut temporary = None;
+    for index in 0..16u32 {
+        let name = format!(".registry-v1.json.tmp-{}-{index}", std::process::id());
+        let c_name = CString::new(name.as_str()).unwrap();
+        let fd = unsafe {
+            libc::openat(
+                directory.as_raw_fd(),
+                c_name.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600,
+            )
+        };
+        if fd >= 0 {
+            temporary = Some((c_name, unsafe { File::from_raw_fd(fd) }));
+            break;
+        }
+        let error = std::io::Error::last_os_error();
+        if error.kind() != std::io::ErrorKind::AlreadyExists {
+            return Err(plugin_path_error(error));
+        }
+    }
+    let Some((c_name, mut file)) = temporary else {
+        return Err(ApiError::internal(
+            "could not allocate a plugin registry temporary file",
+        ));
+    };
+    let final_name = CString::new("registry-v1.json").unwrap();
+    let write_result = file.write_all(&bytes).and_then(|()| file.sync_all());
+    drop(file);
+    if let Err(error) = write_result {
+        unsafe { libc::unlinkat(directory.as_raw_fd(), c_name.as_ptr(), 0) };
+        return Err(ApiError::internal(error.to_string()));
+    }
+    if unsafe {
+        libc::renameat(
+            directory.as_raw_fd(),
+            c_name.as_ptr(),
+            directory.as_raw_fd(),
+            final_name.as_ptr(),
+        )
+    } != 0
+    {
+        let error = std::io::Error::last_os_error();
+        unsafe { libc::unlinkat(directory.as_raw_fd(), c_name.as_ptr(), 0) };
+        return Err(plugin_path_error(error));
+    }
+    if unsafe { libc::fsync(directory.as_raw_fd()) } != 0 {
+        return Err(ApiError::internal(
+            std::io::Error::last_os_error().to_string(),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn save(_state: &AppState, _value: &Value) -> Result<(), ApiError> {
+    Err(ApiError::not_implemented(
+        "descriptor-anchored plugin state is unsupported on this platform",
+    ))
+}
+
+fn load(state: &AppState) -> Result<Value, ApiError> {
+    let Some(directory) = plugin_directory(state, false)? else {
+        return Ok(json!({"version":1,"plugins":{}}));
+    };
+    let Some(mut file) = plugin_read_file(&directory, "registry-v1.json")? else {
+        return Ok(json!({"version":1,"plugins":{}}));
+    };
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let value: Value = serde_json::from_str(&content).map_err(|_| ApiError {
+        status: StatusCode::CONFLICT,
+        code: "invalid_registry",
+        message: "plugin registry is malformed".into(),
+    })?;
+    let valid = value.get("version").and_then(Value::as_u64) == Some(1)
+        && value
+            .get("plugins")
+            .and_then(Value::as_object)
+            .is_some_and(|plugins| plugins.iter().all(|(id, plugin)| valid_record(id, plugin)));
+    if valid {
+        Ok(value)
+    } else {
+        Err(ApiError {
+            status: StatusCode::CONFLICT,
+            code: "invalid_registry",
+            message: "plugin registry shape is invalid".into(),
+        })
+    }
 }
 fn valid_semver(version: &str) -> bool {
     let (without_build, build) = match version.split_once('+') {
@@ -235,81 +493,6 @@ fn valid_record(id: &str, value: &Value) -> bool {
         }
     }
     true
-}
-fn load(state: &AppState) -> Result<Value, ApiError> {
-    let path = registry_path(state);
-    match fs::read_to_string(path) {
-        Ok(s) => {
-            let value: Value = serde_json::from_str(&s).map_err(|_| ApiError {
-                status: StatusCode::CONFLICT,
-                code: "invalid_registry",
-                message: "plugin registry is malformed".into(),
-            })?;
-            let valid = value.get("version").and_then(Value::as_u64) == Some(1)
-                && value
-                    .get("plugins")
-                    .and_then(Value::as_object)
-                    .is_some_and(|plugins| {
-                        plugins.iter().all(|(id, plugin)| valid_record(id, plugin))
-                    });
-            if valid {
-                Ok(value)
-            } else {
-                Err(ApiError {
-                    status: StatusCode::CONFLICT,
-                    code: "invalid_registry",
-                    message: "plugin registry shape is invalid".into(),
-                })
-            }
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({"version":1,"plugins":{}})),
-        Err(e) => Err(ApiError::internal(e.to_string())),
-    }
-}
-fn save(state: &AppState, value: &Value) -> Result<(), ApiError> {
-    let path = registry_path(state);
-    let parent = path.parent().unwrap();
-    fs::create_dir_all(parent).map_err(|e| ApiError::internal(e.to_string()))?;
-    let bytes = serde_json::to_vec_pretty(value).map_err(|e| ApiError::internal(e.to_string()))?;
-    let mut tmp = None;
-    for n in 0..16u32 {
-        let candidate = parent.join(format!(
-            ".registry-v1.json.tmp-{}-{}",
-            std::process::id(),
-            n
-        ));
-        match fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
-            Ok(mut f) => {
-                f.write_all(&bytes)
-                    .and_then(|_| f.sync_all())
-                    .map_err(|e| {
-                        let _ = fs::remove_file(&candidate);
-                        ApiError::internal(e.to_string())
-                    })?;
-                tmp = Some(candidate);
-                break;
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(ApiError::internal(e.to_string())),
-        }
-    }
-    let tmp =
-        tmp.ok_or_else(|| ApiError::internal("could not allocate registry temporary file"))?;
-    fs::rename(&tmp, &path).map_err(|e| {
-        let _ = fs::remove_file(&tmp);
-        ApiError::internal(e.to_string())
-    })?;
-    #[cfg(unix)]
-    {
-        fs::File::open(parent)
-            .and_then(|f| f.sync_all())
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-    }
-    Ok(())
 }
 fn surfaces(id: &str) -> Value {
     if id == "signet-secrets" {
@@ -1047,38 +1230,40 @@ async fn audit(
     let mut out = Vec::new();
     let mut truncated = false;
     let mut bytes_scanned = 0u64;
-    if let Ok(mut f) = fs::File::open(audit_path(&s)) {
-        let len = f
-            .metadata()
-            .map_err(|e| ApiError::internal(e.to_string()))?
-            .len();
-        let start = len.saturating_sub(MAX_AUDIT_BYTES);
-        truncated = start > 0;
-        f.seek(SeekFrom::Start(start))
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        let mut text = String::new();
-        f.take(MAX_AUDIT_BYTES)
-            .read_to_string(&mut text)
-            .map_err(|e| ApiError::internal(e.to_string()))?;
-        bytes_scanned = text.len() as u64;
-        for l in text.lines().skip(if truncated && !text.starts_with('\n') {
-            1
-        } else {
-            0
-        }) {
-            if let Ok(v) = serde_json::from_str::<Value>(l) {
-                if q.plugin_id.as_ref().is_some_and(|x| v["pluginId"] != *x)
-                    || q.event.as_ref().is_some_and(|x| v["event"] != *x)
-                    || q.since
-                        .as_ref()
-                        .is_some_and(|x| v["timestamp"].as_str().unwrap_or("") < x.as_str())
-                    || q.until
-                        .as_ref()
-                        .is_some_and(|x| v["timestamp"].as_str().unwrap_or("") > x.as_str())
-                {
-                    continue;
+    if let Some(directory) = plugin_directory(&s, false)? {
+        if let Some(mut f) = plugin_read_file(&directory, "audit-v1.ndjson")? {
+            let len = f
+                .metadata()
+                .map_err(|e| ApiError::internal(e.to_string()))?
+                .len();
+            let start = len.saturating_sub(MAX_AUDIT_BYTES);
+            truncated = start > 0;
+            f.seek(SeekFrom::Start(start))
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            let mut text = String::new();
+            f.take(MAX_AUDIT_BYTES)
+                .read_to_string(&mut text)
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+            bytes_scanned = text.len() as u64;
+            for l in text.lines().skip(if truncated && !text.starts_with('\n') {
+                1
+            } else {
+                0
+            }) {
+                if let Ok(v) = serde_json::from_str::<Value>(l) {
+                    if q.plugin_id.as_ref().is_some_and(|x| v["pluginId"] != *x)
+                        || q.event.as_ref().is_some_and(|x| v["event"] != *x)
+                        || q.since
+                            .as_ref()
+                            .is_some_and(|x| v["timestamp"].as_str().unwrap_or("") < x.as_str())
+                        || q.until
+                            .as_ref()
+                            .is_some_and(|x| v["timestamp"].as_str().unwrap_or("") > x.as_str())
+                    {
+                        continue;
+                    }
+                    out.push(v);
                 }
-                out.push(v);
             }
         }
     }
@@ -1107,17 +1292,11 @@ async fn update(
         .to_string();
     st["plugins"][&id] = json!({"enabled":u.enabled,"installedAt":installed,"updatedAt":now()});
     save(&s, &st)?;
-    let audit_result = (|| -> Result<(), String> {
-        let p = audit_path(&s);
-        fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
-        let mut f = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(p)
-            .map_err(|e| e.to_string())?;
-        writeln!(f, "{}", json!({"timestamp":now(),"pluginId":id,"event":if u.enabled{"plugin.enabled"}else{"plugin.disabled"}})).map_err(|e| e.to_string())?;
-        f.sync_all().map_err(|e| e.to_string())
-    })();
+    let audit_result = append_audit(
+        &s,
+        &json!({"timestamp":now(),"pluginId":id,"event":if u.enabled{"plugin.enabled"}else{"plugin.disabled"}}),
+    )
+    .map_err(|error| error.message);
     let committed = records(&s)?.into_iter().find(|x| x["id"] == id).unwrap();
     let mut response = committed;
     response["auditDegraded"] = Value::Bool(audit_result.is_err());

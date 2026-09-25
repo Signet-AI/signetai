@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const root = join(import.meta.dir, "../..");
@@ -7,11 +7,12 @@ const root = join(import.meta.dir, "../..");
 const binary = process.env.SIGNET_RUST_DAEMON_BIN ?? join(root, "platform/rust-daemon/target/debug/signet-daemon");
 const children: Bun.Subprocess[] = [];
 const dirs: string[] = [];
-let port = 39940;
 async function start() {
 	const workspace = mkdtempSync(join(tmpdir(), "signet-plugins-"));
 	dirs.push(workspace);
-	const p = port++;
+	const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+	const p = probe.port;
+	probe.stop();
 	const child = Bun.spawn([binary], {
 		cwd: workspace,
 		env: {
@@ -75,6 +76,100 @@ it("starts, authenticates every route, filters audit, persists safely", async ()
 		(await get(origin, "/api/plugins/audit?event=plugin.disabled&since=0&until=9999999999&limit=10", auth)).status,
 	).toBe(200);
 });
+it("rejects plugin registry and audit paths redirected through a workspace symlink", async () => {
+	const { origin, workspace } = await start();
+	const outside = mkdtempSync(join(tmpdir(), "signet-plugins-outside-"));
+	dirs.push(outside);
+	const outsideRegistry = join(outside, "registry-v1.json");
+	const initialRegistry = JSON.stringify({
+		version: 1,
+		plugins: { "signet-graphiq": { enabled: true, installedAt: "1", updatedAt: "1" } },
+	});
+	writeFileSync(outsideRegistry, initialRegistry);
+	const initialAudit = '{"timestamp":"outside","pluginId":"signet-graphiq","event":"outside"}\n';
+	writeFileSync(join(outside, "audit-v1.ndjson"), initialAudit);
+	const pluginDirectory = join(workspace, ".daemon/plugins");
+	mkdirSync(pluginDirectory, { recursive: true });
+	rmSync(pluginDirectory, { recursive: true, force: true });
+	symlinkSync(outside, pluginDirectory, "dir");
+	expect((await get(origin, "/api/plugins", auth)).status).toBe(409);
+	expect((await get(origin, "/api/plugins/audit", auth)).status).toBe(409);
+	const response = await fetch(`${origin}/api/plugins/signet-graphiq`, {
+		method: "PATCH",
+		headers: { ...auth, "content-type": "application/json" },
+		body: JSON.stringify({ enabled: false }),
+	});
+	expect(response.status).toBe(409);
+	expect(readFileSync(outsideRegistry, "utf8")).toBe(initialRegistry);
+	expect(readFileSync(join(outside, "audit-v1.ndjson"), "utf8")).toBe(initialAudit);
+});
+
+it("keeps plugin state bound to the admitted workspace after pathname replacement", async () => {
+	const { origin, workspace } = await start();
+	const outside = mkdtempSync(join(tmpdir(), "signet-plugins-root-replacement-"));
+	dirs.push(outside);
+	const outsidePlugins = join(outside, ".daemon/plugins");
+	mkdirSync(outsidePlugins, { recursive: true });
+	const outsideRegistry = join(outsidePlugins, "registry-v1.json");
+	const initialRegistry = JSON.stringify({ version: 1, plugins: {} });
+	const initialAudit = '{"timestamp":"outside","pluginId":"signet-graphiq","event":"outside"}\\n';
+	writeFileSync(outsideRegistry, initialRegistry);
+	writeFileSync(join(outsidePlugins, "audit-v1.ndjson"), initialAudit);
+	const pinnedWorkspace = `${workspace}-pinned`;
+	renameSync(workspace, pinnedWorkspace);
+	dirs.push(pinnedWorkspace);
+	symlinkSync(outside, workspace, "dir");
+	const response = await fetch(`${origin}/api/plugins/signet-graphiq`, {
+		method: "PATCH",
+		headers: { ...auth, "content-type": "application/json" },
+		body: JSON.stringify({ enabled: false }),
+	});
+	expect(response.status).toBe(200);
+	expect((await response.json()).enabled).toBe(false);
+	expect(readFileSync(outsideRegistry, "utf8")).toBe(initialRegistry);
+	expect(readFileSync(join(outsidePlugins, "audit-v1.ndjson"), "utf8")).toBe(initialAudit);
+	const savedRegistry = JSON.parse(readFileSync(join(pinnedWorkspace, ".daemon/plugins/registry-v1.json"), "utf8"));
+	expect(savedRegistry.plugins["signet-graphiq"].enabled).toBe(false);
+	expect(readFileSync(join(pinnedWorkspace, ".daemon/plugins/audit-v1.ndjson"), "utf8")).toContain("plugin.disabled");
+});
+
+it("rejects registry and audit leaf symlinks without reading or appending outside", async () => {
+	const { origin, workspace } = await start();
+	const outside = mkdtempSync(join(tmpdir(), "signet-plugins-leaf-symlink-"));
+	dirs.push(outside);
+	const pluginDirectory = join(workspace, ".daemon/plugins");
+	mkdirSync(pluginDirectory, { recursive: true });
+	const outsideRegistry = join(outside, "registry-v1.json");
+	const outsideAudit = join(outside, "audit-v1.ndjson");
+	const initialRegistry = JSON.stringify({ version: 1, plugins: {} });
+	const initialAudit = `${JSON.stringify({ timestamp: "outside", pluginId: "signet-graphiq", event: "outside" })}\n`;
+	writeFileSync(outsideRegistry, initialRegistry);
+	writeFileSync(outsideAudit, initialAudit);
+	const registryPath = join(pluginDirectory, "registry-v1.json");
+	const auditPath = join(pluginDirectory, "audit-v1.ndjson");
+	symlinkSync(outsideRegistry, registryPath, "file");
+	expect((await get(origin, "/api/plugins", auth)).status).toBe(409);
+	rmSync(registryPath);
+	writeFileSync(
+		registryPath,
+		JSON.stringify({
+			version: 1,
+			plugins: { "signet-graphiq": { enabled: true, installedAt: "1", updatedAt: "1" } },
+		}),
+	);
+	symlinkSync(outsideAudit, auditPath, "file");
+	expect((await get(origin, "/api/plugins/audit", auth)).status).toBe(409);
+	const response = await fetch(`${origin}/api/plugins/signet-graphiq`, {
+		method: "PATCH",
+		headers: { ...auth, "content-type": "application/json" },
+		body: JSON.stringify({ enabled: false }),
+	});
+	expect(response.status).toBe(200);
+	expect((await response.json()).auditDegraded).toBe(true);
+	expect(readFileSync(outsideRegistry, "utf8")).toBe(initialRegistry);
+	expect(readFileSync(outsideAudit, "utf8")).toBe(initialAudit);
+});
+
 it("refuses malformed registry instead of overwriting it", async () => {
 	const { origin, workspace } = await start();
 	const path = join(workspace, ".daemon/plugins/registry-v1.json");
