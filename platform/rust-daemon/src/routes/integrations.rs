@@ -12,8 +12,14 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{fs::OpenOptions, time::Duration};
-use tokio::fs;
+#[cfg(unix)]
+use std::{
+    ffi::CString,
+    io::{self, Read, Write},
+    os::fd::{AsRawFd, FromRawFd},
+    sync::atomic::{AtomicU64, Ordering},
+};
+use std::{fs::File, sync::Arc, time::Duration};
 
 use crate::{execute, ApiError, AppState};
 use signet_core_native::Operation;
@@ -68,23 +74,11 @@ struct ConfigWriteRequest {
 }
 
 async fn config(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
-    let directory = state.workspace.clone();
     let mut files = Vec::new();
     for name in CONFIG_NAMES {
-        let path = directory.join(name);
-        let metadata = match bounded(fs::symlink_metadata(&path)).await {
-            Ok(metadata) if metadata.is_file() => metadata,
-            Ok(_) | Err(_) => continue,
-        };
-        if metadata.len() > MAX_CONFIG_FILE_BYTES {
-            return Err(ApiError::internal(format!(
-                "configuration file {name} exceeds size limit"
-            )));
+        if let Some((content, size)) = read_config_file(&state, name).await? {
+            files.push(json!({ "name": name, "content": content, "size": size }));
         }
-        let content = bounded(read_utf8_no_follow(path)).await.map_err(|_| {
-            ApiError::unavailable(format!("configuration file {name} could not be read"))
-        })?;
-        files.push(json!({ "name": name, "content": content, "size": metadata.len() }));
     }
     Ok(Json(json!({ "files": files })))
 }
@@ -101,32 +95,16 @@ async fn write_config(
     if !CONFIG_NAMES.contains(&request.file.as_str()) {
         return Err(ApiError::bad_request("configuration file is not writable"));
     }
-    let path = state.workspace.join(&request.file);
-    if let Ok(metadata) = fs::symlink_metadata(&path).await {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(ApiError::bad_request(
-                "configuration target is not a regular file",
-            ));
-        }
-    }
-    let temporary = state
-        .workspace
-        .join(format!(".{}.tmp-{}", request.file, std::process::id()));
-    bounded(write_new_file(&temporary, request.content.as_bytes()))
-        .await
-        .map_err(|_| ApiError::unavailable("configuration file could not be written"))?;
-    if let Err(error) = fs::rename(&temporary, &path).await {
-        let _ = fs::remove_file(&temporary).await;
-        return Err(ApiError::unavailable(format!(
-            "configuration file could not be committed: {error}"
-        )));
-    }
-    bounded(sync_directory(&state.workspace))
-        .await
-        .map_err(|_| ApiError::unavailable("configuration directory could not be synchronized"))?;
-    Ok(Json(
-        json!({ "name": request.file, "size": request.content.len() }),
-    ))
+    let root = config_root(&state)?;
+    let name = request.file;
+    let content = request.content;
+    let size = content.len();
+    let (name, size) = blocking_config(move || {
+        write_config_at(&root, &name, &content)?;
+        Ok((name, size))
+    })
+    .await?;
+    Ok(Json(json!({ "name": name, "size": size })))
 }
 
 #[derive(Debug, Deserialize)]
@@ -194,9 +172,9 @@ async fn unsupported_harness_regeneration() -> (StatusCode, Json<Value>) {
 }
 
 async fn harnesses(State(state): State<AppState>) -> Json<Value> {
-    let configured = match bounded(read_utf8_no_follow(state.workspace.join("agent.yaml"))).await {
-        Ok(content) => parse_harnesses(&content),
-        Err(_) => Vec::new(),
+    let configured = match read_config_file(&state, "agent.yaml").await {
+        Ok(Some((content, _))) => parse_harnesses(&content),
+        _ => Vec::new(),
     };
     let connectors: Vec<Value> = configured
         .iter()
@@ -305,102 +283,209 @@ async fn integration_health(State(state): State<AppState>) -> Result<Json<Value>
     })))
 }
 
-async fn bounded<F, T>(operation: F) -> Result<T, String>
+fn config_root(state: &AppState) -> Result<Arc<File>, ApiError> {
+    state
+        .config_dir
+        .as_ref()
+        .map(Arc::clone)
+        .map_err(|_| ApiError::unavailable("safe configuration directory is unavailable"))
+}
+
+async fn read_config_file(
+    state: &AppState,
+    name: &'static str,
+) -> Result<Option<(String, u64)>, ApiError> {
+    let root = config_root(state)?;
+    blocking_config(move || read_config_at(&root, name)).await
+}
+
+async fn blocking_config<T, F>(operation: F) -> Result<T, ApiError>
 where
-    F: std::future::Future<Output = std::io::Result<T>>,
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, ApiError> + Send + 'static,
 {
-    tokio::time::timeout(IO_TIMEOUT, operation)
-        .await
-        .map_err(|_| "operation timed out".to_owned())?
-        .map_err(|error| error.to_string())
-}
-
-async fn read_utf8_no_follow(path: std::path::PathBuf) -> std::io::Result<String> {
-    tokio::task::spawn_blocking(move || {
-        let mut file = open_read_no_follow(&path)?;
-        let mut content = String::new();
-        std::io::Read::read_to_string(&mut file, &mut content)?;
-        Ok(content)
-    })
-    .await
-    .map_err(std::io::Error::other)?
-}
-
-async fn write_new_file(path: &std::path::Path, content: &[u8]) -> std::io::Result<()> {
-    let path = path.to_owned();
-    let content = content.to_owned();
-    tokio::task::spawn_blocking(move || {
-        use std::io::Write;
-        let mut file = open_new_file_no_follow(&path)?;
-        file.write_all(&content)?;
-        file.sync_all()
-    })
-    .await
-    .map_err(std::io::Error::other)?
-}
-
-async fn sync_directory(path: &std::path::Path) -> std::io::Result<()> {
-    let path = path.to_owned();
-    tokio::task::spawn_blocking(move || std::fs::File::open(path)?.sync_all())
-        .await
-        .map_err(std::io::Error::other)?
+    match tokio::time::timeout(IO_TIMEOUT, tokio::task::spawn_blocking(operation)).await {
+        Err(_) => Err(ApiError::unavailable(
+            "configuration file operation timed out",
+        )),
+        Ok(Err(_)) => Err(ApiError::unavailable("configuration file operation failed")),
+        Ok(Ok(result)) => result,
+    }
 }
 
 #[cfg(unix)]
-fn open_read_no_follow(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(0o400000)
-        .open(path)
+fn read_config_at(root: &File, name: &str) -> Result<Option<(String, u64)>, ApiError> {
+    let name = CString::new(name)
+        .map_err(|_| ApiError::bad_request("configuration filename is invalid"))?;
+    let mut file = match open_config_at(root, &name, libc::O_RDONLY | libc::O_NONBLOCK, 0) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error)
+            if matches!(
+                error.raw_os_error(),
+                Some(libc::ELOOP) | Some(libc::ENOTDIR)
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(_) => {
+            return Err(ApiError::unavailable(
+                "configuration file could not be read",
+            ))
+        }
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|_| ApiError::unavailable("configuration file could not be read"))?;
+    if !metadata.is_file() {
+        return Ok(None);
+    }
+    if metadata.len() > MAX_CONFIG_FILE_BYTES {
+        return Err(ApiError::internal("configuration file exceeds size limit"));
+    }
+    let mut content = String::new();
+    (&mut file)
+        .take(MAX_CONFIG_FILE_BYTES + 1)
+        .read_to_string(&mut content)
+        .map_err(|_| ApiError::unavailable("configuration file could not be read"))?;
+    let size = u64::try_from(content.len())
+        .map_err(|_| ApiError::internal("configuration file size is not representable"))?;
+    if size > MAX_CONFIG_FILE_BYTES {
+        return Err(ApiError::internal("configuration file exceeds size limit"));
+    }
+    Ok(Some((content, size)))
 }
 
 #[cfg(not(unix))]
-fn open_read_no_follow(_path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "safe no-follow configuration reads are unavailable on this platform",
+fn read_config_at(_root: &File, _name: &str) -> Result<Option<(String, u64)>, ApiError> {
+    Err(ApiError::not_implemented(
+        "descriptor-anchored configuration reads are unsupported on this platform",
     ))
 }
 
 #[cfg(unix)]
-fn open_new_file_no_follow(path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
+fn write_config_at(root: &File, name: &str, content: &str) -> Result<(), ApiError> {
+    let target = CString::new(name)
+        .map_err(|_| ApiError::bad_request("configuration filename is invalid"))?;
+    let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+    let inspection = unsafe {
+        libc::fstatat(
+            root.as_raw_fd(),
+            target.as_ptr(),
+            metadata.as_mut_ptr(),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    };
+    if inspection == 0 {
+        let metadata = unsafe { metadata.assume_init() };
+        if metadata.st_mode & libc::S_IFMT != libc::S_IFREG {
+            return Err(ApiError::bad_request(
+                "configuration target is not a regular file",
+            ));
+        }
+    } else {
+        let error = io::Error::last_os_error();
+        if error.kind() != io::ErrorKind::NotFound {
+            return Err(
+                if matches!(
+                    error.raw_os_error(),
+                    Some(libc::ELOOP) | Some(libc::ENOTDIR)
+                ) {
+                    ApiError::bad_request("configuration target is not a regular file")
+                } else {
+                    ApiError::unavailable("configuration target could not be inspected")
+                },
+            );
+        }
+    }
 
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .custom_flags(0o400000)
-        .open(path)
+    static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let mut temporary = None;
+    for _ in 0..16 {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let name = CString::new(format!(".{name}.tmp-{}-{sequence}", std::process::id()))
+            .map_err(|_| ApiError::internal("configuration temporary filename is invalid"))?;
+        match open_config_at(
+            root,
+            &name,
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NONBLOCK,
+            0o666,
+        ) {
+            Ok(file) => {
+                temporary = Some((name, file));
+                break;
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(_) => {
+                return Err(ApiError::unavailable(
+                    "configuration file could not be written",
+                ))
+            }
+        }
+    }
+    let Some((temporary_name, mut file)) = temporary else {
+        return Err(ApiError::unavailable(
+            "configuration temporary file could not be created",
+        ));
+    };
+    if file
+        .write_all(content.as_bytes())
+        .and_then(|()| file.sync_all())
+        .is_err()
+    {
+        let _ = unsafe { libc::unlinkat(root.as_raw_fd(), temporary_name.as_ptr(), 0) };
+        return Err(ApiError::unavailable(
+            "configuration file could not be written",
+        ));
+    }
+    drop(file);
+    if unsafe {
+        libc::renameat(
+            root.as_raw_fd(),
+            temporary_name.as_ptr(),
+            root.as_raw_fd(),
+            target.as_ptr(),
+        )
+    } != 0
+    {
+        let _ = unsafe { libc::unlinkat(root.as_raw_fd(), temporary_name.as_ptr(), 0) };
+        return Err(ApiError::unavailable(
+            "configuration file could not be committed",
+        ));
+    }
+    if unsafe { libc::fsync(root.as_raw_fd()) } != 0 {
+        return Err(ApiError::unavailable(
+            "configuration directory could not be synchronized",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn open_new_file_no_follow(_path: &std::path::Path) -> std::io::Result<std::fs::File> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "safe no-follow configuration writes are unavailable on this platform",
+fn write_config_at(_root: &File, _name: &str, _content: &str) -> Result<(), ApiError> {
+    Err(ApiError::not_implemented(
+        "descriptor-anchored configuration writes are unsupported on this platform",
     ))
 }
 
-#[cfg(all(test, not(unix)))]
-mod platform_contract_tests {
-    use super::{open_new_file_no_follow, open_read_no_follow};
-    use std::io::ErrorKind;
-
-    #[test]
-    fn configuration_io_fails_closed_without_no_follow_support() {
-        assert_eq!(
-            open_read_no_follow(std::path::Path::new("config.yaml"))
-                .unwrap_err()
-                .kind(),
-            ErrorKind::Unsupported
-        );
-        assert_eq!(
-            open_new_file_no_follow(std::path::Path::new("config.yaml"))
-                .unwrap_err()
-                .kind(),
-            ErrorKind::Unsupported
-        );
+#[cfg(unix)]
+fn open_config_at(
+    root: &File,
+    name: &CString,
+    flags: libc::c_int,
+    mode: libc::mode_t,
+) -> io::Result<File> {
+    let descriptor = unsafe {
+        libc::openat(
+            root.as_raw_fd(),
+            name.as_ptr(),
+            flags | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            mode,
+        )
+    };
+    if descriptor < 0 {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(unsafe { File::from_raw_fd(descriptor) })
     }
 }

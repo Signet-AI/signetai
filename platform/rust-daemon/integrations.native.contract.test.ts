@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, symlinkSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, renameSync, symlinkSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -10,20 +10,21 @@ const binary =
 	join(root, "platform/rust-daemon/target/debug/signet-daemon");
 const children: ReturnType<typeof Bun.spawn>[] = [];
 const workspaces: string[] = [];
-let port = 39_100;
-
 async function start(existingWorkspace?: string) {
 	expect(existsSync(binary)).toBe(true);
 	const workspace = existingWorkspace ?? mkdtempSync(join(tmpdir(), "signet-integrations-"));
 	if (!existingWorkspace) workspaces.push(workspace);
+	const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
+	const port = probe.port;
+	probe.stop();
 	const child = Bun.spawn([binary], {
 		cwd: root,
-		env: { ...process.env, SIGNET_PATH: workspace, SIGNET_BIND: "127.0.0.1", SIGNET_PORT: String(port++) },
+		env: { ...process.env, SIGNET_PATH: workspace, SIGNET_BIND: "127.0.0.1", SIGNET_PORT: String(port) },
 		stdout: "ignore",
 		stderr: "pipe",
 	});
 	children.push(child);
-	const origin = `http://127.0.0.1:${port - 1}`;
+	const origin = `http://127.0.0.1:${port}`;
 	for (let i = 0; i < 100; i++) {
 		try {
 			if ((await fetch(`${origin}/health/ready`)).ok) return { origin, workspace };
@@ -79,6 +80,36 @@ describe("native configuration and integration boundary", () => {
 		const restarted = await start(first.workspace);
 		const persisted = await fetch(`${restarted.origin}/api/config`);
 		expect((await persisted.json()).files).toContainEqual({ name: "SOUL.md", content: "café — native", size: 16 });
+	});
+
+	it("keeps config reads and writes bound to the admitted workspace after pathname replacement", async () => {
+		const workspace = mkdtempSync(join(tmpdir(), "signet-integrations-root-replacement-"));
+		workspaces.push(workspace);
+		writeFileSync(join(workspace, "SOUL.md"), "inside-before");
+		writeFileSync(join(workspace, "agent.yaml"), "harnesses:\n  - pinned-harness\n");
+		const { origin } = await start(workspace);
+		const outside = mkdtempSync(join(tmpdir(), "signet-integrations-outside-"));
+		workspaces.push(outside);
+		const outsideConfig = join(outside, "SOUL.md");
+		writeFileSync(outsideConfig, "outside-secret");
+		writeFileSync(join(outside, "agent.yaml"), "harnesses:\n  - outside-harness\n");
+		const pinnedWorkspace = `${workspace}-admitted`;
+		workspaces.push(pinnedWorkspace);
+		renameSync(workspace, pinnedWorkspace);
+		symlinkSync(outside, workspace, "dir");
+
+		const read = await (await fetch(`${origin}/api/config`)).json();
+		const harnesses = await (await fetch(`${origin}/api/harnesses`)).json();
+		const write = await fetch(`${origin}/api/config`, {
+			method: "POST",
+			headers: { "content-type": "application/json" },
+			body: JSON.stringify({ file: "SOUL.md", content: "inside-after" }),
+		});
+		expect(write.status).toBe(200);
+		expect(readFileSync(outsideConfig, "utf8")).toBe("outside-secret");
+		expect(read.files).toContainEqual({ name: "SOUL.md", content: "inside-before", size: 13 });
+		expect(harnesses.configuredHarnesses).toEqual(["pinned-harness"]);
+		expect(readFileSync(join(pinnedWorkspace, "SOUL.md"), "utf8")).toBe("inside-after");
 	});
 
 	it("rejects traversal, symlink targets, and oversize payloads", async () => {
