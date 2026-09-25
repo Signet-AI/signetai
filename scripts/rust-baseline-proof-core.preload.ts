@@ -12,7 +12,7 @@ const evidenceFile = process.env.SIGNET_RUST_CORE_EVIDENCE_FILE;
 
 function recordEvidence(operation: string): void {
 	if (!evidenceFile) throw new Error("SIGNET_RUST_CORE_EVIDENCE_FILE is required");
-	appendFileSync(evidenceFile, formatFreshRustCoreEvidence(driverPath, operation));
+	appendFileSync(evidenceFile, formatFreshRustCoreEvidence(driverPath, operation, new Error().stack ?? ""));
 }
 
 // biome-ignore lint/suspicious/noExplicitAny: transport JSON is intentionally dynamic.

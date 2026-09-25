@@ -43,6 +43,7 @@ function recordEvidence(
 			success: result.success ?? null,
 			original,
 			replaced,
+			callerStack: new Error().stack ?? "",
 			status: transport === "spawn" ? "native-created" : "native-completed",
 		})}\n`,
 	);

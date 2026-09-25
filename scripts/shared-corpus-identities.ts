@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { relative, resolve, sep } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import * as ts from "typescript";
 
 export type CaseStatus = "passed" | "failed" | "skipped";
@@ -13,6 +13,8 @@ export type JUnitCaseIdentity = {
 	readonly name: string;
 	readonly suitePath: readonly string[];
 	readonly status: CaseStatus;
+	readonly runtimeStartLine?: number;
+	readonly runtimeEndLine?: number;
 	readonly parameters?: unknown;
 	readonly parameterIndex?: number;
 	readonly parameterDigest?: string;
@@ -49,6 +51,8 @@ type StaticValue = { readonly known: true; readonly value: unknown } | { readonl
 
 type SourceTest = {
 	readonly line: number;
+	readonly runtimeStartLine?: number;
+	readonly runtimeEndLine?: number;
 	readonly suitePath: readonly string[];
 	readonly name: string | undefined;
 	readonly parameterRows: readonly unknown[] | null | undefined;
@@ -323,11 +327,24 @@ function sourceIndex(sourceRoot: string, file: string): SourceIndex | undefined 
 				const name = stringLiteral(nameArgument);
 				if (nameArgument) {
 					const line = source.getLineAndCharacterOfPosition(nameArgument.getStart(source)).line + 1;
+					const callback = [...node.arguments]
+						.reverse()
+						.find((argument) => ts.isArrowFunction(argument) || ts.isFunctionExpression(argument));
+					const callbackBody = callback ? callback.body : undefined;
+					const runtimeStartLine = callbackBody
+						? source.getLineAndCharacterOfPosition(callbackBody.getStart(source)).line + 1
+						: undefined;
+					const runtimeEndLine = callbackBody
+						? source.getLineAndCharacterOfPosition(callbackBody.getEnd()).line + 1
+						: undefined;
 					const testConcurrent = info.methods.includes("sequential")
 						? false
 						: concurrent || info.methods.includes("concurrent");
 					tests.push({
 						line,
+						...(runtimeStartLine !== undefined && runtimeEndLine !== undefined
+							? { runtimeStartLine, runtimeEndLine }
+							: {}),
 						suitePath,
 						name,
 						parameterRows: parameterRows(node, aliases),
@@ -510,6 +527,12 @@ export function resolveJUnitCaseIdentities(caseXml: readonly string[], sourceRoo
 			name: testcase.name,
 			suitePath,
 			status: testcase.status,
+			...(sourceCase?.source.runtimeStartLine !== undefined && sourceCase.source.runtimeEndLine !== undefined
+				? {
+						runtimeStartLine: sourceCase.source.runtimeStartLine,
+						runtimeEndLine: sourceCase.source.runtimeEndLine,
+					}
+				: {}),
 			...(parameter && parameterDigest !== undefined
 				? {
 						parameters: parameter.row,
@@ -530,5 +553,87 @@ export function resolveJUnitCaseIdentities(caseXml: readonly string[], sourceRoo
 		suiteHookIdentities: hookIdentities,
 		identityCollisions,
 		unresolvedIdentityCount,
+	};
+}
+
+export type RuntimeCaseEvidenceResolution = {
+	readonly caseKeys: readonly string[];
+	readonly unmatchedEvidenceCount: number;
+	readonly ambiguousEvidenceCount: number;
+};
+
+type RuntimeFrame = { readonly file: string; readonly line: number };
+
+function runtimeFrames(stack: string): RuntimeFrame[] {
+	const frames: RuntimeFrame[] = [];
+	for (const rawLine of stack.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		const location = line.match(/\((.*)\)$/)?.[1] ?? line.replace(/^at\s+/, "");
+		const match = location.match(/^(.*):(\d+):(\d+)$/);
+		if (!match) continue;
+		const file = match[1];
+		const sourceLine = Number(match[2]);
+		if (!file || !isAbsolute(file) || !Number.isSafeInteger(sourceLine) || sourceLine < 1) continue;
+		frames.push({ file, line: sourceLine });
+	}
+	return frames;
+}
+
+function relativeRuntimeFile(sourceRoot: string, file: string): string | undefined {
+	const root = resolve(sourceRoot);
+	const path = resolve(file);
+	const pathFromRoot = relative(root, path);
+	if (!pathFromRoot || pathFromRoot === ".." || pathFromRoot.startsWith(`..${sep}`) || pathFromRoot.startsWith(sep))
+		return undefined;
+	return pathFromRoot.split(sep).join("/");
+}
+
+/** Attribute native-boundary stack evidence only when one JUnit case owns its source frame. */
+export function resolveRuntimeCaseEvidence(
+	caseXml: readonly string[],
+	sourceRoot: string,
+	stacks: readonly string[],
+): RuntimeCaseEvidenceResolution {
+	const { caseIdentities, identityCollisions } = resolveJUnitCaseIdentities(caseXml, sourceRoot);
+	const collisions = new Set(identityCollisions.map((collision) => collision.key));
+	const attributed = new Set<string>();
+	let unmatchedEvidenceCount = 0;
+	let ambiguousEvidenceCount = 0;
+	for (const stack of stacks) {
+		const candidates = new Set<number>();
+		for (const frame of runtimeFrames(stack)) {
+			const file = relativeRuntimeFile(sourceRoot, frame.file);
+			if (!file) continue;
+			for (const [index, identity] of caseIdentities.entries()) {
+				if (
+					identity.file === file &&
+					identity.runtimeStartLine !== undefined &&
+					identity.runtimeEndLine !== undefined &&
+					frame.line >= identity.runtimeStartLine &&
+					frame.line <= identity.runtimeEndLine
+				)
+					candidates.add(index);
+			}
+		}
+		if (candidates.size === 0) {
+			unmatchedEvidenceCount += 1;
+			continue;
+		}
+		if (candidates.size !== 1) {
+			ambiguousEvidenceCount += 1;
+			continue;
+		}
+		const index = [...candidates][0];
+		const identity = index === undefined ? undefined : caseIdentities[index];
+		if (!identity || collisions.has(identity.key)) {
+			ambiguousEvidenceCount += 1;
+			continue;
+		}
+		attributed.add(identity.key);
+	}
+	return {
+		caseKeys: [...attributed].sort(),
+		unmatchedEvidenceCount,
+		ambiguousEvidenceCount,
 	};
 }

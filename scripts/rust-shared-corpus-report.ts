@@ -159,7 +159,11 @@ function outputCounter(source: string, name: keyof SuiteCounters, fallback: numb
 }
 
 /** Preserve Bun's declared totals while adding native evidence for the parent runner. */
-export function wrapRustJUnitReport(reportXml: string, nativeEvidence: boolean): WrappedRustJUnitReport {
+export function wrapRustJUnitReport(
+	reportXml: string,
+	nativeEvidence: boolean,
+	perCaseEvidence = false,
+): WrappedRustJUnitReport {
 	const cases = reportXml.match(TESTCASE_PATTERN) ?? [];
 	if (cases.length === 0) throw new Error("Rust child produced no real testcase identities");
 	assertDeclaredTestcaseCounts(reportXml, cases.length);
@@ -172,9 +176,10 @@ export function wrapRustJUnitReport(reportXml: string, nativeEvidence: boolean):
 	const failures = outputCounter(rootOpening, "failures", observedFailures, aggregate);
 	const errors = outputCounter(rootOpening, "errors", observedErrors, aggregate);
 	const skipped = outputCounter(rootOpening, "skipped", observedSkipped, aggregate);
+	const evidenceScope = !nativeEvidence ? "none" : perCaseEvidence ? "per-case" : "batch";
 	return {
 		cases,
 		caseCount: cases.length,
-		xml: `<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" nativeEvidence="${nativeEvidence ? "true" : "false"}" tests="${tests}" failures="${failures}" errors="${errors}" skipped="${skipped}">${cases.join("")}</testsuite>`,
+		xml: `<?xml version="1.0" encoding="UTF-8"?><testsuite name="rust-shared-corpus" nativeEvidence="${nativeEvidence ? "true" : "false"}" nativeEvidenceScope="${evidenceScope}" tests="${tests}" failures="${failures}" errors="${errors}" skipped="${skipped}">${cases.join("")}</testsuite>`,
 	};
 }

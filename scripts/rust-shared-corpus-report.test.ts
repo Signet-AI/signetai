@@ -77,6 +77,18 @@ test("falls back to observed case totals when Bun omits suite counters", () => {
 	expect(wrapped.xml).toContain('skipped="0"');
 });
 
+test("reports per-case native evidence only when the adapter proves that scope", () => {
+	const child = '<testsuite name="bun test" tests="1"><testcase file="a.test.ts" name="one"/></testsuite>';
+	const wrapped = wrapRustJUnitReport(child, true, true);
+
+	expect(wrapped.xml).toContain('nativeEvidence="true"');
+	expect(wrapped.xml).toContain('nativeEvidenceScope="per-case"');
+	withTestSource('test("one", () => {});', (sourceRoot) => {
+		const accounting = parseJUnitReport(wrapped.xml, ["a.test.ts"], 0, sourceRoot);
+		expect(accounting.nativeEvidenceScope).toBe("per-case");
+	});
+});
+
 test("uses aggregate counters from a testsuites root", () => {
 	const child =
 		'<testsuites name="bun test" tests="2" failures="1" errors="0" skipped="0">' +

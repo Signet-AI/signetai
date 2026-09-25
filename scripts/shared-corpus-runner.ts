@@ -58,6 +58,52 @@ export function caseCoverageIncomplete(backend: Backend, cases: readonly CaseBac
 	return backend === "rust" && (cases.length === 0 || cases.some((entry) => entry.backend !== "rust"));
 }
 
+function stringArray(value: unknown): string[] | undefined {
+	if (!Array.isArray(value)) return undefined;
+	const output: string[] = [];
+	for (const item of value) {
+		if (typeof item !== "string") return undefined;
+		output.push(item);
+	}
+	return output;
+}
+
+export function parseRustCaseEvidenceKeys(value: unknown, expectedKeys: readonly string[]): Set<string> | undefined {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	if (
+		!("version" in value) ||
+		!("caseKeys" in value) ||
+		!("missingCaseKeys" in value) ||
+		!("unmatchedEvidenceCount" in value) ||
+		!("ambiguousEvidenceCount" in value) ||
+		value.version !== 1 ||
+		typeof value.unmatchedEvidenceCount !== "number" ||
+		!Number.isSafeInteger(value.unmatchedEvidenceCount) ||
+		value.unmatchedEvidenceCount < 0 ||
+		typeof value.ambiguousEvidenceCount !== "number" ||
+		!Number.isSafeInteger(value.ambiguousEvidenceCount) ||
+		value.ambiguousEvidenceCount < 0
+	)
+		return undefined;
+	const caseKeys = stringArray(value.caseKeys);
+	const missingCaseKeys = stringArray(value.missingCaseKeys);
+	if (!caseKeys || !missingCaseKeys) return undefined;
+	const expected = new Set(expectedKeys);
+	const attributed = new Set(caseKeys);
+	const missing = new Set(missingCaseKeys);
+	if (
+		expected.size !== expectedKeys.length ||
+		attributed.size !== caseKeys.length ||
+		missing.size !== missingCaseKeys.length ||
+		caseKeys.some((key) => !expected.has(key)) ||
+		missingCaseKeys.some((key) => !expected.has(key) || attributed.has(key)) ||
+		attributed.size + missing.size !== expected.size ||
+		[...expected].some((key) => !attributed.has(key) && !missing.has(key))
+	)
+		return undefined;
+	return attributed;
+}
+
 export function requiresNativeEvidence(backend: Backend, scope: NativeEvidenceScope): boolean {
 	return backend === "rust" && scope !== "per-case";
 }
@@ -198,7 +244,8 @@ export function resolveReportPath(backend: Backend, _repo: string, report?: stri
 	return backend === "rust" ? undefined : undefined;
 }
 export function clearReport(report?: string): void {
-	if (report && existsSync(report)) unlinkSync(report);
+	if (!report) return;
+	for (const path of [report, `${report}.case-evidence.json`]) if (existsSync(path)) unlinkSync(path);
 }
 export function buildTypeScriptCommand(selected?: string[], report?: string): string[] {
 	if (selected && report)
@@ -278,10 +325,12 @@ export function parseJUnitReport(
 		const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 		return source.match(new RegExp(`(?:^|\\s)${escaped}\\s*=\\s*(["'])(.*?)\\1`))?.[2] ?? "";
 	};
-	const nativeEvidence = [...xml.matchAll(/<testsuite\b[^>]*>/g)].some(
-		(match) => attribute(match[0], "nativeEvidence") === "true",
+	const evidenceSuites = [...xml.matchAll(/<testsuite\b[^>]*>/g)].map((match) => match[0]);
+	const nativeEvidence = evidenceSuites.some((suite) => attribute(suite, "nativeEvidence") === "true");
+	const hasPerCaseEvidence = evidenceSuites.some(
+		(suite) => attribute(suite, "nativeEvidence") === "true" && attribute(suite, "nativeEvidenceScope") === "per-case",
 	);
-	const nativeEvidenceScope: NativeEvidenceScope = nativeEvidence ? "batch" : "none";
+	const nativeEvidenceScope: NativeEvidenceScope = !nativeEvidence ? "none" : hasPerCaseEvidence ? "per-case" : "batch";
 	const suiteStats = (() => {
 		type Stats = { tests?: number; failures?: number; errors?: number };
 		type SuiteNode = { kind: "testsuites" | "testsuite"; stats: Stats; childSuites: number };
@@ -493,13 +542,27 @@ export function run(
 		backend === "typescript" ? o.worktree : repo,
 	);
 	const sourceHashes = new Map(manifest.protectedCorpus.map((entry) => [entry.path, entry.sha256]));
+	let rustCaseKeys = new Set<string>();
+	if (backend === "rust" && report) {
+		const caseEvidenceReport = `${report}.case-evidence.json`;
+		if (existsSync(caseEvidenceReport)) {
+			try {
+				const evidence: unknown = JSON.parse(readFileSync(caseEvidenceReport, "utf8"));
+				rustCaseKeys =
+					parseRustCaseEvidenceKeys(
+						evidence,
+						accounting.caseIdentities.map((identity) => identity.key),
+					) ?? rustCaseKeys;
+			} catch {}
+		}
+	}
 	const caseBackendEvidence: CaseBackendEvidence[] = accounting.caseIdentities.map((identity) => ({
 		identity: identity.key,
 		file: identity.file,
 		line: identity.line,
 		sourceSha256: sourceHashes.get(identity.file) ?? null,
 		status: identity.status,
-		backend: backend === "typescript" ? "typescript" : "unverified",
+		backend: backend === "typescript" ? "typescript" : rustCaseKeys.has(identity.key) ? "rust" : "unverified",
 	}));
 	const caseCoverageIsIncomplete = caseCoverageIncomplete(backend, caseBackendEvidence);
 	const caseBackendCounts = {

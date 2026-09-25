@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { caseCoverageIncomplete, type CaseBackendEvidence } from "./shared-corpus-runner";
+import { caseCoverageIncomplete, parseRustCaseEvidenceKeys, type CaseBackendEvidence } from "./shared-corpus-runner";
 
 describe("shared-corpus per-case backend attribution", () => {
 	test("Rust is incomplete when cases remain unverified despite batch evidence", () => {
@@ -26,5 +26,18 @@ describe("shared-corpus per-case backend attribution", () => {
 			{ identity: "core.test.ts:1:core", file: "platform/core/core.test.ts", backend: "typescript" },
 		];
 		expect(caseCoverageIncomplete("typescript", cases)).toBe(false);
+	});
+
+	test("accepts only an exact, non-overlapping Rust evidence partition", () => {
+		const evidence = {
+			version: 1,
+			caseKeys: ["case-a"],
+			missingCaseKeys: ["case-b"],
+			unmatchedEvidenceCount: 2,
+			ambiguousEvidenceCount: 0,
+		};
+		expect([...(parseRustCaseEvidenceKeys(evidence, ["case-a", "case-b"]) ?? [])]).toEqual(["case-a"]);
+		expect(parseRustCaseEvidenceKeys({ ...evidence, missingCaseKeys: [] }, ["case-a", "case-b"])).toBeUndefined();
+		expect(parseRustCaseEvidenceKeys({ ...evidence, caseKeys: ["unknown"] }, ["case-a", "case-b"])).toBeUndefined();
 	});
 });

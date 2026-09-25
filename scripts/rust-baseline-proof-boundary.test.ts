@@ -26,7 +26,8 @@ describe("Rust shared-corpus native boundary evidence", () => {
 
 	test("accepts only an exact structured core record after a successful native transport response", () => {
 		const driver = "/scratch/signet-core-test-driver";
-		const line = formatFreshRustCoreEvidence(driver, "database.addMemory");
+		const callerStack = "Error\\n    at addMemory (/checkout/platform/core/src/database.test.ts:4:12)";
+		const line = formatFreshRustCoreEvidence(driver, "database.addMemory", callerStack);
 		expect(JSON.parse(line)).toMatchObject({
 			backend: "fresh-rust",
 			artifact: "signet-core-test-driver",
@@ -34,11 +35,13 @@ describe("Rust shared-corpus native boundary evidence", () => {
 			driver,
 			operation: "database.addMemory",
 			status: "ok",
+			callerStack,
 		});
 		expect(isFreshRustCoreEvidenceLine(line, driver)).toBe(true);
 		expect(isFreshRustCoreEvidenceLine(`${line}suffix`, driver)).toBe(false);
 		expect(isFreshRustCoreEvidenceLine(line.replace(driver, `${driver}/attacker`), driver)).toBe(false);
 		expect(isFreshRustCoreEvidenceLine(line.replace('"status":"ok"', '"status":"not-ok"'), driver)).toBe(false);
+		expect(isFreshRustCoreEvidenceLine(line.replace('"callerStack":"Error', '"callerStack":""'), driver)).toBe(false);
 	});
 
 	test("does not emit evidence when spawnSync cannot create the configured native child", () => {

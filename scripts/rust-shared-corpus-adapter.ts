@@ -34,7 +34,8 @@ import {
 	normalizeObservedJUnitCounters,
 	wrapRustJUnitReport,
 } from "./rust-shared-corpus-report";
-import { isFreshRustCoreEvidenceLine } from "./rust-baseline-proof-evidence";
+import { parseFreshRustCoreEvidenceLine } from "./rust-baseline-proof-evidence";
+import { resolveJUnitCaseIdentities, resolveRuntimeCaseEvidence } from "./shared-corpus-identities";
 
 const FORBIDDEN = /(?:^|\/)(?:platform\/daemon-rs|platform\/rust-daemon-rs|platform\/daemon\/src\/daemon\.ts)(?:\/|$)/;
 const isForbiddenPath = (path: string) => FORBIDDEN.test(path.replaceAll("\\", "/"));
@@ -136,6 +137,7 @@ function validatePinnedManifest(manifest: Manifest): void {
 const manifestValue = required("--manifest");
 const pathsValue = required("--paths");
 const report = resolve(required("--report"));
+const caseEvidenceReport = `${report}.case-evidence.json`;
 const scope = arg("--scope") ?? "combined";
 if (scope !== "combined" && scope !== "core" && scope !== "daemon") fail("--scope must be combined, core, or daemon");
 const manifest = readManifest(manifestValue);
@@ -191,6 +193,7 @@ mkdirSync(dirname(report), { recursive: true });
 const evidenceFile = `${report}.native-evidence`;
 const daemonEvidenceFile = `${report}.daemon-evidence`;
 const evidenceNonce = randomUUID();
+if (existsSync(caseEvidenceReport)) unlinkSync(caseEvidenceReport);
 if (existsSync(evidenceFile)) unlinkSync(evidenceFile);
 if (existsSync(daemonEvidenceFile)) unlinkSync(daemonEvidenceFile);
 const stdoutPath = `${report}.stdout`;
@@ -327,6 +330,7 @@ const daemonEvidenceRecords = daemonEvidenceLines.map((line) => {
 			exitCode?: unknown;
 			success?: unknown;
 			status?: string;
+			callerStack?: string;
 		};
 	} catch {
 		return null;
@@ -340,6 +344,8 @@ const daemonEvidence =
 			value.backend === "rust-daemon" &&
 			value.binary === artifact &&
 			value.nonce === evidenceNonce &&
+			typeof value.callerStack === "string" &&
+			value.callerStack.length > 0 &&
 			typeof value.pid === "number" &&
 			value.pid > 0 &&
 			((value.transport === "spawn" && value.status === "native-created" && value.success === null) ||
@@ -348,13 +354,17 @@ const daemonEvidence =
 					typeof value.exitCode === "number" &&
 					typeof value.success === "boolean")),
 	);
+const daemonCallerStacks = daemonEvidenceRecords.flatMap((record) =>
+	record && typeof record.callerStack === "string" ? [record.callerStack] : [],
+);
 const coreEvidenceLines = existsSync(evidenceFile)
 	? readFileSync(evidenceFile, "utf8")
 			.split(/\r?\n/)
 			.filter((line) => line.length > 0)
 	: [];
-const coreEvidence =
-	coreEvidenceLines.length > 0 && coreEvidenceLines.every((line) => isFreshRustCoreEvidenceLine(line, coreDriver));
+const coreEvidenceRecords = coreEvidenceLines.map((line) => parseFreshRustCoreEvidenceLine(line, coreDriver));
+const coreEvidence = coreEvidenceRecords.length > 0 && coreEvidenceRecords.every((record) => record !== undefined);
+const coreCallerStacks = coreEvidenceRecords.flatMap((record) => (record ? [record.callerStack] : []));
 // The complete corpus is authoritative only when both unchanged execution
 // boundaries were exercised. Supplementary proof runs are intentionally
 // narrower: direct-core paths prove the core transport, daemon paths prove
@@ -400,16 +410,44 @@ const observedFiles = new Set(cases.map((testcase) => attribute(testcase, "file"
 const missingIdentity = cases.some((testcase) => !attribute(testcase, "file"));
 const missingSelected = selected.filter((path) => !observedFiles.has(path));
 const unexpectedFiles = [...observedFiles].filter((path) => !selected.includes(path));
+const runtimeEvidenceStacks =
+	scope === "core"
+		? coreCallerStacks
+		: scope === "daemon"
+			? daemonCallerStacks
+			: [...coreCallerStacks, ...daemonCallerStacks];
+const runtimeEvidence = resolveRuntimeCaseEvidence(cases, process.cwd(), runtimeEvidenceStacks);
+const identityResolution = resolveJUnitCaseIdentities(cases, process.cwd());
+const attributedCaseKeys = new Set(runtimeEvidence.caseKeys);
+const missingCaseKeys = identityResolution.caseIdentities
+	.filter((identity) => !attributedCaseKeys.has(identity.key))
+	.map((identity) => identity.key);
+const caseCoverageIncomplete =
+	identityResolution.caseIdentities.length === 0 ||
+	identityResolution.unresolvedIdentityCount > 0 ||
+	identityResolution.identityCollisions.length > 0 ||
+	missingCaseKeys.length > 0;
+writeFileSync(
+	caseEvidenceReport,
+	JSON.stringify({
+		version: 1,
+		caseKeys: runtimeEvidence.caseKeys,
+		missingCaseKeys,
+		unmatchedEvidenceCount: runtimeEvidence.unmatchedEvidenceCount,
+		ambiguousEvidenceCount: runtimeEvidence.ambiguousEvidenceCount,
+	}),
+);
 const infrastructureFailure =
 	anyBatchFailed ||
 	!nativeEvidence ||
+	caseCoverageIncomplete ||
 	child.signal !== null ||
 	child.error !== undefined ||
 	!cases.length ||
 	missingIdentity ||
 	missingSelected.length > 0 ||
 	unexpectedFiles.length > 0;
-const wrappedReport = wrapRustJUnitReport(reportXml, nativeEvidence);
+const wrappedReport = wrapRustJUnitReport(reportXml, nativeEvidence, !caseCoverageIncomplete);
 writeFileSync(report, wrappedReport.xml);
 console.error(
 	JSON.stringify({
@@ -422,6 +460,13 @@ console.error(
 		childStatus: child.status,
 		childSignal: child.signal,
 		infrastructureFailure,
+		caseCoverageIncomplete,
+		caseEvidence: {
+			attributed: runtimeEvidence.caseKeys.length,
+			missing: missingCaseKeys.length,
+			unmatchedEvidence: runtimeEvidence.unmatchedEvidenceCount,
+			ambiguousEvidence: runtimeEvidence.ambiguousEvidenceCount,
+		},
 		missingSelected,
 		unexpectedFiles,
 		stderr: stderr.slice(-8192),
