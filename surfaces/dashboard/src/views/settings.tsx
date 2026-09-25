@@ -55,7 +55,7 @@ import { useEffect, useMemo, useState } from "react";
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
 	{
 		id: "workspace",
-		label: "Workspace",
+		label: "Data & files",
 		icon: <FolderOpen className="size-[15px]" aria-hidden="true" />,
 	},
 	{

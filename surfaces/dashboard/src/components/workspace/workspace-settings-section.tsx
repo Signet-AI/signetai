@@ -4,8 +4,10 @@ import { WorkspaceMigrationCard } from "@/components/workspace/workspace-migrati
 
 export function WorkspaceSettingsSection() {
 	return (
-		<section aria-label="Workspace settings" className="flex flex-col gap-4">
-			<p className="m-0 text-[12px] text-muted-foreground">Workspace layout, migration, import status, and recovery.</p>
+		<section aria-label="Data & files settings" className="flex flex-col gap-4">
+			<p className="m-0 text-[12px] text-muted-foreground">
+				Manage where Signet stores your memories and files, plus imports and recovery.
+			</p>
 			<WorkspaceMigrationCard />
 			<DurableImportStatus />
 			<ProtectionRecoveryData />

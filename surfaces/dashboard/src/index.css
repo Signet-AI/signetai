@@ -230,17 +230,18 @@
 		--home-type-learning: #80a8b8;
 	}
 	.sig-app-frame > header { background: var(--home-chrome); }
-	.sig-app-frame > header { height: 56px; padding-inline-start: 40px; }
-	html[data-surface="desktop"][data-platform="mac"] .sig-app-frame > header { padding-inline-start: 96px; }
-	html[data-surface="desktop"]:not([data-platform="mac"]) .sig-app-frame > header {
+	.sig-app-frame > header { height: auto; min-height: 56px; padding-inline-start: 0; }
+	.sig-app-frame > header > .sig-topbar-row { padding-inline-start: 40px; }
+	html[data-surface="desktop"][data-platform="mac"] .sig-app-frame > header > .sig-topbar-row { padding-inline-start: 96px; }
+	html[data-surface="desktop"]:not([data-platform="mac"]) .sig-app-frame > header > .sig-topbar-row {
 		padding-inline-start: max(24px, env(titlebar-area-x, 0px));
 		padding-inline-end: max(
 			24px,
 			calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 138px)))
 		);
 	}
-	.sig-app-frame > header > .ml-12 { margin-inline-start: 3rem; margin-left: 3rem; }
-	.sig-app-frame > header > .ml-auto { margin-inline-start: auto; margin-left: auto; }
+	.sig-app-frame > header > .sig-topbar-row > .ml-12 { margin-inline-start: 3rem; margin-left: 3rem; }
+	.sig-app-frame > header > .sig-topbar-row > .ml-auto { margin-inline-start: auto; margin-left: auto; }
 	.sig-app-frame[data-view="home"] > header { border-bottom: 0; }
 	.sig-app-frame [aria-label="Dashboard navigation"] button { font-size: 14px; height: 36px; padding-inline: 22px; font-weight: 400; }
 	.sig-app-frame [aria-label="Dashboard navigation"] button[aria-current] { font-weight: 500; }
@@ -377,8 +378,8 @@
 	.home-status-bar span { font-size: 10.5px; font-weight: 400; }
 	.home-system [aria-labelledby="review-suggestions-title"] .font-mono,
 	.home-system [aria-labelledby="home-secrets-title"] .font-mono { font-size: 10.5px; font-weight: 400; }
-	.sig-app-frame > header > div.ml-auto > button { width: 32px; height: 32px; }
-	.sig-app-frame > header > div.ml-auto > button svg { width: 17px; height: 17px; }
+	.sig-app-frame > header > .sig-topbar-row > div.ml-auto > button { width: 32px; height: 32px; }
+	.sig-app-frame > header > .sig-topbar-row > div.ml-auto > button svg { width: 17px; height: 17px; }
 	.home-page-heading :is(h1, h2) { color: var(--home-title, var(--foreground)); }
 	.home-daily-brief .insight-text { color: var(--home-body, var(--foreground)); }
 	.home-memory-summary p,
@@ -462,7 +463,7 @@
 		.home-system { border-inline-start: 0; border-block-start: 1px solid var(--border); }
 		.home-activity { margin-block-start: 12px; }
 		.home-source-filter { width: 120px; }
-		.sig-app-frame > header { padding-inline-start: 12px; }
+		.sig-app-frame > header > .sig-topbar-row { padding-inline-start: 12px; }
 	}
 	@media (min-width: 851px) and (max-height: 950px) {
 		.home-today, .home-system { padding-block: 24px; }

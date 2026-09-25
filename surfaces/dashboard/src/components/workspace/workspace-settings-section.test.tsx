@@ -22,7 +22,7 @@ afterAll(() => {
 	domWindow.close();
 });
 
-test("workspace imports, migration, and recovery live under Workspace settings", async () => {
+test("data moves, imports, and recovery live under Data & files settings", async () => {
 	const container = document.createElement("div");
 	document.body.appendChild(container);
 	const root: Root = createRoot(container);
@@ -31,8 +31,9 @@ test("workspace imports, migration, and recovery live under Workspace settings",
 		await new Promise((resolve) => setTimeout(resolve, 0));
 	});
 
-	expect(container.querySelector('[aria-label="Workspace settings"]')).not.toBeNull();
-	expect(container.querySelector('[aria-label="Workspace V2 migration"]')).not.toBeNull();
+	expect(container.querySelector('[aria-label="Data & files settings"]')).not.toBeNull();
+	expect(container.querySelector('[aria-label="Storage update details"]')).not.toBeNull();
+	expect(container.textContent).toContain("Manage where Signet stores your memories and files");
 	expect(container.querySelector('[aria-label="Protection recovery"]')).not.toBeNull();
 	expect(container.textContent).toContain("Durable imports");
 
