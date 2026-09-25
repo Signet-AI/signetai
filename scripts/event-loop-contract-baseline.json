@@ -1513,63 +1513,63 @@
     },
     {
       "path": "logger.ts",
-      "line": 213,
+      "line": 188,
       "api": "existsSync",
       "source": "if (!existsSync(this.config.logFilePath)) return [];",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 221,
+      "line": 196,
       "api": "existsSync",
       "source": "if (!existsSync(this.config.logDir)) return [];",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 222,
+      "line": 197,
       "api": "readdirSync",
       "source": "return readdirSync(this.config.logDir)",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 322,
+      "line": 285,
       "api": "appendFileSync",
       "source": "appendFileSync(this.currentLogFile, lines);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 345,
+      "line": 307,
       "api": "existsSync",
       "source": "if (!existsSync(this.currentLogFile)) return;",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 347,
+      "line": 309,
       "api": "statSync",
       "source": "const stats = statSync(this.currentLogFile);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 362,
+      "line": 321,
       "api": "renameSync",
       "source": "renameSync(this.currentLogFile, rotatedName);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 378,
+      "line": 331,
       "api": "unlinkSync",
       "source": "unlinkSync(files[i].path);",
       "category": "hot-path"
     },
     {
       "path": "logger.ts",
-      "line": 524,
+      "line": 464,
       "api": "readFileSync",
       "source": "const content = readFileSync(file.path, \"utf-8\");",
       "category": "hot-path"

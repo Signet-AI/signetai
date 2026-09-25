@@ -146,16 +146,8 @@ const workerEntries = [
 	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
 	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
-// Native runtime assets are materialized by cli-native.ts. Keep worker bundles
-// single-file by inlining the WASM module; the inherited
-// SIGNET_TIKTOKEN_WASM_PATH supplies the filesystem path used at runtime.
 const nativeExternalArgs = ["--external", "better-sqlite3", "--external", "@napi-rs/keyring"] as const;
 const nativeWorkerExternalArgs = [...nativeExternalArgs, "--loader", ".wasm:base64"] as const;
-
-// `@napi-rs/keyring` can't be require()'d by name inside a compiled binary
-// (Bun `--compile` can't trace its loader). Embed the platform `.node` file
-// as a runtime asset; cli-native.ts points SIGNET_KEYRING_NATIVE_MODULE_PATH
-// at the materialized copy before anything imports the addon.
 const coreRequire = createRequire(join(root, "platform", "core", "package.json"));
 const nativeAddonAssets = (() => {
 	const packagePlatformKey = platformKey.startsWith("linux-") ? `${platformKey}-gnu` : platformKey;
