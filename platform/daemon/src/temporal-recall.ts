@@ -1,8 +1,8 @@
 import type { AgentRosterReadPolicy, RecallTemporalMeta, TemporalFacet } from "@signet/core";
 import { getDbAccessor } from "./db-accessor";
 import { tableExists } from "./db-helpers";
-import { buildAgentScopeClause } from "./memory-access-scope";
 import { isMemoryContentContextEligible } from "./memory-content-safety";
+import { buildMemorySearchFilterClause, currentMemorySql, type MemorySearchFilterInput } from "./memory-search-filters";
 
 const DEFAULT_TEMPORAL_FACETS: readonly TemporalFacet[] = [
 	"session",
@@ -75,7 +75,7 @@ export interface TemporalTimeOptions {
 	readonly mode?: "auto" | "timeline" | "filter";
 }
 
-export interface TemporalRecallParams {
+export interface TemporalRecallParams extends MemorySearchFilterInput {
 	readonly query: string;
 	readonly time?: TemporalTimeOptions;
 	readonly limit: number;
@@ -362,6 +362,19 @@ function projectSql(project: string | undefined, column = "project"): { sql: str
 	return { sql: ` AND ${column} = ?`, args: [project] };
 }
 
+function nonMemoryTemporalSelectorsSupported(params: TemporalRecallParams): boolean {
+	return (
+		params.scope === undefined &&
+		params.type === undefined &&
+		params.tags === undefined &&
+		params.who === undefined &&
+		params.pinned !== true &&
+		params.importance_min === undefined &&
+		params.since === undefined &&
+		params.until === undefined
+	);
+}
+
 function temporalFacetAllowed(facets: readonly TemporalFacet[], facet: TemporalFacet): boolean {
 	return facets.includes(facet);
 }
@@ -371,14 +384,6 @@ function temporalRowLimit(intent: ParsedTemporalIntent, resultLimit: number): nu
 		return Math.max(resultLimit * TEMPORAL_FILTER_LIMIT_MULTIPLIER, TEMPORAL_FILTER_MIN_CANDIDATES);
 	}
 	return resultLimit;
-}
-
-function memoryVisibilitySql(params: TemporalRecallParams): { sql: string; args: unknown[] } {
-	return buildAgentScopeClause(
-		params.agentId ?? "default",
-		params.readPolicy ?? "isolated",
-		params.policyGroup ?? null,
-	);
 }
 
 function temporalOwnerSql(column: string, params: TemporalRecallParams): { sql: string; args: unknown[] } {
@@ -435,7 +440,11 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	return getDbAccessor().withReadDb((db: import("./db-accessor").ReadDb) => {
-		if (temporalFacetAllowed(intent.facets, "session") && tableExists(db, "session_summaries")) {
+		if (
+			temporalFacetAllowed(intent.facets, "session") &&
+			nonMemoryTemporalSelectorsSupported(params) &&
+			tableExists(db, "session_summaries")
+		) {
 			const owner = temporalOwnerSql("agent_id", params);
 			const project = projectSql(params.project, "project");
 			const sessionRows = db
@@ -491,21 +500,19 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		if (temporalFacetAllowed(intent.facets, "captured") && tableExists(db, "memories")) {
-			const visibility = memoryVisibilitySql(params);
-			const project = projectSql(params.project, "m.project");
+			const memoryFilter = buildMemorySearchFilterClause(params);
 			const memoryRows = db
 				.prepare(
 					`SELECT m.id, m.content, m.source_id, m.type, m.tags, m.pinned, m.importance, m.who, m.project,
 						        m.created_at, m.visibility, m.scope, m.agent_id
 					 FROM memories m
-					 WHERE m.is_deleted = 0
-					   AND m.scope IS NULL
+					 WHERE 1 = 1${currentMemorySql("m")}
 					   AND m.created_at >= ?
-					   AND m.created_at < ?${visibility.sql}${project.sql}
+					   AND m.created_at < ?${memoryFilter.sql}
 					 ORDER BY m.created_at DESC
 					 LIMIT ?`,
 				)
-				.all(intent.start, intent.end, ...visibility.args, ...project.args, params.limit * 4) as Array<{
+				.all(intent.start, intent.end, ...memoryFilter.args, params.limit * 4) as Array<{
 				id: string;
 				content: string;
 				source_id: string | null;
@@ -553,7 +560,7 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 			}
 		}
 
-		if (tableExists(db, "memory_artifacts")) {
+		if (nonMemoryTemporalSelectorsSupported(params) && tableExists(db, "memory_artifacts")) {
 			const owner = temporalOwnerSql("agent_id", params);
 			const project = projectSql(params.project, "project");
 			if (temporalFacetAllowed(intent.facets, "captured")) {
@@ -672,8 +679,12 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 		}
 
 		if (tableExists(db, "temporal_edges")) {
-			const visibility = memoryVisibilitySql(params);
+			const memoryFilter = buildMemorySearchFilterClause(params);
 			const nonMemoryOwner = temporalOwnerSql("te.agent_id", params);
+			const includeNonMemoryEdges = nonMemoryTemporalSelectorsSupported(params) && !params.project;
+			const nonMemoryEligibility = includeNonMemoryEdges
+				? ` OR (te.subject_type != 'memory'${nonMemoryOwner.sql})`
+				: "";
 			const edgeRows = db
 				.prepare(
 					`SELECT te.id, te.subject_type, te.subject_id, te.facet, te.start_at, te.end_at, te.confidence,
@@ -683,13 +694,10 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					 LEFT JOIN memories m
 					   ON te.subject_type = 'memory'
 					  AND m.id = te.subject_id
-					  AND m.is_deleted = 0
+					  ${currentMemorySql("m")}
 					 WHERE te.facet IN (${intent.facets.map(() => "?").join(", ")})
 					   AND ${overlapClause("te.start_at", "te.end_at")}
-					   AND (
-					     (te.subject_type = 'memory' AND m.id IS NOT NULL AND m.scope IS NULL${visibility.sql})
-					     OR (te.subject_type != 'memory'${nonMemoryOwner.sql})
-					   )
+					   AND ((te.subject_type = 'memory' AND m.id IS NOT NULL${memoryFilter.sql})${nonMemoryEligibility})
 					 ORDER BY te.start_at DESC
 					 LIMIT ?`,
 				)
@@ -697,8 +705,8 @@ function collectTemporalRows(intent: ParsedTemporalIntent, params: TemporalRecal
 					...intent.facets,
 					intent.end,
 					intent.start,
-					...visibility.args,
-					...nonMemoryOwner.args,
+					...memoryFilter.args,
+					...(includeNonMemoryEdges ? nonMemoryOwner.args : []),
 					params.limit * 4,
 				) as Array<{
 				id: string;

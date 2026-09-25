@@ -15,14 +15,25 @@ import { normalizeAndHashContent } from "./content-normalization";
 import { getDbAccessor, getDbAccessorPath, runWriteTxAsync } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
 import { vectorSearchThroughDbOwner } from "./db-owner-recall";
-import { ownerBytesFromHex, ownerReadAll, ownerReadOne } from "./db-owner-sql";
+import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { getDbOwner, getDbRecallOwner } from "./db-owner-runtime";
 import { DB_OWNER_MAX_WORK_UNITS } from "./db-owner-protocol";
-import type { EmbeddingRole } from "./embedding-profile";
+import {
+	embeddingProfileFingerprint,
+	embeddingProfileFingerprintsEqual,
+	type EmbeddingRole,
+} from "./embedding-profile";
+import { parseEmbeddingIndexStateRow, type EmbeddingIndexStateRow } from "./embedding-index-state";
+import {
+	buildMemorySearchFilterClause as buildFilterClause,
+	currentMemorySql,
+	hasMemoryMetadataFilters,
+	hasRestrictedMemoryContentFilters,
+	type MemorySearchFilterClause as FilterClause,
+} from "./memory-search-filters";
 import { isFtsIndexIncomplete } from "./fts-index-state";
 import { getLlmProvider } from "./llm";
 import { logger } from "./logger";
-import { buildAgentScopeClause } from "./memory-access-scope";
 import type { EmbeddingConfig, MemorySearchConfig, ResolvedMemoryConfig } from "./memory-config";
 import { isMemoryContentContextEligible } from "./memory-content-safety";
 import { NATIVE_MEMORY_BRIDGE_SOURCE_NODE_ID } from "./native-memory-constants";
@@ -55,6 +66,9 @@ import { recordFirstSourceRecall } from "./source-lifecycle-telemetry";
 import { escapeLike } from "./sql-utils";
 import { getActiveTelemetry } from "./telemetry";
 import { type TemporalTimeOptions, hasFreshnessIntent, resolveTemporalRecall } from "./temporal-recall";
+
+export { buildAgentScopeClause } from "./memory-access-scope";
+export { currentMemorySql };
 
 export interface RecallParams {
 	query: string;
@@ -123,6 +137,7 @@ export interface RecallResponse {
 		noHits: boolean;
 		vectorCompleteness?: VectorSearchCompleteness;
 		searchedWindow?: number;
+		sourceVectorSearch?: SourceChunkVectorDiagnostics;
 		graphPartial?: boolean;
 		graphError?: {
 			channel: "graph_traversal";
@@ -243,97 +258,6 @@ function createRecallTimingCollector(): {
 			};
 		},
 	};
-}
-
-export { buildAgentScopeClause } from "./memory-access-scope";
-
-interface FilterClause {
-	sql: string;
-	args: unknown[];
-}
-
-function buildFilterClause(params: RecallParams): FilterClause {
-	const parts: string[] = [];
-	const args: unknown[] = [];
-	if (params.scope !== undefined) {
-		if (params.scope === null) {
-			parts.push("m.scope IS NULL");
-		} else {
-			parts.push("m.scope = ?");
-			args.push(params.scope);
-		}
-	} else {
-		parts.push("m.scope IS NULL");
-	}
-
-	if (params.type) {
-		parts.push("m.type = ?");
-		args.push(params.type);
-	}
-	if (params.tags) {
-		for (const t of params.tags
-			.split(",")
-			.map((s) => s.trim())
-			.filter(Boolean)) {
-			parts.push("m.tags LIKE ? ESCAPE '\\'");
-			args.push(`%${escapeLike(t)}%`);
-		}
-	}
-	if (params.who) {
-		parts.push("m.who = ?");
-		args.push(params.who);
-	}
-	if (params.pinned) {
-		parts.push("m.pinned = 1");
-	}
-	if (typeof params.importance_min === "number") {
-		parts.push("m.importance >= ?");
-		args.push(params.importance_min);
-	}
-	if (params.aggregate === true || params.excludeAggregateRecallMemories === true) {
-		parts.push("COALESCE(m.source_type, '') != 'aggregate-recall'");
-	}
-	if (params.since) {
-		parts.push("m.created_at >= ?");
-		args.push(params.since);
-	}
-	if (params.until) {
-		parts.push("m.created_at <= ?");
-		args.push(params.until);
-	}
-	if (params.project) {
-		parts.push("m.project = ?");
-		args.push(params.project);
-	}
-
-	const base: FilterClause = {
-		sql: parts.length ? ` AND ${parts.join(" AND ")}` : "",
-		args,
-	};
-	if (params.agentId) {
-		const scope = buildAgentScopeClause(params.agentId, params.readPolicy ?? "isolated", params.policyGroup ?? null);
-		return { sql: base.sql + scope.sql, args: [...base.args, ...scope.args] };
-	}
-
-	return base;
-}
-
-function hasMemoryMetadataFilters(params: RecallParams): boolean {
-	const hasTags =
-		params.tags
-			?.split(",")
-			.map((tag) => tag.trim())
-			.some(Boolean) === true;
-	return (
-		params.type !== undefined ||
-		hasTags ||
-		params.who !== undefined ||
-		params.pinned === true ||
-		typeof params.importance_min === "number" ||
-		params.since !== undefined ||
-		params.until !== undefined ||
-		params.scope !== undefined
-	);
 }
 
 function canUseOntologyClaimRecall(params: RecallParams): boolean {
@@ -616,10 +540,6 @@ function mergeCandidate(
 		rows.set(row.id, row);
 	}
 }
-export function currentMemorySql(alias = "m"): string {
-	return ` AND ${alias}.is_deleted = 0 AND ${alias}.superseded_by IS NULL AND ${alias}.stale_at IS NULL`;
-}
-
 function lexicalFallbackTerms(keywordQuery: string): string[] {
 	return [
 		...new Set(
@@ -668,25 +588,32 @@ async function readLexicalFallbackThroughOwner(
 	);
 }
 
+interface CandidateAuthorizationContext {
+	readonly owner: DbOwnerClient;
+	readonly hasSafetyLedger: boolean;
+}
+
 async function authorizeScoredCandidates(
 	scored: ReadonlyArray<{ id: string; score: number; source: string }>,
 	filter: FilterClause,
+	context?: CandidateAuthorizationContext,
 ): Promise<Array<{ id: string; score: number; source: string }>> {
 	const ids = [...new Set(scored.map((row) => row.id))];
 	if (ids.length === 0) return [];
-	const owner = await getDbOwner(getDbAccessorPath());
-	const safetyTable = await ownerReadOne<{ readonly name: string }>(
-		owner,
-		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-		[],
-		{
-			operation: "memory-search.authorize-safety-schema",
-			workloadClass: "foreground",
-			estimatedWorkUnits: 1,
-			deadlineMs: 5_000,
-		},
-	);
-	const hasSafetyLedger = safetyTable !== undefined;
+	const owner = context?.owner ?? (await getDbOwner(getDbAccessorPath()));
+	const hasSafetyLedger =
+		context?.hasSafetyLedger ??
+		(await ownerReadOne<{ readonly name: string }>(
+			owner,
+			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
+			[],
+			{
+				operation: "memory-search.authorize-safety-schema",
+				workloadClass: "foreground",
+				estimatedWorkUnits: 1,
+				deadlineMs: 5_000,
+			},
+		)) != null;
 	const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
 	const safetyJoin = hasSafetyLedger
 		? `LEFT JOIN memory_content_safety AS mcs
@@ -729,6 +656,82 @@ async function authorizeScoredCandidates(
 		}
 	}
 	return scored.filter((row) => allowed.has(row.id));
+}
+
+interface AuthorizedVectorCandidates {
+	readonly results: ReadonlyArray<{ readonly id: string; readonly score: number }>;
+	readonly completeness: VectorSearchCompleteness;
+	readonly searchedWindow?: number;
+}
+
+async function findAuthorizedVectorCandidates(
+	queryVector: Float32Array,
+	params: RecallParams,
+	cfg: ResolvedMemoryConfig,
+	filter: FilterClause,
+	execution?: RecallExecutionOptions,
+): Promise<AuthorizedVectorCandidates> {
+	const maxWork = Math.min(DB_OWNER_MAX_WORK_UNITS, 10_000);
+	const targetCount = Math.min(cfg.search.top_k, maxWork);
+	const owner = await getDbRecallOwner(getDbAccessorPath());
+	const safetyTable = await ownerReadOne<{ readonly name: string }>(
+		owner,
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
+		[],
+		{
+			operation: "memory-search.vector-safety-schema",
+			workloadClass: "foreground",
+			estimatedWorkUnits: 1,
+			deadlineMs: 5_000,
+		},
+	);
+	const authorizationContext = { owner, hasSafetyLedger: safetyTable != null };
+	const discovered = new Set<string>();
+	const authorized = new Map<string, { readonly id: string; readonly score: number }>();
+	let usedWork = 0;
+	let requested = Math.max(1, targetCount);
+	let completeness: VectorSearchCompleteness = "complete";
+	let searchedWindow = 0;
+	let exhausted = false;
+
+	while (usedWork < maxWork) {
+		checkRecallCancellation(execution);
+		const vectorResult = await vectorSearchThroughDbOwner(owner, [...queryVector], {
+			limit: requested,
+			type: params.type,
+			excludeAggregateRecall: params.aggregate === true || params.excludeAggregateRecallMemories === true,
+			maxScanRows: requested,
+		});
+		usedWork += requested;
+		completeness = vectorResult.completeness;
+		searchedWindow = Math.max(searchedWindow, vectorResult.searchedWindow ?? vectorResult.results.length);
+		if (completeness === "unavailable") return { results: [], completeness, searchedWindow };
+
+		const fresh = vectorResult.results.flatMap((row) => {
+			if (discovered.has(row.id) || !Number.isFinite(row.score) || row.score <= 0) return [];
+			const candidate = { id: row.id, score: row.score, source: "vector" };
+			discovered.add(row.id);
+			return [candidate];
+		});
+		const scoped = await authorizeScoredCandidates(fresh, filter, authorizationContext);
+		for (const row of scoped) authorized.set(row.id, { id: row.id, score: row.score });
+		if (authorized.size >= targetCount) break;
+
+		if (vectorResult.completeness === "complete" && vectorResult.results.length < requested) {
+			exhausted = true;
+			break;
+		}
+		const remainingWork = maxWork - usedWork;
+		if (remainingWork <= 0) {
+			completeness = "recent-window";
+			break;
+		}
+		requested = Math.min(requested * 2, remainingWork);
+	}
+
+	if (!exhausted && authorized.size < targetCount && usedWork >= maxWork) completeness = "recent-window";
+	const results = [...authorized.values()].sort((left, right) => right.score - left.score).slice(0, targetCount);
+	return { results, completeness, searchedWindow };
 }
 
 async function loadObservedScores(ids: readonly string[], agentId: string): Promise<Map<string, number>> {
@@ -885,6 +888,89 @@ interface SourceChunkVectorHit {
 	readonly project: string | null;
 }
 
+export interface SourceChunkVectorDiagnostics {
+	readonly indexedQueries: number;
+	readonly fallbackBatches: number;
+	readonly candidateRows: number;
+	readonly retainedCandidates: number;
+	readonly materializedBodies: number;
+	readonly materializedBodyBytes: number;
+	readonly workUnits: number;
+	readonly termination: "enough-eligible" | "exhausted" | "budget";
+}
+
+export interface SourceChunkVectorOutcome {
+	readonly hits: ReadonlyArray<SourceChunkVectorHit>;
+	readonly completeness: VectorSearchCompleteness;
+	readonly searchedWindow?: number;
+	readonly diagnostics: SourceChunkVectorDiagnostics;
+}
+
+export interface RecallExecutionOptions {
+	readonly signal?: AbortSignal;
+	readonly checkCancelled?: () => void;
+}
+
+const SOURCE_CHUNK_BATCH_ROWS = 64;
+const SOURCE_CHUNK_BODY_BATCH_ROWS = 64;
+const SOURCE_CHUNK_MAX_WORK_UNITS = Math.min(DB_OWNER_MAX_WORK_UNITS, 10_000);
+const MAX_SOURCE_CHUNK_BODY_BYTES = 64 * 1024;
+
+function checkRecallCancellation(options?: RecallExecutionOptions): void {
+	options?.checkCancelled?.();
+	if (options?.signal?.aborted) {
+		const error = options.signal.reason instanceof Error ? options.signal.reason : new Error("Recall cancelled");
+		error.name = "AbortError";
+		throw error;
+	}
+}
+
+function ownerVectorFromBlob(value: unknown): Float32Array | null {
+	let bytes: Uint8Array;
+	if (value instanceof Uint8Array) bytes = value;
+	else if (value instanceof ArrayBuffer) bytes = new Uint8Array(value);
+	else if (
+		typeof value === "object" &&
+		value !== null &&
+		"data" in value &&
+		Array.isArray(value.data) &&
+		value.data.every((part) => Number.isInteger(part) && part >= 0 && part <= 255)
+	) {
+		bytes = Uint8Array.from(value.data);
+	} else return null;
+	if (bytes.byteLength === 0 || bytes.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) return null;
+	const vector = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / Float32Array.BYTES_PER_ELEMENT);
+	return vector.every(Number.isFinite) ? vector : null;
+}
+
+function recallQueryVectorIsValid(query: Float32Array, expectedDimensions: number): boolean {
+	return query.length === expectedDimensions && query.length > 0 && query.every(Number.isFinite);
+}
+
+async function activeEmbeddingProfileIsKnown(embedding: EmbeddingConfig): Promise<boolean> {
+	const owner = await getDbOwner(getDbAccessorPath());
+	let row: EmbeddingIndexStateRow | null;
+	try {
+		row = await ownerReadOne<EmbeddingIndexStateRow>(
+			owner,
+			"SELECT active_profile_json, staging_profile_json, state, last_error FROM embedding_index_state WHERE id = 1",
+			[],
+			{
+				operation: "memory-search.embedding-profile-state",
+				workloadClass: "foreground",
+				estimatedWorkUnits: 1,
+				deadlineMs: 5_000,
+			},
+		);
+	} catch (error) {
+		if (error instanceof Error && /no such table: embedding_index_state/i.test(error.message)) return false;
+		throw error;
+	}
+	const state = parseEmbeddingIndexStateRow(row);
+	if (!state || (state.state === "building" && state.staging?.projectionRebuild === true)) return false;
+	return embeddingProfileFingerprintsEqual(embeddingProfileFingerprint(embedding), state.active.fingerprint);
+}
+
 function nativeIdSegment(value: string | null | undefined): string {
 	return (
 		value
@@ -935,105 +1021,375 @@ function sourceChunkProvider(sourceId: string): string {
 	return separator > 0 ? sourceId.slice(0, separator) : "source";
 }
 
+function isVectorIndexUnavailable(error: unknown): boolean {
+	const message = error instanceof Error ? error.message : String(error);
+	return /no such module: vec0|no such table: vec_embeddings|no such column: (?:v\.)?(?:distance|embedding)|unable to use function MATCH in requested context/i.test(
+		message,
+	);
+}
+
 function sourceChunkRecallTags(hit: SourceChunkVectorHit): string {
 	const provider = sourceChunkProvider(hit.sourceId);
 	return [provider, "source", hit.sourceType, "vector"].join(",");
 }
 
-async function buildSourceChunkVectorHits(
+export async function buildSourceChunkVectorHits(
 	queryVec: Float32Array | null,
 	existingSourceIds: ReadonlySet<string>,
 	limit: number,
 	agentId: string,
+	embedding: EmbeddingConfig,
 	project?: string,
-): Promise<SourceChunkVectorHit[]> {
-	if (!queryVec || limit <= 0) return [];
-	if (project) return [];
-	try {
-		const owner = await getDbOwner(getDbAccessorPath());
-		const embeddingColumns = await ownerReadAll<{ readonly name: string }>(owner, "PRAGMA table_info(embeddings)", [], {
-			operation: "memory-search.source-chunk-schema",
+	execution?: RecallExecutionOptions,
+): Promise<SourceChunkVectorOutcome> {
+	const hits: SourceChunkVectorHit[] = [];
+	const stats = {
+		indexedQueries: 0,
+		fallbackBatches: 0,
+		candidateRows: 0,
+		retainedCandidates: 0,
+		materializedBodies: 0,
+		materializedBodyBytes: 0,
+		workUnits: 0,
+		termination: "exhausted" as SourceChunkVectorDiagnostics["termination"],
+	};
+	const outcome = (completeness: VectorSearchCompleteness, searchedWindow?: number): SourceChunkVectorOutcome => ({
+		hits: [...hits].sort((a, b) => b.score - a.score).slice(0, limit),
+		completeness,
+		...(searchedWindow === undefined ? {} : { searchedWindow }),
+		diagnostics: { ...stats },
+	});
+	if (!queryVec || limit <= 0 || project) return outcome("complete", 0);
+	if (!recallQueryVectorIsValid(queryVec, embedding.dimensions)) return outcome("unavailable");
+
+	const profileCompatible = await activeEmbeddingProfileIsKnown(embedding);
+	if (!profileCompatible) {
+		logger.warn(
+			"memory",
+			"Source vector recall skipped because the active embedding profile is unknown or incompatible",
+		);
+		return outcome("unavailable");
+	}
+
+	const owner = await getDbOwner(getDbAccessorPath());
+	const embeddingColumns = await ownerReadAll<{ readonly name: string }>(owner, "PRAGMA table_info(embeddings)", [], {
+		operation: "memory-search.source-chunk-schema",
+		workloadClass: "foreground",
+		estimatedWorkUnits: 1,
+		deadlineMs: 5_000,
+	});
+	if (!embeddingColumns.some((column) => column.name === "agent_id")) {
+		logger.warn("memory", "Source vector recall skipped because legacy embeddings have no agent ownership column");
+		return outcome("unavailable");
+	}
+	const safetyTable = await ownerReadOne<{ readonly name: string }>(
+		owner,
+		"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
+		[],
+		{
+			operation: "memory-search.source-chunk-safety-schema",
 			workloadClass: "foreground",
 			estimatedWorkUnits: 1,
 			deadlineMs: 5_000,
-		});
-		const hasAgentId = embeddingColumns.some((column) => column.name === "agent_id");
-		const safetyTable = await ownerReadOne<{ readonly name: string }>(
-			owner,
-			"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety' LIMIT 1",
-			[],
-			{
-				operation: "memory-search.source-chunk-safety-schema",
-				workloadClass: "foreground",
-				estimatedWorkUnits: 1,
-				deadlineMs: 5_000,
-			},
-		);
-		const hasSafetyLedger = safetyTable != null;
-		const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
-		const safetyJoin = hasSafetyLedger
-			? "LEFT JOIN memory_content_safety mcs ON mcs.agent_id = ? AND mcs.source_kind = 'source_chunk' AND mcs.source_id = e.id"
-			: "";
-		const safetyFilter = hasSafetyLedger
-			? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))"
-			: "";
-		const agentFilter = hasAgentId ? "AND e.agent_id = ?" : "";
-		const params: unknown[] = hasSafetyLedger ? [agentId] : [];
-		params.push(SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE);
-		if (hasAgentId) params.push(agentId);
-		const rows = await ownerReadAll<{
-			id: string;
-			source_type: string;
-			source_id: string;
-			vector_hex: string;
-			chunk_text: string;
-			created_at: string;
-			safety_status?: string | null;
-			context_eligible?: number | null;
-		}>(
-			owner,
-			`SELECT e.id, e.source_type, e.source_id, hex(e.vector) AS vector_hex, e.chunk_text, e.created_at,
-					${safetySelect.slice(2)}
-			 FROM embeddings e
-			 ${safetyJoin}
-			 WHERE e.source_type IN (?, ?)
-			   AND e.vector IS NOT NULL
-			   ${agentFilter}
-			   ${safetyFilter}`,
-			params,
-			{
-				operation: "memory-search.source-chunk-vectors",
-				workloadClass: "foreground",
-				estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, DB_OWNER_MAX_WORK_UNITS),
-				deadlineMs: 30_000,
-			},
-		);
-		return rows
-			.filter((row) => scanMemoryContent(row.chunk_text).contextEligible)
-			.flatMap((row) => {
-				const sourcePath = sourcePathFromChunkText(row.chunk_text);
-				return [
-					{
-						embeddingId: row.id,
+		},
+	);
+	const hasSafetyLedger = safetyTable != null;
+	const safetySelect = hasSafetyLedger ? ", mcs.status AS safety_status, mcs.context_eligible" : "";
+	const safetyJoin = hasSafetyLedger
+		? "LEFT JOIN memory_content_safety mcs ON mcs.agent_id = ? AND mcs.source_kind = 'source_chunk' AND mcs.source_id = e.id"
+		: "";
+	const safetyFilter = hasSafetyLedger
+		? "AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))"
+		: "";
+	const types = [SOURCE_CHUNK_SOURCE_TYPE, LEGACY_OBSIDIAN_CHUNK_SOURCE_TYPE] as const;
+	const seenIds = new Set<string>();
+	const candidateRows = new Map<
+		string,
+		{
+			readonly id: string;
+			readonly sourceId: string;
+			readonly sourceType: string;
+			readonly score: number;
+			readonly createdAt: string;
+		}
+	>();
+
+	const hydrateCandidates = async (
+		candidates: ReadonlyArray<{
+			readonly id: string;
+			readonly sourceId: string;
+			readonly sourceType: string;
+			readonly score: number;
+			readonly createdAt: string;
+		}>,
+	): Promise<void> => {
+		for (let offset = 0; offset < candidates.length; offset += SOURCE_CHUNK_BODY_BATCH_ROWS) {
+			checkRecallCancellation(execution);
+			const batch = candidates.slice(offset, offset + SOURCE_CHUNK_BODY_BATCH_ROWS);
+			if (batch.length === 0) continue;
+			const placeholders = batch.map(() => "?").join(", ");
+			const rows = await ownerReadAll<{
+				id: string;
+				source_id: string;
+				source_type: string;
+				chunk_text: string;
+				created_at: string;
+				safety_status?: string | null;
+				context_eligible?: number | null;
+			}>(
+				owner,
+				`SELECT e.id, e.source_id, e.source_type, e.chunk_text, e.created_at${safetySelect}
+				 FROM embeddings e
+				 ${safetyJoin}
+				 WHERE e.id IN (${placeholders})
+				   AND e.agent_id = ?
+				   AND e.source_type IN (?, ?)
+				   AND length(CAST(e.chunk_text AS BLOB)) <= ?
+				   ${safetyFilter}`,
+				[
+					...(hasSafetyLedger ? [agentId] : []),
+					...batch.map((candidate) => candidate.id),
+					agentId,
+					...types,
+					MAX_SOURCE_CHUNK_BODY_BYTES,
+				],
+				{
+					operation: "memory-search.source-chunk-bodies",
+					workloadClass: "foreground",
+					estimatedWorkUnits: batch.length,
+					deadlineMs: 30_000,
+				},
+			);
+			stats.materializedBodies += rows.length;
+			for (const row of rows) {
+				stats.materializedBodyBytes += Buffer.byteLength(row.chunk_text, "utf8");
+				if (
+					!scanMemoryContent(row.chunk_text).contextEligible ||
+					(hasSafetyLedger &&
+						row.safety_status != null &&
+						(row.safety_status !== "clean" || row.context_eligible !== 1)) ||
+					existingSourceIds.has(row.source_id)
+				)
+					continue;
+				const candidate = candidateRows.get(row.id);
+				if (!candidate) continue;
+				hits.push({
+					embeddingId: row.id,
+					sourceId: row.source_id,
+					sourceType: row.source_type,
+					sourcePath: sourcePathFromChunkText(row.chunk_text),
+					chunkText: row.chunk_text,
+					score: candidate.score,
+					createdAt: row.created_at,
+					project: null,
+				});
+			}
+			for (const candidate of batch) candidateRows.delete(candidate.id);
+		}
+	};
+
+	let indexedSearchAvailable = true;
+	let workUsed = 0;
+	let requested = Math.min(limit, SOURCE_CHUNK_MAX_WORK_UNITS);
+	let exhausted = false;
+	while (indexedSearchAvailable && workUsed < SOURCE_CHUNK_MAX_WORK_UNITS && requested > 0) {
+		checkRecallCancellation(execution);
+		const queryBlob = Buffer.from(queryVec.buffer, queryVec.byteOffset, queryVec.byteLength);
+		try {
+			stats.indexedQueries++;
+			const rows = await ownerReadAll<{
+				id: string;
+				source_id: string;
+				source_type: string;
+				created_at: string;
+				distance: number;
+			}>(
+				owner,
+				`SELECT e.id, e.source_id, e.source_type, e.created_at, v.distance${safetySelect}
+				 FROM vec_embeddings v
+				 JOIN embeddings e ON e.id = v.id
+				 ${safetyJoin}
+				 WHERE v.embedding MATCH ? AND k = ?
+				   AND e.source_type IN (?, ?)
+				   AND e.agent_id = ?
+				   AND length(CAST(e.chunk_text AS BLOB)) <= ?
+				   ${safetyFilter}
+				 ORDER BY v.distance`,
+				[...(hasSafetyLedger ? [agentId] : []), queryBlob, requested, ...types, agentId, MAX_SOURCE_CHUNK_BODY_BYTES],
+				{
+					operation: "memory-search.source-chunk-knn",
+					workloadClass: "foreground",
+					estimatedWorkUnits: requested,
+					deadlineMs: 30_000,
+				},
+			);
+			stats.candidateRows += rows.length;
+			stats.workUnits += requested;
+			workUsed += requested;
+			const fresh = rows.flatMap((row) => {
+				if (seenIds.has(row.id) || !Number.isFinite(row.distance)) return [];
+				seenIds.add(row.id);
+				const score = Math.max(0, Math.min(1, 1 - row.distance));
+				if (score <= 0) return [];
+				const candidate = {
+					id: row.id,
+					sourceId: row.source_id,
+					sourceType: row.source_type,
+					score,
+					createdAt: row.created_at,
+				};
+				candidateRows.set(row.id, candidate);
+				return [candidate];
+			});
+			stats.retainedCandidates = candidateRows.size;
+			await hydrateCandidates(fresh);
+			if (hits.length >= limit) {
+				stats.termination = "enough-eligible";
+				return outcome("complete", seenIds.size);
+			}
+			if (rows.length < requested) {
+				exhausted = true;
+				break;
+			}
+			const remainingWork = SOURCE_CHUNK_MAX_WORK_UNITS - workUsed;
+			if (remainingWork <= 0) break;
+			requested = Math.min(requested * 2, remainingWork);
+		} catch (error) {
+			if (stats.indexedQueries > 1 || !isVectorIndexUnavailable(error)) throw error;
+			indexedSearchAvailable = false;
+		}
+	}
+
+	if (!indexedSearchAvailable) {
+		const heap: Array<{
+			readonly id: string;
+			readonly sourceId: string;
+			readonly sourceType: string;
+			readonly createdAt: string;
+			readonly score: number;
+		}> = [];
+		const retainedLimit = Math.min(SOURCE_CHUNK_MAX_WORK_UNITS, Math.max(limit, limit * 16));
+		let retentionLimited = false;
+		const siftDown = (index: number): void => {
+			for (;;) {
+				const left = index * 2 + 1;
+				const right = left + 1;
+				let smallest = index;
+				const leftRow = heap[left];
+				const currentRow = heap[smallest];
+				if (leftRow && currentRow && leftRow.score < currentRow.score) smallest = left;
+				const rightRow = heap[right];
+				const smallestRow = heap[smallest];
+				if (rightRow && smallestRow && rightRow.score < smallestRow.score) smallest = right;
+				if (smallest === index) return;
+				const current = heap[index];
+				const replacement = heap[smallest];
+				if (!current || !replacement) return;
+				heap[index] = replacement;
+				heap[smallest] = current;
+				index = smallest;
+			}
+		};
+		const retain = (candidate: (typeof heap)[number]): void => {
+			if (heap.length < retainedLimit) {
+				heap.push(candidate);
+				let index = heap.length - 1;
+				while (index > 0) {
+					const parent = Math.floor((index - 1) / 2);
+					const parentRow = heap[parent];
+					const currentRow = heap[index];
+					if (!parentRow || !currentRow || parentRow.score <= currentRow.score) break;
+					heap[parent] = currentRow;
+					heap[index] = parentRow;
+					index = parent;
+				}
+				return;
+			}
+			retentionLimited = true;
+			const weakest = heap[0];
+			if (!weakest || candidate.score <= weakest.score) return;
+			heap[0] = candidate;
+			siftDown(0);
+		};
+		let cursor = 0;
+		let scanComplete = false;
+		while (workUsed < SOURCE_CHUNK_MAX_WORK_UNITS) {
+			checkRecallCancellation(execution);
+			const batchLimit = Math.min(SOURCE_CHUNK_BATCH_ROWS, SOURCE_CHUNK_MAX_WORK_UNITS - workUsed);
+			const rows = await ownerReadAll<{
+				rowid: number;
+				id: string;
+				source_type: string;
+				source_id: string;
+				vector: unknown;
+				created_at: string;
+			}>(
+				owner,
+				`SELECT e.rowid, e.id, e.source_type, e.source_id, e.vector, e.created_at
+				 FROM embeddings e ${safetyJoin}
+				 WHERE e.rowid > ? AND e.source_type IN (?, ?) AND e.agent_id = ?
+			   AND e.vector IS NOT NULL AND length(CAST(e.chunk_text AS BLOB)) <= ? ${safetyFilter}
+			 ORDER BY e.rowid LIMIT ?`,
+				[...(hasSafetyLedger ? [agentId] : []), cursor, ...types, agentId, MAX_SOURCE_CHUNK_BODY_BYTES, batchLimit],
+				{
+					operation: "memory-search.source-chunk-vector-batch",
+					workloadClass: "foreground",
+					estimatedWorkUnits: batchLimit,
+					deadlineMs: 30_000,
+				},
+			);
+			stats.fallbackBatches++;
+			stats.candidateRows += rows.length;
+			stats.workUnits += rows.length;
+			workUsed += rows.length;
+			if (rows.length === 0) {
+				scanComplete = true;
+				break;
+			}
+			const lastRow = rows.at(-1);
+			if (!lastRow) {
+				scanComplete = true;
+				break;
+			}
+			cursor = lastRow.rowid;
+			for (const row of rows) {
+				const vector = ownerVectorFromBlob(row.vector);
+				if (!vector) continue;
+				const score = cosineSimilarity(queryVec, vector);
+				if (score > 0 && !existingSourceIds.has(row.source_id))
+					retain({
+						id: row.id,
 						sourceId: row.source_id,
 						sourceType: row.source_type,
-						sourcePath,
-						chunkText: row.chunk_text,
-						score: cosineSimilarity(queryVec, new Float32Array(ownerBytesFromHex(row.vector_hex).buffer)),
 						createdAt: row.created_at,
-						project: null,
-					},
-				];
-			})
-			.filter((row) => row.score > 0 && !existingSourceIds.has(row.sourceId))
-			.sort((a, b) => b.score - a.score)
-			.slice(0, limit);
-	} catch (e) {
-		logger.warn("memory", "Source chunk vector recall failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
-		return [];
+						score,
+					});
+			}
+			if (rows.length < batchLimit) {
+				scanComplete = true;
+				break;
+			}
+		}
+		heap.sort((a, b) => b.score - a.score);
+		stats.retainedCandidates = heap.length;
+		for (let offset = 0; offset < heap.length && hits.length < limit; offset += SOURCE_CHUNK_BODY_BATCH_ROWS) {
+			const batch = heap.slice(offset, offset + SOURCE_CHUNK_BODY_BATCH_ROWS);
+			for (const candidate of batch) candidateRows.set(candidate.id, candidate);
+			await hydrateCandidates(batch);
+		}
+		if (hits.length >= limit) stats.termination = "enough-eligible";
+		else if (scanComplete && !retentionLimited) stats.termination = "exhausted";
+		else stats.termination = "budget";
+		const completeness = scanComplete && (!retentionLimited || hits.length >= limit) ? "complete" : "recent-window";
+		return outcome(completeness, stats.candidateRows);
 	}
+
+	if (exhausted) {
+		stats.termination = "exhausted";
+		return outcome("complete", seenIds.size);
+	}
+	stats.termination = "budget";
+	return outcome("recent-window", seenIds.size);
 }
 
 function sessionIdFromSourceId(sourceId: string): string {
@@ -1199,8 +1555,7 @@ async function buildNativeArtifactRecallHits(
 			owner,
 			`SELECT ma.rowid, ma.source_id, ma.source_path, ma.source_kind, ma.harness, ma.project, ma.source_sha256,
 				COALESCE(ma.updated_at, ma.captured_at) AS updated_at, ma.content,
-				bm25(memory_artifacts_fts) AS rank,
-				${safetySelect.slice(2)}
+				bm25(memory_artifacts_fts) AS rank${safetySelect}
 			 FROM memory_artifacts_fts
 			 JOIN memory_artifacts ma ON ma.rowid = memory_artifacts_fts.rowid
 			 ${safetyJoin}
@@ -1229,10 +1584,21 @@ async function buildNativeArtifactRecallHits(
 			},
 		);
 
-		const mirroredHashes = new Set<string>();
+		const candidateHashesByRowid = new Map<number, string>();
+		const candidateHashes = new Set<string>();
 		if (params.sourceOnly !== true) {
+			for (const row of rows) {
+				if (row.harness !== "hermes-agent") continue;
+				const hash = normalizeAndHashContent(row.content).contentHash;
+				candidateHashesByRowid.set(row.rowid, hash);
+				candidateHashes.add(hash);
+			}
+		}
+		const mirroredHashes = new Set<string>();
+		if (candidateHashes.size > 0) {
+			const hashPlaceholders = [...candidateHashes].map(() => "?").join(", ");
 			const mirrorParts = [
-				`SELECT m.id, m.content, m.content_hash${safetySelect}`,
+				"SELECT DISTINCT m.content_hash",
 				"FROM memories m",
 				...(hasSafetyLedger
 					? [
@@ -1240,7 +1606,7 @@ async function buildNativeArtifactRecallHits(
 						]
 					: []),
 				"WHERE m.agent_id = ?",
-				"AND COALESCE(m.is_deleted, 0) = 0",
+				`${currentMemorySql("m")}`,
 				"AND COALESCE(m.visibility, 'global') != 'archived'",
 				"AND m.source_type = 'hermes-memory-write'",
 			];
@@ -1249,41 +1615,32 @@ async function buildNativeArtifactRecallHits(
 				mirrorParts.push("AND m.project = ?");
 				mirrorArgs.push(params.project);
 			} else mirrorParts.push("AND m.project IS NULL");
-			if (params.scope !== undefined) {
-				if (params.scope === null) mirrorParts.push("AND m.scope IS NULL");
-				else {
-					mirrorParts.push("AND m.scope = ?");
-					mirrorArgs.push(params.scope);
-				}
+			if (params.scope !== undefined && params.scope !== null) {
+				mirrorParts.push("AND m.scope = ?");
+				mirrorArgs.push(params.scope);
 			} else mirrorParts.push("AND m.scope IS NULL");
-			const mirrorRows = await ownerReadAll<{
-				id: string;
-				content: string;
-				content_hash: string | null;
-				safety_status?: string | null;
-				context_eligible?: number | null;
-			}>(owner, mirrorParts.join("\n"), mirrorArgs, {
-				operation: "memory-search.native-artifact-mirrors",
-				workloadClass: "foreground",
-				estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, DB_OWNER_MAX_WORK_UNITS),
-				deadlineMs: 30_000,
-			});
-			for (const mirror of mirrorRows) {
-				if (
-					scanMemoryContent(mirror.content).contextEligible &&
-					(!hasSafetyLedger ||
-						mirror.safety_status == null ||
-						(mirror.safety_status === "clean" && mirror.context_eligible === 1)) &&
-					mirror.content_hash
-				)
-					mirroredHashes.add(mirror.content_hash);
-			}
+			mirrorParts.push(`AND m.content_hash IN (${hashPlaceholders})`);
+			if (hasSafetyLedger)
+				mirrorParts.push("AND (mcs.source_id IS NULL OR (mcs.status = 'clean' AND mcs.context_eligible = 1))");
+			mirrorArgs.push(...candidateHashes);
+			const mirrorRows = await ownerReadAll<{ readonly content_hash: string | null }>(
+				owner,
+				mirrorParts.join("\n"),
+				mirrorArgs,
+				{
+					operation: "memory-search.native-artifact-mirrors",
+					workloadClass: "foreground",
+					estimatedWorkUnits: Math.min(DB_OWNER_MAX_WORK_UNITS, candidateHashes.size),
+					deadlineMs: 5_000,
+				},
+			);
+			for (const mirror of mirrorRows) if (mirror.content_hash) mirroredHashes.add(mirror.content_hash);
 		}
 
 		const seenHermesHashes = new Set<string>();
 		const dedupedRows = rows.filter((row) => {
 			if (row.harness !== "hermes-agent") return true;
-			if (mirroredHashes.has(normalizeAndHashContent(row.content).contentHash)) return false;
+			if (mirroredHashes.has(candidateHashesByRowid.get(row.rowid) ?? "")) return false;
 			if (!row.source_sha256) return true;
 			if (seenHermesHashes.has(row.source_sha256)) return false;
 			seenHermesHashes.add(row.source_sha256);
@@ -1304,27 +1661,26 @@ async function buildNativeArtifactRecallHits(
 			}))
 			.filter((row) => row.content.length > 0 && !existingSourceIds.has(nativeArtifactPublicId(row)));
 	} catch (e) {
-		logger.warn("memory", "Native artifact recall failed (non-fatal)", {
-			error: e instanceof Error ? e.message : String(e),
-		});
-		return [];
+		logger.error("memory", "Native artifact recall query failed", e instanceof Error ? e : new Error(String(e)));
+		throw e;
 	}
 }
 
 function cosineSimilarity(query: Float32Array, memory: Float32Array): number {
-	const len = Math.min(query.length, memory.length);
+	if (query.length === 0 || query.length !== memory.length) return 0;
 	let dot = 0;
 	let queryNorm = 0;
 	let memoryNorm = 0;
-	for (let i = 0; i < len; i++) {
-		const q = query[i] ?? 0;
-		const m = memory[i] ?? 0;
+	for (let i = 0; i < query.length; i++) {
+		const q = query[i] ?? Number.NaN;
+		const m = memory[i] ?? Number.NaN;
+		if (!Number.isFinite(q) || !Number.isFinite(m)) return 0;
 		dot += q * m;
 		queryNorm += q * q;
 		memoryNorm += m * m;
 	}
 	const denom = Math.sqrt(queryNorm) * Math.sqrt(memoryNorm);
-	if (denom <= 0) return 0;
+	if (!Number.isFinite(denom) || denom <= 0) return 0;
 	return Math.max(0, Math.min(1, dot / denom));
 }
 
@@ -1366,7 +1722,9 @@ export async function hybridRecall(
 	params: RecallParams,
 	cfg: ResolvedMemoryConfig,
 	embedFn: EmbedFn,
+	execution?: RecallExecutionOptions,
 ): Promise<RecallResponse> {
+	checkRecallCancellation(execution);
 	let query = params.query;
 	const limit = normalizeRecallLimit(params.limit);
 	const alpha = cfg.search.alpha;
@@ -1475,7 +1833,7 @@ export async function hybridRecall(
 		try {
 			const trackedIds = response.results.map((row) => row.id).filter((id) => !id.includes(":"));
 			if (params.trackRecallAccess !== false && trackedIds.length > 0) {
-				timings.timeAsync("access_tracking_update", async () => {
+				await timings.timeAsync("access_tracking_update", async () => {
 					const trackedPlaceholders = trackedIds.map(() => "?").join(", ");
 					await runWriteTxAsync(getDbAccessor(), (db) => {
 						db.prepare(
@@ -1538,6 +1896,16 @@ export async function hybridRecall(
 		readPolicy: params.readPolicy,
 		policyGroup: params.policyGroup,
 		project: params.project,
+		scope: params.scope,
+		type: params.type,
+		tags: params.tags,
+		who: params.who,
+		pinned: params.pinned,
+		importance_min: params.importance_min,
+		since: params.since,
+		until: params.until,
+		aggregate: params.aggregate === true,
+		excludeAggregateRecallMemories: params.excludeAggregateRecallMemories,
 		sessionKey: params.sessionKey,
 	});
 	if (temporal.response) {
@@ -1719,30 +2087,30 @@ export async function hybridRecall(
 	let searchedWindow: number | undefined;
 	if (queryVecF32) {
 		const queryVector = queryVecF32;
-		const excludeAggregateRecall = params.aggregate === true || params.excludeAggregateRecallMemories === true;
-		const vecLimit = needsPostFilter || excludeAggregateRecall ? cfg.search.top_k * 2 : cfg.search.top_k;
-		try {
-			await timings.timeAsync("vector_search", async () => {
-				const vectorResult = await vectorSearchThroughDbOwner(
-					await getDbRecallOwner(getDbAccessorPath()),
-					[...queryVector],
-					{
-						limit: vecLimit,
-						type: params.type,
-						excludeAggregateRecall,
-						maxScanRows: DB_OWNER_MAX_WORK_UNITS,
-					},
-				);
-				vectorCompleteness = vectorResult.completeness;
-				searchedWindow = vectorResult.searchedWindow;
-				for (const r of vectorResult.results) {
-					vectorMap.set(r.id, r.score);
-				}
-			});
-		} catch (e) {
-			logger.warn("memory", "Vector search failed, using keyword only", {
-				error: String(e),
-			});
+		if (!recallQueryVectorIsValid(queryVector, cfg.embedding.dimensions)) {
+			vectorCompleteness = "unavailable";
+		} else {
+			try {
+				await timings.timeAsync("vector_search", async () => {
+					if (!(await activeEmbeddingProfileIsKnown(cfg.embedding))) {
+						vectorCompleteness = "unavailable";
+						logger.warn(
+							"memory",
+							"Vector recall skipped because the active embedding profile is unknown or incompatible",
+						);
+						return;
+					}
+					const vectorResult = await findAuthorizedVectorCandidates(queryVector, params, cfg, filter, execution);
+					vectorCompleteness = vectorResult.completeness;
+					searchedWindow = vectorResult.searchedWindow;
+					for (const candidate of vectorResult.results) vectorMap.set(candidate.id, candidate.score);
+				});
+			} catch (e) {
+				vectorCompleteness = "unavailable";
+				logger.warn("memory", "Vector search failed, using keyword only", {
+					error: String(e),
+				});
+			}
 		}
 	}
 	const semanticEvidenceMap = new Map(vectorMap);
@@ -2443,26 +2811,37 @@ export async function hybridRecall(
 			: [],
 	);
 	const allowSourceFallbacks = temporalCandidateSet.size === 0 && !hasMemoryMetadataFilters(params);
+	let sourceChunkSearchDiagnostics: SourceChunkVectorDiagnostics | undefined;
 
 	if (topIds.length === 0) {
 		const results = suppressPreviouslyRecalledForSelection(ontologyClaimResults).slice(0, limit);
 		const fallbackLimit = selectionDedupeEnabled ? Math.max(limit * 3, limit + 10) : limit;
-		const sourceChunkHits = allowSourceFallbacks
-			? await timings.timeAsync(
-					"source_chunk_vector_fallback",
-					async () =>
-						await buildSourceChunkVectorHits(
-							queryVecF32,
-							new Set(),
-							fallbackLimit,
-							params.agentId ?? "default",
-							params.project,
-						),
-				)
-			: [];
-		if (sourceChunkHits.length > 0 && results.length < limit) {
+		const sourceChunkOutcome =
+			allowSourceFallbacks && results.length < limit
+				? await timings.timeAsync(
+						"source_chunk_vector_fallback",
+						async () =>
+							await buildSourceChunkVectorHits(
+								queryVecF32,
+								new Set(),
+								fallbackLimit,
+								params.agentId ?? "default",
+								cfg.embedding,
+								params.project,
+								execution,
+							),
+					)
+				: undefined;
+		sourceChunkSearchDiagnostics = sourceChunkOutcome?.diagnostics;
+		if (sourceChunkOutcome?.completeness === "recent-window") {
+			vectorCompleteness = "recent-window";
+			searchedWindow = sourceChunkOutcome.searchedWindow;
+		} else if (sourceChunkOutcome?.completeness === "unavailable" && vectorCompleteness === undefined) {
+			vectorCompleteness = "unavailable";
+		}
+		if (sourceChunkOutcome && sourceChunkOutcome.hits.length > 0 && results.length < limit) {
 			const sourceResults = suppressPreviouslyRecalledForSelection(
-				sourceChunkHits.slice(0, fallbackLimit).map((hit): RecallResult => {
+				sourceChunkOutcome.hits.slice(0, fallbackLimit).map((hit): RecallResult => {
 					const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
 					const truncated = content.length > recallTruncate;
 					return {
@@ -2491,12 +2870,13 @@ export async function hybridRecall(
 				results.push(row);
 			}
 		}
-		const nativeHits = allowSourceFallbacks
-			? await timings.timeAsync(
-					"native_artifact_fallback",
-					async () => await buildNativeArtifactRecallHits(params, expandedQuery, new Set()),
-				)
-			: [];
+		const nativeHits =
+			allowSourceFallbacks && results.length < limit
+				? await timings.timeAsync(
+						"native_artifact_fallback",
+						async () => await buildNativeArtifactRecallHits(params, expandedQuery, new Set()),
+					)
+				: [];
 		if (nativeHits.length > 0 && results.length < limit) {
 			const nativeResults = suppressPreviouslyRecalledForSelection(
 				nativeHits.slice(0, fallbackLimit).map((hit): RecallResult => {
@@ -2545,6 +2925,7 @@ export async function hybridRecall(
 				noHits: results.length === 0,
 				...(vectorCompleteness === undefined ? {} : { vectorCompleteness }),
 				...(searchedWindow === undefined ? {} : { searchedWindow }),
+				...(sourceChunkOutcome === undefined ? {} : { sourceVectorSearch: sourceChunkOutcome.diagnostics }),
 			},
 		});
 	}
@@ -2638,7 +3019,7 @@ export async function hybridRecall(
 	if (results.length < limit) {
 		const existingSourceIds = new Set(results.map((row) => row.source_id).filter((id): id is string => !!id));
 		const fill = limit - results.length;
-		const sourceChunkHits = allowSourceFallbacks
+		const sourceChunkOutcome = allowSourceFallbacks
 			? await timings.timeAsync(
 					"source_chunk_vector_supplement",
 					async () =>
@@ -2647,11 +3028,18 @@ export async function hybridRecall(
 							existingSourceIds,
 							selectionDedupeEnabled ? Math.max(fill * 3, fill + 10) : fill,
 							params.agentId ?? "default",
+							cfg.embedding,
 							params.project,
+							execution,
 						),
 				)
-			: [];
-		const candidates = sourceChunkHits.map((hit): RecallResult => {
+			: undefined;
+		if (sourceChunkOutcome) {
+			sourceChunkSearchDiagnostics = sourceChunkOutcome.diagnostics;
+			if (sourceChunkOutcome.completeness !== "complete") vectorCompleteness = sourceChunkOutcome.completeness;
+			searchedWindow = sourceChunkOutcome.searchedWindow ?? searchedWindow;
+		}
+		const candidates = (sourceChunkOutcome?.hits ?? []).map((hit): RecallResult => {
 			const content = `[Source chunk: ${hit.sourcePath}]\n${hit.chunkText}`;
 			const truncated = content.length > recallTruncate;
 			return {
@@ -2767,7 +3155,7 @@ export async function hybridRecall(
 	const decisionIds = results.filter((r) => r.type === "decision").map((r) => r.id);
 	const existingIds = new Set(results.map((r) => r.id));
 
-	if (decisionIds.length > 0 && cfg.pipelineV2.graph.enabled) {
+	if (decisionIds.length > 0 && cfg.pipelineV2.graph.enabled && results.length < limit) {
 		const rationaleStart = performance.now();
 		try {
 			const dPlaceholders = decisionIds.map(() => "?").join(", ");
@@ -2863,6 +3251,7 @@ export async function hybridRecall(
 	}
 	let entityContext: RecallResponse["entities"];
 	let focalEids: string[] = [];
+	let contextBlocks: Awaited<ReturnType<typeof constructContextBlocksViaOwner>>["blocks"] = [];
 
 	if (cfg.pipelineV2.graph.enabled && cfg.pipelineV2.traversal?.enabled) {
 		const entityContextStart = performance.now();
@@ -2876,92 +3265,37 @@ export async function hybridRecall(
 				const ctx = await (async () => {
 					if (focal.entityIds.length === 0) return null;
 					let eids = focal.entityIds;
-					if (params.scope !== undefined || params.project) {
-						const ph = eids.map(() => "?").join(", ");
-						const scoped = await graphOwnerReadAll<{ entity_id: string }>(
-							`SELECT DISTINCT mem.entity_id
-							 FROM memory_entity_mentions mem
-							 JOIN memories m ON m.id = mem.memory_id
-							 WHERE mem.entity_id IN (${ph})
-							   ${currentMemorySql("m")}
-							   ${filter.sql}`,
-							[...eids, ...filter.args],
-							"memory-search.entity-context.scope",
-							eids.length,
-						);
-						eids = scoped.map((row) => row.entity_id);
-						if (eids.length === 0) return null;
-					}
-
-					const placeholders = eids.map(() => "?").join(", ");
-					const entities = await graphOwnerReadAll<{ id: string; name: string; entity_type: string }>(
-						`SELECT id, name, entity_type FROM entities WHERE id IN (${placeholders})`,
-						eids,
-						"memory-search.entity-context.entities",
+					const ph = eids.map(() => "?").join(", ");
+					const scoped = await graphOwnerReadAll<{ entity_id: string }>(
+						`SELECT DISTINCT mem.entity_id
+						 FROM memory_entity_mentions mem
+						 JOIN memories m ON m.id = mem.memory_id
+						 WHERE mem.entity_id IN (${ph})
+						   ${currentMemorySql("m")}
+						   ${filter.sql}`,
+						[...eids, ...filter.args],
+						"memory-search.entity-context.scope",
 						eids.length,
 					);
-					const safetyTable = await graphOwnerReadAll<{ name: string }>(
-						"SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'memory_content_safety'",
-						[],
-						"memory-search.entity-context.safety-table",
-						1,
+					eids = scoped.map((row) => row.entity_id);
+					if (eids.length === 0) return null;
+
+					const blockLimit =
+						results.length < limit ? Math.min(limit - results.length, Math.max(3, Math.ceil(limit * 0.3))) : 0;
+					const snapshot = await constructContextBlocksViaOwner(
+						owner,
+						agentId,
+						eids,
+						blockLimit,
+						filter,
+						!hasRestrictedMemoryContentFilters(params),
 					);
-					const safetyJoin =
-						safetyTable.length > 0
-							? "LEFT JOIN memory_content_safety safety ON safety.agent_id = ea.agent_id AND safety.source_kind = 'memory' AND safety.source_id = ea.memory_id"
-							: "";
-					const safetySelect =
-						safetyTable.length > 0
-							? ", safety.status AS safety_status, safety.context_eligible AS safety_context_eligible"
-							: "";
-					const structured = [];
-					for (const entity of entities) {
-						const aspects = await graphOwnerReadAll<{ id: string; name: string }>(
-							`SELECT id, name FROM entity_aspects INDEXED BY idx_entity_aspects_entity
-							 WHERE entity_id = ? AND agent_id = ?
-							 ORDER BY weight DESC LIMIT 10`,
-							[entity.id, agentId],
-							"memory-search.entity-context.aspects",
-							10,
-						);
-						const contextAspects = [];
-						for (const aspect of aspects) {
-							const attrs = await graphOwnerReadAll<{
-								content: string;
-								status: string;
-								importance: number;
-								memory_id: string | null;
-								safety_status?: string | null;
-								safety_context_eligible?: number | null;
-							}>(
-								`SELECT ea.content, ea.status, ea.importance, ea.memory_id${safetySelect}
-								 FROM entity_attributes ea ${safetyJoin}
-								 WHERE ea.aspect_id = ? AND ea.agent_id = ? AND ea.status = 'active'
-								 ORDER BY ea.importance DESC LIMIT 5`,
-								[aspect.id, agentId],
-								"memory-search.entity-context.attributes",
-								5,
-							);
-							const attributes = attrs
-								.filter(
-									(attr) =>
-										scanMemoryContent(attr.content).contextEligible &&
-										(!attr.memory_id ||
-											attr.safety_status == null ||
-											(attr.safety_status === "clean" && attr.safety_context_eligible === 1)),
-								)
-								.map((attr) => ({ content: attr.content, status: attr.status, importance: attr.importance }));
-							if (attributes.length > 0) contextAspects.push({ name: aspect.name, attributes });
-						}
-						if (contextAspects.length > 0) {
-							structured.push({ name: entity.name, type: entity.entity_type, aspects: contextAspects });
-						}
-					}
-					return { eids, structured };
+					return { eids, snapshot };
 				})();
 
 				if (ctx) {
-					entityContext = ctx.structured;
+					entityContext = ctx.snapshot.entities;
+					contextBlocks = ctx.snapshot.blocks;
 					focalEids = ctx.eids;
 				}
 			}
@@ -2973,12 +3307,11 @@ export async function hybridRecall(
 			timings.record("entity_context", entityContextStart);
 		}
 	}
-	if (focalEids.length > 0) {
+	if (focalEids.length > 0 && results.length < limit) {
 		const constructedStart = performance.now();
 		try {
-			const agentId = params.agentId ?? "default";
-			const cap = Math.max(3, Math.ceil(limit * 0.3));
-			const blocks = await constructContextBlocksViaOwner(await getGraphOwner(), agentId, focalEids, cap);
+			const cap = Math.min(limit - results.length, Math.max(3, Math.ceil(limit * 0.3)));
+			const blocks = contextBlocks;
 			const now = new Date().toISOString();
 			const minReal = results.length > 0 ? Math.min(...results.map((r) => r.score)) : 0.5;
 			const maxConstructed = Math.max(0.01, minReal - 0.01);
@@ -3030,6 +3363,7 @@ export async function hybridRecall(
 			noHits: results.length === 0,
 			...(vectorCompleteness === undefined ? {} : { vectorCompleteness }),
 			...(searchedWindow === undefined ? {} : { searchedWindow }),
+			...(sourceChunkSearchDiagnostics === undefined ? {} : { sourceVectorSearch: sourceChunkSearchDiagnostics }),
 			...(temporal.meta ? { temporal: temporal.meta } : {}),
 		},
 		entities: entityContext && entityContext.length > 0 ? entityContext : undefined,
