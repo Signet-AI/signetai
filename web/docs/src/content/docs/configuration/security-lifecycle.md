@@ -267,7 +267,10 @@ wait. The default and maximum are 900000 ms to preserve the existing
 maintenance deadline ceiling. When a non-health request times out, the owner
 is terminated and the daemon does not replay the request. It returns HTTP 503
 with code `database_outcome_unknown`; the request may have committed, so
-reconcile state before retrying a mutation.
+reconcile state before retrying a mutation. During daemon shutdown, the owner
+receives a graceful shutdown request; if it has not exited within one second,
+the daemon terminates and reaps the child before removing its lifecycle marker.
+On Unix, forced cleanup also terminates the owner's process group.
 
 When installing the macOS launchd service, set either timeout variable in the
 environment used for `signet daemon install`; the generated plist copies each

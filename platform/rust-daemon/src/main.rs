@@ -45,6 +45,7 @@ const DEFAULT_OWNER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MAX_OWNER_RESPONSE_TIMEOUT_MS: u64 = 15 * 60 * 1000;
 // Keep startup bounded like the established DB-owner client; a live, silent child must not stall daemon startup.
 const OWNER_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const OWNER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn should_recover_health(attempts: usize) -> bool {
     attempts < MAX_HEALTH_RECOVERY_ATTEMPTS
@@ -84,15 +85,19 @@ struct OwnerPipe {
 
 impl Drop for OwnerPipe {
     fn drop(&mut self) {
-        if let Ok(mut session) = self.session.lock() {
-            let generation = session.generation.clone();
-            let _ = writeln!(
-                session.stdin,
-                "{{\"id\":null,\"generation\":\"{}\",\"op\":\"shutdown\"}}",
-                generation
-            );
-            let _ = session.stdin.flush();
-            let _ = session.child.wait();
+        let session = match self.session.get_mut() {
+            Ok(session) => session,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let generation = session.generation.clone();
+        let _ = writeln!(
+            session.stdin,
+            "{{\"id\":null,\"generation\":\"{}\",\"op\":\"shutdown\"}}",
+            generation
+        );
+        let _ = session.stdin.flush();
+        if !wait_for_owner_shutdown(&mut session.child) {
+            terminate_owner_process_tree(&mut session.child);
         }
         let daemon_dir = self.workspace.join(".daemon");
         let _ = std::fs::remove_file(daemon_dir.join("db-owner.json"));
@@ -227,11 +232,25 @@ impl Drop for StartupMarkerGuard {
 fn terminate_owner_process_tree(child: &mut Child) {
     #[cfg(unix)]
     if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+        // Callers keep the child unreaped until after this signal; its PID also identifies the process group.
         // The owner and any helpers inherit this group so a stalled pipe cannot outlive its reader.
         let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
     }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+fn wait_for_owner_shutdown(child: &mut Child) -> bool {
+    let deadline = std::time::Instant::now() + OWNER_SHUTDOWN_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(None) | Err(_) => return false,
+        }
+    }
 }
 
 fn retire_owner_session(session: &mut OwnerSession) {
@@ -2758,7 +2777,6 @@ mod owner_admission_tests {
         let mut session = owner.inner.session.lock().unwrap();
         let stdout_retired = session.stdout.is_none();
         let child_exited = session.child.try_wait().unwrap().is_some();
-        terminate_owner_process_tree(&mut session.child);
 
         assert!(matches!(result, Err(CoreError::OwnerOutcomeUnknown)));
         assert!(stdout_retired);
@@ -2797,5 +2815,50 @@ mod owner_admission_tests {
         let api_error = ApiError::from(error);
         assert_eq!(api_error.status, StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(api_error.code, "database_unavailable");
+    }
+
+    #[test]
+    fn owner_shutdown_child_fixture() {
+        if env::var_os("SIGNET_TEST_OWNER_DROP_CHILD").is_some() {
+            std::thread::sleep(Duration::from_secs(3));
+        }
+    }
+
+    #[test]
+    fn dropping_owner_bounds_wait_for_a_child_that_ignores_shutdown() {
+        let mut child = Command::new(env::current_exe().unwrap())
+            .arg("--exact")
+            .arg("owner_admission_tests::owner_shutdown_child_fixture")
+            .arg("--nocapture")
+            .env("SIGNET_TEST_OWNER_DROP_CHILD", "1")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let session = OwnerSession {
+            stdin,
+            stdout: Some(stdout),
+            child,
+            generation: "drop-test-generation".into(),
+        };
+        let owner = ExternalOwner {
+            inner: Arc::new(OwnerPipe {
+                workspace: env::temp_dir().join(format!("signet-owner-drop-{}", Uuid::new_v4())),
+                session: Mutex::new(session),
+                admission: Arc::new(Semaphore::new(1)),
+                response_timeout: Duration::from_millis(50),
+            }),
+        };
+
+        let started = std::time::Instant::now();
+        drop(owner);
+
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "owner drop waited for the unresponsive child"
+        );
     }
 }
