@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { up as admissionMigration } from "../../core/src/migrations/158-import-admission-ledger";
+import { up as admissionMigration } from "../../core/src/migrations/160-import-admission-ledger";
 import { closeDbAccessor, getDbAccessor, initDbAccessor } from "./db-accessor";
 import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
 import {
