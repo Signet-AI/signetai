@@ -34,6 +34,13 @@ export interface DesktopDaemonStatus {
 
 export interface DaemonManagerOptions {
 	readonly workspacePath: string;
+	readonly runtimePaths?: DaemonManagerRuntimePaths;
+}
+
+export interface DaemonManagerRuntimePaths {
+	readonly bunPath: () => string;
+	readonly daemonEntry: () => string;
+	readonly daemonRoot: () => string;
 }
 
 function readPort(): number {
@@ -79,6 +86,7 @@ export class DaemonManager {
 	readonly port = readPort();
 	readonly baseUrl = `http://${LOOPBACK_HOST}:${this.port}`;
 	readonly #workspacePath: string;
+	readonly #runtimePaths: DaemonManagerRuntimePaths;
 	#child: ChildProcess | null = null;
 	#owned = false;
 	#mode: DaemonMode = "none";
@@ -90,6 +98,7 @@ export class DaemonManager {
 
 	constructor(options: DaemonManagerOptions) {
 		this.#workspacePath = resolve(options.workspacePath);
+		this.#runtimePaths = options.runtimePaths ?? { bunPath, daemonEntry, daemonRoot };
 		process.env.SIGNET_DESKTOP_DAEMON_BASE_URL = this.baseUrl;
 	}
 
@@ -254,7 +263,7 @@ export class DaemonManager {
 		});
 	}
 	#spawnBundled(): void {
-		const entry = daemonEntry();
+		const entry = this.#runtimePaths.daemonEntry();
 		if (!existsSync(entry)) {
 			throw new Error(`Bundled daemon entry not found: ${entry}. Install the .dmg or run stage:runtime first.`);
 		}
@@ -265,8 +274,8 @@ export class DaemonManager {
 		this.#stdoutFd = openSync(join(logDir, "daemon.out.log"), "a");
 		this.#stderrFd = openSync(join(logDir, "daemon.err.log"), "a");
 
-		this.#child = spawn(bunPath(), [entry], {
-			cwd: daemonRoot(),
+		this.#child = spawn(this.#runtimePaths.bunPath(), [entry], {
+			cwd: this.#runtimePaths.daemonRoot(),
 			detached: false,
 			stdio: ["ignore", this.#stdoutFd, this.#stderrFd],
 			env: {
@@ -276,9 +285,15 @@ export class DaemonManager {
 				SIGNET_WORKSPACE: this.#workspacePath,
 				SIGNET_DESKTOP: "1",
 				SIGNET_DAEMON_RUNTIME: "bun-js",
-				SIGNET_DAEMON_JS_PATH: daemonEntry(),
-				SIGNET_TIKTOKEN_WASM_PATH: join(daemonRoot(), "node_modules", "tiktoken", "tiktoken_bg.wasm"),
-				SIGNET_CONNECTOR_ASSETS_DIR: process.env.SIGNET_CONNECTOR_ASSETS_DIR ?? join(daemonRoot(), "connectors"),
+				SIGNET_DAEMON_JS_PATH: this.#runtimePaths.daemonEntry(),
+				SIGNET_TIKTOKEN_WASM_PATH: join(
+					this.#runtimePaths.daemonRoot(),
+					"node_modules",
+					"tiktoken",
+					"tiktoken_bg.wasm",
+				),
+				SIGNET_CONNECTOR_ASSETS_DIR:
+					process.env.SIGNET_CONNECTOR_ASSETS_DIR ?? join(this.#runtimePaths.daemonRoot(), "connectors"),
 				SIGNET_TELEMETRY_INSTALL_CHANNEL: process.env.SIGNET_TELEMETRY_INSTALL_CHANNEL ?? "desktop",
 			},
 		});

@@ -2,6 +2,7 @@ import { ConnectProviderDialog } from "@/components/settings/connect-dialog";
 import { OnePasswordPanel } from "@/components/secrets/onepassword-panel";
 import { AddSecretDialog } from "@/components/secrets/add-secret-dialog";
 import { SecretCard } from "@/components/secrets/secret-card";
+import { WorkspaceSettingsSection } from "@/components/workspace/workspace-settings-section";
 import { Button } from "@/components/ui/button";
 import {
 	Dialog,
@@ -42,6 +43,7 @@ import {
 	CheckCircle,
 	Download,
 	ExternalLink,
+	FolderOpen,
 	Loader2,
 	RefreshCw,
 	Search,
@@ -51,6 +53,11 @@ import {
 import { useEffect, useMemo, useState } from "react";
 
 const NAV: { id: SettingsSection; label: string; icon: React.ReactNode }[] = [
+	{
+		id: "workspace",
+		label: "Workspace",
+		icon: <FolderOpen className="size-[15px]" aria-hidden="true" />,
+	},
 	{
 		id: "network",
 		label: "Network",
@@ -182,7 +189,7 @@ export function SettingsModal() {
 				{}
 				<aside
 					aria-label="Settings sections"
-					className="flex w-[220px] shrink-0 flex-col gap-1 border-r border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--background)_60%,var(--card))] p-3 pt-4.5 max-sm:grid max-sm:grid-cols-5 max-sm:h-auto max-sm:w-full max-sm:items-stretch max-sm:gap-0 max-sm:border-b max-sm:border-r-0 max-sm:p-2 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]"
+					className="flex w-[220px] shrink-0 flex-col gap-1 border-r border-[oklch(1_0_0/0.06)] bg-[color-mix(in_oklch,var(--background)_60%,var(--card))] p-3 pt-4.5 max-sm:grid max-sm:grid-cols-7 max-sm:h-auto max-sm:w-full max-sm:items-stretch max-sm:gap-0 max-sm:border-b max-sm:border-r-0 max-sm:p-2 [html:not(.dark)_&]:border-[oklch(0_0_0/0.06)]"
 				>
 					<div className="px-2.5 pb-2 font-mono text-[10px] uppercase tracking-[0.08em] text-muted-foreground max-sm:hidden">
 						Settings
@@ -225,6 +232,7 @@ export function SettingsModal() {
 					</DialogHeader>
 
 					<div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-none">
+						{section === "workspace" && <WorkspaceSettingsSection />}
 						{section === "network" && <NetworkSection />}
 						{section === "inference" && <InferenceSection />}
 						{section === "secrets" && <SecretsSection />}

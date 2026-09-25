@@ -1,23 +1,56 @@
 import { expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
+import { Command } from "commander";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
-	copyFileSync,
 	existsSync,
+	lstatSync,
 	mkdirSync,
 	mkdtempSync,
-	readdirSync,
 	readFileSync,
+	readdirSync,
+	readlinkSync,
+	renameSync,
 	rmSync,
 	statSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, win32 } from "node:path";
+import { DatabaseSync, backup } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { initializeMigrationLeaseFile, requestMigrationDrain, verifyDestinationDaemon } from "./migration";
-import { Database as CoreDatabase, addObsidianSource, loadSourcesConfig, resolveWorkspaceLayout } from "@signet/core";
+import {
+	defaultMigrationDestination,
+	initializeMigrationLeaseFile,
+	migrationLeasePath,
+	registerMigrationCommands,
+	requestMigrationDrain,
+	verifyDestinationDaemon,
+} from "./migration";
+import {
+	Database as CoreDatabase,
+	addObsidianSource,
+	findSqliteVecExtension,
+	loadSourcesConfig,
+	resolveWorkspaceLayout,
+} from "@signet/core";
+
+test("default migration destination uses the platform path basename", () => {
+	expect(defaultMigrationDestination("C:\\Users\\alice\\.agents", win32)).toBe("C:\\Users\\alice\\.agents-v2");
+});
+
+test("Windows migration lease stays a safe file beneath state and reuses an existing legacy lease", () => {
+	const state = "C:\\Users\\alice\\AppData\\Local\\Signet\\migrations";
+	const source = "C:\\Users\\alice\\.agents";
+	const legacy = win32.join(state, `${win32.resolve(source).replaceAll("/", "_")}.lease`);
+	const lease = migrationLeasePath(state, source, { platform: "win32", pathApi: win32, exists: () => false });
+	expect(win32.dirname(lease)).toBe(state);
+	expect(win32.basename(lease)).toMatch(/^[a-f0-9]{32}\.lease$/);
+	expect(
+		migrationLeasePath(state, source, { platform: "win32", pathApi: win32, exists: (path) => path === legacy }),
+	).toBe(legacy);
+});
 
 function runGit(root: string, ...args: string[]): string {
 	const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
@@ -25,20 +58,25 @@ function runGit(root: string, ...args: string[]): string {
 	return result.stdout;
 }
 
-function treeDigest(root: string): string {
+function treeDigest(root: string, ignoreIndex = false): string {
 	const hash = createHash("sha256");
-	const visit = (path: string, relativePath: string): void => {
-		for (const name of readdirSync(path).sort()) {
-			const absolute = join(path, name);
-			const relative = join(relativePath, name);
-			const stat = statSync(absolute);
-			hash.update(relative);
-			hash.update(`${stat.mode & 0o7777}:${stat.size}`);
-			if (stat.isDirectory()) visit(absolute, relative);
-			else hash.update(readFileSync(absolute));
-		}
+	const visit = (relativePath: string) => {
+		if (ignoreIndex && relativePath === "index") return;
+		const path = join(root, relativePath);
+		const stat = lstatSync(path);
+		hash.update(
+			JSON.stringify([
+				relativePath,
+				stat.mode & 0o7777,
+				stat.isDirectory() ? "directory" : stat.isSymbolicLink() ? "symlink" : "file",
+			]),
+		);
+		if (stat.isDirectory()) {
+			for (const child of readdirSync(path).sort()) visit(join(relativePath, child));
+		} else if (stat.isSymbolicLink()) hash.update(readlinkSync(path));
+		else hash.update(readFileSync(path));
 	};
-	visit(root, "");
+	visit("");
 	return hash.digest("hex");
 }
 
@@ -64,11 +102,15 @@ function writeDaemonConfig(root: string): void {
 }
 
 test("migration drain reports named daemon writer blockers", async () => {
+	const source = join(tmpdir(), "workspace-being-migrated");
+	const pid = 1234;
 	const blockers = await requestMigrationDrain(
 		"http://127.0.0.1:3850",
 		async (input: string | URL | Request, init?: RequestInit) => {
+			if (String(input).endsWith("/api/status")) return Response.json({ pid, agentsDir: source });
 			expect(String(input)).toBe("http://127.0.0.1:3850/api/workspace/migration-control/drain");
 			expect(init?.method).toBe("POST");
+			expect(JSON.parse(String(init?.body))).toEqual({ expectedPid: pid, expectedWorkspace: source });
 			return new Response(
 				JSON.stringify({
 					closed: false,
@@ -77,6 +119,8 @@ test("migration drain reports named daemon writer blockers", async () => {
 				{ status: 200, headers: { "content-type": "application/json" } },
 			);
 		},
+		source,
+		pid,
 	);
 	expect(blockers).toEqual(["transcript-capture"]);
 });
@@ -98,24 +142,42 @@ test("migration does not drain a daemon serving another workspace", async () => 
 
 test("migration drains only a daemon with a matching workspace and managed PID", async () => {
 	const requests: string[] = [];
+	let drainBody: unknown;
 	const source = join(tmpdir(), "workspace-being-migrated");
 	const pid = 1234;
 	const blockers = await requestMigrationDrain(
 		"http://127.0.0.1:3850",
-		async (input) => {
+		async (input, init) => {
 			requests.push(String(input));
-			return String(input).endsWith("/api/status")
-				? Response.json({ pid, agentsDir: source })
-				: Response.json({ closed: true, blockers: [] });
+			if (String(input).endsWith("/api/status")) return Response.json({ pid, agentsDir: source });
+			drainBody = JSON.parse(String(init?.body));
+			return Response.json({ closed: true, blockers: [] });
 		},
 		source,
 		pid,
 	);
 	expect(blockers).toEqual([]);
+	expect(drainBody).toEqual({ expectedPid: pid, expectedWorkspace: source });
 	expect(requests).toEqual([
 		"http://127.0.0.1:3850/api/status",
 		"http://127.0.0.1:3850/api/workspace/migration-control/drain",
 	]);
+});
+
+test("migration refuses to drain a replacement daemon with a different PID", async () => {
+	const requests: string[] = [];
+	const source = join(tmpdir(), "workspace-being-migrated");
+	const blockers = await requestMigrationDrain(
+		"http://127.0.0.1:3850",
+		async (input) => {
+			requests.push(String(input));
+			return Response.json({ pid: 5678, agentsDir: source });
+		},
+		source,
+		1234,
+	);
+	expect(blockers).toEqual(["daemon:pid-unverified"]);
+	expect(requests).toEqual(["http://127.0.0.1:3850/api/status"]);
 });
 
 test("migration withholds drain when a daemon PID is not independently managed", async () => {
@@ -277,7 +339,7 @@ test("migration leaves an active lease owner in control", () => {
 	}
 });
 
-test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
+test("packaged desktop migration runner migrates and verifies a real v1 SQLite workspace", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-cli-"));
 	const source = join(root, "v1");
 	const destination = join(root, "v2");
@@ -287,6 +349,22 @@ test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
 	mkdirSync(join(source, "memory"), { recursive: true });
 	mkdirSync(home, { recursive: true });
 	writeDaemonConfig(source);
+	const arbitraryFiles = Array.from({ length: 24 }, (_, index) => {
+		const bucket = index % 4;
+		const sourcePath =
+			bucket === 0
+				? `loose note ${index}.txt`
+				: bucket === 1
+					? `.personal-notes/nested/field ${index}.md`
+					: bucket === 2
+						? `memory/misc/${index}/opaque file.bin`
+						: `files/old attachments/${index}.dat`;
+		const destinationPath = bucket === 2 ? `data/legacy-memory/misc/${index}/opaque file.bin` : sourcePath;
+		const contents = Buffer.from(`user-authored payload ${index}\0with arbitrary bytes`);
+		mkdirSync(dirname(join(source, sourcePath)), { recursive: true });
+		writeFileSync(join(source, sourcePath), contents);
+		return { sourcePath, destinationPath, contents };
+	});
 	try {
 		const sourceDb = new Database(join(source, "memory", "memories.db"), { create: true });
 		sourceDb.exec(
@@ -296,6 +374,15 @@ test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
 		const databaseBefore = readFileSync(join(source, "memory", "memories.db"));
 		const walBefore = readFileSync(join(source, "memory", "memories.db-wal"));
 		const cli = join(import.meta.dir, "..", "cli.ts");
+		const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
+		const runnerSource = join(repoRoot, "surfaces", "desktop", "scripts", "workspace-migration-runner.ts");
+		const runner = join(root, "workspace-migration-runner.js");
+		const buildRunner = spawnSync(
+			process.execPath,
+			["build", runnerSource, "--target=bun", "--outfile", runner, "--external", "better-sqlite3"],
+			{ cwd: repoRoot, encoding: "utf8" },
+		);
+		expect(buildRunner.status, buildRunner.stderr).toBe(0);
 		const preflight = spawnSync(
 			process.execPath,
 			[cli, "migration", "preflight", "--source", source, "--destination", destination],
@@ -316,31 +403,115 @@ test("production CLI migrates and verifies a real v1 SQLite workspace", () => {
 		expect(readFileSync(join(source, "memory", "memories.db"))).toEqual(databaseBefore);
 		expect(readFileSync(join(source, "memory", "memories.db-wal"))).toEqual(walBefore);
 		expect(existsSync(destination)).toBe(false);
-		const result = spawnSync(
-			process.execPath,
-			[cli, "migration", "run", "--source", source, "--destination", destination],
-			{
-				cwd: join(import.meta.dir, "..", "..", "..", ".."),
-				encoding: "utf8",
-				env: {
-					...process.env,
-					HOME: home,
-					XDG_CONFIG_HOME: config,
-					XDG_STATE_HOME: state,
-					SIGNET_PATH: source,
-					SIGNET_DAEMON_ENTRYPOINT: "0",
-				},
+		const sqliteVecPath = findSqliteVecExtension();
+		if (!sqliteVecPath) throw new Error("sqlite-vec extension is required by the desktop migration runner test");
+		const workerOptions = {
+			cwd: repoRoot,
+			encoding: "utf8" as const,
+			env: {
+				...process.env,
+				HOME: home,
+				XDG_CONFIG_HOME: config,
+				XDG_STATE_HOME: state,
+				SIGNET_PATH: source,
+				SIGNET_VEC_PATH: sqliteVecPath,
+				SIGNET_WORKSPACE: "",
+				SIGNET_DAEMON_URL: "http://127.0.0.1:1",
+				SIGNET_DAEMON_RUNTIME: "bun-js",
+				SIGNET_DAEMON_JS_PATH: join(repoRoot, "platform", "daemon", "dist", "daemon.js"),
+				SIGNET_DAEMON_ENTRYPOINT: "0",
 			},
+		};
+		const workerStatus = spawnSync(
+			process.execPath,
+			[runner, "status", "--source", source, "--destination", destination],
+			workerOptions,
 		);
+		expect(workerStatus.status, workerStatus.stderr).toBe(0);
+		expect(JSON.parse(workerStatus.stdout)).toMatchObject({ phase: "not-started", destinationWrites: false });
+		expect(readFileSync(join(source, "memory", "memories.db"))).toEqual(databaseBefore);
+		expect(readFileSync(join(source, "memory", "memories.db-wal"))).toEqual(walBefore);
+		expect(existsSync(destination)).toBe(false);
+		const result = spawnSync(process.execPath, [runner, "run", "--source", source, "--destination", destination], {
+			...workerOptions,
+		});
+		const sourceDatabaseAfter = readFileSync(join(source, "memory", "memories.db"));
+		const sourceWalAfter = readFileSync(join(source, "memory", "memories.db-wal"));
 		sourceDb.close();
-		expect(result.status).toBe(0);
+		expect(sourceDatabaseAfter).toEqual(databaseBefore);
+		expect(sourceWalAfter).toEqual(walBefore);
+		expect(result.status, result.stderr.toString()).toBe(0);
+		expect(result.stderr.toString()).toBe("");
 		expect(JSON.parse(result.stdout)).toMatchObject({ status: "completed", destination });
 		const layout = resolveWorkspaceLayout(destination);
 		expect(layout.version).toBe(2);
+		for (const file of arbitraryFiles) {
+			expect(readFileSync(join(destination, file.destinationPath))).toEqual(file.contents);
+			expect(readFileSync(join(source, file.sourcePath))).toEqual(file.contents);
+		}
 		const migrated = new Database(layout.database, { readonly: true });
 		expect(migrated.query("SELECT value FROM proof").get()).toEqual({ value: "workspace-v2-ok" });
 		migrated.close();
 	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 60_000);
+
+test("production CLI refuses an unregistered SQLite writer before destination writes", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-writer-fence-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const databasePath = join(source, "memory", "memories.db");
+	mkdirSync(dirname(databasePath), { recursive: true });
+	mkdirSync(join(root, "home"), { recursive: true });
+	writeDaemonConfig(source);
+	const writer = new Database(databasePath, { create: true });
+	let transactionOpen = false;
+	try {
+		writer.exec(
+			'PRAGMA journal_mode=WAL; CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ("committed")',
+		);
+		writer.exec("BEGIN IMMEDIATE");
+		transactionOpen = true;
+		const cli = join(import.meta.dir, "..", "cli.ts");
+		const options = {
+			cwd: join(import.meta.dir, "..", "..", "..", ".."),
+			encoding: "utf8" as const,
+			timeout: 10_000,
+			env: {
+				...process.env,
+				HOME: join(root, "home"),
+				XDG_CONFIG_HOME: join(root, "config"),
+				XDG_STATE_HOME: join(root, "state"),
+				SIGNET_PATH: source,
+				SIGNET_DAEMON_ENTRYPOINT: "0",
+			},
+		};
+		const blocked = spawnSync(
+			process.execPath,
+			[cli, "migration", "run", "--source", source, "--destination", destination],
+			options,
+		);
+		expect(blocked.status).not.toBe(0);
+		expect(blocked.stderr).toContain("source database has an active writer");
+		expect(existsSync(destination)).toBe(false);
+		writer.exec("ROLLBACK");
+		transactionOpen = false;
+		const resumed = spawnSync(
+			process.execPath,
+			[cli, "migration", "resume", "--source", source, "--destination", destination],
+			options,
+		);
+		expect(resumed.status, resumed.stderr).toBe(0);
+		const migrated = new Database(join(destination, "data", "signet.db"), { readonly: true });
+		try {
+			expect(migrated.query("SELECT value FROM proof").get()).toEqual({ value: "committed" });
+		} finally {
+			migrated.close();
+		}
+	} finally {
+		if (transactionOpen) writer.exec("ROLLBACK");
+		writer.close();
 		rmSync(root, { recursive: true, force: true });
 	}
 }, 60_000);
@@ -352,6 +523,7 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 	const destination = join(root, "v2");
 	const vault = join(root, "vault");
 	const home = join(root, "home");
+	let interruptedTemporaryPath: string | undefined;
 	mkdirSync(join(source, "memory"), { recursive: true });
 	mkdirSync(vault);
 	mkdirSync(home);
@@ -403,7 +575,7 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 			`import { Command } from ${JSON.stringify(pathToFileURL(join(commandsDir, "..", "..", "node_modules", "commander", "esm.mjs")).href)};`,
 			`import { registerMigrationCommands } from ${JSON.stringify(pathToFileURL(join(commandsDir, "migration.ts")).href)};`,
 			"const program = new Command();",
-			"registerMigrationCommands(program, { hooks: { afterEntryCopy: async () => { process.exit(73); } } });",
+			"registerMigrationCommands(program, { hooks: { afterEntryPublish: async () => { process.exit(73); } } });",
 			'await program.parseAsync(process.argv.slice(1), { from: "user" });',
 		].join("\n");
 		const interrupted = spawnSync(
@@ -423,7 +595,26 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 			},
 		);
 		expect(status.status).toBe(0);
-		expect(JSON.parse(status.stdout)).toMatchObject({ destinationWrites: true, rollbackEligible: true, copied: 0 });
+		const interruptedStatus = JSON.parse(status.stdout) as { journal?: string };
+		expect(interruptedStatus).toMatchObject({ destinationWrites: true, rollbackEligible: true, copied: 0 });
+		const journalPath = interruptedStatus.journal;
+		if (journalPath === undefined) throw new Error("migration status omitted its journal path");
+		const interruptedJournal = JSON.parse(readFileSync(journalPath, "utf8")) as {
+			pendingCopy?: string;
+			pendingCopyTemporaryPath?: string;
+			fingerprints: { path: string; destinationPath?: string }[];
+		};
+		const temporaryPath = interruptedJournal.pendingCopyTemporaryPath;
+		if (temporaryPath === undefined) throw new Error("migration journal omitted its pending temporary path");
+		interruptedTemporaryPath = temporaryPath;
+		expect(interruptedJournal.pendingCopy).toBeDefined();
+		expect(existsSync(join(destination, temporaryPath))).toBe(true);
+		const pendingCopy = interruptedJournal.pendingCopy;
+		if (pendingCopy === undefined) throw new Error("migration journal omitted its pending copy");
+		const pendingFingerprint = interruptedJournal.fingerprints.find((fingerprint) => fingerprint.path === pendingCopy);
+		if (!pendingFingerprint) throw new Error(`missing pending fingerprint: ${pendingCopy}`);
+		const pendingDestinationPath = pendingFingerprint.destinationPath ?? pendingFingerprint.path;
+		expect(existsSync(join(destination, pendingDestinationPath))).toBe(true);
 		expect(readFileSync(join(source, "sources.json"))).toEqual(configBytes);
 		const resumed = spawnSync(
 			process.execPath,
@@ -437,6 +628,8 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 		);
 		if (resumed.status !== 0) throw new Error(`migration resume failed: ${resumed.stderr.slice(-2000)}`);
 		expect(JSON.parse(resumed.stdout)).toMatchObject({ status: "completed", destination });
+		if (interruptedTemporaryPath === undefined) throw new Error("migration temporary path was not captured");
+		expect(existsSync(join(destination, interruptedTemporaryPath))).toBe(false);
 		const destinationSource = loadSourcesConfig(destination).sources.find((entry) => entry.id === original?.id);
 		expect(destinationSource).toMatchObject(original ?? {});
 		expect(readFileSync(join(source, "sources.json"))).toEqual(configBytes);
@@ -506,7 +699,7 @@ test("production migration rollback preserves a source after a hard exit followi
 			`import { Command } from ${JSON.stringify(pathToFileURL(join(commandsDir, "..", "..", "node_modules", "commander", "esm.mjs")).href)};`,
 			`import { registerMigrationCommands } from ${JSON.stringify(pathToFileURL(join(commandsDir, "migration.ts")).href)};`,
 			"const program = new Command();",
-			"registerMigrationCommands(program, { hooks: { afterEntryCopy: async () => { process.exit(73); } } });",
+			"registerMigrationCommands(program, { hooks: { afterEntryPublish: async () => { process.exit(73); } } });",
 			'await program.parseAsync(process.argv.slice(1), { from: "user" });',
 		].join("\n");
 		const interrupted = spawnSync(
@@ -516,6 +709,30 @@ test("production migration rollback preserves a source after a hard exit followi
 		);
 		expect(interrupted.status).toBe(73);
 		expect(existsSync(destination)).toBe(true);
+		const interruptedStatus = spawnSync(
+			process.execPath,
+			[cli, "migration", "status", "--source", source, "--destination", destination],
+			{ cwd, env, encoding: "utf8" },
+		);
+		expect(interruptedStatus.status).toBe(0);
+		const statusBody = JSON.parse(interruptedStatus.stdout) as { journal?: string };
+		const journalPath = statusBody.journal;
+		if (journalPath === undefined) throw new Error("migration status omitted its journal path");
+		const interruptedJournal = JSON.parse(readFileSync(journalPath, "utf8")) as {
+			pendingCopy?: string;
+			pendingCopyTemporaryPath?: string;
+			fingerprints: { path: string; destinationPath?: string }[];
+		};
+		const temporaryPath = interruptedJournal.pendingCopyTemporaryPath;
+		if (temporaryPath === undefined) throw new Error("migration journal omitted its pending temporary path");
+		expect(interruptedJournal.pendingCopy).toBeDefined();
+		expect(existsSync(join(destination, temporaryPath))).toBe(true);
+		const pendingCopy = interruptedJournal.pendingCopy;
+		if (pendingCopy === undefined) throw new Error("migration journal omitted its pending copy");
+		const pendingFingerprint = interruptedJournal.fingerprints.find((fingerprint) => fingerprint.path === pendingCopy);
+		if (!pendingFingerprint) throw new Error(`missing pending fingerprint: ${pendingCopy}`);
+		const pendingDestinationPath = pendingFingerprint.destinationPath ?? pendingFingerprint.path;
+		expect(existsSync(join(destination, pendingDestinationPath))).toBe(true);
 		const rollback = spawnSync(
 			process.execPath,
 			[cli, "migration", "rollback", "--source", source, "--destination", destination],
@@ -616,6 +833,337 @@ test("production CLI maps default v1 components into canonical v2 ownership", ()
 			files: join(destination, "files"),
 			imports: join(destination, "data", "imports"),
 		});
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 30_000);
+
+test("preflight verifies an external absolute database without changing its bytes", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-preflight-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const external = join(root, "outside", "custom.db");
+	mkdirSync(join(source, "memory"), { recursive: true });
+	mkdirSync(dirname(external), { recursive: true });
+	mkdirSync(join(root, "home"), { recursive: true });
+	writeDaemonConfig(source);
+	writeFileSync(
+		join(source, "workspace-layout.json"),
+		JSON.stringify({ version: 1, overrides: { database: external } }),
+	);
+	const db = new Database(external, { create: true });
+	db.exec('CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ("authoritative")');
+	db.close();
+	const before = createHash("sha256").update(readFileSync(external)).digest("hex");
+	try {
+		const cli = join(import.meta.dir, "..", "cli.ts");
+		const repositoryRoot = dirname(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url))))));
+		const result = spawnSync(
+			process.execPath,
+			[cli, "migration", "preflight", "--source", source, "--destination", destination],
+			{
+				cwd: repositoryRoot,
+				encoding: "utf8",
+				env: {
+					...process.env,
+					HOME: join(root, "home"),
+					XDG_CONFIG_HOME: join(root, "config"),
+					XDG_STATE_HOME: join(root, "state"),
+					SIGNET_PATH: source,
+				},
+			},
+		);
+		expect(result.status, result.stderr).toBe(0);
+		expect(createHash("sha256").update(readFileSync(external)).digest("hex")).toBe(before);
+		expect(existsSync(destination)).toBe(false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 30_000);
+
+test("external database writer cannot cross the migration cutover fence", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-writer-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const external = join(root, "external", "custom.db");
+	mkdirSync(source, { recursive: true });
+	mkdirSync(dirname(external), { recursive: true });
+	mkdirSync(join(root, "home"), { recursive: true });
+	writeDaemonConfig(source);
+	writeFileSync(
+		join(source, "workspace-layout.json"),
+		JSON.stringify({ version: 1, overrides: { database: external } }),
+	);
+	const writer = new Database(external, { create: true });
+	let transactionOpen = false;
+	try {
+		writer.exec(
+			'PRAGMA journal_mode=WAL; CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ("external")',
+		);
+		const cli = join(import.meta.dir, "..", "cli.ts");
+		const options = {
+			cwd: join(import.meta.dir, "..", "..", "..", ".."),
+			encoding: "utf8" as const,
+			timeout: 15_000,
+			env: {
+				...process.env,
+				HOME: join(root, "home"),
+				XDG_CONFIG_HOME: join(root, "config"),
+				XDG_STATE_HOME: join(root, "state"),
+				SIGNET_PATH: source,
+				SIGNET_DAEMON_ENTRYPOINT: "0",
+			},
+		};
+		const preflight = spawnSync(
+			process.execPath,
+			[cli, "migration", "preflight", "--source", source, "--destination", destination],
+			options,
+		);
+		expect(preflight.status, preflight.stderr).toBe(0);
+		writer.exec("BEGIN IMMEDIATE");
+		transactionOpen = true;
+		const blocked = spawnSync(
+			process.execPath,
+			[cli, "migration", "run", "--source", source, "--destination", destination],
+			options,
+		);
+		expect(blocked.status).not.toBe(0);
+		expect(blocked.stderr).toContain("source database has an active writer");
+		expect(existsSync(destination)).toBe(false);
+		writer.exec("ROLLBACK");
+		transactionOpen = false;
+		const resumed = spawnSync(
+			process.execPath,
+			[cli, "migration", "resume", "--source", source, "--destination", destination],
+			options,
+		);
+		expect(resumed.status, resumed.stderr).toBe(0);
+		expect(resolveWorkspaceLayout(destination).database).toBe(external);
+		expect(writer.query("SELECT value FROM proof").get()).toEqual({ value: "external" });
+	} finally {
+		if (transactionOpen) writer.exec("ROLLBACK");
+		writer.close();
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 60_000);
+
+test("production migration rejects an external database replaced after writer fencing", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-fenced-replacement-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const external = join(root, "external", "custom.db");
+	const replacement = join(root, "external", "replacement.db");
+	mkdirSync(source, { recursive: true });
+	mkdirSync(dirname(external), { recursive: true });
+	mkdirSync(join(root, "home"), { recursive: true });
+	writeDaemonConfig(source);
+	writeFileSync(
+		join(source, "workspace-layout.json"),
+		JSON.stringify({ version: 1, overrides: { database: external } }),
+	);
+	for (const [path, value] of [
+		[external, "original"],
+		[replacement, "replacement"],
+	] as const) {
+		const database = new Database(path, { create: true });
+		database.exec(`CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ('${value}')`);
+		database.close();
+	}
+	const originalInode = lstatSync(external, { bigint: true }).ino;
+	const envKeys = ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "SIGNET_PATH", "SIGNET_DAEMON_ENTRYPOINT"] as const;
+	const previous = envKeys.map((key) => [key, process.env[key]] as const);
+	const previousEntrypoint = process.argv[1];
+	process.argv[1] = join(import.meta.dir, "..", "..", "..", "..", "platform", "daemon", "src", "daemon.ts");
+	Object.assign(process.env, {
+		HOME: join(root, "home"),
+		XDG_CONFIG_HOME: join(root, "config"),
+		XDG_STATE_HOME: join(root, "state"),
+		SIGNET_PATH: source,
+		SIGNET_DAEMON_ENTRYPOINT: "0",
+	});
+	try {
+		const program = new Command();
+		registerMigrationCommands(program, {
+			stdout: { log: () => undefined, error: () => undefined },
+			hooks: {
+				afterDatabaseFence: async () => {
+					renameSync(external, `${external}.held`);
+					renameSync(replacement, external);
+				},
+			},
+		});
+		await expect(
+			program.parseAsync(["migration", "run", "--source", source, "--destination", destination], { from: "user" }),
+		).rejects.toThrow("external database identity changed during migration");
+		expect(lstatSync(`${external}.held`, { bigint: true }).ino).toBe(originalInode);
+		expect(existsSync(destination)).toBe(false);
+	} finally {
+		if (previousEntrypoint === undefined) process.argv.splice(1, 1);
+		else process.argv[1] = previousEntrypoint;
+		for (const [key, value] of previous) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 30_000);
+
+test("post-cutover verification fails closed when the external database reference disappears", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-disappears-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const external = join(root, "external", "custom.db");
+	mkdirSync(source, { recursive: true });
+	mkdirSync(dirname(external), { recursive: true });
+	mkdirSync(join(root, "home"), { recursive: true });
+	writeDaemonConfig(source);
+	writeFileSync(
+		join(source, "workspace-layout.json"),
+		JSON.stringify({ version: 1, overrides: { database: external } }),
+	);
+	const db = new Database(external, { create: true });
+	db.exec('CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ("external")');
+	db.close();
+	const envKeys = ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "SIGNET_PATH", "SIGNET_DAEMON_ENTRYPOINT"] as const;
+	const previous = envKeys.map((key) => [key, process.env[key]] as const);
+	const previousEntrypoint = process.argv[1];
+	process.argv[1] = join(import.meta.dir, "..", "..", "..", "..", "platform", "daemon", "src", "daemon.ts");
+	Object.assign(process.env, {
+		HOME: join(root, "home"),
+		XDG_CONFIG_HOME: join(root, "config"),
+		XDG_STATE_HOME: join(root, "state"),
+		SIGNET_PATH: source,
+		SIGNET_DAEMON_ENTRYPOINT: "0",
+	});
+	try {
+		const program = new Command();
+		registerMigrationCommands(program, {
+			stdout: { log: () => undefined, error: () => undefined },
+			hooks: { afterPointerPublished: async () => renameSync(external, `${external}.held`) },
+		});
+		await expect(
+			program.parseAsync(["migration", "run", "--source", source, "--destination", destination], { from: "user" }),
+		).rejects.toThrow("external database identity unavailable during migration");
+		expect(existsSync(`${external}.held`)).toBe(true);
+		expect(existsSync(external)).toBe(false);
+	} finally {
+		if (previousEntrypoint === undefined) process.argv.splice(1, 1);
+		else process.argv[1] = previousEntrypoint;
+		for (const [key, value] of previous) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 30_000);
+
+test("production resume rejects a replaced but valid external database after pointer publication", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-replaced-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const external = join(root, "external", "custom.db");
+	const replacement = join(root, "external", "replacement.db");
+	mkdirSync(source, { recursive: true });
+	mkdirSync(dirname(external), { recursive: true });
+	mkdirSync(join(root, "home"), { recursive: true });
+	writeDaemonConfig(source);
+	writeFileSync(
+		join(source, "workspace-layout.json"),
+		JSON.stringify({ version: 1, overrides: { database: external } }),
+	);
+	for (const [path, value] of [
+		[external, "original"],
+		[replacement, "replacement"],
+	] as const) {
+		const database = new Database(path, { create: true });
+		database.exec(`CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ('${value}')`);
+		database.close();
+	}
+	const originalInode = lstatSync(external, { bigint: true }).ino;
+	const envKeys = ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "SIGNET_PATH", "SIGNET_DAEMON_ENTRYPOINT"] as const;
+	const previous = envKeys.map((key) => [key, process.env[key]] as const);
+	Object.assign(process.env, {
+		HOME: join(root, "home"),
+		XDG_CONFIG_HOME: join(root, "config"),
+		XDG_STATE_HOME: join(root, "state"),
+		SIGNET_PATH: source,
+		SIGNET_DAEMON_ENTRYPOINT: "0",
+	});
+	try {
+		const run = new Command();
+		registerMigrationCommands(run, {
+			stdout: { log: () => undefined, error: () => undefined },
+			hooks: {
+				afterPointerPublished: async () => {
+					renameSync(replacement, external);
+					throw new Error("interrupted after publication");
+				},
+			},
+		});
+		await expect(
+			run.parseAsync(["migration", "run", "--source", source, "--destination", destination], { from: "user" }),
+		).rejects.toThrow("interrupted after publication");
+		expect(lstatSync(external, { bigint: true }).ino).not.toBe(originalInode);
+		const resume = new Command();
+		registerMigrationCommands(resume, { stdout: { log: () => undefined, error: () => undefined } });
+		await expect(
+			resume.parseAsync(["migration", "resume", "--source", source, "--destination", destination], { from: "user" }),
+		).rejects.toThrow("external database identity changed");
+		const database = new Database(external, { readonly: true });
+		try {
+			expect(database.query("SELECT value FROM proof").get()).toEqual({ value: "replacement" });
+		} finally {
+			database.close();
+		}
+	} finally {
+		for (const [key, value] of previous) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 30_000);
+
+test("production CLI preserves an external absolute database override as authoritative", () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-db-"));
+	const source = join(root, "v1");
+	const destination = join(root, "v2");
+	const external = join(root, "external", "custom.db");
+	mkdirSync(join(source, "memory"), { recursive: true });
+	mkdirSync(dirname(external), { recursive: true });
+	mkdirSync(join(root, "home"), { recursive: true });
+	writeDaemonConfig(source);
+	writeFileSync(
+		join(source, "workspace-layout.json"),
+		JSON.stringify({ version: 1, overrides: { database: external } }),
+	);
+	const db = new Database(external, { create: true });
+	db.exec('CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ("external-authority")');
+	db.close();
+	try {
+		const cli = join(import.meta.dir, "..", "cli.ts");
+		const child = spawnSync(
+			process.execPath,
+			[cli, "migration", "run", "--source", source, "--destination", destination],
+			{
+				cwd: join(import.meta.dir, "..", "..", "..", ".."),
+				encoding: "utf8",
+				env: {
+					...process.env,
+					HOME: join(root, "home"),
+					XDG_CONFIG_HOME: join(root, "config"),
+					XDG_STATE_HOME: join(root, "state"),
+					SIGNET_PATH: source,
+					SIGNET_DAEMON_ENTRYPOINT: "0",
+				},
+			},
+		);
+		expect(child.status, child.stderr).toBe(0);
+		expect(resolveWorkspaceLayout(destination).database).toBe(external);
+		expect(readFileSync(join(destination, "workspace-layout.json"), "utf8")).toContain(external);
+		const check = new Database(external, { readonly: true });
+		expect(check.query("SELECT value FROM proof").get()).toEqual({ value: "external-authority" });
+		check.close();
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -738,6 +1286,25 @@ test("production CLI preserves root and nested Git state without mutating the so
 			},
 		);
 		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+		const destinationNested = join(destination, "skills", "demo");
+		expect(treeDigest(join(source, ".git"))).toBe(sourceGitDigest);
+		expect(treeDigest(join(nested, ".git"))).toBe(nestedGitDigest);
+		// Restored-daemon startup refreshes Git's inode cache in the index.
+		// The migration engine verifies the copied index hash before startup.
+		expect(treeDigest(join(destination, ".git"), true)).toBe(treeDigest(join(source, ".git"), true));
+		expect(treeDigest(join(destinationNested, ".git"))).toBe(nestedGitDigest);
+		expect(runGit(destination, "rev-parse", "HEAD").trim()).toBe(sourceHead);
+		expect(runGit(destinationNested, "rev-parse", "HEAD").trim()).toBe(nestedHead);
+		expect(runGit(destination, "ls-files", "--stage")).toBe(runGit(source, "ls-files", "--stage"));
+		expect(existsSync(join(destination, ".git", "objects", "info"))).toBe(true);
+		expect(existsSync(join(destination, ".git", "objects", "pack"))).toBe(true);
+		expect(existsSync(join(destination, ".git", "refs", "tags"))).toBe(true);
+		expect(statSync(join(destination, ".git")).mode & 0o7777).toBe(statSync(join(source, ".git")).mode & 0o7777);
+		expect(statSync(join(destinationNested, ".git")).mode & 0o7777).toBe(statSync(join(nested, ".git")).mode & 0o7777);
+		expect(statSync(join(destination, ".git", "objects", "info")).mtimeMs).toBeCloseTo(
+			statSync(join(source, ".git", "objects", "info")).mtimeMs,
+			0,
+		);
 		expect(runGit(destination, "rev-parse", "HEAD").trim()).toBe(sourceHead);
 		const destinationStatus = runGit(destination, "status", "--porcelain=v1");
 		for (const line of sourceStatus
@@ -750,11 +1317,8 @@ test("production CLI preserves root and nested Git state without mutating the so
 			"https://example.test/workspace.git",
 		);
 		expect(readFileSync(join(destination, ".git", "hooks", "pre-commit"), "utf8")).toBe("#!/bin/sh\nexit 0\n");
-		const destinationNested = join(destination, "skills", "demo");
 		expect(runGit(destinationNested, "rev-parse", "HEAD").trim()).toBe(nestedHead);
 		expect(runGit(destinationNested, "status", "--porcelain=v1")).toBe(nestedStatus);
-		expect(treeDigest(join(source, ".git"))).toBe(sourceGitDigest);
-		expect(treeDigest(join(nested, ".git"))).toBe(nestedGitDigest);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -815,7 +1379,7 @@ test("production CLI blocks cutover when the configured source database is missi
 	}
 }, 30_000);
 
-test("production CLI resumes when a matching descriptor snapshot exists before its journal update", () => {
+test("production CLI refuses an unowned pre-existing destination even when its database matches", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-snapshot-resume-"));
 	const source = join(root, "v1");
 	const destination = join(root, "v2");
@@ -830,7 +1394,12 @@ test("production CLI resumes when a matching descriptor snapshot exists before i
 		const sourceDb = new Database(join(source, "memory", "memories.db"), { create: true });
 		sourceDb.exec('CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ("resume-ok")');
 		sourceDb.close();
-		copyFileSync(join(source, "memory", "memories.db"), join(destination, "data", "signet.db"));
+		const stagedSource = new DatabaseSync(join(source, "memory", "memories.db"), { readOnly: true });
+		try {
+			await backup(stagedSource, join(destination, "data", "signet.db"));
+		} finally {
+			stagedSource.close();
+		}
 		const cli = join(import.meta.dir, "..", "cli.ts");
 		const result = spawnSync(
 			process.execPath,
@@ -848,12 +1417,12 @@ test("production CLI resumes when a matching descriptor snapshot exists before i
 				},
 			},
 		);
-		if (result.status !== 0) throw new Error(result.stderr);
-		expect(result.status).toBe(0);
-		expect(JSON.parse(result.stdout)).toMatchObject({ status: "completed", destination });
+		expect(result.status).not.toBe(0);
+		expect(result.stderr).toContain("EEXIST");
 		const migrated = new Database(join(destination, "data", "signet.db"), { readonly: true });
 		expect(migrated.query("SELECT value FROM proof").get()).toEqual({ value: "resume-ok" });
 		migrated.close();
+		expect(existsSync(join(destination, "workspace-layout.json"))).toBe(false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

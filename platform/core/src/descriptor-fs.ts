@@ -4,7 +4,33 @@ import { link, lstat, mkdir, open, opendir, readlink, rename, rmdir, symlink, un
 import type { FileHandle } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
 import { relative, resolve, sep } from "node:path";
-import { dlopen, ptr, read, toArrayBuffer } from "bun:ffi";
+
+type DarwinPointer = unknown;
+
+type DarwinFfi = {
+	readonly dlopen: (path: string, symbols: Record<string, unknown>) => DarwinApi;
+	readonly ptr: (value: ArrayBufferView) => DarwinPointer;
+	readonly read: {
+		i32: (pointer: DarwinPointer, offset: number) => number;
+		u16: (pointer: DarwinPointer, offset: number) => number;
+		u8: (pointer: DarwinPointer, offset: number) => number;
+	};
+	readonly toArrayBuffer: (pointer: DarwinPointer, offset: number, length: number) => ArrayBuffer;
+};
+
+let darwinFfi: DarwinFfi | null | undefined;
+
+function loadDarwinFfi(): DarwinFfi | null {
+	if (process.platform !== "darwin") return null;
+	if (darwinFfi !== undefined) return darwinFfi;
+	try {
+		const ffiModule = "bun:ffi";
+		darwinFfi = require(ffiModule) as DarwinFfi;
+	} catch {
+		darwinFfi = null;
+	}
+	return darwinFfi;
+}
 
 const DESCRIPTOR_ROOT =
 	process.platform === "linux" ? "/proc/self/fd" : process.platform === "darwin" ? "/dev/fd" : undefined;
@@ -53,53 +79,47 @@ export type DescriptorWriteOptions = {
 	readonly beforeMutation?: () => Promise<void>;
 };
 
+export type DescriptorCopyOptions = DescriptorWriteOptions & {
+	readonly temporaryName?: string;
+	readonly beforePublish?: () => Promise<void>;
+	readonly afterPublish?: () => Promise<void>;
+};
+
 type DarwinApi = {
 	readonly symbols: {
-		readonly __error: () => ReturnType<typeof ptr>;
+		readonly __error: () => DarwinPointer;
 		readonly close: (fd: number) => number;
-		readonly getdirentries: (
-			fd: number,
-			buffer: ReturnType<typeof ptr>,
-			length: number,
-			base: ReturnType<typeof ptr>,
-		) => number;
+		readonly getdirentries: (fd: number, buffer: DarwinPointer, length: number, base: DarwinPointer) => number;
 		readonly linkat: (
 			oldfd: number,
-			oldpath: ReturnType<typeof ptr>,
+			oldpath: DarwinPointer,
 			newfd: number,
-			newpath: ReturnType<typeof ptr>,
+			newpath: DarwinPointer,
 			flags: number,
 		) => number;
-		readonly mkdirat: (fd: number, path: ReturnType<typeof ptr>, mode: number) => number;
-		readonly openat: (fd: number, path: ReturnType<typeof ptr>, flags: number, mode: number) => number;
-		readonly readlinkat: (
-			fd: number,
-			path: ReturnType<typeof ptr>,
-			buffer: ReturnType<typeof ptr>,
-			length: number,
-		) => number;
-		readonly renameat: (
-			oldfd: number,
-			oldpath: ReturnType<typeof ptr>,
-			newfd: number,
-			newpath: ReturnType<typeof ptr>,
-		) => number;
-		readonly symlinkat: (target: ReturnType<typeof ptr>, fd: number, path: ReturnType<typeof ptr>) => number;
-		readonly unlinkat: (fd: number, path: ReturnType<typeof ptr>, flags: number) => number;
+		readonly mkdirat: (fd: number, path: DarwinPointer, mode: number) => number;
+		readonly openat: (fd: number, path: DarwinPointer, flags: number, mode: number) => number;
+		readonly readlinkat: (fd: number, path: DarwinPointer, buffer: DarwinPointer, length: number) => number;
+		readonly renameat: (oldfd: number, oldpath: DarwinPointer, newfd: number, newpath: DarwinPointer) => number;
+		readonly symlinkat: (target: DarwinPointer, fd: number, path: DarwinPointer) => number;
+		readonly unlinkat: (fd: number, path: DarwinPointer, flags: number) => number;
 	};
 };
 
 let darwinApi: DarwinApi | null | undefined;
 
-function cstring(value: string): ReturnType<typeof ptr> {
-	return ptr(Buffer.from(`${value}\0`));
+function cstring(value: string): DarwinPointer {
+	const ffi = loadDarwinFfi();
+	if (!ffi) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
+	return ffi.ptr(Buffer.from(`${value}\0`));
 }
 
 function loadDarwinApi(): DarwinApi | null {
-	if (process.platform !== "darwin") return null;
+	const ffi = loadDarwinFfi();
+	if (!ffi) return null;
 	if (darwinApi !== undefined) return darwinApi;
 	try {
-		darwinApi = dlopen("/usr/lib/libSystem.B.dylib", {
+		darwinApi = ffi.dlopen("/usr/lib/libSystem.B.dylib", {
 			__error: { args: [], returns: "ptr" },
 			close: { args: ["i32"], returns: "i32" },
 			getdirentries: { args: ["i32", "ptr", "i32", "ptr"], returns: "i32" },
@@ -118,7 +138,9 @@ function loadDarwinApi(): DarwinApi | null {
 }
 
 function darwinError(operation: string, api: DarwinApi): NodeJS.ErrnoException {
-	const errno = read.i32(api.symbols.__error(), 0);
+	const ffi = loadDarwinFfi();
+	if (!ffi) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
+	const errno = ffi.read.i32(api.symbols.__error(), 0);
 	const code = Object.entries(osConstants.errno).find(([, value]) => value === errno)?.[0] ?? "EIO";
 	return Object.assign(new Error(`${operation} failed: ${code}`), { code, errno });
 }
@@ -230,16 +252,20 @@ async function readlinkChild(parent: FileHandle, name: string): Promise<string> 
 	const api = loadDarwinApi();
 	if (!api) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
 	const buffer = new Uint8Array(64 * 1024);
-	const length = api.symbols.readlinkat(parent.fd, cstring(name), ptr(buffer), buffer.byteLength);
+	const ffi = loadDarwinFfi();
+	if (!ffi) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
+	const length = api.symbols.readlinkat(parent.fd, cstring(name), ffi.ptr(buffer), buffer.byteLength);
 	if (length < 0) throw darwinError("readlinkat", api);
 	return new TextDecoder().decode(buffer.subarray(0, Number(length)));
 }
 
 function* readDarwinDirectory(fd: number, api: DarwinApi): Generator<string> {
+	const ffi = loadDarwinFfi();
+	if (!ffi) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
 	const buffer = new Uint8Array(DARWIN_DIRECTORY_BUFFER_BYTES);
 	const base = new BigInt64Array(1);
-	const bufferPointer = ptr(buffer);
-	const basePointer = ptr(base);
+	const bufferPointer = ffi.ptr(buffer);
+	const basePointer = ffi.ptr(base);
 	const decoder = new TextDecoder();
 	for (;;) {
 		const bytes = api.symbols.getdirentries(fd, bufferPointer, buffer.byteLength, basePointer);
@@ -247,8 +273,8 @@ function* readDarwinDirectory(fd: number, api: DarwinApi): Generator<string> {
 		if (bytes === 0) return;
 		for (let offset = 0; offset < bytes; ) {
 			if (offset + DARWIN_DIRENT_HEADER_BYTES > bytes) throw new Error("invalid macOS directory entry");
-			const recordLength = read.u16(bufferPointer, offset + 4);
-			const nameLength = read.u8(bufferPointer, offset + 7);
+			const recordLength = ffi.read.u16(bufferPointer, offset + 4);
+			const nameLength = ffi.read.u8(bufferPointer, offset + 7);
 			if (
 				recordLength < DARWIN_DIRENT_HEADER_BYTES ||
 				offset + recordLength > bytes ||
@@ -257,7 +283,7 @@ function* readDarwinDirectory(fd: number, api: DarwinApi): Generator<string> {
 				throw new Error("invalid macOS directory entry");
 			if (nameLength > 0) {
 				const name = decoder.decode(
-					new Uint8Array(toArrayBuffer(bufferPointer, offset + DARWIN_DIRENT_HEADER_BYTES, nameLength)),
+					new Uint8Array(ffi.toArrayBuffer(bufferPointer, offset + DARWIN_DIRENT_HEADER_BYTES, nameLength)),
 				);
 				if (name !== "." && name !== "..") yield name;
 			}
@@ -540,12 +566,34 @@ export class DescriptorRoot {
 		}
 	}
 
-	async createDirectory(path: string, mode = 0o700): Promise<void> {
+	async createDirectoryExclusive(path: string, mode = 0o700): Promise<void> {
+		this.requireOpen();
+		const pathParts = parts(path);
+		const name = pathParts.pop();
+		if (!name) throw new UnsafeDescriptorPathError("descriptor path is empty");
+		const parent = await openDirectoryPath(this.root, pathParts, false);
+		try {
+			await mkdirChild(parent, name, mode);
+			const directory = await openChild(parent, name, DIRECTORY_FLAGS);
+			try {
+				await requirePreservedMode(directory, mode);
+				await directory.sync();
+			} finally {
+				await directory.close();
+			}
+			await parent.sync();
+		} finally {
+			await parent.close();
+		}
+	}
+
+	async createDirectory(path: string, mode = 0o700, mtimeMs?: number): Promise<void> {
 		this.requireOpen();
 		const directory = await openDirectoryPath(this.root, parts(path), true);
 		try {
 			await directory.chmod(mode);
 			await requirePreservedMode(directory, mode);
+			if (mtimeMs !== undefined) await directory.utimes(mtimeMs / 1000, mtimeMs / 1000);
 			await directory.sync();
 		} finally {
 			await directory.close();
@@ -639,7 +687,7 @@ export class DescriptorRoot {
 	async copyFileFrom(
 		source: DescriptorRoot,
 		sourcePath: string,
-		options: DescriptorWriteOptions = {},
+		options: DescriptorCopyOptions = {},
 		destinationPath = sourcePath,
 	): Promise<void> {
 		this.requireOpen();
@@ -650,9 +698,18 @@ export class DescriptorRoot {
 		const destinationParts = parts(destinationPath);
 		const destinationName = destinationParts.pop();
 		if (!destinationName) throw new UnsafeDescriptorPathError("descriptor path is empty");
+		const requestedTemporary = options.temporaryName === undefined ? undefined : parts(options.temporaryName);
+		if (
+			requestedTemporary &&
+			(requestedTemporary.length !== 1 ||
+				requestedTemporary[0] !== options.temporaryName ||
+				requestedTemporary[0] === destinationName)
+		)
+			throw new UnsafeDescriptorPathError("descriptor temporary name must be a distinct path component");
+		const temporary = requestedTemporary?.[0] ?? `.${destinationName}.${process.pid}.${randomUUID()}.tmp`;
 		const sourceParent = await openDirectoryPath(source.root, sourceParts, false);
 		const destinationParent = await openDirectoryPath(this.root, destinationParts, true);
-		const temporary = `.${destinationName}.${process.pid}.${randomUUID()}.tmp`;
+		let temporaryCreated = false;
 		let published = false;
 		try {
 			const sourceFile = await openChild(sourceParent, sourceName, FILE_FLAGS);
@@ -666,6 +723,7 @@ export class DescriptorRoot {
 					fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | NOFOLLOW,
 					options.mode ?? stat.mode & 0o7777,
 				);
+				temporaryCreated = true;
 				try {
 					const buffer = Buffer.allocUnsafe(1024 * 1024);
 					let position = 0;
@@ -688,15 +746,17 @@ export class DescriptorRoot {
 				} finally {
 					await destinationFile.close();
 				}
+				await options.beforePublish?.();
 				await linkChild(destinationParent, temporary, destinationName);
 				published = true;
+				await options.afterPublish?.();
 				await unlinkChild(destinationParent, temporary);
 				await destinationParent.sync();
 			} finally {
 				await sourceFile.close();
 			}
 		} catch (error) {
-			if (!published) await unlinkChild(destinationParent, temporary).catch(() => {});
+			if (!published && temporaryCreated) await unlinkChild(destinationParent, temporary).catch(() => {});
 			throw normalizeError(error);
 		} finally {
 			await destinationParent.close();

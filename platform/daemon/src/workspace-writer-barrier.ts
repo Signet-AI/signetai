@@ -9,7 +9,7 @@ import {
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 
 export type AdmissionState = "open" | "draining" | "closed";
 
@@ -51,6 +51,16 @@ export interface DrainBlockerReceipt {
 export interface DrainResult {
 	timedOut: boolean;
 	blockers: DrainBlockerReceipt[];
+}
+
+export function migrationDrainTargetMatches(value: unknown, actualPid: number, actualWorkspace: string): boolean {
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+	const expectedPid = Reflect.get(value, "expectedPid");
+	const expectedWorkspace = Reflect.get(value, "expectedWorkspace");
+	if (expectedPid !== actualPid || typeof expectedWorkspace !== "string") return false;
+	const expected = resolve(expectedWorkspace);
+	const actual = resolve(actualWorkspace);
+	return process.platform === "win32" ? expected.toLowerCase() === actual.toLowerCase() : expected === actual;
 }
 
 type Writer = { active: number; queued: number };

@@ -131,6 +131,22 @@ function pkgVersion(pkg, name) {
 	return pkg.dependencies?.[name] ?? pkg.optionalDependencies?.[name] ?? pkg.devDependencies?.[name] ?? null;
 }
 
+export function runtimeDependencies(daemonPkg, corePkg, platform, arch) {
+	const vecPackage = platformVecPackage(platform, arch);
+	const dependencies = {};
+	for (const name of ["@firecrawl/anydoc", "tiktoken"]) {
+		const version = pkgVersion(daemonPkg, name);
+		if (version) dependencies[name] = version;
+	}
+	// The staged runner and daemon execute under Bun, whose database backend is bun:sqlite.
+	// Keep the native Node-only fallback out of this runtime to avoid ABI-specific staging.
+	for (const name of ["sqlite-vec", vecPackage]) {
+		const version = pkgVersion(corePkg, name);
+		if (version) dependencies[name] = version;
+	}
+	return dependencies;
+}
+
 function resourceLockPath(target) {
 	return join(dirname(target), `.${basename(target)}.lock`);
 }
@@ -303,6 +319,19 @@ export function stageRuntime() {
 				cpSync(join(daemonDist, entry), resolve(daemonOut, "dist", entry));
 			}
 		}
+		execFileSync(
+			bunSrc,
+			[
+				"build",
+				resolve(repoRoot, "surfaces/desktop/scripts/workspace-migration-runner.ts"),
+				"--target=bun",
+				"--external",
+				"better-sqlite3",
+				"--outfile",
+				resolve(daemonOut, "dist", "workspace-migration-runner.js"),
+			],
+			{ cwd: repoRoot, stdio: "inherit" },
+		);
 		cpSync(resolve(repoRoot, "platform/daemon/dashboard"), resolve(daemonOut, "dashboard"), { recursive: true });
 		cpSync(resolve(repoRoot, "platform/daemon/skills"), resolve(daemonOut, "skills"), { recursive: true });
 		const connectorsOut = resolve(daemonOut, "connectors");
@@ -316,19 +345,10 @@ export function stageRuntime() {
 		const daemonPkg = readJson(daemonPkgPath);
 		const corePkg = readJson(corePkgPath);
 		const vecPkg = platformVecPackage(target, bunArch);
-		const vecVersion = pkgVersion(corePkg, vecPkg);
-		if (vecVersion === null) {
+		if (pkgVersion(corePkg, vecPkg) === null) {
 			throw new Error(`No sqlite-vec binary package is available for ${target}/${bunArch}`);
 		}
-		const dependencies = {};
-		for (const name of ["@firecrawl/anydoc", "tiktoken"]) {
-			const version = pkgVersion(daemonPkg, name);
-			if (version) dependencies[name] = version;
-		}
-		for (const name of ["sqlite-vec", vecPkg]) {
-			const version = pkgVersion(corePkg, name);
-			if (version) dependencies[name] = version;
-		}
+		const dependencies = runtimeDependencies(daemonPkg, corePkg, target, bunArch);
 
 		writeFileSync(
 			resolve(daemonOut, "package.json"),

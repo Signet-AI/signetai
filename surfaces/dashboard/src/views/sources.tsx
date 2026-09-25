@@ -21,7 +21,6 @@ import {
 	X,
 } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
-import { ProtectionRecoveryData } from "@/components/sources/protection-recovery";
 import { importStatusLabel, importStatusReason } from "@/lib/import-status";
 
 const DURABLE_IMPORT_STATES = ["pending", "processing", "imported", "duplicate", "failed", "quarantined"] as const;
@@ -62,8 +61,6 @@ export function HomeSourcesPanel({
 
 	return (
 		<>
-			<ProtectionRecoveryData />
-			<HomeImportStatus />
 			<section className="group pb-3">
 				<div className="flex items-center justify-between gap-3">
 					<span className="text-[15px] font-semibold tracking-tight text-foreground">Sources</span>
@@ -103,24 +100,6 @@ export function HomeSourcesPanel({
 			</section>
 			<ConnectSourceDialog open={connectOpen} onClose={() => setConnectOpen(false)} onConnected={onRefresh} />
 		</>
-	);
-}
-
-function HomeImportStatus() {
-	const imports = useAsync(() => api.getSourceImports(), { intervalMs: 5000 });
-	const jobs = imports.data?.data?.imports;
-	return (
-		<section aria-label="Durable import status" className="border-y border-border py-2.5">
-			<div className="flex items-center justify-between gap-3">
-				<span className="text-[12px] font-medium">Durable imports</span>
-				<span className="font-mono text-[10px] text-muted-foreground">
-					{imports.loading && !jobs ? "Loading…" : jobs ? `${jobs.length} tracked` : "Unavailable"}
-				</span>
-			</div>
-			{!imports.loading && !jobs && (
-				<p className="mt-1 text-[10px] text-muted-foreground">Unable to load import status.</p>
-			)}
-		</section>
 	);
 }
 
@@ -311,7 +290,6 @@ export function SourcesView() {
 
 	return (
 		<div className="flex flex-1 flex-col gap-3 min-h-0">
-			<ProtectionRecoveryData />
 			<div className="flex shrink-0 items-center gap-[9px] px-0.5 pb-3.5 font-mono">
 				<HeroStat value={sources ? totals.artifacts.toLocaleString() : "—"} label="artifacts" />
 				<Sep />

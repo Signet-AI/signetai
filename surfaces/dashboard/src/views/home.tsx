@@ -7,6 +7,7 @@ import { HomeSecretsPanel } from "@/components/home/secrets";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
+import { WorkspaceMigrationCard } from "@/components/workspace/workspace-migration";
 import { HomeSourcesPanel } from "@/views/sources";
 import { ChevronRight, FileText } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
@@ -73,6 +74,7 @@ export function HomeView() {
 							A more memorable you.
 						</span>
 					</div>
+					<WorkspaceMigrationCard placement="notice" />
 					{!connected && (
 						<a href="#setup" className="self-start text-sm underline underline-offset-4">
 							Set up or repair your memory connection

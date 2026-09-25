@@ -1,10 +1,15 @@
+import { join } from "node:path";
 import { describe, expect, mock, test } from "bun:test";
 
 mock.module("electron", () => ({
 	app: { isPackaged: false },
 }));
 
-const { resolveBunPath } = await import("./paths.js");
+const { daemonRoot, migrationRunnerEntry, resolveBunPath } = await import("./paths.ts");
+
+test("resolves the migration runner only inside the staged daemon runtime", () => {
+	expect(migrationRunnerEntry()).toBe(join(daemonRoot(), "dist", "workspace-migration-runner.js"));
+});
 
 describe("desktop Bun runtime resolution", () => {
 	test("uses a known absolute Windows Bun path when the bundled runtime is absent", () => {

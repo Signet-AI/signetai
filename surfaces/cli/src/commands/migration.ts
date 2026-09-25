@@ -1,7 +1,7 @@
 import type { Command } from "commander";
-import { spawn } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
+	type BigIntStats,
 	chmodSync,
 	closeSync,
 	existsSync,
@@ -15,7 +15,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { homedir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import {
 	inspectRootGit,
@@ -23,6 +23,7 @@ import {
 	resolveDaemonRuntime,
 	resolveWorkspaceLayout,
 	serializeWorkspaceLayout,
+	spawnHidden as spawn,
 } from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
 import { createDatabase, verifyMigrationDatabaseRows } from "../sqlite.js";
@@ -91,30 +92,28 @@ export async function requestMigrationDrain(
 	expectedWorkspace?: string,
 	expectedPid?: number | null,
 ): Promise<string[] | null> {
-	if (expectedWorkspace) {
-		let status: Response;
-		try {
-			status = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/status`, {
-				signal: AbortSignal.timeout(1500),
-			});
-		} catch {
-			return null;
-		}
-		if (!status.ok) throw new Error(`daemon workspace identity probe failed (${status.status})`);
-		const identity: unknown = await status.json();
-		if (!identity || typeof identity !== "object") throw new Error("daemon workspace identity is malformed");
-		const agentsDir = Reflect.get(identity, "agentsDir");
-		if (typeof agentsDir !== "string" || !agentsDir) throw new Error("daemon workspace identity is unavailable");
-		if (resolve(agentsDir) !== resolve(expectedWorkspace)) return null;
-		if (typeof expectedPid !== "number" || Reflect.get(identity, "pid") !== expectedPid)
-			return ["daemon:pid-unverified"];
+	if (!expectedWorkspace) return ["daemon:workspace-unverified"];
+	let status: Response;
+	try {
+		status = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/status`, {
+			signal: AbortSignal.timeout(1500),
+		});
+	} catch {
+		return null;
 	}
+	if (!status.ok) throw new Error(`daemon workspace identity probe failed (${status.status})`);
+	const identity: unknown = await status.json();
+	if (!identity || typeof identity !== "object") throw new Error("daemon workspace identity is malformed");
+	const agentsDir = Reflect.get(identity, "agentsDir");
+	if (typeof agentsDir !== "string" || !agentsDir) throw new Error("daemon workspace identity is unavailable");
+	if (resolve(agentsDir) !== resolve(expectedWorkspace)) return null;
+	if (typeof expectedPid !== "number" || Reflect.get(identity, "pid") !== expectedPid) return ["daemon:pid-unverified"];
 	let response: Response;
 	try {
 		response = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/api/workspace/migration-control/drain`, {
 			method: "POST",
 			headers: { "content-type": "application/json" },
-			body: "{}",
+			body: JSON.stringify({ expectedPid, expectedWorkspace }),
 			signal: AbortSignal.timeout(35_000),
 		});
 	} catch {
@@ -250,14 +249,41 @@ export async function verifyDestinationDaemon(
 	if (verificationError) throw verificationError;
 }
 
-function defaultEngine(
+type MigrationPathApi = Pick<typeof import("node:path"), "basename" | "dirname" | "join" | "resolve">;
+
+const nativeMigrationPath: MigrationPathApi = { basename, dirname, join, resolve };
+
+export function defaultMigrationDestination(source: string, pathApi: MigrationPathApi = nativeMigrationPath): string {
+	const resolvedSource = pathApi.resolve(source);
+	return pathApi.join(pathApi.dirname(resolvedSource), `${pathApi.basename(resolvedSource) || "workspace"}-v2`);
+}
+
+export function migrationLeasePath(
+	state: string,
+	source: string,
+	options: {
+		readonly platform?: NodeJS.Platform;
+		readonly pathApi?: MigrationPathApi;
+		readonly exists?: (path: string) => boolean;
+	} = {},
+): string {
+	const pathApi = options.pathApi ?? nativeMigrationPath;
+	const resolvedSource = pathApi.resolve(source);
+	const legacyPath = pathApi.join(state, `${resolvedSource.replaceAll("/", "_")}.lease`);
+	if (options.platform === "win32" || (options.platform === undefined && process.platform === "win32")) {
+		if ((options.exists ?? existsSync)(legacyPath)) return legacyPath;
+		const id = createHash("sha256").update(resolvedSource).digest("hex").slice(0, 32);
+		return pathApi.join(state, `${id}.lease`);
+	}
+	return legacyPath;
+}
+
+export function createDefaultMigrationEngine(
 	options: { source?: string; destination?: string },
 	hooks?: MigrationDeps["hooks"],
 ): MigrationEngine {
 	const source = resolve(options.source ?? resolveAgentsDir().path);
-	const destination = resolve(
-		options.destination ?? join(dirname(source), `${source.split("/").pop() ?? "workspace"}-v2`),
-	);
+	const destination = resolve(options.destination ?? defaultMigrationDestination(source));
 	const sourceLayout = resolveWorkspaceLayout(source);
 	const rootGitMode = inspectRootGit(source).mode;
 	if (sourceLayout.version !== 1) throw new Error("workspace is not a v1 layout");
@@ -280,9 +306,13 @@ function defaultEngine(
 			.filter(([key, value]) => sourceLayout[key as keyof typeof legacyDefaults] !== value)
 			.map(([key]) => [
 				key,
-				contained(source, sourceLayout[key as keyof typeof legacyDefaults])
-					? relative(source, sourceLayout[key as keyof typeof legacyDefaults])
-					: sourceLayout[key as keyof typeof legacyDefaults],
+				key === "database"
+					? contained(source, sourceLayout.database)
+						? relative(source, sourceLayout.database)
+						: sourceLayout.database
+					: contained(source, sourceLayout[key as keyof typeof legacyDefaults])
+						? relative(source, sourceLayout[key as keyof typeof legacyDefaults])
+						: sourceLayout[key as keyof typeof legacyDefaults],
 			]),
 	);
 	const databasePath = contained(source, sourceLayout.database)
@@ -293,11 +323,18 @@ function defaultEngine(
 		.map(([key]) => sourceLayout[key as keyof typeof legacyDefaults])
 		.filter((value) => contained(source, value))
 		.map((value) => descriptorRelative(source, value));
-	const mapDestinationPath = (path: string): string | undefined => {
+	const mapDestinationPath = (path: string, type: "file" | "symlink" | "directory"): string | undefined => {
 		if (path === "workspace-layout.json") return undefined;
 		if (databasePath && (path === databasePath || path === `${databasePath}-wal` || path === `${databasePath}-shm`))
 			return undefined;
 		if (customRoots.some((root) => withinDescriptorPath(root, path))) return path;
+		if (type === "directory") {
+			if (path === "memory") return "data/legacy-memory";
+			if (path === "memory/cache") return "cache";
+			if (path === "memory/imports") return "data/imports";
+			const transcripts = /^memory\/([^/]+)\/transcripts$/.exec(path);
+			if (transcripts) return `transcripts/${transcripts[1]}`;
+		}
 		if (path.startsWith("memory/cache/")) return `cache/${path.slice("memory/cache/".length)}`;
 		if (path.startsWith("memory/imports/")) return `data/imports/${path.slice("memory/imports/".length)}`;
 		const harnessTranscript = /^memory\/([^/]+)\/transcripts\/(.+)$/.exec(path);
@@ -318,19 +355,19 @@ function defaultEngine(
 		verifyDestination: async () => {
 			const layout = resolveWorkspaceLayout(destination);
 			if (layout.version !== 2) throw new Error("destination layout verification failed");
-			if (existsSync(layout.database)) {
-				const db = createDatabase(layout.database);
-				try {
-					const row = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
-					if (row?.quick_check !== "ok") throw new Error("destination database verification failed");
-				} finally {
-					db.close();
-				}
+			if (!existsSync(layout.database)) throw new Error("destination database is missing");
+			if (!lstatSync(layout.database).isFile()) throw new Error("destination database is not a regular file");
+			const db = createDatabase(layout.database, { readonly: true });
+			try {
+				const row = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
+				if (row?.quick_check !== "ok") throw new Error("destination database verification failed");
+			} finally {
+				db.close();
 			}
 			await verifyDestinationDaemon(destination);
 		},
 	};
-	const leasePath = join(state, `${source.replaceAll("/", "_")}.lease`);
+	const leasePath = migrationLeasePath(state, source);
 	const acquireLease = async () => {
 		mkdirSync(state, { recursive: true, mode: 0o700 });
 		try {
@@ -382,6 +419,16 @@ function defaultEngine(
 			},
 		},
 		database: {
+			externalReference: async () => {
+				if (contained(source, sourceLayout.database)) return undefined;
+				const stat = lstatSync(sourceLayout.database, { bigint: true });
+				if (!stat.isFile()) throw new Error("external source database is not a regular file");
+				return {
+					path: resolve(sourceLayout.database),
+					device: String(stat.dev),
+					inode: String(stat.ino),
+				};
+			},
 			inspect: async () => {
 				if (!existsSync(sourceLayout.database)) throw new Error("source database is missing");
 				if (!statSync(sourceLayout.database).isFile()) throw new Error("source database is not a regular file");
@@ -393,12 +440,69 @@ function defaultEngine(
 					db.close();
 				}
 			},
+			acquireFence: async () => {
+				const sourceDatabase = sourceLayout.database;
+				let sourceStat: BigIntStats;
+				try {
+					sourceStat = lstatSync(sourceDatabase, { bigint: true });
+				} catch (error) {
+					if (error && typeof error === "object" && Reflect.get(error, "code") === "ENOENT")
+						throw new Error("source database is missing", { cause: error });
+					throw error;
+				}
+				if (!sourceStat.isFile()) throw new Error("source database is not a regular file");
+				const db = createDatabase(sourceDatabase);
+				let fencedStat: BigIntStats;
+				try {
+					db.exec("PRAGMA busy_timeout = 0");
+					db.exec("BEGIN IMMEDIATE");
+					fencedStat = lstatSync(sourceDatabase, { bigint: true });
+					if (!fencedStat.isFile() || fencedStat.dev !== sourceStat.dev || fencedStat.ino !== sourceStat.ino)
+						throw new Error("external database identity changed during migration");
+				} catch (error) {
+					db.close();
+					if (
+						(error instanceof Error && /database is locked/.test(error.message)) ||
+						(error && typeof error === "object" && Reflect.get(error, "code") === "SQLITE_BUSY")
+					)
+						throw new Error("source database has an active writer", { cause: error });
+					throw error;
+				}
+				let released = false;
+				return {
+					externalDatabase: contained(source, sourceDatabase)
+						? null
+						: {
+								path: resolve(sourceDatabase),
+								device: String(fencedStat.dev),
+								inode: String(fencedStat.ino),
+							},
+					release: async () => {
+						if (released) return;
+						released = true;
+						try {
+							db.exec("ROLLBACK");
+						} finally {
+							db.close();
+						}
+					},
+				};
+			},
 			prepare: async () => {
 				if (!existsSync(sourceLayout.database)) throw new Error("source database is missing");
-				const db = createDatabase(sourceLayout.database);
+				const externalDatabase = !contained(source, sourceLayout.database);
+				if (externalDatabase) {
+					const external = createDatabase(sourceLayout.database, { readonly: true });
+					try {
+						const row = external.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
+						if (row?.integrity_check !== "ok") throw new Error("source database integrity verification failed");
+					} finally {
+						external.close();
+					}
+					return undefined;
+				}
+				const db = createDatabase(sourceLayout.database, { readonly: true });
 				try {
-					const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get() as { busy?: number } | undefined;
-					if (checkpoint?.busy !== 0) throw new Error("database checkpoint is blocked by an active writer");
 					const row = db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
 					if (row?.integrity_check !== "ok") throw new Error("source database integrity verification failed");
 				} finally {
@@ -415,6 +519,15 @@ function defaultEngine(
 							: relative(source, sourceLayout.database),
 					bytes: statSync(sourceLayout.database).size,
 				};
+			},
+			backupTo: async (stagedSource, stagedDestination) => {
+				const { DatabaseSync, backup } = await import("node:sqlite");
+				const db = new DatabaseSync(stagedSource, { readOnly: true });
+				try {
+					await backup(db, stagedDestination);
+				} finally {
+					db.close();
+				}
 			},
 			verifySnapshot: async (sourceDatabase, destinationDatabase) => {
 				verifyMigrationDatabaseRows(sourceDatabase, destinationDatabase);
@@ -434,7 +547,8 @@ function defaultEngine(
 export function registerMigrationCommands(program: Command, deps: MigrationCommandDeps = {}): void {
 	const out = deps.stdout ?? console;
 	const factory =
-		deps.createEngine ?? ((options: { source?: string; destination?: string }) => defaultEngine(options, deps.hooks));
+		deps.createEngine ??
+		((options: { source?: string; destination?: string }) => createDefaultMigrationEngine(options, deps.hooks));
 	const migration = program.command("migration").description("Manage the v1 to v2 workspace migration");
 	const options = (cmd: Command) =>
 		cmd.option("--source <path>", "v1 workspace root").option("--destination <path>", "v2 workspace root");

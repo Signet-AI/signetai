@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { platform, arch } from "node:os";
+import { arch, platform } from "node:os";
+import { findSqliteVecExtension } from "./database";
 
 function getPlatformPackageName(): string {
 	const os = platform() === "win32" ? "windows" : platform();
@@ -18,14 +19,17 @@ describe("sqlite-vec extension path resolution (bun global native binary)", () =
 	let savedExecPath: string;
 	let savedEnvPath: string | undefined;
 	let savedBunInstall: string | undefined;
+	let savedDaemonJsPath: string | undefined;
 
 	beforeEach(() => {
 		tempDir = mkdtempSync(join(tmpdir(), "vec-path-test-"));
 		savedExecPath = process.execPath;
 		savedEnvPath = process.env.SIGNET_VEC_PATH;
 		savedBunInstall = process.env.BUN_INSTALL;
+		savedDaemonJsPath = process.env.SIGNET_DAEMON_JS_PATH;
 		delete process.env.SIGNET_VEC_PATH;
 		delete process.env.BUN_INSTALL;
+		delete process.env.SIGNET_DAEMON_JS_PATH;
 	});
 
 	afterEach(() => {
@@ -36,6 +40,8 @@ describe("sqlite-vec extension path resolution (bun global native binary)", () =
 		else delete process.env.SIGNET_VEC_PATH;
 		if (savedBunInstall !== undefined) process.env.BUN_INSTALL = savedBunInstall;
 		else delete process.env.BUN_INSTALL;
+		if (savedDaemonJsPath !== undefined) process.env.SIGNET_DAEMON_JS_PATH = savedDaemonJsPath;
+		else delete process.env.SIGNET_DAEMON_JS_PATH;
 		rmSync(tempDir, { recursive: true, force: true });
 	});
 
@@ -110,5 +116,17 @@ describe("sqlite-vec extension path resolution (bun global native binary)", () =
 
 			rmSync(tempLayout, { recursive: true, force: true });
 		}
+	});
+	it("resolves extension from the staged daemon runtime package", () => {
+		const daemonRoot = join(tempDir, "resources", "daemon");
+		const entrypoint = join(daemonRoot, "dist", "daemon.js");
+		const extensionPath = join(daemonRoot, "node_modules", getPlatformPackageName(), `vec0.${getExtSuffix()}`);
+		mkdirSync(join(daemonRoot, "dist"), { recursive: true });
+		mkdirSync(join(daemonRoot, "node_modules", getPlatformPackageName()), { recursive: true });
+		writeFileSync(entrypoint, "");
+		writeFileSync(extensionPath, "fake extension");
+		process.env.SIGNET_DAEMON_JS_PATH = entrypoint;
+
+		expect(findSqliteVecExtension()).toBe(extensionPath);
 	});
 });

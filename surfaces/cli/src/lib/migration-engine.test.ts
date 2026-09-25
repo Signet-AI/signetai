@@ -1,17 +1,23 @@
 import { expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import { createHash } from "node:crypto";
+import { DescriptorRoot } from "@signet/core";
 import {
+	copyFileSync,
 	existsSync,
 	linkSync,
+	lstatSync,
 	mkdtempSync,
 	mkdirSync,
 	readFileSync,
 	renameSync,
 	rmSync,
 	symlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { MigrationEngine } from "./migration-engine.js";
 
 test("preflight is read-only and inventory reports required bytes", async () => {
@@ -43,6 +49,202 @@ test("preflight is read-only and inventory reports required bytes", async () => 
 	expect(plan.components).toContain("AGENTS.md");
 	expect(drains).toBe(0);
 	expect(leases).toBe(0);
+});
+
+test("SQLite backup reads the fenced live database rather than a separately staged WAL pair", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-live-backup-source-"));
+	const state = `${source}-state`;
+	const destination = `${source}-new`;
+	const sourceDatabase = join(source, "memories.db");
+	writeFileSync(sourceDatabase, "database fixture");
+	let fenceHeld = false;
+	let backupSource = "";
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root: source, destination }),
+			verifyDestination: async () => expect(fenceHeld).toBe(false),
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			acquireFence: async () => {
+				fenceHeld = true;
+				return {
+					release: async () => {
+						fenceHeld = false;
+					},
+				};
+			},
+			prepare: async () => ({
+				sourceRoot: source,
+				sourcePath: "memories.db",
+				destinationPath: "data/signet.db",
+				bytes: 16,
+			}),
+			backupTo: async (sourcePath, destinationPath) => {
+				expect(fenceHeld).toBe(true);
+				backupSource = sourcePath;
+				copyFileSync(sourcePath, destinationPath);
+			},
+			verifySnapshot: async () => undefined,
+		},
+		mapDestinationPath: (path) => (path === "memories.db" ? undefined : path),
+		journalStateDir: state,
+	});
+	try {
+		await engine.run();
+		expect(backupSource).toBe(sourceDatabase);
+		expect(fenceHeld).toBe(false);
+	} finally {
+		rmSync(source, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("migration rejects an external database replacement between fencing and inventory", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-fence-identity-source-"));
+	const state = `${source}-state`;
+	const destination = `${source}-new`;
+	const external = `${source}-external.db`;
+	writeFileSync(join(source, "AGENTS.md"), "identity");
+	writeFileSync(external, "external authority");
+	let admittedDestination = false;
+	let releasedFence = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			acquireFence: async () => ({
+				externalDatabase: { path: external, device: "1", inode: "1" },
+				release: async () => {
+					releasedFence = true;
+				},
+			}),
+			externalReference: async () => ({ path: external, device: "1", inode: "2" }),
+			prepare: async () => undefined,
+		},
+		hooks: {
+			afterDestinationAdmitted: async () => {
+				admittedDestination = true;
+			},
+		},
+		journalStateDir: state,
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("external database identity changed during migration");
+		expect(admittedDestination).toBe(false);
+		expect(releasedFence).toBe(true);
+	} finally {
+		rmSync(source, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+		rmSync(external, { force: true });
+	}
+});
+
+test("migration rejects a replaced external database during restored-daemon verification", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-post-fence-source-"));
+	const state = `${source}-state`;
+	const destination = `${source}-new`;
+	const external = `${source}-external.db`;
+	const replacement = `${source}-replacement.db`;
+	writeFileSync(join(source, "AGENTS.md"), "identity");
+	writeFileSync(external, "original database");
+	writeFileSync(replacement, "replacement database");
+	const identity = () => {
+		const stat = lstatSync(external, { bigint: true });
+		return { path: external, device: String(stat.dev), inode: String(stat.ino) };
+	};
+	const original = identity();
+	let fenced = false;
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root: source, destination }),
+			verifyDestination: async () => {
+				expect(fenced).toBe(false);
+				renameSync(external, `${external}.held`);
+				renameSync(replacement, external);
+			},
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			acquireFence: async () => {
+				fenced = true;
+				return {
+					externalDatabase: original,
+					release: async () => {
+						fenced = false;
+					},
+				};
+			},
+			externalReference: async () => identity(),
+			prepare: async () => undefined,
+		},
+		journalStateDir: state,
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("external database identity changed during migration");
+		expect((await engine.status()).phase).toBe("cutover-pending");
+		expect(readFileSync(`${external}.held`, "utf8")).toBe("original database");
+		expect(fenced).toBe(false);
+	} finally {
+		rmSync(source, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+		rmSync(external, { force: true });
+		rmSync(`${external}.held`, { force: true });
+		rmSync(replacement, { force: true });
+	}
+});
+
+test("migration checks external database identity before starting restored-daemon verification", async () => {
+	const source = mkdtempSync(join(tmpdir(), "migration-release-identity-source-"));
+	const state = `${source}-state`;
+	const destination = `${source}-new`;
+	const external = `${source}-external.db`;
+	const replacement = `${source}-replacement.db`;
+	writeFileSync(join(source, "AGENTS.md"), "identity");
+	writeFileSync(external, "original database");
+	writeFileSync(replacement, "replacement database");
+	const identity = () => {
+		const stat = lstatSync(external, { bigint: true });
+		return { path: external, device: String(stat.dev), inode: String(stat.ino) };
+	};
+	const original = identity();
+	let verifications = 0;
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root: source, destination }),
+			verifyDestination: async () => {
+				verifications++;
+			},
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			acquireFence: async () => ({
+				externalDatabase: original,
+				release: async () => {
+					renameSync(external, `${external}.held`);
+					renameSync(replacement, external);
+				},
+			}),
+			externalReference: async () => identity(),
+			prepare: async () => undefined,
+		},
+		journalStateDir: state,
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("external database identity changed during migration");
+		expect(verifications).toBe(0);
+		expect((await engine.status()).phase).toBe("cutover-pending");
+	} finally {
+		rmSync(source, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+		rmSync(external, { force: true });
+		rmSync(`${external}.held`, { force: true });
+		rmSync(replacement, { force: true });
+	}
 });
 
 test("migration refuses to cut over a database without semantic verification", async () => {
@@ -156,6 +358,42 @@ test("interrupted copy resumes and rollback is fenced after destination writes",
 	await expect(engine.run()).rejects.toThrow("interrupt");
 	expect(await engine.resume()).toMatchObject({ status: "completed" });
 	await expect(engine.rollback()).rejects.toThrow("rollback is no longer safe");
+});
+
+test("resume tolerates source directory mtime changes when inventory is unchanged", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-directory-mtime-"));
+	const source = join(root, "source");
+	const nested = join(source, "nested");
+	const destination = join(root, "destination");
+	const state = join(root, "state");
+	mkdirSync(nested, { recursive: true });
+	writeFileSync(join(nested, "entry.txt"), "preserved");
+	let interrupted = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+		hooks: {
+			afterEntryCopy: async () => {
+				if (!interrupted) {
+					interrupted = true;
+					utimesSync(nested, new Date(0), new Date(0));
+					throw new Error("interrupt after copy");
+				}
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt after copy");
+		await expect(engine.resume()).resolves.toMatchObject({ status: "completed" });
+		expect(readFileSync(join(source, "nested", "entry.txt"), "utf8")).toBe("preserved");
+		expect(readFileSync(join(destination, "nested", "entry.txt"), "utf8")).toBe("preserved");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
 });
 
 test("run releases its lease when source setup fails before a journal is opened", async () => {
@@ -453,6 +691,142 @@ test("resume completes a cutover interrupted after pointer publication", async (
 	expect(verifications).toBe(1);
 });
 
+test("migration never claims a pre-existing destination containing unrelated data", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-preexisting-source-"));
+	const destination = `${root}-new`;
+	mkdirSync(destination);
+	writeFileSync(join(root, "source.txt"), "source");
+	writeFileSync(join(destination, "user.txt"), "user-owned");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterDestinationAdmitted: async () => {
+				throw new Error("interrupt after admission");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow();
+	await engine.rollback().catch(() => {});
+	expect(readFileSync(join(destination, "user.txt"), "utf8")).toBe("user-owned");
+});
+
+test("rollback removes a verified unreceipted copy after interruption", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-rollback-unreceipted-"));
+	const destination = `${root}-new`;
+	writeFileSync(join(root, "source.txt"), "source");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterEntryCopy: async () => {
+				throw new Error("interrupt before receipt");
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt before receipt");
+		await expect(engine.rollback()).resolves.toBeUndefined();
+		expect(existsSync(destination)).toBe(false);
+		expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("source");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+	}
+});
+
+test("rollback preserves a modified pending copy after interruption", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-rollback-modified-pending-"));
+	const destination = `${root}-new`;
+	writeFileSync(join(root, "source.txt"), "source");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterEntryCopy: async () => {
+				throw new Error("interrupt before receipt");
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt before receipt");
+		writeFileSync(join(destination, "source.txt"), "user-owned");
+		await expect(engine.rollback()).rejects.toThrow("destination conflict during resume: source.txt");
+		expect(readFileSync(join(destination, "source.txt"), "utf8")).toBe("user-owned");
+		expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("source");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+	}
+});
+
+test("rollback refuses an owned destination with unrelated post-admission data", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-foreign-after-copy-"));
+	const destination = `${root}-new`;
+	writeFileSync(join(root, "source.txt"), "source");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterCopy: async () => {
+				throw new Error("interrupt after copy");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupt after copy");
+	writeFileSync(join(destination, "user.txt"), "user-owned");
+	await expect(engine.rollback()).rejects.toThrow("unexpected migration destination entry");
+	expect(readFileSync(join(destination, "user.txt"), "utf8")).toBe("user-owned");
+	expect(readFileSync(join(destination, "source.txt"), "utf8")).toBe("source");
+});
+
+test("rollback preserves every copied entry when unrelated data appears before removal", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-rollback-race-source-"));
+	const destination = `${root}-new`;
+	const state = join(root, "state");
+	writeFileSync(join(root, "source.txt"), "source");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+		hooks: {
+			afterCopy: async () => {
+				throw new Error("interrupt after copy");
+			},
+		},
+	});
+	const originalRemove = DescriptorRoot.prototype.remove;
+	let injected = false;
+	DescriptorRoot.prototype.remove = async function (path, options) {
+		if (path === "source.txt" && !injected) {
+			injected = true;
+			writeFileSync(join(destination, "user.txt"), "user-owned");
+		}
+		return originalRemove.call(this, path, options);
+	};
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt after copy");
+		await expect(engine.rollback()).rejects.toThrow("unexpected migration destination entry");
+		expect(injected).toBe(true);
+		expect(readFileSync(join(destination, "source.txt"), "utf8")).toBe("source");
+		expect(readFileSync(join(destination, "user.txt"), "utf8")).toBe("user-owned");
+		expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("source");
+	} finally {
+		DescriptorRoot.prototype.remove = originalRemove;
+		rmSync(root, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+	}
+});
+
 test("rollback removes only the owned partial destination and can be rerun", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
 	writeFileSync(join(root, "one.txt"), "one");
@@ -496,6 +870,52 @@ test("cleanup writes a durable redacted receipt with verified components", async
 	expect(JSON.stringify(receipt)).not.toContain(root);
 });
 
+test("distinct workspace roots retain separate migration journals in shared state", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-workspace-identity-"));
+	const firstRoot = join(root, "first");
+	const secondRoot = join(root, "second");
+	const journalStateDir = join(root, "shared-state");
+	mkdirSync(firstRoot);
+	mkdirSync(secondRoot);
+	writeFileSync(join(firstRoot, "same.txt"), "same");
+	writeFileSync(join(secondRoot, "same.txt"), "same");
+	const firstDestination = join(root, "first-destination");
+	const secondDestination = join(root, "second-destination");
+	const first = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: firstRoot, destination: firstDestination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir,
+		hooks: {
+			afterCopy: async () => {
+				throw new Error("interrupt migration");
+			},
+		},
+	});
+	await expect(first.run()).rejects.toThrow("interrupt migration");
+	let drains = 0;
+	const second = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: secondRoot, destination: secondDestination }) },
+		writers: {
+			drain: async () => {
+				drains++;
+				return { owners: [] };
+			},
+		},
+		database: { prepare: async () => undefined },
+		journalStateDir,
+	});
+	const secondResult = await second.run();
+	expect(secondResult.status).toBe("completed");
+	expect(drains).toBe(1);
+	expect(readFileSync(join(secondDestination, "same.txt"), "utf8")).toBe("same");
+	const firstStatus = await first.status();
+	const secondStatus = await second.status();
+	expect(firstStatus.journal).not.toBe(secondStatus.journal);
+	expect(firstStatus.phase).toBe("failed");
+	expect(secondStatus.phase).toBe("completed");
+});
+
 test("resume fails closed when a new source entry appears after the journaled inventory", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-source-inventory-"));
 	const journalStateDir = mkdtempSync(join(tmpdir(), "signet-migration-source-state-"));
@@ -516,6 +936,291 @@ test("resume fails closed when a new source entry appears after the journaled in
 	writeFileSync(join(root, "late.txt"), "late");
 	await expect(engine.resume()).rejects.toThrow("source inventory changed");
 	expect(existsSync(join(destination, "late.txt"))).toBe(false);
+});
+
+test("cutover-pending rejects a different external database inode after pointer publication", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-cutover-db-identity-"));
+	const source = join(root, "source");
+	const destination = join(root, "destination");
+	const external = join(root, "outside.db");
+	const replacement = join(root, "replacement.db");
+	const state = join(root, "state");
+	mkdirSync(source);
+	writeFileSync(join(source, "AGENTS.md"), "preserve");
+	for (const [path, value] of [
+		[external, "original"],
+		[replacement, "replacement"],
+	] as const) {
+		const database = new Database(path);
+		database.exec(`CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ('${value}')`);
+		database.close();
+	}
+	let pointer = source;
+	let fenceHeld = false;
+	const originalInode = lstatSync(external, { bigint: true }).ino;
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root: source, destination }),
+			current: async () => pointer,
+			cutover: async () => {
+				pointer = destination;
+			},
+			verifyDestination: async () => undefined,
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			acquireFence: async () => {
+				fenceHeld = true;
+				return {
+					release: async () => {
+						fenceHeld = false;
+					},
+				};
+			},
+			prepare: async () => undefined,
+			externalReference: async () => {
+				if (!fenceHeld) throw new Error("external identity checked without database fence");
+				const stat = lstatSync(external, { bigint: true });
+				return { path: external, device: String(stat.dev), inode: String(stat.ino) };
+			},
+		},
+		journalStateDir: state,
+		hooks: {
+			afterPointerPublished: async () => {
+				renameSync(replacement, external);
+				throw new Error("crash after pointer publication");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("crash after pointer publication");
+	expect(pointer).toBe(destination);
+	expect(lstatSync(external, { bigint: true }).ino).not.toBe(originalInode);
+	const journalPath = join(state, `${createHash("sha256").update(resolve(source)).digest("hex").slice(0, 32)}.json`);
+	const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+	expect(journal.externalDatabase).toMatchObject({ path: external, inode: String(originalInode) });
+	await expect(engine.resume()).rejects.toThrow("external database identity changed");
+	journal.pointerPublished = false;
+	writeFileSync(journalPath, JSON.stringify(journal));
+	await expect(engine.resume()).rejects.toThrow("external database identity changed");
+	delete journal.externalDatabase;
+	writeFileSync(journalPath, JSON.stringify(journal));
+	await expect(engine.resume()).rejects.toThrow("external database identity is missing from migration journal");
+	expect((await engine.status()).phase).toBe("cutover-pending");
+	rmSync(root, { recursive: true, force: true });
+});
+
+test("cutover-pending accepts ordinary writes to the same external database inode", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-cutover-db-writes-"));
+	const source = join(root, "source");
+	const destination = join(root, "destination");
+	const external = join(root, "outside.db");
+	mkdirSync(source);
+	writeFileSync(join(source, "AGENTS.md"), "preserve");
+	const original = new Database(external);
+	original.exec("CREATE TABLE proof (value TEXT NOT NULL); INSERT INTO proof VALUES ('original')");
+	original.close();
+	const before = lstatSync(external, { bigint: true });
+	let pointer = source;
+	let fenceHeld = false;
+	let witnessedFencedReference = false;
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root: source, destination }),
+			current: async () => pointer,
+			cutover: async () => {
+				pointer = destination;
+			},
+			verifyDestination: async () => undefined,
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			acquireFence: async () => {
+				fenceHeld = true;
+				return {
+					release: async () => {
+						fenceHeld = false;
+					},
+				};
+			},
+			prepare: async () => undefined,
+			externalReference: async () => {
+				if (fenceHeld) witnessedFencedReference = true;
+				const stat = lstatSync(external, { bigint: true });
+				return { path: external, device: String(stat.dev), inode: String(stat.ino) };
+			},
+		},
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterPointerPublished: async () => {
+				const db = new Database(external);
+				try {
+					db.exec("INSERT INTO proof VALUES ('post-cutover')");
+				} finally {
+					db.close();
+				}
+				throw new Error("crash after pointer publication");
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("crash after pointer publication");
+	expect(lstatSync(external, { bigint: true }).ino).toBe(before.ino);
+	await expect(engine.resume()).resolves.toMatchObject({ status: "completed" });
+	expect(witnessedFencedReference).toBe(true);
+	const verified = new Database(external, { readonly: true });
+	try {
+		expect(verified.prepare("SELECT value FROM proof ORDER BY rowid").all()).toEqual([
+			{ value: "original" },
+			{ value: "post-cutover" },
+		]);
+	} finally {
+		verified.close();
+	}
+	rmSync(root, { recursive: true, force: true });
+});
+
+test("resume fails closed when the external authoritative database disappears", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-external-db-resume-"));
+	const source = join(root, "source");
+	const destination = join(root, "destination");
+	const state = join(root, "state");
+	mkdirSync(source);
+	writeFileSync(join(source, "proof.txt"), "stable");
+	const external = join(root, "outside.db");
+	writeFileSync(external, "external identity");
+	let interrupt = true;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => {
+				if (!existsSync(external)) throw new Error("external source database is missing");
+				return undefined;
+			},
+		},
+		journalStateDir: state,
+		hooks: {
+			afterCopy: async () => {
+				if (interrupt) {
+					interrupt = false;
+					throw new Error("interrupt migration");
+				}
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupt migration");
+	rmSync(external);
+	await expect(engine.resume()).rejects.toThrow("external source database is missing");
+	expect(existsSync(join(destination, "proof.txt"))).toBe(true);
+});
+
+test("resume blocks when an external database reference changes", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-external-db-changed-"));
+	const source = join(root, "source");
+	const destination = join(root, "destination");
+	const original = join(root, "outside.db");
+	mkdirSync(source);
+	writeFileSync(join(source, "proof.txt"), "stable");
+	writeFileSync(original, "original external database");
+	let interrupt = true;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => ({ sourceRoot: root, sourcePath: "outside.db", destinationPath: "outside.db", bytes: 1 }),
+			verifySnapshot: async () => undefined,
+		},
+		journalStateDir: join(root, "state"),
+		gitignoreBytes: () => {
+			if (interrupt) {
+				interrupt = false;
+				throw new Error("interrupted after database snapshot");
+			}
+			return new Uint8Array();
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupted after database snapshot");
+	writeFileSync(original, "changed external database");
+	await expect(engine.resume()).rejects.toThrow("database snapshot source changed or disappeared");
+});
+
+test("migration journal validates source database identity before resume", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-db-source-identity-"));
+	const source = join(root, "source");
+	const destination = join(root, "destination");
+	mkdirSync(source);
+	writeFileSync(join(source, "memory.db"), "original db");
+	let interrupted = true;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => ({
+				sourceRoot: source,
+				sourcePath: "memory.db",
+				destinationPath: "data/signet.db",
+				bytes: 11,
+			}),
+			verifySnapshot: async () => undefined,
+		},
+		mapDestinationPath: (path) => (path === "memory.db" ? undefined : path),
+		journalStateDir: join(root, "state"),
+		gitignoreBytes: () => {
+			if (interrupted) {
+				interrupted = false;
+				throw new Error("interrupted after snapshot");
+			}
+			return new Uint8Array();
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupted after snapshot");
+	writeFileSync(join(source, "memory.db"), "different db");
+	await expect(engine.resume()).rejects.toThrow("database snapshot source changed or disappeared");
+});
+
+test("resume fails closed when a database snapshot journal lacks WAL evidence", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-db-old-journal-"));
+	const source = join(root, "source");
+	const destination = join(root, "destination");
+	mkdirSync(source);
+	writeFileSync(join(source, "memories.db"), "stable database");
+	const state = join(root, "state");
+	let interrupt = true;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => ({
+				sourceRoot: source,
+				sourcePath: "memories.db",
+				destinationPath: "data/signet.db",
+				bytes: 15,
+			}),
+			backupTo: async () => undefined,
+			verifySnapshot: async () => undefined,
+		},
+		mapDestinationPath: (path) => (path === "memories.db" ? undefined : path),
+		journalStateDir: state,
+		hooks: {
+			afterCopy: async () => {
+				if (interrupt) {
+					interrupt = false;
+					throw new Error("interrupt before snapshot");
+				}
+			},
+		},
+	});
+	await expect(engine.run()).rejects.toThrow("interrupt before snapshot");
+	const journalPath = join(state, `${createHash("sha256").update(resolve(source)).digest("hex").slice(0, 32)}.json`);
+	const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+	journal.databaseSnapshot = {
+		sourceRoot: source,
+		sourcePath: "memories.db",
+		destinationPath: "data/signet.db",
+		bytes: 15,
+		hash: createHash("sha256").update("stable database").digest("hex"),
+	};
+	writeFileSync(journalPath, JSON.stringify(journal));
+	await expect(engine.resume()).rejects.toThrow("database snapshot journal lacks WAL evidence");
 });
 
 test("resume rejects a database snapshot whose source disappeared before cutover", async () => {

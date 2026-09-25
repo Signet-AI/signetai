@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { arch, platform } from "node:process";
 import { fileURLToPath } from "node:url";
 import { execFileSyncHidden } from "./child-process";
@@ -48,6 +48,12 @@ function findSqliteVecExtension(): string | null {
 
 	const platformPkg = getPlatformPackageName();
 	const extFile = `vec0.${getExtensionSuffix()}`;
+	const daemonEntrypoint = process.env.SIGNET_DAEMON_JS_PATH;
+	if (daemonEntrypoint) {
+		const daemonRoot = dirname(dirname(resolve(daemonEntrypoint)));
+		const bundledExtension = join(daemonRoot, "node_modules", platformPkg, extFile);
+		if (existsSync(bundledExtension)) return bundledExtension;
+	}
 	const npmRoot = findNpmGlobalRoot();
 	if (npmRoot) {
 		const direct = join(npmRoot, platformPkg, extFile);

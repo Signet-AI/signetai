@@ -7,6 +7,7 @@ import {
 	MigrationWriterRegistry,
 	WorkspaceAdmissionBarrier,
 	WorkspaceMigrationRetryableError,
+	migrationDrainTargetMatches,
 } from "./workspace-writer-barrier";
 
 const dirs: string[] = [];
@@ -21,6 +22,15 @@ function tempDir() {
 }
 
 describe("workspace writer barrier", () => {
+	it("binds migration drain requests to the exact daemon PID and workspace", () => {
+		const target = { expectedPid: 4321, expectedWorkspace: "/workspace/a" };
+		expect(migrationDrainTargetMatches(target, 4321, "/workspace/a")).toBe(true);
+		expect(migrationDrainTargetMatches(target, 4322, "/workspace/a")).toBe(false);
+		expect(migrationDrainTargetMatches(target, 4321, "/workspace/b")).toBe(false);
+		expect(migrationDrainTargetMatches({}, 4321, "/workspace/a")).toBe(false);
+		expect(migrationDrainTargetMatches(null, 4321, "/workspace/a")).toBe(false);
+	});
+
 	it("controls drain, reports blockers, and reopens only as a new generation", async () => {
 		const control = new MigrationControlBoundary("generation-a", 5);
 		const release = control.admit("db-owner");

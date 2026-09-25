@@ -8,12 +8,16 @@ mock.module("electron", () => ({
 	},
 	app: { getPath: (_name: string) => "/tmp/signet-test-userdata", isPackaged: false },
 }));
-mock.module("./paths.js", () => ({
+const testRuntimePaths = {
 	bunPath: () => "/usr/local/bin/bun",
 	daemonEntry: () => "/tmp/signet-test-daemon/dist/daemon.js",
 	daemonRoot: () => "/tmp/signet-test-daemon",
-}));
+};
 const { DaemonManager } = await import("./daemon-manager.js");
+
+function makeDaemonManager(workspacePath: string): InstanceType<typeof DaemonManager> {
+	return new DaemonManager({ workspacePath, runtimePaths: testRuntimePaths });
+}
 function makeFakeChild(): ChildProcess {
 	const emitter = new EventEmitter() as unknown as ChildProcess;
 	(emitter as unknown as Record<string, unknown>).exitCode = null;
@@ -71,7 +75,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		const cp = await import("node:child_process");
 		const fakeChild = makeFakeChild();
 		const spawnSpy = spyOn(cp, "spawn").mockReturnValue(fakeChild);
-		const manager = new DaemonManager({ workspacePath: "/tmp/signet-workspace" });
+		const manager = makeDaemonManager("/tmp/signet-workspace");
 		await manager.ensureStarted();
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
 		expect(spawnSpy.mock.calls[0][0]).toBe("/usr/local/bin/bun");
@@ -97,7 +101,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 
 		const cp = await import("node:child_process");
 		const spawnSpy = spyOn(cp, "spawn");
-		const manager = new DaemonManager({ workspacePath: "/tmp/signet-workspace" });
+		const manager = makeDaemonManager("/tmp/signet-workspace");
 		const status = await manager.ensureStarted();
 		expect(spawnSpy).not.toHaveBeenCalled();
 		expect(status.mode).toBe("attached");
@@ -120,7 +124,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 		const cp = await import("node:child_process");
 		const fakeChild = makeFakeChild();
 		const spawnSpy = spyOn(cp, "spawn").mockReturnValue(fakeChild);
-		const manager = new DaemonManager({ workspacePath: "/tmp/signet-workspace" });
+		const manager = makeDaemonManager("/tmp/signet-workspace");
 		const status = await manager.ensureStarted();
 		expect(spawnSpy).toHaveBeenCalledTimes(1);
 		expect(status.mode).toBe("bundled");
@@ -147,7 +151,7 @@ describe("DaemonManager dual-mode regressions (#606 / PR #615)", () => {
 			return fakeChild;
 		});
 
-		const manager = new DaemonManager({ workspacePath: "/tmp/signet-workspace" });
+		const manager = makeDaemonManager("/tmp/signet-workspace");
 		await expect(manager.ensureStarted()).rejects.toThrow("Reinstall the desktop app or install Bun");
 
 		const status = await manager.status();

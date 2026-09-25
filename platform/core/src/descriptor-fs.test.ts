@@ -118,6 +118,90 @@ describe("descriptor-rooted filesystem", () => {
 		}
 	});
 
+	test("copies to a caller-owned staging name and cleans it when publication stops", async () => {
+		const sourcePath = temporaryRoot("descriptor-staged-source");
+		const destinationPath = temporaryRoot("descriptor-staged-destination");
+		writeFileSync(join(sourcePath, "payload.txt"), "complete bytes");
+		const source = await openDescriptorRoot(sourcePath);
+		const destination = await openDescriptorRoot(destinationPath);
+		const temporaryName = ".signet-migration-test.tmp";
+		let reachedPublication = false;
+		try {
+			await expect(
+				destination.copyFileFrom(
+					source,
+					"payload.txt",
+					{
+						temporaryName,
+						beforePublish: async () => {
+							reachedPublication = true;
+							expect(existsSync(join(destinationPath, temporaryName))).toBe(true);
+							throw new Error("stop before publication");
+						},
+					},
+					"payload.txt",
+				),
+			).rejects.toThrow("stop before publication");
+			expect(reachedPublication).toBe(true);
+			expect(existsSync(join(destinationPath, temporaryName))).toBe(false);
+			expect(existsSync(join(destinationPath, "payload.txt"))).toBe(false);
+		} finally {
+			await destination.close();
+			await source.close();
+		}
+	});
+
+	test("keeps the published target and staging link at the pre-cleanup boundary", async () => {
+		const sourcePath = temporaryRoot("descriptor-published-source");
+		const destinationPath = temporaryRoot("descriptor-published-destination");
+		writeFileSync(join(sourcePath, "payload.txt"), "complete bytes");
+		const source = await openDescriptorRoot(sourcePath);
+		const destination = await openDescriptorRoot(destinationPath);
+		const temporaryName = ".signet-migration-published.tmp";
+		try {
+			await expect(
+				destination.copyFileFrom(
+					source,
+					"payload.txt",
+					{
+						temporaryName,
+						afterPublish: async () => {
+							expect(existsSync(join(destinationPath, temporaryName))).toBe(true);
+							expect(existsSync(join(destinationPath, "payload.txt"))).toBe(true);
+							throw new Error("interrupt after publication");
+						},
+					},
+					"payload.txt",
+				),
+			).rejects.toThrow("interrupt after publication");
+			expect(existsSync(join(destinationPath, temporaryName))).toBe(true);
+			expect(lstatSync(join(destinationPath, temporaryName)).ino).toBe(
+				lstatSync(join(destinationPath, "payload.txt")).ino,
+			);
+		} finally {
+			await destination.close();
+			await source.close();
+		}
+	});
+
+	test("preserves an existing file when a requested staging name is occupied", async () => {
+		const sourcePath = temporaryRoot("descriptor-occupied-source");
+		const destinationPath = temporaryRoot("descriptor-occupied-destination");
+		writeFileSync(join(sourcePath, "payload.txt"), "source bytes");
+		const temporaryName = ".signet-migration-occupied.tmp";
+		writeFileSync(join(destinationPath, temporaryName), "unrelated data");
+		const source = await openDescriptorRoot(sourcePath);
+		const destination = await openDescriptorRoot(destinationPath);
+		try {
+			await expect(destination.copyFileFrom(source, "payload.txt", { temporaryName }, "payload.txt")).rejects.toThrow();
+			expect(readFileSync(join(destinationPath, temporaryName), "utf8")).toBe("unrelated data");
+			expect(existsSync(join(destinationPath, "payload.txt"))).toBe(false);
+		} finally {
+			await destination.close();
+			await source.close();
+		}
+	});
+
 	test("reports hard-link identity and copies files in bounded chunks", async () => {
 		const sourcePath = temporaryRoot("descriptor-hardlink-source");
 		const destinationPath = temporaryRoot("descriptor-hardlink-destination");

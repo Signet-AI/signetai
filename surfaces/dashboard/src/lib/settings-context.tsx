@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
-type SettingsSection = "network" | "inference" | "secrets" | "logs" | "advanced" | "licenses";
+type SettingsSection = "workspace" | "network" | "inference" | "secrets" | "logs" | "advanced" | "licenses";
 export type { SettingsSection };
 
 interface SettingsCtx {
