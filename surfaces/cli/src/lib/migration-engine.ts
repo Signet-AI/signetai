@@ -39,6 +39,7 @@ export type Journal = {
 	destinationParentIdentity: string;
 	destinationIdentity: string;
 	destinationCreated?: boolean;
+	destinationCreationPending?: boolean;
 	phase: "preflight" | "drained" | "copying" | "snapshotting" | "verified" | "cutover-pending" | "completed" | "failed";
 	destinationWrites: boolean;
 	rollbackEligible: boolean;
@@ -103,6 +104,7 @@ export interface MigrationDeps {
 		afterEntryPublish?: (component: string, temporaryPath: string) => Promise<void>;
 		afterCutover?: () => Promise<void>;
 		afterPointerPublished?: () => Promise<void>;
+		afterDestinationCreated?: () => Promise<void>;
 		afterDestinationAdmitted?: () => Promise<void>;
 		verifyComponent?: (receipt: Receipt) => Promise<boolean>;
 	};
@@ -224,9 +226,19 @@ export class MigrationEngine {
 				requiredBytes: plan.bytes,
 				externalDatabase,
 			};
-			journal.phase = "drained";
-			await saveJournal(state, this.journalName, journal);
-			destination = await admitDestination(layout.destination, journal.destinationIdentity, journal.destinationCreated);
+			const activeJournal = journal;
+			activeJournal.phase = "drained";
+			await saveJournal(state, this.journalName, activeJournal);
+			destination = await admitDestination(
+				layout.destination,
+				activeJournal,
+				async (parentIdentity) => {
+					activeJournal.destinationParentIdentity = parentIdentity;
+					activeJournal.destinationCreationPending = true;
+					await saveJournal(state, this.journalName, activeJournal);
+				},
+				async () => this.deps.hooks?.afterDestinationCreated?.(),
+			);
 			if (journal.destinationIdentity !== "missing" && journal.destinationIdentity !== destination.identity)
 				throw new Error("destination identity mismatch");
 			if (
@@ -237,6 +249,7 @@ export class MigrationEngine {
 			journal.destinationIdentity = destination.identity;
 			journal.destinationParentIdentity = destination.parentIdentity;
 			journal.destinationCreated = true;
+			journal.destinationCreationPending = false;
 			journal.destinationWrites = true;
 			await saveJournal(state, this.journalName, journal);
 			await this.deps.hooks?.afterDestinationAdmitted?.();
@@ -619,6 +632,7 @@ export class MigrationEngine {
 						);
 						if (!expected) throw new Error(`unexpected migration destination entry: ${entry.path}`);
 						await destination.remove(entry.path, {
+							expectedEntry: entry,
 							beforeMutation: async () => {
 								await revalidateBeforeMutation();
 								await verifyDestinationEntry(destination, expected);
@@ -629,6 +643,7 @@ export class MigrationEngine {
 						.filter((entry) => entry.type === "directory")
 						.sort((a, b) => b.path.split(sep).length - a.path.split(sep).length))
 						await destination.remove(entry.path, {
+							expectedEntry: entry,
 							beforeMutation: revalidateBeforeMutation,
 						});
 				} finally {
@@ -692,17 +707,35 @@ async function openExistingRoot(path: string): Promise<DescriptorRoot | undefine
 
 async function admitDestination(
 	path: string,
-	expectedIdentity: string,
-	created?: boolean,
+	journal: Journal,
+	recordCreationIntent: (parentIdentity: string) => Promise<void>,
+	afterCreated: () => Promise<void>,
 ): Promise<AdmittedDestination> {
 	const parent = await openDescriptorRoot(dirname(path));
+	let root: DescriptorRoot | undefined;
 	try {
 		const parentIdentity = await parent.identity();
-		if (expectedIdentity === "missing") await parent.createDirectoryExclusive(basename(path), 0o700);
-		else if (created !== true) throw new Error("migration destination ownership is unverified");
-		const root = await parent.openDirectory(basename(path));
+		if (journal.destinationParentIdentity !== "missing" && journal.destinationParentIdentity !== parentIdentity)
+			throw new Error("destination parent identity mismatch");
+		if (journal.destinationIdentity === "missing") {
+			const recoveringInterruptedCreation = journal.destinationCreationPending === true;
+			if (!recoveringInterruptedCreation) await recordCreationIntent(parentIdentity);
+			try {
+				await parent.createDirectoryExclusive(basename(path), 0o700);
+				await afterCreated();
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !recoveringInterruptedCreation) throw error;
+				root = await parent.openDirectory(basename(path));
+				if ((await root.inventory()).length > 0)
+					throw new Error("refusing to recover an unverified non-empty migration destination");
+			}
+		} else if (journal.destinationCreated !== true) {
+			throw new Error("migration destination ownership is unverified");
+		}
+		root ??= await parent.openDirectory(basename(path));
 		return { parent, root, parentIdentity, identity: await root.identity() };
 	} catch (error) {
+		await root?.close();
 		await parent.close();
 		throw error;
 	}

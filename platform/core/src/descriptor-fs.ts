@@ -428,8 +428,16 @@ async function removeTree(
 	name: string,
 	recursive: boolean,
 	beforeMutation?: () => Promise<void>,
+	expectedEntry?: Pick<DescriptorEntry, "type" | "dev" | "ino">,
 ): Promise<void> {
 	const entry = await inspectChild(parent, name);
+	if (
+		expectedEntry &&
+		(entry.type !== expectedEntry.type || entry.dev !== expectedEntry.dev || entry.ino !== expectedEntry.ino)
+	) {
+		await entry.handle?.close();
+		throw new UnsafeDescriptorPathError("descriptor removal target changed");
+	}
 	if (entry.type === "directory" && recursive) {
 		const directory = entry.handle;
 		if (!directory) throw new Error("directory descriptor missing");
@@ -669,7 +677,11 @@ export class DescriptorRoot {
 
 	async remove(
 		path: string,
-		options: { readonly recursive?: boolean; readonly beforeMutation?: () => Promise<void> } = {},
+		options: {
+			readonly recursive?: boolean;
+			readonly beforeMutation?: () => Promise<void>;
+			readonly expectedEntry?: Pick<DescriptorEntry, "type" | "dev" | "ino">;
+		} = {},
 	): Promise<void> {
 		this.requireOpen();
 		const pathParts = parts(path);
@@ -677,7 +689,7 @@ export class DescriptorRoot {
 		if (!name) throw new UnsafeDescriptorPathError("descriptor path is empty");
 		const parent = await openDirectoryPath(this.root, pathParts, false);
 		try {
-			await removeTree(parent, name, options.recursive ?? false, options.beforeMutation);
+			await removeTree(parent, name, options.recursive ?? false, options.beforeMutation, options.expectedEntry);
 			await parent.sync();
 		} finally {
 			await parent.close();

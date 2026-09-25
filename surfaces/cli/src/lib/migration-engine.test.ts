@@ -10,6 +10,7 @@ import {
 	mkdtempSync,
 	mkdirSync,
 	readFileSync,
+	readdirSync,
 	renameSync,
 	rmSync,
 	symlinkSync,
@@ -713,6 +714,66 @@ test("migration never claims a pre-existing destination containing unrelated dat
 	expect(readFileSync(join(destination, "user.txt"), "utf8")).toBe("user-owned");
 });
 
+test("migration resumes after its destination directory is created but before ownership is saved", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-admission-crash-source-"));
+	const destination = `${root}-new`;
+	const state = join(root, "state");
+	writeFileSync(join(root, "source.txt"), "source");
+	let interrupted = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+		hooks: {
+			afterDestinationCreated: async () => {
+				if (!interrupted) {
+					interrupted = true;
+					throw new Error("interrupt before destination ownership is saved");
+				}
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt before destination ownership is saved");
+		expect(readdirSync(destination)).toEqual([]);
+		await expect(engine.resume()).resolves.toMatchObject({ status: "completed" });
+		expect(readFileSync(join(destination, "source.txt"), "utf8")).toBe("source");
+		expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("source");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+	}
+});
+
+test("migration refuses to recover a non-empty destination after interrupted creation", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-admission-occupied-source-"));
+	const destination = `${root}-new`;
+	const state = join(root, "state");
+	writeFileSync(join(root, "source.txt"), "source");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: state,
+		hooks: {
+			afterDestinationCreated: async () => {
+				throw new Error("interrupt before destination ownership is saved");
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt before destination ownership is saved");
+		writeFileSync(join(destination, "user.txt"), "user-owned");
+		await expect(engine.resume()).rejects.toThrow("refusing to recover an unverified non-empty migration destination");
+		expect(readFileSync(join(destination, "user.txt"), "utf8")).toBe("user-owned");
+		expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("source");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+	}
+});
+
 test("rollback removes a verified unreceipted copy after interruption", async () => {
 	const root = mkdtempSync(join(tmpdir(), "migration-rollback-unreceipted-"));
 	const destination = `${root}-new`;
@@ -786,6 +847,50 @@ test("rollback refuses an owned destination with unrelated post-admission data",
 	await expect(engine.rollback()).rejects.toThrow("unexpected migration destination entry");
 	expect(readFileSync(join(destination, "user.txt"), "utf8")).toBe("user-owned");
 	expect(readFileSync(join(destination, "source.txt"), "utf8")).toBe("source");
+});
+
+test("rollback refuses to remove a replacement created after its inventory was reviewed", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-rollback-replacement-source-"));
+	const destination = `${root}-new`;
+	const reviewedCopy = `${destination}-reviewed-copy`;
+	writeFileSync(join(root, "source.txt"), "source");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterCopy: async () => {
+				throw new Error("interrupt after copy");
+			},
+		},
+	});
+	const originalRemove = DescriptorRoot.prototype.remove;
+	let replaced = false;
+	let reviewedInode = 0;
+	DescriptorRoot.prototype.remove = async function (path, options) {
+		if (path === "source.txt" && !replaced) {
+			replaced = true;
+			reviewedInode = lstatSync(join(destination, path)).ino;
+			renameSync(join(destination, path), reviewedCopy);
+			writeFileSync(join(destination, path), "source");
+		}
+		return originalRemove.call(this, path, options);
+	};
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt after copy");
+		await expect(engine.rollback()).rejects.toThrow("descriptor removal target changed");
+		expect(replaced).toBe(true);
+		expect(readFileSync(join(destination, "source.txt"), "utf8")).toBe("source");
+		expect(readFileSync(reviewedCopy, "utf8")).toBe("source");
+		expect(lstatSync(join(destination, "source.txt")).ino).not.toBe(reviewedInode);
+		expect(readFileSync(join(root, "source.txt"), "utf8")).toBe("source");
+	} finally {
+		DescriptorRoot.prototype.remove = originalRemove;
+		rmSync(root, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+		rmSync(reviewedCopy, { force: true });
+	}
 });
 
 test("rollback preserves every copied entry when unrelated data appears before removal", async () => {

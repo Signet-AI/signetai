@@ -92,6 +92,27 @@ describe("descriptor-rooted filesystem", () => {
 		}
 	});
 
+	test("refuses to remove a path whose inode differs from the reviewed inventory entry", async () => {
+		const rootPath = temporaryRoot("descriptor-remove-identity");
+		const originalPath = join(rootPath, "entry.txt");
+		const movedPath = join(rootPath, "reviewed-entry.txt");
+		writeFileSync(originalPath, "reviewed bytes");
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			const [expected] = await root.inventory();
+			if (!expected) throw new Error("expected inventory entry");
+			renameSync(originalPath, movedPath);
+			writeFileSync(originalPath, "replacement bytes");
+			await expect(root.remove("entry.txt", { expectedEntry: expected })).rejects.toThrow(
+				"descriptor removal target changed",
+			);
+			expect(readFileSync(originalPath, "utf8")).toBe("replacement bytes");
+			expect(readFileSync(movedPath, "utf8")).toBe("reviewed bytes");
+		} finally {
+			await root.close();
+		}
+	});
+
 	test("copies regular files and symlinks without following them", async () => {
 		const sourcePath = temporaryRoot("descriptor-source");
 		const destinationPath = temporaryRoot("descriptor-destination");
