@@ -31,6 +31,22 @@ test("cancellation has durable unknown outcomes, fenced replay, and restart visi
 	const port = 3967;
 	let proc = await start(workspace, port);
 	try {
+		const invalidId = "x".repeat(257);
+		const queuedInvalid = await call(port, {
+			action: "begin",
+			operationId: invalidId,
+			content: "cannot be persisted",
+			fault: "delay",
+		});
+		expect(queuedInvalid.status).toBe(200);
+		expect(await queuedInvalid.json()).toMatchObject({ operationId: invalidId, outcome: "queued" });
+		const rejectedCancellation = await call(port, { action: "cancel", operationId: invalidId });
+		expect(rejectedCancellation.status).toBe(400);
+		const cancellationRetry = await call(port, { action: "cancel", operationId: invalidId });
+		expect(cancellationRetry.status).toBe(200);
+		expect(await cancellationRetry.json()).toMatchObject({ operationId: invalidId, outcome: "unknown" });
+		await Bun.sleep(300);
+
 		const begun = (await (
 			await call(port, { action: "begin", operationId: "op-1", content: "durable" })
 		).json()) as Record<string, unknown>;

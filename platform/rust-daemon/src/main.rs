@@ -401,9 +401,11 @@ pub(crate) struct CancellationRuntime {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CancellationState {
     Queued,
+    Cancelling,
     InFlight,
     Cancelled,
     Finished,
+    Unknown,
 }
 
 #[derive(Debug, Serialize)]
@@ -1095,11 +1097,11 @@ async fn cancellation(
                         *state = CancellationState::InFlight;
                         false
                     }
-                    Some(CancellationState::Cancelled) => true,
+                    Some(CancellationState::Cancelled | CancellationState::Cancelling) => true,
                     _ => true,
                 }
             };
-            let _ = owner.submit(Operation::Cancellation {
+            let operation = Operation::Cancellation {
                 agent_id: agent_for_task,
                 action: if cancelled {
                     "cancel".into()
@@ -1109,13 +1111,20 @@ async fn cancellation(
                 operation_id,
                 content: if cancelled { None } else { content },
                 fault: None,
-            });
-            if let Some(state) = runtime.operations.lock().unwrap().get_mut(&key) {
-                *state = if cancelled {
-                    CancellationState::Cancelled
-                } else {
-                    CancellationState::Finished
-                };
+            };
+            let outcome = tokio::task::spawn_blocking(move || owner.submit(operation)).await;
+            let next_state = match outcome {
+                Ok(Ok(result)) => match result.get("outcome").and_then(Value::as_str) {
+                    Some("cancelled") => CancellationState::Cancelled,
+                    Some("committed") => CancellationState::Finished,
+                    _ => CancellationState::Unknown,
+                },
+                _ => CancellationState::Unknown,
+            };
+            if let Some(current) = runtime.operations.lock().unwrap().get_mut(&key) {
+                if !matches!(current, CancellationState::Cancelled | CancellationState::Finished) {
+                    *current = next_state;
+                }
             }
         });
         return Ok(Json(
@@ -1123,17 +1132,59 @@ async fn cancellation(
         ));
     }
     if request.action == "cancel" {
-        let mut operations = state.cancellation.operations.lock().unwrap();
-        if let Some(operation) = operations.get_mut(&key) {
-            if *operation == CancellationState::Queued {
-                *operation = CancellationState::Cancelled;
-                return Ok(Json(
-                    json!({"operationId":request.operation_id,"outcome":"cancelled"}),
-                ));
+        let cancel_queued = {
+            let mut operations = state.cancellation.operations.lock().unwrap();
+            match operations.get_mut(&key) {
+                Some(operation @ CancellationState::Queued) => {
+                    *operation = CancellationState::Cancelling;
+                    true
+                }
+                Some(CancellationState::Cancelled) => {
+                    return Ok(Json(
+                        json!({"operationId":request.operation_id,"outcome":"cancelled"}),
+                    ));
+                }
+                Some(_) => {
+                    return Ok(Json(
+                        json!({"operationId":request.operation_id,"outcome":"unknown"}),
+                    ));
+                }
+                None => false,
             }
-            return Ok(Json(
-                json!({"operationId":request.operation_id,"outcome":"unknown"}),
-            ));
+        };
+        if cancel_queued {
+            let result = match execute(
+                &state,
+                Operation::Cancellation {
+                    agent_id: agent_id.clone(),
+                    action: "cancel".into(),
+                    operation_id: request.operation_id.clone(),
+                    content: None,
+                    fault: None,
+                },
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    if let Some(operation) = state.cancellation.operations.lock().unwrap().get_mut(&key)
+                    {
+                        if *operation == CancellationState::Cancelling {
+                            *operation = CancellationState::Unknown;
+                        }
+                    }
+                    return Err(error);
+                }
+            };
+            if result.get("outcome").and_then(Value::as_str) == Some("cancelled") {
+                if let Some(operation) = state.cancellation.operations.lock().unwrap().get_mut(&key)
+                {
+                    if *operation == CancellationState::Cancelling {
+                        *operation = CancellationState::Cancelled;
+                    }
+                }
+            }
+            return Ok(Json(result));
         }
     }
     let result = execute(
