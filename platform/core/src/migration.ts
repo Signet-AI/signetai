@@ -20,6 +20,22 @@ export interface MigrationResult {
 	memoriesMigrated: number;
 	errors: string[];
 }
+export function detectSchemaType(columns: readonly string[]): SchemaType {
+	if (columns.length === 0) return "unknown";
+	const hasPythonColumns = columns.includes("who") && columns.includes("why");
+	const hasCliV1Columns = columns.includes("source") && columns.includes("accessed_at");
+	const hasCoreColumns =
+		columns.includes("category") &&
+		columns.includes("confidence") &&
+		columns.includes("source_id") &&
+		columns.includes("vector_clock");
+
+	if (hasCoreColumns) return "core";
+	if (hasPythonColumns) return "python";
+	if (hasCliV1Columns) return "cli-v1";
+	return "unknown";
+}
+
 export function detectSchema(db: {
 	prepare(sql: string): {
 		get(...args: unknown[]): Record<string, unknown> | undefined;
@@ -71,25 +87,7 @@ export function detectSchema(db: {
 	} catch {
 		hasFts = false;
 	}
-	let type: SchemaType = "unknown";
-
-	if (hasMemories) {
-		const hasPythonColumns = columns.includes("who") && columns.includes("why");
-		const hasCliV1Columns = columns.includes("source") && columns.includes("accessed_at");
-		const hasCoreColumns =
-			columns.includes("category") &&
-			columns.includes("confidence") &&
-			columns.includes("source_id") &&
-			columns.includes("vector_clock");
-
-		if (hasCoreColumns) {
-			type = "core";
-		} else if (hasPythonColumns) {
-			type = "python";
-		} else if (hasCliV1Columns) {
-			type = "cli-v1";
-		}
-	}
+	const type = hasMemories ? detectSchemaType(columns) : "unknown";
 	let version = 0;
 	try {
 		const versionResult = db.prepare("SELECT MAX(version) as version FROM schema_migrations").get() as

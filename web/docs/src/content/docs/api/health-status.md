@@ -365,9 +365,13 @@ silent fallback or hard-blocked extraction after boot.
   },
   "pipeline": {
     "queue": {
-      "memory": { "pending": 0, "leased": 0, "completed": 0, "failed": 0, "dead": 0, "oldestAgeSec": 0, "oldestDeadAgeSec": 0, "lastError": null, "completeness": "exact" },
-      "summary": { "pending": 0, "leased": 0, "completed": 0, "failed": 0, "dead": 0, "oldestAgeSec": 0, "oldestDeadAgeSec": 0, "lastError": null, "completeness": "exact" }
+      "memory": { "pending": 0, "leased": 0, "completed": 0, "failed": 0, "dead": 0, "oldestAgeSec": 0, "oldestDeadAgeSec": 0, "lastError": null, "completeness": "unknown" },
+      "summary": { "pending": 0, "leased": 0, "completed": 0, "failed": 0, "dead": 0, "oldestAgeSec": 0, "oldestDeadAgeSec": 0, "lastError": null, "completeness": "unknown" }
     }
+  },
+  "dreaming": {
+    "enabled": true,
+    "workerRunning": false
   },
   "providerResolution": {
     "extraction": {
@@ -458,7 +462,12 @@ extraction provider is unavailable or routed to a fallback target.
 When extraction is blocked, `providerResolution.extraction.blockedBy` contains
 the first routing candidate's policy and runtime gate reasons in evaluation
 order. The array is empty for non-blocked states.
-`pipeline.queue` exposes per-queue counts (memory / summary).
+`pipeline.queue` is a nonblocking snapshot; its zero-valued counts have
+`completeness: "unknown"` and must not be read as verified zeros. Use
+`GET /api/diagnostics/queue` for bounded queue counts. `dreaming.enabled`
+reports configuration and `dreaming.workerRunning` reports the live worker
+state; they are separate from the most recent scheduler decision in
+`pipeline.dreaming`.
 `pipeline.dreaming` records the latest periodic Dreaming scheduler decision.
 It is `null` before the worker starts. A `deferred` result with
 `reason: "queue_pressure"` means the scheduler itself yielded that sweep to
@@ -468,6 +477,46 @@ The retired worker's load/overload telemetry is no longer reported.
 use `GET /api/diagnostics/transcripts` for detailed artifact/audit diagnostics.
 Use `GET /api/inference/status` for the shared inference control plane status.
 
+### GET /api/status/workspace
+
+Returns workspace statistics for the daemon's resolved agent. Callers cannot
+select a different agent or workspace. `memoryCount` excludes soft-deleted
+memories. `capturedSessionCount` counts distinct captured session keys and is
+`null` when the transcript table is unavailable. The ontology fields use the
+same agent-scoped knowledge statistics as `GET /api/knowledge/stats`;
+`coveragePercent` and `unassignedMemoryCount` describe memory IDs represented by
+active graph mentions; they do not count every stored workspace memory. Returns
+`schema` and `needsMigration` from the database owner, so schema diagnostics do
+not open the workspace database from the CLI process. `needsMigration` is true
+for recognized legacy schemas and false for the current or unknown schema.
+Returns `503` when the owner cannot provide a complete summary. Standard daemon
+authentication applies.
+
+**Response**
+
+```json
+{
+  "agentId": "default",
+  "memoryCount": 190,
+  "capturedSessionCount": 17,
+  "schema": "core",
+  "needsMigration": false,
+  "ontology": {
+    "entityCount": 14,
+    "aspectCount": 22,
+    "attributeCount": 31,
+    "claimCount": 8,
+    "constraintCount": 5,
+    "dependencyCount": 12,
+    "unassignedMemoryCount": 7,
+    "coveragePercent": 82.5,
+    "feedbackUpdatedAspectCount": 3,
+    "averageAspectWeight": 0.641,
+    "maxWeightAspectCount": 2,
+    "minWeightAspectCount": 1
+  }
+}
+```
 
 ### GET /api/diagnostics/workloads
 

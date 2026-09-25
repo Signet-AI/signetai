@@ -29,6 +29,7 @@ import {
 	resolveLaunchdExecutable,
 	resolveSignetDaemonUrl,
 	type DaemonRuntime,
+	type SchemaType,
 } from "@signet/core";
 import { formatInspectorEndpoint, parseInspectorEndpoint } from "./inspector-proxy.js";
 import { resolveDaemonNetwork } from "./network.js";
@@ -130,6 +131,7 @@ export interface DaemonResourceUsage {
 
 interface DaemonInstance {
 	readonly baseUrl: string;
+	readonly workspacePath: string | null;
 	readonly pid: number | null;
 	readonly uptime: number | null;
 	readonly version: string | null;
@@ -155,6 +157,11 @@ interface DaemonInstance {
 		readonly blockedReason: string | null;
 		readonly hasWorkloadState: boolean;
 	} | null;
+	readonly dreaming: {
+		readonly enabled: boolean;
+		readonly workerRunning: boolean;
+	} | null;
+	readonly workspaceStats: WorkspaceStatusSummaryFromStatus | null;
 	readonly transcripts: {
 		readonly pending: number;
 		readonly failed: number;
@@ -180,14 +187,33 @@ interface DreamingSchedulerStatusFromStatus {
 }
 
 interface QueueCountsFromStatus {
-	readonly pending: number;
-	readonly leased: number;
-	readonly completed: number;
-	readonly failed: number;
-	readonly dead: number;
-	readonly oldestAgeSec: number;
-	readonly oldestDeadAgeSec: number;
+	readonly pending: number | null;
+	readonly leased: number | null;
+	readonly completed: number | null;
+	readonly failed: number | null;
+	readonly dead: number | null;
+	readonly oldestAgeSec: number | null;
+	readonly oldestDeadAgeSec: number | null;
 	readonly lastError: string | null;
+	readonly completeness: "exact" | "truncated" | "unknown";
+}
+
+interface WorkspaceStatusSummaryFromStatus {
+	readonly agentId: string;
+	readonly memoryCount: number;
+	readonly capturedSessionCount: number | null;
+	readonly schema: SchemaType;
+	readonly needsMigration: boolean;
+	readonly ontology: {
+		readonly entityCount: number;
+		readonly aspectCount: number;
+		readonly attributeCount: number;
+		readonly claimCount: number;
+		readonly constraintCount: number;
+		readonly dependencyCount: number;
+		readonly unassignedMemoryCount: number;
+		readonly coveragePercent: number;
+	};
 }
 
 interface DaemonProbeDeps {
@@ -509,10 +535,10 @@ function reachableDaemonProbe(
 	};
 }
 
-async function fetchJsonOrNull<T>(baseUrl: string, path: string): Promise<T | null> {
+async function fetchJsonOrNull<T>(baseUrl: string, path: string, timeoutMs = 1200): Promise<T | null> {
 	try {
 		const response = await fetch(`${baseUrl}${path}`, {
-			signal: AbortSignal.timeout(1200),
+			signal: AbortSignal.timeout(timeoutMs),
 		});
 		if (!response.ok) return null;
 		return (await response.json()) as T;
@@ -655,6 +681,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 	return Promise.all(
 		urls.map(async (baseUrl): Promise<DaemonInstance> => {
 			try {
+				const workspaceStatsPromise = fetchJsonOrNull<unknown>(baseUrl, "/api/status/workspace", 2500);
 				const response = await fetch(`${baseUrl}/api/status`, {
 					signal: AbortSignal.timeout(1200),
 				});
@@ -667,6 +694,8 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						host?: string;
 						bindHost?: string;
 						networkMode?: string;
+						agentsDir?: string;
+						dreaming?: { enabled?: boolean; workerRunning?: boolean };
 						health?: {
 							score?: number;
 							status?: string;
@@ -708,8 +737,13 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					const transcripts = data.transcripts?.capture;
 					const resources = data.resources;
 					const runtime = parseDaemonRuntime(data.runtime);
-					const openclawReport = await fetchJsonOrNull<unknown>(baseUrl, "/api/diagnostics/openclaw");
-					const readiness = await fetchDaemonReadiness(baseUrl);
+					const [openclawReport, readiness, workspaceStatsRaw] = await Promise.all([
+						fetchJsonOrNull<unknown>(baseUrl, "/api/diagnostics/openclaw"),
+						fetchDaemonReadiness(baseUrl),
+						workspaceStatsPromise,
+					]);
+					const workspaceStats = normalizeWorkspaceStatusSummaryFromStatus(workspaceStatsRaw);
+					const dreaming = normalizeDreamingStatusFromStatus(data.dreaming);
 					const healthRaw = data.health;
 					const pipelineRaw = data.pipeline;
 					const queueRaw =
@@ -739,6 +773,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 					const scheduler = normalizeDreamingSchedulerFromStatus(dreamingRaw);
 					return {
 						baseUrl,
+						workspacePath: typeof data.agentsDir === "string" ? data.agentsDir : null,
 						pid: data.pid ?? null,
 						uptime: data.uptime ?? null,
 						version: data.version ?? null,
@@ -789,6 +824,8 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 						health,
 						queue,
 						scheduler,
+						dreaming,
+						workspaceStats,
 						probe: reachableDaemonProbe(baseUrl, data.pid ?? null, readiness),
 						openclaw: summarizeOpenClawHealth(openclawReport),
 					};
@@ -797,6 +834,7 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 
 			return {
 				baseUrl,
+				workspacePath: null,
 				pid: null,
 				uptime: null,
 				version: null,
@@ -810,6 +848,8 @@ async function getDaemonInstances(): Promise<DaemonInstance[]> {
 				health: null,
 				queue: null,
 				scheduler: null,
+				dreaming: null,
+				workspaceStats: null,
 				probe: reachableDaemonProbe(
 					baseUrl,
 					null,
@@ -839,24 +879,133 @@ function matchesDaemon(cmd: string, paths: readonly string[]): boolean {
 	return daemonMarks(paths).some((path) => normalizedCmd.includes(normalizeCmd(path)));
 }
 
+function isStatusRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function normalizeQueueCountsFromStatus(value: unknown): QueueCountsFromStatus | null {
-	if (typeof value !== "object" || value === null) return null;
-	const record = value as Record<string, unknown>;
-	const toNumber = (key: string): number => {
-		const raw = record[key];
-		return typeof raw === "number" && Number.isFinite(raw) ? raw : 0;
+	if (!isStatusRecord(value)) return null;
+	const lastError = typeof value.lastError === "string" && value.lastError.trim().length > 0 ? value.lastError : null;
+	const unknownCounts: QueueCountsFromStatus = {
+		pending: null,
+		leased: null,
+		completed: null,
+		failed: null,
+		dead: null,
+		oldestAgeSec: null,
+		oldestDeadAgeSec: null,
+		lastError,
+		completeness: "unknown",
 	};
-	const lastErrorRaw = record.lastError;
+	if (value.completeness !== "exact" && value.completeness !== "truncated") return unknownCounts;
+	const readCount = (key: string): number | null => {
+		const raw = value[key];
+		return typeof raw === "number" && Number.isSafeInteger(raw) && raw >= 0 ? raw : null;
+	};
+	const readAge = (key: string): number | null => {
+		const raw = value[key];
+		return typeof raw === "number" && Number.isFinite(raw) && raw >= 0 ? raw : null;
+	};
+	const pending = readCount("pending");
+	const leased = readCount("leased");
+	const completed = readCount("completed");
+	const failed = readCount("failed");
+	const dead = readCount("dead");
+	const oldestAgeSec = readAge("oldestAgeSec");
+	const oldestDeadAgeSec = readAge("oldestDeadAgeSec");
+	if (
+		pending === null ||
+		leased === null ||
+		completed === null ||
+		failed === null ||
+		dead === null ||
+		oldestAgeSec === null ||
+		oldestDeadAgeSec === null
+	) {
+		return unknownCounts;
+	}
 	return {
-		pending: toNumber("pending"),
-		leased: toNumber("leased"),
-		completed: toNumber("completed"),
-		failed: toNumber("failed"),
-		dead: toNumber("dead"),
-		oldestAgeSec: toNumber("oldestAgeSec"),
-		oldestDeadAgeSec: toNumber("oldestDeadAgeSec"),
-		lastError: typeof lastErrorRaw === "string" && lastErrorRaw.trim().length > 0 ? lastErrorRaw : null,
+		pending,
+		leased,
+		completed,
+		failed,
+		dead,
+		oldestAgeSec,
+		oldestDeadAgeSec,
+		lastError,
+		completeness: value.completeness,
 	};
+}
+
+function normalizeWorkspaceStatusSummaryFromStatus(value: unknown): WorkspaceStatusSummaryFromStatus | null {
+	if (!isStatusRecord(value)) return null;
+	const agentId = value.agentId;
+	const schema = value.schema;
+	const needsMigration = value.needsMigration;
+	const rawOntology = value.ontology;
+	if (typeof agentId !== "string" || agentId.trim().length === 0) return null;
+	if (schema !== "python" && schema !== "cli-v1" && schema !== "core" && schema !== "unknown") return null;
+	if (typeof needsMigration !== "boolean") return null;
+	if (!isStatusRecord(rawOntology)) return null;
+	const readCount = (key: string): number | null => {
+		const count = rawOntology[key];
+		return typeof count === "number" && Number.isSafeInteger(count) && count >= 0 ? count : null;
+	};
+	const entityCount = readCount("entityCount");
+	const aspectCount = readCount("aspectCount");
+	const attributeCount = readCount("attributeCount");
+	const claimCount = readCount("claimCount");
+	const constraintCount = readCount("constraintCount");
+	const dependencyCount = readCount("dependencyCount");
+	const unassignedMemoryCount = readCount("unassignedMemoryCount");
+	const coveragePercent = rawOntology.coveragePercent;
+	const memoryCount = value.memoryCount;
+	const capturedSessionCount = value.capturedSessionCount;
+	if (
+		entityCount === null ||
+		aspectCount === null ||
+		attributeCount === null ||
+		claimCount === null ||
+		constraintCount === null ||
+		dependencyCount === null ||
+		unassignedMemoryCount === null ||
+		typeof coveragePercent !== "number" ||
+		!Number.isFinite(coveragePercent) ||
+		coveragePercent < 0 ||
+		coveragePercent > 100 ||
+		typeof memoryCount !== "number" ||
+		!Number.isSafeInteger(memoryCount) ||
+		memoryCount < 0 ||
+		(capturedSessionCount !== null &&
+			(typeof capturedSessionCount !== "number" ||
+				!Number.isSafeInteger(capturedSessionCount) ||
+				capturedSessionCount < 0))
+	) {
+		return null;
+	}
+	return {
+		agentId,
+		memoryCount,
+		capturedSessionCount,
+		schema,
+		needsMigration,
+		ontology: {
+			entityCount,
+			aspectCount,
+			attributeCount,
+			claimCount,
+			constraintCount,
+			dependencyCount,
+			unassignedMemoryCount,
+			coveragePercent,
+		},
+	};
+}
+
+function normalizeDreamingStatusFromStatus(value: unknown): DaemonInstance["dreaming"] {
+	if (!isStatusRecord(value)) return null;
+	if (typeof value.enabled !== "boolean" || typeof value.workerRunning !== "boolean") return null;
+	return { enabled: value.enabled, workerRunning: value.workerRunning };
 }
 
 function normalizeDreamingSchedulerFromStatus(value: unknown): DreamingSchedulerStatusFromStatus | null {
@@ -1065,6 +1214,7 @@ export async function hasDaemonProcess(agentsDir: string = AGENTS_DIR): Promise<
 
 async function readDaemonStatus(): Promise<{
 	running: boolean;
+	workspacePath: string | null;
 	pid: number | null;
 	uptime: number | null;
 	version: string | null;
@@ -1074,6 +1224,8 @@ async function readDaemonStatus(): Promise<{
 	networkMode: string | null;
 	resources: DaemonResourceUsage | null;
 	extraction: DaemonInstance["extraction"];
+	dreaming: DaemonInstance["dreaming"];
+	workspaceStats: DaemonInstance["workspaceStats"];
 	transcripts: DaemonInstance["transcripts"];
 	health: DaemonInstance["health"];
 	queue: DaemonInstance["queue"];
@@ -1087,6 +1239,7 @@ async function readDaemonStatus(): Promise<{
 		const fallbackPid = typeof preferred.pid === "number" ? null : (findMarkedDaemonProcessPids()[0] ?? null);
 		return {
 			running: true,
+			workspacePath: preferred.workspacePath,
 			pid: preferred.pid ?? fallbackPid,
 			uptime: preferred.uptime,
 			version: preferred.version,
@@ -1096,6 +1249,8 @@ async function readDaemonStatus(): Promise<{
 			networkMode: preferred.networkMode,
 			resources: preferred.resources,
 			extraction: preferred.extraction,
+			dreaming: preferred.dreaming,
+			workspaceStats: preferred.workspaceStats,
 			transcripts: preferred.transcripts,
 			health: preferred.health,
 			queue: preferred.queue,
@@ -1111,6 +1266,7 @@ async function readDaemonStatus(): Promise<{
 	const probe = await buildUnreachableDaemonProbe(AGENTS_DIR);
 	return {
 		running: false,
+		workspacePath: null,
 		pid: probe.processPid,
 		uptime: null,
 		version: null,
@@ -1120,6 +1276,8 @@ async function readDaemonStatus(): Promise<{
 		networkMode: null,
 		resources: null,
 		extraction: null,
+		dreaming: null,
+		workspaceStats: null,
 		transcripts: null,
 		health: null,
 		queue: null,
