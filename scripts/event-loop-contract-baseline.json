@@ -3313,56 +3313,56 @@
     },
     {
       "path": "routes/marketplace-reviews.ts",
-      "line": 58,
+      "line": 59,
       "api": "existsSync",
       "source": "if (!existsSync(dir)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace-reviews.ts",
-      "line": 59,
+      "line": 60,
       "api": "mkdirSync",
       "source": "mkdirSync(dir, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace-reviews.ts",
-      "line": 123,
+      "line": 131,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return [];",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace-reviews.ts",
-      "line": 125,
+      "line": 133,
       "api": "readFileSync",
       "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace-reviews.ts",
-      "line": 135,
+      "line": 143,
       "api": "writeFileSync",
       "source": "writeFileSync(getReviewsPath(), JSON.stringify(reviews, null, 2), \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace-reviews.ts",
-      "line": 140,
+      "line": 148,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return DEFAULT_CONFIG;",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace-reviews.ts",
-      "line": 142,
+      "line": 150,
       "api": "readFileSync",
       "source": "const raw = JSON.parse(readFileSync(path, \"utf-8\")) as unknown;",
       "category": "hot-path"
     },
     {
       "path": "routes/marketplace-reviews.ts",
-      "line": 158,
+      "line": 166,
       "api": "writeFileSync",
       "source": "writeFileSync(getReviewsConfigPath(), JSON.stringify(config, null, 2), \"utf-8\");",
       "category": "hot-path"
