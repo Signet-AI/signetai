@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
-import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -234,5 +234,94 @@ describe("marketplace reviews routes", () => {
 		const secondBody = (await secondRes.json()) as { sent: number; synced: number };
 		expect(firstBody.sent + secondBody.sent).toBe(1);
 		expect(firstBody.synced + secondBody.synced).toBe(1);
+	});
+
+	it("preserves legacy MCP reviews without exposing or syncing them", async () => {
+		const marketplaceDir = join(tmpAgentsDir, "marketplace");
+		const reviewsPath = join(marketplaceDir, "reviews.json");
+		mkdirSync(marketplaceDir, { recursive: true });
+		const legacyReview = {
+			id: "legacy-mcp-review",
+			targetType: "mcp",
+			targetId: "server:legacy",
+			displayName: "Avery",
+			rating: 5,
+			title: "Legacy review",
+			body: "Keep this record during unrelated review writes",
+			source: "local",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			syncedAt: null,
+		};
+		writeFileSync(reviewsPath, JSON.stringify([legacyReview]), "utf-8");
+
+		const createRes = await app.request("/api/marketplace/reviews", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				targetType: "skill",
+				targetId: "skills.sh/current",
+				displayName: "Morgan",
+				rating: 4,
+				title: "Current review",
+				body: "A supported review",
+			}),
+		});
+		expect(createRes.status).toBe(200);
+		const createBody = (await createRes.json()) as { review: { id: string } };
+		const storedAfterCreate = JSON.parse(readFileSync(reviewsPath, "utf-8")) as Array<{
+			id: string;
+			targetType: string;
+			syncedAt: string | null;
+		}>;
+		expect(storedAfterCreate.find((item) => item.id === legacyReview.id)).toEqual(legacyReview);
+
+		const listRes = await app.request("/api/marketplace/reviews");
+		const listBody = (await listRes.json()) as { reviews: Array<{ targetType: string }> };
+		expect(listBody.reviews.map((item) => item.targetType)).toEqual(["skill"]);
+		const mcpListRes = await app.request("/api/marketplace/reviews?type=mcp");
+		expect(mcpListRes.status).toBe(400);
+		const mcpPatchRes = await app.request(`/api/marketplace/reviews/${legacyReview.id}`, {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ title: "Removed target type" }),
+		});
+		expect(mcpPatchRes.status).toBe(404);
+		const mcpDeleteRes = await app.request(`/api/marketplace/reviews/${legacyReview.id}`, { method: "DELETE" });
+		expect(mcpDeleteRes.status).toBe(404);
+
+		await app.request("/api/marketplace/reviews/config", {
+			method: "PATCH",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ enabled: true, endpointUrl: "https://example.com/reviews" }),
+		});
+		const pendingRes = await app.request("/api/marketplace/reviews/config");
+		const pendingBody = (await pendingRes.json()) as { pending: number };
+		expect(pendingBody.pending).toBe(1);
+		let syncedTargetTypes: string[] = [];
+		globalThis.fetch = mock((_input: string | URL | Request, init?: RequestInit) => {
+			const payload = JSON.parse(String(init?.body)) as { reviews: Array<{ targetType: string }> };
+			syncedTargetTypes = payload.reviews.map((item) => item.targetType);
+			return Promise.resolve(Response.json({ ok: true }));
+		}) as unknown as typeof fetch;
+
+		const syncRes = await app.request("/api/marketplace/reviews/sync", { method: "POST" });
+		expect(syncRes.status).toBe(200);
+		expect(syncedTargetTypes).toEqual(["skill"]);
+		const storedAfterSync = JSON.parse(readFileSync(reviewsPath, "utf-8")) as Array<{
+			id: string;
+			targetType: string;
+			syncedAt: string | null;
+		}>;
+		expect(storedAfterSync.find((item) => item.id === legacyReview.id)).toEqual(legacyReview);
+
+		const deleteRes = await app.request(`/api/marketplace/reviews/${createBody.review.id}`, { method: "DELETE" });
+		expect(deleteRes.status).toBe(200);
+		const storedAfterDelete = JSON.parse(readFileSync(reviewsPath, "utf-8")) as Array<{
+			id: string;
+			targetType: string;
+			syncedAt: string | null;
+		}>;
+		expect(storedAfterDelete).toEqual([legacyReview]);
 	});
 });
