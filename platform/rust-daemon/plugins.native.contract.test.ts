@@ -85,6 +85,35 @@ it("starts, authenticates every route, filters audit, persists safely", async ()
 		(await get(origin, "/api/plugins/audit?event=plugin.disabled&since=0&until=9999999999&limit=10", auth)).status,
 	).toBe(200);
 });
+
+it("preserves concurrent updates to different plugin records", async () => {
+	const { origin, workspace } = await start();
+	const registryPath = join(workspace, ".daemon/plugins/registry-v1.json");
+	mkdirSync(join(workspace, ".daemon/plugins"), { recursive: true });
+	const ids = ["signet-graphiq", "signet-secrets"] as const;
+	for (let attempt = 0; attempt < 8; attempt++) {
+		writeFileSync(
+			registryPath,
+			JSON.stringify({
+				version: 1,
+				plugins: Object.fromEntries(ids.map((id) => [id, { enabled: true, installedAt: "1", updatedAt: "1" }])),
+			}),
+		);
+		const responses = await Promise.all(
+			ids.map((id) =>
+				fetch(`${origin}/api/plugins/${id}`, {
+					method: "PATCH",
+					headers: { ...auth, "content-type": "application/json" },
+					body: JSON.stringify({ enabled: false }),
+				}),
+			),
+		);
+		expect(responses.map((response) => response.status)).toEqual([200, 200]);
+		const saved = JSON.parse(readFileSync(registryPath, "utf8"));
+		for (const id of ids) expect(saved.plugins[id].enabled).toBe(false);
+	}
+});
+
 it("rejects plugin registry and audit paths redirected through a workspace symlink", async () => {
 	const { origin, workspace } = await start();
 	const outside = mkdtempSync(join(tmpdir(), "signet-plugins-outside-"));

@@ -1247,6 +1247,7 @@ async fn audit(
     h: HeaderMap,
 ) -> Result<Json<Value>, ApiError> {
     gate(&s, &h).await?;
+    let _registry_lock = s.plugin_registry_lock.lock().await;
     const MAX_AUDIT_BYTES: u64 = 2 * 1024 * 1024;
     let mut out = Vec::new();
     let mut truncated = false;
@@ -1302,6 +1303,7 @@ async fn update(
     Json(u): Json<Update>,
 ) -> Result<Json<Value>, ApiError> {
     gate(&s, &headers).await?;
+    let _registry_lock = s.plugin_registry_lock.lock().await;
     let mut st = load(&s)?;
     if records(&s)?.iter().all(|x| x["id"] != id) {
         return Err(ApiError::not_found("plugin not found"));

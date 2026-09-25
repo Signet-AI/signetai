@@ -540,6 +540,8 @@ pub(crate) struct AppState {
     pub(crate) started_at: u64,
     pub(crate) workspace: PathBuf,
     pub(crate) config_dir: Result<Arc<File>, String>,
+    // Registry updates replace the full snapshot and must not lose concurrent changes.
+    pub(crate) plugin_registry_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) dashboard: Option<PathBuf>,
     pub(crate) auth_secret: Option<Vec<u8>>,
     pub(crate) auth_mode: Arc<Mutex<String>>,
@@ -2274,6 +2276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         auth_mode,
         workspace,
         config_dir,
+        plugin_registry_lock: Arc::new(tokio::sync::Mutex::new(())),
         cancellation: Arc::new(CancellationRuntime::default()),
     };
     let worker_owner = state.owner.clone();
