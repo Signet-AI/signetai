@@ -29,6 +29,7 @@
 		"@signet/core": "0.227.0"
 	},
 	"devDependencies": {
+		"@signet/oh-my-pi-extension": "workspace:*",
 		"@types/node": "^22.0.0",
 		"typescript": "^5.7.0"
 	},
