@@ -7,9 +7,10 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-25
-- Bug fixes: preserve request deadlines and cancellation; validate plugin manifest values; handle missing proposal evidence; reject invalid judge verdicts; keep attempt fenced on read errors; reconcile late pass creation; release trigger on scope failure; preserve legacy MCP records; validate tokenizer wasm path; sync retired ledger artifacts; drop exports for removed OS types; clear stale binary outputs; stabilize Node WASM names; externalize Bun FFI fallback; stabilize daemon asset builds; keep worker bundles single-file; make stdio bundle portable; remove stale retirement references; externalize native keyring; retire legacy invocation slot; await startup source cleanup; lease transcript import target; refresh sync DB audit ledger; serialize source mutations; accept deferred removal.
+- Features: daemon-owned workspace stats, honest queue counts, Dreaming state.
+- Bug fixes: satisfy comment-strip and event-loop ledger policies; preserve request deadlines and cancellation; validate plugin manifest values; handle missing proposal evidence; reject invalid judge verdicts; keep attempt fenced on read errors; reconcile late pass creation; release trigger on scope failure; preserve legacy MCP records; validate tokenizer wasm path; sync retired ledger artifacts; drop exports for removed OS types; clear stale binary outputs; stabilize Node WASM names; externalize Bun FFI fallback; stabilize daemon asset builds; keep worker bundles single-file; make stdio bundle portable; remove stale retirement references; externalize native keyring; retire legacy invocation slot; await startup source cleanup; lease transcript import target; refresh sync DB audit ledger; serialize source mutations; accept deferred removal.
 - Refactoring: remove external server surface.
-- Docs: update latest schema reference.
+- Docs: note legacy-schema semantics for workspace memory count; update latest schema reference.
 
 ### 2026-09-24
 - Bug fixes: tolerate missing blog bodies; harden session recall dedupe; guard moved targets; harden entry removal; recheck removal identity; guard ambient uninstall; secure ambient profile writes; enforce profile marker ownership; harden profile removal; reject unsafe profile paths; harden profile writes; normalize profile paths; contain profile writes; ignore desktop build artifacts in source sync; classify loader failures at boundary; classify missing keyring; preserve source changes during sync; bound constellation work.
@@ -34,6 +35,23 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: deduplicate vector repair policy.
 
 ## Release Ledger
+
+## [0.227.0] - 2026-09-25
+
+Release summary: 1 feature, 1 bug fix, and 1 docs update.
+Tag range: `v0.226.28..v0.227.0`.
+
+### Features
+
+- **status**: daemon-owned workspace stats, honest queue counts, Dreaming state
+
+### Bug Fixes
+
+- **status**: satisfy comment-strip and event-loop ledger policies
+
+### Docs
+
+- **status**: note legacy-schema semantics for workspace memory count
 
 ## [0.226.28] - 2026-09-25
 
