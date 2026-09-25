@@ -1067,7 +1067,7 @@ dependencies = [
 
 [[package]]
 name = "signet-core-native"
-version = "0.226.17"
+version = "0.226.27"
 dependencies = [
  "regex",
  "rusqlite",
@@ -1083,7 +1083,7 @@ dependencies = [
 
 [[package]]
 name = "signet-daemon-native"
-version = "0.226.17"
+version = "0.226.27"
 dependencies = [
  "axum",
  "base64",
