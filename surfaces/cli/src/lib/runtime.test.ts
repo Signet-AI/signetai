@@ -1228,6 +1228,25 @@ describe("getDaemonStatus", () => {
 	it("parses extraction provider degradation from /api/status", async () => {
 		globalThis.fetch = async (input: string | URL) => {
 			const url = String(input);
+			if (url.endsWith("/api/status/workspace")) {
+				return Response.json({
+					agentId: "default",
+					memoryCount: 190,
+					capturedSessionCount: 17,
+					schema: "cli-v1",
+					needsMigration: true,
+					ontology: {
+						entityCount: 3,
+						aspectCount: 4,
+						attributeCount: 5,
+						claimCount: 6,
+						constraintCount: 7,
+						dependencyCount: 8,
+						unassignedMemoryCount: 9,
+						coveragePercent: 95.3,
+					},
+				});
+			}
 			if (url.endsWith("/api/diagnostics/openclaw")) {
 				return Response.json({
 					status: "connected",
@@ -1251,6 +1270,8 @@ describe("getDaemonStatus", () => {
 					host: "127.0.0.1",
 					bindHost: "127.0.0.1",
 					networkMode: "local",
+					agentsDir: "/tmp/status-workspace",
+					dreaming: { enabled: true, workerRunning: true },
 					resources: {
 						rss: 169,
 						heapUsed: 106,
@@ -1276,6 +1297,20 @@ describe("getDaemonStatus", () => {
 						},
 					},
 					pipeline: {
+						queue: {
+							memory: {
+								pending: 0,
+								leased: 0,
+								completed: 0,
+								failed: 0,
+								dead: 0,
+								oldestAgeSec: 0,
+								oldestDeadAgeSec: 0,
+								lastError: null,
+								completeness: "unknown",
+							},
+							summary: null,
+						},
 						dreaming: { status: "deferred", reason: "system_pressure", checkedAt: "2026-08-11T15:00:00.000Z" },
 					},
 				});
@@ -1287,6 +1322,36 @@ describe("getDaemonStatus", () => {
 		expect(status.running).toBe(true);
 		expect(status.probe.status).toBe("healthy");
 		expect(status.probe.readinessReasons).toBeUndefined();
+		expect(status.workspacePath).toBe("/tmp/status-workspace");
+		expect(status.dreaming).toEqual({ enabled: true, workerRunning: true });
+		expect(status.workspaceStats).toEqual({
+			agentId: "default",
+			memoryCount: 190,
+			capturedSessionCount: 17,
+			schema: "cli-v1",
+			needsMigration: true,
+			ontology: {
+				entityCount: 3,
+				aspectCount: 4,
+				attributeCount: 5,
+				claimCount: 6,
+				constraintCount: 7,
+				dependencyCount: 8,
+				unassignedMemoryCount: 9,
+				coveragePercent: 95.3,
+			},
+		});
+		expect(status.queue?.memory).toEqual({
+			pending: null,
+			leased: null,
+			completed: null,
+			failed: null,
+			dead: null,
+			oldestAgeSec: null,
+			oldestDeadAgeSec: null,
+			lastError: null,
+			completeness: "unknown",
+		});
 		expect(status.scheduler).toEqual({
 			status: "deferred",
 			reason: "system_pressure",

@@ -3,7 +3,13 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { getExtractionStatusNotice, getStatusReport, showDoctor, showStatus } from "./health.js";
+import {
+	getExtractionStatusNotice,
+	getStatusReport,
+	renderPipelineQueuesBlock,
+	showDoctor,
+	showStatus,
+} from "./health.js";
 
 const originalHome = process.env.HOME;
 const originalOpenClawConfig = process.env.OPENCLAW_CONFIG_PATH;
@@ -45,12 +51,56 @@ function depsFor(basePath: string) {
 			host: null,
 			bindHost: null,
 			networkMode: null,
+			extraction: null,
+			transcripts: null,
 		}),
 		normalizeAgentPath: (pathValue: string) => pathValue,
-		parseIntegerValue: (value: unknown) => (typeof value === "number" ? value : null),
 		signetLogo: () => "signet",
 	};
 }
+
+describe("status workspace schema", () => {
+	it("uses daemon-owned schema diagnostics and current workspace counts", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-schema-status-"));
+		try {
+			const deps = depsFor(root);
+			const report = await getStatusReport(root, {
+				...deps,
+				detectExistingSetup: () => ({ agentsDir: true, agentsMd: true, agentYaml: true, memoryDb: true }),
+				getDaemonStatus: async () => ({
+					...(await deps.getDaemonStatus()),
+					workspacePath: root,
+					workspaceStats: {
+						agentId: "default",
+						memoryCount: 1,
+						capturedSessionCount: 1,
+						schema: "cli-v1",
+						needsMigration: true,
+						ontology: {
+							entityCount: 0,
+							aspectCount: 0,
+							attributeCount: 0,
+							claimCount: 0,
+							constraintCount: 0,
+							dependencyCount: 0,
+							unassignedMemoryCount: 0,
+							coveragePercent: 0,
+						},
+					},
+				}),
+			});
+			expect(report.db).toMatchObject({
+				schema: "cli-v1",
+				needsMigration: true,
+				memoryCount: 1,
+				capturedSessionCount: 1,
+			});
+			expect(report.db).not.toHaveProperty("conversationCount");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("status report openclaw backup risk", () => {
 	it("marks workspace as unprotected when openclaw is linked and origin is missing", async () => {
@@ -801,8 +851,8 @@ describe("getExtractionStatusNotice", () => {
 		expect(notice).toBeNull();
 	});
 
-	it("still warns that the pipeline is disabled when no retirement reason is present", () => {
-		const notice = getExtractionStatusNotice({
+	it("warns for disabled extraction only when the Dreaming cutover is not reported", () => {
+		const daemon: Parameters<typeof getExtractionStatusNotice>[0] = {
 			running: true,
 			pid: 1,
 			uptime: 10,
@@ -810,6 +860,7 @@ describe("getExtractionStatusNotice", () => {
 			host: "127.0.0.1",
 			bindHost: "127.0.0.1",
 			networkMode: "local",
+			transcripts: null,
 			extraction: {
 				configured: null,
 				resolved: null,
@@ -827,10 +878,12 @@ describe("getExtractionStatusNotice", () => {
 				blockedReason: null,
 				hasWorkloadState: true,
 			},
-		});
+		};
 
-		expect(notice?.level).toBe("warn");
-		expect(notice?.title).toBe("Pipeline disabled");
+		const legacyNotice = getExtractionStatusNotice(daemon);
+		expect(legacyNotice?.level).toBe("warn");
+		expect(legacyNotice?.title).toBe("Extraction disabled");
+		expect(getExtractionStatusNotice({ ...daemon, dreaming: { enabled: true, workerRunning: false } })).toBeNull();
 	});
 });
 
@@ -865,16 +918,27 @@ describe("showStatus readiness labeling", () => {
 		};
 	}
 
-	async function captureStatus(deps: ReturnType<typeof runningDaemonDeps>): Promise<string> {
+	async function captureStatus(
+		deps: Parameters<typeof showStatus>[1],
+		options: Parameters<typeof showStatus>[0] = {},
+	): Promise<string> {
 		const lines: string[] = [];
 		const oldLog = console.log;
+		const oldFetch = globalThis.fetch;
 		console.log = (...args: unknown[]) => {
 			lines.push(args.join(" "));
 		};
+		globalThis.fetch = Object.assign(
+			async () => {
+				throw new Error("status fixture has no queue endpoint");
+			},
+			{ preconnect: () => undefined },
+		);
 		try {
-			await showStatus({}, deps);
+			await showStatus(options, deps);
 		} finally {
 			console.log = oldLog;
+			globalThis.fetch = oldFetch;
 		}
 		return lines.join("\n");
 	}
@@ -921,6 +985,216 @@ describe("showStatus readiness labeling", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	it("labels a missing captured-session count as unavailable", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-sessions-"));
+		try {
+			const baseDeps = runningDaemonDeps(root, {
+				status: "healthy",
+				detail: "/health responded",
+				url: "http://127.0.0.1:3850",
+				listenerPresent: true,
+				processPid: 42,
+				stalePid: null,
+			});
+			const output = await captureStatus({
+				...baseDeps,
+				detectExistingSetup: () => ({ agentsDir: true, agentsMd: true, agentYaml: true, memoryDb: true }),
+				getDaemonStatus: async () => ({
+					...(await baseDeps.getDaemonStatus()),
+					workspacePath: root,
+					workspaceStats: {
+						agentId: "default",
+						memoryCount: 5,
+						capturedSessionCount: null,
+						schema: "core" as const,
+						needsMigration: false,
+						ontology: {
+							entityCount: 0,
+							aspectCount: 0,
+							attributeCount: 0,
+							claimCount: 0,
+							constraintCount: 0,
+							dependencyCount: 0,
+							unassignedMemoryCount: 0,
+							coveragePercent: 0,
+						},
+					},
+				}),
+			});
+			expect(output).toContain("Captured sessions: unavailable");
+			expect(output).not.toContain("Captured sessions: 0");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("keeps OpenClaw integration details out of status output", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-openclaw-status-"));
+		const previousOpenClawConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+		try {
+			spawnSync("git", ["init"], { cwd: root, windowsHide: true });
+			const openClawConfig = join(root, "openclaw.json");
+			writeFileSync(openClawConfig, JSON.stringify({ agents: { defaults: { workspace: root } } }));
+			process.env.OPENCLAW_CONFIG_PATH = openClawConfig;
+			const deps = runningDaemonDeps(root, {
+				status: "healthy",
+				detail: "/health responded",
+				url: "http://127.0.0.1:3850",
+				listenerPresent: true,
+				processPid: 42,
+				stalePid: null,
+			});
+			const output = await captureStatus(deps);
+			const jsonOutput = await captureStatus(deps, { json: true });
+			expect(output).not.toContain("OpenClaw");
+			expect(output).not.toContain("workspace snapshot");
+			expect(jsonOutput).not.toContain('"openclaw');
+		} finally {
+			if (previousOpenClawConfigPath === undefined) Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
+			else process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfigPath;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("shows current Dreaming and workspace stats without integration noise or fake queue zeros", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-status-summary-"));
+		const previousOpenClawConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+		try {
+			spawnSync("git", ["init"], { cwd: root, windowsHide: true });
+			spawnSync("git", ["remote", "add", "origin", "https://example.com/status.git"], { cwd: root, windowsHide: true });
+			const openClawConfig = join(root, "openclaw.json");
+			writeFileSync(openClawConfig, JSON.stringify({ agents: { defaults: { workspace: root } } }));
+			process.env.OPENCLAW_CONFIG_PATH = openClawConfig;
+			const deps = {
+				...runningDaemonDeps(root, {
+					status: "healthy",
+					detail: "/health responded",
+					url: "http://127.0.0.1:3850",
+					listenerPresent: true,
+					processPid: 42,
+					stalePid: null,
+				}),
+				detectExistingSetup: () => ({
+					agentsDir: true,
+					agentsMd: true,
+					agentYaml: true,
+					memoryDb: true,
+				}),
+				getDaemonStatus: async () => ({
+					running: true,
+					pid: 42,
+					uptime: 10,
+					version: "0.148.0",
+					host: "127.0.0.1",
+					bindHost: "127.0.0.1",
+					networkMode: "local",
+					workspacePath: root,
+					workspaceStats: {
+						agentId: "default",
+						memoryCount: 190,
+						capturedSessionCount: 17,
+						schema: "core" as const,
+						needsMigration: false,
+						ontology: {
+							entityCount: 3,
+							aspectCount: 4,
+							attributeCount: 5,
+							claimCount: 6,
+							constraintCount: 7,
+							dependencyCount: 8,
+							unassignedMemoryCount: 9,
+							coveragePercent: 95.3,
+						},
+					},
+					extraction: {
+						configured: null,
+						resolved: "claude-code",
+						effective: "claude-code",
+						fallbackProvider: null,
+						status: "disabled",
+						degraded: false,
+						reason: null,
+						blockedBy: [],
+						since: null,
+						enabled: false,
+						paused: false,
+						workerRunning: false,
+						ready: false,
+						blockedReason: null,
+						hasWorkloadState: true,
+					},
+					dreaming: { enabled: true, workerRunning: true },
+					scheduler: { status: "idle" as const, reason: null, checkedAt: null },
+					transcripts: null,
+					queue: {
+						memory: {
+							pending: null,
+							leased: null,
+							completed: null,
+							failed: null,
+							dead: null,
+							oldestAgeSec: null,
+							oldestDeadAgeSec: null,
+							lastError: null,
+							completeness: "unknown" as const,
+						},
+						summary: {
+							pending: null,
+							leased: null,
+							completed: null,
+							failed: null,
+							dead: null,
+							oldestAgeSec: null,
+							oldestDeadAgeSec: null,
+							lastError: null,
+							completeness: "unknown" as const,
+						},
+					},
+					probe: {
+						status: "healthy" as const,
+						detail: "/health responded",
+						url: "http://127.0.0.1:3850",
+						listenerPresent: true,
+						processPid: 42,
+						stalePid: null,
+					},
+					openclaw: {
+						status: "never-seen" as const,
+						lastHeartbeat: null,
+						pluginVersion: null,
+						hooksRegistered: [],
+						hooksSucceeded: 0,
+						hooksFailed: 0,
+						lastLatencyMs: 0,
+						lastError: null,
+					},
+				}),
+			};
+
+			const output = await captureStatus(deps);
+			const jsonOutput = JSON.parse(await captureStatus(deps, { json: true })) as {
+				daemon: { queue: { memory: { pending: number | null; completeness: string } } };
+			};
+			expect(output).toContain("Dreaming: enabled (worker running)");
+			expect(output).not.toContain("Extraction disabled");
+			expect(output).not.toContain("Pipeline disabled");
+			expect(output).not.toContain("OpenClaw");
+			expect(output).toContain("Memories: 190");
+			expect(output).toContain("Captured sessions: 17");
+			expect(output).toContain("3 entities");
+			expect(output).toContain("8 links");
+			expect(output).toContain("95.3% graph-linked coverage");
+			expect(output).toContain("9 graph-linked memories unassigned");
+			expect(output).toContain("counts unavailable");
+			expect(output).not.toContain("p=0");
+			expect(jsonOutput.daemon.queue.memory).toMatchObject({ pending: null, completeness: "unknown" });
+		} finally {
+			if (previousOpenClawConfigPath === undefined) Reflect.deleteProperty(process.env, "OPENCLAW_CONFIG_PATH");
+			else process.env.OPENCLAW_CONFIG_PATH = previousOpenClawConfigPath;
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 	it("labels an alive-but-unresponsive daemon as unresponsive, not stopped", async () => {
 		const root = mkdtempSync(join(tmpdir(), "health-status-"));
 		try {
@@ -934,6 +1208,8 @@ describe("showStatus readiness labeling", () => {
 					host: null,
 					bindHost: null,
 					networkMode: null,
+					extraction: null,
+					transcripts: null,
 					probe: {
 						status: "listener-unhealthy" as const,
 						detail:
@@ -967,6 +1243,7 @@ describe("dead-job backlog surfacing (#1048)", () => {
 			oldestAgeSec: 0,
 			oldestDeadAgeSec: 86400 * 9,
 			lastError: "LLM extraction failed: All routing candidates were blocked by policy or runtime state.",
+			completeness: "exact" as const,
 		},
 		summary: {
 			pending: 0,
@@ -977,6 +1254,7 @@ describe("dead-job backlog surfacing (#1048)", () => {
 			oldestAgeSec: 0,
 			oldestDeadAgeSec: 86400 * 3,
 			lastError: "All routed targets failed.",
+			completeness: "exact" as const,
 		},
 	};
 
@@ -1026,9 +1304,9 @@ describe("dead-job backlog surfacing (#1048)", () => {
 		const root = mkdtempSync(join(tmpdir(), "health-dead-backlog-"));
 		try {
 			const output = await captureStatus(deadBacklogDeps(root));
-			expect(output).toContain("Pipeline queues (dead jobs present)");
-			expect(output).toContain("d=10952");
-			expect(output).toContain("d=275");
+			expect(output).toContain("Memory job queue (dead work present)");
+			expect(output).toContain("10,952 dead-lettered (retries exhausted)");
+			expect(output).not.toContain("Summary generation");
 			expect(output).toContain("LLM extraction failed");
 			expect(output).toContain("signet repair queue");
 			expect(output).toContain("unhealthy composite health");
@@ -1228,7 +1506,6 @@ async function captureDoctorJson(
 				formatUptime: () => "0s",
 				getDaemonStatus: getDaemonStatus as never,
 				normalizeAgentPath: (pathValue: string) => pathValue,
-				parseIntegerValue: (value: unknown) => (typeof value === "number" ? value : null),
 				signetLogo: () => "signet",
 			},
 		);
@@ -1357,6 +1634,109 @@ describe("daemon lifecycle exit findings (#1148)", () => {
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
+	});
+});
+
+describe("status queue diagnostics fallback", () => {
+	it("labels truncated zero counts as lower bounds", async () => {
+		const lines: string[] = [];
+		const previousLog = console.log;
+		console.log = (...args: unknown[]) => {
+			lines.push(args.join(" "));
+		};
+		try {
+			await renderPipelineQueuesBlock(
+				{ defaultPort: 3850 },
+				{
+					memory: {
+						pending: 0,
+						leased: 0,
+						completed: 0,
+						failed: 0,
+						dead: 0,
+						oldestAgeSec: 0,
+						oldestDeadAgeSec: 0,
+						lastError: null,
+						completeness: "truncated",
+					},
+					summary: null,
+				},
+			);
+		} finally {
+			console.log = previousLog;
+		}
+		expect(lines.join("\\n")).toContain("at least 0 failed");
+		expect(lines.join("\\n")).toContain("at least 0 dead-lettered");
+	});
+
+	it("fetches verified counts when the nonblocking status snapshot is unknown", async () => {
+		const previousFetch = globalThis.fetch;
+		const previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		const previousLog = console.log;
+		const requestedUrls: string[] = [];
+		const lines: string[] = [];
+		process.env.SIGNET_DAEMON_URL = "http://127.0.0.1:3850";
+		globalThis.fetch = Object.assign(
+			async (input: RequestInfo | URL) => {
+				requestedUrls.push(String(input));
+				return Response.json({
+					queues: {
+						memory: {
+							pending: 2,
+							leased: 1,
+							completed: 31,
+							failed: 0,
+							dead: 1,
+							oldestAgeSec: 300,
+							oldestDeadAgeSec: 3600,
+							lastError: null,
+							completeness: "exact",
+						},
+					},
+				});
+			},
+			{ preconnect: () => undefined },
+		);
+		console.log = (...args: unknown[]) => {
+			lines.push(args.join(" "));
+		};
+		try {
+			await renderPipelineQueuesBlock(
+				{ defaultPort: 3850 },
+				{
+					memory: {
+						pending: 0,
+						leased: 0,
+						completed: 0,
+						failed: 0,
+						dead: 0,
+						oldestAgeSec: 0,
+						oldestDeadAgeSec: 0,
+						lastError: null,
+						completeness: "unknown",
+					},
+					summary: {
+						pending: 0,
+						leased: 0,
+						completed: 0,
+						failed: 0,
+						dead: 0,
+						oldestAgeSec: 0,
+						oldestDeadAgeSec: 0,
+						lastError: null,
+						completeness: "unknown",
+					},
+				},
+			);
+		} finally {
+			globalThis.fetch = previousFetch;
+			console.log = previousLog;
+			if (previousDaemonUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+			else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
+		}
+		expect(requestedUrls).toEqual(["http://127.0.0.1:3850/api/diagnostics/queue"]);
+		expect(lines.join("\n")).toContain("2 waiting · 1 in progress · 31 completed");
+		expect(lines.join("\n")).toContain("1 dead-lettered (retries exhausted)");
 	});
 });
 

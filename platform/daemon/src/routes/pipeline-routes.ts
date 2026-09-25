@@ -59,6 +59,7 @@ import { getCachedResourceSnapshot } from "../resource-monitor.js";
 import { activeSessionCount, getBypassedSessionKeys, getSessionTrackerStats } from "../session-tracker.js";
 import { getTranscriptCaptureStatus } from "../transcript-capture-worker.js";
 import { getTranscriptHealthReport } from "../transcript-health.js";
+import { getWorkspaceStatusSummary } from "../status-summary.js";
 import {
 	AGENTS_DIR,
 	BIND_HOST,
@@ -131,7 +132,7 @@ export function pipelineQueueBlock(options: { readonly allowSynchronousRead?: bo
 				summary: snapshot.summary,
 				oldestDeadSummaryJob: snapshot.oldestDeadSummaryJob,
 			};
-		}, "routes/pipeline-routes.ts:127");
+		}, "routes/pipeline-routes.ts:128");
 	} catch {
 		return {
 			memory: { ...UNKNOWN_QUEUE_COUNTS_SHAPE },
@@ -338,6 +339,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		} catch {}
 
 		const us = getUpdateState();
+		const dreamingWorker = getDreamingWorker();
 		let embeddingMigration = null;
 		try {
 			embeddingMigration =
@@ -396,7 +398,11 @@ export function registerPipelineRoutes(app: Hono): void {
 			pipelineV2: config.pipelineV2,
 			pipeline: {
 				queue: pipelineQueueBlock({ allowSynchronousRead: false }),
-				dreaming: getDreamingWorker()?.scheduler ?? null,
+				dreaming: dreamingWorker?.scheduler ?? null,
+			},
+			dreaming: {
+				enabled: config.dreaming.enabled,
+				workerRunning: dreamingWorker?.running ?? false,
 			},
 			providerResolution: { ...providerRuntimeResolution, extraction: extractionWorkload },
 			logging: {
@@ -512,7 +518,7 @@ export function registerPipelineRoutes(app: Hono): void {
 					limit,
 					offset,
 				}),
-			"routes/pipeline-routes.ts:506",
+			"routes/pipeline-routes.ts:512",
 		);
 		return c.json({
 			agentId: resolveAgentId({ agentId: scopedAgent.agentId }),
@@ -611,7 +617,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const ownerRows = await withRegisteredDbOwnerMaintenance((maintenance) =>
 			ownerQueryAll<{ status: string; count: number }>(
 				maintenance.owner,
-				"routes/pipeline-routes.ts:614",
+				"routes/pipeline-routes.ts:615",
 				"SELECT status, COUNT(*) as count FROM memory_jobs GROUP BY status",
 			),
 		);
@@ -945,7 +951,7 @@ export function registerPipelineRoutes(app: Hono): void {
 				async (maintenance) =>
 					(await ownerQueryOne<{ present: number }>(
 						maintenance.owner,
-						"routes/pipeline-routes.ts:948",
+						"routes/pipeline-routes.ts:949",
 						"SELECT 1 AS present FROM dreaming_evidence_exclusions WHERE agent_id = ? AND source_kind = 'summary' AND source_id = ? AND resolved_at IS NULL",
 						[agentId, sourceId],
 					)) != null,
@@ -1081,5 +1087,13 @@ export function registerPipelineRoutes(app: Hono): void {
 			return c.json({ error: msg }, 500);
 		}
 		return c.json({ accepted: true, passId, status: "running", mode, agentId }, 202);
+	});
+
+	app.get("/api/status/workspace", async (c) => {
+		try {
+			return c.json(await getWorkspaceStatusSummary(getDbAccessor(), resolveDaemonAgentId()));
+		} catch {
+			return c.json({ error: "Workspace statistics are unavailable" }, 503);
+		}
 	});
 }

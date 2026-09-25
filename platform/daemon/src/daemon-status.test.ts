@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Hono } from "hono";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
-import { createDbOwnerClient } from "./db-owner-client";
+import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
 
 let app: Hono;
 let dir = "";
@@ -55,7 +55,7 @@ describe("daemon status contract", () => {
 			const { closeDbAccessor } = await import("./db-accessor");
 			const daemon = await import("./daemon");
 			await daemon.stopDaemonRuntimeForTests();
-			closeDbAccessor();
+			await closeDbAccessor();
 		} catch {}
 		if (prev === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
@@ -144,6 +144,136 @@ describe("daemon status contract", () => {
 		expect(
 			body.resources?.peakPhysicalFootprint === null || typeof body.resources?.peakPhysicalFootprint === "number",
 		).toBe(true);
+	});
+
+	it("reports agent-scoped workspace and ontology counts", async () => {
+		const { getDbAccessor } = await import("./db-accessor");
+		const { closeRegisteredDbOwnerMaintenance, createDbOwnerMaintenance, registerDbOwnerMaintenance } = await import(
+			"./db-owner-maintenance"
+		);
+		const { getDbOwnerForAccessor } = await import("./db-owner-runtime");
+		const agentId = `status-test-${crypto.randomUUID()}`;
+		const previousAgentId = process.env.SIGNET_AGENT_ID;
+		let owner: DbOwnerClient | undefined;
+		let maintenanceRegistered = false;
+		process.env.SIGNET_AGENT_ID = agentId;
+		const now = new Date().toISOString();
+		try {
+			owner = await getDbOwnerForAccessor(getDbAccessor());
+			registerDbOwnerMaintenance(createDbOwnerMaintenance({ dbPath: join(dir, "memory", "memories.db"), owner }));
+			maintenanceRegistered = true;
+			await getDbAccessor().withWriteTxAsync(
+				(db) => {
+					for (const [id, scopedAgent, isDeleted] of [
+						["status-memory", agentId, 0],
+						["status-unassigned-memory", agentId, 0],
+						["deleted-status-memory", agentId, 1],
+						["other-memory", "other-agent", 0],
+					] as const) {
+						db.prepare(
+							`INSERT INTO memories (id, content, type, agent_id, updated_by, created_at, updated_at, is_deleted)
+					 VALUES (?, ?, 'fact', ?, 'test', ?, ?, ?)`,
+						).run(id, id, scopedAgent, now, now, isDeleted);
+					}
+					for (const [key, scopedAgent] of [
+						["status-session", agentId],
+						["other-session", "other-agent"],
+					]) {
+						db.prepare(
+							`INSERT INTO session_transcripts (session_key, content, agent_id, created_at, updated_at)
+					 VALUES (?, ?, ?, ?, ?)`,
+						).run(key, key, scopedAgent, now, now);
+					}
+					for (const [id, name, scopedAgent] of [
+						["status-source", "Status Source", agentId],
+						["status-target", "Status Target", agentId],
+						["other-status-source", "Other Status Source", "other-agent"],
+						["other-status-target", "Other Status Target", "other-agent"],
+					]) {
+						db.prepare(
+							`INSERT INTO entities
+					 (id, name, entity_type, canonical_name, mentions, agent_id, pinned, pinned_at, created_at, updated_at)
+					 VALUES (?, ?, 'concept', ?, 1, ?, 0, NULL, ?, ?)`,
+						).run(id, name, name.toLowerCase(), scopedAgent, now, now);
+					}
+					for (const memoryId of ["status-memory", "status-unassigned-memory"]) {
+						db.prepare("INSERT INTO memory_entity_mentions (memory_id, entity_id) VALUES (?, ?)").run(
+							memoryId,
+							"status-source",
+						);
+					}
+					db.prepare(
+						`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('status-aspect', 'status-source', ?, 'overview', 'overview', 0.5, ?, ?)`,
+					).run(agentId, now, now);
+					db.prepare(
+						`INSERT INTO entity_aspects (id, entity_id, agent_id, name, canonical_name, weight, created_at, updated_at)
+				 VALUES ('other-status-aspect', 'other-status-source', 'other-agent', 'overview', 'overview', 0.5, ?, ?)`,
+					).run(now, now);
+					db.prepare(
+						`INSERT INTO entity_attributes
+					(id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, memory_id, status, created_at, updated_at)
+					VALUES ('status-claim', 'status-aspect', ?, 'claim', 'Status claim', 'status claim', 0.8, 0.5, 'status-memory', 'active', ?, ?)`,
+					).run(agentId, now, now);
+					db.prepare(
+						`INSERT INTO entity_attributes
+				 (id, aspect_id, agent_id, kind, content, normalized_content, confidence, importance, status, created_at, updated_at)
+				 VALUES ('other-status-claim', 'other-status-aspect', 'other-agent', 'claim', 'Other claim', 'other claim', 0.8, 0.5, 'active', ?, ?)`,
+					).run(now, now);
+					db.prepare(
+						`INSERT INTO entity_dependencies
+				 (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, created_at, updated_at)
+				 VALUES ('status-link', 'status-source', 'status-target', ?, 'depends_on', 0.8, ?, ?)`,
+					).run(agentId, now, now);
+					db.prepare(
+						`INSERT INTO entity_dependencies
+				 (id, source_entity_id, target_entity_id, agent_id, dependency_type, strength, created_at, updated_at)
+				 VALUES ('other-status-link', 'other-status-source', 'other-status-target', 'other-agent', 'depends_on', 0.8, ?, ?)`,
+					).run(now, now);
+				},
+				{ operation: "test.status-workspace.seed" },
+			);
+
+			owner?.setWriteBlocked(true);
+			const response = await app.request("http://localhost/api/status/workspace");
+			expect(response.status).toBe(200);
+			const body = (await response.json()) as {
+				agentId?: string;
+				memoryCount?: number;
+				capturedSessionCount?: number | null;
+				schema?: string;
+				needsMigration?: boolean;
+				ontology?: {
+					entityCount?: number;
+					aspectCount?: number;
+					claimCount?: number;
+					dependencyCount?: number;
+					unassignedMemoryCount?: number;
+					coveragePercent?: number;
+				};
+			};
+			expect(body).toMatchObject({
+				agentId,
+				memoryCount: 2,
+				capturedSessionCount: 1,
+				schema: "core",
+				needsMigration: false,
+				ontology: {
+					entityCount: 2,
+					aspectCount: 1,
+					claimCount: 1,
+					dependencyCount: 1,
+					unassignedMemoryCount: 1,
+					coveragePercent: 50,
+				},
+			});
+		} finally {
+			owner?.setWriteBlocked(false);
+			if (maintenanceRegistered) await closeRegisteredDbOwnerMaintenance();
+			await owner?.close();
+			if (previousAgentId === undefined) Reflect.deleteProperty(process.env, "SIGNET_AGENT_ID");
+			else process.env.SIGNET_AGENT_ID = previousAgentId;
+		}
 	});
 
 	it("serves status without synchronously reading SQLite when the event loop is under pressure", async () => {

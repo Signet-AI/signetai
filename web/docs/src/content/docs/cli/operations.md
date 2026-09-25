@@ -5,7 +5,14 @@ description: "Inspect status, open the dashboard, route inference, manage the da
 
 ## `signet status`
 
-Show comprehensive status of the Signet installation.
+Show daemon liveness and readiness, Dreaming and extraction state, the memory-job
+queue, database schema state, and workspace memory/session and ontology counts.
+Queue counts appear as unavailable rather than zero when the daemon cannot verify
+them. Truncated queue counts are shown as lower bounds. With `--json`, queue
+counts with `completeness: "unknown"` are `null`; truncated counts retain their
+lower-bound values and completeness. Captured sessions are unavailable when the
+transcript table cannot be read. Workspace counts and schema diagnostics come
+from the daemon's DB owner.
 
 ```bash
 signet status
@@ -17,6 +24,7 @@ Options:
 | Option | Description |
 |--------|-------------|
 | `-p, --path <path>` | Custom base path |
+| `--json` | Emit status as JSON |
 
 Output:
 
@@ -31,13 +39,21 @@ Output:
     Uptime: 2h 15m
     Runtime: compiled
     Dashboard: http://localhost:3850
+    Dreaming: enabled (worker running)
+
+  Memory job queue
+    Memory processing: 0 waiting · 0 in progress · 42 completed
+      0 failed · 0 dead-lettered (retries exhausted)
+      Oldest waiting: — · oldest dead-lettered: —
 
   ✓ AGENTS.md
   ✓ agent.yaml
   ✓ memories.db
 
   Memories: 42
-  Conversations: 7
+  Captured sessions: 7
+  Ontology: 14 entities · 22 aspects · 31 attributes · 8 claims · 5 constraints · 12 links
+  82.5% graph-linked coverage · 7 graph-linked memories unassigned
 
   Path: /home/user/.agents
 ```

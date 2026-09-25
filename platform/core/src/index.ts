@@ -292,6 +292,7 @@ export { migrate } from "./migrate";
 export type { MigrationSource } from "./migrate";
 export {
 	detectSchema,
+	detectSchemaType,
 	ensureUnifiedSchema,
 	ensureMigrationsTableSchema,
 	UNIFIED_SCHEMA,

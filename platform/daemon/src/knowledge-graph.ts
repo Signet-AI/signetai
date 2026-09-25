@@ -1571,23 +1571,7 @@ export async function getEntityDependenciesDetailed(
 	}));
 }
 
-export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string): Promise<KnowledgeStats> {
-	const row = await ownerReadOne<{
-		readonly scopedMemoryCount: number;
-		readonly entityCount: number;
-		readonly aspectCount: number;
-		readonly attributeCount: number;
-		readonly claimCount: number;
-		readonly constraintCount: number;
-		readonly dependencyCount: number;
-		readonly assignedMemoryCount: number;
-		readonly feedbackUpdatedAspectCount: number;
-		readonly averageAspectWeight: number;
-		readonly maxWeightAspectCount: number;
-		readonly minWeightAspectCount: number;
-	}>(
-		await getDbOwner(getDbAccessorPath()),
-		`SELECT
+export const KNOWLEDGE_STATS_SQL = `SELECT
 			(SELECT COUNT(DISTINCT mem.memory_id) FROM memory_entity_mentions mem
 			 JOIN entities e ON e.id = mem.entity_id AND e.agent_id = ?
 			 JOIN memories m ON m.id = mem.memory_id AND m.is_deleted = 0
@@ -1623,42 +1607,66 @@ export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string):
 			(SELECT COUNT(CASE WHEN weight >= 1.0 THEN 1 END) FROM entity_aspects asp JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
 			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS maxWeightAspectCount,
 			(SELECT COUNT(CASE WHEN weight <= 0.1 THEN 1 END) FROM entity_aspects asp JOIN entities e ON e.id = asp.entity_id AND e.agent_id = asp.agent_id
-			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS minWeightAspectCount`,
-		Array(12).fill(agentId),
-		{ operation: "knowledge.stats", deadlineMs: 5_000, estimatedWorkUnits: 12 },
-	);
-	if (row === null) {
-		return {
-			entityCount: 0,
-			aspectCount: 0,
-			attributeCount: 0,
-			claimCount: 0,
-			constraintCount: 0,
-			dependencyCount: 0,
-			unassignedMemoryCount: 0,
-			coveragePercent: 0,
-			feedbackUpdatedAspectCount: 0,
-			averageAspectWeight: 0,
-			maxWeightAspectCount: 0,
-			minWeightAspectCount: 0,
-		};
-	}
-	const scopedMemoryCount = Number(row.scopedMemoryCount ?? 0);
-	const assignedMemoryCount = Number(row.assignedMemoryCount ?? 0);
+			 WHERE asp.agent_id = ? AND COALESCE(e.status, 'active') = 'active' AND COALESCE(asp.status, 'active') = 'active') AS minWeightAspectCount`;
+
+function isKnowledgeStatsRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function normalizeKnowledgeStatsRow(value: unknown): KnowledgeStats {
+	const empty: KnowledgeStats = {
+		entityCount: 0,
+		aspectCount: 0,
+		attributeCount: 0,
+		claimCount: 0,
+		constraintCount: 0,
+		dependencyCount: 0,
+		unassignedMemoryCount: 0,
+		coveragePercent: 0,
+		feedbackUpdatedAspectCount: 0,
+		averageAspectWeight: 0,
+		maxWeightAspectCount: 0,
+		minWeightAspectCount: 0,
+	};
+	if (!isKnowledgeStatsRecord(value)) return empty;
+	const scopedMemoryCount = Number(value.scopedMemoryCount ?? 0);
+	const assignedMemoryCount = Number(value.assignedMemoryCount ?? 0);
 	return {
-		entityCount: Number(row.entityCount ?? 0),
-		aspectCount: Number(row.aspectCount ?? 0),
-		attributeCount: Number(row.attributeCount ?? 0),
-		claimCount: Number(row.claimCount ?? 0),
-		constraintCount: Number(row.constraintCount ?? 0),
-		dependencyCount: Number(row.dependencyCount ?? 0),
+		entityCount: Number(value.entityCount ?? 0),
+		aspectCount: Number(value.aspectCount ?? 0),
+		attributeCount: Number(value.attributeCount ?? 0),
+		claimCount: Number(value.claimCount ?? 0),
+		constraintCount: Number(value.constraintCount ?? 0),
+		dependencyCount: Number(value.dependencyCount ?? 0),
 		unassignedMemoryCount: Math.max(scopedMemoryCount - assignedMemoryCount, 0),
 		coveragePercent: scopedMemoryCount > 0 ? Math.round((assignedMemoryCount / scopedMemoryCount) * 1000) / 10 : 0,
-		feedbackUpdatedAspectCount: Number(row.feedbackUpdatedAspectCount ?? 0),
-		averageAspectWeight: Math.round(Number(row.averageAspectWeight ?? 0) * 1000) / 1000,
-		maxWeightAspectCount: Number(row.maxWeightAspectCount ?? 0),
-		minWeightAspectCount: Number(row.minWeightAspectCount ?? 0),
+		feedbackUpdatedAspectCount: Number(value.feedbackUpdatedAspectCount ?? 0),
+		averageAspectWeight: Math.round(Number(value.averageAspectWeight ?? 0) * 1000) / 1000,
+		maxWeightAspectCount: Number(value.maxWeightAspectCount ?? 0),
+		minWeightAspectCount: Number(value.minWeightAspectCount ?? 0),
 	};
+}
+
+export async function getKnowledgeStats(_accessor: DbAccessor, agentId: string): Promise<KnowledgeStats> {
+	const row = await ownerReadOne<{
+		readonly scopedMemoryCount: number;
+		readonly entityCount: number;
+		readonly aspectCount: number;
+		readonly attributeCount: number;
+		readonly claimCount: number;
+		readonly constraintCount: number;
+		readonly dependencyCount: number;
+		readonly assignedMemoryCount: number;
+		readonly feedbackUpdatedAspectCount: number;
+		readonly averageAspectWeight: number;
+		readonly maxWeightAspectCount: number;
+		readonly minWeightAspectCount: number;
+	}>(await getDbOwner(getDbAccessorPath()), KNOWLEDGE_STATS_SQL, Array(12).fill(agentId), {
+		operation: "knowledge.stats",
+		deadlineMs: 5_000,
+		estimatedWorkUnits: 12,
+	});
+	return normalizeKnowledgeStatsRow(row);
 }
 
 export async function getEntityHealth(
