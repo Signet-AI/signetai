@@ -26,9 +26,9 @@ use std::{
     io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
     net::SocketAddr,
     path::{Path as FsPath, PathBuf},
-    process::{Child, ChildStdin, Command, Stdio},
-    sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    sync::{mpsc, Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::signal;
 use tokio::sync::Semaphore;
@@ -37,6 +37,8 @@ use uuid::Uuid;
 const MAX_OWNER_REQUEST_LINE_BYTES: usize = 40 * 1024 * 1024;
 const MAX_OWNER_MARKER_BYTES: u64 = 4096;
 const MAX_HEALTH_RECOVERY_ATTEMPTS: usize = 1;
+// Keep startup bounded like the established DB-owner client; a live, silent child must not stall daemon startup.
+const OWNER_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn should_recover_health(attempts: usize) -> bool {
     attempts < MAX_HEALTH_RECOVERY_ATTEMPTS
@@ -221,6 +223,44 @@ fn failed_owner_start(mut child: Child, error: CoreError) -> Result<OwnerSession
     Err(error)
 }
 
+fn read_owner_startup_line(
+    child: &mut Child,
+    stdout_pipe: ChildStdout,
+    timeout: Duration,
+) -> Result<(BufReader<ChildStdout>, String), CoreError> {
+    let (sender, receiver) = mpsc::channel();
+    let reader = match std::thread::Builder::new()
+        .name("signet-owner-startup-reader".into())
+        .spawn(move || {
+            let mut stdout = BufReader::new(stdout_pipe);
+            let line = read_owner_request_line(&mut stdout);
+            let _ = sender.send((stdout, line));
+        }) {
+        Ok(reader) => reader,
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CoreError::OwnerStopped);
+        }
+    };
+
+    let (stdout, line) = match receiver.recv_timeout(timeout) {
+        Ok((stdout, Ok(Some(line)))) => (stdout, line),
+        _ => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return Err(CoreError::OwnerStopped);
+        }
+    };
+    if reader.join().is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(CoreError::OwnerStopped);
+    }
+    Ok((stdout, line))
+}
+
 fn owner_startup_generation(response: &Value) -> Result<String, CoreError> {
     if response.get("ready").and_then(Value::as_bool) == Some(false) {
         return Err(remote_core_error(response));
@@ -261,13 +301,14 @@ impl ExternalOwner {
                 return failed_owner_start(child, CoreError::OwnerStopped);
             }
         };
-        let mut stdout = BufReader::new(stdout_pipe);
-        let mut line = String::new();
-        if stdout.read_line(&mut line).is_err() {
-            drop(stdin);
-            drop(stdout);
-            return failed_owner_start(child, CoreError::OwnerStopped);
-        }
+        let (stdout, line) =
+            match read_owner_startup_line(&mut child, stdout_pipe, OWNER_STARTUP_TIMEOUT) {
+                Ok(startup) => startup,
+                Err(error) => {
+                    drop(stdin);
+                    return Err(error);
+                }
+            };
         let ready: Value = match serde_json::from_str(&line) {
             Ok(ready) => ready,
             Err(_) => {
@@ -660,11 +701,30 @@ fn wire_core_error(error: &CoreError) -> Value {
 
 #[cfg(test)]
 mod owner_health_recovery_tests {
+    use super::*;
+
     #[test]
     fn health_recovery_allows_one_replacement_then_terminates() {
         assert!(super::should_recover_health(0));
         assert!(!super::should_recover_health(1));
         assert!(!super::should_recover_health(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stalled_owner_startup_is_killed_and_reaped_by_deadline() {
+        let mut child = Command::new("sh")
+            .args(["-c", "exec sleep 30"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let started = std::time::Instant::now();
+        let result = read_owner_startup_line(&mut child, stdout, Duration::from_millis(50));
+
+        assert!(matches!(result, Err(CoreError::OwnerStopped)));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert!(child.try_wait().unwrap().is_some());
     }
 }
 
@@ -1122,7 +1182,10 @@ async fn cancellation(
                 _ => CancellationState::Unknown,
             };
             if let Some(current) = runtime.operations.lock().unwrap().get_mut(&key) {
-                if !matches!(current, CancellationState::Cancelled | CancellationState::Finished) {
+                if !matches!(
+                    current,
+                    CancellationState::Cancelled | CancellationState::Finished
+                ) {
                     *current = next_state;
                 }
             }
@@ -1167,7 +1230,8 @@ async fn cancellation(
             {
                 Ok(result) => result,
                 Err(error) => {
-                    if let Some(operation) = state.cancellation.operations.lock().unwrap().get_mut(&key)
+                    if let Some(operation) =
+                        state.cancellation.operations.lock().unwrap().get_mut(&key)
                     {
                         if *operation == CancellationState::Cancelling {
                             *operation = CancellationState::Unknown;

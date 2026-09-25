@@ -1,5 +1,14 @@
 import { afterEach, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync } from "node:fs";
+import {
+	chmodSync,
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	readlinkSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -66,6 +75,55 @@ afterEach(async () => {
 	}
 	for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
+
+it(
+	"fails stalled owner startup within the deadline and reaps the child process",
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-owner-startup-timeout-"));
+		dirs.push(dir);
+		const pidPath = join(dir, "stalled-owner.pid");
+		const stubPath = join(dir, "stalled-owner.sh");
+		writeFileSync(stubPath, '#!/bin/sh\necho "$$" > "$SIGNET_PATH/stalled-owner.pid"\nexec sleep 60\n');
+		chmodSync(stubPath, 0o755);
+		const child = Bun.spawn([bin], {
+			env: {
+				...process.env,
+				SIGNET_PATH: dir,
+				SIGNET_BIND: "127.0.0.1",
+				SIGNET_PORT: "0",
+				SIGNET_MODE: "local",
+				SIGNET_API_KEY: "owner-contract-secret",
+				SIGNET_DAEMON_BIN: stubPath,
+			},
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		children.push(child);
+		try {
+			const exitCode = await Promise.race([child.exited, Bun.sleep(20_000).then(() => null)]);
+			expect(exitCode).not.toBeNull();
+			if (exitCode === null) return;
+			expect(exitCode).not.toBe(0);
+			expect(await new Response(child.stderr).text()).toContain("database owner startup");
+			const ownerPid = Number(readFileSync(pidPath, "utf8"));
+			expect(ownerPid).toBeGreaterThan(1);
+			expect(() => process.kill(ownerPid, 0)).toThrow();
+		} finally {
+			if (child.exitCode === null) {
+				child.kill("SIGKILL");
+				await child.exited;
+			}
+			if (existsSync(pidPath)) {
+				const ownerPid = Number(readFileSync(pidPath, "utf8"));
+				try {
+					process.kill(ownerPid, "SIGKILL");
+				} catch {}
+			}
+		}
+	},
+	{ timeout: 25_000 },
+);
 
 it("proves the fresh external owner process boundary and recovery lifecycle", async () => {
 	const first = await start();
