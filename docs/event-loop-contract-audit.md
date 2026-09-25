@@ -328,7 +328,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `temporal-fallback.ts:36` (withReadDb)
 - `temporal-fallback.ts:153` (withReadDb)
 - `temporal-fallback.ts:209` (withReadDb)
-- `temporal-recall.ts:437` (withReadDb)
+- `temporal-recall.ts:442` (withReadDb)
 - `db:transcript.capture.current` (withReadDbAsync)
 - `db:transcript.capture.cleanup` (withReadDbAsync)
 - `db:transcript.capture.status` (withReadDbAsync)
