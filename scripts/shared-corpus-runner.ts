@@ -45,6 +45,19 @@ export type Accounting = {
 	status?: "passed" | "failed";
 };
 
+export type CaseBackendEvidence = {
+	identity: string;
+	file: string;
+	line?: string;
+	sourceSha256?: string | null;
+	status?: JUnitCaseIdentity["status"];
+	backend: "typescript" | "rust" | "unverified";
+};
+
+export function caseCoverageIncomplete(backend: Backend, cases: readonly CaseBackendEvidence[]): boolean {
+	return backend === "rust" && (cases.length === 0 || cases.some((entry) => entry.backend !== "rust"));
+}
+
 export function requiresNativeEvidence(backend: Backend, scope: NativeEvidenceScope): boolean {
 	return backend === "rust" && scope !== "per-case";
 }
@@ -480,7 +493,7 @@ export function run(
 		backend === "typescript" ? o.worktree : repo,
 	);
 	const sourceHashes = new Map(manifest.protectedCorpus.map((entry) => [entry.path, entry.sha256]));
-	const caseBackendEvidence = accounting.caseIdentities.map((identity) => ({
+	const caseBackendEvidence: CaseBackendEvidence[] = accounting.caseIdentities.map((identity) => ({
 		identity: identity.key,
 		file: identity.file,
 		line: identity.line,
@@ -488,6 +501,7 @@ export function run(
 		status: identity.status,
 		backend: backend === "typescript" ? "typescript" : "unverified",
 	}));
+	const caseCoverageIsIncomplete = caseCoverageIncomplete(backend, caseBackendEvidence);
 	const caseBackendCounts = {
 		typescript: caseBackendEvidence.filter((evidence) => evidence.backend === "typescript").length,
 		rust: caseBackendEvidence.filter((evidence) => evidence.backend === "rust").length,
@@ -496,7 +510,12 @@ export function run(
 	const infrastructureCrash = child.signal !== null || child.error !== undefined;
 	const nativeEvidenceGap = requiresNativeEvidence(backend, accounting.nativeEvidenceScope);
 	const crash = infrastructureCrash || accounting.crash;
-	const incomplete = accounting.incomplete || accounting.tests === 0 || infrastructureCrash || nativeEvidenceGap;
+	const incomplete =
+		accounting.incomplete ||
+		accounting.tests === 0 ||
+		infrastructureCrash ||
+		nativeEvidenceGap ||
+		caseCoverageIsIncomplete;
 	return {
 		baselineSha: BASELINE_SHA,
 		backend,
@@ -509,6 +528,7 @@ export function run(
 		...accounting,
 		caseBackendEvidence,
 		caseBackendCounts,
+		caseCoverageIncomplete: caseCoverageIsIncomplete,
 		crash,
 		incomplete,
 		status:
