@@ -9,7 +9,11 @@ if (typeof tokenizerWasmPathExport !== "string") {
 	throw new TypeError("Bun did not expose the tokenizer WASM path");
 }
 const tokenizerWasmFile = tokenizerWasmPathExport;
-const tokenizerWasmPath = tokenizerWasmOverride || fileURLToPath(new URL(tokenizerWasmFile, import.meta.url));
+export function resolveTokenizerWasmPath(emitted: string): string {
+	if (/^(?:[a-zA-Z]:[\\/]|\\\\)/.test(emitted)) return emitted;
+	return fileURLToPath(emitted.startsWith("file:") ? new URL(emitted) : new URL(emitted, import.meta.url));
+}
+const tokenizerWasmPath = tokenizerWasmOverride || resolveTokenizerWasmPath(tokenizerWasmFile);
 await init(async (imports) => WebAssembly.instantiate(await readFile(tokenizerWasmPath), imports));
 const tok = get_encoding("cl100k_base");
 const decoder = new TextDecoder("utf-8", { fatal: true });
