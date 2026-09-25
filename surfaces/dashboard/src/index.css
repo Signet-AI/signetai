@@ -230,6 +230,23 @@
 		--home-type-learning: #80a8b8;
 	}
 	.sig-app-frame > header { background: var(--home-chrome); }
+	.sig-storage-strip {
+		display: flex;
+		flex-wrap: wrap;
+		align-items: center;
+		gap: 12px;
+		padding: 9px 40px;
+		border-top: 1px solid var(--border);
+		background: var(--home-chrome);
+	}
+	@media (max-width: 479px) {
+		.sig-storage-strip { flex-direction: column; align-items: flex-start; gap: 8px; padding-block: 10px; }
+	}
+	html[data-surface="desktop"][data-platform="mac"] .sig-storage-strip { padding-inline-start: 96px; }
+	html[data-surface="desktop"]:not([data-platform="mac"]) .sig-storage-strip {
+		padding-inline-start: max(40px, env(titlebar-area-x, 0px));
+		padding-inline-end: max(40px, calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 138px))));
+	}
 	.sig-app-frame > header { height: auto; min-height: 56px; padding-inline-start: 0; }
 	.sig-app-frame > header > .sig-topbar-row { padding-inline-start: 40px; }
 	html[data-surface="desktop"][data-platform="mac"] .sig-app-frame > header > .sig-topbar-row { padding-inline-start: 96px; }

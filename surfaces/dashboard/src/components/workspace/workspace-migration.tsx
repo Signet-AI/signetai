@@ -111,44 +111,40 @@ export function WorkspaceMigrationCard({ placement = "settings" }: { placement?:
 
 	if (placement === "toast") {
 		return (
-			<div className="sig-no-drag mx-auto w-[min(36rem,calc(100vw-2rem))] pb-2">
-				<Surface
-					role="status"
-					aria-label="Signet storage update available"
-					className="flex flex-col gap-3 border-primary/25 p-4 shadow-[0_12px_30px_oklch(0_0_0/0.22)] sm:flex-row sm:items-center"
-				>
-					<div className="min-w-0 flex-1">
-						<div className="text-[13px] font-semibold">Move your memories and files</div>
-						<p className="mt-1 mb-0 text-[11px] text-muted-foreground">
-							{status?.state === "interrupted"
-								? "The previous move stopped. Continue so Signet can check the copy; your original files stay in place."
-								: "Signet has a new place to store them. It checks the copy before using it; your original files stay in place."}
-						</p>
-					</div>
-					<div className="flex shrink-0 items-center gap-3">
-						<button
-							type="button"
-							onClick={() => void startMigration()}
-							disabled={running || rollingBack || query.loading}
-							className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-[11px] font-medium text-primary-foreground disabled:opacity-50"
-						>
-							{running && <Loader2 className="size-3 animate-spin" />}
-							{running ? "Moving…" : status?.state === "interrupted" ? "Continue moving" : "Move now"}
-						</button>
-						<button
-							type="button"
-							onClick={dismiss}
-							className="text-[11px] text-muted-foreground underline underline-offset-4"
-						>
-							Later
-						</button>
-					</div>
-					{resultMessage && (
-						<p role="status" className="basis-full m-0 text-[11px] text-muted-foreground">
-							{resultMessage}
-						</p>
-					)}
-				</Surface>
+			<div role="status" aria-label="Signet storage update available" className="sig-storage-strip sig-no-drag">
+				<div className="min-w-0 flex-1">
+					<span className="text-[12px] font-medium">
+						{status?.state === "interrupted" ? "Finish moving your memories and files" : "Move your memories and files"}
+					</span>
+					<span className="ml-3 hidden text-[11px] text-muted-foreground lg:inline">
+						{status?.state === "interrupted"
+							? "The previous move stopped. Signet checks the copy; your original files stay in place."
+							: "Signet has a new place to store them. It checks the copy first; your original files stay in place."}
+					</span>
+				</div>
+				<div className="flex shrink-0 items-center gap-3">
+					<button
+						type="button"
+						onClick={() => void startMigration()}
+						disabled={running || rollingBack || query.loading}
+						className="inline-flex h-7 items-center gap-2 rounded-md bg-primary px-2.5 text-[11px] font-medium text-primary-foreground disabled:opacity-50"
+					>
+						{running && <Loader2 className="size-3 animate-spin" />}
+						{running ? "Moving…" : status?.state === "interrupted" ? "Continue" : "Move now"}
+					</button>
+					<button
+						type="button"
+						onClick={dismiss}
+						className="text-[11px] text-muted-foreground underline underline-offset-4"
+					>
+						Later
+					</button>
+				</div>
+				{resultMessage && (
+					<p role="status" className="m-0 w-full text-[11px] text-muted-foreground">
+						{resultMessage}
+					</p>
+				)}
 			</div>
 		);
 	}

@@ -105,7 +105,7 @@ test("the storage notice explains the move in plain language and starts it direc
 	const mounted = await mount();
 	expect(mounted.container.textContent).toContain("Move your memories and files");
 	expect(mounted.container.textContent).toContain("Signet has a new place to store them.");
-	expect(mounted.container.textContent).toContain("checks the copy before using it");
+	expect(mounted.container.textContent).toContain("checks the copy first");
 	expect(mounted.container.textContent).toContain("your original files stay in place");
 	expect(mounted.container.textContent).not.toContain("Workspace V2");
 	const migrate = [...mounted.container.querySelectorAll("button")].find((button) =>
