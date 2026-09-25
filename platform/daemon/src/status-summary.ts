@@ -69,8 +69,6 @@ SELECT
   ${sessionCountSql} AS capturedSessionCount,
   knowledge.*
 FROM knowledge`;
-	// Placeholder order follows SQL text order: the knowledge CTE binds first,
-	// then the memory-count and session-count subqueries in the outer SELECT.
 	const params = [
 		...Array(12).fill(agentId),
 		...(memoryPlan.scopedByAgent ? [agentId] : []),
@@ -104,8 +102,6 @@ export function buildMemoryCountPlan(memoryColumns: readonly string[]): {
 	const hasAgentScope = memoryColumns.includes("agent_id");
 	const hasSoftDelete = memoryColumns.includes("is_deleted");
 	if (schema === "core" && hasAgentScope) {
-		// Legacy core databases predate migration 003: agent scoping exists but the
-		// soft-delete column does not, so only the verified clauses may filter.
 		const softDeleteClause = hasSoftDelete ? "\n     AND (is_deleted = 0 OR is_deleted IS NULL)" : "";
 		return {
 			schema,
@@ -113,9 +109,6 @@ export function buildMemoryCountPlan(memoryColumns: readonly string[]): {
 			memoryCountSql: `(SELECT COUNT(*) FROM memories\n   WHERE COALESCE(NULLIF(agent_id, ''), 'default') = ?${softDeleteClause}) AS memoryCount`,
 		};
 	}
-	// Legacy python/cli-v1 schemas predate agent scoping entirely: every row
-	// belongs to the single workspace agent, so an unscoped count is correct and
-	// keeps the summary (and its needsMigration signal) reportable.
 	return { schema, scopedByAgent: false, memoryCountSql: "(SELECT COUNT(*) FROM memories) AS memoryCount" };
 }
 

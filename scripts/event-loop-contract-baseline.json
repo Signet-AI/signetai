@@ -1505,7 +1505,7 @@
     },
     {
       "path": "knowledge-graph.ts",
-      "line": 2091,
+      "line": 2099,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
@@ -3600,42 +3600,42 @@
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 127,
+      "line": 128,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 352,
+      "line": 354,
       "api": "existsSync",
       "source": "if (existsSync(p)) {",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 353,
+      "line": 355,
       "api": "readFileSync",
       "source": "const yaml = parseSimpleYaml(readFileSync(p, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 394,
+      "line": 396,
       "api": "existsSync",
       "source": "memoryDb: existsSync(MEMORY_DB),",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 446,
+      "line": 452,
       "api": "readFileSync",
       "source": "soulContent = readFileSync(soulPath, \"utf-8\").slice(0, 500);",
       "category": "hot-path"
     },
     {
       "path": "routes/pipeline-routes.ts",
-      "line": 506,
+      "line": 512,
       "api": "withReadDb",
       "source": "const report: ReturnType<typeof listMemoryContentSafety> = getDbAccessor().withReadDb(",
       "category": "hot-path"
