@@ -79,24 +79,29 @@ function blobToVector(blob: Buffer | ArrayBuffer): Float32Array {
 	return new Float32Array(blob.buffer, blob.byteOffset, blob.byteLength / 4);
 }
 function tsCosineSimilarity(a: Float32Array, b: Float32Array): number {
+	if (a.length === 0 || a.length !== b.length) return 0;
 	let dot = 0;
 	let normA = 0;
 	let normB = 0;
-	const len = Math.min(a.length, b.length);
 
-	for (let i = 0; i < len; i++) {
-		dot += a[i] * b[i];
-		normA += a[i] * a[i];
-		normB += b[i] * b[i];
+	for (let i = 0; i < a.length; i++) {
+		const left = a[i] ?? Number.NaN;
+		const right = b[i] ?? Number.NaN;
+		if (!Number.isFinite(left) || !Number.isFinite(right)) return 0;
+		dot += left * right;
+		normA += left * left;
+		normB += right * right;
 	}
 
 	const denom = Math.sqrt(normA) * Math.sqrt(normB);
-	return denom > 0 ? dot / denom : 0;
+	return Number.isFinite(denom) && denom > 0 ? dot / denom : 0;
 }
 
 export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+	if (a.length === 0 || a.length !== b.length || !a.every(Number.isFinite) || !b.every(Number.isFinite)) return 0;
 	if (native !== null) {
-		return native.cosineSimilarity(a, b);
+		const score = native.cosineSimilarity(a, b);
+		return Number.isFinite(score) ? Math.max(-1, Math.min(1, score)) : 0;
 	}
 	return tsCosineSimilarity(a, b);
 }
