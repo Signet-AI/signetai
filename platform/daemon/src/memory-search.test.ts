@@ -83,11 +83,6 @@ describe("hybridRecall", () => {
 	function vectorBlob(values: readonly number[]): Buffer {
 		return Buffer.from(new Float32Array(values).buffer);
 	}
-
-	// Production embedding writes project every vector into the vec0 index
-	// (transactions.ts -> syncVecInsert); the indexed source-chunk KNN reads only
-	// that projection. Fixtures must mirror the same shape or the fallback would
-	// silently exercise a legacy no-index path production no longer produces.
 	function seedSourceChunkVectorFixture(
 		db: import("./db-accessor").WriteDb,
 		input: {
