@@ -849,6 +849,48 @@ test("rollback refuses an owned destination with unrelated post-admission data",
 	expect(readFileSync(join(destination, "source.txt"), "utf8")).toBe("source");
 });
 
+test("rollback refuses to delete a late nested entry when removing an owned directory", async () => {
+	const root = mkdtempSync(join(tmpdir(), "migration-rollback-late-child-source-"));
+	const destination = `${root}-new`;
+	const sourceDirectory = join(root, "nested");
+	mkdirSync(sourceDirectory);
+	writeFileSync(join(sourceDirectory, "source.txt"), "source");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		journalStateDir: join(root, "state"),
+		hooks: {
+			afterCopy: async () => {
+				throw new Error("interrupt after copy");
+			},
+		},
+	});
+	const originalRemove = DescriptorRoot.prototype.remove;
+	let injected = false;
+	DescriptorRoot.prototype.remove = async function (path, options) {
+		const result = await originalRemove.call(this, path, options);
+		if (path === "nested/source.txt" && !injected) {
+			injected = true;
+			writeFileSync(join(destination, "nested", "user.txt"), "user-owned");
+		}
+		return result;
+	};
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt after copy");
+		await expect(engine.rollback()).rejects.toThrow();
+		expect(injected).toBe(true);
+		expect(existsSync(join(destination, "nested", "user.txt"))).toBe(true);
+		expect(readFileSync(join(destination, "nested", "user.txt"), "utf8")).toBe("user-owned");
+		expect(existsSync(join(destination, "nested", "source.txt"))).toBe(false);
+		expect(readFileSync(join(sourceDirectory, "source.txt"), "utf8")).toBe("source");
+	} finally {
+		DescriptorRoot.prototype.remove = originalRemove;
+		rmSync(root, { recursive: true, force: true });
+		rmSync(destination, { recursive: true, force: true });
+	}
+});
+
 test("rollback refuses to remove a replacement created after its inventory was reviewed", async () => {
 	const root = mkdtempSync(join(tmpdir(), "migration-rollback-replacement-source-"));
 	const destination = `${root}-new`;
