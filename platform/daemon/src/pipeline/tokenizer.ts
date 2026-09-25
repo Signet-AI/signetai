@@ -4,8 +4,11 @@ import { get_encoding, init } from "tiktoken/init";
 import * as tokenizerWasmModule from "tiktoken/tiktoken_bg.wasm";
 
 const tokenizerWasmOverride = process.env.SIGNET_TIKTOKEN_WASM_PATH?.trim();
-// @ts-expect-error Bun's file loader adds a default path export to the wasm module.
-const tokenizerWasmFile: string = tokenizerWasmModule.default;
+const tokenizerWasmPathExport: unknown = Reflect.get(tokenizerWasmModule, "default");
+if (typeof tokenizerWasmPathExport !== "string") {
+	throw new TypeError("Bun did not expose the tokenizer WASM path");
+}
+const tokenizerWasmFile = tokenizerWasmPathExport;
 const tokenizerWasmPath = tokenizerWasmOverride || fileURLToPath(new URL(tokenizerWasmFile, import.meta.url));
 await init(async (imports) => WebAssembly.instantiate(await readFile(tokenizerWasmPath), imports));
 const tok = get_encoding("cl100k_base");

@@ -1,13 +1,19 @@
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "bun:test";
 import {
 	countTokens,
 	estimateTokens,
 	resetTokenizerStats,
 	tokenizerStats,
+	tokenizerWasmPath,
 	truncateToTokens,
 } from "./pipeline/tokenizer";
 
 describe("tokenizer", () => {
+	it("resolves the WASM file used by the Bun loader", () => {
+		expect(existsSync(tokenizerWasmPath)).toBe(true);
+	});
+
 	it("estimates tokens from characters without encoding", () => {
 		expect(estimateTokens("")).toBe(0);
 		expect(estimateTokens("hello world")).toBe(Math.ceil("hello world".length / 4));
