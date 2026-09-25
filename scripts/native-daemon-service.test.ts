@@ -49,15 +49,25 @@ describe("native daemon service cutover", () => {
 		const binary = join(root, "signet-daemon");
 		makeExecutable(binary);
 		const previous = process.env.SIGNET_RUST_DAEMON_BIN;
+		const previousResponseTimeout = process.env.SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS;
 		process.env.SIGNET_RUST_DAEMON_BIN = binary;
+		process.env.SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS = "45000";
 		try {
 			const plist = generateLaunchdPlist(3901);
 			const unit = generateSystemdUnit(3901);
 			expect(plist).toContain(`<string>${binary}</string>`);
 			expect(unit).toContain(`ExecStart=${binary}`);
+			expect(plist).toContain("<key>SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS</key>");
+			expect(plist).toContain("<string>45000</string>");
+			expect(unit).toContain("Environment=SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS=45000");
+			process.env.SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS = ["45000", "ExecStart=/bin/false"].join("\n");
+			expect(() => generateLaunchdPlist(3901)).toThrow(/positive integer/);
+			expect(() => generateSystemdUnit(3901)).toThrow(/positive integer/);
 		} finally {
 			if (previous === undefined) delete process.env.SIGNET_RUST_DAEMON_BIN;
 			else process.env.SIGNET_RUST_DAEMON_BIN = previous;
+			if (previousResponseTimeout === undefined) delete process.env.SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS;
+			else process.env.SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS = previousResponseTimeout;
 		}
 	});
 });

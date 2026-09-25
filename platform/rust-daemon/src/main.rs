@@ -37,6 +37,9 @@ use uuid::Uuid;
 const MAX_OWNER_REQUEST_LINE_BYTES: usize = 40 * 1024 * 1024;
 const MAX_OWNER_MARKER_BYTES: u64 = 4096;
 const MAX_HEALTH_RECOVERY_ATTEMPTS: usize = 1;
+const OWNER_RESPONSE_TIMEOUT_ENV: &str = "SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS";
+const DEFAULT_OWNER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const MAX_OWNER_RESPONSE_TIMEOUT_MS: u64 = 15 * 60 * 1000;
 // Keep startup bounded like the established DB-owner client; a live, silent child must not stall daemon startup.
 const OWNER_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -66,13 +69,14 @@ pub(crate) struct ExternalOwner {
 struct OwnerSession {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<std::process::ChildStdout>,
+    stdout: Option<BufReader<ChildStdout>>,
     generation: String,
 }
 struct OwnerPipe {
     workspace: PathBuf,
     session: Mutex<OwnerSession>,
     admission: Arc<Semaphore>,
+    response_timeout: Duration,
 }
 
 impl Drop for OwnerPipe {
@@ -228,11 +232,18 @@ fn read_owner_startup_line(
     stdout_pipe: ChildStdout,
     timeout: Duration,
 ) -> Result<(BufReader<ChildStdout>, String), CoreError> {
+    read_owner_line_with_deadline(child, BufReader::new(stdout_pipe), timeout)
+}
+
+fn read_owner_line_with_deadline(
+    child: &mut Child,
+    mut stdout: BufReader<ChildStdout>,
+    timeout: Duration,
+) -> Result<(BufReader<ChildStdout>, String), CoreError> {
     let (sender, receiver) = mpsc::channel();
     let reader = match std::thread::Builder::new()
-        .name("signet-owner-startup-reader".into())
+        .name("signet-owner-ipc-reader".into())
         .spawn(move || {
-            let mut stdout = BufReader::new(stdout_pipe);
             let line = read_owner_request_line(&mut stdout);
             let _ = sender.send((stdout, line));
         }) {
@@ -259,6 +270,30 @@ fn read_owner_startup_line(
         return Err(CoreError::OwnerStopped);
     }
     Ok((stdout, line))
+}
+
+fn parse_owner_response_timeout(value: Option<&str>) -> Result<Duration, CoreError> {
+    let Some(value) = value else {
+        return Ok(DEFAULT_OWNER_RESPONSE_TIMEOUT);
+    };
+    let milliseconds = value.parse::<u64>().map_err(|_| {
+        CoreError::InvalidInput(format!(
+            "{OWNER_RESPONSE_TIMEOUT_ENV} must be a positive integer no greater than {MAX_OWNER_RESPONSE_TIMEOUT_MS}"
+        ))
+    })?;
+    if milliseconds == 0 || milliseconds > MAX_OWNER_RESPONSE_TIMEOUT_MS {
+        return Err(CoreError::InvalidInput(format!(
+            "{OWNER_RESPONSE_TIMEOUT_ENV} must be a positive integer no greater than {MAX_OWNER_RESPONSE_TIMEOUT_MS}"
+        )));
+    }
+    Ok(Duration::from_millis(milliseconds))
+}
+
+fn owner_response_timeout() -> Result<Duration, CoreError> {
+    match env::var_os(OWNER_RESPONSE_TIMEOUT_ENV) {
+        None => parse_owner_response_timeout(None),
+        Some(value) => parse_owner_response_timeout(Some(value.to_str().unwrap_or(""))),
+    }
 }
 
 fn owner_startup_generation(response: &Value) -> Result<String, CoreError> {
@@ -328,17 +363,19 @@ impl ExternalOwner {
         Ok(OwnerSession {
             child,
             stdin,
-            stdout,
+            stdout: Some(stdout),
             generation,
         })
     }
     fn spawn(workspace: &FsPath) -> Result<Self, CoreError> {
+        let response_timeout = owner_response_timeout()?;
         let session = Self::start_session(workspace)?;
         Ok(Self {
             inner: Arc::new(OwnerPipe {
                 workspace: workspace.to_path_buf(),
                 session: Mutex::new(session),
                 admission: Arc::new(Semaphore::new(32)),
+                response_timeout,
             }),
         })
     }
@@ -354,8 +391,10 @@ impl ExternalOwner {
             .lock()
             .map_err(|_| CoreError::OwnerStopped)?;
         let mut health_recovery_attempts = 0;
-        let mut line = String::new();
         loop {
+            if session.stdout.is_none() && !matches!(operation, Operation::Health) {
+                return Err(CoreError::OwnerStopped);
+            }
             let id = Uuid::new_v4().to_string();
             let generation = session.generation.clone();
             let request = json!({"id":id,"generation":generation,"operation":operation.clone()});
@@ -368,32 +407,61 @@ impl ExternalOwner {
                 })
                 .and_then(|_| session.stdin.flush().map_err(serde_json::Error::io))
                 .is_err();
-            line.clear();
-            let read_failed =
-                failed || !matches!(session.stdout.read_line(&mut line), Ok(size) if size > 0);
+            let response_line = if failed {
+                None
+            } else if let Some(stdout) = session.stdout.take() {
+                match read_owner_line_with_deadline(
+                    &mut session.child,
+                    stdout,
+                    self.inner.response_timeout,
+                ) {
+                    Ok((stdout, line)) => {
+                        session.stdout = Some(stdout);
+                        Some(line)
+                    }
+                    Err(_) => None,
+                }
+            } else {
+                None
+            };
+            let read_failed = response_line.is_none();
             if !read_failed {
-                let response: Value =
-                    serde_json::from_str(&line).map_err(|_| CoreError::OwnerStopped)?;
+                let response: Value = serde_json::from_str(
+                    response_line.as_deref().unwrap_or_default(),
+                )
+                .map_err(|_| {
+                    if matches!(operation, Operation::Health) {
+                        CoreError::OwnerStopped
+                    } else {
+                        CoreError::OwnerOutcomeUnknown
+                    }
+                })?;
                 if response.get("id").and_then(Value::as_str) != Some(id.as_str())
                     || response.get("generation").and_then(Value::as_str)
                         != Some(generation.as_str())
                 {
-                    return Err(CoreError::InvalidInput(
-                        "stale owner response rejected".into(),
-                    ));
+                    return Err(if matches!(operation, Operation::Health) {
+                        CoreError::OwnerStopped
+                    } else {
+                        CoreError::OwnerOutcomeUnknown
+                    });
                 }
                 return if response.get("ok").and_then(Value::as_bool) == Some(true) {
-                    response
-                        .get("result")
-                        .cloned()
-                        .ok_or(CoreError::OwnerStopped)
+                    response.get("result").cloned().ok_or_else(|| {
+                        if matches!(operation, Operation::Health) {
+                            CoreError::OwnerStopped
+                        } else {
+                            CoreError::OwnerOutcomeUnknown
+                        }
+                    })
                 } else {
                     Err(remote_core_error(&response))
                 };
             }
-            if !matches!(operation, Operation::Health)
-                || !should_recover_health(health_recovery_attempts)
-            {
+            if !matches!(operation, Operation::Health) {
+                return Err(CoreError::OwnerOutcomeUnknown);
+            }
+            if !should_recover_health(health_recovery_attempts) {
                 return Err(CoreError::OwnerStopped);
             }
             health_recovery_attempts += 1;
@@ -636,6 +704,11 @@ impl From<CoreError> for ApiError {
                 "database owner queue is saturated (capacity {capacity})"
             )),
             CoreError::OwnerStopped => Self::unavailable("database owner is unavailable"),
+            CoreError::OwnerOutcomeUnknown => Self {
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                code: "database_outcome_unknown",
+                message: error.to_string(),
+            },
             CoreError::UnsupportedMigrationHistory(message) => Self {
                 status: StatusCode::SERVICE_UNAVAILABLE,
                 code: "unsupported_migration_history",
@@ -665,6 +738,7 @@ fn remote_core_error(response: &Value) -> CoreError {
                 .unwrap_or_default() as usize,
         },
         Some("owner_stopped") => CoreError::OwnerStopped,
+        Some("owner_outcome_unknown") => CoreError::OwnerOutcomeUnknown,
         Some("unsupported_migration_history") => CoreError::UnsupportedMigrationHistory(message),
         Some("internal") => CoreError::Remote(message),
         _ => CoreError::Remote(message),
@@ -690,6 +764,9 @@ fn wire_core_error(error: &CoreError) -> Value {
             json!({"errorKind":"queue_full","capacity":capacity,"error":error.to_string()})
         }
         CoreError::OwnerStopped => json!({"errorKind":"owner_stopped","error":error.to_string()}),
+        CoreError::OwnerOutcomeUnknown => {
+            json!({"errorKind":"owner_outcome_unknown","error":error.to_string()})
+        }
         CoreError::UnsupportedMigrationHistory(message) => {
             json!({"errorKind":"unsupported_migration_history","error":message})
         }
@@ -708,6 +785,24 @@ mod owner_health_recovery_tests {
         assert!(super::should_recover_health(0));
         assert!(!super::should_recover_health(1));
         assert!(!super::should_recover_health(2));
+    }
+
+    #[test]
+    fn response_timeout_defaults_to_the_existing_maintenance_ceiling_and_rejects_invalid_bounds() {
+        assert_eq!(
+            parse_owner_response_timeout(None).unwrap(),
+            Duration::from_secs(15 * 60)
+        );
+        assert_eq!(
+            parse_owner_response_timeout(Some("25")).unwrap(),
+            Duration::from_millis(25)
+        );
+        for value in [Some("0"), Some("900001"), Some("bad"), Some("")] {
+            assert!(matches!(
+                parse_owner_response_timeout(value),
+                Err(CoreError::InvalidInput(_))
+            ));
+        }
     }
 
     #[cfg(unix)]
@@ -734,6 +829,17 @@ mod migration_error_tests {
     use std::sync::Mutex;
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn owner_outcome_unknown_has_a_stable_owner_wire_envelope() {
+        let error = CoreError::OwnerOutcomeUnknown;
+        let response = wire_core_error(&error);
+        assert_eq!(response["errorKind"], "owner_outcome_unknown");
+        assert!(matches!(
+            remote_core_error(&response),
+            CoreError::OwnerOutcomeUnknown
+        ));
+    }
 
     #[test]
     fn not_found_owner_wire_preserves_specific_message() {

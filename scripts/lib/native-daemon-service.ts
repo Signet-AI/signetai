@@ -147,14 +147,26 @@ function assertInstalledServiceUsesDaemon(servicePath: string, daemonPath: strin
 // macOS (launchd)
 // ============================================================================
 
+function configuredOwnerResponseTimeout(): string | undefined {
+	const value = process.env.SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS;
+	if (value === undefined) return undefined;
+	const milliseconds = Number(value);
+	if (!/^\d+$/.test(value) || !Number.isSafeInteger(milliseconds) || milliseconds < 1 || milliseconds > 900_000) {
+		throw new Error("SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS must be a positive integer no greater than 900000");
+	}
+	return value;
+}
+
 export function generateLaunchdPlist(port: number = 3850): string {
 	const daemonPath = getDaemonPath();
 	const startupTimeout = process.env.SIGNET_DB_OWNER_START_TIMEOUT_MS;
+	const responseTimeout = configuredOwnerResponseTimeout();
 	const environment = buildLaunchdEnvironment({
 		values: {
 			SIGNET_PORT: String(port),
 			SIGNET_PATH: AGENTS_DIR,
 			...(startupTimeout === undefined ? {} : { SIGNET_DB_OWNER_START_TIMEOUT_MS: startupTimeout }),
+			...(responseTimeout === undefined ? {} : { SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS: responseTimeout }),
 		},
 	});
 	return buildLaunchdPlist({
@@ -221,6 +233,7 @@ function resolveRuntimePath(): string {
 
 export function generateSystemdUnit(port: number = 3850): string {
 	const runtimePath = resolveRuntimePath();
+	const responseTimeout = configuredOwnerResponseTimeout();
 
 	return `[Unit]
 Description=Signet Daemon
@@ -231,6 +244,7 @@ Type=simple
 ExecStart=${runtimePath}
 Environment=SIGNET_PORT=${port}
 Environment=SIGNET_PATH=${AGENTS_DIR}
+${responseTimeout === undefined ? "" : `Environment=SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS=${responseTimeout}`}
 WorkingDirectory=${AGENTS_DIR}
 Restart=always
 RestartSec=5

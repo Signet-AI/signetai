@@ -125,6 +125,114 @@ it(
 	{ timeout: 25_000 },
 );
 
+it(
+	"bounds a stalled owner response without replaying the write and keeps HTTP live",
+	async () => {
+		const dir = mkdtempSync(join(tmpdir(), "signet-owner-response-timeout-"));
+		dirs.push(dir);
+		const ownerPidsPath = join(dir, "owner-pids.log");
+		const firstOwnerPidPath = join(dir, "first-owner.pid");
+		const requestsPath = join(dir, "owner-requests.log");
+		const stubPath = join(dir, "stalled-response-owner.cjs");
+		writeFileSync(
+			stubPath,
+			[
+				`#!${process.execPath}`,
+				'const { appendFileSync, existsSync, writeFileSync } = require("node:fs");',
+				'const generation = "stalled-response-generation";',
+				'const firstPidPath = process.env.SIGNET_PATH + "/first-owner.pid";',
+				'const pidsPath = process.env.SIGNET_PATH + "/owner-pids.log";',
+				'const requestsPath = process.env.SIGNET_PATH + "/owner-requests.log";',
+				"if (!existsSync(firstPidPath)) writeFileSync(firstPidPath, String(process.pid));",
+				'appendFileSync(pidsPath, String(process.pid) + "\\n");',
+				'process.stdout.write(JSON.stringify({ ready: true, generation }) + "\\n");',
+				'const input = require("node:readline").createInterface({ input: process.stdin });',
+				"(async () => {",
+				"  for await (const line of input) {",
+				"    const request = JSON.parse(line);",
+				'    if (request.op === "shutdown") process.exit(0);',
+				"    const operation = request.operation;",
+				'    const kind = typeof operation === "string" ? operation : Object.keys(operation ?? {})[0];',
+				'    if (kind === "Health") {',
+				'      process.stdout.write(JSON.stringify({ id: request.id, generation, ok: true, result: { ready: true } }) + "\\n");',
+				"      continue;",
+				"    }",
+				'    if (kind !== "Remember") {',
+				'      process.stdout.write(JSON.stringify({ id: request.id, generation, ok: true, result: {} }) + "\\n");',
+				"      continue;",
+				"    }",
+				'    appendFileSync(requestsPath, kind + "\\n");',
+				"    await new Promise(() => {});",
+				"  }",
+				"})();",
+			].join("\n"),
+		);
+		chmodSync(stubPath, 0o755);
+		const portProbe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+		const port = portProbe.port;
+		portProbe.stop(true);
+		const child = Bun.spawn([bin], {
+			env: {
+				...process.env,
+				SIGNET_PATH: dir,
+				SIGNET_BIND: "127.0.0.1",
+				SIGNET_PORT: String(port),
+				SIGNET_MODE: "local",
+				SIGNET_API_KEY: "owner-contract-secret",
+				SIGNET_DAEMON_BIN: stubPath,
+				SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS: "500",
+			},
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		children.push(child);
+		const origin = `http://127.0.0.1:${port}`;
+		try {
+			await waitFor(async () => (await fetch(`${origin}/health/live`)).ok, "HTTP liveness");
+			const response = await Promise.race([
+				fetch(`${origin}/api/memory/remember`, {
+					method: "POST",
+					headers: {
+						"content-type": "application/json",
+						"x-signet-api-key": "owner-contract-secret",
+						"x-signet-agent-id": "owner-timeout-agent",
+					},
+					body: JSON.stringify({ content: "owner response timeout proof" }),
+				}).then(async (result) => ({ status: result.status, body: await result.json() })),
+				Bun.sleep(20_000).then(() => null),
+			]);
+			expect(response).not.toBeNull();
+			if (response === null) return;
+			expect(response.status).toBe(503);
+			expect(response.body).toMatchObject({ code: "database_outcome_unknown" });
+			expect(response.body.error).toContain("may have committed");
+			expect(readFileSync(requestsPath, "utf8").trim().split("\n")).toEqual(["Remember"]);
+			const firstOwnerPid = Number(readFileSync(firstOwnerPidPath, "utf8"));
+			expect(firstOwnerPid).toBeGreaterThan(1);
+			expect(() => process.kill(firstOwnerPid, 0)).toThrow();
+			expect((await fetch(`${origin}/health/live`)).ok).toBe(true);
+		} finally {
+			if (child.exitCode === null) {
+				child.kill("SIGTERM");
+				await Promise.race([child.exited, Bun.sleep(1500)]);
+				if (child.exitCode === null) {
+					child.kill("SIGKILL");
+					await child.exited;
+				}
+			}
+			if (existsSync(ownerPidsPath)) {
+				for (const rawPid of readFileSync(ownerPidsPath, "utf8").trim().split("\n")) {
+					try {
+						process.kill(Number(rawPid), "SIGKILL");
+					} catch {}
+				}
+			}
+		}
+	},
+	{ timeout: 25_000 },
+);
+
 it("proves the fresh external owner process boundary and recovery lifecycle", async () => {
 	const first = await start();
 	const db = join(first.dir, "memory", "memories.db");

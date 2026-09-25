@@ -235,6 +235,7 @@ editing the config file is impractical.
 | `SIGNET_LOG_DIR` | `$SIGNET_WORKSPACE/.daemon/logs` | Optional daemon log directory override |
 | `SIGNET_SQLITE_PATH` | — | macOS explicit SQLite dylib override used before Bun opens the database |
 | `SIGNET_DB_OWNER_START_TIMEOUT_MS` | `15000` | DB-owner protocol startup deadline in ms. Readiness is published before database initialization; this remains a bounded fallback for worker launch failures |
+| `SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS` | `900000` | Maximum DB-owner IPC response wait in ms; accepts positive integers up to `900000` |
 | `SIGNET_SESSION_START_TIMEOUT` | `15000` | Session-start daemon wait budget in ms for Signet-managed clients. Generated Claude Code hook config writes this value directly. Generated Codex hook config rounds up to seconds and adds 5 seconds of harness grace |
 | `SIGNET_FETCH_TIMEOUT` | `15000` | Legacy fallback for session-start timeout in ms when `SIGNET_SESSION_START_TIMEOUT` is unset |
 | `SIGNET_PROMPT_SUBMIT_TIMEOUT` | `5000` | Prompt-submit daemon wait budget in ms; OpenCode uses this value directly, generated Claude Code hook config writes this value + 2000 ms grace, and generated Codex hook config rounds up to seconds and adds 2 seconds of harness grace |
@@ -261,9 +262,17 @@ does not wait for SQLite construction, migrations, or vector extension loading.
 Those operations remain inside the killable owner process and have their own
 job deadlines.
 
-When installing the macOS launchd service, set this variable in the environment
-used for `signet daemon install`; the generated plist copies it into the service
-environment.
+`SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS` bounds each Rust DB-owner IPC response
+wait. The default and maximum are 900000 ms to preserve the existing
+maintenance deadline ceiling. When a non-health request times out, the owner
+is terminated and the daemon does not replay the request. It returns HTTP 503
+with code `database_outcome_unknown`; the request may have committed, so
+reconcile state before retrying a mutation.
+
+When installing the macOS launchd service, set either timeout variable in the
+environment used for `signet daemon install`; the generated plist copies each
+set variable into the service environment. The generated systemd unit also
+copies `SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS` when set.
 
 For non-loopback Anthropic endpoint overrides, the daemon
 only sends provider credentials during startup preflight when the host

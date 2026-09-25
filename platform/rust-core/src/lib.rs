@@ -54,6 +54,8 @@ pub enum CoreError {
     QueueFull { capacity: usize },
     #[error("database owner stopped")]
     OwnerStopped,
+    #[error("database owner did not confirm the request outcome; it may have committed")]
+    OwnerOutcomeUnknown,
     #[error("record not found")]
     NotFound,
     #[error("not found: {0}")]
