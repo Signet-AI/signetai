@@ -481,7 +481,10 @@ Use `GET /api/inference/status` for the shared inference control plane status.
 
 Returns workspace statistics for the daemon's resolved agent. Callers cannot
 select a different agent or workspace. `memoryCount` excludes soft-deleted
-memories. `capturedSessionCount` counts distinct captured session keys and is
+memories and is scoped to the daemon agent on current schemas; legacy
+python/cli-v1 schemas predate agent scoping and soft deletes, so the count is
+unscoped there while `needsMigration` still reports the upgrade path.
+`capturedSessionCount` counts distinct captured session keys and is
 `null` when the transcript table is unavailable. The ontology fields use the
 same agent-scoped knowledge statistics as `GET /api/knowledge/stats`;
 `coveragePercent` and `unassignedMemoryCount` describe memory IDs represented by
