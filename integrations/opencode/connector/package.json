@@ -30,6 +30,7 @@
 		"jsonc-parser": "3.3.1"
 	},
 	"devDependencies": {
+		"@signet/opencode-plugin": "workspace:*",
 		"@types/node": "^22.0.0",
 		"typescript": "^5.7.0"
 	},

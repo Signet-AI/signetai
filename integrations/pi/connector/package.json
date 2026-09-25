@@ -28,6 +28,7 @@
 		"@signet/connector-base": "0.227.0"
 	},
 	"devDependencies": {
+		"@signet/pi-extension": "workspace:*",
 		"@signet/pi-extension-base": "workspace:*",
 		"@types/node": "^22.0.0",
 		"typescript": "^5.7.0"

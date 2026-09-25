@@ -50,10 +50,18 @@ bun test            # All maintained repository tests (excludes vendored referen
 Git hooks
 ---
 
-The pre-commit hook runs staged Biome validation and the workspace typecheck.
-The typecheck observes the current working tree rather than reconstructing the
-staged index, so unrelated unstaged changes can affect its result. It also prints
-a documentation reminder when a commit may change user-visible behavior, APIs,
+The pre-commit hook runs staged Biome validation and the typechecks of the
+workspaces affected by the staged files, including their workspace dependencies.
+It selects the affected workspaces from staged paths only; unrelated packages
+are not checked. Documentation- and asset-only changes skip the TypeScript
+checks entirely. The full workspace typecheck remains in CI
+(`bun run typecheck`), and shared root files (`package.json`, `tsconfig.json`,
+`biome.json`, `bunfig.toml`, `bun.lock`) plus `scripts/` and `tests/` widen the
+scoped check back to all workspaces. Packages whose typechecks need built
+workspace artifacts build them on demand during the hook. The scoped checks
+observe the current working tree rather than reconstructing the staged index,
+so unrelated unstaged changes can affect their result. The hook also prints a
+documentation reminder when a commit may change user-visible behavior, APIs,
 schemas, configuration, or lifecycle. The documentation step is intentionally
 advisory; it does not run a separate documentation checker.
 
