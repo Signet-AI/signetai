@@ -107,6 +107,31 @@ fn plugin_path_error(error: std::io::Error) -> ApiError {
 }
 
 #[cfg(unix)]
+fn validate_plugin_file(file: &File, message: &'static str) -> Result<(), ApiError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = file
+        .metadata()
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    if metadata.file_type().is_file() && metadata.nlink() == 1 {
+        Ok(())
+    } else {
+        Err(ApiError::conflict(message))
+    }
+}
+
+#[cfg(unix)]
+fn plugin_publication_uncertain(error: std::io::Error) -> ApiError {
+    ApiError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        code: "plugin_outcome_unknown",
+        message: format!(
+            "plugin registry was published but directory durability could not be confirmed; read current state before retrying: {error}"
+        ),
+    }
+}
+
+#[cfg(unix)]
 fn open_child_directory(parent: &File, name: &str, create: bool) -> Result<Option<File>, ApiError> {
     use std::ffi::CString;
 
@@ -178,16 +203,10 @@ fn plugin_read_file(directory: &File, name: &str) -> Result<Option<File>, ApiErr
         return Err(plugin_path_error(error));
     }
     let file = unsafe { File::from_raw_fd(fd) };
-    if !file
-        .metadata()
-        .map_err(|error| ApiError::internal(error.to_string()))?
-        .file_type()
-        .is_file()
-    {
-        return Err(ApiError::conflict(
-            "plugin state file must be a regular file",
-        ));
-    }
+    validate_plugin_file(
+        &file,
+        "plugin state file must be a singly-linked regular file",
+    )?;
     Ok(Some(file))
 }
 
@@ -213,16 +232,10 @@ fn plugin_append_file(directory: &File, name: &str) -> Result<File, ApiError> {
         return Err(plugin_path_error(std::io::Error::last_os_error()));
     }
     let file = unsafe { File::from_raw_fd(fd) };
-    if !file
-        .metadata()
-        .map_err(|error| ApiError::internal(error.to_string()))?
-        .file_type()
-        .is_file()
-    {
-        return Err(ApiError::conflict(
-            "plugin audit file must be a regular file",
-        ));
-    }
+    validate_plugin_file(
+        &file,
+        "plugin audit file must be a singly-linked regular file",
+    )?;
     Ok(file)
 }
 
@@ -312,9 +325,7 @@ fn save(state: &AppState, value: &Value) -> Result<(), ApiError> {
         return Err(plugin_path_error(error));
     }
     if unsafe { libc::fsync(directory.as_raw_fd()) } != 0 {
-        return Err(ApiError::internal(
-            std::io::Error::last_os_error().to_string(),
-        ));
+        return Err(plugin_publication_uncertain(std::io::Error::last_os_error()));
     }
     Ok(())
 }
@@ -1170,6 +1181,16 @@ mod marketplace_contract_tests {
         let a = json!({"key":"k","fingerprint":"a","response":{"success":true}});
         assert!(idempotency_matches(&a, "k", "a"));
         assert!(!idempotency_matches(&a, "k", "b"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn registry_directory_sync_failure_reports_unknown_publication() {
+        let error =
+            super::plugin_publication_uncertain(std::io::Error::from_raw_os_error(libc::EIO));
+        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code, "plugin_outcome_unknown");
+        assert!(error.message.contains("read current state before retrying"));
     }
 }
 

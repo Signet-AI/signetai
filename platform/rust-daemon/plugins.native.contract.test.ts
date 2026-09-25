@@ -1,5 +1,14 @@
 import { afterEach, expect, it } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	linkSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const root = join(import.meta.dir, "../..");
@@ -170,6 +179,43 @@ it("rejects registry and audit leaf symlinks without reading or appending outsid
 	expect(readFileSync(outsideAudit, "utf8")).toBe(initialAudit);
 });
 
+it("rejects hard-linked registry files instead of reading outside state", async () => {
+	const { origin, workspace } = await start();
+	const outside = mkdtempSync(join(tmpdir(), "signet-plugins-hardlink-read-"));
+	dirs.push(outside);
+	const pluginDirectory = join(workspace, ".daemon/plugins");
+	mkdirSync(pluginDirectory, { recursive: true });
+	const outsideRegistry = join(outside, "registry-v1.json");
+	const registry = JSON.stringify({
+		version: 1,
+		plugins: { "signet-graphiq": { enabled: false, installedAt: "outside-only", updatedAt: "1" } },
+	});
+	writeFileSync(outsideRegistry, registry);
+	linkSync(outsideRegistry, join(pluginDirectory, "registry-v1.json"));
+	const response = await get(origin, "/api/plugins", auth);
+	expect(response.status).toBe(409);
+	expect(readFileSync(outsideRegistry, "utf8")).toBe(registry);
+});
+it("does not append plugin audit events through hard-linked files", async () => {
+	const { origin, workspace } = await start();
+	const outside = mkdtempSync(join(tmpdir(), "signet-plugins-hardlink-audit-"));
+	dirs.push(outside);
+	const pluginDirectory = join(workspace, ".daemon/plugins");
+	mkdirSync(pluginDirectory, { recursive: true });
+	const outsideAudit = join(outside, "audit-v1.ndjson");
+	const initialAudit = '{"timestamp":"outside","pluginId":"signet-graphiq","event":"outside"}\\n';
+	writeFileSync(outsideAudit, initialAudit);
+	linkSync(outsideAudit, join(pluginDirectory, "audit-v1.ndjson"));
+	const response = await fetch(`${origin}/api/plugins/signet-graphiq`, {
+		method: "PATCH",
+		headers: { ...auth, "content-type": "application/json" },
+		body: JSON.stringify({ enabled: false }),
+	});
+	expect(response.status).toBe(200);
+	const updated = await response.json();
+	expect(readFileSync(outsideAudit, "utf8")).toBe(initialAudit);
+	expect(updated.auditDegraded).toBe(true);
+});
 it("refuses malformed registry instead of overwriting it", async () => {
 	const { origin, workspace } = await start();
 	const path = join(workspace, ".daemon/plugins/registry-v1.json");
