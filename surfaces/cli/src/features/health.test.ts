@@ -57,6 +57,8 @@ function depsFor(basePath: string) {
 			transcripts: null,
 		}),
 		normalizeAgentPath: (pathValue: string) => pathValue,
+		parseIntegerValue: (value: unknown) =>
+			typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) || null : null,
 		signetLogo: () => "signet",
 	};
 }

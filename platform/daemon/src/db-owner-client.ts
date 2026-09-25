@@ -824,7 +824,6 @@ export function createDbOwnerClient(options: DbOwnerClientOptions): DbOwnerClien
 	async function close(): Promise<void> {
 		if (closePromise !== null) return closePromise;
 		migrationControl.beginDrain();
-		await migrationControl.close();
 		const owner = child;
 		const ownerClose = activeChildClose;
 		const retiredClose = retiredChildClose;

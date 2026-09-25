@@ -3,6 +3,7 @@ import { OpenClawConnector, type OpenClawRuntimeState } from "@signet/connector-
 import {
 	type SignetInstallationReport,
 	type SchemaType,
+	detectSchema,
 	detectSignetInstallations,
 	getMissingIdentityFiles,
 	hasValidIdentity,
@@ -14,6 +15,7 @@ import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
 import type { DaemonLastExit, DaemonResourceUsage } from "../lib/runtime.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
+import Database from "../sqlite.js";
 
 import { getDaemonBaseUrl } from "./repair-queue.js";
 
@@ -193,6 +195,17 @@ interface StatusDeps {
 	readonly fetchProtection?: (port: number) => Promise<unknown | null>;
 }
 
+function readCount(db: ReturnType<typeof Database>, sql: string, deps: StatusDeps): number | null {
+	try {
+		const raw = db.prepare(sql).get();
+		return typeof raw === "object" && raw !== null && "count" in raw
+			? deps.parseIntegerValue((raw as Record<string, unknown>).count)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
 export async function getStatusReport(basePath: string, deps: StatusDeps): Promise<StatusReport> {
 	const existing = deps.detectExistingSetup(basePath);
 	const installed = existing.agentsDir;
@@ -240,7 +253,34 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 		...(protection ? { protection } : {}),
 	};
 
-	return report;
+	if (!existing.memoryDb || workspaceStats !== null) {
+		return report;
+	}
+
+	let db: ReturnType<typeof Database> | null = null;
+	try {
+		db = Database(resolveWorkspaceLayout(basePath).database, {
+			readonly: true,
+		});
+		const schema = detectSchema(db);
+		const memoryCount = readCount(db, "SELECT COUNT(*) as count FROM memories", deps);
+		return {
+			...report,
+			db: {
+				...report.db,
+				exists: true,
+				schema: report.db.schema ?? schema.type,
+				needsMigration: report.db.needsMigration ?? (schema.type !== "core" && schema.type !== "unknown"),
+				memoryCount: report.db.memoryCount ?? memoryCount,
+			},
+		};
+	} catch {
+		return report;
+	} finally {
+		if (db) {
+			db.close();
+		}
+	}
 }
 
 export async function showStatus(options: { path?: string; json?: boolean }, deps: StatusDeps): Promise<void> {
