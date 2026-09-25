@@ -1,11 +1,3 @@
-/**
- * MCP tool definitions for the Signet daemon.
- *
- * Creates an McpServer with memory operations exposed as MCP tools.
- * Tool handlers call the daemon's HTTP API — this avoids duplicating
- * the complex recall/remember logic and ensures feature parity.
- */
-
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import {
 	SIGNET_GRAPHIQ_PLUGIN_ID,
@@ -21,18 +13,10 @@ import { redactUnsafeMemoryProjection } from "../memory-content-safety.js";
 import { DREAMING_ONTOLOGY_OPERATION_SCHEMA } from "../pipeline/dreaming-operation-contract.js";
 import { createDefaultPluginHost } from "../plugins/index.js";
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 interface McpServerOptions {
-	/** Daemon HTTP base URL (default: http://127.0.0.1:3850) */
 	readonly daemonUrl?: string;
-	/** Server version string */
 	readonly version?: string;
-	/** Per-request bearer credential validated by the daemon's /mcp auth middleware. */
 	readonly authorizationHeader?: string;
-	/** Plugin policy source used to gate plugin-owned MCP surfaces */
 	readonly pluginHost?: GraphiqPluginPolicyHost;
 }
 
@@ -63,13 +47,6 @@ export interface DaemonError {
 }
 
 export type FetchResult<T> = DaemonResponse<T> | DaemonError;
-
-/**
- * The MCP SDK currently resolves its tool overloads against a second Zod
- * major. Keep the cast at this transport boundary so every daemon tool retains
- * its real Zod schema and inferred handler input instead of spreading unsafe
- * casts across individual registrations.
- */
 function registerMcpTool<TSchema extends z.ZodType>(
 	server: McpServer,
 	name: string,
@@ -106,14 +83,6 @@ const GRAPHIQ_COMPAT_ALIASES: ReadonlyMap<string, string> = new Map([
 	["code_clear", "signet_code_clear"],
 	["code_briefing", "signet_code_briefing"],
 ]);
-
-// ---------------------------------------------------------------------------
-// Internal HTTP helper
-// ---------------------------------------------------------------------------
-
-// Standalone `signet-mcp` uses process env auth. Hosted `/mcp` requests pass
-// a per-request Authorization header through createMcpServer(), which takes
-// precedence in daemonFetch().
 function readDaemonAuthToken(): string | undefined {
 	const apiKey = process.env.SIGNET_API_KEY?.trim();
 	if (apiKey) return apiKey;
@@ -264,10 +233,6 @@ function allowedGraphiqMcpTools(pluginHost: GraphiqPluginPolicyHost): ReadonlySe
 	return new Set(plugin.surfaces.mcpTools.map((tool) => tool.name).filter((name) => GRAPHIQ_MCP_TOOL_NAMES.has(name)));
 }
 
-// ---------------------------------------------------------------------------
-// GraphIQ backward-compat aliases
-// ---------------------------------------------------------------------------
-
 function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: GraphiqPluginPolicyHostProvider): void {
 	const compatDefs: ReadonlyArray<{
 		alias: string;
@@ -408,10 +373,6 @@ function registerGraphiqCompatAliases(server: McpServer, pluginHostProvider: Gra
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Factory
-// ---------------------------------------------------------------------------
-
 export async function createMcpServer(opts?: McpServerOptions): Promise<McpServer> {
 	const baseUrl = opts?.daemonUrl ?? resolveSignetDaemonUrl({ env: {} });
 	const version = opts?.version ?? "0.1.0";
@@ -429,10 +390,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		name: "signet",
 		version,
 	});
-
-	// ------------------------------------------------------------------
-	// memory_search — hybrid vector + keyword search
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"memory_search",
@@ -529,8 +486,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			if (!result.ok) {
 				return errorResult(`Search failed: ${result.error}`);
 			}
-			// Score thresholds trim ranked matches, but intentionally keep
-			// unscored supporting context in-band.
 			return textResult(
 				formatRecallText(redactUnsafeMemoryToolOutput(applyRecallScoreThreshold(result.data, score_min))),
 			);
@@ -663,10 +618,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(formatRecallText(redactUnsafeMemoryToolOutput(result.data)));
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// memory_store — save a new memory
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"memory_store",
@@ -839,10 +790,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(redactUnsafeMemoryToolOutput(result.data));
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// memory_get — retrieve a memory by ID
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"memory_get",
@@ -862,10 +809,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(redactUnsafeMemoryToolOutput(result.data));
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// memory_list — list memories with optional filters
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"memory_list",
@@ -894,10 +837,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(redactUnsafeMemoryToolOutput(result.data));
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// memory_modify — edit an existing memory
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"memory_modify",
@@ -934,10 +873,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(redactUnsafeMemoryToolOutput(result.data));
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// memory_forget — soft-delete a memory
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"memory_forget",
@@ -962,10 +897,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// memory_feedback — rate relevance of injected memories
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"memory_feedback",
@@ -1021,10 +952,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// agent_peers — list active peer sessions
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"agent_peers",
@@ -1059,10 +986,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// agent_message_send — send message to another agent/session
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"agent_message_send",
@@ -1129,10 +1052,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// agent_message_retry — retry an indeterminate ACP delivery
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"agent_message_retry",
@@ -1155,10 +1074,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// agent_message_inbox — read recent inbound messages
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"agent_message_inbox",
@@ -1207,10 +1122,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// agent_message_ack — acknowledge one inbound message
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"agent_message_ack",
@@ -1237,10 +1148,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// secret_list — list available secret names
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"secret_list",
@@ -1258,10 +1165,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// secret_exec — run a command with secrets injected as env vars
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"secret_exec",
@@ -1377,10 +1280,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 			return textResult(result.data);
 		},
 	);
-
-	// ------------------------------------------------------------------
-	// knowledge_expand — drill deeper into a knowledge graph entity
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"knowledge_expand",
@@ -1722,10 +1621,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 		hygieneReport,
 	);
-
-	// The daemon validates every citation against scoped episodic evidence and
-	// applies each item through the audited Dreaming operation seam. ACPX gets
-	// this over stdio MCP; it never receives a SQLite handle.
 	registerMcpTool(
 		server,
 		"apply_ontology_ops",
@@ -1819,10 +1714,6 @@ export async function createMcpServer(opts?: McpServerOptions): Promise<McpServe
 		},
 		listAttributes,
 	);
-
-	// ------------------------------------------------------------------
-	// knowledge_expand_session — temporal drill-down via session DAG
-	// ------------------------------------------------------------------
 	registerMcpTool(
 		server,
 		"knowledge_expand_session",

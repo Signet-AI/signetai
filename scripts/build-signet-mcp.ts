@@ -6,7 +6,6 @@ import { dirname, join } from "node:path";
 const root = join(import.meta.dir, "..");
 const outfile = join(root, "dist", "signetai", "dist", "mcp-stdio.js");
 const entry = join(root, "platform", "daemon", "src", "mcp-stdio.ts");
-// Mirrors the workspace daemon build and externalizes native dependencies.
 const EXTERNAL = [
 	"better-sqlite3",
 	"@1password/sdk",
