@@ -131,20 +131,28 @@ it(
 		const dir = mkdtempSync(join(tmpdir(), "signet-owner-response-timeout-"));
 		dirs.push(dir);
 		const ownerPidsPath = join(dir, "owner-pids.log");
+		const ownerGenerationsPath = join(dir, "owner-generations.log");
 		const firstOwnerPidPath = join(dir, "first-owner.pid");
+		const descendantPidPath = join(dir, "descendant-owner.pid");
 		const requestsPath = join(dir, "owner-requests.log");
 		const stubPath = join(dir, "stalled-response-owner.cjs");
 		writeFileSync(
 			stubPath,
 			[
 				`#!${process.execPath}`,
-				'const { appendFileSync, existsSync, writeFileSync } = require("node:fs");',
-				'const generation = "stalled-response-generation";',
+				'const { appendFileSync, existsSync, readFileSync, writeFileSync } = require("node:fs");',
+				'const { spawn } = require("node:child_process");',
+				'const generation = require("node:crypto").randomUUID();',
 				'const firstPidPath = process.env.SIGNET_PATH + "/first-owner.pid";',
 				'const pidsPath = process.env.SIGNET_PATH + "/owner-pids.log";',
+				'const generationsPath = process.env.SIGNET_PATH + "/owner-generations.log";',
+				'const descendantPidPath = process.env.SIGNET_PATH + "/descendant-owner.pid";',
 				'const requestsPath = process.env.SIGNET_PATH + "/owner-requests.log";',
 				"if (!existsSync(firstPidPath)) writeFileSync(firstPidPath, String(process.pid));",
+				'const descendant = spawn(process.execPath, ["-e", "setInterval(() => {}, 60000)"], { stdio: "inherit" });',
+				"writeFileSync(descendantPidPath, String(descendant.pid));",
 				'appendFileSync(pidsPath, String(process.pid) + "\\n");',
+				'appendFileSync(generationsPath, generation + "\\n");',
 				'process.stdout.write(JSON.stringify({ ready: true, generation }) + "\\n");',
 				'const input = require("node:readline").createInterface({ input: process.stdin });',
 				"(async () => {",
@@ -161,7 +169,11 @@ it(
 				'      process.stdout.write(JSON.stringify({ id: request.id, generation, ok: true, result: {} }) + "\\n");',
 				"      continue;",
 				"    }",
-				'    appendFileSync(requestsPath, kind + "\\n");',
+				'    appendFileSync(requestsPath, kind + ":" + generation + "\\n");',
+				'    if (process.pid !== Number(readFileSync(firstPidPath, "utf8"))) {',
+				'      process.stdout.write(JSON.stringify({ id: request.id, generation, ok: "invalid", result: {} }) + "\\n");',
+				"      continue;",
+				"    }",
 				"    await new Promise(() => {});",
 				"  }",
 				"})();",
@@ -200,18 +212,54 @@ it(
 					},
 					body: JSON.stringify({ content: "owner response timeout proof" }),
 				}).then(async (result) => ({ status: result.status, body: await result.json() })),
-				Bun.sleep(20_000).then(() => null),
+				Bun.sleep(4_000).then(() => null),
 			]);
 			expect(response).not.toBeNull();
 			if (response === null) return;
 			expect(response.status).toBe(503);
 			expect(response.body).toMatchObject({ code: "database_outcome_unknown" });
 			expect(response.body.error).toContain("may have committed");
-			expect(readFileSync(requestsPath, "utf8").trim().split("\n")).toEqual(["Remember"]);
+			expect(readFileSync(requestsPath, "utf8").trim().split("\n")).toHaveLength(1);
 			const firstOwnerPid = Number(readFileSync(firstOwnerPidPath, "utf8"));
 			expect(firstOwnerPid).toBeGreaterThan(1);
 			expect(() => process.kill(firstOwnerPid, 0)).toThrow();
+			const descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
+			expect(descendantPid).toBeGreaterThan(1);
+			expect(() => process.kill(descendantPid, 0)).toThrow();
 			expect((await fetch(`${origin}/health/live`)).ok).toBe(true);
+			const recovered = await fetch(`${origin}/api/sources`, {
+				headers: {
+					"x-signet-api-key": "owner-contract-secret",
+					"x-signet-agent-id": "owner-timeout-agent",
+				},
+			});
+			expect(recovered.status).toBe(200);
+			const ownerGenerations = readFileSync(ownerGenerationsPath, "utf8").trim().split("\n");
+			expect(ownerGenerations).toHaveLength(2);
+			expect(new Set(ownerGenerations).size).toBe(2);
+			expect(readFileSync(requestsPath, "utf8").trim().split("\n")).toHaveLength(1);
+			const malformedAcknowledgement = await fetch(`${origin}/api/memory/remember`, {
+				method: "POST",
+				headers: {
+					"content-type": "application/json",
+					"x-signet-api-key": "owner-contract-secret",
+					"x-signet-agent-id": "owner-timeout-agent",
+				},
+				body: JSON.stringify({ content: "malformed owner acknowledgement proof" }),
+			});
+			expect(malformedAcknowledgement.status).toBe(503);
+			expect(await malformedAcknowledgement.json()).toMatchObject({ code: "database_outcome_unknown" });
+			const afterMalformedAcknowledgement = await fetch(`${origin}/api/sources`, {
+				headers: {
+					"x-signet-api-key": "owner-contract-secret",
+					"x-signet-agent-id": "owner-timeout-agent",
+				},
+			});
+			expect(afterMalformedAcknowledgement.status).toBe(200);
+			const finalGenerations = readFileSync(ownerGenerationsPath, "utf8").trim().split("\n");
+			expect(finalGenerations).toHaveLength(3);
+			expect(new Set(finalGenerations).size).toBe(3);
+			expect(readFileSync(requestsPath, "utf8").trim().split("\n")).toHaveLength(2);
 		} finally {
 			if (child.exitCode === null) {
 				child.kill("SIGTERM");
@@ -227,6 +275,11 @@ it(
 						process.kill(Number(rawPid), "SIGKILL");
 					} catch {}
 				}
+			}
+			if (existsSync(descendantPidPath)) {
+				try {
+					process.kill(Number(readFileSync(descendantPidPath, "utf8")), "SIGKILL");
+				} catch {}
 			}
 		}
 	},

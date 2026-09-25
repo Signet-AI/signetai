@@ -17,6 +17,8 @@ use signet_core_native::{CoreError, Operation, WorkspaceOwner};
 use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::{ffi::OsStrExt, io::AsRawHandle};
 use std::{
@@ -37,6 +39,7 @@ use uuid::Uuid;
 const MAX_OWNER_REQUEST_LINE_BYTES: usize = 40 * 1024 * 1024;
 const MAX_OWNER_MARKER_BYTES: u64 = 4096;
 const MAX_HEALTH_RECOVERY_ATTEMPTS: usize = 1;
+const OWNER_ADMISSION_CAPACITY: usize = 32;
 const OWNER_RESPONSE_TIMEOUT_ENV: &str = "SIGNET_DB_OWNER_RESPONSE_TIMEOUT_MS";
 const DEFAULT_OWNER_RESPONSE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const MAX_OWNER_RESPONSE_TIMEOUT_MS: u64 = 15 * 60 * 1000;
@@ -221,9 +224,23 @@ impl Drop for StartupMarkerGuard {
     }
 }
 
-fn failed_owner_start(mut child: Child, error: CoreError) -> Result<OwnerSession, CoreError> {
+fn terminate_owner_process_tree(child: &mut Child) {
+    #[cfg(unix)]
+    if let Ok(pid) = libc::pid_t::try_from(child.id()) {
+        // The owner and any helpers inherit this group so a stalled pipe cannot outlive its reader.
+        let _ = unsafe { libc::kill(-pid, libc::SIGKILL) };
+    }
     let _ = child.kill();
     let _ = child.wait();
+}
+
+fn retire_owner_session(session: &mut OwnerSession) {
+    drop(session.stdout.take());
+    terminate_owner_process_tree(&mut session.child);
+}
+
+fn failed_owner_start(mut child: Child, error: CoreError) -> Result<OwnerSession, CoreError> {
+    terminate_owner_process_tree(&mut child);
     Err(error)
 }
 
@@ -249,8 +266,7 @@ fn read_owner_line_with_deadline(
         }) {
         Ok(reader) => reader,
         Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_owner_process_tree(child);
             return Err(CoreError::OwnerStopped);
         }
     };
@@ -258,15 +274,13 @@ fn read_owner_line_with_deadline(
     let (stdout, line) = match receiver.recv_timeout(timeout) {
         Ok((stdout, Ok(Some(line)))) => (stdout, line),
         _ => {
-            let _ = child.kill();
-            let _ = child.wait();
+            terminate_owner_process_tree(child);
             let _ = reader.join();
             return Err(CoreError::OwnerStopped);
         }
     };
     if reader.join().is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
+        terminate_owner_process_tree(child);
         return Err(CoreError::OwnerStopped);
     }
     Ok((stdout, line))
@@ -317,14 +331,16 @@ impl ExternalOwner {
             .map(PathBuf::from)
             .or_else(|| env::current_exe().ok())
             .ok_or(CoreError::OwnerStopped)?;
-        let mut child = Command::new(exe)
+        let mut command = Command::new(exe);
+        command
             .arg("--db-owner")
             .env("SIGNET_PATH", workspace)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .map_err(|_| CoreError::OwnerStopped)?;
+            .stderr(Stdio::null());
+        #[cfg(unix)]
+        command.process_group(0);
+        let mut child = command.spawn().map_err(|_| CoreError::OwnerStopped)?;
         let stdin = match child.stdin.take() {
             Some(stdin) => stdin,
             None => return failed_owner_start(child, CoreError::OwnerStopped),
@@ -374,7 +390,7 @@ impl ExternalOwner {
             inner: Arc::new(OwnerPipe {
                 workspace: workspace.to_path_buf(),
                 session: Mutex::new(session),
-                admission: Arc::new(Semaphore::new(32)),
+                admission: Arc::new(Semaphore::new(OWNER_ADMISSION_CAPACITY)),
                 response_timeout,
             }),
         })
@@ -384,7 +400,9 @@ impl ExternalOwner {
             .inner
             .admission
             .try_acquire()
-            .map_err(|_| CoreError::InvalidInput("owner IPC capacity exhausted".into()))?;
+            .map_err(|_| CoreError::QueueFull {
+                capacity: OWNER_ADMISSION_CAPACITY,
+            })?;
         let mut session = self
             .inner
             .session
@@ -392,8 +410,8 @@ impl ExternalOwner {
             .map_err(|_| CoreError::OwnerStopped)?;
         let mut health_recovery_attempts = 0;
         loop {
-            if session.stdout.is_none() && !matches!(operation, Operation::Health) {
-                return Err(CoreError::OwnerStopped);
+            if session.stdout.is_none() {
+                *session = Self::start_session(&self.inner.workspace)?;
             }
             let id = Uuid::new_v4().to_string();
             let generation = session.generation.clone();
@@ -407,6 +425,9 @@ impl ExternalOwner {
                 })
                 .and_then(|_| session.stdin.flush().map_err(serde_json::Error::io))
                 .is_err();
+            if failed {
+                retire_owner_session(&mut session);
+            }
             let response_line = if failed {
                 None
             } else if let Some(stdout) = session.stdout.take() {
@@ -426,36 +447,39 @@ impl ExternalOwner {
             };
             let read_failed = response_line.is_none();
             if !read_failed {
-                let response: Value = serde_json::from_str(
-                    response_line.as_deref().unwrap_or_default(),
-                )
-                .map_err(|_| {
-                    if matches!(operation, Operation::Health) {
-                        CoreError::OwnerStopped
-                    } else {
-                        CoreError::OwnerOutcomeUnknown
-                    }
-                })?;
+                let outcome_unknown = if matches!(operation, Operation::Health) {
+                    CoreError::OwnerStopped
+                } else {
+                    CoreError::OwnerOutcomeUnknown
+                };
+                let response: Value =
+                    match serde_json::from_str(response_line.as_deref().unwrap_or_default()) {
+                        Ok(response) => response,
+                        Err(_) => {
+                            retire_owner_session(&mut session);
+                            return Err(outcome_unknown);
+                        }
+                    };
                 if response.get("id").and_then(Value::as_str) != Some(id.as_str())
                     || response.get("generation").and_then(Value::as_str)
                         != Some(generation.as_str())
                 {
-                    return Err(if matches!(operation, Operation::Health) {
-                        CoreError::OwnerStopped
-                    } else {
-                        CoreError::OwnerOutcomeUnknown
-                    });
+                    retire_owner_session(&mut session);
+                    return Err(outcome_unknown);
                 }
-                return if response.get("ok").and_then(Value::as_bool) == Some(true) {
-                    response.get("result").cloned().ok_or_else(|| {
-                        if matches!(operation, Operation::Health) {
-                            CoreError::OwnerStopped
-                        } else {
-                            CoreError::OwnerOutcomeUnknown
+                return match response.get("ok").and_then(Value::as_bool) {
+                    Some(true) => match response.get("result").cloned() {
+                        Some(result) => Ok(result),
+                        None => {
+                            retire_owner_session(&mut session);
+                            Err(outcome_unknown)
                         }
-                    })
-                } else {
-                    Err(remote_core_error(&response))
+                    },
+                    Some(false) => Err(remote_core_error(&response)),
+                    None => {
+                        retire_owner_session(&mut session);
+                        Err(outcome_unknown)
+                    }
                 };
             }
             if !matches!(operation, Operation::Health) {
@@ -2689,5 +2713,89 @@ mod owner_reader_tests {
         let input = vec![b'x'; MAX_OWNER_REQUEST_LINE_BYTES + 1];
         let result = read_owner_request_line(&mut BufReader::new(std::io::Cursor::new(input)));
         assert!(result.is_err());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod owner_admission_tests {
+    use super::*;
+
+    #[test]
+    fn broken_owner_stdin_retires_the_uncertain_session() {
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("exec 0<&-; printf 'ready\\n'; sleep 30")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        stdout.read_line(&mut ready).unwrap();
+        assert_eq!(ready, "ready\n");
+        let session = OwnerSession {
+            child,
+            stdin,
+            stdout: Some(stdout),
+            generation: "test-generation".into(),
+        };
+        let owner = ExternalOwner {
+            inner: Arc::new(OwnerPipe {
+                workspace: PathBuf::new(),
+                session: Mutex::new(session),
+                admission: Arc::new(Semaphore::new(1)),
+                response_timeout: Duration::from_millis(50),
+            }),
+        };
+
+        let result = owner.submit(Operation::Remember {
+            agent_id: "agent".into(),
+            content: "partial write".into(),
+            metadata: json!({}),
+        });
+        let mut session = owner.inner.session.lock().unwrap();
+        let stdout_retired = session.stdout.is_none();
+        let child_exited = session.child.try_wait().unwrap().is_some();
+        terminate_owner_process_tree(&mut session.child);
+
+        assert!(matches!(result, Err(CoreError::OwnerOutcomeUnknown)));
+        assert!(stdout_retired);
+        assert!(child_exited);
+    }
+
+    #[test]
+    fn exhausted_owner_admission_is_not_a_client_input_error() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().map(BufReader::new);
+        let session = OwnerSession {
+            child,
+            stdin,
+            stdout,
+            generation: "test-generation".into(),
+        };
+        let owner = ExternalOwner {
+            inner: Arc::new(OwnerPipe {
+                workspace: PathBuf::new(),
+                session: Mutex::new(session),
+                admission: Arc::new(Semaphore::new(0)),
+                response_timeout: Duration::from_millis(50),
+            }),
+        };
+
+        let error = owner.submit(Operation::Health).unwrap_err();
+        let mut session = owner.inner.session.lock().unwrap();
+        terminate_owner_process_tree(&mut session.child);
+        let api_error = ApiError::from(error);
+        assert_eq!(api_error.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(api_error.code, "database_unavailable");
     }
 }
