@@ -6,6 +6,11 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-25
+- Bug fixes: preserve legacy MCP records; validate tokenizer wasm path; sync retired ledger artifacts; drop exports for removed OS types; clear stale binary outputs; stabilize Node WASM names; externalize Bun FFI fallback; stabilize daemon asset builds; keep worker bundles single-file; make stdio bundle portable; remove stale retirement references; externalize native keyring; retire legacy invocation slot; await startup source cleanup; lease transcript import target; refresh sync DB audit ledger; serialize source mutations; accept deferred removal.
+- Refactoring: remove external server surface.
+- Docs: update latest schema reference.
+
 ### 2026-09-24
 - Bug fixes: tolerate missing blog bodies; harden session recall dedupe; guard moved targets; harden entry removal; recheck removal identity; guard ambient uninstall; secure ambient profile writes; enforce profile marker ownership; harden profile removal; reject unsafe profile paths; harden profile writes; normalize profile paths; contain profile writes; ignore desktop build artifacts in source sync; classify loader failures at boundary; classify missing keyring; preserve source changes during sync; bound constellation work.
 - Performance: batch navigation claims.
@@ -28,10 +33,41 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: refresh event-loop ledger; harden vector repair safety; bound vector repair reconciliation.
 - Refactoring: deduplicate vector repair policy.
 
-### 2026-09-16
-- Bug fixes: await workload diagnostics routes; persist search across navigation.
-
 ## Release Ledger
+
+## [0.226.27] - 2026-09-25
+
+Release summary: 18 bug fixes, 1 refactor, and 1 docs update.
+Tag range: `v0.226.26..v0.226.27`.
+
+### Bug Fixes
+
+- **reviews**: preserve legacy MCP records
+- **native**: validate tokenizer wasm path
+- **mcp**: sync retired ledger artifacts
+- **mcp**: drop exports for removed OS types
+- **native**: clear stale binary outputs
+- **bundle**: stabilize Node WASM names
+- **bundle**: externalize Bun FFI fallback
+- **native**: stabilize daemon asset builds
+- **native**: keep worker bundles single-file
+- **mcp**: make stdio bundle portable
+- **mcp**: remove stale retirement references
+- **build**: externalize native keyring
+- **migrations**: retire legacy invocation slot
+- **daemon**: await startup source cleanup
+- **sources**: lease transcript import target
+- **daemon**: refresh sync DB audit ledger
+- **sources**: serialize source mutations
+- **sources**: accept deferred removal
+
+### Refactoring
+
+- **mcp**: remove external server surface
+
+### Docs
+
+- **migrations**: update latest schema reference
 
 ## [0.226.26] - 2026-09-24
 
