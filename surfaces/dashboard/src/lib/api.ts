@@ -1,4 +1,5 @@
 import { installDemoApi } from "./demo";
+import { getDesktopBridge } from "./desktop";
 
 const API_BASE = "";
 function authHeaders(): HeadersInit {
@@ -272,6 +273,14 @@ export interface DaemonStatus {
 		enabled: boolean;
 		paused: boolean;
 		shadowMode: boolean;
+		mutationsFrozen?: boolean;
+		graph?: { enabled?: boolean };
+		autonomous?: {
+			enabled?: boolean;
+			frozen?: boolean;
+			allowUpdateDelete?: boolean;
+			maintenanceMode?: "execute" | "observe";
+		};
 		extraction?: { provider?: string; model?: string };
 	};
 }
@@ -1081,6 +1090,15 @@ export const api = {
 		}
 	},
 	pickFiles: async (): Promise<{ ok: boolean; paths?: string[]; unavailable?: boolean; error?: string }> => {
+		const desktop = getDesktopBridge();
+		if (desktop?.pickFiles) {
+			try {
+				const paths = await desktop.pickFiles({ title: "Choose files to import" });
+				return { ok: true, paths: paths ? [...paths] : [] };
+			} catch {
+				return { ok: false, error: "desktop file picker failed" };
+			}
+		}
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/pick-files`, {
 				method: "POST",
@@ -1150,6 +1168,15 @@ export const api = {
 		}
 	},
 	pickDirectory: async (): Promise<{ ok: boolean; path?: string; unavailable?: boolean }> => {
+		const desktop = getDesktopBridge();
+		if (desktop?.pickDirectory) {
+			try {
+				const path = await desktop.pickDirectory({ title: "Choose your vault folder" });
+				return path ? { ok: true, path } : { ok: false };
+			} catch {
+				return { ok: false };
+			}
+		}
 		try {
 			const res = await fetch(`${API_BASE}/api/sources/pick-directory`, {
 				method: "POST",

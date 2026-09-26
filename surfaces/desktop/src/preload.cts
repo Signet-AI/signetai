@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld("signetDesktop", {
 	quickCapture: (content: string) => ipcRenderer.invoke("desktop:quickCapture", content),
 	searchMemories: (query: string, limit?: number) => ipcRenderer.invoke("desktop:searchMemories", query, limit),
 	pickDirectory: (options?: { title?: string }) => ipcRenderer.invoke("desktop:pickDirectory", options),
+	pickFiles: (options?: { title?: string }) => ipcRenderer.invoke("desktop:pickFiles", options),
 	checkForUpdate: () => ipcRenderer.invoke("desktop:checkForUpdate"),
 	openExternal: (url: string) => ipcRenderer.invoke("desktop:openExternal", url),
 	quit: () => ipcRenderer.invoke("desktop:quit"),

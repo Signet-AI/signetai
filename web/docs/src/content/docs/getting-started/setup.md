@@ -70,6 +70,7 @@ update. If a managed desktop checkout was removed, rerun `signet desktop install
 to restore its source build path before the next automatic desktop update.
 
 The source-built desktop app installs to `~/Applications/Signet.app` on macOS and
-`%LOCALAPPDATA%\Programs\Signet Desktop` on Windows. These locations remain
-separate from the native CLI installation; Linux continues to use its user AppImage
-launcher.
+`%LOCALAPPDATA%\Programs\Signet Desktop` on Windows. On Windows, the install also
+updates the Signet Start Menu shortcut to point to that executable. These locations
+remain separate from the native CLI installation; Linux continues to use its user
+AppImage launcher.

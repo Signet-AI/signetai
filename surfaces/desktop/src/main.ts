@@ -469,6 +469,16 @@ async function pickDirectory(options?: { title?: string }): Promise<string | nul
 	return result.canceled ? null : (result.filePaths[0] ?? null);
 }
 
+async function pickFiles(options?: { title?: string }): Promise<readonly string[] | null> {
+	const win = focusedWindow();
+	const dialogOptions: OpenDialogOptions = {
+		title: options?.title ?? "Choose files",
+		properties: ["openFile", "multiSelections"],
+	};
+	const result = win ? await dialog.showOpenDialog(win, dialogOptions) : await dialog.showOpenDialog(dialogOptions);
+	return result.canceled ? null : result.filePaths;
+}
+
 function assertTrustedMigrationIpc(event: IpcMainInvokeEvent): void {
 	if (event.sender !== mainWindow?.webContents || !isTrustedMigrationDashboardUrl(event.senderFrame?.url))
 		throw new Error("Workspace migration is only available to the Signet desktop dashboard");
@@ -507,6 +517,7 @@ function registerIpc(): void {
 	ipcMain.handle("desktop:quickCapture", (_event, content: string) => quickCapture(content));
 	ipcMain.handle("desktop:searchMemories", (_event, query: string, limit?: number) => searchMemories(query, limit));
 	ipcMain.handle("desktop:pickDirectory", (_event, options?: { title?: string }) => pickDirectory(options));
+	ipcMain.handle("desktop:pickFiles", (_event, options?: { title?: string }) => pickFiles(options));
 	ipcMain.handle("desktop:openExternal", (_event, url: string) => shell.openExternal(validateExternalUrl(url)));
 	ipcMain.handle("desktop:checkForUpdate", () => checkForDesktopUpdate({ showNoUpdateDialog: true }));
 	ipcMain.handle("desktop:quit", () => app.quit());

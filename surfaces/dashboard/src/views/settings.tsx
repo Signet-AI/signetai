@@ -1099,16 +1099,18 @@ function AdvToggle({
 	path,
 	title,
 	desc,
+	fallback = false,
 }: {
 	store: AgentConfigStore;
 	path: readonly string[];
 	title: string;
 	desc: string;
+	fallback?: boolean;
 }) {
 	return (
 		<Row title={title} desc={desc}>
 			<Switch
-				checked={store.aBool(path)}
+				checked={store.aBool(path, fallback)}
 				onCheckedChange={(v) => {
 					store.aSetBool(path, v);
 					void store.save();
@@ -1230,10 +1232,36 @@ function AdvNum({
 function AdvancedSection() {
 	const store = useAgentConfig();
 	const pv2 = (key: string): readonly string[] => ["memory", "pipelineV2", key];
+	const pv2Nested = (group: string, key: string): readonly string[] => ["memory", "pipelineV2", group, key];
 	const srch = (key: string): readonly string[] => ["search", key];
 	const drm = (key: string): readonly string[] => ["memory", "dreaming", key];
+	const status = useAsync(() => api.getStatus(), { intervalMs: 5_000 }).data;
+	const pipeline = status?.pipelineV2;
 	const embPath = useMemo(() => resolveEmbPath(store.agent), [store.agent]);
-	const maintenanceMode = store.aStr(pv2("maintenanceMode"));
+	const maintenanceModeValue = store.aStr(pv2Nested("autonomous", "maintenanceMode"));
+	const legacyMaintenanceMode = store.aStr(pv2("maintenanceMode"));
+	const maintenanceMode =
+		maintenanceModeValue === "observe" || maintenanceModeValue === "execute"
+			? maintenanceModeValue
+			: legacyMaintenanceMode === "observe" || legacyMaintenanceMode === "execute"
+				? legacyMaintenanceMode
+				: (pipeline?.autonomous?.maintenanceMode ?? "execute");
+	const graphEnabled = store.aBool(
+		pv2Nested("graph", "enabled"),
+		store.aBool(pv2("graphEnabled"), pipeline?.graph?.enabled ?? true),
+	);
+	const autonomousEnabled = store.aBool(
+		pv2Nested("autonomous", "enabled"),
+		store.aBool(pv2("autonomousEnabled"), pipeline?.autonomous?.enabled ?? true),
+	);
+	const autonomousFrozen = store.aBool(
+		pv2Nested("autonomous", "frozen"),
+		store.aBool(pv2("autonomousFrozen"), pipeline?.autonomous?.frozen ?? false),
+	);
+	const allowUpdateDelete = store.aBool(
+		pv2Nested("autonomous", "allowUpdateDelete"),
+		store.aBool(pv2("allowUpdateDelete"), pipeline?.autonomous?.allowUpdateDelete ?? true),
+	);
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -1249,24 +1277,28 @@ function AdvancedSection() {
 					path={pv2("enabled")}
 					title="Pipeline enabled"
 					desc="Master switch. The memory pipeline does nothing when disabled."
+					fallback={pipeline?.enabled ?? true}
 				/>
 				<AdvToggle
 					store={store}
 					path={pv2("shadowMode")}
 					title="Shadow mode"
 					desc="Run extraction and decisions without writing. Safe for evaluation."
+					fallback={pipeline?.shadowMode ?? false}
 				/>
 				<AdvToggle
 					store={store}
 					path={pv2("mutationsFrozen")}
 					title="Freeze mutations"
 					desc="Emergency brake — blocks all writes even when shadow mode is off."
+					fallback={pipeline?.mutationsFrozen ?? false}
 				/>
 				<AdvToggle
 					store={store}
-					path={pv2("graphEnabled")}
+					path={pv2Nested("graph", "enabled")}
 					title="Knowledge graph"
 					desc="Build and query a graph from extracted entity relationships."
+					fallback={graphEnabled}
 				/>
 			</div>
 
@@ -1274,21 +1306,24 @@ function AdvancedSection() {
 				<GroupLabel>Autonomy &amp; maintenance</GroupLabel>
 				<AdvToggle
 					store={store}
-					path={pv2("autonomousEnabled")}
+					path={pv2Nested("autonomous", "enabled")}
 					title="Autonomous operations"
 					desc="Allow autonomous pipeline operations like maintenance and repair."
+					fallback={autonomousEnabled}
 				/>
 				<AdvToggle
 					store={store}
-					path={pv2("autonomousFrozen")}
+					path={pv2Nested("autonomous", "frozen")}
 					title="Freeze autonomous writes"
 					desc="Block autonomous writes while still allowing autonomous reads."
+					fallback={autonomousFrozen}
 				/>
 				<AdvToggle
 					store={store}
-					path={pv2("allowUpdateDelete")}
+					path={pv2Nested("autonomous", "allowUpdateDelete")}
 					title="Allow update/delete"
 					desc="Permit UPDATE/DELETE decisions on existing memories."
+					fallback={allowUpdateDelete}
 				/>
 				<Row
 					title="Maintenance mode"
@@ -1301,7 +1336,7 @@ function AdvancedSection() {
 							{ value: "execute", label: "execute" },
 						]}
 						onChange={(v) => {
-							store.aSetStr(pv2("maintenanceMode"), v);
+							store.aSetStr(pv2Nested("autonomous", "maintenanceMode"), v);
 							void store.save();
 						}}
 					/>

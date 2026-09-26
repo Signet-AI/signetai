@@ -118,6 +118,14 @@ describe("agent config store", () => {
 		expect(isDreamingEnabled({ memory: { dreaming: {} } })).toBe(true);
 	});
 
+	test("config readers can display daemon defaults without overwriting explicit values", async () => {
+		const harness = await mountHarness();
+		expect(harness.store.aBool(["memory", "pipelineV2", "missing"], true)).toBe(true);
+		expect(harness.store.aBool(["memory", "pipelineV2", "mutationsFrozen"], false)).toBe(true);
+		expect(harness.store.aStr(["memory", "pipelineV2", "missingMode"], "execute")).toBe("execute");
+		await harness.unmount();
+	});
+
 	test("mutations are visible to an immediate save in the same tick (disconnect purge regression)", async () => {
 		capturedSaveBody = null;
 		const harness = await mountHarness();
