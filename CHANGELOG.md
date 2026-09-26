@@ -7,7 +7,10 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-09-26
-- Bug fixes: scope typecheck to affected workspaces; resolve windows tokenizer wasm path; satisfy comment-strip and event-loop ledger policies; repair recall scope and bounds.
+- Features: add migration recovery controls; harden workspace migration; add descriptor-rooted fs; unify durable admission pipeline; wire durable admission and canonical inbox layout; add bounded manual inbox worker; fence git writer by migration generation; fence transcript and import writers; fence db owner admission during migration drain; add verified root git archive retirement; expose workspace migration lifecycle; converge uploads on durable admission boundary; wire protection evidence into daemon and cli; execute disposable restore verification; add migration control drain boundary; finalize db-owned admission lifecycle; unify protection contract across surfaces; add protection and durable import status; add shared component protection status; add independent skills repository setup; add stopped resumable workspace migration engine; add workspace migration writer barrier; make JSONL authoritative for completed capture; add durable workspace import inbox admission; add canonical v1/v2 layout resolver.
+- Bug fixes: back up migration snapshot via sqlite wrapper; take main's scoped pre-commit during rebase; repair rebase conflict resolutions; render storage move notice as a header strip; clarify storage move notice; close destination recovery races; recover migration lease after hard process exit; preserve journal ownership and verify production sources; scope migration drain to source daemon identity; refuse migration filesystems that discard permissions; reconcile migrated artifacts and completed transcripts; resolve migrated v1 artifact links in v2 lineage; reject missing source database during read-only preflight; retain legacy transcript artifacts in active layout; verify SQLite snapshot rows before cutover; make protection evidence readable in narrow panes; validate package map at its owning source; fail closed on unverified secret restore; fail closed when resuming workspace migration; keep route drift scanner within lint guardrails; restore production build and repository guardrails; reconcile runtime audits; preserve workspace source state; verify protection receipt digests; recover published inbox imports; nest migration 158 ledger rebuild; repair scoped admission recovery; harden migration verification; require migration readiness; fence descriptor removal; wire safe root git migration; harden workspace migration cutover; wire shared owner barrier; fence db owner admissions; harden protection status reachability; map admission conflicts; expose writer drain boundary; harden protection restore evidence; harden admission recovery; close filesystem review gaps; preserve managed ignore state; preserve custom setup paths; harden v2 migration; resolve v2 workspace database paths; align status across surfaces; wire durable manual inbox admission lifecycle; require verified protection and restore evidence; enforce transcript import agent scope; finish v2 layout adoption; harden stopped workspace migration lifecycle; wire migration lifecycle to canonical workspace state; preserve legacy layout contracts; decouple git sync from unmanaged roots; harden migration filesystem journal; adopt canonical workspace layout across runtime surfaces; route transcript uploads away from document imports; fail closed on unverified restores; enforce root ownership and decouple ignore updates; make workspace migration resumable and fenced; harden inbox admission recovery; route database paths through workspace layout; scope typecheck to affected workspaces; resolve windows tokenizer wasm path; satisfy comment-strip and event-loop ledger policies; repair recall scope and bounds.
+- Refactoring: keep migration SQLite verification in database owner.
+- Docs: reconcile workspace routes and drift detection; document workspace v2 migration and ownership.
 
 ### 2026-09-25
 - Features: daemon-owned workspace stats, honest queue counts, Dreaming state.
@@ -34,6 +37,113 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: trim integrity cleanup.
 
 ## Release Ledger
+
+## [0.228.0] - 2026-09-26
+
+Release summary: 25 features, 62 bug fixes, 1 refactor, and 2 docs updates.
+Tag range: `v0.227.1..v0.228.0`.
+
+### Features
+
+- **workspace**: add migration recovery controls
+- **cli**: harden workspace migration
+- **core**: add descriptor-rooted fs
+- **import**: unify durable admission pipeline
+- **import**: wire durable admission and canonical inbox layout
+- **daemon**: add bounded manual inbox worker
+- **daemon**: fence git writer by migration generation
+- **daemon**: fence transcript and import writers
+- **daemon**: fence db owner admission during migration drain
+- add verified root git archive retirement
+- **cli**: expose workspace migration lifecycle
+- converge uploads on durable admission boundary
+- wire protection evidence into daemon and cli
+- execute disposable restore verification
+- **daemon**: add migration control drain boundary
+- **import**: finalize db-owned admission lifecycle
+- unify protection contract across surfaces
+- **dashboard**: add protection and durable import status
+- add shared component protection status
+- **git**: add independent skills repository setup
+- **cli**: add stopped resumable workspace migration engine
+- **daemon**: add workspace migration writer barrier
+- **transcripts**: make JSONL authoritative for completed capture
+- add durable workspace import inbox admission
+- **workspace**: add canonical v1/v2 layout resolver
+
+### Bug Fixes
+
+- **cli**: back up migration snapshot via sqlite wrapper
+- **hooks**: take main's scoped pre-commit during rebase
+- **daemon,cli**: repair rebase conflict resolutions
+- **dashboard**: render storage move notice as a header strip
+- **dashboard**: clarify storage move notice
+- **migration**: close destination recovery races
+- **cli**: recover migration lease after hard process exit
+- **migration**: preserve journal ownership and verify production sources
+- scope migration drain to source daemon identity
+- refuse migration filesystems that discard permissions
+- **workspace**: reconcile migrated artifacts and completed transcripts
+- **transcripts**: resolve migrated v1 artifact links in v2 lineage
+- **migration**: reject missing source database during read-only preflight
+- **migration**: retain legacy transcript artifacts in active layout
+- **migration**: verify SQLite snapshot rows before cutover
+- **dashboard**: make protection evidence readable in narrow panes
+- **docs**: validate package map at its owning source
+- **daemon**: fail closed on unverified secret restore
+- **cli**: fail closed when resuming workspace migration
+- **docs**: keep route drift scanner within lint guardrails
+- **workspace**: restore production build and repository guardrails
+- **daemon**: reconcile runtime audits
+- **core**: preserve workspace source state
+- verify protection receipt digests
+- recover published inbox imports
+- **core**: nest migration 158 ledger rebuild
+- **import**: repair scoped admission recovery
+- **import**: recover published inbox imports
+- **cli**: harden migration verification
+- **cli**: require migration readiness
+- **core**: fence descriptor removal
+- wire safe root git migration
+- harden workspace migration cutover
+- **daemon**: wire shared owner barrier
+- **daemon**: fence db owner admissions
+- harden protection status reachability
+- **import**: map admission conflicts
+- **daemon**: expose writer drain boundary
+- harden protection restore evidence
+- **import**: harden admission recovery
+- **migration**: close filesystem review gaps
+- **git**: preserve managed ignore state
+- **workspace**: preserve custom setup paths
+- **workspace**: harden v2 migration
+- **cli**: resolve v2 workspace database paths
+- **protection**: align status across surfaces
+- **import**: wire durable manual inbox admission lifecycle
+- require verified protection and restore evidence
+- **daemon**: enforce transcript import agent scope
+- **workspace**: finish v2 layout adoption
+- **cli**: harden stopped workspace migration lifecycle
+- **cli**: wire migration lifecycle to canonical workspace state
+- **workspace**: preserve legacy layout contracts
+- decouple git sync from unmanaged roots
+- harden migration filesystem journal
+- adopt canonical workspace layout across runtime surfaces
+- **daemon**: route transcript uploads away from document imports
+- fail closed on unverified restores
+- **git**: enforce root ownership and decouple ignore updates
+- make workspace migration resumable and fenced
+- **import**: harden inbox admission recovery
+- **runtime**: route database paths through workspace layout
+
+### Refactoring
+
+- **cli**: keep migration SQLite verification in database owner
+
+### Docs
+
+- reconcile workspace routes and drift detection
+- document workspace v2 migration and ownership
 
 ## [0.227.1] - 2026-09-26
 
