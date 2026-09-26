@@ -783,7 +783,7 @@ describe("Windows desktop install", () => {
 			expect(result.appDir).toBe(join(localAppData, "Programs", "Signet Desktop"));
 			expect(result.startMenuShortcut).toBe(
 				join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Signet.lnk"),
-		);
+			);
 			expect(shortcutCalls).toHaveLength(1);
 			expect(shortcutCalls[0]?.cmd).toBe("powershell.exe");
 			expect(shortcutCalls[0]?.args).toContain("-Command");
