@@ -68,10 +68,12 @@ describe("auth guard co-location", () => {
 	}
 
 	it("passes the resolved SQLite runtime to the shared owner", async () => {
-		const { createRecallDbOwnerOptions } = await import("./daemon");
-		expect(createRecallDbOwnerOptions("/tmp/custom-libsqlite3.dylib")).toEqual({
+		const { createRecallDbOwnerOptions, daemonMigrationControl } = await import("./daemon");
+		const options = createRecallDbOwnerOptions("/tmp/custom-libsqlite3.dylib");
+		expect(options).toEqual({
 			dbPath: join(tmpDir, "memory", "memories.db"),
 			sqlitePath: "/tmp/custom-libsqlite3.dylib",
+			migrationControl: daemonMigrationControl,
 		});
 	});
 

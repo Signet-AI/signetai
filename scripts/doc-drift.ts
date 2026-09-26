@@ -2,6 +2,7 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { expandRoutePattern, normalizeRoutePath } from "./doc-drift-routes";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
@@ -90,10 +91,7 @@ function sliceSection(content: string, heading: string): string {
 	return content.slice(start, end);
 }
 function normRoute(p: string): string {
-	return p
-		.replace(/\{[^}]+\}/g, "")
-		.replace(/\/+$/, "")
-		.toLowerCase();
+	return normalizeRoutePath(p);
 }
 
 function routeKey(method: string, path: string): string {
@@ -114,20 +112,41 @@ function extractRoutesFromSource(): RouteEntry[] {
 		...listTsFilesRecursive("platform/daemon/src/routes"),
 		"platform/daemon/src/mcp/route.ts",
 	];
-	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*["'`]([^"'`]+)["'`]/g;
+	const routePattern = /app\.(get|post|put|patch|delete|all)\(\s*([`"'])(.*?)\2/g;
 
 	const routes: RouteEntry[] = [];
 
 	for (const file of files) {
 		if (!fileExists(file)) continue;
 		const content = read(file);
+		const finiteArrays: Record<string, readonly string[]> = {};
+		const captureFiniteArray = (match: RegExpMatchArray): void => {
+			const name = match[1];
+			const items = match[2];
+			if (name === undefined || items === undefined) return;
+			const values = [...items.matchAll(/["']([^"']+)["']/g)]
+				.map((value) => value[1])
+				.filter((value): value is string => value !== undefined);
+			const residue = items.replace(/["'][^"']*["']/g, "").replace(/[\s,]/g, "");
+			if (values.length > 0 && residue.length === 0) finiteArrays[name] = values;
+		};
+		for (const arrayMatch of content.matchAll(/(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*\[([^\]]*)\]\s*(?:as const)?/g))
+			captureFiniteArray(arrayMatch);
+		for (const loopMatch of content.matchAll(
+			/for\s*\(\s*const\s+([A-Za-z_$][\w$]*)\s+of\s+\[([^\]]*)\]\s*(?:as const\s*)?\)/g,
+		))
+			captureFiniteArray(loopMatch);
 		routePattern.lastIndex = 0;
 		let match: RegExpExecArray | null = null;
 		while ((match = routePattern.exec(content)) !== null) {
-			const method = match[1].toUpperCase();
-			const path = match[2];
-			if (path === "*" || path === "/*" || path === "/**" || path === "/") continue;
-			routes.push({ method, path, source: file });
+			const method = match[1]?.toUpperCase();
+			const rawPath = match[3];
+			if (method === undefined || rawPath === undefined) continue;
+			const paths = expandRoutePattern(rawPath, finiteArrays);
+			for (const path of paths) {
+				if (path === "*" || path === "/*" || path === "/**" || path === "/") continue;
+				routes.push({ method, path, source: file });
+			}
 		}
 	}
 	const seen = new Set<string>();
@@ -331,73 +350,24 @@ interface PackageTableDrift {
 	extraInTable: string[];
 }
 
-function parsePackageTable(content: string, sectionHeader: string): Map<string, string> {
-	const tableContent = sliceSection(content, sectionHeader);
-	if (!tableContent) return new Map();
-
-	const pkgPattern = /`([^`]+)`/;
-	const linkPattern = /\]\(([^)]+)\)/;
-	const result = new Map<string, string>();
-
-	for (const line of tableContent.split("\n")) {
-		if (!line.startsWith("|") || line.includes("---")) continue;
-		const cells = line
-			.split("|")
-			.map((c) => c.trim())
-			.filter(Boolean);
-		if (cells.length < 2) continue;
-		const nameMatch = cells[0].match(pkgPattern);
-		if (nameMatch && nameMatch[1] !== "Package") {
-			const pathMatch = cells[0].match(linkPattern) ?? cells[1].match(pkgPattern);
-			const key = pathMatch ? pathMatch[1].replace(/^\.\//, "").replace(/\/$/, "") : nameMatch[1];
-			result.set(key, line);
-		}
-	}
-
-	return result;
-}
-
-function tableCoversDir(table: Map<string, string>, dir: string): boolean {
-	if (table.has(dir)) return true;
-	for (const key of table.keys()) {
-		if (!key.includes("*")) continue;
-		const pattern = new RegExp(`^${key.split("*").map(escapeRegex).join(".*")}$`);
-		if (pattern.test(dir)) return true;
-	}
-	return false;
-}
-
-function escapeRegex(value: string): string {
-	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function checkPackageDrift(claudeMd: string): PackageTableDrift[] {
+function checkPackageDrift(): PackageTableDrift[] {
 	const actual = getActualPackages();
-	const actualDirs = new Set(actual.map((p) => p.dir));
-
-	const results: PackageTableDrift[] = [];
-	const legacyClaudeTable = parsePackageTable(claudeMd, "## Package map");
-	const claudeTable =
-		legacyClaudeTable.size > 0 ? legacyClaudeTable : parsePackageTable(claudeMd, "## Package And Directory Map");
-	results.push({
-		file: "AGENTS.md",
-		missingFromTable: actual.filter((p) => !tableCoversDir(claudeTable, p.dir)),
-		extraInTable: [...claudeTable.keys()].filter((dir) => {
-			if (dir.includes("*")) return !actual.some((p) => tableCoversDir(new Map([[dir, ""]]), p.dir));
-			return !actualDirs.has(dir) && !fileExists(dir);
-		}),
-	});
-	if (fileExists("README.md")) {
-		const readme = read("README.md");
-		const readmeTable = parsePackageTable(readme, "## Packages");
-		results.push({
-			file: "README.md",
-			missingFromTable: actual.filter((p) => !readmeTable.has(p.dir)),
-			extraInTable: [...readmeTable.keys()].filter((dir) => !actualDirs.has(dir) && !fileExists(dir)),
-		});
+	const content = read("repo.map.yaml");
+	const mapped = new Map<string, string>();
+	for (const match of content.matchAll(/^\s*- path:\s*([^\s#]+)\s*\n\s*name:\s*["']?([^"'\n]+)["']?\s*$/gm)) {
+		const path = match[1];
+		const name = match[2]?.trim();
+		if (path === undefined || name === undefined) continue;
+		if (mapped.has(path)) throw new Error(`Duplicate package in repo.map.yaml: ${path}`);
+		mapped.set(path, name);
 	}
-
-	return results;
+	return [
+		{
+			file: "repo.map.yaml",
+			missingFromTable: actual.filter((pkg) => mapped.get(pkg.dir) !== pkg.name),
+			extraInTable: [...mapped.keys()].filter((dir) => !fileExists(dir)),
+		},
+	];
 }
 
 interface DriftReport {
@@ -419,7 +389,7 @@ function generateReport(): DriftReport {
 	const routes = checkRouteDrift(apiMd);
 	const migrations = checkMigrationDrift(architectureMd);
 	const keyFiles = checkKeyFilesDrift(claudeMd);
-	const packages = checkPackageDrift(claudeMd);
+	const packages = checkPackageDrift();
 
 	const summary: string[] = [];
 

@@ -1,6 +1,5 @@
 import { stat } from "node:fs/promises";
-import { join } from "node:path";
-import { vectorSearchWithMetadata } from "@signet/core";
+import { resolveWorkspaceLayout, vectorSearchWithMetadata } from "@signet/core";
 import type { DbAccessor, ReadDb, WriteDb } from "./db-accessor";
 import { getDbAccessorPath, hasDbAccessor, resolveSqliteAgentsDir } from "./db-accessor";
 import { registerDbAccessorCloseParticipant } from "./db-accessor-lifecycle";
@@ -40,6 +39,7 @@ import type {
 	DbOwnerWorkloadClass,
 } from "./db-owner-protocol";
 import { applyVectorRepairBatch } from "./vector-repair-owner";
+import { MigrationControlBoundary } from "./workspace-writer-barrier";
 
 let isolatedTestAccessor: DbAccessor | null = null;
 export function registerDbOwnerIsolatedTestAccessor(accessor: DbAccessor): void {
@@ -224,6 +224,7 @@ async function executeInlineOwnerRequest(accessor: DbAccessor, request: DbOwnerR
 }
 
 function inlineOwner(accessor: DbAccessor): DbOwnerClient {
+	const migrationControl = new MigrationControlBoundary(`inline-db-owner:${process.pid}`);
 	const submit = <Result>(request: DbOwnerRequest, options: DbOwnerSubmitOptions): DbOwnerJobHandle<Result> => {
 		const now = Date.now();
 		const job: DbOwnerJob = {
@@ -262,6 +263,7 @@ function inlineOwner(accessor: DbAccessor): DbOwnerClient {
 			lastError: null,
 		}),
 		close: async () => undefined,
+		migrationControl: () => migrationControl,
 	};
 }
 
@@ -287,7 +289,7 @@ async function dbIdentity(dbPath: string): Promise<string> {
 export async function startDbOwnerWithRole(
 	dbPath: string,
 	workerRole: "generic" | "recall",
-	options: Pick<DbOwnerClientOptions, "workerPath"> = {},
+	options: Pick<DbOwnerClientOptions, "workerPath" | "migrationControl"> = {},
 ): Promise<DbOwnerClient> {
 	const identity = await dbIdentity(dbPath);
 	const key = dbPath;
@@ -327,12 +329,12 @@ export async function startDbOwnerWithRole(
 	}
 }
 export async function startDbOwner(
-	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
+	dbPath = resolveWorkspaceLayout(resolveSqliteAgentsDir()).database,
 ): Promise<DbOwnerClient> {
 	return await startDbOwnerWithRole(dbPath, "generic");
 }
 export async function startDbRecallOwner(
-	dbPath = join(resolveSqliteAgentsDir(), "memory", "memories.db"),
+	dbPath = resolveWorkspaceLayout(resolveSqliteAgentsDir()).database,
 ): Promise<DbOwnerClient> {
 	return await startDbOwnerWithRole(dbPath, "recall");
 }
@@ -392,6 +394,7 @@ function registeredOwnerProxy(owner: DbOwnerClient): DbOwnerClient {
 			owner.cancel(jobId);
 		},
 		health: (): ReturnType<DbOwnerClient["health"]> => currentOwner().health(),
+		migrationControl: () => currentOwner().migrationControl(),
 		close: async (): Promise<void> => {
 			const maintenance = getDbOwnerMaintenance();
 			if (maintenance === null || maintenance.owner !== owner) throw registeredOwnerError();

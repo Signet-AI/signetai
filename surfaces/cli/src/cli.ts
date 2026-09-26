@@ -53,6 +53,7 @@ import { registerGraphiqCommands } from "./commands/graphiq.js";
 import { registerHookCommands } from "./commands/hook.js";
 import { registerKnowledgeCommands } from "./commands/knowledge.js";
 import { registerMemoryCommands } from "./commands/memory.js";
+import { registerMigrationCommands } from "./commands/migration.js";
 import { registerOntologyCommands } from "./commands/ontology.js";
 import { registerPortableCommands } from "./commands/portable.js";
 import { registerRepairQueueCommands } from "./commands/repair-queue.js";
@@ -836,7 +837,7 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 		return;
 	}
 
-	if (topLevelCommand === "hook" || topLevelCommand === "setup") {
+	if (topLevelCommand === "hook" || topLevelCommand === "setup" || topLevelCommand === "migration") {
 		return;
 	}
 
@@ -856,6 +857,14 @@ const healthDeps = {
 	extractPathOption,
 	formatUptime,
 	getDaemonStatus,
+	fetchProtection: async (port: number): Promise<unknown | null> => {
+		try {
+			const response = await fetch(`http://127.0.0.1:${port}/api/protection`);
+			return response.ok ? await response.json() : null;
+		} catch {
+			return null;
+		}
+	},
 	normalizeAgentPath,
 	parseIntegerValue,
 	signetLogo,
@@ -1053,6 +1062,7 @@ registerWorkspaceCommands(program, {
 	signetLogo,
 });
 
+registerMigrationCommands(program);
 registerHookCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonResult,

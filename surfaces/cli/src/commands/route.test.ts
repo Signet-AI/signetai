@@ -243,7 +243,7 @@ describe("registerRouteCommands", () => {
 		tempDirs.push(dir);
 		const lines: string[] = [];
 		const previousExitCode = process.exitCode;
-		process.exitCode = undefined;
+		process.exitCode = 0;
 		console.log = (line?: unknown) => {
 			lines.push(String(line ?? ""));
 		};
@@ -286,9 +286,9 @@ describe("registerRouteCommands", () => {
 
 			expect(lines.join("\n")).toContain("model selection is agent-managed for opencode");
 			expect(lines.join("\n")).toContain("verify the agent's native configuration");
-			expect(process.exitCode).toBeUndefined();
+			expect(process.exitCode).toBe(0);
 		} finally {
-			process.exitCode = previousExitCode;
+			process.exitCode = previousExitCode ?? 0;
 		}
 	});
 });

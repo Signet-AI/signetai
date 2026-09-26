@@ -2,10 +2,11 @@ import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveWorkspaceLayout } from "@signet/core";
 import type { DbAccessor, WriteDb } from "./db-accessor";
 import { runWriteTxAsync } from "./db-accessor";
 import { logger } from "./logger";
-import { indexCanonicalTranscriptJsonl, writeTranscriptArtifact } from "./memory-lineage";
+import { indexCanonicalTranscriptJsonl } from "./memory-lineage";
 import { isNoiseSession } from "./session-noise";
 import { awaitPressureClear, isSystemPressureHigh } from "./system-pressure";
 import { getStoredSessionTranscriptInfoAsync, upsertSessionTranscriptAsync } from "./session-transcripts";
@@ -72,6 +73,10 @@ interface TranscriptCaptureResult {
 	readonly sourceSha256: string;
 	readonly sourceSizeBytes: number | null;
 	readonly sourceMtimeMs: number | null;
+}
+
+class CanonicalTranscriptMismatchError extends Error {
+	readonly name = "CanonicalTranscriptMismatchError";
 }
 
 export interface TranscriptCaptureWorkerHandle {
@@ -150,7 +155,7 @@ function basePathFor(input?: string): string {
 
 function sourceLockPath(basePath: string, agentId: string, sourceIdentity: string): string {
 	const token = sha256(`${agentId}\0${sourceIdentity}`).slice(0, 32);
-	return join(basePath, ".daemon", "locks", `transcript-capture-${token}`);
+	return join(resolveWorkspaceLayout(basePath).runtime, "locks", `transcript-capture-${token}`);
 }
 
 function sourceIdentityFor(input: TranscriptCaptureJobInput, sourcePath: string | null): string {
@@ -524,28 +529,6 @@ async function processTranscriptCaptureJob(
 		return captureResult(await writeCaptureAudit(basePath, job, resolved), resolved);
 	}
 	const sourceBacked = Boolean(job.transcriptPath);
-	if (!sourceBacked && job.sessionKey) {
-		await upsertSessionTranscriptAsync(
-			job.sessionKey,
-			resolved.transcript,
-			job.harness,
-			job.project,
-			job.agentId,
-			job.endedAt ?? job.capturedAt,
-			dbAccessor,
-			{ completedAt: job.endedAt ?? job.capturedAt, preserveExistingContent: true },
-		);
-	}
-	if (
-		isNoiseSession({
-			project: job.project,
-			sessionKey: job.sessionKey,
-			sessionId: job.sessionId,
-			harness: job.harness,
-		})
-	) {
-		return captureResult(await writeCaptureAudit(basePath, job, resolved), resolved);
-	}
 	const canonicalWasWritten = await writeCanonicalTranscriptFromSnapshot({
 		basePath,
 		agentId: job.agentId,
@@ -559,7 +542,33 @@ async function processTranscriptCaptureJob(
 		transcriptPath: job.transcriptPath ?? undefined,
 		preserveExistingSession: resolved.sessionCompleted || job.previouslyCompleted,
 	});
-	if (!canonicalWasWritten) return captureResult(null, resolved);
+	if (!canonicalWasWritten) {
+		throw new CanonicalTranscriptMismatchError(
+			`canonical transcript mismatch: retained JSONL is richer or divergent for session ${job.sessionKey ?? job.sessionId}`,
+		);
+	}
+	if (
+		isNoiseSession({
+			project: job.project,
+			sessionKey: job.sessionKey,
+			sessionId: job.sessionId,
+			harness: job.harness,
+		})
+	) {
+		return captureResult(await writeCaptureAudit(basePath, job, resolved), resolved);
+	}
+	if (!sourceBacked && job.sessionKey) {
+		await upsertSessionTranscriptAsync(
+			job.sessionKey,
+			resolved.transcript,
+			job.harness,
+			job.project,
+			job.agentId,
+			job.endedAt ?? job.capturedAt,
+			dbAccessor,
+			{ completedAt: job.endedAt ?? job.capturedAt, preserveExistingContent: true },
+		);
+	}
 	if (sourceBacked && job.sessionKey && (!resolved.sessionCompleted || job.previouslyCompleted)) {
 		await upsertSessionTranscriptAsync(
 			job.sessionKey,
@@ -572,19 +581,6 @@ async function processTranscriptCaptureJob(
 			{ completedAt: job.endedAt ?? job.capturedAt, preserveExistingContent: true },
 		);
 	}
-	const transcriptArtifact = await writeTranscriptArtifact({
-		agentId: job.agentId,
-		sessionId: job.sessionId,
-		sessionKey: job.sessionKey,
-		project: job.project,
-		harness: job.harness,
-		capturedAt: job.capturedAt,
-		startedAt: null,
-		endedAt: job.endedAt,
-		transcript: resolved.transcript,
-		summaryStatus: "not_requested",
-		replaceExisting: job.sourceIdentity !== null,
-	});
 	await indexCanonicalTranscriptJsonl({
 		agentId: job.agentId,
 		sessionId: job.sessionId,
@@ -595,7 +591,7 @@ async function processTranscriptCaptureJob(
 		startedAt: null,
 		endedAt: job.endedAt,
 		transcript: resolved.transcript,
-		manifestPath: transcriptArtifact.manifestPath,
+		manifestPath: canonicalTranscriptRelativePath(job.harness),
 	});
 	const auditPath = await writeCaptureAudit(basePath, job, resolved);
 	logger.debug("transcripts", "Transcript capture job completed", {
@@ -603,7 +599,7 @@ async function processTranscriptCaptureJob(
 		harness: job.harness,
 		sessionKey: job.sessionKey,
 		path: canonicalTranscriptRelativePath(job.harness),
-		transcriptPath: transcriptArtifact.transcriptPath,
+		transcriptPath: canonicalTranscriptRelativePath(job.harness),
 	});
 	return captureResult(auditPath, resolved);
 }
@@ -709,6 +705,7 @@ async function runTranscriptCaptureOnceInternal(dbAccessor: DbAccessor, basePath
 			await markDone(dbAccessor, job, result);
 		} catch (error) {
 			await markFailed(dbAccessor, job, error);
+			if (error instanceof CanonicalTranscriptMismatchError) return true;
 			throw error;
 		}
 		return true;

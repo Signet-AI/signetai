@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { persistWorkspaceLayout } from "@signet/core";
+import Database from "../sqlite.js";
 import {
 	getExtractionStatusNotice,
 	getStatusReport,
@@ -55,6 +57,8 @@ function depsFor(basePath: string) {
 			transcripts: null,
 		}),
 		normalizeAgentPath: (pathValue: string) => pathValue,
+		parseIntegerValue: (value: unknown) =>
+			typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) || null : null,
 		signetLogo: () => "signet",
 	};
 }
@@ -103,6 +107,36 @@ describe("status workspace schema", () => {
 });
 
 describe("status report openclaw backup risk", () => {
+	it("reads v2 database status from the canonical workspace layout", async () => {
+		const root = mkdtempSync(join(tmpdir(), "health-v2-"));
+		const workspace = join(root, "agents");
+		try {
+			mkdirSync(join(workspace, "data"), { recursive: true });
+			persistWorkspaceLayout(workspace, { version: 2 });
+			const db = Database(join(workspace, "data", "signet.db"));
+			try {
+				db.exec("CREATE TABLE memories (id TEXT PRIMARY KEY)");
+				db.exec("INSERT INTO memories (id) VALUES ('m1')");
+			} finally {
+				db.close();
+			}
+			const deps = depsFor(workspace);
+			const report = await getStatusReport(workspace, {
+				...deps,
+				detectExistingSetup: () => ({
+					agentsDir: true,
+					agentsMd: false,
+					agentYaml: false,
+					memoryDb: true,
+				}),
+			});
+			expect(report.db.exists).toBe(true);
+			expect(report.db.memoryCount).toBe(1);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
 	it("marks workspace as unprotected when openclaw is linked and origin is missing", async () => {
 		const root = mkdtempSync(join(tmpdir(), "health-risk-"));
 		const workspace = join(root, "agents");

@@ -3,16 +3,19 @@ import { OpenClawConnector, type OpenClawRuntimeState } from "@signet/connector-
 import {
 	type SignetInstallationReport,
 	type SchemaType,
+	detectSchema,
 	detectSignetInstallations,
 	getMissingIdentityFiles,
 	hasValidIdentity,
 	inactivePackageManagerInstallations,
 	loadIdentityMode,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import chalk from "chalk";
 import { daemonAccessLines } from "../lib/network.js";
 import type { DaemonLastExit, DaemonResourceUsage } from "../lib/runtime.js";
 import { getGitRemoteState, getSnapshotProtection, hasOpenClawWorkspaceLink } from "../lib/workspace-protection.js";
+import Database from "../sqlite.js";
 
 import { getDaemonBaseUrl } from "./repair-queue.js";
 
@@ -165,6 +168,7 @@ interface StatusReport {
 	readonly openclawRuntime: OpenClawRuntimeState;
 	readonly openclawWorkspaceLinked: boolean;
 	readonly openclawWorkspaceUnprotected: boolean;
+	readonly protection?: unknown;
 }
 
 interface DoctorFinding {
@@ -188,6 +192,18 @@ interface StatusDeps {
 	readonly normalizeAgentPath: (pathValue: string) => string;
 	readonly signetLogo: () => string;
 	readonly detectInstallations?: () => SignetInstallationReport;
+	readonly fetchProtection?: (port: number) => Promise<unknown | null>;
+}
+
+function readCount(db: ReturnType<typeof Database>, sql: string, deps: StatusDeps): number | null {
+	try {
+		const raw = db.prepare(sql).get();
+		return typeof raw === "object" && raw !== null && "count" in raw
+			? deps.parseIntegerValue((raw as Record<string, unknown>).count)
+			: null;
+	} catch {
+		return null;
+	}
 }
 
 export async function getStatusReport(basePath: string, deps: StatusDeps): Promise<StatusReport> {
@@ -209,6 +225,7 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 		typeof daemon.workspacePath === "string" && deps.normalizeAgentPath(daemon.workspacePath) === basePath
 			? (daemon.workspaceStats ?? null)
 			: null;
+	const protection = deps.fetchProtection ? await deps.fetchProtection(deps.defaultPort) : null;
 	const report: StatusReport = {
 		basePath,
 		installed,
@@ -233,9 +250,37 @@ export async function getStatusReport(basePath: string, deps: StatusDeps): Promi
 		openclawRuntime,
 		openclawWorkspaceLinked,
 		openclawWorkspaceUnprotected: openclawWorkspaceLinked && git.origin === null && snapshot === null,
+		...(protection ? { protection } : {}),
 	};
 
-	return report;
+	if (!existing.memoryDb || workspaceStats !== null) {
+		return report;
+	}
+
+	let db: ReturnType<typeof Database> | null = null;
+	try {
+		db = Database(resolveWorkspaceLayout(basePath).database, {
+			readonly: true,
+		});
+		const schema = detectSchema(db);
+		const memoryCount = readCount(db, "SELECT COUNT(*) as count FROM memories", deps);
+		return {
+			...report,
+			db: {
+				...report.db,
+				exists: true,
+				schema: report.db.schema ?? schema.type,
+				needsMigration: report.db.needsMigration ?? (schema.type !== "core" && schema.type !== "unknown"),
+				memoryCount: report.db.memoryCount ?? memoryCount,
+			},
+		};
+	} catch {
+		return report;
+	} finally {
+		if (db) {
+			db.close();
+		}
+	}
 }
 
 export async function showStatus(options: { path?: string; json?: boolean }, deps: StatusDeps): Promise<void> {

@@ -1,60 +1,22 @@
-import { randomUUID } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
-import {
-	addImportedSource,
-	deterministicImportedSourceId,
-	loadSourcesConfig,
-	markSourceIndexed,
-	removeSourceIfGeneration,
-} from "@signet/core";
 import type { Context } from "hono";
 import type { Hono } from "hono";
-import { resolveDaemonAgentId } from "../agent-id";
 import { getPeerAddress } from "../auth/middleware";
-import { getDbAccessor, runWriteTxAsync } from "../db-accessor";
-import {
-	IMPORT_MAX_BATCH_BYTES,
-	IMPORT_MAX_FILES,
-	IMPORT_MAX_FILE_BYTES,
-	normalizeImportedFile,
-} from "../import-normalizer";
-import { markImportedSourceUnsupported } from "../imported-source-lifecycle";
-import {
-	type ImportExtractionOutcome,
-	persistImportedSourceOutcomeInTx,
-	readImportedSourceOutcome,
-} from "../imported-source-outcome";
-import { logger } from "../logger";
-import { beginSourceMutation, SOURCE_OPERATION_IN_PROGRESS_ERROR } from "../source-deletion-lock";
-import { indexExternalMemoryArtifact } from "../memory-lineage";
-import { enqueueDreamingAttentionInTx } from "../pipeline/dreaming-attention";
-import { indexSourceArtifactStructureInTx } from "../source-artifact-graph";
-import { purgeSourceOwnedRowsInTx } from "../source-purge";
+import { type DocumentImportStatus, importDocument } from "../document-import-service";
+import { IMPORT_MAX_BATCH_BYTES, IMPORT_MAX_FILES, IMPORT_MAX_FILE_BYTES } from "../import-normalizer";
+import { ImportAdmissionConflictError, type DurableImportAdmission } from "../import-inbox";
 
 const MAX_MULTIPART_OVERHEAD = 1 * 1024 * 1024;
 const MAX_MULTIPART_BYTES = IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD;
 
 class ImportPayloadTooLargeError extends Error {}
 
-type ImportFileStatus =
-	| {
-			readonly fileName: string;
-			readonly status: "imported";
-			readonly sourceId: string;
-			readonly format: string;
-			readonly duplicate: boolean;
-			readonly extraction: ImportExtractionOutcome;
-	  }
-	| {
-			readonly fileName: string;
-			readonly status: "duplicate";
-			readonly sourceId: string;
-			readonly extraction?: ImportExtractionOutcome;
-	  }
-	| { readonly fileName: string; readonly status: "failed"; readonly error: string };
+export interface ImportRouteDeps {
+	readonly durableImportAdmission: DurableImportAdmission;
+}
 
-export function registerImportRoutes(app: Hono): void {
+export function registerImportRoutes(app: Hono, deps: ImportRouteDeps): void {
 	app.post("/api/sources/import", async (c) => {
 		const contentLength = Number.parseInt(c.req.header("content-length") ?? "", 10);
 		if (Number.isFinite(contentLength) && contentLength > IMPORT_MAX_BATCH_BYTES + MAX_MULTIPART_OVERHEAD) {
@@ -77,13 +39,26 @@ export function registerImportRoutes(app: Hono): void {
 			return c.json({ error: "Filesystem path imports are only available on a local daemon" }, 400);
 		if (uploadedEntries.length + pathEntries.length === 0)
 			return c.json({ error: "At least one file is required" }, 400);
+		const requestIdempotencyKey = c.req.header("Idempotency-Key")?.trim();
+		if (
+			requestIdempotencyKey !== undefined &&
+			(!requestIdempotencyKey ||
+				requestIdempotencyKey.length > 256 ||
+				!/^[A-Za-z0-9._:-]+$/.test(requestIdempotencyKey))
+		)
+			return c.json({ error: "Invalid Idempotency-Key" }, 400);
+		if ([...uploadedEntries.map((file) => file.name), ...pathEntries].some((name) => /\.jsonl$/i.test(name)))
+			return c.json({ error: "Transcript JSONL must be uploaded through /api/sources/imports" }, 400);
 		if (uploadedEntries.length + pathEntries.length > IMPORT_MAX_FILES)
 			return c.json({ error: `Import accepts at most ${IMPORT_MAX_FILES} files` }, 413);
 
 		const duplicateModeValue = form.get("duplicateMode");
 		const duplicateMode =
 			duplicateModeValue === "replace" || duplicateModeValue === "reimport" ? duplicateModeValue : "skip";
-		const statuses: ImportFileStatus[] = [];
+		const statuses: Array<
+			| DocumentImportStatus
+			| { readonly fileName: string; readonly status: "imported" | "duplicate"; readonly sourceId: string }
+		> = [];
 		const pathFiles: File[] = [];
 		const uploadedBytes = uploadedEntries.reduce((total, file) => total + file.size, 0);
 		let pathBytes = 0;
@@ -127,218 +102,46 @@ export function registerImportRoutes(app: Hono): void {
 				});
 				continue;
 			}
-			const normalized = await normalizeImportedFile(file.name, new Uint8Array(await file.arrayBuffer()), file.type);
-			if (normalized.ok === false) {
-				statuses.push({ fileName: file.name, status: "failed", error: normalized.error });
-				continue;
-			}
-			const normalizedBytes = persistedImportBytes(normalized.value);
-			if (normalizedBatchBytes + normalizedBytes > IMPORT_MAX_BATCH_BYTES) {
-				statuses.push({
-					fileName: file.name,
-					status: "failed",
-					error: `Normalized import batch exceeds the ${IMPORT_MAX_BATCH_BYTES} byte limit`,
-				});
-				continue;
-			}
-			normalizedBatchBytes += normalizedBytes;
-
-			const agentsDir = process.env.SIGNET_PATH;
-			const agentId = resolveDaemonAgentId();
-			const existingSource = loadSourcesConfig(agentsDir).sources.find(
-				(source) =>
-					source.kind === "import" &&
-					source.providerSettings?.contentHash === normalized.value.contentHash &&
-					source.providerSettings?.agentId === agentId,
-			);
-			const replacedSource = duplicateMode === "replace" ? existingSource : undefined;
-			const addDuplicateMode = replacedSource === undefined ? duplicateMode : "reimport";
-			const sourceId =
-				addDuplicateMode === "reimport"
-					? `import:${normalized.value.contentHash.slice(0, 16)}:${randomUUID().slice(0, 8)}`
-					: (existingSource?.id ?? deterministicImportedSourceId(normalized.value.contentHash, agentId));
-			const releaseReplacedSourceMutation =
-				replacedSource === undefined ? undefined : beginSourceMutation(replacedSource.id);
-			if (replacedSource !== undefined && releaseReplacedSourceMutation === undefined) {
-				statuses.push({ fileName: file.name, status: "failed", error: SOURCE_OPERATION_IN_PROGRESS_ERROR });
-				continue;
-			}
-			const releaseSourceMutation = beginSourceMutation(sourceId);
-			if (releaseSourceMutation === undefined) {
-				releaseReplacedSourceMutation?.();
-				statuses.push({ fileName: file.name, status: "failed", error: SOURCE_OPERATION_IN_PROGRESS_ERROR });
-				continue;
-			}
+			const fileBytes = new Uint8Array(await file.arrayBuffer());
+			let admission: Awaited<ReturnType<DurableImportAdmission["admit"]>> | undefined;
 			try {
-				const added = addImportedSource(
-					{
-						fileName: normalized.value.fileName,
-						contentHash: normalized.value.contentHash,
-						format: normalized.value.format,
-						agentId,
-						duplicateMode: addDuplicateMode,
-						sourceId,
-					},
-					agentsDir,
-				);
-				if (added.ok === false) {
-					statuses.push({ fileName: file.name, status: "failed", error: added.error });
+				admission = await deps.durableImportAdmission.admit({
+					fileName: file.name,
+					bytes: fileBytes,
+					contentType: file.type,
+					idempotencyKey: requestIdempotencyKey ? `${requestIdempotencyKey}:${file.name}` : undefined,
+				});
+				if (admission.status === "imported" || admission.status === "duplicate") {
+					statuses.push({ fileName: file.name, status: admission.status, sourceId: admission.sourceId ?? "" });
 					continue;
 				}
-				if (
-					added.duplicate &&
-					duplicateMode === "skip" &&
-					added.source.lastIndexedAt !== undefined &&
-					hasIndexedSource(added.source.id, agentId)
-				) {
-					statuses.push({
-						fileName: file.name,
-						status: "duplicate",
-						sourceId: added.source.id,
-						extraction: readImportedSourceOutcome(added.source.id, agentId),
-					});
-					continue;
-				}
-
-				try {
-					const sourcePath = `imports/${added.source.id}/${normalized.value.fileName}`;
-					const sourceKind = `source_import_${normalized.value.format}`;
-					const now = new Date().toISOString();
-
-					await indexExternalMemoryArtifact({
-						agentId,
-						sourcePath,
-						sourceKind: normalized.value.format === "json" ? "source_import_json_projection" : sourceKind,
-						harness: "dashboard-import",
-						content: normalized.value.content,
-						sourceMtimeMs: Date.now(),
-						capturedAt: now,
-						sourceId: added.source.id,
-						sourceRoot: normalized.value.fileName,
-						sourceExternalId: normalized.value.contentHash,
-						sourceMeta: normalized.value.sourceMeta,
-					});
-					if (normalized.value.format === "json") {
-						await indexExternalMemoryArtifact({
-							agentId,
-							sourcePath: `${sourcePath}#canonical`,
-							sourceKind: "source_import_json_canonical",
-							harness: "dashboard-import",
-							content: normalized.value.canonicalContent ?? normalized.value.content,
-							sourceMtimeMs: Date.now(),
-							capturedAt: now,
-							sourceId: added.source.id,
-							sourceRoot: normalized.value.fileName,
-							sourceExternalId: normalized.value.contentHash,
-							sourceMeta: { ...normalized.value.sourceMeta, representation: "structured-json-canonical" },
-						});
-					}
-					const extraction = await runWriteTxAsync(getDbAccessor(), (db) => {
-						const result = indexSourceArtifactStructureInTx(db, {
-							agentId,
-							sourceId: added.source.id,
-							sourceKind,
-							sourceRoot: normalized.value.fileName,
-							sourcePath,
-							displayName: normalized.value.fileName,
-							content: normalized.value.content,
-						});
-						persistImportedSourceOutcomeInTx(db, {
-							agentId,
-							sourceId: added.source.id,
-							sourcePath,
-							outcome: {
-								documentEntityId: result.documentEntityId,
-								aspectsCreated: result.aspectsCreated,
-								attributesCreated: result.attributesCreated,
-							},
-						});
-						return result;
-					});
-					for (const chunk of normalized.value.searchChunks) {
-						const rowStart = typeof chunk.sourceMeta.rowStart === "number" ? chunk.sourceMeta.rowStart : 0;
-						const rowEnd = typeof chunk.sourceMeta.rowEnd === "number" ? chunk.sourceMeta.rowEnd : rowStart;
-						await indexExternalMemoryArtifact({
-							agentId,
-							sourcePath: `${sourcePath}#rows-${rowStart}-${rowEnd}`,
-							sourceKind: "source_import_csv_chunk",
-							harness: "dashboard-import",
-							content: chunk.content,
-							sourceMtimeMs: Date.now(),
-							capturedAt: now,
-							sourceId: added.source.id,
-							sourceRoot: normalized.value.fileName,
-							sourceExternalId: normalized.value.contentHash,
-							sourceMeta: { ...normalized.value.sourceMeta, ...chunk.sourceMeta },
-						});
-					}
-					await runWriteTxAsync(getDbAccessor(), (db) => {
-						enqueueDreamingAttentionInTx(db, {
-							agentId,
-							kind: "hygiene",
-							subjectRef: `source:${added.source.id}`,
-							details: { sourceId: added.source.id, sourceKind, reason: "import-completed" },
-							priority: 40,
-						});
-					});
-					if (replacedSource !== undefined) {
-						await markImportedSourceUnsupported({
-							sourceId: replacedSource.id,
-							agentId: resolveDaemonAgentId(),
-							reason: "imported source replaced",
-						});
-						const removed = removeSourceIfGeneration(replacedSource.id, replacedSource.generation, agentsDir);
-						if (removed.ok === false) {
-							throw new Error(`Replaced dashboard import config cleanup failed: ${removed.error}`);
-						}
-					}
-					markSourceIndexed(added.source.id, now, agentsDir);
-					imported += 1;
-					statuses.push({
-						fileName: file.name,
-						status: "imported",
-						sourceId: added.source.id,
-						format: normalized.value.format,
-						duplicate: added.duplicate,
-						extraction: {
-							documentEntityId: extraction.documentEntityId,
-							aspectsCreated: extraction.aspectsCreated,
-							attributesCreated: extraction.attributesCreated,
-						},
-					});
-				} catch (error) {
-					const primaryError = error instanceof Error ? error.message : String(error);
-					let failure = primaryError;
-					if (added.created) {
-						try {
-							await runWriteTxAsync(getDbAccessor(), (db) =>
-								purgeSourceOwnedRowsInTx(db, { sourceId: added.source.id, agentId: resolveDaemonAgentId() }),
-							);
-							const removed = removeSourceIfGeneration(
-								added.source.id,
-								added.source.generation,
-								process.env.SIGNET_PATH,
-							);
-							if (removed.ok === false) throw new Error(removed.error);
-						} catch (cleanupError) {
-							const cleanupMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-							failure = `${primaryError}; cleanup failed: ${cleanupMessage}`;
-							logger.warn("documents", "Dashboard import cleanup failed", {
-								sourceId: added.source.id,
-								error: cleanupMessage,
-								primaryError,
-							});
-						}
-					}
-					logger.warn("documents", "Dashboard import failed after source registration", {
-						sourceId: added.source.id,
-						error: failure,
-					});
-					statuses.push({ fileName: file.name, status: "failed", error: failure });
-				}
-			} finally {
-				releaseSourceMutation();
-				releaseReplacedSourceMutation?.();
+				await deps.durableImportAdmission.begin(admission.key);
+				const result = await importDocument({
+					fileName: file.name,
+					bytes: fileBytes,
+					contentType: file.type,
+					duplicateMode,
+					maxPersistedBytes: IMPORT_MAX_BATCH_BYTES - normalizedBatchBytes,
+				});
+				normalizedBatchBytes += result.persistedBytes;
+				await deps.durableImportAdmission.complete({
+					key: admission.key,
+					status: result.status.status,
+					...(result.status.status === "failed"
+						? { error: result.status.error }
+						: { sourceId: result.status.sourceId }),
+				});
+				statuses.push(result.status);
+				if (result.status.status === "imported") imported++;
+			} catch (error) {
+				if (error instanceof ImportAdmissionConflictError)
+					return c.json({ error: "Import admission key conflicts with different content" }, 409);
+				const message = error instanceof Error ? error.message : "durable import failed";
+				if (admission)
+					await deps.durableImportAdmission
+						.complete({ key: admission.key, status: "failed", error: message })
+						.catch(() => {});
+				statuses.push({ fileName: file.name, status: "failed", error: message });
 			}
 		}
 
@@ -360,34 +163,6 @@ function isLoopbackRequest(c: Context): boolean {
 		normalizedPeer === "::1" ||
 		normalizedPeer === "::ffff:127.0.0.1"
 	);
-}
-
-function hasIndexedSource(sourceId: string, agentId: string): boolean {
-	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
-	return getDbAccessor().withReadDb((db: import("../db-accessor").ReadDb) => {
-		const row = db
-			.prepare(
-				`SELECT 1 AS present
-				 FROM memory_artifacts
-				 WHERE agent_id = ? AND source_id = ? AND COALESCE(is_deleted, 0) = 0
-				 LIMIT 1`,
-			)
-			.get(agentId, sourceId) as { present: number } | null | undefined;
-		return row != null;
-	}, "db:imports.has-indexed-source");
-}
-
-function persistedImportBytes(value: {
-	readonly content: string;
-	readonly canonicalContent?: string;
-	readonly format: string;
-	readonly searchChunks: readonly { readonly content: string }[];
-}): number {
-	const encoder = new TextEncoder();
-	const contentBytes = encoder.encode(value.content).byteLength;
-	const canonicalBytes = value.format === "json" ? encoder.encode(value.canonicalContent ?? "").byteLength : 0;
-	const chunkBytes = value.searchChunks.reduce((total, chunk) => total + encoder.encode(chunk.content).byteLength, 0);
-	return contentBytes + canonicalBytes + chunkBytes;
 }
 
 async function boundedFormData(request: Request): Promise<FormData> {

@@ -337,7 +337,8 @@ describe("registerMemoryCommands embed backfill --all guard", () => {
 		expect(errText).toContain("--all");
 		expect(errText).toContain("--dry-run");
 		expect(process.exitCode).toBe(1);
-		process.exitCode = undefined;
+		process.exitCode = 0;
+		expect(process.exitCode).toBe(0);
 	});
 
 	test("allows --all with --model-mismatch (explicit migration)", async () => {

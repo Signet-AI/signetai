@@ -9,6 +9,7 @@ import {
 	type TelemetryDeploymentRole,
 	type TelemetryInstallChannel,
 	summarizeAccountingProvenance,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import { getDbAccessorPath, type DbAccessor } from "./db-accessor";
 import type { DbOwnerClient } from "./db-owner-client";
@@ -17,7 +18,7 @@ import { ownerChanges, ownerTransaction } from "./db-owner-maintenance";
 import { ownerReadAll, ownerReadOne } from "./db-owner-sql";
 import { logger } from "./logger";
 export function defaultTelemetryLogPath(agentsDir: string): string {
-	return join(agentsDir, ".daemon", "telemetry", "events.jsonl");
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "telemetry", "events.jsonl");
 }
 export function parseTelemetryTimestamp(timestamp: string): number {
 	const normalized = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(timestamp)
@@ -489,14 +490,14 @@ function getOrCreateInstallId(db: DbAccessor, daemonVersion: string, owner?: DbO
 		// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 		return db.withWriteTx(
 			(w: import("./db-accessor").WriteDb) => resolveInstallIdentity(w, daemonVersion),
-			"telemetry.ts:490",
+			"telemetry.ts:491",
 		);
 	} catch {
 		try {
 			// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withWriteTx migration site
 			return db.withWriteTx(
 				(w: import("./db-accessor").WriteDb) => resolveLegacyInstallIdentity(w),
-				"telemetry.ts:497",
+				"telemetry.ts:498",
 			);
 		} catch {
 			return fallback;

@@ -59,6 +59,7 @@ export default defineConfig({
 						{ label: "Your first session", slug: "getting-started/first-session" },
 						{ label: "Operate your installation", slug: "getting-started/operate" },
 						{ label: "Upgrade", slug: "upgrading" },
+						{ label: "Workspace v2", slug: "workspace-v2" },
 					],
 				},
 				{

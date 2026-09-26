@@ -504,6 +504,7 @@ export interface SourceImportsResponse {
 	readonly imports: readonly SourceImportJob[];
 }
 
+export type DashboardProtectionReport = import("@signet/core").ProtectionStatus;
 export interface SourcesResponse {
 	version: number;
 	sources: SignetSource[];
@@ -910,6 +911,7 @@ export const api = {
 		return { ok, error: ok ? undefined : (data?.error ?? "Failed to reject proposal") };
 	},
 	getSources: () => getJSON<SourcesResponse>("/api/sources"),
+	getProtection: () => getJSONResult<DashboardProtectionReport>("/api/protection"),
 	getSourceImports: (agentId?: string) =>
 		getJSONResult<SourceImportsResponse>(`/api/sources/imports${agentQuery(agentId)}`),
 	getSourceImport: (jobId: string, agentId?: string) =>

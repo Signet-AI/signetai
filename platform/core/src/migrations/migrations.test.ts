@@ -409,7 +409,7 @@ describe("migration framework", () => {
 			runMigrations(db);
 
 			const applied = db.query("SELECT MAX(version) AS version FROM schema_migrations").get() as { version: number };
-			expect(applied.version).toBe(159);
+			expect(applied.version).toBe(160);
 			expect(
 				db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'vector_repair_checkpoints'").get(),
 			).toEqual({ name: "vector_repair_checkpoints" });
@@ -2737,6 +2737,50 @@ describe("migration 154: transcript capture source identity", () => {
 		).toEqual({
 			name: "idx_transcript_capture_jobs_source_identity",
 		});
+		db.close();
+	});
+});
+
+describe("migration 158: import admission ledger", () => {
+	test("runs inside the migration runner and preserves scoped ledger/event data", () => {
+		const db = createFreshDb();
+		runMigrations(db);
+		db.exec("DROP INDEX uq_import_admission_scope_key");
+		db.exec("DROP TABLE import_admission_ledger");
+		db.exec(
+			`CREATE TABLE import_admission_ledger (key TEXT PRIMARY KEY, file_name TEXT NOT NULL, status TEXT NOT NULL, original_path TEXT NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO import_admission_ledger VALUES ('same-key', 'one.txt', 'imported', '/one', 'sha-one', 3, 't', 't'); INSERT INTO import_admission_events (admission_key, event, created_at) VALUES ('same-key', 'imported', 't'); DELETE FROM schema_migrations WHERE version = 160;`,
+		);
+		runMigrations(db);
+		expect(db.query("SELECT key, file_name, agent_id, workspace_id FROM import_admission_ledger").all()).toEqual([
+			{ key: "same-key", file_name: "one.txt", agent_id: "", workspace_id: "" },
+		]);
+		expect(db.query("SELECT COUNT(*) AS count FROM import_admission_events").get()).toEqual({ count: 1 });
+		const insert = db.prepare(
+			"INSERT INTO import_admission_ledger (key, agent_id, workspace_id, file_name, status, original_path, sha256, size_bytes, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)",
+		);
+		insert.run("same-key", "agent-b", "workspace-b", "two.txt", "/two", "sha-two", 3, "t", "t");
+		expect(() =>
+			insert.run("same-key", "agent-b", "workspace-b", "duplicate.txt", "/dup", "sha-dup", 3, "t", "t"),
+		).toThrow(/UNIQUE/i);
+		runMigrations(db);
+		expect(db.query("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 160").get()).toEqual({ count: 1 });
+		db.close();
+	});
+
+	test("rolls back a failed rebuild without losing the legacy table or event", () => {
+		const db = createFreshDb();
+		runMigrations(db);
+		db.exec("DROP INDEX uq_import_admission_scope_key");
+		db.exec("DROP TABLE import_admission_ledger");
+		db.exec(
+			`CREATE TABLE import_admission_ledger (key TEXT PRIMARY KEY, file_name TEXT NOT NULL, status TEXT NOT NULL, original_path TEXT NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL); INSERT INTO import_admission_ledger VALUES ('legacy', 'legacy.txt', 'pending', '/legacy', 'sha', 1, 't', 't'); CREATE TABLE import_admission_ledger_v158 (key TEXT); DELETE FROM schema_migrations WHERE version = 160;`,
+		);
+		expect(() => runMigrations(db)).toThrow(/already exists/i);
+		expect(db.query("SELECT key FROM import_admission_ledger").all()).toEqual([{ key: "legacy" }]);
+		expect(db.query("SELECT COUNT(*) AS count FROM schema_migrations WHERE version = 160").get()).toEqual({ count: 0 });
+		expect(
+			db.query("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'import_admission_ledger_v158'").get(),
+		).toEqual({ name: "import_admission_ledger_v158" });
 		db.close();
 	});
 });

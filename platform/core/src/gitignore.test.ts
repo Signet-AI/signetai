@@ -13,6 +13,12 @@ describe("mergeSignetGitignoreEntries", () => {
 		expect(merged).toContain("!tools/**");
 		expect(merged).toContain("!dreaming/**");
 		expect(merged).toContain("memory/memories.db*");
+		expect(merged).toContain("data/");
+		expect(merged).toContain("runtime/");
+		expect(merged).toContain("cache/");
+		expect(merged).toContain("files/");
+		expect(merged).toContain(".secrets/");
+		expect(merged).toContain("workspace-layout.json");
 		expect(merged).toContain("memory/backups/");
 		expect(merged).toContain("*.db");
 		expect(merged).toContain("signetai/");
@@ -39,11 +45,12 @@ describe("mergeSignetGitignoreEntries", () => {
 	it("normalizes CRLF content while preserving non-managed rules", () => {
 		const merged = mergeSignetGitignoreEntries("# Existing\r\n.venv/\r\n");
 
-		expect(merged.startsWith("# Existing\n.venv/\n\n# BEGIN Signet lightweight workspace")).toBe(true);
+		expect(merged.startsWith("# Existing\r\n.venv/\r\n\r\n# BEGIN Signet lightweight workspace")).toBe(true);
 	});
 
 	it("allows the managed gitignore but rejects database backups", () => {
 		expect(isSignetGitTrackedPath(".gitignore")).toBe(true);
+		expect(isSignetGitTrackedPath(".sigignore")).toBe(true);
 		expect(isSignetGitTrackedPath("AGENTS.md")).toBe(true);
 		expect(isSignetGitTrackedPath("memory/session.jsonl")).toBe(true);
 		expect(isSignetGitTrackedPath("memory/memories.db.bak-v1-1")).toBe(false);

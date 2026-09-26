@@ -26,7 +26,7 @@ import {
 let dir = "";
 let prevSignetPath: string | undefined;
 
-function manifestValue(path: string, key: string): string | null {
+function _manifestValue(path: string, key: string): string | null {
 	const match = readFileSync(path, "utf8").match(new RegExp(`^${key}:\\s*(.*)$`, "m"));
 	if (!match) return null;
 	const raw = (match[1] ?? "").trim();
@@ -166,7 +166,7 @@ describe("transcript capture worker", () => {
 			await enqueueTranscriptCaptureJob(getDbAccessor(), { ...input, capturedAt: "2026-06-20T10:01:00.000Z" }),
 		).toBe(first);
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
-		expect(readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8")).toContain(
+		expect(readFileSync(join(dir, "memory", "pi", "transcripts", "transcript.jsonl"), "utf8")).not.toContain(
 			'"content":"x"',
 		);
 	});
@@ -195,6 +195,10 @@ describe("transcript capture worker", () => {
 			await enqueueTranscriptCaptureJob(getDbAccessor(), { ...input, capturedAt: "2026-06-20T10:01:00.000Z" }),
 		).toBe(id);
 		expect(await runTranscriptCaptureOnce(getDbAccessor(), dir)).toBe(true);
+		expect(await getTranscriptCaptureJobStatus(getDbAccessor(), "agent-a", id)).toMatchObject({
+			status: "failed",
+			error: expect.stringContaining("canonical transcript mismatch"),
+		});
 
 		const stored = await getDbAccessor().withReadDbAsync(
 			(db) =>
@@ -240,7 +244,7 @@ describe("transcript capture worker", () => {
 		).toEqual({ transcript: "", raw_transcript: null });
 	});
 
-	it("writes canonical and per-session artifacts from a durable job", async () => {
+	it("writes canonical JSONL and indexed database evidence without normal Markdown copies", async () => {
 		const id = await enqueueTranscriptCaptureJob(getDbAccessor(), {
 			agentId: "agent-a",
 			harness: "pi",
@@ -262,20 +266,14 @@ describe("transcript capture worker", () => {
 
 		const canonical = join(dir, "memory", "pi", "transcripts", "transcript.jsonl");
 		expect(existsSync(canonical)).toBe(true);
-		const manifestRows = getDbAccessor().withReadDb((db) =>
+		const transcriptRows = getDbAccessor().withReadDb((db) =>
 			db
-				.prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = ? AND source_kind = 'manifest'")
+				.prepare("SELECT source_path FROM memory_artifacts WHERE agent_id = ? AND source_kind = 'transcript'")
 				.all("agent-a"),
 		) as Array<{ source_path: string }>;
-		expect(manifestRows).toHaveLength(1);
-		const manifestPath = join(dir, manifestRows[0].source_path);
-		const transcriptPath = manifestValue(manifestPath, "transcript_path");
-		expect(transcriptPath).toBeTruthy();
-		expect(transcriptPath).not.toBe("memory/pi/transcripts/transcript.jsonl");
-		expect(existsSync(join(dir, transcriptPath ?? ""))).toBe(true);
-		expect(manifestValue(manifestPath, "canonical_transcript_path")).toBe("memory/pi/transcripts/transcript.jsonl");
-		expect(manifestValue(manifestPath, "summary_path")).toBeNull();
-		expect(manifestValue(manifestPath, "summary_status")).toBe("not_requested");
+		expect(transcriptRows).toHaveLength(1);
+		expect(transcriptRows[0].source_path).toStartWith("memory/pi/transcripts/transcript.jsonl#");
+		expect(readdirSync(join(dir, "memory", "pi", "transcripts"))).toEqual(["transcript.jsonl"]);
 	});
 
 	it("keeps a bounded audit reference when normalized transcript has no conversation turns", async () => {

@@ -3,6 +3,7 @@ import { ConnectSourceDialog } from "@/components/sources/connect-source-dialog"
 import { type SignetSource, api } from "@/lib/api";
 import { ViewProvider } from "@/lib/view-context";
 import { Window } from "happy-dom";
+import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { HomeSourcesPanel, SourcesView } from "./sources";
@@ -15,6 +16,8 @@ const originalRemoveSource = api.removeSource;
 const originalGetAgents = api.getAgents;
 const originalGetStatus = api.getStatus;
 const originalFetch = globalThis.fetch;
+let domWindow: Window;
+let restoreDomGlobals = () => {};
 
 let importCall: { files: readonly File[]; duplicateMode: string; paths: readonly string[] } | null = null;
 let sourcesResponse: { version: number; sources: SignetSource[] } = { version: 1, sources: [] };
@@ -48,13 +51,8 @@ function button(container: HTMLElement, label: string): HTMLButtonElement {
 }
 
 beforeAll(() => {
-	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-	const window = new Window();
-	for (const key of Object.getOwnPropertyNames(window)) {
-		if (!(key in globalThis)) {
-			(globalThis as Record<string, unknown>)[key] = (window as unknown as Record<string, unknown>)[key];
-		}
-	}
+	domWindow = new Window();
+	restoreDomGlobals = installDashboardDomGlobals(domWindow);
 	globalThis.fetch = (async (input: RequestInfo | URL) => {
 		if (String(input).endsWith("/api/sources")) {
 			return new Response(JSON.stringify(sourcesResponse), { status: 200 });
@@ -100,6 +98,8 @@ afterAll(() => {
 	api.getAgents = originalGetAgents;
 	api.getStatus = originalGetStatus;
 	globalThis.fetch = originalFetch;
+	restoreDomGlobals();
+	domWindow.close();
 });
 
 function sourceFixture(
@@ -156,6 +156,18 @@ function sourceFixture(
 }
 
 describe("sources grouping", () => {
+	test("keeps workspace import controls out of the Sources home panel", async () => {
+		const mounted = await mount(
+			<ViewProvider>
+				<HomeSourcesPanel sources={[]} loading={false} onRefresh={() => {}} />
+			</ViewProvider>,
+		);
+		expect(mounted.container.querySelector('[data-testid="import-inbox-card"]')).toBeNull();
+		expect(mounted.container.textContent).not.toContain("Durable imports");
+		await act(async () => mounted.root.unmount());
+		mounted.container.remove();
+	});
+
 	test("does not render blank extraction counts from an older daemon payload", async () => {
 		const source = sourceFixture("import:legacy", "import", "legacy.md");
 		source.health = {

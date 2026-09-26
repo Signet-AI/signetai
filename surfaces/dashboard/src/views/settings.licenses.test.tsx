@@ -1,23 +1,21 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { DASHBOARD_LICENSES } from "@/lib/dashboard-licenses";
 import { Window } from "happy-dom";
+import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { LicensesSection } from "./settings";
 
 let domWindow: Window;
+let restoreDomGlobals = () => {};
 
 beforeAll(() => {
-	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 	domWindow = new Window();
-	for (const key of Object.getOwnPropertyNames(domWindow)) {
-		if (!(key in globalThis)) {
-			(globalThis as Record<string, unknown>)[key] = (domWindow as unknown as Record<string, unknown>)[key];
-		}
-	}
+	restoreDomGlobals = installDashboardDomGlobals(domWindow);
 });
 
 afterAll(() => {
+	restoreDomGlobals();
 	domWindow.close();
 });
 
@@ -159,7 +157,7 @@ describe("dashboard Licenses modal layout", () => {
 		expect(logsStart).toBeGreaterThan(licensesStart);
 		expect(source).toContain("sm:max-w-[calc(100vw-48px)]");
 		expect(source).toContain("lg:max-w-[840px]");
-		expect(source).toContain("max-sm:grid max-sm:grid-cols-5");
+		expect(source).toContain("max-sm:grid max-sm:grid-cols-7");
 		expect(source).toContain("max-sm:flex-col");
 		expect(source).toContain("max-sm:whitespace-nowrap");
 		expect(source).toContain("flex min-h-0 min-w-0 flex-1 flex-col");

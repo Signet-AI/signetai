@@ -1,4 +1,32 @@
 export { Signet } from "./signet";
+export { inspectRootGit, managedGitignoreUpdate } from "./git-transition";
+export {
+	prepareRootGitArchive,
+	planRootGitArchive,
+	verifyRootGitArchive,
+	restoreVerifiedRootGitArchive,
+} from "./git-archive-retirement";
+export type { RootGitArchive, RootGitArchivePlan, RootGitArchiveVerification } from "./git-archive-retirement";
+
+export {
+	DescriptorRoot,
+	openDescriptorRoot,
+	UnsafeDescriptorPathError,
+	UnsupportedDescriptorFilesystemError,
+} from "./descriptor-fs";
+export type { DescriptorEntry, DescriptorWriteOptions } from "./descriptor-fs";
+export type { ManagedGitignoreUpdate, RootGitInventory, RootGitMode } from "./git-transition";
+export { aggregateProtection, PROTECTION_COMPONENT_IDS, validateRestoreReceipt } from "./protection";
+export type {
+	ProtectionComponent,
+	ProtectionComponentId,
+	ProtectionComponentStatus,
+	ProtectionStatus,
+	RestoreReceipt,
+	RestoreReceiptInput,
+} from "./protection";
+export { buildProtectionEvidence, computeProtectionDigests } from "./protection-evidence";
+export type { ProtectionEvidence, ProtectionEvidenceOptions } from "./protection-evidence";
 export {
 	execFileHidden,
 	execFileSyncHidden,
@@ -216,6 +244,17 @@ export {
 	stripInternalMemoryContext,
 	wrapMemoryContext,
 } from "./memory-context";
+export {
+	createFreshWorkspaceV2,
+	persistWorkspaceLayout,
+	resolveWorkspaceLayout,
+	serializeWorkspaceLayout,
+	WORKSPACE_LAYOUT_V1,
+	WORKSPACE_LAYOUT_V2,
+	type WorkspaceLayout,
+	type WorkspaceLayoutOverrides,
+	type WorkspaceLayoutVersion,
+} from "./workspace-layout";
 export {
 	type WorkspaceSource,
 	type WorkspaceResolution,

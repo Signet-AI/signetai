@@ -1,11 +1,10 @@
-import { homedir } from "node:os";
-import { join } from "node:path";
 import type { Plugin, PluginInput } from "@opencode-ai/plugin";
 import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	composeApiUserContent,
 	readStaticIdentity,
 	resolvePromptSubmitTimeoutMs,
+	resolveWorkspacePath,
 	resolveSessionStartTimeoutMs,
 	scrubPromptContext,
 	stripInternalMemoryContext,
@@ -109,25 +108,26 @@ function recallOnlyInject(result: HookNotificationResult): string {
 
 function readRuntimeEnv(name: string): string | undefined {
 	const runtimeProcess = Reflect.get(globalThis, "process");
-	if (!runtimeProcess || typeof runtimeProcess !== "object") {
-		return undefined;
-	}
-
-	const runtimeEnv = Reflect.get(runtimeProcess, "env");
-	if (!runtimeEnv || typeof runtimeEnv !== "object") {
-		return undefined;
-	}
-
-	const value = Reflect.get(runtimeEnv, name);
+	const runtimeEnv =
+		runtimeProcess && typeof runtimeProcess === "object" ? Reflect.get(runtimeProcess, "env") : undefined;
+	const value = runtimeEnv && typeof runtimeEnv === "object" ? Reflect.get(runtimeEnv, name) : undefined;
 	return typeof value === "string" ? value : undefined;
 }
+function resolveRuntimeWorkspace(): string {
+	const runtimeProcess = Reflect.get(globalThis, "process");
+	const runtimeEnv =
+		runtimeProcess && typeof runtimeProcess === "object" ? Reflect.get(runtimeProcess, "env") : undefined;
+	return resolveWorkspacePath({
+		env: (runtimeEnv && typeof runtimeEnv === "object" ? runtimeEnv : {}) as NodeJS.ProcessEnv,
+	}).path;
+}
 function staticFallback(): string {
-	const dir = readRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
+	const dir = readRuntimeEnv("SIGNET_PATH") ?? resolveRuntimeWorkspace();
 	return readStaticIdentity(dir) ?? "";
 }
 
 function sessionStartFallback(reason: "offline" | "timeout"): string {
-	const dir = readRuntimeEnv("SIGNET_PATH") ?? join(homedir(), ".agents");
+	const dir = readRuntimeEnv("SIGNET_PATH") ?? resolveRuntimeWorkspace();
 	if (reason === "timeout") {
 		return readStaticIdentity(dir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS) ?? "";
 	}

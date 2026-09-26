@@ -4,7 +4,7 @@ import { requestMemoryHead } from "./memory-head";
 import "./bun-socket-polyfill";
 import { spawnHidden as spawn } from "@signet/core";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { realpathSync } from "node:fs";
 import { opendir, readFile as readFileAsync, stat as statAsync, unlink as unlinkAsync } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -27,6 +27,7 @@ import {
 	preflightWorkspace,
 	formatWorkspacePreflightError,
 	resolveDefaultBasePath,
+	resolveWorkspaceLayout,
 	routingTargetLocality,
 	scanMemoryContent,
 	stripSignetBlock,
@@ -261,7 +262,13 @@ import {
 import { type TranscriptCaptureWorkerHandle, startTranscriptCaptureWorker } from "./transcript-capture-worker";
 import { type TranscriptRecoveryWorkerHandle, startTranscriptRecoveryWorker } from "./transcript-recovery-worker";
 import { type TranscriptImportWorkerHandle, startTranscriptImportWorker } from "./transcript-import-worker";
+import { MigrationControlBoundary, migrationDrainTargetMatches } from "./workspace-writer-barrier";
 import { createOwnerTranscriptImportStore } from "./transcript-import-store";
+import { DbOwnedImportAdmissionLedger } from "./import-admission-ledger";
+import { admitImport } from "./import-inbox";
+import { startManualInboxWorker, type ManualInboxAdmission, type ManualInboxWorkerHandle } from "./manual-inbox-worker";
+import { importDocument } from "./document-import-service";
+import { stageTranscriptImport } from "./transcript-import-admission";
 
 import { resolveDaemonRestartMode } from "./daemon-restart";
 import {
@@ -287,9 +294,11 @@ import {
 	scheduleAutoCommit,
 	startGitSyncTimer,
 	stopGitSyncTimer,
+	setGitMigrationControl,
 } from "./routes/git-sync.js";
 import { registerGraphiqRoutes } from "./routes/graphiq-routes.js";
 import { mountHealthRoutes } from "./routes/health.js";
+import { mountProtectionRoutes } from "./protection.js";
 import { registerHooksRoutes } from "./routes/hooks-routes.js";
 import { registerImportRoutes } from "./routes/import-routes.js";
 import { registerTranscriptImportRoutes } from "./routes/transcript-import-routes.js";
@@ -340,6 +349,7 @@ let skillReconcilerHandle: ReturnType<typeof startReconciler> | null = null;
 let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 let transcriptImportWorkerHandle: TranscriptImportWorkerHandle | null = null;
+let manualInboxWorkerHandle: ManualInboxWorkerHandle | null = null;
 let telemetryRef: TelemetryCollector | undefined;
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
@@ -483,6 +493,23 @@ export function countConnectorsActive(connectors: readonly { readonly status: st
 }
 
 export const app = new Hono();
+export const daemonMigrationControl = new MigrationControlBoundary(`daemon:${process.pid}:${randomUUID()}`);
+
+app.get("/api/workspace/migration-control", (c) =>
+	c.json({
+		generation: daemonMigrationControl.generation,
+		state: daemonMigrationControl.state,
+		blockers: daemonMigrationControl.blockers(),
+	}),
+);
+app.post("/api/workspace/migration-control/drain", async (c) => {
+	const target: unknown = await c.req.json().catch(() => null);
+	if (!migrationDrainTargetMatches(target, process.pid, AGENTS_DIR))
+		return c.json({ error: "migration drain target identity mismatch" }, 409);
+	const started = daemonMigrationControl.beginDrain();
+	const result = await daemonMigrationControl.close();
+	return c.json({ ...started, ...result, blockers: daemonMigrationControl.blockers() });
+});
 app.use("*", async (c, next) => {
 	if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return await next();
 	if (!migrationIntegrityWritesBlocked) return await next();
@@ -500,16 +527,21 @@ app.use("*", async (c, next) => {
 });
 const sqliteRuntime = resolveSqliteRuntimeConfig({ agentsDir: AGENTS_DIR });
 
-export function createRecallDbOwnerOptions(sqlitePath: string | undefined): DbOwnerClientOptions {
-	return { dbPath: MEMORY_DB, sqlitePath };
+export function createRecallDbOwnerOptions(
+	sqlitePath: string | undefined,
+	migrationControl: MigrationControlBoundary = daemonMigrationControl,
+): DbOwnerClientOptions {
+	return { dbPath: MEMORY_DB, sqlitePath, migrationControl };
 }
-const recallOwner = createDbOwnerClient(createRecallDbOwnerOptions(sqliteRuntime.choice?.path));
+const recallOwner = createDbOwnerClient(createRecallDbOwnerOptions(sqliteRuntime.choice?.path, daemonMigrationControl));
 recallDbOwner = recallOwner;
 
 registerGlobalMiddleware(app);
+setGitMigrationControl(daemonMigrationControl);
 getOrCreateInferenceRouter(resolveDefaultBasePath());
 
 mountHealthRoutes(app);
+mountProtectionRoutes(app, { workspacePath: process.env.SIGNET_PATH });
 mountMcpRoute(app);
 registerAuthRoutes(app);
 
@@ -525,7 +557,38 @@ registerGraphiqRoutes(app);
 registerSecretRoutes(app);
 registerSessionRoutes(app, { gitConfig, stopGitSyncTimer, startGitSyncTimer, getGitStatus, gitPull, gitPush, gitSync });
 registerSourcesRoutes(app);
-registerImportRoutes(app);
+registerImportRoutes(app, {
+	durableImportAdmission: {
+		admit: async ({ fileName, bytes, idempotencyKey }) => {
+			const layout = resolveWorkspaceLayout(AGENTS_DIR);
+			const row = await admitImport({
+				root: layout.root,
+				layout,
+				fileName,
+				bytes,
+				idempotencyKey,
+				ledger: new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() }),
+			});
+			return {
+				key: row.key,
+				originalPath: row.originalPath,
+				sha256: row.sha256,
+				size: row.size,
+				status: row.status,
+				sourceId: row.sourceId,
+				error: row.error,
+			};
+		},
+		begin: async (key) => {
+			const ledger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() });
+			await ledger.lease(key);
+		},
+		complete: async ({ key, status, sourceId, error }) => {
+			const ledger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId: resolveDaemonAgentId() });
+			await ledger.transition(key, "processing", status, error, { sourceId });
+		},
+	},
+});
 registerTranscriptImportRoutes(app);
 registerPipelineRoutes(app);
 registerReflectionRoutes(app);
@@ -1262,7 +1325,7 @@ async function* legacyMarkdownFiles(memoryDir: string): AsyncGenerator<string> {
 }
 
 async function importExistingMemoryFiles(): Promise<number> {
-	const memoryDir = join(AGENTS_DIR, "memory");
+	const memoryDir = resolveWorkspaceLayout(AGENTS_DIR).transcripts;
 	if (!existsSync(memoryDir)) {
 		logger.debug("daemon", "Memory directory does not exist, skipping initial import");
 		return 0;
@@ -1928,6 +1991,9 @@ async function cleanup() {
 	vacuumConversionHandle = null;
 	const vacuumConversionStop = vacuumConversionWorker?.stop() ?? Promise.resolve();
 	setShuttingDown(true);
+	daemonMigrationControl.beginDrain();
+	const writerDrain = await daemonMigrationControl.close();
+	if (!writerDrain.closed) logger.warn("daemon", "Workspace writer drain timed out", writerDrain);
 	bindAbort.abort();
 	await stopHarnessInstall();
 	await stopHarnessHealth();
@@ -1994,6 +2060,10 @@ async function cleanup() {
 	try {
 		await flushPendingCheckpoints();
 	} catch {}
+	if (manualInboxWorkerHandle) {
+		await manualInboxWorkerHandle.stop();
+		manualInboxWorkerHandle = null;
+	}
 	if (transcriptImportWorkerHandle) {
 		try {
 			await transcriptImportWorkerHandle.stop();
@@ -2773,6 +2843,74 @@ async function main() {
 						],
 						{ operation: "sources.import.dreaming-attention", lane: "write" },
 					);
+				},
+			});
+		}
+		if (!manualInboxWorkerHandle) {
+			const agentId = resolveDaemonAgentId();
+			const layout = resolveWorkspaceLayout(AGENTS_DIR);
+			const importLedger = new DbOwnedImportAdmissionLedger(getDbAccessor(), { agentId });
+			const enabledMarker = join(layout.imports, ".manual-inbox-enabled");
+			const manualInboxAdmission: ManualInboxAdmission = {
+				isEnabled: async () => existsSync(enabledMarker),
+				enable: async () => {
+					mkdirSync(layout.imports, { recursive: true });
+					const tmp = `${enabledMarker}.tmp-${process.pid}`;
+					writeFileSync(tmp, "enabled\n", { mode: 0o600 });
+					renameSync(tmp, enabledMarker);
+				},
+				claim: async ({ key, fileName, bytes }) => {
+					const row = await importLedger.find(key);
+					if (row?.status === "imported" || row?.status === "duplicate") return null;
+					if (row?.status === "processing" && row.sourceId) return { ...row, status: "imported" };
+					const admitted =
+						row ??
+						(await admitImport({
+							root: AGENTS_DIR,
+							layout,
+							fileName,
+							bytes,
+							idempotencyKey: key,
+							ledger: importLedger,
+						}));
+					await importLedger.lease(key);
+					const retainedBytes = new Uint8Array(await Bun.file(admitted.originalPath).arrayBuffer());
+					return { key, fileName, originalPath: admitted.originalPath, bytes: retainedBytes, status: "processing" };
+				},
+				record: async (row) => {
+					await importLedger.transition(row.key, "processing", row.status, row.error, { sourceId: row.sourceId });
+				},
+				recordPublication: async (row) => {
+					await importLedger.recordPublication(row);
+				},
+				reconcile: async () => {
+					await importLedger.recoverExpiredLeases();
+				},
+			};
+			manualInboxWorkerHandle = startManualInboxWorker({
+				root: AGENTS_DIR,
+				inboxPath: layout.files,
+				admission: manualInboxAdmission,
+				dispatchDocument: async (row) => {
+					if (!row.bytes) throw new Error("managed import original is unavailable");
+					const result = await importDocument({
+						fileName: row.fileName,
+						bytes: row.bytes,
+						agentId,
+						workspaceRoot: layout.root,
+					});
+					if (result.status.status === "failed") throw new Error(result.status.error);
+					return { status: result.status.status, sourceId: result.status.sourceId };
+				},
+				dispatchTranscript: async (row) => {
+					if (!row.bytes) throw new Error("managed transcript original is unavailable");
+					const staged = await stageTranscriptImport({
+						agentId,
+						fileName: row.fileName,
+						bytes: row.bytes,
+						workspaceRoot: layout.root,
+					});
+					return { status: "imported", sourceId: staged.sourceId };
 				},
 			});
 		}

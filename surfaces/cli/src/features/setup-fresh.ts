@@ -1,6 +1,6 @@
 import { createDaemonClient } from "../lib/daemon.js";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	addObsidianSource,
@@ -10,6 +10,7 @@ import {
 	formatYaml,
 	resolvePrimaryPackageManager,
 	runMigrations,
+	createFreshWorkspaceV2,
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
@@ -48,6 +49,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		const templatesDir = deps.getTemplatesDir();
 		mkdirSync(context.basePath, { recursive: true });
+		const workspaceLayout = createFreshWorkspaceV2(context.basePath);
 
 		const gitignoreSource = join(templatesDir, "gitignore.template");
 		if (existsSync(gitignoreSource)) {
@@ -64,20 +66,9 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			const date = new Date().toISOString().split("T")[0];
 			await deps.gitAddAndCommit(context.basePath, `${date}_pre-signet-backup`);
 		}
-
-		mkdirSync(join(context.basePath, "memory", "scripts"), { recursive: true });
 		mkdirSync(join(context.basePath, "harnesses"), { recursive: true });
 
 		spinner.text = "Installing memory system...";
-		const scriptsSource = join(templatesDir, "memory", "scripts");
-		if (existsSync(scriptsSource)) {
-			deps.copyDirRecursive(scriptsSource, join(context.basePath, "memory", "scripts"));
-		}
-
-		const requirementsSource = join(templatesDir, "memory", "requirements.txt");
-		if (existsSync(requirementsSource)) {
-			copyFileSync(requirementsSource, join(context.basePath, "memory", "requirements.txt"));
-		}
 
 		const utilScriptsSource = join(templatesDir, "scripts");
 		if (existsSync(utilScriptsSource)) {
@@ -87,6 +78,10 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 
 		spinner.text = "Installing built-in skills...";
 		deps.syncBuiltinSkills(deps.getSkillsSourceDir(), context.basePath);
+		if (plan.gitEnabled) {
+			const { initializeSkillsRepository } = await import("../lib/git.js");
+			await initializeSkillsRepository(context.basePath);
+		}
 
 		if (plan.identityMode === "managed") {
 			spinner.text = "Creating agent identity...";
@@ -126,7 +121,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 				source: packageManager.source,
 			},
 			memory: {
-				database: "memory/memories.db",
+				database: relative(context.basePath, workspaceLayout.database),
 				session_budget: plan.memorySessionBudget,
 				decay_rate: plan.memoryDecayRate,
 			},
@@ -247,7 +242,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		}
 
 		spinner.text = "Initializing database...";
-		const dbPath = join(context.basePath, "memory", "memories.db");
+		const dbPath = workspaceLayout.database;
 		const db = Database(dbPath);
 		try {
 			ensureUnifiedSchema(db);
@@ -336,7 +331,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 			const special = plan.specialIdentityFiles.some((entry) => entry.path === name) ? " (special session)" : "";
 			console.log(chalk.dim(`    ├── ${name.padEnd(12)}${special}`));
 		}
-		console.log(chalk.dim("    └── memory/       database & vectors"));
+		console.log(chalk.dim("    └── data/         database & durable state"));
 
 		console.log();
 		console.log(chalk.dim("  Core plugins:"));

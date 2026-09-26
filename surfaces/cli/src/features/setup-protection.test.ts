@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
+import { persistWorkspaceLayout } from "@signet/core";
 import { createWorkspaceSnapshot, getSnapshotProtection, saveSnapshotProtection } from "../lib/workspace-protection.js";
 import Database from "../sqlite.js";
 import { enforceSetupProtection, refreshSnapshotProtection } from "./setup-protection.js";
@@ -105,6 +106,34 @@ describe("setup protection soft gate", () => {
 				}
 			}
 			expect(getSnapshotProtection(workspace)).toBe(result.snapshotPath);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	it("creates and recognizes a v2 snapshot at the resolved database path", () => {
+		const { root, workspace } = setupRepo();
+		try {
+			persistWorkspaceLayout(workspace, { version: 2 });
+			rmSync(join(workspace, "memory"), { recursive: true, force: true });
+			mkdirSync(join(workspace, "data"), { recursive: true });
+			const db = Database(join(workspace, "data", "signet.db"));
+			try {
+				db.exec("CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT)");
+				db.exec("INSERT INTO marker (value) VALUES ('v2')");
+			} finally {
+				db.close();
+			}
+
+			const snapshot = createWorkspaceSnapshot(workspace, join(root, "backups"));
+			saveSnapshotProtection(workspace, snapshot.path);
+			expect(getSnapshotProtection(workspace)).toBe(snapshot.path);
+			const snapDb = Database(join(snapshot.path, "data", "signet.db"), { readonly: true });
+			try {
+				expect(snapDb.prepare("SELECT value FROM marker").get()?.value).toBe("v2");
+			} finally {
+				snapDb.close();
+			}
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}

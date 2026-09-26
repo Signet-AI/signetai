@@ -712,7 +712,7 @@ memory:
 		for (const name of ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "DREAMING.md"]) {
 			expect(existsSync(join(basePath, name))).toBe(false);
 		}
-		expect(existsSync(join(basePath, "memory", "memories.db"))).toBe(true);
+		expect(existsSync(join(basePath, "data", "signet.db"))).toBe(true);
 	});
 
 	it("writes every openclaw special-session file referenced by the identity preset", async () => {
@@ -956,7 +956,7 @@ describe("setupWizard headless plan path", () => {
 		const agentYaml = readFileSync(join(basePath, "agent.yaml"), "utf-8");
 		expect(agentYaml).toContain("name: Headless Agent");
 		expect(agentYaml).toContain("mode: localhost");
-		expect(existsSync(join(basePath, "memory", "memories.db"))).toBe(true);
+		expect(existsSync(join(basePath, "data", "signet.db"))).toBe(true);
 	});
 
 	it("rejects a malformed --agent flag instead of silently dropping it", async () => {

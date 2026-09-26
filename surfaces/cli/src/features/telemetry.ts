@@ -5,6 +5,7 @@ import {
 	DEFAULT_TELEMETRY_FLUSH_BATCH_SIZE,
 	DEFAULT_TELEMETRY_POSTHOG_API_KEY,
 	DEFAULT_TELEMETRY_POSTHOG_HOST,
+	resolveWorkspaceLayout,
 	TELEMETRY_DEPLOYMENT_ROLES,
 	TELEMETRY_INSTALL_CHANNELS,
 	type TelemetryDeploymentRole,
@@ -91,7 +92,7 @@ function cliTelemetryDisabledByEnv(env: NodeJS.ProcessEnv): boolean {
 	return env.SIGNET_TELEMETRY_OPTOUT === "1" || env.SIGNET_TELEMETRY_OPTOUT === "true";
 }
 export function cliTelemetryLogPath(agentsDir: string): string {
-	return join(agentsDir, ".daemon", "telemetry", "events.jsonl");
+	return join(resolveWorkspaceLayout(agentsDir).runtime, "telemetry", "events.jsonl");
 }
 
 function readTelemetrySettings(agentsDir: string, env: NodeJS.ProcessEnv = process.env): CliTelemetrySettings | null {
@@ -158,7 +159,7 @@ function getOrCreateInstallId(db: ReturnType<typeof createDatabase>): string | n
 }
 
 function queueCommandEvent(agentsDir: string, event: QueuedEvent): void {
-	const dbPath = join(agentsDir, "memory", "memories.db");
+	const dbPath = resolveWorkspaceLayout(agentsDir).database;
 	if (!existsSync(dbPath)) return;
 
 	let db: ReturnType<typeof createDatabase> | null = null;
@@ -266,7 +267,7 @@ export async function flushCliTelemetry(
 	const settings = readTelemetrySettings(agentsDir, env);
 	if (!settings || settings.posthogHost.length === 0 || settings.posthogApiKey.length === 0) return;
 
-	const dbPath = join(agentsDir, "memory", "memories.db");
+	const dbPath = resolveWorkspaceLayout(agentsDir).database;
 	if (!existsSync(dbPath)) return;
 
 	let db: ReturnType<typeof createDatabase> | null = null;

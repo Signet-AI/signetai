@@ -11,11 +11,18 @@ Support, dashboard, repair, marketplace, and runtime routes not expanded in the 
 
 The sections above document the primary public contracts. The daemon also
 exposes these support, dashboard, repair, marketplace, and runtime routes.
-This inventory is generated from route registrations so additions do not
-silently disappear from the API reference.
+This inventory records additional registered route paths. Dynamic handlers are
+expanded only when their finite actions are explicit in source; this is not a
+generated runtime route dump.
 
 | Method | Path | Source |
 |--------|------|--------|
+| GET | `/api/os/tray` | platform/daemon/src/routes/app-tray.ts |
+| GET | `/api/os/tray/:id` | platform/daemon/src/routes/app-tray.ts |
+| GET | `/api/os/tray/:id/probe` | platform/daemon/src/routes/app-tray.ts |
+| POST | `/api/os/tray/:id/reprobe` | platform/daemon/src/routes/app-tray.ts |
+| PATCH | `/api/os/tray/:id` | platform/daemon/src/routes/app-tray.ts |
+| POST | `/api/os/install` | platform/daemon/src/routes/app-tray.ts |
 | GET | `/api/changelog` | platform/daemon/src/routes/changelog.ts |
 | GET | `/api/roadmap` | platform/daemon/src/routes/changelog.ts |
 | GET | `/api/readme` | platform/daemon/src/routes/changelog.ts |
@@ -23,6 +30,10 @@ silently disappear from the API reference.
 | GET | `/health/ready` | platform/daemon/src/routes/health.ts |
 | GET | `/api/mode` | platform/daemon/src/routes/health.ts |
 | POST | `/api/connectors/resync` | platform/daemon/src/routes/connectors-routes.ts |
+| GET | `/api/os/events` | platform/daemon/src/routes/event-bus.ts |
+| GET | `/api/os/events/stream` | platform/daemon/src/routes/event-bus.ts |
+| GET | `/api/os/context` | platform/daemon/src/routes/event-bus.ts |
+| GET | `/api/os/events/stats` | platform/daemon/src/routes/event-bus.ts |
 | GET | `/api/graphiq/status` | platform/daemon/src/routes/graphiq-routes.ts |
 | POST | `/api/graphiq/install` | platform/daemon/src/routes/graphiq-routes.ts |
 | POST | `/api/graphiq/update` | platform/daemon/src/routes/graphiq-routes.ts |
@@ -45,6 +56,7 @@ silently disappear from the API reference.
 | POST | `/api/sources/obsidian` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/discord` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/import` | platform/daemon/src/routes/import-routes.ts |
+| POST | `/api/sources/web` | platform/daemon/src/routes/sources-routes.ts |
 | GET | `/api/sources/:sourceId/health` | platform/daemon/src/routes/sources-routes.ts |
 | GET | `/api/sources/:sourceId/snapshot` | platform/daemon/src/routes/sources-routes.ts |
 | POST | `/api/sources/:sourceId/snapshot/import` | platform/daemon/src/routes/sources-routes.ts |
@@ -78,11 +90,33 @@ silently disappear from the API reference.
 | DELETE | `/api/marketplace/reviews/:id` | platform/daemon/src/routes/marketplace-reviews.ts |
 | GET | `/api/marketplace/reviews/config` | platform/daemon/src/routes/marketplace-reviews.ts |
 | POST | `/api/marketplace/reviews/sync` | platform/daemon/src/routes/marketplace-reviews.ts |
+| GET | `/api/marketplace/mcp` | platform/daemon/src/routes/marketplace.ts |
+| GET | `/api/marketplace/mcp/policy` | platform/daemon/src/routes/marketplace.ts |
+| PATCH | `/api/marketplace/mcp/policy` | platform/daemon/src/routes/marketplace.ts |
+| GET | `/api/marketplace/mcp/browse` | platform/daemon/src/routes/marketplace.ts |
+| GET | `/api/marketplace/mcp/detail` | platform/daemon/src/routes/marketplace.ts |
+| POST | `/api/marketplace/mcp/test` | platform/daemon/src/routes/marketplace.ts |
+| POST | `/api/marketplace/mcp/install` | platform/daemon/src/routes/marketplace.ts |
+| POST | `/api/marketplace/mcp/register` | platform/daemon/src/routes/marketplace.ts |
+| GET | `/api/marketplace/mcp/tools` | platform/daemon/src/routes/marketplace.ts |
+| GET | `/api/marketplace/mcp/search` | platform/daemon/src/routes/marketplace.ts |
+| POST | `/api/marketplace/mcp/call` | platform/daemon/src/routes/marketplace.ts |
+| POST | `/api/marketplace/mcp/read-resource` | platform/daemon/src/routes/marketplace.ts |
+| GET | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
+| PATCH | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
+| DELETE | `/api/marketplace/mcp/:id` | platform/daemon/src/routes/marketplace.ts |
+| GET | `/api/mcp/analytics` | platform/daemon/src/routes/mcp-analytics.ts |
+| GET | `/api/mcp/analytics/:server` | platform/daemon/src/routes/mcp-analytics.ts |
 | GET | `/api/memories/most-used` | platform/daemon/src/routes/memory-routes.ts |
 | GET | `/api/memory/timeline` | platform/daemon/src/routes/memory-routes.ts |
 | GET | `/api/memory/review-queue` | platform/daemon/src/routes/memory-routes.ts |
 | GET | `/api/memory/jobs/:id` | platform/daemon/src/routes/memory-routes.ts |
 | POST | `/api/memory/feedback` | platform/daemon/src/routes/memory-routes.ts |
+| POST | `/api/os/agent-execute` | platform/daemon/src/routes/os-agent.ts |
+| POST | `/api/os/agent-state` | platform/daemon/src/routes/os-agent.ts |
+| GET | `/api/os/agent-events` | platform/daemon/src/routes/os-agent.ts |
+| GET | `/api/os/agent-sessions` | platform/daemon/src/routes/os-agent.ts |
+| POST | `/api/os/chat` | platform/daemon/src/routes/os-chat.ts |
 | GET | `/api/home/greeting` | platform/daemon/src/routes/pipeline-routes.ts |
 | GET | `/api/reflections/today` | platform/daemon/src/routes/reflection-routes.ts |
 | GET | `/api/reflections` | platform/daemon/src/routes/reflection-routes.ts |
@@ -107,6 +141,8 @@ silently disappear from the API reference.
 | GET | `/api/repair/cold-stats` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/cluster-entities` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/relink-entities` | platform/daemon/src/routes/repair-routes.ts |
+| GET | `/api/repair/integrity-check` | platform/daemon/src/routes/repair-routes.ts |
+| POST | `/api/repair/rebuild-indexes` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/backfill-hints` | platform/daemon/src/routes/repair-routes.ts |
 | GET | `/api/repair/dead-memories` | platform/daemon/src/routes/repair-routes.ts |
 | POST | `/api/repair/dead-memories/forget` | platform/daemon/src/routes/repair-routes.ts |
@@ -117,6 +153,52 @@ silently disappear from the API reference.
 | GET | `/api/telemetry/memory-search` | platform/daemon/src/routes/telemetry-routes.ts |
 | GET | `/api/telemetry/health` | platform/daemon/src/routes/telemetry-routes.ts |
 | GET | `/api/telemetry/memory-search/export` | platform/daemon/src/routes/telemetry-routes.ts |
+| POST | `/api/os/widget/generate` | platform/daemon/src/routes/widget.ts |
+| GET | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
+| DELETE | `/api/os/widget/:id` | platform/daemon/src/routes/widget.ts |
+
+`GET /api/marketplace/mcp` and the marketplace tools/search responses include a
+`runtime` object with `activeClients`, `activeProcesses`, `pending`, and
+`limit`. The counts cover marketplace discovery, probes, and user operations;
+the limit is the daemon-wide client/process budget.
+
+## Workspace and harness lifecycle
+
+| Method | Path | Source |
+|--------|------|--------|
+| GET | `/api/workspace/migration-control` | platform/daemon/src/daemon.ts |
+| POST | `/api/workspace/migration-control/drain` | platform/daemon/src/daemon.ts |
+| GET | `/api/harnesses/:id/health` | platform/daemon/src/routes/connectors-routes.ts |
+| GET | `/api/hooks/transcript-capture/:jobId` | platform/daemon/src/routes/hooks-routes.ts |
+| POST | `/api/hooks/skill-invocation` | platform/daemon/src/routes/hooks-routes.ts |
+| GET | `/api/memories/curator-slices` | platform/daemon/src/routes/memory-routes.ts |
+| POST | `/api/memories/:id/tombstone` | platform/daemon/src/routes/memory-routes.ts |
+| POST | `/api/memories/:id/supersede` | platform/daemon/src/routes/memory-routes.ts |
+| PATCH | `/api/agents/:name` | platform/daemon/src/routes/misc-routes.ts |
+| POST | `/api/harnesses/:id/connect` | platform/daemon/src/routes/harness-install.ts |
+
+Migration-control endpoints are used by the CLI's migration writer-drain
+lifecycle; prefer the supported `signet migration` commands over calling them
+directly. `POST /api/sources/web` adds a public web source and queues indexing.
+
+## Transcript import upload routes
+
+Transcript import jobs are agent-scoped and require `modify` permission. Create
+a job with `POST /api/sources/imports`, then upload each listed file. A direct
+`PUT` sends the raw JSONL body and requires `upload-length` or `content-length`.
+Resumable `PATCH` requires `upload-length`, `upload-offset`, and
+`upload-checksum`; finalize seals a completed upload. The job status is available
+from `GET /api/sources/imports/:jobId`. Up to 25 files are admitted per job;
+duplicate mode is `skip` (default), `replace`, or `reimport`.
+
+| Method | Path | Source |
+|--------|------|--------|
+| PUT | `/api/sources/imports/:jobId/files/:fileId` | platform/daemon/src/routes/transcript-import-routes.ts |
+| PATCH | `/api/sources/imports/:jobId/files/:fileId` | platform/daemon/src/routes/transcript-import-routes.ts |
+| POST | `/api/sources/imports/:jobId/files/:fileId/finalize` | platform/daemon/src/routes/transcript-import-routes.ts |
+| POST | `/api/sources/imports/:jobId/files/:fileId/reset` | platform/daemon/src/routes/transcript-import-routes.ts |
+| GET | `/api/sources/imports/:jobId/files/:fileId/content` | platform/daemon/src/routes/transcript-import-routes.ts |
+
 
 ## Dashboard
 

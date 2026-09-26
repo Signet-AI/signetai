@@ -21,6 +21,12 @@ import {
 	X,
 } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
+import { importStatusLabel, importStatusReason } from "@/lib/import-status";
+
+const DURABLE_IMPORT_STATES = ["pending", "processing", "imported", "duplicate", "failed", "quarantined"] as const;
+function isDurableImportState(value: string): value is (typeof DURABLE_IMPORT_STATES)[number] {
+	return (DURABLE_IMPORT_STATES as readonly string[]).includes(value);
+}
 
 const HEALTH_STYLES: Record<string, string> = {
 	healthy: "home-health-healthy",
@@ -344,8 +350,13 @@ function TranscriptImportCard({ job, onMutate }: { job: SourceImportJob; onMutat
 					<div className="text-[14px] font-semibold">Agent transcripts</div>
 					<div className="truncate font-mono text-[9.5px] text-muted-foreground">job {current.id}</div>
 				</div>
-				<span className="font-mono text-[10px]">{current.state}</span>
+				<span className="font-mono text-[10px]">
+					{isDurableImportState(current.state) ? importStatusLabel(current.state) : current.state}
+				</span>
 			</div>
+			{isDurableImportState(current.state) && importStatusReason(current.state) && (
+				<p className="font-mono text-[10px] text-muted-foreground">{importStatusReason(current.state)}</p>
+			)}
 			<div className="grid grid-cols-2 gap-2 font-mono text-[10px]">
 				<MiniStat value={String(current.imported ?? 0)} label="imported" />
 				<MiniStat value={String(current.rejected ?? 0)} label="rejected" />

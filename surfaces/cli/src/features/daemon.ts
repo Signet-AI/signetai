@@ -2,7 +2,13 @@ import type { ChildProcess, DaemonRuntime } from "@signet/core";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { confirm } from "@inquirer/prompts";
-import { detectSchema, ensureUnifiedSchema, resolveDaemonRuntime, runMigrations } from "@signet/core";
+import {
+	detectSchema,
+	ensureUnifiedSchema,
+	resolveDaemonRuntime,
+	resolveWorkspaceLayout,
+	runMigrations,
+} from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import type { LogOptions, PathOptions, RestartOptions, StartOptions } from "../commands/shared.js";
@@ -96,7 +102,7 @@ export async function launchDashboard(options: PathOptions, deps: Deps): Promise
 
 export async function migrateSchema(options: PathOptions, deps: Deps): Promise<void> {
 	const basePath = readPath(options, deps);
-	const dbPath = join(basePath, "memory", "memories.db");
+	const dbPath = resolveWorkspaceLayout(basePath).database;
 
 	console.log(deps.signetLogo());
 
@@ -675,7 +681,7 @@ function printLogEventBlock(eventBlock: string): void {
 }
 
 function readFileLogs(basePath: string, limit: number, options: LogOptions): void {
-	const logDir = join(basePath, ".daemon", "logs");
+	const logDir = join(resolveWorkspaceLayout(basePath).runtime, "logs");
 	const logFile = join(logDir, `signet-${new Date().toISOString().split("T")[0]}.log`);
 
 	if (!existsSync(logFile)) {

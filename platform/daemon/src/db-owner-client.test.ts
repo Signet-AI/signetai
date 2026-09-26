@@ -36,6 +36,7 @@ import {
 } from "./db-owner-maintenance";
 import { recallThroughDbOwner } from "./db-owner-recall";
 import { dbOwnerQuery, dbOwnerVacuumConversion, getDbOwner, startDbOwnerWithRole } from "./db-owner-runtime";
+import { MigrationControlBoundary, WorkspaceMigrationRetryableError } from "./workspace-writer-barrier";
 
 function makeDb(): { readonly directory: string; readonly path: string } {
 	const directory = mkdtempSync(join(tmpdir(), "signet-db-owner-"));
@@ -1707,4 +1708,18 @@ process.stdin.on("data", (chunk) => {
 		);
 		expect(await rejected(handle.result)).toMatchObject({ code: "DB_OWNER_RESULT_TOO_LARGE" });
 	});
+});
+
+test("shares the daemon migration control with DB-owner admissions", () => {
+	const database = makeDb();
+	const control = new MigrationControlBoundary("daemon-generation");
+	const owner = createDbOwnerClient({ dbPath: database.path, migrationControl: control });
+	control.beginDrain();
+	expect(() =>
+		owner.submit(
+			{ kind: "query", statement: { sql: "SELECT 1", params: [], result: "all" } },
+			{ operation: "test.write", lane: "write", deadlineMs: 1_000 },
+		),
+	).toThrow(WorkspaceMigrationRetryableError);
+	expect(control.blockers()).toEqual([]);
 });

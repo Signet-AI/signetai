@@ -9,6 +9,7 @@ import {
 	formatRecallText,
 	parseRecallPayload,
 	readStaticIdentity,
+	resolveWorkspacePath,
 	resolveSessionStartTimeoutMs,
 	stripInternalMemoryContext,
 	wrapMemoryContext,
@@ -367,7 +368,7 @@ async function getDaemonPid(daemonUrl: string): Promise<number | null> {
 	}
 }
 function staticFallback(reason: "offline" | "timeout" = "offline"): SessionStartResult | null {
-	const dir = process.env.SIGNET_PATH ?? join(homedir(), ".agents");
+	const dir = process.env.SIGNET_PATH ?? resolveWorkspacePath().path;
 	const inject =
 		reason === "timeout"
 			? readStaticIdentity(dir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS)

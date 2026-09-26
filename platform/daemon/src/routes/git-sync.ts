@@ -1,15 +1,17 @@
 import { spawnHidden as spawn, type ChildProcessWithoutNullStreams } from "@signet/core";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
 	SIGNET_GIT_PROTECTED_PATHS,
 	isSignetGitProtectedPath,
 	isSignetGitTrackedPath,
-	mergeSignetGitignoreEntries,
+	managedGitignoreUpdate,
+	inspectRootGit,
 } from "@signet/core";
 import { logger } from "../logger";
 import { SecretKeyringError, getSecret, hasSecret } from "../secrets.js";
 import { AGENTS_DIR } from "./state";
+import { WorkspaceMigrationRetryableError, type MigrationControlBoundary } from "../workspace-writer-barrier";
 
 import { clampGitSyncIntervalSeconds, gitConfig } from "./git-config";
 export { gitConfig };
@@ -19,6 +21,11 @@ let lastGitSync: Date | null = null;
 let gitSyncInProgress = false;
 let gitSyncPromise: Promise<unknown> | null = null;
 let gitSyncQueued = false;
+let migrationControl: MigrationControlBoundary | null = null;
+export function setGitMigrationControl(control: MigrationControlBoundary | null): void {
+	migrationControl = control;
+	if (control && control.state !== "open") stopGitSyncTimer();
+}
 
 const DEFAULT_GIT_TIMEOUT_MS = 10_000;
 const FETCH_GIT_TIMEOUT_MS = 45_000;
@@ -46,7 +53,7 @@ let consecutiveGitFailures = 0;
 let gitCircuitOpenUntil = 0;
 let lastGitFailureReason: string | undefined;
 
-let gitRepoProbe = (dir: string): boolean => existsSync(join(dir, ".git"));
+let gitRepoProbe = (dir: string): boolean => inspectRootGit(dir).mode === "shell";
 
 type CommandRunner = (cmd: string, args: string[], options?: CommandOptions) => Promise<CommandResult>;
 let commandRunner: CommandRunner = runBoundedCommand;
@@ -604,8 +611,15 @@ export async function gitSync(): Promise<{
 	if (gitSyncInProgress) {
 		return { success: false, message: "Sync already in progress" };
 	}
+	if (migrationControl && migrationControl.state !== "open") {
+		return {
+			success: false,
+			message: new WorkspaceMigrationRetryableError("git-sync", migrationControl.generation).message,
+		};
+	}
 
 	gitSyncInProgress = true;
+	const lease = migrationControl?.acquireWriter("git-sync");
 
 	try {
 		const pullResult = await gitPull();
@@ -613,6 +627,7 @@ export async function gitSync(): Promise<{
 			return { success: false, message: pullResult.message };
 		}
 
+		lease?.assertCurrent();
 		const pushResult = await gitPush();
 		if (!pushResult.success) {
 			return {
@@ -630,6 +645,7 @@ export async function gitSync(): Promise<{
 			pushed: pushResult.changes,
 		};
 	} finally {
+		lease?.release();
 		gitSyncInProgress = false;
 	}
 }
@@ -825,14 +841,8 @@ export function ensureWorkspaceGitignore(): boolean {
 }
 
 function ensureProtectedGitignore(dir: string): boolean {
-	const gitignorePath = join(dir, ".gitignore");
-	const existingContent = existsSync(gitignorePath) ? readFileSync(gitignorePath, "utf-8") : "";
-	const nextContent = mergeSignetGitignoreEntries(existingContent);
-	if (nextContent !== existingContent) {
-		writeFileSync(gitignorePath, nextContent, "utf-8");
-		return true;
-	}
-	return false;
+	const result = managedGitignoreUpdate(dir);
+	return result.status === "updated" && result.content !== result.preimage;
 }
 
 async function gitUntrackProtectedFiles(dir: string): Promise<void> {
@@ -1031,7 +1041,7 @@ export function setGitCommandRunnerForTests(runner: CommandRunner | null): void 
 }
 
 export function setGitRepoProbeForTests(probe: ((dir: string) => boolean) | null): void {
-	gitRepoProbe = probe ?? ((dir: string): boolean => existsSync(join(dir, ".git")));
+	gitRepoProbe = probe ?? ((dir: string): boolean => inspectRootGit(dir).mode === "shell");
 }
 
 export function toRelativeGitPathForTests(dir: string, path: string): string | null {

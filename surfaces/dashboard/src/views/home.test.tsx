@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
+import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 
 const dom = new Window({ url: "http://localhost/#" });
 const originalFetch = globalThis.fetch;
+let restoreDomGlobals = () => {};
 
 let harnessPayload: unknown;
 
@@ -13,10 +15,7 @@ function flush(): Promise<void> {
 }
 
 beforeAll(() => {
-	Reflect.set(globalThis, "IS_REACT_ACT_ENVIRONMENT", true);
-	for (const key of Object.getOwnPropertyNames(dom)) {
-		if (!(key in globalThis)) Reflect.set(globalThis, key, Reflect.get(dom, key));
-	}
+	restoreDomGlobals = installDashboardDomGlobals(dom);
 	globalThis.fetch = (async (input: RequestInfo | URL) => {
 		const path = String(input);
 		if (path.endsWith("/api/harnesses")) {
@@ -27,6 +26,21 @@ beforeAll(() => {
 		}
 		if (path.endsWith("/api/knowledge/stats")) {
 			return Response.json({ entityCount: 0 });
+		}
+		if (path.endsWith("/api/sources/import-inbox")) {
+			return Response.json({ enabled: false, imports: [] });
+		}
+		if (path.endsWith("/api/sources/imports")) {
+			return Response.json({ imports: [] });
+		}
+		if (path.endsWith("/api/protection")) {
+			return Response.json({
+				overall: "partial",
+				components: [],
+				missing: [],
+				degraded: [],
+				restoreReceipt: null,
+			});
 		}
 		if (path.endsWith("/api/sources")) {
 			return Response.json({ version: 1, sources: [] });
@@ -58,6 +72,7 @@ beforeAll(() => {
 
 afterAll(() => {
 	globalThis.fetch = originalFetch;
+	restoreDomGlobals();
 });
 
 async function renderHome(): Promise<readonly [HTMLElement, Root]> {
@@ -145,5 +160,18 @@ test("keeps the setup link while the harness check is pending", async () => {
 		await unmountHome(root);
 		container.remove();
 		globalThis.fetch = original;
+	}
+});
+
+test("keeps protection and durable import controls out of the reachable Home surface", async () => {
+	harnessPayload = { harnesses: [], configuredHarnesses: [] };
+	const [container, root] = await renderHome();
+	try {
+		expect(container.querySelector('[aria-label="Protection recovery"]')).toBeNull();
+		expect(container.querySelector('[aria-label="Durable import status"]')).toBeNull();
+		expect(container.querySelector('[data-testid="import-inbox-card"]')).toBeNull();
+	} finally {
+		await unmountHome(root);
+		container.remove();
 	}
 });
