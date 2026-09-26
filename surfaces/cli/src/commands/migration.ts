@@ -63,8 +63,7 @@ export function initializeMigrationLeaseFile(leasePath: string): void {
 	} catch (error) {
 		try {
 			unlinkSync(stagedPath);
-		} catch {
-		}
+		} catch {}
 		throw error;
 	}
 	unlinkSync(stagedPath);

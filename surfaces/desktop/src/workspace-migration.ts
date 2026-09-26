@@ -139,8 +139,7 @@ export class WorkspaceMigrationService {
 				const configuredPath = deps.configuredWorkspacePath();
 				if (!samePath(configuredPath, deps.workspace.path)) deps.relaunch(configuredPath);
 				else await deps.ensureDaemon();
-			} catch {
-			}
+			} catch {}
 			return { state: "failed" };
 		} finally {
 			this.#running = false;
@@ -166,8 +165,7 @@ export class WorkspaceMigrationService {
 				const configuredPath = deps.configuredWorkspacePath();
 				if (!samePath(configuredPath, deps.workspace.path)) deps.relaunch(configuredPath);
 				else await deps.ensureDaemon();
-			} catch {
-			}
+			} catch {}
 			return { state: "failed" };
 		} finally {
 			this.#running = false;
