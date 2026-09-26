@@ -140,7 +140,6 @@ export class WorkspaceMigrationService {
 				if (!samePath(configuredPath, deps.workspace.path)) deps.relaunch(configuredPath);
 				else await deps.ensureDaemon();
 			} catch {
-				// Preserve the migration failure state; the desktop can surface recovery on next launch.
 			}
 			return { state: "failed" };
 		} finally {
@@ -168,7 +167,6 @@ export class WorkspaceMigrationService {
 				if (!samePath(configuredPath, deps.workspace.path)) deps.relaunch(configuredPath);
 				else await deps.ensureDaemon();
 			} catch {
-				// Preserve the migration failure state; the desktop can surface recovery on next launch.
 			}
 			return { state: "failed" };
 		} finally {

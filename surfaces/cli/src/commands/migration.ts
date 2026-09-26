@@ -44,7 +44,6 @@ export type MigrationCommandDeps = {
 };
 
 export function initializeMigrationLeaseFile(leasePath: string): void {
-	// A hard exit must never expose a new-format lease before its marker is on disk.
 	const stagedPath = `${leasePath}.init-${randomUUID()}`;
 	try {
 		const staged = createDatabase(stagedPath);
@@ -60,13 +59,11 @@ export function initializeMigrationLeaseFile(leasePath: string): void {
 		} finally {
 			closeSync(fd);
 		}
-		// Hard linking publishes the complete inode only if the lease name is absent.
 		linkSync(stagedPath, leasePath);
 	} catch (error) {
 		try {
 			unlinkSync(stagedPath);
 		} catch {
-			// Preserve the initialization error; an orphan staging name is not a lease.
 		}
 		throw error;
 	}

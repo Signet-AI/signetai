@@ -1289,8 +1289,6 @@ test("production CLI preserves root and nested Git state without mutating the so
 		const destinationNested = join(destination, "skills", "demo");
 		expect(treeDigest(join(source, ".git"))).toBe(sourceGitDigest);
 		expect(treeDigest(join(nested, ".git"))).toBe(nestedGitDigest);
-		// Restored-daemon startup refreshes Git's inode cache in the index.
-		// The migration engine verifies the copied index hash before startup.
 		expect(treeDigest(join(destination, ".git"), true)).toBe(treeDigest(join(source, ".git"), true));
 		expect(treeDigest(join(destinationNested, ".git"))).toBe(nestedGitDigest);
 		expect(runGit(destination, "rev-parse", "HEAD").trim()).toBe(sourceHead);

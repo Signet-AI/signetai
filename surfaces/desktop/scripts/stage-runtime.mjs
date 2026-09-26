@@ -138,8 +138,6 @@ export function runtimeDependencies(daemonPkg, corePkg, platform, arch) {
 		const version = pkgVersion(daemonPkg, name);
 		if (version) dependencies[name] = version;
 	}
-	// The staged runner and daemon execute under Bun, whose database backend is bun:sqlite.
-	// Keep the native Node-only fallback out of this runtime to avoid ABI-specific staging.
 	for (const name of ["sqlite-vec", vecPackage]) {
 		const version = pkgVersion(corePkg, name);
 		if (version) dependencies[name] = version;
