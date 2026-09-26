@@ -53,8 +53,8 @@ export interface AgentConfigStore {
 	ready: boolean;
 	dirty: boolean;
 	agent: YamlObject;
-	aStr: (path: readonly string[]) => string;
-	aBool: (path: readonly string[]) => boolean;
+	aStr: (path: readonly string[], fallback?: string) => string;
+	aBool: (path: readonly string[], fallback?: boolean) => boolean;
 	aSetStr: (path: readonly string[], value: string) => void;
 	aSetBool: (path: readonly string[], value: boolean) => void;
 	aSetNum: (path: readonly string[], value: number) => void;
@@ -115,22 +115,23 @@ export function useAgentConfig(): AgentConfigStore {
 	}, []);
 
 	const aStr = useCallback(
-		(path: readonly string[]) => {
+		(path: readonly string[], fallback = "") => {
 			const v = getPath(agent, path);
-			return v == null ? "" : String(v);
+			return v == null ? fallback : String(v);
 		},
 		[agent],
 	);
 
 	const aBool = useCallback(
-		(path: readonly string[]) => {
+		(path: readonly string[], fallback = false) => {
 			const v = getPath(agent, path);
 			if (typeof v === "boolean") return v;
 			if (typeof v === "string") {
 				const s = v.trim().toLocaleLowerCase();
 				if (s === "true") return true;
+				if (s === "false") return false;
 			}
-			return false;
+			return fallback;
 		},
 		[agent],
 	);

@@ -19,6 +19,8 @@ export interface DesktopBridge {
 	readonly getWorkspaceMigrationStatus?: () => Promise<WorkspaceMigrationUiStatus>;
 	readonly startWorkspaceMigration?: () => Promise<WorkspaceMigrationResult>;
 	readonly rollbackWorkspaceMigration?: () => Promise<WorkspaceMigrationResult>;
+	readonly pickDirectory?: (options?: { readonly title?: string }) => Promise<string | null>;
+	readonly pickFiles?: (options?: { readonly title?: string }) => Promise<readonly string[] | null>;
 }
 
 declare global {

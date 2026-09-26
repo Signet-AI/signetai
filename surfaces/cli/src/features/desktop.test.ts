@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import {
 	chmodSync,
 	existsSync,
@@ -759,6 +760,7 @@ describe("Windows desktop install", () => {
 			makeWindowsAppDirectory(release, hostDesktopArch());
 			const workspace = join(home, "workspace");
 			const localAppData = join(home, "local-app-data");
+			const shortcutCalls: Array<{ cmd: string; args: readonly string[]; env: NodeJS.ProcessEnv }> = [];
 
 			const result = installDesktopFromSource(
 				{ repo: root, skipBuild: true },
@@ -769,12 +771,60 @@ describe("Windows desktop install", () => {
 					runner: () => {
 						throw new Error("runner should not be called");
 					},
+					shortcutRunner: (cmd, args, opts) => {
+						shortcutCalls.push({ cmd, args, env: opts.env });
+						return { status: 0 };
+					},
 				},
 			);
 
 			if (!("appDir" in result)) throw new Error("expected Windows install result");
 			expect(result.workspace).toBe(workspace);
 			expect(result.appDir).toBe(join(localAppData, "Programs", "Signet Desktop"));
+			expect(result.startMenuShortcut).toBe(
+				join(home, "AppData", "Roaming", "Microsoft", "Windows", "Start Menu", "Programs", "Signet.lnk"),
+			);
+			expect(shortcutCalls).toHaveLength(1);
+			expect(shortcutCalls[0]?.cmd).toBe("powershell.exe");
+			expect(shortcutCalls[0]?.args).toContain("-Command");
+			expect(shortcutCalls[0]?.env.SIGNET_DESKTOP_TARGET).toBe(result.executable);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("writes the Start Menu shortcut to the installed executable on Windows", () => {
+		if (process.platform !== "win32") return;
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			const shortcut = join(home, "Start Menu", "Signet.lnk");
+			const result = installWindowsDesktopApp(root, home, join(home, "workspace"), join(home, "local-app-data"), {
+				startMenuShortcut: shortcut,
+				platform: "win32",
+			});
+
+			expect(existsSync(shortcut)).toBe(true);
+			const target = execFileSync(
+				"powershell.exe",
+				[
+					"-NoLogo",
+					"-NoProfile",
+					"-NonInteractive",
+					"-Command",
+					"$shell = New-Object -ComObject WScript.Shell; [Console]::Write($shell.CreateShortcut($env:SIGNET_TEST_SHORTCUT).TargetPath)",
+				],
+				{
+					encoding: "utf8",
+					windowsHide: true,
+					env: { ...process.env, SIGNET_TEST_SHORTCUT: shortcut },
+				},
+			);
+			expect(target).toBe(result.executable);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 			rmSync(home, { recursive: true, force: true });

@@ -61,6 +61,7 @@ export interface DesktopWindowsInstallResult extends DesktopBuildResult {
 	readonly appDir: string;
 	readonly executable: string;
 	readonly programsDir: string;
+	readonly startMenuShortcut?: string;
 	readonly workspace: string;
 }
 
@@ -72,6 +73,7 @@ interface DesktopCommandContext {
 	readonly home?: string;
 	readonly platform?: NodeJS.Platform;
 	readonly runner?: CommandRunner;
+	readonly shortcutRunner?: CommandRunner;
 	readonly syncWorkspaceSourceRepo?: typeof syncWorkspaceSourceRepo;
 }
 
@@ -97,6 +99,13 @@ const defaultRunner: CommandRunner = (cmd, args, opts) =>
 		cwd: opts.cwd,
 		env: opts.env,
 		stdio: "inherit",
+	});
+
+const defaultShortcutRunner: CommandRunner = (cmd, args, opts) =>
+	spawnSync(cmd, [...args], {
+		cwd: opts.cwd,
+		env: opts.env,
+		stdio: "ignore",
 	});
 
 export function resolveDesktopSourceCheckout(
@@ -201,8 +210,15 @@ export function installDesktopFromSource(
 		}
 		if (platform === "win32") {
 			const localAppData = ctx.env?.LOCALAPPDATA?.trim() || join(home, "AppData", "Local");
+			const appData = ctx.env?.APPDATA?.trim() || join(home, "AppData", "Roaming");
+			const startMenuShortcut = join(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Signet.lnk");
 			return withSourceSyncMetadata(
-				installWindowsDesktopApp(prepared.repo, home, workspace, localAppData),
+				installWindowsDesktopApp(prepared.repo, home, workspace, localAppData, {
+					startMenuShortcut,
+					shortcutRunner: ctx.shortcutRunner,
+					env: ctx.env,
+					platform,
+				}),
 				prepared.sourceSync,
 			);
 		}
@@ -248,6 +264,13 @@ function sourceChangesRecoveryMessage(repo: string, stashRef: string): string {
 
 const MAC_APP_MARKER = "ai.signet.app";
 
+interface WindowsDesktopInstallOptions {
+	readonly startMenuShortcut?: string;
+	readonly shortcutRunner?: CommandRunner;
+	readonly env?: NodeJS.ProcessEnv;
+	readonly platform?: NodeJS.Platform;
+}
+
 export function installMacDesktopApp(
 	repo: string,
 	home: string,
@@ -279,6 +302,7 @@ export function installWindowsDesktopApp(
 	home: string,
 	workspace = resolveAgentsDir().path,
 	localAppData = join(home, "AppData", "Local"),
+	options: WindowsDesktopInstallOptions = {},
 ): DesktopWindowsInstallResult {
 	const releaseDir = desktopReleaseDir(repo);
 	const source = findWindowsAppDirectory(releaseDir, process.arch);
@@ -303,7 +327,73 @@ export function installWindowsDesktopApp(
 	if (!executable) {
 		throw new Error(`Installed Windows Signet app is missing its executable at ${appDir}.`);
 	}
-	return { repo, releaseDir, appDir, executable, programsDir, workspace };
+
+	if (options.startMenuShortcut && (options.platform ?? process.platform) === "win32") {
+		writeWindowsStartMenuShortcut(
+			executable,
+			options.startMenuShortcut,
+			options.env ?? process.env,
+			options.shortcutRunner ?? defaultShortcutRunner,
+		);
+	}
+
+	return {
+		repo,
+		releaseDir,
+		appDir,
+		executable,
+		programsDir,
+		startMenuShortcut: options.startMenuShortcut,
+		workspace,
+	};
+}
+
+const WINDOWS_START_MENU_SHORTCUT_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+$shortcutPath = $env:SIGNET_DESKTOP_SHORTCUT
+$targetPath = $env:SIGNET_DESKTOP_TARGET
+if ([string]::IsNullOrWhiteSpace($shortcutPath) -or [string]::IsNullOrWhiteSpace($targetPath)) {
+    throw 'Signet desktop shortcut paths are missing.'
+}
+$parent = Split-Path -Parent $shortcutPath
+New-Item -ItemType Directory -Force -Path $parent | Out-Null
+$shell = New-Object -ComObject WScript.Shell
+if (Test-Path -LiteralPath $shortcutPath) {
+    $existing = $shell.CreateShortcut($shortcutPath)
+    $existingTarget = [string]$existing.TargetPath
+    if ($existingTarget -and $existingTarget -notmatch '(?i)\\(?:@signetdesktop|Signet Desktop)\\signet\.exe$') {
+        throw "Refusing to replace unrelated shortcut at $shortcutPath."
+    }
+}
+$link = $shell.CreateShortcut($shortcutPath)
+$link.TargetPath = $targetPath
+$link.WorkingDirectory = Split-Path -Parent $targetPath
+$link.Description = 'Signet desktop app'
+$link.IconLocation = "$targetPath,0"
+$link.Save()
+`;
+
+function writeWindowsStartMenuShortcut(
+	executable: string,
+	shortcutPath: string,
+	env: NodeJS.ProcessEnv,
+	runner: CommandRunner,
+): void {
+	const args = [
+		"-NoLogo",
+		"-NoProfile",
+		"-NonInteractive",
+		"-ExecutionPolicy",
+		"Bypass",
+		"-Command",
+		WINDOWS_START_MENU_SHORTCUT_SCRIPT,
+	] as const;
+	runChecked(runner, "powershell.exe", args, dirname(executable), {
+		...process.env,
+		...env,
+		SIGNET_DESKTOP_SHORTCUT: shortcutPath,
+		SIGNET_DESKTOP_TARGET: executable,
+	});
 }
 function replaceManagedPath(
 	source: string,
