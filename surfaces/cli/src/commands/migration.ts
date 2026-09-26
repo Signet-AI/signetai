@@ -518,10 +518,10 @@ export function createDefaultMigrationEngine(
 				};
 			},
 			backupTo: async (stagedSource, stagedDestination) => {
-				const { DatabaseSync, backup } = await import("node:sqlite");
-				const db = new DatabaseSync(stagedSource, { readOnly: true });
+				const escaped = stagedDestination.replaceAll("'", "''");
+				const db = createDatabase(stagedSource, { readonly: true });
 				try {
-					await backup(db, stagedDestination);
+					db.exec(`VACUUM INTO '${escaped}'`);
 				} finally {
 					db.close();
 				}
