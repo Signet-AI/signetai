@@ -6,6 +6,9 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-09-26
+- Bug fixes: scope typecheck to affected workspaces; resolve windows tokenizer wasm path; satisfy comment-strip and event-loop ledger policies; repair recall scope and bounds.
+
 ### 2026-09-25
 - Features: daemon-owned workspace stats, honest queue counts, Dreaming state.
 - Bug fixes: satisfy comment-strip and event-loop ledger policies; preserve request deadlines and cancellation; validate plugin manifest values; handle missing proposal evidence; reject invalid judge verdicts; keep attempt fenced on read errors; reconcile late pass creation; release trigger on scope failure; preserve legacy MCP records; validate tokenizer wasm path; sync retired ledger artifacts; drop exports for removed OS types; clear stale binary outputs; stabilize Node WASM names; externalize Bun FFI fallback; stabilize daemon asset builds; keep worker bundles single-file; make stdio bundle portable; remove stale retirement references; externalize native keyring; retire legacy invocation slot; await startup source cleanup; lease transcript import target; refresh sync DB audit ledger; serialize source mutations; accept deferred removal.
@@ -30,11 +33,19 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Bug fixes: avoid duplicate telemetry sweep; continue integrity past FTS; capture UNC DB attribution; harden Windows DB attribution paths; preserve runtime DB attribution; accept absolute-path stack tokens in bundled runtime (#1764 regression); use kernel-owned instance lock.
 - Refactoring: trim integrity cleanup.
 
-### 2026-09-17
-- Bug fixes: refresh event-loop ledger; harden vector repair safety; bound vector repair reconciliation.
-- Refactoring: deduplicate vector repair policy.
-
 ## Release Ledger
+
+## [0.227.1] - 2026-09-26
+
+Release summary: 4 bug fixes.
+Tag range: `v0.227.0..v0.227.1`.
+
+### Bug Fixes
+
+- **hooks**: scope typecheck to affected workspaces
+- **native**: resolve windows tokenizer wasm path
+- **search**: satisfy comment-strip and event-loop ledger policies
+- **search**: repair recall scope and bounds
 
 ## [0.227.0] - 2026-09-25
 
