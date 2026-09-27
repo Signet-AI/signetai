@@ -12,6 +12,7 @@ describe("openUrlWithFallback", () => {
 		expect(command).not.toContain(url);
 		expect(invocation.options.env.SIGNET_OPEN_URL).toBe(url);
 		expect(invocation.options.stdio).toBe("ignore");
+		expect(invocation.options).not.toHaveProperty("detached");
 	});
 
 	it("prints a usable manual URL when opening the browser fails (#1477)", async () => {

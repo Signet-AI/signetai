@@ -83,6 +83,7 @@ import { setupWizard } from "./features/setup.js";
 import { copyDirRecursive, syncBuiltinSkills, syncTemplates } from "./features/sync.js";
 import { flushCliTelemetry, recordCommandInvoked } from "./features/telemetry.js";
 import { signetBanner } from "./lib/banner.js";
+import { registerCliPreAction } from "./lib/cli-pre-action.js";
 import { createDaemonClient, ensureDaemonRunning } from "./lib/daemon.js";
 import { createOfflineSecretApiCall, createSecretCommandApiCall } from "./lib/secrets.js";
 import {
@@ -821,39 +822,12 @@ Examples:
 `,
 );
 
-program.hook("preAction", async (_thisCommand, actionCommand) => {
-	let current: Command | null = actionCommand;
-	let topLevelCommand = "";
-
-	while (current?.parent) {
-		if (current.parent.name() === "signet") {
-			topLevelCommand = current.name();
-			break;
-		}
-		current = current.parent;
-	}
-
-	if (actionCommand.name() === "signet" || topLevelCommand === "") {
-		return;
-	}
-
-	if (
-		topLevelCommand === "hook" ||
-		topLevelCommand === "setup" ||
-		topLevelCommand === "migration" ||
-		topLevelCommand === "status" ||
-		topLevelCommand === "dashboard"
-	) {
-		return;
-	}
-
-	if (!existsSync(AGENTS_DIR)) {
-		return;
-	}
-	recordCommandInvoked(AGENTS_DIR, topLevelCommand);
-	void flushCliTelemetry(AGENTS_DIR, VERSION);
-
-	await ensureOpenClawPluginPackage(AGENTS_DIR, { silent: true });
+registerCliPreAction(program, {
+	agentsDir: AGENTS_DIR,
+	version: VERSION,
+	recordCommandInvoked,
+	flushCliTelemetry,
+	ensureOpenClawPluginPackage,
 });
 
 const healthDeps = {
