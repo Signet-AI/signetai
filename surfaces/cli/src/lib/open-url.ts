@@ -19,7 +19,6 @@ export interface WindowsOpenInvocation {
 	readonly command: "powershell.exe";
 	readonly args: readonly string[];
 	readonly options: {
-		readonly detached: true;
 		readonly stdio: "ignore";
 		readonly env: NodeJS.ProcessEnv;
 	};
@@ -46,7 +45,6 @@ export function buildWindowsOpenInvocation(url: string): WindowsOpenInvocation {
 		command: "powershell.exe",
 		args: ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_OPEN_SCRIPT],
 		options: {
-			detached: true,
 			stdio: "ignore",
 			env: { ...process.env, [WINDOWS_OPEN_ENV]: url },
 		},

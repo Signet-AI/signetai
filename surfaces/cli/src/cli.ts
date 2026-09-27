@@ -837,7 +837,13 @@ program.hook("preAction", async (_thisCommand, actionCommand) => {
 		return;
 	}
 
-	if (topLevelCommand === "hook" || topLevelCommand === "setup" || topLevelCommand === "migration") {
+	if (
+		topLevelCommand === "hook" ||
+		topLevelCommand === "setup" ||
+		topLevelCommand === "migration" ||
+		topLevelCommand === "status" ||
+		topLevelCommand === "dashboard"
+	) {
 		return;
 	}
 
