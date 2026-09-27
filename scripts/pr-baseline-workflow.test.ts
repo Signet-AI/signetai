@@ -22,7 +22,7 @@ test("PR baseline is always on and uses the pinned hermetic install", async () =
 	expect(source).toContain('PUPPETEER_SKIP_DOWNLOAD: "1"');
 });
 
-test("PR baseline runs architecture audits, their fixtures, workspace typecheck, and the production build", async () => {
+test("PR baseline runs architecture audits, the complete workspace suite, and typecheck", async () => {
 	const source = await workflow();
 	for (const command of [
 		"bun run comments:check",
@@ -31,13 +31,13 @@ test("PR baseline runs architecture audits, their fixtures, workspace typecheck,
 		"bun run audit:agent-identity",
 		"bun test scripts/strip-comments.test.ts scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts",
 		"bun run typecheck",
-		"bun run build",
+		"run: bun run test",
 	]) {
 		expect(source).toContain(command);
 	}
-	expect(source.indexOf("bun run build")).toBeLessThan(source.indexOf("bun run typecheck"));
+	expect(source.indexOf("run: bun run test")).toBeLessThan(source.indexOf("bun run typecheck"));
+	expect(source).not.toContain("run: bun run build\n");
 	expect(source).not.toContain("  typecheck:\n");
-	expect(source).not.toContain("run: bun run test\n");
 });
 
 test("PR baseline leaves specialized acceptance and release work to owning workflows", async () => {

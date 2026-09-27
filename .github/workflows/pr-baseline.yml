@@ -44,7 +44,7 @@ jobs:
         run: bun test scripts/strip-comments.test.ts scripts/check-production-comments.test.ts scripts/audit-database-ownership.test.ts scripts/audit-agent-identity.test.ts scripts/pr-baseline-workflow.test.ts
 
   build:
-    name: Production build and workspace typecheck
+    name: Production build, complete test suite, and workspace typecheck
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +53,7 @@ jobs:
           bun-version-file: package.json
       - name: Install dependencies
         run: bun install --frozen-lockfile
-      - name: Build maintained workspaces
-        run: bun run build
+      - name: Build and run the complete workspace test suite
+        run: bun run test
       - name: Typecheck workspaces
         run: bun run typecheck

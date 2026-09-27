@@ -15,9 +15,11 @@ const MAINTAINED_TEST_ROOTS = [
 	"surfaces/dashboard",
 	"surfaces/desktop",
 	"surfaces/tray",
+	"surfaces/browser-extension",
 	"integrations",
 	"libs",
 	"memorybench",
+	"web/marketing",
 	"web/workers",
 ];
 
@@ -90,6 +92,7 @@ test("the root test command covers every maintained test root", () => {
 	expect(DIRECTORY_TEST_COMMAND).toBe("");
 	expect(HERMETIC_TEST_COMMAND).not.toContain("--filter");
 	expect(HERMETIC_TEST_COMMAND).not.toContain("references");
+	expect(WORKSPACE_TEST_COMMAND).toContain("bun run --filter '@signet/docs' test:search");
 });
 
 test("the hermetic test runner owns host-sensitive paths and overrides", () => {
