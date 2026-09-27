@@ -14,6 +14,7 @@ import {
 	renameSync,
 	rmSync,
 	statSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -365,6 +366,7 @@ test("packaged desktop migration runner migrates and verifies a real v1 SQLite w
 		writeFileSync(join(source, sourcePath), contents);
 		return { sourcePath, destinationPath, contents };
 	});
+	symlinkSync("loose note 0.txt", join(source, "CLAUDE.md"));
 	try {
 		const sourceDb = new Database(join(source, "memory", "memories.db"), { create: true });
 		sourceDb.exec(

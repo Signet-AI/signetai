@@ -139,6 +139,20 @@ describe("descriptor-rooted filesystem", () => {
 		}
 	});
 
+	test("inventories symlink metadata from its parent descriptor", async () => {
+		const rootPath = temporaryRoot("descriptor-symlink-inventory");
+		writeFileSync(join(rootPath, "target.txt"), "target");
+		symlinkSync("target.txt", join(rootPath, "link"));
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			const link = (await root.inventory()).find((entry) => entry.path === "link");
+			expect(link).toMatchObject({ type: "symlink", target: "target.txt" });
+			expect(link?.ino).toBe(lstatSync(join(rootPath, "link")).ino);
+		} finally {
+			await root.close();
+		}
+	});
+
 	test("copies to a caller-owned staging name and cleans it when publication stops", async () => {
 		const sourcePath = temporaryRoot("descriptor-staged-source");
 		const destinationPath = temporaryRoot("descriptor-staged-destination");

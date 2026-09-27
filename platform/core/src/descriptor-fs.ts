@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, fstatSync } from "node:fs";
+import type { Stats } from "node:fs";
 import { link, lstat, mkdir, open, opendir, readlink, rename, rmdir, symlink, unlink } from "node:fs/promises";
 import type { FileHandle } from "node:fs/promises";
 import { constants as osConstants } from "node:os";
@@ -40,6 +41,7 @@ const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const DARWIN_DIRECTORY_BUFFER_BYTES = 64 * 1024;
 const DARWIN_DIRENT_HEADER_BYTES = 8;
 const DARWIN_AT_REMOVEDIR = 0x80;
+const DARWIN_O_SYMLINK = 0x00200000;
 
 export class UnsupportedDescriptorFilesystemError extends Error {
 	readonly code = "unsupported_descriptor_filesystem";
@@ -259,6 +261,18 @@ async function readlinkChild(parent: FileHandle, name: string): Promise<string> 
 	return new TextDecoder().decode(buffer.subarray(0, Number(length)));
 }
 
+function statSymlinkChild(parent: FileHandle, name: string): Stats {
+	const api = loadDarwinApi();
+	if (!api) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
+	const fd = api.symbols.openat(parent.fd, cstring(name), DARWIN_O_SYMLINK, 0);
+	if (fd < 0) throw darwinError("openat", api);
+	try {
+		return fstatSync(fd, { bigint: false });
+	} finally {
+		api.symbols.close(fd);
+	}
+}
+
 function* readDarwinDirectory(fd: number, api: DarwinApi): Generator<string> {
 	const ffi = loadDarwinFfi();
 	if (!ffi) throw new UnsupportedDescriptorFilesystemError("macOS descriptor filesystem is unavailable");
@@ -374,7 +388,8 @@ async function inspectChild(parent: FileHandle, name: string): Promise<EntryInsp
 			throw fileError;
 	}
 	const target = await readlinkChild(parent, name);
-	const stat = await lstat(descriptorPath(parent.fd, name));
+	const stat =
+		process.platform === "darwin" ? statSymlinkChild(parent, name) : await lstat(descriptorPath(parent.fd, name));
 	return {
 		type: "symlink",
 		target,
