@@ -45,13 +45,15 @@ During historical backfill, an existing completed JSONL session remains authorit
 Migration is stopped, drained, copy-and-verify, resumable, and journaled outside both workspaces. The journal records component progress, fingerprints, receipts, cutover, rollback eligibility, cleanup acceptance, and redacted errors.
 
 ```bash
-signet migration preflight [--source <v1-root>] [--destination <v2-root>]
-signet migration run       [--source <v1-root>] [--destination <v2-root>]
-signet migration resume    [--source <v1-root>] [--destination <v2-root>]
-signet migration status    [--source <v1-root>] [--destination <v2-root>]
-signet migration rollback  [--source <v1-root>] [--destination <v2-root>]
-signet migration cleanup   --accept [--source <v1-root>] [--destination <v2-root>]
+signet workspace layout migrate preflight [--source <v1-root>] [--destination <v2-root>]
+signet workspace layout migrate run       [--source <v1-root>] [--destination <v2-root>]
+signet workspace layout migrate resume    [--source <v1-root>] [--destination <v2-root>]
+signet workspace layout migrate status    [--source <v1-root>] [--destination <v2-root>]
+signet workspace layout migrate rollback  [--source <v1-root>] [--destination <v2-root>]
+signet workspace layout migrate cleanup   --accept [--source <v1-root>] [--destination <v2-root>]
 ```
+
+The previous top-level `signet migration` command remains a compatibility alias.
 
 - **preflight** is read-only. It resolves overrides, inventories ownership and Git state, checks the configured source database read-only, reports required space, and produces a redacted plan. Writer draining occurs during `run`.
 - **run** acquires the migration lease, drains supported writers, copies regular files and in-boundary symlinks with hash verification, compares typed row values and counts for every table in the copied SQLite snapshot, then publishes v2 cutover. v1 harness transcript files and top-level transcript/manifest/summary/compaction artifacts move to `transcripts/`; historical `memory/` artifact references resolve to the moved files until row reindex reconciles them. Unknown `memory/` payloads survive under `data/legacy-memory/` as retained, non-indexed material.

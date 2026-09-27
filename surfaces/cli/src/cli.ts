@@ -1058,11 +1058,12 @@ registerPortableCommands(program, {
 	fetchDaemonStream,
 });
 
-registerWorkspaceCommands(program, {
+const workspaceLayoutCommand = registerWorkspaceCommands(program, {
 	signetLogo,
 });
 
 registerMigrationCommands(program);
+registerMigrationCommands(workspaceLayoutCommand, {}, "migrate");
 registerHookCommands(program, {
 	AGENTS_DIR,
 	fetchDaemonResult,

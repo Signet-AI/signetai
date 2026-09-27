@@ -14,8 +14,9 @@ interface WorkspaceDeps {
 	readonly signetLogo: () => string;
 }
 
-export function registerWorkspaceCommands(program: Command, deps: WorkspaceDeps): void {
+export function registerWorkspaceCommands(program: Command, deps: WorkspaceDeps): Command {
 	const workspaceCmd = program.command("workspace").description("Manage the default Signet workspace location");
+	const layoutCmd = workspaceCmd.command("layout").description("Manage the workspace's on-disk layout");
 
 	workspaceCmd
 		.command("status")
@@ -75,6 +76,8 @@ export function registerWorkspaceCommands(program: Command, deps: WorkspaceDeps)
 				process.exit(1);
 			}
 		});
+
+	return layoutCmd;
 }
 
 async function pickWorkspace(currentPath: string): Promise<string> {

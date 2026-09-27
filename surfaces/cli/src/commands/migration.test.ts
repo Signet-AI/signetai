@@ -225,17 +225,27 @@ test("destination verification requires readiness rather than liveness", async (
 	}
 });
 
-test("production CLI registers the workspace migration lifecycle", () => {
+test("production CLI registers layout migration under workspace and preserves the legacy alias", () => {
 	const cli = join(import.meta.dir, "..", "cli.ts");
-	const result = spawnSync(process.execPath, [cli, "migration", "--help"], {
-		cwd: join(import.meta.dir, "..", "..", "..", ".."),
-		encoding: "utf8",
-		env: { ...process.env, SIGNET_DAEMON_ENTRYPOINT: "0" },
-	});
-	expect(result.status).toBe(0);
-	expect(result.stdout).toContain("Manage the v1 to v2 workspace migration");
-	for (const command of ["preflight", "run", "resume", "status", "rollback", "cleanup"])
-		expect(result.stdout).toContain(command);
+	const cwd = join(import.meta.dir, "..", "..", "..", "..");
+	const env = { ...process.env, SIGNET_DAEMON_ENTRYPOINT: "0" };
+	const commands = [
+		{
+			args: ["workspace", "layout", "migrate", "--help"],
+			description: "Manage the v1 to v2 workspace migration",
+		},
+		{
+			args: ["migration", "--help"],
+			description: "Compatibility alias for workspace layout migration",
+		},
+	] as const;
+	for (const command of commands) {
+		const result = spawnSync(process.execPath, [cli, ...command.args], { cwd, encoding: "utf8", env });
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain(command.description);
+		for (const subcommand of ["preflight", "run", "resume", "status", "rollback", "cleanup"])
+			expect(result.stdout).toContain(subcommand);
+	}
 });
 
 test("migration refuses an ambiguous legacy lease instead of racing an older writer", () => {
@@ -387,7 +397,7 @@ test("packaged desktop migration runner migrates and verifies a real v1 SQLite w
 		expect(buildRunner.status, buildRunner.stderr).toBe(0);
 		const preflight = spawnSync(
 			process.execPath,
-			[cli, "migration", "preflight", "--source", source, "--destination", destination],
+			[cli, "workspace", "layout", "migrate", "preflight", "--source", source, "--destination", destination],
 			{
 				cwd: join(import.meta.dir, "..", "..", "..", ".."),
 				encoding: "utf8",
@@ -862,7 +872,7 @@ test("preflight verifies an external absolute database without changing its byte
 		const repositoryRoot = dirname(dirname(dirname(dirname(dirname(fileURLToPath(import.meta.url))))));
 		const result = spawnSync(
 			process.execPath,
-			[cli, "migration", "preflight", "--source", source, "--destination", destination],
+			[cli, "workspace", "layout", "migrate", "preflight", "--source", source, "--destination", destination],
 			{
 				cwd: repositoryRoot,
 				encoding: "utf8",
@@ -918,7 +928,7 @@ test("external database writer cannot cross the migration cutover fence", () => 
 		};
 		const preflight = spawnSync(
 			process.execPath,
-			[cli, "migration", "preflight", "--source", source, "--destination", destination],
+			[cli, "workspace", "layout", "migrate", "preflight", "--source", source, "--destination", destination],
 			options,
 		);
 		expect(preflight.status, preflight.stderr).toBe(0);
@@ -1338,7 +1348,7 @@ test("production CLI blocks cutover when the configured source database is missi
 		const cli = join(import.meta.dir, "..", "cli.ts");
 		const preflight = spawnSync(
 			process.execPath,
-			[cli, "migration", "preflight", "--source", source, "--destination", destination],
+			[cli, "workspace", "layout", "migrate", "preflight", "--source", source, "--destination", destination],
 			{
 				cwd: join(import.meta.dir, "..", "..", "..", ".."),
 				encoding: "utf8",

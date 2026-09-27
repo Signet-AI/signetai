@@ -63,11 +63,13 @@ Then test the feature you depend on: a bounded recall, a provider route, or a re
 
 After updating, use the explicit lifecycle in [Workspace v2](/workspace-v2/) rather
 than copying or deleting workspace directories manually. Run
-`signet migration preflight` before `run`; use `resume` after interruption;
-use `status` to inspect rollback eligibility; and use `cleanup --accept` only
-after destination verification. Automatic rollback ends when the destination
-accepts its first durable write. Older binaries that do not understand the
-persisted layout version are unsupported downgrade targets after cutover.
+`signet workspace layout migrate preflight` before `run`; use `resume` after
+interruption; use `status` to inspect rollback eligibility; and use
+`cleanup --accept` only after destination verification. The previous top-level
+`signet migration` command remains a compatibility alias. Automatic rollback
+ends when the destination accepts its first durable write. Older binaries that
+do not understand the persisted layout version are unsupported downgrade
+targets after cutover.
 
 ## Rollback and incident handling
 

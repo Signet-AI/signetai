@@ -40,13 +40,15 @@ On historical backfill, completed JSONL turns are the authority for the same ses
 Migration is stopped, drained, copy-and-verify, journaled, and resumable:
 
 ```bash
-signet migration preflight --source <v1-root> --destination <v2-root>
-signet migration run --source <v1-root> --destination <v2-root>
-signet migration resume --source <v1-root> --destination <v2-root>
-signet migration status --source <v1-root> --destination <v2-root>
-signet migration rollback --source <v1-root> --destination <v2-root>
-signet migration cleanup --accept --source <v1-root> --destination <v2-root>
+signet workspace layout migrate preflight --source <v1-root> --destination <v2-root>
+signet workspace layout migrate run --source <v1-root> --destination <v2-root>
+signet workspace layout migrate resume --source <v1-root> --destination <v2-root>
+signet workspace layout migrate status --source <v1-root> --destination <v2-root>
+signet workspace layout migrate rollback --source <v1-root> --destination <v2-root>
+signet workspace layout migrate cleanup --accept --source <v1-root> --destination <v2-root>
 ```
+
+The previous top-level `signet migration` command remains available as a compatibility alias.
 
 - `preflight` makes no changes. It resolves custom paths, inventories ownership and Git state, checks the configured source database read-only, reports required space, and returns a redacted plan. Writer draining occurs during `run`, not preflight.
 - `run` acquires an exclusive lease, drains supported writers, copies and verifies state, snapshots SQLite, and publishes the v2 resolver cutover.

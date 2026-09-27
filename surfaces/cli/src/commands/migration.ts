@@ -540,12 +540,20 @@ export function createDefaultMigrationEngine(
 	return new MigrationEngine(deps);
 }
 
-export function registerMigrationCommands(program: Command, deps: MigrationCommandDeps = {}): void {
+export function registerMigrationCommands(
+	program: Command,
+	deps: MigrationCommandDeps = {},
+	commandName = "migration",
+): void {
 	const out = deps.stdout ?? console;
 	const factory =
 		deps.createEngine ??
 		((options: { source?: string; destination?: string }) => createDefaultMigrationEngine(options, deps.hooks));
-	const migration = program.command("migration").description("Manage the v1 to v2 workspace migration");
+	const description =
+		commandName === "migration"
+			? "Compatibility alias for workspace layout migration"
+			: "Manage the v1 to v2 workspace migration";
+	const migration = program.command(commandName).description(description);
 	const options = (cmd: Command) =>
 		cmd.option("--source <path>", "v1 workspace root").option("--destination <path>", "v2 workspace root");
 

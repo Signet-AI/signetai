@@ -177,9 +177,10 @@ the limit is the daemon-wide client/process budget.
 | PATCH | `/api/agents/:name` | platform/daemon/src/routes/misc-routes.ts |
 | POST | `/api/harnesses/:id/connect` | platform/daemon/src/routes/harness-install.ts |
 
-Migration-control endpoints are used by the CLI's migration writer-drain
-lifecycle; prefer the supported `signet migration` commands over calling them
-directly. `POST /api/sources/web` adds a public web source and queues indexing.
+Migration-control endpoints are used by the CLI's workspace layout migration
+writer-drain lifecycle; prefer `signet workspace layout migrate` (or its
+compatibility alias, `signet migration`) over calling them directly.
+`POST /api/sources/web` adds a public web source and queues indexing.
 
 ## Transcript import upload routes
 
