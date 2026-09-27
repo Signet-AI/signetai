@@ -1,7 +1,10 @@
+import { Database as SqliteDatabase } from "bun:sqlite";
 import { afterEach, expect, it } from "bun:test";
 import {
 	chmodSync,
+	copyFileSync,
 	existsSync,
+	mkdirSync,
 	mkdtempSync,
 	readFileSync,
 	readdirSync,
@@ -42,7 +45,9 @@ function handles(pid: number, suffix: string) {
 
 async function start(dir = mkdtempSync(join(tmpdir(), "signet-owner-lifecycle-"))) {
 	if (!dirs.includes(dir)) dirs.push(dir);
-	const port = 40000 + Math.floor(Math.random() * 20000);
+	const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response() });
+	const port = probe.port;
+	probe.stop(true);
 	const child = Bun.spawn([bin], {
 		env: {
 			...process.env,
@@ -57,13 +62,32 @@ async function start(dir = mkdtempSync(join(tmpdir(), "signet-owner-lifecycle-")
 	});
 	children.push(child);
 	const origin = `http://127.0.0.1:${port}`;
-	await waitFor(async () => (await fetch(`${origin}/health/ready`)).ok, "HTTP readiness");
+	try {
+		await waitFor(async () => (await fetch(`${origin}/health/ready`)).ok, "HTTP readiness");
+	} catch (error) {
+		if (child.exitCode === null) {
+			child.kill("SIGTERM");
+			await Promise.race([child.exited, Bun.sleep(1500)]);
+			if (child.exitCode === null) {
+				child.kill("SIGKILL");
+				await child.exited;
+			}
+		}
+		const stderr = await new Response(child.stderr).text();
+		throw new Error(`HTTP readiness failed: ${String(error)}\n${stderr}`);
+	}
 	const markerPath = join(dir, ".daemon", "db-owner.json");
 	const marker = await waitFor(
 		() => (existsSync(markerPath) ? JSON.parse(readFileSync(markerPath, "utf8")) : null),
 		"owner marker",
 	);
-	return { child, dir, origin, markerPath, marker: marker as { pid: number; generation: string } };
+	return {
+		child,
+		dir,
+		origin,
+		markerPath,
+		marker: marker as { pid: number; generation: string; database: string },
+	};
 }
 
 afterEach(async () => {
@@ -347,4 +371,154 @@ it("proves the fresh external owner process boundary and recovery lifecycle", as
 	await first.child.exited;
 	expect(existsSync(first.markerPath)).toBe(false);
 	expect(existsSync(db)).toBe(true);
+});
+
+it("upgrades pinned TypeScript v153 through the production owner process and survives restart", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "signet-owner-ts-v153-"));
+	dirs.push(dir);
+	const database = join(dir, "memory", "memories.db");
+	mkdirSync(join(dir, "memory"), { recursive: true });
+	copyFileSync(join(repoRoot, "platform/rust-core/tests/fixtures/ts_applied_153.sqlite"), database);
+
+	const first = await start(dir);
+	expect(first.marker.database).toBe(database);
+	expect(handles(first.child.pid, "/memories.db")).toHaveLength(0);
+	expect(handles(first.marker.pid, "/memories.db").length).toBeGreaterThan(0);
+	const firstResponse = await fetch(`${first.origin}/api/sources`, {
+		headers: {
+			"x-signet-api-key": "owner-contract-secret",
+			"x-signet-agent-id": "default",
+		},
+	});
+	expect(firstResponse.status).toBe(200);
+	first.child.kill("SIGTERM");
+	expect(await first.child.exited).toBe(0);
+	expect(existsSync(first.markerPath)).toBe(false);
+	expect(existsSync(database)).toBe(true);
+
+	const second = await start(dir);
+	const secondResponse = await fetch(`${second.origin}/api/sources`, {
+		headers: {
+			"x-signet-api-key": "owner-contract-secret",
+			"x-signet-agent-id": "default",
+		},
+	});
+	expect(secondResponse.status).toBe(200);
+	second.child.kill("SIGTERM");
+	expect(await second.child.exited).toBe(0);
+	expect(existsSync(second.markerPath)).toBe(false);
+	expect(existsSync(database)).toBe(true);
+});
+
+// Pinned TypeScript baseline 11e4720c07107caf7fdd57a685eca24e8a82e654 produced schema v1-v80; only row 79 was deleted, with its audit retained (source SHA-256: 9d75b98ef0fe790b73a1ea07c6a149041a76024c8a89c0aac131f2f42b87c6a9).
+it("repairs a missing TypeScript v79 history row through the real owner and survives restart", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "signet-owner-ts-v79-repair-"));
+	dirs.push(dir);
+	const database = join(dir, "memory", "memories.db");
+	mkdirSync(join(dir, "memory"), { recursive: true });
+	copyFileSync(join(repoRoot, "platform/rust-core/tests/fixtures/ts_v80_missing_79.sqlite"), database);
+
+	const seed = new SqliteDatabase(database);
+	seed
+		.prepare(
+			"INSERT INTO documents(id,source_type,metadata_json,agent_id,project,created_at,updated_at) VALUES('v79-sentinel','test',NULL,'fixture-agent','/sentinel','2026-09-26','2026-09-26')",
+		)
+		.run();
+	seed.close();
+
+	const first = await start(dir);
+	expect(first.marker.database).toBe(database);
+	expect(handles(first.child.pid, "/memories.db")).toHaveLength(0);
+	expect(handles(first.marker.pid, "/memories.db").length).toBeGreaterThan(0);
+	const firstResponse = await fetch(`${first.origin}/api/sources`, {
+		headers: {
+			"x-signet-api-key": "owner-contract-secret",
+			"x-signet-agent-id": "default",
+		},
+	});
+	expect(firstResponse.status).toBe(200);
+	first.child.kill("SIGTERM");
+	expect(await first.child.exited).toBe(0);
+	expect(existsSync(first.markerPath)).toBe(false);
+	expect(existsSync(database)).toBe(true);
+	const verifyFirst = new SqliteDatabase(database, { readonly: true });
+	expect(verifyFirst.query("SELECT checksum FROM schema_migrations WHERE version=79").get()).toEqual({
+		checksum: "5939169c",
+	});
+	expect(verifyFirst.query("SELECT count(*) AS n FROM schema_migrations_audit WHERE version=79").get()).toEqual({
+		n: 2,
+	});
+	expect(
+		verifyFirst
+			.query(
+				"SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name IN ('idx_transcript_capture_jobs_status','idx_transcript_capture_jobs_agent_session')",
+			)
+			.get(),
+	).toEqual({ n: 2 });
+	expect(verifyFirst.query("SELECT agent_id,project FROM documents WHERE id='v79-sentinel'").get()).toEqual({
+		agent_id: "fixture-agent",
+		project: "/sentinel",
+	});
+	verifyFirst.close();
+
+	const second = await start(dir);
+	const secondResponse = await fetch(`${second.origin}/api/sources`, {
+		headers: {
+			"x-signet-api-key": "owner-contract-secret",
+			"x-signet-agent-id": "default",
+		},
+	});
+	expect(secondResponse.status).toBe(200);
+	second.child.kill("SIGTERM");
+	expect(await second.child.exited).toBe(0);
+	expect(existsSync(second.markerPath)).toBe(false);
+	expect(existsSync(database)).toBe(true);
+	const verifySecond = new SqliteDatabase(database, { readonly: true });
+	expect(verifySecond.query("SELECT checksum FROM schema_migrations WHERE version=79").get()).toEqual({
+		checksum: "5939169c",
+	});
+	expect(verifySecond.query("SELECT count(*) AS n FROM schema_migrations_audit WHERE version=79").get()).toEqual({
+		n: 2,
+	});
+	expect(
+		verifySecond
+			.query(
+				"SELECT count(*) AS n FROM sqlite_master WHERE type='index' AND name IN ('idx_transcript_capture_jobs_status','idx_transcript_capture_jobs_agent_session')",
+			)
+			.get(),
+	).toEqual({ n: 2 });
+	expect(verifySecond.query("SELECT agent_id,project FROM documents WHERE id='v79-sentinel'").get()).toEqual({
+		agent_id: "fixture-agent",
+		project: "/sentinel",
+	});
+	verifySecond.close();
+});
+
+it("admits an authentic TypeScript v157 database through the production owner process", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "signet-owner-ts-schema-"));
+	dirs.push(dir);
+	const database = join(dir, "memory", "memories.db");
+	mkdirSync(join(dir, "memory"), { recursive: true });
+	copyFileSync(join(repoRoot, "platform/rust-core/tests/fixtures/ts_applied_157.sqlite"), database);
+	const running = await start(dir);
+
+	expect(running.marker.database).toBe(database);
+	expect(running.marker.pid).not.toBe(running.child.pid);
+	expect(handles(running.child.pid, "/memories.db")).toHaveLength(0);
+	expect(handles(running.child.pid, "/memories.db-wal")).toHaveLength(0);
+	expect(handles(running.child.pid, "/memories.db-shm")).toHaveLength(0);
+	expect(handles(running.marker.pid, "/memories.db").length).toBeGreaterThan(0);
+
+	const response = await fetch(`${running.origin}/api/sources`, {
+		headers: {
+			"x-signet-api-key": "owner-contract-secret",
+			"x-signet-agent-id": "fixture-agent",
+		},
+	});
+	expect(response.status).toBe(200);
+
+	running.child.kill("SIGTERM");
+	expect(await running.child.exited).toBe(0);
+	expect(existsSync(running.markerPath)).toBe(false);
+	expect(existsSync(database)).toBe(true);
 });

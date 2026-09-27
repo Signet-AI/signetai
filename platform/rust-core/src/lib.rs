@@ -5524,7 +5524,15 @@ fn reflection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Value> {
 
 fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     let transaction = connection.transaction()?;
-    const NATIVE_SCHEMA_COMPATIBILITY_VERSION: i64 = 155;
+    const NATIVE_SCHEMA_COMPATIBILITY_VERSION: i64 = 157;
+    if !has_table(&transaction, "schema_migrations")? {
+        transaction.execute_batch("CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL);")?;
+    }
+    if !has_table(&transaction, "agents")? {
+        transaction.execute_batch(
+            "CREATE TABLE agents(id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');",
+        )?;
+    }
     let had_entity_dependency_history = has_table(&transaction, "entity_dependency_history")?;
     let has_migration_050_artifacts = had_entity_dependency_history
         && has_trigger(
@@ -5546,6 +5554,26 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     } else {
         None
     };
+    validate_migration_history(&transaction, max_schema_version)?;
+    let recorded_versions: Vec<i64> = if has_schema_migrations {
+        let mut statement =
+            transaction.prepare("SELECT version FROM schema_migrations ORDER BY version")?;
+        let rows = statement.query_map([], |row| row.get::<_, i64>(0))?;
+        rows.collect::<Result<Vec<_>, _>>()?
+    } else {
+        Vec::new()
+    };
+    let malformed = recorded_versions.iter().any(|version| *version <= 0);
+    if malformed {
+        return Err(CoreError::UnsupportedMigrationHistory(
+            "invalid migration version".to_owned(),
+        ));
+    }
+    let documents_table_missing_at_start = !has_table(&transaction, "documents")?;
+    let document_agent_id_missing_at_start =
+        documents_table_missing_at_start || !has_column(&transaction, "documents", "agent_id")?;
+    let document_project_missing_at_start =
+        documents_table_missing_at_start || !has_column(&transaction, "documents", "project")?;
     let migration_050_recorded = if has_schema_migrations {
         transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = 50)",
@@ -5563,8 +5591,10 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         )));
     }
     let migration_050_applied = migration_050_recorded && has_migration_050_artifacts;
+    validate_migration_history(&transaction, max_schema_version)?;
     transaction.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT, checksum TEXT);
+        "CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL, checksum TEXT NOT NULL);\n         CREATE TABLE IF NOT EXISTS schema_migrations_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, version INTEGER NOT NULL, applied_at TEXT NOT NULL, duration_ms INTEGER, checksum TEXT);
+         CREATE TABLE IF NOT EXISTS native_backfill_markers (marker TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL);
          CREATE TABLE IF NOT EXISTS agents (id TEXT PRIMARY KEY, metadata TEXT NOT NULL DEFAULT '{}');
          CREATE TABLE IF NOT EXISTS cancellation_operations (agent_id TEXT NOT NULL, operation_id TEXT NOT NULL, outcome TEXT NOT NULL, content TEXT, created_at TEXT NOT NULL, PRIMARY KEY(agent_id,operation_id));
          CREATE TABLE IF NOT EXISTS sources (id TEXT NOT NULL, agent_id TEXT NOT NULL DEFAULT 'default', workspace_id TEXT NOT NULL DEFAULT 'default', kind TEXT NOT NULL, name TEXT NOT NULL DEFAULT '', config TEXT NOT NULL DEFAULT '{}', generation INTEGER NOT NULL DEFAULT 0, created_at TEXT, PRIMARY KEY(agent_id,workspace_id,id));
@@ -6412,6 +6442,12 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "workspace_id",
         "TEXT DEFAULT 'default'",
     )?;
+    ensure_column(
+        &transaction,
+        "cross_agent_messages",
+        "recipient_agent_id",
+        "TEXT",
+    )?;
     transaction.execute("UPDATE ontology_records SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
     transaction.execute("UPDATE kg_aspects SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
     transaction.execute("UPDATE kg_attributes SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''", [])?;
@@ -6587,42 +6623,107 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
         "INTEGER NOT NULL DEFAULT 0",
     )?;
     ensure_column(&transaction, "documents", "updated_at", "TEXT")?;
-    ensure_column(
-        &transaction,
-        "documents",
-        "workspace_id",
-        "TEXT DEFAULT 'default'",
-    )?;
-    ensure_column(&transaction, "documents", "project", "TEXT")?;
+    ensure_column(&transaction, "documents", "metadata", "TEXT")?;
+    ensure_column(&transaction, "documents", "workspace_id", "TEXT")?;
     ensure_column(
         &transaction,
         "documents",
         "status",
         "TEXT NOT NULL DEFAULT 'queued'",
     )?;
-    const DOCUMENT_SCOPE_BACKFILL_CHECKSUM: &str = "document-workspace-backfill-v1";
+    ensure_column(&transaction, "documents", "content", "TEXT")?;
+    reconcile_document_scope_migration80(
+        &transaction,
+        document_agent_id_missing_at_start,
+        document_project_missing_at_start,
+    )?;
+    const DOCUMENT_SCOPE_BACKFILL_CHECKSUM: &str = "document-workspace-backfill-v2";
+    const LEGACY_DOCUMENT_SCOPE_BACKFILL_CHECKSUM: &str = "document-workspace-backfill-v1";
+    let has_metadata_json = has_column(&transaction, "documents", "metadata_json")?;
+    let legacy_marker_in_history: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=2 AND checksum=?1)",
+        [LEGACY_DOCUMENT_SCOPE_BACKFILL_CHECKSUM],
+        |row| row.get::<_, i64>(0),
+    )? != 0;
+    // Scope recovery from legacy metadata is allowed only during a verified
+    // marker repair or while the durable marker is incomplete. After that,
+    // `default` is materialized data and must not be reinterpreted on reopen.
+    let native_scope_backfill_complete: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM native_backfill_markers WHERE marker='document-workspace-backfill' AND checksum='document-workspace-backfill-v2')",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? != 0;
+    let repair_scope_backfill = legacy_marker_in_history || !native_scope_backfill_complete;
+    if repair_scope_backfill {
+        let canonical_history = if has_column(&transaction, "schema_migrations_audit", "version")?
+            && has_column(&transaction, "schema_migrations_audit", "applied_at")?
+            && has_column(&transaction, "schema_migrations_audit", "checksum")?
+        {
+            transaction
+                .query_row(
+                    "SELECT applied_at,checksum FROM schema_migrations_audit WHERE version=2 ORDER BY id DESC LIMIT 1",
+                    [],
+                    |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?)),
+                )
+                .optional()?
+        } else {
+            None
+        };
+        if let Some((Some(applied_at), Some(checksum))) = canonical_history {
+            transaction.execute(
+                "UPDATE schema_migrations SET applied_at=?1,checksum=?2 WHERE version=2 AND checksum=?3",
+                params![applied_at, checksum, LEGACY_DOCUMENT_SCOPE_BACKFILL_CHECKSUM],
+            )?;
+        } else {
+            transaction.execute(
+                "DELETE FROM schema_migrations WHERE version=2 AND checksum=?1",
+                [LEGACY_DOCUMENT_SCOPE_BACKFILL_CHECKSUM],
+            )?;
+        }
+    }
+    // TypeScript keeps `project` as a separate document field. Do not infer
+    // workspace identity from project paths or project metadata; rows without
+    // an explicit native workspace scope remain in the default workspace.
+
+    if has_metadata_json {
+        transaction.execute(
+            "UPDATE documents SET metadata=metadata_json WHERE metadata_json IS NOT NULL AND trim(metadata_json)<>'' AND (metadata IS NULL OR trim(metadata)='' OR trim(metadata)='{}')",
+            [],
+        )?;
+    }
+    if has_column(&transaction, "documents", "raw_content")? {
+        transaction.execute(
+            "UPDATE documents SET content=raw_content WHERE raw_content IS NOT NULL AND (content IS NULL OR content='')",
+            [],
+        )?;
+    }
+    transaction.execute(
+        "UPDATE documents SET metadata='{}' WHERE metadata IS NULL OR trim(metadata)=''",
+        [],
+    )?;
+
     let document_scope_backfill: Option<String> = transaction
         .query_row(
-            "SELECT checksum FROM schema_migrations WHERE version=2",
+            "SELECT checksum FROM native_backfill_markers WHERE marker='document-workspace-backfill'",
             [],
             |row| row.get(0),
         )
         .optional()?;
-    let documents_need_scope_backfill: i64 = transaction.query_row(
-        "SELECT count(*) FROM documents WHERE workspace_id IS NULL OR trim(workspace_id) = ''",
+    let documents_need_scope_backfill: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM documents WHERE workspace_id IS NULL OR trim(workspace_id) = '')",
         [],
-        |row| row.get(0),
-    )?;
+        |row| row.get::<_, i64>(0),
+    )? != 0;
     if document_scope_backfill.as_deref() != Some(DOCUMENT_SCOPE_BACKFILL_CHECKSUM)
-        || documents_need_scope_backfill > 0
+        || documents_need_scope_backfill
     {
         transaction.execute(
-            "UPDATE documents SET workspace_id = CASE WHEN json_valid(metadata) AND json_type(metadata,'$._workspaceId')='text' AND trim(json_extract(metadata,'$._workspaceId')) <> '' THEN trim(json_extract(metadata,'$._workspaceId')) ELSE 'default' END",
+            "UPDATE documents SET workspace_id='default' WHERE workspace_id IS NULL OR trim(workspace_id)=''",
             [],
         )?;
         transaction.execute(
-            "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (2, datetime('now'), 'document-workspace-backfill-v1') ON CONFLICT(version) DO UPDATE SET applied_at=excluded.applied_at, checksum=excluded.checksum",
-            [],
+            "INSERT INTO native_backfill_markers(marker,checksum,applied_at) VALUES('document-workspace-backfill',?1,datetime('now')) ON CONFLICT(marker) DO UPDATE SET checksum=excluded.checksum,applied_at=excluded.applied_at",
+            [DOCUMENT_SCOPE_BACKFILL_CHECKSUM],
         )?;
     }
     ensure_column(&transaction, "sources", "created_at", "TEXT")?;
@@ -6635,21 +6736,23 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
     ensure_column(
         &transaction,
         "documents",
+        "source_id",
+        "TEXT NOT NULL DEFAULT ''",
+    )?;
+    ensure_column(
+        &transaction,
+        "documents",
         "path",
         "TEXT NOT NULL DEFAULT ''",
     )?;
     ensure_column(
         &transaction,
         "documents",
-        "content",
+        "path",
         "TEXT NOT NULL DEFAULT ''",
     )?;
-    ensure_column(
-        &transaction,
-        "documents",
-        "metadata",
-        "TEXT NOT NULL DEFAULT '{}'",
-    )?;
+    ensure_column(&transaction, "documents", "content", "TEXT")?;
+    ensure_column(&transaction, "documents", "metadata", "TEXT")?;
     ensure_column(&transaction, "documents", "created_at", "TEXT")?;
     transaction.execute("CREATE INDEX IF NOT EXISTS documents_source_path ON documents(agent_id,workspace_id,source_id,path)", [])?;
     let source_identity_dirty: bool = transaction.query_row(
@@ -6883,6 +6986,7 @@ fn migrate(connection: &mut Connection) -> Result<(), CoreError> {
             row.get(0)
         })?;
     // Migration numbering is owned by TypeScript; native owner performs additive reconciliation.
+    reconcile_typescript_migration_tail(&transaction)?;
     transaction.execute(
         "INSERT OR IGNORE INTO schema_migrations(version, applied_at, checksum) VALUES (1, datetime('now'), 'fresh-rust-core-v1')",
         [],
@@ -7164,6 +7268,57 @@ fn has_table(transaction: &Transaction<'_>, table: &str) -> Result<bool, CoreErr
     )? != 0)
 }
 
+fn index_matches(
+    transaction: &Transaction<'_>,
+    index: &str,
+    table: &str,
+    columns: &[&str],
+    partial_predicate: Option<&str>,
+) -> Result<bool, CoreError> {
+    let definition: Option<(String, Option<String>)> = transaction
+        .query_row(
+            "SELECT tbl_name,sql FROM sqlite_master WHERE type='index' AND name=?1",
+            [index],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((actual_table, sql)) = definition else {
+        return Ok(false);
+    };
+    if actual_table != table {
+        return Ok(false);
+    }
+    let actual_columns: Vec<String> = transaction
+        .prepare("SELECT name FROM pragma_index_info(?1) ORDER BY seqno")?
+        .query_map([index], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    if !actual_columns
+        .iter()
+        .map(String::as_str)
+        .eq(columns.iter().copied())
+    {
+        return Ok(false);
+    }
+    let normalized_sql: String = sql
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect();
+    if normalized_sql.contains("createuniqueindex") {
+        return Ok(false);
+    }
+    if let Some(predicate) = partial_predicate {
+        let normalized_predicate: String =
+            predicate.to_ascii_lowercase().split_whitespace().collect();
+        if !normalized_sql.contains(&normalized_predicate) {
+            return Ok(false);
+        }
+    } else if normalized_sql.contains("where") {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
 fn has_trigger(transaction: &Transaction<'_>, trigger: &str) -> Result<bool, CoreError> {
     Ok(transaction.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger' AND name=?)",
@@ -7180,6 +7335,628 @@ fn has_column(transaction: &Transaction<'_>, table: &str, column: &str) -> Resul
         .collect::<Result<Vec<_>, _>>()?
         .iter()
         .any(|name| name == column))
+}
+
+fn validate_migration_history(
+    transaction: &Transaction<'_>,
+    max_version: Option<i64>,
+) -> Result<(), CoreError> {
+    if let Some(version) = max_version {
+        if version > 157 {
+            return Err(CoreError::UnsupportedMigrationHistory(format!(
+                "version {version} exceeds native compatibility version 157"
+            )));
+        }
+    }
+    let malformed: Option<i64> = transaction
+        .query_row(
+            "SELECT version FROM schema_migrations WHERE version <= 0 LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(version) = malformed {
+        return Err(CoreError::UnsupportedMigrationHistory(format!(
+            "invalid migration version {version}"
+        )));
+    }
+    if let Some(max_version) = max_version {
+        let required_prefix_version = max_version.min(153);
+        let recorded_prefix_count: i64 = transaction.query_row(
+            "SELECT count(DISTINCT version) FROM schema_migrations WHERE version BETWEEN 1 AND ?1",
+            [required_prefix_version],
+            |row| row.get(0),
+        )?;
+        let missing_prefix_count = required_prefix_version - recorded_prefix_count;
+        let missing_v79_supported: bool = required_prefix_version >= 79
+            && missing_prefix_count == 1
+            && transaction.query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM schema_migrations WHERE version=79) AND EXISTS(SELECT 1 FROM schema_migrations WHERE version=80)",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? != 0;
+        if missing_prefix_count > 0 && !missing_v79_supported {
+            return Err(CoreError::UnsupportedMigrationHistory(
+                "incomplete migration history before native tail".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn replay_missing_migration79(transaction: &Transaction<'_>) -> Result<(), CoreError> {
+    let name = "transcript-capture-jobs";
+    let expected = migration_checksum(79, name);
+    let started = std::time::Instant::now();
+    transaction.execute_batch(
+        "CREATE TABLE IF NOT EXISTS transcript_capture_jobs (
+            id TEXT PRIMARY KEY, agent_id TEXT NOT NULL DEFAULT 'default', harness TEXT NOT NULL,
+            session_key TEXT, session_id TEXT NOT NULL, project TEXT, transcript TEXT NOT NULL,
+            raw_transcript TEXT, transcript_path TEXT, captured_at TEXT NOT NULL, ended_at TEXT,
+            summary_status TEXT NOT NULL DEFAULT 'not_requested', status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0, max_attempts INTEGER NOT NULL DEFAULT 5,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT, error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_status ON transcript_capture_jobs(status, created_at);
+        CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_agent_session ON transcript_capture_jobs(agent_id, session_key, created_at);"
+    )?;
+    // TypeScript v79 declares only the table as a migration artifact; its CREATE INDEX IF NOT EXISTS accepts pre-existing same-name indexes.
+    if !has_table(transaction, "transcript_capture_jobs")? {
+        return Err(CoreError::UnsupportedMigrationHistory(
+            "migration 79 did not create required artifacts".into(),
+        ));
+    }
+    let matching_audit: Option<(String, Option<i64>)> = transaction.query_row(
+        "SELECT applied_at,duration_ms FROM schema_migrations_audit WHERE version=79 AND checksum=?1 ORDER BY id DESC LIMIT 1", [&expected], |r| Ok((r.get(0)?,r.get(1)?))
+    ).optional()?;
+    let (applied_at, duration) = matching_audit.unwrap_or_else(|| {
+        let at = OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .unwrap_or_default();
+        let ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+        (at, Some(ms))
+    });
+    transaction.execute(
+        "INSERT INTO schema_migrations(version,applied_at,checksum) VALUES(79,?1,?2)",
+        params![applied_at, expected],
+    )?;
+    transaction.execute("INSERT INTO schema_migrations_audit(version,applied_at,duration_ms,checksum) VALUES(79,?1,?2,?3)", params![applied_at, duration, expected])?;
+    Ok(())
+}
+
+fn reconcile_document_scope_migration80(
+    transaction: &Transaction<'_>,
+    agent_id_missing_at_start: bool,
+    project_missing_at_start: bool,
+) -> Result<(), CoreError> {
+    let v79_recorded: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=79)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !v79_recorded {
+        let other_history_gap: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=80)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? != 0;
+        if other_history_gap {
+            replay_missing_migration79(transaction)?;
+        }
+    }
+    let recorded_v79 = transaction
+        .query_row(
+            "SELECT 1 FROM schema_migrations WHERE version=79",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    let recorded = transaction
+        .query_row(
+            "SELECT 1 FROM schema_migrations WHERE version=80",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    if !recorded_v79 && recorded.is_none() {
+        return Ok(());
+    }
+    let first_application = recorded.is_none();
+    let artifacts_missing = agent_id_missing_at_start
+        || project_missing_at_start
+        || document_scope_migration80_artifact_missing(transaction)?;
+    if !first_application && !artifacts_missing {
+        return Ok(());
+    }
+
+    let started = std::time::Instant::now();
+    let backfill_agent_id = first_application || agent_id_missing_at_start;
+    let backfill_project = first_application || project_missing_at_start;
+    apply_document_scope_migration80(
+        transaction,
+        backfill_agent_id,
+        backfill_project,
+        first_application,
+    )?;
+    if document_scope_migration80_artifact_missing(transaction)? {
+        return Err(CoreError::UnsupportedMigrationHistory(
+            "migration 80 did not create its required artifacts".to_owned(),
+        ));
+    }
+    if recorded.is_some() {
+        return Ok(());
+    }
+    let duration = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+    let applied_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| CoreError::UnsupportedMigrationHistory(error.to_string()))?;
+    let checksum = migration_checksum(80, "document-scope-columns");
+    transaction.execute(
+        "INSERT INTO schema_migrations(version,applied_at,checksum) VALUES(?1,?2,?3)",
+        params![80_i64, &applied_at, &checksum],
+    )?;
+    transaction.execute(
+        "INSERT INTO schema_migrations_audit(version,applied_at,duration_ms,checksum) VALUES(?1,?2,?3,?4)",
+        params![80_i64, &applied_at, duration, &checksum],
+    )?;
+    Ok(())
+}
+
+fn document_scope_migration80_artifact_missing(
+    transaction: &Transaction<'_>,
+) -> Result<bool, CoreError> {
+    Ok(!has_column(transaction, "documents", "agent_id")?
+        || !has_column(transaction, "documents", "project")?)
+}
+
+fn apply_document_scope_migration80(
+    transaction: &Transaction<'_>,
+    backfill_agent_id: bool,
+    backfill_project: bool,
+    first_application: bool,
+) -> Result<(), CoreError> {
+    ensure_column(
+        transaction,
+        "documents",
+        "agent_id",
+        "TEXT NOT NULL DEFAULT 'default'",
+    )?;
+    ensure_column(transaction, "documents", "project", "TEXT")?;
+    if !has_column(transaction, "documents", "metadata_json")? {
+        return Err(CoreError::UnsupportedMigrationHistory(
+            "migration 80 requires documents.metadata_json".to_owned(),
+        ));
+    }
+    if !has_table(transaction, "document_memories")? || !has_table(transaction, "memories")? {
+        return Err(CoreError::UnsupportedMigrationHistory(
+            "migration 80 requires document_memories and memories".to_owned(),
+        ));
+    }
+    if backfill_agent_id {
+        transaction.execute_batch(
+            r#"
+        UPDATE documents
+        SET agent_id = NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '')
+        WHERE metadata_json IS NOT NULL
+          AND json_valid(metadata_json)
+          AND json_type(metadata_json, '$.signet.agentId') = 'text'
+          AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL;
+        "#,
+        )?;
+    }
+    if backfill_project {
+        transaction.execute_batch(
+            r#"
+        UPDATE documents
+        SET project = NULLIF(TRIM(json_extract(metadata_json, '$.signet.project')), '')
+        WHERE metadata_json IS NOT NULL
+          AND json_valid(metadata_json)
+          AND json_type(metadata_json, '$.signet.project') = 'text';
+        "#,
+        )?;
+    }
+
+    if first_application {
+        transaction.execute_batch(
+            r#"
+        WITH linked_scope AS (
+            SELECT
+                dm.document_id,
+                m.agent_id,
+                m.project,
+                ROW_NUMBER() OVER (
+                    PARTITION BY dm.document_id
+                    ORDER BY COUNT(*) DESC, m.agent_id, COALESCE(m.project, '')
+                ) AS rank
+            FROM document_memories dm
+            JOIN memories m ON m.id = dm.memory_id
+            WHERE m.agent_id IS NOT NULL
+              AND NULLIF(TRIM(m.agent_id), '') IS NOT NULL
+            GROUP BY dm.document_id, m.agent_id, m.project
+        )
+        UPDATE documents
+        SET
+            agent_id = COALESCE((
+                SELECT agent_id FROM linked_scope
+                WHERE linked_scope.document_id = documents.id AND rank = 1
+            ), agent_id),
+            project = (
+                SELECT project FROM linked_scope
+                WHERE linked_scope.document_id = documents.id AND rank = 1
+            )
+        WHERE EXISTS (
+            SELECT 1 FROM linked_scope
+            WHERE linked_scope.document_id = documents.id AND rank = 1
+        )
+        AND NOT (
+            metadata_json IS NOT NULL
+            AND json_valid(metadata_json)
+            AND json_type(metadata_json, '$.signet.agentId') = 'text'
+            AND NULLIF(TRIM(json_extract(metadata_json, '$.signet.agentId')), '') IS NOT NULL
+        );
+        "#,
+        )?;
+    }
+    if has_column(transaction, "memories", "visibility")?
+        && has_column(transaction, "memories", "type")?
+        && has_column(transaction, "memories", "source_type")?
+    {
+        transaction.execute(
+            "UPDATE memories SET visibility='private' WHERE id IN (SELECT memory_id FROM document_memories) AND type='document_chunk' AND source_type='document' AND (visibility IS NULL OR visibility='global')",
+            [],
+        )?;
+    }
+    if has_column(transaction, "memories", "content_hash")?
+        && has_column(transaction, "memories", "agent_id")?
+        && has_column(transaction, "memories", "project")?
+        && has_column(transaction, "memories", "scope")?
+        && has_column(transaction, "memories", "visibility")?
+        && has_column(transaction, "memories", "is_deleted")?
+    {
+        transaction.execute_batch(
+            "DROP INDEX IF EXISTS idx_memories_content_hash_unique;
+             CREATE UNIQUE INDEX idx_memories_content_hash_unique
+             ON memories(
+                 content_hash,
+                 COALESCE(NULLIF(agent_id, ''), 'default'),
+                 COALESCE(project, ''),
+                 COALESCE(scope, '__NULL__'),
+                 COALESCE(visibility, 'global')
+             )
+             WHERE content_hash IS NOT NULL AND is_deleted = 0;",
+        )?;
+    }
+    transaction.execute_batch(
+        "CREATE INDEX IF NOT EXISTS idx_documents_agent_project ON documents(agent_id, project);
+         CREATE INDEX IF NOT EXISTS idx_documents_source_scope ON documents(source_url, agent_id, project);",
+    )?;
+    Ok(())
+}
+
+fn reconcile_typescript_migration_tail(transaction: &Transaction<'_>) -> Result<(), CoreError> {
+    let mut recorded_versions: Vec<i64> = {
+        let mut statement =
+            transaction.prepare("SELECT version FROM schema_migrations ORDER BY rowid")?;
+        let rows = statement.query_map([], |row| row.get(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    // This native reconciler implements only the migration tail. It may run
+    // only for histories whose actual highest recorded migration is in that
+    // supported tail. A stray 153/tail row must not authorize fabricating the
+    // preceding registry or applying an unrelated migration to a partial DB.
+    let tail_is_applicable = recorded_versions
+        .iter()
+        .copied()
+        .max()
+        .is_some_and(|version| (153..=157).contains(&version));
+    if !tail_is_applicable {
+        return Ok(());
+    }
+    for (version, name) in [
+        (154_i64, "transcript-capture-source-identity"),
+        (155_i64, "source-sync-failures"),
+        (156_i64, "embedding-repair-checkpoints"),
+        (157_i64, "embedding-repair-progress"),
+    ] {
+        let recorded = transaction
+            .query_row(
+                "SELECT 1 FROM schema_migrations WHERE version=?1",
+                [version],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?;
+        if recorded.is_some() {
+            let recorded_checksum: String = transaction.query_row(
+                "SELECT checksum FROM schema_migrations WHERE version=?1",
+                [version],
+                |row| row.get(0),
+            )?;
+            let expected_checksum = migration_checksum(version, name);
+            if recorded_checksum != expected_checksum {
+                return Err(CoreError::UnsupportedMigrationHistory(format!(
+                    "migration {version} checksum mismatch"
+                )));
+            }
+            if typescript_migration_artifact_missing(transaction, version)? {
+                // Repair incomplete recorded artifacts without replacing the
+                // original history timestamp/checksum.
+                let started = std::time::Instant::now();
+                apply_typescript_migration(transaction, version)?;
+                if typescript_migration_artifact_missing(transaction, version)? {
+                    return Err(CoreError::UnsupportedMigrationHistory(format!(
+                        "migration {version} did not create its required artifacts"
+                    )));
+                }
+                let applied_at = OffsetDateTime::now_utc()
+                    .format(&Rfc3339)
+                    .map_err(|error| CoreError::UnsupportedMigrationHistory(error.to_string()))?;
+                let duration = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                transaction.execute(
+                    "INSERT INTO schema_migrations_audit(version,applied_at,duration_ms,checksum) VALUES(?1,?2,?3,?4)",
+                    params![version, applied_at, duration, expected_checksum],
+                )?;
+            }
+            continue;
+        }
+
+        let started = std::time::Instant::now();
+        apply_typescript_migration(transaction, version)?;
+        if typescript_migration_artifact_missing(transaction, version)? {
+            return Err(CoreError::UnsupportedMigrationHistory(format!(
+                "migration {version} did not create its required artifacts"
+            )));
+        }
+        let duration = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+        let applied_at = OffsetDateTime::now_utc()
+            .format(&Rfc3339)
+            .map_err(|error| CoreError::UnsupportedMigrationHistory(error.to_string()))?;
+        let checksum = migration_checksum(version, name);
+        transaction.execute(
+            "INSERT OR REPLACE INTO schema_migrations(version,applied_at,checksum) VALUES(?1,?2,?3)",
+            params![version, applied_at, checksum],
+        )?;
+        transaction.execute(
+            "INSERT INTO schema_migrations_audit(version,applied_at,duration_ms,checksum) VALUES(?1,?2,?3,?4)",
+            params![version, applied_at, duration, checksum],
+        )?;
+        if !recorded_versions.contains(&version) {
+            recorded_versions.push(version);
+        }
+    }
+    Ok(())
+}
+
+fn typescript_migration_artifact_missing(
+    transaction: &Transaction<'_>,
+    version: i64,
+) -> Result<bool, CoreError> {
+    let missing_columns = |table: &str, columns: &[&str]| -> Result<bool, CoreError> {
+        for column in columns {
+            if !has_column(transaction, table, column)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    };
+    match version {
+        154 => {
+            if !has_table(transaction, "transcript_capture_jobs")? {
+                return Ok(false);
+            }
+            Ok(missing_columns(
+                "transcript_capture_jobs",
+                &[
+                    "source_identity",
+                    "source_sha256",
+                    "source_size_bytes",
+                    "source_mtime_ms",
+                    "source_format",
+                    "audit_path",
+                ],
+            )? || !index_matches(
+                transaction,
+                "idx_transcript_capture_jobs_source_identity",
+                "transcript_capture_jobs",
+                &["agent_id", "source_identity", "status"],
+                None,
+            )? || !index_matches(
+                transaction,
+                "idx_transcript_capture_jobs_source_digest",
+                "transcript_capture_jobs",
+                &["agent_id", "source_sha256"],
+                None,
+            )?)
+        }
+        155 => Ok(!has_table(transaction, "source_sync_failures")?
+            || missing_columns(
+                "source_sync_failures",
+                &[
+                    "agent_id",
+                    "source_key",
+                    "phase",
+                    "item_path",
+                    "fingerprint",
+                    "failure_code",
+                    "terminal",
+                    "diagnostic",
+                    "attempt_count",
+                    "first_observed_at",
+                    "last_observed_at",
+                    "retry_after",
+                    "resolved_at",
+                ],
+            )?
+            || !index_matches(
+                transaction,
+                "idx_source_sync_failures_active",
+                "source_sync_failures",
+                &["agent_id", "source_key", "phase", "item_path"],
+                Some("WHERE resolved_at IS NULL"),
+            )?),
+        156 => Ok(!has_table(transaction, "embedding_repair_checkpoints")?
+            || missing_columns(
+                "embedding_repair_checkpoints",
+                &[
+                    "checkpoint_id",
+                    "agent_id",
+                    "model",
+                    "status",
+                    "batches",
+                    "selected",
+                    "written",
+                    "failed",
+                    "stale",
+                    "cross_agent_hash_conflicts",
+                    "last_error",
+                    "created_at",
+                    "updated_at",
+                ],
+            )?
+            || !index_matches(
+                transaction,
+                "idx_embedding_repair_checkpoints_status",
+                "embedding_repair_checkpoints",
+                &["status", "updated_at"],
+                None,
+            )?),
+        157 => Ok(!has_table(transaction, "embedding_repair_progress")?
+            || missing_columns(
+                "embedding_repair_progress",
+                &[
+                    "agent_id",
+                    "last_completed_at",
+                    "last_affected",
+                    "last_error",
+                    "updated_at",
+                ],
+            )?
+            || !has_column(
+                transaction,
+                "embedding_repair_checkpoints",
+                "profile_fingerprint",
+            )?
+            || !index_matches(
+                transaction,
+                "idx_embedding_repair_checkpoints_status",
+                "embedding_repair_checkpoints",
+                &["status", "updated_at"],
+                None,
+            )?),
+        _ => Err(CoreError::UnsupportedMigrationHistory(format!(
+            "no native artifact contract for migration {version}"
+        ))),
+    }
+}
+
+fn migration_checksum(version: i64, name: &str) -> String {
+    let mut hash = 0_i32;
+    // JavaScript's bitwise coercion and `Number#toString(16)` preserve the
+    // sign; Rust's integer formatter instead emits two's-complement digits.
+    for unit in format!("{version}:{name}").encode_utf16() {
+        hash = hash.wrapping_mul(31).wrapping_add(i32::from(unit));
+    }
+    if hash < 0 {
+        format!("-{:x}", hash.unsigned_abs())
+    } else {
+        format!("{hash:x}")
+    }
+}
+
+fn apply_typescript_migration(
+    transaction: &Transaction<'_>,
+    version: i64,
+) -> Result<(), CoreError> {
+    match version {
+        154 => {
+            if !has_table(transaction, "transcript_capture_jobs")? {
+                return Ok(());
+            }
+            for (column, definition) in [
+                ("source_identity", "TEXT"),
+                ("source_sha256", "TEXT"),
+                ("source_size_bytes", "INTEGER"),
+                ("source_mtime_ms", "REAL"),
+                ("source_format", "TEXT"),
+                ("audit_path", "TEXT"),
+            ] {
+                ensure_column(transaction, "transcript_capture_jobs", column, definition)?;
+            }
+            transaction.execute_batch(
+                "CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_source_identity
+                    ON transcript_capture_jobs(agent_id, source_identity, status);
+                 CREATE INDEX IF NOT EXISTS idx_transcript_capture_jobs_source_digest
+                    ON transcript_capture_jobs(agent_id, source_sha256);",
+            )?;
+        }
+        155 => {
+            transaction.execute_batch(
+                "CREATE TABLE IF NOT EXISTS source_sync_failures (
+                    agent_id TEXT NOT NULL,
+                    source_key TEXT NOT NULL,
+                    phase TEXT NOT NULL,
+                    item_path TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    failure_code TEXT NOT NULL,
+                    terminal INTEGER NOT NULL DEFAULT 1,
+                    diagnostic TEXT NOT NULL,
+                    attempt_count INTEGER NOT NULL DEFAULT 1,
+                    first_observed_at TEXT NOT NULL,
+                    last_observed_at TEXT NOT NULL,
+                    retry_after TEXT,
+                    resolved_at TEXT,
+                    PRIMARY KEY (agent_id, source_key, phase, item_path)
+                );
+                CREATE INDEX IF NOT EXISTS idx_source_sync_failures_active
+                    ON source_sync_failures(agent_id, source_key, phase, item_path)
+                    WHERE resolved_at IS NULL;",
+            )?;
+        }
+        156 => {
+            transaction.execute_batch(
+                "CREATE TABLE IF NOT EXISTS embedding_repair_checkpoints (
+                    checkpoint_id TEXT PRIMARY KEY,
+                    agent_id TEXT NOT NULL CHECK (length(trim(agent_id)) > 0),
+                    model TEXT NOT NULL CHECK (length(trim(model)) > 0),
+                    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'complete', 'failed')),
+                    batches INTEGER NOT NULL DEFAULT 0 CHECK (batches >= 0),
+                    selected INTEGER NOT NULL DEFAULT 0 CHECK (selected >= 0),
+                    written INTEGER NOT NULL DEFAULT 0 CHECK (written >= 0),
+                    failed INTEGER NOT NULL DEFAULT 0 CHECK (failed >= 0),
+                    stale INTEGER NOT NULL DEFAULT 0 CHECK (stale >= 0),
+                    cross_agent_hash_conflicts INTEGER NOT NULL DEFAULT 0 CHECK (cross_agent_hash_conflicts >= 0),
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_embedding_repair_checkpoints_status
+                    ON embedding_repair_checkpoints(status, updated_at);",
+            )?;
+        }
+        157 => {
+            ensure_column(
+                transaction,
+                "embedding_repair_checkpoints",
+                "profile_fingerprint",
+                "TEXT",
+            )?;
+            transaction.execute_batch(
+                "CREATE TABLE IF NOT EXISTS embedding_repair_progress (
+                    agent_id TEXT PRIMARY KEY CHECK (length(trim(agent_id)) > 0),
+                    last_completed_at TEXT,
+                    last_affected INTEGER NOT NULL DEFAULT 0 CHECK (last_affected >= 0),
+                    last_error TEXT,
+                    updated_at TEXT NOT NULL
+                );",
+            )?;
+        }
+        _ => {
+            return Err(CoreError::UnsupportedMigrationHistory(format!(
+                "no native migration implementation for version {version}"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn ensure_column(
