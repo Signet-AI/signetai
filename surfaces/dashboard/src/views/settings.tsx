@@ -1253,6 +1253,8 @@ function AdvancedSection() {
 	const autonomousFrozenPath = pipelineV2BooleanAliasPath(store.agent, "autonomousFrozen");
 	const allowUpdateDelete = resolvePipelineV2BooleanAlias(store.agent, "allowUpdateDelete");
 	const allowUpdateDeletePath = pipelineV2BooleanAliasPath(store.agent, "allowUpdateDelete");
+	const rerankerEnabled = resolvePipelineV2BooleanAlias(store.agent, "rerankerEnabled");
+	const rerankerEnabledPath = pipelineV2BooleanAliasPath(store.agent, "rerankerEnabled");
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -1430,9 +1432,10 @@ function AdvancedSection() {
 				/>
 				<AdvToggle
 					store={store}
-					path={pv2("rerankerEnabled")}
+					path={rerankerEnabledPath}
 					title="Reranker"
 					desc="Re-score recall candidates by full-content embedding similarity. No LLM call needed."
+					value={rerankerEnabled}
 				/>
 				<AdvNum
 					store={store}
