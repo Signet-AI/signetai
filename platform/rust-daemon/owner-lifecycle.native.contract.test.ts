@@ -419,6 +419,10 @@ it("repairs a missing TypeScript v79 history row through the real owner and surv
 	copyFileSync(join(repoRoot, "platform/rust-core/tests/fixtures/ts_v80_missing_79.sqlite"), database);
 
 	const seed = new SqliteDatabase(database);
+	const originalAudit = seed
+		.query("SELECT id,applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=79 ORDER BY id")
+		.all();
+	expect(originalAudit).toHaveLength(1);
 	seed
 		.prepare(
 			"INSERT INTO documents(id,source_type,metadata_json,agent_id,project,created_at,updated_at) VALUES('v79-sentinel','test',NULL,'fixture-agent','/sentinel','2026-09-26','2026-09-26')",
@@ -445,9 +449,15 @@ it("repairs a missing TypeScript v79 history row through the real owner and surv
 	expect(verifyFirst.query("SELECT checksum FROM schema_migrations WHERE version=79").get()).toEqual({
 		checksum: "5939169c",
 	});
-	expect(verifyFirst.query("SELECT count(*) AS n FROM schema_migrations_audit WHERE version=79").get()).toEqual({
-		n: 2,
-	});
+	const repairedAppliedAt = verifyFirst.query("SELECT applied_at FROM schema_migrations WHERE version=79").get();
+	expect(repairedAppliedAt?.applied_at).not.toBe(originalAudit[0]?.applied_at);
+	const auditsFirst = verifyFirst
+		.query("SELECT id,applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=79 ORDER BY id")
+		.all();
+	expect(auditsFirst).toHaveLength(originalAudit.length + 1);
+	expect(auditsFirst.slice(0, originalAudit.length)).toEqual(originalAudit);
+	expect(auditsFirst[originalAudit.length]?.checksum).toBe("5939169c");
+	expect(auditsFirst[originalAudit.length]?.applied_at).not.toBe(originalAudit[0]?.applied_at);
 	expect(
 		verifyFirst
 			.query(

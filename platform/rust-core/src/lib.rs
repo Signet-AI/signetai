@@ -7406,21 +7406,18 @@ fn replay_missing_migration79(transaction: &Transaction<'_>) -> Result<(), CoreE
             "migration 79 did not create required artifacts".into(),
         ));
     }
-    let matching_audit: Option<(String, Option<i64>)> = transaction.query_row(
-        "SELECT applied_at,duration_ms FROM schema_migrations_audit WHERE version=79 AND checksum=?1 ORDER BY id DESC LIMIT 1", [&expected], |r| Ok((r.get(0)?,r.get(1)?))
-    ).optional()?;
-    let (applied_at, duration) = matching_audit.unwrap_or_else(|| {
-        let at = OffsetDateTime::now_utc()
-            .format(&Rfc3339)
-            .unwrap_or_default();
-        let ms = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
-        (at, Some(ms))
-    });
+    let applied_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|error| CoreError::UnsupportedMigrationHistory(error.to_string()))?;
+    let duration = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
     transaction.execute(
         "INSERT INTO schema_migrations(version,applied_at,checksum) VALUES(79,?1,?2)",
         params![applied_at, expected],
     )?;
-    transaction.execute("INSERT INTO schema_migrations_audit(version,applied_at,duration_ms,checksum) VALUES(79,?1,?2,?3)", params![applied_at, duration, expected])?;
+    transaction.execute(
+        "INSERT INTO schema_migrations_audit(version,applied_at,duration_ms,checksum) VALUES(79,?1,?2,?3)",
+        params![applied_at, duration, expected],
+    )?;
     Ok(())
 }
 

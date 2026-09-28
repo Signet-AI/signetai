@@ -353,6 +353,13 @@ fn owner_replays_only_the_exact_missing_v79_gap_before_tail() {
         .unwrap()
         .collect::<Result<_, _>>()
         .unwrap();
+    let audit_before: Vec<(i64, String, Option<i64>, Option<String>)> = db
+        .prepare("SELECT id,applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=79 ORDER BY id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
     drop(db);
 
     drop(WorkspaceOwner::open(file.path(), 4).expect("exact v79 gap should replay"));
@@ -368,6 +375,28 @@ fn owner_replays_only_the_exact_missing_v79_gap_before_tail() {
     assert!(history_after
         .iter()
         .any(|(version, _, checksum)| *version == 79 && checksum == "5939169c"));
+    let repaired_applied_at: String = db
+        .query_row(
+            "SELECT applied_at FROM schema_migrations WHERE version=79",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let audit_after: Vec<(i64, String, Option<i64>, Option<String>)> = db
+        .prepare("SELECT id,applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=79 ORDER BY id")
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(audit_after.len(), audit_before.len() + 1);
+    assert_eq!(&audit_after[..audit_before.len()], &audit_before);
+    let previous_audit_at = &audit_before
+        .last()
+        .expect("fixture has v79 audit history")
+        .1;
+    assert_ne!(&repaired_applied_at, previous_audit_at);
+    assert_ne!(&audit_after.last().unwrap().1, previous_audit_at);
 }
 
 #[test]
