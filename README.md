@@ -38,7 +38,7 @@ Read more: [Why Signet](https://docs.signetai.sh/quickstart/#why-signet) · [Arc
 ### Install Signet
 
 ```bash
-curl -fsSL https://signetai.sh/install.sh | bash                 # recommended
+curl -fsSL https://signetai.sh/install.sh | bash
 ```
 
 On Windows x64, run the PowerShell installer:
