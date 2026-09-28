@@ -51,6 +51,7 @@ describe("Bun runtime contract", () => {
 		expect(releaseWorkflow).toContain("SIGNET_RUNTIME_VERSION_SMOKE");
 		expect(releaseWorkflow).toContain("Verify macOS arm64 ad-hoc signature");
 		expect(releaseWorkflow).toContain("codesign --verify --strict");
+		expect(releaseWorkflow).toMatch(/- os: xcode-27\s+platform: darwin-arm64\s+asset: signet-darwin-arm64/);
 
 		const nativeFirstUse = text(".github/workflows/native-first-use.yml");
 		for (const [platform, asset] of [

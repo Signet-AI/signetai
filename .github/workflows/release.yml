@@ -244,7 +244,7 @@ jobs:
           - os: macos-15-intel
             platform: darwin-x64
             asset: signet-darwin-x64
-          - os: macos-14
+          - os: xcode-27
             platform: darwin-arm64
             asset: signet-darwin-arm64
           - os: windows-latest
