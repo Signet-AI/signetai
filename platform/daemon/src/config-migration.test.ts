@@ -8,6 +8,7 @@ import {
 	migrateInferenceProviders,
 	migrateLegacyRoutingToRegistry,
 } from "./config-migration";
+import { loadMemoryConfig } from "./memory-config";
 
 function setupDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "signet-config-migration-"));
@@ -18,7 +19,7 @@ function setupDir(): string {
 afterEach(() => {});
 
 describe("migrateConfig pipelineV2 aliases", () => {
-	it("applies the registered flat and nested default migrations without rewriting unrelated config", () => {
+	it("migrates legacy aliases into values resolved by the daemon without rewriting unrelated config", () => {
 		const dir = setupDir();
 		const path = join(dir, "agent.yaml");
 		try {
@@ -51,6 +52,7 @@ other:
 			migrateConfig(dir);
 			const afterFirstRun = readFileSync(path, "utf-8");
 			expect(afterFirstRun).toContain("graphEnabled: true # legacy graph setting");
+			expect(afterFirstRun).toContain("configVersion: 2");
 			expect(afterFirstRun).toContain("rerankerEnabled: true");
 			expect(afterFirstRun).toContain("autonomousEnabled: true");
 			expect(afterFirstRun).toContain("autonomousFrozen: false");
@@ -62,6 +64,15 @@ other:
 			expect(afterFirstRun).toContain("# operator note");
 			expect(afterFirstRun).toMatch(/enabled: true/g);
 			expect(afterFirstRun.match(/enabled: true/g)).toHaveLength(3);
+
+			const resolved = loadMemoryConfig(dir).pipelineV2;
+			expect(resolved.graph.enabled).toBe(true);
+			expect(resolved.reranker.enabled).toBe(true);
+			expect(resolved.autonomous.enabled).toBe(true);
+			expect(resolved.autonomous.frozen).toBe(false);
+			expect(resolved.autonomous.allowUpdateDelete).toBe(false);
+			expect(resolved.autonomous.maintenanceMode).toBe("observe");
+			expect(resolved.autonomous.maintenanceIntervalMs).toBe(90000);
 
 			migrateConfig(dir);
 			expect(readFileSync(path, "utf-8")).toBe(afterFirstRun);
