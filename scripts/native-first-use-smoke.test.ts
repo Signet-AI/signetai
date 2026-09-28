@@ -98,11 +98,14 @@ describe("compiled native first use", () => {
 	const smoke = enabled ? test : test.skip;
 
 	smoke(
-		"runs the pinned runtime, bounded source transport, and isolated keyring helper from the compiled artifact",
+		"runs the native boundary checks and strict-verifies the macOS arm64 signature from the compiled artifact",
 		() => {
 			const binary = nativeSmokeBinary();
 			if (!existsSync(binary)) {
 				throw new Error(`native binary not found at ${binary}; build it first (bun run build:native-bun)`);
+			}
+			if (process.platform === "darwin" && process.env.SIGNET_NATIVE_PLATFORM === "darwin-arm64") {
+				run("codesign", ["--verify", "--strict", "--verbose=2", binary], process.env, 10_000);
 			}
 			smokeHome = mkdtempSync(join(tmpdir(), "signet-native-boundaries-"));
 			const env = smokeEnv(smokeHome, join(smokeHome, ".agents"));

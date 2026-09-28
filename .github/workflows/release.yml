@@ -277,6 +277,11 @@ jobs:
       - name: Build native Signet binary
         run: bun run build:native-bun
 
+      - name: Verify macOS arm64 ad-hoc signature
+        if: matrix.platform == 'darwin-arm64'
+        shell: bash
+        run: codesign --verify --strict --verbose=2 ./dist/native/"$RELEASE_ASSET"
+
       - name: Smoke native binary
         shell: bash
         run: ./dist/native/"$RELEASE_ASSET" --help > /dev/null

@@ -2,7 +2,7 @@
 	"name": "signet",
 	"version": "0.228.5",
 	"private": true,
-	"packageManager": "bun@1.4.0",
+	"packageManager": "bun@1.4.2",
 	"description": "Local-first identity, memory, and secrets for AI agents",
 	"repository": {
 		"type": "git",
@@ -99,7 +99,7 @@
 		"@opencode-ai/plugin": "^1.18.13",
 		"@signet/sdk": "workspace:*",
 		"@types/node": "^24.5.2",
-		"bun-types": "1.4.0",
+		"bun-types": "1.4.2",
 		"esbuild": "^0.25.0",
 		"hono": "^4.13.0",
 		"node-gyp": "^12.4.0",

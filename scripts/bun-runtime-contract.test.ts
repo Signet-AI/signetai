@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 const root = resolve(import.meta.dir, "..");
-const requiredVersion = "1.4.0";
+const requiredVersion = "1.4.2";
 
 function text(path: string): string {
 	return readFileSync(join(root, path), "utf8");
@@ -17,6 +17,9 @@ describe("Bun runtime contract", () => {
 		};
 		expect(pkg.packageManager).toBe(`bun@${requiredVersion}`);
 		expect(pkg.devDependencies?.["bun-types"]).toBe(requiredVersion);
+
+		const lock = text("bun.lock");
+		expect(lock).toContain(`"bun-types": "${requiredVersion}"`);
 
 		const dockerfile = text("deploy/docker/Dockerfile");
 		expect(dockerfile.match(new RegExp(`FROM oven/bun:${requiredVersion}`, "g"))?.length).toBe(2);
@@ -46,6 +49,8 @@ describe("Bun runtime contract", () => {
 		const releaseWorkflow = text(".github/workflows/release.yml");
 		expect(releaseWorkflow).toContain("Verify embedded Bun runtime");
 		expect(releaseWorkflow).toContain("SIGNET_RUNTIME_VERSION_SMOKE");
+		expect(releaseWorkflow).toContain("Verify macOS arm64 ad-hoc signature");
+		expect(releaseWorkflow).toContain("codesign --verify --strict");
 
 		const nativeFirstUse = text(".github/workflows/native-first-use.yml");
 		for (const [platform, asset] of [
@@ -58,6 +63,7 @@ describe("Bun runtime contract", () => {
 			expect(nativeFirstUse).toContain(`platform: ${platform}`);
 			expect(nativeFirstUse).toContain(`asset: ${asset}`);
 		}
+		expect(nativeFirstUse).toContain("os: xcode-27");
 		expect(nativeFirstUse).toContain(
 			["SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/", "$", "{{ matrix.asset }}"].join(""),
 		);
