@@ -20,6 +20,7 @@ Direct curl installs use the same compiled Signet binary:
 
 ```bash
 curl -fsSL https://signetai.sh/install.sh | bash
+curl -fsSL https://signetai.sh/install.sh | bash -s -- --nightly
 ```
 
 On Windows x64, use the native PowerShell installer:

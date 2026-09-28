@@ -72,6 +72,64 @@ describe("summarizePipelineToggle", () => {
 	});
 });
 
+describe("daemon start workspace setup", () => {
+	for (const action of [doStart, doRestart]) {
+		it(`${action.name} runs setup instead of starting the daemon when the workspace is unconfigured`, async () => {
+			let daemonStarts = 0;
+			let setups = 0;
+			const deps = makeDeps({
+				setupUnconfiguredWorkspace: async (agentsDir) => {
+					setups += 1;
+					expect(agentsDir).toBe("/tmp/.agents");
+					return true;
+				},
+				startDaemon: async () => {
+					daemonStarts += 1;
+					return true;
+				},
+			});
+
+			await action({}, deps);
+
+			expect(setups).toBe(1);
+			expect(daemonStarts).toBe(0);
+		});
+	}
+	it("runs setup instead of launching the dashboard when the workspace is unconfigured", async () => {
+		let daemonStarts = 0;
+		let statusReads = 0;
+		let setups = 0;
+		const deps = makeDeps({
+			setupUnconfiguredWorkspace: async () => {
+				setups += 1;
+				return true;
+			},
+			getDaemonStatus: async () => {
+				statusReads += 1;
+				return {
+					running: false,
+					pid: null,
+					uptime: null,
+					version: null,
+					host: null,
+					bindHost: null,
+					networkMode: null,
+				};
+			},
+			startDaemon: async () => {
+				daemonStarts += 1;
+				return true;
+			},
+		});
+
+		await launchDashboard({}, deps);
+
+		expect(setups).toBe(1);
+		expect(statusReads).toBe(0);
+		expect(daemonStarts).toBe(0);
+	});
+});
+
 function makeDeps(overrides?: Partial<Parameters<typeof doRestart>[1]>): Parameters<typeof doRestart>[1] {
 	return {
 		agentsDir: "/tmp/.agents",

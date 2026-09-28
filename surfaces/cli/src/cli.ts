@@ -29,6 +29,7 @@ import {
 	getGlobalInstallCommand,
 	loadConfiguredHarnesses,
 	LOOPBACK_HOST,
+	preflightWorkspace,
 	readStaticIdentity,
 	resolveGlobalPackagePath,
 	resolvePrimaryPackageManager,
@@ -874,6 +875,23 @@ const daemonDeps = {
 	signetLogo,
 	sleep,
 	startDaemon,
+	setupUnconfiguredWorkspace: async (agentsDir: string) => {
+		const workspace = preflightWorkspace();
+		if (workspace.path !== agentsDir) return false;
+		const existing = detectExistingSetup(agentsDir);
+		if (
+			workspace.status !== "fresh" &&
+			!(workspace.status === "incomplete" && existing.agentsDir && !existing.agentYaml && !existing.configYaml)
+		)
+			return false;
+		if (!process.stdin.isTTY) {
+			throw new Error(
+				`No Signet workspace is configured at ${agentsDir}. Run 'signet setup' in an interactive terminal.`,
+			);
+		}
+		await setupWizard({ path: agentsDir }, setupDeps);
+		return true;
+	},
 	stopDaemon,
 	syncTemplates: runSyncTemplates,
 };

@@ -61,6 +61,7 @@ interface Deps {
 	readonly signetLogo: () => string;
 	readonly sleep: (ms: number) => Promise<void>;
 	readonly startDaemon: (agentsDir?: string, runtime?: DaemonRuntime, daemonPath?: string) => Promise<boolean>;
+	readonly setupUnconfiguredWorkspace?: (agentsDir: string) => Promise<boolean>;
 	readonly stopDaemon: (agentsDir?: string) => Promise<boolean>;
 	readonly isLaunchdDaemonLoaded?: (agentsDir?: string) => Promise<boolean>;
 	readonly confirmRestartSync?: () => Promise<boolean>;
@@ -73,6 +74,7 @@ interface Deps {
 export async function launchDashboard(options: PathOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
+	if (await deps.setupUnconfiguredWorkspace?.(basePath)) return;
 	const before = await deps.getDaemonStatus();
 
 	if (!before.running) {
@@ -210,6 +212,7 @@ export async function showLogs(options: LogOptions, deps: Deps): Promise<void> {
 export async function doStart(options: StartOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
+	if (await deps.setupUnconfiguredWorkspace?.(basePath)) return;
 	const runtime = readRuntime(options.runtime);
 	const daemonPath = readDaemonJsPath(options.daemonJsPath, runtime);
 	let running = await deps.isDaemonRunning();
@@ -273,6 +276,7 @@ export async function doStop(options: PathOptions, deps: Deps): Promise<void> {
 export async function doRestart(options: RestartOptions, deps: Deps): Promise<void> {
 	console.log(deps.signetLogo());
 	const basePath = readPath(options, deps);
+	if (await deps.setupUnconfiguredWorkspace?.(basePath)) return;
 	const runtime = readRuntime(options.runtime);
 	const daemonPath = readDaemonJsPath(options.daemonJsPath, runtime);
 	const spinner = ora("Restarting daemon...").start();

@@ -1,6 +1,6 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { confirm } from "@inquirer/prompts";
 import {
 	Database as CoreDatabase,
@@ -12,6 +12,7 @@ import {
 	formatYaml,
 	importMemoryLogs,
 	resolvePrimaryPackageManager,
+	resolveWorkspaceLayout,
 	runMigrations,
 	unifySkills,
 } from "@signet/core";
@@ -283,7 +284,7 @@ export async function runExistingSetupWizard(
 				source: packageManager.source,
 			},
 			memory: {
-				database: "memory/memories.db",
+				database: relative(basePath, resolveWorkspaceLayout(basePath).database),
 				session_budget: 2000,
 				decay_rate: 0.95,
 			},
@@ -449,7 +450,7 @@ export async function runExistingSetupWizard(
 		}
 
 		spinner.text = "Initializing database...";
-		const dbPath = join(basePath, "memory", "memories.db");
+		const dbPath = resolveWorkspaceLayout(basePath).database;
 		const db = Database(dbPath);
 		const migrationResult = ensureUnifiedSchema(db);
 		if (migrationResult.migrated) {

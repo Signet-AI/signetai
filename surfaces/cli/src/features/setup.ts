@@ -275,6 +275,15 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	console.log(deps.signetBanner());
 	console.log(chalk.dim(`  Workspace: ${basePath}`));
+	if (!existing.agentYaml && !existing.configYaml && existing.memoryDb) {
+		await runExistingSetupWizard(basePath, existing, {}, deps, {
+			openDashboard: options.openDashboard === true,
+			skipGit: options.skipGit === true,
+			allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+			createLocalBackup: options.createLocalBackup === true,
+		});
+		return;
+	}
 	if (!existing.agentYaml && !existing.configYaml && !existing.memoryDb) {
 		const harnesses = options.harness ?? [];
 		await applySetupOptions(

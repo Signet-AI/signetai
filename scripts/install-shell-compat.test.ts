@@ -29,6 +29,7 @@ describe("install.sh shell compatibility", () => {
 		const fixtureDir = join(workspace, "fixtures");
 		const downloadDir = join(workspace, "downloads");
 		const argsPath = join(workspace, "install-args");
+		const requestsPath = join(workspace, "requests");
 		mkdirSync(binDir);
 		mkdirSync(fixtureDir);
 		mkdirSync(downloadDir);
@@ -60,21 +61,22 @@ describe("install.sh shell compatibility", () => {
 			writeFileSync(
 				curl,
 				`#!/bin/sh
-output=""
-url=""
-while [ "$#" -gt 0 ]; do
-	case "$1" in
-		-o) output="$2"; shift 2 ;;
-		*) url="$1"; shift ;;
-	esac
-done
-file="\${url##*/}"
-if [ -n "$output" ]; then
-	cp "$FIXTURE_ROOT/$file" "$output"
-else
-	cat "$FIXTURE_ROOT/$file"
-fi
-`,
+				output=""
+				url=""
+				while [ "$#" -gt 0 ]; do
+					case "$1" in
+						-o) output="$2"; shift 2 ;;
+						*) url="$1"; shift ;;
+					esac
+				done
+				printf '%s\\n' "$url" >> "$SIGNET_REQUESTS"
+				file="\${url##*/}"
+				if [ -n "$output" ]; then
+					cp "$FIXTURE_ROOT/$file" "$output"
+				else
+					cat "$FIXTURE_ROOT/$file"
+				fi
+				`,
 			);
 			chmodSync(curl, 0o755);
 
@@ -110,24 +112,34 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 					},
 				}),
 			);
+			writeFileSync(join(fixtureDir, "next"), JSON.stringify({ version: "nightly-test" }));
 
 			for (const shell of ["bash", "zsh"]) {
 				const shellPath = Bun.which(shell);
 				if (!shellPath) {
 					throw new Error(`Required test shell is not installed: ${shell}`);
 				}
-				for (const invocation of ["direct", "source"]) {
+				for (const invocation of ["direct", "source", "nightly-direct", "nightly-source"]) {
+					const nightly = invocation.startsWith("nightly-");
+					const source = invocation.endsWith("source");
 					rmSync(argsPath, { force: true });
-					const args = invocation === "source" ? ["-c", 'source "$1" --json', shell, installer] : [installer, "--json"];
+					rmSync(requestsPath, { force: true });
+					const installerFlags = `${nightly ? "--nightly " : ""}--json`;
+					const args = source
+						? ["-c", `source "$1" ${installerFlags}`, shell, installer]
+						: [installer, ...(nightly ? ["--nightly"] : []), "--json"];
 					const result = spawnSync(shellPath, args, {
 						encoding: "utf8",
 						env: {
 							...process.env,
 							FIXTURE_ROOT: fixtureDir,
 							PATH: binDir,
-							SIGNET_DOWNLOAD_BASE: "https://fixtures.invalid/v-test",
+							SIGNET_RELEASES_DOWNLOAD_BASE: "https://fixtures.invalid/releases",
 							SIGNET_DOWNLOAD_DIR: downloadDir,
 							SIGNET_INSTALL_ARGS: argsPath,
+							SIGNET_REQUESTS: requestsPath,
+							SIGNET_NIGHTLY_VERSION_API: "https://fixtures.invalid/next",
+							...(nightly ? {} : { SIGNET_DOWNLOAD_BASE: "https://fixtures.invalid/v-test" }),
 						},
 					});
 
@@ -142,6 +154,12 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 						"--json",
 						"",
 					]);
+					if (nightly) {
+						const requests = readFileSync(requestsPath, "utf8");
+						expect(requests).toContain("https://fixtures.invalid/next");
+						expect(requests).toContain("https://fixtures.invalid/releases/vnightly-test/native-manifest.json");
+						expect(readFileSync(argsPath, "utf8")).not.toContain("--nightly");
+					}
 				}
 			}
 		} finally {
