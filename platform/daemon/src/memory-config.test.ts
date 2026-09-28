@@ -1116,6 +1116,48 @@ describe("loadPipelineConfig", () => {
 		expect(result.autonomous.maintenanceMode).toBe("observe");
 	});
 
+	it("uses shared alias precedence in the resolved daemon config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					graphEnabled: true,
+					graph: { enabled: false },
+					rerankerEnabled: true,
+					rerankerUseExtractionModel: false,
+					reranker: { enabled: false, useExtractionModel: true },
+					autonomousEnabled: true,
+					autonomousFrozen: true,
+					allowUpdateDelete: true,
+					maintenanceMode: "observe",
+					autonomous: {
+						enabled: false,
+						frozen: false,
+						allowUpdateDelete: false,
+						maintenanceMode: "invalid",
+					},
+				},
+			},
+		});
+
+		expect(result.graph.enabled).toBe(false);
+		expect(result.reranker.enabled).toBe(false);
+		expect(result.reranker.useExtractionModel).toBe(true);
+		expect(result.autonomous.enabled).toBe(false);
+		expect(result.autonomous.frozen).toBe(false);
+		expect(result.autonomous.allowUpdateDelete).toBe(false);
+		expect(result.autonomous.maintenanceMode).toBe("execute");
+
+		const nullishMaintenanceMode = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					maintenanceMode: "observe",
+					autonomous: { maintenanceMode: null },
+				},
+			},
+		});
+		expect(nullishMaintenanceMode.autonomous.maintenanceMode).toBe("observe");
+	});
+
 	it("supports nested config format", () => {
 		const result = loadPipelineConfig({
 			memory: {
@@ -1157,20 +1199,14 @@ describe("loadPipelineConfig", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
-					rerankerEnabled: false,
 					rerankerModel: "flat-model",
-					rerankerUseExtractionModel: false,
 					reranker: {
-						enabled: true,
 						model: "nested-model",
-						useExtractionModel: true,
 					},
 				},
 			},
 		});
 
-		expect(result.reranker.enabled).toBe(true);
 		expect(result.reranker.model).toBe("nested-model");
-		expect(result.reranker.useExtractionModel).toBe(true);
 	});
 });

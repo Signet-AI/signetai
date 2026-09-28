@@ -98,6 +98,16 @@ export {
 	ACCOUNTING_PROVENANCES,
 	summarizeAccountingProvenance,
 } from "./types";
+export {
+	PIPELINE_V2_CONFIG_ALIASES,
+	PIPELINE_V2_CONFIG_MIGRATION,
+	PIPELINE_V2_MAINTENANCE_MODES,
+	pipelineV2BooleanAliasPath,
+	pipelineV2MaintenanceModePath,
+	resolvePipelineV2BooleanAlias,
+	resolvePipelineV2MaintenanceMode,
+} from "./pipeline-v2-config";
+export type { PipelineV2BooleanAlias, PipelineV2MaintenanceMode } from "./pipeline-v2-config";
 export type {
 	Agent,
 	AgentManifest,

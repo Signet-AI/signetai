@@ -1,3 +1,9 @@
+import {
+	pipelineV2BooleanAliasPath,
+	pipelineV2MaintenanceModePath,
+	resolvePipelineV2BooleanAlias,
+	resolvePipelineV2MaintenanceMode,
+} from "@signet/core/pipeline-v2-config";
 import { ConnectProviderDialog } from "@/components/settings/connect-dialog";
 import { OnePasswordPanel } from "@/components/secrets/onepassword-panel";
 import { AddSecretDialog } from "@/components/secrets/add-secret-dialog";
@@ -14,14 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import {
-	type AgentConfigStore,
-	isDreamingEnabled,
-	pv2MaintenanceMode,
-	pv2ToggleValue,
-	pv2ToggleWriteForm,
-	useAgentConfig,
-} from "@/lib/agent-config";
+import { type AgentConfigStore, isDreamingEnabled, useAgentConfig } from "@/lib/agent-config";
 import { type InferenceCatalog, type LogEntry, api } from "@/lib/api";
 import { readEmbeddingEndpoint, writeEmbeddingEndpoint } from "@/lib/embedding-config";
 import {
@@ -1107,21 +1106,21 @@ function AdvToggle({
 	title,
 	desc,
 	fallback = false,
-	writeForm,
+	value,
 }: {
 	store: AgentConfigStore;
 	path: readonly string[];
 	title: string;
 	desc: string;
 	fallback?: boolean;
-	writeForm?: readonly string[];
+	value?: boolean;
 }) {
 	return (
 		<Row title={title} desc={desc}>
 			<Switch
-				checked={store.aBool(path, fallback)}
+				checked={value ?? store.aBool(path, fallback)}
 				onCheckedChange={(v) => {
-					store.aSetBool(writeForm ?? path, v);
+					store.aSetBool(path, v);
 					void store.save();
 				}}
 			/>
@@ -1241,40 +1240,19 @@ function AdvNum({
 function AdvancedSection() {
 	const store = useAgentConfig();
 	const pv2 = (key: string): readonly string[] => ["memory", "pipelineV2", key];
-	const pv2Nested = (group: string, key: string): readonly string[] => ["memory", "pipelineV2", group, key];
 	const srch = (key: string): readonly string[] => ["search", key];
 	const drm = (key: string): readonly string[] => ["memory", "dreaming", key];
 	const embPath = useMemo(() => resolveEmbPath(store.agent), [store.agent]);
-	const writeForm = (nested: readonly string[], flat: readonly string[]): "nested" | "flat" =>
-		pv2ToggleWriteForm(store.agent, nested, flat);
-	const maintenanceModeNestedValue = pv2MaintenanceMode(store.agent);
-	const maintenanceModeValue = maintenanceModeNestedValue ?? "";
-	const maintenanceMode =
-		maintenanceModeValue === "observe" || maintenanceModeValue === "execute" ? maintenanceModeValue : "execute";
-	const maintenanceModeWriteForm: "nested" | "flat" = maintenanceModeNestedValue !== undefined ? "nested" : "flat";
-	const graphEnabled = pv2ToggleValue(store.agent, pv2Nested("graph", "enabled"), pv2("graphEnabled"), true);
-	const autonomousEnabled = pv2ToggleValue(
-		store.agent,
-		pv2Nested("autonomous", "enabled"),
-		pv2("autonomousEnabled"),
-		true,
-	);
-	const autonomousFrozen = pv2ToggleValue(
-		store.agent,
-		pv2Nested("autonomous", "frozen"),
-		pv2("autonomousFrozen"),
-		false,
-	);
-	const allowUpdateDelete = pv2ToggleValue(
-		store.agent,
-		pv2Nested("autonomous", "allowUpdateDelete"),
-		pv2("allowUpdateDelete"),
-		true,
-	);
-	const graphWriteForm = writeForm(pv2Nested("graph", "enabled"), pv2("graphEnabled"));
-	const autonomousEnabledWriteForm = writeForm(pv2Nested("autonomous", "enabled"), pv2("autonomousEnabled"));
-	const autonomousFrozenWriteForm = writeForm(pv2Nested("autonomous", "frozen"), pv2("autonomousFrozen"));
-	const allowUpdateDeleteWriteForm = writeForm(pv2Nested("autonomous", "allowUpdateDelete"), pv2("allowUpdateDelete"));
+	const maintenanceMode = resolvePipelineV2MaintenanceMode(store.agent);
+	const maintenanceModePath = pipelineV2MaintenanceModePath(store.agent);
+	const graphEnabled = resolvePipelineV2BooleanAlias(store.agent, "graphEnabled");
+	const graphPath = pipelineV2BooleanAliasPath(store.agent, "graphEnabled");
+	const autonomousEnabled = resolvePipelineV2BooleanAlias(store.agent, "autonomousEnabled");
+	const autonomousEnabledPath = pipelineV2BooleanAliasPath(store.agent, "autonomousEnabled");
+	const autonomousFrozen = resolvePipelineV2BooleanAlias(store.agent, "autonomousFrozen");
+	const autonomousFrozenPath = pipelineV2BooleanAliasPath(store.agent, "autonomousFrozen");
+	const allowUpdateDelete = resolvePipelineV2BooleanAlias(store.agent, "allowUpdateDelete");
+	const allowUpdateDeletePath = pipelineV2BooleanAliasPath(store.agent, "allowUpdateDelete");
 
 	return (
 		<div className="flex flex-col gap-3">
@@ -1305,11 +1283,10 @@ function AdvancedSection() {
 				/>
 				<AdvToggle
 					store={store}
-					path={pv2Nested("graph", "enabled")}
-					writeForm={graphWriteForm === "flat" ? pv2("graphEnabled") : undefined}
+					path={graphPath}
 					title="Knowledge graph"
 					desc="Build and query a graph from extracted entity relationships."
-					fallback={graphEnabled}
+					value={graphEnabled}
 				/>
 			</div>
 
@@ -1317,27 +1294,24 @@ function AdvancedSection() {
 				<GroupLabel>Autonomy &amp; maintenance</GroupLabel>
 				<AdvToggle
 					store={store}
-					path={pv2Nested("autonomous", "enabled")}
-					writeForm={autonomousEnabledWriteForm === "flat" ? pv2("autonomousEnabled") : undefined}
+					path={autonomousEnabledPath}
 					title="Autonomous operations"
 					desc="Allow autonomous pipeline operations like maintenance and repair."
-					fallback={autonomousEnabled}
+					value={autonomousEnabled}
 				/>
 				<AdvToggle
 					store={store}
-					path={pv2Nested("autonomous", "frozen")}
-					writeForm={autonomousFrozenWriteForm === "flat" ? pv2("autonomousFrozen") : undefined}
+					path={autonomousFrozenPath}
 					title="Freeze autonomous writes"
 					desc="Block autonomous writes while still allowing autonomous reads."
-					fallback={autonomousFrozen}
+					value={autonomousFrozen}
 				/>
 				<AdvToggle
 					store={store}
-					path={pv2Nested("autonomous", "allowUpdateDelete")}
-					writeForm={allowUpdateDeleteWriteForm === "flat" ? pv2("allowUpdateDelete") : undefined}
+					path={allowUpdateDeletePath}
 					title="Allow update/delete"
 					desc="Permit UPDATE/DELETE decisions on existing memories."
-					fallback={allowUpdateDelete}
+					value={allowUpdateDelete}
 				/>
 				<Row
 					title="Maintenance mode"
@@ -1350,12 +1324,7 @@ function AdvancedSection() {
 							{ value: "execute", label: "execute" },
 						]}
 						onChange={(v) => {
-							store.aSetStr(
-								maintenanceModeWriteForm === "flat"
-									? pv2("maintenanceMode")
-									: pv2Nested("autonomous", "maintenanceMode"),
-								v,
-							);
+							store.aSetStr(maintenanceModePath, v);
 							void store.save();
 						}}
 					/>
