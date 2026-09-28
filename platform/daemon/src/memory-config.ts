@@ -498,7 +498,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			"memory.synthesis is retired; MEMORY.md synthesis follows the canonical inference workload instead.",
 		);
 	}
-	if (!raw) return { ...DEFAULT_PIPELINE_V2 };
+	if (!raw) return structuredClone(DEFAULT_PIPELINE_V2);
 	const extractionRaw = raw.extraction as Record<string, unknown> | undefined;
 	const workerRaw = raw.worker as Record<string, unknown> | undefined;
 	const claudeCodeRaw = raw.claudeCode as Record<string, unknown> | undefined;
