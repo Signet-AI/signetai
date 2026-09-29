@@ -2529,49 +2529,49 @@
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 101,
+      "line": 104,
       "api": "withReadDb",
       "source": "accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 141,
+      "line": 144,
       "api": "withReadDb",
       "source": "return accessor.withReadDb((db: import(\"../db-accessor\").ReadDb) => {",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 409,
+      "line": 412,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 423,
+      "line": 426,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 438,
+      "line": 441,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 457,
+      "line": 460,
       "api": "withReadDb",
       "source": "return accessor.withReadDb(",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming-operations.ts",
-      "line": 619,
+      "line": 622,
       "api": "withReadDb",
       "source": "const pending = params.accessor.withReadDb(",
       "category": "hot-path"

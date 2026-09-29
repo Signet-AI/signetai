@@ -107,7 +107,7 @@ function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown):
 				return { evidence: createDreamingAgentEvidence([source]), sourceAgentIds: [] };
 			}
 			return { evidence: [], sourceAgentIds: findEpisodicSourceAgentIds(db, requested.sourceRef) };
-		}, "pipeline/dreaming-operations.ts:101");
+		}, "pipeline/dreaming-operations.ts:104");
 	return {
 		evidence:
 			result.evidence.find(
@@ -152,7 +152,7 @@ function semanticDuplicateIds(accessor: DbAccessor, agentId: string, canonicalNa
 			)
 			.all(agentId, canonicalName, ...SOURCE_NATIVE_TOPOLOGY_ENTITY_TYPES) as Array<{ id: string }>;
 		return new Set(rows.map((row) => row.id));
-	}, "pipeline/dreaming-operations.ts:141");
+	}, "pipeline/dreaming-operations.ts:144");
 }
 
 function asStringRecord(value: unknown): Readonly<Record<string, string>> | undefined {
@@ -417,7 +417,7 @@ function lookupEntityName(accessor: DbAccessor, agentId: string, entityId: strin
 				entityId,
 				agentId,
 			),
-		"pipeline/dreaming-operations.ts:409",
+		"pipeline/dreaming-operations.ts:412",
 	);
 }
 
@@ -432,7 +432,7 @@ function lookupAspectName(accessor: DbAccessor, agentId: string, entityId: strin
 				entityId,
 				agentId,
 			),
-		"pipeline/dreaming-operations.ts:423",
+		"pipeline/dreaming-operations.ts:426",
 	);
 }
 
@@ -446,7 +446,7 @@ function lookupAspectEntityId(accessor: DbAccessor, agentId: string, aspectId: s
 				aspectId,
 				agentId,
 			),
-		"pipeline/dreaming-operations.ts:438",
+		"pipeline/dreaming-operations.ts:441",
 	);
 }
 
@@ -466,7 +466,7 @@ function lookupActiveClaimAttributeId(
 				agentId,
 				claimKey,
 			),
-		"pipeline/dreaming-operations.ts:457",
+		"pipeline/dreaming-operations.ts:460",
 	);
 }
 
@@ -627,7 +627,7 @@ function validateRequestBeforeWrites(params: ApplyDreamingOperationsParams): str
 						 WHERE id = ? AND agent_id = ? AND resolved_at IS NULL`,
 						)
 						.get(attentionId, params.agentId),
-				"pipeline/dreaming-operations.ts:619",
+				"pipeline/dreaming-operations.ts:622",
 			);
 			if (pending == null) return "Attention record is not pending in this agent scope";
 			continue;
