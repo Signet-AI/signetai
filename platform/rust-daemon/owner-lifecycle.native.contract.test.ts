@@ -504,6 +504,95 @@ it("repairs a missing TypeScript v79 history row through the real owner and surv
 	verifySecond.close();
 });
 
+it("repairs missing v152 SHA index through owner startup and restart", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "signet-owner-v152-repair-"));
+	dirs.push(dir);
+	const database = join(dir, "memory", "memories.db");
+	mkdirSync(join(dir, "memory"), { recursive: true });
+	copyFileSync(join(repoRoot, "platform/rust-core/tests/fixtures/ts_applied_157.sqlite"), database);
+	const damaged = new SqliteDatabase(database);
+	const rowsBefore = damaged.query("SELECT count(*) AS n FROM memory_artifacts").get();
+	const appliedAtBefore = damaged.query("SELECT applied_at FROM schema_migrations WHERE version=152").get();
+	const checksumBefore = damaged.query("SELECT checksum FROM schema_migrations WHERE version=152").get();
+	const auditBefore = damaged
+		.query("SELECT applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=152 ORDER BY id")
+		.all();
+	damaged.exec("DROP INDEX idx_memory_artifacts_agent_sha");
+	damaged.close();
+	const first = await start(dir);
+	first.child.kill("SIGTERM");
+	expect(await first.child.exited).toBe(0);
+	let verify = new SqliteDatabase(database, { readonly: true });
+	expect(
+		verify
+			.query("SELECT count(*) AS n FROM sqlite_schema WHERE type='index' AND name='idx_memory_artifacts_agent_sha'")
+			.get(),
+	).toEqual({ n: 1 });
+	expect(verify.query("SELECT count(*) AS n FROM memory_artifacts").get()).toEqual(rowsBefore);
+	const appliedAt = verify.query("SELECT applied_at FROM schema_migrations WHERE version=152").get();
+	const checksum = verify.query("SELECT checksum FROM schema_migrations WHERE version=152").get();
+	expect(appliedAt).not.toEqual(appliedAtBefore);
+	expect(checksum).toEqual(checksumBefore);
+	const audit = verify
+		.query("SELECT applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=152 ORDER BY id")
+		.all();
+	expect(audit).toHaveLength(auditBefore.length + 1);
+	expect(audit.slice(0, auditBefore.length)).toEqual(auditBefore);
+	verify.close();
+	const second = await start(dir);
+	second.child.kill("SIGTERM");
+	expect(await second.child.exited).toBe(0);
+	verify = new SqliteDatabase(database, { readonly: true });
+	expect(verify.query("SELECT count(*) AS n FROM memory_artifacts").get()).toEqual(rowsBefore);
+	expect(verify.query("SELECT applied_at FROM schema_migrations WHERE version=152").get()).toEqual(appliedAt);
+	expect(
+		verify
+			.query("SELECT applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=152 ORDER BY id")
+			.all(),
+	).toEqual(audit);
+	verify.close();
+});
+
+it("repairs missing v153 vector checkpoint artifacts through owner startup and restart", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "signet-owner-v153-repair-"));
+	dirs.push(dir);
+	const database = join(dir, "memory", "memories.db");
+	mkdirSync(join(dir, "memory"), { recursive: true });
+	copyFileSync(join(repoRoot, "platform/rust-core/tests/fixtures/ts_applied_157.sqlite"), database);
+	const damaged = new SqliteDatabase(database);
+	const historyBefore = damaged.query("SELECT applied_at,checksum FROM schema_migrations WHERE version=153").get();
+	damaged.exec("DROP TABLE vector_repair_checkpoints");
+	damaged.close();
+	const first = await start(dir);
+	first.child.kill("SIGTERM");
+	expect(await first.child.exited).toBe(0);
+	let verify = new SqliteDatabase(database, { readonly: true });
+	expect(
+		verify
+			.query("SELECT count(*) AS n FROM sqlite_schema WHERE type='table' AND name='vector_repair_checkpoints'")
+			.get(),
+	).toEqual({ n: 1 });
+	expect(
+		verify
+			.query(
+				"SELECT count(*) AS n FROM sqlite_schema WHERE type='index' AND name='idx_vector_repair_checkpoints_status'",
+			)
+			.get(),
+	).toEqual({ n: 1 });
+	const repairedHistory = verify.query("SELECT applied_at,checksum FROM schema_migrations WHERE version=153").get();
+	expect(repairedHistory.applied_at).not.toEqual(historyBefore.applied_at);
+	expect(repairedHistory.checksum).toEqual(historyBefore.checksum);
+	verify.close();
+	const second = await start(dir);
+	second.child.kill("SIGTERM");
+	expect(await second.child.exited).toBe(0);
+	verify = new SqliteDatabase(database, { readonly: true });
+	expect(verify.query("SELECT applied_at,checksum FROM schema_migrations WHERE version=153").get()).toEqual(
+		repairedHistory,
+	);
+	verify.close();
+});
+
 it("admits an authentic TypeScript v157 database through the production owner process", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "signet-owner-ts-schema-"));
 	dirs.push(dir);

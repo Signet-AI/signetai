@@ -7651,6 +7651,8 @@ fn reconcile_typescript_migration_tail(transaction: &Transaction<'_>) -> Result<
         return Ok(());
     }
     for (version, name) in [
+        (152_i64, "memory-artifact-sha-index"),
+        (153_i64, "vector-repair-checkpoints"),
         (154_i64, "transcript-capture-source-identity"),
         (155_i64, "source-sync-failures"),
         (156_i64, "embedding-repair-checkpoints"),
@@ -7676,25 +7678,35 @@ fn reconcile_typescript_migration_tail(transaction: &Transaction<'_>) -> Result<
                 )));
             }
             if typescript_migration_artifact_missing(transaction, version)? {
-                // Repair incomplete recorded artifacts without replacing the
-                // original history timestamp/checksum.
-                let started = std::time::Instant::now();
-                apply_typescript_migration(transaction, version)?;
-                if typescript_migration_artifact_missing(transaction, version)? {
-                    return Err(CoreError::UnsupportedMigrationHistory(format!(
-                        "migration {version} did not create its required artifacts"
-                    )));
+                if version <= 153 {
+                    // Match TypeScript phantom repair for the newly ported migrations.
+                    transaction
+                        .execute("DELETE FROM schema_migrations WHERE version=?1", [version])?;
+                } else {
+                    // Preserve the established native-tail repair contract for v154+.
+                    let started = std::time::Instant::now();
+                    apply_typescript_migration(transaction, version)?;
+                    if typescript_migration_artifact_missing(transaction, version)? {
+                        return Err(CoreError::UnsupportedMigrationHistory(format!(
+                            "migration {version} did not create its required artifacts"
+                        )));
+                    }
+                    let applied_at =
+                        OffsetDateTime::now_utc()
+                            .format(&Rfc3339)
+                            .map_err(|error| {
+                                CoreError::UnsupportedMigrationHistory(error.to_string())
+                            })?;
+                    let duration = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+                    transaction.execute(
+                        "INSERT INTO schema_migrations_audit(version,applied_at,duration_ms,checksum) VALUES(?1,?2,?3,?4)",
+                        params![version, applied_at, duration, expected_checksum],
+                    )?;
+                    continue;
                 }
-                let applied_at = OffsetDateTime::now_utc()
-                    .format(&Rfc3339)
-                    .map_err(|error| CoreError::UnsupportedMigrationHistory(error.to_string()))?;
-                let duration = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
-                transaction.execute(
-                    "INSERT INTO schema_migrations_audit(version,applied_at,duration_ms,checksum) VALUES(?1,?2,?3,?4)",
-                    params![version, applied_at, duration, expected_checksum],
-                )?;
+            } else {
+                continue;
             }
-            continue;
         }
 
         let started = std::time::Instant::now();
@@ -7737,6 +7749,15 @@ fn typescript_migration_artifact_missing(
         Ok(false)
     };
     match version {
+        152 => {
+            let exists: bool = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_memory_artifacts_agent_sha')",
+                [],
+                |row| row.get(0),
+            )?;
+            Ok(!exists)
+        }
+        153 => Ok(!has_table(transaction, "vector_repair_checkpoints")?),
         154 => {
             if !has_table(transaction, "transcript_capture_jobs")? {
                 return Ok(false);
@@ -7865,6 +7886,35 @@ fn apply_typescript_migration(
     version: i64,
 ) -> Result<(), CoreError> {
     match version {
+        152 => {
+            if !has_table(transaction, "memory_artifacts")? {
+                return Ok(());
+            }
+            transaction.execute_batch("DROP INDEX IF EXISTS idx_memory_artifacts_agent_sha; CREATE INDEX idx_memory_artifacts_agent_sha ON memory_artifacts(agent_id, source_sha256, COALESCE(source_id, ''), COALESCE(is_deleted, 0), captured_at DESC, source_path);")?;
+        }
+        153 => {
+            transaction.execute_batch(
+                "CREATE TABLE IF NOT EXISTS vector_repair_checkpoints (
+                    operation TEXT NOT NULL CHECK (operation IN ('resync', 'clean-orphans')),
+                    agent_id TEXT NOT NULL CHECK (length(trim(agent_id)) > 0),
+                    checkpoint_id TEXT NOT NULL UNIQUE,
+                    phase TEXT NOT NULL CHECK (phase IN ('orphan-vectors', 'missing-vectors', 'orphan-embeddings', 'complete')),
+                    cursor TEXT,
+                    processed INTEGER NOT NULL DEFAULT 0 CHECK (processed >= 0),
+                    skipped INTEGER NOT NULL DEFAULT 0 CHECK (skipped >= 0),
+                    failed INTEGER NOT NULL DEFAULT 0 CHECK (failed >= 0),
+                    affected INTEGER NOT NULL DEFAULT 0 CHECK (affected >= 0),
+                    remaining INTEGER NOT NULL DEFAULT 0 CHECK (remaining >= 0),
+                    status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'complete', 'failed')),
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (operation, agent_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_vector_repair_checkpoints_status
+                    ON vector_repair_checkpoints(status, updated_at);",
+            )?;
+        }
         154 => {
             if !has_table(transaction, "transcript_capture_jobs")? {
                 return Ok(());
@@ -8004,6 +8054,20 @@ mod owner_schema_reconciliation_tests {
     use super::Core;
     use rusqlite::Connection;
     use tempfile::NamedTempFile;
+
+    // Core::open rejects incomplete schema_migrations prefixes before it
+    // reconciles legacy tables, so fixtures for v50+ must include 1..49.
+    fn insert_schema_migration_prefix(connection: &Connection) {
+        for version in 1..=49 {
+            let checksum = format!("migration-{version:03}");
+            connection
+                .execute(
+                    "INSERT INTO schema_migrations(version, applied_at, checksum) VALUES (?1, '2026-09-23', ?2)",
+                    (version, checksum),
+                )
+                .unwrap();
+        }
+    }
 
     #[test]
     fn preserves_legacy_rows_and_is_idempotent() {
@@ -8231,11 +8295,16 @@ mod owner_schema_reconciliation_tests {
             connection
                 .execute_batch(
                     "CREATE TABLE schema_migrations (
-                        version INTEGER PRIMARY KEY,
-                        applied_at TEXT,
-                        checksum TEXT
-                    );
-                    INSERT INTO schema_migrations(version, applied_at, checksum)
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT,
+                    checksum TEXT
+                );",
+                )
+                .unwrap();
+            insert_schema_migration_prefix(&connection);
+            connection
+                .execute_batch(
+                    "INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (50, '2026-09-23', 'migration-050');
                     CREATE TABLE entity_dependency_history (
                         id TEXT PRIMARY KEY,
@@ -8305,11 +8374,16 @@ mod owner_schema_reconciliation_tests {
             connection
                 .execute_batch(
                     "CREATE TABLE schema_migrations (
-                        version INTEGER PRIMARY KEY,
-                        applied_at TEXT,
-                        checksum TEXT
-                    );
-                    INSERT INTO schema_migrations(version, applied_at, checksum)
+                    version INTEGER PRIMARY KEY,
+                    applied_at TEXT,
+                    checksum TEXT
+                );",
+                )
+                .unwrap();
+            insert_schema_migration_prefix(&connection);
+            connection
+                .execute_batch(
+                    "INSERT INTO schema_migrations(version, applied_at, checksum)
                     VALUES (50, '2026-09-23', 'migration-050'),
                            (51, '2026-09-23', 'migration-051');
                     CREATE TABLE entity_dependency_history (

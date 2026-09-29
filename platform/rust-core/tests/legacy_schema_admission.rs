@@ -2,6 +2,270 @@ use rusqlite::Connection;
 use signet_core_native::{CoreError, WorkspaceOwner};
 use tempfile::NamedTempFile;
 
+#[test]
+fn recorded_v153_table_artifact_does_not_replay_when_only_undeclared_index_is_missing() {
+    let file = NamedTempFile::new().unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/ts_applied_157.sqlite");
+    std::fs::copy(fixture, file.path()).unwrap();
+    let db = Connection::open(file.path()).unwrap();
+    let history_before: (String, String) = db
+        .query_row(
+            "SELECT applied_at,checksum FROM schema_migrations WHERE version=153",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let audit_count_before: i64 = db
+        .query_row(
+            "SELECT count(*) FROM schema_migrations_audit WHERE version=153",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    db.execute_batch("DROP INDEX idx_vector_repair_checkpoints_status;")
+        .unwrap();
+    drop(db);
+
+    drop(
+        WorkspaceOwner::open(file.path(), 4)
+            .expect("recorded v153 table artifact should be admitted"),
+    );
+
+    let db = Connection::open(file.path()).unwrap();
+    let history_after: (String, String) = db
+        .query_row(
+            "SELECT applied_at,checksum FROM schema_migrations WHERE version=153",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let audit_count_after: i64 = db
+        .query_row(
+            "SELECT count(*) FROM schema_migrations_audit WHERE version=153",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(history_after, history_before);
+    assert_eq!(audit_count_after, audit_count_before);
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='idx_vector_repair_checkpoints_status'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn owner_repairs_missing_v153_vector_checkpoint_artifacts_and_preserves_restart_state() {
+    let file = NamedTempFile::new().unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/ts_applied_157.sqlite");
+    std::fs::copy(fixture, file.path()).unwrap();
+    let db = Connection::open(file.path()).unwrap();
+    db.execute_batch(
+        "DROP TABLE vector_repair_checkpoints;
+         CREATE TABLE vector_v153_fixture_marker (value TEXT NOT NULL);
+         INSERT INTO vector_v153_fixture_marker VALUES ('preserve');",
+    )
+    .unwrap();
+    let history_before: (String, String) = db
+        .query_row(
+            "SELECT applied_at,checksum FROM schema_migrations WHERE version=153",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    drop(db);
+
+    drop(WorkspaceOwner::open(file.path(), 4).expect("owner should repair v153 phantom history"));
+
+    let db = Connection::open(file.path()).unwrap();
+    assert_eq!(
+        db.query_row("SELECT value FROM vector_v153_fixture_marker", [], |row| {
+            row.get::<_, String>(0)
+        })
+        .unwrap(),
+        "preserve"
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM sqlite_schema WHERE type='table' AND name='vector_repair_checkpoints'", [], |row| row.get::<_, i64>(0)).unwrap(),
+        1
+    );
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='idx_vector_repair_checkpoints_status'", [], |row| row.get::<_, i64>(0)).unwrap(),
+        1
+    );
+    let history_after: (String, String) = db
+        .query_row(
+            "SELECT applied_at,checksum FROM schema_migrations WHERE version=153",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_ne!(history_after.0, history_before.0);
+    assert_eq!(history_after.1, history_before.1);
+}
+
+#[test]
+fn owner_repairs_missing_v152_artifact_from_authentic_typescript_157_fixture() {
+    let file = NamedTempFile::new().unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/ts_applied_157.sqlite");
+    std::fs::copy(fixture, file.path()).unwrap();
+    let db = Connection::open(file.path()).unwrap();
+    let history_before: Vec<(i64, String, String)> = db
+        .prepare("SELECT version,applied_at,checksum FROM schema_migrations WHERE version<152 ORDER BY version")
+        .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap().collect::<Result<_, _>>().unwrap();
+    let rows_before: i64 = db
+        .query_row("SELECT count(*) FROM memory_artifacts", [], |r| r.get(0))
+        .unwrap();
+    let applied_at_before: String = db
+        .query_row(
+            "SELECT applied_at FROM schema_migrations WHERE version=152",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let checksum_before: String = db
+        .query_row(
+            "SELECT checksum FROM schema_migrations WHERE version=152",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let audit_before: Vec<(String, Option<i64>, Option<String>)> = db
+        .prepare("SELECT applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=152 ORDER BY id")
+        .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap().collect::<Result<_, _>>().unwrap();
+    db.execute_batch("DROP INDEX idx_memory_artifacts_agent_sha;")
+        .unwrap();
+    drop(db);
+    drop(WorkspaceOwner::open(file.path(), 4).expect("owner should repair v152 phantom history"));
+    let db = Connection::open(file.path()).unwrap();
+    assert_eq!(db.query_row("SELECT count(*) FROM sqlite_schema WHERE type='index' AND name='idx_memory_artifacts_agent_sha'", [], |r| r.get::<_, i64>(0)).unwrap(), 1);
+    assert_eq!(
+        db.query_row("SELECT count(*) FROM memory_artifacts", [], |r| r
+            .get::<_, i64>(0))
+            .unwrap(),
+        rows_before
+    );
+    let applied_at_after: String = db
+        .query_row(
+            "SELECT applied_at FROM schema_migrations WHERE version=152",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let checksum_after: String = db
+        .query_row(
+            "SELECT checksum FROM schema_migrations WHERE version=152",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_ne!(
+        applied_at_after, applied_at_before,
+        "phantom migration replay must refresh applied_at"
+    );
+    assert_eq!(checksum_after, checksum_before);
+    let audit_after: Vec<(String, Option<i64>, Option<String>)> = db
+        .prepare("SELECT applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=152 ORDER BY id")
+        .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(audit_after.len(), audit_before.len() + 1);
+    assert_eq!(
+        &audit_after[..audit_before.len()],
+        audit_before.as_slice(),
+        "phantom repair must preserve prior audit rows"
+    );
+    let history_after: Vec<(i64, String, String)> = db
+        .prepare("SELECT version,applied_at,checksum FROM schema_migrations WHERE version<152 ORDER BY version")
+        .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap().collect::<Result<_, _>>().unwrap();
+    assert_eq!(history_after, history_before);
+}
+
+#[test]
+fn owner_trusts_recorded_v152_index_name_even_when_index_is_on_another_table() {
+    let file = NamedTempFile::new().unwrap();
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/ts_applied_157.sqlite");
+    std::fs::copy(fixture, file.path()).unwrap();
+    let db = Connection::open(file.path()).unwrap();
+    db.execute_batch(
+        "DROP INDEX idx_memory_artifacts_agent_sha;
+         CREATE INDEX idx_memory_artifacts_agent_sha ON schema_migrations(version);",
+    )
+    .unwrap();
+    let index_before: (String, String) = db
+        .query_row(
+            "SELECT tbl_name,sql FROM sqlite_master WHERE type='index' AND name='idx_memory_artifacts_agent_sha'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(index_before.0, "schema_migrations");
+    let history_before: (String, String) = db
+        .query_row(
+            "SELECT applied_at,checksum FROM schema_migrations WHERE version=152",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    let audit_before: Vec<(i64, String, Option<i64>, Option<String>)> = db
+        .prepare(
+            "SELECT id,applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=152 ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    drop(db);
+
+    drop(
+        WorkspaceOwner::open(file.path(), 4).expect("authentic v157 workspace should be admitted"),
+    );
+
+    let db = Connection::open(file.path()).unwrap();
+    let index_after: (String, String) = db
+        .query_row(
+            "SELECT tbl_name,sql FROM sqlite_master WHERE type='index' AND name='idx_memory_artifacts_agent_sha'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(index_after, index_before);
+    let history_after: (String, String) = db
+        .query_row(
+            "SELECT applied_at,checksum FROM schema_migrations WHERE version=152",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(history_after, history_before);
+    let audit_after: Vec<(i64, String, Option<i64>, Option<String>)> = db
+        .prepare(
+            "SELECT id,applied_at,duration_ms,checksum FROM schema_migrations_audit WHERE version=152 ORDER BY id",
+        )
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(audit_after, audit_before);
+}
+
 // v157 was generated from the PR-base TypeScript registry at 7a46e8227b4f2a3ad629f0de80ebce02330967bd.
 // The pinned behavioral reference 11e4720c07107caf7fdd57a685eca24e8a82e654 ends at v153; see the separate fixture below.
 
