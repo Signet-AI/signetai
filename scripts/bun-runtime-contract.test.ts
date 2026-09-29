@@ -49,8 +49,6 @@ describe("Bun runtime contract", () => {
 		const releaseWorkflow = text(".github/workflows/release.yml");
 		expect(releaseWorkflow).toContain("Verify embedded Bun runtime");
 		expect(releaseWorkflow).toContain("SIGNET_RUNTIME_VERSION_SMOKE");
-		expect(releaseWorkflow).toContain("Verify macOS arm64 ad-hoc signature");
-		expect(releaseWorkflow).toContain("codesign --verify --strict");
 		expect(releaseWorkflow).toMatch(/- os: xcode-27\s+platform: darwin-arm64\s+asset: signet-darwin-arm64/);
 
 		const nativeFirstUse = text(".github/workflows/native-first-use.yml");
@@ -68,5 +66,22 @@ describe("Bun runtime contract", () => {
 		expect(nativeFirstUse).toContain(
 			["SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/", "$", "{{ matrix.asset }}"].join(""),
 		);
+	});
+
+	test("macOS native releases run Developer ID signing before artifact upload", () => {
+		const releaseWorkflow = text(".github/workflows/release.yml");
+		const signingStart = releaseWorkflow.indexOf("      - name: Sign and verify macOS native binary with Developer ID");
+		const signingEnd = releaseWorkflow.indexOf("\n      - name:", signingStart + 1);
+		const signingStep = releaseWorkflow.slice(signingStart, signingEnd);
+		const uploadStart = releaseWorkflow.indexOf("      - name: Upload to release", signingEnd);
+
+		expect(signingStart).toBeGreaterThanOrEqual(0);
+		expect(signingEnd).toBeGreaterThan(signingStart);
+		expect(signingStep).toContain("if: startsWith(matrix.platform, 'darwin-')");
+		expect(signingStep).toMatch(/MACOS_CERTIFICATE_P12: \$\{\{ secrets\.MACOS_CERTIFICATE_P12 \}\}/);
+		expect(signingStep).toMatch(/MACOS_CERTIFICATE_PASSWORD: \$\{\{ secrets\.MACOS_CERTIFICATE_PASSWORD \}\}/);
+		expect(signingStep).toMatch(/APPLE_TEAM_ID: \$\{\{ secrets\.APPLE_TEAM_ID \}\}/);
+		expect(signingStep).toMatch(/run: bash scripts\/sign-macos-native\.sh "\.\/dist\/native\/\$\{RELEASE_ASSET\}"/);
+		expect(uploadStart).toBeGreaterThan(signingEnd);
 	});
 });

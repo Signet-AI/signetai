@@ -68,7 +68,7 @@ test("signs the macOS CLI with a stable team-bound designated requirement", asyn
 	expect(output).toContain("Signed and verified");
 	expect(calls).toContain("security:import ");
 	expect(calls).toContain("codesign:--force --timestamp --identifier ai.signet.cli");
-	expect(calls).toContain("--requirements designated => anchor apple generic");
+	expect(calls).toContain("--requirements =designated => anchor apple generic");
 	expect(calls).toContain("certificate leaf[subject.OU] =");
 	expect(calls).toContain("TEAM123456");
 	expect(calls).toContain(` ${fixture.binary}`);

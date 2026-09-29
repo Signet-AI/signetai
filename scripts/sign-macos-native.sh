@@ -51,7 +51,7 @@ if [[ -z "$identity" ]]; then
   exit 1
 fi
 
-codesign --force --timestamp --identifier "$identifier" --requirements "$requirement" --keychain "$keychain_path" --sign "$identity" "$binary"
+codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --keychain "$keychain_path" --sign "$identity" "$binary"
 codesign --verify --strict --verbose=2 "$binary"
 signing_details="$(codesign --display --verbose=4 "$binary" 2>&1)"
 for expected in "Identifier=${identifier}" "TeamIdentifier=${APPLE_TEAM_ID}" "Authority=Developer ID Application:"; do
