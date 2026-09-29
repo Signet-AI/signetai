@@ -250,7 +250,7 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `routes/memory-routes.ts:3799` (withReadDbAsync)
 - `routes/memory-routes.ts:3802` (withReadDbAsync)
 - `routes/pipeline-routes.ts:128` (withReadDb)
-- `routes/pipeline-routes.ts:505` (withReadDb)
+- `routes/pipeline-routes.ts:516` (withReadDb)
 - `routes/queue-diagnostics.ts:156` (withReadDb)
 - `routes/reflection-routes.ts:96` (withReadDb)
 - `routes/reflection-routes.ts:116` (withReadDb)
