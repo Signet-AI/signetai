@@ -154,7 +154,11 @@ const SECURE_REMOVAL_SCRIPT = [
 	"name = sys.argv[4]",
 	"expected_parent = sys.argv[5]",
 	"descriptor_root = sys.argv[6]",
-	"if os.path.realpath(os.path.join(descriptor_root, '3')) != expected_parent:",
+	"expected_parent_stat = os.stat(expected_parent, follow_symlinks=False)",
+	"if os.path.realpath(expected_parent) != expected_parent:",
+	"    raise SystemExit(75)",
+	"opened_parent_stat = os.fstat(3)",
+	"if (opened_parent_stat.st_dev, opened_parent_stat.st_ino) != (expected_parent_stat.st_dev, expected_parent_stat.st_ino):",
 	"    raise SystemExit(75)",
 	"try:",
 	"    current = os.stat(name, dir_fd=3, follow_symlinks=False)",
@@ -173,6 +177,72 @@ const SECURE_REMOVAL_SCRIPT = [
 	"    raise SystemExit(75)",
 ].join("\n");
 
+const SECURE_CREATE_DIRECTORIES_SCRIPT = [
+	"import os, sys",
+	"expected = os.stat(sys.argv[1], follow_symlinks=False)",
+	"opened = os.fstat(3)",
+	"if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):",
+	"    raise SystemExit(75)",
+	"fd = os.dup(3)",
+	"try:",
+	"    for name in sys.argv[2:]:",
+	"        try:",
+	"            os.mkdir(name, dir_fd=fd)",
+	"        except FileExistsError:",
+	"            pass",
+	"        entry = os.stat(name, dir_fd=fd, follow_symlinks=False)",
+	"        child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)",
+	"        opened = os.fstat(child)",
+	"        if (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino):",
+	"            os.close(child)",
+	"            raise SystemExit(75)",
+	"        os.close(fd)",
+	"        fd = child",
+	"finally:",
+	"    os.close(fd)",
+].join("\n");
+const SECURE_WRITE_FILE_SCRIPT = [
+	"import os, stat, sys",
+	"expected = os.stat(sys.argv[1], follow_symlinks=False)",
+	"opened = os.fstat(3)",
+	"if (opened.st_dev, opened.st_ino) != (expected.st_dev, expected.st_ino):",
+	"    raise SystemExit(75)",
+	"fd = os.dup(3)",
+	"try:",
+	"    for name in sys.argv[2:-1]:",
+	"        entry = os.stat(name, dir_fd=fd, follow_symlinks=False)",
+	"        child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)",
+	"        opened = os.fstat(child)",
+	"        if (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino):",
+	"            os.close(child)",
+	"            raise SystemExit(75)",
+	"        os.close(fd)",
+	"        fd = child",
+	"    name = sys.argv[-1]",
+	"    try:",
+	"        entry = os.stat(name, dir_fd=fd, follow_symlinks=False)",
+	"        if not stat.S_ISREG(entry.st_mode):",
+	"            raise SystemExit(76)",
+	"        flags = os.O_WRONLY | os.O_NOFOLLOW",
+	"    except FileNotFoundError:",
+	"        entry = None",
+	"        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW",
+	"    file_fd = os.open(name, flags, 0o666, dir_fd=fd)",
+	"    try:",
+	"        opened = os.fstat(file_fd)",
+	"        if entry is not None and (entry.st_dev, entry.st_ino) != (opened.st_dev, opened.st_ino):",
+	"            raise SystemExit(75)",
+	"        os.ftruncate(file_fd, 0)",
+	"        view = memoryview(sys.stdin.buffer.read())",
+	"        while view:",
+	"            written = os.write(file_fd, view)",
+	"            view = view[written:]",
+	"    finally:",
+	"        os.close(file_fd)",
+	"finally:",
+	"    os.close(fd)",
+].join("\n");
+
 function getPythonCandidates(): readonly { readonly command: string; readonly args: readonly string[] }[] {
 	const configuredPython = process.env.PYTHON?.trim();
 	if (configuredPython) return [{ command: configuredPython, args: [] }];
@@ -185,6 +255,34 @@ function getPythonCandidates(): readonly { readonly command: string; readonly ar
 				{ command: "python3", args: [] },
 				{ command: "python", args: [] },
 			];
+}
+
+function runSecureFilesystemOperation(
+	fd: number,
+	rootPath: string,
+	script: string,
+	args: readonly string[],
+	input?: string | Uint8Array,
+): void {
+	if (DESCRIPTOR_ROOT === null) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
+	const errors: string[] = [];
+	for (const candidate of getPythonCandidates()) {
+		const result = spawnSync(candidate.command, [...candidate.args, "-c", script, rootPath, ...args], {
+			encoding: "utf-8",
+			input: input === undefined ? undefined : Buffer.from(input),
+			stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe", fd],
+			timeout: 5_000,
+		});
+		if (result.error) {
+			errors.push(`${candidate.command}: ${result.error.message}`);
+			continue;
+		}
+		if (result.status === 0) return;
+		if (result.status === 75) throw new Error("Hermes directory entry changed during secure write");
+		const detail = result.stderr.trim();
+		errors.push(`${candidate.command}: ${detail || `exited ${result.status ?? "without a status"}`}`);
+	}
+	throw new Error(`${DESCRIPTOR_WRITE_UNAVAILABLE_ERROR}: ${errors.join("; ") || "No Python interpreter found"}`);
 }
 
 function runSecureEntryOperation(
@@ -259,6 +357,13 @@ function sameStatIdentity(
 	return left.dev === right.dev && left.ino === right.ino;
 }
 
+function assertDescriptorPathIdentity(fd: number, path: string, message: string): void {
+	const pathStat = lstatSync(path);
+	if (realpathSync(path) !== path || pathStat.isSymbolicLink() || !sameStatIdentity(fstatSync(fd), pathStat)) {
+		throw new Error(message);
+	}
+}
+
 function ensureContainedDirectory(directory: string, targetRoot: string): void {
 	const safeDirectory = resolveContainedWritePath(directory, targetRoot);
 	if (!DESCRIPTOR_WRITES_SUPPORTED) {
@@ -282,6 +387,15 @@ function ensureContainedDirectory(directory: string, targetRoot: string): void {
 	const existingReal = realpathSync(existing);
 	if (existingReal !== existing) {
 		throw new Error(`Hermes target directory is symlinked and cannot be used for writes: ${directory}`);
+	}
+	if (process.platform === "darwin") {
+		const fd = openDirectoryNoFollow(existing);
+		try {
+			runSecureFilesystemOperation(fd, existingReal, SECURE_CREATE_DIRECTORIES_SCRIPT, missing);
+		} finally {
+			closeDirectory(fd);
+		}
+		return;
 	}
 
 	let fd = openDirectoryNoFollow(existing);
@@ -321,6 +435,24 @@ function writeContainedFile(targetPath: string, content: string | Uint8Array, ta
 
 	const rootPath = resolvePath(targetRoot);
 	ensureContainedDirectory(dirname(safePath), targetRoot);
+	if (process.platform === "darwin") {
+		const relativePath = relative(rootPath, safePath);
+		if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) {
+			throw new Error(`Hermes target file escapes validated root: ${targetPath}`);
+		}
+		const components = relativePath.split(sep);
+		const fileName = components.pop();
+		if (!fileName || components.some((component) => component === "" || component === "." || component === "..")) {
+			throw new Error(`Hermes target file has an invalid relative path: ${targetPath}`);
+		}
+		const fd = openDirectoryNoFollow(rootPath);
+		try {
+			runSecureFilesystemOperation(fd, rootPath, SECURE_WRITE_FILE_SCRIPT, [...components, fileName], content);
+		} finally {
+			closeDirectory(fd);
+		}
+		return;
+	}
 	const relativePath = relative(rootPath, safePath);
 	if (!relativePath || relativePath.startsWith("..") || isAbsolute(relativePath)) {
 		throw new Error(`Hermes target file escapes validated root: ${targetPath}`);
@@ -449,19 +581,27 @@ function resolveContainedWritePath(targetPath: string, targetRoot: string): stri
 }
 
 function removeDirectoryContentsNoFollow(directoryFd: number, expectedDirectoryPath: string): void {
-	if (realpathSync(descriptorPath(directoryFd)) !== expectedDirectoryPath) {
-		throw new Error(`Hermes target directory changed during secure removal: ${expectedDirectoryPath}`);
-	}
-	for (const entry of readdirSync(descriptorPath(directoryFd), { withFileTypes: true })) {
-		const childPath = join(descriptorPath(directoryFd), entry.name);
+	assertDescriptorPathIdentity(
+		directoryFd,
+		expectedDirectoryPath,
+		`Hermes target directory changed during secure removal: ${expectedDirectoryPath}`,
+	);
+	const directoryEntriesPath = process.platform === "darwin" ? expectedDirectoryPath : descriptorPath(directoryFd);
+	for (const entry of readdirSync(directoryEntriesPath, { withFileTypes: true })) {
+		const childPath =
+			process.platform === "darwin"
+				? join(expectedDirectoryPath, entry.name)
+				: join(descriptorPath(directoryFd), entry.name);
 		const expectedChildPath = join(expectedDirectoryPath, entry.name);
 		if (entry.isDirectory() && !entry.isSymbolicLink()) {
 			const childFd = openDirectoryNoFollow(childPath);
 			try {
 				const childIdentity = fstatSync(childFd);
-				if (realpathSync(descriptorPath(childFd)) !== expectedChildPath) {
-					throw new Error(`Hermes target directory changed during secure removal: ${expectedChildPath}`);
-				}
+				assertDescriptorPathIdentity(
+					childFd,
+					expectedChildPath,
+					`Hermes target directory changed during secure removal: ${expectedChildPath}`,
+				);
 				assertEntryIdentityNoFollow(
 					directoryFd,
 					expectedDirectoryPath,
@@ -503,12 +643,16 @@ function removeContainedDirectory(
 	try {
 		let expected = rootPath;
 		for (const component of components) {
-			const childFd = openDirectoryNoFollow(join(descriptorPath(parentFd), component));
+			const childPath =
+				process.platform === "darwin" ? join(expected, component) : join(descriptorPath(parentFd), component);
+			const childFd = openDirectoryNoFollow(childPath);
 			try {
 				expected = join(expected, component);
-				if (realpathSync(descriptorPath(childFd)) !== expected) {
-					throw new Error(`Hermes target directory changed during secure removal: ${targetPath}`);
-				}
+				assertDescriptorPathIdentity(
+					childFd,
+					expected,
+					`Hermes target directory changed during secure removal: ${targetPath}`,
+				);
 			} catch (error) {
 				closeDirectory(childFd);
 				throw error;
@@ -517,15 +661,17 @@ function removeContainedDirectory(
 			parentFd = childFd;
 		}
 
-		const targetEntryPath = join(descriptorPath(parentFd), targetName);
+		const expectedTarget = join(expected, targetName);
+		const targetEntryPath = process.platform === "darwin" ? expectedTarget : join(descriptorPath(parentFd), targetName);
 		const targetFd = openDirectoryNoFollow(targetEntryPath);
 		try {
 			const targetIdentity = fstatSync(targetFd);
-			const expectedTarget = join(expected, targetName);
-			if (realpathSync(descriptorPath(targetFd)) !== expectedTarget) {
-				throw new Error(`Hermes target directory changed during secure removal: ${targetPath}`);
-			}
-			const marker = readInstallMarkerFromDirectory(targetFd);
+			assertDescriptorPathIdentity(
+				targetFd,
+				expectedTarget,
+				`Hermes target directory changed during secure removal: ${targetPath}`,
+			);
+			const marker = readInstallMarkerFromDirectory(targetFd, expectedTarget);
 			if (marker === null || marker.targetKind !== targetKind) {
 				throw new Error(
 					`Refusing to uninstall unowned Hermes plugin path: ${targetPath} (missing or invalid ${INSTALL_MARKER_FILE})`,
@@ -560,12 +706,16 @@ function removeContainedFile(targetPath: string, targetRoot: string): void {
 	try {
 		let expected = rootPath;
 		for (const component of components) {
-			const childFd = openDirectoryNoFollow(join(descriptorPath(parentFd), component));
+			const childPath =
+				process.platform === "darwin" ? join(expected, component) : join(descriptorPath(parentFd), component);
+			const childFd = openDirectoryNoFollow(childPath);
 			try {
 				expected = join(expected, component);
-				if (realpathSync(descriptorPath(childFd)) !== expected) {
-					throw new Error(`Hermes target file changed during secure removal: ${targetPath}`);
-				}
+				assertDescriptorPathIdentity(
+					childFd,
+					expected,
+					`Hermes target file changed during secure removal: ${targetPath}`,
+				);
 			} catch (error) {
 				closeDirectory(childFd);
 				throw error;
@@ -573,7 +723,9 @@ function removeContainedFile(targetPath: string, targetRoot: string): void {
 			closeDirectory(parentFd);
 			parentFd = childFd;
 		}
-		const targetFile = lstatSync(join(descriptorPath(parentFd), fileName));
+		const filePath =
+			process.platform === "darwin" ? join(expected, fileName) : join(descriptorPath(parentFd), fileName);
+		const targetFile = lstatSync(filePath);
 		removeEntryNoFollow(parentFd, expected, fileName, targetFile.dev, targetFile.ino, false);
 	} finally {
 		closeDirectory(parentFd);
@@ -1043,13 +1195,14 @@ function readInstallMarker(targetDir: string): InstallMarker | null {
 	}
 }
 
-function readInstallMarkerFromDirectory(directoryFd: number): InstallMarker | null {
+function readInstallMarkerFromDirectory(directoryFd: number, directoryPath: string): InstallMarker | null {
 	let markerFd: number | undefined;
 	try {
-		markerFd = openSync(
-			join(descriptorPath(directoryFd), INSTALL_MARKER_FILE),
-			constants.O_RDONLY | constants.O_NOFOLLOW,
-		);
+		const markerPath =
+			process.platform === "darwin"
+				? join(directoryPath, INSTALL_MARKER_FILE)
+				: join(descriptorPath(directoryFd), INSTALL_MARKER_FILE);
+		markerFd = openSync(markerPath, constants.O_RDONLY | constants.O_NOFOLLOW);
 		return parseInstallMarker(readFileSync(markerFd, "utf-8"));
 	} catch {
 		return null;

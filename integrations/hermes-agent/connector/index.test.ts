@@ -6,6 +6,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	realpathSync,
 	readFileSync,
 	rmSync,
 	symlinkSync,
@@ -195,7 +196,7 @@ function writeHermesMemoryFixture(hermesRepo: string): void {
 }
 
 beforeEach(() => {
-	tmpRoot = mkdtempSync(join(tmpdir(), "signet-hermes-connector-"));
+	tmpRoot = realpathSync(mkdtempSync(join(tmpdir(), "signet-hermes-connector-")));
 	process.env.HOME = tmpRoot;
 	delete process.env.PYTHON;
 	delete process.env.HERMES_REPO;
