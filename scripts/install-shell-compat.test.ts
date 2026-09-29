@@ -119,15 +119,22 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 				if (!shellPath) {
 					throw new Error(`Required test shell is not installed: ${shell}`);
 				}
-				for (const invocation of ["direct", "source", "nightly-direct", "nightly-source"]) {
-					const nightly = invocation.startsWith("nightly-");
-					const source = invocation.endsWith("source");
+				for (const scenario of [
+					{ name: "direct", nightly: false, source: false, forwarded: ["--json"] },
+					{ name: "source", nightly: false, source: true, forwarded: ["--json"] },
+					{ name: "nightly-direct", nightly: true, source: false, forwarded: ["--json"] },
+					{ name: "nightly-source", nightly: true, source: true, forwarded: ["--json"] },
+					{ name: "no-forwarded-args", nightly: false, source: false, forwarded: [] },
+					{ name: "nightly-only", nightly: true, source: false, forwarded: [] },
+					{ name: "nightly-only-source", nightly: true, source: true, forwarded: [] },
+				] as const) {
+					const { nightly, source } = scenario;
 					rmSync(argsPath, { force: true });
 					rmSync(requestsPath, { force: true });
-					const installerFlags = `${nightly ? "--nightly " : ""}--json`;
+					const installerFlags = [...(nightly ? ["--nightly"] : []), ...scenario.forwarded].join(" ");
 					const args = source
 						? ["-c", `source "$1" ${installerFlags}`, shell, installer]
-						: [installer, ...(nightly ? ["--nightly"] : []), "--json"];
+						: [installer, ...(nightly ? ["--nightly"] : []), ...scenario.forwarded];
 					const result = spawnSync(shellPath, args, {
 						encoding: "utf8",
 						env: {
@@ -143,7 +150,7 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 						},
 					});
 
-					expect(result.status, `${shell} ${invocation} stderr:\n${result.stderr}`).toBe(0);
+					expect(result.status, `${shell} ${scenario.name} stderr:\n${result.stderr}`).toBe(0);
 					expect(readFileSync(argsPath, "utf8").split("\n")).toEqual([
 						"install",
 						"--force",
@@ -151,7 +158,7 @@ printf '%s\\n' "$@" > "$SIGNET_INSTALL_ARGS"
 						join(downloadDir, connectorName),
 						"--daemon-js-assets",
 						join(downloadDir, daemonJsName),
-						"--json",
+						...scenario.forwarded,
 						"",
 					]);
 					if (nightly) {

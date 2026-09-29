@@ -11,13 +11,17 @@ RELEASES_DOWNLOAD_BASE="${SIGNET_RELEASES_DOWNLOAD_BASE:-https://github.com/${RE
 LATEST_RELEASE_API="${SIGNET_LATEST_RELEASE_API:-${RELEASES_API_BASE}/latest}"
 NIGHTLY_VERSION_API="${SIGNET_NIGHTLY_VERSION_API:-https://registry.npmjs.org/signetai/next}"
 SIGNET_CHANNEL="${SIGNET_CHANNEL:-stable}"
-INSTALL_ARGS=()
-for arg in "$@"; do
+arg_count=$#
+arg_index=0
+while [ "$arg_index" -lt "$arg_count" ]; do
+	arg="$1"
+	shift
 	if [ "$arg" = "--nightly" ]; then
 		SIGNET_CHANNEL="nightly"
 	else
-		INSTALL_ARGS+=("$arg")
+		set -- "$@" "$arg"
 	fi
+	arg_index=$((arg_index + 1))
 done
 
 case "$SIGNET_CHANNEL" in
@@ -230,13 +234,13 @@ if [ -n "$daemon_js_url" ] && [ -n "$daemon_js_sha" ]; then
 	fi
 fi
 if [ -n "$connector_path" ] && [ -n "$daemon_js_path" ]; then
-	"$binary_path" install --force --connector-assets "$connector_path" --daemon-js-assets "$daemon_js_path" "${INSTALL_ARGS[@]}"
+	"$binary_path" install --force --connector-assets "$connector_path" --daemon-js-assets "$daemon_js_path" "$@"
 elif [ -n "$connector_path" ]; then
-	"$binary_path" install --force --connector-assets "$connector_path" "${INSTALL_ARGS[@]}"
+	"$binary_path" install --force --connector-assets "$connector_path" "$@"
 elif [ -n "$daemon_js_path" ]; then
-	"$binary_path" install --force --daemon-js-assets "$daemon_js_path" "${INSTALL_ARGS[@]}"
+	"$binary_path" install --force --daemon-js-assets "$daemon_js_path" "$@"
 else
-	"$binary_path" install --force "${INSTALL_ARGS[@]}"
+	"$binary_path" install --force "$@"
 fi
 rm -f "$binary_path"
 if [ -n "$connector_path" ]; then
