@@ -255,6 +255,17 @@ function isTerminalDreamingEvent(event: DreamingLiveEvent): boolean {
 
 const DREAMING_LIVE_STREAM_QUEUE_SIZE = 64;
 
+export function getDreamingTriggerBlockReason(
+	transitioning: boolean,
+	paused: boolean,
+	mutationsFrozen: boolean,
+): { readonly status: 409 | 503; readonly error: string } | null {
+	if (transitioning) return { status: 409, error: "Pipeline transition already in progress" };
+	if (paused) return { status: 503, error: "Pipeline is paused" };
+	if (mutationsFrozen) return { status: 503, error: "Mutations are frozen (kill switch active)" };
+	return null;
+}
+
 async function togglePipelinePause(c: Context, paused: boolean): Promise<Response> {
 	if (pipelineTransition) {
 		return c.json({ error: "Pipeline transition already in progress" }, 409);
@@ -1062,6 +1073,14 @@ export function registerPipelineRoutes(app: Hono): void {
 	});
 
 	app.post("/api/dream/trigger", async (c) => {
+		const config = loadMemoryConfig(AGENTS_DIR);
+		const blocked = getDreamingTriggerBlockReason(
+			pipelineTransition,
+			config.pipelineV2.paused,
+			config.pipelineV2.mutationsFrozen,
+		);
+		if (blocked) return c.json({ error: blocked.error }, blocked.status);
+
 		const worker = getDreamingWorker();
 		if (!worker) {
 			return c.json({ error: "Dreaming worker not running" }, 503);

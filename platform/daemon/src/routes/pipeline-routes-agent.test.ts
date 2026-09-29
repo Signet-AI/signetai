@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import type { Context } from "hono";
-import { resolveDreamRequestAgentId } from "./pipeline-routes";
+import { getDreamingTriggerBlockReason, resolveDreamRequestAgentId } from "./pipeline-routes";
 
 const originalAgentId = process.env.SIGNET_AGENT_ID;
 
@@ -16,6 +16,27 @@ function makeContext(query: Record<string, string | undefined>, headers: Record<
 		},
 	} as unknown as Context;
 }
+
+describe("dream trigger admission", () => {
+	it("rejects triggers during pipeline transitions", () => {
+		expect(getDreamingTriggerBlockReason(true, false, false)).toEqual({
+			status: 409,
+			error: "Pipeline transition already in progress",
+		});
+	});
+
+	it("rejects triggers while paused or mutations are frozen", () => {
+		expect(getDreamingTriggerBlockReason(false, true, false)).toEqual({ status: 503, error: "Pipeline is paused" });
+		expect(getDreamingTriggerBlockReason(false, false, true)).toEqual({
+			status: 503,
+			error: "Mutations are frozen (kill switch active)",
+		});
+	});
+
+	it("allows explicit triggers when automatic Dreaming is disabled", () => {
+		expect(getDreamingTriggerBlockReason(false, false, false)).toBeNull();
+	});
+});
 
 describe("dream route agent resolution", () => {
 	afterEach(() => {
