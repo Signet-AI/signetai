@@ -277,10 +277,14 @@ jobs:
       - name: Build native Signet binary
         run: bun run build:native-bun
 
-      - name: Verify macOS arm64 ad-hoc signature
-        if: matrix.platform == 'darwin-arm64'
+      - name: Sign and verify macOS native binary with Developer ID
+        if: startsWith(matrix.platform, 'darwin-')
         shell: bash
-        run: codesign --verify --strict --verbose=2 ./dist/native/"$RELEASE_ASSET"
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/sign-macos-native.sh "./dist/native/${RELEASE_ASSET}"
 
       - name: Smoke native binary
         shell: bash

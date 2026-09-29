@@ -30,7 +30,7 @@ export interface SecretKeyringAdapter {
 
 interface SecretKeyringHelperOverride {
 	readonly entryPath: string;
-	readonly deadlineMs: number;
+	readonly deadlineMs: number | undefined;
 }
 
 interface SecretKeyringChildResponse {
@@ -42,6 +42,7 @@ interface SecretKeyringChildResponse {
 
 const SERVICE = "ai.signet.secrets";
 const DEFAULT_DEADLINE_MS = 2_000;
+const MACOS_DEADLINE_MS = 5 * 60_000;
 const MAX_HELPER_OUTPUT_BYTES = 64 * 1024;
 const STATES = new Set<SecretKeyringState>([
 	"found",
@@ -86,12 +87,20 @@ function sourceHelperPath(): string {
 	return existsSync(built) ? built : join(directory, "secrets-keyring-child.ts");
 }
 
+function defaultDeadlineMs(): number {
+	return process.platform === "darwin" ? MACOS_DEADLINE_MS : DEFAULT_DEADLINE_MS;
+}
+
 function helperCommand(): { readonly command: string; readonly args: readonly string[]; readonly deadlineMs: number } {
 	if (helperForTests !== null)
-		return { command: process.execPath, args: [helperForTests.entryPath], deadlineMs: helperForTests.deadlineMs };
+		return {
+			command: process.execPath,
+			args: [helperForTests.entryPath],
+			deadlineMs: helperForTests.deadlineMs ?? defaultDeadlineMs(),
+		};
 	if (process.env.SIGNET_COMPILED_NATIVE === "1")
-		return { command: process.execPath, args: [], deadlineMs: DEFAULT_DEADLINE_MS };
-	return { command: process.execPath, args: [sourceHelperPath()], deadlineMs: DEFAULT_DEADLINE_MS };
+		return { command: process.execPath, args: [], deadlineMs: defaultDeadlineMs() };
+	return { command: process.execPath, args: [sourceHelperPath()], deadlineMs: defaultDeadlineMs() };
 }
 
 function parseChildResponse(output: string, code: number | null): SecretKeyringResult {

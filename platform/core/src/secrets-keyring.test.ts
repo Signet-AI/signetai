@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { closeSync, openSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { devNull, tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -101,13 +101,26 @@ Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 		expect(() => process.kill(pid, 0)).toThrow();
 	});
 
+	test("keeps a macOS keyring request alive beyond the old two-second cutoff", async () => {
+		if (process.platform !== "darwin") return;
+		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-interactive-"));
+		directories.push(directory);
+		const helperPath = join(directory, "delayed-result.ts");
+		await writeFile(
+			helperPath,
+			'setTimeout(() => process.stdout.write(JSON.stringify({ ok: true, result: { state: "missing" } })), 2_200);\n',
+		);
+		setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: undefined });
+
+		expect(await getSecretKeyring(directory).get()).toMatchObject({ state: "missing" });
+	}, 8_000);
 	test("keeps the native addon import outside the parent adapter", async () => {
 		const source = await readFile(new URL("./secrets-keyring.ts", import.meta.url), "utf8");
 		expect(source).not.toContain('from "@napi-rs/keyring"');
 		expect(source).not.toContain('require("@napi-rs/keyring")');
 	});
 
-	test("falls back to the encrypted local store when the native module is missing", async () => {
+	test("refuses to create secrets when the native keyring is unavailable", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-missing-module-"));
 		directories.push(directory);
 		process.env.SIGNET_PATH = directory;
@@ -115,8 +128,8 @@ Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 
 		const result = await getSecretKeyring(directory).get();
 		expect(result).toMatchObject({ state: "unavailable" });
-		await putLocalSecret("MISSING_MODULE_KEY", "local-value");
-		expect(await getLocalSecretValue("MISSING_MODULE_KEY")).toBe("local-value");
+		await expect(putLocalSecret("MISSING_MODULE_KEY", "local-value")).rejects.toMatchObject({ state: "unavailable" });
+		expect(existsSync(join(directory, ".secrets", "secrets.enc"))).toBe(false);
 		expect(await getLocalSecretProviderHealth()).toMatchObject({ status: "degraded" });
 	});
 

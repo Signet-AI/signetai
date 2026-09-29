@@ -52,10 +52,9 @@ jobs:
         id: signing
         shell: bash
         env:
-          SIGNING_MODE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || 'auto' }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SIGNING_MODE_INPUT: ${{ github.event_name == 'workflow_dispatch' && inputs.signing_mode || (startsWith(matrix.runner, 'macos-') && 'official' || 'auto') }}
+          APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -87,7 +86,6 @@ jobs:
             requires_signing=1
             require_secret APPLE_CERTIFICATE "${APPLE_CERTIFICATE:-}"
             require_secret APPLE_CERTIFICATE_PASSWORD "${APPLE_CERTIFICATE_PASSWORD:-}"
-            require_secret APPLE_SIGNING_IDENTITY "${APPLE_SIGNING_IDENTITY:-}"
 
             apple_id_present=0
             apple_id_complete=0
@@ -173,9 +171,8 @@ jobs:
         if: steps.signing.outputs.mode == 'official'
         shell: bash
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
@@ -202,7 +199,6 @@ jobs:
           if [[ "${{ matrix.runner }}" == macos-* ]]; then
             write_env CSC_LINK "${APPLE_CERTIFICATE}"
             write_env CSC_KEY_PASSWORD "${APPLE_CERTIFICATE_PASSWORD}"
-            write_env CSC_NAME "${APPLE_SIGNING_IDENTITY}"
             api_key_path=""
             if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_KEY_ID:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
               api_key_path="${RUNNER_TEMP}/signet-apple-api-key.p8"

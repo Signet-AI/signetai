@@ -339,7 +339,10 @@ async function migrateLegacyStore(store: SecretsStore, legacyKey: Uint8Array, na
 	clearDegradedWarning();
 }
 
-async function resolveMasterKey(store: SecretsStore): Promise<MasterKeyResolution> {
+async function resolveMasterKey(
+	store: SecretsStore,
+	options: { readonly allowLegacyFallback?: boolean } = {},
+): Promise<MasterKeyResolution> {
 	const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
 	const result = await keyring.get();
 	if (store.version === NATIVE_STORE_VERSION || store.provider === "native-keyring") {
@@ -367,6 +370,12 @@ async function resolveMasterKey(store: SecretsStore): Promise<MasterKeyResolutio
 	if (result.state === "locked") throw new SecretKeyringError(result);
 	if (result.state !== "unavailable" && result.state !== "unsupported") throw new SecretKeyringError(result);
 	emitDegradedWarning(result);
+	if (options.allowLegacyFallback === false) {
+		throw new SecretKeyringError({
+			...result,
+			message: `Native keyring is ${result.state}; refusing to write secrets with legacy machine-id encryption${result.message ? `: ${result.message}` : ""}`,
+		});
+	}
 	return { key: await getLegacyMasterKey(), provider: "legacy-obfuscated" };
 }
 
@@ -704,7 +713,7 @@ export async function putLocalSecret(name: string, value: string): Promise<void>
 	await withSecretStoreLock(async () => {
 		const localName = parseLocalSecretName(name);
 		const store = loadStore();
-		const resolution = await resolveMasterKey(store);
+		const resolution = await resolveMasterKey(store, { allowLegacyFallback: false });
 		if (
 			resolution.provider === "legacy-obfuscated" &&
 			existsSync(getSecretsFile()) &&

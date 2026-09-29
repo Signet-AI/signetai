@@ -1,3 +1,4 @@
+import { unlinkSync } from "node:fs";
 import { test, expect } from "bun:test";
 
 const workflowPath = ".github/workflows/desktop-build.yml";
@@ -64,12 +65,33 @@ function runResolver(
 	});
 	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
 	try {
-		Bun.file(outputPath).delete();
+		unlinkSync(outputPath);
 	} catch {}
 	return { exitCode: result.exitCode, output };
 }
 
-test("macOS tag auto signing falls back to self-signed when secrets are absent", async () => {
+test("macOS releases default to official signing with the configured certificate secrets", async () => {
+	const workflow = await Bun.file(workflowPath).text();
+	expect(workflow).toContain("default: auto");
+	expect(workflow).toContain("startsWith(matrix.runner, 'macos-') && 'official'");
+	expect(workflow).toContain("secrets.MACOS_CERTIFICATE_P12");
+	expect(workflow).toContain("secrets.MACOS_CERTIFICATE_PASSWORD");
+	expect(workflow).not.toContain("secrets.APPLE_SIGNING_IDENTITY");
+});
+
+test("macOS official signing activates when certificate and notarization credentials are available", async () => {
+	const script = resolverScript(await Bun.file(workflowPath).text());
+	const result = runResolver("official", script, {
+		APPLE_CERTIFICATE: "base64-certificate",
+		APPLE_CERTIFICATE_PASSWORD: "fixture-password",
+		APPLE_ID: "apple@example.test",
+		APPLE_APP_SPECIFIC_PASSWORD: "not-a-real-password",
+		APPLE_TEAM_ID: "TEAM123456",
+	});
+	expect(result.exitCode).toBe(0);
+	expect(result.output).toContain("Desktop signing mode: official");
+});
+test("macOS auto signing falls back to self-signed when secrets are absent", async () => {
 	const script = resolverScript(await Bun.file(workflowPath).text());
 	const result = runResolver("auto", script);
 	expect(result.exitCode).toBe(0);
