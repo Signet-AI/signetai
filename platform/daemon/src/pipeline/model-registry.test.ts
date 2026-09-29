@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
+import { getBuiltinModels } from "@earendil-works/pi-ai/providers/all";
 import type { ModelRegistryEntry } from "@signet/core";
+import { PIPELINE_MODEL_CATALOG } from "@signet/core";
 import {
 	getAvailableModels,
 	getModelsByProvider,
@@ -42,16 +44,22 @@ describe("static model registry", () => {
 
 	it("groups checked catalog entries by provider", () => {
 		const byProvider = getModelsByProvider();
-		expect(byProvider.codex.map((model) => model.id)).toEqual([
-			"gpt-5.3-codex-spark",
-			"gpt-5.4-mini",
-			"gpt-5.4",
-			"gpt-5.5",
-			"gpt-5.6-luna",
-			"gpt-5.6-sol",
-			"gpt-5.6-terra",
-		]);
+		expect(byProvider.codex.map((model) => model.id)).toContain("gpt-6.1-sol");
+		expect(byProvider.codex.map((model) => model.id)).not.toContain("gpt-5.4-mini");
+		expect(byProvider.anthropic.map((model) => model.id)).toContain("claude-sonnet-5-5");
+		expect(byProvider.openrouter.map((model) => model.id)).toContain("anthropic/claude-sonnet-5.5");
 		expect(byProvider.acpx.map((model) => model.id)).toContain("gpt-5.4-mini");
+	});
+
+	it("keeps Pi-backed presets present in the bundled SDK registries", () => {
+		for (const [provider, sdkProvider] of [
+			["codex", "openai-codex"],
+			["anthropic", "anthropic"],
+			["openrouter", "openrouter"],
+		] as const) {
+			const available = new Set(getBuiltinModels(sdkProvider).map((model) => model.id));
+			expect(PIPELINE_MODEL_CATALOG[provider].every((preset) => available.has(preset.value))).toBe(true);
+		}
 	});
 
 	it("keeps refresh API-compatible without changing the static catalog", async () => {

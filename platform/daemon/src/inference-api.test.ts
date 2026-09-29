@@ -36,7 +36,7 @@ inference:
       endpoint: https://openrouter.ai/api/v1
       models:
         sonnet:
-          model: anthropic/claude-sonnet-4-6
+          model: anthropic/claude-sonnet-4.6
           reasoning: medium
           toolUse: true
           streaming: true

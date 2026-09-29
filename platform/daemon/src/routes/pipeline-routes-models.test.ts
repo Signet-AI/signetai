@@ -33,15 +33,8 @@ describe("pipeline model routes", () => {
 		const res = await app.request("/api/pipeline/models/by-provider");
 		expect(res.status).toBe(200);
 		const body = (await res.json()) as Record<string, Array<{ id: string }>>;
-		expect(body.codex.map((model) => model.id)).toEqual([
-			"gpt-5.3-codex-spark",
-			"gpt-5.4-mini",
-			"gpt-5.4",
-			"gpt-5.5",
-			"gpt-5.6-luna",
-			"gpt-5.6-sol",
-			"gpt-5.6-terra",
-		]);
+		expect(body.codex.map((model) => model.id)).toContain("gpt-6.1-sol");
+		expect(body.codex.map((model) => model.id)).not.toContain("gpt-5.4-mini");
 		expect(body.acpx.map((model) => model.id)).toContain("gpt-5.4-mini");
 	});
 

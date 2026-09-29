@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from "bun:test";
 import { parseRoutingConfig } from "@signet/core";
 import { createRoutingProvider } from "./inference-provider-factory";
 
-function codexConfig(model = "gpt-5.4") {
+function codexConfig(model = "gpt-6-luna") {
 	const parsed = parseRoutingConfig({
 		inference: {
 			accounts: {
@@ -35,7 +35,7 @@ describe("inference provider factory", () => {
 			},
 		});
 
-		expect(provider.name).toBe("openai-codex:gpt-5.4");
+		expect(provider.name).toBe("openai-codex:gpt-6-luna");
 		expect(await provider.available()).toBe(true);
 	});
 

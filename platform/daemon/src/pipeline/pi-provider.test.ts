@@ -51,12 +51,12 @@ describe("pi provider catalog models", () => {
 	});
 
 	test("preserves the Codex responses API and registry metadata", () => {
-		const model = getModels("openai-codex").find((candidate) => candidate.id === "gpt-5.4");
+		const model = getModels("openai-codex").find((candidate) => candidate.id === "gpt-6-luna");
 		expect(model).toBeDefined();
 		const resolved = resolvePiModel({
 			executor: "openai-codex",
 			providerFamily: "openai-codex",
-			model: "gpt-5.4",
+			model: "gpt-6-luna",
 			piModel: model as Model<Api>,
 			apiKey: "oauth-access",
 		});
@@ -170,8 +170,8 @@ describe("pi provider catalog models", () => {
 				"done",
 			);
 
-			const unrelatedModel = getModels("openrouter")[0];
-			if (!unrelatedModel) throw new Error("expected OpenRouter catalog model");
+			const unrelatedModel = getModels("openrouter").find((candidate) => candidate.api === "openai-completions");
+			if (!unrelatedModel) throw new Error("expected an OpenAI-compatible OpenRouter catalog model");
 			const unrelatedProvider = createPiModelProvider({
 				executor: "openrouter",
 				providerFamily: "openrouter",
