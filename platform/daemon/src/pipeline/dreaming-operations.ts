@@ -64,26 +64,29 @@ const HYGIENE_ARCHIVE_OPS = new Set([
 
 function citationRecord(value: unknown): {
 	readonly sourceRef: string;
-	readonly sourceKind: string;
-	readonly sourceId: string;
+	readonly sourceKind: string | null;
+	readonly sourceId: string | null;
 	readonly sourcePath: string | null;
 	readonly quote: string;
 } | null {
 	if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
 	const citation = value as Record<string, unknown>;
 	const sourceRef = typeof citation.source_ref === "string" ? citation.source_ref.trim() : "";
-	const sourceKind = typeof citation.source_kind === "string" ? citation.source_kind.trim() : "";
-	const sourceId = typeof citation.source_id === "string" ? citation.source_id.trim() : "";
+	const sourceKind =
+		citation.source_kind === undefined
+			? null
+			: typeof citation.source_kind === "string"
+				? citation.source_kind.trim()
+				: "";
+	const sourceId =
+		citation.source_id === undefined ? null : typeof citation.source_id === "string" ? citation.source_id.trim() : "";
 	const sourcePath = typeof citation.source_path === "string" ? citation.source_path.trim() : null;
 	const quote = typeof citation.quote === "string" ? citation.quote.trim() : "";
-	let kind = sourceKind;
-	let id = sourceId;
-	const colon = sourceRef.indexOf(":");
-	if (colon > 0) {
-		if (!kind) kind = sourceRef.slice(0, colon);
-		if (!id) id = sourceRef.slice(colon + 1);
-	}
-	return sourceRef && kind && id && quote ? { sourceRef, sourceKind: kind, sourceId: id, sourcePath, quote } : null;
+	const separator = sourceRef.indexOf(":");
+	const hasCanonicalIdentity = separator > 0 && separator < sourceRef.length - 1;
+	return sourceRef && hasCanonicalIdentity && quote && sourceKind !== "" && sourceId !== ""
+		? { sourceRef, sourceKind, sourceId, sourcePath, quote }
+		: null;
 }
 interface CitationResolution {
 	readonly evidence: DreamingAgentEvidence | null;
@@ -110,8 +113,8 @@ function citeEvidence(accessor: DbAccessor, agentId: string, citation: unknown):
 			result.evidence.find(
 				(record) =>
 					record.sourceRef === requested.sourceRef &&
-					record.sourceKind === requested.sourceKind &&
-					record.sourceId === requested.sourceId &&
+					(requested.sourceKind === null || record.sourceKind === requested.sourceKind) &&
+					(requested.sourceId === null || record.sourceId === requested.sourceId) &&
 					(requested.sourcePath === null || record.sourcePath === requested.sourcePath) &&
 					record.content.includes(requested.quote),
 			) ?? null,

@@ -797,7 +797,7 @@ describe("dreaming operations", () => {
 		).not.toBeNull();
 	});
 
-	it("applies a content op with an exact-quote citation resolved against the store", async () => {
+	it("applies a content op with a canonical source_ref and exact quote", async () => {
 		insertEpisodicMemory("mem-1", "Acme switched its deployment target to edge runtime in Q2.");
 		const result = await applyDreamingOperations({
 			accessor: getDbAccessor(),
@@ -810,8 +810,6 @@ describe("dreaming operations", () => {
 					evidence: [
 						{
 							source_ref: "memory:mem-1",
-							source_kind: "manual",
-							source_id: "mem-1",
 							quote: "Acme switched its deployment target to edge runtime in Q2.",
 						},
 					],
