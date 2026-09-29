@@ -28,11 +28,11 @@ See [Install](/getting-started/install/) for package-manager alternatives and no
 signet setup
 ```
 
-Setup starts Signet and opens guided dashboard onboarding: connect your agents and a model, optionally bring an Obsidian vault, transcript exports, or files, then save and recall a first memory. Provider processing starts only after your explicit connection test and enable action. See [Set up Signet](/getting-started/setup/) for the flow and recovery steps.
+Setup prepares a minimal local workspace and opens guided dashboard onboarding: connect the agents and model you choose, optionally bring an Obsidian vault, transcript exports, or files, then test and save a first memory. The default interactive path does not preselect providers or harnesses, create identity files, install skills, or initialize Git. Provider processing starts only after your explicit connection test and enable action. See [Set up Signet](/getting-started/setup/) for the flow and recovery steps.
 
-The default Minimal identity preset keeps normal startup context small. Setup creates `AGENTS.md` for that startup context and `DREAMING.md` for Dreaming sessions. Other presets create a different set of identity files; do not assume that every workspace has `SOUL.md`, `USER.md`, `MEMORY.md`, or a hooks directory. See [Set up Signet](/getting-started/setup/) for the preset and workspace details.
+Fresh interactive setup leaves identity management off and creates no identity files. Configure an identity preset later if you want Signet-managed prompt files; scripted CLI setup still supports `--identity-mode` and `--identity-preset`.
 
-Setup initializes the database and starts a local daemon unless you selected a remote daemon. It can then open the dashboard.
+The CLI creates the protected workspace and database bootstrap, starts a local daemon unless the workspace targets a remote one, and opens the dashboard directly to onboarding.
 
 ## 3. Check the installation
 

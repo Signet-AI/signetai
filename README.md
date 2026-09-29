@@ -65,14 +65,14 @@ Durable transcript imports and imported-source deletion support Windows, Linux, 
 ### Setup
 
 ```bash
-signet setup                         # interactive setup wizard
+signet setup               # prepare a workspace and open guided dashboard onboarding
 signet status                        # confirm daemon + pipeline health
 signet dashboard                     # open memory + retrieval inspector
 ```
 
 ## Harness support
 
-Signet runs underneath the tools you already use. Run `signet setup` to configure plugins and connectors. Currently, Signet supports:
+Signet runs underneath the tools you already use. Run `signet setup` to prepare the workspace and open guided dashboard onboarding; use noninteractive CLI options for scripted configuration. Currently, Signet supports:
 
 |Harness|Integration path|
 |---|---|

@@ -56,7 +56,8 @@ function hasSnapshotContents(source: string, snapshot: string): boolean {
 	if (database.length === 0 || isAbsolute(database) || database === ".." || database.startsWith(`..${sep}`)) {
 		return false;
 	}
-	const required = ["AGENTS.md", "agent.yaml", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md", database];
+	const identityFiles = ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "MEMORY.md"];
+	const required = ["agent.yaml", ...identityFiles.filter((file) => existsSync(join(source, file))), database];
 	for (const file of required) {
 		if (!existsSync(join(root, file))) {
 			return false;

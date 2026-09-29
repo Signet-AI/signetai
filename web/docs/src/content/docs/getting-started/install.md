@@ -67,7 +67,7 @@ path. Use the CLI binary for server, terminal, and automation deployments.
 
 ## Recommended first route
 
-Use the interactive wizard unless a deployment system already knows the choices. It can create a workspace, configure selected harnesses, initialize the database, and start a local daemon. Continue with [Set up Signet](/getting-started/setup/).
+Use `signet setup` for guided onboarding unless a deployment system already knows the choices. On a fresh default interactive run, the CLI prepares the protected workspace and database bootstrap needed to start Signet, then opens dashboard onboarding for agent, model, and source choices. The headless setup modes remain available for scripted configuration. Continue with [Set up Signet](/getting-started/setup/).
 
 ## Headless setup
 

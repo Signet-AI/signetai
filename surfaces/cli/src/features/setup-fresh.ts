@@ -1,6 +1,6 @@
 import { createDaemonClient } from "../lib/daemon.js";
 import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { OpenClawConnector } from "@signet/connector-openclaw";
 import {
 	addObsidianSource,
@@ -11,6 +11,7 @@ import {
 	resolvePrimaryPackageManager,
 	runMigrations,
 	createFreshWorkspaceV2,
+	resolveWorkspaceLayout,
 } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
@@ -31,6 +32,62 @@ import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotPro
 import { readErr, readRecord } from "./setup-shared.js";
 import { withSetupPrompt } from "./setup-terminal.js";
 import type { SetupDeps } from "./setup-types.js";
+
+function assertNoExistingWorkspaceDatabase(basePath: string): void {
+	const layout = resolveWorkspaceLayout(basePath);
+	const existingDatabase = [
+		layout.database,
+		...(layout.version === 1 ? [join(layout.data, "signet.db")] : []),
+		join(basePath, "data", "signet.db"),
+		join(basePath, "memory", "memories.db"),
+	].find((database) => existsSync(database));
+	if (existingDatabase) {
+		throw new Error(`Refusing to replace an existing database at ${existingDatabase}.`);
+	}
+}
+
+export async function runDashboardSetupBootstrap(
+	basePath: string,
+	options: { readonly allowUnprotectedWorkspace: boolean; readonly createLocalBackup: boolean },
+	deps: SetupDeps,
+): Promise<void> {
+	assertNoExistingWorkspaceDatabase(basePath);
+	if (options.createLocalBackup) mkdirSync(basePath, { recursive: true });
+	let protection = await enforceSetupProtection({
+		basePath,
+		nonInteractive: true,
+		allowUnprotectedWorkspace: options.allowUnprotectedWorkspace,
+		createLocalBackup: options.createLocalBackup,
+	});
+	assertNoExistingWorkspaceDatabase(basePath);
+	const workspaceLayout = createFreshWorkspaceV2(basePath);
+	const gitignorePath = join(basePath, ".gitignore");
+	const gitignoreSource = join(deps.getTemplatesDir(), "gitignore.template");
+	if (!existsSync(gitignorePath) && existsSync(gitignoreSource)) copyFileSync(gitignoreSource, gitignorePath);
+	if (existsSync(workspaceLayout.database)) {
+		throw new Error(`Refusing to replace an existing database at ${workspaceLayout.database}.`);
+	}
+	mkdirSync(dirname(workspaceLayout.database), { recursive: true });
+	writeSetupCorePluginRegistry(basePath, { signetSecretsEnabled: true });
+	writeFileSync(workspaceLayout.database, "", { flag: "wx", mode: 0o600 });
+	const config = {
+		version: 1,
+		schema: "signet/v1",
+		capabilities: {
+			memory: { enabled: true, autoInject: true, memoryHead: true },
+			secrets: { enabled: true },
+			identity: { mode: "off" },
+		},
+		embedding: { provider: "none" },
+		memory: {
+			database: relative(basePath, workspaceLayout.database),
+			pipelineV2: { enabled: false, paused: true, telemetryEnabled: false },
+		},
+	};
+	writeFileSync(join(basePath, "agent.yaml"), formatYaml(config));
+	if (protection.state === "snapshot") protection = refreshSnapshotProtection(basePath, protection);
+	printSetupProtectionSummary(protection);
+}
 
 export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext, deps: SetupDeps): Promise<void> {
 	const spinner = ora("Setting up Signet...").start();

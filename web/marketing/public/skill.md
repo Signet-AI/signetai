@@ -10,7 +10,7 @@
 ## Install Objective (Must Complete)
 
 Your job is not just to install a package. Your job is to leave the
-user with a fully configured, running Signet setup.
+user with a working Signet installation and a clear onboarding state.
 
 You are done only when ALL of these are true:
 
@@ -18,12 +18,14 @@ You are done only when ALL of these are true:
 2. `signet status` shows the daemon is running
 3. `curl -s http://localhost:3850/health` returns JSON with
    `"status":"healthy"`
-4. The setup wizard completed with the user's selected harnesses and
-   providers
-5. You give the user a short handoff explaining what is now active
+4. Dashboard onboarding completes with the user's choices, or the handoff says
+   onboarding is still pending
+5. The handoff explains what is active and what remains
 
-Default to interactive setup (`signet`) unless the user asks for
-non-interactive flags. Never silently choose harness/provider settings.
+Default to `signet setup` for interactive first-run onboarding. It prepares a
+minimal workspace and opens the dashboard flow; never silently choose
+harness/provider settings. The explicit non-interactive CLI setup path remains
+available when the user wants scripted configuration.
 
 ## What is Signet?
 
@@ -43,31 +45,16 @@ WAIT FOR THEM TO CONFIRM BEFORE PROCEEDING.
 
 | Component | What it does |
 |-----------|-------------|
-| **CLI** (`signet`) | Setup wizard, memory commands, daemon management |
-| **Daemon** | Background HTTP service (port 3850) that handles memory, hooks, file watching |
-| **Dashboard** | Web UI at `http://localhost:3850` for browsing memories, config, and status |
-| **Connectors** | Platform-specific integrations installed during setup |
+| **CLI** (`signet`) | Prepares a fresh workspace, runs explicit headless setup, and manages the daemon and memory commands |
+| **Daemon** | Background HTTP service (port 3850) that handles memory, hooks, and file watching |
+| **Dashboard** | Web UI at `http://localhost:3850` for guided first-run onboarding, memories, config, and status |
+| **Connectors** | Platform-specific integrations selected during dashboard onboarding or explicit CLI setup |
 
 ### Where data lives
 
-All Signet data lives at `~/.agents/`:
+The default workspace is `~/.agents/`; `--path` or `SIGNET_PATH` can select another root. A fresh interactive setup creates a minimal `agent.yaml`, a Git ignore policy, and `data/signet.db`, plus standard workspace directories. It does not create identity files or harness configuration before the user chooses them. Headless setup can create an explicitly selected identity preset and integration files.
 
-```
-~/.agents/
-  agent.yaml       # Configuration manifest
-  AGENTS.md        # Operational instructions (you)
-  SOUL.md          # Personality and tone
-  IDENTITY.md      # Workspace name and metadata
-  USER.md          # User profile
-  MEMORY.md        # Working memory summary (auto-generated)
-  memory/
-    memories.db    # SQLite database (source of truth)
-  skills/          # Installed skills
-  .secrets/        # Encrypted secret store
-```
-
-The SQLite database is the source of truth. Markdown files like
-MEMORY.md are generated outputs from it, not the other way around.
+The SQLite database is the source of truth for Signet memory. Other workspace files and connector-owned configuration vary with the choices made during setup.
 
 ### Supported platforms
 
@@ -332,31 +319,29 @@ another installation automatically.
 > Do NOT proceed to the setup wizard until this command works.
 > Tell the user the installed version number.
 
-### Step 3: Run the setup wizard
+### Step 3: Start guided setup
 
 > GATE: Tell your user:
-> "Signet is installed. Now I need to run the setup wizard.
-> This will ask you to choose:
-> - A name and description for your agent (me)
-> - Which platforms to connect (Claude Code, OpenClaw, OpenCode)
-> - An embedding provider for semantic memory search (Ollama is free
->   and local, OpenAI requires a key, or skip for keyword-only search)
-> - Whether to enable git sync for your agent config
+> "Signet is installed. `signet setup` will prepare a minimal workspace,
+> start the daemon, and open guided dashboard onboarding. You can choose
+> which supported agents and model providers to connect, add sources, and
+> test the first memory there. The interactive CLI does not invent an agent
+> profile, preselect a provider, install skills, or initialize Git. The
+> non-interactive CLI setup remains available for explicit scripted choices.
+> Ready?"
 >
-> The wizard will configure hooks, connectors, and skills automatically.
-> I can run this interactively (you answer prompts) or non-interactively
-> (I pass flags myself). Ready?"
->
-> WAIT for the user to confirm before running the wizard.
-> 
+> WAIT for the user to confirm before running setup.
 
 Interactive mode:
 ```bash
-signet
+signet setup
 ```
 
-Run `signet` with no arguments. It automatically detects a fresh
-install and launches the interactive setup wizard.
+On a fresh local workspace, setup creates only the bootstrap required for the
+dashboard flow, starts the local daemon, and opens onboarding. Do not report
+providers or harnesses as configured until the user selects them and the
+connection test succeeds. If the user prefers unattended configuration, use
+the non-interactive command below instead.
 
 Non-interactive mode (for agent-driven setup):
 ```bash
@@ -393,22 +378,15 @@ curl -fsSL https://signetai.sh/install.sh | bash -s -- -- \
 If you do not have those choices, install first, ask the user, then run
 `signet setup`.
 
-The wizard will ask:
-1. **Workspace name and description**
-2. **Platform selection** — which harnesses to configure (Claude Code,
-   OpenClaw, OpenCode). Select all that apply.
-3. **Embedding provider** — Ollama (local, recommended), OpenAI
-   (requires API key), or none (keyword search only, still works)
-4. **Memory extraction provider** — for auto-extracting memories from
-   sessions
-5. **Git sync** — optional, for syncing agent config across machines
+Dashboard onboarding guides the user through agent and provider connections,
+optional context sources, a first memory, and the connection checks. The user
+can defer a connection or skip a source; do not claim those choices are active
+until the dashboard reports success.
 
-Follow the prompts. The wizard handles connector installation,
-hook setup, file generation, and skill deployment automatically.
+### Step 4: Verify the daemon
 
-### Step 4: Start the daemon
-
-The setup wizard usually starts the daemon automatically. Verify first:
+Interactive setup starts the local daemon for a fresh local workspace. Verify
+its actual status before continuing:
 
 ```bash
 signet status

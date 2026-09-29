@@ -22,7 +22,7 @@ import { validateName } from "../commands/agent.js";
 import { createDaemonClient } from "../lib/daemon.js";
 import { openUrlWithFallback } from "../lib/open-url.js";
 import { installGraphiqPlugin } from "./graphiq.js";
-import { runFreshSetup } from "./setup-fresh.js";
+import { runDashboardSetupBootstrap, runFreshSetup } from "./setup-fresh.js";
 import { aggregateRecallProviderIds } from "./setup-inference-connect.js";
 import { enableDreamingInConfig, runExistingSetupWizard } from "./setup-migrate.js";
 import { defaultAcpxModel, defaultExtractionModel } from "./setup-pipeline.js";
@@ -246,6 +246,39 @@ async function buildHeadlessApplyContext(
 		openDashboard: options.openDashboard === true,
 	};
 }
+function hasInteractiveSetupConfiguration(options: SetupWizardOptions): boolean {
+	const values: readonly (string | undefined)[] = [
+		options.name,
+		options.description,
+		options.deploymentType,
+		options.networkMode,
+		options.embeddingProvider,
+		options.embeddingModel,
+		options.extractionProvider,
+		options.extractionModel,
+		options.extractionEndpoint,
+		options.aggregateRecallProvider,
+		options.aggregateRecallModel,
+		options.aggregateRecallEndpoint,
+		options.searchBalance,
+		options.openclawRuntimePath,
+		options.identityPreset,
+		options.identityMode,
+		options.remoteUrl,
+	];
+	const lists: readonly (readonly string[] | undefined)[] = [options.harness, options.agent, options.obsidianSource];
+	return (
+		values.some((value) => value !== undefined) ||
+		lists.some((value) => (value?.length ?? 0) > 0) ||
+		options.configureOpenclawWorkspace === true ||
+		options.disableSignetSecrets === true ||
+		options.withGraphiq === true ||
+		options.disableGraphiq === true ||
+		options.enableDreaming === true ||
+		options.skipGit === true
+	);
+}
+
 export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
 	if (options.nonInteractive || options.schema || options.file || options.json || options.dryRun) {
 		await applySetupOptions(options, deps);
@@ -275,6 +308,7 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	}
 	console.log(deps.signetBanner());
 	console.log(chalk.dim(`  Workspace: ${basePath}`));
+	let shouldStartLocalDaemon = existing.agentYaml || existing.configYaml || existing.memoryDb;
 	if (!existing.agentYaml && !existing.configYaml && existing.memoryDb) {
 		await runExistingSetupWizard(basePath, existing, {}, deps, {
 			openDashboard: options.openDashboard === true,
@@ -285,25 +319,47 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 		return;
 	}
 	if (!existing.agentYaml && !existing.configYaml && !existing.memoryDb) {
-		const harnesses = options.harness ?? [];
-		await applySetupOptions(
-			{
-				...options,
-				path: basePath,
-				nonInteractive: true,
-				harness: harnesses,
-				identityMode: options.identityMode ?? "off",
-				extractionProvider: options.extractionProvider ?? "none",
-				openDashboard: false,
-			},
-			deps,
-		);
+		const bootstrapClient = createDaemonClient(deps.DEFAULT_PORT, basePath);
+		if (!options.remoteUrl && bootstrapClient.localWorkspace) {
+			const runningStatus = await bootstrapClient.fetchDaemonResult<{ agentsDir: string }>("/api/status", {
+				timeout: 1_000,
+			});
+			if (runningStatus.ok && runningStatus.data.agentsDir !== basePath) {
+				throw new Error(
+					"Another workspace is running at this address. Stop it or select its workspace before continuing setup.",
+				);
+			}
+			if (!runningStatus.ok && runningStatus.reason !== "offline") {
+				throw new Error(
+					`Could not verify the local Signet workspace (${runningStatus.error ?? runningStatus.reason}). Refusing to initialize another workspace on the same address.`,
+				);
+			}
+		}
+		if (hasInteractiveSetupConfiguration(options)) {
+			await applySetupOptions(
+				{
+					...options,
+					path: basePath,
+					nonInteractive: true,
+					openDashboard: false,
+				},
+				deps,
+			);
+		} else {
+			await runDashboardSetupBootstrap(
+				basePath,
+				{
+					allowUnprotectedWorkspace: options.allowUnprotectedWorkspace === true,
+					createLocalBackup: options.createLocalBackup === true,
+				},
+				deps,
+			);
+			shouldStartLocalDaemon = true;
+		}
 	}
 	const client = createDaemonClient(deps.DEFAULT_PORT, basePath);
-	if (existing.agentYaml || existing.configYaml || existing.memoryDb) {
-		if (client.localWorkspace && !(await deps.startDaemon(basePath))) {
-			throw new Error("Could not start Signet. Run signet doctor for recovery details; your workspace was preserved.");
-		}
+	if (client.localWorkspace && shouldStartLocalDaemon && !(await deps.startDaemon(basePath))) {
+		throw new Error("Could not start Signet. Run signet doctor for recovery details; your workspace was preserved.");
 	}
 	const status = await client.fetchDaemonResult<{ agentsDir: string }>("/api/status");
 	if (!status.ok)

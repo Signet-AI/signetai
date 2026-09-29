@@ -69,7 +69,7 @@ signet setup --schema
 signet setup --file ./setup-plan.json --dry-run
 ```
 
-Interactive setup requires a TTY and opens the dashboard modal. It prints a URL if the browser cannot open. For headless setup, choose one of these modes:
+Interactive setup requires a TTY and opens guided dashboard onboarding. On a fresh default interactive run, the CLI creates only the protected workspace and minimal configuration/database bootstrap needed to start that flow; it does not preselect providers or harnesses, create identity files, install skills, or initialize Git. Existing workspaces are not reset. For scripted or headless setup, the CLI still supports explicit flags, plans, and JSON output. It prints the onboarding URL if the browser cannot open. Choose one of these modes:
 
 - `--non-interactive` with flags for a scripted setup or reconfiguration.
 - `--file <path>` to apply a JSON setup plan.

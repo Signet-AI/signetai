@@ -1,12 +1,15 @@
-import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:test";
 import * as prompts from "@inquirer/prompts";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SIGNET_SECRETS_PLUGIN_ID, parseSimpleYaml, readGraphiqState, updateGraphiqActiveProject } from "@signet/core";
 import { detectExistingSetup, type SetupDetection } from "../lib/setup-detection.js";
+import { defaultBackupRoot, getSnapshotProtection } from "../lib/workspace-protection.js";
 import * as openUrl from "../lib/open-url.js";
 import { detectedHarnessesForExistingSetup, runExistingSetupWizard } from "./setup-migrate.js";
+import { readSetupCorePluginEnabled } from "./setup-plugins.js";
+import { runDashboardSetupBootstrap } from "./setup-fresh.js";
 import type { SetupDeps } from "./setup-types.js";
 import { setupWizard } from "./setup.js";
 
@@ -1339,6 +1342,18 @@ describe("setupWizard headless plan path", () => {
 });
 
 describe("interactive onboarding", () => {
+	let previousDaemonUrl: string | undefined;
+
+	beforeEach(() => {
+		previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+	});
+
+	afterEach(() => {
+		if (previousDaemonUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+		else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
+	});
+
 	it("resumes through the dashboard without rewriting the workspace", async () => {
 		const root = mkdtempSync(join(tmpdir(), "signet-onboarding-"));
 		const config = "name: Existing agent\noperator_setting: preserve-me\n";
@@ -1441,6 +1456,363 @@ describe("first-run setup migration onboarding handoff", () => {
 			confirm.mockRestore();
 			open.mockRestore();
 			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+		}
+	});
+});
+
+describe("fresh interactive dashboard setup", () => {
+	let root = "";
+
+	afterEach(() => {
+		if (root) rmSync(root, { recursive: true, force: true });
+	});
+
+	it("refuses a legacy database created during workspace protection", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-dashboard-bootstrap-raced-v1-"));
+		const basePath = join(root, "agents");
+		const legacyDatabase = join(basePath, "memory", "memories.db");
+		const configPath = join(root, "openclaw.json");
+		writeFileSync(configPath, "{}\n");
+		const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+		try {
+			const bootstrap = runDashboardSetupBootstrap(
+				basePath,
+				{ allowUnprotectedWorkspace: false, createLocalBackup: false },
+				stubDeps(),
+			);
+			mkdirSync(join(basePath, "memory"), { recursive: true });
+			writeFileSync(legacyDatabase, "concurrent-v1-database");
+
+			await expect(bootstrap).rejects.toThrow(`Refusing to replace an existing database at ${legacyDatabase}.`);
+
+			expect(readFileSync(legacyDatabase, "utf8")).toBe("concurrent-v1-database");
+			expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
+			expect(existsSync(join(basePath, "data", "signet.db"))).toBe(false);
+		} finally {
+			if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+			else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+		}
+	});
+
+	it("refuses a database at the next layout path under a custom data override", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-dashboard-bootstrap-custom-data-v1-"));
+		const basePath = join(root, "agents");
+		const layoutFile = join(basePath, "workspace-layout.json");
+		const layoutContent = `${JSON.stringify({ version: 1, overrides: { data: "custom-data" } }, null, 2)}\n`;
+		const databasePath = join(basePath, "custom-data", "signet.db");
+		const configPath = join(root, "openclaw.json");
+		mkdirSync(join(basePath, "custom-data"), { recursive: true });
+		writeFileSync(layoutFile, layoutContent);
+		writeFileSync(databasePath, "existing-custom-v2-database");
+		writeFileSync(configPath, "{}\n");
+		const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+		try {
+			await expect(
+				runDashboardSetupBootstrap(
+					basePath,
+					{ allowUnprotectedWorkspace: false, createLocalBackup: false },
+					stubDeps(),
+				),
+			).rejects.toThrow(`Refusing to replace an existing database at ${databasePath}.`);
+
+			expect(readFileSync(databasePath, "utf8")).toBe("existing-custom-v2-database");
+			expect(readFileSync(layoutFile, "utf8")).toBe(layoutContent);
+			expect(existsSync(join(basePath, "agent.yaml"))).toBe(false);
+		} finally {
+			if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+			else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+		}
+	});
+
+	it("creates only the dashboard bootstrap and opens onboarding", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-dashboard-bootstrap-"));
+		const basePath = join(root, "agents");
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: (request) =>
+				new URL(request.url).pathname === "/api/status"
+					? Response.json({ agentsDir: basePath })
+					: new Response("not found", { status: 404 }),
+		});
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		const previousTty = process.stdin.isTTY;
+		delete process.env.SIGNET_DAEMON_URL;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				DEFAULT_PORT: server.port,
+				getTemplatesDir: mock(() => join(import.meta.dir, "../../templates")),
+				detectExistingSetup: () => ({
+					...fakeDetection(basePath),
+					agentsDir: false,
+					agentYaml: false,
+					configYaml: false,
+					memoryDb: false,
+					hasMemoryDir: false,
+				}),
+				normalizeAgentPath: mock((path: string) => path),
+			});
+
+			await setupWizard({ path: basePath }, deps);
+
+			expect(deps.startDaemon).toHaveBeenCalledWith(basePath);
+			const agentYaml = parseSimpleYaml(readFileSync(join(basePath, "agent.yaml"), "utf8"));
+			expect(Object.keys(agentYaml).sort()).toEqual(["capabilities", "embedding", "memory", "schema", "version"]);
+			expect(agentYaml.embedding).toEqual({ provider: "none" });
+			expect(agentYaml.memory).toMatchObject({
+				database: "data/signet.db",
+				pipelineV2: { enabled: false, paused: true, telemetryEnabled: false },
+			});
+			expect(agentYaml.capabilities).toMatchObject({
+				memory: { enabled: true },
+				secrets: { enabled: true },
+				identity: { mode: "off" },
+			});
+			expect(readSetupCorePluginEnabled(basePath)).toBe(true);
+			expect(existsSync(join(basePath, "data", "signet.db"))).toBe(true);
+			expect(readFileSync(join(basePath, ".gitignore"), "utf8")).toContain("# Signet workspace Git policy");
+			expect(existsSync(join(basePath, "AGENTS.md"))).toBe(false);
+			expect(existsSync(join(basePath, "scripts"))).toBe(false);
+			expect(existsSync(join(basePath, "harnesses"))).toBe(false);
+			expect(existsSync(join(basePath, ".git"))).toBe(false);
+			expect(readdirSync(join(basePath, "skills"))).toEqual([]);
+			expect(open).toHaveBeenCalledWith(`http://127.0.0.1:${server.port}/#setup`);
+		} finally {
+			open.mockRestore();
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			if (previousDaemonUrl === undefined) delete process.env.SIGNET_DAEMON_URL;
+			else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
+		}
+	});
+
+	it("applies explicit fresh-setup options when Git is skipped", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-dashboard-bootstrap-skip-git-"));
+		const basePath = join(root, "agents");
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ agentsDir: basePath }),
+		});
+		const previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		const previousTty = process.stdin.isTTY;
+		delete process.env.SIGNET_DAEMON_URL;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		const gitInit = mock(async () => true);
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				DEFAULT_PORT: server.port,
+				detectExistingSetup: () => ({
+					...fakeDetection(basePath),
+					agentsDir: false,
+					agentYaml: false,
+					configYaml: false,
+					memoryDb: false,
+					hasMemoryDir: false,
+				}),
+				gitInit,
+				normalizeAgentPath: mock((path: string) => path),
+			});
+
+			await setupWizard({ path: basePath, skipGit: true }, deps);
+
+			const config = parseSimpleYaml(readFileSync(join(basePath, "agent.yaml"), "utf8"));
+			expect(config.agent).toBeDefined();
+			expect(gitInit).not.toHaveBeenCalled();
+		} finally {
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			if (previousDaemonUrl === undefined) delete process.env.SIGNET_DAEMON_URL;
+			else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
+		}
+	});
+
+	it("creates a valid local snapshot for an OpenClaw-linked fresh workspace", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-dashboard-bootstrap-snapshot-"));
+		const workspaceName = `agents-dashboard-bootstrap-snapshot-${process.pid}-${Date.now()}`;
+		const basePath = join(root, workspaceName);
+		const configPath = join(root, "openclaw.json");
+		const backupRoot = defaultBackupRoot(basePath);
+		const previousSnapshots = new Set(existsSync(backupRoot) ? readdirSync(backupRoot) : []);
+		writeFileSync(configPath, JSON.stringify({ agents: { defaults: { workspace: basePath } } }));
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ agentsDir: basePath }),
+		});
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+		const previousHome = process.env.HOME;
+		const previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		const previousTty = process.stdin.isTTY;
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+		process.env.HOME = root;
+		delete process.env.SIGNET_DAEMON_URL;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				DEFAULT_PORT: server.port,
+				getTemplatesDir: mock(() => join(import.meta.dir, "../../templates")),
+				detectExistingSetup: () => ({
+					...fakeDetection(basePath),
+					agentsDir: false,
+					agentYaml: false,
+					configYaml: false,
+					memoryDb: false,
+					hasMemoryDir: false,
+				}),
+				normalizeAgentPath: mock((path: string) => path),
+			});
+
+			await setupWizard({ path: basePath, createLocalBackup: true }, deps);
+
+			const snapshotPath = getSnapshotProtection(basePath);
+			expect(snapshotPath).not.toBeNull();
+			if (!snapshotPath) throw new Error("expected a protected workspace snapshot");
+			expect(existsSync(join(snapshotPath, "agent.yaml"))).toBe(true);
+			expect(existsSync(join(snapshotPath, "data", "signet.db"))).toBe(true);
+			expect(existsSync(join(basePath, "AGENTS.md"))).toBe(false);
+			expect(open).toHaveBeenCalledWith(`http://127.0.0.1:${server.port}/#setup`);
+		} finally {
+			open.mockRestore();
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+			else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+			if (previousHome === undefined) delete process.env.HOME;
+			else process.env.HOME = previousHome;
+			if (previousDaemonUrl === undefined) delete process.env.SIGNET_DAEMON_URL;
+			else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
+			if (existsSync(backupRoot)) {
+				for (const entry of readdirSync(backupRoot)) {
+					if (entry.startsWith(`${workspaceName}-`) && !previousSnapshots.has(entry))
+						rmSync(join(backupRoot, entry), { recursive: true, force: true });
+				}
+			}
+		}
+	});
+
+	it("refuses an orphaned v2 database before writing workspace bootstrap files", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-dashboard-bootstrap-orphan-v2-"));
+		const basePath = join(root, "agents");
+		const databasePath = join(basePath, "data", "signet.db");
+		const configPath = join(root, "openclaw.json");
+		mkdirSync(join(basePath, "data"), { recursive: true });
+		writeFileSync(databasePath, "existing-v2-database");
+		writeFileSync(configPath, "{}");
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ agentsDir: basePath }),
+		});
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+		const previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		const previousTty = process.stdin.isTTY;
+		process.env.OPENCLAW_CONFIG_PATH = configPath;
+		delete process.env.SIGNET_DAEMON_URL;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				DEFAULT_PORT: server.port,
+				detectExistingSetup: () => ({
+					...fakeDetection(basePath),
+					agentsDir: true,
+					agentYaml: false,
+					configYaml: false,
+					memoryDb: false,
+					hasMemoryDir: true,
+				}),
+				normalizeAgentPath: mock((path: string) => path),
+			});
+
+			await expect(setupWizard({ path: basePath }, deps)).rejects.toThrow("Refusing to replace an existing database");
+
+			expect(readFileSync(databasePath, "utf8")).toBe("existing-v2-database");
+			expect(existsSync(join(basePath, "workspace-layout.json"))).toBe(false);
+			expect(existsSync(join(basePath, ".gitignore"))).toBe(false);
+			expect(open).not.toHaveBeenCalled();
+		} finally {
+			open.mockRestore();
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			if (previousConfigPath === undefined) delete process.env.OPENCLAW_CONFIG_PATH;
+			else process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
+			if (previousDaemonUrl === undefined) delete process.env.SIGNET_DAEMON_URL;
+			else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
+		}
+	});
+
+	it("leaves the workspace untouched when another local workspace is serving", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-dashboard-bootstrap-other-workspace-"));
+		const basePath = join(root, "agents");
+		const runningWorkspace = join(root, "other-agents");
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ agentsDir: runningWorkspace }),
+		});
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		const previousTty = process.stdin.isTTY;
+		delete process.env.SIGNET_DAEMON_URL;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				DEFAULT_PORT: server.port,
+				detectExistingSetup: () => ({
+					...fakeDetection(basePath),
+					agentsDir: false,
+					agentYaml: false,
+					configYaml: false,
+					memoryDb: false,
+					hasMemoryDir: false,
+				}),
+				normalizeAgentPath: mock((path: string) => path),
+			});
+
+			await expect(setupWizard({ path: basePath }, deps)).rejects.toThrow(
+				"Another workspace is running at this address.",
+			);
+
+			expect(deps.startDaemon).not.toHaveBeenCalled();
+			expect(existsSync(basePath)).toBe(false);
+
+			const explicitBasePath = join(root, "agents-with-explicit-options");
+			const explicitDeps = stubDeps({
+				AGENTS_DIR: explicitBasePath,
+				DEFAULT_PORT: server.port,
+				detectExistingSetup: () => ({
+					...fakeDetection(explicitBasePath),
+					agentsDir: false,
+					agentYaml: false,
+					configYaml: false,
+					memoryDb: false,
+					hasMemoryDir: false,
+				}),
+				normalizeAgentPath: mock((path: string) => path),
+			});
+			await expect(setupWizard({ path: explicitBasePath, harness: ["pi"] }, explicitDeps)).rejects.toThrow(
+				"Another workspace is running at this address.",
+			);
+			expect(explicitDeps.startDaemon).not.toHaveBeenCalled();
+			expect(existsSync(explicitBasePath)).toBe(false);
+			expect(open).not.toHaveBeenCalled();
+		} finally {
+			open.mockRestore();
+			server.stop(true);
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+			if (previousDaemonUrl === undefined) delete process.env.SIGNET_DAEMON_URL;
+			else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
 		}
 	});
 });
