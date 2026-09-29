@@ -215,6 +215,7 @@ export default defineConfig({
 								{ label: "Platform services", slug: "architecture/platform-services" },
 								{ label: "Data lifecycle", slug: "architecture/data-lifecycle" },
 								{ label: "Interfaces and agents", slug: "architecture/interfaces-agents" },
+								{ label: "DB owner protocol", slug: "architecture/db-owner-protocol" },
 							],
 						},
 						{ label: "Contributing", slug: "contributing" },

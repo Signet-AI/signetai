@@ -1,16 +1,19 @@
-# DB owner protocol
+---
+title: "DB owner protocol"
+description: "Contributor reference for the daemon-to-database-owner job and wire contract."
+---
 
-This is the frozen daemon/owner contract introduced by Phase C. The daemon side is `db-owner-client.ts`; the owner side is `db-owner-worker.ts`. Only the owner imports SQLite and executes synchronous SQL.
+This page documents the daemon-to-owner contract. The executable protocol types live in `platform/daemon/src/db-owner-protocol.ts`; the daemon client and owner runtime are in `db-owner-client.ts` and `db-owner-worker.ts`. Only the owner imports SQLite and executes synchronous SQL.
 
 ## Job envelope
 
-Every submitted job has this shape:
+A job carries an identifier, operation, lane, workload class, enqueue time, absolute deadline, estimated work units, cancellation state, and a request. The excerpt below shows common SQL request shapes; the complete request union and field types are defined in `db-owner-protocol.ts`.
 
 ```ts
 {
   id: string,
   operation: string,
-  lane: "read" | "write" | "maintenance",
+  lane: "read" | "write" | "maintenance" | "verify",
   workloadClass: "foreground" | "maintenance",
   enqueuedAt: number,
   deadlineAt: number,
@@ -23,13 +26,14 @@ Every submitted job has this shape:
       params?: Array<string | number | boolean | null | { type: "bytes", base64: string }>,
       result: "all" | "get" | "run",
       maxResultBytes?: number,
+      readonly?: boolean,
       transactional?: boolean,
       requireChanges?: boolean
     }
   } | {
     kind: "transaction",
     transaction: {
-      statements: Array<Statement>
+      statements: Array<DbOwnerStatement>
     }
   } | {
     kind: "batch",
@@ -58,7 +62,7 @@ Every submitted job has this shape:
 }
 ```
 
-`enqueuedAt` and `deadlineAt` use Unix milliseconds. `deadlineAt` is an absolute deadline, so queue wait and execution consume the same budget. Each workload class has an independent bounded admission queue of 64 pending jobs, so foreground work retains capacity while maintenance is saturated. The writer scheduler prioritizes foreground jobs and forces a maintenance turn after a bounded foreground burst; it never preempts a synchronous job already running. Each job is also limited to 10,000 estimated work units and a 60-second deadline for read/write jobs. Maintenance jobs may use a 15-minute deadline for bounded, killable operations such as the one-time VACUUM conversion. `maxResultBytes` is bounded at 1 MiB. A result above that limit is rejected with `DB_OWNER_RESULT_TOO_LARGE`; callers must page the SQL query or select fewer columns. The owner never emits an unbounded result line. `estimatedWorkUnits` is admission and telemetry metadata, not permission to exceed the deadline. The `sleep` request exists only for lifecycle and deadline tests and is not a production database operation.
+`enqueuedAt` and `deadlineAt` use Unix milliseconds. `deadlineAt` is an absolute deadline, so queue wait and execution consume the same budget. Each workload class has an independent bounded admission queue of 64 pending jobs, so foreground work retains capacity while maintenance is saturated. The owner scheduler prioritizes foreground jobs and forces a maintenance turn after a bounded foreground burst; it never preempts synchronous work already running. Each job is also limited to 10,000 estimated work units and a 60-second deadline for read/write jobs. Maintenance and verification jobs may use a 15-minute deadline for bounded operations such as the one-time VACUUM conversion. `maxResultBytes` is bounded at 1 MiB. A result above that limit is rejected with `DB_OWNER_RESULT_TOO_LARGE`; callers must page the SQL query or select fewer columns. The owner never emits an unbounded result line. `estimatedWorkUnits` is admission and telemetry metadata, not permission to exceed the deadline. The `sleep` request exists only for lifecycle and deadline tests and is not a production database operation.
 
 ## Wire messages
 
@@ -70,7 +74,8 @@ Messages are newline-delimited JSON over the owner's stdin/stdout. The daemon se
 
 The owner sends:
 
-- `{"type":"ready","pid": ...}` after it has opened its SQLite connection.
+- `{"type":"ready","pid": ...}` when the worker process starts. This is transport readiness, not database readiness; database initialization is a separate owner job/result.
+- `{"type":"started","jobId": ...,"workloadClass": ...}` when a job begins execution.
 - `{"type":"result","jobId": ...,"outcome":"completed","result": ...}`
 - `{"type":"result","jobId": ...,"outcome":"cancelled"}`
 - `{"type":"result","jobId": ...,"outcome":"timed_out"}`
@@ -81,17 +86,7 @@ The owner sends:
 
 ## Execution and cancellation
 
-The owner has two independent processes: a reader for `read` jobs and a
-serial writer for `write` and `maintenance` jobs. A read job therefore does
-not wait behind a synchronous maintenance job. Each process has its own SQLite
-connection; WAL mode provides the concurrent read/write boundary. Inside the
-writer, foreground and maintenance jobs have separate FIFO admission queues;
-foreground jobs have priority with a bounded burst so maintenance cannot starve.
-The writer still serializes all writes and maintenance work. A `run` statement is wrapped
-in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A
-transaction request wraps all of its statements atomically. A `batch` contains
-only `run` statements and also rolls back on failure; `requireChanges` is a
-fail-closed zero-change precondition.
+The single owner process serially drains bounded foreground and maintenance queues. It prioritizes foreground jobs and admits a maintenance turn after a bounded foreground burst; no job preempts synchronous work already running. Read-only statements use read-only SQLite connections within that same process, not a separate reader process. A `run` statement is wrapped in `BEGIN IMMEDIATE`/`COMMIT` unless `transactional: false` is explicit. A transaction request wraps all of its statements atomically. A `batch` contains only `run` statements and also rolls back on failure; `requireChanges` is a fail-closed zero-change precondition.
 
 A queued cancellation is removed from the client pending map, clears its deadline timer, and is removed from the owner's queue before execution. A cancellation received while synchronous native SQLite work is running is best effort because the owner cannot observe stdin until that call returns. A deadline abandons the job rather than killing the owner: the client rejects the handle, removes the job from its pending map, and sends a cancel message when the job was dispatched. The owner drops a still-queued job; an already-running synchronous operation may finish, but its abandoned result is ignored. Other jobs continue on the surviving owner.
 
@@ -101,7 +96,8 @@ Construction failure, malformed protocol input, owner exit, deadline abandonment
 
 `DbOwnerClient` is the only daemon-facing interface:
 
-- `start()` waits for owner construction and readiness.
+- `start()` starts the worker process and waits for its `ready` transport event; it does not establish database readiness.
+- `initialize(agentsDir?)` submits the initialization job and waits for its result. A completed result establishes database readiness.
 - `submit(request, options)` returns a serializable job envelope and a typed result handle.
 - `awaitResult(handle, timeoutMs?)` awaits a result and cancels on the optional caller timeout.
 - `cancel(jobId)` requests cancellation.
