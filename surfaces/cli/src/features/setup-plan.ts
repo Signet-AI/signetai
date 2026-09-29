@@ -91,7 +91,7 @@ export const setupPlanSchema = z
 		identityPreset: identityPresetSchema,
 		startupIdentityFiles: z.array(identityContextFileSchema),
 		specialIdentityFiles: z.array(identitySpecialFileSchema),
-		dreamingEnabled: z.boolean().optional(),
+		dreamingEnabled: z.boolean().optional().meta({ default: true }),
 		daemonUrl: z
 			.string()
 			.regex(BARE_DAEMON_ORIGIN_PATTERN, "must be a bare http(s) origin (no path, query, or credentials)")
@@ -196,7 +196,7 @@ export interface SetupApplyContext {
 export function parseSetupPlan(json: unknown): SetupPlan {
 	const result = setupPlanSchema.safeParse(json);
 	if (result.success) {
-		return result.data;
+		return { ...result.data, dreamingEnabled: result.data.dreamingEnabled ?? true };
 	}
 	const issues = result.error.issues.map((issue) => {
 		const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";

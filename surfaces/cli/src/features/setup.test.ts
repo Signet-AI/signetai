@@ -224,6 +224,27 @@ describe("setupWizard non-interactive harness hooks", () => {
 		expect(configureHarnessHooks).not.toHaveBeenCalled();
 	});
 
+	it("enables Dreaming for a fresh basic setup without an opt-in flag", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-fresh-dreaming-default-"));
+		const basePath = join(root, "agents");
+		const deps = stubDeps({
+			AGENTS_DIR: basePath,
+			normalizeAgentPath: mock((p: string) => p),
+			detectExistingSetup: mock(() => ({
+				...fakeDetection(basePath),
+				agentsDir: false,
+				memoryDb: false,
+			})),
+		});
+
+		await setupWizard({ nonInteractive: true, skipGit: true, identityMode: "off", extractionProvider: "none" }, deps);
+
+		const config = parseSimpleYaml(readFileSync(join(basePath, "agent.yaml"), "utf-8"));
+		const memory = config.memory as Record<string, unknown>;
+		const dreaming = memory.dreaming as Record<string, unknown>;
+		expect(dreaming.enabled).toBe(true);
+	});
+
 	it("enables Dreaming on an existing installation when requested", async () => {
 		root = mkdtempSync(join(tmpdir(), "setup-existing-dreaming-"));
 		const basePath = join(root, "agents");
@@ -961,6 +982,9 @@ describe("setupWizard headless plan path", () => {
 		expect(agentYaml).toContain("name: Headless Agent");
 		expect(agentYaml).toContain("mode: localhost");
 		expect(existsSync(join(basePath, "data", "signet.db"))).toBe(true);
+		const config = parseSimpleYaml(agentYaml);
+		const memory = config.memory as Record<string, unknown>;
+		expect((memory.dreaming as Record<string, unknown>).enabled).toBe(true);
 	});
 
 	it("rejects a malformed --agent flag instead of silently dropping it", async () => {
@@ -1114,6 +1138,22 @@ describe("setupWizard headless plan path", () => {
 		expect(agentYaml).toContain("maintenanceMode: execute");
 		expect(agentYaml).not.toContain("synthesis:");
 		expect(agentYaml).not.toContain("provider: claude-code");
+	});
+
+	it("keeps Dreaming off when a fresh setup plan explicitly disables it", async () => {
+		root = mkdtempSync(join(tmpdir(), "setup-headless-dreaming-disabled-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		writeIdentityTemplates(templatesPath);
+		const planPath = writePlanFile(root, { dreamingEnabled: false });
+		const deps = freshDeps(basePath, templatesPath);
+
+		await setupWizard({ file: planPath }, deps);
+
+		const config = parseSimpleYaml(readFileSync(join(basePath, "agent.yaml"), "utf-8"));
+		const memory = config.memory as Record<string, unknown>;
+		expect(memory.dreaming).toBeUndefined();
+		expect((memory.pipelineV2 as Record<string, unknown>).enabled).toBe(false);
 	});
 
 	it("rejects a connected cloud extraction target from a headless plan", async () => {

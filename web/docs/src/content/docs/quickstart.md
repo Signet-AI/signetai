@@ -28,7 +28,7 @@ See [Install](/getting-started/install/) for package-manager alternatives and no
 signet setup
 ```
 
-Setup prepares a minimal local workspace and opens guided dashboard onboarding: connect the agents and model you choose, optionally bring an Obsidian vault, transcript exports, or files, then test and save a first memory. The default interactive path does not preselect providers or harnesses, create identity files, install skills, or initialize Git. Provider processing starts only after your explicit connection test and enable action. See [Set up Signet](/getting-started/setup/) for the flow and recovery steps.
+Setup prepares a minimal local workspace and opens guided dashboard onboarding: connect the agents and model you choose, optionally bring an Obsidian vault, transcript exports, or files, then test and save a first memory. The default interactive path does not preselect providers or harnesses, create identity files, install skills, or initialize Git. Provider processing starts only after your explicit connection test and enable action. Fresh workspaces default Dreaming to on, and onboarding asks about it beside provider/model setup. If you continue without a working provider, Dreaming remains enabled but unavailable until one is connected and tested. Existing workspaces keep their current setting unless you opt in with `signet setup --enable-dreaming`. See [Set up Signet](/getting-started/setup/) for the flow and recovery steps.
 
 Fresh interactive setup leaves identity management off and creates no identity files. Configure an identity preset later if you want Signet-managed prompt files; scripted CLI setup still supports `--identity-mode` and `--identity-preset`.
 

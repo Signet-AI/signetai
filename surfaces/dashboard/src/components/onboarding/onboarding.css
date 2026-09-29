@@ -51,6 +51,13 @@
  .selected .tick { background:var(--success); border-color:var(--success); }
  .muted-link { border:0; background:none; color:var(--muted-foreground); text-decoration:underline; text-underline-offset:3px; font-size:11px; padding:12px 0; }
  .auth-card { border:1px solid var(--border); border-radius:10px; padding:16px; margin-top:18px; }
+ .dreaming-choice { display:flex; align-items:center; justify-content:space-between; gap:20px; border:1px solid var(--border); border-radius:10px; padding:13px 15px; margin-top:14px; }
+ .dreaming-choice strong { font-size:12px; font-weight:500; }
+ .dreaming-choice p { font-size:11px; line-height:1.5; margin:5px 0 0; }
+ .dreaming-choice [data-slot="switch"] { width:40px; height:24px; flex-shrink:0; border:1px solid var(--border); padding:2px; background:var(--muted); }
+ .dreaming-choice [data-slot="switch"][data-state="checked"] { border-color:var(--success); background:var(--success); }
+ .dreaming-choice [data-slot="switch-thumb"] { width:18px; height:18px; background:var(--background); }
+ .dreaming-choice [data-slot="switch"][data-state="checked"] [data-slot="switch-thumb"] { transform:translateX(16px); }
  .connection-heading { display:flex; align-items:center; gap:10px; }
  .status { font-size:12px; color:var(--muted-foreground); margin-top:8px; line-height:1.6; }
  .failure { border-inline-start:2px solid var(--destructive); padding:8px 12px; margin-top:12px; color:var(--destructive); font-size:12px; line-height:1.5; }

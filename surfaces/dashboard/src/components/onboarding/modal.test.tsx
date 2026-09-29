@@ -164,15 +164,18 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		}
 	});
 
-	test("connection setup can be deferred without enabling inference or reporting a successful probe", async () => {
+	test("keeps Dreaming enabled but provider-unavailable when connection setup is deferred", async () => {
 		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 		const view = await mount();
 		try {
 			await view.click("Get started");
 			await view.click("Continue");
-			const before = config;
+			const dreaming = document.querySelector('[role="switch"][aria-label="Enable Dreaming?"]');
+			expect(dreaming?.getAttribute("aria-checked")).toBe("true");
+			expect(dreaming?.getAttribute("aria-describedby")).toBe("dreaming-provider-status");
+			expect(document.body.textContent).toContain("unavailable until a working provider is connected and tested");
 			await view.click("Set up later");
-			expect(config).toBe(before);
+			expect(config).toContain("dreaming:\n    enabled: true");
 			expect(calls).not.toContain("POST /api/inference/execute");
 			expect(calls).not.toContain("POST /api/pipeline/resume");
 			await view.click("Continue");
@@ -192,7 +195,47 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		}
 	});
 
+	test("lets users opt out while deferring provider setup", async () => {
+		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			const dreaming = document.querySelector('[role="switch"][aria-label="Enable Dreaming?"]');
+			if (!(dreaming instanceof HTMLButtonElement)) throw new Error("Missing Dreaming preference");
+			await act(async () => dreaming.click());
+			expect(dreaming.getAttribute("aria-checked")).toBe("false");
+			await view.click("Set up later");
+			expect(config).toMatch(/dreaming:\s*\n\s+enabled: false/);
+			expect(calls).not.toContain("POST /api/inference/execute");
+			expect(calls).not.toContain("POST /api/pipeline/resume");
+		} finally {
+			await view.close();
+		}
+	});
+
+	test("preserves the Dreaming opt-out when a provider passes setup", async () => {
+		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.click("Local modelProcess on your own machine");
+			await view.input("Model name", "fixture-model");
+			const dreaming = document.querySelector('[role="switch"][aria-label="Enable Dreaming?"]');
+			if (!(dreaming instanceof HTMLButtonElement)) throw new Error("Missing Dreaming preference");
+			await act(async () => dreaming.click());
+			await view.click("Test and enable memory");
+			expect(calls).toContain("POST /api/inference/execute");
+			expect(calls).toContain("POST /api/pipeline/resume");
+			expect(config).toMatch(/dreaming:\s*\n\s+enabled: false/);
+		} finally {
+			await view.close();
+		}
+	});
+
 	test("the modal requires a successful save and probe, exposes sources, and recalls scoped evidence", async () => {
+		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 		const view = await mount();
 		try {
 			expect(document.querySelector('[role="dialog"]')).not.toBeNull();
@@ -209,6 +252,7 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			expect(calls).toContain("POST /api/inference/execute");
 			expect(calls).toContain("POST /api/pipeline/resume");
 			expect(config).toContain("operator_setting: preserved");
+			expect(config).toMatch(/dreaming:\s*\n\s+enabled: true/);
 			await view.click("Continue");
 			expect(document.body.textContent).toContain("Bring your context");
 			expect(document.body.textContent).toContain("Obsidian");

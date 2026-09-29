@@ -28,6 +28,7 @@ function basePlan(overrides: Partial<SetupPlan> = {}): SetupPlan {
 		identityPreset: "minimal",
 		startupIdentityFiles: [...IDENTITY_PRESETS.minimal.startup],
 		specialIdentityFiles: [...IDENTITY_PRESETS.minimal.special],
+		dreamingEnabled: true,
 		...overrides,
 	};
 }
@@ -36,6 +37,10 @@ describe("setupPlanSchema", () => {
 	it("accepts a well-formed plan", () => {
 		const plan = basePlan();
 		expect(parseSetupPlan(plan)).toEqual(plan);
+	});
+
+	it("defaults Dreaming on when a fresh plan omits the field", () => {
+		expect(parseSetupPlan({ ...basePlan(), dreamingEnabled: undefined }).dreamingEnabled).toBe(true);
 	});
 
 	it("accepts a plan with an http openai-compatible endpoint", () => {
@@ -264,6 +269,7 @@ describe("setupPlanJsonSchema", () => {
 		]) {
 			expect(schema.properties[key]).toBeDefined();
 		}
+		expect(schema.properties.dreamingEnabled).toEqual({ default: true, type: "boolean" });
 	});
 
 	it("keeps the zod schema and its inferred type in sync", () => {

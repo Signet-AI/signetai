@@ -3,6 +3,7 @@ import { Monitor, FileText as Files, MessageCircle as MessagesSquare } from "@/c
 import { SignetMark, sourceLogo } from "@/components/icons";
 import { ConnectorLogo } from "@/components/connector-logo";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { useEffect, useRef, useState } from "react";
 import { api, getJSONResult, type Memory } from "@/lib/api";
 import { useAgentConfig } from "@/lib/agent-config";
@@ -52,6 +53,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 	const [prompt, setPrompt] = useState("");
 	const [connected, setConnected] = useState(false);
 	const [verified, setVerified] = useState(false);
+	const [dreamingEnabled, setDreamingEnabled] = useState(true);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | null>(null);
 	const [memory, setMemory] = useState("");
@@ -109,6 +111,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 	useEffect(() => {
 		if (!storageKey || !store.ready || !catalog.data || loaded.current) return;
 		loaded.current = true;
+		setDreamingEnabled(store.aBool(["memory", "dreaming", "enabled"], true));
 		const ref = store.aStr(["inference", "workloads", "memoryExtraction", "target"]) || "background/default";
 		const [targetId, modelId] = ref.split("/");
 		const base = ["inference", "targets", targetId ?? "background"];
@@ -135,7 +138,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 				if (typeof saved.memoryKey === "string") memoryKey.current = saved.memoryKey;
 			}
 		} catch {}
-	}, [storageKey, store.ready, store.agent, store.aStr, catalog.data]);
+	}, [storageKey, store.ready, store.agent, store.aBool, store.aStr, catalog.data]);
 	useEffect(() => {
 		if (!storageKey || !loaded.current) return;
 		try {
@@ -168,6 +171,24 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 		setModel(catalog.data?.recommendedModels?.[id] ?? "");
 		setKey("");
 	};
+	const chooseDreaming = (enabled: boolean) => {
+		setDreamingEnabled(enabled);
+		store.aSetBool(["memory", "dreaming", "enabled"], enabled);
+		void store.save().then((saved) => {
+			if (!saved) setError("Could not save the Dreaming preference. Retry before leaving setup.");
+		});
+	};
+	const deferConnection = async () => {
+		controller.cancelOAuth();
+		navigation.close();
+		store.aSetBool(["memory", "dreaming", "enabled"], dreamingEnabled);
+		if (!(await store.save())) {
+			setError("Could not save the Dreaming preference. Retry before leaving setup.");
+			return;
+		}
+		setError(null);
+		setStep(3);
+	};
 	const configureModel = async () => {
 		if (!model.trim()) throw new Error("Choose a model before testing.");
 		if (local) {
@@ -191,6 +212,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 			store.aDel([...target, "endpoint"]);
 		}
 		store.aSetStr(["inference", "workloads", "memoryExtraction", "target"], ref);
+		store.aSetBool(["memory", "dreaming", "enabled"], dreamingEnabled);
 		store.aUpdate(ensureInferenceRoute);
 		if (!local) store.aUpdate(allowRemoteMemoryExtraction);
 		if (!(await store.save()))
@@ -324,9 +346,9 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 		}
 		onClose();
 	};
-	const blocked = busy || sourceBusy || phase.kind === "oauth-running" || phase.kind === "saving";
+	const blocked = busy || sourceBusy || store.saving || phase.kind === "oauth-running" || phase.kind === "saving";
 	const close = () => {
-		if (!busy && !sourceBusy) {
+		if (!busy && !sourceBusy && !store.saving) {
 			controller.cancelOAuth();
 			onClose();
 		}
@@ -713,6 +735,27 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 											)}
 										</>
 									)}
+									{step === 2 && (
+										<div className="dreaming-choice">
+											<div>
+												<strong>Enable Dreaming?</strong>
+												<p id="dreaming-provider-status">
+													{dreamingEnabled
+														? verified
+															? "Dreaming is enabled and your provider passed its test."
+															: "Dreaming stays enabled, but is unavailable until a working provider is connected and tested."
+														: "Dreaming is off and will stay disabled until you enable it in your agent configuration."}
+												</p>
+											</div>
+											<Switch
+												checked={dreamingEnabled}
+												disabled={busy || store.saving}
+												onCheckedChange={chooseDreaming}
+												aria-label="Enable Dreaming?"
+												aria-describedby="dreaming-provider-status"
+											/>
+										</div>
+									)}
 									{step === 3 && (
 										<>
 											{heading(
@@ -816,7 +859,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 															maxLength={240}
 															onChange={(e) => setMemory(e.target.value)}
 														/>
-														<div className="memory-examples" aria-label="Memory examples">
+														<div className="memory-examples">
 															{[
 																["How I like answers", "I prefer short answers with concrete examples."],
 																["How I work", "Explain the tradeoffs before recommending an approach."],
@@ -917,13 +960,8 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 								<button
 									type="button"
 									className="back"
-									disabled={busy || phase.kind === "saving"}
-									onClick={() => {
-										controller.cancelOAuth();
-										navigation.close();
-										setError(null);
-										setStep(3);
-									}}
+									disabled={busy || store.saving || phase.kind === "saving"}
+									onClick={() => void deferConnection()}
 								>
 									Set up later
 								</button>

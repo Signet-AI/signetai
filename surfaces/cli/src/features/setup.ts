@@ -844,7 +844,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	const memorySessionBudget = deps.parseIntegerValue(existingMemory.session_budget) ?? 2000;
 	const memoryDecayRate = deps.parseSearchBalanceValue(existingMemory.decay_rate) ?? 0.95;
 
-	const dreamingEnabled = options.enableDreaming === true;
+	const dreamingEnabled = options.enableDreaming ?? (!existing.agentYaml && !existing.configYaml && !existing.memoryDb);
 
 	let gitEnabled = false;
 	const shouldSkipGit = options.skipGit === true;

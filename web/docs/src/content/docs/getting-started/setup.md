@@ -15,14 +15,16 @@ Setup creates a local workspace when needed, starts or reaches its daemon, and o
 
 1. **Welcome** explains what memory carries between conversations.
 2. **Agents** offers Claude Code, Codex, Hermes Agent, OpenCode, OpenClaw, Gemini CLI, Pi, Oh My Pi, Kimi, and ForgeCode. OpenClaw requires its Signet plugin package from CLI setup before connecting here. You may connect an agent later.
-3. **Connection** signs in to a provider, stores an API key, or connects a local model. An explicit **Test and enable memory** action saves the configuration, checks a real model response, and starts automatic processing. Saved credentials can be replaced or signed in again. Failed saves or tests show an error; **Set up later** continues to sources without enabling processing or claiming the connection works. Existing frozen or shadow controls are respected.
+3. **Connection** signs in to a provider, stores an API key, or connects a local model. The screen also asks whether to enable Dreaming, defaulting on for a fresh workspace. Dreaming remains enabled but unavailable until a working provider is connected and tested. **Test and enable memory** saves the model configuration, checks a real response, and starts automatic processing. Saved credentials can be replaced or signed in again. Failed saves or tests show an error; **Set up later** keeps the Dreaming choice but does not run inference or start automatic processing. Existing frozen or shadow controls are respected.
 4. **Bring your context** optionally connects an Obsidian vault or imports files and [transcript exports](/sources/#agent-transcript-imports). You can add multiple sources. Indexing and import jobs may continue in the background; their reported state is not a claim that semantic processing has completed. Sources provides progress, errors, retry, and removal.
 5. **First memory** saves a private note under your active agent, then retrieves that same note through scoped search.
 6. **Ready** reports the checks that actually completed. Start a new conversation in your agent to check its integration.
 
+![The provider setup step keeps Dreaming enabled by default and explains that it is unavailable until a working provider is connected.](/screenshots/onboarding-connection-dreaming-dark.png)
+
 Closing and reopening remembers the UI checkpoint in this browser, but rechecks the model connection. Credentials are stored by the daemon, never in the checkpoint. If browser storage is unavailable, the workspace is still preserved.
 
-Fresh interactive setup leaves identity management off and telemetry disabled. Provider processing waits for the explicit enable action. Existing workspaces keep their settings. Sources and advanced configuration remain available after onboarding.
+Fresh interactive setup leaves identity management off and telemetry disabled. Dreaming defaults on and is offered as a choice beside provider/model setup; without a working provider it remains enabled but unavailable. Automatic processing starts only after the explicit provider test and enable action. Existing workspaces keep their settings. Sources and advanced configuration remain available after onboarding.
 
 For unattended systems, use [the non-interactive setup reference](/cli/getting-started/#signet-setup). JSON plans and flags still use the CLI's validated setup path; the modal requests existing daemon operations rather than creating a second plan executor. Browser sign-in replaces the retired `extractionConnect` plan field, which now fails validation.
 
