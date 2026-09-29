@@ -359,7 +359,7 @@ export function startDreamingWorker(
 	}
 
 	async function check(): Promise<void> {
-		if (stopped || active) return;
+		if (stopped || active || !cfg.enabled) return;
 		const checkedAt = new Date().toISOString();
 		if (isSystemPressureHigh()) {
 			scheduler = { status: "deferred", reason: "system_pressure", checkedAt };

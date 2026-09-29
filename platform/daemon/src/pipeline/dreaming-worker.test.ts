@@ -678,8 +678,28 @@ describe("dreaming worker agent scope", () => {
 		}
 	});
 
-	it("writes manual async trigger passes to the requested agent", async () => {
-		const worker = startDreamingWorker(accessor, defaultCfg(), agentsDir, "default");
+	it("does not run scheduled checks when automatic Dreaming is disabled", async () => {
+		let queueHealthChecks = 0;
+		const ownerMaintenance = {
+			queueIsHealthy: async () => {
+				queueHealthChecks += 1;
+				return true;
+			},
+		} as unknown as DbOwnerMaintenance;
+		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: false }), agentsDir, "default", {
+			checkIntervalMs: 10,
+			ownerMaintenance,
+		});
+		try {
+			await new Promise<void>((resolve) => setTimeout(resolve, 50));
+			expect(queueHealthChecks).toBe(0);
+		} finally {
+			worker.stop();
+		}
+	});
+
+	it("writes manual async trigger passes when automatic Dreaming is disabled", async () => {
+		const worker = startDreamingWorker(accessor, defaultCfg({ enabled: false }), agentsDir, "default");
 		try {
 			const passId = await worker.triggerAsync("incremental", "noam");
 			await worker.activePass;

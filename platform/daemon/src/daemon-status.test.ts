@@ -510,6 +510,9 @@ describe("daemon status contract", () => {
 		expect(runtimeStart).toBeGreaterThanOrEqual(0);
 		expect(maintenanceStart).toBeGreaterThan(runtimeStart);
 		expect(maintenanceStart).toBeLessThan(workerStart);
+		expect(
+			source.slice(workerStart, source.indexOf("setDreamingWorker(dreamingWorkerHandle)", workerStart)),
+		).not.toContain("memoryCfg.dreaming.enabled");
 	});
 
 	it("counts non-errored connectors as active for heartbeat telemetry", () => {

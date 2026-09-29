@@ -798,8 +798,10 @@ and restricted ACPX bindings receive it from the daemon-owned pass context.
 Manually trigger a dreaming pass. Requires `admin` permission.
 Returns `202 Accepted` immediately and runs the pass in the background
 (passes can take up to several minutes on large graphs).
-Returns 409 if a pass is already running. Returns 503 if the
-dreaming worker is not started.
+The daemon keeps the worker available for manual triggers when automatic
+Dreaming is disabled; scheduled sweeps remain idle. The pipeline must not be
+paused and mutations must not be frozen. Returns 409 if a pass is already
+running and 503 if the pipeline prevents worker startup.
 
 Poll `GET /api/dream/status` and check `passes[0].status` for completion, or
 use `GET /api/dream/passes/:passId/events` for a live read-only view.
