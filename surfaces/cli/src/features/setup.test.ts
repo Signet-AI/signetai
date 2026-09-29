@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, mock, spyOn } from "bun:test";
+import * as prompts from "@inquirer/prompts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1394,6 +1395,52 @@ describe("interactive onboarding", () => {
 			server.stop(true);
 			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
 			rmSync(root, { recursive: true, force: true });
+		}
+	});
+});
+
+describe("first-run setup migration onboarding handoff", () => {
+	let root = "";
+
+	afterEach(() => {
+		if (root) rmSync(root, { recursive: true, force: true });
+	});
+
+	it("opens the guided setup flow after the user accepts the dashboard prompt", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-first-run-onboarding-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(templatesPath, { recursive: true });
+
+		const confirm = spyOn(prompts, "confirm").mockImplementation(() =>
+			Object.assign(Promise.resolve(true), { cancel: () => {} }),
+		);
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const previousTty = process.stdin.isTTY;
+		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+		try {
+			const deps = stubDeps({
+				AGENTS_DIR: basePath,
+				DEFAULT_PORT: 4217,
+				getTemplatesDir: mock(() => templatesPath),
+				normalizeAgentPath: mock((path: string) => path),
+				detectExistingSetup: mock(() => ({
+					...fakeDetection(basePath),
+					agentYaml: false,
+					configYaml: false,
+					memoryDb: true,
+				})),
+			});
+
+			await setupWizard({}, deps);
+
+			expect(confirm).toHaveBeenCalledWith({ message: "Open the dashboard?", default: true });
+			expect(open).toHaveBeenCalledWith("http://127.0.0.1:4217/#setup");
+		} finally {
+			confirm.mockRestore();
+			open.mockRestore();
+			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
 		}
 	});
 });

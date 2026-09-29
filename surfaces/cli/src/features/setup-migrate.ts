@@ -604,7 +604,7 @@ export async function runExistingSetupWizard(
 				confirm({ message: "Open the dashboard?", default: true }),
 			);
 			if (launchNow) {
-				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
+				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}/#setup`);
 			}
 		}
 
