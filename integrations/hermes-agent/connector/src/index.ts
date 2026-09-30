@@ -147,13 +147,12 @@ function closeDirectory(fd: number): void {
 
 const SECURE_REMOVAL_CHANGED_STATUS = 75;
 const SECURE_REMOVAL_SCRIPT = [
-	"import os, sys",
+	"import ctypes, os, secrets, stat, sys",
 	"expected_dev = int(sys.argv[1])",
 	"expected_ino = int(sys.argv[2])",
 	"operation = sys.argv[3]",
 	"name = sys.argv[4]",
 	"expected_parent = sys.argv[5]",
-	"descriptor_root = sys.argv[6]",
 	"expected_parent_stat = os.stat(expected_parent, follow_symlinks=False)",
 	"if os.path.realpath(expected_parent) != expected_parent:",
 	"    raise SystemExit(75)",
@@ -166,15 +165,98 @@ const SECURE_REMOVAL_SCRIPT = [
 	"    raise SystemExit(75)",
 	"if current.st_dev != expected_dev or current.st_ino != expected_ino:",
 	"    raise SystemExit(75)",
+	"if operation == 'verify':",
+	"    raise SystemExit(0)",
+	"if operation not in ('directory', 'file'):",
+	"    raise SystemExit(76)",
+	"libc = ctypes.CDLL(None, use_errno=True)",
+	"if sys.platform == 'darwin':",
+	"    rename_function = getattr(libc, 'renameatx_np', None)",
+	"    rename_flags = 4",
+	"elif sys.platform.startswith('linux'):",
+	"    rename_function = getattr(libc, 'renameat2', None)",
+	"    rename_flags = 1",
+	"else:",
+	"    rename_function = None",
+	"    rename_flags = 0",
+	"if rename_function is None:",
+	"    raise OSError('exclusive descriptor-relative rename is unavailable')",
+	"rename_function.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]",
+	"rename_function.restype = ctypes.c_int",
+	"def rename_exclusive(source_fd, source_name, destination_fd, destination_name):",
+	"    result = rename_function(source_fd, os.fsencode(source_name), destination_fd, os.fsencode(destination_name), rename_flags)",
+	"    if result != 0:",
+	"        error = ctypes.get_errno()",
+	"        raise OSError(error, os.strerror(error), source_name)",
+	"quarantine = None",
+	"for attempt in range(8):",
+	"    candidate = '.signet-remove-' + secrets.token_hex(16)",
+	"    try:",
+	"        os.mkdir(candidate, 0o700, dir_fd=3)",
+	"        quarantine = candidate",
+	"        break",
+	"    except FileExistsError:",
+	"        pass",
+	"if quarantine is None:",
+	"    raise OSError('could not allocate a private removal directory')",
+	"quarantine_fd = os.open(quarantine, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=3)",
+	"changed = False",
+	"entry_moved = False",
 	"try:",
-	"    if operation == 'directory':",
-	"        os.rmdir(name, dir_fd=3)",
-	"    elif operation == 'file':",
-	"        os.unlink(name, dir_fd=3)",
-	"    elif operation != 'verify':",
-	"        raise SystemExit(76)",
-	"except FileNotFoundError:",
+	"    os.fchmod(quarantine_fd, 0o700)",
+	"    try:",
+	"        rename_exclusive(3, name, quarantine_fd, 'entry')",
+	"        entry_moved = True",
+	"    except FileNotFoundError:",
+	"        changed = True",
+	"    if not changed:",
+	"        moved = os.stat('entry', dir_fd=quarantine_fd, follow_symlinks=False)",
+	"        if moved.st_dev != expected_dev or moved.st_ino != expected_ino:",
+	"            try:",
+	"                rename_exclusive(quarantine_fd, 'entry', 3, name)",
+	"                entry_moved = False",
+	"            except OSError as restore_error:",
+	"                print(f'recovery entry retained at {expected_parent}/{quarantine}/entry: {restore_error}', file=sys.stderr)",
+	"            changed = True",
+	"        elif operation == 'directory':",
+	"            if not stat.S_ISDIR(moved.st_mode):",
+	"                try:",
+	"                    rename_exclusive(quarantine_fd, 'entry', 3, name)",
+	"                    entry_moved = False",
+	"                except OSError as restore_error:",
+	"                    print(f'recovery entry retained at {expected_parent}/{quarantine}/entry: {restore_error}', file=sys.stderr)",
+	"                changed = True",
+	"            else:",
+	"                os.rmdir('entry', dir_fd=quarantine_fd)",
+	"                entry_moved = False",
+	"        elif stat.S_ISDIR(moved.st_mode):",
+	"            try:",
+	"                rename_exclusive(quarantine_fd, 'entry', 3, name)",
+	"                entry_moved = False",
+	"            except OSError as restore_error:",
+	"                print(f'recovery entry retained at {expected_parent}/{quarantine}/entry: {restore_error}', file=sys.stderr)",
+	"            changed = True",
+	"        else:",
+	"            os.unlink('entry', dir_fd=quarantine_fd)",
+	"            entry_moved = False",
+	"except Exception as error:",
+	"    if entry_moved:",
+	"        print(f'recovery entry retained at {expected_parent}/{quarantine}/entry: {error}', file=sys.stderr)",
+	"    else:",
+	"        try:",
+	"            os.rmdir(quarantine, dir_fd=3)",
+	"        except OSError:",
+	"            pass",
+	"    raise",
+	"finally:",
+	"    os.close(quarantine_fd)",
+	"if changed:",
+	"    try:",
+	"        os.rmdir(quarantine, dir_fd=3)",
+	"    except OSError:",
+	"        pass",
 	"    raise SystemExit(75)",
+	"os.rmdir(quarantine, dir_fd=3)",
 ].join("\n");
 
 const SECURE_CREATE_DIRECTORIES_SCRIPT = [
@@ -242,6 +324,26 @@ const SECURE_WRITE_FILE_SCRIPT = [
 	"finally:",
 	"    os.close(fd)",
 ].join("\n");
+const SECURE_READ_FILE_SCRIPT = [
+	"import os, stat, sys",
+	"try:",
+	"    fd = os.open(sys.argv[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=3)",
+	"except FileNotFoundError:",
+	"    raise SystemExit(0)",
+	"try:",
+	"    if not stat.S_ISREG(os.fstat(fd).st_mode):",
+	"        raise SystemExit(0)",
+	"    content = bytearray()",
+	"    while len(content) <= 65536:",
+	"        chunk = os.read(fd, min(4096, 65537 - len(content)))",
+	"        if not chunk:",
+	"            break",
+	"        content.extend(chunk)",
+	"    if len(content) <= 65536:",
+	"        sys.stdout.buffer.write(content)",
+	"finally:",
+	"    os.close(fd)",
+].join("\n");
 
 function getPythonCandidates(): readonly { readonly command: string; readonly args: readonly string[] }[] {
 	const configuredPython = process.env.PYTHON?.trim();
@@ -263,7 +365,7 @@ function runSecureFilesystemOperation(
 	script: string,
 	args: readonly string[],
 	input?: string | Uint8Array,
-): void {
+): string {
 	if (DESCRIPTOR_ROOT === null) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
 	const errors: string[] = [];
 	for (const candidate of getPythonCandidates()) {
@@ -277,7 +379,7 @@ function runSecureFilesystemOperation(
 			errors.push(`${candidate.command}: ${result.error.message}`);
 			continue;
 		}
-		if (result.status === 0) return;
+		if (result.status === 0) return result.stdout;
 		if (result.status === 75) throw new Error("Hermes directory entry changed during secure write");
 		const detail = result.stderr.trim();
 		errors.push(`${candidate.command}: ${detail || `exited ${result.status ?? "without a status"}`}`);
@@ -307,7 +409,6 @@ function runSecureEntryOperation(
 				operation,
 				name,
 				parentPath,
-				DESCRIPTOR_ROOT,
 			],
 			{
 				encoding: "utf-8",
@@ -322,9 +423,11 @@ function runSecureEntryOperation(
 		}
 		if (result.status === 0) return;
 		if (result.status === SECURE_REMOVAL_CHANGED_STATUS) {
-			throw new Error(`Hermes directory entry changed during secure removal: ${name}`);
+			const detail = result.stderr.trim();
+			throw new Error(`Hermes directory entry changed during secure removal: ${name}${detail ? ` (${detail})` : ""}`);
 		}
-		errors.push(`${candidate.command}: exited ${result.status ?? "without a status"}`);
+		const detail = result.stderr.trim();
+		errors.push(`${candidate.command}: ${detail || `exited ${result.status ?? "without a status"}`}`);
 	}
 	throw new Error(`${DESCRIPTOR_WRITE_UNAVAILABLE_ERROR}: ${errors.join("; ") || "No Python interpreter found"}`);
 }
@@ -587,7 +690,15 @@ function removeDirectoryContentsNoFollow(directoryFd: number, expectedDirectoryP
 		`Hermes target directory changed during secure removal: ${expectedDirectoryPath}`,
 	);
 	const directoryEntriesPath = process.platform === "darwin" ? expectedDirectoryPath : descriptorPath(directoryFd);
-	for (const entry of readdirSync(directoryEntriesPath, { withFileTypes: true })) {
+	const entries = readdirSync(directoryEntriesPath, { withFileTypes: true });
+	entries.sort((left, right) => {
+		if (left.name === INSTALL_MARKER_FILE) return 1;
+		if (right.name === INSTALL_MARKER_FILE) return -1;
+		if (left.name < right.name) return -1;
+		if (left.name > right.name) return 1;
+		return 0;
+	});
+	for (const entry of entries) {
 		const childPath =
 			process.platform === "darwin"
 				? join(expectedDirectoryPath, entry.name)
@@ -1198,10 +1309,13 @@ function readInstallMarker(targetDir: string): InstallMarker | null {
 function readInstallMarkerFromDirectory(directoryFd: number, directoryPath: string): InstallMarker | null {
 	let markerFd: number | undefined;
 	try {
-		const markerPath =
-			process.platform === "darwin"
-				? join(directoryPath, INSTALL_MARKER_FILE)
-				: join(descriptorPath(directoryFd), INSTALL_MARKER_FILE);
+		if (process.platform === "darwin") {
+			const content = runSecureFilesystemOperation(directoryFd, directoryPath, SECURE_READ_FILE_SCRIPT, [
+				INSTALL_MARKER_FILE,
+			]);
+			return parseInstallMarker(content);
+		}
+		const markerPath = join(descriptorPath(directoryFd), INSTALL_MARKER_FILE);
 		markerFd = openSync(markerPath, constants.O_RDONLY | constants.O_NOFOLLOW);
 		return parseInstallMarker(readFileSync(markerFd, "utf-8"));
 	} catch {

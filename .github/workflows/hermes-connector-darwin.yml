@@ -1,0 +1,51 @@
+name: Hermes Connector Darwin
+
+on:
+  pull_request:
+    paths:
+      - "integrations/hermes-agent/connector/**"
+      - "libs/connector-base/**"
+      - "platform/core/**"
+      - "package.json"
+      - "bun.lock"
+      - "tsconfig.json"
+      - ".github/workflows/hermes-connector-darwin.yml"
+  push:
+    branches: [main]
+    paths:
+      - "integrations/hermes-agent/connector/**"
+      - "libs/connector-base/**"
+      - "platform/core/**"
+      - "package.json"
+      - "bun.lock"
+      - "tsconfig.json"
+      - ".github/workflows/hermes-connector-darwin.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  hermes-connector-darwin:
+    name: Hermes connector secure filesystem (macOS)
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Build workspace dependencies
+        run: |
+          bun run --filter @signet/core build
+          bun run --filter @signet/connector-base build
+      - name: Build and typecheck Hermes connector
+        run: |
+          bun run --filter @signet/connector-hermes-agent build
+          bun run --filter @signet/connector-hermes-agent typecheck
+      - name: Test Darwin marker and uninstall races
+        run: |
+          bun test --max-concurrency=1 integrations/hermes-agent/connector/darwin-marker-race.test.ts
+          bun test --max-concurrency=1 integrations/hermes-agent/connector/darwin-uninstall-race.test.ts
+          bun test --max-concurrency=1 integrations/hermes-agent/connector/index.test.ts
