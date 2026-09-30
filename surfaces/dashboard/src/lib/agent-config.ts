@@ -13,33 +13,6 @@ function getPath(obj: YamlObject, path: readonly string[]): unknown {
 	return cur;
 }
 
-export function pv2MaintenanceMode(agent: Record<string, unknown>): string | undefined {
-	const value = getPath(agent, ["memory", "pipelineV2", "autonomous", "maintenanceMode"]);
-	return typeof value === "string" ? value : undefined;
-}
-
-export function pv2ToggleValue(
-	agent: Record<string, unknown>,
-	nested: readonly string[],
-	flat: readonly string[],
-	fallback: boolean,
-): boolean {
-	const nestedValue = getPath(agent, nested);
-	if (typeof nestedValue === "boolean") return nestedValue;
-	const flatValue = getPath(agent, flat);
-	if (typeof flatValue === "boolean") return flatValue;
-	return fallback;
-}
-export function pv2ToggleWriteForm(
-	agent: Record<string, unknown>,
-	nested: readonly string[],
-	flat: readonly string[],
-): "nested" | "flat" {
-	if (typeof getPath(agent, nested) === "boolean") return "nested";
-	if (typeof getPath(agent, flat) === "boolean") return "flat";
-	return "nested";
-}
-
 function setPath(obj: YamlObject, path: readonly string[], value: unknown): void {
 	let cur = obj;
 	for (let i = 0; i < path.length - 1; i++) {

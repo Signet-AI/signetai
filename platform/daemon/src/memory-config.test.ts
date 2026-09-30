@@ -504,7 +504,28 @@ network:
 	it("includes pipelineV2 defaults when no config exists", () => {
 		const agentsDir = makeTempAgentsDir();
 		const cfg = loadMemoryConfig(agentsDir);
-		expect(cfg.pipelineV2).toEqual(DEFAULT_PIPELINE_V2);
+		expect(cfg.pipelineV2.enabled).toBe(true);
+		expect(cfg.pipelineV2.shadowMode).toBe(false);
+		expect(cfg.pipelineV2.graph.enabled).toBe(true);
+		expect(cfg.pipelineV2.reranker.enabled).toBe(true);
+		expect(cfg.pipelineV2.autonomous.enabled).toBe(true);
+		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(true);
+		expect(cfg.pipelineV2.autonomous.maintenanceMode).toBe("execute");
+	});
+
+	it("does not share no-config defaults between loads", () => {
+		try {
+			const first = loadMemoryConfig(makeTempAgentsDir());
+			Reflect.set(first.pipelineV2.graph, "enabled", false);
+			Reflect.set(first.pipelineV2.reranker, "enabled", false);
+
+			const second = loadMemoryConfig(makeTempAgentsDir());
+			expect(second.pipelineV2.graph.enabled).toBe(true);
+			expect(second.pipelineV2.reranker.enabled).toBe(true);
+		} finally {
+			Reflect.set(DEFAULT_PIPELINE_V2.graph, "enabled", true);
+			Reflect.set(DEFAULT_PIPELINE_V2.reranker, "enabled", true);
+		}
 	});
 
 	it("loads pipelineV2 flags from agent.yaml (flat keys, backward compat)", () => {
@@ -524,10 +545,10 @@ network:
 		expect(cfg.pipelineV2.enabled).toBe(true);
 		expect(cfg.pipelineV2.shadowMode).toBe(true);
 		expect(cfg.pipelineV2.graph.enabled).toBe(true);
-		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
-		expect(cfg.pipelineV2.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
-		expect(cfg.pipelineV2.mutationsFrozen).toBe(DEFAULT_PIPELINE_V2.mutationsFrozen);
-		expect(cfg.pipelineV2.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
+		expect(cfg.pipelineV2.autonomous.allowUpdateDelete).toBe(true);
+		expect(cfg.pipelineV2.autonomous.enabled).toBe(true);
+		expect(cfg.pipelineV2.mutationsFrozen).toBe(false);
+		expect(cfg.pipelineV2.autonomous.frozen).toBe(false);
 		expect(cfg.pipelineV2.extraction.minConfidence).toBe(0.82);
 	});
 
@@ -561,14 +582,22 @@ network:
 });
 
 describe("loadPipelineConfig", () => {
-	it("returns all-false defaults when memory.pipelineV2 is absent", () => {
+	it("uses the enabled defaults when memory.pipelineV2 is absent", () => {
 		const result = loadPipelineConfig({});
-		expect(result).toEqual(DEFAULT_PIPELINE_V2);
+		expect(result.enabled).toBe(true);
+		expect(result.shadowMode).toBe(false);
+		expect(result.graph.enabled).toBe(true);
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.autonomous.enabled).toBe(true);
+		expect(result.autonomous.allowUpdateDelete).toBe(true);
 	});
 
-	it("returns all-false defaults when memory key exists but pipelineV2 is absent", () => {
+	it("uses the enabled defaults when memory key exists but pipelineV2 is absent", () => {
 		const result = loadPipelineConfig({ memory: { database: "test.db" } });
-		expect(result).toEqual(DEFAULT_PIPELINE_V2);
+		expect(result.enabled).toBe(true);
+		expect(result.graph.enabled).toBe(true);
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.autonomous.enabled).toBe(true);
 	});
 
 	it("loads extraction tuning without provider routing", () => {
@@ -722,11 +751,11 @@ describe("loadPipelineConfig", () => {
 
 		expect(result.enabled).toBe(true);
 		expect(result.mutationsFrozen).toBe(true);
-		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
-		expect(result.autonomous.allowUpdateDelete).toBe(DEFAULT_PIPELINE_V2.autonomous.allowUpdateDelete);
-		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
-		expect(result.autonomous.enabled).toBe(DEFAULT_PIPELINE_V2.autonomous.enabled);
-		expect(result.autonomous.frozen).toBe(DEFAULT_PIPELINE_V2.autonomous.frozen);
+		expect(result.shadowMode).toBe(false);
+		expect(result.autonomous.allowUpdateDelete).toBe(true);
+		expect(result.graph.enabled).toBe(true);
+		expect(result.autonomous.enabled).toBe(true);
+		expect(result.autonomous.frozen).toBe(false);
 	});
 
 	it("bounds explicit telemetry deployment role and install channel declarations", () => {
@@ -789,9 +818,9 @@ describe("loadPipelineConfig", () => {
 				},
 			},
 		});
-		expect(result.enabled).toBe(DEFAULT_PIPELINE_V2.enabled);
-		expect(result.shadowMode).toBe(DEFAULT_PIPELINE_V2.shadowMode);
-		expect(result.graph.enabled).toBe(DEFAULT_PIPELINE_V2.graph.enabled);
+		expect(result.enabled).toBe(true);
+		expect(result.shadowMode).toBe(false);
+		expect(result.graph.enabled).toBe(true);
 	});
 
 	it("clamps numeric fields to valid ranges (flat keys)", () => {
@@ -948,13 +977,13 @@ describe("loadPipelineConfig", () => {
 			memory: { pipelineV2: { enabled: true } },
 		});
 
-		expect(result.graph.boostWeight).toBe(DEFAULT_PIPELINE_V2.graph.boostWeight);
-		expect(result.graph.boostTimeoutMs).toBe(DEFAULT_PIPELINE_V2.graph.boostTimeoutMs);
-		expect(result.reranker.enabled).toBe(DEFAULT_PIPELINE_V2.reranker.enabled);
-		expect(result.reranker.model).toBe(DEFAULT_PIPELINE_V2.reranker.model);
-		expect(result.reranker.useExtractionModel).toBe(DEFAULT_PIPELINE_V2.reranker.useExtractionModel);
-		expect(result.reranker.topN).toBe(DEFAULT_PIPELINE_V2.reranker.topN);
-		expect(result.reranker.timeoutMs).toBe(DEFAULT_PIPELINE_V2.reranker.timeoutMs);
+		expect(result.graph.boostWeight).toBe(0.15);
+		expect(result.graph.boostTimeoutMs).toBe(500);
+		expect(result.reranker.enabled).toBe(true);
+		expect(result.reranker.model).toBe("");
+		expect(result.reranker.useExtractionModel).toBe(false);
+		expect(result.reranker.topN).toBe(20);
+		expect(result.reranker.timeoutMs).toBe(2000);
 	});
 
 	it("loads maintenance and repair config fields (flat keys)", () => {
@@ -1050,12 +1079,12 @@ describe("loadPipelineConfig", () => {
 			memory: { pipelineV2: { enabled: true } },
 		});
 
-		expect(result.autonomous.maintenanceIntervalMs).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceIntervalMs);
-		expect(result.autonomous.maintenanceMode).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceMode);
-		expect(result.repair.reembedCooldownMs).toBe(DEFAULT_PIPELINE_V2.repair.reembedCooldownMs);
-		expect(result.repair.reembedHourlyBudget).toBe(DEFAULT_PIPELINE_V2.repair.reembedHourlyBudget);
-		expect(result.repair.requeueCooldownMs).toBe(DEFAULT_PIPELINE_V2.repair.requeueCooldownMs);
-		expect(result.repair.requeueHourlyBudget).toBe(DEFAULT_PIPELINE_V2.repair.requeueHourlyBudget);
+		expect(result.autonomous.maintenanceIntervalMs).toBe(1_800_000);
+		expect(result.autonomous.maintenanceMode).toBe("execute");
+		expect(result.repair.reembedCooldownMs).toBe(300_000);
+		expect(result.repair.reembedHourlyBudget).toBe(10);
+		expect(result.repair.requeueCooldownMs).toBe(60_000);
+		expect(result.repair.requeueHourlyBudget).toBe(50);
 	});
 
 	it("rejects invalid maintenanceMode values", () => {
@@ -1067,7 +1096,7 @@ describe("loadPipelineConfig", () => {
 			},
 		});
 
-		expect(result.autonomous.maintenanceMode).toBe(DEFAULT_PIPELINE_V2.autonomous.maintenanceMode);
+		expect(result.autonomous.maintenanceMode).toBe("execute");
 	});
 
 	it("defaults paused to false when absent", () => {
@@ -1116,6 +1145,48 @@ describe("loadPipelineConfig", () => {
 		expect(result.autonomous.maintenanceMode).toBe("observe");
 	});
 
+	it("uses shared alias precedence in the resolved daemon config", () => {
+		const result = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					graphEnabled: true,
+					graph: { enabled: false },
+					rerankerEnabled: true,
+					rerankerUseExtractionModel: false,
+					reranker: { enabled: false, useExtractionModel: true },
+					autonomousEnabled: true,
+					autonomousFrozen: true,
+					allowUpdateDelete: true,
+					maintenanceMode: "observe",
+					autonomous: {
+						enabled: false,
+						frozen: false,
+						allowUpdateDelete: false,
+						maintenanceMode: "invalid",
+					},
+				},
+			},
+		});
+
+		expect(result.graph.enabled).toBe(false);
+		expect(result.reranker.enabled).toBe(false);
+		expect(result.reranker.useExtractionModel).toBe(true);
+		expect(result.autonomous.enabled).toBe(false);
+		expect(result.autonomous.frozen).toBe(false);
+		expect(result.autonomous.allowUpdateDelete).toBe(false);
+		expect(result.autonomous.maintenanceMode).toBe("execute");
+
+		const nullishMaintenanceMode = loadPipelineConfig({
+			memory: {
+				pipelineV2: {
+					maintenanceMode: "observe",
+					autonomous: { maintenanceMode: null },
+				},
+			},
+		});
+		expect(nullishMaintenanceMode.autonomous.maintenanceMode).toBe("observe");
+	});
+
 	it("supports nested config format", () => {
 		const result = loadPipelineConfig({
 			memory: {
@@ -1157,20 +1228,14 @@ describe("loadPipelineConfig", () => {
 		const result = loadPipelineConfig({
 			memory: {
 				pipelineV2: {
-					rerankerEnabled: false,
 					rerankerModel: "flat-model",
-					rerankerUseExtractionModel: false,
 					reranker: {
-						enabled: true,
 						model: "nested-model",
-						useExtractionModel: true,
 					},
 				},
 			},
 		});
 
-		expect(result.reranker.enabled).toBe(true);
 		expect(result.reranker.model).toBe("nested-model");
-		expect(result.reranker.useExtractionModel).toBe(true);
 	});
 });

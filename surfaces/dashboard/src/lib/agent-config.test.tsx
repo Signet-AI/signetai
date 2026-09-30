@@ -3,14 +3,7 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import { useEffect, useRef } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import {
-	type AgentConfigStore,
-	isDreamingEnabled,
-	pv2MaintenanceMode,
-	pv2ToggleValue,
-	pv2ToggleWriteForm,
-	useAgentConfig,
-} from "./agent-config";
+import { type AgentConfigStore, isDreamingEnabled, useAgentConfig } from "./agent-config";
 import { writeEmbeddingEndpoint } from "./embedding-config";
 
 const INITIAL_CONFIG = `inference:
@@ -131,91 +124,6 @@ describe("agent config store", () => {
 		expect(harness.store.aBool(["memory", "pipelineV2", "mutationsFrozen"], false)).toBe(true);
 		expect(harness.store.aStr(["memory", "pipelineV2", "missingMode"], "execute")).toBe("execute");
 		await harness.unmount();
-	});
-
-	test("pv2ToggleValue mirrors the daemon resolver: nested boolean, then flat boolean, then default", () => {
-		const nested = { memory: { pipelineV2: { autonomous: { enabled: false } } } };
-		expect(
-			pv2ToggleValue(
-				nested,
-				["memory", "pipelineV2", "autonomous", "enabled"],
-				["memory", "pipelineV2", "autonomousEnabled"],
-				true,
-			),
-		).toBe(false);
-		const flat = { memory: { pipelineV2: { autonomousEnabled: true } } };
-		expect(
-			pv2ToggleValue(
-				flat,
-				["memory", "pipelineV2", "autonomous", "enabled"],
-				["memory", "pipelineV2", "autonomousEnabled"],
-				false,
-			),
-		).toBe(true);
-		const both = { memory: { pipelineV2: { autonomous: { enabled: false }, autonomousEnabled: true } } };
-		expect(
-			pv2ToggleValue(
-				both,
-				["memory", "pipelineV2", "autonomous", "enabled"],
-				["memory", "pipelineV2", "autonomousEnabled"],
-				true,
-			),
-		).toBe(false);
-		const stringForm = { memory: { pipelineV2: { autonomous: { enabled: "false" } } } };
-		expect(
-			pv2ToggleValue(
-				stringForm,
-				["memory", "pipelineV2", "autonomous", "enabled"],
-				["memory", "pipelineV2", "autonomousEnabled"],
-				true,
-			),
-		).toBe(true);
-		expect(
-			pv2ToggleValue(
-				{},
-				["memory", "pipelineV2", "autonomous", "enabled"],
-				["memory", "pipelineV2", "autonomousEnabled"],
-				true,
-			),
-		).toBe(true);
-		expect(
-			pv2ToggleValue(
-				{},
-				["memory", "pipelineV2", "autonomous", "enabled"],
-				["memory", "pipelineV2", "autonomousEnabled"],
-				false,
-			),
-		).toBe(false);
-	});
-
-	test("pv2ToggleWriteForm keeps a config on the form it already uses", () => {
-		const flat = { memory: { pipelineV2: { graphEnabled: false } } };
-		expect(
-			pv2ToggleWriteForm(flat, ["memory", "pipelineV2", "graph", "enabled"], ["memory", "pipelineV2", "graphEnabled"]),
-		).toBe("flat");
-		const nested = { memory: { pipelineV2: { graph: { enabled: true } } } };
-		expect(
-			pv2ToggleWriteForm(
-				nested,
-				["memory", "pipelineV2", "graph", "enabled"],
-				["memory", "pipelineV2", "graphEnabled"],
-			),
-		).toBe("nested");
-		const both = { memory: { pipelineV2: { graph: { enabled: true }, graphEnabled: false } } };
-		expect(
-			pv2ToggleWriteForm(both, ["memory", "pipelineV2", "graph", "enabled"], ["memory", "pipelineV2", "graphEnabled"]),
-		).toBe("nested");
-		expect(
-			pv2ToggleWriteForm({}, ["memory", "pipelineV2", "graph", "enabled"], ["memory", "pipelineV2", "graphEnabled"]),
-		).toBe("nested");
-	});
-
-	test("maintenance mode follows the daemon's nullish string contract", () => {
-		const nestedInvalid = { memory: { pipelineV2: { autonomous: { maintenanceMode: "auto" } } } };
-		expect(pv2MaintenanceMode(nestedInvalid)).toBe("auto");
-		expect(pv2MaintenanceMode({ memory: { pipelineV2: { maintenanceMode: "observe" } } })).toBeUndefined();
-		expect(pv2MaintenanceMode({})).toBeUndefined();
-		expect(pv2MaintenanceMode({ memory: { pipelineV2: { autonomous: { maintenanceMode: 5 } } } })).toBeUndefined();
 	});
 
 	test("mutations are visible to an immediate save in the same tick (disconnect purge regression)", async () => {

@@ -1,17 +1,15 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { PIPELINE_V2_CONFIG_MIGRATION } from "@signet/core";
 import { type Document, isMap, isPair, parseDocument } from "yaml";
 import { logger } from "./logger";
 const FLIP_TRUE = [
 	"semanticContradictionEnabled",
-	"graphEnabled",
-	"rerankerEnabled",
-	"autonomousEnabled",
-	"allowUpdateDelete",
+	...PIPELINE_V2_CONFIG_MIGRATION.flatFalseToTrue,
 	"rehearsal_enabled",
 	"agentFeedback",
 ] as const;
-const NESTED_PARENTS = ["graph", "reranker", "autonomous", "predictor"] as const;
+const NESTED_PARENTS = [...PIPELINE_V2_CONFIG_MIGRATION.nestedEnabledFalseToTrue, "predictor"] as const;
 
 function flip(text: string, key: string): string {
 	return text.replace(new RegExp(`^(\\s*${key}:\\s*)false(\\s*(?:#.*)?)$`, "m"), "$1true$2");

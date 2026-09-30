@@ -109,91 +109,91 @@
     },
     {
       "path": "config-migration.ts",
-      "line": 35,
+      "line": 33,
       "api": "existsSync",
       "source": "if (existsSync(p)) {",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 44,
+      "line": 42,
       "api": "readFileSync",
       "source": "text = readFileSync(path, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 78,
+      "line": 76,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, text, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 79,
+      "line": 77,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 99,
+      "line": 97,
       "api": "existsSync",
       "source": "if (existsSync(p)) return p;",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 110,
+      "line": 108,
       "api": "readFileSync",
       "source": "text = readFileSync(path, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 174,
+      "line": 172,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, contents, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 175,
+      "line": 173,
       "api": "renameSync",
       "source": "renameSync(tmp, path);",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 222,
+      "line": 220,
       "api": "readFileSync",
       "source": "text = readFileSync(path, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 421,
+      "line": 419,
       "api": "readFileSync",
       "source": "text = readFileSync(path, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 475,
+      "line": 473,
       "api": "readFileSync",
       "source": "text = readFileSync(path, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 570,
+      "line": 568,
       "api": "readFileSync",
       "source": "text = readFileSync(path, \"utf-8\");",
       "category": "hot-path"
     },
     {
       "path": "config-migration.ts",
-      "line": 620,
+      "line": 618,
       "api": "readFileSync",
       "source": "text = readFileSync(path, \"utf-8\");",
       "category": "hot-path"
@@ -1653,14 +1653,14 @@
     },
     {
       "path": "memory-config.ts",
-      "line": 353,
+      "line": 356,
       "api": "existsSync",
       "source": ".find((path) => existsSync(path));",
       "category": "hot-path"
     },
     {
       "path": "memory-config.ts",
-      "line": 355,
+      "line": 358,
       "api": "readFileSync",
       "source": "const yaml = path ? parseRuntimeYaml(readFileSync(path, \"utf8\")) : {};",
       "category": "hot-path"

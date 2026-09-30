@@ -8,6 +8,9 @@ import {
 	DEFAULT_TELEMETRY_FLUSH_INTERVAL_MS,
 	DEFAULT_TELEMETRY_POSTHOG_API_KEY,
 	DEFAULT_TELEMETRY_POSTHOG_HOST,
+	PIPELINE_V2_CONFIG_ALIASES,
+	resolvePipelineV2BooleanAlias,
+	resolvePipelineV2MaintenanceMode,
 	type DreamingConfig,
 	LOOPBACK_HOST,
 	NETWORK_MODES,
@@ -126,7 +129,7 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		cooldownMs: 300000,
 	},
 	graph: {
-		enabled: true,
+		enabled: PIPELINE_V2_CONFIG_ALIASES.graphEnabled.defaultValue,
 		boostWeight: 0.15,
 		boostTimeoutMs: 500,
 	},
@@ -147,18 +150,18 @@ export const DEFAULT_PIPELINE_V2: ResolvedPipelineV2Config = {
 		constraintBudgetChars: 1000,
 	},
 	reranker: {
-		enabled: true,
+		enabled: PIPELINE_V2_CONFIG_ALIASES.rerankerEnabled.defaultValue,
 		model: "",
-		useExtractionModel: false,
+		useExtractionModel: PIPELINE_V2_CONFIG_ALIASES.rerankerUseExtractionModel.defaultValue,
 		topN: 20,
 		timeoutMs: 2000,
 	},
 	autonomous: {
-		enabled: true,
-		frozen: false,
-		allowUpdateDelete: true,
+		enabled: PIPELINE_V2_CONFIG_ALIASES.autonomousEnabled.defaultValue,
+		frozen: PIPELINE_V2_CONFIG_ALIASES.autonomousFrozen.defaultValue,
+		allowUpdateDelete: PIPELINE_V2_CONFIG_ALIASES.allowUpdateDelete.defaultValue,
 		maintenanceIntervalMs: 30 * 60 * 1000,
-		maintenanceMode: "execute",
+		maintenanceMode: PIPELINE_V2_CONFIG_ALIASES.maintenanceMode.defaultValue,
 	},
 	repair: {
 		reembedCooldownMs: 300000,
@@ -495,7 +498,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 			"memory.synthesis is retired; MEMORY.md synthesis follows the canonical inference workload instead.",
 		);
 	}
-	if (!raw) return { ...DEFAULT_PIPELINE_V2 };
+	if (!raw) return structuredClone(DEFAULT_PIPELINE_V2);
 	const extractionRaw = raw.extraction as Record<string, unknown> | undefined;
 	const workerRaw = raw.worker as Record<string, unknown> | undefined;
 	const claudeCodeRaw = raw.claudeCode as Record<string, unknown> | undefined;
@@ -634,7 +637,7 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		claudeCode: parseClaudeCodeConfig(claudeCodeRaw, d.claudeCode),
 
 		graph: {
-			enabled: resolveBool(graphRaw?.enabled, raw.graphEnabled, d.graph.enabled),
+			enabled: resolvePipelineV2BooleanAlias(yaml, "graphEnabled"),
 			boostWeight: clampFraction(graphRaw?.boostWeight ?? raw.graphBoostWeight, d.graph.boostWeight),
 			boostTimeoutMs: clampPositive(
 				graphRaw?.boostTimeoutMs ?? raw.graphBoostTimeoutMs,
@@ -690,41 +693,29 @@ export function loadPipelineConfig(yaml: Record<string, unknown>): ResolvedPipel
 		},
 
 		reranker: {
-			enabled: resolveBool(rerankerRaw?.enabled, raw.rerankerEnabled, d.reranker.enabled),
+			enabled: resolvePipelineV2BooleanAlias(yaml, "rerankerEnabled"),
 			model:
 				typeof rerankerRaw?.model === "string"
 					? rerankerRaw.model
 					: typeof raw.rerankerModel === "string"
 						? (raw.rerankerModel as string)
 						: d.reranker.model,
-			useExtractionModel: resolveBool(
-				rerankerRaw?.useExtractionModel,
-				raw.rerankerUseExtractionModel,
-				d.reranker.useExtractionModel,
-			),
+			useExtractionModel: resolvePipelineV2BooleanAlias(yaml, "rerankerUseExtractionModel"),
 			topN: clampPositive(rerankerRaw?.topN ?? raw.rerankerTopN, 1, 100, d.reranker.topN),
 			timeoutMs: clampPositive(rerankerRaw?.timeoutMs ?? raw.rerankerTimeoutMs, 100, 30000, d.reranker.timeoutMs),
 		},
 
 		autonomous: {
-			enabled: resolveBool(autonomousRaw?.enabled, raw.autonomousEnabled, d.autonomous.enabled),
-			frozen: resolveBool(autonomousRaw?.frozen, raw.autonomousFrozen, d.autonomous.frozen),
-			allowUpdateDelete: resolveBool(
-				autonomousRaw?.allowUpdateDelete,
-				raw.allowUpdateDelete,
-				d.autonomous.allowUpdateDelete,
-			),
+			enabled: resolvePipelineV2BooleanAlias(yaml, "autonomousEnabled"),
+			frozen: resolvePipelineV2BooleanAlias(yaml, "autonomousFrozen"),
+			allowUpdateDelete: resolvePipelineV2BooleanAlias(yaml, "allowUpdateDelete"),
 			maintenanceIntervalMs: clampPositive(
 				autonomousRaw?.maintenanceIntervalMs ?? raw.maintenanceIntervalMs,
 				60000,
 				86400000,
 				d.autonomous.maintenanceIntervalMs,
 			),
-			maintenanceMode: (() => {
-				const v = autonomousRaw?.maintenanceMode ?? raw.maintenanceMode;
-				if (v === "execute" || v === "observe") return v;
-				return d.autonomous.maintenanceMode;
-			})(),
+			maintenanceMode: resolvePipelineV2MaintenanceMode(yaml),
 		},
 
 		repair: {

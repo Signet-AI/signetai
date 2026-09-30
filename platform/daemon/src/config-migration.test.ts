@@ -2,7 +2,13 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { migrateEmbeddingBaseUrl, migrateInferenceProviders, migrateLegacyRoutingToRegistry } from "./config-migration";
+import {
+	migrateConfig,
+	migrateEmbeddingBaseUrl,
+	migrateInferenceProviders,
+	migrateLegacyRoutingToRegistry,
+} from "./config-migration";
+import { loadMemoryConfig } from "./memory-config";
 
 function setupDir(): string {
 	const dir = mkdtempSync(join(tmpdir(), "signet-config-migration-"));
@@ -11,6 +17,70 @@ function setupDir(): string {
 }
 
 afterEach(() => {});
+
+describe("migrateConfig pipelineV2 aliases", () => {
+	it("migrates legacy aliases into values resolved by the daemon without rewriting unrelated config", () => {
+		const dir = setupDir();
+		const path = join(dir, "agent.yaml");
+		try {
+			writeFileSync(
+				path,
+				`# operator note
+memory:
+  pipelineV2:
+    graphEnabled: false # legacy graph setting
+    rerankerEnabled: false
+    autonomousEnabled: false
+    autonomousFrozen: false
+    allowUpdateDelete: false
+    maintenanceMode: observe
+    graph:
+      enabled: false
+    reranker:
+      enabled: false
+    autonomous:
+      enabled: false
+      frozen: false
+      allowUpdateDelete: false
+      maintenanceIntervalMs: 90000
+    customSetting: keep
+other:
+  retained: true
+`,
+			);
+
+			migrateConfig(dir);
+			const afterFirstRun = readFileSync(path, "utf-8");
+			expect(afterFirstRun).toContain("graphEnabled: true # legacy graph setting");
+			expect(afterFirstRun).toContain("configVersion: 2");
+			expect(afterFirstRun).toContain("rerankerEnabled: true");
+			expect(afterFirstRun).toContain("autonomousEnabled: true");
+			expect(afterFirstRun).toContain("autonomousFrozen: false");
+			expect(afterFirstRun).toContain("allowUpdateDelete: true");
+			expect(afterFirstRun).toContain("maintenanceMode: observe");
+			expect(afterFirstRun).toContain("customSetting: keep");
+			expect(afterFirstRun).toContain("maintenanceIntervalMs: 90000");
+			expect(afterFirstRun).toContain("retained: true");
+			expect(afterFirstRun).toContain("# operator note");
+			expect(afterFirstRun).toMatch(/enabled: true/g);
+			expect(afterFirstRun.match(/enabled: true/g)).toHaveLength(3);
+
+			const resolved = loadMemoryConfig(dir).pipelineV2;
+			expect(resolved.graph.enabled).toBe(true);
+			expect(resolved.reranker.enabled).toBe(true);
+			expect(resolved.autonomous.enabled).toBe(true);
+			expect(resolved.autonomous.frozen).toBe(false);
+			expect(resolved.autonomous.allowUpdateDelete).toBe(false);
+			expect(resolved.autonomous.maintenanceMode).toBe("observe");
+			expect(resolved.autonomous.maintenanceIntervalMs).toBe(90000);
+
+			migrateConfig(dir);
+			expect(readFileSync(path, "utf-8")).toBe(afterFirstRun);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+});
 
 describe("migrateInferenceProviders (#947)", () => {
 	it("rewrites folded harness executors to acpx with the mapped agent", () => {
