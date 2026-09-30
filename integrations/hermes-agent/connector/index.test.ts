@@ -1850,6 +1850,33 @@ describe("HermesAgentConnector profile ownership boundaries", () => {
 		expect(existsSync(join(profile, "plugins", "signet"))).toBe(true);
 	});
 
+	it("does not trust a symlinked user install marker during uninstall", async () => {
+		const home = join(tmpRoot, "symlink-marker-uninstall-home");
+		const hermesHome = join(home, ".hermes");
+		const plugin = join(hermesHome, "plugins", "signet");
+		const victimMarker = join(tmpRoot, "symlink-marker-uninstall-victim.json");
+		const marker = JSON.stringify({
+			connector: "@signet/connector-hermes-agent",
+			schemaVersion: 1,
+			connectorVersion: "0.228.8",
+			sourceHash: "fixture",
+			targetKind: "user",
+			installedAt: "2026-09-30T00:00:00.000Z",
+		});
+		mkdirSync(plugin, { recursive: true });
+		writeFileSync(victimMarker, marker);
+		symlinkSync(victimMarker, join(plugin, "signet.install.json"));
+		process.env.HOME = home;
+		process.env.HERMES_HOME = hermesHome;
+		delete process.env.HERMES_REPO;
+
+		const result = await new HermesAgentConnector().uninstall();
+
+		expect(result.filesRemoved).toEqual([]);
+		expect(existsSync(plugin)).toBe(true);
+		expect(readFileSync(victimMarker, "utf8")).toBe(marker);
+	});
+
 	it("does not uninstall a repo plugin with a user-owned marker", async () => {
 		const home = join(tmpRoot, "repo-wrong-marker-home");
 		const hermesRepo = join(tmpRoot, "repo-wrong-marker-hermes");

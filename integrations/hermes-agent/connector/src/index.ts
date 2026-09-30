@@ -736,7 +736,8 @@ function removeContainedDirectory(
 	targetPath: string,
 	targetRoot: string,
 	targetKind: InstallMarker["targetKind"],
-): void {
+	unownedTargetBehavior: "throw" | "skip",
+): boolean {
 	if (!DESCRIPTOR_WRITES_SUPPORTED) throw new Error(DESCRIPTOR_WRITE_UNAVAILABLE_ERROR);
 	const safeTargetDir = resolveContainedWritePath(targetPath, targetRoot);
 	const rootPath = resolvePath(targetRoot);
@@ -784,6 +785,7 @@ function removeContainedDirectory(
 			);
 			const marker = readInstallMarkerFromDirectory(targetFd, expectedTarget);
 			if (marker === null || marker.targetKind !== targetKind) {
+				if (unownedTargetBehavior === "skip") return false;
 				throw new Error(
 					`Refusing to uninstall unowned Hermes plugin path: ${targetPath} (missing or invalid ${INSTALL_MARKER_FILE})`,
 				);
@@ -791,6 +793,7 @@ function removeContainedDirectory(
 			assertEntryIdentityNoFollow(parentFd, expected, targetName, targetIdentity.dev, targetIdentity.ino);
 			removeDirectoryContentsNoFollow(targetFd, expectedTarget);
 			removeEntryNoFollow(parentFd, expected, targetName, targetIdentity.dev, targetIdentity.ino, true);
+			return true;
 		} finally {
 			closeDirectory(targetFd);
 		}
@@ -874,9 +877,14 @@ function installPlugin(targetDir: string, targetKind: InstallMarker["targetKind"
 
 	return written;
 }
-function uninstallPlugin(targetDir: string, targetKind: InstallMarker["targetKind"], targetRoot: string): string[] {
+function uninstallPlugin(
+	targetDir: string,
+	targetKind: InstallMarker["targetKind"],
+	targetRoot: string,
+	unownedTargetBehavior: "throw" | "skip" = "throw",
+): string[] {
 	if (!pathEntryExists(targetDir)) return [];
-	removeContainedDirectory(targetDir, targetRoot, targetKind);
+	if (!removeContainedDirectory(targetDir, targetRoot, targetKind, unownedTargetBehavior)) return [];
 	return [targetDir];
 }
 
@@ -1773,11 +1781,11 @@ export class HermesAgentConnector extends BaseConnector {
 		const userPluginTarget = getUserPluginTargetDir(hermesHome);
 		const targetRoot = hermesHome;
 		const safeUserPluginTarget = resolveContainedWritePath(userPluginTarget, targetRoot);
-		const marker = readInstallMarker(safeUserPluginTarget);
-		if (!pathEntryExists(safeUserPluginTarget) || marker === null || marker.targetKind !== "user") {
+		if (!pathEntryExists(safeUserPluginTarget)) {
 			return { filesRemoved, configsPatched };
 		}
-		const userPluginRemoved = uninstallPlugin(userPluginTarget, "user", targetRoot);
+		const userPluginRemoved = uninstallPlugin(userPluginTarget, "user", targetRoot, "skip");
+		if (userPluginRemoved.length === 0) return { filesRemoved, configsPatched };
 		filesRemoved.push(...userPluginRemoved);
 
 		const providerConfig = restoreOrClearProvider(hermesHome, targetRoot);
