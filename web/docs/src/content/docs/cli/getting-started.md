@@ -69,7 +69,7 @@ signet setup --schema
 signet setup --file ./setup-plan.json --dry-run
 ```
 
-Interactive setup requires a TTY and opens guided dashboard onboarding. On a fresh default interactive run, the CLI creates only the protected workspace and minimal configuration/database bootstrap needed to start that flow; it does not preselect providers or harnesses, create identity files, install skills, or initialize Git. Existing workspaces are not reset. For scripted or headless setup, the CLI still supports explicit flags, plans, and JSON output. It prints the onboarding URL if the browser cannot open. Choose one of these modes:
+Interactive setup requires a TTY and opens guided dashboard onboarding. For the default local workspace, the CLI tries the Signet Desktop installation through each OS's launch target: the Windows `signet://` registry handler, the `ai.signet.app` macOS bundle, or the `signet.desktop` Linux entry. If Desktop is unavailable or launch fails, it falls back to the local browser URL. Custom workspaces and remote daemons keep the browser handoff so Desktop cannot silently open a different workspace. On a fresh default interactive run, the CLI creates only the protected workspace and minimal configuration/database bootstrap needed to start that flow; it does not preselect providers or harnesses, create identity files, install skills, or initialize Git. Existing workspaces are not reset. For scripted or headless setup, the CLI still supports explicit flags, plans, and JSON output. It prints the onboarding URL if neither handoff can open.
 
 - `--non-interactive` with flags for a scripted setup or reconfiguration.
 - `--file <path>` to apply a JSON setup plan.

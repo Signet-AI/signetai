@@ -56,6 +56,14 @@
 		"mac": {
 			"category": "public.app-category.productivity",
 			"icon": "icons/icon.icns",
+			"protocols": [
+				{
+					"name": "Signet",
+					"schemes": [
+						"signet"
+					]
+				}
+			],
 			"target": [
 				"dmg",
 				"zip"
@@ -67,6 +75,9 @@
 			"entitlementsInherit": "build/entitlements.mac.inherit.plist",
 			"notarize": true
 		},
+		"nsis": {
+			"include": "build/installer.nsh"
+		},
 		"win": {
 			"icon": "icons/icon.ico",
 			"target": [
@@ -76,6 +87,11 @@
 		"linux": {
 			"category": "Utility",
 			"icon": "icons/icon.png",
+			"desktop": {
+				"entry": {
+					"MimeType": "x-scheme-handler/signet;"
+				}
+			},
 			"target": [
 				"AppImage",
 				"deb"

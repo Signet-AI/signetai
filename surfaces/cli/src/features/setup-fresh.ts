@@ -16,7 +16,8 @@ import {
 import chalk from "chalk";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
-import { openUrlWithFallback } from "../lib/open-url.js";
+import { openDashboardWithDesktopFallback, openUrlWithFallback } from "../lib/open-url.js";
+import { isDesktopWorkspacePath } from "../lib/workspace.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import {
@@ -427,7 +428,12 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		}
 
 		if (context.openDashboard) {
-			await openUrlWithFallback(`${createDaemonClient(deps.DEFAULT_PORT, context.basePath).url}/#setup`);
+			const url = `${createDaemonClient(deps.DEFAULT_PORT, context.basePath).url}/#setup`;
+			if (!remoteDaemon && isDesktopWorkspacePath(context.basePath)) {
+				await openDashboardWithDesktopFallback(url, "setup");
+			} else {
+				await openUrlWithFallback(url);
+			}
 		}
 		if (failedHarnesses.length)
 			throw new Error(

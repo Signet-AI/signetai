@@ -1,0 +1,166 @@
+name: Desktop deep-link platform contract
+
+on:
+  pull_request:
+    paths:
+      - "surfaces/cli/src/features/setup*.ts"
+      - "surfaces/cli/src/lib/open-url*.ts"
+      - "surfaces/cli/src/lib/workspace*.ts"
+      - "surfaces/desktop/package.json"
+      - "surfaces/desktop/build/installer.nsh"
+      - "surfaces/desktop/src/deep-link.*"
+      - "surfaces/desktop/src/main.ts"
+      - "surfaces/desktop/src/single-instance.*"
+      - ".github/workflows/desktop-deep-link-platform.yml"
+  push:
+    branches: [main]
+    paths:
+      - "surfaces/cli/src/features/setup*.ts"
+      - "surfaces/cli/src/lib/open-url*.ts"
+      - "surfaces/cli/src/lib/workspace*.ts"
+      - "surfaces/desktop/package.json"
+      - "surfaces/desktop/build/installer.nsh"
+      - "surfaces/desktop/src/deep-link.*"
+      - "surfaces/desktop/src/main.ts"
+      - "surfaces/desktop/src/single-instance.*"
+      - ".github/workflows/desktop-deep-link-platform.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  platform-contract:
+    name: Desktop protocol package (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: Linux x64
+            electron_builder_args: --linux deb AppImage --x64
+          - os: macos-15
+            platform: macOS arm64
+            electron_builder_args: --mac zip --arm64 --config.mac.notarize=false
+          - os: macos-15-intel
+            platform: macOS x64
+            electron_builder_args: --mac zip --x64 --config.mac.notarize=false
+          - os: windows-latest
+            platform: Windows x64
+            electron_builder_args: --win nsis --x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: package.json
+      - run: bun install --frozen-lockfile
+      - name: Build the platform package with its OS protocol registration
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          cd surfaces/desktop
+          bun run build:desktop -- ${{ matrix.electron_builder_args }}
+      - name: Verify Linux .deb protocol registration
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=(surfaces/desktop/release/*.deb)
+          if ((${#packages[@]} != 1)); then
+            printf 'Expected one .deb package, found %d\n' "${#packages[@]}" >&2
+            exit 1
+          fi
+          root="$RUNNER_TEMP/signet-linux-package"
+          mkdir -p "$root"
+          dpkg-deb -x "${packages[0]}" "$root"
+          desktop_files=("$root"/usr/share/applications/*.desktop)
+          if ((${#desktop_files[@]} != 1)); then
+            printf 'Expected one packaged .desktop file, found %d\n' "${#desktop_files[@]}" >&2
+            exit 1
+          fi
+          test "$(basename "${desktop_files[0]}")" = 'signet.desktop'
+          grep -Fqx 'MimeType=x-scheme-handler/signet;' "${desktop_files[0]}"
+          grep -Eq '^Exec=.*[[:space:]]%U$' "${desktop_files[0]}"
+      - name: Verify Linux AppImage protocol registration
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          appimages=(surfaces/desktop/release/*.AppImage)
+          if ((${#appimages[@]} != 1)); then
+            printf 'Expected one AppImage package, found %d\n' "${#appimages[@]}" >&2
+            exit 1
+          fi
+          root="$RUNNER_TEMP/signet-appimage-package"
+          mkdir -p "$root"
+          (cd "$root" && "$GITHUB_WORKSPACE/${appimages[0]}" --appimage-extract >/dev/null)
+          desktop="$root/squashfs-root/signet.desktop"
+          test -f "$desktop"
+          grep -Fqx 'MimeType=x-scheme-handler/signet;' "$desktop"
+          grep -Eq '^Exec=.*[[:space:]]%U$' "$desktop"
+      - name: Verify macOS bundle protocol registration
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          archives=(surfaces/desktop/release/*.zip)
+          if ((${#archives[@]} != 1)); then
+            printf 'Expected one macOS .zip package, found %d\n' "${#archives[@]}" >&2
+            exit 1
+          fi
+          root="$RUNNER_TEMP/signet-macos-package"
+          mkdir -p "$root"
+          ditto -x -k "${archives[0]}" "$root"
+          plist="$root/Signet.app/Contents/Info.plist"
+          test -f "$plist"
+          bundle_id=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")
+          test "$bundle_id" = 'ai.signet.app'
+          scheme=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$plist")
+          test "$scheme" = 'signet'
+      - name: Verify Windows installer registration and uninstall cleanup
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installer = Get-ChildItem surfaces/desktop/release -Filter 'Signet-*.exe' | Select-Object -First 1
+          if ($null -eq $installer) { throw 'Windows NSIS installer was not produced.' }
+          $installPath = Join-Path $env:RUNNER_TEMP 'signet-protocol-test'
+          try {
+            $install = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$installPath") -Wait -PassThru
+            if ($install.ExitCode -ne 0) { throw "Silent install failed with exit code $($install.ExitCode)." }
+            $registryPaths = @(
+              'HKCU:\Software\Classes\signet\shell\open\command',
+              'HKLM:\Software\Classes\signet\shell\open\command'
+            )
+            $registeredPath = $registryPaths | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+            if ($null -eq $registeredPath) { throw 'Installer did not register the signet:// protocol.' }
+            $command = (Get-Item -LiteralPath $registeredPath).GetValue('')
+            if ($command -notlike "*$installPath*" -or $command -notlike '*signet.exe*' -or $command -notlike '*%1*') {
+              throw "Protocol command does not target the installation or pass the URL: $command"
+            }
+          } finally {
+            if (Test-Path -LiteralPath $installPath) {
+              $uninstaller = Get-ChildItem $installPath -Filter '*uninstall*.exe' -File | Select-Object -First 1
+              if ($null -eq $uninstaller) { throw 'Installed application did not contain an uninstaller.' }
+              $uninstall = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+              if ($uninstall.ExitCode -ne 0) { throw "Silent uninstall failed with exit code $($uninstall.ExitCode)." }
+            }
+          }
+          foreach ($registryPath in @('HKCU:\Software\Classes\signet', 'HKLM:\Software\Classes\signet')) {
+            if (Test-Path -LiteralPath $registryPath) { throw "Protocol registration remained after uninstall: $registryPath" }
+          }
+      - name: Verify Desktop deep-link and CLI fallback contracts
+        run: |
+          bun test surfaces/desktop/src/deep-link.test.ts
+          bun test surfaces/desktop/src/single-instance.test.ts
+          bun test surfaces/cli/src/lib/open-url.test.ts
+          bun test surfaces/cli/src/lib/workspace.test.ts

@@ -20,8 +20,10 @@ import { readNetworkMode } from "@signet/core";
 import chalk from "chalk";
 import ora from "ora";
 import { daemonAccessLines } from "../lib/network.js";
+import { createDaemonClient } from "../lib/daemon.js";
 import type { SetupDetection } from "../lib/setup-detection.js";
-import { openUrlWithFallback } from "../lib/open-url.js";
+import { openDashboardWithDesktopFallback, openUrlWithFallback } from "../lib/open-url.js";
+import { isDesktopWorkspacePath } from "../lib/workspace.js";
 import Database from "../sqlite.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import {
@@ -595,16 +597,31 @@ export async function runExistingSetupWizard(
 		console.log();
 		printSetupProtectionSummary(protection);
 		console.log();
-		if (options?.nonInteractive === true) {
-			if (options.openDashboard === true) {
-				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
+		const shouldOpenDashboard =
+			options?.nonInteractive === true
+				? options.openDashboard === true
+				: await withSetupPrompt(spinner, () => confirm({ message: "Open the dashboard?", default: true }));
+		if (shouldOpenDashboard) {
+			const client = createDaemonClient(deps.DEFAULT_PORT, basePath);
+			if (client.localWorkspace) {
+				const status = await client.fetchDaemonResult<{ agentsDir: string }>("/api/status");
+				if (!status.ok) {
+					throw new Error(
+						`Signet is not ready: ${status.error ?? status.reason}. Run signet doctor, then retry setup.`,
+					);
+				}
+				if (status.data.agentsDir !== basePath) {
+					throw new Error(
+						"Another workspace is running at this address. Stop it or select its workspace before continuing setup.",
+					);
+				}
 			}
-		} else {
-			const launchNow = await withSetupPrompt(spinner, () =>
-				confirm({ message: "Open the dashboard?", default: true }),
-			);
-			if (launchNow) {
-				await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}/#setup`);
+			const destination = options?.nonInteractive === true ? "dashboard" : "setup";
+			const url = `${client.url}${destination === "setup" ? "/#setup" : ""}`;
+			if (client.localWorkspace && isDesktopWorkspacePath(basePath)) {
+				await openDashboardWithDesktopFallback(url, destination);
+			} else {
+				await openUrlWithFallback(url);
 			}
 		}
 

@@ -1342,14 +1342,19 @@ describe("setupWizard headless plan path", () => {
 });
 
 describe("interactive onboarding", () => {
+	let previousPort: string | undefined;
 	let previousDaemonUrl: string | undefined;
 
 	beforeEach(() => {
+		previousPort = process.env.SIGNET_PORT;
 		previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		Reflect.deleteProperty(process.env, "SIGNET_PORT");
 		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 	});
 
 	afterEach(() => {
+		if (previousPort === undefined) Reflect.deleteProperty(process.env, "SIGNET_PORT");
+		else process.env.SIGNET_PORT = previousPort;
 		if (previousDaemonUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
 		else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
 	});
@@ -1360,6 +1365,7 @@ describe("interactive onboarding", () => {
 		writeFileSync(join(root, "agent.yaml"), config);
 		writeFileSync(join(root, "AGENTS.md"), "User-authored instructions");
 		const server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => Response.json({ agentsDir: root }) });
+		process.env.SIGNET_PORT = String(server.port);
 		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
 		const previousTty = process.stdin.isTTY;
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
@@ -1390,6 +1396,7 @@ describe("interactive onboarding", () => {
 			port: 0,
 			fetch: () => Response.json({ agentsDir: "/another/workspace" }),
 		});
+		process.env.SIGNET_PORT = String(server.port);
 		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
 		const previousTty = process.stdin.isTTY;
 		Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
@@ -1416,8 +1423,21 @@ describe("interactive onboarding", () => {
 
 describe("first-run setup migration onboarding handoff", () => {
 	let root = "";
+	let previousPort: string | undefined;
+	let previousDaemonUrl: string | undefined;
+
+	beforeEach(() => {
+		previousPort = process.env.SIGNET_PORT;
+		previousDaemonUrl = process.env.SIGNET_DAEMON_URL;
+		Reflect.deleteProperty(process.env, "SIGNET_PORT");
+		Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+	});
 
 	afterEach(() => {
+		if (previousPort === undefined) Reflect.deleteProperty(process.env, "SIGNET_PORT");
+		else process.env.SIGNET_PORT = previousPort;
+		if (previousDaemonUrl === undefined) Reflect.deleteProperty(process.env, "SIGNET_DAEMON_URL");
+		else process.env.SIGNET_DAEMON_URL = previousDaemonUrl;
 		if (root) rmSync(root, { recursive: true, force: true });
 	});
 
@@ -1427,6 +1447,12 @@ describe("first-run setup migration onboarding handoff", () => {
 		const templatesPath = join(root, "templates");
 		mkdirSync(basePath, { recursive: true });
 		mkdirSync(templatesPath, { recursive: true });
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ agentsDir: basePath }),
+		});
+		process.env.SIGNET_PORT = String(server.port);
 
 		const confirm = spyOn(prompts, "confirm").mockImplementation(() =>
 			Object.assign(Promise.resolve(true), { cancel: () => {} }),
@@ -1451,11 +1477,59 @@ describe("first-run setup migration onboarding handoff", () => {
 			await setupWizard({}, deps);
 
 			expect(confirm).toHaveBeenCalledWith({ message: "Open the dashboard?", default: true });
-			expect(open).toHaveBeenCalledWith("http://127.0.0.1:4217/#setup");
+			expect(open).toHaveBeenCalledWith(`http://127.0.0.1:${server.port}/#setup`);
 		} finally {
 			confirm.mockRestore();
 			open.mockRestore();
+			server.stop(true);
 			Object.defineProperty(process.stdin, "isTTY", { value: previousTty, configurable: true });
+		}
+	});
+
+	it("refuses to open onboarding when the local daemon serves a different workspace", async () => {
+		root = mkdtempSync(join(tmpdir(), "signet-first-run-onboarding-scope-"));
+		const basePath = join(root, "agents");
+		const templatesPath = join(root, "templates");
+		mkdirSync(basePath, { recursive: true });
+		mkdirSync(templatesPath, { recursive: true });
+		const server = Bun.serve({
+			hostname: "127.0.0.1",
+			port: 0,
+			fetch: () => Response.json({ agentsDir: join(root, "other-agents") }),
+		});
+		process.env.SIGNET_PORT = String(server.port);
+		const open = spyOn(openUrl, "openUrlWithFallback").mockResolvedValue(undefined);
+		const exit = spyOn(process, "exit").mockImplementation(((code?: string | number | null) => {
+			throw new Error(`process.exit:${code ?? ""}`);
+		}) as never);
+		const error = spyOn(console, "error").mockImplementation(() => {});
+		try {
+			await expect(
+				runExistingSetupWizard(
+					basePath,
+					fakeDetection(basePath),
+					{},
+					stubDeps({
+						AGENTS_DIR: basePath,
+						DEFAULT_PORT: 4217,
+						getTemplatesDir: mock(() => templatesPath),
+						normalizeAgentPath: mock((path: string) => path),
+					}),
+					{
+						nonInteractive: true,
+						openDashboard: true,
+						skipGit: true,
+						allowUnprotectedWorkspace: true,
+					},
+				),
+			).rejects.toThrow("process.exit:1");
+			expect(String(error.mock.calls[0]?.[0] ?? "")).toContain("Another workspace");
+			expect(open).not.toHaveBeenCalled();
+		} finally {
+			open.mockRestore();
+			exit.mockRestore();
+			error.mockRestore();
+			server.stop(true);
 		}
 	});
 });

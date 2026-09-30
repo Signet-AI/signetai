@@ -20,7 +20,8 @@ import chalk from "chalk";
 import ora from "ora";
 import { validateName } from "../commands/agent.js";
 import { createDaemonClient } from "../lib/daemon.js";
-import { openUrlWithFallback } from "../lib/open-url.js";
+import { openDashboardWithDesktopFallback, openUrlWithFallback } from "../lib/open-url.js";
+import { isDesktopWorkspacePath } from "../lib/workspace.js";
 import { installGraphiqPlugin } from "./graphiq.js";
 import { runDashboardSetupBootstrap, runFreshSetup } from "./setup-fresh.js";
 import { aggregateRecallProviderIds } from "./setup-inference-connect.js";
@@ -371,7 +372,11 @@ export async function setupWizard(options: SetupWizardOptions, deps: SetupDeps):
 	const url = `${client.url}/#setup`;
 	console.log(chalk.cyan(`  Continue setup: ${url}`));
 	console.log(chalk.dim("  Connect your provider, select a memory model, and test the connection."));
-	await openUrlWithFallback(url);
+	if (client.localWorkspace && isDesktopWorkspacePath(basePath)) {
+		await openDashboardWithDesktopFallback(url, "setup");
+	} else {
+		await openUrlWithFallback(url);
+	}
 }
 
 async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): Promise<void> {
@@ -600,7 +605,12 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		}
 
 		if (options.openDashboard === true) {
-			await openUrlWithFallback(`http://127.0.0.1:${deps.DEFAULT_PORT}`);
+			const url = `http://127.0.0.1:${deps.DEFAULT_PORT}`;
+			if (isDesktopWorkspacePath(basePath)) {
+				await openDashboardWithDesktopFallback(url, "dashboard");
+			} else {
+				await openUrlWithFallback(url);
+			}
 		}
 
 		printSetupProtectionSummary(protection);

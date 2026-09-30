@@ -1,11 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { installSingleInstanceLock, type SingleInstanceHost } from "./single-instance";
 
-function makeHost(
-	locked: boolean,
-): SingleInstanceHost & { readonly quitCalls: number; readonly listeners: (() => void)[] } {
+function makeHost(locked: boolean): SingleInstanceHost & {
+	readonly quitCalls: number;
+	readonly listeners: ((commandLine: readonly string[]) => void)[];
+} {
 	let quitCalls = 0;
-	const listeners: (() => void)[] = [];
+	const listeners: ((commandLine: readonly string[]) => void)[] = [];
 	return {
 		requestSingleInstanceLock: () => locked,
 		quit: () => {
@@ -34,8 +35,19 @@ describe("desktop single-instance lock", () => {
 		expect(host.quitCalls).toBe(0);
 		expect(host.listeners).toHaveLength(1);
 
-		host.listeners[0]?.();
+		host.listeners[0]?.([]);
 		expect(focusCalls).toBe(1);
+	});
+
+	test("forwards the operating-system command line to the second-instance handler", () => {
+		const host = makeHost(true);
+		const received: (readonly string[])[] = [];
+		installSingleInstanceLock(host, (commandLine) => {
+			received.push(commandLine);
+		});
+
+		host.listeners[0]?.(["signet://setup"]);
+		expect(received).toEqual([["signet://setup"]]);
 	});
 
 	test("quits a second launch before it can attempt another daemon spawn", () => {

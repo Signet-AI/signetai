@@ -1,6 +1,11 @@
 import { describe, expect, it, spyOn } from "bun:test";
 import { spawn } from "node:child_process";
-import { buildWindowsOpenInvocation, openUrlWithFallback } from "./open-url.js";
+import {
+	buildDesktopDeepLinkInvocation,
+	buildWindowsOpenInvocation,
+	openDashboardWithDesktopFallback,
+	openUrlWithFallback,
+} from "./open-url.js";
 
 describe("openUrlWithFallback", () => {
 	it("passes Windows browser URLs as data to a static PowerShell command", () => {
@@ -8,11 +13,30 @@ describe("openUrlWithFallback", () => {
 		const invocation = buildWindowsOpenInvocation(url);
 		const command = invocation.args.at(-1);
 
-		expect(command).toBe("$url = $env:SIGNET_OPEN_URL; Start-Process -FilePath $url;");
+		expect(command).toBe("$ErrorActionPreference = 'Stop'; $url = $env:SIGNET_OPEN_URL; Start-Process -FilePath $url;");
 		expect(command).not.toContain(url);
 		expect(invocation.options.env.SIGNET_OPEN_URL).toBe(url);
 		expect(invocation.options.stdio).toBe("ignore");
 		expect(invocation.options).not.toHaveProperty("detached");
+	});
+
+	it("builds native launches for the packaged desktop app on each platform", () => {
+		expect(buildDesktopDeepLinkInvocation("setup", "win32")).toMatchObject({
+			command: "powershell.exe",
+			args: ["-NoProfile", "-NonInteractive", "-Command", expect.any(String)],
+			options: { stdio: "ignore", env: { SIGNET_OPEN_URL: "signet://setup" } },
+		});
+		expect(buildDesktopDeepLinkInvocation("setup", "darwin")).toEqual({
+			command: "open",
+			args: ["-b", "ai.signet.app", "signet://setup"],
+			options: { stdio: "ignore" },
+		});
+		expect(buildDesktopDeepLinkInvocation("setup", "linux")).toEqual({
+			command: "gio",
+			args: ["launch", "signet.desktop", "signet://setup"],
+			options: { stdio: "ignore" },
+		});
+		expect(buildDesktopDeepLinkInvocation("setup", "freebsd")).toBeNull();
 	});
 
 	it("prints a usable manual URL when opening the browser fails (#1477)", async () => {
@@ -22,6 +46,7 @@ describe("openUrlWithFallback", () => {
 		});
 		try {
 			await openUrlWithFallback("https://example.com/oauth", {
+				platform: "linux",
 				open: async () => {
 					throw new Error("browser unavailable");
 				},
@@ -34,7 +59,7 @@ describe("openUrlWithFallback", () => {
 		expect(lines.join("\n")).toContain("https://example.com/oauth");
 	});
 
-	it("kills a stuck browser opener process before printing the manual URL", async () => {
+	it("keeps a still-running opener alive after the launch grace period", async () => {
 		const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 1_000)"]);
 		const lines: string[] = [];
 		let waitOption: boolean | undefined;
@@ -43,19 +68,21 @@ describe("openUrlWithFallback", () => {
 		});
 		try {
 			await openUrlWithFallback("https://example.com/stuck", {
+				platform: "linux",
 				open: async (_url, options) => {
 					waitOption = options?.wait;
 					return child;
 				},
 				timeoutMs: 10,
 			});
+
+			expect(waitOption).toBe(false);
+			expect(child.killed).toBe(false);
+			expect(lines).toEqual([]);
 		} finally {
 			log.mockRestore();
+			if (child.exitCode === null && child.signalCode === null) child.kill();
 		}
-
-		expect(waitOption).toBe(true);
-		expect(child.killed).toBe(true);
-		expect(lines.join("\n")).toContain("https://example.com/stuck");
 	});
 
 	it("prints the manual URL when a headless opener exits nonzero (#1477)", async () => {
@@ -66,6 +93,7 @@ describe("openUrlWithFallback", () => {
 		});
 		try {
 			await openUrlWithFallback("https://example.com/headless", {
+				platform: "linux",
 				open: async (_url, options) => {
 					waitOption = options?.wait;
 					const child = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(7), 25)"]);
@@ -92,7 +120,7 @@ describe("openUrlWithFallback", () => {
 			log.mockRestore();
 		}
 
-		expect(waitOption).toBe(true);
+		expect(waitOption).toBe(false);
 		expect(lines.join("\n")).toContain("Paste this URL into your browser:");
 		expect(lines.join("\n")).toContain("https://example.com/headless");
 	});
@@ -119,7 +147,7 @@ describe("openUrlWithFallback", () => {
 		}
 
 		expect(opened).toEqual(["https://example.com/macos"]);
-		expect(waitOption).toBe(true);
+		expect(waitOption).toBe(false);
 		expect(lines).toEqual([]);
 	});
 
@@ -155,6 +183,7 @@ describe("openUrlWithFallback", () => {
 		});
 		try {
 			await openUrlWithFallback("https://example.com/dashboard", {
+				platform: "linux",
 				open: async (url) => {
 					opened.push(url);
 					return undefined;
@@ -166,5 +195,72 @@ describe("openUrlWithFallback", () => {
 
 		expect(opened).toEqual(["https://example.com/dashboard"]);
 		expect(lines).toEqual([]);
+	});
+
+	it("opens setup in the desktop app before using the browser URL", async () => {
+		const opened: string[] = [];
+		await openDashboardWithDesktopFallback("http://127.0.0.1:3850/#setup", "setup", {
+			platform: "linux",
+			open: async (url) => {
+				opened.push(url);
+				return undefined;
+			},
+		});
+
+		expect(opened).toEqual(["signet://setup"]);
+	});
+
+	for (const platform of ["darwin", "linux", "win32"] as const) {
+		it(`uses the same setup deep link on ${platform}`, async () => {
+			const opened: string[] = [];
+			await openDashboardWithDesktopFallback("http://127.0.0.1:3850/#setup", "setup", {
+				platform,
+				hasGuiSession: async () => true,
+				hasWindowsProtocolHandler: async () => true,
+				open: async (url) => {
+					opened.push(url);
+					return undefined;
+				},
+			});
+
+			expect(opened).toEqual(["signet://setup"]);
+		});
+	}
+
+	it("falls back to the local browser dashboard when no desktop handler is available", async () => {
+		const opened: string[] = [];
+		const lines: string[] = [];
+		const log = spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+			lines.push(args.join(" "));
+		});
+		try {
+			await openDashboardWithDesktopFallback("http://127.0.0.1:3850/#setup", "setup", {
+				platform: "linux",
+				open: async (url) => {
+					opened.push(url);
+					if (url === "signet://setup") throw new Error("Signet desktop handler is unavailable");
+					return undefined;
+				},
+			});
+		} finally {
+			log.mockRestore();
+		}
+
+		expect(opened).toEqual(["signet://setup", "http://127.0.0.1:3850/#setup"]);
+		expect(lines).toEqual([]);
+	});
+
+	it("does not invoke an unregistered Windows protocol and falls back to the browser", async () => {
+		const opened: string[] = [];
+		await openDashboardWithDesktopFallback("http://127.0.0.1:3850/#setup", "setup", {
+			platform: "win32",
+			hasWindowsProtocolHandler: async () => false,
+			open: async (url) => {
+				opened.push(url);
+				return undefined;
+			},
+		});
+
+		expect(opened).toEqual(["http://127.0.0.1:3850/#setup"]);
 	});
 });

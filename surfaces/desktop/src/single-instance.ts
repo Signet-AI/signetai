@@ -1,10 +1,13 @@
 export interface SingleInstanceHost {
 	requestSingleInstanceLock(): boolean;
 	quit(): void;
-	onSecondInstance(listener: () => void): void;
+	onSecondInstance(listener: (commandLine: readonly string[]) => void): void;
 }
 
-export function installSingleInstanceLock(host: SingleInstanceHost, onSecondInstance: () => void): boolean {
+export function installSingleInstanceLock(
+	host: SingleInstanceHost,
+	onSecondInstance: (commandLine: readonly string[]) => void,
+): boolean {
 	if (!host.requestSingleInstanceLock()) {
 		host.quit();
 		return false;

@@ -34,16 +34,33 @@ import { DesktopTray } from "./tray.js";
 import { applyDesktopWorkspaceEnv, resolveDesktopWorkspace } from "./workspace.js";
 import { applicationMenuTemplate } from "./application-menu.js";
 import { installSingleInstanceLock } from "./single-instance.js";
+import {
+	desktopDashboardUrl,
+	findDesktopDeepLink,
+	parseDesktopDeepLink,
+	type DesktopDeepLinkDestination,
+} from "./deep-link.js";
+
+function registerDesktopDeepLink(): void {
+	if (process.platform === "linux") return;
+	if (process.defaultApp && process.argv[1] !== undefined) {
+		app.setAsDefaultProtocolClient("signet", process.execPath, [resolve(process.argv[1])]);
+		return;
+	}
+	app.setAsDefaultProtocolClient("signet");
+}
+
+registerDesktopDeepLink();
 
 const hasSingleInstanceLock = installSingleInstanceLock(
 	{
 		requestSingleInstanceLock: () => app.requestSingleInstanceLock(),
 		quit: () => app.quit(),
 		onSecondInstance: (listener) => {
-			app.on("second-instance", listener);
+			app.on("second-instance", (_event, commandLine) => listener(commandLine));
 		},
 	},
-	showDashboard,
+	(commandLine) => showDashboard(findDesktopDeepLink(commandLine) ?? undefined),
 );
 
 const workspace = applyDesktopWorkspaceEnv(resolveDesktopWorkspace());
@@ -66,6 +83,10 @@ let tray: DesktopTray | null = null;
 let quitting = false;
 let daemonStartupError: string | null = null;
 let loadedMainWindowUrl: string | null = null;
+let pendingDashboardDestination = findDesktopDeepLink(process.argv);
+let dashboardDeepLinkGeneration = 0;
+let dashboardHasLoaded = false;
+let dashboardLoading: Promise<void> | null = null;
 
 function enableGpuRendering(): void {
 	if (process.env.SIGNET_DESKTOP_DISABLE_GPU === "1") return;
@@ -233,23 +254,41 @@ function createMainWindow(): BrowserWindow {
 	mainWindow.on("closed", () => {
 		mainWindow = null;
 		loadedMainWindowUrl = null;
+		dashboardHasLoaded = false;
 	});
 
 	return mainWindow;
 }
 
-function showDashboard(): void {
-	void showDashboardReady();
-}
+function showDashboard(destination?: DesktopDeepLinkDestination): void {
+	if (destination !== undefined) {
+		pendingDashboardDestination = destination;
+		dashboardDeepLinkGeneration += 1;
+	}
+	if (!app.isReady() || !hasSingleInstanceLock) return;
 
-async function showDashboardReady(): Promise<void> {
 	const win = createMainWindow();
 	loadStartupWindow(win);
 	if (win.isMinimized()) win.restore();
 	win.show();
 	win.focus();
+	if (dashboardLoading !== null || (dashboardHasLoaded && pendingDashboardDestination === null)) return;
+
+	const generation = dashboardDeepLinkGeneration;
+	dashboardLoading = showDashboardReady(win).finally(() => {
+		dashboardLoading = null;
+		if (pendingDashboardDestination !== null && dashboardDeepLinkGeneration !== generation) showDashboard();
+	});
+}
+
+async function showDashboardReady(win: BrowserWindow): Promise<void> {
 	await prepareDaemonForDashboard();
-	loadMainWindow(win);
+	const generation = dashboardDeepLinkGeneration;
+	const destination = pendingDashboardDestination ?? "dashboard";
+	const loaded = await loadMainWindow(win, destination);
+	if (!loaded) return;
+	dashboardHasLoaded = true;
+	if (generation === dashboardDeepLinkGeneration) pendingDashboardDestination = null;
 }
 
 async function prepareDaemonForDashboard(): Promise<void> {
@@ -272,13 +311,16 @@ async function assertDaemonUsable(): Promise<void> {
 	}
 }
 
-function loadMainWindow(win: BrowserWindow): void {
-	const url = daemonStartupError ? startupErrorUrl(daemonStartupError) : "app://signet/";
-	if (loadedMainWindowUrl === url) return;
+async function loadMainWindow(win: BrowserWindow, destination: DesktopDeepLinkDestination): Promise<boolean> {
+	const url = daemonStartupError ? startupErrorUrl(daemonStartupError) : desktopDashboardUrl(destination);
 	loadedMainWindowUrl = url;
-	win.loadURL(url).catch((err) => {
+	try {
+		await win.loadURL(url);
+		return true;
+	} catch (err) {
 		console.error(daemonStartupError ? "Failed to load startup error" : "Failed to load dashboard", err);
-	});
+		return false;
+	}
 }
 
 function loadStartupWindow(win: BrowserWindow): void {
@@ -530,6 +572,11 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.setName("Signet");
+
+app.on("open-url", (event, value) => {
+	event.preventDefault();
+	showDashboard(parseDesktopDeepLink(value) ?? undefined);
+});
 
 app.whenReady().then(async () => {
 	if (!hasSingleInstanceLock) return;
