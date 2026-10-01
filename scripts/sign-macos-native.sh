@@ -48,7 +48,7 @@ printf 'Configuring code-signing key access.\n'
 security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path" >/dev/null
 
 printf 'Resolving Developer ID identity.\n'
-identities="$(security find-identity -v -p codesigning "$keychain_path" 2>&1)"
+identities="$(security find-identity -p codesigning "$keychain_path" 2>&1)"
 identity="$(printf '%s\n' "$identities" | awk -v team="$APPLE_TEAM_ID" -F '"' '$2 ~ /^Developer ID Application: / && index($2, "(" team ")") > 0 { print $2; exit }')"
 if [[ -z "$identity" ]]; then
   echo "::error::No Developer ID Application identity found for the configured team"
