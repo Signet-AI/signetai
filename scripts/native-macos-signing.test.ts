@@ -36,8 +36,8 @@ if [ "\${SIGNING_SECURITY_FAILURE:-}" = "$1" ]; then
   printf 'fixture security error\\n' >&2
   exit 1
 fi
-if [ "$1" = find-identity ] && [ "$2" = "-v" ]; then
-  echo 'security: SecKeychainSearchCopyNext: The specified item could not be found in the keychain.' >&2
+if [ "$1" = find-identity ] && [ "$2" = "-p" ]; then
+  echo 'security: SecPolicySearchCopyNext: The specified item could not be found in the keychain.' >&2
   exit 1
 fi
 if [ "$1" = find-identity ]; then
@@ -112,8 +112,8 @@ test("signs the macOS CLI with a stable team-bound designated requirement", asyn
 
 	expect(result.exitCode).toBe(0);
 	expect(output).toContain("Signed and verified");
-	expect(calls).toContain("security:find-identity -p codesigning ");
-	expect(calls).not.toContain("security:find-identity -v ");
+	expect(calls).toContain("security:find-identity ");
+	expect(calls).not.toContain("security:find-identity -p ");
 	expect(calls).toContain("codesign:--force --timestamp --identifier ai.signet.cli");
 	expect(calls).toContain("--requirements =designated => anchor apple generic");
 	expect(calls).toContain("-R =anchor apple generic and identifier");

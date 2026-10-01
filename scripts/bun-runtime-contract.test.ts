@@ -70,11 +70,18 @@ describe("Bun runtime contract", () => {
 
 	test("macOS native releases run Developer ID signing before artifact upload", () => {
 		const releaseWorkflow = text(".github/workflows/release.yml");
-		const signingStart = releaseWorkflow.indexOf("      - name: Sign and verify macOS native binary with Developer ID");
-		const signingEnd = releaseWorkflow.indexOf("\n      - name:", signingStart + 1);
-		const signingStep = releaseWorkflow.slice(signingStart, signingEnd);
-		const uploadStart = releaseWorkflow.indexOf("      - name: Upload to release", signingEnd);
+		const buildNativeStart = releaseWorkflow.indexOf("\n  build-native:\n");
+		const publishStart = releaseWorkflow.indexOf("\n  publish:\n", buildNativeStart);
+		const buildNativeWorkflow = releaseWorkflow.slice(buildNativeStart, publishStart);
+		const signingStart = buildNativeWorkflow.indexOf(
+			"      - name: Sign and verify macOS native binary with Developer ID",
+		);
+		const signingEnd = buildNativeWorkflow.indexOf("\n      - name:", signingStart + 1);
+		const signingStep = buildNativeWorkflow.slice(signingStart, signingEnd);
+		const uploadStart = buildNativeWorkflow.indexOf("      - name: Upload to release", signingEnd);
 
+		expect(buildNativeStart).toBeGreaterThanOrEqual(0);
+		expect(publishStart).toBeGreaterThan(buildNativeStart);
 		expect(signingStart).toBeGreaterThanOrEqual(0);
 		expect(signingEnd).toBeGreaterThan(signingStart);
 		expect(signingStep).toContain("if: startsWith(matrix.platform, 'darwin-')");
