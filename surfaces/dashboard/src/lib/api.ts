@@ -1,6 +1,9 @@
 import { dashboardQueryCache } from "./query-cache";
 import { installDemoApi } from "./demo";
 import { getDesktopBridge } from "./desktop";
+import { onboardingPreviewFetch, installOnboardingPreview } from "./onboarding-preview";
+
+export const onboardingPreview = import.meta.env.DEV && import.meta.env.VITE_ONBOARDING_PREVIEW === true;
 
 const API_BASE = "";
 function authHeaders(): HeadersInit {
@@ -34,6 +37,7 @@ function invalidateMutation(path: string): void {
 }
 
 async function dashboardFetch(path: string, init?: RequestInit): Promise<Response> {
+	if (onboardingPreview) return onboardingPreviewFetch(path, init);
 	const method = init?.method?.toUpperCase() ?? "GET";
 	const deadline = method === "GET" ? AbortSignal.timeout(20_000) : undefined;
 	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
@@ -1365,7 +1369,7 @@ export function startOAuthLogin(providerId: string): OAuthLoginHandle {
 		for (const h of errorHandlers) h(message);
 	};
 
-	const pump = fetch(`${API_BASE}/api/inference/oauth/login/${encodeURIComponent(providerId)}`, {
+	const pump = dashboardFetch(`${API_BASE}/api/inference/oauth/login/${encodeURIComponent(providerId)}`, {
 		method: "POST",
 		headers: { Accept: "text/event-stream", ...authHeaders() },
 		signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10 * 60_000)]),
@@ -1449,3 +1453,4 @@ export async function disconnectOAuthProvider(providerId: string): Promise<boole
 if (import.meta.env.VITE_DEMO === "1") {
 	installDemoApi(api);
 }
+if (onboardingPreview) installOnboardingPreview(api);

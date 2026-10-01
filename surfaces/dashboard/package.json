@@ -6,6 +6,7 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
+		"dev:onboarding": "vite --mode onboarding",
 		"build": "tsc --noEmit && vite build",
 		"test": "bun test",
 		"preview": "vite preview",

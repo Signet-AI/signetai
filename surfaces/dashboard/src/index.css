@@ -255,6 +255,8 @@
 			calc(100% - env(titlebar-area-x, 0px) - env(titlebar-area-width, calc(100% - 138px)))
 		);
 	}
+	html[data-surface="desktop"][data-platform="mac"] .sig-topbar-row { height:40px; }
+	html[data-surface="desktop"]:not([data-platform="mac"]) .sig-topbar-row { height:max(56px, env(titlebar-area-height, 56px)); }
 	.sig-work-area { background: var(--home-chrome); }
 	.sig-content { background: var(--background); border-top: 1px solid var(--border); border-left: 1px solid var(--border); border-top-left-radius: 18px; }
 	.sig-sidebar { background: var(--home-chrome); display: flex; flex-direction: column; width: 56px; flex: none; padding: 16px 8px; }

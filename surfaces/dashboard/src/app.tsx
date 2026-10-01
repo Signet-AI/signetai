@@ -10,13 +10,12 @@ import { SkillsView } from "@/views/stubs";
 import { DreamsView } from "@/views/dreaming";
 import { GraphView } from "@/views/graph";
 
-import { OnboardingModal } from "@/components/onboarding/modal";
+import { OnboardingPage } from "@/components/onboarding/page";
 
 export function App() {
 	return (
 		<TooltipProvider delayDuration={200}>
 			<Shell />
-			<OnboardingModal />
 			<Toaster />
 		</TooltipProvider>
 	);
@@ -24,7 +23,7 @@ export function App() {
 
 function Shell() {
 	useSettingsHotkey();
-	const { view } = useView();
+	const { view, setView, setSetupComplete } = useView();
 	const contentRef = useRef<HTMLDivElement>(null);
 	useEffect(() => {
 		contentRef.current?.scrollTo({ top: 0 });
@@ -40,12 +39,18 @@ function Shell() {
 					<SidebarNav />
 					<div
 						ref={contentRef}
-						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "settings" ? "overflow-hidden" : "overflow-auto p-6"}`}
+						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "settings" || view === "setup" ? "overflow-hidden" : "overflow-auto p-6"}`}
 					>
-						<Activity mode={view === "home" ? "visible" : "hidden"}>
-							<HomeView />
-						</Activity>
-						{view !== "home" && <ViewSwitch view={view} />}
+						{view === "setup" ? (
+							<OnboardingPage onClose={() => setView("home")} onCompleteChange={setSetupComplete} />
+						) : (
+							<>
+								<Activity mode={view === "home" ? "visible" : "hidden"}>
+									<HomeView />
+								</Activity>
+								{view !== "home" && <ViewSwitch view={view} />}
+							</>
+						)}
 					</div>
 				</div>
 			</main>

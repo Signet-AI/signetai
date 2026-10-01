@@ -3,7 +3,7 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 let createRoot: typeof import("react-dom/client").createRoot;
-let OnboardingModal: typeof import("./modal").OnboardingModal;
+let OnboardingPage: typeof import("./page").OnboardingPage;
 
 const dom = new Window({ url: "http://localhost/#setup" });
 const originalFetch = globalThis.fetch;
@@ -13,6 +13,8 @@ let config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 let saveFails = false;
 let savedOAuth = false;
 const calls: string[] = [];
+let identityFiles: Record<string, string> = {};
+let importFiles: Array<{ id: string; name: string }> = [];
 if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 	test("onboarding browser fixture", () => {
 		const result = spawnSync(process.execPath, ["test", import.meta.filename], {
@@ -30,17 +32,24 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		for (const key of Object.getOwnPropertyNames(dom))
 			if (!(key in globalThis)) Reflect.set(globalThis, key, Reflect.get(dom, key));
 		({ createRoot } = await import("react-dom/client"));
-		({ OnboardingModal } = await import("./modal"));
+		({ OnboardingPage } = await import("./page"));
 		globalThis.fetch = async (input, init) => {
 			const path = String(input);
 			calls.push(`${init?.method ?? "GET"} ${path}`);
 			if (path === "/api/config") {
 				if (init?.method === "POST") {
 					if (saveFails) return Response.json({ error: "disk full" }, { status: 500 });
-					config = JSON.parse(String(init.body)).content;
+					const body = JSON.parse(String(init.body));
+					if (body.file === "agent.yaml") config = body.content;
+					else identityFiles[body.file] = body.content;
 					return Response.json({ success: true });
 				}
-				return Response.json({ files: [{ name: "agent.yaml", content: config }] });
+				return Response.json({
+					files: [
+						{ name: "agent.yaml", content: config },
+						...Object.entries(identityFiles).map(([name, content]) => ({ name, content })),
+					],
+				});
 			}
 			if (path === "/api/status")
 				return Response.json({ agentId: "alice", agentsDir: "/fixture", pipelineV2: { enabled: false, paused: true } });
@@ -71,12 +80,26 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			if (path.startsWith("/api/sources/imports?")) {
 				expect(path).toContain("agentId=alice");
 				const body = JSON.parse(String(init?.body));
-				return Response.json({ id: "import-job", files: body.files });
+				importFiles = body.files;
+				return Response.json({ id: "import-job", files: importFiles });
 			}
 			if (path.startsWith("/api/sources/imports/import-job/files/")) {
-				expect(init?.body instanceof dom.File).toBe(true);
+				if (init?.method === "PATCH") expect(init.body instanceof ArrayBuffer).toBe(true);
 				expect(path).toContain("agentId=alice");
 				return Response.json({ success: true });
+			}
+			if (path.startsWith("/api/sources/imports/import-job?")) {
+				expect(path).toContain("agentId=alice");
+				return Response.json({
+					job: { id: "import-job" },
+					files: importFiles.map((file) => ({
+						...file,
+						state: "uploading",
+						upload_offset: 0,
+						upload_generation: 1,
+						upload_digest: "",
+					})),
+				});
 			}
 			if (path.startsWith("/api/sources/imports/import-job/start")) return Response.json({ changed: true });
 			if (path.startsWith("/api/sources/import")) return Response.json({ imports: [] });
@@ -105,7 +128,8 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		dom.close();
 	});
 
-	async function mount() {
+	async function mount(files: Record<string, string> = {}) {
+		identityFiles = { ...files };
 		window.location.hash = "#setup";
 		localStorage.clear();
 		calls.length = 0;
@@ -113,7 +137,7 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		document.body.append(element);
 		const root = createRoot(element);
 		await act(async () => {
-			root.render(<OnboardingModal />);
+			root.render(<OnboardingPage onClose={() => {}} />);
 		});
 		return {
 			async click(text: string) {
@@ -124,7 +148,9 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 				await act(async () => button.click());
 			},
 			async input(label: string, value: string) {
-				const input = document.querySelector(`input[aria-label="${label}"]`);
+				const input =
+					document.querySelector(`input[aria-label="${label}"]`) ??
+					[...document.querySelectorAll("label")].find((entry) => entry.textContent?.trim() === label)?.control;
 				if (!(input instanceof HTMLInputElement)) throw new Error(`Missing input ${label}`);
 				await act(async () => {
 					const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
@@ -140,6 +166,55 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		};
 	}
 
+	test("identity setup preserves user-owned files, scope, and unrelated config", async () => {
+		config = "agent:\n  name: Existing\noperator_setting: preserved\nharnesses: []\n";
+		const originals = {
+			"AGENTS.md": "My existing instructions",
+			"SOUL.md": "My existing persona",
+			"MEMORY.md": "Generated memory",
+		};
+		const view = await mount(originals);
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.input("Agent name", "New display name");
+			await view.click("Save identity");
+			expect(config).toContain("name: New display name");
+			expect(config).toContain("operator_setting: preserved");
+			expect(identityFiles["AGENTS.md"]).toBe(originals["AGENTS.md"]);
+			expect(identityFiles["SOUL.md"]).toBe(originals["SOUL.md"]);
+			expect(identityFiles["MEMORY.md"]).toBe(originals["MEMORY.md"]);
+			expect(calls).not.toContain("POST /api/agents");
+		} finally {
+			await view.close();
+		}
+	});
+
+	test("failed identity writes keep setup incomplete and can be retried", async () => {
+		config = "agent:\n  name: Existing\nharnesses: []\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.input("Agent name", "New display name");
+			await view.input("Your name optional", "Fixture User");
+			saveFails = true;
+			await view.click("Save identity");
+			expect(config).toContain("name: Existing");
+			expect(identityFiles["AGENTS.md"]).toBeUndefined();
+			expect(document.body.textContent).toContain("Could not save AGENTS.md");
+			saveFails = false;
+			await view.click("Save identity");
+			expect(identityFiles["AGENTS.md"]).toContain("You are New display name");
+			expect(identityFiles["AGENTS.md"]).toContain("- Name: Fixture User");
+			expect(identityFiles["AGENTS.md"]).not.toContain("SIGNET:START");
+			expect(config).toContain("name: New display name");
+		} finally {
+			saveFails = false;
+			await view.close();
+		}
+	});
+
 	test("saved OAuth still allows signing in again when popups are blocked", async () => {
 		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 		savedOAuth = true;
@@ -148,6 +223,9 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		const view = await mount();
 		try {
 			await view.click("Get started");
+			await view.click("Continue");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
 			await view.click("Continue");
 			await view.click("ChatGPT / Codex");
 			expect(document.body.textContent).toContain("Saved credentials found");
@@ -170,15 +248,19 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		try {
 			await view.click("Get started");
 			await view.click("Continue");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
+			await view.click("Continue");
 			const dreaming = document.querySelector('[role="switch"][aria-label="Enable Dreaming?"]');
 			expect(dreaming?.getAttribute("aria-checked")).toBe("true");
 			expect(dreaming?.getAttribute("aria-describedby")).toBe("dreaming-provider-status");
-			expect(document.body.textContent).toContain("unavailable until a working provider is connected and tested");
+			expect(document.body.textContent).toContain("Starts after your connection passes its test");
 			await view.click("Set up later");
 			expect(config).toContain("dreaming:\n    enabled: true");
 			expect(calls).not.toContain("POST /api/inference/execute");
 			expect(calls).not.toContain("POST /api/pipeline/resume");
 			await view.click("Continue");
+			await view.click("Keep current settings");
 			expect(document.querySelector<HTMLInputElement>('[aria-label="Your first memory"]')?.value).toBe("");
 			expect(
 				Array.from(document.querySelectorAll("button")).find((button) => button.textContent?.includes("Remember this"))
@@ -188,7 +270,7 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 			await view.click("Remember this");
 			await view.click("Recall it");
 			await view.click("Continue");
-			expect(document.body.textContent).toContain("Automatic memory setup deferred");
+			expect(document.body.textContent).toContain("Connection setup deferred");
 			expect(document.body.textContent).not.toContain("answered the connection test");
 		} finally {
 			await view.close();
@@ -200,6 +282,9 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		const view = await mount();
 		try {
 			await view.click("Get started");
+			await view.click("Continue");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
 			await view.click("Continue");
 			const dreaming = document.querySelector('[role="switch"][aria-label="Enable Dreaming?"]');
 			if (!(dreaming instanceof HTMLButtonElement)) throw new Error("Missing Dreaming preference");
@@ -224,6 +309,9 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		try {
 			await view.click("Get started");
 			await view.click("Continue");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
+			await view.click("Continue");
 			const dreaming = document.querySelector('[role="switch"][aria-label="Enable Dreaming?"]');
 			if (!(dreaming instanceof HTMLButtonElement)) throw new Error("Missing Dreaming preference");
 			await act(async () => dreaming.click());
@@ -243,7 +331,10 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		try {
 			await view.click("Get started");
 			await view.click("Continue");
-			await view.click("Local modelProcess on your own machine");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
+			await view.click("Continue");
+			await view.click("Local model");
 			await view.input("Model name", "fixture-model");
 			const dreaming = document.querySelector('[role="switch"][aria-label="Enable Dreaming?"]');
 			if (!(dreaming instanceof HTMLButtonElement)) throw new Error("Missing Dreaming preference");
@@ -257,14 +348,45 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		}
 	});
 
-	test("the modal requires a successful save and probe, exposes sources, and recalls scoped evidence", async () => {
+	test("embedding saves preserve other settings and failures keep setup incomplete", async () => {
+		config =
+			"name: Example\nharnesses: []\noperator_setting: preserved\nembedding:\n  provider: native\n  model: nomic-embed-text-v1.5\n  dimensions: 768\n  idleTtlMs: 12345\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
+			await view.click("Continue");
+			await view.click("Set up later");
+			await view.click("Continue");
+			saveFails = true;
+			await view.click("Save search settings");
+			expect(document.body.textContent).toContain("Could not save search settings");
+			expect(document.body.textContent).toContain("Find it, even in different words");
+			saveFails = false;
+			await view.click("Save search settings");
+			expect(config).toContain("operator_setting: preserved");
+			expect(config).toContain("idleTtlMs: 12345");
+			expect(config).toContain("dimensions: 768");
+			expect(config).not.toContain("memory:\n  embeddings:");
+			expect(document.body.textContent).toContain("What should your agents know about you");
+		} finally {
+			saveFails = false;
+			await view.close();
+		}
+	});
+
+	test("the page requires a successful save and probe, exposes sources, and recalls scoped evidence", async () => {
 		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 		const view = await mount();
 		try {
-			expect(document.querySelector('[role="dialog"]')).not.toBeNull();
 			await view.click("Get started");
 			await view.click("Continue");
-			await view.click("Local modelProcess on your own machine");
+			await view.input("Agent name", "Fixture Agent");
+			await view.click("Save identity");
+			await view.click("Continue");
+			await view.click("Local model");
 			await view.input("Model name", "fixture-model");
 			saveFails = true;
 			await view.click("Test and enable memory");
@@ -305,8 +427,9 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 				option.click();
 			});
 			await view.click("Import & index");
-			expect(calls).toContain("POST /api/sources/imports/import-job/start");
+			expect(calls).toContain("POST /api/sources/imports/import-job/start?agentId=alice");
 			await view.click("Continue");
+			await view.click("Keep current settings");
 			await view.click("How I like answers");
 			await view.click("Remember this");
 			await view.click("Recall it");

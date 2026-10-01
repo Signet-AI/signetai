@@ -6,7 +6,10 @@ import { defineConfig } from "vite";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const daemonProxyTarget = process.env.SIGNET_DAEMON_URL ?? "http://127.0.0.1:3850";
-export default defineConfig({
+export default defineConfig(({ command, mode }) => ({
+	define: {
+		"import.meta.env.VITE_ONBOARDING_PREVIEW": JSON.stringify(command === "serve" && mode === "onboarding"),
+	},
 	plugins: [react(), tailwindcss()],
 	resolve: {
 		alias: {
@@ -24,4 +27,4 @@ export default defineConfig({
 		outDir: "build",
 		sourcemap: false,
 	},
-});
+}));

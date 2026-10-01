@@ -10,7 +10,7 @@ test("Vite loads the dashboard config under its Node build runtime", () => {
 			"-e",
 			`import { loadConfigFromFile } from "vite";
 const loaded = await loadConfigFromFile({ command: "build", mode: "production" }, ${JSON.stringify(join(import.meta.dir, "vite.config.ts"))}, ${JSON.stringify(import.meta.dir)}, "error");
-if (!loaded?.config) process.exitCode = 1;`,
+if (!loaded?.config || loaded.config.define?.["import.meta.env.VITE_ONBOARDING_PREVIEW"] !== "false") process.exitCode = 1;`,
 		],
 		{ cwd: import.meta.dir, encoding: "utf8", timeout: 30_000 },
 	);
