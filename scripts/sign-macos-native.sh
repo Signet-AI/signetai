@@ -47,44 +47,28 @@ security import "$certificate_path" -k "$keychain_path" -P "$MACOS_CERTIFICATE_P
 printf 'Configuring code-signing key access.\n'
 security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path" >/dev/null
 
-printf 'Resolving Developer ID identity.\n'
-if identities="$(security find-identity "$keychain_path" 2>&1)"; then
-  identity="$(printf '%s\n' "$identities" | awk -v team="$APPLE_TEAM_ID" -F '"' '$2 ~ /^Developer ID Application: / && substr($2, length($2) - length(team) - 2) == " (" team ")" { print $2; exit }')"
-  if [[ -z "$identity" ]]; then
-    printf '%s\n' "$identities" >&2
-    echo "::error::No Developer ID Application identity found for the configured team"
-    exit 1
-  fi
-else
-  identity_lookup_status=$?
-  printf '%s\n' "$identities" >&2
-  if [[ "$identities" != *"The specified item could not be found in the keychain."* ]]; then
-    echo "::error::Unexpected security find-identity failure; refusing fingerprint fallback"
-    exit "$identity_lookup_status"
-  fi
-  printf '::warning::security find-identity failed for the temporary keychain (exit %s); resolving the imported certificate directly.\n' "$identity_lookup_status"
-  if ! certificate_subject="$(openssl pkcs12 -in "$certificate_path" -clcerts -nokeys -passin env:MACOS_CERTIFICATE_PASSWORD | openssl x509 -noout -subject -nameopt RFC2253)"; then
-    echo "::error::Could not inspect the imported signing certificate subject"
-    exit 1
-  fi
-  certificate_subject="${certificate_subject#subject=}"
-  if [[ ! "$certificate_subject" =~ (^|,)CN=Developer\ ID\ Application:\ .+\ \(${APPLE_TEAM_ID}\)(,|$) ]] || [[ ! "$certificate_subject" =~ (^|,)OU=${APPLE_TEAM_ID}(,|$) ]]; then
-    echo "::error::Imported certificate is not a Developer ID Application identity for the configured team"
-    exit 1
-  fi
-  if ! identity_fingerprint="$(openssl pkcs12 -in "$certificate_path" -clcerts -nokeys -passin env:MACOS_CERTIFICATE_PASSWORD | openssl x509 -noout -fingerprint -sha1)"; then
-    echo "::error::Could not extract the imported signing certificate fingerprint"
-    exit 1
-  fi
-  identity="${identity_fingerprint#*=}"
-  identity="${identity//:/}"
-  identity="${identity//[[:space:]]/}"
-  if [[ ! "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]; then
-    echo "::error::Could not parse the imported signing certificate SHA-1 fingerprint"
-    exit 1
-  fi
-  printf 'Signing with the imported certificate SHA-1 fingerprint.\n'
+printf 'Inspecting imported Developer ID certificate.\n'
+if ! certificate_subject="$(openssl pkcs12 -in "$certificate_path" -clcerts -nokeys -passin env:MACOS_CERTIFICATE_PASSWORD | openssl x509 -noout -subject -nameopt RFC2253)"; then
+  echo "::error::Could not inspect the imported signing certificate subject"
+  exit 1
 fi
+certificate_subject="${certificate_subject#subject=}"
+if [[ ! "$certificate_subject" =~ (^|,)CN=Developer\ ID\ Application:\ .+\ \(${APPLE_TEAM_ID}\)(,|$) ]] || [[ ! "$certificate_subject" =~ (^|,)OU=${APPLE_TEAM_ID}(,|$) ]]; then
+  echo "::error::Imported certificate is not a Developer ID Application identity for the configured team"
+  exit 1
+fi
+if ! identity_fingerprint="$(openssl pkcs12 -in "$certificate_path" -clcerts -nokeys -passin env:MACOS_CERTIFICATE_PASSWORD | openssl x509 -noout -fingerprint -sha1)"; then
+  echo "::error::Could not extract the imported signing certificate fingerprint"
+  exit 1
+fi
+identity="${identity_fingerprint#*=}"
+identity="${identity//:/}"
+identity="${identity//[[:space:]]/}"
+if [[ ! "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]; then
+  echo "::error::Could not parse the imported signing certificate SHA-1 fingerprint"
+  exit 1
+fi
+printf 'Signing with the imported certificate SHA-1 fingerprint.\n'
 
 codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --keychain "$keychain_path" --sign "$identity" "$binary"
 codesign --verify --strict --verbose=2 "$binary"
