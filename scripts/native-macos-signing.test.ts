@@ -36,6 +36,13 @@ if [ "\${SIGNING_SECURITY_FAILURE:-}" = "$1" ]; then
   printf 'fixture security error\\n' >&2
   exit 1
 fi
+if [ "$1" = import ]; then
+  printf '1 certificate imported.\\n1 identity imported.\\n'
+fi
+if [ "$1" = find-identity ] && [ "\${SIGNING_IDENTITY_LOOKUP_FAILURE:-0}" = "1" ]; then
+  printf 'security: SecPolicySearchCopyNext: The specified item could not be found in the keychain.\\n' >&2
+  exit 1
+fi
 if [ "$1" = find-identity ] && [ "$2" = "-p" ]; then
   echo 'security: SecPolicySearchCopyNext: The specified item could not be found in the keychain.' >&2
   exit 1
@@ -181,6 +188,33 @@ test("refuses to report success when the signed binary fails the team requiremen
 	});
 
 	expect(result.exitCode).not.toBe(0);
+});
+
+test("reports certificate import results and identity lookup errors", async () => {
+	const fixture = await signingFixture();
+	const script = resolve(import.meta.dir, "sign-macos-native.sh");
+	const result = Bun.spawnSync(["bash", script, fixture.binary], {
+		cwd: resolve(import.meta.dir, ".."),
+		env: {
+			...process.env,
+			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
+			RUNNER_TEMP: fixture.runnerTemp,
+			SIGNING_LOG: fixture.log,
+			SIGNING_IDENTITY_LOOKUP_FAILURE: "1",
+			MACOS_CERTIFICATE_P12: "cGsi",
+			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
+			APPLE_TEAM_ID: "TEAM123456",
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+
+	expect(result.exitCode).not.toBe(0);
+	expect(output).toContain("1 certificate imported.");
+	expect(output).toContain("1 identity imported.");
+	expect(output).toContain("The specified item could not be found in the keychain.");
+	expect(output).not.toContain("Signed and verified");
 });
 
 test("identifies the keychain stage when macOS rejects a security operation", async () => {

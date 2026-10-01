@@ -43,14 +43,21 @@ security create-keychain -p "$keychain_password" "$keychain_path" >/dev/null
 security set-keychain-settings -lut 21600 "$keychain_path"
 security unlock-keychain -p "$keychain_password" "$keychain_path"
 printf 'Importing Developer ID certificate.\n'
-security import "$certificate_path" -k "$keychain_path" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
+security import "$certificate_path" -k "$keychain_path" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
 printf 'Configuring code-signing key access.\n'
 security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path" >/dev/null
 
 printf 'Resolving Developer ID identity.\n'
-identities="$(security find-identity "$keychain_path" 2>&1)"
-identity="$(printf '%s\n' "$identities" | awk -v team="$APPLE_TEAM_ID" -F '"' '$2 ~ /^Developer ID Application: / && substr($2, length($2) - length(team) - 1) == "(" team ")" { print $2; exit }')"
+if identities="$(security find-identity "$keychain_path" 2>&1)"; then
+  identity="$(printf '%s\n' "$identities" | awk -v team="$APPLE_TEAM_ID" -F '"' '$2 ~ /^Developer ID Application: / && substr($2, length($2) - length(team) - 1) == "(" team ")" { print $2; exit }')"
+else
+  identity_lookup_status=$?
+  printf '%s\n' "$identities" >&2
+  echo "::error::security find-identity failed for the temporary keychain (exit ${identity_lookup_status})"
+  exit "$identity_lookup_status"
+fi
 if [[ -z "$identity" ]]; then
+  printf '%s\n' "$identities" >&2
   echo "::error::No Developer ID Application identity found for the configured team"
   exit 1
 fi
