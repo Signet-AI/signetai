@@ -80,6 +80,7 @@ if [[ ! "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]; then
   echo "::error::Could not parse the imported signing certificate SHA-1 fingerprint"
   exit 1
 fi
+identity="$(printf '%s' "$identity" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
 identity_lookup_status=0
 identity_listing="$(security find-identity -v -p codesigning "$keychain_path" 2>&1)" || identity_lookup_status=$?
 identity_listed=no
@@ -87,8 +88,8 @@ identity_entry_regex='^[[:space:]]*[0-9]+\)[[:space:]]+([[:xdigit:]]{40})[[:spac
 if [[ "$identity_lookup_status" -eq 0 ]]; then
   while IFS= read -r identity_line; do
     if [[ "$identity_line" =~ $identity_entry_regex ]]; then
-      listed_fingerprint="${BASH_REMATCH[1]}"
-      if [[ "${listed_fingerprint^^}" == "${identity^^}" ]]; then
+      listed_fingerprint="$(printf '%s' "${BASH_REMATCH[1]}" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+      if [[ "$listed_fingerprint" == "$identity" ]]; then
         identity_listed=yes
         break
       fi

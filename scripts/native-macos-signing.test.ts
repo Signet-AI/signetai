@@ -79,6 +79,7 @@ fi
 if [ "$1" = find-identity ]; then
   case "\${SIGNING_IDENTITY_OUTPUT_MODE:-valid}" in
     missing) printf '0 valid identities found.\\n' ;;
+    lowercase) printf '1) 0123456789abcdef0123456789abcdef01234567 "Developer ID Application: Signet AI (TEAM123456)"\\n1 valid identities found.\\n' ;;
     unrelated) printf 'Warning: fingerprint 0123456789ABCDEF0123456789ABCDEF01234567 was not listed\\n0 valid identities found.\\n' ;;
     malformed) printf '1. 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Signet AI (TEAM123456)"\\n1 valid identities found.\\n' ;;
     query-error)
@@ -207,6 +208,30 @@ test("accepts only a well-formed Keychain identity row and keeps lookup output p
 		expect(output).not.toContain("0123456789ABCDEF0123456789ABCDEF01234567");
 		expect(calls).not.toContain("codesign:");
 	}
+});
+
+test("matches a lowercase Keychain fingerprint case-insensitively", async () => {
+	const fixture = await signingFixture();
+	const script = resolve(import.meta.dir, "sign-macos-native.sh");
+	const result = Bun.spawnSync(["bash", script, fixture.binary], {
+		cwd: resolve(import.meta.dir, ".."),
+		env: {
+			...process.env,
+			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
+			RUNNER_TEMP: fixture.runnerTemp,
+			SIGNING_LOG: fixture.log,
+			SIGNING_IDENTITY_OUTPUT_MODE: "lowercase",
+			MACOS_CERTIFICATE_P12: "cGsi",
+			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
+			APPLE_TEAM_ID: "TEAM123456",
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+
+	expect(output).toContain("Signed and verified");
+	expect(result.exitCode).toBe(0);
 });
 
 afterAll(async () => {
