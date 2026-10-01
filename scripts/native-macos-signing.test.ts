@@ -93,11 +93,22 @@ if [ "$1" = "list-keychains" ]; then
       printf 'fixture keychain restore error\\n' >&2
       exit 1
     fi
-    : > "$state_file"
-    shift 4
-    for keychain_path in "$@"; do
-      printf ' "%s"\\n' "$keychain_path" >> "$state_file"
-    done
+    case "$5" in
+      "$RUNNER_TEMP"/signet-macos-signing.*/signing.keychain-db)
+        printf ' "%s"\\n' "$5" > "$state_file"
+        ;;
+      *)
+        if [ -n "$SIGNING_KEYCHAIN_LIST" ]; then
+          printf '%s\\n' "$SIGNING_KEYCHAIN_LIST" > "$state_file"
+        else
+          : > "$state_file"
+          shift 4
+          for keychain_path in "$@"; do
+            printf ' "%s"\\n' "$keychain_path" >> "$state_file"
+          done
+        fi
+        ;;
+    esac
   else
     query_count_file="\${SIGNING_LOG}.keychain-query-count"
     query_count=0
@@ -111,6 +122,8 @@ if [ "$1" = "list-keychains" ]; then
     fi
     if [ -f "$state_file" ]; then
       cat "$state_file"
+    elif [ "\${SIGNING_KEYCHAIN_EMPTY_LIST:-0}" = "1" ]; then
+      :
     elif [ "\${SIGNING_KEYCHAIN_EMPTY_ENTRY:-0}" = "1" ]; then
       printf ' ""\\n "fixture-secondary.keychain"\\n'
     elif [ "\${SIGNING_KEYCHAIN_NUL_ENTRY:-0}" = "1" ]; then
@@ -328,7 +341,7 @@ test("preserves literal backslashes in keychain search-list paths", async () => 
 	const fixture = await signingFixture();
 	const script = resolve(import.meta.dir, "sign-macos-native.sh");
 	const backslash = String.fromCharCode(92);
-	const keychainList = ` "fixture${backslash}tail.keychain"${String.fromCharCode(10)} "fixture-secondary.keychain"`;
+	const keychainList = `    "fixture${backslash}tail.keychain"  ${String.fromCharCode(10)}"fixture-secondary.keychain"`;
 	const result = Bun.spawnSync(["bash", script, fixture.binary], {
 		cwd: resolve(import.meta.dir, ".."),
 		env: {
@@ -528,6 +541,81 @@ test("removes the temporary keychain when a fresh read confirms it is no longer 
 	expect(keychainState).toBe(' "fixture login.keychain"\n "fixture-secondary.keychain"\n');
 	expect(output).toContain("current list does not reference the temporary keychain");
 	expect(output).not.toContain("Temporary keychain retained");
+	expect(calls).toContain(`security:delete-keychain ${temporaryKeychain}`);
+	expect(await Bun.file(temporaryKeychain).exists()).toBe(false);
+	expect(await readdir(fixture.runnerTemp)).toHaveLength(0);
+});
+
+test("restores the original list and removes the temporary keychain after a partial setter failure", async () => {
+	const fixture = await signingFixture();
+	const script = resolve(import.meta.dir, "sign-macos-native.sh");
+	const result = Bun.spawnSync(["bash", script, fixture.binary], {
+		cwd: resolve(import.meta.dir, ".."),
+		env: {
+			...process.env,
+			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
+			RUNNER_TEMP: fixture.runnerTemp,
+			SIGNING_LOG: fixture.log,
+			SIGNING_KEYCHAIN_SET_FAILURE_PARTIAL: "1",
+			SIGNING_DIAGNOSTIC_PROBE: "true",
+			MACOS_CERTIFICATE_P12: "cGsi",
+			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
+			APPLE_TEAM_ID: "TEAM123456",
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const calls = await readFile(fixture.log, "utf8");
+	const keychainState = await readFile(`${fixture.log}.keychain-state`, "utf8");
+	const temporaryKeychain =
+		calls
+			.split("\n")
+			.find((line) => line.startsWith("created-keychain:"))
+			?.slice("created-keychain:".length) ?? "missing-keychain";
+
+	expect(result.exitCode).not.toBe(0);
+	expect(output).toContain("Could not set temporary user keychain search list for diagnostic probe");
+	expect(calls).toContain(`temporary-list-mutated:${temporaryKeychain}`);
+	expect(keychainState).toBe(' "fixture login.keychain"\n "fixture-secondary.keychain"\n');
+	expect(calls).toContain("restore-args:fixture login.keychain|fixture-secondary.keychain");
+	expect(calls).toContain(`security:delete-keychain ${temporaryKeychain}`);
+	expect(await Bun.file(temporaryKeychain).exists()).toBe(false);
+	expect(await readdir(fixture.runnerTemp)).toHaveLength(0);
+});
+
+test("preserves and restores an initially empty user keychain search list", async () => {
+	const fixture = await signingFixture();
+	const script = resolve(import.meta.dir, "sign-macos-native.sh");
+	const result = Bun.spawnSync(["bash", script, fixture.binary], {
+		cwd: resolve(import.meta.dir, ".."),
+		env: {
+			...process.env,
+			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
+			RUNNER_TEMP: fixture.runnerTemp,
+			SIGNING_LOG: fixture.log,
+			SIGNING_KEYCHAIN_EMPTY_LIST: "1",
+			SIGNING_DIAGNOSTIC_PROBE: "true",
+			MACOS_CERTIFICATE_P12: "cGsi",
+			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
+			APPLE_TEAM_ID: "TEAM123456",
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const calls = await readFile(fixture.log, "utf8");
+	const keychainState = await readFile(`${fixture.log}.keychain-state`, "utf8");
+	const temporaryKeychain =
+		calls
+			.split("\n")
+			.find((line) => line.startsWith("created-keychain:"))
+			?.slice("created-keychain:".length) ?? "missing-keychain";
+
+	expect(result.exitCode).toBe(0);
+	expect(output).toContain("search_list_restore_status=0");
+	expect(keychainState).toBe("");
+	expect(calls).toContain("restore-args:|");
 	expect(calls).toContain(`security:delete-keychain ${temporaryKeychain}`);
 	expect(await Bun.file(temporaryKeychain).exists()).toBe(false);
 	expect(await readdir(fixture.runnerTemp)).toHaveLength(0);

@@ -27,11 +27,25 @@ diagnostic_keychains_saved=no
 diagnostic_keychain_reference=unknown
 parse_keychain_entry() {
   local line="$1"
-  if [[ "${line:0:1}" != ' ' ]]; then
-    return 1
-  fi
-  line="${line:1}"
-  local line_length="${#line}"
+  local line_length=0
+  local character=""
+  local horizontal_tab=$'\t'
+  while [[ -n "$line" ]]; do
+    character="${line:0:1}"
+    if [[ "$character" != ' ' && "$character" != "$horizontal_tab" ]]; then
+      break
+    fi
+    line="${line:1}"
+  done
+  while [[ -n "$line" ]]; do
+    line_length=${#line}
+    character="${line:$((line_length - 1)):1}"
+    if [[ "$character" != ' ' && "$character" != "$horizontal_tab" ]]; then
+      break
+    fi
+    line="${line:0:$((line_length - 1))}"
+  done
+  line_length="${#line}"
   local keychain_path=""
   if [[ "$line_length" -lt 2 || "${line:0:1}" != '"' || "${line:$((line_length - 1)):1}" != '"' ]]; then
     return 1
@@ -73,6 +87,10 @@ inspect_temporary_keychain_reference() {
   if ! current_keychain_list="$(cat "$current_keychain_list_file")"; then
     return 0
   fi
+  if [[ ! -s "$current_keychain_list_file" ]]; then
+    diagnostic_keychain_reference=not_referenced
+    return 0
+  fi
   while IFS= read -r current_keychain_line; do
     if ! current_keychain_path="$(parse_keychain_entry "$current_keychain_line")"; then
       return 0
@@ -92,7 +110,9 @@ report_diagnostic_restore_failure() {
   else
     printf '::error::Could not verify whether the user search list references the temporary keychain. It is preserved at %q. To recover, run: security list-keychains -d user -s' "$keychain_path" >&2
   fi
-  printf ' %q' "${diagnostic_original_keychains[@]}" >&2
+  if [[ "${#diagnostic_original_keychains[@]}" -gt 0 ]]; then
+    printf ' %q' "${diagnostic_original_keychains[@]}" >&2
+  fi
   if [[ "$diagnostic_keychain_reference" == not_referenced ]]; then
     printf '\n' >&2
   else
@@ -235,14 +255,16 @@ if [[ "${SIGNING_DIAGNOSTIC_PROBE:-}" == true ]]; then
     exit 1
   fi
   keychain_list_valid=yes
-  while IFS= read -r keychain_line; do
-    if ! original_keychain_path="$(parse_keychain_entry "$keychain_line")"; then
-      keychain_list_valid=no
-      break
-    fi
-    diagnostic_original_keychains+=( "$original_keychain_path" )
-  done <<< "$original_keychain_list"
-  if [[ "$keychain_list_valid" != yes || "${#diagnostic_original_keychains[@]}" -eq 0 ]]; then
+  if [[ -s "$original_keychain_list_file" ]]; then
+    while IFS= read -r keychain_line; do
+      if ! original_keychain_path="$(parse_keychain_entry "$keychain_line")"; then
+        keychain_list_valid=no
+        break
+      fi
+      diagnostic_original_keychains+=( "$original_keychain_path" )
+    done <<< "$original_keychain_list"
+  fi
+  if [[ "$keychain_list_valid" != yes ]]; then
     echo "::error::Could not parse original user keychain search list for diagnostic probe"
     exit 1
   fi
