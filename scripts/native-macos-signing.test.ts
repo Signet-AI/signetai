@@ -80,7 +80,8 @@ if [ "$1" = find-identity ]; then
   case "\${SIGNING_IDENTITY_OUTPUT_MODE:-valid}" in
     missing) printf '0 valid identities found.\\n' ;;
     lowercase) printf '1) 0123456789abcdef0123456789abcdef01234567 "Developer ID Application: Signet AI (TEAM123456)"\\n1 valid identities found.\\n' ;;
-    unrelated) printf 'Warning: fingerprint 0123456789ABCDEF0123456789ABCDEF01234567 was not listed\\n0 valid identities found.\\n' ;;
+    unrelated) printf '1) 1123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Signet AI (TEAM123456)"\\n1 valid identities found.\\n' ;;
+    ambiguous) printf '1) 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Signet AI (TEAM123456)"\\n2) 1123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Signet AI (TEAM123456)"\\n2 valid identities found.\\n' ;;
     malformed) printf '1. 0123456789ABCDEF0123456789ABCDEF01234567 "Developer ID Application: Signet AI (TEAM123456)"\\n1 valid identities found.\\n' ;;
     query-error)
       printf 'Lookup failed for fingerprint 0123456789ABCDEF0123456789ABCDEF01234567\\n' >&2
@@ -182,7 +183,7 @@ test("does not request OpenSSL's legacy provider when the PKCS#12 reader lacks i
 
 test("accepts only a well-formed Keychain identity row and keeps lookup output private", async () => {
 	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	for (const mode of ["missing", "unrelated", "malformed", "query-error"] as const) {
+	for (const mode of ["missing", "unrelated", "ambiguous", "malformed", "query-error"] as const) {
 		const fixture = await signingFixture();
 		const result = Bun.spawnSync(["bash", script, fixture.binary], {
 			cwd: resolve(import.meta.dir, ".."),
@@ -238,7 +239,7 @@ afterAll(async () => {
 	await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
 });
 
-test("signs the macOS CLI with a stable team-bound designated requirement", async () => {
+test("signs only with the Keychain identity whose certificate fingerprint matches", async () => {
 	const fixture = await signingFixture();
 	const script = resolve(import.meta.dir, "sign-macos-native.sh");
 	const result = Bun.spawnSync(["bash", script, fixture.binary], {
@@ -260,7 +261,8 @@ test("signs the macOS CLI with a stable team-bound designated requirement", asyn
 
 	expect(result.exitCode).toBe(0);
 	expect(output).toContain("Signed and verified");
-	expect(calls).toContain("--sign 0123456789ABCDEF0123456789ABCDEF01234567");
+	expect(calls).toContain("--sign Developer ID Application: Signet AI (TEAM123456)");
+	expect(calls).not.toContain("--sign 0123456789ABCDEF0123456789ABCDEF01234567");
 	expect(calls).toContain("--requirements =designated => anchor apple generic");
 	expect(calls).toContain("-R =anchor apple generic and identifier");
 	expect(calls).toContain("certificate leaf[subject.OU] =");

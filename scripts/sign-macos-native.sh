@@ -84,26 +84,41 @@ identity="$(printf '%s' "$identity" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
 identity_lookup_status=0
 identity_listing="$(security find-identity -v -p codesigning "$keychain_path" 2>&1)" || identity_lookup_status=$?
 identity_listed=no
-identity_entry_regex='^[[:space:]]*[0-9]+\)[[:space:]]+([[:xdigit:]]{40})[[:space:]]+"[^"]+"[[:space:]]*$'
+signing_identity=""
+matching_identity_count=0
+identity_entry_regex='^[[:space:]]*[0-9]+\)[[:space:]]+([[:xdigit:]]{40})[[:space:]]+"([^"]+)"[[:space:]]*$'
 if [[ "$identity_lookup_status" -eq 0 ]]; then
   while IFS= read -r identity_line; do
     if [[ "$identity_line" =~ $identity_entry_regex ]]; then
-      listed_fingerprint="$(printf '%s' "${BASH_REMATCH[1]}" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
+      listed_fingerprint="${BASH_REMATCH[1]}"
+      listed_identity="${BASH_REMATCH[2]}"
+      listed_fingerprint="$(printf '%s' "$listed_fingerprint" | LC_ALL=C tr '[:lower:]' '[:upper:]')"
       if [[ "$listed_fingerprint" == "$identity" ]]; then
-        identity_listed=yes
-        break
+        signing_identity="$listed_identity"
+        matching_identity_count=$((matching_identity_count + 1))
       fi
     fi
   done <<< "$identity_listing"
 fi
+if [[ "$identity_lookup_status" -eq 0 && "$matching_identity_count" -eq 1 ]]; then
+  matching_name_count=0
+  while IFS= read -r identity_line; do
+    if [[ "$identity_line" =~ $identity_entry_regex ]] && [[ "${BASH_REMATCH[2]}" == "$signing_identity" ]]; then
+      matching_name_count=$((matching_name_count + 1))
+    fi
+  done <<< "$identity_listing"
+  if [[ "$matching_name_count" -eq 1 ]]; then
+    identity_listed=yes
+  fi
+fi
 printf 'Keychain identity diagnostic: query_status=%s, expected_identity_listed=%s.\n' "$identity_lookup_status" "$identity_listed"
 if [[ "$identity_listed" != yes ]]; then
-  echo "::error::Imported certificate is not listed as a valid code-signing identity in the temporary keychain"
+  echo "::error::Imported certificate does not resolve to a unique valid code-signing identity in the temporary keychain"
   exit 1
 fi
-printf 'Signing with the imported certificate SHA-1 fingerprint.\n'
+printf 'Signing with the Keychain identity matched to the imported certificate.\n'
 
-codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --keychain "$keychain_path" --sign "$identity" "$binary"
+codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --keychain "$keychain_path" --sign "$signing_identity" "$binary"
 codesign --verify --strict --verbose=2 "$binary"
 codesign --verify --strict --verbose=2 -R "=$test_requirement" "$binary"
 signing_details="$(codesign --display --verbose=4 "$binary" 2>&1)"
