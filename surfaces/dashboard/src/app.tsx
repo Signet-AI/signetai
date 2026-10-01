@@ -26,7 +26,6 @@ function Shell() {
 	useSettingsHotkey();
 	const { view } = useView();
 	const contentRef = useRef<HTMLDivElement>(null);
-	// biome-ignore lint/correctness/useExhaustiveDependencies: Reset this owned scroll container when the route changes.
 	useEffect(() => {
 		contentRef.current?.scrollTo({ top: 0 });
 	}, [view]);

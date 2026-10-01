@@ -145,6 +145,16 @@
 					}
 				}
 			}
+		},
+		{
+			"includes": ["surfaces/dashboard/src/views/dreaming.tsx"],
+			"linter": {
+				"rules": {
+					"a11y": {
+						"noNoninteractiveTabindex": "off"
+					}
+				}
+			}
 		}
 	]
 }

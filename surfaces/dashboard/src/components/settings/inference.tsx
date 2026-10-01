@@ -234,7 +234,6 @@ function RouteHealthPanel({ refreshKey }: { refreshKey: number }) {
 		setReport({ status: nextStatus, statusError: nextStatusResult.error, memoryExtraction, aggregateRecall, probeOk });
 		setChecking(false);
 	};
-	// biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey intentionally controls the route check.
 	useEffect(() => {
 		if (refreshKey > 0) void checkRoutes();
 	}, [refreshKey]);

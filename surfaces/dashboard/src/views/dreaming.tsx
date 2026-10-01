@@ -241,10 +241,14 @@ function DreamingSummarySection({
 					</span>
 				}
 			/>
-			{/* biome-ignore lint/a11y/noNoninteractiveTabindex: The scrollable summary must support keyboard scrolling. */}
-			<section className="dashboard-region-body dreams-reflection-body" tabIndex={0} aria-label="Reflection summary">
+			<div
+				role="region"
+				className="dashboard-region-body dreams-reflection-body"
+				tabIndex={0}
+				aria-label="Reflection summary"
+			>
 				<MarkdownSummary text={summary ?? (loading ? "Loading reflection…" : "No reflection recorded yet.")} />
-			</section>
+			</div>
 		</section>
 	);
 }

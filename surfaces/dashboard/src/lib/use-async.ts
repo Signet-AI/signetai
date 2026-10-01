@@ -89,7 +89,6 @@ export function useAsync<T>(
 			document.removeEventListener("visibilitychange", visible);
 			window.removeEventListener("storage", storage);
 		};
-		// biome-ignore lint/correctness/useExhaustiveDependencies: Callers supply their read dependencies.
 	}, [key, staleMs, opts.intervalMs, ...(opts.deps ?? [])]);
 	return {
 		data: result.data,
