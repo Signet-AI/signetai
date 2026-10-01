@@ -195,6 +195,29 @@ if (!process.env.SIGNET_MODAL_TEST_CHILD) {
 		}
 	});
 
+	test("retries a failed Dreaming preference save when setup is deferred", async () => {
+		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
+		const view = await mount();
+		try {
+			await view.click("Get started");
+			await view.click("Continue");
+			const dreaming = document.querySelector('[role="switch"][aria-label="Enable Dreaming?"]');
+			if (!(dreaming instanceof HTMLButtonElement)) throw new Error("Missing Dreaming preference");
+			const preferenceSavesBeforeToggle = calls.filter((call) => call === "POST /api/config").length;
+			saveFails = true;
+			await act(async () => dreaming.click());
+			expect(document.body.textContent).toContain("Could not save the Dreaming preference");
+			expect(calls.filter((call) => call === "POST /api/config")).toHaveLength(preferenceSavesBeforeToggle + 1);
+			saveFails = false;
+			await view.click("Set up later");
+			expect(config).toMatch(/dreaming:\s*\n\s+enabled: false/);
+			expect(calls.filter((call) => call === "POST /api/config")).toHaveLength(preferenceSavesBeforeToggle + 2);
+		} finally {
+			saveFails = false;
+			await view.close();
+		}
+	});
+
 	test("lets users opt out while deferring provider setup", async () => {
 		config = "name: Example\nharnesses: []\noperator_setting: preserved\n";
 		const view = await mount();
