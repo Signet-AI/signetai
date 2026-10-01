@@ -7,18 +7,119 @@ on:
         description: "Resume build and publish for an existing tag, for example v0.207.1"
         required: false
         type: string
+      signing_preflight_only:
+        description: "Run macOS signing acceptance checks without creating a release"
+        required: false
+        type: boolean
+        default: false
   push:
     branches: [main]
 
 jobs:
+  macos-signing-preflight:
+    if: "!contains(github.event.head_commit.message, 'chore: release')"
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15-intel
+            platform: darwin-x64
+            asset: signet-darwin-x64
+          - os: xcode-27
+            platform: darwin-arm64
+            asset: signet-darwin-arm64
+    runs-on: ${{ matrix.os }}
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      SIGNET_NATIVE_PLATFORM: ${{ matrix.platform }}
+      RELEASE_ASSET: ${{ matrix.asset }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for code changes
+        id: changes
+        env:
+          RESUME_INPUT: ${{ inputs.resume_from_tag }}
+          SIGNING_PREFLIGHT_ONLY: ${{ inputs.signing_preflight_only }}
+        run: |
+          if [ "$SIGNING_PREFLIGHT_ONLY" = "true" ]; then
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Explicit signing-only run; checking both macOS targets"
+            exit 0
+          fi
+          if [ -n "$RESUME_INPUT" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Resume requested; signing preflight is not required"
+            exit 0
+          fi
+          CODE_CHANGES=$(git diff --name-only HEAD~1 HEAD -- \
+            'platform/**' 'surfaces/**' 'integrations/**' 'libs/**' 'dist/**' 'plugins/**' 'runtimes/**' 'scripts/**' \
+            'package.json' 'bunfig.toml' 'tsconfig*.json' \
+            '.github/workflows/**' \
+            | grep -v '\.md$' \
+            | grep -v '\.jpg$' \
+            | grep -v '\.jpeg$' \
+            | grep -v '\.png$' \
+            | grep -v '\.svg$' \
+            | head -1 || true)
+          if [ -z "$CODE_CHANGES" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No code changes detected; skipping signing preflight"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Code changes detected; running macOS signing preflight"
+          fi
+
+      - uses: oven-sh/setup-bun@v2
+        if: steps.changes.outputs.skip != 'true'
+        with:
+          bun-version-file: package.json
+
+      - name: Install dependencies
+        if: steps.changes.outputs.skip != 'true'
+        run: bun install
+
+      - name: Build workspace dependencies
+        if: steps.changes.outputs.skip != 'true'
+        run: bun run build
+
+      - name: Build dashboard assets
+        if: steps.changes.outputs.skip != 'true'
+        run: bun run build:dashboard
+
+      - name: Build native Signet binary
+        if: steps.changes.outputs.skip != 'true'
+        run: bun run build:native-bun
+
+      - name: Sign and verify macOS native binary with Developer ID
+        if: steps.changes.outputs.skip != 'true'
+        shell: bash
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: bash scripts/sign-macos-native.sh "./dist/native/${RELEASE_ASSET}"
+
+      - name: Smoke signed native binary
+        if: steps.changes.outputs.skip != 'true'
+        shell: bash
+        run: ./dist/native/"$RELEASE_ASSET" --help > /dev/null
+
   release:
+    needs: macos-signing-preflight
     runs-on: ubuntu-latest
     env:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     concurrency:
       group: nightly-release-pipeline
       cancel-in-progress: true
-    if: "!contains(github.event.head_commit.message, 'chore: release')"
+    if: >-
+      always() &&
+      !contains(github.event.head_commit.message, 'chore: release') &&
+      inputs.signing_preflight_only != true &&
+      needs.macos-signing-preflight.result == 'success'
 
     permissions:
       contents: write
@@ -228,7 +329,7 @@ jobs:
 
   build-native:
     needs: release
-    if: needs.release.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    if: needs.release.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != '' && inputs.signing_preflight_only != true
     permissions:
       contents: write
     strategy:
@@ -336,7 +437,7 @@ jobs:
   publish:
     needs: [release, build-native]
     runs-on: ubuntu-latest
-    if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != ''
+    if: always() && needs.release.result == 'success' && needs.build-native.result == 'success' && needs.release.outputs.skip != 'true' && needs.release.outputs.version != '' && inputs.signing_preflight_only != true
     permissions:
       contents: write
     env:

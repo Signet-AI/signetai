@@ -16,16 +16,16 @@ if [[ ! -f "$binary" ]]; then
 fi
 
 identifier="ai.signet.cli"
-requirement="designated => anchor apple generic and identifier \"${identifier}\" and certificate leaf[subject.OU] = \"${APPLE_TEAM_ID}\""
+requirement="$(printf 'designated => anchor apple generic and identifier "%s" and certificate leaf[subject.OU] = "%s"' "$identifier" "$APPLE_TEAM_ID")"
+test_requirement="${requirement#designated => }"
 temporary_directory="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/signet-macos-signing.XXXXXX")"
 keychain_path="${temporary_directory}/signing.keychain-db"
-keychain_password="$(openssl rand -hex 32)"
-
 cleanup() {
   security delete-keychain "$keychain_path" >/dev/null 2>&1 || true
   rm -rf "$temporary_directory"
 }
 trap cleanup EXIT
+keychain_password="$(openssl rand -hex 32)"
 
 certificate_path="${temporary_directory}/developer-id.p12"
 if [[ "$(uname -s)" == "Darwin" ]]; then
@@ -38,12 +38,16 @@ if [[ ! -s "$certificate_path" ]]; then
   exit 1
 fi
 
+printf 'Creating temporary signing keychain.\n'
 security create-keychain -p "$keychain_password" "$keychain_path" >/dev/null
 security set-keychain-settings -lut 21600 "$keychain_path"
 security unlock-keychain -p "$keychain_password" "$keychain_path"
+printf 'Importing Developer ID certificate.\n'
 security import "$certificate_path" -k "$keychain_path" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign >/dev/null
+printf 'Configuring code-signing key access.\n'
 security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path" >/dev/null
 
+printf 'Resolving Developer ID identity.\n'
 identities="$(security find-identity -v -p codesigning "$keychain_path" 2>&1)"
 identity="$(printf '%s\n' "$identities" | awk -v team="$APPLE_TEAM_ID" -F '"' '$2 ~ /^Developer ID Application: / && index($2, "(" team ")") > 0 { print $2; exit }')"
 if [[ -z "$identity" ]]; then
@@ -53,6 +57,7 @@ fi
 
 codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --keychain "$keychain_path" --sign "$identity" "$binary"
 codesign --verify --strict --verbose=2 "$binary"
+codesign --verify --strict --verbose=2 -R "=$test_requirement" "$binary"
 signing_details="$(codesign --display --verbose=4 "$binary" 2>&1)"
 for expected in "Identifier=${identifier}" "TeamIdentifier=${APPLE_TEAM_ID}" "Authority=Developer ID Application:"; do
   if [[ "$signing_details" != *"$expected"* ]]; then
@@ -62,11 +67,6 @@ for expected in "Identifier=${identifier}" "TeamIdentifier=${APPLE_TEAM_ID}" "Au
 done
 if [[ "$signing_details" == *"Signature=adhoc"* ]]; then
   echo "::error::Native binary still has an ad-hoc signature"
-  exit 1
-fi
-actual_requirement="$(codesign --display --requirements - "$binary" 2>&1)"
-if [[ "$actual_requirement" != *"$requirement"* ]]; then
-  echo "::error::Native binary designated requirement is not team-stable"
   exit 1
 fi
 
