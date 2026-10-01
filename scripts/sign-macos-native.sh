@@ -48,7 +48,19 @@ printf 'Configuring code-signing key access.\n'
 security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path" >/dev/null
 
 printf 'Inspecting imported Developer ID certificate.\n'
-if ! certificate_subject="$(openssl pkcs12 -in "$certificate_path" -clcerts -nokeys -passin env:MACOS_CERTIFICATE_PASSWORD | openssl x509 -noout -subject -nameopt RFC2253)"; then
+pkcs12_help="$(openssl pkcs12 -help 2>&1 || true)"
+pkcs12_legacy_supported=no
+if [[ "$pkcs12_help" == *"-legacy"* ]]; then
+  pkcs12_legacy_supported=yes
+fi
+read_pkcs12() {
+  if [[ "$pkcs12_legacy_supported" == yes ]]; then
+    openssl pkcs12 -legacy "$@"
+  else
+    openssl pkcs12 "$@"
+  fi
+}
+if ! certificate_subject="$(read_pkcs12 -in "$certificate_path" -clcerts -nokeys -passin env:MACOS_CERTIFICATE_PASSWORD | openssl x509 -noout -subject -nameopt RFC2253)"; then
   echo "::error::Could not inspect the imported signing certificate subject"
   exit 1
 fi
@@ -57,7 +69,7 @@ if [[ ! "$certificate_subject" =~ (^|,)CN=Developer\ ID\ Application:\ .+\ \(${A
   echo "::error::Imported certificate is not a Developer ID Application identity for the configured team"
   exit 1
 fi
-if ! identity_fingerprint="$(openssl pkcs12 -in "$certificate_path" -clcerts -nokeys -passin env:MACOS_CERTIFICATE_PASSWORD | openssl x509 -noout -fingerprint -sha1)"; then
+if ! identity_fingerprint="$(read_pkcs12 -in "$certificate_path" -clcerts -nokeys -passin env:MACOS_CERTIFICATE_PASSWORD | openssl x509 -noout -fingerprint -sha1)"; then
   echo "::error::Could not extract the imported signing certificate fingerprint"
   exit 1
 fi
@@ -66,6 +78,26 @@ identity="${identity//:/}"
 identity="${identity//[[:space:]]/}"
 if [[ ! "$identity" =~ ^[A-Fa-f0-9]{40}$ ]]; then
   echo "::error::Could not parse the imported signing certificate SHA-1 fingerprint"
+  exit 1
+fi
+identity_lookup_status=0
+identity_listing="$(security find-identity -v -p codesigning "$keychain_path" 2>&1)" || identity_lookup_status=$?
+identity_listed=no
+identity_entry_regex='^[[:space:]]*[0-9]+\)[[:space:]]+([[:xdigit:]]{40})[[:space:]]+"[^"]+"[[:space:]]*$'
+if [[ "$identity_lookup_status" -eq 0 ]]; then
+  while IFS= read -r identity_line; do
+    if [[ "$identity_line" =~ $identity_entry_regex ]]; then
+      listed_fingerprint="${BASH_REMATCH[1]}"
+      if [[ "${listed_fingerprint^^}" == "${identity^^}" ]]; then
+        identity_listed=yes
+        break
+      fi
+    fi
+  done <<< "$identity_listing"
+fi
+printf 'Keychain identity diagnostic: query_status=%s, expected_identity_listed=%s.\n' "$identity_lookup_status" "$identity_listed"
+if [[ "$identity_listed" != yes ]]; then
+  echo "::error::Imported certificate is not listed as a valid code-signing identity in the temporary keychain"
   exit 1
 fi
 printf 'Signing with the imported certificate SHA-1 fingerprint.\n'
