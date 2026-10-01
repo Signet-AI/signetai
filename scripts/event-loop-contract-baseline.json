@@ -1328,14 +1328,14 @@
     },
     {
       "path": "harness-install-worker.ts",
-      "line": 34,
+      "line": 40,
       "api": "existsSync",
       "source": "if (!pluginPath || !existsSync(join(pluginPath, \"dist\", \"index.js\")))",
       "category": "hot-path"
     },
     {
       "path": "harness-registry.ts",
-      "line": 182,
+      "line": 188,
       "api": "existsSync",
       "source": "detected = connector.isDetected?.() ?? (configPath !== null && existsSync(configPath));",
       "category": "hot-path"
@@ -3340,7 +3340,7 @@
     },
     {
       "path": "routes/harness-install.ts",
-      "line": 32,
+      "line": 33,
       "api": "existsSync",
       "source": "return existsSync(built) ? built : join(directory, \"../harness-install-worker.ts\");",
       "category": "hot-path"
