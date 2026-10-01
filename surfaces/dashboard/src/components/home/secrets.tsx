@@ -1,16 +1,15 @@
 import { ChevronRight, KeyRound } from "@/components/mingcute-icons";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
-import { useSettings } from "@/lib/settings-context";
+import { useView } from "@/lib/view-context";
 
 export function HomeSecretsPanel() {
-	const secrets = useAsync(() => api.getSecrets(), { intervalMs: 30_000 });
-	const { setOpen, setSection } = useSettings();
+	const secrets = useAsync(() => api.getSecrets(), { key: "secrets", intervalMs: 30_000 });
+	const { openSettings } = useView();
 	const count = secrets.data?.secrets?.length;
 
 	const openSecrets = () => {
-		setSection("secrets");
-		setOpen(true);
+		openSettings("secrets");
 	};
 
 	return (
@@ -18,7 +17,7 @@ export function HomeSecretsPanel() {
 			<button type="button" onClick={openSecrets} className="group/secret flex w-full items-start gap-3 text-left">
 				<span className="min-w-0 flex-1">
 					<span className="flex items-center justify-between gap-3">
-						<span id="home-secrets-title" className="text-[15px] font-semibold tracking-tight text-foreground">
+						<span id="home-secrets-title" className="text-[14px] font-medium tracking-tight text-foreground">
 							Secrets
 						</span>
 						<span className="flex items-center gap-2 font-mono text-[10.5px] text-muted-foreground">

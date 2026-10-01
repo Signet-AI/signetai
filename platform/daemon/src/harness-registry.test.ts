@@ -106,13 +106,15 @@ test("enumeration follows the supplied registry and isolates connector failures"
 	expect(statuses.find((status) => status.id === "charlie")).toMatchObject({
 		available: true,
 		relevant: true,
-		health: { status: "unhealthy", message: "Health inspection failed: probe unavailable" },
+		inspectionStatus: "unavailable",
+		health: { status: "unknown", message: "Health inspection failed: probe unavailable" },
 	});
 	expect(statuses.find((status) => status.id === "missing")).toMatchObject({
 		available: false,
 		configured: true,
 		relevant: true,
-		health: { status: "unhealthy", message: "Connector plugin failed to load: bundle missing" },
+		inspectionStatus: "unavailable",
+		health: { status: "unknown", message: "Connector plugin failed to load: bundle missing" },
 	});
 });
 
@@ -159,9 +161,29 @@ test("installation markers do not report disabled or missing Codex runtime as he
 			);
 			expect(result.installed).toBe(true);
 			expect(result.health.status).toBe("unknown");
-			expect(result.health.message).toContain("not been verified");
+			expect(result.health.message).toContain("does not check runtime health");
 		}
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
+});
+
+test("unreadable installation files are an unavailable inspection, not a broken connector", async () => {
+	class UnreadableConnector extends HealthyConnector {
+		isInstalled(): boolean {
+			throw new Error("configuration unavailable");
+		}
+	}
+	const health = await new UnreadableConnector().inspectHealth();
+	expect(health).toEqual({ status: "unknown", message: "Health inspection failed: configuration unavailable" });
+	const result = await inspectRegisteredConnector(
+		"alpha",
+		async () => UnreadableConnector,
+		true,
+		null,
+		new Date().toISOString(),
+	);
+	expect(result.inspectionStatus).toBe("unavailable");
+	expect(result.health.status).toBe("unknown");
+	expect(result.icon).toBe("alpha.svg");
 });

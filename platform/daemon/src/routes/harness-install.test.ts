@@ -34,6 +34,12 @@ test("installs through a worker thread without spawning the Signet runtime", () 
  const reinitialize = await app.request("/api/harnesses/claude-code/reinitialize", {method:"POST", headers:{"content-type":"application/json"}, body:JSON.stringify({confirm:true})});
  assert.equal(reinitialize.status, 200);
  assert.equal((await reinitialize.json()).action, "reinitialize");
+ const disconnectResult = await app.request("/api/harnesses/claude-code/disconnect", {method:"POST"});
+ assert.equal(disconnectResult.status, 200);
+ assert.ok(!readFileSync(${JSON.stringify(join(home, ".claude", "settings.json"))}, "utf8").includes("hook session-start"));
+ authConfig.mode = "team";
+ assert.equal((await app.request("/api/harnesses/claude-code/disconnect", {method:"POST"})).status, 403);
+ authConfig.mode = "local";
  await installHarness("claude-code", new AbortController().signal);
  console.log("permission, worker-thread installation, and no internal runtime spawn passed");
  const {logger} = await import(${JSON.stringify(join(import.meta.dir, "../logger.ts"))}); logger.shutdown();

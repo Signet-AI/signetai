@@ -1,5 +1,8 @@
+import { ModalHeading } from "@/components/ui/modal-heading";
+import { Field, Input } from "@/components/ui/field";
+import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
-import { Loader2, X } from "@/components/mingcute-icons";
+import { Loader2 } from "@/components/mingcute-icons";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
 import { normalizeSecretNameInput, validateSecretName } from "@/lib/secret-names";
@@ -65,17 +68,11 @@ export function AddSecretDialog({
 			}}
 		>
 			<div className="cs-panel" role="dialog" aria-modal="true" aria-label="Add secret" style={{ width: 440 }}>
-				<header className="cs-head">
-					<span className="cs-title">Add secret</span>
-					<button type="button" className="cs-close" onClick={onClose} disabled={busy} aria-label="Close">
-						<X className="size-4" />
-					</button>
-				</header>
+				<ModalHeading className="cs-head" title="Add secret" onClose={onClose} disabled={busy} />
 				<div className="cs-body">
-					<div className="cs-field">
-						<span className="cs-field__label">Name</span>
-						<input
-							className="cs-field__input"
+					<Field label="Name" htmlFor="add-secret-name" hint="Uppercase SNAKE_CASE · referenced as $secret:NAME">
+						<Input
+							id="add-secret-name"
 							value={name}
 							onChange={(e) => {
 								setName(normalizeSecretNameInput(e.target.value));
@@ -86,12 +83,10 @@ export function AddSecretDialog({
 							aria-invalid={nameError ? "true" : "false"}
 							autoFocus
 						/>
-						<span className="cs-field__hint">Uppercase SNAKE_CASE · referenced as $secret:NAME</span>
-					</div>
-					<div className="cs-field">
-						<span className="cs-field__label">Value</span>
-						<input
-							className="cs-field__input"
+					</Field>
+					<Field label="Value" htmlFor="add-secret-value" hint="Encrypted at rest · never displayed again">
+						<Input
+							id="add-secret-value"
 							type="password"
 							value={value}
 							onChange={(e) => {
@@ -104,23 +99,23 @@ export function AddSecretDialog({
 							placeholder="••••••••••••"
 							aria-label="Secret value"
 						/>
-						<span className="cs-field__hint">Encrypted at rest · never displayed again</span>
-					</div>
+					</Field>
 					{(error ?? nameError) && <div className="cs-error">{error ?? nameError}</div>}
 				</div>
 				<footer className="cs-foot">
-					<button type="button" className="cs-btn-ghost" onClick={onClose} disabled={busy}>
+					<Button variant="ghost" size="compact" type="button" onClick={onClose} disabled={busy}>
 						Cancel
-					</button>
-					<button
+					</Button>
+					<Button
+						variant="default"
+						size="compact"
 						type="button"
-						className="cs-btn-primary"
 						onClick={() => void submit()}
 						disabled={busy || !name.trim() || !value.trim() || Boolean(nameError)}
 					>
 						{busy && <Loader2 className="size-3.5 animate-spin" />}
 						Encrypt &amp; save
-					</button>
+					</Button>
 				</footer>
 			</div>
 		</div>

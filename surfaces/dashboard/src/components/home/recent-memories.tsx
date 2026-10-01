@@ -1,4 +1,7 @@
-import { ChevronRight, Search, FileText, MessageCircle } from "@/components/mingcute-icons";
+import { LoadingRows } from "@/components/ui/skeleton";
+import { SectionHeading } from "@/components/dashboard/heading";
+import { ChevronRight, FileText, MessageCircle } from "@/components/mingcute-icons";
+import { SearchField } from "@/components/ui/field";
 import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
 import { Dialog, DialogTrigger, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { api, type Memory } from "@/lib/api";
@@ -25,7 +28,7 @@ export function HomeRecentMemories() {
 				return { memories: null, query: trimmedQuery };
 			}
 		},
-		{ deps: [trimmedQuery], intervalMs: 30_000 },
+		{ key: `recent-memories:${trimmedQuery}`, deps: [trimmedQuery], intervalMs: 30_000 },
 	);
 	const memories = memoriesQuery.data?.memories ?? [];
 	const sourceOptions = useMemo(
@@ -52,29 +55,25 @@ export function HomeRecentMemories() {
 
 	return (
 		<section className="home-recent group flex min-h-0 flex-col" aria-labelledby="recent-memories-title">
-			<div className="flex shrink-0 items-center justify-between gap-3">
-				<div className="flex items-baseline gap-2.5">
-					<h2 id="recent-memories-title" className="m-0 text-[15px] font-semibold tracking-tight text-foreground">
-						Recently saved
-					</h2>
+			<SectionHeading
+				id="recent-memories-title"
+				title="Recently saved"
+				className="shrink-0"
+				meta={
 					<span role="status" className="font-mono text-[10.5px] text-muted-foreground">
 						{meta}
 					</span>
-				</div>
-			</div>
+				}
+			/>
 
 			<div className="mt-3 flex shrink-0 items-center gap-2">
-				<label className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-[var(--radius)] border border-border bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-2.5 transition-colors focus-within:border-[color-mix(in_oklch,var(--foreground)_28%,transparent)]">
-					<Search className="size-3.5 shrink-0 text-muted-foreground" />
-					<span className="sr-only">Search saved memories</span>
-					<input
-						aria-label="Search saved memories"
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-						placeholder="Search saved memories…"
-						className="h-full min-w-0 flex-1 border-0 bg-transparent p-0 text-[12px] text-foreground outline-none placeholder:text-muted-foreground"
-					/>
-				</label>
+				<SearchField
+					className="min-w-0 flex-1"
+					aria-label="Search saved memories"
+					value={query}
+					onChange={(event) => setQuery(event.target.value)}
+					placeholder="Search saved memories…"
+				/>
 				<Select value={sourceFilter} onValueChange={setSourceFilter}>
 					<SelectTrigger className="home-source-filter" aria-label="Filter memories by source">
 						<SelectValue />
@@ -93,9 +92,7 @@ export function HomeRecentMemories() {
 			<div className="relative mt-2 min-h-0 flex-1">
 				<div aria-busy={searching} className="h-full overflow-y-auto scrollbar-none">
 					{memoriesQuery.loading && memoriesQuery.data === null ? (
-						<div className="grid min-h-[84px] place-items-center font-mono text-[10.5px] text-muted-foreground">
-							Loading memories…
-						</div>
+						<LoadingRows label="Loading memories…" rows={4} />
 					) : failed ? (
 						<div className="flex min-h-[84px] items-center justify-center gap-2 text-[11px] text-muted-foreground">
 							<span>{trimmedQuery ? "Unable to search saved memories." : "Unable to load saved memories."}</span>

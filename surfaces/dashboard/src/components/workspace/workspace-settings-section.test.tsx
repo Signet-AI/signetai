@@ -22,7 +22,7 @@ afterAll(() => {
 	domWindow.close();
 });
 
-test("data moves, imports, and recovery live under Data & files settings", async () => {
+test("storage, imports, and recovery remain visible without desktop-only migration actions", async () => {
 	const container = document.createElement("div");
 	document.body.appendChild(container);
 	const root: Root = createRoot(container);
@@ -32,10 +32,10 @@ test("data moves, imports, and recovery live under Data & files settings", async
 	});
 
 	expect(container.querySelector('[aria-label="Data & files settings"]')).not.toBeNull();
-	expect(container.querySelector('[aria-label="Storage update details"]')).not.toBeNull();
-	expect(container.textContent).toContain("Manage where Signet stores your memories and files");
+	expect(container.querySelector('[aria-label="Storage update details"]')).toBeNull();
+	expect(container.textContent).toContain("Storage location");
 	expect(container.querySelector('[aria-label="Protection recovery"]')).not.toBeNull();
-	expect(container.textContent).toContain("Durable imports");
+	expect(container.textContent).toContain("File imports");
 
 	await act(async () => root.unmount());
 	container.remove();

@@ -6,7 +6,7 @@ import { Window } from "happy-dom";
 import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { HomeSourcesPanel, SourcesView } from "./sources";
+import { HomeSourcesPanel } from "./sources";
 
 const originalImportSources = api.importSources;
 const originalAddSource = api.addSource;
@@ -184,7 +184,7 @@ describe("sources grouping", () => {
 		sourcesResponse = { version: 1, sources: [source] };
 		const mounted = await mount(
 			<ViewProvider>
-				<SourcesView />
+				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
 
@@ -213,7 +213,7 @@ describe("sources grouping", () => {
 		sourcesResponse = { version: 1, sources: [source] };
 		const mounted = await mount(
 			<ViewProvider>
-				<SourcesView />
+				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
 
@@ -224,10 +224,10 @@ describe("sources grouping", () => {
 		mounted.container.remove();
 	});
 
-	test("Sources has one Connect a source entry point that opens the centered dialog with file import reachable", async () => {
+	test("Home Sources has one Connect a source entry point that opens the centered dialog with file import reachable", async () => {
 		const mounted = await mount(
 			<ViewProvider>
-				<SourcesView />
+				<HomeSourcesPanel sources={sourcesResponse.sources} loading={false} onRefresh={() => {}} />
 			</ViewProvider>,
 		);
 		const entries = [...mounted.container.querySelectorAll("button")].filter((candidate) =>
@@ -480,91 +480,6 @@ describe("sources grouping", () => {
 			await flush();
 		});
 		expect(closed).toBe(3);
-
-		await act(async () => mounted.root.unmount());
-		mounted.container.remove();
-	});
-
-	test("groups one or many imported documents without merging connected collections", async () => {
-		sourcesResponse = {
-			version: 1,
-			sources: [
-				sourceFixture("import:hash-a", "import", "notes.pdf"),
-				sourceFixture("import:hash-b", "import", "table.csv", "degraded", {
-					id: "job-b",
-					sourceId: "import:hash-b",
-					status: "running",
-					queuedAt: "2026-08-10T00:00:00.000Z",
-					scanned: 2,
-					total: 5,
-					currentPath: "table.csv",
-				}),
-				sourceFixture("obsidian:vault", "obsidian", "Vault"),
-			],
-		};
-		const mounted = await mount(
-			<ViewProvider>
-				<SourcesView />
-			</ViewProvider>,
-		);
-		const documents = mounted.container.querySelector('[data-testid="imported-documents-card"]');
-		if (!(documents instanceof HTMLElement)) throw new Error("Documents card not found");
-
-		expect(mounted.container.querySelectorAll('[data-testid="imported-documents-card"]')).toHaveLength(1);
-		expect(documents.textContent).toContain("2 documents");
-		expect(documents.textContent).toContain("notes.pdf");
-		expect(documents.textContent).toContain("2 aspects · 3 attributes · entity linked");
-		expect(documents.textContent).toContain("table.csv");
-		expect(documents.textContent).toContain("40% · table.csv");
-		expect(documents.querySelectorAll('[aria-label="Re-index"]')).toHaveLength(0);
-		expect(documents.querySelectorAll('[aria-label="Snapshot"]')).toHaveLength(2);
-		expect(documents.querySelectorAll('[aria-label="Remove"]')).toHaveLength(2);
-		const list = documents.querySelector('[data-testid="imported-document-list"]');
-		if (!(list instanceof HTMLUListElement)) throw new Error("Imported document list not found");
-		expect(list.getAttribute("aria-label")).toBe("Imported documents");
-		expect(list.className).toContain("min-h-0");
-		expect(list.className).toContain("overflow-x-hidden");
-		expect(list.className).toContain("overflow-y-auto");
-		expect(list.className).toContain("pr-1");
-		expect(list.querySelectorAll('[data-testid="imported-document-row"]')).toHaveLength(2);
-		expect(documents.className).toContain("h-[clamp(360px,45vh,480px)]");
-		expect(documents.textContent).toContain("3 artifacts · 4 chunks · 5 indexed");
-		expect(mounted.container.querySelectorAll(".sig-src-card")).toHaveLength(2);
-		expect(mounted.container.textContent).toContain("Vault");
-
-		await act(async () => mounted.root.unmount());
-		mounted.container.remove();
-	});
-
-	test("keeps the aggregate stable across refresh when document names change", async () => {
-		sourcesResponse = {
-			version: 1,
-			sources: [sourceFixture("import:stable", "import", "before.pdf")],
-		};
-		const mounted = await mount(
-			<ViewProvider>
-				<SourcesView />
-			</ViewProvider>,
-		);
-		expect(mounted.container.querySelector('[data-testid="imported-documents-card"]')?.textContent).toContain(
-			"before.pdf",
-		);
-
-		sourcesResponse = {
-			version: 1,
-			sources: [sourceFixture("import:stable", "import", "after.pdf")],
-		};
-		const remove = mounted.container.querySelector('[aria-label="Remove"]');
-		if (!(remove instanceof HTMLElement)) throw new Error("Remove action not found");
-		await click(remove);
-		const confirm = mounted.container.querySelector('[aria-label="Remove source"]');
-		if (!(confirm instanceof HTMLElement)) throw new Error("Remove source action not found");
-		await click(confirm);
-
-		expect(mounted.container.querySelectorAll('[data-testid="imported-documents-card"]')).toHaveLength(1);
-		expect(mounted.container.querySelector('[data-testid="imported-documents-card"]')?.textContent).toContain(
-			"after.pdf",
-		);
 
 		await act(async () => mounted.root.unmount());
 		mounted.container.remove();

@@ -1,53 +1,96 @@
+import { GroupLabel, SettingsGroup } from "@/components/settings/controls";
 import { useAsync } from "@/lib/use-async";
 import { api, type DashboardProtectionReport } from "@/lib/api";
 import { protectionSummary } from "@/lib/dashboard-protection";
 
+const COMPONENT_NAMES: Record<string, string> = {
+	"root-authored": "Workspace documents",
+	skills: "Skills",
+	"managed-originals": "Imported original files",
+	sqlite: "Memory database",
+	transcripts: "Conversation transcripts",
+	"external-sources": "Linked external sources",
+	runtime: "Runtime files",
+	"filesystem-cache": "File cache",
+	secrets: "Secrets",
+};
+const STATE_NAMES: Record<string, string> = {
+	protected: "Protected",
+	missing: "Missing protection",
+	stale: "Out of date",
+	degraded: "Needs attention",
+	unknown: "Unknown",
+	external: "Managed externally",
+	unverified: "Not verified",
+	"excluded-rebuildable": "Can be rebuilt",
+};
+
 export function ProtectionRecoveryPanel({ report }: { report?: DashboardProtectionReport }) {
-	if (!report)
-		return (
-			<section aria-label="Protection recovery" className="rounded border p-4">
-				<span className="font-mono text-xs text-muted-foreground">Protection status unavailable.</span>
-			</section>
-		);
-	const summary = protectionSummary(report);
+	const summary = report ? protectionSummary(report) : null;
 	return (
-		<section aria-label="Protection recovery" className="rounded border p-4">
-			<div className="flex items-center justify-between gap-3">
-				<h2 className="text-sm font-semibold">Protection &amp; recovery</h2>
-				<strong className="font-mono text-xs">{summary.overallLabel}</strong>
-			</div>
-			<p className="mt-1 font-mono text-[10px] text-muted-foreground">
-				{summary.restore.testedAt
-					? `Restore tested ${new Date(summary.restore.testedAt).toLocaleString()} · ${summary.restore.scope ?? "scope unavailable"}`
-					: "Restore test not recorded"}
+		<SettingsGroup aria-label="Protection recovery">
+			<GroupLabel>Recovery coverage</GroupLabel>
+			<p className="settings-row-description">
+				Shows the recovery evidence Signet has for each part of your workspace. “Not verified” means recovery has not
+				been confirmed; it does not mean the data is missing.
 			</p>
-			<div className="mt-3 space-y-3">
-				{summary.groups.map((group) => (
-					<div key={group.name}>
-						<h3 className="text-[11px] uppercase text-slate-500 dark:text-slate-400">{group.name}</h3>
-						<ul aria-label="Protection components" className="mt-1 divide-y divide-border/50">
-							{group.components.map((component) => (
-								<li key={component.name} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 py-1.5">
-									<span className="min-w-0 text-[12px] font-medium">{component.name}</span>
-									<span className="whitespace-nowrap font-mono text-[11px] text-slate-500 dark:text-slate-400">
-										{component.state}
+			{!report || !summary ? (
+				<p role="status" className="settings-row-description mt-2">
+					Recovery information is unavailable from the connected Signet service.
+				</p>
+			) : (
+				<>
+					<div className="settings-row">
+						<div>
+							<div className="settings-row-title">Overall coverage</div>
+							<p className="settings-row-description">
+								{summary.restore.testedAt
+									? `Restore tested ${new Date(summary.restore.testedAt).toLocaleString()} · ${summary.restore.scope ?? "scope unavailable"}`
+									: "No verified restore test recorded."}
+							</p>
+						</div>
+						<span className="text-xs text-muted-foreground">
+							{report.status === "unknown" || report.status === "unverified"
+								? "Recovery not verified"
+								: summary.overallLabel}
+						</span>
+					</div>
+					<details className="group mt-2">
+						<summary className="flex cursor-pointer list-none items-center justify-between gap-3 py-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+							View coverage details ({report.components.length})
+							<span className="group-open:rotate-90" aria-hidden="true">
+								›
+							</span>
+						</summary>
+						<ul aria-label="Protection components" className="mt-2 divide-y divide-border/60">
+							{report.components.map((component) => (
+								<li key={component.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 py-3">
+									<span className="settings-row-title">
+										{component.label || COMPONENT_NAMES[component.id] || component.id}
 									</span>
-									{component.reason && (
-										<p className="col-span-2 mt-0.5 text-[12px] leading-4 text-slate-500 dark:text-slate-400">
-											{component.reason}
-										</p>
+									<span className="text-xs text-muted-foreground">
+										{STATE_NAMES[component.status] || component.status}
+									</span>
+									{component.detail && (
+										<p className="col-span-2 text-xs leading-relaxed text-muted-foreground">{component.detail}</p>
 									)}
 								</li>
 							))}
 						</ul>
-					</div>
-				))}
-			</div>
-		</section>
+					</details>
+				</>
+			)}
+		</SettingsGroup>
 	);
 }
 
 export function ProtectionRecoveryData() {
-	const { data } = useAsync(() => api.getProtection(), { intervalMs: 30000 });
+	const { data, loading } = useAsync(() => api.getProtection(), { key: "protection", intervalMs: 30000 });
+	if (loading && !data)
+		return (
+			<SettingsGroup title="Recovery coverage">
+				<p className="settings-row-description">Loading recovery information…</p>
+			</SettingsGroup>
+		);
 	return <ProtectionRecoveryPanel report={data?.data ?? undefined} />;
 }

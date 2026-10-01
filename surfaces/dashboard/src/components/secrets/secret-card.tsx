@@ -1,8 +1,8 @@
+import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { Bot, ChevronRight, Cloud, Copy, KeyRound, ShieldCheck, Trash2 } from "@/components/mingcute-icons";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
 function secretIcon(name: string) {
 	if (/BOT/.test(name)) return Bot;
 	if (/TOKEN/.test(name)) return ShieldCheck;
@@ -57,28 +57,28 @@ export function SecretCard({ name, provider, onDeleted }: { name: string; provid
 					{ref}
 				</code>
 				<div className="flex shrink-0 items-center gap-1">
-					<button
+					<Button
+						variant="ghost"
+						size="icon-xs"
 						type="button"
 						onClick={copyRef}
 						title="Copy $secret ref"
 						aria-label={`Copy secret reference for ${name}`}
-						className="grid size-6 place-items-center rounded-[5px] text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
 					>
 						<Copy className="size-3" />
-					</button>
-					<button
+					</Button>
+					<Button
+						variant="ghost"
+						size="icon-xs"
 						type="button"
 						onClick={remove}
 						disabled={deleting}
 						title={confirming ? "Click again to confirm" : "Delete"}
 						aria-label={`Delete secret ${name}`}
-						className={cn(
-							"grid h-6 min-w-6 place-items-center rounded-[5px] px-1 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive",
-							confirming && "w-auto font-mono text-[9px] uppercase tracking-[0.06em] text-destructive",
-						)}
+						className={confirming ? "w-auto px-1 font-mono text-[9px] text-destructive" : "hover:text-destructive"}
 					>
 						{deleting ? "…" : confirming ? "sure?" : <Trash2 className="size-3" />}
-					</button>
+					</Button>
 				</div>
 			</div>
 		</details>

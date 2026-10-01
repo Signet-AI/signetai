@@ -1,3 +1,4 @@
+import { dashboardQueryCache } from "@/lib/query-cache";
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { installDashboardDomGlobals } from "@/test/dom-globals";
@@ -76,17 +77,17 @@ afterAll(() => {
 });
 
 async function renderHome(): Promise<readonly [HTMLElement, Root]> {
+	dashboardQueryCache.clear(false);
 	const { HomeView } = await import("./home");
 	const { ViewProvider } = await import("@/lib/view-context");
-	const { SettingsProvider } = await import("@/lib/settings-context");
 	const container = document.createElement("div");
 	document.body.appendChild(container);
 	const root = createRoot(container);
 	await act(async () => {
 		root.render(
-			<SettingsProvider>
-				<ViewProvider>{<HomeView />}</ViewProvider>
-			</SettingsProvider>,
+			<ViewProvider>
+				<HomeView />
+			</ViewProvider>,
 		);
 		await flush();
 	});
@@ -110,7 +111,7 @@ test("shows the setup link on a fresh workspace even when harness directories ex
 	const [container, root] = await renderHome();
 	try {
 		expect(container.querySelector('a[href="#setup"]')).not.toBeNull();
-		expect(container.textContent).toContain("Set up or repair your memory connection");
+		expect(container.textContent).toContain("Set up your memory connection");
 	} finally {
 		await unmountHome(root);
 		container.remove();
@@ -125,6 +126,23 @@ test("hides the setup link once a harness connection is configured", async () =>
 	const [container, root] = await renderHome();
 	try {
 		expect(container.querySelector('a[href="#setup"]')).toBeNull();
+	} finally {
+		await unmountHome(root);
+		container.remove();
+	}
+});
+
+test("a failed connector refresh does not invite repair of an existing connection", async () => {
+	harnessPayload = { harnesses: [], connectors: [], configuredHarnesses: ["codex"] };
+	const [container, root] = await renderHome();
+	try {
+		harnessPayload = { error: "Request timed out" };
+		await act(async () => {
+			dashboardQueryCache.invalidate();
+			await flush();
+		});
+		expect(container.querySelector('a[href="#setup"]')).toBeNull();
+		expect(container.textContent).toContain("Checks unavailable");
 	} finally {
 		await unmountHome(root);
 		container.remove();

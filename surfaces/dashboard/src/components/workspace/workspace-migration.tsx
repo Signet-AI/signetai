@@ -1,4 +1,5 @@
-import { Surface } from "@/components/ui/surface";
+import { SettingsGroup } from "@/components/settings/controls";
+import { Button } from "@/components/ui/button";
 import { getDesktopBridge } from "@/lib/desktop";
 import { useAsync } from "@/lib/use-async";
 import { CheckCircle, FolderOpen, Loader2, TriangleAlert } from "@/components/mingcute-icons";
@@ -35,7 +36,13 @@ function blockedMessage(reason: string | undefined): string {
 	}
 }
 
-export function WorkspaceMigrationCard({ placement = "settings" }: { placement?: "toast" | "settings" }) {
+export function WorkspaceMigrationCard({
+	placement = "settings",
+	onlyWhenRelevant = false,
+}: {
+	placement?: "toast" | "settings";
+	onlyWhenRelevant?: boolean;
+}) {
 	const bridge = getDesktopBridge();
 	const query = useAsync(() => bridge?.getWorkspaceMigrationStatus?.() ?? Promise.resolve(null));
 	const [running, setRunning] = useState(false);
@@ -46,6 +53,8 @@ export function WorkspaceMigrationCard({ placement = "settings" }: { placement?:
 	const hiddenNotice = placement === "toast" && status ? dismissed || isDismissed(status.appVersion) : false;
 
 	if (placement === "toast" && (!status?.available || hiddenNotice)) return null;
+	if (onlyWhenRelevant && (!bridge?.getWorkspaceMigrationStatus || query.loading || status?.state === "completed"))
+		return null;
 
 	const startMigration = async () => {
 		if (!bridge?.startWorkspaceMigration || running || rollingBack) return;
@@ -116,32 +125,29 @@ export function WorkspaceMigrationCard({ placement = "settings" }: { placement?:
 					<span className="text-[12px] font-medium">
 						{status?.state === "interrupted" ? "Finish moving your memories and files" : "Move your memories and files"}
 					</span>
-					<span className="ml-3 hidden text-[11px] text-muted-foreground lg:inline">
+					<span className="ml-3 hidden text-xs text-muted-foreground lg:inline">
 						{status?.state === "interrupted"
 							? "The previous move stopped. Signet checks the copy; your original files stay in place."
 							: "Signet has a new place to store them. It checks the copy first; your original files stay in place."}
 					</span>
 				</div>
 				<div className="flex shrink-0 items-center gap-3">
-					<button
+					<Button
+						variant="default"
+						size="compact"
 						type="button"
 						onClick={() => void startMigration()}
 						disabled={running || rollingBack || query.loading}
-						className="inline-flex h-7 items-center gap-2 rounded-md bg-primary px-2.5 text-[11px] font-medium text-primary-foreground disabled:opacity-50"
 					>
 						{running && <Loader2 className="size-3 animate-spin" />}
 						{running ? "Moving…" : status?.state === "interrupted" ? "Continue" : "Move now"}
-					</button>
-					<button
-						type="button"
-						onClick={dismiss}
-						className="text-[11px] text-muted-foreground underline underline-offset-4"
-					>
+					</Button>
+					<Button variant="link" size="compact" type="button" onClick={dismiss}>
 						Later
-					</button>
+					</Button>
 				</div>
 				{resultMessage && (
-					<p role="status" className="m-0 w-full text-[11px] text-muted-foreground">
+					<p role="status" className="m-0 w-full text-xs text-muted-foreground">
 						{resultMessage}
 					</p>
 				)}
@@ -150,7 +156,7 @@ export function WorkspaceMigrationCard({ placement = "settings" }: { placement?:
 	}
 
 	return (
-		<Surface aria-label="Storage update details" className="flex flex-col gap-3 p-4">
+		<SettingsGroup aria-label="Storage update details" className="gap-3">
 			<div className="flex items-start gap-3">
 				{status?.state === "completed" ? (
 					<CheckCircle className="mt-0.5 size-4 shrink-0 text-emerald-500" />
@@ -162,8 +168,8 @@ export function WorkspaceMigrationCard({ placement = "settings" }: { placement?:
 					<FolderOpen className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
 				)}
 				<div className="min-w-0 flex-1">
-					<div className="text-[14px] font-semibold">Storage update</div>
-					<p className="mt-1 mb-0 text-[11px] text-muted-foreground">
+					<div className="text-[13px] font-medium">Storage migration</div>
+					<p className="mt-1 mb-0 text-xs text-muted-foreground">
 						{query.loading
 							? "Checking storage status…"
 							: !bridge?.getWorkspaceMigrationStatus
@@ -171,7 +177,7 @@ export function WorkspaceMigrationCard({ placement = "settings" }: { placement?:
 								: status?.available
 									? status.state === "interrupted"
 										? "The previous move stopped. Continue so Signet can check the copy and finish the move."
-										: "Move your memories and files to Signet’s new place. Signet checks the copy before using it; your original files stay in place."
+										: "Upgrade this workspace to Signet’s newer storage layout. Signet copies and checks your data before switching, then restarts. Your original files stay in place."
 									: status?.state === "completed"
 										? "Signet is using the new storage location."
 										: status?.state === "running"
@@ -183,44 +189,43 @@ export function WorkspaceMigrationCard({ placement = "settings" }: { placement?:
 				</div>
 			</div>
 			{status?.blockers && status.blockers.length > 0 && (
-				<ul
-					aria-label="Things to resolve before moving"
-					className="m-0 list-disc pl-5 text-[11px] text-muted-foreground"
-				>
+				<ul aria-label="Things to resolve before moving" className="m-0 list-disc pl-5 text-xs text-muted-foreground">
 					{status.blockers.map((blocker) => (
 						<li key={blocker}>{blocker}</li>
 					))}
 				</ul>
 			)}
 			{resultMessage && (
-				<p role="status" className="m-0 text-[11px] text-muted-foreground">
+				<p role="status" className="m-0 text-xs text-muted-foreground">
 					{resultMessage}
 				</p>
 			)}
 			{status?.available && (
 				<div className="flex flex-wrap items-center gap-3">
-					<button
+					<Button
+						variant="default"
+						size="compact"
 						type="button"
 						onClick={() => void startMigration()}
 						disabled={running || rollingBack || query.loading}
-						className="inline-flex h-8 items-center gap-2 rounded-md bg-primary px-3 text-[11px] font-medium text-primary-foreground disabled:opacity-50"
 					>
 						{running && <Loader2 className="size-3 animate-spin" />}
-						{running ? "Moving…" : status.state === "interrupted" ? "Continue moving" : "Move now"}
-					</button>
+						{running ? "Moving…" : status.state === "interrupted" ? "Resume migration" : "Migrate storage"}
+					</Button>
 					<span className="text-[10px] text-muted-foreground">Your original files stay in place.</span>
 					{status.rollbackAvailable && bridge?.rollbackWorkspaceMigration && (
-						<button
+						<Button
+							variant="link"
+							size="compact"
 							type="button"
 							onClick={() => void rollbackMigration()}
 							disabled={running || rollingBack || query.loading}
-							className="text-[11px] text-muted-foreground underline underline-offset-4 disabled:opacity-50"
 						>
 							{rollingBack ? "Removing copy…" : "Remove incomplete copy"}
-						</button>
+						</Button>
 					)}
 				</div>
 			)}
-		</Surface>
+		</SettingsGroup>
 	);
 }

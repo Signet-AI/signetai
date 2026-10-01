@@ -4,7 +4,7 @@ import { Window } from "happy-dom";
 import { installDashboardDomGlobals } from "@/test/dom-globals";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
-import { LicensesSection } from "./settings";
+import { LicensesSection } from "@/components/settings/licenses";
 
 let domWindow: Window;
 let restoreDomGlobals = () => {};
@@ -130,7 +130,7 @@ describe("dashboard license inventory", () => {
 	});
 });
 
-describe("dashboard Licenses modal layout", () => {
+describe("dashboard Licenses layout", () => {
 	test("keeps every card shrinkable at the failing mobile viewport widths", async () => {
 		for (const viewportWidth of [280, 320]) {
 			const mounted = await mountLicenses(viewportWidth);
@@ -146,23 +146,10 @@ describe("dashboard Licenses modal layout", () => {
 		}
 	});
 
-	test("pins mobile layout, navigation, safe links, and direct-only scope", async () => {
-		const source = await Bun.file(new URL("./settings.tsx", import.meta.url)).text();
-		const licensesStart = source.indexOf("function LicensesSection()");
-		const logsStart = source.indexOf("function LogsSection()", licensesStart);
-		const licensesSource = source.slice(licensesStart, logsStart);
+	test("preserves safe links and direct-only scope", async () => {
+		const licensesSource = await Bun.file(new URL("../components/settings/licenses.tsx", import.meta.url)).text();
 		const normalizedLicensesSource = licensesSource.replace(/\s+/g, " ");
 
-		expect(licensesStart).toBeGreaterThanOrEqual(0);
-		expect(logsStart).toBeGreaterThan(licensesStart);
-		expect(source).toContain("sm:max-w-[calc(100vw-48px)]");
-		expect(source).toContain("lg:max-w-[840px]");
-		expect(source).toContain("max-sm:grid max-sm:grid-cols-7");
-		expect(source).toContain("max-sm:flex-col");
-		expect(source).toContain("max-sm:whitespace-nowrap");
-		expect(source).toContain("flex min-h-0 min-w-0 flex-1 flex-col");
-		expect(source).toContain("min-h-0 flex-1 overflow-y-auto p-5 scrollbar-none");
-		expect(source).toContain('aria-current={section === n.id ? "page" : undefined}');
 		expect(licensesSource).toContain("DASHBOARD_LICENSES.map");
 		expect(licensesSource).toContain('target="_blank"');
 		expect(licensesSource).toContain('rel="noopener noreferrer"');

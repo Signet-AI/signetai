@@ -1,8 +1,11 @@
+import { ModalHeading } from "@/components/ui/modal-heading";
+import { Input, NativeSelect } from "@/components/ui/field";
+import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { sourceLogo } from "@/components/icons";
 import { type ImportSourcesResponse, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
-import { FolderOpen, Globe, Loader2, MessageCircle, RotateCcw, Upload, X } from "@/components/mingcute-icons";
+import { FolderOpen, Globe, Loader2, MessageCircle, RotateCcw, Upload } from "@/components/mingcute-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type SourceKind = "files" | "web" | "transcripts" | "obsidian" | "github" | "discord";
@@ -391,12 +394,7 @@ export function ConnectSourceDialog({
 				aria-modal={embedded ? undefined : true}
 				aria-label="Connect a source"
 			>
-				<header className="cs-head">
-					<span className="cs-title">Add a source</span>
-					<button type="button" className="cs-close" onClick={onClose} disabled={busy} aria-label="Close">
-						<X className="size-4" />
-					</button>
-				</header>
+				<ModalHeading className="cs-head" title="Add a source" onClose={onClose} disabled={busy} />
 				<div className="cs-body cs-body--source">
 					<div className="cs-layout">
 						{!embedded && (
@@ -463,9 +461,16 @@ export function ConnectSourceDialog({
 										</span>
 									</button>
 									{kind === "files" && (
-										<button type="button" className="cs-btn-ghost self-center" onClick={chooseDesktop} disabled={busy}>
+										<Button
+											variant="ghost"
+											size="compact"
+											type="button"
+											className="self-center"
+											onClick={chooseDesktop}
+											disabled={busy}
+										>
 											Choose from desktop
-										</button>
+										</Button>
 									)}
 									<input
 										ref={inputRef}
@@ -480,10 +485,8 @@ export function ConnectSourceDialog({
 										onChange={(event) => choose(event.target.files)}
 									/>
 									{kind === "transcripts" && (
-										<label className="cs-field">
-											<span id="source-target-label" className="cs-field__label">
-												Target agent
-											</span>
+										<label className="ui-field-label">
+											<span id="source-target-label">Target agent</span>
 											<Select value={target} onValueChange={setTarget} disabled={busy}>
 												<SelectTrigger
 													aria-label="Target agent"
@@ -503,19 +506,25 @@ export function ConnectSourceDialog({
 													))}
 												</SelectContent>
 											</Select>
-											<span className="cs-field__hint">{FIELD.transcripts.hint}</span>
+											<span className="ui-field-hint">{FIELD.transcripts.hint}</span>
 											{agentLoadError && (
-												<span className="cs-field__hint flex items-center justify-between gap-2" role="alert">
+												<span className="ui-field-hint flex items-center justify-between gap-2" role="alert">
 													{agentLoadError}
-													<button type="button" className="cs-btn-ghost shrink-0" onClick={() => void loadAgents()}>
+													<Button
+														variant="ghost"
+														size="compact"
+														type="button"
+														className="shrink-0"
+														onClick={() => void loadAgents()}
+													>
 														Retry agent list
-													</button>
+													</Button>
 												</span>
 											)}
 										</label>
 									)}
 									{embedded && selectedCount > 2 && (
-										<span className="cs-field__hint">{selectedCount} files selected</span>
+										<span className="ui-field-hint">{selectedCount} files selected</span>
 									)}
 									{selectedCount > 0 && (
 										<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 font-mono text-[10px]">
@@ -532,10 +541,9 @@ export function ConnectSourceDialog({
 										</div>
 									)}
 									{!embedded && (
-										<label className="cs-field">
-											<span className="cs-field__label">If a content hash already exists</span>
-											<select
-												className="cs-field__input"
+										<label className="ui-field-label">
+											<span>If a content hash already exists</span>
+											<NativeSelect
 												value={duplicateMode}
 												onChange={(event) => setDuplicateMode(event.target.value as typeof duplicateMode)}
 												disabled={busy}
@@ -543,22 +551,22 @@ export function ConnectSourceDialog({
 												<option value="skip">Skip duplicate</option>
 												<option value="replace">Replace and re-index</option>
 												<option value="reimport">Import as a new source</option>
-											</select>
+											</NativeSelect>
 										</label>
 									)}
 									{transcriptJobId && (
-										<div className="cs-field__hint" aria-live="polite">
+										<div className="ui-field-hint" aria-live="polite">
 											Import job created: <code>{transcriptJobId}</code>
 										</div>
 									)}
 									{busy && (
-										<div className="cs-field__hint" aria-live="polite">
+										<div className="ui-field-hint" aria-live="polite">
 											Importing {selectedCount} {selectedCount === 1 ? "file" : "files"}…
 										</div>
 									)}
 									{result && (
 										<div className="flex flex-col gap-2" aria-live="polite">
-											<div className="cs-field__hint">
+											<div className="ui-field-hint">
 												Imported {result.imported}; failed {result.failed}.
 											</div>
 											<div className="flex flex-col gap-1 rounded-md bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] p-2 text-[10px]">
@@ -579,30 +587,37 @@ export function ConnectSourceDialog({
 												))}
 											</div>
 											{result.failed > 0 && (
-												<button type="button" className="cs-btn-ghost self-start" onClick={retryFailed} disabled={busy}>
+												<Button
+													variant="ghost"
+													size="compact"
+													type="button"
+													className="self-start"
+													onClick={retryFailed}
+													disabled={busy}
+												>
 													<RotateCcw className="size-3" />
 													Retry failed imports
-												</button>
+												</Button>
 											)}
 										</div>
 									)}
 								</>
 							) : (
 								<>
-									<div className="cs-field">
-										<span className="cs-field__label">{FIELD[kind].label}</span>
+									<div className="ui-field-label">
+										<span>{FIELD[kind].label}</span>
 										<div className="flex gap-2">
-											<input
-												className="cs-field__input"
+											<Input
 												value={target}
 												onChange={(event) => setTarget(event.target.value)}
 												placeholder={FIELD[kind].placeholder}
 												aria-label={FIELD[kind].label}
 											/>
 											{kind === "obsidian" && (
-												<button
+												<Button
+													variant="outline"
+													size="icon-sm"
 													type="button"
-													className="cs-browse"
 													onClick={browse}
 													disabled={browsing}
 													title="Browse folders"
@@ -613,16 +628,15 @@ export function ConnectSourceDialog({
 													) : (
 														<FolderOpen className="size-3.5" />
 													)}
-												</button>
+												</Button>
 											)}
 										</div>
-										<span className="cs-field__hint">{FIELD[kind].hint}</span>
+										<span className="ui-field-hint">{FIELD[kind].hint}</span>
 									</div>
 									{kind !== "web" && (
-										<div className="cs-field">
-											<span className="cs-field__label">Name</span>
-											<input
-												className="cs-field__input"
+										<div className="ui-field-label">
+											<span>Name</span>
+											<Input
 												value={name}
 												onChange={(event) => setName(event.target.value)}
 												placeholder={CONNECT_KINDS.find((item) => item.id === kind)?.namePlaceholder}
@@ -631,16 +645,15 @@ export function ConnectSourceDialog({
 										</div>
 									)}
 									{kind !== "obsidian" && kind !== "web" && (
-										<div className="cs-field">
-											<span className="cs-field__label">Token secret{kind === "github" ? " (optional)" : ""}</span>
-											<input
-												className="cs-field__input"
+										<div className="ui-field-label">
+											<span>Token secret{kind === "github" ? " (optional)" : ""}</span>
+											<Input
 												value={tokenRef}
 												onChange={(event) => setTokenRef(event.target.value)}
 												placeholder={kind === "github" ? "GITHUB_TOKEN" : "DISCORD_BOT_TOKEN"}
 												aria-label="Token secret name"
 											/>
-											<span className="cs-field__hint">Name of the secret holding your token</span>
+											<span className="ui-field-hint">Name of the secret holding your token</span>
 										</div>
 									)}
 								</>
@@ -651,18 +664,18 @@ export function ConnectSourceDialog({
 				</div>
 				<footer className="cs-foot">
 					{!embedded && (
-						<button type="button" className="cs-btn-ghost" onClick={onClose} disabled={busy}>
+						<Button variant="ghost" size="compact" type="button" onClick={onClose} disabled={busy}>
 							Close
-						</button>
+						</Button>
 					)}
-					<button type="button" className="cs-btn-primary" onClick={submit} disabled={submitDisabled}>
+					<Button variant="default" size="compact" type="button" onClick={submit} disabled={submitDisabled}>
 						{busy && <Loader2 className="size-3.5 animate-spin" />}
 						{kind === "files" || kind === "transcripts"
 							? "Import & index"
 							: kind === "web"
 								? "Add & index"
 								: "Connect & index"}
-					</button>
+					</Button>
 				</footer>
 			</Panel>
 		</div>

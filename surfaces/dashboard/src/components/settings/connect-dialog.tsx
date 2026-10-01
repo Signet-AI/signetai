@@ -1,9 +1,12 @@
+import { ModalHeading } from "@/components/ui/modal-heading";
+import { Input } from "@/components/ui/field";
+import { Button } from "@/components/ui/button";
 import { useConnectController } from "@/components/settings/connect-controller";
 import { api } from "@/lib/api";
 import { getDesktopBridge } from "@/lib/desktop";
 import { apiKeyFormat, providerKeySecretName } from "@/lib/inference-keys";
 import { createOAuthNavigation, safeOAuthHref, type OAuthNavigation } from "@/lib/oauth-navigation";
-import { CheckCircle, Eye, EyeOff, KeyRound, Loader2, TriangleAlert, X } from "@/components/mingcute-icons";
+import { CheckCircle, Eye, EyeOff, KeyRound, Loader2, TriangleAlert } from "@/components/mingcute-icons";
 import { useEffect, useRef, useState } from "react";
 
 export interface ConnectableProvider {
@@ -132,7 +135,7 @@ export function ConnectProviderDialog({
 
 	return (
 		<div
-			className="cp-backdrop"
+			className="cs-backdrop"
 			role="presentation"
 			onClick={(e) => {
 				if (e.target === e.currentTarget) onClose();
@@ -141,63 +144,63 @@ export function ConnectProviderDialog({
 				if (e.key === "Escape") onClose();
 			}}
 		>
-			<div className="cp-panel" role="dialog" aria-modal="true" aria-label={`Connect ${provider.name}`}>
-				<header className="cp-header">
-					<span className="cp-header-icon">
-						{phase.kind === "key-entry" || phase.kind === "saving" ? (
+			<div
+				className="cs-panel"
+				style={{ width: 420 }}
+				role="dialog"
+				aria-modal="true"
+				aria-label={`Connect ${provider.name}`}
+			>
+				<ModalHeading
+					title={provider.name}
+					description={
+						<>
+							{provider.connected ? "Connected" : provider.isOAuth ? "OAuth sign-in" : "API key"}
+							{modelCount > 0 ? ` · ${modelCount} models` : ""}
+						</>
+					}
+					icon={
+						phase.kind === "key-entry" || phase.kind === "saving" ? (
 							<KeyRound className="size-4" />
 						) : (
 							<CheckCircle className="size-4" />
-						)}
-					</span>
-					<div className="min-w-0 flex-1">
-						<div className="cp-title">{provider.name}</div>
-						<div className="cp-sub">
-							{provider.connected ? "Connected" : provider.isOAuth ? "OAuth sign-in" : "API key"}
-							{modelCount > 0 ? ` · ${modelCount} models` : ""}
-						</div>
-					</div>
-					<button type="button" className="gr-close" aria-label="Close" onClick={onClose}>
-						<X className="size-3.5" />
-					</button>
-				</header>
+						)
+					}
+					onClose={onClose}
+				/>
 
-				<div className="cp-body">
-					{}
+				<div className="cs-body">
 					{provider.connected && phase.kind === "method" && (
 						<>
 							<div className="cp-status-line">
 								<span className="cp-dot cp-dot--on" />
 								Sign-in saved. Test the memory connection to verify it works.
 							</div>
-							<button
+							<Button
+								variant="destructive"
+								size="compact"
 								type="button"
-								className="cp-btn cp-btn--danger"
 								disabled={disconnecting}
 								onClick={handleDisconnect}
 							>
 								{disconnecting ? "Disconnecting…" : "Disconnect"}
-							</button>
+							</Button>
 						</>
 					)}
-
-					{}
 					{!provider.connected && phase.kind === "method" && (
 						<div className="flex flex-col gap-2">
 							{provider.supportsOAuth && (
-								<button type="button" className="cp-btn cp-btn--primary" onClick={handleSignIn}>
+								<Button variant="default" size="compact" type="button" onClick={handleSignIn}>
 									Sign in with {provider.name}
-								</button>
+								</Button>
 							)}
 							{provider.supportsApiKey && (
-								<button type="button" className="cp-btn" onClick={controller.enterKeyMode}>
+								<Button variant="outline" size="compact" type="button" onClick={controller.enterKeyMode}>
 									Paste an API key
-								</button>
+								</Button>
 							)}
 						</div>
 					)}
-
-					{}
 					{phase.kind === "oauth-running" && (
 						<div className="flex flex-col gap-2.5">
 							<div className="cp-status-line">
@@ -228,9 +231,9 @@ export function ConnectProviderDialog({
 										{phase.prompt.message}
 									</label>
 									<div className="flex gap-1.5">
-										<input
+										<Input
 											id="cp-prompt"
-											className="ctrl ctrl--field flex-1"
+											className="flex-1"
 											placeholder={phase.prompt.placeholder ?? ""}
 											value={promptInput}
 											onChange={(e) => setPromptInput(e.target.value)}
@@ -238,9 +241,9 @@ export function ConnectProviderDialog({
 												if (e.key === "Enter") submitPrompt();
 											}}
 										/>
-										<button type="button" className="cp-btn cp-btn--primary" onClick={submitPrompt}>
+										<Button variant="default" size="compact" type="button" onClick={submitPrompt}>
 											Send
-										</button>
+										</Button>
 									</div>
 								</div>
 							)}
@@ -248,32 +251,31 @@ export function ConnectProviderDialog({
 								<div className="flex flex-col gap-1.5">
 									<span className="cp-label">{phase.prompt.message}</span>
 									{phase.prompt.options?.map((opt) => (
-										<button
+										<Button
+											variant="outline"
+											size="compact"
 											key={opt.id}
 											type="button"
-											className="cp-btn"
 											onClick={() => void controller.answerPrompt(opt.id)}
 										>
 											{opt.label}
-										</button>
+										</Button>
 									))}
 								</div>
 							)}
-							<button type="button" className="cp-btn" onClick={controller.cancelOAuth}>
+							<Button variant="outline" size="compact" type="button" onClick={controller.cancelOAuth}>
 								Cancel
-							</button>
+							</Button>
 						</div>
 					)}
-
-					{}
 					{phase.kind === "key-entry" && (
 						<div className="flex flex-col gap-2">
 							<label className="cp-label" htmlFor="cp-key">
 								API key {format ? <span className="text-muted-foreground">({format.hint})</span> : null}
 							</label>
 							<div className="flex gap-1.5">
-								<div className="ctrl ctrl--field flex-1">
-									<input
+								<div className="ui-search-field flex-1">
+									<Input
 										id="cp-key"
 										type={phase.reveal ? "text" : "password"}
 										placeholder="Paste the key…"
@@ -285,23 +287,25 @@ export function ConnectProviderDialog({
 											if (e.key === "Enter") void handleSaveKey();
 										}}
 									/>
-									<button
+									<Button
+										variant="ghost"
+										size="icon-sm"
 										type="button"
-										className="cp-eye"
 										aria-label={phase.reveal ? "Hide key" : "Show key"}
 										onClick={controller.toggleReveal}
 									>
 										{phase.reveal ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-									</button>
+									</Button>
 								</div>
-								<button
+								<Button
+									variant="default"
+									size="compact"
 									type="button"
-									className="cp-btn cp-btn--primary"
 									disabled={!phase.key.trim()}
 									onClick={() => void handleSaveKey()}
 								>
 									Connect
-								</button>
+								</Button>
 							</div>
 							{phase.validation === "unsure" && phase.key.trim() && (
 								<div className="cp-hint">
@@ -330,9 +334,9 @@ export function ConnectProviderDialog({
 							<div className="cp-error">
 								<TriangleAlert className="size-3.5 shrink-0" /> {phase.message}
 							</div>
-							<button type="button" className="cp-btn" onClick={controller.reset}>
+							<Button variant="outline" size="compact" type="button" onClick={controller.reset}>
 								Try again
-							</button>
+							</Button>
 						</div>
 					)}
 				</div>

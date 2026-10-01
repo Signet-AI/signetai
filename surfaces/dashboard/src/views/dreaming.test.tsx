@@ -1,8 +1,16 @@
+import { beforeEach as beforeDashboardFixture } from "bun:test";
+import { dashboardQueryCache } from "@/lib/query-cache";
+beforeDashboardFixture(() => dashboardQueryCache.clear(false, false));
+
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
-import { type Root, createRoot } from "react-dom/client";
-import { DreamsView } from "./dreaming";
+import type { Root } from "react-dom/client";
+import { installDashboardDomGlobals } from "@/test/dom-globals";
+let createRoot: typeof import("react-dom/client").createRoot;
+let DreamsView: typeof import("./dreaming").DreamsView;
+let restoreDomGlobals = () => {};
+import type { DreamStatus, DreamToolCall } from "@/lib/api";
 
 const DREAM_STATUS = {
 	worker: { running: true, active: false, activeAgentId: null },
@@ -47,25 +55,37 @@ const DREAM_STATUS = {
 	exclusions: [],
 };
 const originalFetch = globalThis.fetch;
+let fixtureStatus: DreamStatus = DREAM_STATUS;
+let fixtureTools: DreamToolCall[] = [
+	{
+		id: "tool-1",
+		passId: "pass-1",
+		sequence: 1,
+		toolCallId: null,
+		toolName: "attention_list",
+		input: { kind: "review_due" },
+		output: null,
+		success: 1,
+		latencyMs: 12,
+		createdAt: null,
+	},
+];
 
-beforeAll(() => {
-	(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+beforeAll(async () => {
 	const window = new Window();
-	for (const key of Object.getOwnPropertyNames(window)) {
-		if (!(key in globalThis)) {
-			(globalThis as Record<string, unknown>)[key] = (window as unknown as Record<string, unknown>)[key];
-		}
-	}
+	restoreDomGlobals = installDashboardDomGlobals(window);
+	({ createRoot } = await import("react-dom/client"));
+	({ DreamsView } = await import("./dreaming"));
 	globalThis.fetch = (async (input: RequestInfo | URL) => {
 		const url = String(input);
 		if (url.endsWith("/api/dream/status")) {
-			return new Response(JSON.stringify(DREAM_STATUS), {
+			return new Response(JSON.stringify(fixtureStatus), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
 		}
 		if (url.includes("/api/dream/passes/pass-1/tools")) {
-			return new Response(JSON.stringify({ agentId: "default", passId: "pass-1", items: [] }), {
+			return new Response(JSON.stringify({ agentId: "default", passId: "pass-1", items: fixtureTools }), {
 				status: 200,
 				headers: { "Content-Type": "application/json" },
 			});
@@ -76,10 +96,11 @@ beforeAll(() => {
 
 afterAll(() => {
 	globalThis.fetch = originalFetch;
+	restoreDomGlobals();
 });
 
 describe("dreaming summary layout", () => {
-	test("keeps the summary in a scrollable, scrollbar-free container", async () => {
+	test("opens the full pass details when a recent pass is clicked", async () => {
 		const container = document.createElement("div");
 		document.body.appendChild(container);
 		const root: Root = createRoot(container);
@@ -89,15 +110,56 @@ describe("dreaming summary layout", () => {
 			await new Promise((resolve) => setTimeout(resolve, 0));
 		});
 
-		const summary = container.querySelector("section.scrollbar-none");
+		const summary = container.querySelector(".dreams-summary");
 		expect(summary).not.toBeNull();
-		expect(summary?.className).toContain("min-h-0");
-		expect(summary?.className).toContain("overflow-y-auto");
+		expect(summary?.textContent).toContain("A long dreaming summary must remain readable.");
 		expect(container.textContent).toContain("automatic Dreaming deferred: queue pressure");
+		expect(container.querySelector(".dream-section")).toBeNull();
+		expect(container.querySelector(".dreams-activity")?.textContent).toContain("attention_list");
+		const details = container.querySelector<HTMLButtonElement>(".dreams-pass-row");
+		expect(details).toBeDefined();
+		await act(async () => {
+			details?.click();
+			await new Promise((resolve) => setTimeout(resolve, 0));
+		});
+		expect(document.querySelector('[role="dialog"]')?.textContent).toContain("attention_list");
 
 		await act(async () => {
 			root.unmount();
 		});
 		container.remove();
+	});
+	test("shows the last pass failure when no tool calls were recorded", async () => {
+		fixtureStatus = {
+			...DREAM_STATUS,
+			passes: [
+				{ ...DREAM_STATUS.passes[0], status: "failed", error: "All routing candidates were blocked.", summary: null },
+			],
+		};
+		fixtureTools = [];
+		const container = document.createElement("div");
+		document.body.appendChild(container);
+		const root = createRoot(container);
+		try {
+			await act(async () => {
+				root.render(<DreamsView />);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+			expect(container.querySelector(".dream-section")).toBeNull();
+			const details = Array.from(container.querySelectorAll("button")).find((button) =>
+				button.textContent?.includes("Details"),
+			);
+			await act(async () => {
+				details?.click();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			});
+			const dialog = document.querySelector('[role="dialog"]');
+			expect(dialog?.textContent).toContain("All routing candidates were blocked.");
+			expect(dialog?.textContent).toContain("No tool calls recorded.");
+		} finally {
+			await act(async () => root.unmount());
+			container.remove();
+			fixtureStatus = DREAM_STATUS;
+		}
 	});
 });

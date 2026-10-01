@@ -1,3 +1,4 @@
+import { PageHeading, SectionHeading } from "@/components/dashboard/heading";
 import { DailyBrief } from "@/components/home/daily-brief";
 import { HomeAgentsPanel } from "@/components/home/agents";
 import { HomeConnectorsPanel } from "@/components/home/connectors";
@@ -7,24 +8,27 @@ import { HomeSecretsPanel } from "@/components/home/secrets";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
-import { HomeSourcesPanel } from "@/views/sources";
+import { HomeSourcesPanel } from "@/components/home/sources";
 import { ChevronRight, FileText } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useState } from "react";
 
 export function HomeView() {
-	const status = useAsync(() => api.getStatus(), { intervalMs: 30000 });
-	const stats = useAsync(() => api.getKnowledgeStats(), { intervalMs: 30000 }).data;
-	const sourcesQuery = useAsync(() => api.getSources(), { intervalMs: 30000 });
-	const fetchedSources = sourcesQuery.data?.sources;
-	const [lastSources, setLastSources] = useState<typeof fetchedSources>();
-	useEffect(() => {
-		if (fetchedSources) setLastSources(fetchedSources);
-	}, [fetchedSources]);
-	const sources = fetchedSources ?? lastSources;
-	const timeline = useAsync(() => api.getMemoryTimeline(new Date().getTimezoneOffset())).data;
+	const status = useAsync(() => api.getStatus(), { key: "status", intervalMs: 30000 });
+	const stats = useAsync(() => api.getKnowledgeStats(), { key: "knowledge-stats", intervalMs: 30000 }).data;
+	const sourcesQuery = useAsync(() => api.getSources(), { key: "sources", intervalMs: 30000 });
+	const sources = sourcesQuery.data?.sources;
+	const timeline = useAsync(() => api.getMemoryTimeline(new Date().getTimezoneOffset()), {
+		key: `timeline:${new Date().getTimezoneOffset()}`,
+	}).data;
 	const today = useDateString(new Date().toLocaleDateString("en-US"));
-	const harnessesQuery = useAsync(() => api.getHarnesses(), { intervalMs: 30000 });
-	const connected = (harnessesQuery.data?.data?.configuredHarnesses?.length ?? 0) > 0;
+	const harnessesQuery = useAsync(() => api.getHarnesses(), { key: "harnesses", intervalMs: 30000 });
+	const connectionRecord = harnessesQuery.data?.data?.configuredHarnesses;
+	const [lastConnected, setLastConnected] = useState(false);
+	const connected = harnessesQuery.data?.data ? (connectionRecord?.length ?? 0) > 0 : lastConnected;
+	useEffect(() => {
+		if (harnessesQuery.data?.data) setLastConnected((connectionRecord?.length ?? 0) > 0);
+		else if (harnessesQuery.error && harnessesQuery.data === null) setLastConnected(false);
+	}, [harnessesQuery.data, harnessesQuery.error, connectionRecord]);
 
 	const kpis: KpiData[] = useMemo(() => {
 		const totalMemories = timeline?.totalMemories;
@@ -59,23 +63,10 @@ export function HomeView() {
 		<div className="home-dashboard">
 			<div className="home-workspace">
 				<section className="home-today" aria-labelledby="today-title">
-					<div className="home-page-heading flex justify-between gap-4">
-						<div>
-							<h1
-								id="today-title"
-								className="m-0 text-[26px] font-semibold leading-none tracking-[-0.035em] text-foreground"
-							>
-								Today
-							</h1>
-							<p className="mt-2 mb-0 text-[13px] text-muted-foreground">{today}</p>
-						</div>
-						<span className="hidden pb-0.5 text-[12px] italic text-muted-foreground/80 xl:block">
-							A more memorable you.
-						</span>
-					</div>
+					<PageHeading id="today-title" title="Today" description={today} />
 					{!connected && (
 						<a href="#setup" className="self-start text-sm underline underline-offset-4">
-							Set up or repair your memory connection
+							Set up your memory connection
 						</a>
 					)}
 					<DailyBrief agentId={status.data?.agentId} agentSettled={!status.loading} />
@@ -83,7 +74,7 @@ export function HomeView() {
 					<HomeRecentMemories />
 					<div className="home-activity">
 						<div className="mb-3 flex items-center justify-between">
-							<h2 className="m-0 text-[15px] font-semibold tracking-tight text-foreground">Activity</h2>
+							<SectionHeading title="Activity" />
 						</div>
 						<ActivityHeatmap days={days} />
 					</div>
@@ -91,26 +82,19 @@ export function HomeView() {
 
 				{/* biome-ignore lint/a11y/noNoninteractiveTabindex: this independently scrolling panel must be keyboard-scrollable. */}
 				<section className="home-system" aria-labelledby="system-title" tabIndex={0}>
-					<div className="home-page-heading">
-						<h2
-							id="system-title"
-							className="m-0 text-[26px] font-semibold leading-none tracking-[-0.035em] text-foreground"
-						>
-							System
-						</h2>
-						<p className="mt-2 mb-0 text-[13px] text-muted-foreground">Your knowledge, agents, and connections.</p>
-					</div>
+					<PageHeading
+						id="system-title"
+						title="System"
+						level="h2"
+						description="Your knowledge, agents, and connections."
+					/>
 					<HomeSourcesPanel
 						sources={sources}
 						loading={sourcesQuery.loading && sources === undefined}
 						onRefresh={sourcesQuery.refresh}
 					/>
 					<HomeWidgetSeparator />
-					<HomeConnectorsPanel
-						result={harnessesQuery.data}
-						loading={harnessesQuery.loading}
-						onRefresh={harnessesQuery.refresh}
-					/>
+					<HomeConnectorsPanel result={harnessesQuery.data} loading={harnessesQuery.loading} />
 					<HomeWidgetSeparator />
 					<HomeAgentsPanel activeAgentId={status.data?.agentId} />
 					<HomeWidgetSeparator />
@@ -130,18 +114,20 @@ function HomeWidgetSeparator() {
 }
 
 function ReviewSuggestions() {
-	const proposals = useAsync(() => api.getOntologyProposals("pending", 20), { intervalMs: 15000 });
+	const proposals = useAsync(() => api.getOntologyProposals("pending", 20), {
+		key: "proposals:pending:20",
+		intervalMs: 15000,
+	});
 	const items = proposals.data?.items ?? [];
 	const meta = proposals.loading && proposals.data === null ? "loading…" : `${items.length} pending`;
 
 	return (
 		<section className="py-5" aria-labelledby="review-suggestions-title">
-			<div className="flex items-baseline gap-2.5">
-				<h2 id="review-suggestions-title" className="m-0 text-[15px] font-semibold tracking-tight text-foreground">
-					Review suggestions
-				</h2>
-				<span className="font-mono text-[10.5px] text-muted-foreground">{meta}</span>
-			</div>
+			<SectionHeading
+				id="review-suggestions-title"
+				title="Review suggestions"
+				meta={<span className="font-mono text-[10.5px] text-muted-foreground">{meta}</span>}
+			/>
 			{proposals.loading && proposals.data === null ? (
 				<div className="py-4 font-mono text-[10.5px] text-muted-foreground">
 					<span className="font-mono text-[10.5px] text-muted-foreground">Loading review suggestions…</span>

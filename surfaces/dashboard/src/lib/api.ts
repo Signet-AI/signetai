@@ -1,3 +1,4 @@
+import { dashboardQueryCache } from "./query-cache";
 import { installDemoApi } from "./demo";
 import { getDesktopBridge } from "./desktop";
 
@@ -5,6 +6,42 @@ const API_BASE = "";
 function authHeaders(): HeadersInit {
 	const token = typeof localStorage !== "undefined" ? localStorage.getItem("signet-token") : null;
 	return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function invalidateMutation(path: string): void {
+	const resources = path.includes("/harnesses/")
+		? ["harnesses", "status", "identity", "agent-list"]
+		: path.includes("/secrets")
+			? ["secrets", "inference-"]
+			: path.includes("/inference/")
+				? ["inference-"]
+				: /\/(sources|memory|memories|knowledge|ontology|dream|reflections)(?:\/|\?|$)/.test(path)
+					? [
+							"sources",
+							"source-import",
+							"protection",
+							"knowledge-stats",
+							"constellation",
+							"recent-memories",
+							"timeline",
+							"proposals",
+							"dream-",
+						]
+					: null;
+	dashboardQueryCache.invalidate(
+		resources ? (key) => resources.some((resource) => key.includes(`:${resource}`)) : undefined,
+	);
+}
+
+async function dashboardFetch(path: string, init?: RequestInit): Promise<Response> {
+	const method = init?.method?.toUpperCase() ?? "GET";
+	const deadline = method === "GET" ? AbortSignal.timeout(20_000) : undefined;
+	const signal = init?.signal && deadline ? AbortSignal.any([init.signal, deadline]) : (init?.signal ?? deadline);
+	const response = await fetch(path, { ...init, signal });
+	if (response.status === 401 || response.status === 403) dashboardQueryCache.clear(false);
+	else if (response.ok && method !== "GET" && !path.includes("/probe") && !path.includes("/decision"))
+		invalidateMutation(path);
+	return response;
 }
 
 async function getJSON<T>(path: string, init?: RequestInit): Promise<T | null> {
@@ -20,7 +57,7 @@ export interface ApiReadResult<T> {
 
 export async function getJSONResult<T>(path: string, init?: RequestInit): Promise<ApiReadResult<T>> {
 	try {
-		const res = await fetch(`${API_BASE}${path}`, {
+		const res = await dashboardFetch(`${API_BASE}${path}`, {
 			...init,
 			headers: { Accept: "application/json", ...authHeaders(), ...(init?.headers ?? {}) },
 		});
@@ -64,7 +101,7 @@ async function mutateJSON<T extends { error?: string }>(
 	signal?: AbortSignal,
 ): Promise<{ ok: boolean; data: T | null }> {
 	try {
-		const res = await fetch(`${API_BASE}${path}`, {
+		const res = await dashboardFetch(`${API_BASE}${path}`, {
 			method,
 			signal,
 			headers: {
@@ -92,7 +129,7 @@ async function postSourceImport(
 ): Promise<ApiReadResult<SourceImportJob>> {
 	const descriptors = files.map((file) => ({ id: crypto.randomUUID(), name: file.name }));
 	try {
-		const res = await fetch(`${API_BASE}/api/sources/imports?agentId=${encodeURIComponent(agentId)}`, {
+		const res = await dashboardFetch(`${API_BASE}/api/sources/imports?agentId=${encodeURIComponent(agentId)}`, {
 			method: "POST",
 			signal: AbortSignal.timeout(30_000),
 			headers: { "Content-Type": "application/json", Accept: "application/json", ...authHeaders() },
@@ -534,6 +571,7 @@ export interface HarnessConnectorCapabilities {
 }
 
 export interface HarnessConnector {
+	inspectionStatus?: "complete" | "unavailable";
 	id: string;
 	displayName: string;
 	kind: "harness";
@@ -740,6 +778,10 @@ export interface DreamStatus {
 export const api = {
 	getStatus: () => getJSON<DaemonStatus>("/api/status"),
 	getIdentity: () => getJSON<DashboardIdentity>("/api/identity"),
+	connectHarness: (id: string, signal?: AbortSignal) =>
+		postJSONResult<{ success: boolean }>(`/api/harnesses/${encodeURIComponent(id)}/connect`, undefined, signal),
+	disconnectHarness: (id: string) =>
+		postJSONResult<{ success: boolean }>(`/api/harnesses/${encodeURIComponent(id)}/disconnect`, {}),
 	getHarnesses: () => getJSONResult<HarnessesResponse>("/api/harnesses"),
 	getHarnessHealth: (id: string) => getJSONResult<HarnessConnector>(`/api/harnesses/${encodeURIComponent(id)}/health`),
 	repairHarness: (id: string) =>
@@ -760,7 +802,7 @@ export const api = {
 	},
 	getHealth: async (): Promise<boolean> => {
 		try {
-			return (await fetch(`${API_BASE}/health`)).ok;
+			return (await dashboardFetch(`${API_BASE}/health`)).ok;
 		} catch {
 			return false;
 		}
@@ -773,7 +815,7 @@ export const api = {
 	getDreamQuality: () => getJSON<DreamQuality>("/api/dream/quality"),
 	triggerDream: async (mode: "incremental" | "compact" = "incremental") => {
 		try {
-			const res = await fetch(`${API_BASE}/api/dream/trigger`, {
+			const res = await dashboardFetch(`${API_BASE}/api/dream/trigger`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify({ mode }),
@@ -828,7 +870,7 @@ export const api = {
 		reason: string,
 	): Promise<{ ok: boolean; error?: string }> => {
 		try {
-			const res = await fetch(`${API_BASE}/api/memory/${encodeURIComponent(id)}`, {
+			const res = await dashboardFetch(`${API_BASE}/api/memory/${encodeURIComponent(id)}`, {
 				method: "PATCH",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify({ ...patch, reason }),
@@ -842,7 +884,7 @@ export const api = {
 	},
 	deleteMemory: async (id: string, reason: string): Promise<{ ok: boolean; error?: string }> => {
 		try {
-			const res = await fetch(`${API_BASE}/api/memory/${encodeURIComponent(id)}`, {
+			const res = await dashboardFetch(`${API_BASE}/api/memory/${encodeURIComponent(id)}`, {
 				method: "DELETE",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify({ reason }),
@@ -863,7 +905,7 @@ export const api = {
 		const sep = agentQ ? "&" : "?";
 		const countQ = count === undefined ? "" : `${sep}count=${count}`;
 		try {
-			const res = await fetch(`${API_BASE}/api/reflections/generate${agentQ}${countQ}`, {
+			const res = await dashboardFetch(`${API_BASE}/api/reflections/generate${agentQ}${countQ}`, {
 				method: "POST",
 				headers: authHeaders(),
 			});
@@ -883,7 +925,7 @@ export const api = {
 	): Promise<{ success: boolean; memoryId?: string; error?: string }> => {
 		const q = agentId && agentId !== "default" ? `?agentId=${encodeURIComponent(agentId)}` : "";
 		try {
-			const res = await fetch(`${API_BASE}/api/reflections/${encodeURIComponent(id)}/answer${q}`, {
+			const res = await dashboardFetch(`${API_BASE}/api/reflections/${encodeURIComponent(id)}/answer${q}`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify({ answer: answer.trim() }),
@@ -985,7 +1027,7 @@ export const api = {
 						return { data: null, error: "File prefix differs from the retained upload" };
 				} else {
 					for (let attempt = 0; ; attempt++) {
-						const response = await fetch(`${path}${query}`, {
+						const response = await dashboardFetch(`${path}${query}`, {
 							method: "PATCH",
 							signal: AbortSignal.timeout(60_000),
 							headers: {
@@ -1029,7 +1071,7 @@ export const api = {
 				},
 			};
 			for (let attempt = 0; ; attempt++) {
-				const response = await fetch(finalizePath, {
+				const response = await dashboardFetch(finalizePath, {
 					...finalizeOptions,
 					signal: AbortSignal.timeout(15 * 60_000),
 				}).catch(() => null);
@@ -1078,7 +1120,7 @@ export const api = {
 			for (const file of files) form.append("files", file, file.name);
 			for (const path of paths) form.append("paths", path);
 			form.set("duplicateMode", duplicateMode);
-			const res = await fetch(`${API_BASE}/api/sources/import`, {
+			const res = await dashboardFetch(`${API_BASE}/api/sources/import`, {
 				method: "POST",
 				headers: authHeaders(),
 				body: form,
@@ -1100,7 +1142,7 @@ export const api = {
 			}
 		}
 		try {
-			const res = await fetch(`${API_BASE}/api/sources/pick-files`, {
+			const res = await dashboardFetch(`${API_BASE}/api/sources/pick-files`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify({ title: "Choose files to import" }),
@@ -1127,7 +1169,7 @@ export const api = {
 		if (source.kind === "discord" && !body.guildIds?.length)
 			return { ok: false, error: "source config is missing guild ids" };
 		try {
-			const res = await fetch(`${API_BASE}/api/sources/${source.kind}`, {
+			const res = await dashboardFetch(`${API_BASE}/api/sources/${source.kind}`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify(body),
@@ -1141,7 +1183,7 @@ export const api = {
 	},
 	removeSource: async (id: string): Promise<{ ok: boolean; error?: string }> => {
 		try {
-			const res = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(id)}`, {
+			const res = await dashboardFetch(`${API_BASE}/api/sources/${encodeURIComponent(id)}`, {
 				method: "DELETE",
 				headers: authHeaders(),
 			});
@@ -1154,7 +1196,7 @@ export const api = {
 	},
 	addSource: async (kind: string, body: unknown): Promise<{ ok: boolean; error?: string }> => {
 		try {
-			const res = await fetch(`${API_BASE}/api/sources/${kind}`, {
+			const res = await dashboardFetch(`${API_BASE}/api/sources/${kind}`, {
 				method: "POST",
 				signal: AbortSignal.timeout(30_000),
 				headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -1178,7 +1220,7 @@ export const api = {
 			}
 		}
 		try {
-			const res = await fetch(`${API_BASE}/api/sources/pick-directory`, {
+			const res = await dashboardFetch(`${API_BASE}/api/sources/pick-directory`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify({ title: "Choose your vault folder" }),
@@ -1193,7 +1235,7 @@ export const api = {
 	},
 	getSourceSnapshot: async (id: string): Promise<unknown | null> => {
 		try {
-			const res = await fetch(`${API_BASE}/api/sources/${encodeURIComponent(id)}/snapshot`, {
+			const res = await dashboardFetch(`${API_BASE}/api/sources/${encodeURIComponent(id)}/snapshot`, {
 				headers: authHeaders(),
 			});
 			if (!res.ok) return null;
@@ -1278,7 +1320,7 @@ export const api = {
 	},
 	saveConfigFile: async (file: string, content: string): Promise<SaveConfigResult> => {
 		try {
-			const res = await fetch(`${API_BASE}/api/config`, {
+			const res = await dashboardFetch(`${API_BASE}/api/config`, {
 				method: "POST",
 				headers: { "Content-Type": "application/json", ...authHeaders() },
 				body: JSON.stringify({ file, content }),
@@ -1388,7 +1430,7 @@ export function startOAuthLogin(providerId: string): OAuthLoginHandle {
 }
 
 export async function completeOAuthInteraction(sessionId: string, responseId: string, value: string): Promise<boolean> {
-	const res = await fetch(`${API_BASE}/api/inference/oauth/complete`, {
+	const res = await dashboardFetch(`${API_BASE}/api/inference/oauth/complete`, {
 		method: "POST",
 		headers: { "Content-Type": "application/json", ...authHeaders() },
 		body: JSON.stringify({ sessionId, responseId, value }),
@@ -1398,7 +1440,7 @@ export async function completeOAuthInteraction(sessionId: string, responseId: st
 }
 
 export async function disconnectOAuthProvider(providerId: string): Promise<boolean> {
-	const res = await fetch(`${API_BASE}/api/inference/oauth/disconnect/${encodeURIComponent(providerId)}`, {
+	const res = await dashboardFetch(`${API_BASE}/api/inference/oauth/disconnect/${encodeURIComponent(providerId)}`, {
 		method: "POST",
 		headers: authHeaders(),
 	});

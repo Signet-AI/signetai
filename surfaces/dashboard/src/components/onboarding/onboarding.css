@@ -34,7 +34,7 @@
  .dots { display:flex; gap:8px; }
  .dot { width:5px; height:5px; border-radius:50%; background:var(--border); }
  .dot.active { background:var(--success); }
- .primary { border:1px solid var(--border); background:var(--muted); color:var(--foreground); border-radius:9px; padding-block:11px; padding-inline:18px 16px; font-size:13px; font-weight:500; display:flex; gap:24px; align-items:center; }
+ .primary { border:1px solid var(--border); background:var(--muted); color:var(--foreground); border-radius:var(--control-radius); padding-block:11px; padding-inline:18px 16px; font-size:13px; font-weight:500; display:flex; gap:24px; align-items:center; }
  .primary:enabled:hover { border-color:var(--success); background:var(--accent); }
  .choices { display:grid; gap:9px; margin-top:22px; }
  .choice { background:transparent; border:1px solid var(--border); border-radius:9px; padding:12px 14px; display:flex; align-items:center; gap:13px; min-height:58px; text-align:start; }
@@ -56,7 +56,7 @@
  .failure { border-inline-start:2px solid var(--destructive); padding:8px 12px; margin-top:12px; color:var(--destructive); font-size:12px; line-height:1.5; }
  .fixture { font-size:10px; color:var(--muted-foreground); margin:14px 0 0; }
  .chat { margin-top:30px; }
- .memory-input { width:100%; border:1px solid var(--input); border-radius:8px; padding:11px 12px; font-size:13px; background:var(--card); color:var(--foreground); }
+ .memory-input { width:100%; border:1px solid var(--input); border-radius:var(--control-radius); padding:11px 12px; font-size:13px; background:var(--card); color:var(--foreground); }
  .memory-input::placeholder { color:var(--muted-foreground); }
  .first-memory { padding:22px 18px; font-size:16px; border-color:color-mix(in srgb,var(--success) 55%,var(--border)); box-shadow:0 0 0 4px color-mix(in srgb,var(--success) 5%,transparent); }
  .first-memory:hover,.first-memory:focus { border-color:var(--success); }
@@ -94,7 +94,7 @@
 .onboarding .onboarding-source .cs-head { display:none; }
 .onboarding .onboarding-source .cs-foot { padding:8px 0; justify-content:flex-end; }
 .onboarding .onboarding-source .min-h-28 { min-height:70px; }
-.onboarding .onboarding-source .cs-field__hint { font-size:10px; }
+.onboarding .onboarding-source .ui-field-hint { font-size:10px; }
 .onboarding .onboarding-source p { margin-bottom:0; }
 .dark .onboarding img[src$="hermes-agent.svg"],.dark .onboarding img[src$="oh-my-pi.svg"] { filter:invert(1); }
 html:not(.dark) .onboarding img[src$="openai.svg"],html:not(.dark) .onboarding img[src$="forge.svg"],html:not(.dark) .onboarding img[src$="pi.svg"] { filter:invert(1); }

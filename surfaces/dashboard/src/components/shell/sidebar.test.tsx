@@ -1,14 +1,14 @@
 import { describe, expect, it } from "bun:test";
-import { MEMORY_NAV_ITEMS, TOP_LEVEL_NAV_ITEMS } from "./navigation";
+import { TOP_LEVEL_NAV_ITEMS } from "./navigation";
 
 describe("dashboard navigation data", () => {
 	it("keeps primary views in a compact header order", () => {
-		expect(TOP_LEVEL_NAV_ITEMS.map((item) => item.view)).toEqual(["home", "memory", "skills"]);
+		expect(TOP_LEVEL_NAV_ITEMS.map((item) => item.view)).toEqual(["home", "memory", "dreaming", "skills"]);
 		expect(TOP_LEVEL_NAV_ITEMS.find((item) => item.view === "skills")?.disabled).toBe(true);
 	});
 
-	it("keeps graph and dreams inside the memory section", () => {
-		expect(MEMORY_NAV_ITEMS.map((item) => item.view)).toEqual(["graph", "dreaming"]);
-		expect(TOP_LEVEL_NAV_ITEMS.some((item) => item.view === "graph" || item.view === "dreaming")).toBe(false);
+	it("gives Dreams its own header entry while Memory opens the graph", () => {
+		expect(TOP_LEVEL_NAV_ITEMS.find((item) => item.view === "dreaming")?.label).toBe("Dreams");
+		expect(TOP_LEVEL_NAV_ITEMS.some((item) => item.view === "graph")).toBe(false);
 	});
 });

@@ -1,25 +1,33 @@
+import { SETTINGS_SECTIONS, type SettingsSection } from "./settings-sections";
 import { type ReactNode, createContext, useCallback, useContext, useEffect, useState } from "react";
 
-export type ViewId = "home" | "memory" | "graph" | "dreaming" | "skills";
+export type ViewId = "home" | "memory" | "graph" | "dreaming" | "skills" | "settings";
 
 const VIEW_LABELS: Record<ViewId, string> = {
 	home: "Home",
 	memory: "Memory",
-	graph: "Graph",
+	graph: "Memory",
 	dreaming: "Dreams",
 	skills: "Skills",
+	settings: "Settings",
 };
-function viewFromHash(): ViewId | null {
+function routeFromHash(): { view: ViewId; settingsSection?: SettingsSection } | null {
 	if (typeof window === "undefined") return null;
 	const raw = window.location.hash.replace(/^#\/?/, "").trim();
-	if (raw === "memory") return "graph";
-	return (raw in VIEW_LABELS ? raw : null) as ViewId | null;
+	if (raw === "memory") return { view: "graph" };
+	if (raw === "settings" || raw.startsWith("settings/")) {
+		const section = raw.split("/")[1];
+		return { view: "settings", settingsSection: SETTINGS_SECTIONS.find((item) => item === section) ?? "network" };
+	}
+	return raw in VIEW_LABELS ? { view: raw as ViewId } : null;
 }
 
 interface ViewCtx {
 	view: ViewId;
 	setView: (v: ViewId) => void;
 	label: (v: ViewId) => string;
+	settingsSection: SettingsSection;
+	openSettings: (section?: SettingsSection) => void;
 	connectSourceRequested: boolean;
 	requestConnectSource: () => void;
 	clearConnectSource: () => void;
@@ -28,20 +36,26 @@ interface ViewCtx {
 const Ctx = createContext<ViewCtx | null>(null);
 
 export function ViewProvider({ children }: { children: ReactNode }) {
-	const [view, setViewState] = useState<ViewId>(() => viewFromHash() ?? "home");
+	const [route, setRoute] = useState(() => routeFromHash() ?? { view: "home" as ViewId });
+	const view = route.view;
+	const settingsSection = route.settingsSection ?? "network";
 	const [connectSourceRequested, setConnectSourceRequested] = useState(false);
-	const setView = useCallback((next: ViewId) => {
+	const navigate = useCallback((next: ViewId, section?: SettingsSection) => {
 		const canonical = next === "memory" ? "graph" : next;
-		setViewState(canonical);
-		if (typeof window !== "undefined" && window.location.hash !== `#${canonical}`) {
-			history.replaceState(null, "", `#${canonical}`);
-		}
+		setRoute({ view: canonical, settingsSection: section });
+		const hash = canonical === "settings" ? `#settings/${section ?? "network"}` : `#${canonical}`;
+		if (typeof window !== "undefined" && window.location.hash !== hash) history.replaceState(null, "", hash);
 	}, []);
+	const setView = useCallback((next: ViewId) => navigate(next, settingsSection), [navigate, settingsSection]);
+	const openSettings = useCallback(
+		(section?: SettingsSection) => navigate("settings", section ?? settingsSection),
+		[navigate, settingsSection],
+	);
 
 	useEffect(() => {
 		const onHashChange = () => {
-			const next = viewFromHash();
-			if (next) setViewState(next);
+			const next = routeFromHash();
+			if (next) setRoute(next);
 			if (window.location.hash === "#memory") history.replaceState(null, "", "#graph");
 		};
 		if (window.location.hash === "#memory") history.replaceState(null, "", "#graph");
@@ -55,6 +69,8 @@ export function ViewProvider({ children }: { children: ReactNode }) {
 				view,
 				setView,
 				label: (v) => VIEW_LABELS[v],
+				settingsSection,
+				openSettings,
 				connectSourceRequested,
 				requestConnectSource: () => {
 					setConnectSourceRequested(true);

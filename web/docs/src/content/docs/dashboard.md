@@ -14,37 +14,41 @@ signet dashboard
 
 The default URL is `http://localhost:3850`. If you set `SIGNET_PORT`, use that port instead.
 
-## Current navigation
+## Navigation and cached data
 
-The dashboard uses hash routes. These routes are available in the current application:
+Home, Memory, Dreams, and Settings are client-rendered hash routes. Home includes
+sources and memory search; Settings has its own sections for data and files,
+connectors, network, inference, secrets, logs, advanced options, and licenses.
+Select the three dots at the bottom of the sidebar to open Settings.
 
-| Route | Surface | What it is for |
-|---|---|---|
-| `#home` | Home | Daemon and workspace overview. |
-| `#memory` | Memory | Browse and search stored memory. |
-| `#sources` | Sources | Connect supported sources, import files, inspect source health, re-index, snapshot, or remove a source. |
-| `#graph` | Graph | Inspect the knowledge graph. |
-| `#dreaming` | Dreams | Inspect Dreaming status and attention. |
-| `#secrets` | Secrets | Inspect stored secret names and manage secrets without exposing their values. |
+Dashboard reads share a session-only cache. Returning to a page shows its last
+successful result immediately. Fresh results avoid another daemon request;
+stale results refresh in the background. Simultaneous reads of the same query
+share one request, and slow polls do not start overlapping requests.
 
-Unknown hashes fall back to the current/default view rather than opening a legacy route.
+The cache retains at most 48 results and 12 MiB of serialized payloads, with a
+4 MiB per-result limit. Least recently used results are evicted first, and
+inactive results expire after five minutes. These are payload bounds, not a
+measurement of JavaScript heap usage. Parameterized reads, including constellation
+density, memory searches, and individual Dreaming passes, have separate keys.
+The cache is scoped to the daemon origin and authentication token, is cleared
+on authorization failures. Successful dashboard mutations invalidate the affected
+queries for background refresh. The cache is never
+persisted to disk. Refreshing the application starts a new cache.
 
-`Agents` and `Skills` are visible as disabled “Coming soon” navigation rows in the current build. They are not finished management surfaces. The retired Overview, Ontology, Tasks, and Audit tabs are not part of this dashboard.
+Visible pages poll at their existing intervals; hidden pages and windows stop
+polling. Failed background reads retain their last successful result and show
+that updates are unavailable. Read requests have a 20-second deadline. The daemon
+continues to own database access and every durable transition, including in the
+desktop application.
 
-## Settings
-
-Select the gear in the lower-left account row to open the settings modal. The current modal groups controls into:
-
-- Network: local daemon address and sync settings.
-- Inference: provider accounts, model routing, embedding configuration, and route checks.
-- Logs: runtime log controls.
-- Advanced: additional daemon configuration.
-
-Settings are a modal, not a hash-routed dashboard tab. Treat the daemon and configuration references as the authority for operational behavior.
+The constellation currently refreshes a bounded snapshot. This cache does not
+introduce graph streaming or a change-feed protocol; external changes are picked
+up on the next visible-page refresh.
 
 ## Sources and imports
 
-Open `#sources` to work with source-backed recall:
+Use the Sources section on Home to work with source-backed recall:
 
 - **Connect a source** offers the dashboard’s basic Obsidian, GitHub, and Discord forms.
 - **Import files** uploads text, Markdown, JSON, HTML, CSV, and supported document formats as durable source artifacts.

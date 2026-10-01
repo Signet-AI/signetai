@@ -31,11 +31,12 @@ function failed(request: HarnessHealthRequest, message: string): HarnessConnecto
 		configured: request.configured,
 		detected: false,
 		installed: false,
-		relevant: true,
+		relevant: request.configured || request.lastSeen !== null,
 		configPath: null,
 		lastSeen: request.lastSeen,
 		capabilities: { repair: false, reinitialize: false, reinitializeRequiresConfirmation: false },
-		health: { status: "unhealthy", message, checkedAt: new Date().toISOString() },
+		inspectionStatus: "unavailable",
+		health: { status: "unknown", message, checkedAt: new Date().toISOString() },
 	};
 }
 export async function runHarnessInspection(

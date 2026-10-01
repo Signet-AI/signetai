@@ -121,6 +121,12 @@ executor. `GET /api/inference/catalog` includes `recommendedModels`, an optional
 provider-to-model-ID map drawn from curated defaults only when the provider's
 current catalog contains that model. Absence requires an explicit model choice.
 
+`POST /api/harnesses/:id/disconnect` requires admin permission. It runs the
+connector's uninstall method in the same bounded worker used for installation,
+then verifies that the integration is no longer installed. It removes Signet's
+harness integration, not the harness application or Signet memories. Responses
+include `success`, `id`, `action`, and `message`; failures return an error.
+
 `POST /api/harnesses/:id/connect` requires admin permission and accepts
 `claude-code`, `codex`, `hermes-agent`, `opencode`, `openclaw`, `gemini`,
 `pi`, `oh-my-pi`, `kimi`, or `forge`. It installs into the daemon host's agent
@@ -135,7 +141,24 @@ reconcile them. OpenClaw preserves its configured runtime path and requires the
 existing CLI-managed plugin package for plugin mode; missing packages fail
 explicitly before configuration is written.
 
-`GET /api/harnesses` reports each harness's home-directory `exists` state plus
+`GET /api/harnesses` includes `connectors` with independent installation and health
+observations. `installed` means the connector found its Signet installation files;
+`detected` means only that the harness configuration exists. A workspace connection
+record or previous activity does not prove a current installation. The dashboard
+lists installed connectors and retains its last known installations while checks
+are unavailable. A completed inspection reporting `installed: false` removes the
+connector from that list.
+
+`inspectionStatus` is `complete` when inspection returns a result, or `unavailable`
+when the inspector cannot complete. Inspection timeouts, cancellation, loader
+failures, and thrown probes report health `unknown`, not `unhealthy`. Installation
+files alone do not establish runtime health; connectors without a runtime probe
+also report `unknown`. The dashboard presents those installations as Installed,
+without suggesting repair. Repair and reinitialization controls appear in connector details only for a
+completed check reporting a concrete problem. Request failures also preserve the
+Home page connection record instead of suggesting setup or repair.
+
+`GET /api/harnesses` also reports each harness's home-directory `exists` state plus
 `configuredHarnesses`: the harness ids recorded as connected in the workspace's
 agent.yaml, written when a connect (or `signet setup`) succeeds. `configuredHarnesses`
 is the Signet-owned connection record; `exists` alone proves only that a harness

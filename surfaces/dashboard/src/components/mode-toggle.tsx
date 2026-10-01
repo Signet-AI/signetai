@@ -46,7 +46,7 @@ export function ModeToggle() {
 			onClick={switchTheme}
 			aria-label={`Switch theme (current: ${current})`}
 			title={`Theme: ${current} → ${next}`}
-			className="sig-header-control size-[26px] rounded-[var(--radius)]"
+			className="sig-sidebar-link sig-theme-control"
 		>
 			<span className="sig-theme-icon-stack" data-ready={transitionReady} aria-hidden="true">
 				<Sun className={cn("sig-theme-icon", visibleTheme === "light" && "is-active")} />

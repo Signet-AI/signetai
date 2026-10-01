@@ -1,3 +1,4 @@
+import { Skeleton } from "@/components/ui/skeleton";
 import { type DailyReflection, api } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { ChevronLeft, ChevronRight, RotateCw } from "@/components/mingcute-icons";
@@ -158,17 +159,14 @@ export function DailyBrief({
 					{}
 					<div className="flex shrink-0 flex-col gap-2.25" aria-label="Loading daily brief">
 						<div>
-							{["100%", "100%", "55%"].map((w, idx) => (
+							{[0, 1, 2].map((idx) => (
 								<div key={idx} className="flex h-[25px] items-center">
-									<span
-										className="block h-4 animate-pulse rounded bg-[color-mix(in_oklch,var(--foreground)_7%,transparent)]"
-										style={{ width: w }}
-									/>
+									<Skeleton className={idx === 2 ? "h-4 w-[55%]" : "h-4 w-full"} />
 								</div>
 							))}
 						</div>
 						<div className="mt-1 flex h-[15.8px] shrink-0 items-center">
-							<span className="block h-[10.5px] w-20 animate-pulse rounded bg-[color-mix(in_oklch,var(--foreground)_7%,transparent)]" />
+							<Skeleton className="h-[10.5px] w-20" />
 						</div>
 					</div>
 				</>
@@ -224,7 +222,7 @@ export function DailyBrief({
 								rows={2}
 								autoFocus
 								aria-label="Your answer"
-								className="w-full resize-none rounded-[var(--radius)] border border-[oklch(1_0_0/0.1)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-2.5 py-1.5 text-[12px] leading-[1.5] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[color-mix(in_oklch,var(--foreground)_30%,transparent)]"
+								className="w-full resize-none rounded-[var(--control-radius)] border border-[oklch(1_0_0/0.1)] bg-[color-mix(in_oklch,var(--foreground)_3%,transparent)] px-2.5 py-1.5 text-[12px] leading-[1.5] text-foreground outline-none transition-colors placeholder:text-muted-foreground focus:border-[color-mix(in_oklch,var(--foreground)_30%,transparent)]"
 							/>
 							<div className="flex items-center gap-2">
 								<button

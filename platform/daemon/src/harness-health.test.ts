@@ -37,7 +37,16 @@ console.log("SIGNET_HEALTH_RESULT " + JSON.stringify(await inspectRegisteredConn
 		expect(duplicate.health.message).toContain("already running");
 		const healthy = await runHarnessInspection(request("healthy"), { entrypoint, timeoutMs: 2000 });
 		expect(healthy.health.status).toBe("healthy");
-		expect((await blocked).health.message).toContain("timed out");
+		const timeout = await blocked;
+		expect(timeout.health.message).toContain("timed out");
+		expect(timeout.health.status).toBe("unknown");
+		expect(timeout.inspectionStatus).toBe("unavailable");
+		const absent = await runHarnessInspection(
+			{ id: "blocked", configured: false, lastSeen: null },
+			{ entrypoint, timeoutMs: 100 },
+		);
+		expect(absent.relevant).toBe(false);
+		expect(absent.installed).toBe(false);
 		clearInterval(timer);
 		expect(ticks).toBeGreaterThan(2);
 		if (process.platform !== "win32") {

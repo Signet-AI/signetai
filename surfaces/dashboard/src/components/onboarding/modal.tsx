@@ -39,9 +39,9 @@ export function OnboardingModal() {
 
 function OnboardingFlow({ onClose }: { onClose: () => void }) {
 	const store = useAgentConfig();
-	const status = useAsync(() => api.getStatus());
-	const catalog = useAsync(() => api.getInferenceCatalog());
-	const harnesses = useAsync(() => api.getHarnesses());
+	const status = useAsync(() => api.getStatus(), { key: "status" });
+	const catalog = useAsync(() => api.getInferenceCatalog(), { key: "inference-catalog" });
+	const harnesses = useAsync(() => api.getHarnesses(), { key: "harnesses" });
 	const [step, setStep] = useState(0);
 	const [selected, setSelected] = useState<string[]>([]);
 	const [provider, setProvider] = useState("");
@@ -59,8 +59,8 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 	const [recalled, setRecalled] = useState<Memory | null>(null);
 	const [sourceKind, setSourceKind] = useState<SourceKind | null>(null);
 	const [sourceBusy, setSourceBusy] = useState(false);
-	const sources = useAsync(() => api.getSources(), { intervalMs: 5000 });
-	const imports = useAsync(() => api.getSourceImports(), { intervalMs: 5000 });
+	const sources = useAsync(() => api.getSources(), { key: "sources", intervalMs: 5000 });
+	const imports = useAsync(() => api.getSourceImports(), { key: "source-imports", intervalMs: 5000 });
 	const loaded = useRef(false);
 	const memoryKey = useRef(crypto.randomUUID());
 	const request = useRef<AbortController | null>(null);
@@ -211,10 +211,7 @@ function OnboardingFlow({ onClose }: { onClose: () => void }) {
 		if (step === 1) {
 			void perform(async (signal) => {
 				for (const id of selected) {
-					const result = await getJSONResult<{ success: boolean }>(`/api/harnesses/${encodeURIComponent(id)}/connect`, {
-						method: "POST",
-						signal,
-					});
+					const result = await api.connectHarness(id, signal);
 					if (!result.data?.success) throw new Error(result.error ?? `Could not connect ${id}. Retry to repair it.`);
 				}
 				store.aUpdate((draft) => {

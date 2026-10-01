@@ -1,3 +1,7 @@
+import { beforeEach as beforeDashboardFixture } from "bun:test";
+import { dashboardQueryCache } from "@/lib/query-cache";
+beforeDashboardFixture(() => dashboardQueryCache.clear(false, false));
+
 import { afterAll, beforeAll, test, expect } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";

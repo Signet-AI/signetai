@@ -1,13 +1,7 @@
+import { LoadingRows } from "@/components/ui/skeleton";
 import { useEffect, useRef, useState } from "react";
 import { ArrowRight, ChevronRight, UserRound } from "@/components/mingcute-icons";
-import {
-	Dialog,
-	DialogContent,
-	DialogDescription,
-	DialogFooter,
-	DialogHeader,
-	DialogTitle,
-} from "@/components/ui/dialog";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { api, type Agent } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 
@@ -30,8 +24,11 @@ function ScopeBadge({ children }: { children: string }) {
 }
 export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 	const rosterRef = useRef<HTMLElement>(null);
-	const identityQuery = useAsync(() => api.getIdentity(), { intervalMs: 30000 });
-	const agentsQuery = useAsync(async () => (await api.getAgents()).data?.agents ?? null, { intervalMs: 30000 });
+	const identityQuery = useAsync(() => api.getIdentity(), { key: "identity", intervalMs: 30000 });
+	const agentsQuery = useAsync(async () => (await api.getAgents()).data?.agents ?? null, {
+		key: "agent-list",
+		intervalMs: 30000,
+	});
 	const [editing, setEditing] = useState<string | null>(null);
 	const [draft, setDraft] = useState<Draft>({ policy: "isolated", group: "" });
 	const [pending, setPending] = useState<{ agent: Agent; draft: Draft } | null>(null);
@@ -72,7 +69,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 		<>
 			<section ref={rosterRef} className="py-2.5" aria-labelledby="home-agents-title">
 				<div className="flex items-center justify-between gap-2.5">
-					<span id="home-agents-title" className="text-[15px] font-semibold tracking-tight text-foreground">
+					<span id="home-agents-title" className="text-[14px] font-medium tracking-tight text-foreground">
 						Agents
 					</span>
 					{agents?.some((agent) => agent.name !== "default") && (
@@ -109,9 +106,7 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 				)}
 
 				{agentsQuery.loading && agents === null ? (
-					<div className="grid min-h-[48px] place-items-center">
-						<span className="font-mono text-[10px] text-muted-foreground">Loading agents…</span>
-					</div>
+					<LoadingRows label="Loading agents…" rows={2} />
 				) : agents === null ? (
 					<div className="flex min-h-[48px] items-center justify-center gap-2 text-center">
 						<span className="font-mono text-[10px] text-muted-foreground">Unable to load agents.</span>
@@ -150,28 +145,27 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 				)}
 			</section>
 
-			<Dialog
+			<ConfirmationDialog
 				open={pending !== null}
 				onOpenChange={(open) => {
 					if (!open && !saving) setPending(null);
 				}}
-			>
-				<DialogContent>
-					<DialogHeader>
-						<DialogTitle>Confirm access change</DialogTitle>
-						<DialogDescription>
-							Set <strong>{pending?.agent.name}</strong>'s memory access to{" "}
-							<ScopeBadge>{pending ? POLICY_LABELS[pending.draft.policy] : ""}</ScopeBadge>
-							{pending?.draft.policy === "group" && pending.draft.group ? (
-								<>
-									{" "}
-									in <ScopeBadge>{pending.draft.group}</ScopeBadge>
-								</>
-							) : null}
-							? Signet will apply the effective scope after you save.
-						</DialogDescription>
-					</DialogHeader>
-					<DialogFooter>
+				title={<>Confirm access change</>}
+				description={
+					<>
+						Set <strong>{pending?.agent.name}</strong>'s memory access to{" "}
+						<ScopeBadge>{pending ? POLICY_LABELS[pending.draft.policy] : ""}</ScopeBadge>
+						{pending?.draft.policy === "group" && pending.draft.group ? (
+							<>
+								{" "}
+								in <ScopeBadge>{pending.draft.group}</ScopeBadge>
+							</>
+						) : null}
+						? Signet will apply the effective scope after you save.
+					</>
+				}
+				actions={
+					<>
 						<button
 							type="button"
 							disabled={saving}
@@ -188,9 +182,9 @@ export function HomeAgentsPanel({ activeAgentId }: { activeAgentId?: string }) {
 						>
 							{saving ? "Saving…" : "Save access change"}
 						</button>
-					</DialogFooter>
-				</DialogContent>
-			</Dialog>
+					</>
+				}
+			/>
 
 			{confirmation && (
 				<div role="status" className="mt-2 font-mono text-[10px] text-muted-foreground">
@@ -268,7 +262,7 @@ function AgentDisclosure({
 							aria-label={`Memory policy for ${agent.name}`}
 							value={draft.policy}
 							onChange={(event) => onDraftChange({ ...draft, policy: event.target.value as Policy })}
-							className="h-7 rounded border border-input bg-background px-2 text-[11px]"
+							className="h-7 rounded-[var(--control-radius)] border border-input bg-background px-2 text-[11px]"
 						>
 							{policies.map((policy) => (
 								<option key={policy} value={policy}>
@@ -282,14 +276,14 @@ function AgentDisclosure({
 								value={draft.group}
 								onChange={(event) => onDraftChange({ ...draft, group: event.target.value })}
 								placeholder="group name"
-								className="h-7 w-28 rounded border border-input bg-background px-2 text-[11px]"
+								className="h-7 w-28 rounded-[var(--control-radius)] border border-input bg-background px-2 text-[11px]"
 							/>
 						)}
 						<button
 							type="button"
 							disabled={saving}
 							onClick={onConfirm}
-							className="h-7 rounded bg-primary px-2.5 text-[11px] font-medium text-primary-foreground"
+							className="h-7 rounded-[var(--control-radius)] bg-primary px-2.5 text-[11px] font-medium text-primary-foreground"
 						>
 							Review change
 						</button>

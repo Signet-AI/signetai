@@ -1,3 +1,5 @@
+import { Input } from "@/components/ui/field";
+import { Button } from "@/components/ui/button";
 import { useCallback, useEffect, useState } from "react";
 import {
 	Check,
@@ -127,15 +129,16 @@ export function OnePasswordPanel({ onImported, compact = false }: { onImported: 
 					<span className="text-[11px] font-medium">1Password</span>
 					<span className={cn("font-mono text-[10px]", statusColor)}>{statusLabel}</span>
 				</button>
-				<button
+				<Button
+					variant="ghost"
+					size="icon-xs"
 					type="button"
 					onClick={() => void refresh()}
 					disabled={loading}
 					aria-label="Refresh 1Password status"
-					className="grid size-6 place-items-center rounded-[5px] text-muted-foreground transition-colors hover:bg-[oklch(1_0_0/0.08)] hover:text-foreground disabled:opacity-40"
 				>
 					<RefreshCw className={cn("size-3", loading && "animate-spin")} />
-				</button>
+				</Button>
 			</div>
 
 			{expanded && (
@@ -162,31 +165,32 @@ export function OnePasswordPanel({ onImported, compact = false }: { onImported: 
 					)}
 
 					<div className="flex gap-2">
-						<input
+						<Input
 							type="password"
-							className="cs-field__input flex-1"
+							className="flex-1"
 							value={token}
 							onChange={(e) => setToken(e.target.value)}
 							placeholder={status.connected ? "Replace service account token" : "Service account token"}
 							aria-label="1Password service account token"
 						/>
-						<button
+						<Button
+							variant="ghost"
+							size="compact"
 							type="button"
 							onClick={() => void connect()}
 							disabled={connecting || !token.trim()}
-							className="cs-btn-ghost inline-flex items-center gap-1.5 border border-[oklch(1_0_0/0.1)] [:root:not(.dark)_&]:border-[oklch(0_0_0/0.1)]"
 						>
 							{connecting ? <Loader2 className="size-3 animate-spin" /> : <Link2 className="size-3" />}
 							{status.connected ? "Update" : "Connect"}
-						</button>
+						</Button>
 					</div>
 
 					<div className="flex items-center gap-4">
 						<label className="flex items-center gap-2">
 							<span className="font-mono text-[9.5px] uppercase tracking-[0.08em] text-muted-foreground">Prefix</span>
-							<input
+							<Input
 								type="text"
-								className="cs-field__input w-20"
+								className="w-20"
 								value={prefix}
 								onChange={(e) => setPrefix(e.target.value)}
 								placeholder="OP"
@@ -238,24 +242,26 @@ export function OnePasswordPanel({ onImported, compact = false }: { onImported: 
 						))}
 
 					<div className="flex gap-2">
-						<button
+						<Button
+							variant="default"
+							size="compact"
 							type="button"
 							onClick={() => void importSecrets()}
 							disabled={importing || !status.connected}
-							className="cs-btn-primary inline-flex items-center gap-1.5 disabled:opacity-40"
 						>
 							{importing ? <Loader2 className="size-3 animate-spin" /> : <Import className="size-3" />}
 							{importing ? "Importing…" : "Import"}
-						</button>
-						<button
+						</Button>
+						<Button
+							variant="ghost"
+							size="compact"
 							type="button"
 							onClick={() => void disconnect()}
 							disabled={disconnecting || !status.configured}
-							className="cs-btn-ghost inline-flex items-center gap-1.5 disabled:opacity-40"
 						>
 							{disconnecting ? <Loader2 className="size-3 animate-spin" /> : <Unlink className="size-3" />}
 							Disconnect
-						</button>
+						</Button>
 					</div>
 
 					<div className="font-mono text-[9px] text-muted-foreground">

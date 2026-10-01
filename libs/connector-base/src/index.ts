@@ -110,7 +110,10 @@ export abstract class BaseConnector {
 	async inspectHealth(): Promise<ConnectorHealth> {
 		try {
 			if (this.isInstalled()) {
-				return { status: "unknown", message: "Integration detected; runtime health has not been verified." };
+				return {
+					status: "unknown",
+					message: "Signet integration files are installed. This connector does not check runtime health.",
+				};
 			}
 			if (this.isDetected()) {
 				return { status: "degraded", message: "Harness detected; Signet integration is not configured." };
@@ -118,7 +121,7 @@ export abstract class BaseConnector {
 			return { status: "unhealthy", message: "Signet integration is not installed." };
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			return { status: "unhealthy", message: `Health inspection failed: ${message}` };
+			return { status: "unknown", message: `Health inspection failed: ${message}` };
 		}
 	}
 	getRecoveryCapabilities(): ConnectorRecoveryCapabilities {

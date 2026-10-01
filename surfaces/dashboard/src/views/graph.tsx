@@ -1,3 +1,4 @@
+import { Skeleton } from "@/components/ui/skeleton";
 import { Network } from "@/components/mingcute-icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
@@ -67,11 +68,12 @@ function provenanceLabel(
 export function GraphView() {
 	const [entityLimit, setEntityLimit] = useState(48);
 	const graphQuery = useAsync(() => api.getKnowledgeConstellation(entityLimit, Math.min(2000, entityLimit * 4)), {
+		key: `constellation:${entityLimit}:${Math.min(2000, entityLimit * 4)}`,
 		intervalMs: 30_000,
 		deps: [entityLimit],
 	});
-	const stats = useAsync(() => api.getKnowledgeStats(), { intervalMs: 30_000 }).data;
-	const sources = useAsync(() => api.getSources(), { intervalMs: 30_000 }).data?.sources;
+	const stats = useAsync(() => api.getKnowledgeStats(), { key: "knowledge-stats", intervalMs: 30_000 }).data;
+	const sources = useAsync(() => api.getSources(), { key: "sources", intervalMs: 30_000 }).data?.sources;
 	const [legendOpen, setLegendOpen] = useState(false);
 	const [detail, setDetail] = useState<EntityDetail | null>(null);
 	const [responded, setResponded] = useState(false);
@@ -532,12 +534,25 @@ export function GraphView() {
 
 			{}
 			<div ref={stageRef} className="graph-stage" />
-			{graphQuery.loading && (
-				<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
-					Loading constellation…
+			{graphQuery.loading && !graphQuery.data && (
+				<div
+					role="status"
+					aria-label="Loading constellation…"
+					className="pointer-events-none absolute inset-0 z-[2] flex flex-col items-center justify-center gap-5"
+				>
+					<Skeleton className="size-32 rounded-full opacity-40" />
+					<Skeleton className="h-2 w-36" />
+					<span className="font-mono text-[10.5px] text-muted-foreground">Loading constellation…</span>
+				</div>
+			)}
+			{graphQuery.error && (
+				<span role="status" className="absolute left-4 top-14 z-[3] text-xs text-muted-foreground">
+					{graphQuery.data
+						? "Showing cached constellation. Updates are unavailable."
+						: "Constellation unavailable. Retrying in the background."}
 				</span>
 			)}
-			{!graphQuery.loading && limitedScene.data.nodes.length === 0 && (
+			{!graphQuery.loading && !graphQuery.error && limitedScene.data.nodes.length === 0 && (
 				<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
 					No graph nodes are available yet.
 				</span>

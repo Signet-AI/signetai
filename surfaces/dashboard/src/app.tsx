@@ -1,11 +1,10 @@
-import { Activity, useEffect, type ReactNode } from "react";
+import { Activity, useEffect, useRef } from "react";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SidebarNav } from "@/components/shell/navigation";
 import { Topbar } from "@/components/shell/topbar";
-import { MemoryNav } from "@/components/shell/navigation";
-import { useView } from "@/lib/view-context";
-import { SettingsProvider } from "@/lib/settings-context";
-import { SettingsModal, useSettingsHotkey } from "@/views/settings";
+import { type ViewId, useView } from "@/lib/view-context";
+import { SettingsView, useSettingsHotkey } from "@/views/settings";
 import { HomeView } from "@/views/home";
 import { SkillsView } from "@/views/stubs";
 import { DreamsView } from "@/views/dreaming";
@@ -15,74 +14,62 @@ import { OnboardingModal } from "@/components/onboarding/modal";
 
 export function App() {
 	return (
-		<SettingsProvider>
-			<TooltipProvider delayDuration={200}>
-				<Shell />
-				<SettingsModal />
-				<OnboardingModal />
-				<Toaster />
-			</TooltipProvider>
-		</SettingsProvider>
+		<TooltipProvider delayDuration={200}>
+			<Shell />
+			<OnboardingModal />
+			<Toaster />
+		</TooltipProvider>
 	);
 }
 
 function Shell() {
 	useSettingsHotkey();
 	const { view } = useView();
+	const contentRef = useRef<HTMLDivElement>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Reset this owned scroll container when the route changes.
+	useEffect(() => {
+		contentRef.current?.scrollTo({ top: 0 });
+	}, [view]);
 	return (
-		<div className="shell-stage flex h-full min-h-0 flex-col bg-background text-foreground">
+		<div className="flex h-full min-h-0 flex-col bg-background text-foreground">
 			<main
 				data-view={view}
 				className="sig-app-frame flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background"
 			>
 				<Topbar />
-				<div
-					className={`sig-content flex min-h-0 flex-1 flex-col ${view === "home" ? "overflow-hidden" : "overflow-auto p-6"}`}
-				>
-					<Activity mode={view === "home" ? "visible" : "hidden"}>
-						<HomeView />
-					</Activity>
-					{view !== "home" && <ViewSwitch />}
+				<div className="sig-work-area flex min-h-0 min-w-0 flex-1">
+					<SidebarNav />
+					<div
+						ref={contentRef}
+						className={`sig-content flex min-h-0 min-w-0 flex-1 flex-col ${view === "home" || view === "dreaming" || view === "settings" ? "overflow-hidden" : "overflow-auto p-6"}`}
+					>
+						<Activity mode={view === "home" ? "visible" : "hidden"}>
+							<HomeView />
+						</Activity>
+						{view !== "home" && <ViewSwitch view={view} />}
+					</div>
 				</div>
 			</main>
 		</div>
 	);
 }
 
-function ViewSwitch() {
-	const { view } = useView();
-	useEffect(() => {
-		const el = document.querySelector(".sig-content");
-		if (el) el.scrollTo({ top: 0 });
-	}, [view]);
-
-	if (view === "graph" || view === "dreaming") {
-		return (
-			<PageTransition view={view}>
-				<div className="flex min-h-0 flex-1 flex-col gap-3">
-					<MemoryNav />
-					<div className="flex min-h-0 flex-1 flex-col">{view === "graph" ? <GraphView /> : <DreamsView />}</div>
-				</div>
-			</PageTransition>
-		);
-	}
-
-	switch (view) {
-		case "skills":
-			return (
-				<PageTransition view={view}>
-					<SkillsView />
-				</PageTransition>
-			);
-		default:
-			return null;
-	}
-}
-
-function PageTransition({ view, children }: { view: string; children: ReactNode }) {
+function ViewSwitch({ view }: { view: ViewId }) {
+	const page =
+		view === "graph" ? (
+			<GraphView />
+		) : view === "dreaming" ? (
+			<DreamsView />
+		) : view === "skills" ? (
+			<SkillsView />
+		) : view === "settings" ? (
+			<SettingsView />
+		) : null;
 	return (
-		<div key={view} className="sig-page-transition flex min-h-0 flex-1 flex-col">
-			{children}
-		</div>
+		page && (
+			<div key={view} className="sig-page-transition flex min-h-0 min-w-0 flex-1 flex-col">
+				{page}
+			</div>
+		)
 	);
 }
