@@ -41,6 +41,13 @@ if [ "$1" = find-identity ] && [ "$2" = "-p" ]; then
   exit 1
 fi
 if [ "$1" = find-identity ]; then
+  if [ "$SIGNING_AMBIGUOUS_IDENTITY" = "1" ]; then
+    printf '  1) BAD "Developer ID Application: Other (${team}) Extra"
+  2) ABCDEF "Developer ID Application: Signet AI (${team})"
+  2 identities found
+'
+    exit 0
+  fi
   printf '  1) ABCDEF "Developer ID Application: Signet AI (${team})"\n  1 identities found\n'
 fi
 `,
@@ -99,7 +106,9 @@ test("signs the macOS CLI with a stable team-bound designated requirement", asyn
 		env: {
 			...process.env,
 			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
+			RUNNER_TEMP: fixture.runnerTemp,
 			SIGNING_LOG: fixture.log,
+			SIGNING_AMBIGUOUS_IDENTITY: "1",
 			MACOS_CERTIFICATE_P12: "cGsi",
 			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
 			APPLE_TEAM_ID: "TEAM123456",
@@ -114,7 +123,14 @@ test("signs the macOS CLI with a stable team-bound designated requirement", asyn
 	expect(output).toContain("Signed and verified");
 	expect(calls).toContain("security:find-identity ");
 	expect(calls).not.toContain("security:find-identity -p ");
+	const keychainLine = calls
+		.split(String.fromCharCode(10))
+		.find((call) => call.startsWith("security:create-keychain -p "));
+	const keychain = keychainLine?.split(" ").at(-1);
+	expect(keychain).toBeDefined();
+	expect(calls).toContain(`security:find-identity ${keychain}`);
 	expect(calls).toContain("codesign:--force --timestamp --identifier ai.signet.cli");
+	expect(calls).toContain("--sign Developer ID Application: Signet AI (TEAM123456)");
 	expect(calls).toContain("--requirements =designated => anchor apple generic");
 	expect(calls).toContain("-R =anchor apple generic and identifier");
 	expect(calls).toContain("certificate leaf[subject.OU] =");
