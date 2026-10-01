@@ -207,7 +207,7 @@ test("accepts only a well-formed Keychain identity row and keeps lookup output p
 		expect(output).toContain(`query_status=${queryStatus}, expected_identity_listed=no`);
 		expect(output).not.toContain("Developer ID Application");
 		expect(output).not.toContain("0123456789ABCDEF0123456789ABCDEF01234567");
-		expect(calls).not.toContain("codesign:");
+		expect(calls).not.toContain("\ncodesign:");
 	}
 });
 
@@ -261,6 +261,7 @@ test("signs only with the Keychain identity whose certificate fingerprint matche
 
 	expect(result.exitCode).toBe(0);
 	expect(output).toContain("Signed and verified");
+	expect(calls).toContain("security:set-key-partition-list -S apple-tool:,apple:,codesign: -s -k ");
 	expect(calls).toContain("--sign Developer ID Application: Signet AI (TEAM123456)");
 	expect(calls).not.toContain("--sign 0123456789ABCDEF0123456789ABCDEF01234567");
 	expect(calls).toContain("--requirements =designated => anchor apple generic");
@@ -291,7 +292,7 @@ test("refuses to sign when the imported certificate belongs to another team", as
 
 	expect(result.exitCode).not.toBe(0);
 	expect(output).toContain("Imported certificate is not a Developer ID Application identity for the configured team");
-	expect(calls).not.toContain("codesign:");
+	expect(calls).not.toContain("\ncodesign:");
 });
 
 test("refuses to report success when the signed binary fails the team requirement", async () => {
@@ -337,7 +338,7 @@ test("refuses a certificate whose team differs", async () => {
 
 	expect(result.exitCode).not.toBe(0);
 	expect(output).toContain("Imported certificate is not a Developer ID Application identity for the configured team");
-	expect(calls).not.toContain("codesign:");
+	expect(calls).not.toContain("\ncodesign:");
 });
 
 test("refuses a certificate with a different Developer ID certificate type", async () => {
@@ -362,7 +363,7 @@ test("refuses a certificate with a different Developer ID certificate type", asy
 
 	expect(result.exitCode).not.toBe(0);
 	expect(output).toContain("Imported certificate is not a Developer ID Application identity for the configured team");
-	expect(calls).not.toContain("codesign:");
+	expect(calls).not.toContain("\ncodesign:");
 });
 
 test("identifies the keychain stage when macOS rejects a security operation", async () => {

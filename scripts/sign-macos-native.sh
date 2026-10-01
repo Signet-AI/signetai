@@ -45,7 +45,7 @@ security unlock-keychain -p "$keychain_password" "$keychain_path"
 printf 'Importing Developer ID certificate.\n'
 security import "$certificate_path" -k "$keychain_path" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
 printf 'Configuring code-signing key access.\n'
-security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain_path" >/dev/null
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$keychain_password" "$keychain_path" >/dev/null
 
 printf 'Inspecting imported Developer ID certificate.\n'
 pkcs12_help="$(openssl pkcs12 -help 2>&1 || true)"
