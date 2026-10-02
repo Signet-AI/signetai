@@ -481,7 +481,7 @@ export function GraphView() {
 				<DialogTitle>{inspected?.label ?? detail?.name ?? "Selection"}</DialogTitle>
 				<DialogDescription>{inspected ? humanize(inspected.kind) : "Entity"} · Memory graph</DialogDescription>
 				<div className="gr-body">
-					{inspected && (
+					{inspected && inspected.kind !== "entity" && (
 						<div className="gr-answer">
 							<div className="gr-section-label">
 								{inspected.kind === "memory" || inspected.kind === "origin" ? "Evidence" : humanize(inspected.kind)}
