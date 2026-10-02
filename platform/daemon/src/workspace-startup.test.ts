@@ -255,6 +255,9 @@ describe("daemon workspace startup preflight", () => {
 		}
 		const output = daemon.output();
 		expect(daemon.child.exitCode).toBe(0);
+		await expect(
+			fetch(`http://127.0.0.1:${port}/health/live`, { signal: AbortSignal.timeout(1_000) }),
+		).rejects.toThrow();
 		expect(output).not.toContain("Post-ready conversion worker failed");
 		expect(output).not.toContain("Post-ready conversion worker crashed");
 		expect(output.toLowerCase()).not.toContain("database is locked");

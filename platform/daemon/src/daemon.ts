@@ -121,7 +121,7 @@ import {
 	resolveActiveEmbeddingConfigFromState,
 } from "./embedding-index-state";
 import { completeFtsStartupRecovery } from "./fts-startup-recovery";
-import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
+import { startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
@@ -205,7 +205,10 @@ import {
 	setRestartPipelineRuntime,
 	setShuttingDown,
 	setTelemetryRef,
-	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
+	embeddingTrackerHandle,
+	heartbeatTimer,
+	checkpointPruneTimer,
+	telemetryRef,
 	shuttingDown,
 } from "./routes/state.js";
 import {
@@ -341,7 +344,6 @@ let migrationWritesDeferred = false;
 let recallDbOwner: DbOwnerClient | null = null;
 let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
-let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
 let vacuumConversionHandle: VacuumConversionHandle | null = null;
 let embeddingPromotionRestart: Promise<void> | null = null;
@@ -350,10 +352,6 @@ let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 let transcriptImportWorkerHandle: TranscriptImportWorkerHandle | null = null;
 let manualInboxWorkerHandle: ManualInboxWorkerHandle | null = null;
-let telemetryRef: TelemetryCollector | undefined;
-let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
-
 function armMigrationIntegrityWriteBlock(): void {
 	migrationIntegrityWritesBlocked = true;
 	migrationWritesDeferred = false;
@@ -1580,7 +1578,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		try {
 			await embeddingTrackerHandle.stop();
 		} catch {}
-		embeddingTrackerHandle = null;
 		setEmbeddingTrackerHandle(null);
 	}
 	if (embeddingIndexMigrationHandle) {
@@ -1589,13 +1586,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		} catch {}
 		embeddingIndexMigrationHandle = null;
 	}
-	if (sharedEmbeddingTrackerHandle) {
-		try {
-			await sharedEmbeddingTrackerHandle.stop();
-		} catch {}
-		setEmbeddingTrackerHandle(null);
-	}
-
 	if (dreamingWorkerHandle) {
 		dreamingWorkerHandle.stop();
 		if (dreamingWorkerHandle.activePass) {
@@ -1928,16 +1918,17 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	}
 
 	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
-		embeddingTrackerHandle = startEmbeddingTracker(
-			getDbAccessor(),
-			activeEmbeddingCfg,
-			memoryCfg.pipelineV2.embeddingTracker,
-			memoryCfg.pipelineV2.repair,
-			fetchEmbedding,
-			checkEmbeddingProvider,
-			defaultAgentId,
+		setEmbeddingTrackerHandle(
+			startEmbeddingTracker(
+				getDbAccessor(),
+				activeEmbeddingCfg,
+				memoryCfg.pipelineV2.embeddingTracker,
+				memoryCfg.pipelineV2.repair,
+				fetchEmbedding,
+				checkEmbeddingProvider,
+				defaultAgentId,
+			),
 		);
-		setEmbeddingTrackerHandle(embeddingTrackerHandle);
 	}
 	if (!pipelinePaused) {
 		try {
@@ -2037,12 +2028,10 @@ async function cleanup() {
 
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
-		heartbeatTimer = undefined;
 		setHeartbeatTimer(undefined);
 	}
 	if (checkpointPruneTimer) {
 		clearInterval(checkpointPruneTimer);
-		checkpointPruneTimer = undefined;
 		setCheckpointPruneTimer(undefined);
 	}
 	stopResourceMonitors();
@@ -2052,7 +2041,6 @@ async function cleanup() {
 		try {
 			await telemetryRef.stop();
 		} catch {}
-		telemetryRef = undefined;
 		setTelemetryRef(undefined);
 		setActiveTelemetry(undefined);
 	}
@@ -2543,7 +2531,6 @@ async function main() {
 			dbPath: MEMORY_DB,
 		});
 		telemetryCollector.start();
-		telemetryRef = telemetryCollector;
 		setTelemetryRef(telemetryCollector);
 		setActiveTelemetry(telemetryCollector);
 
@@ -2585,7 +2572,7 @@ async function main() {
 		}
 
 		const daemonStartTime = Date.now();
-		heartbeatTimer = setInterval(
+		const heartbeat = setInterval(
 			() => {
 				void (async () => {
 					if (!telemetryRef) return;
@@ -2662,7 +2649,7 @@ async function main() {
 			},
 			5 * 60 * 1000,
 		);
-		setHeartbeatTimer(heartbeatTimer);
+		setHeartbeatTimer(heartbeat);
 	}
 
 	const deferredRuntimeGate = createDeferredRuntimeGate();
@@ -2915,7 +2902,7 @@ async function main() {
 			});
 		}
 
-		checkpointPruneTimer = setInterval(() => {
+		const checkpointPrune = setInterval(() => {
 			try {
 				const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
 				if (cfg.enabled) {
@@ -2931,7 +2918,7 @@ async function main() {
 				});
 			}
 		}, 3600_000);
-		setCheckpointPruneTimer(checkpointPruneTimer);
+		setCheckpointPruneTimer(checkpointPrune);
 
 		startGitSyncTimer();
 		initUpdateSystem(

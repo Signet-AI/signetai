@@ -245,10 +245,6 @@ function parseEpisodicCursor(value: string | null): EpisodicCursor | null {
 		return null;
 	}
 }
-export function _testParseEpisodicCursor(value: string | null): EpisodicCursor | null {
-	return parseEpisodicCursor(value);
-}
-
 export interface DreamingPassRow {
 	readonly id: string;
 	readonly mode: string;
@@ -383,56 +379,42 @@ function deferredEvidenceKeys(value: unknown, primaryAgentId: string): ReadonlyS
 }
 
 function readDreamingState(db: ReadDb, agentId: string): DreamingState {
-	let row:
-		| {
-				consecutive_failures: number;
-				last_failure_at: string | null;
-				last_pass_at: string | null;
-				evidence_cursor: string | null;
-				last_pass_id: string | null;
-				last_pass_mode: string | null;
-		  }
-		| undefined;
 	try {
-		row = db
+		const row = db
 			.prepare(
 				`SELECT consecutive_failures, last_failure_at,
 				        last_pass_at, evidence_cursor, last_pass_id, last_pass_mode
 				 FROM dreaming_state WHERE agent_id = ?`,
 			)
-			.get(agentId) as typeof row;
+			.get(agentId) as DreamingStateRow | null | undefined;
+		return dreamingStateFromRow(row);
 	} catch {
-		row = undefined;
+		return dreamingStateFromRow(null);
 	}
-	if (!row) {
-		return {
-			consecutiveFailures: 0,
-			lastFailureAt: null,
-			lastPassAt: null,
-			evidenceCursor: null,
-			lastPassId: null,
-			lastPassMode: null,
-		};
-	}
+}
+
+type DreamingStateRow = {
+	readonly consecutive_failures: number;
+	readonly last_failure_at: string | null;
+	readonly last_pass_at: string | null;
+	readonly evidence_cursor: string | null;
+	readonly last_pass_id: string | null;
+	readonly last_pass_mode: string | null;
+};
+
+function dreamingStateFromRow(row: DreamingStateRow | null | undefined): DreamingState {
 	return {
-		consecutiveFailures: row.consecutive_failures,
-		lastFailureAt: row.last_failure_at,
-		lastPassAt: row.last_pass_at,
-		evidenceCursor: parseEpisodicCursor(row.evidence_cursor),
-		lastPassId: row.last_pass_id,
-		lastPassMode: row.last_pass_mode,
+		consecutiveFailures: row?.consecutive_failures ?? 0,
+		lastFailureAt: row?.last_failure_at ?? null,
+		lastPassAt: row?.last_pass_at ?? null,
+		evidenceCursor: parseEpisodicCursor(row?.evidence_cursor ?? null),
+		lastPassId: row?.last_pass_id ?? null,
+		lastPassMode: row?.last_pass_mode ?? null,
 	};
 }
 
 export async function getDreamingState(accessor: DbAccessor, agentId: string): Promise<DreamingState> {
-	const row = await ownerQueryOne<{
-		consecutive_failures: number;
-		last_failure_at: string | null;
-		last_pass_at: string | null;
-		evidence_cursor: string | null;
-		last_pass_id: string | null;
-		last_pass_mode: string | null;
-	}>(
+	const row = await ownerQueryOne<DreamingStateRow>(
 		await getDbOwnerForAccessor(accessor),
 		"dreaming.state.read",
 		`SELECT consecutive_failures, last_failure_at,
@@ -441,24 +423,7 @@ export async function getDreamingState(accessor: DbAccessor, agentId: string): P
 		[agentId],
 		{ deadlineMs: 30_000, estimatedWorkUnits: 1 },
 	);
-	if (!row) {
-		return {
-			consecutiveFailures: 0,
-			lastFailureAt: null,
-			lastPassAt: null,
-			evidenceCursor: null,
-			lastPassId: null,
-			lastPassMode: null,
-		};
-	}
-	return {
-		consecutiveFailures: row.consecutive_failures,
-		lastFailureAt: row.last_failure_at,
-		lastPassAt: row.last_pass_at,
-		evidenceCursor: parseEpisodicCursor(row.evidence_cursor),
-		lastPassId: row.last_pass_id,
-		lastPassMode: row.last_pass_mode,
-	};
+	return dreamingStateFromRow(row);
 }
 
 function resetDreamingTokens(
