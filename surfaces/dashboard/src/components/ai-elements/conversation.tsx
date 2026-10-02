@@ -1,5 +1,4 @@
 // Copyright 2023 Vercel, Inc. Licensed under Apache-2.0.
-// Adapted from vercel/ai-elements: dashboard imports, scoped text-only surface.
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ArrowDownIcon } from "lucide-react";
