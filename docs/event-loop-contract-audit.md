@@ -4,18 +4,18 @@ This report is generated from the deterministic migration ledger in `scripts/eve
 
 ## Current inventory
 
-- Exact ledger inventory: 788 sites
+- Exact ledger inventory: 789 sites
 - Synchronous `withWriteTx()` sites: 58
 - Synchronous `withReadDb()` sites: 91
 - Async-named DB sites: 169
 - Async-named ON-PARENT DB sites: 167
 - Async-named OFF-PARENT DB sites: 2
-- Synchronous filesystem/process sites: 470
+- Synchronous filesystem/process sites: 471
 - Compile-visible legacy DB sites remaining: 149
   - `withWriteTx`: 58
   - `withReadDb`: 91
 
-The 788-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 58 synchronous writes, 91 synchronous reads, and 169 async-named DB sites are the complete database-call inventory; 149 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 167 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
+The 789-site inventory excludes test, benchmark, generated, and `__tests__` fixtures and includes every synchronous filesystem, process, and database call, including async-named DB callbacks. The 58 synchronous writes, 91 synchronous reads, and 169 async-named DB sites are the complete database-call inventory; 149 compatibility DB operations remain transitional callers for the later migration phase. The async-named DB counts above separate the 167 ON-PARENT callbacks from the 2 OFF-PARENT callbacks. Those compatibility calls are marked with `@ts-expect-error LEGACY_SYNC_DB_ACCESS`, so the compiler reports every remaining site without forcing this phase to migrate them.
 
 ## Execution-home inventory
 
@@ -173,10 +173,10 @@ The classifier follows execution home, not API spelling. A direct accessor callb
 - `pipeline/dreaming-operations.ts:622` (withReadDb)
 - `pipeline/dreaming-runbook.ts:193` (withWriteTx)
 - `pipeline/dreaming-runbook.ts:231` (withReadDb)
-- `pipeline/dreaming-worker.ts:102` (withReadDbAsync)
-- `pipeline/dreaming-worker.ts:152` (withReadDbAsync)
-- `pipeline/dreaming-worker.ts:210` (withReadDbAsync)
-- `pipeline/dreaming-worker.ts:230` (withReadDbAsync)
+- `pipeline/dreaming-worker.ts:107` (withReadDbAsync)
+- `pipeline/dreaming-worker.ts:157` (withReadDbAsync)
+- `pipeline/dreaming-worker.ts:215` (withReadDbAsync)
+- `pipeline/dreaming-worker.ts:235` (withReadDbAsync)
 - `pipeline/graph-traversal.ts:69` (withReadDbAsync)
 - `db:maintenance.graph-agent-scopes.read` (withReadDbAsync)
 - `pipeline/maintenance-worker.ts:313` (withReadDbAsync)

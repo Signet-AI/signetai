@@ -253,6 +253,7 @@ const persistentSessions = new Map<
 		session: Promise<PiAgentSession>;
 		signature: string;
 		modelSignature: string;
+		apiKey: string;
 		busy: boolean;
 		timer?: ReturnType<typeof setTimeout>;
 	}
@@ -270,9 +271,7 @@ export async function leaseWorkerAgentSession(
 	const signature = createHash("sha256")
 		.update(JSON.stringify({ tools: input.tools, systemPrompt: input.systemPrompt }))
 		.digest("hex");
-	const modelSignature = createHash("sha256")
-		.update(JSON.stringify({ model: input.model, apiKey: input.apiKey }))
-		.digest("hex");
+	const modelSignature = createHash("sha256").update(JSON.stringify(input.model)).digest("hex");
 	let entry = persistentSessions.get(key);
 	if (entry?.busy) throw new Error("This conversation already has an active turn");
 	if (entry && entry.signature !== signature) {
@@ -286,7 +285,13 @@ export async function leaseWorkerAgentSession(
 	if (!entry) {
 		if (persistentSessions.size >= 3)
 			throw new Error("Persistent chat capacity reached; idle sessions expire after 15 minutes");
-		entry = { session: createWorkerAgentSession(input, tools, signal), signature, modelSignature, busy: true };
+		entry = {
+			session: createWorkerAgentSession(input, tools, signal),
+			signature,
+			modelSignature,
+			apiKey: input.apiKey,
+			busy: true,
+		};
 		persistentSessions.set(key, entry);
 	} else {
 		clearTimeout(entry.timer);
@@ -296,9 +301,10 @@ export async function leaseWorkerAgentSession(
 	let session: PiAgentSession;
 	try {
 		session = await current.session;
-		if (current.modelSignature !== modelSignature) {
+		if (current.modelSignature !== modelSignature || current.apiKey !== input.apiKey) {
 			await session.updateModel?.(input);
 			current.modelSignature = modelSignature;
+			current.apiKey = input.apiKey;
 		}
 		session.setTools?.(tools);
 	} catch (error) {
