@@ -2,19 +2,7 @@ import { confirm, password } from "@inquirer/prompts";
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
-
-interface SecretDeps {
-	readonly ensureDaemonForSecrets: () => Promise<boolean>;
-	readonly secretApiCall: (
-		method: string,
-		path: string,
-		body?: unknown,
-		timeoutMs?: number,
-	) => Promise<{
-		ok: boolean;
-		data: unknown;
-	}>;
-}
+import type { DaemonCommandDeps } from "./command-utils";
 
 function append(value: string, previous: string[]): string[] {
 	return [...previous, value];
@@ -28,7 +16,7 @@ async function readSecretFromStdin(): Promise<string> {
 	return Buffer.concat(chunks).toString("utf-8").trim();
 }
 
-export function registerSecretCommands(program: Command, deps: SecretDeps): void {
+export function registerSecretCommands(program: Command, deps: DaemonCommandDeps): void {
 	const secretCmd = program.command("secret").description("Manage encrypted secrets").enablePositionalOptions();
 
 	secretCmd

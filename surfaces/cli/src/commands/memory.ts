@@ -8,6 +8,7 @@ import {
 import chalk from "chalk";
 import type { Command } from "commander";
 import ora from "ora";
+import { asRecord, type DaemonCommandDeps } from "./command-utils";
 
 const MEMORY_RECALL_TIMEOUT_MS = 30_000;
 const AGGREGATE_MEMORY_RECALL_TIMEOUT_MS = 120_000;
@@ -17,20 +18,7 @@ function collectHint(value: string, previous: string[] = []): string[] {
 	return hint.length > 0 ? [...previous, hint] : previous;
 }
 
-interface MemoryDeps {
-	readonly ensureDaemonForSecrets: () => Promise<boolean>;
-	readonly secretApiCall: (
-		method: string,
-		path: string,
-		body?: unknown,
-		timeoutMs?: number,
-	) => Promise<{
-		ok: boolean;
-		data: unknown;
-	}>;
-}
-
-export function registerMemoryCommands(program: Command, deps: MemoryDeps): void {
+export function registerMemoryCommands(program: Command, deps: DaemonCommandDeps): void {
 	program
 		.command("remember <content>")
 		.description("Save a memory (auto-embedded for vector search)")
@@ -73,13 +61,13 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 				}),
 			);
 
-			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
+			const err = asRecord(data).error;
 			if (!ok || typeof err === "string") {
 				spinner.fail(typeof err === "string" ? err : "Failed to save memory");
 				process.exit(1);
 			}
 
-			const result = typeof data === "object" && data !== null ? data : {};
+			const result = asRecord(data);
 			const id = typeof result.id === "string" ? result.id : "unknown";
 			const pinned = result.pinned === true;
 			const embedded = result.embedded === true;
@@ -162,7 +150,7 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 				timeoutMs,
 			);
 
-			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
+			const err = asRecord(data).error;
 			if (!ok || typeof err === "string") {
 				spinner.fail(typeof err === "string" ? err : "Search failed");
 				process.exit(1);
@@ -197,14 +185,14 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 
 			const spinner = ora("Checking embedding coverage...").start();
 			const { ok, data } = await deps.secretApiCall("GET", "/api/repair/embedding-gaps");
-			const err = typeof data === "object" && data !== null && "error" in data ? data.error : undefined;
+			const err = asRecord(data).error;
 			if (!ok || typeof err === "string") {
 				spinner.fail(typeof err === "string" ? err : "Audit failed");
 				process.exit(1);
 			}
 
 			spinner.stop();
-			const stats = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
+			const stats = asRecord(data);
 			const total = typeof stats.total === "number" ? stats.total : 0;
 			const unembedded = typeof stats.unembedded === "number" ? stats.unembedded : 0;
 			const embedded = typeof stats.embedded === "number" ? stats.embedded : Math.max(0, total - unembedded);
@@ -280,16 +268,15 @@ export function registerMemoryCommands(program: Command, deps: MemoryDeps): void
 					...(migration ? { all: options.all === true } : {}),
 				},
 			);
-			const dataObj = typeof data === "object" && data !== null ? (data as Record<string, unknown>) : {};
-			const err = typeof dataObj.error === "string" ? dataObj.error : undefined;
-			const failureMessage = typeof dataObj.message === "string" ? dataObj.message : undefined;
+			const result = asRecord(data);
+			const err = typeof result.error === "string" ? result.error : undefined;
+			const failureMessage = typeof result.message === "string" ? result.message : undefined;
 			if (!ok || err !== undefined) {
 				spinner.fail(err ?? failureMessage ?? "Backfill failed");
 				process.exit(1);
 			}
 
 			spinner.stop();
-			const result = typeof data === "object" && data !== null ? data : {};
 			const success = result.success === true;
 			const affected = typeof result.affected === "number" ? result.affected : 0;
 			const message = typeof result.message === "string" ? result.message : "Backfill complete";

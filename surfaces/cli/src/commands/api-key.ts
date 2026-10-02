@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonApiCall } from "../lib/daemon.js";
+import { isRecord } from "./command-utils";
 import { withJson } from "./shared.js";
 
 interface ApiKeyDeps {
@@ -23,10 +24,6 @@ interface ApiKeyListOptions {
 
 interface ApiKeyRevokeOptions {
 	json?: boolean;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function readError(data: unknown): string {

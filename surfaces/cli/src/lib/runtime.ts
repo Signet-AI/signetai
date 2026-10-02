@@ -452,6 +452,20 @@ export function sleep(ms: number): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function singleFlight<T>(read: () => Promise<T>): () => Promise<T> {
+	let flight: Promise<T> | null = null;
+	return () => {
+		if (flight !== null) return flight;
+		const current = read();
+		flight = current;
+		const clear = (): void => {
+			if (flight === current) flight = null;
+		};
+		void current.then(clear, clear);
+		return current;
+	};
+}
+
 async function isDaemonHealthyAt(baseUrl: string): Promise<boolean> {
 	try {
 		const response = await fetch(`${baseUrl}/health`, {
@@ -473,21 +487,10 @@ async function isDaemonAliveAt(baseUrl: string): Promise<boolean> {
 	}
 }
 
-let daemonLivenessFlight: Promise<boolean> | null = null;
-function probeDaemonLiveness(): Promise<boolean> {
-	if (daemonLivenessFlight !== null) return daemonLivenessFlight;
-
-	const flight = (async (): Promise<boolean> => {
-		const checks = await Promise.all(resolveDaemonProbeUrls().map((baseUrl) => isDaemonAliveAt(baseUrl)));
-		return checks.some((reachable) => reachable);
-	})();
-	daemonLivenessFlight = flight;
-	const clearFlight = (): void => {
-		if (daemonLivenessFlight === flight) daemonLivenessFlight = null;
-	};
-	void flight.then(clearFlight, clearFlight);
-	return flight;
-}
+const probeDaemonLiveness = singleFlight(async (): Promise<boolean> => {
+	const checks = await Promise.all(resolveDaemonProbeUrls().map((baseUrl) => isDaemonAliveAt(baseUrl)));
+	return checks.some((reachable) => reachable);
+});
 
 interface DaemonReadiness {
 	readonly ready: boolean;
@@ -658,22 +661,14 @@ async function buildUnreachableDaemonProbe(agentsDir: string): Promise<DaemonHea
 	};
 }
 
-let reachableDaemonUrlsFlight: Promise<string[]> | null = null;
+const readReachableDaemonUrls = singleFlight(async (): Promise<string[]> => {
+	const checks = await Promise.all(
+		resolveDaemonProbeUrls().map(async (baseUrl) => ((await isDaemonHealthyAt(baseUrl)) ? baseUrl : null)),
+	);
+	return checks.flatMap((url) => (url === null ? [] : [url]));
+});
 export function getReachableDaemonUrls(): Promise<string[]> {
-	if (reachableDaemonUrlsFlight !== null) return reachableDaemonUrlsFlight;
-
-	const flight = (async (): Promise<string[]> => {
-		const checks = await Promise.all(
-			resolveDaemonProbeUrls().map(async (baseUrl) => ((await isDaemonHealthyAt(baseUrl)) ? baseUrl : null)),
-		);
-		return checks.flatMap((url) => (url === null ? [] : [url]));
-	})();
-	reachableDaemonUrlsFlight = flight;
-	const clearFlight = (): void => {
-		if (reachableDaemonUrlsFlight === flight) reachableDaemonUrlsFlight = null;
-	};
-	void flight.then(clearFlight, clearFlight);
-	return flight;
+	return readReachableDaemonUrls();
 }
 
 async function getDaemonInstances(): Promise<DaemonInstance[]> {
@@ -1287,17 +1282,9 @@ async function readDaemonStatus(): Promise<{
 	};
 }
 
-let daemonStatusFlight: Promise<Awaited<ReturnType<typeof readDaemonStatus>>> | null = null;
+const readDaemonStatusSingleFlight = singleFlight(readDaemonStatus);
 export function getDaemonStatus(): Promise<Awaited<ReturnType<typeof readDaemonStatus>>> {
-	if (daemonStatusFlight !== null) return daemonStatusFlight;
-
-	const flight = readDaemonStatus();
-	daemonStatusFlight = flight;
-	const clearFlight = (): void => {
-		if (daemonStatusFlight === flight) daemonStatusFlight = null;
-	};
-	void flight.then(clearFlight, clearFlight);
-	return flight;
+	return readDaemonStatusSingleFlight();
 }
 
 export interface DaemonStartArgsInput {

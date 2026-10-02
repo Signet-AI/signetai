@@ -30,7 +30,7 @@ import {
 import type { SetupApplyContext, SetupPlan } from "./setup-plan.js";
 import { writeSetupCorePluginRegistry } from "./setup-plugins.js";
 import { enforceSetupProtection, printSetupProtectionSummary, refreshSnapshotProtection } from "./setup-protection.js";
-import { readErr, readRecord } from "./setup-shared.js";
+import { printSetupNextStep, readErr, readRecord } from "./setup-shared.js";
 import { withSetupPrompt } from "./setup-terminal.js";
 import type { SetupDeps } from "./setup-types.js";
 
@@ -443,14 +443,7 @@ export async function runFreshSetup(plan: SetupPlan, context: SetupApplyContext,
 		console.log();
 		printSetupProtectionSummary(protection);
 		console.log();
-		if (plan.identityMode === "managed") {
-			console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
-			console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
-			console.log(chalk.dim("    communication style, and your preferences."));
-		} else {
-			console.log(chalk.cyan("  → Next step: Use `signet remember` or configure harness memory hooks"));
-			console.log(chalk.dim("    Signet will manage memory, recall, sources, and secrets without owning identity."));
-		}
+		printSetupNextStep(plan.identityMode === "managed");
 		if (protection.state === "bypass") {
 			console.log(chalk.red("    Backup warning: this workspace is still unprotected."));
 		}
