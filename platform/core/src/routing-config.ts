@@ -390,22 +390,31 @@ function asRoutingCostTier(value: unknown): RoutingCostTier | undefined {
 	return asMember(value, ROUTING_COST_TIERS);
 }
 
+interface InferredTargetDefaults {
+	readonly kind: RoutingTargetKind;
+	readonly privacy: RoutingPrivacyTier;
+}
+
+const INFERRED_TARGET_DEFAULTS: Readonly<Record<string, InferredTargetDefaults>> = {
+	acpx: { kind: "subscription_session", privacy: "restricted_remote" },
+	anthropic: { kind: "api", privacy: "remote_ok" },
+	"claude-code": { kind: "subscription_session", privacy: "restricted_remote" },
+	codex: { kind: "subscription_session", privacy: "restricted_remote" },
+	command: { kind: "local", privacy: "remote_ok" },
+	"llama-cpp": { kind: "local", privacy: "local_only" },
+	ollama: { kind: "local", privacy: "local_only" },
+	"openai-compatible": { kind: "gateway", privacy: "remote_ok" },
+	openrouter: { kind: "api", privacy: "remote_ok" },
+	opencode: { kind: "subscription_session", privacy: "restricted_remote" },
+};
+
 function inferTargetKind(executor: string): RoutingTargetKind {
-	if (executor === "ollama" || executor === "llama-cpp" || executor === "openai-compatible" || executor === "command") {
-		return executor === "openai-compatible" ? "gateway" : "local";
-	}
-	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode") {
-		return "subscription_session";
-	}
-	return "api";
+	return INFERRED_TARGET_DEFAULTS[executor]?.kind ?? "api";
 }
 
 export function inferTargetPrivacy(executor: string, endpoint?: string): RoutingPrivacyTier {
 	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local_only";
-	if (executor === "ollama" || executor === "llama-cpp") return "local_only";
-	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode")
-		return "restricted_remote";
-	return "remote_ok";
+	return INFERRED_TARGET_DEFAULTS[executor]?.privacy ?? "remote_ok";
 }
 
 export function makeRoutingTargetRef(targetId: string, modelId: string): RoutingTargetRef {
