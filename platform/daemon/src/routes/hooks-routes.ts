@@ -1137,7 +1137,7 @@ function registerCompactionComplete(app: Hono): void {
 									 WHERE session_key = ? AND agent_id = ?`,
 								)
 								.get(body.sessionKey, agentId) as { project: string | null } | undefined,
-						"routes/hooks-routes.ts:1130",
+						"db:hooks.session-transcript.project.read",
 					)
 				: undefined;
 			const requestedProject = transcriptRow?.project ?? parseOptionalString(body.project);
@@ -1233,7 +1233,7 @@ function registerCompactionComplete(app: Hono): void {
 						sourceRef: body.sessionKey ?? null,
 						harness: body.harness,
 					});
-				}, "routes/hooks-routes.ts:1160");
+				}, "db:hooks.session-summary.memory.write");
 
 				try {
 					await writeCompactionArtifact({
@@ -1302,7 +1302,7 @@ function registerCompactionComplete(app: Hono): void {
 								agentId,
 							);
 						}
-					}, "routes/hooks-routes.ts:1285");
+					}, "db:hooks.compaction.transcript-state.delete");
 				} catch (err) {
 					logger.warn("hooks", "Failed to reset checkpoint state after compaction (non-fatal)", {
 						error: err instanceof Error ? err.message : String(err),
