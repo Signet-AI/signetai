@@ -2,6 +2,8 @@ import { describe, expect, it } from "bun:test"
 import type { JudgeResult } from "../types/judge"
 import { config } from "../utils/config"
 import { OpenAIJudge } from "./openai"
+import { AnthropicJudge } from "./anthropic"
+import { GoogleJudge } from "./google"
 
 async function run(content: string): Promise<JudgeResult> {
   const previousBaseUrl = config.openaiBaseUrl
@@ -70,5 +72,19 @@ describe("OpenAIJudge response parsing", () => {
     await expect(
       run('{"score":0,"label":"incorrect","explanation":{"detail":"wrong"}}')
     ).rejects.toThrow("Judge response")
+  })
+})
+
+describe("provider-specific judges", () => {
+  it("uses the configured Anthropic default model", async () => {
+    const judge = new AnthropicJudge()
+    await judge.initialize({ apiKey: "fixture-key" })
+    expect(judge.getModel()).toHaveProperty("modelId", "claude-sonnet-4-20250514")
+  })
+
+  it("uses the configured Google default model", async () => {
+    const judge = new GoogleJudge()
+    await judge.initialize({ apiKey: "fixture-key" })
+    expect(judge.getModel()).toHaveProperty("modelId", "gemini-2.5-flash")
   })
 })

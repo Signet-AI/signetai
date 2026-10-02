@@ -35,7 +35,7 @@ export interface QuestionCheckpoint {
     ingest: { status: string; completedSessions: string[] }
     indexing: { status: string }
     search: { status: string; results?: any[] }
-    answer: { status: string; hypothesis?: string }
+    answer: { status: string; hypothesis?: string; promptTokens?: number }
     evaluate: { status: string; score?: number; label?: string; explanation?: string }
   }
 }

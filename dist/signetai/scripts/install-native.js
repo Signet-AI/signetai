@@ -207,7 +207,7 @@ function verifySha256(path, expected) {
 	}
 }
 
-function isConnectorMarker(value) {
+function isComponentMarker(value) {
 	if (typeof value !== "object" || value === null) return false;
 	return (
 		typeof value.version === "string" &&
@@ -235,18 +235,8 @@ function releaseBaseUrl() {
 	return `https://github.com/${repo}/releases/download/${tag}`;
 }
 
-async function installConnectorAssets() {
-	const manifest = loadManifest();
-	const component = manifest?.components?.[CONNECTOR_COMPONENT];
-	if (!component) {
-		// No connector assets in this release (e.g. early versions, or the
-		// wrapper is running from a workspace without a synced manifest).
-		// Skip silently — connectors without runtime assets keep working.
-		return;
-	}
-
-	const targetDir = join(packageDir, "runtime", "connectors");
-	const targetMarker = join(targetDir, ".signet-connectors-version");
+async function installComponentArchive(manifest, component, options) {
+	const targetMarker = join(options.targetDir, options.markerName);
 	let installedMarker = null;
 	try {
 		installedMarker = JSON.parse(readFileSync(targetMarker, "utf8"));
@@ -255,37 +245,30 @@ async function installConnectorAssets() {
 	}
 	if (
 		existsSync(targetMarker) &&
-		isConnectorMarker(installedMarker) &&
+		isComponentMarker(installedMarker) &&
 		installedMarker.version === manifest.version &&
 		installedMarker.sha256.toLowerCase() === component.sha256.toLowerCase()
 	) {
-		// Already extracted for this version. Skip to keep postinstall fast
-		// and to avoid clobbering user-tweaked assets.
+		// Keep a matching extraction intact so user adjustments are not overwritten.
 		return;
 	}
 
-	const tempPath = join(packageDir, `signet-connectors-${manifest.version}.tar.gz.tmp`);
-	const url = component.url.startsWith("http")
-		? component.url
-		: `${releaseBaseUrl()}/${component.url}`;
+	const tempPath = join(packageDir, options.archiveName);
+	const url = component.url.startsWith("http") ? component.url : `${releaseBaseUrl()}/${component.url}`;
 
 	try {
 		await downloadTo(url, tempPath);
 		verifySha256(tempPath, component.sha256);
-		const stat = readFileSync(tempPath);
-		if (stat.length !== component.size) {
-			rmSync(tempPath, { force: true });
-			throw new Error(`Tarball size mismatch: expected ${component.size}, got ${stat.length}`);
+		const tarballSize = readFileSync(tempPath).length;
+		if (tarballSize !== component.size) {
+			throw new Error(`Tarball size mismatch: expected ${component.size}, got ${tarballSize}`);
 		}
 
-		if (existsSync(targetDir)) {
-			rmSync(targetDir, { recursive: true, force: true });
+		if (existsSync(options.targetDir)) {
+			rmSync(options.targetDir, { recursive: true, force: true });
 		}
-		// Tarball layout is `./runtime/connectors/<harness>/...`. Extract
-		// at `<packageDir>/` so the tarball's own `runtime/` prefix
-		// lands naturally at `<packageDir>/runtime/connectors/...`.
+		// Component archives preserve their package-relative runtime/ path.
 		mkdirSync(packageDir, { recursive: true });
-
 		const result = spawnSync("tar", ["xzf", tempPath, "-C", packageDir], { stdio: "inherit" });
 		if (result.status !== 0) {
 			throw new Error(`tar extraction failed with status ${result.status ?? "unknown"}`);
@@ -294,10 +277,27 @@ async function installConnectorAssets() {
 			targetMarker,
 			`${JSON.stringify({ version: manifest.version, sha256: component.sha256 })}\n`,
 		);
-		console.log(`Installed connector assets to ${targetDir}`);
+		console.log(`${options.successMessage} to ${options.targetDir}`);
 	} finally {
 		rmSync(tempPath, { force: true });
 	}
+}
+
+async function installConnectorAssets() {
+	const manifest = loadManifest();
+	const component = manifest?.components?.[CONNECTOR_COMPONENT];
+	if (!manifest || !component) {
+		// Releases without connector assets can still use their existing connectors.
+		return;
+	}
+
+	const targetDir = join(packageDir, "runtime", "connectors");
+	await installComponentArchive(manifest, component, {
+		targetDir,
+		markerName: ".signet-connectors-version",
+		archiveName: `signet-connectors-${manifest.version}.tar.gz.tmp`,
+		successMessage: "Installed connector assets",
+	});
 }
 
 async function installDaemonJsAssets() {
@@ -310,53 +310,14 @@ async function installDaemonJsAssets() {
 		join(targetDir, "vendor", "tiktoken_bg.wasm"),
 		join(targetDir, "vendor", "node_modules", "@firecrawl", "anydoc"),
 	].every(existsSync);
-	if (packagedRuntime) return;
-	if (!component) return;
+	if (packagedRuntime || !manifest || !component) return;
 
-	const targetMarker = join(targetDir, ".signet-daemon-js-version");
-	let installedMarker = null;
-	try {
-		installedMarker = JSON.parse(readFileSync(targetMarker, "utf8"));
-	} catch {
-		// Reinstall legacy or malformed markers instead of trusting stale assets.
-	}
-	if (
-		existsSync(targetMarker) &&
-		isConnectorMarker(installedMarker) &&
-		installedMarker.version === manifest.version &&
-		installedMarker.sha256.toLowerCase() === component.sha256.toLowerCase()
-	) {
-		return;
-	}
-
-	const tempPath = join(packageDir, `signet-daemon-js-${manifest.version}.tar.gz.tmp`);
-	const url = component.url.startsWith("http")
-		? component.url
-		: `${releaseBaseUrl()}/${component.url}`;
-
-	try {
-		await downloadTo(url, tempPath);
-		verifySha256(tempPath, component.sha256);
-		const stat = readFileSync(tempPath);
-		if (stat.length !== component.size) {
-			rmSync(tempPath, { force: true });
-			throw new Error(`Tarball size mismatch: expected ${component.size}, got ${stat.length}`);
-		}
-
-		if (existsSync(targetDir)) rmSync(targetDir, { recursive: true, force: true });
-		mkdirSync(packageDir, { recursive: true });
-		const result = spawnSync("tar", ["xzf", tempPath, "-C", packageDir], { stdio: "inherit" });
-		if (result.status !== 0) {
-			throw new Error(`tar extraction failed with status ${result.status ?? "unknown"}`);
-		}
-		writeFileSync(
-			targetMarker,
-			`${JSON.stringify({ version: manifest.version, sha256: component.sha256 })}\n`,
-		);
-		console.log(`Installed Bun JavaScript daemon assets to ${targetDir}`);
-	} finally {
-		rmSync(tempPath, { force: true });
-	}
+	await installComponentArchive(manifest, component, {
+		targetDir,
+		markerName: ".signet-daemon-js-version",
+		archiveName: `signet-daemon-js-${manifest.version}.tar.gz.tmp`,
+		successMessage: "Installed Bun JavaScript daemon assets",
+	});
 }
 
 async function installRuntimeAssets() {

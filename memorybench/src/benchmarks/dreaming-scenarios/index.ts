@@ -2,7 +2,13 @@ import { existsSync, readFileSync } from "node:fs"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { Benchmark, BenchmarkConfig, QuestionFilter } from "../../types/benchmark"
-import type { QuestionTypeRegistry, UnifiedMessage, UnifiedQuestion, UnifiedSession } from "../../types/unified"
+import type {
+  QuestionTypeRegistry,
+  UnifiedMessage,
+  UnifiedQuestion,
+  UnifiedSession,
+} from "../../types/unified"
+import { filterBenchmarkQuestions } from "../question-filter"
 
 const DEFAULT_DATA_PATH = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -60,26 +66,35 @@ export const DREAMING_SCENARIO_QUESTION_TYPES: QuestionTypeRegistry = {
 }
 
 function assertNonEmptyString(value: unknown, label: string): asserts value is string {
-  if (typeof value !== "string" || value.trim() === "") throw new Error(`Dreaming scenario ${label} must be a non-empty string`)
+  if (typeof value !== "string" || value.trim() === "")
+    throw new Error(`Dreaming scenario ${label} must be a non-empty string`)
 }
 
 function assertAgentId(value: unknown, label: string): asserts value is string {
   assertNonEmptyString(value, label)
   if (!/^[A-Za-z0-9._:-]+$/.test(value)) {
-    throw new Error(`Dreaming scenario ${label} must only contain letters, numbers, dot, underscore, colon, or hyphen`)
+    throw new Error(
+      `Dreaming scenario ${label} must only contain letters, numbers, dot, underscore, colon, or hyphen`
+    )
   }
 }
 
 function assertStringArray(value: unknown, label: string): asserts value is string[] {
-  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string" || item.trim() === "")) {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.some((item) => typeof item !== "string" || item.trim() === "")
+  ) {
     throw new Error(`Dreaming scenario ${label} must be a non-empty string array`)
   }
 }
 
 export function parseDreamingScenarioCorpus(value: unknown): DreamingScenarioCorpus {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Dreaming scenario corpus must be an object")
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new Error("Dreaming scenario corpus must be an object")
   const corpus = value as Partial<DreamingScenarioCorpus>
-  if (corpus.schemaVersion !== 1) throw new Error(`Unsupported Dreaming scenario schema version: ${String(corpus.schemaVersion)}`)
+  if (corpus.schemaVersion !== 1)
+    throw new Error(`Unsupported Dreaming scenario schema version: ${String(corpus.schemaVersion)}`)
   assertNonEmptyString(corpus.name, "corpus name")
   if (!Array.isArray(corpus.scenarios) || corpus.scenarios.length === 0) {
     throw new Error("Dreaming scenario corpus must contain at least one scenario")
@@ -87,7 +102,8 @@ export function parseDreamingScenarioCorpus(value: unknown): DreamingScenarioCor
 
   const ids = new Set<string>()
   for (const scenario of corpus.scenarios) {
-    if (!scenario || typeof scenario !== "object") throw new Error("Dreaming scenario must be an object")
+    if (!scenario || typeof scenario !== "object")
+      throw new Error("Dreaming scenario must be an object")
     assertAgentId(scenario.id, "id")
     if (ids.has(scenario.id)) throw new Error(`Duplicate Dreaming scenario id: ${scenario.id}`)
     ids.add(scenario.id)
@@ -100,31 +116,57 @@ export function parseDreamingScenarioCorpus(value: unknown): DreamingScenarioCor
     if (!scenario.expected || typeof scenario.expected !== "object") {
       throw new Error(`Dreaming scenario ${scenario.id} must define expected evidence`)
     }
-    assertStringArray(scenario.expected.relevantSessionIds, `${scenario.id}.expected.relevantSessionIds`)
+    assertStringArray(
+      scenario.expected.relevantSessionIds,
+      `${scenario.id}.expected.relevantSessionIds`
+    )
     assertStringArray(scenario.expected.sourceQuotes, `${scenario.id}.expected.sourceQuotes`)
-    assertStringArray(scenario.expected.sourceSessionIds, `${scenario.id}.expected.sourceSessionIds`)
+    assertStringArray(
+      scenario.expected.sourceSessionIds,
+      `${scenario.id}.expected.sourceSessionIds`
+    )
     if (scenario.expected.sourceQuotes.length !== scenario.expected.sourceSessionIds.length) {
-      throw new Error(`Dreaming scenario ${scenario.id} must pair each source quote with one source session`)
+      throw new Error(
+        `Dreaming scenario ${scenario.id} must pair each source quote with one source session`
+      )
     }
     if (scenario.expected.requiresExactSourceRefs !== true) {
       throw new Error(`Dreaming scenario ${scenario.id} must require exact source references`)
     }
-    if (!scenario.expected.semanticOutcome || typeof scenario.expected.semanticOutcome !== "object") {
+    if (
+      !scenario.expected.semanticOutcome ||
+      typeof scenario.expected.semanticOutcome !== "object"
+    ) {
       throw new Error(`Dreaming scenario ${scenario.id} must define a semantic outcome`)
     }
-    assertNonEmptyString(scenario.expected.semanticOutcome.entity, `${scenario.id}.expected.semanticOutcome.entity`)
-    assertNonEmptyString(scenario.expected.semanticOutcome.aspect, `${scenario.id}.expected.semanticOutcome.aspect`)
-    assertNonEmptyString(scenario.expected.semanticOutcome.claimKey, `${scenario.id}.expected.semanticOutcome.claimKey`)
-    assertNonEmptyString(scenario.expected.semanticOutcome.value, `${scenario.id}.expected.semanticOutcome.value`)
+    assertNonEmptyString(
+      scenario.expected.semanticOutcome.entity,
+      `${scenario.id}.expected.semanticOutcome.entity`
+    )
+    assertNonEmptyString(
+      scenario.expected.semanticOutcome.aspect,
+      `${scenario.id}.expected.semanticOutcome.aspect`
+    )
+    assertNonEmptyString(
+      scenario.expected.semanticOutcome.claimKey,
+      `${scenario.id}.expected.semanticOutcome.claimKey`
+    )
+    assertNonEmptyString(
+      scenario.expected.semanticOutcome.value,
+      `${scenario.id}.expected.semanticOutcome.value`
+    )
 
     const sessionIds = new Set<string>()
     for (const session of scenario.sessions) {
       assertAgentId(session.id, `${scenario.id}.session.id`)
-      if (sessionIds.has(session.id)) throw new Error(`Dreaming scenario ${scenario.id} has duplicate session id: ${session.id}`)
+      if (sessionIds.has(session.id))
+        throw new Error(`Dreaming scenario ${scenario.id} has duplicate session id: ${session.id}`)
       sessionIds.add(session.id)
-      if (session.agentId !== undefined) assertAgentId(session.agentId, `${scenario.id}.${session.id}.agentId`)
+      if (session.agentId !== undefined)
+        assertAgentId(session.agentId, `${scenario.id}.${session.id}.agentId`)
       assertNonEmptyString(session.date, `${scenario.id}.${session.id}.date`)
-      if (Number.isNaN(Date.parse(session.date))) throw new Error(`Dreaming scenario ${scenario.id}.${session.id}.date must be ISO-parseable`)
+      if (Number.isNaN(Date.parse(session.date)))
+        throw new Error(`Dreaming scenario ${scenario.id}.${session.id}.date must be ISO-parseable`)
       if (!Array.isArray(session.messages) || session.messages.length === 0) {
         throw new Error(`Dreaming scenario ${scenario.id}.${session.id} must contain messages`)
       }
@@ -138,17 +180,23 @@ export function parseDreamingScenarioCorpus(value: unknown): DreamingScenarioCor
 
     for (const sessionId of scenario.expected.relevantSessionIds) {
       if (!sessionIds.has(sessionId)) {
-        throw new Error(`Dreaming scenario ${scenario.id} expects unknown relevant session: ${sessionId}`)
+        throw new Error(
+          `Dreaming scenario ${scenario.id} expects unknown relevant session: ${sessionId}`
+        )
       }
     }
     for (const [index, quote] of scenario.expected.sourceQuotes.entries()) {
       const sourceSessionId = scenario.expected.sourceSessionIds[index]
       const sourceSession = scenario.sessions.find((session) => session.id === sourceSessionId)
       if (!sourceSession) {
-        throw new Error(`Dreaming scenario ${scenario.id} expects unknown source session: ${sourceSessionId}`)
+        throw new Error(
+          `Dreaming scenario ${scenario.id} expects unknown source session: ${sourceSessionId}`
+        )
       }
       if (!sourceSession.messages.some((message) => message.content.includes(quote))) {
-        throw new Error(`Dreaming scenario ${scenario.id} source quote is not present in its declared session: ${quote}`)
+        throw new Error(
+          `Dreaming scenario ${scenario.id} source quote is not present in its declared session: ${quote}`
+        )
       }
     }
   }
@@ -198,11 +246,7 @@ export class DreamingScenariosBenchmark implements Benchmark {
   }
 
   getQuestions(filter?: QuestionFilter): UnifiedQuestion[] {
-    let questions = [...this.questions]
-    if (filter?.questionTypes?.length) questions = questions.filter((question) => filter.questionTypes?.includes(question.questionType))
-    if (filter?.offset) questions = questions.slice(filter.offset)
-    if (filter?.limit) questions = questions.slice(0, filter.limit)
-    return questions
+    return filterBenchmarkQuestions(this.questions, filter)
   }
 
   getHaystackSessions(questionId: string): UnifiedSession[] {

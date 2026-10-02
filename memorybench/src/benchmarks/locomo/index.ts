@@ -9,6 +9,7 @@ import type {
 } from "../../types/unified"
 import type { LoCoMoItem, LoCoMoMessage } from "./types"
 import { logger } from "../../utils/logger"
+import { filterBenchmarkQuestions } from "../question-filter"
 
 const DEFAULT_DATA_PATH = "./data/benchmarks/locomo/locomo10.json"
 const GITHUB_DATASET_URL =
@@ -184,21 +185,7 @@ export class LoCoMoBenchmark implements Benchmark {
   }
 
   getQuestions(filter?: QuestionFilter): UnifiedQuestion[] {
-    let result = [...this.questions]
-
-    if (filter?.questionTypes?.length) {
-      result = result.filter((q) => filter.questionTypes!.includes(q.questionType))
-    }
-
-    if (filter?.offset) {
-      result = result.slice(filter.offset)
-    }
-
-    if (filter?.limit) {
-      result = result.slice(0, filter.limit)
-    }
-
-    return result
+    return filterBenchmarkQuestions(this.questions, filter)
   }
 
   getHaystackSessions(questionId: string): UnifiedSession[] {

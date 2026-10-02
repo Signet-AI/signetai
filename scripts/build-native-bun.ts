@@ -15,6 +15,7 @@ import {
 import { createRequire } from "node:module";
 import { arch, platform } from "node:os";
 import { dirname, join } from "node:path";
+import { compileTargetFor, nativeBinaryArtifactNames } from "./native-build-platforms";
 
 const root = join(import.meta.dir, "..");
 const outDir = join(root, "dist", "native");
@@ -23,22 +24,13 @@ const workerDir = join(buildDir, "workers");
 const platformKey = process.env.SIGNET_NATIVE_PLATFORM ?? `${platform()}-${arch()}`;
 const binaryName = platformKey.startsWith("win32-") ? `signet-${platformKey}.exe` : `signet-${platformKey}`;
 const outfile = join(outDir, binaryName);
-const nativeBinaryNames = [
-	"signet",
-	"signet.exe",
-	"signet-linux-x64",
-	"signet-linux-arm64",
-	"signet-darwin-x64",
-	"signet-darwin-arm64",
-	"signet-win32-x64.exe",
-] as const;
 const daemonRequire = createRequire(join(root, "platform", "daemon", "package.json"));
 const tokenizerWasmPath = daemonRequire.resolve("tiktoken/tiktoken_bg.wasm");
 const rootPackage = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version?: unknown };
 const nativeVersion = typeof rootPackage.version === "string" ? rootPackage.version : "0.0.0";
 
 mkdirSync(outDir, { recursive: true });
-for (const name of nativeBinaryNames) rmSync(join(outDir, name), { force: true });
+for (const name of nativeBinaryArtifactNames()) rmSync(join(outDir, name), { force: true });
 rmSync(buildDir, { recursive: true, force: true });
 mkdirSync(workerDir, { recursive: true });
 
@@ -72,23 +64,6 @@ function assertNoUnbundledRelativeRequires(path: string, worker: string): void {
 		throw new Error(
 			`Native worker ${worker} contains unbundled relative require(s): ${[...specifiers].sort().join(", ")}`,
 		);
-	}
-}
-
-function compileTargetFor(targetPlatform: string): string {
-	switch (targetPlatform) {
-		case "linux-x64":
-			return "bun-linux-x64";
-		case "linux-arm64":
-			return "bun-linux-arm64";
-		case "darwin-x64":
-			return "bun-darwin-x64";
-		case "darwin-arm64":
-			return "bun-darwin-arm64";
-		case "win32-x64":
-			return "bun-windows-x64";
-		default:
-			throw new Error(`Unsupported native compile platform: ${targetPlatform}`);
 	}
 }
 

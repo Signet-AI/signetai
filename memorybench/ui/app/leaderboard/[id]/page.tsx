@@ -10,7 +10,6 @@ import {
   StatsGrid,
   AccuracyByType,
   LatencyTable,
-  RetrievalMetrics,
   EvaluationList,
   type EvaluationResult,
 } from "@/components/benchmark-results"
@@ -45,8 +44,7 @@ export default function LeaderboardEntryPage() {
           if (fileNames.length > 0) {
             setActiveCodeFile(fileNames[0])
           }
-        } catch {
-        }
+        } catch {}
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load entry")
@@ -171,7 +169,6 @@ export default function LeaderboardEntryPage() {
           <StatsGrid cards={statsCards} />
           <AccuracyByType byQuestionType={entry.byQuestionType} />
           <LatencyTable latency={entry.latencyStats} />
-          <RetrievalMetrics retrieval={entry.retrieval} byQuestionType={entry.byQuestionType} />
         </div>
       )}
 
