@@ -82,12 +82,7 @@ export async function getJSONResult<T>(path: string, init?: RequestInit): Promis
 }
 
 async function postJSON<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<T | null> {
-	return getJSON<T>(path, {
-		method: "POST",
-		signal,
-		headers: body ? { "Content-Type": "application/json" } : undefined,
-		body: body ? JSON.stringify(body) : undefined,
-	});
+	return (await postJSONResult<T>(path, body, signal)).data;
 }
 
 async function postJSONResult<T>(path: string, body?: unknown, signal?: AbortSignal): Promise<ApiReadResult<T>> {
