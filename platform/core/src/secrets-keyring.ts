@@ -21,11 +21,16 @@ export interface SecretKeyringResult {
 	readonly message?: string;
 }
 
+export interface SecretKeyringAccessOptions {
+	readonly allowInteraction?: boolean;
+	readonly signal?: AbortSignal;
+}
+
 export interface SecretKeyringAdapter {
 	readonly platform: string;
 	readonly service: string;
 	readonly account: string;
-	readonly get: () => Promise<SecretKeyringResult>;
+	readonly get: (options?: SecretKeyringAccessOptions) => Promise<SecretKeyringResult>;
 	readonly set: (value: string) => Promise<SecretKeyringResult>;
 	readonly getStatus?: () => Promise<SecretKeyringResult>;
 }
@@ -61,6 +66,7 @@ const reads = new Map<string, Promise<SecretKeyringResult>>();
 const observations = new Map<string, SecretKeyringResult>();
 let adapterForTests: SecretKeyringAdapter | null = null;
 let helperForTests: SecretKeyringHelperOverride | null = null;
+let interactiveRequest = false;
 let mutation: Promise<void> = Promise.resolve();
 
 function workspaceAccount(workspace: string): string {
@@ -132,7 +138,12 @@ async function invoke(
 	service: string,
 	account: string,
 	value?: string,
+	options: SecretKeyringAccessOptions = {},
 ): Promise<SecretKeyringResult> {
+	if (options.signal?.aborted) return { state: "unavailable", message: "Keyring request cancelled" };
+	const interactive = process.platform === "darwin" && options.allowInteraction === true;
+	if (interactive && interactiveRequest)
+		return { state: "unavailable", message: "A keychain authorization request is already in progress" };
 	const helper = helperCommand();
 	const child = spawnHidden(helper.command, helper.args, {
 		stdio: ["pipe", "pipe", "ignore"],
@@ -141,21 +152,34 @@ async function invoke(
 			...(process.env.SIGNET_COMPILED_NATIVE === "1" ? { SIGNET_KEYRING_HELPER: "1" } : {}),
 		},
 	});
-	const request = `${JSON.stringify({ op, service, account, ...(op === "set" ? { value } : {}) })}\n`;
+	if (interactive) interactiveRequest = true;
+	const request = `${JSON.stringify({ op, service, account, ...(op === "set" ? { value } : {}), ...(interactive ? { allowInteraction: true } : {}) })}\n`;
 	return await new Promise<SecretKeyringResult>((resolve) => {
 		let output = "";
 		let timedOut = false;
+		let cancelled = false;
 		let outputExceeded = false;
 		let settled = false;
 		const finish = (result: SecretKeyringResult): void => {
 			if (settled) return;
 			settled = true;
+			options.signal?.removeEventListener("abort", cancel);
+			if (interactive) interactiveRequest = false;
 			resolve(result);
 		};
-		const timer = setTimeout(() => {
-			timedOut = true;
+		const cancel = (): void => {
+			cancelled = true;
 			child.kill("SIGKILL");
-		}, helper.deadlineMs);
+		};
+		options.signal?.addEventListener("abort", cancel, { once: true });
+		if (options.signal?.aborted) cancel();
+		const timer = setTimeout(
+			() => {
+				timedOut = true;
+				child.kill("SIGKILL");
+			},
+			interactive ? 120_000 : helper.deadlineMs,
+		);
 		child.stdout?.setEncoding("utf8");
 		child.stdout?.on("data", (chunk: string) => {
 			if (outputExceeded) return;
@@ -182,6 +206,10 @@ async function invoke(
 		});
 		child.once("close", (code) => {
 			clearTimeout(timer);
+			if (cancelled) {
+				finish({ state: "unavailable", message: "Keyring request cancelled" });
+				return;
+			}
 			if (timedOut) {
 				finish({ state: "unavailable", message: "Native keyring helper deadline exceeded" });
 				return;
@@ -205,7 +233,12 @@ class NativeSecretKeyringAdapter implements SecretKeyringAdapter {
 		this.account = workspaceAccount(workspace);
 	}
 
-	get(): Promise<SecretKeyringResult> {
+	get(options: SecretKeyringAccessOptions = {}): Promise<SecretKeyringResult> {
+		if (options.allowInteraction === true)
+			return invoke("get", this.service, this.account, undefined, options).then((result) => {
+				observe(this.account, result);
+				return result;
+			});
 		const pending = reads.get(this.account);
 		if (pending) return pending;
 		if (reads.size >= MAX_ACCOUNTS)

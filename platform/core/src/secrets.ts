@@ -23,6 +23,7 @@ import {
 	getSecretKeyring,
 	setSecretKeyringForTests,
 	type SecretKeyringAdapter,
+	type SecretKeyringAccessOptions,
 	type SecretKeyringResult,
 	type SecretKeyringState,
 } from "./secrets-keyring.js";
@@ -336,10 +337,35 @@ async function migrateLegacyStore(store: SecretsStore, legacyKey: Uint8Array, na
 
 async function resolveMasterKey(
 	store: SecretsStore,
-	options: { readonly allowLegacyFallback?: boolean } = {},
+	options: SecretKeyringAccessOptions & {
+		readonly allowLegacyFallback?: boolean;
+		readonly onKeyringAuthorization?: () => Promise<void>;
+	} = {},
 ): Promise<MasterKeyResolution> {
 	const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
-	const result = await keyring.get();
+	let result = await keyring.get();
+	if (
+		keyring.platform === "darwin" &&
+		options.allowInteraction === true &&
+		(result.state === "locked" || result.state === "permission-denied")
+	) {
+		await options.onKeyringAuthorization?.();
+		if (options.signal?.aborted) throw new Error("Secret write cancelled");
+		result = await keyring.get(options);
+		if (result.state === "found") {
+			const authorized = result.value;
+			result = await keyring.get();
+			if (result.state === "locked" || result.state === "permission-denied")
+				throw new SecretKeyringError({
+					...result,
+					message:
+						"Keychain authorization was not saved. Retry sign-in and choose Always Allow in the macOS Keychain prompt to enable background access. Your existing secrets have not been changed.",
+				});
+			if (result.state === "found" && result.value !== authorized)
+				throw new SecretKeyringError({ state: "corrupt", message: "Master key changed during authorization" });
+		}
+	}
+	if (options.signal?.aborted) throw new Error("Secret write cancelled");
 	if (store.version === NATIVE_STORE_VERSION || store.provider === "native-keyring") {
 		if (result.state !== "found") throw new SecretKeyringError(result);
 		return { key: decodeKeyringValue(result), provider: "native-keyring" };
@@ -704,11 +730,15 @@ async function withSecretStoreLock<T>(fn: () => Promise<T> | T): Promise<T> {
 	}
 }
 
-export async function putLocalSecret(name: string, value: string): Promise<void> {
+export async function putLocalSecret(
+	name: string,
+	value: string,
+	options: SecretKeyringAccessOptions & { readonly onKeyringAuthorization?: () => Promise<void> } = {},
+): Promise<void> {
 	await withSecretStoreLock(async () => {
 		const localName = parseLocalSecretName(name);
 		const store = loadStore();
-		const resolution = await resolveMasterKey(store, { allowLegacyFallback: false });
+		const resolution = await resolveMasterKey(store, { ...options, allowLegacyFallback: false });
 		if (
 			resolution.provider === "legacy-obfuscated" &&
 			existsSync(getSecretsFile()) &&
@@ -730,6 +760,7 @@ export async function putLocalSecret(name: string, value: string): Promise<void>
 			updated: now,
 		};
 
+		if (options.signal?.aborted) throw new Error("Secret write cancelled");
 		saveStore(store);
 		recordSecretEvent("secret.stored", { name: localName, providerId: resolution.provider });
 	});

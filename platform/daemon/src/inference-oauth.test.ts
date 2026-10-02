@@ -13,7 +13,7 @@ import {
 	startOAuthLogin,
 	storeOAuthCredentials,
 } from "./inference-oauth";
-import { invalidateSecretsCache } from "./secrets";
+import { invalidateSecretsCache, setSecretKeyringAdapterForTests } from "./secrets";
 
 const PROVIDER_ID = "signet-test-oauth-966";
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -65,14 +65,76 @@ describe("inference OAuth", () => {
 		mkdirSync(agentsDir, { recursive: true });
 		process.env.SIGNET_PATH = agentsDir;
 		registerOAuthProviderForTests(provider());
+		let key: string | undefined;
+		setSecretKeyringAdapterForTests({
+			platform: "darwin",
+			service: "test",
+			account: "test",
+			async get() {
+				return key ? { state: "found", value: key } : { state: "missing" };
+			},
+			async set(value) {
+				key = value;
+				return { state: "found", value };
+			},
+		});
 	});
 
 	afterEach(() => {
+		setSecretKeyringAdapterForTests(null);
 		resetOAuthStateForTests();
 		invalidateSecretsCache();
 		if (originalSignetPath === undefined) Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		else process.env.SIGNET_PATH = originalSignetPath;
 		rmSync(agentsDir, { recursive: true, force: true });
+	});
+
+	test("only explicit login completion can authorize a locked keyring", async () => {
+		const key = Buffer.alloc(32, 9).toString("base64");
+		let locked = false;
+		const allowed: boolean[] = [];
+		setSecretKeyringAdapterForTests({
+			platform: "darwin",
+			service: "test",
+			account: "test",
+			async get(options) {
+				allowed.push(options?.allowInteraction === true);
+				if (options?.allowInteraction) locked = false;
+				return locked && !options?.allowInteraction ? { state: "locked" } : { state: "found", value: key };
+			},
+			async set() {
+				throw Error("Existing key must not be replaced");
+			},
+		});
+		await storeOAuthCredentials(PROVIDER_ID, { refresh: "fixture", access: "fixture", expires: Date.now() + 60_000 });
+		locked = true;
+		allowed.length = 0;
+		await expect(
+			storeOAuthCredentials(PROVIDER_ID, { refresh: "fixture", access: "fixture", expires: Date.now() + 60_000 }),
+		).rejects.toThrow("locked");
+		expect(allowed).toEqual([false]);
+		registerOAuthProviderForTests(
+			provider({
+				async login() {
+					return { type: "oauth", refresh: "fixture-login", access: "fixture-login", expires: Date.now() + 60_000 };
+				},
+			}),
+		);
+		allowed.length = 0;
+		const login = startOAuthLogin(PROVIDER_ID);
+		const reader = login.stream.getReader();
+		const confirmation = await readUntil(reader, (text) => text.includes("event: select"));
+		const event = JSON.parse(
+			confirmation
+				.split("\n")
+				.find((line) => line.startsWith("data: ") && line.includes('"type":"select"'))
+				?.slice(6) ?? "{}",
+		);
+		expect(confirmation).toContain("Always Allow");
+		completeOAuthInteraction(login.sessionId, event.responseId, "authorize");
+		const text = await readUntil(reader, (text) => text.includes("event: done"));
+		expect(text).toContain("event: connected");
+		expect(allowed).toEqual([false, true, false]);
 	});
 
 	test("streams interactive login events and stores credentials only in the daemon", async () => {

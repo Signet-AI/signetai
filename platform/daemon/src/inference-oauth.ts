@@ -164,10 +164,19 @@ export async function loadOAuthCredentials(providerId: string): Promise<OAuthCre
 	return parsed;
 }
 
-export async function storeOAuthCredentials(providerId: string, credentials: OAuthCredentials): Promise<void> {
+export async function storeOAuthCredentials(
+	providerId: string,
+	credentials: OAuthCredentials,
+	signal?: AbortSignal,
+	onKeyringAuthorization?: () => Promise<void>,
+): Promise<void> {
 	if (!oauthProvider(validateProviderId(providerId))) throw new Error(`Unknown OAuth provider: ${providerId}`);
 	if (!isOAuthCredentials(credentials)) throw new Error(`Invalid OAuth credentials for ${providerId}`);
-	await putSecret(secretName(providerId), JSON.stringify(credentials));
+	await putSecret(
+		secretName(providerId),
+		JSON.stringify(credentials),
+		signal ? { allowInteraction: true, signal, onKeyringAuthorization } : undefined,
+	);
 }
 
 export async function disconnectOAuthProvider(providerId: string): Promise<boolean> {
@@ -329,11 +338,28 @@ export function startOAuthLogin(
 				.login(callbacks)
 				.then(async (credentials) => {
 					if (abortController.signal.aborted) throw new Error("Login cancelled");
-					await storeOAuthCredentials(normalized, {
-						refresh: credentials.refresh,
-						access: credentials.access,
-						expires: credentials.expires,
-					});
+					await storeOAuthCredentials(
+						normalized,
+						{
+							refresh: credentials.refresh,
+							access: credentials.access,
+							expires: credentials.expires,
+						},
+						abortController.signal,
+						async () => {
+							const answer = await callbacks.prompt({
+								type: "select",
+								message:
+									"macOS Keychain authorization is required. Choose Always Allow in the next system prompt for persistent access by this Signet installation. One-time access cannot enable background provider requests.",
+								options: [
+									{ id: "authorize", label: "Authorize this installation" },
+									{ id: "cancel", label: "Cancel" },
+								],
+							});
+							if (answer !== "authorize") throw new Error("Keychain authorization cancelled");
+						},
+					);
+					if (abortController.signal.aborted) throw new Error("Login cancelled");
 					onCredentialsChanged?.();
 					session.emit({ type: "connected", providerId: normalized });
 					session.emit({ type: "done" });

@@ -65,7 +65,12 @@ export type {
 	ResolvedSecretV1,
 } from "./secrets";
 export { getSecretKeyring, setSecretKeyringForTests } from "./secrets-keyring";
-export type { SecretKeyringAdapter, SecretKeyringResult, SecretKeyringState } from "./secrets-keyring";
+export type {
+	SecretKeyringAdapter,
+	SecretKeyringAccessOptions,
+	SecretKeyringResult,
+	SecretKeyringState,
+} from "./secrets-keyring";
 export { detectFilesystemType, isNetworkFilesystem, resolveSqliteJournalConfig } from "./sqlite-journal";
 export type { SqliteJournalConfig, SqliteJournalMode } from "./sqlite-journal";
 export {
