@@ -59,6 +59,17 @@ const REMOTE_ACPX_PROVIDERS = {
 	codex: "codex",
 	gemini: "gemini",
 } as const;
+type WorkloadBindingKey = keyof NonNullable<RoutingConfig["workloads"]>;
+const WORKLOAD_BINDING_KEYS = {
+	default: ["default"],
+	interactive: ["interactive", "default"],
+	tool_planning: ["interactive", "default"],
+	code_reasoning: ["interactive", "default"],
+	memory_extraction: ["memoryExtraction", "default"],
+	session_synthesis: ["memoryExtraction", "default"],
+	aggregate_recall: ["aggregateRecall", "memoryExtraction", "default"],
+	repair: ["repair", "memoryExtraction", "default"],
+} as const satisfies Record<RoutingOperationKind, readonly WorkloadBindingKey[]>;
 
 function acpxTelemetryProvider(agent?: string): string {
 	const normalized = agent?.trim().toLowerCase();
@@ -164,22 +175,11 @@ function workloadBindingForOperation(
 	config: RoutingConfig,
 	operation: RoutingOperationKind,
 ): RoutingWorkloadBinding | undefined {
-	switch (operation) {
-		case "default":
-			return config.workloads?.default;
-		case "interactive":
-		case "tool_planning":
-		case "code_reasoning":
-			return config.workloads?.interactive ?? config.workloads?.default;
-		case "memory_extraction":
-			return config.workloads?.memoryExtraction ?? config.workloads?.default;
-		case "session_synthesis":
-			return config.workloads?.memoryExtraction ?? config.workloads?.default;
-		case "aggregate_recall":
-			return config.workloads?.aggregateRecall ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
-		case "repair":
-			return config.workloads?.repair ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
+	for (const key of WORKLOAD_BINDING_KEYS[operation]) {
+		const binding = config.workloads?.[key];
+		if (binding != null) return binding;
 	}
+	return undefined;
 }
 
 function routeClassification(
@@ -261,9 +261,11 @@ function orderedPreferenceLists(
 ):
 	| {
 			readonly policyId: string;
+			readonly policy: RoutingPolicyConfig;
 			readonly mode: RoutingPolicyMode;
 			readonly orderedTargets: readonly string[];
 			readonly fallbackTargets: readonly string[];
+			readonly candidateRefs: readonly string[];
 	  }
 	| RouterError {
 	const workload = workloadBindingForOperation(config, request.operation);
@@ -288,7 +290,8 @@ function orderedPreferenceLists(
 		};
 	}
 
-	const allowedTargets = new Set(targetRefsAllowedByPolicy(config, request, policy));
+	const allowedTargetRefs = targetRefsAllowedByPolicy(config, request, policy);
+	const allowedTargets = new Set(allowedTargetRefs);
 	const explicitTargets = request.explicitTargets ?? [];
 	const disallowedExplicitTargets = explicitTargets.filter((targetRef) => !allowedTargets.has(targetRef));
 	if (disallowedExplicitTargets.length > 0) {
@@ -316,12 +319,23 @@ function orderedPreferenceLists(
 		agentConfig?.preferredTargets?.[classification.taskClass] ?? [],
 		workloadTargets,
 	).filter((targetRef) => allowedTargets.has(targetRef));
+	const explicitTargetSet = new Set(explicitTargets);
+	const rosterCandidates =
+		explicitTargets.length > 0
+			? allowedTargetRefs.filter((targetRef) => explicitTargetSet.has(targetRef))
+			: allowedTargetRefs;
+	const rosterTargets = workload?.target
+		? []
+		: mergeUnique(config.taskClasses[classification.taskClass]?.preferredTargets ?? [], rosterCandidates);
+	const fallbackTargets = (policy.fallbackTargets ?? []).filter((targetRef) => allowedTargets.has(targetRef));
 
 	return {
 		policyId,
+		policy,
 		mode: policy.mode,
 		orderedTargets,
-		fallbackTargets: (policy.fallbackTargets ?? []).filter((targetRef) => allowedTargets.has(targetRef)),
+		fallbackTargets,
+		candidateRefs: mergeUnique(orderedTargets, rosterTargets, fallbackTargets),
 	};
 }
 
@@ -344,21 +358,6 @@ function targetRefsAllowedByPolicy(
 	return candidates;
 }
 
-function targetRefsForRoster(
-	config: RoutingConfig,
-	request: RouteRequest,
-	classification: RouteClassification,
-	policy: RoutingPolicyConfig,
-): readonly string[] {
-	let candidates = [...targetRefsAllowedByPolicy(config, request, policy)];
-	if (request.explicitTargets && request.explicitTargets.length > 0) {
-		const explicit = new Set(request.explicitTargets);
-		candidates = candidates.filter((candidate) => explicit.has(candidate));
-	}
-	const preferred = config.taskClasses[classification.taskClass]?.preferredTargets ?? [];
-	return mergeUnique(preferred, candidates);
-}
-
 export function configuredRoutingTargetRefs(config: RoutingConfig): readonly string[] {
 	let refs: readonly string[] = [];
 	for (const operation of ROUTING_OPERATION_KINDS) {
@@ -367,11 +366,7 @@ export function configuredRoutingTargetRefs(config: RoutingConfig): readonly str
 		const preference = orderedPreferenceLists(config, request, classification);
 		if ("code" in preference) continue;
 
-		const policy = config.policies[preference.policyId];
-		if (!policy) continue;
-		const workload = workloadBindingForOperation(config, operation);
-		const rosterTargets = workload?.target ? [] : targetRefsForRoster(config, request, classification, policy);
-		refs = mergeUnique(refs, preference.orderedTargets, rosterTargets, preference.fallbackTargets);
+		refs = mergeUnique(refs, preference.candidateRefs);
 	}
 	return refs;
 }
@@ -390,47 +385,6 @@ interface CandidateContext {
 	readonly requiredCost?: RoutingCostTier;
 	readonly latencyBudget?: number;
 	readonly estimatedLatency: number;
-}
-
-interface CandidateTraceProjection {
-	readonly targetRef: string;
-	readonly runtime: RoutingRuntimeState;
-	readonly blockedBy: readonly string[];
-	readonly reasons: readonly string[];
-	readonly score: number;
-}
-
-function createCandidateContext(
-	config: RoutingConfig,
-	request: RouteRequest,
-	classification: RouteClassification,
-	targetRef: string,
-	runtime: RoutingRuntimeState,
-	policy: RoutingPolicyConfig,
-	orderedTargets: readonly string[],
-): CandidateContext | string {
-	const ref = parseRoutingTargetRef(targetRef);
-	if (ref.ok === false) return ref.error.message;
-	const target = config.targets[ref.value.targetId];
-	const model = target?.models[ref.value.modelId];
-	if (!target || !model) return "target not found";
-
-	const taskClass = config.taskClasses[classification.taskClass];
-	return {
-		targetRef,
-		target,
-		model,
-		runtime,
-		request,
-		classification,
-		taskClass,
-		orderedTargets,
-		requiredPrivacy: request.privacy ?? taskClass?.privacy ?? "remote_ok",
-		expectedInputTokens: request.expectedInputTokens ?? taskClass?.expectedInputTokens,
-		requiredCost: request.costCeiling ?? taskClass?.costCeiling ?? policy.costCeiling,
-		latencyBudget: request.latencyBudgetMs ?? taskClass?.maxLatencyMs ?? policy.maxLatencyMs,
-		estimatedLatency: model.averageLatencyMs ?? defaultLatencyForTarget(target),
-	};
 }
 
 function candidateBlockers(candidate: CandidateContext): string[] {
@@ -524,15 +478,14 @@ function scoreCandidate(candidate: CandidateContext): { readonly score: number; 
 	return { score, reasons };
 }
 
-function projectCandidateTrace(trace: CandidateTraceProjection): RouteCandidateTrace {
-	const allowed = trace.blockedBy.length === 0;
+function blockedCandidateTrace(targetRef: string, runtime: RoutingRuntimeState, reason: string): RouteCandidateTrace {
 	return {
-		targetRef: trace.targetRef,
-		allowed,
-		score: allowed ? trace.score : null,
-		reasons: trace.reasons,
-		blockedBy: trace.blockedBy,
-		runtime: trace.runtime,
+		targetRef,
+		allowed: false,
+		score: null,
+		reasons: [],
+		blockedBy: [reason],
+		runtime,
 	};
 }
 
@@ -545,13 +498,32 @@ function buildCandidateTrace(
 	policy: RoutingPolicyConfig,
 	orderedTargets: readonly string[],
 ): RouteCandidateTrace {
-	const candidate = createCandidateContext(config, request, classification, targetRef, runtime, policy, orderedTargets);
-	if (typeof candidate === "string") {
-		return projectCandidateTrace({ targetRef, runtime, blockedBy: [candidate], reasons: [], score: 0 });
-	}
+	const ref = parseRoutingTargetRef(targetRef);
+	if (ref.ok === false) return blockedCandidateTrace(targetRef, runtime, ref.error.message);
+	const target = config.targets[ref.value.targetId];
+	const model = target?.models[ref.value.modelId];
+	if (!target || !model) return blockedCandidateTrace(targetRef, runtime, "target not found");
+
+	const taskClass = config.taskClasses[classification.taskClass];
+	const candidate: CandidateContext = {
+		targetRef,
+		target,
+		model,
+		runtime,
+		request,
+		classification,
+		taskClass,
+		orderedTargets,
+		requiredPrivacy: request.privacy ?? taskClass?.privacy ?? "remote_ok",
+		expectedInputTokens: request.expectedInputTokens ?? taskClass?.expectedInputTokens,
+		requiredCost: request.costCeiling ?? taskClass?.costCeiling ?? policy.costCeiling,
+		latencyBudget: request.latencyBudgetMs ?? taskClass?.maxLatencyMs ?? policy.maxLatencyMs,
+		estimatedLatency: model.averageLatencyMs ?? defaultLatencyForTarget(target),
+	};
 	const blockedBy = candidateBlockers(candidate);
 	const { score, reasons } = scoreCandidate(candidate);
-	return projectCandidateTrace({ targetRef, runtime, blockedBy, reasons, score });
+	const allowed = blockedBy.length === 0;
+	return { targetRef, allowed, score: allowed ? score : null, reasons, blockedBy, runtime };
 }
 
 function selectRouteCandidates(
@@ -584,10 +556,8 @@ export function resolveRoutingDecision(
 	if ("code" in pref) {
 		return { ok: false, error: pref };
 	}
-	const policy = config.policies[pref.policyId];
-	const workload = workloadBindingForOperation(config, request.operation);
-	const rosterCandidates = workload?.target ? [] : targetRefsForRoster(config, request, classification, policy);
-	const candidateRefs = mergeUnique(pref.orderedTargets, rosterCandidates, pref.fallbackTargets);
+	const policy = pref.policy;
+	const candidateRefs = pref.candidateRefs;
 	if (candidateRefs.length === 0) {
 		return err("no-candidates", "No route candidates were available for this request.", {
 			policyId: pref.policyId,
