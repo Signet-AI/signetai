@@ -57,7 +57,8 @@ import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
-import type { MemoryHeadCommitter } from "../memory-head";
+import { readCuratedMemoryHead, type MemoryHeadCommitInput, type MemoryHeadCommitter } from "../memory-head";
+import { commitCuratedMemoryHeadInDb } from "../memory-head-owner";
 import { renderDreamingEvidence } from "./dreaming-evidence";
 import { deliveredOffsetForSource, recordDreamingEvidenceConsumptionInTx } from "./dreaming-evidence-consumption";
 import {
@@ -1123,7 +1124,7 @@ export function selectDreamingPassMode(
 export interface DreamingPassLiveOptions {
 	readonly hub?: DreamingLiveEventHub;
 	readonly userRequest?: { readonly sourceRef: string; readonly content: string };
-	readonly memoryHeadCommitter?: MemoryHeadCommitter;
+	readonly memoryHeadReader?: (agentId: string) => Promise<Record<string, unknown>>;
 }
 export function recordDreamingPassTelemetry(input: {
 	readonly mode: string;
@@ -1681,7 +1682,34 @@ ${JSON.stringify(liveOptions.userRequest)}
 		}
 
 		let applyCallbackReported = false;
-		let memoryHeadResult: Record<string, unknown> | null = null;
+		let memoryHeadCommitInput: MemoryHeadCommitInput | null = null;
+		const memoryHeadCommitter: MemoryHeadCommitter = {
+			read: liveOptions?.memoryHeadReader ?? readCuratedMemoryHead,
+			async commit(input) {
+				if (mode !== "incremental-content" || input.agentId !== agentId || input.passId !== passId) {
+					return {
+						ok: false,
+						code: "PASS_NOT_AUTHORIZED",
+						error: "only the active content pass may stage its memory-head commit",
+					};
+				}
+				if (memoryHeadCommitInput !== null) {
+					memoryHeadCommitInput = null;
+					return {
+						ok: false,
+						code: "MULTIPLE_COMMIT_ATTEMPTS",
+						error: "a content pass may stage only one memory-head commit",
+					};
+				}
+				memoryHeadCommitInput = input;
+				return {
+					ok: true,
+					code: "STAGED_FOR_FINALIZATION",
+					revision: input.baseRevision,
+					hash: input.baseHash,
+				};
+			},
+		};
 		let retirementCandidates: DreamingRetirementCandidates = new Map();
 		const rejectedEvidence: RejectedDreamingEvidence[] = [];
 		const surfacedWatermarkByScope = new Map<string, string>();
@@ -1690,7 +1718,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			restrictToAgent: liveOptions?.userRequest !== undefined,
 			accessor,
 			agentId,
-			memoryHeadCommitter: liveOptions?.memoryHeadCommitter,
+			memoryHeadCommitter,
 			actor: "dreaming",
 			passId,
 			mode,
@@ -1711,7 +1739,6 @@ ${JSON.stringify(liveOptions.userRequest)}
 			async onToolCall(trace) {
 				publishDreamingToolTrace(passId, trace, live);
 				await recordDreamingToolCall(accessor, agentId, passId, ++toolCallSequence, trace);
-				if (trace.tool === "memory_head_commit") memoryHeadResult = trace.output;
 				if (trace.tool === "search_evidence" && trace.output.ok === true && Array.isArray(trace.output.items)) {
 					const input = isRecord(trace.input) ? trace.input : null;
 					const scope = input !== null && typeof input.agentId === "string" ? input.agentId : agentId;
@@ -1777,11 +1804,10 @@ ${JSON.stringify(liveOptions.userRequest)}
 			onEvent: (event) => publishDreamingAgentEvent(passId, event, live),
 			onSessionInfo: (info) => publishDreamingSessionInfo(passId, info, live),
 		});
-		const memoryHeadMissing =
-			mode === "incremental-content" && (memoryHeadResult === null || Reflect.get(memoryHeadResult, "ok") !== true);
-		if (memoryHeadMissing)
-			logger.warn("dreaming", "Content pass completed without a successful memory-head commit", { passId });
-		const summary = `${executorResult.summary?.trim() || "Agentic Dreaming pass completed"}${memoryHeadMissing ? " [memory-head commit missing]" : ""}`;
+		if (mode === "incremental-content" && memoryHeadCommitInput === null) {
+			throw new Error("Content pass finalization requires a successful memory-head commit: staged input missing");
+		}
+		const summary = executorResult.summary?.trim() || "Agentic Dreaming pass completed";
 		const attribution = executorResult.attribution ?? null;
 		const usage = executorResult.usage ?? null;
 		const tokensConsumed = usage?.totalTokens ?? countTokens(prompt);
@@ -1833,7 +1859,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			failed,
 			summary,
 			rejectedEvidence,
-			memoryHeadResult,
+			memoryHeadCommitInput,
 			hasBacklogByScope: [...hasBacklogByScope].map(([scope, scopeHasBacklog]) => ({
 				scope,
 				hasBacklog: scopeHasBacklog,
@@ -1854,11 +1880,31 @@ ${JSON.stringify(liveOptions.userRequest)}
 				);
 				return await finalize.result;
 			},
-			runInline: ({ write }) =>
-				write((db) => {
+			runInline: async ({ write }) => {
+				const result = await write((db) => {
 					finalizeDreamingPassInDb(db, finalizeInput);
 					return null;
-				}),
+				});
+				if (mode === "incremental-content") {
+					try {
+						const projection = await memoryHeadCommitter.read(agentId);
+						if (projection.publication === "pending") {
+							logger.warn("dreaming", "Content pass completed with a pending MEMORY.md projection", {
+								passId,
+								agentId,
+								error: projection.publicationError,
+							});
+						}
+					} catch (error) {
+						logger.warn("dreaming", "Content pass completed but MEMORY.md projection retry failed", {
+							passId,
+							agentId,
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
+				return result;
+			},
 		});
 		const outcome: DreamingPassOutcome =
 			failed > 0
@@ -2021,8 +2067,22 @@ function writeDreamingTranscriptManifestInTx(
 	}
 }
 export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPassFinalize): void {
-	if (input.mode === "incremental-content" && input.memoryHeadResult?.ok !== true) {
-		throw new Error("Content pass finalization requires a successful memory-head commit");
+	let memoryHeadResult: Record<string, unknown> | null = null;
+	if (input.mode === "incremental-content") {
+		const commitInput = input.memoryHeadCommitInput;
+		if (commitInput === null)
+			throw new Error("Content pass finalization requires a successful memory-head commit: staged input missing");
+		if (commitInput.agentId !== input.agentId || commitInput.passId !== input.passId) {
+			throw new Error("Content pass memory-head commit does not match its finalizing pass");
+		}
+		memoryHeadResult = commitCuratedMemoryHeadInDb(db, commitInput);
+		if (memoryHeadResult.ok !== true) {
+			const code = typeof memoryHeadResult.code === "string" ? memoryHeadResult.code : "unknown";
+			const error = typeof memoryHeadResult.error === "string" ? memoryHeadResult.error : "commit was rejected";
+			throw new Error(`Content pass finalization requires a successful memory-head commit (${code}): ${error}`);
+		}
+	} else if (input.memoryHeadCommitInput !== null) {
+		throw new Error("Only an incremental-content pass may commit the memory head");
 	}
 	writeDreamingTranscriptManifestInTx(db, {
 		passId: input.passId,
@@ -2052,7 +2112,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		input.passId,
 	);
 	recordRejectedDreamingEvidenceInTx(db, input.passId, input.rejectedEvidence as RejectedDreamingEvidence[]);
-	if (input.memoryHeadResult !== null) {
+	if (memoryHeadResult !== null) {
 		const row = db.prepare("SELECT runbook_json AS runbookJson FROM dreaming_passes WHERE id = ?").get(input.passId) as
 			| { runbookJson: string | null }
 			| undefined;
@@ -2063,7 +2123,7 @@ export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPass
 		} catch {
 			manifest = {};
 		}
-		manifest.memoryHead = input.memoryHeadResult;
+		manifest.memoryHead = memoryHeadResult;
 		db.prepare("UPDATE dreaming_passes SET runbook_json = ? WHERE id = ?").run(JSON.stringify(manifest), input.passId);
 	}
 	if (input.mode !== "incremental-hygiene" && input.failed === 0) {

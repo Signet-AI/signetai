@@ -917,7 +917,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 992,
+      "line": 1013,
       "api": "withReadDbAsync",
       "source": "const embedding = await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -925,7 +925,7 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1022,
+      "line": 1043,
       "api": "withReadDbAsync",
       "source": "return await getDbAccessor().withReadDbAsync(",
       "category": "hot-path",
@@ -933,21 +933,21 @@
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1032,
+      "line": 1053,
       "api": "writeFileSync",
       "source": "writeFileSync(startedMarker, \"started\\n\");",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1033,
+      "line": 1054,
       "api": "existsSync",
       "source": "while (!existsSync(releaseMarker)) await new Promise((resolve) => setTimeout(resolve, 5));",
       "category": "hot-path"
     },
     {
       "path": "db-owner-worker.ts",
-      "line": 1157,
+      "line": 1178,
       "api": "writeFileSync",
       "source": "if (activeFile) writeFileSync(activeFile, `${Date.now()}\\n`);",
       "category": "hot-path"
@@ -2627,14 +2627,14 @@
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 890,
+      "line": 892,
       "api": "existsSync",
       "source": "if (!existsSync(path)) return { content: \"\", unreadable: false };",
       "category": "hot-path"
     },
     {
       "path": "pipeline/dreaming.ts",
-      "line": 892,
+      "line": 894,
       "api": "readFileSync",
       "source": "const raw = readFileSync(path, \"utf-8\").trim();",
       "category": "hot-path"

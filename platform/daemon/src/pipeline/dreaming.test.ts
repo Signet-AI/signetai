@@ -8,12 +8,6 @@ import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
 import { runDbOwnerDomainOperation } from "../db-owner-runtime";
 import type { DreamingAgentExecutor } from "./dreaming";
-import type {
-	MemoryHeadCommitter as MemoryHeadCommitterContract,
-	MemoryHeadCommitInput,
-	MemoryHeadRequest,
-	MemoryHeadResult,
-} from "../memory-head";
 import { executeMemoryHead } from "../memory-head-owner";
 import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
 import { countTokens, resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
@@ -209,13 +203,14 @@ function seedEpisodicMemory(db: Database, id: string, content: string, agentId =
 	);
 }
 
-class MemoryHeadCommitter implements MemoryHeadCommitterContract {
+class TestMemoryHeadReader {
 	constructor(
 		private readonly accessor: DbAccessor,
 		private readonly root: string,
 	) {}
 
-	private async request(request: MemoryHeadRequest): Promise<Record<string, unknown>> {
+	async read(agentId: string): Promise<Record<string, unknown>> {
+		const request = { action: "read", agentId } as const;
 		return await runDbOwnerDomainOperation(this.accessor, {
 			runWithOwner: async (owner) => {
 				const handle = owner.submit<Record<string, unknown>>(
@@ -232,25 +227,17 @@ class MemoryHeadCommitter implements MemoryHeadCommitterContract {
 			runInline: ({ write }) => write((db) => executeMemoryHead(db as WriteDb, this.root, request)),
 		});
 	}
-
-	async read(agentId: string): Promise<Record<string, unknown>> {
-		return await this.request({ action: "read", agentId });
-	}
-
-	async commit(input: MemoryHeadCommitInput): Promise<MemoryHeadResult> {
-		return (await this.request({ action: "commit", input })) as MemoryHeadResult;
-	}
 }
 
-const memoryHeadCommitterCache = new WeakMap<DbAccessor, MemoryHeadCommitter>();
+const memoryHeadReaderCache = new WeakMap<DbAccessor, TestMemoryHeadReader>();
 
-function getTestMemoryHeadCommitter(accessor: DbAccessor, root: string): MemoryHeadCommitter {
-	let committer = memoryHeadCommitterCache.get(accessor);
-	if (committer === undefined) {
-		committer = new MemoryHeadCommitter(accessor, root);
-		memoryHeadCommitterCache.set(accessor, committer);
+function getTestMemoryHeadReader(accessor: DbAccessor, root: string): TestMemoryHeadReader {
+	let reader = memoryHeadReaderCache.get(accessor);
+	if (reader === undefined) {
+		reader = new TestMemoryHeadReader(accessor, root);
+		memoryHeadReaderCache.set(accessor, reader);
 	}
-	return committer;
+	return reader;
 }
 
 type DreamingAgentInput = Parameters<DreamingAgentExecutor["run"]>[0];
@@ -403,7 +390,10 @@ describe("Dreaming", () => {
 			mode,
 			passId,
 			writeCaps,
-			{ ...liveOptions, memoryHeadCommitter: getTestMemoryHeadCommitter(activeAccessor, memoryHeadRoot) },
+			{
+				...liveOptions,
+				memoryHeadReader: (scopeId) => getTestMemoryHeadReader(activeAccessor, memoryHeadRoot).read(scopeId),
+			},
 			maintenance,
 		);
 	}

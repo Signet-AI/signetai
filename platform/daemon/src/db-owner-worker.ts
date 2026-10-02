@@ -565,10 +565,31 @@ export function runDbOwnerWorker(): void {
 		context: JobExecutionContext,
 	): Promise<null> {
 		const { finalizeDreamingPassInDb } = await import("./pipeline/dreaming");
-		return withBusyRetry(() => {
+		withBusyRetry(() => {
 			finalizeDreamingPassInDb(db as never, request.input);
 			return null;
 		}, context);
+		if (request.input.mode === "incremental-content") {
+			try {
+				const { executeMemoryHead } = await import("./memory-head-owner");
+				const publication = withBusyRetry(() =>
+					executeMemoryHead(db as never, dirname(dirname(ownerDbPath)), {
+						action: "read",
+						agentId: request.input.agentId,
+					}),
+				);
+				if (publication.publication === "pending") {
+					console.warn(
+						`Dreaming pass ${request.input.passId} completed; MEMORY.md projection remains pending for agent ${request.input.agentId}`,
+					);
+				}
+			} catch (error) {
+				console.warn(
+					`Dreaming pass ${request.input.passId} completed; MEMORY.md projection retry failed for agent ${request.input.agentId}: ${error instanceof Error ? error.message : String(error)}`,
+				);
+			}
+		}
+		return null;
 	}
 
 	async function executeDreamingReviewDue(

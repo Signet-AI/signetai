@@ -130,10 +130,14 @@ not hold a SQLite write lock.
 Dreaming records pass status, tool calls, applied/skipped/failed mutation
 counts, evidence progress, and summary information. The evidence watermark
 advances only when the pass actually consumes the relevant episodic backlog.
-An `incremental-content` pass is not finalized unless `memory_head_commit`
-succeeds; a missing or rejected commit fails the pass and leaves its evidence
-watermark unchanged. A hygiene-only pass must not hide unprocessed content
-from a later content pass.
+An `incremental-content` pass stages `memory_head_commit`; the DB owner applies
+the staged head in the same transaction as pass completion and watermark
+updates. If validation or any finalization write fails, the transaction rolls
+back the head, pass completion, and watermark together. The generated
+`MEMORY.md` file is a projection: a publication failure leaves a durable
+pending publication for a later read to recover and does not turn the
+committed pass into a failure. A hygiene-only pass must not hide unprocessed
+content from a later content pass.
 
 Dreaming has focused modes for incremental work, compact runs, content work,
 and hygiene work. These are pass modes, not the retired per-fact
