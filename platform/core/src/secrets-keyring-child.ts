@@ -19,6 +19,7 @@ function safeError(error: unknown): string {
 
 function classify(error: unknown): string {
 	const detail = safeError(error).toLowerCase();
+	if (/default keychain could not be found/.test(detail)) return "unavailable";
 	if (/noentry|no entry|no such item|item.*not found|credential.*missing|does not exist/.test(detail)) return "missing";
 	if (
 		/-25308|-25293|locked|interaction|required|authfailed|authentication|passphrase|user name.*not correct|islocked|prompt/.test(

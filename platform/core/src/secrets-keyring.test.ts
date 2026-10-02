@@ -494,6 +494,28 @@ await new Promise(()=>{});}
 		expect(result).toMatchObject({ state: "unavailable" });
 	});
 
+	test("a missing default macOS keychain is unavailable, while unknown errors remain corrupt", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-no-default-"));
+		directories.push(directory);
+		process.env.SIGNET_PATH = directory;
+		const modulePath = join(directory, "no-default.cjs");
+		await writeFile(
+			modulePath,
+			'module.exports.AsyncEntry = class { async getPassword() { throw new Error("Platform failure: A default keychain could not be found."); } };',
+		);
+		await useNativeModule(directory, modulePath);
+		expect(await getSecretKeyring(directory).get()).toMatchObject({ state: "unavailable" });
+		await expect(putLocalSecret("NEW", "fixture")).rejects.toMatchObject({ state: "unavailable" });
+		expect(existsSync(join(directory, ".secrets", "secrets.enc"))).toBe(false);
+		const unknownPath = join(directory, "unknown.cjs");
+		await writeFile(
+			unknownPath,
+			'module.exports.AsyncEntry = class { async getPassword() { throw new Error("Platform failure: unknown native failure"); } };',
+		);
+		await useNativeModule(directory, unknownPath);
+		expect(await getSecretKeyring(directory).get()).toMatchObject({ state: "corrupt" });
+	});
+
 	test("keeps keyring-backed stores closed when the keyring is unavailable", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-backed-store-"));
 		directories.push(directory);

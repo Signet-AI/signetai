@@ -132,7 +132,11 @@ describe("compiled native first use", () => {
 			const keyring = parseJsonOutput(run(binary, [], keyringEnv, 10_000));
 			expect(keyring.type).toBe("keyring-helper-smoke");
 			expect(keyring.elapsedMs).toBeLessThan(5_000);
-			expect(Reflect.get(keyring.result as object, "state")).toMatch(/^(found|missing|unavailable)$/);
+			const message = Reflect.get(keyring.result as object, "message");
+			expect(
+				Reflect.get(keyring.result as object, "state"),
+				typeof message === "string" ? message : "Native keyring smoke failed",
+			).toMatch(/^(found|missing|unavailable)$/);
 		},
 		60_000,
 	);
