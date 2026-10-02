@@ -19,7 +19,7 @@ export function up(db: MigrationDb): void {
 			UPDATE generic_entity_prune_scan_state SET generation = generation + 1 WHERE id = 1;
 		END;
 		CREATE TRIGGER IF NOT EXISTS trg_entities_prune_scan_update
-		AFTER UPDATE OF name, entity_type, agent_id, pinned, updated_at ON entities
+		AFTER UPDATE OF name, canonical_name, entity_type, agent_id, pinned, updated_at ON entities
 		BEGIN
 			UPDATE generic_entity_prune_scan_state SET generation = generation + 1 WHERE id = 1;
 		END;

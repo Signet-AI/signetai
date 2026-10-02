@@ -114,6 +114,32 @@ describe("migration framework", () => {
 		).toBeTruthy();
 	});
 
+	test("migration 162 invalidates prune scans when canonical entity names change", () => {
+		db = createFreshDb();
+		runMigrations(db);
+		db.prepare(
+			`INSERT INTO entities
+			 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		).run("entity-canonical-name", "Project Apollo", "project apollo", "project", "default", 1, 0, "now", "now");
+
+		const readGeneration = (): number => {
+			const row = db.prepare("SELECT generation FROM generic_entity_prune_scan_state WHERE id = 1").get() as
+				| { generation: number }
+				| undefined;
+			if (row === undefined) throw new Error("prune scan generation row is missing");
+			return row.generation;
+		};
+		const before = readGeneration();
+
+		db.prepare("UPDATE entities SET canonical_name = ? WHERE id = ?").run(
+			"updated project apollo",
+			"entity-canonical-name",
+		);
+
+		expect(readGeneration()).toBe(before + 1);
+	});
+
 	test("migration 147 preserves existing replay records when upgrading from migration 146", () => {
 		db = createFreshDb();
 		db.exec(

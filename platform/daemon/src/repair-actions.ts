@@ -2588,19 +2588,6 @@ export async function pruneGenericEntities(
 		await yieldBetweenPages();
 	}
 
-	if (complete) {
-		const finalGeneration = await accessor.withReadDbAsync((db) => readGenericEntityPruneScanGeneration(db), {
-			siteToken: "db:repair.generic-entity-candidates.read",
-			operation: "repair.pruneGenericEntities.final-generation",
-		});
-		if (finalGeneration !== scanGeneration) {
-			stopReason = "changed";
-			complete = false;
-			cursor = undefined;
-			candidates.length = 0;
-		}
-	}
-
 	const scanDetails = (): Readonly<Record<string, unknown>> =>
 		genericEntityScanDetails(
 			candidateLimit,
