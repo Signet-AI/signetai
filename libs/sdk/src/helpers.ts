@@ -1,7 +1,16 @@
 import { applyRecallScoreThreshold, buildRecallRequestBody } from "@signet/core/recall";
 import { SignetApiError } from "./errors.js";
 import type { SignetTransport } from "./transport.js";
-import type { DocumentRecord, JobStatus, MemoryRecord, RecallResponse, SdkRecallOptions } from "./types.js";
+import type {
+	BatchModifyOptions,
+	BatchModifyPatch,
+	CreateDocumentOptions,
+	DocumentRecord,
+	JobStatus,
+	MemoryRecord,
+	RecallResponse,
+	SdkRecallOptions,
+} from "./types.js";
 
 export interface WaitForJobOptions {
 	readonly timeout?: number;
@@ -55,15 +64,7 @@ export class SignetClientHelpers {
 
 		throw new Error(`Document ${documentId} did not complete within ${timeout}ms`);
 	}
-	async createAndIngestDocument(opts: {
-		readonly source_type: "text" | "url" | "file";
-		readonly content?: string;
-		readonly url?: string;
-		readonly title?: string;
-		readonly content_type?: string;
-		readonly connector_id?: string;
-		readonly metadata?: Record<string, unknown>;
-	}): Promise<DocumentRecord> {
+	async createAndIngestDocument(opts: CreateDocumentOptions): Promise<DocumentRecord> {
 		const result = await this.transport.post<{ id: string; jobId?: string }>("/api/documents", opts);
 		if (result.jobId) {
 			await this.waitForJob(result.jobId);
@@ -107,22 +108,9 @@ export class SignetClientHelpers {
 		}
 	}
 	async batchModifyWithProgress(
-		patches: readonly {
-			readonly id: string;
-			readonly content?: string;
-			readonly type?: string;
-			readonly importance?: number;
-			readonly tags?: string;
-			readonly pinned?: boolean;
-			readonly project?: string;
-			readonly reason: string;
-			readonly ifVersion?: number;
-		}[],
+		patches: readonly BatchModifyPatch[],
 		onProgress?: (progress: BatchModifyProgress) => void,
-		opts?: {
-			readonly reason?: string;
-			readonly changed_by?: string;
-		},
+		opts?: BatchModifyOptions,
 	): Promise<{ success: number; failed: number; results: unknown[] }> {
 		onProgress?.({ done: 0, total: patches.length });
 		const mapped = patches.map(({ ifVersion, ...rest }) => ({
