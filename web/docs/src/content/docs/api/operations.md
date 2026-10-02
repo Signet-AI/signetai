@@ -666,6 +666,58 @@ count that would remain if the preview were applied.
 }
 ```
 
+### POST /api/repair/prune-generic-entities
+
+Remove non-concrete, unpinned entities for the resolved agent. Scanning uses a
+bounded inspection budget and can return a cursor for a later request.
+
+**Request body**
+
+```json
+{
+  "agentId": "default",
+  "candidateLimit": 100,
+  "inspectionLimit": 1000,
+  "cursor": {
+    "updatedAt": "2026-05-11T18:00:00.000Z",
+    "id": "ent-123"
+  },
+  "dryRun": true
+}
+```
+
+`candidateLimit` defaults to `100` and is capped at `500`. It limits matching
+entities. `inspectionLimit` defaults to `1000` and is capped at `5000`; it
+limits all inspected entities independently of matches. `cursor` is optional
+and resumes after the supplied `(updatedAt, id)` position. Dry-run is enabled
+by default. Each request also has a server-owned scan time budget; expiration
+returns a partial response with the cursor. The response `reason` identifies
+whether scanning stopped at a limit, deadline, cancellation, or system pressure.
+
+**Partial response**
+
+```json
+{
+  "action": "pruneGenericEntities",
+  "success": true,
+  "affected": 0,
+  "message": "dry-run: would delete 0 generic/non-concrete entities; partial scan after 1000 inspected row(s), resume with cursor",
+  "details": {
+    "status": "partial",
+    "complete": false,
+    "candidateLimit": 100,
+    "inspectionLimit": 1000,
+    "inspected": 1000,
+    "matched": 0,
+    "remaining": "unknown",
+    "reason": "inspection_limit",
+    "cursor": {
+      "updatedAt": "2026-05-11T18:00:00.000Z",
+      "id": "ent-123"
+    }
+  }
+}
+```
 
 ## Pipeline
 

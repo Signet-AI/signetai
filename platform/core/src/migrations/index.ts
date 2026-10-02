@@ -161,6 +161,7 @@ import { up as embeddingRepairCheckpoints } from "./156-embedding-repair-checkpo
 import { up as embeddingRepairProgress } from "./157-embedding-repair-progress";
 import { up as dreamingCandidateScanIndex } from "./158-dreaming-candidate-scan-index";
 import { up as importAdmissionLedger } from "./160-import-admission-ledger";
+import { up as entityPruneKeysetIndex } from "./161-entity-prune-keyset-index";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
 export const MIGRATIONS: readonly Migration[] = [
@@ -1465,6 +1466,12 @@ export const MIGRATIONS: readonly Migration[] = [
 				),
 			],
 		},
+	},
+	{
+		version: 161,
+		name: "entity-prune-keyset-index",
+		up: entityPruneKeysetIndex,
+		artifacts: { indexes: ["idx_entities_agent_updated_id"] },
 	},
 ];
 function checksum(m: Migration): string {
