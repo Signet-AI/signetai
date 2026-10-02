@@ -362,50 +362,25 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 	if ("error" in settings) return { ok: false, error: settings.error };
 
 	const now = input.now ?? new Date().toISOString();
-	const cfg = loadSourcesConfigForWrite(agentsDir);
+	const config = loadSourcesConfigForWrite(agentsDir);
+	const guildIds = settings.guildIds.slice().sort();
 	const root =
 		settings.syncMode === "desktop-cache"
 			? (settings.desktopCachePath ?? DEFAULT_DISCORD_DESKTOP_CACHE_PATH)
-			: `discord://guilds/${settings.guildIds.slice().sort().join(",")}`;
-	const sourceId =
-		settings.syncMode === "desktop-cache"
-			? `discord-cache:${createHash("sha256").update(root).digest("hex").slice(0, 16)}`
-			: `discord:${createHash("sha256").update(settings.guildIds.slice().sort().join(",")).digest("hex").slice(0, 16)}`;
-	const existing = cfg.sources.find((source) => source.id === sourceId);
-	if (existing) {
-		const updated: SignetSourceEntry = {
-			...existing,
-			name: cleanName(input.name) ?? existing.name,
-			root,
-			enabled: true,
-			providerSettings: discordSettingsProviderSettings(settings),
-			generation: newSourceGeneration(),
-			updatedAt: now,
-		};
-		saveSourcesConfig(
-			{
-				version: SOURCES_CONFIG_VERSION,
-				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
-			},
-			agentsDir,
-		);
-		return { ok: true, source: updated, created: false };
-	}
-
-	const source: SignetSourceEntry = {
-		id: sourceId,
-		generation: newSourceGeneration(),
+			: `discord://guilds/${guildIds.join(",")}`;
+	const sourceId = `discord${settings.syncMode === "desktop-cache" ? "-cache" : ""}:${createHash("sha256")
+		.update(settings.syncMode === "desktop-cache" ? root : guildIds.join(","))
+		.digest("hex")
+		.slice(0, 16)}`;
+	return upsertProviderSource(config, agentsDir, {
+		sourceId,
 		kind: "discord",
-		name: cleanName(input.name) ?? "Discord Source",
+		name: input.name,
+		createdName: "Discord Source",
 		root,
-		enabled: true,
-		mode: "read-only",
-		createdAt: now,
-		updatedAt: now,
+		now,
 		providerSettings: discordSettingsProviderSettings(settings),
-	};
-	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
-	return { ok: true, source, created: true };
+	});
 }
 
 function addGitHubSourceUnlocked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
@@ -418,52 +393,67 @@ function addGitHubSourceUnlocked(input: AddGitHubSourceInput, agentsDir = getAge
 }
 
 function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
-	const settings = buildGitHubSettings(input);
+	const config = loadSourcesConfigForWrite(agentsDir);
+	const repos = cleanGitHubRepos(input.repos).slice().sort();
+	const sourceId = `github:${createHash("sha256").update(repos.join(",")).digest("hex").slice(0, 16)}`;
+	const existing = config.sources.find((source) => source.id === sourceId);
+	const settings = buildGitHubSettings(input, existing ? parseGitHubSettings(existing.providerSettings) : undefined);
 	if ("error" in settings) return { ok: false, error: settings.error };
 
-	const now = input.now ?? new Date().toISOString();
-	const cfg = loadSourcesConfigForWrite(agentsDir);
-	const settingsKey = settings.repos.slice().sort().join(",");
-	const sourceId = `github:${createHash("sha256").update(settingsKey).digest("hex").slice(0, 16)}`;
-	const root = `github://repos/${settings.repos.slice().sort().join(",")}`;
-	const existing = cfg.sources.find((source) => source.id === sourceId);
-	if (existing) {
-		const existingSettings = parseGitHubSettings(existing.providerSettings);
-		const updatedSettings = buildGitHubSettings(input, existingSettings);
-		if ("error" in updatedSettings) return { ok: false, error: updatedSettings.error };
-		const updated: SignetSourceEntry = {
-			...existing,
-			name: cleanName(input.name) ?? existing.name,
-			root,
-			enabled: true,
-			providerSettings: githubSettingsProviderSettings(updatedSettings),
-			generation: newSourceGeneration(),
-			updatedAt: now,
-		};
-		saveSourcesConfig(
-			{
-				version: SOURCES_CONFIG_VERSION,
-				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
-			},
-			agentsDir,
-		);
-		return { ok: true, source: updated, created: false };
-	}
-
-	const source: SignetSourceEntry = {
-		id: sourceId,
-		generation: newSourceGeneration(),
+	return upsertProviderSource(config, agentsDir, {
+		sourceId,
 		kind: "github",
-		name: cleanName(input.name) ?? settings.repos[0] ?? "GitHub Source",
-		root,
-		enabled: true,
-		mode: "read-only",
-		createdAt: now,
-		updatedAt: now,
+		name: input.name,
+		createdName: settings.repos[0] ?? "GitHub Source",
+		root: `github://repos/${repos.join(",")}`,
+		now: input.now ?? new Date().toISOString(),
 		providerSettings: githubSettingsProviderSettings(settings),
-	};
-	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources: [...cfg.sources, source] }, agentsDir);
-	return { ok: true, source, created: true };
+	});
+}
+
+interface ProviderSourceUpsert {
+	readonly sourceId: string;
+	readonly kind: "discord" | "github";
+	readonly name?: string;
+	readonly createdName: string;
+	readonly root: string;
+	readonly now: string;
+	readonly providerSettings: SignetSourceProviderSettings;
+}
+
+function upsertProviderSource(
+	config: SignetSourcesConfig,
+	agentsDir: string,
+	input: ProviderSourceUpsert,
+): AddSourceResult {
+	const existing = config.sources.find((source) => source.id === input.sourceId);
+	const source: SignetSourceEntry = existing
+		? {
+				...existing,
+				name: cleanName(input.name) ?? existing.name,
+				root: input.root,
+				enabled: true,
+				providerSettings: input.providerSettings,
+				generation: newSourceGeneration(),
+				updatedAt: input.now,
+			}
+		: {
+				id: input.sourceId,
+				generation: newSourceGeneration(),
+				kind: input.kind,
+				name: cleanName(input.name) ?? input.createdName,
+				root: input.root,
+				enabled: true,
+				mode: "read-only",
+				createdAt: input.now,
+				updatedAt: input.now,
+				providerSettings: input.providerSettings,
+			};
+	const sources = existing
+		? config.sources.map((entry) => (entry.id === existing.id ? source : entry))
+		: [...config.sources, source];
+	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources }, agentsDir);
+	return { ok: true, source, created: !existing };
 }
 
 export function parseDiscordSettings(raw?: SignetSourceProviderSettings): DiscordSourceSettings {
