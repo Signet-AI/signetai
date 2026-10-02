@@ -1747,6 +1747,96 @@ function initializeDbOwnerMaintenance(): DbOwnerMaintenance {
 	return maintenance;
 }
 
+async function startConfiguredPipelineWorkers(
+	memoryCfg: ResolvedMemoryConfig,
+	activeEmbeddingCfg: ResolvedMemoryConfig["embedding"],
+	defaultAgentId: string,
+	telemetry?: TelemetryCollector,
+): Promise<void> {
+	const pipelinePaused = memoryCfg.pipelineV2.paused;
+	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
+		startPipeline(
+			getDbAccessor(),
+			memoryCfg.pipelineV2,
+			activeEmbeddingCfg,
+			fetchEmbedding,
+			memoryCfg.search,
+			defaultAgentId,
+			providerTracker,
+			analyticsCollector,
+			telemetry,
+			dbOwnerMaintenanceHandle ?? undefined,
+		);
+		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
+			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
+			configureNativeEmbeddingAssets({
+				embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
+				wasmAssetDir: materializeEmbeddedWasmAssets(),
+				transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
+			});
+		}
+	} else {
+		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);
+	}
+
+	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
+		setEmbeddingTrackerHandle(
+			startEmbeddingTracker(
+				getDbAccessor(),
+				activeEmbeddingCfg,
+				memoryCfg.pipelineV2.embeddingTracker,
+				memoryCfg.pipelineV2.repair,
+				fetchEmbedding,
+				checkEmbeddingProvider,
+				defaultAgentId,
+			),
+		);
+	}
+	if (!pipelinePaused) {
+		try {
+			embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
+				accessor: getDbAccessor(),
+				configured: memoryCfg.embedding,
+				readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
+				fetchEmbedding,
+				checkProvider: checkEmbeddingProvider,
+				owner: dbOwnerClient ?? undefined,
+				pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
+				batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
+				onPromoted: () => {
+					restartAfterEmbeddingPromotion(telemetry);
+				},
+			});
+		} catch (error) {
+			logger.warn("embedding", "Embedding index migration deferred after startup admission failure", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	if (memoryCfg.pipelineV2.reflections.enabled && !pipelinePaused) {
+		try {
+			reflectionWorkerHandle = startReflectionWorker(memoryCfg.pipelineV2.reflections);
+		} catch (err) {
+			logger.warn("reflections", "Failed to start reflection worker (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	if (memoryCfg.pipelineV2.procedural.enabled && !pipelinePaused) {
+		skillReconcilerHandle = startReconciler({
+			accessor: getDbAccessor(),
+			pipelineConfig: memoryCfg.pipelineV2,
+			embeddingConfig: memoryCfg.embedding,
+			fetchEmbedding,
+			agentsDir: AGENTS_DIR,
+		});
+	}
+
+	invalidateDiagnosticsCache();
+}
+
 async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	const pipelinePaused = memoryCfg.pipelineV2.paused;
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);
@@ -1884,87 +1974,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		default: await router.hasWorkload("default"),
 	});
 
-	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
-		startPipeline(
-			getDbAccessor(),
-			memoryCfg.pipelineV2,
-			activeEmbeddingCfg,
-			fetchEmbedding,
-			memoryCfg.search,
-			defaultAgentId,
-			providerTracker,
-			analyticsCollector,
-			telemetry,
-			dbOwnerMaintenanceHandle ?? undefined,
-		);
-		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
-			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
-			configureNativeEmbeddingAssets({
-				embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
-				wasmAssetDir: materializeEmbeddedWasmAssets(),
-				transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
-			});
-		}
-	} else {
-		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);
-	}
-
-	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
-		setEmbeddingTrackerHandle(
-			startEmbeddingTracker(
-				getDbAccessor(),
-				activeEmbeddingCfg,
-				memoryCfg.pipelineV2.embeddingTracker,
-				memoryCfg.pipelineV2.repair,
-				fetchEmbedding,
-				checkEmbeddingProvider,
-				defaultAgentId,
-			),
-		);
-	}
-	if (!pipelinePaused) {
-		try {
-			embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
-				accessor: getDbAccessor(),
-				configured: memoryCfg.embedding,
-				readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
-				fetchEmbedding,
-				checkProvider: checkEmbeddingProvider,
-				owner: dbOwnerClient ?? undefined,
-				pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
-				batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
-				onPromoted: () => {
-					restartAfterEmbeddingPromotion(telemetry);
-				},
-			});
-		} catch (error) {
-			logger.warn("embedding", "Embedding index migration deferred after startup admission failure", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-
-	if (memoryCfg.pipelineV2.reflections.enabled && !pipelinePaused) {
-		try {
-			reflectionWorkerHandle = startReflectionWorker(memoryCfg.pipelineV2.reflections);
-		} catch (err) {
-			logger.warn("reflections", "Failed to start reflection worker (non-fatal)", {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}
-
-	if (memoryCfg.pipelineV2.procedural.enabled && !pipelinePaused) {
-		skillReconcilerHandle = startReconciler({
-			accessor: getDbAccessor(),
-			pipelineConfig: memoryCfg.pipelineV2,
-			embeddingConfig: memoryCfg.embedding,
-			fetchEmbedding,
-			agentsDir: AGENTS_DIR,
-		});
-	}
-
-	invalidateDiagnosticsCache();
+	await startConfiguredPipelineWorkers(memoryCfg, activeEmbeddingCfg, defaultAgentId, telemetry);
 }
 
 queueMicrotask(() => setRestartPipelineRuntime(restartPipelineRuntime));
@@ -2785,9 +2795,6 @@ async function main() {
 
 		initCheckpointFlush(getDbAccessor());
 
-		if (!transcriptCaptureWorkerHandle) {
-			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
-		}
 		if (!transcriptRecoveryWorkerHandle) {
 			transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(
 				getDbAccessor(),
