@@ -123,52 +123,33 @@ function mergeUnique(...groups: readonly (readonly string[])[]): readonly string
 	return merged;
 }
 
+const TIER_RANK = { low: 1, medium: 2, high: 3 } as const satisfies Record<
+	RoutingCostTier | RoutingReasoningDepth,
+	number
+>;
+const PRIVACY_RANK = { remote_ok: 0, restricted_remote: 1, local_only: 2 } as const satisfies Record<
+	RoutingPrivacyTier,
+	number
+>;
+const DEFAULT_LATENCY = { local: 50, api: 350, gateway: 250, subscription_session: 900 } as const satisfies Record<
+	RoutingTargetConfig["kind"],
+	number
+>;
+
 function costRank(value: RoutingCostTier | undefined): number {
-	switch (value) {
-		case "low":
-			return 1;
-		case "medium":
-			return 2;
-		case "high":
-			return 3;
-		default:
-			return 2;
-	}
+	return value ? TIER_RANK[value] : TIER_RANK.medium;
 }
 
 function privacyRank(value: RoutingPrivacyTier): number {
-	switch (value) {
-		case "remote_ok":
-			return 0;
-		case "restricted_remote":
-			return 1;
-		case "local_only":
-			return 2;
-	}
+	return PRIVACY_RANK[value];
 }
 
 function reasoningRank(value: RoutingReasoningDepth): number {
-	switch (value) {
-		case "low":
-			return 1;
-		case "medium":
-			return 2;
-		case "high":
-			return 3;
-	}
+	return TIER_RANK[value];
 }
 
 function defaultLatencyForTarget(target: RoutingTargetConfig): number {
-	switch (target.kind) {
-		case "local":
-			return 50;
-		case "api":
-			return 350;
-		case "gateway":
-			return 250;
-		case "subscription_session":
-			return 900;
-	}
+	return DEFAULT_LATENCY[target.kind];
 }
 
 function workloadBindingForOperation(
