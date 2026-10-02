@@ -393,11 +393,16 @@ function addGitHubSourceUnlocked(input: AddGitHubSourceInput, agentsDir = getAge
 }
 
 function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+	const initialSettings = buildGitHubSettings(input);
+	if ("error" in initialSettings) return { ok: false, error: initialSettings.error };
+
 	const config = loadSourcesConfigForWrite(agentsDir);
-	const repos = cleanGitHubRepos(input.repos).slice().sort();
+	const repos = initialSettings.repos.slice().sort();
 	const sourceId = `github:${createHash("sha256").update(repos.join(",")).digest("hex").slice(0, 16)}`;
 	const existing = config.sources.find((source) => source.id === sourceId);
-	const settings = buildGitHubSettings(input, existing ? parseGitHubSettings(existing.providerSettings) : undefined);
+	const settings = existing
+		? buildGitHubSettings(input, parseGitHubSettings(existing.providerSettings))
+		: initialSettings;
 	if ("error" in settings) return { ok: false, error: settings.error };
 
 	return upsertProviderSource(config, agentsDir, {
