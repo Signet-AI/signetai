@@ -5,11 +5,12 @@ import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { runMigrations } from "../platform/core/src/migrations";
+import type { DbOwnerDreamingPassFinalize } from "../platform/daemon/src/db-owner-protocol";
 
 const root = join(import.meta.dir, "..");
 const enabled = process.env.SIGNET_DB_OWNER_SMOKE === "1";
 const tempDirs: string[] = [];
-const children: ChildProcessWithoutNullStreams[] = [];
+const children = new Map<ChildProcessWithoutNullStreams, Promise<unknown>>();
 const SMOKE_TIMEOUT_MS = 30_000;
 
 function nativeSmokeBinary(): string {
@@ -50,12 +51,14 @@ async function waitForJsonEvent(
 	throw new Error(`native DB-owner event did not arrive within ${SMOKE_TIMEOUT_MS}ms: ${stderr()}`);
 }
 
-afterEach(() => {
-	for (const child of children.splice(0)) {
-		if (child.exitCode === null) child.kill("SIGKILL");
+afterEach(async () => {
+	for (const [child, closed] of children) {
+		if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+		await closed;
 	}
+	children.clear();
 	for (const directory of tempDirs.splice(0)) rmSync(directory, { recursive: true, force: true });
-});
+}, SMOKE_TIMEOUT_MS);
 
 test("force-closes prepared SQLite handles before temporary workspace cleanup (#1932)", () => {
 	const directory = mkdtempSync(join(tmpdir(), "signet-native-dreaming-finalize-cleanup-"));
@@ -91,7 +94,6 @@ describe("compiled native Dreaming finalization", () => {
 				env: { ...process.env, SIGNET_DB_OWNER_DB_PATH: dbPath, SIGNET_TELEMETRY_OPTOUT: "1" },
 				stdio: ["pipe", "pipe", "pipe"],
 			});
-			children.push(child);
 			let output = "";
 			let stderr = "";
 			let processError: Error | null = null;
@@ -109,6 +111,7 @@ describe("compiled native Dreaming finalization", () => {
 			const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
 				child.once("close", (code, signal) => resolve({ code, signal }));
 			});
+			children.set(child, closed);
 
 			await waitForJsonEvent(outputText, stderrText, child, processErrorText, (event) => event.type === "ready");
 
@@ -150,10 +153,10 @@ describe("compiled native Dreaming finalization", () => {
 					failed: 0,
 					summary: "native smoke",
 					rejectedEvidence: [],
-					memoryHeadResult: null,
+					memoryHeadCommitInput: null,
 					hasBacklogByScope: [],
 					nextWatermarkByScope: [],
-				},
+				} satisfies DbOwnerDreamingPassFinalize,
 			});
 			const finalized = await waitForJsonEvent(
 				outputText,
