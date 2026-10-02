@@ -6,6 +6,10 @@ All notable changes to Signet are documented here.
 
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
+### 2026-10-02
+- Bug fixes: use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
+- Refactoring: rebuild guided onboarding.
+
 ### 2026-10-01
 - Bug fixes: default on in onboarding; refresh route DB site tokens; enforce trigger gates; allow manual triggers.
 - Refactoring: align controls with repository guardrails; refresh connector source inventory; consolidate UI and cache daemon reads.
@@ -32,13 +36,33 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Refactoring: keep migration SQLite verification in database owner.
 - Docs: reconcile workspace routes and drift detection; document workspace v2 migration and ownership.
 
-### 2026-09-25
-- Features: daemon-owned workspace stats, honest queue counts, Dreaming state.
-- Bug fixes: satisfy comment-strip and event-loop ledger policies; preserve request deadlines and cancellation; validate plugin manifest values; handle missing proposal evidence; reject invalid judge verdicts; keep attempt fenced on read errors; reconcile late pass creation; release trigger on scope failure; preserve legacy MCP records; validate tokenizer wasm path; sync retired ledger artifacts; drop exports for removed OS types; clear stale binary outputs; stabilize Node WASM names; externalize Bun FFI fallback; stabilize daemon asset builds; keep worker bundles single-file; make stdio bundle portable; remove stale retirement references; externalize native keyring; retire legacy invocation slot; await startup source cleanup; lease transcript import target; refresh sync DB audit ledger; serialize source mutations; accept deferred removal.
-- Refactoring: remove external server surface.
-- Docs: note legacy-schema semantics for workspace memory count; update latest schema reference.
-
 ## Release Ledger
+
+## [0.229.4] - 2026-10-02
+
+Release summary: 14 bug fixes and 1 refactor.
+Tag range: `v0.229.3..v0.229.4`.
+
+### Bug Fixes
+
+- **release**: use keychain search list
+- **release**: parse signing keychain lists
+- **release**: harden signing probe recovery
+- **release**: add codesign key access
+- **release**: use matched signing identity
+- **release**: support Bash 3.2 signing
+- **release**: harden macOS signing lookup
+- **release**: sign by certificate fingerprint
+- **release**: guard fallback signing identity
+- **release**: report macOS keychain lookup details
+- **release**: match signing team suffix
+- **release**: skip identity policy filter
+- **release**: bypass trust-only identity scan
+- **release**: preflight macOS signing
+
+### Refactoring
+
+- **dashboard**: rebuild guided onboarding
 
 ## [0.229.3] - 2026-10-01
 
