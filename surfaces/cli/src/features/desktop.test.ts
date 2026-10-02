@@ -772,7 +772,7 @@ describe("Windows desktop install", () => {
 		}
 	});
 
-	test("uninstalls the recognized legacy app before refreshing the Start Menu shortcut", () => {
+	test("removes the leftover uninstaller after app payload is gone and preserves unrelated files", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
 		const localAppData = join(home, "Local AppData");
@@ -810,6 +810,7 @@ describe("Windows desktop install", () => {
 					rmSync(join(legacyAppDir, "signet.exe"), { force: true });
 					rmSync(join(legacyAppDir, "resources"), { recursive: true, force: true });
 					writeFileSync(join(legacyAppDir, "user-note.txt"), "preserve user data");
+					expect(existsSync(uninstaller)).toBe(true);
 					return { status: 0 };
 				},
 				shortcutRunner: (cmd, _args, options) => {

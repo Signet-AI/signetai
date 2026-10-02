@@ -169,8 +169,10 @@ jobs:
           try {
             $migrationInstall = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$migrationLegacyAppDir") -Wait -PassThru
             if ($migrationInstall.ExitCode -ne 0) { throw "Legacy fixture install failed with exit code $($migrationInstall.ExitCode)." }
-            bun surfaces/cli/scripts/windows-desktop-migration-smoke.ts "$env:RUNNER_TEMP" "$migrationLocalAppData"
-            if ($LASTEXITCODE -ne 0) { throw "Production CLI migration smoke failed with exit code $LASTEXITCODE." }
+            $bunExecutable = (Get-Command bun -CommandType Application -ErrorAction Stop).Source
+            & $bunExecutable surfaces/cli/scripts/windows-desktop-migration-smoke.ts "$env:RUNNER_TEMP" "$migrationLocalAppData"
+            $migrationSmokeExitCode = $LASTEXITCODE
+            if ($migrationSmokeExitCode -ne 0) { throw "Production CLI migration smoke failed with exit code $migrationSmokeExitCode." }
           } finally {
             Remove-Item -LiteralPath $migrationLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
           }
