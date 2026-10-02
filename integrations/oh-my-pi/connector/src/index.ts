@@ -1,12 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
 	MANAGED_DAEMON_URL_DEFAULT,
 	type UninstallResult,
 	buildManagedExtensionContent,
-	isManagedExtensionFile,
 	managedExtensionFilePath,
 	removeManagedExtensionFile,
 	resolveSignetAgentId,
@@ -88,33 +87,23 @@ export class OhMyPiConnector extends BaseConnector {
 		const targetPath = managedExtensionFilePath(agentDir, OH_MY_PI_MANAGED_FILENAME);
 		const legacyPath = managedExtensionFilePath(agentDir, OH_MY_PI_LEGACY_MANAGED_FILENAME);
 
-		if (existsSync(targetPath) && !isManagedExtensionFile(targetPath, OH_MY_PI_MANAGED_MARKER)) {
-			throw new Error(
-				`Refusing to overwrite unmanaged Oh My Pi extension at ${targetPath}. Move or remove it first, then rerun setup.`,
-			);
-		}
-
-		for (const filePath of this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME)) {
-			if (filePath === targetPath) continue;
-			removeManagedExtensionFile(filePath, OH_MY_PI_MANAGED_MARKER);
-		}
-		for (const filePath of this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME)) {
-			if (filePath === legacyPath) continue;
-			removeManagedExtensionFile(filePath, OH_MY_PI_MANAGED_MARKER);
-		}
-
-		mkdirSync(dirname(targetPath), { recursive: true });
-		const managedContent = buildManagedOhMyPiExtensionContent({
-			signetPath: expandedBasePath,
-			daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
-			agentId: resolveSignetAgentId(),
-			apiKey: resolveSignetApiKey(),
+		const extensionWritten = this.installManagedExtension({
+			targetPath,
+			marker: OH_MY_PI_MANAGED_MARKER,
+			unmanagedMessage: `Refusing to overwrite unmanaged Oh My Pi extension at ${targetPath}. Move or remove it first, then rerun setup.`,
+			stalePaths: () => [
+				...this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME),
+				...this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME).filter((path) => path !== legacyPath),
+			],
+			buildContent: () =>
+				buildManagedOhMyPiExtensionContent({
+					signetPath: expandedBasePath,
+					daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
+					agentId: resolveSignetAgentId(),
+					apiKey: resolveSignetApiKey(),
+				}),
 		});
-		const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf8") : null;
-		if (previous !== managedContent) {
-			writeFileSync(targetPath, managedContent, "utf8");
-			filesWritten.push(targetPath);
-		}
+		if (extensionWritten) filesWritten.push(targetPath);
 
 		removeManagedExtensionFile(legacyPath, OH_MY_PI_MANAGED_MARKER);
 
@@ -135,15 +124,13 @@ export class OhMyPiConnector extends BaseConnector {
 	}
 
 	async uninstall(): Promise<UninstallResult> {
-		const filesRemoved: string[] = [];
-		for (const path of [
-			...this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME),
-			...this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME),
-		]) {
-			if (removeManagedExtensionFile(path, OH_MY_PI_MANAGED_MARKER)) {
-				filesRemoved.push(path);
-			}
-		}
+		const filesRemoved = this.removeManagedExtensions(
+			[
+				...this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME),
+				...this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME),
+			],
+			OH_MY_PI_MANAGED_MARKER,
+		);
 
 		const configPath = getOhMyPiConfigPath();
 		if (existsSync(configPath)) {
@@ -157,9 +144,12 @@ export class OhMyPiConnector extends BaseConnector {
 	}
 
 	isInstalled(): boolean {
-		return [
-			...this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME),
-			...this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME),
-		].some((path) => isManagedExtensionFile(path, OH_MY_PI_MANAGED_MARKER));
+		return this.hasManagedExtension(
+			[
+				...this.getManagedCandidatePaths(OH_MY_PI_MANAGED_FILENAME),
+				...this.getManagedCandidatePaths(OH_MY_PI_LEGACY_MANAGED_FILENAME),
+			],
+			OH_MY_PI_MANAGED_MARKER,
+		);
 	}
 }

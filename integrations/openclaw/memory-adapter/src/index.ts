@@ -1,738 +1,77 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { wrapMemoryContext } from "@signet/core";
+import type { OpenClawPluginApi } from "./openclaw-types.js";
 import {
-	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
-	applyRecallScoreThreshold,
-	buildRecallRequestBody,
-	buildRememberRequestBody,
-	formatRecallText,
-	parseRecallPayload,
-	readStaticIdentity,
-	resolveWorkspacePath,
-	resolveSessionStartTimeoutMs,
-	stripInternalMemoryContext,
-	wrapMemoryContext,
-} from "@signet/core";
-import type { RecallPayload, RecallRow } from "@signet/core";
-import { SignetClient } from "@signet/sdk";
-import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi, OpenClawToolResult } from "./openclaw-types.js";
+	buildCompactionEventKey,
+	buildScopedSessionKey,
+	buildSessionlessTurnKey,
+	extractCompactionSummary,
+	extractLastAssistantMessage,
+	extractLastUserMessage,
+	extractUserMessage,
+	firstNonEmptyString,
+	firstNumber,
+	isRecord,
+	readCompactionSessionMetadata,
+	resolveCompactionSessionFile,
+	resolveCtx,
+	type ResolvedCtx,
+} from "./event-normalization.js";
+import {
+	DEFAULT_DAEMON_URL,
+	RUNTIME_PATH,
+	daemonFetch,
+	daemonFetchResult,
+	getDaemonPid,
+	onCompactionComplete,
+	onNotifications,
+	onPreCompaction,
+	onSessionEnd,
+	onSessionStart,
+	onUserPromptSubmit,
+	WRITE_TIMEOUT,
+	type SignetConfig,
+	type UserPromptSubmitResult,
+} from "./memory-operations.js";
+import { registerMemoryTools } from "./memory-tools.js";
+export {
+	daemonFetch,
+	daemonFetchResult,
+	getDaemonPid,
+	isDaemonRunning,
+	memoryForget,
+	memoryGet,
+	memoryList,
+	memoryModify,
+	memoryRecall,
+	memorySearch,
+	memoryStore,
+	onCompactionComplete,
+	onNotifications,
+	onPreCompaction,
+	onSessionEnd,
+	onSessionStart,
+	onUserPromptSubmit,
+	recall,
+	remember,
+	sessionSearch,
+} from "./memory-operations.js";
+export type {
+	PreCompactionResult,
+	SessionEndResult,
+	SessionStartResult,
+	SignetConfig,
+	UserPromptSubmitResult,
+} from "./memory-operations.js";
 
-const DEFAULT_DAEMON_URL = "http://127.0.0.1:3850";
-const RUNTIME_PATH = "plugin" as const;
-const READ_TIMEOUT = 5000;
-const WRITE_TIMEOUT = 10000;
 const HEARTBEAT_TIMEOUT = 2000;
 const HEARTBEAT_INTERVAL_MS = 60_000;
 const COMPACTION_HOOK_DEDUPE_MS = 1000;
-const SESSION_START_TIMEOUT = resolveSessionStartTimeoutMs(
-	process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT,
-);
-
-type DaemonFetchFailure = "offline" | "timeout" | "http" | "invalid-json" | "body-read";
-
-type DaemonFetchResult<T> =
-	| { readonly ok: true; readonly data: T }
-	| {
-			readonly ok: false;
-			readonly reason: DaemonFetchFailure;
-			readonly status?: number;
-	  };
-
-function errorName(err: unknown): string {
-	if (typeof err !== "object" || err === null) return "";
-	const name = Reflect.get(err, "name");
-	return typeof name === "string" ? name : "";
-}
-
-function isTimeoutError(err: unknown): boolean {
-	const name = errorName(err);
-	if (name === "AbortError" || name === "TimeoutError") return true;
-	const code = typeof err === "object" && err !== null ? Reflect.get(err, "code") : undefined;
-	return code === "ABORT_ERR";
-}
-
-const METADATA_LINE_PREFIXES = [
-	"<<<EXTERNAL_UNTRUSTED_CONTENT",
-	">>>",
-	"Conversation info",
-	"Sender (untrusted",
-	"Untrusted context",
-	"END_EXTERNAL_UNTRUSTED_CONTENT",
-] as const;
-
-function stripSignetMemory(content: string): string {
-	return stripInternalMemoryContext(content).trim();
-}
 
 function readContextString(value: unknown): string {
 	return typeof value === "string" ? value.trim() : "";
-}
-function looksLikeMetadataJson(content: string): boolean {
-	if (!content.includes("```json")) return false;
-	const metadataFields = ["label", "username", "tag", "sender", "conversation"];
-	const hasMultipleMetadataFields =
-		metadataFields.filter((f) => content.includes(`"${f}"`) || content.includes(`'${f}'`)).length >= 2;
-
-	return hasMultipleMetadataFields;
-}
-
-function extractUserMessage(rawPrompt: string): string {
-	const sanitized = stripSignetMemory(rawPrompt);
-	const lines = sanitized.split("\n");
-	let lastContentStart = 0;
-	let inCodeFence = false;
-	let codeFenceStart = 0;
-
-	for (let i = 0; i < lines.length; i++) {
-		const line = lines[i];
-		if (line.startsWith("```")) {
-			if (!inCodeFence) {
-				inCodeFence = true;
-				codeFenceStart = i;
-			} else {
-				const fenceContent = lines.slice(codeFenceStart, i + 1).join("\n");
-				if (looksLikeMetadataJson(fenceContent)) {
-					lastContentStart = i + 1;
-				}
-				inCodeFence = false;
-			}
-			continue;
-		}
-		if (METADATA_LINE_PREFIXES.some((p) => line.startsWith(p) || line.includes(p))) {
-			lastContentStart = i + 1;
-		}
-	}
-
-	const extracted = lines.slice(lastContentStart).join("\n").trim();
-	return extracted.length > 0 ? extracted : sanitized;
-}
-
-export interface SignetConfig {
-	enabled?: boolean;
-	daemonUrl?: string;
-}
-
-export interface SessionStartResult {
-	identity: {
-		name: string;
-		description?: string;
-	};
-	memories: Array<{
-		id: string;
-		content: string;
-		type: string;
-		importance: number;
-		created_at: string;
-	}>;
-	recentContext?: string;
-	stableSystemPrompt?: string;
-	dynamicContext?: string;
-	inject: string;
-	contextHash?: string;
-	contextVersion?: number;
-}
-
-export interface PreCompactionResult {
-	summaryPrompt: string;
-	guidelines: string;
-}
-
-export interface UserPromptSubmitResult {
-	inject: string;
-	dynamicContext?: string;
-	clockContext?: string;
-	contextHash?: string;
-	contextVersion?: number;
-	memoryCount: number;
-	queryTerms?: string;
-	engine?: string;
-}
-
-function firstNonEmptyString(...values: readonly unknown[]): string | undefined {
-	for (const value of values) {
-		if (typeof value === "string" && value.trim().length > 0) {
-			return value;
-		}
-	}
-	return undefined;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null;
-}
-
-function isAssistantMessage(message: Record<string, unknown>): boolean {
-	const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
-	const sender = typeof message.sender === "string" ? message.sender.toLowerCase() : "";
-
-	return role === "assistant" || role === "agent" || role === "model" || sender === "assistant" || sender === "agent";
-}
-
-function getMessageText(message: Record<string, unknown>): string | undefined {
-	const direct = firstNonEmptyString(message.content, message.text, message.message);
-	if (direct) return direct;
-
-	if (!Array.isArray(message.content)) return undefined;
-
-	const textParts: string[] = [];
-	for (const chunk of message.content) {
-		if (!isRecord(chunk)) continue;
-		const part = chunk;
-		if (part.type !== "text") continue;
-		if (typeof part.text === "string" && part.text.trim().length > 0) {
-			textParts.push(part.text);
-		}
-	}
-
-	if (textParts.length === 0) return undefined;
-	return textParts.join("\n");
-}
-
-function extractLastAssistantMessage(event: Record<string, unknown>): string | undefined {
-	const explicit = firstNonEmptyString(
-		event.lastAssistantMessage,
-		event.last_assistant_message,
-		event.assistantMessage,
-		event.assistant_message,
-		event.previousAssistantMessage,
-		event.previous_assistant_message,
-	);
-	if (explicit) return explicit;
-
-	const messages = event.messages;
-	if (!Array.isArray(messages)) return undefined;
-
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const raw = messages[i];
-		if (!isRecord(raw)) continue;
-		const message = raw;
-		if (!isAssistantMessage(message)) continue;
-
-		const text = getMessageText(message);
-		if (text) return text;
-	}
-
-	return undefined;
-}
-
-function isUserMessage(message: Record<string, unknown>): boolean {
-	const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
-	const sender = typeof message.sender === "string" ? message.sender.toLowerCase() : "";
-
-	return role === "user" || role === "human" || sender === "user" || sender === "human";
-}
-
-function extractLastUserMessage(messages: unknown): string | undefined {
-	if (!Array.isArray(messages)) return undefined;
-
-	for (let i = messages.length - 1; i >= 0; i--) {
-		const raw = messages[i];
-		if (!isRecord(raw)) continue;
-		if (!isUserMessage(raw)) continue;
-
-		const text = getMessageText(raw);
-		if (!text) continue;
-		const sanitized = stripSignetMemory(text);
-		if (sanitized.length > 0) return sanitized;
-	}
-
-	return undefined;
-}
-
-export interface SessionEndResult {
-	memoriesSaved: number;
-}
-
-interface MemoryRecord {
-	id: string;
-	content: string;
-	type: string;
-	importance: number;
-	tags: string | null;
-	pinned: number;
-	who: string | null;
-	created_at: string;
-	updated_at: string;
-}
-
-function pluginHeaders(): Record<string, string> {
-	return {
-		"Content-Type": "application/json",
-		"x-signet-runtime-path": RUNTIME_PATH,
-		"x-signet-actor": "openclaw-plugin",
-		"x-signet-actor-type": "harness",
-	};
-}
-
-async function daemonFetch<T>(
-	daemonUrl: string,
-	path: string,
-	options: {
-		method?: string;
-		body?: unknown;
-		timeout?: number;
-	} = {},
-): Promise<T | null> {
-	const res = await daemonFetchResult<T>(daemonUrl, path, options);
-	if (!res.ok) return null;
-	return res.data;
-}
-
-async function daemonFetchResult<T>(
-	daemonUrl: string,
-	path: string,
-	options: {
-		method?: string;
-		body?: unknown;
-		timeout?: number;
-	} = {},
-): Promise<DaemonFetchResult<T>> {
-	const { method = "GET", body, timeout = READ_TIMEOUT } = options;
-
-	try {
-		const init: RequestInit = {
-			method,
-			headers: pluginHeaders(),
-			signal: AbortSignal.timeout(timeout),
-		};
-
-		if (body !== undefined) {
-			init.body = JSON.stringify(body);
-		}
-
-		const res = await fetch(`${daemonUrl}${path}`, init);
-
-		if (!res.ok) {
-			console.warn(`[signet] ${method} ${path} failed:`, res.status);
-			return { ok: false, reason: "http", status: res.status };
-		}
-
-		try {
-			const text = await res.text();
-			try {
-				const data = JSON.parse(text) as T;
-				return { ok: true, data };
-			} catch {
-				console.warn(
-					`[signet] ${method} ${path} returned invalid JSON (${text.length} chars${text.length === 0 ? ", empty body" : ""})`,
-				);
-				return { ok: false, reason: "invalid-json", status: res.status };
-			}
-		} catch (e) {
-			if (isTimeoutError(e)) {
-				console.warn(`[signet] ${method} ${path} body read timed out after ${timeout}ms`);
-				return { ok: false, reason: "timeout" };
-			}
-			console.warn(`[signet] ${method} ${path} body read failed:`, errorName(e) || e);
-			return { ok: false, reason: "body-read" };
-		}
-	} catch (e) {
-		if (isTimeoutError(e)) {
-			console.warn(`[signet] ${method} ${path} timed out after ${timeout}ms`);
-			return { ok: false, reason: "timeout" };
-		}
-		const cause: unknown = e instanceof TypeError ? e.cause : e;
-		const isConnRefused =
-			typeof cause === "object" && cause !== null && "code" in cause && cause.code === "ECONNREFUSED";
-		if (isConnRefused) {
-			console.warn(`[signet] daemon unreachable at ${daemonUrl} — is the Signet daemon running? (${method} ${path})`);
-		} else {
-			console.warn(`[signet] ${method} ${path} error:`, e);
-		}
-		return { ok: false, reason: "offline" };
-	}
-}
-
-export async function isDaemonRunning(daemonUrl = DEFAULT_DAEMON_URL): Promise<boolean> {
-	try {
-		const res = await fetch(`${daemonUrl}/health`, {
-			signal: AbortSignal.timeout(1000),
-		});
-		return res.ok;
-	} catch {
-		return false;
-	}
-}
-async function getDaemonPid(daemonUrl: string): Promise<number | null> {
-	try {
-		const res = await fetch(`${daemonUrl}/health`, {
-			signal: AbortSignal.timeout(1000),
-		});
-		if (!res.ok) return null;
-		const body = (await res.json()) as { pid?: number };
-		return typeof body.pid === "number" ? body.pid : null;
-	} catch {
-		return null;
-	}
-}
-function staticFallback(reason: "offline" | "timeout" = "offline"): SessionStartResult | null {
-	const dir = process.env.SIGNET_PATH ?? resolveWorkspacePath().path;
-	const inject =
-		reason === "timeout"
-			? readStaticIdentity(dir, STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS)
-			: readStaticIdentity(dir);
-	if (!inject) return null;
-	return { identity: { name: "signet" }, memories: [], inject };
-}
-
-export async function onSessionStart(
-	harness: string,
-	options: {
-		daemonUrl?: string;
-		agentId?: string;
-		context?: string;
-		sessionKey?: string;
-	} = {},
-): Promise<SessionStartResult | null> {
-	const result = await daemonFetchResult<SessionStartResult>(
-		options.daemonUrl || DEFAULT_DAEMON_URL,
-		"/api/hooks/session-start",
-		{
-			method: "POST",
-			body: {
-				harness,
-				agentId: options.agentId,
-				context: options.context,
-				sessionKey: options.sessionKey,
-				runtimePath: RUNTIME_PATH,
-			},
-			timeout: SESSION_START_TIMEOUT,
-		},
-	);
-	if (result.ok) return result.data;
-	if (result.reason === "timeout") return staticFallback("timeout");
-	return staticFallback();
-}
-
-export async function onUserPromptSubmit(
-	harness: string,
-	options: {
-		daemonUrl?: string;
-		agentId?: string;
-		userMessage: string;
-		lastAssistantMessage?: string;
-		sessionKey?: string;
-		project?: string;
-	},
-): Promise<UserPromptSubmitResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/user-prompt-submit", {
-		method: "POST",
-		body: {
-			harness,
-			userMessage: options.userMessage,
-			userPrompt: options.userMessage,
-			lastAssistantMessage: options.lastAssistantMessage,
-			sessionKey: options.sessionKey,
-			project: options.project,
-			agentId: options.agentId,
-			runtimePath: RUNTIME_PATH,
-		},
-		timeout: READ_TIMEOUT,
-	});
-}
-
-export async function onNotifications(
-	harness: string,
-	hook: string,
-	options: {
-		daemonUrl?: string;
-		agentId?: string;
-		sessionKey?: string;
-		project?: string;
-	},
-): Promise<UserPromptSubmitResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/notifications", {
-		method: "POST",
-		body: {
-			harness,
-			hook,
-			agentId: options.agentId,
-			sessionKey: options.sessionKey,
-			project: options.project,
-		},
-		timeout: READ_TIMEOUT,
-	});
-}
-
-export async function onPreCompaction(
-	harness: string,
-	options: {
-		daemonUrl?: string;
-		sessionContext?: string;
-		messageCount?: number;
-		sessionKey?: string;
-	} = {},
-): Promise<PreCompactionResult | null> {
-	return daemonFetch(options.daemonUrl || DEFAULT_DAEMON_URL, "/api/hooks/pre-compaction", {
-		method: "POST",
-		body: {
-			harness,
-			sessionContext: options.sessionContext,
-			messageCount: options.messageCount,
-			sessionKey: options.sessionKey,
-			runtimePath: RUNTIME_PATH,
-		},
-		timeout: READ_TIMEOUT,
-	});
-}
-
-export async function onCompactionComplete(
-	harness: string,
-	summary: string,
-	options: {
-		daemonUrl?: string;
-		agentId?: string;
-		sessionKey?: string;
-		project?: string;
-	} = {},
-): Promise<boolean> {
-	const result = await daemonFetch<{ success: boolean }>(
-		options.daemonUrl || DEFAULT_DAEMON_URL,
-		"/api/hooks/compaction-complete",
-		{
-			method: "POST",
-			body: {
-				harness,
-				summary,
-				agentId: options.agentId,
-				sessionKey: options.sessionKey,
-				project: options.project,
-				runtimePath: RUNTIME_PATH,
-			},
-			timeout: WRITE_TIMEOUT,
-		},
-	);
-	return result?.success === true;
-}
-
-export async function onSessionEnd(
-	harness: string,
-	options: {
-		daemonUrl?: string;
-		agentId?: string;
-		transcriptPath?: string;
-		transcript?: string;
-		sessionKey?: string;
-		sessionId?: string;
-		cwd?: string;
-		reason?: string;
-	} = {},
-): Promise<SessionEndResult | null> {
-	new SignetClient({
-		daemonUrl: options.daemonUrl || DEFAULT_DAEMON_URL,
-		retries: 0,
-		timeoutMs: WRITE_TIMEOUT,
-	}).sessionEndFireAndForget({
-		harness,
-		agentId: options.agentId,
-		transcriptPath: options.transcriptPath,
-		...(options.transcript && { transcript: options.transcript }),
-		sessionKey: options.sessionKey,
-		sessionId: options.sessionId,
-		cwd: options.cwd,
-		reason: options.reason,
-		runtimePath: RUNTIME_PATH,
-	});
-
-	return null;
-}
-
-export async function memoryRecall(
-	query: string,
-	options: {
-		daemonUrl?: string;
-		limit?: number;
-		type?: string;
-		minScore?: number;
-		aggregate?: boolean;
-		aggregateBudget?: "small" | "medium" | "large";
-		saveAggregate?: boolean;
-		sessionKey?: string;
-		agentId?: string;
-		includeRecalled?: boolean;
-	} = {},
-): Promise<RecallPayload | null> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<unknown>(daemonUrl, "/api/memory/recall", {
-		method: "POST",
-		body: buildRecallRequestBody(query, {
-			limit: options.limit,
-			type: options.type,
-			aggregate: options.aggregate,
-			aggregateBudget: options.aggregateBudget,
-			saveAggregate: options.saveAggregate,
-			sessionKey: options.sessionKey,
-			agentId: options.agentId,
-			includeRecalled: options.includeRecalled,
-			minScore: options.minScore,
-			recallSurface: "tool_call",
-		}),
-		timeout: READ_TIMEOUT,
-	});
-	return result ? (applyRecallScoreThreshold(result, options.minScore) as RecallPayload) : null;
-}
-
-export async function memorySearch(
-	query: string,
-	options: {
-		daemonUrl?: string;
-		limit?: number;
-		type?: string;
-		minScore?: number;
-	} = {},
-): Promise<RecallRow[]> {
-	const result = await memoryRecall(query, options);
-	return result ? parseRecallPayload(result).rows : [];
-}
-
-export async function sessionSearch(
-	query: string,
-	options: {
-		daemonUrl?: string;
-		sessionKey?: string;
-		currentSessionKey?: string;
-		agentId?: string;
-		project?: string;
-		limit?: number;
-	} = {},
-): Promise<unknown | null> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	return daemonFetch<unknown>(daemonUrl, "/api/sessions/search", {
-		method: "POST",
-		body: {
-			query,
-			sessionKey: options.sessionKey,
-			currentSessionKey: options.currentSessionKey,
-			agentId: options.agentId,
-			project: options.project,
-			limit: options.limit,
-		},
-		timeout: READ_TIMEOUT,
-	});
-}
-
-export async function memoryStore(
-	content: string,
-	options: {
-		daemonUrl?: string;
-		type?: string;
-		importance?: number;
-		tags?: string | readonly string[];
-		who?: string;
-		reviewAfter?: string;
-	} = {},
-): Promise<string | null> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<{ id?: string; memoryId?: string }>(daemonUrl, "/api/memory/remember", {
-		method: "POST",
-		body: buildRememberRequestBody(content, {
-			type: options.type,
-			importance: options.importance,
-			tags: options.tags,
-			who: options.who || "openclaw",
-			reviewAfter: options.reviewAfter,
-		}),
-		timeout: WRITE_TIMEOUT,
-	});
-	return result?.id || result?.memoryId || null;
-}
-
-export async function memoryGet(id: string, options: { daemonUrl?: string } = {}): Promise<MemoryRecord | null> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	return daemonFetch<MemoryRecord>(daemonUrl, `/api/memory/${encodeURIComponent(id)}`, { timeout: READ_TIMEOUT });
-}
-
-export async function memoryList(
-	options: { daemonUrl?: string; limit?: number; offset?: number; type?: string } = {},
-): Promise<{ memories: MemoryRecord[]; stats: Record<string, number> }> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const params = new URLSearchParams();
-	if (options.limit) params.set("limit", String(options.limit));
-	if (options.offset) params.set("offset", String(options.offset));
-	if (options.type) params.set("type", options.type);
-
-	const qs = params.toString();
-	const path = `/api/memories${qs ? `?${qs}` : ""}`;
-
-	const result = await daemonFetch<{
-		memories: MemoryRecord[];
-		stats: Record<string, number>;
-	}>(daemonUrl, path, { timeout: READ_TIMEOUT });
-
-	return result || { memories: [], stats: {} };
-}
-
-export async function memoryModify(
-	id: string,
-	patch: {
-		content?: string;
-		type?: string;
-		importance?: number;
-		tags?: string;
-		reason: string;
-		if_version?: number;
-	},
-	options: { daemonUrl?: string } = {},
-): Promise<boolean> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const result = await daemonFetch<{ success?: boolean }>(daemonUrl, `/api/memory/${encodeURIComponent(id)}`, {
-		method: "PATCH",
-		body: patch,
-		timeout: WRITE_TIMEOUT,
-	});
-	return result?.success === true;
-}
-
-export async function memoryForget(
-	id: string,
-	options: {
-		daemonUrl?: string;
-		reason: string;
-		force?: boolean;
-	},
-): Promise<boolean> {
-	const daemonUrl = options.daemonUrl || DEFAULT_DAEMON_URL;
-	const params = new URLSearchParams();
-	params.set("reason", options.reason);
-	if (options.force) params.set("force", "true");
-
-	const result = await daemonFetch<{ success?: boolean }>(
-		daemonUrl,
-		`/api/memory/${encodeURIComponent(id)}?${params}`,
-		{
-			method: "DELETE",
-			timeout: WRITE_TIMEOUT,
-		},
-	);
-	return result?.success === true;
-}
-
-export async function remember(
-	content: string,
-	options: {
-		daemonUrl?: string;
-		type?: string;
-		importance?: number;
-		tags?: string | readonly string[];
-		who?: string;
-		reviewAfter?: string;
-	} = {},
-): Promise<string | null> {
-	return memoryStore(content, options);
-}
-
-export async function recall(
-	query: string,
-	options: {
-		daemonUrl?: string;
-		limit?: number;
-		type?: string;
-		minScore?: number;
-	} = {},
-): Promise<RecallRow[]> {
-	return memorySearch(query, options);
 }
 
 const signetConfigSchema = {
@@ -748,12 +87,6 @@ const signetConfigSchema = {
 	},
 };
 
-function textResult(text: string, details?: Record<string, unknown>): OpenClawToolResult {
-	return {
-		content: [{ type: "text", text }],
-		...(details ? { details } : {}),
-	};
-}
 const SESSIONLESS_DEDUPE_MS = 1_000;
 
 export function cleanupTimedMap(map: Map<string, number>, now: number, ttlMs = SESSIONLESS_DEDUPE_MS): void {
@@ -1000,146 +333,6 @@ function buildInjectionResult(result: UserPromptSubmitResult): { prependContext:
 	};
 }
 
-function buildSessionlessTurnKey(event: Record<string, unknown>, agentId: string | undefined): string {
-	const rawPrompt = typeof event.prompt === "string" ? extractUserMessage(event.prompt) : "";
-	const normalizedPrompt = rawPrompt.trim().replace(/\s+/g, " ").slice(0, 240);
-	const messageCount = Array.isArray(event.messages) ? event.messages.length : -1;
-	return `${agentId ?? "-"}|${messageCount}|${normalizedPrompt}`;
-}
-
-function buildScopedSessionKey(sessionKey: string | undefined, agentId: string | undefined): string | undefined {
-	if (!sessionKey) return undefined;
-	return `${agentId ?? "-"}|${sessionKey}`;
-}
-
-function readString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-function readNumber(value: unknown): number | undefined {
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-interface ResolvedCtx {
-	readonly sessionKey: string | undefined;
-	readonly agentId: string | undefined;
-	readonly project: string | undefined;
-	readonly sessionFile: string | undefined;
-	readonly sessionId: string | undefined;
-}
-
-function resolveCtx(event: Record<string, unknown>, ctx: unknown): ResolvedCtx {
-	const c = isRecord(ctx) ? ctx : {};
-	return {
-		sessionKey:
-			readString(c.sessionKey) ??
-			readString(event.sessionKey) ??
-			readString(c.sessionId) ??
-			readString(event.sessionId),
-		agentId: readString(c.agentId) ?? readString(event.agentId),
-		project: firstNonEmptyString(
-			c.workspaceDir,
-			c.project,
-			c.cwd,
-			c.workspace,
-			event.cwd,
-			event.project,
-			event.workspace,
-		),
-		sessionFile: readString(c.sessionFile) ?? readString(event.sessionFile) ?? readString(event.transcriptPath),
-		sessionId: readString(c.sessionId) ?? readString(event.sessionId),
-	};
-}
-
-function resolveCompactionSessionFile(
-	event: Record<string, unknown>,
-	sessionFile: string | undefined,
-): string | undefined {
-	const compaction = isRecord(event.compaction) ? event.compaction : undefined;
-	return firstNonEmptyString(
-		event.sessionFile,
-		event.session_file,
-		compaction?.sessionFile,
-		compaction?.session_file,
-		sessionFile,
-	);
-}
-
-function readSessionFileProject(sessionFile: string | undefined): string | undefined {
-	if (!sessionFile || !existsSync(sessionFile)) return undefined;
-
-	try {
-		const lines = readFileSync(sessionFile, "utf-8")
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => line.length > 0);
-		for (const line of lines) {
-			try {
-				const row = JSON.parse(line) as unknown;
-				if (!isRecord(row) || row.type !== "session") continue;
-				return firstNonEmptyString(row.cwd, row.project, row.workspace);
-			} catch {}
-		}
-	} catch {}
-
-	return undefined;
-}
-
-function extractCompactionSummary(event: Record<string, unknown>, sessionFile: string | undefined): string | undefined {
-	const direct = readString(event.summary);
-	if (direct) return direct;
-
-	const compaction = isRecord(event.compaction) ? event.compaction : undefined;
-	const nested = readString(compaction?.summary);
-	if (nested) return nested;
-	if (!sessionFile || !existsSync(sessionFile)) return undefined;
-
-	try {
-		const lines = readFileSync(sessionFile, "utf-8")
-			.split("\n")
-			.map((line) => line.trim())
-			.filter((line) => line.length > 0);
-		for (let i = lines.length - 1; i >= 0; i--) {
-			try {
-				const row = JSON.parse(lines[i]) as unknown;
-				if (!isRecord(row) || row.type !== "compaction") continue;
-				const summary = readString(row.summary);
-				if (summary) return summary;
-			} catch {}
-		}
-	} catch {}
-
-	return undefined;
-}
-
-function buildCompactionEventKey(
-	event: Record<string, unknown>,
-	options: {
-		agentId?: string;
-		sessionKey?: string;
-		summary?: string;
-	},
-): string {
-	const compaction = isRecord(event.compaction) ? event.compaction : undefined;
-	const parts = [
-		options.agentId ?? "-",
-		options.sessionKey ?? "-",
-		readString(event.runId) ?? readString(compaction?.runId) ?? "-",
-		readString(event.id) ?? readString(compaction?.id) ?? "-",
-		String(
-			readNumber(event.messageCount) ??
-				readNumber(event.compactingCount) ??
-				readNumber(event.compactedCount) ??
-				readNumber(compaction?.messageCount) ??
-				readNumber(compaction?.compactingCount) ??
-				readNumber(compaction?.compactedCount) ??
-				-1,
-		),
-		String(readNumber(event.tokenCount) ?? readNumber(compaction?.tokenCount) ?? -1),
-		options.summary ?? "-",
-	];
-	return parts.join("|");
-}
 const REG_KEY = "__signet_openclaw_registered__signet-memory-openclaw";
 
 function readRegistered(): boolean {
@@ -1278,389 +471,7 @@ const signetPlugin = {
 				});
 			}
 
-			api.registerTool(
-				{
-					name: "memory_search",
-					label: "Memory Search",
-					description: "Search memories using hybrid vector + keyword search",
-					parameters: Type.Object({
-						query: Type.String({ description: "Search query text" }),
-						limit: Type.Optional(
-							Type.Number({
-								description: "Max results to return (default 10)",
-							}),
-						),
-						type: Type.Optional(
-							Type.String({
-								description: "Filter by memory type",
-							}),
-						),
-						min_score: Type.Optional(
-							Type.Number({
-								description: "Minimum relevance score threshold",
-							}),
-						),
-						aggregate: Type.Optional(
-							Type.Boolean({
-								description: "Synthesize an aggregate answer from recall evidence",
-							}),
-						),
-						aggregate_budget: Type.Optional(
-							Type.Union([Type.Literal("small"), Type.Literal("medium"), Type.Literal("large")]),
-						),
-						save_aggregate: Type.Optional(
-							Type.Boolean({
-								description: "Save aggregate answers as memories",
-							}),
-						),
-						session_key: Type.Optional(
-							Type.String({
-								description: "Session key for per-context recall dedupe",
-							}),
-						),
-						agent_id: Type.Optional(
-							Type.String({
-								description: "Agent ID for scoped recall dedupe",
-							}),
-						),
-						include_recalled: Type.Optional(
-							Type.Boolean({
-								description: "Include rows already recalled in this context",
-							}),
-						),
-					}),
-					async execute(_toolCallId, params) {
-						const {
-							query,
-							limit,
-							type,
-							min_score,
-							aggregate,
-							aggregate_budget,
-							save_aggregate,
-							session_key,
-							agent_id,
-							include_recalled,
-						} = params as {
-							query: string;
-							limit?: number;
-							type?: string;
-							min_score?: number;
-							aggregate?: boolean;
-							aggregate_budget?: "small" | "medium" | "large";
-							save_aggregate?: boolean;
-							session_key?: string;
-							agent_id?: string;
-							include_recalled?: boolean;
-						};
-						try {
-							const recall = await memoryRecall(query, {
-								...opts,
-								limit,
-								type,
-								minScore: min_score,
-								aggregate,
-								aggregateBudget: aggregate_budget,
-								saveAggregate: save_aggregate,
-								sessionKey: session_key,
-								agentId: agent_id,
-								includeRecalled: include_recalled,
-							});
-							const parsed = parseRecallPayload(recall);
-							if (parsed.rows.length === 0) {
-								return textResult("No relevant memories found.", {
-									count: 0,
-								});
-							}
-							return textResult(formatRecallText(recall), {
-								count: parsed.rows.length,
-								memories: parsed.rows,
-								meta: parsed.meta,
-							});
-						} catch (err) {
-							return textResult(`Memory search failed: ${String(err)}`, { error: String(err) });
-						}
-					},
-				},
-				{ name: "memory_search" },
-			);
-
-			api.registerTool(
-				{
-					name: "memory_store",
-					label: "Memory Store",
-					description: "Save a new memory",
-					parameters: Type.Object({
-						content: Type.String({
-							description: "Memory content to save",
-						}),
-						type: Type.Optional(
-							Type.String({
-								description: "Memory type (fact, preference, decision, etc.)",
-							}),
-						),
-						importance: Type.Optional(
-							Type.Number({
-								description: "Importance score 0-1",
-							}),
-						),
-						tags: Type.Optional(
-							Type.String({
-								description: "Comma-separated tags for categorization",
-							}),
-						),
-					}),
-					async execute(_toolCallId, params) {
-						const { content, type, importance, tags } = params as {
-							content: string;
-							type?: string;
-							importance?: number;
-							tags?: string;
-						};
-						try {
-							const id = await memoryStore(content, {
-								...opts,
-								type,
-								importance,
-								tags,
-							});
-							if (id) {
-								return textResult(`Memory saved successfully (id: ${id})`, { id });
-							}
-							return textResult("Failed to save memory.", {
-								error: "no id returned",
-							});
-						} catch (err) {
-							return textResult(`Memory store failed: ${String(err)}`, { error: String(err) });
-						}
-					},
-				},
-				{ name: "memory_store" },
-			);
-
-			api.registerTool(
-				{
-					name: "session_search",
-					label: "Session Search",
-					description: "Search active or completed session transcripts",
-					parameters: Type.Object({
-						query: Type.String({
-							description: "Natural language or keyword query",
-						}),
-						session_key: Type.Optional(
-							Type.String({
-								description: "Specific transcript session key to search",
-							}),
-						),
-						current_session_key: Type.Optional(
-							Type.String({
-								description: "Current session key; sub-agent lineage may resolve this to the parent session",
-							}),
-						),
-						agent_id: Type.Optional(
-							Type.String({
-								description: "Agent scope, default default",
-							}),
-						),
-						project: Type.Optional(
-							Type.String({
-								description: "Optional project path filter",
-							}),
-						),
-						limit: Type.Optional(
-							Type.Number({
-								description: "Max results to return (default 10, max 20)",
-							}),
-						),
-					}),
-					async execute(_toolCallId, params) {
-						const { query, session_key, current_session_key, agent_id, project, limit } = params as {
-							query: string;
-							session_key?: string;
-							current_session_key?: string;
-							agent_id?: string;
-							project?: string;
-							limit?: number;
-						};
-						try {
-							const result = await sessionSearch(query, {
-								...opts,
-								sessionKey: session_key,
-								currentSessionKey: current_session_key,
-								agentId: agent_id,
-								project,
-								limit,
-							});
-							if (result === null) {
-								return textResult("Session search failed: daemon unavailable", { error: "daemon unavailable" });
-							}
-							return textResult(JSON.stringify(result, null, 2), { result });
-						} catch (err) {
-							return textResult(`Session search failed: ${String(err)}`, { error: String(err) });
-						}
-					},
-				},
-				{ name: "session_search" },
-			);
-
-			api.registerTool(
-				{
-					name: "memory_get",
-					label: "Memory Get",
-					description: "Get a single memory by its ID",
-					parameters: Type.Object({
-						id: Type.String({
-							description: "Memory ID to retrieve",
-						}),
-					}),
-					async execute(_toolCallId, params) {
-						const { id } = params as { id: string };
-						try {
-							const memory = await memoryGet(id, opts);
-							if (memory) {
-								return textResult(JSON.stringify(memory, null, 2), {
-									memory,
-								});
-							}
-							return textResult(`Memory ${id} not found.`, {
-								error: "not found",
-							});
-						} catch (err) {
-							return textResult(`Memory get failed: ${String(err)}`, { error: String(err) });
-						}
-					},
-				},
-				{ name: "memory_get" },
-			);
-
-			api.registerTool(
-				{
-					name: "memory_list",
-					label: "Memory List",
-					description: "List memories with optional filters",
-					parameters: Type.Object({
-						limit: Type.Optional(
-							Type.Number({
-								description: "Max results (default 50, max 50)",
-							}),
-						),
-						offset: Type.Optional(Type.Number({ description: "Pagination offset" })),
-						type: Type.Optional(
-							Type.String({
-								description: "Filter by memory type",
-							}),
-						),
-					}),
-					async execute(_toolCallId, params) {
-						const { limit, offset, type } = params as {
-							limit?: number;
-							offset?: number;
-							type?: string;
-						};
-						const ITEM_CHAR_LIMIT = 500;
-						const TOTAL_CHAR_BUDGET = 8000;
-						try {
-							const result = await memoryList({
-								...opts,
-								limit: Math.min(limit ?? 50, 50),
-								offset,
-								type,
-							});
-							const lines: string[] = [];
-							let totalChars = 0;
-							for (const m of result.memories) {
-								const content =
-									m.content.length > ITEM_CHAR_LIMIT ? `${m.content.slice(0, ITEM_CHAR_LIMIT)}[truncated]` : m.content;
-								const line = `- [${m.type}] ${content} (id: ${m.id})`;
-								if (totalChars + line.length > TOTAL_CHAR_BUDGET) break;
-								lines.push(line);
-								totalChars += line.length;
-							}
-							return textResult(`${lines.length} of ${result.memories.length} memories:\n\n${lines.join("\n")}`, {
-								count: result.memories.length,
-								shown: lines.length,
-								stats: result.stats,
-							});
-						} catch (err) {
-							return textResult(`Memory list failed: ${String(err)}`, { error: String(err) });
-						}
-					},
-				},
-				{ name: "memory_list" },
-			);
-
-			api.registerTool(
-				{
-					name: "memory_modify",
-					label: "Memory Modify",
-					description: "Edit an existing memory by ID",
-					parameters: Type.Object({
-						id: Type.String({
-							description: "Memory ID to modify",
-						}),
-						reason: Type.String({
-							description: "Why this edit is being made",
-						}),
-						content: Type.Optional(Type.String({ description: "New content" })),
-						type: Type.Optional(Type.String({ description: "New type" })),
-						importance: Type.Optional(Type.Number({ description: "New importance" })),
-						tags: Type.Optional(
-							Type.String({
-								description: "New tags (comma-separated)",
-							}),
-						),
-					}),
-					async execute(_toolCallId, params) {
-						const { id, reason, content, type, importance, tags } = params as {
-							id: string;
-							reason: string;
-							content?: string;
-							type?: string;
-							importance?: number;
-							tags?: string;
-						};
-						try {
-							const ok = await memoryModify(id, { content, type, importance, tags, reason }, opts);
-							return textResult(ok ? `Memory ${id} updated.` : `Failed to update memory ${id}.`, { success: ok });
-						} catch (err) {
-							return textResult(`Memory modify failed: ${String(err)}`, { error: String(err) });
-						}
-					},
-				},
-				{ name: "memory_modify" },
-			);
-
-			api.registerTool(
-				{
-					name: "memory_forget",
-					label: "Memory Forget",
-					description: "Soft-delete a memory by ID",
-					parameters: Type.Object({
-						id: Type.String({
-							description: "Memory ID to forget",
-						}),
-						reason: Type.String({
-							description: "Why this memory should be forgotten",
-						}),
-					}),
-					async execute(_toolCallId, params) {
-						const { id, reason } = params as {
-							id: string;
-							reason: string;
-						};
-						try {
-							const ok = await memoryForget(id, {
-								...opts,
-								reason,
-							});
-							return textResult(ok ? `Memory ${id} forgotten.` : `Failed to forget memory ${id}.`, { success: ok });
-						} catch (err) {
-							return textResult(`Memory forget failed: ${String(err)}`, { error: String(err) });
-						}
-					},
-				},
-				{ name: "memory_forget" },
-			);
+			registerMemoryTools(api, opts);
 			if (mode === "tool-discovery") return;
 
 			const claimedSessions = new Set<string>();
@@ -1746,9 +557,12 @@ const signetPlugin = {
 					});
 			};
 
-			const resolveCompactionProject = (event: Record<string, unknown>, resolved: ResolvedCtx): string | undefined => {
+			const resolveCompactionProject = (
+				event: Record<string, unknown>,
+				resolved: ResolvedCtx,
+				sessionFileProject: string | undefined,
+			): string | undefined => {
 				const compaction = isRecord(event.compaction) ? event.compaction : undefined;
-				const sessionFile = resolveCompactionSessionFile(event, resolved.sessionFile);
 				return firstNonEmptyString(
 					event.cwd,
 					event.project,
@@ -1757,7 +571,7 @@ const signetPlugin = {
 					compaction?.cwd,
 					compaction?.workspace,
 					resolved.project,
-					readSessionFileProject(sessionFile),
+					sessionFileProject,
 				);
 			};
 
@@ -1775,18 +589,14 @@ const signetPlugin = {
 			const handleBeforeCompaction = async (event: Record<string, unknown>, ctx: unknown): Promise<unknown> => {
 				if (!cfg.enabled || !daemonReachable) return undefined;
 				const resolved = resolveCtx(event, ctx);
-				const messageCount =
-					typeof event.messageCount === "number"
-						? event.messageCount
-						: typeof event.compactingCount === "number"
-							? event.compactingCount
-							: typeof event.compactedCount === "number"
-								? event.compactedCount
-								: isRecord(event.compaction) && typeof event.compaction.compactingCount === "number"
-									? event.compaction.compactingCount
-									: isRecord(event.compaction) && typeof event.compaction.compactedCount === "number"
-										? event.compaction.compactedCount
-										: undefined;
+				const compaction = isRecord(event.compaction) ? event.compaction : undefined;
+				const messageCount = firstNumber(
+					event.messageCount,
+					event.compactingCount,
+					event.compactedCount,
+					compaction?.compactingCount,
+					compaction?.compactedCount,
+				);
 				const dedupeKey = buildCompactionEventKey(event, {
 					agentId: resolved.agentId,
 					sessionKey: resolved.sessionKey,
@@ -1825,7 +635,9 @@ const signetPlugin = {
 					checkpointTurns.delete(scopedKey);
 				}
 				const sessionFile = resolveCompactionSessionFile(event, resolved.sessionFile);
-				const summary = extractCompactionSummary(event, sessionFile);
+				const eventSummary = extractCompactionSummary(event);
+				const sessionMetadata = readCompactionSessionMetadata(sessionFile, !eventSummary);
+				const summary = eventSummary ?? sessionMetadata.summary;
 				if (!summary) {
 					api.logger.warn(
 						`signet-memory: compaction summary unavailable, skipping save${sessionFile ? ` (${sessionFile})` : ""}`,
@@ -1845,7 +657,7 @@ const signetPlugin = {
 				await onCompactionComplete("openclaw", summary, {
 					...opts,
 					agentId: resolved.agentId,
-					project: resolveCompactionProject(event, resolved),
+					project: resolveCompactionProject(event, resolved, sessionMetadata.project),
 					sessionKey: resolved.sessionKey,
 				});
 			};

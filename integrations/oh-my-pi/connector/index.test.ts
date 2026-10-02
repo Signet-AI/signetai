@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -64,6 +64,21 @@ describe("OhMyPiConnector", () => {
 		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_DAEMON_URL", "http://127.0.0.1:4123")');
 		expect(content).toContain(`Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(tmpRoot)})`);
 		expect(content.length).toBeGreaterThan(1_000);
+	});
+
+	it("removes the managed legacy extension after installing the current filename", async () => {
+		const legacyPath = join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.mjs");
+		const installedPath = join(tmpRoot, "agent", "extensions", "signet-oh-my-pi.js");
+		mkdirSync(dirname(legacyPath), { recursive: true });
+		writeFileSync(legacyPath, "// SIGNET_MANAGED_OH_MY_PI_EXTENSION\n", "utf8");
+
+		const connector = new OhMyPiConnector();
+		const result = await connector.install(tmpRoot);
+
+		expect(result.filesWritten).toContain(installedPath);
+		expect(existsSync(installedPath)).toBe(true);
+		expect(existsSync(legacyPath)).toBe(false);
+		expect(connector.isInstalled()).toBe(true);
 	});
 
 	it("falls back to default agent id when none is configured at install time", async () => {

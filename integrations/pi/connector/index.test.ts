@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -78,6 +78,20 @@ describe("PiConnector", () => {
 		expect(content).toContain('Reflect.set(__signetRuntimeEnv, "SIGNET_API_KEY", "sig_sk_test_connector")');
 		expect(content).toContain(`Reflect.set(__signetRuntimeEnv, "SIGNET_PATH", ${JSON.stringify(tmpRoot)})`);
 		expect(content.length).toBeGreaterThan(1_000);
+	});
+
+	it("preserves an unmanaged extension when refusing to install over it", async () => {
+		const installedPath = join(tmpRoot, "agent", "extensions", "signet-pi.js");
+		const configPath = join(tmpRoot, ".config-home", "signet", "pi.json");
+		const userContent = "// user-owned Pi extension\n";
+		mkdirSync(dirname(installedPath), { recursive: true });
+		writeFileSync(installedPath, userContent, "utf8");
+
+		await expect(new PiConnector().install(tmpRoot)).rejects.toThrow(
+			`Refusing to overwrite unmanaged pi extension at ${installedPath}. Move or remove it first, then rerun setup.`,
+		);
+		expect(readFileSync(installedPath, "utf8")).toBe(userContent);
+		expect(existsSync(configPath)).toBe(false);
 	});
 
 	it("writes a portable extension with no baked-in SIGNET_PATH for the default workspace (#1015)", async () => {

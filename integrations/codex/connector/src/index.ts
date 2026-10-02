@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	BaseConnector,
 	type InstallResult,
@@ -41,6 +42,7 @@ export type SignetMcpConfig =
 
 const CODEX_PLUGIN_MARKETPLACE_NAME = "signet-local";
 const CODEX_PLUGIN_NAME = "signet";
+const CODEX_CONNECTOR_DIR = dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_CONFIG_NAME = `${CODEX_PLUGIN_NAME}@${CODEX_PLUGIN_MARKETPLACE_NAME}`;
 const CODEX_PLUGIN_VERSION = "0.1.0";
 const CODEX_PLUGIN_DESCRIPTION =
@@ -58,6 +60,7 @@ const CODEX_PLUGIN_INTERFACE = {
 	brandColor: "#2563EB",
 } as const;
 const CODEX_PLUGIN_KEYWORDS = ["signet", "recall", "sources", "sessions", "ontology", "codex"] as const;
+const CODEX_PLUGIN_SKILL_NAMES = ["signet-recall", "signet-sessions", "signet-ontology", "signet-save-note"] as const;
 
 interface CodexPluginBundleFile {
 	readonly relativePath: string;
@@ -416,6 +419,15 @@ export function resolveCodexCli(
 	return null;
 }
 
+function resolvePluginSkillsDirectory(): string {
+	const packaged = join(CODEX_CONNECTOR_DIR, "plugin-assets", "skills");
+	if (existsSync(packaged)) return packaged;
+
+	const workspace = join(CODEX_CONNECTOR_DIR, "..", "..", "plugin", "plugins", CODEX_PLUGIN_NAME, "skills");
+	if (existsSync(workspace)) return workspace;
+	throw new Error("Cannot find Codex plugin skill assets in the connector package");
+}
+
 function codexPluginBundleFiles(
 	signetArgs: readonly string[],
 	mcp: SignetMcpConfig,
@@ -446,6 +458,7 @@ function codexPluginBundleFiles(
 		license: "Apache-2.0",
 		keywords: CODEX_PLUGIN_KEYWORDS,
 	};
+	const skillSources = resolvePluginSkillsDirectory();
 	return [
 		{
 			relativePath: ".agents/plugins/marketplace.json",
@@ -487,64 +500,10 @@ function codexPluginBundleFiles(
 			relativePath: `plugins/${CODEX_PLUGIN_NAME}/hooks/hooks.json`,
 			content: `${JSON.stringify(hookFile, null, 2)}\n`,
 		},
-		{
-			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/signet-recall/SKILL.md`,
-			content: [
-				"---",
-				"name: signet-recall",
-				"description: Use Signet-specific recall and source search from Codex without confusing it with Codex native memory.",
-				"---",
-				"",
-				"# Signet Recall",
-				"",
-				"Use `signet_recall` for explicit Signet recall. Ask natural questions with an entity, event, and timeframe when possible. Use `signet_source_search` when the answer should come from source-backed artifacts rather than ordinary saved memories.",
-				"",
-				"Do not treat Codex native memory and Signet memory as competing stores. Codex native memory is a source that Signet can index with provenance.",
-				"",
-			].join("\n"),
-		},
-		{
-			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/signet-sessions/SKILL.md`,
-			content: [
-				"---",
-				"name: signet-sessions",
-				"description: Search Signet transcript/session evidence from Codex.",
-				"---",
-				"",
-				"# Signet Sessions",
-				"",
-				"Use `signet_session_search` when prior transcript evidence matters. Keep transcript lookup separate from memory recall; do not fold session search into ordinary memory search.",
-				"",
-			].join("\n"),
-		},
-		{
-			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/signet-ontology/SKILL.md`,
-			content: [
-				"---",
-				"name: signet-ontology",
-				"description: Navigate Signet ontology and knowledge graph state from Codex.",
-				"---",
-				"",
-				"# Signet Ontology",
-				"",
-				"Use Signet ontology tools for reviewed structured facts, claim history, entity dependencies, and graph hygiene. Raw Codex memory files are evidence, not ontology by themselves.",
-				"",
-			].join("\n"),
-		},
-		{
-			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/signet-save-note/SKILL.md`,
-			content: [
-				"---",
-				"name: signet-save-note",
-				"description: Save explicit notes into Codex native memory through Signet.",
-				"---",
-				"",
-				"# Signet Save Note",
-				"",
-				"Use `signet_save_note` only for explicit durable notes. It writes small ad-hoc markdown notes under Codex native memory extensions and never edits Codex-generated `MEMORY.md` or `memory_summary.md`.",
-				"",
-			].join("\n"),
-		},
+		...CODEX_PLUGIN_SKILL_NAMES.map((name) => ({
+			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/${name}/SKILL.md`,
+			content: readFileSync(join(skillSources, name, "SKILL.md"), "utf-8"),
+		})),
 	];
 }
 
@@ -881,6 +840,14 @@ function isSignetMatcherGroup(group: unknown): boolean {
 	return hooksArr.some(isSignetHookHandler);
 }
 
+function hasSignetMatcherGroups(file: HooksFile | null): boolean {
+	const events = file?.hooks;
+	if (!events || typeof events !== "object") return false;
+	return Object.values(events as Record<string, unknown[]>).some(
+		(groups) => Array.isArray(groups) && groups.some(isSignetMatcherGroup),
+	);
+}
+
 function commandExecutable(command: string): string | null {
 	let normalized = command.trim();
 	for (let i = 0; i < 2; i++) {
@@ -1035,7 +1002,7 @@ function tomlDottedKeyQuote(value: string): string {
 	return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n")}"`;
 }
 
-function patchHookTrustState(path: string, entries: readonly HookTrustEntry[]): boolean {
+function updateHookTrustState(path: string, entries: readonly HookTrustEntry[], mode: "enable" | "remove"): boolean {
 	if (entries.length === 0 || !existsSync(path)) return false;
 
 	const content = readFileSync(path, "utf-8");
@@ -1059,17 +1026,20 @@ function patchHookTrustState(path: string, entries: readonly HookTrustEntry[]): 
 		.join("\n")
 		.replace(/\n{3,}/g, "\n\n")
 		.trimEnd()}\n`;
-	const blocks = entries
-		.map((entry) =>
-			[
-				`[hooks.state.${tomlDottedKeyQuote(entry.key)}]`,
-				"enabled = true",
-				`trusted_hash = ${tomlQuote(entry.trustedHash)}`,
-			].join("\n"),
-		)
-		.join("\n\n");
-	let updated = `${existing.trimEnd()}\n\n${blocks}\n`;
-	if (content.includes("# Signet MCP server") && !updated.includes("# Signet MCP server")) {
+	const blocks =
+		mode === "enable"
+			? entries
+					.map((entry) =>
+						[
+							`[hooks.state.${tomlDottedKeyQuote(entry.key)}]`,
+							"enabled = true",
+							`trusted_hash = ${tomlQuote(entry.trustedHash)}`,
+						].join("\n"),
+					)
+					.join("\n\n")
+			: "";
+	let updated = mode === "enable" ? `${existing.trimEnd()}\n\n${blocks}\n` : existing;
+	if (mode === "enable" && content.includes("# Signet MCP server") && !updated.includes("# Signet MCP server")) {
 		updated = updated.replace("[mcp_servers.signet]", "# Signet MCP server\n[mcp_servers.signet]");
 	}
 	if (updated === content) return false;
@@ -1077,33 +1047,12 @@ function patchHookTrustState(path: string, entries: readonly HookTrustEntry[]): 
 	return true;
 }
 
+function patchHookTrustState(path: string, entries: readonly HookTrustEntry[]): boolean {
+	return updateHookTrustState(path, entries, "enable");
+}
+
 function removeHookTrustState(path: string, entries: readonly HookTrustEntry[]): boolean {
-	if (entries.length === 0 || !existsSync(path)) return false;
-
-	const content = readFileSync(path, "utf-8");
-	const lines = content.split("\n");
-	const filtered: string[] = [];
-	let skipping = false;
-
-	for (const line of lines) {
-		const trimmed = line.trim();
-		if (trimmed.startsWith("[hooks.state.") && trimmed.endsWith("]")) {
-			skipping = entries.some((entry) => trimmed.includes(tomlDottedKeyQuote(entry.key)));
-			if (skipping) continue;
-		} else if (skipping && trimmed.startsWith("[") && trimmed.endsWith("]")) {
-			skipping = false;
-		}
-
-		if (!skipping) filtered.push(line);
-	}
-
-	const updated = `${filtered
-		.join("\n")
-		.replace(/\n{3,}/g, "\n\n")
-		.trimEnd()}\n`;
-	if (updated === content) return false;
-	writeFileSync(path, updated);
-	return true;
+	return updateHookTrustState(path, entries, "remove");
 }
 
 function migrateLegacyHooksFile(file: HooksFile): HooksFile {
@@ -1256,6 +1205,41 @@ function unpatchNativePluginConfig(path: string): boolean {
 	return true;
 }
 
+function runNativePluginCommand(
+	codex: string,
+	args: readonly string[],
+	codexHome: string,
+	outputMode: "capture" | "ignore" = "capture",
+): {
+	readonly result: ReturnType<typeof spawnSync> | null;
+	readonly error: unknown | null;
+} {
+	try {
+		const env = { ...process.env, CODEX_HOME: codexHome };
+		const invocation = codexCommandInvocation(codex, [...args], process.platform, env);
+		if (outputMode === "capture") {
+			return {
+				result: spawnSync(invocation.command, invocation.args, {
+					encoding: "utf-8",
+					timeout: 15_000,
+					env: invocation.env,
+				}),
+				error: null,
+			};
+		}
+		return {
+			result: spawnSync(invocation.command, invocation.args, {
+				stdio: "ignore",
+				timeout: 15_000,
+				env: invocation.env,
+			}),
+			error: null,
+		};
+	} catch (error) {
+		return { result: null, error };
+	}
+}
+
 export class CodexConnector extends BaseConnector {
 	readonly name = "Codex";
 	readonly harnessId = "codex";
@@ -1286,14 +1270,8 @@ export class CodexConnector extends BaseConnector {
 		const codex = this.resolveCodexCli();
 		if (!codex) return false;
 		try {
-			const env = { ...process.env, CODEX_HOME: this.getCodexHome() };
-			const invocation = codexCommandInvocation(codex, ["plugin", "--help"], process.platform, env);
-			const result = spawnSync(invocation.command, invocation.args, {
-				stdio: "ignore",
-				timeout: 15_000,
-				env: invocation.env,
-			});
-			return result.status === 0 && !result.error;
+			const attempt = runNativePluginCommand(codex, ["plugin", "--help"], this.getCodexHome(), "ignore");
+			return attempt.result?.status === 0 && !attempt.result.error && attempt.error === null;
 		} catch {
 			return false;
 		}
@@ -1312,29 +1290,17 @@ export class CodexConnector extends BaseConnector {
 				warning: "Codex native plugin install skipped because no usable Codex executable was found",
 			};
 		}
-		let marketplaceResult: ReturnType<typeof spawnSync> | null = null;
-		let marketplaceError: unknown = null;
-		try {
-			const env = { ...process.env, CODEX_HOME: codexHome };
-			const invocation = codexCommandInvocation(
-				codex,
-				["plugin", "marketplace", "add", marketplaceRoot],
-				process.platform,
-				env,
-			);
-			marketplaceResult = spawnSync(invocation.command, invocation.args, {
-				encoding: "utf-8",
-				timeout: 15_000,
-				env: invocation.env,
-			});
-		} catch (error) {
-			marketplaceError = error;
-		}
-		if (marketplaceError || !marketplaceResult) {
+		const marketplaceAttempt = runNativePluginCommand(
+			codex,
+			["plugin", "marketplace", "add", marketplaceRoot],
+			codexHome,
+		);
+		const marketplaceResult = marketplaceAttempt.result;
+		if (marketplaceAttempt.error || !marketplaceResult) {
 			return {
 				success: false,
 				filesWritten: [],
-				warning: `Codex native plugin marketplace registration failed; falling back to compatibility hooks/MCP: ${String(marketplaceError ?? "command did not return a result")}`,
+				warning: `Codex native plugin marketplace registration failed; falling back to compatibility hooks/MCP: ${String(marketplaceAttempt.error ?? "command did not return a result")}`,
 			};
 		}
 		const marketplaceOutput = `${marketplaceResult.stdout ?? ""}\n${marketplaceResult.stderr ?? ""}`;
@@ -1347,29 +1313,13 @@ export class CodexConnector extends BaseConnector {
 				}`,
 			};
 		}
-		let result: ReturnType<typeof spawnSync> | null = null;
-		let installError: unknown = null;
-		try {
-			const env = { ...process.env, CODEX_HOME: codexHome };
-			const invocation = codexCommandInvocation(
-				codex,
-				["plugin", "add", CODEX_PLUGIN_CONFIG_NAME],
-				process.platform,
-				env,
-			);
-			result = spawnSync(invocation.command, invocation.args, {
-				encoding: "utf-8",
-				timeout: 15_000,
-				env: invocation.env,
-			});
-		} catch (error) {
-			installError = error;
-		}
-		if (installError || !result) {
+		const installAttempt = runNativePluginCommand(codex, ["plugin", "add", CODEX_PLUGIN_CONFIG_NAME], codexHome);
+		const result = installAttempt.result;
+		if (installAttempt.error || !result) {
 			return {
 				success: false,
 				filesWritten: [],
-				warning: `Codex native plugin install failed; falling back to compatibility hooks/MCP: ${String(installError ?? "command did not return a result")}`,
+				warning: `Codex native plugin install failed; falling back to compatibility hooks/MCP: ${String(installAttempt.error ?? "command did not return a result")}`,
 			};
 		}
 		const output = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
@@ -1392,24 +1342,19 @@ export class CodexConnector extends BaseConnector {
 	protected removeNativePlugin(codexHome: string): void {
 		const codex = this.resolveCodexCli();
 		if (!codex) return;
-		const env = { ...process.env, CODEX_HOME: codexHome };
-		const options = { stdio: "ignore" as const, timeout: 15_000 };
-		try {
-			const removePlugin = codexCommandInvocation(
-				codex,
-				["plugin", "remove", CODEX_PLUGIN_CONFIG_NAME],
-				process.platform,
-				env,
-			);
-			spawnSync(removePlugin.command, removePlugin.args, { ...options, env: removePlugin.env });
-			const removeMarketplace = codexCommandInvocation(
-				codex,
-				["plugin", "marketplace", "remove", CODEX_PLUGIN_MARKETPLACE_NAME],
-				process.platform,
-				env,
-			);
-			spawnSync(removeMarketplace.command, removeMarketplace.args, { ...options, env: removeMarketplace.env });
-		} catch {}
+		const pluginRemoval = runNativePluginCommand(
+			codex,
+			["plugin", "remove", CODEX_PLUGIN_CONFIG_NAME],
+			codexHome,
+			"ignore",
+		);
+		if (pluginRemoval.result === null) return;
+		runNativePluginCommand(
+			codex,
+			["plugin", "marketplace", "remove", CODEX_PLUGIN_MARKETPLACE_NAME],
+			codexHome,
+			"ignore",
+		);
 	}
 
 	private getHooksJsonPath(): string {
@@ -1465,32 +1410,25 @@ export class CodexConnector extends BaseConnector {
 		}
 	}
 
+	private removeCompatibilityHooksFile(hooksPath: string, existing: HooksFile | null): "removed" | "patched" | null {
+		if (!existing || (!hasLegacySignetMarker(existing) && !hasSignetMatcherGroups(existing))) return null;
+		const cleaned = removeSignetEntries(existing);
+		const remaining = Object.keys(cleaned).filter((key) => key !== "hooks");
+		const hooksRemain = cleaned.hooks && Object.keys(cleaned.hooks as Record<string, unknown>).length > 0;
+		if (remaining.length === 0 && !hooksRemain) {
+			rmSync(hooksPath, { force: true });
+			return "removed";
+		}
+		writeHooksFile(hooksPath, cleaned);
+		return "patched";
+	}
+
 	private removeCompatibilityHooks(configsPatched: string[]): void {
 		const hooksPath = this.getHooksJsonPath();
 		const existing = readHooksFile(hooksPath);
 		const hookTrustEntries = existing ? buildHookTrustEntries(hooksPath, existing) : [];
-		if (existing) {
-			const hasMarker = hasLegacySignetMarker(existing);
-			const events = existing.hooks;
-			const hasHandlers =
-				events &&
-				typeof events === "object" &&
-				Object.values(events as Record<string, unknown[]>).some(
-					(groups) => Array.isArray(groups) && groups.some(isSignetMatcherGroup),
-				);
-			if (hasMarker || hasHandlers) {
-				const cleaned = removeSignetEntries(existing);
-				const remaining = Object.keys(cleaned).filter((k) => k !== "hooks");
-				const hooksRemain = cleaned.hooks && Object.keys(cleaned.hooks as Record<string, unknown>).length > 0;
-				if (remaining.length === 0 && !hooksRemain) {
-					rmSync(hooksPath, { force: true });
-				} else {
-					writeHooksFile(hooksPath, cleaned);
-				}
-				if (!configsPatched.includes(hooksPath)) {
-					configsPatched.push(hooksPath);
-				}
-			}
+		if (this.removeCompatibilityHooksFile(hooksPath, existing) && !configsPatched.includes(hooksPath)) {
+			configsPatched.push(hooksPath);
 		}
 
 		const configPath = this.getConfigPath();
@@ -1607,28 +1545,9 @@ export class CodexConnector extends BaseConnector {
 		const hooksPath = this.getHooksJsonPath();
 		const existing = readHooksFile(hooksPath);
 		const hookTrustEntries = existing ? buildHookTrustEntries(hooksPath, existing) : [];
-		if (existing) {
-			const hasMarker = hasLegacySignetMarker(existing);
-			const events = existing.hooks;
-			const hasHandlers =
-				events &&
-				typeof events === "object" &&
-				Object.values(events as Record<string, unknown[]>).some(
-					(groups) => Array.isArray(groups) && groups.some(isSignetMatcherGroup),
-				);
-			if (hasMarker || hasHandlers) {
-				const cleaned = removeSignetEntries(existing);
-				const remaining = Object.keys(cleaned).filter((k) => k !== "hooks");
-				const hooksRemain = cleaned.hooks && Object.keys(cleaned.hooks as Record<string, unknown>).length > 0;
-				if (remaining.length === 0 && !hooksRemain) {
-					rmSync(hooksPath, { force: true });
-					filesRemoved.push(hooksPath);
-				} else {
-					writeHooksFile(hooksPath, cleaned);
-					configsPatched.push(hooksPath);
-				}
-			}
-		}
+		const hooksCleanup = this.removeCompatibilityHooksFile(hooksPath, existing);
+		if (hooksCleanup === "removed") filesRemoved.push(hooksPath);
+		if (hooksCleanup === "patched") configsPatched.push(hooksPath);
 		const skillsLink = join(this.getCodexHome(), "skills");
 		if (existsSync(skillsLink)) {
 			rmSync(skillsLink, { force: true });
@@ -1664,10 +1583,6 @@ export class CodexConnector extends BaseConnector {
 		}
 		const file = readHooksFile(this.getHooksJsonPath());
 		if (!file) return false;
-		const events = file.hooks;
-		if (!events || typeof events !== "object") return false;
-		return Object.values(events as Record<string, unknown[]>).some(
-			(groups) => Array.isArray(groups) && groups.some(isSignetMatcherGroup),
-		);
+		return hasSignetMatcherGroups(file);
 	}
 }

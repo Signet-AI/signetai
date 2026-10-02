@@ -1,69 +1,9 @@
-import { afterEach, describe, expect, test } from "bun:test";
-import type { Server } from "bun";
+import { describe, expect, test } from "bun:test";
 import { SignetClient } from "../index.js";
 import type { SdkRecallOptions } from "../types.js";
+import { createMockDaemonFixture } from "../test-utils/mock-daemon.js";
 
-interface RecordedRequest {
-	readonly method: string;
-	readonly path: string;
-	readonly query: Record<string, string>;
-	readonly body: unknown;
-}
-
-let servers: Server[] = [];
-let recorded: RecordedRequest[] = [];
-
-function mockDaemon(responseOverride?: (req: RecordedRequest) => unknown): { server: Server; client: SignetClient } {
-	const server = Bun.serve({
-		port: 0,
-		async fetch(req) {
-			const url = new URL(req.url);
-			const query: Record<string, string> = {};
-			for (const [k, v] of url.searchParams) {
-				query[k] = v;
-			}
-
-			let body: unknown = null;
-			const ct = req.headers.get("content-type");
-			if (ct?.includes("application/json")) {
-				body = await req.json();
-			}
-
-			const entry: RecordedRequest = {
-				method: req.method,
-				path: url.pathname,
-				query,
-				body,
-			};
-			recorded.push(entry);
-
-			const responseBody = responseOverride ? responseOverride(entry) : { ok: true };
-			return Response.json(responseBody);
-		},
-	});
-
-	servers.push(server);
-	const client = new SignetClient({
-		daemonUrl: `http://localhost:${server.port}`,
-		retries: 0,
-	});
-
-	return { server, client };
-}
-
-function lastRequest(): RecordedRequest {
-	const req = recorded[recorded.length - 1];
-	if (!req) throw new Error("No requests recorded");
-	return req;
-}
-
-afterEach(() => {
-	for (const s of servers) {
-		s.stop(true);
-	}
-	servers = [];
-	recorded = [];
-});
+const { mockDaemon, lastRequest, requests } = createMockDaemonFixture();
 
 describe("SignetClient", () => {
 	test("uses IPv4 loopback for the implicit daemon URL", async () => {
@@ -339,7 +279,7 @@ describe("SignetClient", () => {
 
 		expect(typeof client.getPredictorStatus).toBe("function");
 		await expect(client.getPredictorStatus()).rejects.toThrow("Signet predictor APIs were removed in v0.112");
-		expect(recorded).toHaveLength(0);
+		expect(requests()).toHaveLength(0);
 	});
 
 	test("deprecated rememberHook()/recallHook() aliases still work", async () => {
