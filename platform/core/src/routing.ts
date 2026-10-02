@@ -516,7 +516,7 @@ export function parseRoutingTargetRef(
 	const trimmed = value.trim();
 	const slash = trimmed.indexOf("/");
 	if (slash <= 0 || slash === trimmed.length - 1) {
-		return err("invalid-target-ref", `Invalid target ref \"${value}\". Expected target/model.`);
+		return err("invalid-target-ref", `Invalid target ref "${value}". Expected target/model.`);
 	}
 	return ok({
 		targetId: trimmed.slice(0, slash),
@@ -988,7 +988,7 @@ function workloadBindingForOperation(
 		case "interactive":
 		case "tool_planning":
 		case "code_reasoning":
-			return config.workloads?.interactive ?? config.workloads?.default;
+			return config.workloads?.interactive ?? config.workloads?.default ?? config.workloads?.memoryExtraction;
 		case "memory_extraction":
 			return config.workloads?.memoryExtraction ?? config.workloads?.default;
 		case "session_synthesis":
@@ -1101,7 +1101,7 @@ function orderedPreferenceLists(
 	if (!policy) {
 		return {
 			code: "policy-not-found",
-			message: `Routing policy \"${policyId}\" was not found.`,
+			message: `Routing policy "${policyId}" was not found.`,
 		};
 	}
 

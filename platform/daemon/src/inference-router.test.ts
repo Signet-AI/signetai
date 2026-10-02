@@ -506,6 +506,7 @@ printf 'never reached\\n'
 		);
 		const originalLimit = getLlmConcurrencyStatus().limit;
 		let releaseBlocker: (() => void) | undefined;
+		let workerServer: ReturnType<typeof Bun.serve> | undefined;
 		try {
 			configureLlmConcurrency(1);
 			let chatRequests = 0;
@@ -533,6 +534,18 @@ printf 'never reached\\n'
 			);
 			await new Promise((resolve) => setTimeout(resolve, 10));
 
+			workerServer = Bun.serve({
+				port: 0,
+				hostname: "127.0.0.1",
+				fetch: (request) => globalThis.fetch(request.url, { method: request.method, signal: request.signal }),
+			});
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				readFileSync(join(dir, "agent.yaml"), "utf8").replace(
+					"http://127.0.0.1:1234/v1",
+					`http://127.0.0.1:${workerServer.port}/v1`,
+				),
+			);
 			const router = getOrCreateInferenceRouter(dir);
 			const run = router.runAgent(
 				{ operation: "memory_extraction", promptPreview: "pi concurrency" },
@@ -555,16 +568,17 @@ printf 'never reached\\n'
 				{ operation: "memory_extraction", promptPreview: "pi timeout" },
 				"Use the supplied daemon tools.",
 				[],
-				{ timeoutMs: 50 },
+				{ timeoutMs: 1500 },
 			);
 			expect(timedOut.ok).toBe(false);
 			expect(chatRequests).toBe(2);
-			expect(getLlmConcurrencyStatus().running).toBe(1);
+			expect(getLlmConcurrencyStatus().running).toBe(0);
 			for (let i = 0; i < 20 && getLlmConcurrencyStatus().running !== 0; i += 1) {
 				await new Promise((resolve) => setTimeout(resolve, 10));
 			}
 			expect(getLlmConcurrencyStatus().running).toBe(0);
 		} finally {
+			workerServer?.stop(true);
 			releaseBlocker?.();
 			configureLlmConcurrency(originalLimit);
 			rmSync(dir, { recursive: true, force: true });
@@ -670,6 +684,7 @@ printf 'never reached\\n'
       policy: pi-test
 `,
 		);
+		let workerServer: ReturnType<typeof Bun.serve> | undefined;
 		let chatRequests = 0;
 		globalThis.fetch = mock(async (input: RequestInfo | URL) => {
 			if (String(input).endsWith("/models")) return new Response("not found", { status: 404 });
@@ -677,6 +692,18 @@ printf 'never reached\\n'
 			return openAiSseResponse("agent completed", { prompt_tokens: 3, completion_tokens: 1 });
 		}) as unknown as typeof fetch;
 		try {
+			workerServer = Bun.serve({
+				port: 0,
+				hostname: "127.0.0.1",
+				fetch: (request) => globalThis.fetch(request.url, { method: request.method, signal: request.signal }),
+			});
+			writeFileSync(
+				join(dir, "agent.yaml"),
+				readFileSync(join(dir, "agent.yaml"), "utf8").replace(
+					"http://127.0.0.1:1234/v1",
+					`http://127.0.0.1:${workerServer.port}/v1`,
+				),
+			);
 			const router = getOrCreateInferenceRouter(dir);
 			const result = await router.runAgent(
 				{ operation: "memory_extraction", promptPreview: "zero timeout" },
@@ -687,6 +714,7 @@ printf 'never reached\\n'
 			expect(result.ok).toBe(true);
 			expect(chatRequests).toBe(1);
 		} finally {
+			workerServer?.stop(true);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

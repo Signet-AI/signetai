@@ -820,6 +820,12 @@ and defaults to the daemon configured agent; `agent_id`, the `agentId` query
 parameter, the `agent_id` query parameter, and `x-signet-agent-id` are also
 accepted.
 
+Optional `instructionSourceRef` identifies already-recorded evidence in the resolved
+agent scope. The daemon retrieves the complete instruction from that evidence;
+inaccessible, missing, or fragmented instructions fail explicitly. A directed
+pass stays within that agent scope and runs even if its normal backlog is empty.
+The instruction uses the existing audited Dreaming tools and citation gates.
+
 Explicit triggers always run the combined `incremental` runbook (hygiene
 queue first, then content ingestion). The worker's scheduled sweep passes,
 in contrast, alternate between two focused runbooks when both kinds of work

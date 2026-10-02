@@ -1,3 +1,4 @@
+import type { DreamingPassLiveOptions } from "./dreaming";
 import type { DreamingConfig } from "@signet/core";
 import type { DbAccessor } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
@@ -41,7 +42,11 @@ export interface DreamingWorkerHandle {
 		mode: DreamingMode,
 		agentId?: string,
 	): Promise<{ passId: string; applied: number; skipped: number; failed: number; summary: string }>;
-	triggerAsync(mode: DreamingMode, agentId?: string): Promise<string>;
+	triggerAsync(
+		mode: DreamingMode,
+		agentId?: string,
+		userRequest?: DreamingPassLiveOptions["userRequest"],
+	): Promise<string>;
 	readonly running: boolean;
 	readonly activeAgentId: string | null;
 	readonly activePass: Promise<unknown> | null;
@@ -459,7 +464,11 @@ export function startDreamingWorker(
 			return runPass(normalizeAgentId(agentId, defaultAgentId), mode);
 		},
 
-		async triggerAsync(mode: DreamingMode, agentId?: string): Promise<string> {
+		async triggerAsync(
+			mode: DreamingMode,
+			agentId?: string,
+			userRequest?: DreamingPassLiveOptions["userRequest"],
+		): Promise<string> {
 			if (active) throw new AlreadyRunningError();
 			const runAgentId = normalizeAgentId(agentId, defaultAgentId);
 			active = true;
@@ -481,7 +490,9 @@ export function startDreamingWorker(
 				resolve?.();
 			};
 			try {
-				const passScopes = await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance);
+				const passScopes = userRequest
+					? [runAgentId]
+					: await getDreamingWorkerAgentIds(accessor, defaultAgentId, options.ownerMaintenance);
 				const executor = executorForAgent(runAgentId);
 				const passId = options.ownerMaintenance
 					? await createDreamingPassThroughOwner(options.ownerMaintenance, runAgentId, mode)
@@ -496,7 +507,7 @@ export function startDreamingWorker(
 					mode,
 					passId,
 					caps,
-					undefined,
+					{ userRequest },
 					options.ownerMaintenance,
 				);
 				void p

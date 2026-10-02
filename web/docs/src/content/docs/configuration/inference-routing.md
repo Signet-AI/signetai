@@ -302,3 +302,11 @@ Per-agent routing overrides.
 | `roster` | array | Allowed target refs for that agent |
 | `preferredTargets` | map | Task-class target preferences |
 | `pinnedTargets` | map | Hard pins, usually managed by `signet route pin` |
+
+### Dashboard chat assignment
+
+Dashboard chat uses the `interactive` workload. When that binding is absent,
+it inherits `memoryExtraction`, which is the backend assignment exposed in
+Dashboard inference settings. An explicit interactive binding takes precedence;
+an invalid explicit binding fails rather than silently inheriting another model.
+The selected route must support Pi tool execution.

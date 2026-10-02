@@ -1723,3 +1723,25 @@ test("shares the daemon migration control with DB-owner admissions", () => {
 	).toThrow(WorkspaceMigrationRetryableError);
 	expect(control.blockers()).toEqual([]);
 });
+
+test("readonly single-row owner queries finalize before closing their connection", async () => {
+	const directory = mkdtempSync(join(tmpdir(), "signet-owner-readonly-"));
+	const path = join(directory, "memory.db");
+	const db = new Database(path);
+	db.exec("CREATE TABLE items (value TEXT); INSERT INTO items VALUES ('first'), ('second')");
+	db.close(true);
+	const owner = createDbOwnerClient({ dbPath: path });
+	try {
+		await owner.start();
+		for (let index = 0; index < 3; index++) {
+			const handle = owner.submit<{ value: string }>(
+				{ kind: "query", statement: { sql: "SELECT value FROM items", result: "get", readonly: true } },
+				{ operation: "test.readonly-single-row", lane: "read", deadlineMs: 5000 },
+			);
+			expect(await handle.result).toEqual({ value: "first" });
+		}
+	} finally {
+		await owner.close();
+		rmSync(directory, { recursive: true, force: true });
+	}
+}, 20000);

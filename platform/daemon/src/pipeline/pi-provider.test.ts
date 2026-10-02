@@ -288,7 +288,7 @@ describe("pi provider catalog models", () => {
 		try {
 			expect(session.getActiveToolNames()).toEqual([]);
 		} finally {
-			session.dispose();
+			await session.dispose();
 		}
 	});
 
@@ -325,18 +325,25 @@ describe("pi provider catalog models", () => {
 			),
 		) as unknown as typeof fetch;
 
+		const workerServer = Bun.serve({
+			port: 0,
+			hostname: "127.0.0.1",
+			fetch: (request) => globalThis.fetch(request.url),
+		});
 		const provider = createPiModelProvider({
 			executor: "openai-compatible",
 			model: "silent-overflow-test",
-			baseUrl: "http://127.0.0.1:1234/v1",
+			baseUrl: `http://127.0.0.1:${workerServer.port}/v1`,
 			contextWindow: 2,
 		});
 		await expect(provider.generate("ordinary routed call")).resolves.toBe("done");
 		const session = await provider.createAgentSession([]);
 		try {
-			await expect(session.prompt("finish without tools")).resolves.toBeUndefined();
+			const result = await session.prompt("finish without tools");
+			expect(result).toBeUndefined();
 		} finally {
-			session.dispose();
+			await session.dispose();
+			workerServer.stop(true);
 			globalThis.fetch = originalFetch;
 		}
 	});

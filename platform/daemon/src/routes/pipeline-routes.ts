@@ -1103,9 +1103,39 @@ export function registerPipelineRoutes(app: Hono): void {
 		if (scopedAgent.error) return c.json({ error: scopedAgent.error }, 403);
 		const agentId = scopedAgent.agentId;
 
+		let userRequest: { sourceRef: string; content: string } | undefined;
+		if (body.instructionSourceRef !== undefined) {
+			if (typeof body.instructionSourceRef !== "string" || body.instructionSourceRef.length > 200)
+				return c.json({ error: "Invalid instruction source reference" }, 400);
+			const capability = getDreamingCapability(
+				{ accessor: getDbAccessor(), agentId, actor: "dashboard-user" },
+				"search_evidence",
+			);
+			if (!capability) return c.json({ error: "Evidence retrieval unavailable" }, 503);
+			const evidence = await capability.invoke({
+				agentId,
+				sourceRef: body.instructionSourceRef,
+				offset: 0,
+				chunkSize: 16000,
+			});
+			const item = Array.isArray(evidence.items) ? evidence.items[0] : undefined;
+			if (
+				!evidence.ok ||
+				typeof item !== "object" ||
+				item === null ||
+				!("content" in item) ||
+				typeof item.content !== "string" ||
+				!("sourceRef" in item) ||
+				typeof item.sourceRef !== "string"
+			)
+				return c.json({ error: "Instruction evidence not found in this agent scope" }, 400);
+			if ("contentHasNext" in item && item.contentHasNext === true)
+				return c.json({ error: "Instruction is too long; provide a shorter request" }, 400);
+			userRequest = { sourceRef: item.sourceRef, content: item.content };
+		}
 		let passId: string;
 		try {
-			passId = await worker.triggerAsync(mode, agentId);
+			passId = await worker.triggerAsync(mode, agentId, userRequest);
 		} catch (e) {
 			if (e instanceof AlreadyRunningError) return c.json({ error: e.message }, 409);
 			const msg = e instanceof Error ? e.message : String(e);

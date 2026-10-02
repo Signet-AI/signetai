@@ -1,4 +1,12 @@
 export const DASHBOARD_LICENSES = [
+	{ name: "Streamdown", packages: "streamdown", license: "Apache-2.0", href: "https://github.com/vercel/streamdown" },
+	{
+		name: "Stick to Bottom",
+		packages: "use-stick-to-bottom",
+		license: "MIT",
+		href: "https://github.com/samdenty/use-stick-to-bottom",
+	},
+	{ name: "Lucide Icons", packages: "lucide-react", license: "ISC", href: "https://github.com/lucide-icons/lucide" },
 	{
 		name: "React",
 		packages: "react · react-dom",
@@ -60,10 +68,10 @@ export const DASHBOARD_LICENSES = [
 		href: "https://github.com/dcastil/tailwind-merge",
 	},
 	{
-		name: "Three.js",
-		packages: "three",
-		license: "MIT",
-		href: "https://github.com/mrdoob/three.js",
+		name: "D3 Force",
+		packages: "d3-force",
+		license: "ISC",
+		href: "https://github.com/d3/d3-force",
 	},
 	{
 		name: "YAML",
@@ -73,7 +81,7 @@ export const DASHBOARD_LICENSES = [
 	},
 	{
 		name: "DefinitelyTyped",
-		packages: "@types/react · @types/react-dom · @types/three",
+		packages: "@types/react · @types/react-dom · @types/d3-force",
 		license: "MIT",
 		href: "https://github.com/DefinitelyTyped/DefinitelyTyped",
 	},

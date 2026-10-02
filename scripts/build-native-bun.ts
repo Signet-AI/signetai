@@ -144,6 +144,7 @@ const workerEntries = [
 	["harness-health-worker", "platform/daemon/src/harness-health-worker.ts"],
 	["embedding-worker", "platform/daemon/src/embedding-worker.ts"],
 	["dreaming-token-worker", "platform/daemon/src/pipeline/dreaming-token-worker.ts"],
+	["pi-agent-worker", "platform/daemon/src/pipeline/pi-agent-worker.ts"],
 	["worker-thread-smoke", workerThreadSmokeEntry],
 ] as const;
 const nativeExternalArgs = ["--external", "better-sqlite3", "--external", "@napi-rs/keyring"] as const;

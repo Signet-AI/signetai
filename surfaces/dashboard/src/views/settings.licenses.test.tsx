@@ -20,6 +20,9 @@ afterAll(() => {
 });
 
 const EXPECTED_ATTRIBUTIONS: Record<string, { license: string; href: string }> = {
+	streamdown: { license: "Apache-2.0", href: "https://github.com/vercel/streamdown" },
+	"use-stick-to-bottom": { license: "MIT", href: "https://github.com/samdenty/use-stick-to-bottom" },
+	"lucide-react": { license: "ISC", href: "https://github.com/lucide-icons/lucide" },
 	"@fontsource/geist": { license: "OFL-1.1", href: "https://github.com/fontsource/font-files" },
 	"@fontsource/geist-mono": { license: "OFL-1.1", href: "https://github.com/fontsource/font-files" },
 	"@radix-ui/react-slot": { license: "MIT", href: "https://github.com/radix-ui/primitives" },
@@ -33,12 +36,12 @@ const EXPECTED_ATTRIBUTIONS: Record<string, { license: string; href: string }> =
 	"react-dom": { license: "MIT", href: "https://github.com/facebook/react" },
 	sonner: { license: "MIT", href: "https://github.com/emilkowalski/sonner" },
 	"tailwind-merge": { license: "MIT", href: "https://github.com/dcastil/tailwind-merge" },
-	three: { license: "MIT", href: "https://github.com/mrdoob/three.js" },
+	"d3-force": { license: "ISC", href: "https://github.com/d3/d3-force" },
 	yaml: { license: "ISC", href: "https://github.com/eemeli/yaml" },
 	"@tailwindcss/vite": { license: "MIT", href: "https://github.com/tailwindlabs/tailwindcss" },
 	"@types/react": { license: "MIT", href: "https://github.com/DefinitelyTyped/DefinitelyTyped" },
 	"@types/react-dom": { license: "MIT", href: "https://github.com/DefinitelyTyped/DefinitelyTyped" },
-	"@types/three": { license: "MIT", href: "https://github.com/DefinitelyTyped/DefinitelyTyped" },
+	"@types/d3-force": { license: "MIT", href: "https://github.com/DefinitelyTyped/DefinitelyTyped" },
 	"@types/yaml": { license: "MIT", href: "https://github.com/eemeli/yaml" },
 	"@vitejs/plugin-react": { license: "MIT", href: "https://github.com/vitejs/vite-plugin-react" },
 	"happy-dom": { license: "MIT", href: "https://github.com/capricorn86/happy-dom" },
