@@ -1,5 +1,4 @@
 // Copyright 2023 Vercel, Inc. Licensed under Apache-2.0.
-// Adapted from vercel/ai-elements: dashboard imports, scoped text-only surface.
 import { Collapsible } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon } from "lucide-react";

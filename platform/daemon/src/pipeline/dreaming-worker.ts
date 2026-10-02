@@ -105,7 +105,7 @@ export async function shouldDeferDreamingSweep(
 ): Promise<boolean> {
 	if (ownerMaintenance) return !(await ownerMaintenance.queueIsHealthy());
 	return await accessor.withReadDbAsync((db) => getQueueHealth(db).status !== "healthy", {
-		siteToken: "pipeline/dreaming-worker.ts:102",
+		siteToken: "pipeline/dreaming-worker.ts:107",
 		operation: "dreaming.worker.queue-health",
 	});
 }
@@ -158,7 +158,7 @@ export async function getDreamingWorkerAgentIds(
 				(db) => {
 					return db.prepare(sql).all() as Array<{ id: string | null }>;
 				},
-				{ siteToken: "pipeline/dreaming-worker.ts:152", operation: "dreaming.worker.agent-scopes" },
+				{ siteToken: "pipeline/dreaming-worker.ts:157", operation: "dreaming.worker.agent-scopes" },
 			);
 	const ids = new Set<string>([defaultAgentId]);
 	for (const row of rows) {
@@ -213,7 +213,7 @@ export async function selectDreamingCheckMode(
 							[scope, "hygiene"],
 						).then((row) => row != null)
 					: accessor.withReadDbAsync((db) => hasDreamingAttentionKindInDb(db, scope, ["hygiene"]), {
-							siteToken: "pipeline/dreaming-worker.ts:210",
+							siteToken: "pipeline/dreaming-worker.ts:215",
 							operation: "dreaming.worker.hygiene-attention",
 						}),
 			),
@@ -235,7 +235,7 @@ export async function selectDreamingCheckMode(
 					: accessor.withReadDbAsync(
 							(db) => hasDreamingAttentionKindInDb(db, scope, DREAMING_CONTENT_ATTENTION_KINDS),
 							{
-								siteToken: "pipeline/dreaming-worker.ts:230",
+								siteToken: "pipeline/dreaming-worker.ts:235",
 								operation: "dreaming.worker.content-attention",
 							},
 						),

@@ -1,5 +1,4 @@
 // Copyright 2023 Vercel, Inc. Licensed under Apache-2.0.
-// Adapted from vercel/ai-elements: dashboard imports, scoped text-only surface.
 import { useState, type ComponentProps } from "react";
 import { ArrowUpIcon, SquareIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
