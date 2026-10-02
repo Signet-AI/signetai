@@ -62,6 +62,7 @@ export interface DesktopWindowsInstallResult extends DesktopBuildResult {
 	readonly executable: string;
 	readonly programsDir: string;
 	readonly startMenuShortcut?: string;
+	readonly retiredLegacyAppDir?: string;
 	readonly workspace: string;
 }
 
@@ -216,6 +217,7 @@ export function installDesktopFromSource(
 				installWindowsDesktopApp(prepared.repo, home, workspace, localAppData, {
 					startMenuShortcut,
 					shortcutRunner: ctx.shortcutRunner,
+					legacyUninstallRunner: ctx.runner,
 					env: ctx.env,
 					platform,
 				}),
@@ -267,6 +269,7 @@ const MAC_APP_MARKER = "ai.signet.app";
 interface WindowsDesktopInstallOptions {
 	readonly startMenuShortcut?: string;
 	readonly shortcutRunner?: CommandRunner;
+	readonly legacyUninstallRunner?: CommandRunner;
 	readonly env?: NodeJS.ProcessEnv;
 	readonly platform?: NodeJS.Platform;
 }
@@ -333,6 +336,14 @@ export function installWindowsDesktopApp(
 	if (!executable) {
 		throw new Error(`Installed Windows Signet app is missing its executable at ${appDir}.`);
 	}
+	const retiredLegacyAppDir =
+		(options.platform ?? process.platform) === "win32"
+			? uninstallLegacyWindowsDesktopApp(
+					join(programsDir, "@signetdesktop"),
+					options.env ?? process.env,
+					options.legacyUninstallRunner ?? defaultRunner,
+				)
+			: undefined;
 
 	if (options.startMenuShortcut && (options.platform ?? process.platform) === "win32") {
 		writeWindowsStartMenuShortcut(
@@ -350,8 +361,40 @@ export function installWindowsDesktopApp(
 		executable,
 		programsDir,
 		startMenuShortcut: options.startMenuShortcut,
+		...(retiredLegacyAppDir ? { retiredLegacyAppDir } : {}),
 		workspace,
 	};
+}
+
+function uninstallLegacyWindowsDesktopApp(
+	legacyAppDir: string,
+	env: NodeJS.ProcessEnv,
+	runner: CommandRunner,
+): string | undefined {
+	if (!existsSync(legacyAppDir) || !isSignetWindowsAppDirectory(legacyAppDir)) return undefined;
+	const uninstaller = readdirSync(legacyAppDir, { withFileTypes: true }).find(
+		(entry) => entry.isFile() && /^uninstall .*\.exe$/i.test(entry.name),
+	);
+	if (!uninstaller) {
+		throw new Error(
+			`Found an older Signet desktop install at ${legacyAppDir}, but it has no uninstaller. Remove that install from Windows Settings before continuing.`,
+		);
+	}
+	runChecked(runner, join(legacyAppDir, uninstaller.name), ["/S", "/currentuser"], legacyAppDir, {
+		...process.env,
+		...env,
+	});
+	const deadline = Date.now() + WINDOWS_LEGACY_UNINSTALL_WAIT_MS;
+	const wait = new Int32Array(new SharedArrayBuffer(4));
+	while (windowsAppExecutable(legacyAppDir) && Date.now() < deadline) {
+		Atomics.wait(wait, 0, 0, WINDOWS_LEGACY_UNINSTALL_POLL_MS);
+	}
+	if (windowsAppExecutable(legacyAppDir)) {
+		throw new Error(
+			`The older Signet desktop install at ${legacyAppDir} is still present after uninstall. Close Signet from the system tray, then run desktop install again.`,
+		);
+	}
+	return legacyAppDir;
 }
 
 const WINDOWS_START_MENU_SHORTCUT_SCRIPT = String.raw`
@@ -573,6 +616,8 @@ function macBundleExecutable(path: string): string | null {
 }
 
 const WINDOWS_PACKAGE_MARKERS = [Buffer.from('"name": "@signet/desktop"'), Buffer.from('"name":"@signet/desktop"')];
+const WINDOWS_LEGACY_UNINSTALL_WAIT_MS = 30_000;
+const WINDOWS_LEGACY_UNINSTALL_POLL_MS = 250;
 
 function isSignetWindowsAppDirectory(path: string): boolean {
 	const executable = windowsAppExecutable(path);

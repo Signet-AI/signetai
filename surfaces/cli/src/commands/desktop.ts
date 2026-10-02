@@ -66,6 +66,9 @@ export function registerDesktopCommands(program: Command, deps: DesktopDeps): vo
 				} else {
 					console.log(chalk.dim(`  App:      ${result.appDir}`));
 					console.log(chalk.dim(`  Executable: ${result.executable}`));
+					if (result.retiredLegacyAppDir) {
+						console.log(chalk.dim(`  Previous install removed: ${result.retiredLegacyAppDir}`));
+					}
 					if (result.startMenuShortcut) console.log(chalk.dim(`  Start Menu: ${result.startMenuShortcut}`));
 					console.log(chalk.dim(`  Workspace: ${result.workspace}`));
 					console.log(chalk.cyan("\n  Run: launch Signet from the Start Menu or the executable above"));
