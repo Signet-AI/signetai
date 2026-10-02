@@ -22,9 +22,11 @@ temporary_directory="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/signet-macos-s
 keychain_path="${temporary_directory}/signing.keychain-db"
 original_keychain_list_file="${temporary_directory}/original-keychain-search-list.txt"
 current_keychain_list_file="${temporary_directory}/current-keychain-search-list.txt"
-diagnostic_original_keychains=()
-diagnostic_keychains_saved=no
-diagnostic_keychain_reference=unknown
+original_user_keychains=()
+parsed_user_keychains=()
+current_user_keychains=()
+user_keychain_list_saved=no
+user_keychain_list_state=unknown
 parse_keychain_entry() {
   local line="$1"
   local line_length=0
@@ -56,81 +58,135 @@ parse_keychain_entry() {
   fi
   printf '%s' "$keychain_path"
 }
-restore_diagnostic_keychains() {
-  if [[ "$diagnostic_keychains_saved" != yes ]]; then
+parse_user_keychain_list_file() {
+  local list_file="$1"
+  local list_hex=""
+  local list_text=""
+  local keychain_line=""
+  local keychain_path=""
+  parsed_user_keychains=()
+  if ! list_hex="$(LC_ALL=C od -An -v -tx1 "$list_file")"; then
+    return 1
+  fi
+  if [[ "$list_hex" =~ (^|[[:space:]])00([[:space:]]|$) ]]; then
+    return 1
+  fi
+  if ! list_text="$(cat "$list_file")"; then
+    return 1
+  fi
+  if [[ ! -s "$list_file" ]]; then
     return 0
   fi
-  if ! security list-keychains -d user -s "${diagnostic_original_keychains[@]}" >/dev/null 2>&1; then
-    return 1
-  fi
-  restored_keychain_list="$(security list-keychains -d user 2>/dev/null)" || return 1
-  if [[ "$restored_keychain_list" != "$original_keychain_list" ]]; then
-    return 1
-  fi
-  diagnostic_keychains_saved=no
+  while IFS= read -r keychain_line; do
+    if ! keychain_path="$(parse_keychain_entry "$keychain_line")"; then
+      return 1
+    fi
+    parsed_user_keychains+=( "$keychain_path" )
+  done <<< "$list_text"
 }
-inspect_temporary_keychain_reference() {
-  local current_keychain_list=""
-  local current_keychain_list_hex=""
-  local current_keychain_line=""
-  local current_keychain_path=""
-  diagnostic_keychain_reference=unknown
+user_keychain_lists_equal() {
+  local index=0
+  if [[ "${#original_user_keychains[@]}" -ne "${#parsed_user_keychains[@]}" ]]; then
+    return 1
+  fi
+  for index in "${!original_user_keychains[@]}"; do
+    if [[ "${original_user_keychains[$index]}" != "${parsed_user_keychains[$index]}" ]]; then
+      return 1
+    fi
+  done
+}
+capture_original_user_keychains() {
+  local original_list_hex=""
+  if ! security list-keychains -d user > "$original_keychain_list_file" 2>/dev/null; then
+    echo "::error::Could not read original user keychain search list"
+    return 1
+  fi
+  if ! original_list_hex="$(LC_ALL=C od -An -v -tx1 "$original_keychain_list_file")"; then
+    echo "::error::Could not inspect original user keychain search list"
+    return 1
+  fi
+  if [[ "$original_list_hex" =~ (^|[[:space:]])00([[:space:]]|$) ]]; then
+    echo "::error::Original user keychain search list contains NUL bytes"
+    return 1
+  fi
+  if ! parse_user_keychain_list_file "$original_keychain_list_file"; then
+    echo "::error::Could not parse original user keychain search list"
+    return 1
+  fi
+  original_user_keychains=( "${parsed_user_keychains[@]}" )
+}
+read_current_user_keychains() {
   if ! security list-keychains -d user > "$current_keychain_list_file" 2>/dev/null; then
-    return 0
+    return 1
   fi
-  if ! current_keychain_list_hex="$(LC_ALL=C od -An -v -tx1 "$current_keychain_list_file")"; then
-    return 0
+  if ! parse_user_keychain_list_file "$current_keychain_list_file"; then
+    return 1
   fi
-  if [[ "$current_keychain_list_hex" =~ (^|[[:space:]])00([[:space:]]|$) ]]; then
-    return 0
-  fi
-  if ! current_keychain_list="$(cat "$current_keychain_list_file")"; then
-    return 0
-  fi
-  if [[ ! -s "$current_keychain_list_file" ]]; then
-    diagnostic_keychain_reference=not_referenced
-    return 0
-  fi
-  while IFS= read -r current_keychain_line; do
-    if ! current_keychain_path="$(parse_keychain_entry "$current_keychain_line")"; then
-      return 0
-    fi
-    if [[ "$current_keychain_path" == "$keychain_path" ]]; then
-      diagnostic_keychain_reference=referenced
-      return 0
-    fi
-  done <<< "$current_keychain_list"
-  diagnostic_keychain_reference=not_referenced
+  current_user_keychains=( "${parsed_user_keychains[@]}" )
 }
-report_diagnostic_restore_failure() {
-  if [[ "$diagnostic_keychain_reference" == not_referenced ]]; then
-    printf '::error::Could not verify original keychain search list, but the current list does not reference the temporary keychain. To restore the original list, run: security list-keychains -d user -s' >&2
-  elif [[ "$diagnostic_keychain_reference" == referenced ]]; then
-    printf '::error::Temporary keychain remains in the user search list and is preserved at %q. To recover, run: security list-keychains -d user -s' "$keychain_path" >&2
-  else
-    printf '::error::Could not verify whether the user search list references the temporary keychain. It is preserved at %q. To recover, run: security list-keychains -d user -s' "$keychain_path" >&2
+classify_current_user_keychain_list() {
+  local current_keychain_path=""
+  parsed_user_keychains=( "${current_user_keychains[@]}" )
+  if user_keychain_lists_equal; then
+    user_keychain_list_state=restored
+    user_keychain_list_saved=no
+    return 0
   fi
-  if [[ "${#diagnostic_original_keychains[@]}" -gt 0 ]]; then
-    printf ' %q' "${diagnostic_original_keychains[@]}" >&2
+  user_keychain_list_state=different
+  for current_keychain_path in "${current_user_keychains[@]}"; do
+    if [[ "$current_keychain_path" == "$keychain_path" ]]; then
+      user_keychain_list_state=referenced
+      return 0
+    fi
+  done
+}
+restore_user_keychain_list() {
+  if [[ "$user_keychain_list_saved" != yes ]]; then
+    return 0
   fi
-  if [[ "$diagnostic_keychain_reference" == not_referenced ]]; then
-    printf '\n' >&2
-  else
-    printf '; then remove %q\n' "$temporary_directory" >&2
+  if ! read_current_user_keychains; then
+    user_keychain_list_state=unknown
+    return 1
   fi
+  classify_current_user_keychain_list
+  if [[ "$user_keychain_list_state" == restored ]]; then
+    return 0
+  fi
+  if [[ "${#current_user_keychains[@]}" -ne 1 || "${current_user_keychains[0]}" != "$keychain_path" ]]; then
+    return 1
+  fi
+  if ! security list-keychains -d user -s "${original_user_keychains[@]}" >/dev/null 2>&1; then
+    return 1
+  fi
+  if ! read_current_user_keychains; then
+    user_keychain_list_state=unknown
+    return 1
+  fi
+  classify_current_user_keychain_list
+  [[ "$user_keychain_list_state" == restored ]]
+}
+inspect_current_user_keychain_list() {
+  if ! read_current_user_keychains; then
+    user_keychain_list_state=unknown
+    return 0
+  fi
+  classify_current_user_keychain_list
+}
+report_user_keychain_restore_failure() {
+  printf '::error::Could not restore the original user keychain search list; state=%s. The temporary keychain and recovery files are preserved at %q. Restore the original list with: security list-keychains -d user -s' "$user_keychain_list_state" "$temporary_directory" >&2
+  if [[ "${#original_user_keychains[@]}" -gt 0 ]]; then
+    printf ' %q' "${original_user_keychains[@]}" >&2
+  fi
+  printf '\nAfter verifying the original list is restored, remove the temporary keychain with: security delete-keychain %q && rm -rf %q\n' "$keychain_path" "$temporary_directory" >&2
 }
 cleanup() {
-  if [[ "$diagnostic_keychains_saved" == yes ]] && ! restore_diagnostic_keychains; then
-    inspect_temporary_keychain_reference
-    report_diagnostic_restore_failure
-    if [[ "$diagnostic_keychain_reference" != not_referenced ]]; then
+  if [[ "$user_keychain_list_saved" == yes ]] && ! restore_user_keychain_list; then
+    inspect_current_user_keychain_list
+    if [[ "$user_keychain_list_state" != restored ]]; then
+      report_user_keychain_restore_failure
       if [[ -n "${certificate_path:-}" ]]; then
         rm -f "$certificate_path" || true
       fi
-      if [[ -n "${probe_binary:-}" ]]; then
-        rm -f "$probe_binary" || true
-      fi
-      rm -f "$original_keychain_list_file" "$current_keychain_list_file" || true
       return 0
     fi
   fi
@@ -229,66 +285,24 @@ if [[ "$identity_listed" != yes ]]; then
   echo "::error::Imported certificate does not resolve to a unique valid code-signing identity in the temporary keychain"
   exit 1
 fi
-
-if [[ "${SIGNING_DIAGNOSTIC_PROBE:-}" == true ]]; then
-  probe_binary="${temporary_directory}/codesign-probe"
-  cp /usr/bin/true "$probe_binary"
-  explicit_keychain_status=0
-  codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --keychain "$keychain_path" --sign "$signing_identity" "$probe_binary" >/dev/null 2>&1 || explicit_keychain_status=$?
-
-  search_list_status=not_run
-  search_list_restore_status=not_run
-  if ! security list-keychains -d user > "$original_keychain_list_file" 2>/dev/null; then
-    echo "::error::Could not read original user keychain search list for diagnostic probe"
-    exit 1
-  fi
-  if ! original_keychain_list_hex="$(LC_ALL=C od -An -v -tx1 "$original_keychain_list_file")"; then
-    echo "::error::Could not inspect original user keychain search list for diagnostic probe"
-    exit 1
-  fi
-  if [[ "$original_keychain_list_hex" =~ (^|[[:space:]])00([[:space:]]|$) ]]; then
-    echo "::error::Original user keychain search list contains NUL bytes"
-    exit 1
-  fi
-  if ! original_keychain_list="$(cat "$original_keychain_list_file")"; then
-    echo "::error::Could not read original user keychain search list for diagnostic probe"
-    exit 1
-  fi
-  keychain_list_valid=yes
-  if [[ -s "$original_keychain_list_file" ]]; then
-    while IFS= read -r keychain_line; do
-      if ! original_keychain_path="$(parse_keychain_entry "$keychain_line")"; then
-        keychain_list_valid=no
-        break
-      fi
-      diagnostic_original_keychains+=( "$original_keychain_path" )
-    done <<< "$original_keychain_list"
-  fi
-  if [[ "$keychain_list_valid" != yes ]]; then
-    echo "::error::Could not parse original user keychain search list for diagnostic probe"
-    exit 1
-  fi
-  diagnostic_keychains_saved=yes
-  if ! security list-keychains -d user -s "$keychain_path" >/dev/null 2>&1; then
-    search_list_restore_status=1
-    echo "::error::Could not set temporary user keychain search list for diagnostic probe"
-    exit 1
-  fi
-  search_list_status=0
-  codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --sign "$signing_identity" "$probe_binary" >/dev/null 2>&1 || search_list_status=$?
-  if restore_diagnostic_keychains; then
-    search_list_restore_status=0
-  else
-    search_list_restore_status=1
-    echo "::error::Could not restore original user keychain search list after diagnostic probe"
-    exit 1
-  fi
-  printf 'Signing diagnostic probe: explicit_keychain_status=%s, search_list_status=%s, search_list_restore_status=%s.\n' "$explicit_keychain_status" "$search_list_status" "$search_list_restore_status"
-fi
+capture_original_user_keychains
 
 printf 'Signing with the Keychain identity matched to the imported certificate.\n'
 
-codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --keychain "$keychain_path" --sign "$signing_identity" "$binary"
+user_keychain_list_saved=yes
+if ! security list-keychains -d user -s "$keychain_path" >/dev/null 2>&1; then
+  echo "::error::Could not set temporary user keychain search list for signing"
+  exit 1
+fi
+signing_status=0
+codesign --force --timestamp --identifier "$identifier" --requirements "=$requirement" --sign "$signing_identity" "$binary" || signing_status=$?
+if ! restore_user_keychain_list; then
+  echo "::error::Could not restore original user keychain search list after signing"
+  exit 1
+fi
+if [[ "$signing_status" -ne 0 ]]; then
+  exit "$signing_status"
+fi
 codesign --verify --strict --verbose=2 "$binary"
 codesign --verify --strict --verbose=2 -R "=$test_requirement" "$binary"
 signing_details="$(codesign --display --verbose=4 "$binary" 2>&1)"

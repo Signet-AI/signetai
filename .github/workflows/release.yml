@@ -100,7 +100,6 @@ jobs:
           MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          SIGNING_DIAGNOSTIC_PROBE: ${{ inputs.signing_preflight_only }}
         run: bash scripts/sign-macos-native.sh "./dist/native/${RELEASE_ASSET}"
 
       - name: Smoke signed native binary
