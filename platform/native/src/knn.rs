@@ -1,3 +1,4 @@
+use crate::vector::squared_distance;
 use napi_derive::napi;
 #[napi(object)]
 pub struct NormalisedAxes {
@@ -53,16 +54,6 @@ pub fn build_knn_edges(coords: Vec<Vec<f64>>, k: u32, exact_threshold: u32) -> V
     }
 }
 
-fn squared_dist(a: &[f64], b: &[f64]) -> f64 {
-    let mut d = 0.0;
-    let len = a.len().min(b.len());
-    for i in 0..len {
-        let diff = a[i] - b[i];
-        d += diff * diff;
-    }
-    d
-}
-
 fn build_exact(n: usize, coords: &[Vec<f64>], k: usize) -> Vec<Vec<u32>> {
     let mut edge_set = std::collections::HashSet::new();
     let mut result: Vec<Vec<u32>> = Vec::new();
@@ -73,7 +64,7 @@ fn build_exact(n: usize, coords: &[Vec<f64>], k: usize) -> Vec<Vec<u32>> {
             if i == j {
                 continue;
             }
-            dists.push((j, squared_dist(&coords[i], &coords[j])));
+            dists.push((j, squared_distance(&coords[i], &coords[j])));
         }
         dists.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         let take = k.min(dists.len());
@@ -133,7 +124,7 @@ fn build_approximate(n: usize, coords: &[Vec<f64>], k: usize) -> Vec<Vec<u32>> {
             if cand == source {
                 continue;
             }
-            let d = squared_dist(&coords[source], &coords[cand]);
+            let d = squared_distance(&coords[source], &coords[cand]);
             let pos = nearest
                 .iter()
                 .position(|&(_, nd)| d < nd)

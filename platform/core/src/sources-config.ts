@@ -253,16 +253,8 @@ function addWebSourceUnlocked(input: AddWebSourceInput, agentsDir = getAgentsDir
 			updatedAt: now,
 			providerSettings: { url },
 		};
-		saveSourcesConfig(
-			{
-				version: SOURCES_CONFIG_VERSION,
-				sources: existing
-					? config.sources.map((entry) => (entry.id === existing.id ? source : entry))
-					: [...config.sources, source],
-			},
-			agentsDir,
-		);
-		return { ok: true, source, created: !existing };
+		const created = persistSourceUpsert(config, source, existing, agentsDir);
+		return { ok: true, source, created };
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
 		return { ok: false, error: detail };
@@ -331,12 +323,9 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 				...(agentId === undefined ? {} : { agentId }),
 			},
 		};
-		const sources =
-			duplicate && mode === "replace"
-				? config.sources.map((entry) => (entry.id === duplicate.id ? source : entry))
-				: [...config.sources, source];
-		saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources }, agentsDir);
-		return { ok: true, source, created: !duplicate || mode === "reimport", duplicate: Boolean(duplicate) };
+		const existing = duplicate && mode === "replace" ? duplicate : undefined;
+		const created = persistSourceUpsert(config, source, existing, agentsDir);
+		return { ok: true, source, created, duplicate: Boolean(duplicate) };
 	});
 }
 
@@ -426,46 +415,57 @@ interface ProviderSourceUpsert {
 	readonly providerSettings: SignetSourceProviderSettings;
 }
 
+function mapProviderSource(input: ProviderSourceUpsert, existing?: SignetSourceEntry): SignetSourceEntry {
+	const defaults: Pick<SignetSourceEntry, "kind" | "name" | "mode" | "createdAt"> = existing ?? {
+		kind: input.kind,
+		name: input.createdName,
+		mode: "read-only",
+		createdAt: input.now,
+	};
+	return {
+		...existing,
+		id: input.sourceId,
+		generation: newSourceGeneration(),
+		kind: defaults.kind,
+		name: cleanName(input.name) ?? defaults.name,
+		root: input.root,
+		enabled: true,
+		mode: defaults.mode,
+		createdAt: defaults.createdAt,
+		updatedAt: input.now,
+		providerSettings: input.providerSettings,
+	};
+}
+
 function upsertProviderSource(
 	config: SignetSourcesConfig,
 	agentsDir: string,
 	input: ProviderSourceUpsert,
 ): AddSourceResult {
 	const existing = config.sources.find((source) => source.id === input.sourceId);
-	const source: SignetSourceEntry = existing
-		? {
-				...existing,
-				name: cleanName(input.name) ?? existing.name,
-				root: input.root,
-				enabled: true,
-				providerSettings: input.providerSettings,
-				generation: newSourceGeneration(),
-				updatedAt: input.now,
-			}
-		: {
-				id: input.sourceId,
-				generation: newSourceGeneration(),
-				kind: input.kind,
-				name: cleanName(input.name) ?? input.createdName,
-				root: input.root,
-				enabled: true,
-				mode: "read-only",
-				createdAt: input.now,
-				updatedAt: input.now,
-				providerSettings: input.providerSettings,
-			};
+	const source = mapProviderSource(input, existing);
+	const created = persistSourceUpsert(config, source, existing, agentsDir);
+	return { ok: true, source, created };
+}
+
+function persistSourceUpsert(
+	config: SignetSourcesConfig,
+	source: SignetSourceEntry,
+	existing: SignetSourceEntry | undefined,
+	agentsDir: string,
+): boolean {
 	const sources = existing
 		? config.sources.map((entry) => (entry.id === existing.id ? source : entry))
 		: [...config.sources, source];
 	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources }, agentsDir);
-	return { ok: true, source, created: !existing };
+	return existing === undefined;
 }
 
 export function parseDiscordSettings(raw?: SignetSourceProviderSettings): DiscordSourceSettings {
-	const guildIds = Array.isArray(raw?.guildIds) ? cleanDiscordIds(raw.guildIds) : [];
+	const guildIds = Array.isArray(raw?.guildIds) ? cleanStringArray(raw.guildIds) : [];
 	const tokenRef = typeof raw?.tokenRef === "string" ? raw.tokenRef.trim() : "";
 	const desktopCachePath = typeof raw?.desktopCachePath === "string" ? cleanLocalPath(raw.desktopCachePath) : undefined;
-	const channelFilter = Array.isArray(raw?.channelFilter) ? cleanDiscordChannelFilter(raw.channelFilter) : undefined;
+	const channelFilter = Array.isArray(raw?.channelFilter) ? cleanStringArray(raw.channelFilter) : undefined;
 	const maxMessagesPerChannel =
 		cleanPositiveInteger(raw?.maxMessagesPerChannel, MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL) ??
 		DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL;
@@ -495,7 +495,7 @@ export function parseDiscordSettings(raw?: SignetSourceProviderSettings): Discor
 }
 
 export function parseGitHubSettings(raw?: SignetSourceProviderSettings): GitHubSourceSettings {
-	const repos = Array.isArray(raw?.repos) ? cleanGitHubRepos(raw.repos) : [];
+	const repos = Array.isArray(raw?.repos) ? cleanStringArray(raw.repos) : [];
 	const tokenRef = typeof raw?.tokenRef === "string" ? raw.tokenRef.trim() || undefined : undefined;
 	const resourceTypes =
 		Array.isArray(raw?.resourceTypes) && raw.resourceTypes.every((type) => typeof type === "string")
@@ -532,7 +532,7 @@ function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettin
 	if (input.syncMode && !isDiscordSyncMode(input.syncMode))
 		return { error: `Unsupported Discord sync mode: ${input.syncMode}` };
 	const syncMode = input.syncMode ?? "rest";
-	const guildIds = cleanDiscordIds(input.guildIds ?? []);
+	const guildIds = cleanStringArray(input.guildIds ?? []);
 	if (syncMode !== "desktop-cache" && guildIds.length === 0)
 		return { error: "At least one Discord guild ID is required" };
 	for (const guildId of guildIds) {
@@ -546,7 +546,7 @@ function buildDiscordSettings(input: AddDiscordSourceInput): DiscordSourceSettin
 	if (syncMode === "desktop-cache" && !looksLikeDiscordDesktopCacheRoot(desktopCachePath)) {
 		return { error: "Discord desktopCachePath must point at a Discord Desktop data directory" };
 	}
-	const channelFilter = cleanDiscordChannelFilter(input.channelFilter ?? []);
+	const channelFilter = cleanStringArray(input.channelFilter ?? []);
 	const maxMessagesPerChannel =
 		cleanPositiveInteger(input.maxMessagesPerChannel, MAX_DISCORD_MAX_MESSAGES_PER_CHANNEL) ??
 		DEFAULT_DISCORD_MAX_MESSAGES_PER_CHANNEL;
@@ -594,7 +594,7 @@ function buildGitHubSettings(
 	input: AddGitHubSourceInput,
 	existing?: GitHubSourceSettings,
 ): GitHubSourceSettings | { readonly error: string } {
-	const repos = input.repos !== undefined ? cleanGitHubRepos(input.repos) : (existing?.repos ?? []);
+	const repos = input.repos !== undefined ? cleanStringArray(input.repos) : (existing?.repos ?? []);
 	if (repos.length === 0) return { error: "At least one GitHub repo pattern is required" };
 	for (const repo of repos) {
 		if (!/^[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_*.-]+$/.test(repo)) {
@@ -732,14 +732,8 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 			enabled: true,
 			updatedAt: now,
 		};
-		saveSourcesConfig(
-			{
-				version: SOURCES_CONFIG_VERSION,
-				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
-			},
-			agentsDir,
-		);
-		return { ok: true, source: updated, created: false };
+		const created = persistSourceUpsert(cfg, updated, existing, agentsDir);
+		return { ok: true, source: updated, created };
 	}
 
 	const source: SignetSourceEntry = {
@@ -1035,42 +1029,9 @@ function cleanExcludeGlobs(values: readonly string[] | undefined): readonly stri
 	return cleaned.length > 0 ? cleaned : [];
 }
 
-function cleanDiscordIds(values: readonly unknown[]): readonly string[] {
-	return Array.from(
-		new Set(
-			values
-				.filter((value): value is string => typeof value === "string")
-				.map((value) => value.trim())
-				.filter(Boolean),
-		),
-	);
-}
-
-function cleanDiscordChannelFilter(values: readonly unknown[]): readonly string[] {
-	return Array.from(
-		new Set(
-			values
-				.filter((value): value is string => typeof value === "string")
-				.map((value) => value.trim())
-				.filter(Boolean),
-		),
-	);
-}
-
 function cleanLocalPath(value: string | undefined): string | undefined {
 	const trimmed = value?.trim();
 	return trimmed ? resolve(trimmed.replace(/^~(?=$|\/|\\)/, homedir())) : undefined;
-}
-
-function cleanGitHubRepos(values: readonly unknown[]): readonly string[] {
-	return Array.from(
-		new Set(
-			values
-				.filter((value): value is string => typeof value === "string")
-				.map((value) => value.trim())
-				.filter(Boolean),
-		),
-	);
 }
 
 function cleanStringArray(values: readonly unknown[]): readonly string[] {
