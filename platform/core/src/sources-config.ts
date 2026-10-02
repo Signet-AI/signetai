@@ -253,16 +253,8 @@ function addWebSourceUnlocked(input: AddWebSourceInput, agentsDir = getAgentsDir
 			updatedAt: now,
 			providerSettings: { url },
 		};
-		saveSourcesConfig(
-			{
-				version: SOURCES_CONFIG_VERSION,
-				sources: existing
-					? config.sources.map((entry) => (entry.id === existing.id ? source : entry))
-					: [...config.sources, source],
-			},
-			agentsDir,
-		);
-		return { ok: true, source, created: !existing };
+		const created = persistSourceUpsert(config, source, existing, agentsDir);
+		return { ok: true, source, created };
 	} catch (err) {
 		const detail = err instanceof Error ? err.message : String(err);
 		return { ok: false, error: detail };
@@ -331,12 +323,9 @@ export function addImportedSource(input: AddImportedSourceInput, agentsDir = get
 				...(agentId === undefined ? {} : { agentId }),
 			},
 		};
-		const sources =
-			duplicate && mode === "replace"
-				? config.sources.map((entry) => (entry.id === duplicate.id ? source : entry))
-				: [...config.sources, source];
-		saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources }, agentsDir);
-		return { ok: true, source, created: !duplicate || mode === "reimport", duplicate: Boolean(duplicate) };
+		const existing = duplicate && mode === "replace" ? duplicate : undefined;
+		const created = persistSourceUpsert(config, source, existing, agentsDir);
+		return { ok: true, source, created, duplicate: Boolean(duplicate) };
 	});
 }
 
@@ -454,11 +443,21 @@ function upsertProviderSource(
 				updatedAt: input.now,
 				providerSettings: input.providerSettings,
 			};
+	const created = persistSourceUpsert(config, source, existing, agentsDir);
+	return { ok: true, source, created };
+}
+
+function persistSourceUpsert(
+	config: SignetSourcesConfig,
+	source: SignetSourceEntry,
+	existing: SignetSourceEntry | undefined,
+	agentsDir: string,
+): boolean {
 	const sources = existing
 		? config.sources.map((entry) => (entry.id === existing.id ? source : entry))
 		: [...config.sources, source];
 	saveSourcesConfig({ version: SOURCES_CONFIG_VERSION, sources }, agentsDir);
-	return { ok: true, source, created: !existing };
+	return existing === undefined;
 }
 
 export function parseDiscordSettings(raw?: SignetSourceProviderSettings): DiscordSourceSettings {
@@ -732,14 +731,8 @@ function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = get
 			enabled: true,
 			updatedAt: now,
 		};
-		saveSourcesConfig(
-			{
-				version: SOURCES_CONFIG_VERSION,
-				sources: cfg.sources.map((source) => (source.id === existing.id ? updated : source)),
-			},
-			agentsDir,
-		);
-		return { ok: true, source: updated, created: false };
+		const created = persistSourceUpsert(cfg, updated, existing, agentsDir);
+		return { ok: true, source: updated, created };
 	}
 
 	const source: SignetSourceEntry = {

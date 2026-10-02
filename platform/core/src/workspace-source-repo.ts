@@ -779,53 +779,23 @@ async function sleep(ms: number): Promise<void> {
 }
 
 function missingCheckoutResult(repoPath: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "skipped",
-		path: repoPath,
-		message: "No Signet source checkout; source builds can create one explicitly",
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("skipped", repoPath, "No Signet source checkout; source builds can create one explicitly");
 }
 
 function unsafeRemoteResult(repoPath: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "error",
-		path: repoPath,
-		message: "failed to clone Signet source checkout: remote URL is not a safe git source",
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("error", repoPath, "failed to clone Signet source checkout: remote URL is not a safe git source");
 }
 
 function gitUnavailableResult(repoPath: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "skipped",
-		path: repoPath,
-		message: "git is not available, skipped Signet source checkout sync",
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("skipped", repoPath, "git is not available, skipped Signet source checkout sync");
 }
 
 function syncInProgressResult(repoPath: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "skipped",
-		path: repoPath,
-		message: "source checkout sync already in progress, skipped duplicate run",
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("skipped", repoPath, "source checkout sync already in progress, skipped duplicate run");
 }
 
 function sourceRepoSyncLockErrorResult(repoPath: string, detail: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "error",
-		path: repoPath,
-		message: `failed to acquire source checkout sync lock: ${detail}`,
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("error", repoPath, `failed to acquire source checkout sync lock: ${detail}`);
 }
 
 function ensureDaemonDir(workspaceDir: string): WorkspaceDirEnsureResult {
@@ -860,13 +830,7 @@ function readFsError(prefix: string, err: unknown): string {
 const NO_LOCAL_CHANGES: LocalChangesMetadata = { localChanges: "none" };
 
 function skippedResult(repoPath: string, message: string, state?: RepoState): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "skipped",
-		path: repoPath,
-		message,
-		branch: state?.branch ?? null,
-		defaultBranch: state?.defaultBranch ?? null,
-	};
+	return syncResult("skipped", repoPath, message, { state });
 }
 
 function fetchedResult(
@@ -875,14 +839,7 @@ function fetchedResult(
 	state: RepoState,
 	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
 ): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "fetched",
-		path: repoPath,
-		message: addLocalChangesMessage(message, metadata),
-		branch: state.branch,
-		defaultBranch: state.defaultBranch,
-		...localChangesFields(metadata),
-	};
+	return syncResult("fetched", repoPath, message, { state, metadata });
 }
 
 function errorResult(
@@ -891,24 +848,11 @@ function errorResult(
 	state?: RepoState,
 	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
 ): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "error",
-		path: repoPath,
-		message: addLocalChangesMessage(message, metadata),
-		branch: state?.branch ?? null,
-		defaultBranch: state?.defaultBranch ?? null,
-		...localChangesFields(metadata),
-	};
+	return syncResult("error", repoPath, message, { state, metadata });
 }
 
 function clonedResult(repoPath: string, state: RepoState): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "cloned",
-		path: repoPath,
-		message: "cloned Signet source checkout",
-		branch: state.branch,
-		defaultBranch: state.defaultBranch,
-	};
+	return syncResult("cloned", repoPath, "cloned Signet source checkout", { state });
 }
 
 function pulledResult(
@@ -916,14 +860,7 @@ function pulledResult(
 	state: RepoState,
 	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
 ): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "pulled",
-		path: repoPath,
-		message: addLocalChangesMessage("pulled latest Signet source checkout", metadata),
-		branch: state.branch,
-		defaultBranch: state.defaultBranch,
-		...localChangesFields(metadata),
-	};
+	return syncResult("pulled", repoPath, "pulled latest Signet source checkout", { state, metadata });
 }
 
 function currentResult(
@@ -931,14 +868,7 @@ function currentResult(
 	state: RepoState,
 	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
 ): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "current",
-		path: repoPath,
-		message: addLocalChangesMessage("Signet source checkout is already current", metadata),
-		branch: state.branch,
-		defaultBranch: state.defaultBranch,
-		...localChangesFields(metadata),
-	};
+	return syncResult("current", repoPath, "Signet source checkout is already current", { state, metadata });
 }
 
 function localChangesFields(metadata: LocalChangesMetadata): {
@@ -949,6 +879,23 @@ function localChangesFields(metadata: LocalChangesMetadata): {
 	return {
 		localChanges: metadata.localChanges,
 		...(metadata.stashRef ? { stashRef: metadata.stashRef } : {}),
+	};
+}
+
+function syncResult(
+	status: WorkspaceSourceRepoStatus,
+	repoPath: string,
+	message: string,
+	options: { readonly state?: RepoState; readonly metadata?: LocalChangesMetadata } = {},
+): WorkspaceSourceRepoSyncResult {
+	const metadata = options.metadata ?? NO_LOCAL_CHANGES;
+	return {
+		status,
+		path: repoPath,
+		message: addLocalChangesMessage(message, metadata),
+		branch: options.state?.branch ?? null,
+		defaultBranch: options.state?.defaultBranch ?? null,
+		...localChangesFields(metadata),
 	};
 }
 

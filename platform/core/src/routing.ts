@@ -580,30 +580,10 @@ function parseCommandConfig(raw: unknown): PipelineCommandConfig | undefined {
 	};
 }
 
-function asAcpxPermissionMode(value: unknown): RoutingAcpxPermissionMode | undefined {
-	return asMember(value, ACPX_PERMISSION_MODES);
-}
-
-function asAcpxHooksMode(value: unknown): RoutingAcpxHooksMode | undefined {
-	return asMember(value, ACPX_TOGGLE_MODES);
-}
-
 function asAcpxTerminalMode(value: unknown): RoutingAcpxTerminalMode | undefined {
 	if (value === false) return "disabled";
 	if (value === true) return "enabled";
 	return asMember(value, ACPX_TOGGLE_MODES);
-}
-
-function asAcpxSessionMode(value: unknown): RoutingAcpxSessionMode | undefined {
-	return asMember(value, ACPX_SESSION_MODES);
-}
-
-function asAcpxOutputFormat(value: unknown): RoutingAcpxOutputFormat | undefined {
-	return asMember(value, ACPX_OUTPUT_FORMATS);
-}
-
-function asAcpxModelSelection(value: unknown): AcpxModelSelection | undefined {
-	return asMember(value, ACPX_MODEL_SELECTIONS);
 }
 
 function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
@@ -617,19 +597,19 @@ function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
 		agent,
 		modelSelection: resolveAcpxModelSelection(
 			agent,
-			asAcpxModelSelection(nested.modelSelection ?? nested.model_selection),
+			asMember(nested.modelSelection ?? nested.model_selection, ACPX_MODEL_SELECTIONS),
 		),
 		version: asString(nested.version ?? nested.acpxVersion ?? nested.acpx_version),
 		bin: asString(nested.bin ?? nested.command),
 		package: asString(nested.package ?? nested.packageRef ?? nested.package_ref),
 		cwd: asString(nested.cwd ?? nested.workspace),
 		session: asString(nested.session ?? nested.sessionName ?? nested.session_name),
-		mode: asAcpxSessionMode(nested.mode),
-		permissions: asAcpxPermissionMode(nested.permissions ?? nested.permissionMode ?? nested.permission_mode),
-		hooks: asAcpxHooksMode(nested.hooks ?? nested.hooksMode ?? nested.hooks_mode),
+		mode: asMember(nested.mode, ACPX_SESSION_MODES),
+		permissions: asMember(nested.permissions ?? nested.permissionMode ?? nested.permission_mode, ACPX_PERMISSION_MODES),
+		hooks: asMember(nested.hooks ?? nested.hooksMode ?? nested.hooks_mode, ACPX_TOGGLE_MODES),
 		terminal: asAcpxTerminalMode(nested.terminal ?? nested.terminalMode ?? nested.terminal_mode),
 		allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
-		format: asAcpxOutputFormat(nested.format ?? nested.outputFormat ?? nested.output_format),
+		format: asMember(nested.format ?? nested.outputFormat ?? nested.output_format, ACPX_OUTPUT_FORMATS),
 		captureEvents: asBool(nested.captureEvents ?? nested.capture_events),
 		maxCapturedEvents: asPositiveInt(nested.maxCapturedEvents ?? nested.max_captured_events),
 		emptyResponseRetries: Math.min(
@@ -1315,12 +1295,12 @@ export function resolveRoutingDecision(
 	if (!config.enabled) {
 		return err("no-candidates", "Routing is not enabled for this agent config.");
 	}
-	const pref = orderedPreferenceLists(config, request, classifyRouteRequest(config, request));
+	const classification = classifyRouteRequest(config, request);
+	const pref = orderedPreferenceLists(config, request, classification);
 	if ("code" in pref) {
 		return { ok: false, error: pref };
 	}
 	const policy = config.policies[pref.policyId];
-	const classification = classifyRouteRequest(config, request);
 	const workload = workloadBindingForOperation(config, request.operation);
 	const rosterCandidates = workload?.target ? [] : targetRefsForRoster(config, request, classification, policy);
 	const candidateRefs = mergeUnique(pref.orderedTargets, mergeUnique(rosterCandidates, pref.fallbackTargets));
