@@ -18,6 +18,7 @@ export type ConnectPhase =
 			progress?: string;
 	  }
 	| { kind: "key-entry"; key: string; reveal: boolean; validation: KeyValidationState }
+	| { kind: "keyring-authorization"; key: string; message: string }
 	| { kind: "saving" }
 	| { kind: "connected" }
 	| { kind: "error"; message: string };
@@ -46,10 +47,11 @@ export interface ConnectController {
 	answerPrompt: (value: string) => Promise<void>;
 	cancelOAuth: () => void;
 	disconnect: () => Promise<boolean>;
-	enterKeyMode: () => void;
+	enterKeyMode: (key?: string) => void;
 	setKey: (value: string) => void;
 	toggleReveal: () => void;
 	beginSaving: () => void;
+	requestKeyringAuthorization: (key: string, message: string) => void;
 	finishSaved: (ok: boolean, message?: string) => void;
 	setError: (message: string) => void;
 	reset: () => void;
@@ -192,8 +194,8 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 
 	const disconnect = useCallback(() => disconnectOAuthProvider(optsRef.current.providerId), []);
 
-	const enterKeyMode = useCallback(() => {
-		setPhase({ kind: "key-entry", key: "", reveal: false, validation: "empty" });
+	const enterKeyMode = useCallback((key = "") => {
+		setPhase({ kind: "key-entry", key, reveal: false, validation: validateApiKey(optsRef.current.providerId, key) });
 	}, []);
 
 	const setKey = useCallback((value: string) => {
@@ -206,6 +208,11 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 		const current = phaseRef.current;
 		if (current.kind === "key-entry") setPhase({ ...current, reveal: !current.reveal });
 	}, []);
+
+	const requestKeyringAuthorization = useCallback(
+		(key: string, message: string) => setPhase({ kind: "keyring-authorization", key, message }),
+		[],
+	);
 
 	const beginSaving = useCallback(() => setPhase({ kind: "saving" }), []);
 
@@ -237,6 +244,7 @@ export function useConnectController(opts: ConnectControllerOptions): ConnectCon
 		setKey,
 		toggleReveal,
 		beginSaving,
+		requestKeyringAuthorization,
 		finishSaved,
 		setError,
 		reset,

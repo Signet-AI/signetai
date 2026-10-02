@@ -141,12 +141,12 @@ export async function putSecret(
 	if (options?.signal?.aborted) throw new Error("Secret write cancelled");
 	invalidateSecretsCache();
 	const localName = parseLocalSecretName(name);
-	if (isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
+	if (isInternalSecretName(localName) || !(await isBitwardenProviderActive(options))) {
 		await putLocalSecret(localName, value, options);
 		return;
 	}
 
-	const session = await getLocalSecretValue(BITWARDEN_SESSION_SECRET);
+	const session = await getLocalSecretValue(BITWARDEN_SESSION_SECRET, options);
 	let folderId: string | undefined;
 	try {
 		folderId = await getLocalSecretValue(BITWARDEN_MANAGED_FOLDER_SECRET);
@@ -313,12 +313,11 @@ export async function getActiveSecretProvider(): Promise<"local" | "bitwarden"> 
 	return (await isBitwardenProviderActive()) ? "bitwarden" : "local";
 }
 
-async function isBitwardenProviderActive(): Promise<boolean> {
-	try {
-		return isBitwardenActiveProvider(await getLocalSecretValue(BITWARDEN_ACTIVE_PROVIDER_SECRET));
-	} catch {
-		return false;
-	}
+async function isBitwardenProviderActive(
+	options?: SecretKeyringAccessOptions & { readonly onKeyringAuthorization?: () => Promise<void> },
+): Promise<boolean> {
+	if (!hasLocalSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET)) return false;
+	return isBitwardenActiveProvider(await getLocalSecretValue(BITWARDEN_ACTIVE_PROVIDER_SECRET, options));
 }
 
 export function startSecretExecJob(

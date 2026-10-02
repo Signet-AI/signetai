@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Hono } from "hono";
@@ -8,7 +8,13 @@ import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET } from "../onepassword.js";
 import { queryPluginAuditEvents } from "../plugins/audit.js";
 import { SIGNET_SECRETS_PLUGIN_ID, signetSecretsManifest } from "../plugins/bundled/secrets.js";
 import { PluginHostV1 } from "../plugins/host.js";
-import { getLocalSecretValue, getSecret, putSecret, resetSecretExecJobsForTests } from "../secrets.js";
+import {
+	getLocalSecretValue,
+	getSecret,
+	putSecret,
+	resetSecretExecJobsForTests,
+	setSecretKeyringAdapterForTests,
+} from "../secrets.js";
 import { registerSecretRoutes } from "./secrets-routes.js";
 
 const originalSignetPath = process.env.SIGNET_PATH;
@@ -36,10 +42,27 @@ describe("secrets routes plugin capability enforcement", () => {
 		agentsDir = join(tmpdir(), `signet-secrets-routes-${process.pid}-${Date.now()}`);
 		process.env.SIGNET_PATH = agentsDir;
 		mkdirSync(agentsDir, { recursive: true });
+		writeFileSync(join(agentsDir, "agent.yaml"), "name: fixture\n");
+		mkdirSync(join(agentsDir, "memory"), { recursive: true });
+		writeFileSync(join(agentsDir, "memory", "memories.db"), "");
+		let key: string | undefined = Buffer.alloc(32, 7).toString("base64");
+		setSecretKeyringAdapterForTests({
+			platform: "darwin",
+			service: "fixture",
+			account: "fixture",
+			async get() {
+				return key ? { state: "found", value: key } : { state: "missing" };
+			},
+			async set(value) {
+				key = value;
+				return { state: "found", value };
+			},
+		});
 	});
 
 	afterEach(() => {
 		resetSecretExecJobsForTests();
+		setSecretKeyringAdapterForTests(null);
 		if (originalSignetPath === undefined) {
 			Reflect.deleteProperty(process.env, "SIGNET_PATH");
 		} else {
@@ -56,7 +79,7 @@ describe("secrets routes plugin capability enforcement", () => {
 		const res = await app.request("/api/secrets/OPENAI_API_KEY", {
 			method: "POST",
 			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ value: "sk-test" }),
+			body: JSON.stringify({ value: "sk-test", authorizeKeyring: true }),
 		});
 		const body = (await res.json()) as { status: string; missingCapabilities: string[] };
 
@@ -70,6 +93,138 @@ describe("secrets routes plugin capability enforcement", () => {
 		expect(audit.count).toBe(1);
 		expect(audit.events[0]?.result).toBe("denied");
 		expect(audit.events[0]?.source).toBe("secrets-routes");
+	});
+
+	test("API-key recovery requires explicit consent and verifies persistent access before writing", async () => {
+		await putSecret("EXISTING", "fixture-existing");
+		const file = join(agentsDir, ".secrets", "secrets.enc");
+		const before = readFileSync(file, "utf8");
+		const calls: boolean[] = [];
+		let persistent = false;
+		let grantOnConsent = false;
+		const key = Buffer.alloc(32, 7).toString("base64");
+		setSecretKeyringAdapterForTests({
+			platform: "darwin",
+			service: "fixture",
+			account: "fixture",
+			async get(options) {
+				calls.push(options?.allowInteraction === true);
+				if (options?.allowInteraction === true && grantOnConsent) persistent = true;
+				if (options?.allowInteraction || persistent) return { state: "found", value: key };
+				return {
+					state: "locked",
+					message: "Platform failure: The user name or passphrase you entered is not correct.",
+				};
+			},
+			async set() {
+				throw new Error("must not replace the master key");
+			},
+		});
+		const app = makeApp(makeHost());
+		const post = (body: unknown) =>
+			app.request("/api/secrets/ZAI_API_KEY", {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify(body),
+			});
+		const locked = await post({ value: "fixture-zai" });
+		expect(locked.status).toBe(423);
+		expect(await locked.json()).toMatchObject({
+			code: "keyring-locked",
+			authorizationRequired: process.platform === "darwin",
+		});
+		expect(calls).toEqual([false]);
+		expect(readFileSync(file, "utf8")).toBe(before);
+		calls.length = 0;
+		const once = await post({ value: "fixture-zai", authorizeKeyring: true });
+		expect(once.status).toBe(423);
+		expect(calls).toEqual([false, true, false]);
+		expect(readFileSync(file, "utf8")).toBe(before);
+		calls.length = 0;
+		const invalid = await post({ value: "fixture-zai", authorizeKeyring: "yes" });
+		expect(invalid.status).toBe(400);
+		expect(calls).toEqual([]);
+		grantOnConsent = true;
+		const saved = await post({ value: "fixture-zai", authorizeKeyring: true });
+		expect(saved.status).toBe(200);
+		expect(calls).toEqual([false, true, false]);
+		expect(await getLocalSecretValue("EXISTING")).toBe("fixture-existing");
+		expect(await getLocalSecretValue("ZAI_API_KEY")).toBe("fixture-zai");
+	});
+
+	test("failed first-use key creation offers unlock guidance instead of unusable consent", async () => {
+		setSecretKeyringAdapterForTests({
+			platform: "darwin",
+			service: "fixture",
+			account: "fixture",
+			async get() {
+				return { state: "missing" };
+			},
+			async set() {
+				return { state: "locked" };
+			},
+		});
+		const res = await makeApp(makeHost()).request("/api/secrets/ZAI_API_KEY", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ value: "fixture-zai" }),
+		});
+		expect(res.status).toBe(423);
+		expect(await res.json()).toMatchObject({ authorizationRequired: false });
+		expect(existsSync(join(agentsDir, ".secrets", "secrets.enc"))).toBe(false);
+	});
+
+	test("request cancellation reaches consent and leaves encrypted credentials untouched", async () => {
+		await putSecret("EXISTING", "fixture-existing");
+		const file = join(agentsDir, ".secrets", "secrets.enc");
+		const before = readFileSync(file, "utf8");
+		let entered: () => void = () => {};
+		const consent = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		setSecretKeyringAdapterForTests({
+			platform: "darwin",
+			service: "fixture",
+			account: "fixture",
+			async get(options) {
+				if (!options?.allowInteraction) return { state: "locked" };
+				entered();
+				await new Promise<void>((resolve) =>
+					options.signal?.addEventListener("abort", () => resolve(), { once: true }),
+				);
+				return { state: "found", value: Buffer.alloc(32, 7).toString("base64") };
+			},
+			async set() {
+				throw new Error("must not replace the master key");
+			},
+		});
+		const controller = new AbortController();
+		const settled = Promise.withResolvers<Response>();
+		const app = makeApp(makeHost());
+		const server = Bun.serve({
+			port: 0,
+			async fetch(request) {
+				const response = await app.fetch(request);
+				settled.resolve(response);
+				return response;
+			},
+		});
+		try {
+			const response = fetch(new URL("/api/secrets/ZAI_API_KEY", server.url), {
+				method: "POST",
+				signal: controller.signal,
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({ value: "fixture-zai", authorizeKeyring: true }),
+			}).catch(() => null);
+			await consent;
+			controller.abort();
+			expect(await response).toBeNull();
+			const result = await Promise.race([settled.promise, Bun.sleep(1000).then(() => null)]);
+			expect(result?.status).toBe(400);
+			expect(readFileSync(file, "utf8")).toBe(before);
+		} finally {
+			server.stop(true);
+		}
 	});
 
 	test("disabled signet.secrets blocks route access without deleting stored secrets", async () => {

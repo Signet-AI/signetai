@@ -539,6 +539,64 @@ describe("local secrets provider", () => {
 		expect(plugin?.stateReason).toContain("Failed to read secrets store");
 	});
 
+	test("authorized keyring recovery preserves active Bitwarden write routing", async () => {
+		const key = Buffer.alloc(32, 7).toString("base64");
+		let locked = false;
+		let consent = 0;
+		setSecretKeyringAdapterForTests({
+			platform: "darwin",
+			service: "fixture",
+			account: "fixture",
+			async get(options) {
+				if (options?.allowInteraction) {
+					consent++;
+					locked = false;
+				}
+				return locked ? { state: "locked" } : { state: "found", value: key };
+			},
+			async set() {
+				throw new Error("must not replace the master key");
+			},
+		});
+		await putSecret(BITWARDEN_SESSION_SECRET, "fixture-session");
+		await putSecret(BITWARDEN_ACTIVE_PROVIDER_SECRET, "bitwarden");
+		let writes = 0;
+		setBitwardenClientFactoryForTests(async () => ({
+			async status() {
+				return { status: "unlocked" };
+			},
+			async listFolders() {
+				return [];
+			},
+			async listItems() {
+				return [];
+			},
+			async getItem() {
+				throw new Error("not used");
+			},
+			async putSecret(name, value) {
+				expect(value).toBe("fixture-zai");
+				writes++;
+				return { id: "fixture", name, folderId: null };
+			},
+			async deleteSecret() {
+				return false;
+			},
+			async resolveSecret() {
+				throw new Error("not used");
+			},
+		}));
+		locked = true;
+		const before = readFileSync(secretsFile(), "utf8");
+		await expect(putSecret("ZAI_API_KEY", "fixture-zai")).rejects.toMatchObject({ state: "locked" });
+		expect(readFileSync(secretsFile(), "utf8")).toBe(before);
+		expect(consent).toBe(0);
+		await putSecret("ZAI_API_KEY", "fixture-zai", { allowInteraction: true });
+		expect(consent).toBe(1);
+		expect(writes).toBe(1);
+		expect(hasSecret("ZAI_API_KEY")).toBe(false);
+	});
+
 	test("active Bitwarden provider resolves bare names with the same canonical name used on write", async () => {
 		const client: BitwardenClient = {
 			async status() {

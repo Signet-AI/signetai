@@ -14,6 +14,7 @@ import { SIGNET_SECRETS_PLUGIN_ID, getDefaultPluginHost } from "../plugins/index
 import type { PluginHostV1 } from "../plugins/index.js";
 import {
 	SecretExecQueueFullError,
+	SecretKeyringError,
 	deleteLocalSecretForMigration,
 	deleteSecret,
 	deleteSecretFromActiveProvider,
@@ -450,14 +451,32 @@ export function registerSecretRoutes(app: Hono, host: PluginHostV1 = getDefaultP
 		if (denied) return denied;
 		const { name } = c.req.param();
 		try {
-			const body = (await c.req.json()) as { value?: string };
+			const body = (await c.req.json()) as { value?: string; authorizeKeyring?: boolean };
 			if (typeof body.value !== "string" || body.value.length === 0) {
 				return c.json({ error: "value is required" }, 400);
 			}
-			await putSecret(name, body.value);
+			if (body.authorizeKeyring !== undefined && typeof body.authorizeKeyring !== "boolean")
+				return c.json({ error: "authorizeKeyring must be a boolean" }, 400);
+			await putSecret(name, body.value, {
+				allowInteraction: body.authorizeKeyring === true,
+				signal: c.req.raw.signal,
+			});
 			logger.info("secrets", "Secret stored", { name });
 			return c.json({ success: true, name });
 		} catch (e) {
+			if (e instanceof SecretKeyringError && (e.state === "locked" || e.state === "permission-denied")) {
+				const authorizationRequired = process.platform === "darwin" && e.authorizationRequired;
+				return c.json(
+					{
+						code: "keyring-locked",
+						authorizationRequired,
+						error: authorizationRequired
+							? "macOS Keychain has not granted this Signet installation access to your encrypted vault. Your API key has not been saved. Authorize access and choose Always Allow in the system prompt."
+							: "The system keyring is locked or access was denied. Unlock your login keyring, then retry saving the secret. Your credential has not been saved.",
+					},
+					423,
+				);
+			}
 			const err = e as Error;
 			logger.error("secrets", "Failed to store secret", err, { name });
 			return c.json({ error: err.message }, 400);
