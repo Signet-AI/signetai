@@ -14,6 +14,10 @@ if (resolve(localAppData) !== expectedLocalAppData) {
 }
 
 const legacyAppDir = join(expectedLocalAppData, "Programs", "@signetdesktop");
+const managedAppDir = join(expectedLocalAppData, "Programs", "Signet Desktop");
+if (existsSync(managedAppDir)) {
+	throw new Error(`The managed install path must be clean before the smoke test: ${managedAppDir}.`);
+}
 const legacyExecutable = join(legacyAppDir, "signet.exe");
 const legacyPackage = join(legacyAppDir, "resources", "app.asar");
 const legacyUninstaller = join(legacyAppDir, "Uninstall Signet.exe");
@@ -31,8 +35,11 @@ const result = installWindowsDesktopApp(
 if (result.retiredLegacyAppDir !== legacyAppDir) {
 	throw new Error(`Expected the legacy install to be retired at ${legacyAppDir}.`);
 }
-if (!existsSync(result.executable)) {
-	throw new Error(`The managed desktop executable was not installed at ${result.executable}.`);
+if (result.appDir !== managedAppDir) {
+	throw new Error(`Expected the managed install at ${managedAppDir}, got ${result.appDir}.`);
+}
+if (!existsSync(result.executable) || !existsSync(join(managedAppDir, "resources", "app.asar"))) {
+	throw new Error(`The managed desktop app was not copied completely to ${managedAppDir}.`);
 }
 if (existsSync(legacyExecutable) || existsSync(legacyPackage) || existsSync(legacyUninstaller)) {
 	throw new Error(`Legacy Signet files remain after migration at ${legacyAppDir}.`);
