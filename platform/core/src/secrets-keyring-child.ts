@@ -7,6 +7,7 @@ interface SecretKeyringChildRequest {
 	readonly service: string;
 	readonly account: string;
 	readonly value?: string;
+	readonly allowInteraction?: boolean;
 }
 
 const MAX_REQUEST_BYTES = 64 * 1024;
@@ -19,7 +20,11 @@ function safeError(error: unknown): string {
 function classify(error: unknown): string {
 	const detail = safeError(error).toLowerCase();
 	if (/noentry|no entry|no such item|item.*not found|credential.*missing|does not exist/.test(detail)) return "missing";
-	if (/-25308|-25293|locked|interaction|required|authfailed|authentication|islocked|prompt/.test(detail))
+	if (
+		/-25308|-25293|locked|interaction|required|authfailed|authentication|passphrase|user name.*not correct|islocked|prompt/.test(
+			detail,
+		)
+	)
 		return "locked";
 	if (/-128|user.*cancel|permission|access denied|denied/.test(detail)) return "permission-denied";
 	if (/unsupported|not implemented|dbus|secret service|keyutils|connection|unavailable|no such file/.test(detail))
@@ -64,6 +69,10 @@ function parseRequest(raw: string): SecretKeyringChildRequest {
 		throw new Error("Invalid keyring account");
 	if (value.op === "set" && (typeof value.value !== "string" || value.value.length > 16 * 1024))
 		throw new Error("Invalid keyring value");
+	if (value.allowInteraction !== undefined && typeof value.allowInteraction !== "boolean")
+		throw new Error("Invalid keyring interaction permission");
+	if (value.allowInteraction === true && value.op !== "get")
+		throw new Error("Interaction is only allowed for key reads");
 	return value as SecretKeyringChildRequest;
 }
 
@@ -105,10 +114,10 @@ async function execute(request: SecretKeyringChildRequest): Promise<unknown> {
 			if (security.library.symbols.SecKeychainGetUserInteractionAllowed(security.ptr(previous)) !== 0)
 				return { state: "unavailable", message: "Could not read macOS keychain interaction setting" };
 			restore = true;
-			const status = security.library.symbols.SecKeychainSetUserInteractionAllowed(false);
+			const status = security.library.symbols.SecKeychainSetUserInteractionAllowed(request.allowInteraction === true);
 			result =
 				status !== 0
-					? { state: "unavailable", message: "Could not disable macOS keychain interaction" }
+					? { state: "unavailable", message: "Could not set macOS keychain interaction permission" }
 					: await executeEntry(request, module);
 		} catch (error) {
 			result = { state: classify(error), message: safeError(error) };
@@ -127,7 +136,11 @@ async function executeEntry(
 	request: SecretKeyringChildRequest,
 	module: typeof import("@napi-rs/keyring"),
 ): Promise<unknown> {
-	const entry = new (module.AsyncEntry as typeof AsyncEntry)(request.service, request.account);
+	const entry = new (module.AsyncEntry as typeof AsyncEntry)(
+		request.service,
+		request.account,
+		process.platform === "linux" ? { linux: { store: "secret-service" } } : undefined,
+	);
 	if (request.op === "set") {
 		await entry.setPassword(request.value ?? "");
 		return { state: "found", value: request.value ?? "" };

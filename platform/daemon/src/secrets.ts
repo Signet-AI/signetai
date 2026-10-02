@@ -36,6 +36,7 @@ import {
 	type SecretProviderV1,
 	type ResolvedSecretV1,
 	type SecretKeyringAdapter,
+	type SecretKeyringAccessOptions,
 } from "@signet/core";
 import { ONEPASSWORD_SERVICE_ACCOUNT_SECRET, isOnePasswordReference, readOnePasswordReference } from "./onepassword.js";
 import { recordPluginAuditEvent } from "./plugins/audit.js";
@@ -132,11 +133,16 @@ function recordSecretEvent(event: string, data: Record<string, unknown>): void {
 }
 setSecretEventRecorder(recordSecretEvent);
 
-export async function putSecret(name: string, value: string): Promise<void> {
+export async function putSecret(
+	name: string,
+	value: string,
+	options?: SecretKeyringAccessOptions & { readonly onKeyringAuthorization?: () => Promise<void> },
+): Promise<void> {
+	if (options?.signal?.aborted) throw new Error("Secret write cancelled");
 	invalidateSecretsCache();
 	const localName = parseLocalSecretName(name);
 	if (isInternalSecretName(localName) || !(await isBitwardenProviderActive())) {
-		await putLocalSecret(localName, value);
+		await putLocalSecret(localName, value, options);
 		return;
 	}
 
@@ -147,6 +153,7 @@ export async function putSecret(name: string, value: string): Promise<void> {
 	} catch {
 		folderId = undefined;
 	}
+	if (options?.signal?.aborted) throw new Error("Secret write cancelled");
 	await putBitwardenSecret(localName, value, session, { folderId, overwrite: true });
 	await clearBitwardenDeletedName(localName);
 	recordSecretEvent("secret.stored", { name: localName, providerId: "bitwarden" });

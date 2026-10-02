@@ -84,7 +84,7 @@ new Int32Array(new SharedArrayBuffer(4));
 Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 `,
 		);
-		setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 100 });
+		setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 1000 });
 		let timerAdvanced = false;
 		setTimeout(() => {
 			timerAdvanced = true;
@@ -244,6 +244,139 @@ module.exports.AsyncEntry = class {
 		expect(await readFile(restoredPath, "utf8")).toBe("11110");
 	}, 40_000);
 
+	test("foreground saves authorize existing keys once while background saves and missing v2 keys fail closed", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-foreground-"));
+		directories.push(directory);
+		process.env.SIGNET_PATH = directory;
+		const key = Buffer.alloc(32, 7).toString("base64");
+		let locked = false;
+		let missing = false;
+		let persistAuthorization = true;
+		let writes = 0;
+		const permissions: boolean[] = [];
+		setSecretKeyringAdapterForTests({
+			platform: "darwin",
+			service: "test",
+			account: "test",
+			async get(options) {
+				permissions.push(options?.allowInteraction === true);
+				if (options?.allowInteraction && persistAuthorization) locked = false;
+				return missing
+					? { state: "missing" }
+					: locked && !options?.allowInteraction
+						? { state: "locked" }
+						: { state: "found", value: key };
+			},
+			async set() {
+				writes++;
+				return { state: "found", value: key };
+			},
+		});
+		await putLocalSecret("EXISTING", "fixture-existing");
+		const file = join(directory, ".secrets", "secrets.enc");
+		const original = await readFile(file, "utf8");
+		locked = true;
+		await expect(putLocalSecret("NEW", "fixture-new")).rejects.toThrow("locked");
+		expect(await readFile(file, "utf8")).toBe(original);
+		permissions.length = 0;
+		persistAuthorization = false;
+		await expect(putLocalSecret("ONCE", "fixture-once", { allowInteraction: true })).rejects.toThrow("Always Allow");
+		expect(permissions).toEqual([false, true, false]);
+		expect(await readFile(file, "utf8")).toBe(original);
+		permissions.length = 0;
+		await expect(
+			putLocalSecret("CANCELLED", "fixture-cancel", {
+				allowInteraction: true,
+				onKeyringAuthorization: async () => {
+					throw new Error("Authorization cancelled");
+				},
+			}),
+		).rejects.toThrow("Authorization cancelled");
+		expect(permissions).toEqual([false]);
+		expect(await readFile(file, "utf8")).toBe(original);
+		persistAuthorization = true;
+		permissions.length = 0;
+		await putLocalSecret("NEW", "fixture-new", { allowInteraction: true });
+		expect(permissions).toEqual([false, true, false]);
+		locked = false;
+		expect(await getLocalSecretValue("EXISTING")).toBe("fixture-existing");
+		expect(await getLocalSecretValue("NEW")).toBe("fixture-new");
+		const saved = await readFile(file, "utf8");
+		permissions.length = 0;
+		missing = true;
+		await expect(putLocalSecret("LOST", "fixture-lost", { allowInteraction: true })).rejects.toThrow("missing");
+		expect(permissions).toEqual([false]);
+		expect(await readFile(file, "utf8")).toBe(saved);
+		expect(writes).toBe(0);
+	});
+
+	test("non-macOS locked keyrings never request macOS authorization", async () => {
+		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-nonmac-"));
+		directories.push(directory);
+		process.env.SIGNET_PATH = directory;
+		let reads = 0;
+		let confirmations = 0;
+		setSecretKeyringAdapterForTests({
+			platform: "linux",
+			service: "test",
+			account: "test",
+			async get() {
+				reads++;
+				return { state: "locked" };
+			},
+			async set() {
+				throw new Error("Unexpected key write");
+			},
+		});
+		await expect(
+			putLocalSecret("NEW", "fixture", {
+				allowInteraction: true,
+				onKeyringAuthorization: async () => {
+					confirmations++;
+				},
+			}),
+		).rejects.toThrow("locked");
+		expect(reads).toBe(1);
+		expect(confirmations).toBe(0);
+	});
+
+	test("macOS explicit authorization enables interaction only for a cancellable admitted read", async () => {
+		if (process.platform !== "darwin") return;
+		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-consent-"));
+		directories.push(directory);
+		const modulePath = join(directory, "consent.cjs");
+		await writeFile(
+			modulePath,
+			`const {dlopen,FFIType,ptr}=require("bun:ffi");
+const security=dlopen("/System/Library/Frameworks/Security.framework/Security",{
+SecKeychainGetUserInteractionAllowed:{args:[FFIType.ptr],returns:FFIType.i32}});
+module.exports.AsyncEntry=class {
+async getPassword(){const allowed=new Uint8Array(1);security.symbols.SecKeychainGetUserInteractionAllowed(ptr(allowed));
+if(!allowed[0])throw Error("User interaction is not allowed");
+require("node:fs").writeFileSync(${JSON.stringify(join(directory, "started"))},"started");
+await new Promise(()=>{});}
+};`,
+		);
+		await useNativeModule(directory, modulePath);
+		const adapter = getSecretKeyring(directory);
+		expect(await adapter.get()).toMatchObject({ state: "locked" });
+		const controller = new AbortController();
+		const pending = adapter.get({ allowInteraction: true, signal: controller.signal });
+		for (let i = 0; i < 100 && !existsSync(join(directory, "started")); i++) await Bun.sleep(10);
+		expect(existsSync(join(directory, "started"))).toBe(true);
+		expect(await adapter.get({ allowInteraction: true })).toMatchObject({
+			state: "unavailable",
+			message: "A keychain authorization request is already in progress",
+		});
+		controller.abort();
+		expect(await pending).toMatchObject({ state: "unavailable", message: "Keyring request cancelled" });
+		expect(await adapter.get({ allowInteraction: true, signal: controller.signal })).toMatchObject({
+			state: "unavailable",
+			message: "Keyring request cancelled",
+		});
+		expect(await adapter.get()).toMatchObject({ state: "locked" });
+	});
+
 	test("missing secret lookups never access or create a keyring item", async () => {
 		const directory = await mkdtemp(join(tmpdir(), "signet-keyring-absent-"));
 		directories.push(directory);
@@ -254,7 +387,7 @@ module.exports.AsyncEntry = class {
 			helperPath,
 			`import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(callsPath)}, "unexpected keyring access");`,
 		);
-		setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 100 });
+		setSecretKeyringHelperForTests({ entryPath: helperPath, deadlineMs: 1000 });
 		for (const name of ["BITWARDEN_SESSION", "constructor", "toString", "valueOf", "__proto__"]) {
 			expect(hasLocalSecret(name)).toBe(false);
 			await expect(getLocalSecretValue(name)).rejects.toThrow("not found");
