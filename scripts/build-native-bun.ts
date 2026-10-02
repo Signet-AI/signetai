@@ -374,7 +374,7 @@ if (process.env.SIGNET_KEYRING_HELPER) {
 	const { getSecretKeyring } = await import("../platform/core/src/secrets-keyring");
 	const startedAt = Date.now();
 	const keyring = getSecretKeyring("native-keyring-smoke");
-	const result = await (keyring.getStatus?.() ?? keyring.get());
+	const result = await keyring.get();
 	process.stdout.write(JSON.stringify({ type: "keyring-helper-smoke", elapsedMs: Date.now() - startedAt, result }) + "\\n");
 } else if (process.env.SIGNET_NATIVE_SOURCE_WORKER_SMOKE) {
 	const { mkdtemp, readdir, rm, writeFile } = await import("node:fs/promises");

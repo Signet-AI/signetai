@@ -18,6 +18,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { execSyncHidden, spawnHidden } from "./child-process";
 import { resolveDefaultBasePath } from "./constants.js";
+import { decodeSecretMasterKey } from "./secrets-key.js";
 import {
 	getSecretKeyring,
 	setSecretKeyringForTests,
@@ -280,14 +281,8 @@ async function getLegacyMasterKey(): Promise<Uint8Array> {
 }
 
 function decodeKeyringValue(result: SecretKeyringResult): Uint8Array {
-	if (result.value === undefined)
-		throw new SecretKeyringError({ state: "corrupt", message: "Keyring returned no master key" });
 	try {
-		const key = Buffer.from(result.value, "base64");
-		if (key.length !== 32 || key.toString("base64") !== result.value) {
-			throw new Error("master key is not valid canonical base64");
-		}
-		return new Uint8Array(key);
+		return decodeSecretMasterKey(result.value);
 	} catch (error) {
 		throw new SecretKeyringError({ state: "corrupt", message: error instanceof Error ? error.message : String(error) });
 	}
@@ -321,7 +316,7 @@ async function migrateLegacyStore(store: SecretsStore, legacyKey: Uint8Array, na
 	const migrated: SecretsStore = {
 		version: NATIVE_STORE_VERSION,
 		provider: "native-keyring",
-		secrets: {},
+		secrets: Object.create(null),
 	};
 	for (const [name, plaintext] of plaintexts) {
 		const entry = store.secrets[name];
@@ -453,7 +448,7 @@ function loadStore(): SecretsStore {
 	cleanupStaleSecretStoreTemps();
 	const file = getSecretsFile();
 	if (!existsSync(file)) {
-		return { version: 1, secrets: {} };
+		return { version: 1, secrets: Object.create(null) };
 	}
 	try {
 		return parseSecretsStore(JSON.parse(readFileSync(file, "utf-8")));
@@ -743,19 +738,22 @@ export async function putLocalSecret(name: string, value: string): Promise<void>
 async function readSecretValue(store: SecretsStore, name: string, resolution: MasterKeyResolution): Promise<string> {
 	const localName = parseLocalSecretName(name);
 	const entry = store.secrets[localName];
-	if (!entry) throw new Error(`Secret '${localName}' not found`);
+	if (!Object.hasOwn(store.secrets, localName) || !entry) throw new Error(`Secret '${localName}' not found`);
 	return decryptWithKey(entry.ciphertext, resolution.key);
 }
 
 export async function getLocalSecretValue(name: string): Promise<string> {
 	const initialStore = loadStore();
+	const localName = parseLocalSecretName(name);
 	if (initialStore.version === NATIVE_STORE_VERSION || initialStore.provider === "native-keyring") {
+		if (!Object.hasOwn(initialStore.secrets, localName)) throw new Error(`Secret '${localName}' not found`);
 		const resolution = await resolveMasterKey(initialStore);
 		return readSecretValue(initialStore, name, resolution);
 	}
 
 	return withSecretStoreLock(async () => {
 		const store = loadStore();
+		if (!Object.hasOwn(store.secrets, localName)) throw new Error(`Secret '${localName}' not found`);
 		const resolution = await resolveMasterKey(store);
 		const plaintext = await readSecretValue(store, name, resolution);
 		if (resolution.provider === "legacy-obfuscated") await anchorLegacyMachineIdAfterVerification(resolution.key);
@@ -765,7 +763,7 @@ export async function getLocalSecretValue(name: string): Promise<string> {
 
 export function hasLocalSecret(name: string): boolean {
 	const store = loadStore();
-	return parseLocalSecretName(name) in store.secrets;
+	return Object.hasOwn(store.secrets, parseLocalSecretName(name));
 }
 
 export function hasSecret(name: string): boolean {
@@ -782,7 +780,7 @@ export async function deleteLocalSecret(name: string): Promise<boolean> {
 	return withSecretStoreLock(async () => {
 		const store = loadStore();
 		const localName = parseLocalSecretName(name);
-		if (!(localName in store.secrets)) return false;
+		if (!Object.hasOwn(store.secrets, localName)) return false;
 		delete store.secrets[localName];
 		saveStore(store);
 		recordSecretEvent("secret.deleted", { name: localName });
@@ -841,6 +839,7 @@ function healthForKeyringState(result: SecretKeyringResult): SecretProviderHealt
 	const checkedAt = new Date().toISOString();
 	const message = result.message ?? `Native secrets keyring is ${result.state}`;
 	if (
+		result.state === "unchecked" ||
 		result.state === "missing" ||
 		result.state === "locked" ||
 		result.state === "unavailable" ||
@@ -868,14 +867,14 @@ export async function getLocalSecretProviderHealth(): Promise<SecretProviderHeal
 			const keyring = getSecretKeyring(`${KEYRING_ACCOUNT_SCOPE}:${getAgentsDir()}`);
 			const state = await (keyring.getStatus?.() ?? keyring.get());
 			if (state.state !== "found") return healthForKeyringState(state);
+			if (state.value === undefined) return healthForKeyringState(state);
 			try {
 				decodeKeyringValue(state);
 			} catch (error) {
-				return {
-					status: "degraded",
+				return healthForKeyringState({
+					state: "corrupt",
 					message: `Native secrets keyring is corrupt: ${error instanceof Error ? error.message : String(error)}`,
-					checkedAt: new Date().toISOString(),
-				};
+				});
 			}
 		}
 		return { status: "healthy", checkedAt: new Date().toISOString() };
@@ -1106,7 +1105,7 @@ function parseSecretsStore(value: unknown): SecretsStore {
 	if (!isRecord(value.secrets)) {
 		throw new Error("secrets field must be an object");
 	}
-	const secrets: Record<string, SecretEntry> = {};
+	const secrets: Record<string, SecretEntry> = Object.create(null);
 	for (const [name, entry] of Object.entries(value.secrets)) {
 		validateName(name);
 		if (!isRecord(entry)) {

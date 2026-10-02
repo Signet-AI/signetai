@@ -199,7 +199,7 @@ describe("local secrets provider", () => {
 		expect(health.message).toContain("Native secrets keyring is missing");
 	});
 
-	test("native v2 health degrades for a malformed keyring value and reads fail closed", async () => {
+	test("native v2 health is unhealthy for a malformed keyring value and reads fail closed", async () => {
 		const keyring = makeKeyring({ state: "missing" });
 		setSecretKeyringAdapterForTests(keyring);
 		await putSecret("OPENAI_API_KEY", "native-secret");
@@ -207,7 +207,7 @@ describe("local secrets provider", () => {
 		setSecretKeyringAdapterForTests(makeKeyring({ state: "found", value: "malformed-keyring-value" }));
 		const health = await localSecretProvider.health({});
 
-		expect(health.status).toBe("degraded");
+		expect(health.status).toBe("unhealthy");
 		expect(health.message).toContain("Native secrets keyring is corrupt");
 		await expect(getSecret("OPENAI_API_KEY")).rejects.toMatchObject({
 			name: "SecretKeyringError",
@@ -224,7 +224,7 @@ describe("local secrets provider", () => {
 		setSecretKeyringAdapterForTests(makeKeyring({ state: "found", value: `${"A".repeat(43)}!` }));
 		const health = await localSecretProvider.health({});
 
-		expect(health.status).toBe("degraded");
+		expect(health.status).toBe("unhealthy");
 		expect(health.message).toContain("Native secrets keyring is corrupt");
 		await expect(getSecret("OPENAI_API_KEY")).rejects.toMatchObject({
 			name: "SecretKeyringError",

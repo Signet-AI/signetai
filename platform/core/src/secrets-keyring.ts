@@ -3,8 +3,10 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnHidden } from "./child-process";
+import { decodeSecretMasterKey } from "./secrets-key.js";
 
 export type SecretKeyringState =
+	| "unchecked"
 	| "found"
 	| "missing"
 	| "locked"
@@ -42,9 +44,11 @@ interface SecretKeyringChildResponse {
 
 const SERVICE = "ai.signet.secrets";
 const DEFAULT_DEADLINE_MS = 2_000;
-const MACOS_DEADLINE_MS = 5 * 60_000;
+const MACOS_DEADLINE_MS = 10_000;
+const MAX_ACCOUNTS = 32;
 const MAX_HELPER_OUTPUT_BYTES = 64 * 1024;
 const STATES = new Set<SecretKeyringState>([
+	"unchecked",
 	"found",
 	"missing",
 	"locked",
@@ -53,6 +57,8 @@ const STATES = new Set<SecretKeyringState>([
 	"corrupt",
 	"unsupported",
 ]);
+const reads = new Map<string, Promise<SecretKeyringResult>>();
+const observations = new Map<string, SecretKeyringResult>();
 let adapterForTests: SecretKeyringAdapter | null = null;
 let helperForTests: SecretKeyringHelperOverride | null = null;
 let mutation: Promise<void> = Promise.resolve();
@@ -62,23 +68,7 @@ function workspaceAccount(workspace: string): string {
 }
 
 function errorMessage(error: unknown): string {
-	return error instanceof Error ? error.message : String(error);
-}
-
-function classifyError(error: unknown): SecretKeyringResult {
-	const message = errorMessage(error)
-		.replace(/[\r\n\0]/g, " ")
-		.slice(0, 500);
-	const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
-	const detail = `${code} ${message}`.toLowerCase();
-	if (/noentry|no entry|no such item|item.*not found|credential.*missing|does not exist/.test(detail))
-		return { state: "missing", message };
-	if (/locked|interaction|required|authfailed|authentication|islocked|prompt/.test(detail))
-		return { state: "locked", message };
-	if (/permission|access denied|denied/.test(detail)) return { state: "permission-denied", message };
-	if (/unsupported|not implemented|dbus|secret service|keyutils|connection|unavailable|no such file/.test(detail))
-		return { state: "unavailable", message };
-	return { state: "corrupt", message };
+	return (error instanceof Error ? error.message : String(error)).replace(/[\r\n\0]/g, " ").slice(0, 500);
 }
 
 function sourceHelperPath(): string {
@@ -91,6 +81,22 @@ function defaultDeadlineMs(): number {
 	return process.platform === "darwin" ? MACOS_DEADLINE_MS : DEFAULT_DEADLINE_MS;
 }
 
+function observe(account: string, result: SecretKeyringResult): void {
+	if (!observations.has(account) && observations.size >= MAX_ACCOUNTS) {
+		const oldest = observations.keys().next().value;
+		if (oldest !== undefined) observations.delete(oldest);
+	}
+	if (result.state === "found") {
+		try {
+			decodeSecretMasterKey(result.value).fill(0);
+		} catch (error) {
+			observations.set(account, { state: "corrupt", message: errorMessage(error) });
+			return;
+		}
+	}
+	observations.set(account, { state: result.state, message: result.message });
+}
+
 function helperCommand(): { readonly command: string; readonly args: readonly string[]; readonly deadlineMs: number } {
 	if (helperForTests !== null)
 		return {
@@ -100,7 +106,11 @@ function helperCommand(): { readonly command: string; readonly args: readonly st
 		};
 	if (process.env.SIGNET_COMPILED_NATIVE === "1")
 		return { command: process.execPath, args: [], deadlineMs: defaultDeadlineMs() };
-	return { command: process.execPath, args: [sourceHelperPath()], deadlineMs: defaultDeadlineMs() };
+	return {
+		command: process.platform === "darwin" && !process.versions.bun ? "bun" : process.execPath,
+		args: [sourceHelperPath()],
+		deadlineMs: defaultDeadlineMs(),
+	};
 }
 
 function parseChildResponse(output: string, code: number | null): SecretKeyringResult {
@@ -158,7 +168,17 @@ async function invoke(
 		child.stdin?.on("error", () => {});
 		child.once("error", (error) => {
 			clearTimeout(timer);
-			finish(classifyError(error));
+			finish({
+				state: "unavailable",
+				message:
+					helper.command === "bun" &&
+					typeof error === "object" &&
+					error !== null &&
+					"code" in error &&
+					error.code === "ENOENT"
+						? "The noninteractive macOS keyring helper requires Bun on PATH"
+						: `Native keyring helper could not start: ${errorMessage(error)}`,
+			});
 		});
 		child.once("close", (code) => {
 			clearTimeout(timer);
@@ -186,15 +206,36 @@ class NativeSecretKeyringAdapter implements SecretKeyringAdapter {
 	}
 
 	get(): Promise<SecretKeyringResult> {
-		return invoke("get", this.service, this.account);
+		const pending = reads.get(this.account);
+		if (pending) return pending;
+		if (reads.size >= MAX_ACCOUNTS)
+			return Promise.resolve({ state: "unavailable", message: "Keyring request limit reached" });
+		const result = invoke("get", this.service, this.account)
+			.then((result) => {
+				observe(this.account, result);
+				return result;
+			})
+			.finally(() => reads.delete(this.account));
+		reads.set(this.account, result);
+		return result;
 	}
 
 	getStatus(): Promise<SecretKeyringResult> {
-		return invoke("status", this.service, this.account);
+		return Promise.resolve(
+			observations.get(this.account) ?? {
+				state: "unchecked",
+				message: "Native keyring access has not been checked; health checks do not unlock secrets",
+			},
+		);
 	}
 
 	set(value: string): Promise<SecretKeyringResult> {
-		const result = mutation.then(() => invoke("set", this.service, this.account, value));
+		const result = mutation
+			.then(() => invoke("set", this.service, this.account, value))
+			.then((result) => {
+				observe(this.account, result);
+				return result;
+			});
 		mutation = result.then(
 			() => undefined,
 			() => undefined,
@@ -217,4 +258,6 @@ export function setSecretKeyringHelperForTests(override: SecretKeyringHelperOver
 
 export function resetSecretKeyringModuleForTests(): void {
 	mutation = Promise.resolve();
+	reads.clear();
+	observations.clear();
 }
