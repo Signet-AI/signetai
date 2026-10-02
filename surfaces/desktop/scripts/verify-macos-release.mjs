@@ -1,4 +1,4 @@
-import { cpSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -54,7 +54,7 @@ run("xcrun", ["stapler", "validate", appPath]);
 const quarantineDirectory = mkdtempSync(join(process.env.TMPDIR ?? "/tmp", "signet-macos-quarantine-"));
 const quarantinedAppPath = join(quarantineDirectory, "Signet.app");
 try {
-	cpSync(appPath, quarantinedAppPath, { recursive: true });
+	run("ditto", [appPath, quarantinedAppPath]);
 	run("xattr", ["-w", "com.apple.quarantine", "0081;00000000;Signet;Signet.app", quarantinedAppPath]);
 	const quarantine = run("xattr", ["-p", "com.apple.quarantine", quarantinedAppPath]).trim();
 	if (!quarantine) fail("could not confirm com.apple.quarantine on the Gatekeeper test copy");
