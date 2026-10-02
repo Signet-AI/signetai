@@ -15,7 +15,7 @@ fi
 
 is_retryable_failure() {
   local output="$1"
-  [[ "${output}" =~ (^|[^0-9])HTTP[[:space:]]+5[0-9][0-9]([^0-9]|$) ]]
+  [[ "${output}" =~ (^|[^0-9])HTTP[[:space:]]+(408|5[0-9][0-9])([^0-9]|$) ]]
 }
 
 for ((attempt = 1; attempt <= max_attempts; attempt += 1)); do

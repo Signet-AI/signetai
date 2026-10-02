@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -53,6 +53,38 @@ describe("retry-github-release", () => {
 		expect(result.status).toBe(0);
 		expect(result.stdout).toContain("success");
 		expect(result.stderr).toContain("retrying");
+	});
+
+	test("retries an HTTP 408 upload timeout and preserves upload arguments", () => {
+		const command = writeFakeCommand(
+			'printf "%s\\n" "$@" > "$ARGS"; count=$(cat "$STATE" 2>/dev/null || printf 0); count=$((count + 1)); printf "%s" "$count" > "$STATE"; if [ "$count" -lt 3 ]; then echo "HTTP 408: Upload body timed out due to inactivity" >&2; exit 1; fi; echo uploaded',
+		);
+		const state = join(tempDirs[0], "state");
+		const args = join(tempDirs[0], "args");
+		const uploadArgs = ["release", "upload", "v0.0.0", "Signet fixture.dmg", "--clobber", "--repo", "owner/repo"];
+		const result = spawnSync("bash", [retryScript, command, ...uploadArgs], {
+			cwd: root,
+			encoding: "utf8",
+			env: { ...process.env, STATE: state, ARGS: args, RELEASE_API_RETRY_DELAY_SECONDS: "0" },
+		});
+		expect(result.status).toBe(0);
+		expect(result.stdout).toContain("uploaded");
+		expect(readFileSync(state, "utf8")).toBe("3");
+		expect(readFileSync(args, "utf8").trim().split("\n")).toEqual(uploadArgs);
+	});
+
+	test("stops after three persistent HTTP 408 upload failures", () => {
+		const command = writeFakeCommand(
+			'count=$(cat "$STATE" 2>/dev/null || printf 0); count=$((count + 1)); printf "%s" "$count" > "$STATE"; echo "HTTP 408: Upload body timed out due to inactivity" >&2; exit 7',
+		);
+		const state = join(tempDirs[0], "state");
+		const result = spawnSync("bash", [retryScript, command], {
+			cwd: root,
+			encoding: "utf8",
+			env: { ...process.env, STATE: state, RELEASE_API_RETRY_DELAY_SECONDS: "0" },
+		});
+		expect(result.status).toBe(7);
+		expect(readFileSync(state, "utf8")).toBe("3");
 	});
 
 	test("does not retry a 4xx response whose body contains timeout", () => {
