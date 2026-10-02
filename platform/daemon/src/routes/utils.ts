@@ -467,7 +467,7 @@ export function loadForgetCandidates(
 			version: row.version,
 			score: 0,
 		}));
-	}, "routes/utils.ts:435");
+	}, "routes/utils.ts:399");
 }
 
 export function loadForgetCandidatesByIds(
@@ -507,7 +507,7 @@ export function loadForgetCandidatesByIds(
 				version: row.version,
 				score: 0,
 			}));
-	}, "routes/utils.ts:521");
+	}, "routes/utils.ts:485");
 }
 
 export function buildForgetConfirmToken(memoryIds: readonly string[]): string {

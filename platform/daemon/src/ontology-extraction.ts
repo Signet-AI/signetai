@@ -607,7 +607,7 @@ function readSource(accessor: DbAccessor, params: Pick<ExtractOntologyParams, "a
 	// @ts-expect-error LEGACY_SYNC_DB_ACCESS: withReadDb migration site
 	const source = accessor.withReadDb(
 		(db: import("./db-accessor").ReadDb) => readEpisodicSource(db, { agentId: params.agentId, from }),
-		"ontology-extraction.ts:647",
+		"ontology-extraction.ts:608",
 	);
 	if (source) return source;
 	throw new OntologyExtractionError("Extraction source not found", 404);
@@ -713,7 +713,7 @@ export async function extractOntologyProposals(
 			: { items: [] as readonly OntologyProposal[], count: 0 };
 		const assertionItems = shouldWriteAssertions ? createEpistemicAssertionsInTx(accessor, db, assertionInputs) : [];
 		return { proposalResult, assertionItems };
-	}, "ontology-extraction.ts:749");
+	}, "ontology-extraction.ts:710");
 
 	return {
 		source: sourceInfo(source),

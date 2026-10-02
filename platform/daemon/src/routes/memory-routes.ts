@@ -1056,7 +1056,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						},
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:987" },
+				{ siteToken: "routes/memory-routes.ts:1002" },
 			);
 
 			return c.json(result);
@@ -1097,7 +1097,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						)
 						.map(({ agent_id: _agentId, ...row }) => row);
 				},
-				{ siteToken: "routes/memory-routes.ts:1061" },
+				{ siteToken: "routes/memory-routes.ts:1076" },
 			);
 			return c.json({ memories });
 		} catch (e) {
@@ -1203,7 +1203,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						highUsed: filterSafe(highUsed).map(({ agent_id: _agentId, ...row }) => row),
 					};
 				},
-				{ siteToken: "routes/memory-routes.ts:1112" },
+				{ siteToken: "routes/memory-routes.ts:1127" },
 			);
 			return c.json({ agentId, minSessions, limit, ...slices });
 		} catch (e) {
@@ -1229,7 +1229,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						readPolicy: agentScope.readPolicy,
 						policyGroup: agentScope.policyGroup ?? undefined,
 					}),
-				{ siteToken: "routes/memory-routes.ts:1209" },
+				{ siteToken: "routes/memory-routes.ts:1224" },
 			);
 			return c.json(timeline);
 		} catch (e) {
@@ -1388,7 +1388,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 							return publicRow;
 						});
 				},
-				{ siteToken: "routes/memory-routes.ts:1309" },
+				{ siteToken: "routes/memory-routes.ts:1324" },
 			);
 
 			recordRecallOutcome({
@@ -1599,7 +1599,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const baseIdempotencyMemory = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedIdempotencyMemoryId(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1585" },
+				{ siteToken: "routes/memory-routes.ts:1600" },
 			);
 			if (baseIdempotencyMemory) {
 				return c.json({ error: "idempotencyKey already used for non-chunk content" }, 409);
@@ -1607,7 +1607,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 			const existingChunks = await getDbAccessor().withReadDbAsync(
 				async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-				{ siteToken: "routes/memory-routes.ts:1593" },
+				{ siteToken: "routes/memory-routes.ts:1608" },
 			);
 			if (existingChunks.length > 0) {
 				const groupIds = new Set(existingChunks.map((row) => row.sourceId).filter((id): id is string => !!id));
@@ -1641,7 +1641,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				contentHashes.add(plan.normalized.contentHash);
 				const byHash = await getDbAccessor().withReadDbAsync(
 					async (db) => getScopedContentHashMemoryId(db, plan.normalized.contentHash, dedupeScope),
-					{ siteToken: "routes/memory-routes.ts:1627" },
+					{ siteToken: "routes/memory-routes.ts:1642" },
 				);
 				if (byHash) {
 					return c.json({ error: "chunk content already exists for this agent and scope" }, 409);
@@ -1847,7 +1847,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				? []
 				: await getDbAccessor().withReadDbAsync(
 						async (db) => getScopedChunkIdempotencyRows(db, rowProvenance.idempotencyKey, dedupeScope),
-						{ siteToken: "routes/memory-routes.ts:1833" },
+						{ siteToken: "routes/memory-routes.ts:1848" },
 					);
 		if (chunkedIdempotencyMemory.length > 0) {
 			return c.json({ error: "idempotencyKey already used for chunked content" }, 409);
@@ -1964,7 +1964,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						if (byIdempotencyKey) return byIdempotencyKey;
 						return getScopedContentHashDedupeRow(db, contentHash, dedupeScope);
 					},
-					{ siteToken: "routes/memory-routes.ts:1946" },
+					{ siteToken: "routes/memory-routes.ts:1961" },
 				);
 				if (existing) {
 					c.header("x-signet-operation-skipped", "1");
@@ -2144,7 +2144,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					: null;
 				return { row, safety };
 			},
-			{ siteToken: "routes/memory-routes.ts:2127" },
+			{ siteToken: "routes/memory-routes.ts:2116" },
 		);
 		const row = memoryRead.row;
 
@@ -2317,7 +2317,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 				}
 				return [...byId.values()].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.version - b.version);
 			},
-			{ siteToken: "routes/memory-routes.ts:2296" },
+			{ siteToken: "routes/memory-routes.ts:2285" },
 		);
 
 		return c.json({
@@ -3434,7 +3434,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
         LIMIT 1
       `)
 						.get(id) as { vector: Buffer } | undefined,
-				{ siteToken: "routes/memory-routes.ts:3435" },
+				{ siteToken: "routes/memory-routes.ts:3424" },
 			);
 
 			if (!embeddingRow) {
@@ -3456,7 +3456,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const searchData =
 				recallOwner === undefined
 					? await getDbAccessor().withReadDbAsync((db) => vectorSearchWithMetadata(db, queryVector, searchOptions), {
-							siteToken: "routes/memory-routes.ts:3469",
+							siteToken: "routes/memory-routes.ts:3458",
 						})
 					: await vectorSearchThroughDbOwner(recallOwner, [...queryVector], searchOptions);
 
@@ -3499,7 +3499,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						}),
 					);
 				},
-				{ siteToken: "routes/memory-routes.ts:3487" },
+				{ siteToken: "routes/memory-routes.ts:3476" },
 			);
 
 			const rowMap = new Map(rows.map((r) => [r.id, r]));
@@ -3590,7 +3590,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 
 					return { total: totalRow?.count ?? 0, rows: rowData };
 				},
-				{ siteToken: "routes/memory-routes.ts:3564" },
+				{ siteToken: "routes/memory-routes.ts:3553" },
 			);
 
 			const embeddings = rows.map((row) => ({
@@ -3638,7 +3638,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 					? { ...state, coverage: stagingCoverage(db, state.staging.dimensions, state.staging.fingerprint) }
 					: state;
 			},
-			{ siteToken: "routes/memory-routes.ts:3645" },
+			{ siteToken: "routes/memory-routes.ts:3634" },
 		);
 		return c.json({ ...status, tracker, index });
 	});
@@ -3647,7 +3647,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 		const providerStatus = await checkEmbeddingProvider(cfg.embedding);
 		const report = await getDbAccessor().withReadDbAsync(
 			async (db) => buildEmbeddingHealth(db, cfg.embedding, providerStatus),
-			{ siteToken: "routes/memory-routes.ts:3659" },
+			{ siteToken: "routes/memory-routes.ts:3648" },
 		);
 		return c.json(report);
 	});
@@ -3724,7 +3724,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 									}
 								: undefined,
 						}),
-					{ siteToken: "routes/memory-routes.ts:3718" },
+					{ siteToken: "routes/memory-routes.ts:3707" },
 				);
 
 				return c.json({
@@ -3754,7 +3754,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 						: 0;
 				return { cached: cachedResult, total: count };
 			},
-			{ siteToken: "routes/memory-routes.ts:3758" },
+			{ siteToken: "routes/memory-routes.ts:3747" },
 		);
 
 		if (cached !== null && cached.embeddingCount === total) {
@@ -3786,7 +3786,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 			const computation = (async () => {
 				try {
 					const result = await getDbAccessor().withReadDbAsync(async (db) => computeProjection(db, nComponents), {
-						siteToken: "routes/memory-routes.ts:3799",
+						siteToken: "routes/memory-routes.ts:3788",
 					});
 					const count = await getDbAccessor().withReadDbAsync(
 						async (db) => {
@@ -3795,7 +3795,7 @@ export function registerMemoryRoutes(app: Hono, deps: MemoryRoutesDeps = {}): vo
 								? row.count
 								: 0;
 						},
-						{ siteToken: "routes/memory-routes.ts:3802" },
+						{ siteToken: "routes/memory-routes.ts:3791" },
 					);
 					await runWriteTxAsync(getDbAccessor(), (db) => cacheProjection(db, nComponents, result, count));
 				} catch (err) {
