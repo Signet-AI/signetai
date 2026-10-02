@@ -772,6 +772,349 @@ describe("Windows desktop install", () => {
 		}
 	});
 
+	test("uninstalls the recognized legacy app before refreshing the Start Menu shortcut", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "Local AppData");
+		const programsDir = join(localAppData, "Programs");
+		const legacyAppDir = join(programsDir, "@signetdesktop");
+		const uninstallCalls: Array<{
+			cmd: string;
+			args: readonly string[];
+			cwd: string;
+			testEnv: string | undefined;
+			windowsVerbatimArguments: boolean | undefined;
+		}> = [];
+		const shortcutCalls: Array<{ legacyExecutableStillExists: boolean; target: string | undefined }> = [];
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch());
+			const uninstaller = join(legacyAppDir, "Uninstall Signet.exe");
+			writeFileSync(uninstaller, "legacy uninstaller");
+			const shortcut = join(home, "Start Menu", "Signet.lnk");
+
+			const result = installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+				platform: "win32",
+				startMenuShortcut: shortcut,
+				env: { SIGNET_TEST_UNINSTALL_ENV: "present" },
+				legacyUninstallRunner: (cmd, args, options) => {
+					uninstallCalls.push({
+						cmd,
+						args,
+						cwd: options.cwd,
+						testEnv: options.env.SIGNET_TEST_UNINSTALL_ENV,
+						windowsVerbatimArguments: options.windowsVerbatimArguments,
+					});
+					rmSync(join(legacyAppDir, "signet.exe"), { force: true });
+					rmSync(join(legacyAppDir, "resources"), { recursive: true, force: true });
+					writeFileSync(join(legacyAppDir, "user-note.txt"), "preserve user data");
+					return { status: 0 };
+				},
+				shortcutRunner: (cmd, _args, options) => {
+					shortcutCalls.push({
+						legacyExecutableStillExists: existsSync(join(legacyAppDir, "signet.exe")),
+						target: options.env.SIGNET_DESKTOP_TARGET,
+					});
+					expect(cmd).toBe("powershell.exe");
+					return { status: 0 };
+				},
+			});
+
+			expect(uninstallCalls).toHaveLength(1);
+			expect(uninstallCalls[0]).toMatchObject({
+				cmd: uninstaller,
+				args: ["/S", "/currentuser", `_?=${legacyAppDir}`],
+				cwd: legacyAppDir,
+				windowsVerbatimArguments: true,
+			});
+			expect(uninstallCalls[0]?.testEnv).toBe("present");
+			expect(result.retiredLegacyAppDir).toBe(legacyAppDir);
+			expect(readdirSync(legacyAppDir)).toEqual(["user-note.txt"]);
+			expect(readFileSync(join(legacyAppDir, "user-note.txt"), "utf8")).toBe("preserve user data");
+			expect(existsSync(legacyAppDir)).toBe(true);
+			expect(existsSync(uninstaller)).toBe(false);
+			expect(existsSync(join(legacyAppDir, "signet.exe"))).toBe(false);
+			expect(existsSync(result.executable)).toBe(true);
+			expect(shortcutCalls).toEqual([{ legacyExecutableStillExists: false, target: result.executable }]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("stops when a recognized legacy app has no uninstaller", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "local-app-data");
+		const legacyAppDir = join(localAppData, "Programs", "@signetdesktop");
+		let uninstallCalls = 0;
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch());
+			writeFileSync(join(legacyAppDir, "Uninstall Another App.exe"), "unrelated uninstaller");
+
+			expect(() =>
+				installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+					platform: "win32",
+					legacyUninstallRunner: () => {
+						uninstallCalls += 1;
+						return { status: 0 };
+					},
+				}),
+			).toThrow("has no uninstaller");
+			expect(uninstallCalls).toBe(0);
+			expect(existsSync(legacyAppDir)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("keeps the new app reachable when uninstalling the old app fails", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "local-app-data");
+		const legacyAppDir = join(localAppData, "Programs", "@signetdesktop");
+		let shortcutTarget: string | undefined;
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch());
+			writeFileSync(join(legacyAppDir, "Uninstall Signet.exe"), "legacy uninstaller");
+
+			expect(() =>
+				installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+					platform: "win32",
+					startMenuShortcut: join(home, "Start Menu", "Signet.lnk"),
+					legacyUninstallRunner: () => ({ status: 1 }),
+					shortcutRunner: (_cmd, _args, options) => {
+						shortcutTarget = options.env.SIGNET_DESKTOP_TARGET;
+						return { status: 0 };
+					},
+				}),
+			).toThrow(
+				`The new Signet desktop app is installed at ${join(localAppData, "Programs", "Signet Desktop", "signet.exe")}, but removal of the legacy app at ${legacyAppDir} could not be confirmed. Rerun desktop install to retry legacy cleanup.`,
+			);
+			expect(shortcutTarget).toBe(join(localAppData, "Programs", "Signet Desktop", "signet.exe"));
+			expect(existsSync(join(localAppData, "Programs", "Signet Desktop", "signet.exe"))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("retries a legacy app whose executable was removed but package remains", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "local-app-data");
+		const legacyAppDir = join(localAppData, "Programs", "@signetdesktop");
+		let uninstallCalls = 0;
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch());
+			rmSync(join(legacyAppDir, "signet.exe"));
+			writeFileSync(join(legacyAppDir, "Uninstall Signet.exe"), "legacy uninstaller");
+
+			const result = installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+				platform: "win32",
+				legacyUninstallRunner: () => {
+					uninstallCalls += 1;
+					rmSync(join(legacyAppDir, "resources"), { recursive: true, force: true });
+					return { status: 0 };
+				},
+			});
+
+			expect(uninstallCalls).toBe(1);
+			expect(result.retiredLegacyAppDir).toBe(legacyAppDir);
+			expect(existsSync(result.executable)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("reports a legacy executable left behind after its package is removed", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "local-app-data");
+		const legacyAppDir = join(localAppData, "Programs", "@signetdesktop");
+		let shortcutTarget: string | undefined;
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch());
+			writeFileSync(join(legacyAppDir, "Uninstall Signet.exe"), "legacy uninstaller");
+
+			expect(() =>
+				installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+					platform: "win32",
+					startMenuShortcut: join(home, "Start Menu", "Signet.lnk"),
+					legacyUninstallRunner: () => {
+						rmSync(join(legacyAppDir, "resources"), { recursive: true, force: true });
+						return { status: 0 };
+					},
+					shortcutRunner: (_cmd, _args, options) => {
+						shortcutTarget = options.env.SIGNET_DESKTOP_TARGET;
+						return { status: 0 };
+					},
+				}),
+			).toThrow(`removal of the legacy app at ${legacyAppDir} could not be confirmed`);
+			expect(existsSync(join(legacyAppDir, "signet.exe"))).toBe(true);
+			expect(existsSync(join(legacyAppDir, "Uninstall Signet.exe"))).toBe(true);
+			expect(shortcutTarget).toBe(join(localAppData, "Programs", "Signet Desktop", "signet.exe"));
+			expect(existsSync(join(localAppData, "Programs", "Signet Desktop", "signet.exe"))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("reports both failures when legacy uninstall and shortcut refresh fail", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "local-app-data");
+		const legacyAppDir = join(localAppData, "Programs", "@signetdesktop");
+		let failureMessage: string | undefined;
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch());
+			writeFileSync(join(legacyAppDir, "Uninstall Signet.exe"), "legacy uninstaller");
+
+			try {
+				installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+					platform: "win32",
+					startMenuShortcut: join(home, "Start Menu", "Signet.lnk"),
+					legacyUninstallRunner: () => ({ status: 1 }),
+					shortcutRunner: () => ({ status: 1 }),
+				});
+			} catch (error) {
+				failureMessage = error instanceof Error ? error.message : String(error);
+			}
+
+			expect(failureMessage).toContain(`legacy app at ${legacyAppDir} could not be confirmed`);
+			expect(failureMessage).toContain("Start Menu shortcut refresh also failed");
+			expect(failureMessage).toContain("powershell.exe");
+			expect(existsSync(join(legacyAppDir, "signet.exe"))).toBe(true);
+			expect(existsSync(join(localAppData, "Programs", "Signet Desktop", "signet.exe"))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("reports residual legacy files while keeping the new app reachable", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "local-app-data");
+		const legacyAppDir = join(localAppData, "Programs", "@signetdesktop");
+		let shortcutTarget: string | undefined;
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch());
+			writeFileSync(join(legacyAppDir, "Uninstall Signet.exe"), "legacy uninstaller");
+
+			expect(() =>
+				installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+					platform: "win32",
+					startMenuShortcut: join(home, "Start Menu", "Signet.lnk"),
+					legacyUninstallRunner: (cmd) => {
+						rmSync(join(legacyAppDir, "signet.exe"));
+						expect(cmd).toBe(join(legacyAppDir, "Uninstall Signet.exe"));
+						return { status: 0 };
+					},
+					shortcutRunner: (_cmd, _args, options) => {
+						shortcutTarget = options.env.SIGNET_DESKTOP_TARGET;
+						return { status: 0 };
+					},
+				}),
+			).toThrow("new Signet desktop app is installed");
+			expect(existsSync(legacyAppDir)).toBe(true);
+			expect(existsSync(join(legacyAppDir, "Uninstall Signet.exe"))).toBe(true);
+			expect(shortcutTarget).toBe(join(localAppData, "Programs", "Signet Desktop", "signet.exe"));
+			expect(existsSync(join(localAppData, "Programs", "Signet Desktop", "signet.exe"))).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("does not uninstall an executable without the Signet package marker", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "local-app-data");
+		const legacyAppDir = join(localAppData, "Programs", "@signetdesktop");
+		let uninstallCalls = 0;
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch());
+			rmSync(join(legacyAppDir, "resources"), { recursive: true, force: true });
+			writeFileSync(join(legacyAppDir, "Uninstall Signet.exe"), "unidentified uninstaller");
+
+			const result = installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+				platform: "win32",
+				legacyUninstallRunner: () => {
+					uninstallCalls += 1;
+					return { status: 0 };
+				},
+			});
+
+			expect(uninstallCalls).toBe(0);
+			expect(existsSync(join(legacyAppDir, "signet.exe"))).toBe(true);
+			expect(result.retiredLegacyAppDir).toBeUndefined();
+			expect(existsSync(result.executable)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("does not uninstall a foreign application at the legacy path", () => {
+		const root = makeCheckout();
+		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));
+		const localAppData = join(home, "local-app-data");
+		const legacyAppDir = join(localAppData, "Programs", "@signetdesktop");
+		let uninstallCalls = 0;
+		try {
+			const release = join(root, "surfaces", "desktop", "release");
+			mkdirSync(release, { recursive: true });
+			makeWindowsAppDirectory(release, hostDesktopArch());
+			makeWindowsAppContents(legacyAppDir, hostDesktopArch(), "com.example.other");
+			const uninstaller = join(legacyAppDir, "Uninstall Signet.exe");
+			writeFileSync(uninstaller, "foreign uninstaller");
+
+			const result = installWindowsDesktopApp(root, home, join(home, "workspace"), localAppData, {
+				platform: "win32",
+				legacyUninstallRunner: () => {
+					uninstallCalls += 1;
+					return { status: 0 };
+				},
+			});
+
+			expect(uninstallCalls).toBe(0);
+			expect(existsSync(legacyAppDir)).toBe(true);
+			expect(readFileSync(join(legacyAppDir, "resources", "app.asar"), "utf8")).toContain("com.example.other");
+			expect(result.retiredLegacyAppDir).toBeUndefined();
+			expect(existsSync(result.executable)).toBe(true);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("refuses to replace a foreign application in the managed directory", () => {
 		const root = makeCheckout();
 		const home = mkdtempSync(join(tmpdir(), "signet-desktop-home-"));

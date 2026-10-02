@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - "surfaces/cli/src/features/setup*.ts"
+      - "surfaces/cli/src/features/desktop.ts"
+      - "surfaces/cli/src/features/desktop.test.ts"
+      - "surfaces/cli/scripts/windows-desktop-migration-smoke.ts"
       - "surfaces/cli/src/lib/open-url*.ts"
       - "surfaces/cli/src/lib/workspace*.ts"
       - "surfaces/desktop/package.json"
@@ -16,6 +19,9 @@ on:
     branches: [main]
     paths:
       - "surfaces/cli/src/features/setup*.ts"
+      - "surfaces/cli/src/features/desktop.ts"
+      - "surfaces/cli/src/features/desktop.test.ts"
+      - "surfaces/cli/scripts/windows-desktop-migration-smoke.ts"
       - "surfaces/cli/src/lib/open-url*.ts"
       - "surfaces/cli/src/lib/workspace*.ts"
       - "surfaces/desktop/package.json"
@@ -157,6 +163,16 @@ jobs:
           }
           foreach ($registryPath in @('HKCU:\Software\Classes\signet', 'HKLM:\Software\Classes\signet')) {
             if (Test-Path -LiteralPath $registryPath) { throw "Protocol registration remained after uninstall: $registryPath" }
+          }
+          $migrationLocalAppData = Join-Path $env:RUNNER_TEMP 'Local AppData'
+          $migrationLegacyAppDir = Join-Path (Join-Path $migrationLocalAppData 'Programs') '@signetdesktop'
+          try {
+            $migrationInstall = Start-Process -FilePath $installer.FullName -ArgumentList @('/S', "/D=$migrationLegacyAppDir") -Wait -PassThru
+            if ($migrationInstall.ExitCode -ne 0) { throw "Legacy fixture install failed with exit code $($migrationInstall.ExitCode)." }
+            bun surfaces/cli/scripts/windows-desktop-migration-smoke.ts "$env:RUNNER_TEMP" "$migrationLocalAppData"
+            if ($LASTEXITCODE -ne 0) { throw "Production CLI migration smoke failed with exit code $LASTEXITCODE." }
+          } finally {
+            Remove-Item -LiteralPath $migrationLocalAppData -Recurse -Force -ErrorAction SilentlyContinue
           }
       - name: Verify Desktop deep-link and CLI fallback contracts
         run: |
