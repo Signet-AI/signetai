@@ -76,8 +76,7 @@ is copied from Supermemory's `packages/memory-graph/src/canvas/viewport.ts`
 Copyright (c) 2025 supermemory. Licensed under MIT; the complete notice is preserved
 in the source file. The force simulation in `surfaces/dashboard/src/lib/graph-simulation.ts`
 is adapted from the same package, with geometry scaled for Signet's node sizes
-and structural links mapped to the ontology hierarchy. Its MIT notice is also
-preserved in source.
+and structural links mapped to the ontology hierarchy.
 
 ## Adapted AI Elements components
 
