@@ -153,6 +153,7 @@ import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./nati
 import {
 	DEFAULT_RETENTION,
 	ensureRetentionWorker,
+	getDreamingWorker,
 	getPipelineWorkerStatus,
 	setDreamingWorker,
 	startPipeline,
@@ -162,7 +163,7 @@ import { randomUUID } from "node:crypto";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
 import { dbOwnerTransaction } from "./db-owner-runtime";
 import { startDeferredRuntimeAfterDreaming } from "./dreaming-startup";
-import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
+import { startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
@@ -342,7 +343,6 @@ let globalVerifyInFlight = false;
 let migrationIntegrityWritesBlocked = false;
 let migrationWritesDeferred = false;
 let recallDbOwner: DbOwnerClient | null = null;
-let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
 let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
 let vacuumConversionHandle: VacuumConversionHandle | null = null;
@@ -1586,13 +1586,13 @@ async function stopPipelineRuntime(): Promise<void> {
 		} catch {}
 		embeddingIndexMigrationHandle = null;
 	}
-	if (dreamingWorkerHandle) {
-		dreamingWorkerHandle.stop();
-		if (dreamingWorkerHandle.activePass) {
+	const dreamingWorker = getDreamingWorker();
+	if (dreamingWorker !== null) {
+		dreamingWorker.stop();
+		if (dreamingWorker.activePass) {
 			const timeout = new Promise<void>((resolve) => setTimeout(resolve, 30_000));
-			await Promise.race([dreamingWorkerHandle.activePass.catch(() => undefined), timeout]);
+			await Promise.race([dreamingWorker.activePass.catch(() => undefined), timeout]);
 		}
-		dreamingWorkerHandle = null;
 		setDreamingWorker(null);
 	}
 
@@ -1624,7 +1624,7 @@ async function restartPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry
 
 function restartAfterEmbeddingPromotion(telemetry?: TelemetryCollector): void {
 	if (embeddingPromotionRestart) return;
-	const activePass = dreamingWorkerHandle?.activePass;
+	const activePass = getDreamingWorker()?.activePass;
 	embeddingPromotionRestart = (async () => {
 		if (activePass) {
 			logger.info("embedding", "Deferring embedding worker restart until Dreaming pass completes");
@@ -1769,15 +1769,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	});
 	void router.validateConfigReferences();
 
-	if (dbOwnerMaintenanceHandle === null) {
-		dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
-	}
-
 	const activeEmbeddingCfg = await startDeferredRuntimeAfterDreaming(
 		() => {
 			if (!pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 				try {
-					dreamingWorkerHandle = startDreamingWorker(
+					const dreamingWorker = startDreamingWorker(
 						getDbAccessor(),
 						memoryCfg.dreaming,
 						AGENTS_DIR,
@@ -1803,7 +1799,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 						},
 						graphWriteCaps(memoryCfg),
 					);
-					setDreamingWorker(dreamingWorkerHandle);
+					setDreamingWorker(dreamingWorker);
 				} catch (err) {
 					logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
 						error: err instanceof Error ? err.message : String(err),
@@ -1887,10 +1883,6 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		interactive: await router.hasWorkload("interactive"),
 		default: await router.hasWorkload("default"),
 	});
-
-	if (dbOwnerMaintenanceHandle === null) {
-		dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
-	}
 
 	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
 		startPipeline(
@@ -2603,7 +2595,7 @@ async function main() {
 							resourceTelemetry = buildResourceUtilizationTelemetry(
 								resources,
 								getSystemPressure(),
-								dreamingWorkerHandle?.running === true,
+								getDreamingWorker()?.running === true,
 							);
 							const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
 								? "restarted"
