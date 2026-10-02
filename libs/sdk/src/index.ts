@@ -4,6 +4,8 @@ import { SignetClientP2 } from "./client-p2.js";
 import { SignetClientHelpers, applyRecallMinScore } from "./helpers.js";
 import { SignetTransport } from "./transport.js";
 import type {
+	BatchModifyOptions,
+	BatchModifyPatch,
 	BatchModifyResponse,
 	BitwardenConnectResult,
 	BitwardenMigrationResult,
@@ -67,6 +69,8 @@ import type {
 	TelemetryStatsResponse,
 	TimelineExportResponse,
 	TimelineResponse,
+	CreateDocumentOptions,
+	MemoryModifyPatch,
 } from "./types.js";
 
 export interface SignetClientConfig {
@@ -157,19 +161,7 @@ export class SignetClient extends SignetClientHelpers {
 		});
 	}
 
-	async modifyMemory(
-		id: string,
-		patch: {
-			readonly content?: string;
-			readonly type?: string;
-			readonly importance?: number;
-			readonly tags?: string;
-			readonly pinned?: boolean;
-			readonly project?: string;
-			readonly reason: string;
-			readonly ifVersion?: number;
-		},
-	): Promise<ModifyResult> {
+	async modifyMemory(id: string, patch: MemoryModifyPatch): Promise<ModifyResult> {
 		const { ifVersion, ...rest } = patch;
 		return this.transport.patch<ModifyResult>(`/api/memory/${id}`, {
 			...rest,
@@ -210,23 +202,7 @@ export class SignetClient extends SignetClientHelpers {
 		return this.transport.post<ForgetResponse>("/api/memory/forget", opts);
 	}
 
-	async batchModify(
-		patches: readonly {
-			readonly id: string;
-			readonly content?: string;
-			readonly type?: string;
-			readonly importance?: number;
-			readonly tags?: string;
-			readonly pinned?: boolean;
-			readonly project?: string;
-			readonly reason: string;
-			readonly ifVersion?: number;
-		}[],
-		opts?: {
-			readonly reason?: string;
-			readonly changed_by?: string;
-		},
-	): Promise<BatchModifyResponse> {
+	async batchModify(patches: readonly BatchModifyPatch[], opts?: BatchModifyOptions): Promise<BatchModifyResponse> {
 		const mapped = patches.map(({ ifVersion, ...rest }) => ({
 			...rest,
 			if_version: ifVersion,
@@ -258,15 +234,7 @@ export class SignetClient extends SignetClientHelpers {
 		return this.transport.get<JobStatus>(`/api/memory/jobs/${jobId}`);
 	}
 
-	async createDocument(opts: {
-		readonly source_type: "text" | "url" | "file";
-		readonly content?: string;
-		readonly url?: string;
-		readonly title?: string;
-		readonly content_type?: string;
-		readonly connector_id?: string;
-		readonly metadata?: Record<string, unknown>;
-	}): Promise<DocumentCreateResult> {
+	async createDocument(opts: CreateDocumentOptions): Promise<DocumentCreateResult> {
 		return this.transport.post<DocumentCreateResult>("/api/documents", opts);
 	}
 
@@ -643,6 +611,14 @@ export type {
 	AggregateRecallUsage,
 	AggregateRecallUsageStage,
 	BatchModifyItemResult,
+	BatchModifyOptions,
+	BatchModifyPatch,
+	CreateDocumentOptions,
+	HookRecallOptions,
+	HookRememberOptions,
+	MemoryModifyPatch,
+	RecallStageTiming,
+	RecallTimings,
 	BatchModifyResponse,
 	CheckpointListResponse,
 	ConfigListResponse,

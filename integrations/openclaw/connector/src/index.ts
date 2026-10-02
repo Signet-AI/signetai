@@ -81,9 +81,16 @@ function deepMerge(target: JsonObject, source: JsonObject): JsonObject {
 	return target;
 }
 
-function mergePluginAllow(pluginsObj: JsonObject, pluginName: string): { changed: boolean; warning?: string } {
+function updatePluginAllow(
+	pluginsObj: JsonObject,
+	pluginName: string,
+	action: "add" | "remove",
+): { changed: boolean; warning?: string } {
 	const rawAllow = pluginsObj.allow;
 	if (rawAllow === undefined) {
+		if (action === "remove") {
+			return { changed: false };
+		}
 		pluginsObj.allow = [pluginName];
 		return { changed: true };
 	}
@@ -95,34 +102,17 @@ function mergePluginAllow(pluginsObj: JsonObject, pluginName: string): { changed
 		};
 	}
 
-	const current = rawAllow.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
-	const next = current.includes(pluginName) ? current : [...current, pluginName];
-	const unchanged = next.length === rawAllow.length && next.every((entry, i) => entry === rawAllow[i]);
-
-	if (!unchanged) {
-		pluginsObj.allow = next;
-	}
-	return { changed: !unchanged };
-}
-
-function removePluginAllow(pluginsObj: JsonObject, pluginName: string): { changed: boolean; warning?: string } {
-	const rawAllow = pluginsObj.allow;
-	if (rawAllow === undefined) {
-		return { changed: false };
+	let next: string[];
+	if (action === "add") {
+		const current = rawAllow.filter((entry): entry is string => typeof entry === "string" && entry.trim().length > 0);
+		next = current.includes(pluginName) ? current : [...current, pluginName];
+	} else {
+		next = rawAllow.filter(
+			(entry): entry is string => typeof entry === "string" && entry.trim().length > 0 && entry !== pluginName,
+		);
 	}
 
-	if (!Array.isArray(rawAllow)) {
-		return {
-			changed: false,
-			warning: `plugins.allow has unexpected type (${typeof rawAllow}); cannot safely merge`,
-		};
-	}
-
-	const next = rawAllow.filter(
-		(entry): entry is string => typeof entry === "string" && entry.trim().length > 0 && entry !== pluginName,
-	);
-	const unchanged = next.length === rawAllow.length && next.every((entry, i) => entry === rawAllow[i]);
-
+	const unchanged = next.length === rawAllow.length && next.every((entry, index) => entry === rawAllow[index]);
 	if (!unchanged) {
 		pluginsObj.allow = next;
 	}
@@ -412,7 +402,7 @@ export class OpenClawConnector extends BaseConnector {
 				}
 
 				const pluginsObj = isJsonObject(config.plugins) ? config.plugins : {};
-				const allowResult = removePluginAllow(pluginsObj, pluginName);
+				const allowResult = updatePluginAllow(pluginsObj, pluginName, "remove");
 				if (allowResult.warning) {
 					const warning = `[signet/openclaw] Skipped plugins.allow patch for ${configPath}: ${allowResult.warning}`;
 					warnings.push(warning);
@@ -541,12 +531,11 @@ export class OpenClawConnector extends BaseConnector {
 	private getConfigCandidates(): string[] {
 		const seen = new Set<string>();
 		const candidates: string[] = [];
-		const configFileNames = ["openclaw.json", "clawdbot.json", "moldbot.json", "moltbot.json"] as const;
 		const namedConfigPairs = [
-			{ dirName: "openclaw", fileName: "openclaw.json" },
-			{ dirName: "clawdbot", fileName: "clawdbot.json" },
-			{ dirName: "moldbot", fileName: "moldbot.json" },
-			{ dirName: "moltbot", fileName: "moltbot.json" },
+			{ dirName: "openclaw", fileName: "openclaw.json", homeEnv: "OPENCLAW_HOME" },
+			{ dirName: "clawdbot", fileName: "clawdbot.json", homeEnv: "CLAWDBOT_HOME" },
+			{ dirName: "moldbot", fileName: "moldbot.json", homeEnv: "MOLDBOT_HOME" },
+			{ dirName: "moltbot", fileName: "moltbot.json", homeEnv: "MOLTBOT_HOME" },
 		] as const;
 
 		const push = (rawPath: string | undefined) => {
@@ -585,30 +574,17 @@ export class OpenClawConnector extends BaseConnector {
 		);
 
 		for (const stateDir of stateDirs) {
-			for (const filename of configFileNames) {
-				push(join(stateDir, filename));
+			for (const pair of namedConfigPairs) {
+				push(join(stateDir, pair.fileName));
 			}
 		}
-		push(
-			process.env.OPENCLAW_HOME
-				? join(expandHome(process.env.OPENCLAW_HOME, this.getHomeDir()), "openclaw.json")
-				: undefined,
-		);
-		push(
-			process.env.CLAWDBOT_HOME
-				? join(expandHome(process.env.CLAWDBOT_HOME, this.getHomeDir()), "clawdbot.json")
-				: undefined,
-		);
-		push(
-			process.env.MOLDBOT_HOME
-				? join(expandHome(process.env.MOLDBOT_HOME, this.getHomeDir()), "moldbot.json")
-				: undefined,
-		);
-		push(
-			process.env.MOLTBOT_HOME
-				? join(expandHome(process.env.MOLTBOT_HOME, this.getHomeDir()), "moltbot.json")
-				: undefined,
-		);
+
+		for (const pair of namedConfigPairs) {
+			const homeOverride = process.env[pair.homeEnv];
+			if (homeOverride) {
+				push(join(expandHome(homeOverride, home), pair.fileName));
+			}
+		}
 
 		for (const pair of namedConfigPairs) {
 			push(join(home, `.${pair.dirName}`, pair.fileName));
@@ -686,7 +662,7 @@ export class OpenClawConnector extends BaseConnector {
 				}
 
 				const pluginsObj = isJsonObject(config.plugins) ? config.plugins : {};
-				const allowResult = mergePluginAllow(pluginsObj, pluginName);
+				const allowResult = updatePluginAllow(pluginsObj, pluginName, "add");
 				if (allowResult.warning) {
 					const warning = `[signet/openclaw] Skipped plugins.allow patch for ${configPath}: ${allowResult.warning}`;
 					warnings.push(warning);
@@ -784,7 +760,7 @@ export class OpenClawConnector extends BaseConnector {
 					dirty = true;
 				}
 
-				const allowResult = mergePluginAllow(pluginsObj, pluginName);
+				const allowResult = updatePluginAllow(pluginsObj, pluginName, "add");
 				if (allowResult.warning) {
 					const warning = `[signet/openclaw] Skipped plugins.allow patch for ${configPath}: ${allowResult.warning}`;
 					warnings.push(warning);

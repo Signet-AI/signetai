@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, parse, relative } from "node:path";
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonApiCall } from "../lib/daemon.js";
+import { isRecord } from "./command-utils";
 
 export const DEFAULT_CONTEXT_PROFILE = "coding";
 export const DEFAULT_COMPILED_CONTEXT_MAX_CHARS = 2200;
@@ -54,10 +55,6 @@ export interface CompileContextPromptResult {
 	readonly sources: readonly string[];
 	readonly text: string;
 	readonly targetRef?: string;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number, max: number): number | null {

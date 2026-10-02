@@ -121,7 +121,7 @@ import {
 	resolveActiveEmbeddingConfigFromState,
 } from "./embedding-index-state";
 import { completeFtsStartupRecovery } from "./fts-startup-recovery";
-import { type EmbeddingTrackerHandle, startEmbeddingTracker } from "./embedding-tracker";
+import { startEmbeddingTracker } from "./embedding-tracker";
 import { initFeatureFlags } from "./feature-flags";
 import { writeFileIfChangedAsync } from "./file-sync";
 import { createSignetHttpServer } from "./http-server";
@@ -153,6 +153,7 @@ import { materializeEmbeddedWasmAssets, resolveEmbeddedWorkerPath } from "./nati
 import {
 	DEFAULT_RETENTION,
 	ensureRetentionWorker,
+	getDreamingWorker,
 	getPipelineWorkerStatus,
 	setDreamingWorker,
 	startPipeline,
@@ -162,7 +163,7 @@ import { randomUUID } from "node:crypto";
 import { recordDreamingPassTelemetry } from "./pipeline/dreaming";
 import { dbOwnerTransaction } from "./db-owner-runtime";
 import { startDeferredRuntimeAfterDreaming } from "./dreaming-startup";
-import { type DreamingWorkerHandle, startDreamingWorker } from "./pipeline/dreaming-worker";
+import { startDreamingWorker } from "./pipeline/dreaming-worker";
 import { retireLegacyExtractionJobsAsync } from "./pipeline/extraction-fallback";
 import { invalidateTraversalCache } from "./pipeline/graph-traversal";
 import { stopModelRegistry } from "./pipeline/model-registry";
@@ -205,7 +206,10 @@ import {
 	setRestartPipelineRuntime,
 	setShuttingDown,
 	setTelemetryRef,
-	embeddingTrackerHandle as sharedEmbeddingTrackerHandle,
+	embeddingTrackerHandle,
+	heartbeatTimer,
+	checkpointPruneTimer,
+	telemetryRef,
 	shuttingDown,
 } from "./routes/state.js";
 import {
@@ -339,9 +343,7 @@ let globalVerifyInFlight = false;
 let migrationIntegrityWritesBlocked = false;
 let migrationWritesDeferred = false;
 let recallDbOwner: DbOwnerClient | null = null;
-let dreamingWorkerHandle: DreamingWorkerHandle | null = null;
 let reflectionWorkerHandle: ReflectionWorkerHandle | null = null;
-let embeddingTrackerHandle: EmbeddingTrackerHandle | null = null;
 let embeddingIndexMigrationHandle: EmbeddingIndexMigrationHandle | null = null;
 let vacuumConversionHandle: VacuumConversionHandle | null = null;
 let embeddingPromotionRestart: Promise<void> | null = null;
@@ -350,10 +352,6 @@ let transcriptCaptureWorkerHandle: TranscriptCaptureWorkerHandle | null = null;
 let transcriptRecoveryWorkerHandle: TranscriptRecoveryWorkerHandle | null = null;
 let transcriptImportWorkerHandle: TranscriptImportWorkerHandle | null = null;
 let manualInboxWorkerHandle: ManualInboxWorkerHandle | null = null;
-let telemetryRef: TelemetryCollector | undefined;
-let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
-let checkpointPruneTimer: ReturnType<typeof setInterval> | undefined;
-
 function armMigrationIntegrityWriteBlock(): void {
 	migrationIntegrityWritesBlocked = true;
 	migrationWritesDeferred = false;
@@ -1580,7 +1578,6 @@ async function stopPipelineRuntime(): Promise<void> {
 		try {
 			await embeddingTrackerHandle.stop();
 		} catch {}
-		embeddingTrackerHandle = null;
 		setEmbeddingTrackerHandle(null);
 	}
 	if (embeddingIndexMigrationHandle) {
@@ -1589,20 +1586,13 @@ async function stopPipelineRuntime(): Promise<void> {
 		} catch {}
 		embeddingIndexMigrationHandle = null;
 	}
-	if (sharedEmbeddingTrackerHandle) {
-		try {
-			await sharedEmbeddingTrackerHandle.stop();
-		} catch {}
-		setEmbeddingTrackerHandle(null);
-	}
-
-	if (dreamingWorkerHandle) {
-		dreamingWorkerHandle.stop();
-		if (dreamingWorkerHandle.activePass) {
+	const dreamingWorker = getDreamingWorker();
+	if (dreamingWorker !== null) {
+		dreamingWorker.stop();
+		if (dreamingWorker.activePass) {
 			const timeout = new Promise<void>((resolve) => setTimeout(resolve, 30_000));
-			await Promise.race([dreamingWorkerHandle.activePass.catch(() => undefined), timeout]);
+			await Promise.race([dreamingWorker.activePass.catch(() => undefined), timeout]);
 		}
-		dreamingWorkerHandle = null;
 		setDreamingWorker(null);
 	}
 
@@ -1634,7 +1624,7 @@ async function restartPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry
 
 function restartAfterEmbeddingPromotion(telemetry?: TelemetryCollector): void {
 	if (embeddingPromotionRestart) return;
-	const activePass = dreamingWorkerHandle?.activePass;
+	const activePass = getDreamingWorker()?.activePass;
 	embeddingPromotionRestart = (async () => {
 		if (activePass) {
 			logger.info("embedding", "Deferring embedding worker restart until Dreaming pass completes");
@@ -1757,6 +1747,96 @@ function initializeDbOwnerMaintenance(): DbOwnerMaintenance {
 	return maintenance;
 }
 
+async function startConfiguredPipelineWorkers(
+	memoryCfg: ResolvedMemoryConfig,
+	activeEmbeddingCfg: ResolvedMemoryConfig["embedding"],
+	defaultAgentId: string,
+	telemetry?: TelemetryCollector,
+): Promise<void> {
+	const pipelinePaused = memoryCfg.pipelineV2.paused;
+	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
+		startPipeline(
+			getDbAccessor(),
+			memoryCfg.pipelineV2,
+			activeEmbeddingCfg,
+			fetchEmbedding,
+			memoryCfg.search,
+			defaultAgentId,
+			providerTracker,
+			analyticsCollector,
+			telemetry,
+			dbOwnerMaintenanceHandle ?? undefined,
+		);
+		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
+			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
+			configureNativeEmbeddingAssets({
+				embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
+				wasmAssetDir: materializeEmbeddedWasmAssets(),
+				transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
+			});
+		}
+	} else {
+		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);
+	}
+
+	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
+		setEmbeddingTrackerHandle(
+			startEmbeddingTracker(
+				getDbAccessor(),
+				activeEmbeddingCfg,
+				memoryCfg.pipelineV2.embeddingTracker,
+				memoryCfg.pipelineV2.repair,
+				fetchEmbedding,
+				checkEmbeddingProvider,
+				defaultAgentId,
+			),
+		);
+	}
+	if (!pipelinePaused) {
+		try {
+			embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
+				accessor: getDbAccessor(),
+				configured: memoryCfg.embedding,
+				readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
+				fetchEmbedding,
+				checkProvider: checkEmbeddingProvider,
+				owner: dbOwnerClient ?? undefined,
+				pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
+				batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
+				onPromoted: () => {
+					restartAfterEmbeddingPromotion(telemetry);
+				},
+			});
+		} catch (error) {
+			logger.warn("embedding", "Embedding index migration deferred after startup admission failure", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	}
+
+	if (memoryCfg.pipelineV2.reflections.enabled && !pipelinePaused) {
+		try {
+			reflectionWorkerHandle = startReflectionWorker(memoryCfg.pipelineV2.reflections);
+		} catch (err) {
+			logger.warn("reflections", "Failed to start reflection worker (non-fatal)", {
+				error: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}
+
+	if (memoryCfg.pipelineV2.procedural.enabled && !pipelinePaused) {
+		skillReconcilerHandle = startReconciler({
+			accessor: getDbAccessor(),
+			pipelineConfig: memoryCfg.pipelineV2,
+			embeddingConfig: memoryCfg.embedding,
+			fetchEmbedding,
+			agentsDir: AGENTS_DIR,
+		});
+	}
+
+	invalidateDiagnosticsCache();
+}
+
 async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?: TelemetryCollector): Promise<void> {
 	const pipelinePaused = memoryCfg.pipelineV2.paused;
 	const router = getOrCreateInferenceRouter(AGENTS_DIR);
@@ -1779,15 +1859,11 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 	});
 	void router.validateConfigReferences();
 
-	if (dbOwnerMaintenanceHandle === null) {
-		dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
-	}
-
 	const activeEmbeddingCfg = await startDeferredRuntimeAfterDreaming(
 		() => {
 			if (!pipelinePaused && !memoryCfg.pipelineV2.mutationsFrozen) {
 				try {
-					dreamingWorkerHandle = startDreamingWorker(
+					const dreamingWorker = startDreamingWorker(
 						getDbAccessor(),
 						memoryCfg.dreaming,
 						AGENTS_DIR,
@@ -1813,7 +1889,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 						},
 						graphWriteCaps(memoryCfg),
 					);
-					setDreamingWorker(dreamingWorkerHandle);
+					setDreamingWorker(dreamingWorker);
 				} catch (err) {
 					logger.warn("dreaming", "Failed to start dreaming worker (non-fatal)", {
 						error: err instanceof Error ? err.message : String(err),
@@ -1898,90 +1974,7 @@ async function startPipelineRuntime(memoryCfg: ResolvedMemoryConfig, telemetry?:
 		default: await router.hasWorkload("default"),
 	});
 
-	if (dbOwnerMaintenanceHandle === null) {
-		dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance();
-	}
-
-	if (memoryCfg.pipelineV2.enabled && !pipelinePaused) {
-		startPipeline(
-			getDbAccessor(),
-			memoryCfg.pipelineV2,
-			activeEmbeddingCfg,
-			fetchEmbedding,
-			memoryCfg.search,
-			defaultAgentId,
-			providerTracker,
-			analyticsCollector,
-			telemetry,
-			dbOwnerMaintenanceHandle ?? undefined,
-		);
-		if (activeEmbeddingCfg.provider === "native" && activeEmbeddingCfg.warmNative !== false) {
-			const { configureNativeEmbeddingAssets } = await import("./native-embedding");
-			configureNativeEmbeddingAssets({
-				embeddingWorkerPath: resolveEmbeddedWorkerPath("embedding-worker"),
-				wasmAssetDir: materializeEmbeddedWasmAssets(),
-				transformersRuntimeAssetPath: resolveEmbeddedWorkerPath("embedding-worker-transformers-runtime"),
-			});
-		}
-	} else {
-		ensureRetentionWorker(getDbAccessor(), DEFAULT_RETENTION, dbOwnerMaintenanceHandle ?? undefined);
-	}
-
-	if (activeEmbeddingCfg.provider !== "none" && memoryCfg.pipelineV2.embeddingTracker.enabled && !pipelinePaused) {
-		embeddingTrackerHandle = startEmbeddingTracker(
-			getDbAccessor(),
-			activeEmbeddingCfg,
-			memoryCfg.pipelineV2.embeddingTracker,
-			memoryCfg.pipelineV2.repair,
-			fetchEmbedding,
-			checkEmbeddingProvider,
-			defaultAgentId,
-		);
-		setEmbeddingTrackerHandle(embeddingTrackerHandle);
-	}
-	if (!pipelinePaused) {
-		try {
-			embeddingIndexMigrationHandle = await startEmbeddingIndexMigration({
-				accessor: getDbAccessor(),
-				configured: memoryCfg.embedding,
-				readConfigured: () => loadMemoryConfig(AGENTS_DIR).embedding,
-				fetchEmbedding,
-				checkProvider: checkEmbeddingProvider,
-				owner: dbOwnerClient ?? undefined,
-				pollMs: memoryCfg.pipelineV2.embeddingTracker.pollMs,
-				batchSize: memoryCfg.pipelineV2.embeddingTracker.batchSize,
-				onPromoted: () => {
-					restartAfterEmbeddingPromotion(telemetry);
-				},
-			});
-		} catch (error) {
-			logger.warn("embedding", "Embedding index migration deferred after startup admission failure", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
-	}
-
-	if (memoryCfg.pipelineV2.reflections.enabled && !pipelinePaused) {
-		try {
-			reflectionWorkerHandle = startReflectionWorker(memoryCfg.pipelineV2.reflections);
-		} catch (err) {
-			logger.warn("reflections", "Failed to start reflection worker (non-fatal)", {
-				error: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}
-
-	if (memoryCfg.pipelineV2.procedural.enabled && !pipelinePaused) {
-		skillReconcilerHandle = startReconciler({
-			accessor: getDbAccessor(),
-			pipelineConfig: memoryCfg.pipelineV2,
-			embeddingConfig: memoryCfg.embedding,
-			fetchEmbedding,
-			agentsDir: AGENTS_DIR,
-		});
-	}
-
-	invalidateDiagnosticsCache();
+	await startConfiguredPipelineWorkers(memoryCfg, activeEmbeddingCfg, defaultAgentId, telemetry);
 }
 
 queueMicrotask(() => setRestartPipelineRuntime(restartPipelineRuntime));
@@ -2037,12 +2030,10 @@ async function cleanup() {
 
 	if (heartbeatTimer) {
 		clearInterval(heartbeatTimer);
-		heartbeatTimer = undefined;
 		setHeartbeatTimer(undefined);
 	}
 	if (checkpointPruneTimer) {
 		clearInterval(checkpointPruneTimer);
-		checkpointPruneTimer = undefined;
 		setCheckpointPruneTimer(undefined);
 	}
 	stopResourceMonitors();
@@ -2052,7 +2043,6 @@ async function cleanup() {
 		try {
 			await telemetryRef.stop();
 		} catch {}
-		telemetryRef = undefined;
 		setTelemetryRef(undefined);
 		setActiveTelemetry(undefined);
 	}
@@ -2543,7 +2533,6 @@ async function main() {
 			dbPath: MEMORY_DB,
 		});
 		telemetryCollector.start();
-		telemetryRef = telemetryCollector;
 		setTelemetryRef(telemetryCollector);
 		setActiveTelemetry(telemetryCollector);
 
@@ -2585,7 +2574,7 @@ async function main() {
 		}
 
 		const daemonStartTime = Date.now();
-		heartbeatTimer = setInterval(
+		const heartbeat = setInterval(
 			() => {
 				void (async () => {
 					if (!telemetryRef) return;
@@ -2616,7 +2605,7 @@ async function main() {
 							resourceTelemetry = buildResourceUtilizationTelemetry(
 								resources,
 								getSystemPressure(),
-								dreamingWorkerHandle?.running === true,
+								getDreamingWorker()?.running === true,
 							);
 							const recoveryOutcome: PressureRecoveryOutcome = restartedHeartbeatPending
 								? "restarted"
@@ -2662,7 +2651,7 @@ async function main() {
 			},
 			5 * 60 * 1000,
 		);
-		setHeartbeatTimer(heartbeatTimer);
+		setHeartbeatTimer(heartbeat);
 	}
 
 	const deferredRuntimeGate = createDeferredRuntimeGate();
@@ -2806,9 +2795,6 @@ async function main() {
 
 		initCheckpointFlush(getDbAccessor());
 
-		if (!transcriptCaptureWorkerHandle) {
-			transcriptCaptureWorkerHandle = await startTranscriptCaptureWorker(getDbAccessor(), AGENTS_DIR);
-		}
 		if (!transcriptRecoveryWorkerHandle) {
 			transcriptRecoveryWorkerHandle = startTranscriptRecoveryWorker(
 				getDbAccessor(),
@@ -2915,7 +2901,7 @@ async function main() {
 			});
 		}
 
-		checkpointPruneTimer = setInterval(() => {
+		const checkpointPrune = setInterval(() => {
 			try {
 				const cfg = loadMemoryConfig(AGENTS_DIR).pipelineV2.continuity;
 				if (cfg.enabled) {
@@ -2931,7 +2917,7 @@ async function main() {
 				});
 			}
 		}, 3600_000);
-		setCheckpointPruneTimer(checkpointPruneTimer);
+		setCheckpointPruneTimer(checkpointPrune);
 
 		startGitSyncTimer();
 		initUpdateSystem(

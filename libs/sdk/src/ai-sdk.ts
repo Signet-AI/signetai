@@ -1,26 +1,43 @@
 import type { SignetClient } from "./index.js";
+import type { ZodRawShape } from "zod";
+import { MEMORY_TOOL_SPECS, type MemoryToolParameterSpec } from "./memory-tools-spec.js";
 async function getZod() {
 	const z = await import("zod");
-	return z;
+	return z.z;
+}
+
+function buildFieldSchema(z: Awaited<ReturnType<typeof getZod>>, type: MemoryToolParameterSpec["type"]) {
+	switch (type) {
+		case "string":
+			return z.string();
+		case "number":
+			return z.number();
+		case "boolean":
+			return z.boolean();
+		case "aggregateBudget":
+			return z.enum(["small", "medium", "large"]);
+	}
+}
+
+function buildParameters(
+	z: Awaited<ReturnType<typeof getZod>>,
+	properties: Readonly<Record<string, MemoryToolParameterSpec>>,
+) {
+	const shape: Record<string, ZodRawShape[string]> = {};
+	for (const [name, property] of Object.entries(properties)) {
+		const schema = buildFieldSchema(z, property.type).describe(property.description);
+		shape[name] = property.required ? schema : schema.optional();
+	}
+	return z.object(shape);
 }
 
 export async function memoryTools(client: SignetClient) {
-	const { z } = await getZod();
+	const z = await getZod();
 
 	return {
 		memory_search: {
-			description: "Search the agent's memory for relevant information",
-			parameters: z.object({
-				query: z.string().describe("Search query"),
-				limit: z.number().optional().describe("Max results"),
-				type: z.string().optional().describe("Memory type filter"),
-				aggregate: z.boolean().optional().describe("Synthesize an aggregate answer from recall evidence"),
-				aggregateBudget: z.enum(["small", "medium", "large"]).optional().describe("Aggregate recall budget"),
-				saveAggregate: z.boolean().optional().describe("Save aggregate answers as memories"),
-				sessionKey: z.string().optional().describe("Session key for context dedupe"),
-				agentId: z.string().optional().describe("Agent ID for scoped recall"),
-				includeRecalled: z.boolean().optional().describe("Include rows already recalled in this context"),
-			}),
+			description: MEMORY_TOOL_SPECS.memory_search.description,
+			parameters: buildParameters(z, MEMORY_TOOL_SPECS.memory_search.properties),
 			execute: async ({
 				query,
 				limit,
@@ -57,25 +74,16 @@ export async function memoryTools(client: SignetClient) {
 		},
 
 		memory_store: {
-			description: "Store information in the agent's memory",
-			parameters: z.object({
-				content: z.string().describe("Content to remember"),
-				type: z.string().optional().describe("Memory type"),
-				importance: z.number().optional().describe("0-1 importance"),
-			}),
+			description: MEMORY_TOOL_SPECS.memory_store.description,
+			parameters: buildParameters(z, MEMORY_TOOL_SPECS.memory_store.properties),
 			execute: async ({ content, type, importance }: { content: string; type?: string; importance?: number }) => {
 				return client.remember(content, { type, importance });
 			},
 		},
 
 		memory_modify: {
-			description: "Modify an existing memory by ID",
-			parameters: z.object({
-				id: z.string().describe("Memory ID to modify"),
-				content: z.string().optional().describe("New content"),
-				reason: z.string().describe("Why this change is being made"),
-				ifVersion: z.number().optional().describe("Optimistic lock version"),
-			}),
+			description: MEMORY_TOOL_SPECS.memory_modify.description,
+			parameters: buildParameters(z, MEMORY_TOOL_SPECS.memory_modify.properties),
 			execute: async ({
 				id,
 				content,
@@ -92,11 +100,8 @@ export async function memoryTools(client: SignetClient) {
 		},
 
 		memory_forget: {
-			description: "Forget a memory by ID (soft-delete)",
-			parameters: z.object({
-				id: z.string().describe("Memory ID to forget"),
-				reason: z.string().describe("Why this memory is being forgotten"),
-			}),
+			description: MEMORY_TOOL_SPECS.memory_forget.description,
+			parameters: buildParameters(z, MEMORY_TOOL_SPECS.memory_forget.properties),
 			execute: async ({ id, reason }: { id: string; reason: string }) => {
 				return client.forgetMemory(id, { reason });
 			},

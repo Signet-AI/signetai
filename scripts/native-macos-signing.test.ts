@@ -206,22 +206,37 @@ fi
 	return { binary, log, path: bin, runnerTemp };
 }
 
-test("cleans the temporary keychain directory when password generation fails", async () => {
-	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
+type SigningFixture = Awaited<ReturnType<typeof signingFixture>>;
+type SigningResult = ReturnType<typeof Bun.spawnSync>;
+
+const signingScript = resolve(import.meta.dir, "sign-macos-native.sh");
+const signingDirectory = resolve(import.meta.dir, "..");
+
+function runSigning(fixture: SigningFixture, environment: Record<string, string> = {}): SigningResult {
+	return Bun.spawnSync(["bash", signingScript, fixture.binary], {
+		cwd: signingDirectory,
 		env: {
 			...process.env,
 			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_OPENSSL_FAILURE: "1",
 			MACOS_CERTIFICATE_P12: "cGsi",
 			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
 			APPLE_TEAM_ID: "TEAM123456",
+			...environment,
 		},
 		stdout: "pipe",
 		stderr: "pipe",
+	});
+}
+
+function signingOutput(result: SigningResult): string {
+	return `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+}
+
+test("cleans the temporary keychain directory when password generation fails", async () => {
+	const fixture = await signingFixture();
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_OPENSSL_FAILURE: "1",
 	});
 
 	expect(result.exitCode).not.toBe(0);
@@ -230,21 +245,10 @@ test("cleans the temporary keychain directory when password generation fails", a
 
 test("uses OpenSSL's legacy provider when the PKCS#12 reader supports it", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			SIGNING_OPENSSL_REQUIRE_LEGACY: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		SIGNING_OPENSSL_REQUIRE_LEGACY: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 
 	expect(result.exitCode).toBe(0);
 	expect(output).toContain("Signed and verified");
@@ -252,45 +256,23 @@ test("uses OpenSSL's legacy provider when the PKCS#12 reader supports it", async
 
 test("does not request OpenSSL's legacy provider when the PKCS#12 reader lacks it", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			SIGNING_OPENSSL_LEGACY_SUPPORTED: "0",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		SIGNING_OPENSSL_LEGACY_SUPPORTED: "0",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 
 	expect(result.exitCode).toBe(0);
 	expect(output).toContain("Signed and verified");
 });
 
 test("accepts only a well-formed Keychain identity row and keeps lookup output private", async () => {
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
 	for (const mode of ["missing", "unrelated", "ambiguous", "malformed", "query-error"] as const) {
 		const fixture = await signingFixture();
-		const result = Bun.spawnSync(["bash", script, fixture.binary], {
-			cwd: resolve(import.meta.dir, ".."),
-			env: {
-				...process.env,
-				PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-				SIGNING_LOG: fixture.log,
-				SIGNING_IDENTITY_OUTPUT_MODE: mode,
-				MACOS_CERTIFICATE_P12: "cGsi",
-				MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-				APPLE_TEAM_ID: "TEAM123456",
-			},
-			stdout: "pipe",
-			stderr: "pipe",
+		const result = runSigning(fixture, {
+			SIGNING_LOG: fixture.log,
+			SIGNING_IDENTITY_OUTPUT_MODE: mode,
 		});
-		const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+		const output = signingOutput(result);
 		const calls = await readFile(fixture.log, "utf8").catch(() => "");
 		const queryStatus = mode === "query-error" ? 1 : 0;
 
@@ -304,23 +286,12 @@ test("accepts only a well-formed Keychain identity row and keeps lookup output p
 
 test("matches a lowercase Keychain fingerprint case-insensitively", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_IDENTITY_OUTPUT_MODE: "lowercase",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_IDENTITY_OUTPUT_MODE: "lowercase",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 
 	expect(output).toContain("Signed and verified");
 	expect(result.exitCode).toBe(0);
@@ -328,26 +299,15 @@ test("matches a lowercase Keychain fingerprint case-insensitively", async () => 
 
 test("accepts a semantically restored search list with different formatting", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
 	const originalList = '    "fixture login.keychain"  \n	 "fixture-secondary.keychain"	';
 	const restoredList = '"fixture login.keychain"\n  "fixture-secondary.keychain"';
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_LIST: originalList,
-			SIGNING_KEYCHAIN_RESTORED_LIST: restoredList,
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_LIST: originalList,
+		SIGNING_KEYCHAIN_RESTORED_LIST: restoredList,
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const keychainState = await readFile(`${fixture.log}.keychain-state`, "utf8");
 
 	expect(result.exitCode).toBe(0);
@@ -357,23 +317,12 @@ test("accepts a semantically restored search list with different formatting", as
 
 test("signs through the temporary user search list without an explicit keychain selector", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_CODESIGN_REQUIRE_SEARCH_LIST: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_CODESIGN_REQUIRE_SEARCH_LIST: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 	const keychainState = await readFile(`${fixture.log}.keychain-state`, "utf8");
 	const temporaryKeychain =
@@ -399,25 +348,14 @@ afterAll(async () => {
 
 test("preserves literal backslashes in keychain search-list paths", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
 	const backslash = String.fromCharCode(92);
 	const keychainList = `    "fixture${backslash}tail.keychain"  ${String.fromCharCode(10)}"fixture-secondary.keychain"`;
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_LIST: keychainList,
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_LIST: keychainList,
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 
 	expect(result.exitCode).toBe(0);
@@ -427,24 +365,13 @@ test("preserves literal backslashes in keychain search-list paths", async () => 
 
 test("rejects an ambiguous embedded quote in keychain path output before search-list mutation", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
 	const keychainList = ` "fixture"quoted.keychain"${String.fromCharCode(10)} "fixture-secondary.keychain"`;
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_LIST: keychainList,
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_LIST: keychainList,
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 
 	expect(result.exitCode).not.toBe(0);
@@ -455,23 +382,12 @@ test("rejects an ambiguous embedded quote in keychain path output before search-
 
 test("refuses production signing when it cannot read the list needed for safe restoration", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_SECURITY_FAILURE: "list-keychains",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_SECURITY_FAILURE: "list-keychains",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 
 	expect(result.exitCode).not.toBe(0);
@@ -481,23 +397,12 @@ test("refuses production signing when it cannot read the list needed for safe re
 
 test("rejects an empty quoted keychain path before changing the search list", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_EMPTY_ENTRY: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_EMPTY_ENTRY: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 
 	expect(result.exitCode).not.toBe(0);
@@ -508,23 +413,12 @@ test("rejects an empty quoted keychain path before changing the search list", as
 
 test("rejects NUL bytes in keychain search-list output before changing the search list", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_NUL_ENTRY: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_NUL_ENTRY: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 
 	expect(result.exitCode).not.toBe(0);
@@ -535,23 +429,12 @@ test("rejects NUL bytes in keychain search-list output before changing the searc
 
 test("fails signing and preserves recovery data when the original search list cannot be restored", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_RESTORE_FAILURE: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_RESTORE_FAILURE: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 
 	expect(result.exitCode).not.toBe(0);
@@ -567,23 +450,12 @@ test("fails signing and preserves recovery data when the original search list ca
 
 test("restores the original list after a transient search-list read failure", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_VERIFY_READ_FAILURES: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_VERIFY_READ_FAILURES: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 	const keychainState = await readFile(`${fixture.log}.keychain-state`, "utf8");
 	const temporaryKeychain =
@@ -603,23 +475,12 @@ test("restores the original list after a transient search-list read failure", as
 
 test("cleans up normally when the temporary-list setter fails without mutating state", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_SET_FAILURE_NO_MUTATION: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_SET_FAILURE_NO_MUTATION: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 
 	expect(result.exitCode).not.toBe(0);
@@ -633,24 +494,13 @@ test("cleans up normally when the temporary-list setter fails without mutating s
 
 test("preserves recovery data when the search list diverges without referencing the temporary keychain", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
 	const restoredList = '"fixture login.keychain"';
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_RESTORED_LIST: restoredList,
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_RESTORED_LIST: restoredList,
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 	const temporaryKeychain =
 		calls
@@ -669,23 +519,12 @@ test("preserves recovery data when the search list diverges without referencing 
 
 test("restores the original list and removes the temporary keychain after a partial setter failure", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_SET_FAILURE_PARTIAL: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_SET_FAILURE_PARTIAL: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 	const keychainState = await readFile(`${fixture.log}.keychain-state`, "utf8");
 	const temporaryKeychain =
@@ -706,23 +545,12 @@ test("restores the original list and removes the temporary keychain after a part
 
 test("preserves and restores an initially empty user keychain search list", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_EMPTY_LIST: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_EMPTY_LIST: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 	const keychainState = await readFile(`${fixture.log}.keychain-state`, "utf8");
 	const temporaryKeychain =
@@ -742,24 +570,13 @@ test("preserves and restores an initially empty user keychain search list", asyn
 
 test("preserves the temporary keychain when search-list mutation and restoration both fail", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			SIGNING_KEYCHAIN_SET_FAILURE_PARTIAL: "1",
-			SIGNING_KEYCHAIN_RESTORE_FAILURE: "1",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
+		SIGNING_KEYCHAIN_SET_FAILURE_PARTIAL: "1",
+		SIGNING_KEYCHAIN_RESTORE_FAILURE: "1",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 	const keychainState = await readFile(`${fixture.log}.keychain-state`, "utf8");
 	const temporaryKeychain =
@@ -784,22 +601,11 @@ test("preserves the temporary keychain when search-list mutation and restoration
 
 test("signs only with the Keychain identity whose certificate fingerprint matches", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8").catch(() => "");
 
 	expect(result.exitCode).toBe(0);
@@ -816,21 +622,10 @@ test("signs only with the Keychain identity whose certificate fingerprint matche
 
 test("refuses to sign when the imported certificate belongs to another team", async () => {
 	const fixture = await signingFixture("OTHERTEAM");
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			SIGNING_LOG: fixture.log,
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		SIGNING_LOG: fixture.log,
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8").catch(() => "");
 
 	expect(result.exitCode).not.toBe(0);
@@ -840,22 +635,11 @@ test("refuses to sign when the imported certificate belongs to another team", as
 
 test("rejects a signed binary when codesign verification sees a different team", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			SIGNING_LOG: fixture.log,
-			SIGNING_VERIFIER_TEAM_ID: "OTHERTEAM",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		SIGNING_LOG: fixture.log,
+		SIGNING_VERIFIER_TEAM_ID: "OTHERTEAM",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8");
 
 	expect(result.exitCode).not.toBe(0);
@@ -866,22 +650,11 @@ test("rejects a signed binary when codesign verification sees a different team",
 
 test("refuses a certificate whose team differs", async () => {
 	const fixture = await signingFixture("OTHERTEAM");
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8").catch(() => "");
 
 	expect(result.exitCode).not.toBe(0);
@@ -891,22 +664,11 @@ test("refuses a certificate whose team differs", async () => {
 
 test("refuses a certificate with a different Developer ID certificate type", async () => {
 	const fixture = await signingFixture("TEAM123456", "Developer ID Installer");
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			RUNNER_TEMP: fixture.runnerTemp,
-			SIGNING_LOG: fixture.log,
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		RUNNER_TEMP: fixture.runnerTemp,
+		SIGNING_LOG: fixture.log,
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 	const calls = await readFile(fixture.log, "utf8").catch(() => "");
 
 	expect(result.exitCode).not.toBe(0);
@@ -916,22 +678,11 @@ test("refuses a certificate with a different Developer ID certificate type", asy
 
 test("identifies the keychain stage when macOS rejects a security operation", async () => {
 	const fixture = await signingFixture();
-	const script = resolve(import.meta.dir, "sign-macos-native.sh");
-	const result = Bun.spawnSync(["bash", script, fixture.binary], {
-		cwd: resolve(import.meta.dir, ".."),
-		env: {
-			...process.env,
-			PATH: `${fixture.path}${delimiter}${process.env.PATH ?? ""}`,
-			SIGNING_LOG: fixture.log,
-			SIGNING_SECURITY_FAILURE: "set-key-partition-list",
-			MACOS_CERTIFICATE_P12: "cGsi",
-			MACOS_CERTIFICATE_PASSWORD: "fixture-password",
-			APPLE_TEAM_ID: "TEAM123456",
-		},
-		stdout: "pipe",
-		stderr: "pipe",
+	const result = runSigning(fixture, {
+		SIGNING_LOG: fixture.log,
+		SIGNING_SECURITY_FAILURE: "set-key-partition-list",
 	});
-	const output = `${new TextDecoder().decode(result.stdout)}${new TextDecoder().decode(result.stderr)}`;
+	const output = signingOutput(result);
 
 	expect(result.exitCode).not.toBe(0);
 	expect(output).toContain("Configuring code-signing key access");

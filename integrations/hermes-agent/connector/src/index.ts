@@ -984,16 +984,6 @@ function findMemoryBlock(lines: string[]): MemoryBlock | "missing" | null {
 	return { start, end, provider, indent: childIndent };
 }
 
-function providerLineIsSignet(line: string): boolean {
-	const match = /^\s+provider:\s*(.*)$/.exec(line);
-	return match ? parseScalar(match[1] ?? "") === "signet" : false;
-}
-
-function parseProviderLine(line: string): string | null {
-	const match = /^\s+provider:\s*(.*)$/.exec(line);
-	return match ? parseScalar(match[1] ?? "") : null;
-}
-
 function findDottedProvider(lines: string[]): number | null {
 	for (let i = 0; i < lines.length; i++) {
 		if (/^memory\.provider:\s*/.test(lines[i] ?? "")) return i;
@@ -1001,13 +991,13 @@ function findDottedProvider(lines: string[]): number | null {
 	return null;
 }
 
-function dottedProviderLineIsSignet(line: string): boolean {
-	const match = /^memory\.provider:\s*(.*)$/.exec(line);
-	return match ? parseScalar(match[1] ?? "") === "signet" : false;
-}
+const PROVIDER_LINE_PATTERNS = {
+	nested: /^\s+provider:\s*(.*)$/,
+	dotted: /^memory\.provider:\s*(.*)$/,
+} as const;
 
-function parseDottedProviderLine(line: string): string | null {
-	const match = /^memory\.provider:\s*(.*)$/.exec(line);
+function parseProviderValue(line: string, kind: ProviderBackup["providerKind"]): string | null {
+	const match = PROVIDER_LINE_PATTERNS[kind].exec(line);
 	return match ? parseScalar(match[1] ?? "") : null;
 }
 
@@ -1085,14 +1075,14 @@ function isProviderConfigured(hermesHome: string, targetRoot?: string): boolean 
 	if (!config) return false;
 	const lines = config.content.split(/\r?\n/);
 	const dottedProvider = findDottedProvider(lines);
-	if (dottedProvider !== null) return dottedProviderLineIsSignet(lines[dottedProvider] ?? "");
+	if (dottedProvider !== null) return parseProviderValue(lines[dottedProvider] ?? "", "dotted") === "signet";
 	const block = findMemoryBlock(lines);
 	if (
 		block !== null &&
 		typeof block === "object" &&
 		block.provider !== null &&
 		block.provider !== undefined &&
-		providerLineIsSignet(lines[block.provider] ?? "")
+		parseProviderValue(lines[block.provider] ?? "", "nested") === "signet"
 	) {
 		return true;
 	}
@@ -1122,15 +1112,10 @@ function configureProvider(
 	let backupPath: string | null = null;
 	if (dottedProvider !== null) {
 		let changed = false;
-		const dottedWasSignet = dottedProviderLineIsSignet(lines[dottedProvider] ?? "");
+		const dottedValue = parseProviderValue(lines[dottedProvider] ?? "", "dotted");
+		const dottedWasSignet = dottedValue === "signet";
 		if (!dottedWasSignet) {
-			backupPath = writeProviderBackup(
-				hermesHome,
-				configPath,
-				"dotted",
-				parseDottedProviderLine(lines[dottedProvider] ?? "") ?? "",
-				targetRoot,
-			);
+			backupPath = writeProviderBackup(hermesHome, configPath, "dotted", dottedValue ?? "", targetRoot);
 			setDottedProviderLine(lines, dottedProvider, "signet");
 			changed = true;
 		}
@@ -1140,7 +1125,7 @@ function configureProvider(
 					hermesHome,
 					configPath,
 					"nested",
-					parseProviderLine(lines[block.provider] ?? "") ?? "",
+					parseProviderValue(lines[block.provider] ?? "", "nested") ?? "",
 					targetRoot,
 				);
 				backupPath = nestedBackupPath ?? backupPath;
@@ -1161,14 +1146,9 @@ function configureProvider(
 	}
 
 	if (block !== null && typeof block === "object" && block.provider !== null && block.provider !== undefined) {
-		if (providerLineIsSignet(lines[block.provider] ?? "")) return { configPath: null, backupPath: null };
-		backupPath = writeProviderBackup(
-			hermesHome,
-			configPath,
-			"nested",
-			parseProviderLine(lines[block.provider] ?? "") ?? "",
-			targetRoot,
-		);
+		const previousProvider = parseProviderValue(lines[block.provider] ?? "", "nested");
+		if (previousProvider === "signet") return { configPath: null, backupPath: null };
+		backupPath = writeProviderBackup(hermesHome, configPath, "nested", previousProvider ?? "", targetRoot);
 		lines[block.provider] = `${(lines[block.provider] ?? "").match(/^\s*/)?.[0] ?? "  "}provider: signet`;
 	} else if (block !== null && typeof block === "object") {
 		lines.splice(block.start + 1, 0, `${" ".repeat(block.indent)}provider: signet`);
@@ -1194,7 +1174,7 @@ function restoreOrClearProvider(
 	const dottedProvider = findDottedProvider(lines);
 	const backup = readProviderBackup(hermesHome, targetRoot);
 	let configChanged = false;
-	if (dottedProvider !== null && dottedProviderLineIsSignet(lines[dottedProvider] ?? "")) {
+	if (dottedProvider !== null && parseProviderValue(lines[dottedProvider] ?? "", "dotted") === "signet") {
 		setDottedProviderLine(lines, dottedProvider, backup?.providerKind === "dotted" ? backup.previousProvider : "''");
 		if (backup?.providerKind === "nested") {
 			if (block !== null && typeof block === "object") {
@@ -1210,7 +1190,7 @@ function restoreOrClearProvider(
 		typeof block === "object" &&
 		block.provider !== null &&
 		block.provider !== undefined &&
-		providerLineIsSignet(lines[block.provider] ?? "")
+		parseProviderValue(lines[block.provider] ?? "", "nested") === "signet"
 	) {
 		lines[block.provider] = `${(lines[block.provider] ?? "").match(/^\s*/)?.[0] ?? "  "}provider: ${
 			backup?.providerKind === "nested" ? backup.previousProvider : "''"

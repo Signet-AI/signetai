@@ -1,3 +1,5 @@
+import type { RecallResult } from "./types.js";
+
 export interface SessionStartResponse {
 	readonly context?: string;
 	readonly sessionId?: string;
@@ -43,23 +45,7 @@ export interface SessionEndResponse {
 	readonly transcriptCaptureJobId?: string;
 }
 
-export interface HookRecallResult {
-	readonly id: string;
-	readonly content: string;
-	readonly content_length: number;
-	readonly truncated: boolean;
-	readonly score: number;
-	readonly source: string;
-	readonly type: string;
-	readonly tags: string | null;
-	readonly pinned: boolean;
-	readonly importance: number;
-	readonly who: string;
-	readonly project: string | null;
-	readonly created_at: string;
-	readonly supplementary?: boolean;
-	readonly already_recalled?: boolean;
-}
+export type HookRecallResult = RecallResult;
 
 export interface HookRecallDedupeMeta {
 	readonly enabled: boolean;

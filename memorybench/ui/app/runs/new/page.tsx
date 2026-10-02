@@ -16,10 +16,36 @@ import {
   type SampleType,
   type SamplingConfig,
   type Provider,
+  type ConcurrencyConfig,
 } from "@/lib/api"
 import { SingleSelect } from "@/components/single-select"
+import { ConcurrencyEditor } from "@/components/concurrency-editor"
 
 type Tab = "new" | "advanced"
+
+type RunForm = {
+  provider: string
+  benchmark: string
+  runId: string
+  judgeModel: string
+  answeringModel: string
+  selectionMode: SelectionMode
+  sampleType: SampleType
+  perCategory: string
+  limit: string
+  concurrency: ConcurrencyConfig
+}
+
+function providerConcurrency(provider?: Provider): ConcurrencyConfig {
+  return {
+    default: provider?.concurrency?.default ?? 1,
+    ingest: provider?.concurrency?.ingest,
+    indexing: provider?.concurrency?.indexing,
+    search: provider?.concurrency?.search,
+    answer: provider?.concurrency?.answer,
+    evaluate: provider?.concurrency?.evaluate,
+  }
+}
 
 export default function NewRunPage() {
   const router = useRouter()
@@ -33,7 +59,7 @@ export default function NewRunPage() {
   const [models, setModels] = useState<any>({})
   const [completedRuns, setCompletedRuns] = useState<RunSummary[]>([])
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<RunForm>({
     provider: "",
     benchmark: "",
     runId: "",
@@ -43,14 +69,7 @@ export default function NewRunPage() {
     sampleType: "consecutive" as SampleType,
     perCategory: "2",
     limit: "",
-    concurrency: {
-      default: undefined as number | undefined,
-      ingest: undefined as number | undefined,
-      indexing: undefined as number | undefined,
-      search: undefined as number | undefined,
-      answer: undefined as number | undefined,
-      evaluate: undefined as number | undefined,
-    },
+    concurrency: {},
   })
 
   const [advancedForm, setAdvancedForm] = useState({
@@ -63,28 +82,10 @@ export default function NewRunPage() {
   const [editingAdvancedRunId, setEditingAdvancedRunId] = useState(false)
   const [editingJudgeModel, setEditingJudgeModel] = useState(false)
   const [editingAnsweringModel, setEditingAnsweringModel] = useState(false)
-  const [editingConcurrency, setEditingConcurrency] = useState(false)
   const [showAdvancedConcurrencyNew, setShowAdvancedConcurrencyNew] = useState(false)
   const [showAdvancedConcurrencyAdvanced, setShowAdvancedConcurrencyAdvanced] = useState(false)
-  const [editingPhase, setEditingPhase] = useState<string | null>(null)
   const runIdInputRef = useRef<HTMLInputElement>(null)
   const advancedRunIdInputRef = useRef<HTMLInputElement>(null)
-  const concurrencyInputRef = useRef<HTMLInputElement>(null)
-  const phaseInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
-
-  useEffect(() => {
-    if (editingConcurrency && concurrencyInputRef.current) {
-      concurrencyInputRef.current.focus()
-      concurrencyInputRef.current.select()
-    }
-  }, [editingConcurrency])
-
-  useEffect(() => {
-    if (editingPhase && phaseInputRefs.current[editingPhase]) {
-      phaseInputRefs.current[editingPhase]?.focus()
-      phaseInputRefs.current[editingPhase]?.select()
-    }
-  }, [editingPhase])
 
   useEffect(() => {
     loadOptions()
@@ -113,14 +114,7 @@ export default function NewRunPage() {
         ...f,
         judgeModel: selectedSourceRun.judge,
         answeringModel: selectedSourceRun.answeringModel,
-        concurrency: {
-          default: sourceProvider?.concurrency?.default ?? 1,
-          ingest: sourceProvider?.concurrency?.ingest,
-          indexing: sourceProvider?.concurrency?.indexing,
-          search: sourceProvider?.concurrency?.search,
-          answer: sourceProvider?.concurrency?.answer,
-          evaluate: sourceProvider?.concurrency?.evaluate,
-        },
+        concurrency: providerConcurrency(sourceProvider),
       }))
       const timestamp = new Date().toISOString().slice(0, 10).replace(/-/g, "")
       const random = Math.random().toString(36).slice(2, 6)
@@ -161,14 +155,7 @@ export default function NewRunPage() {
     if (selectedProvider) {
       setForm((f) => ({
         ...f,
-        concurrency: {
-          default: selectedProvider.concurrency?.default ?? 1,
-          ingest: selectedProvider.concurrency?.ingest,
-          indexing: selectedProvider.concurrency?.indexing,
-          search: selectedProvider.concurrency?.search,
-          answer: selectedProvider.concurrency?.answer,
-          evaluate: selectedProvider.concurrency?.evaluate,
-        },
+        concurrency: providerConcurrency(selectedProvider),
       }))
     }
   }, [form.provider, providers])
@@ -188,18 +175,10 @@ export default function NewRunPage() {
 
       if (providersRes.providers.length > 0) {
         const firstProvider = providersRes.providers[0]
-        const defaultConcurrency = firstProvider.concurrency?.default ?? 1
         setForm((f) => ({
           ...f,
           provider: firstProvider.name,
-          concurrency: {
-            default: defaultConcurrency,
-            ingest: firstProvider.concurrency?.ingest,
-            indexing: firstProvider.concurrency?.indexing,
-            search: firstProvider.concurrency?.search,
-            answer: firstProvider.concurrency?.answer,
-            evaluate: firstProvider.concurrency?.evaluate,
-          },
+          concurrency: providerConcurrency(firstProvider),
         }))
       }
       if (benchmarksRes.benchmarks.length > 0) {
@@ -357,14 +336,7 @@ export default function NewRunPage() {
             if (selectedProvider) {
               setForm((f) => ({
                 ...f,
-                concurrency: {
-                  default: selectedProvider.concurrency?.default ?? 1,
-                  ingest: selectedProvider.concurrency?.ingest,
-                  indexing: selectedProvider.concurrency?.indexing,
-                  search: selectedProvider.concurrency?.search,
-                  answer: selectedProvider.concurrency?.answer,
-                  evaluate: selectedProvider.concurrency?.evaluate,
-                },
+                concurrency: providerConcurrency(selectedProvider),
               }))
             }
           }}
@@ -612,159 +584,14 @@ export default function NewRunPage() {
                   )}
                 </div>
 
-                <div className="mt-6 pt-4 border-t border-[#333333]">
-                  <div className="flex items-center justify-between h-8">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-text-primary">
-                        Concurrent requests{!showAdvancedConcurrencyAdvanced && ":"}
-                      </span>
-                      {!showAdvancedConcurrencyAdvanced &&
-                        (editingConcurrency ? (
-                          <input
-                            ref={concurrencyInputRef}
-                            type="number"
-                            className="w-16 px-2 py-0.5 text-sm bg-[#222222] border border-[#444444] rounded text-text-primary focus:outline-none focus:border-accent"
-                            value={form.concurrency.default ?? ""}
-                            onChange={(e) =>
-                              setForm({
-                                ...form,
-                                concurrency: {
-                                  ...form.concurrency,
-                                  default: e.target.value ? parseInt(e.target.value) : undefined,
-                                },
-                              })
-                            }
-                            onBlur={() => setEditingConcurrency(false)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === "Escape") {
-                                setEditingConcurrency(false)
-                              }
-                            }}
-                            min="1"
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            className="flex items-center gap-2 text-sm text-text-primary hover:text-accent transition-colors cursor-pointer"
-                            onClick={() => setEditingConcurrency(true)}
-                          >
-                            <span className="font-medium">{form.concurrency.default ?? 1}</span>
-                            <svg
-                              className="w-3.5 h-3.5 text-text-muted"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
-                              />
-                            </svg>
-                          </button>
-                        ))}
-                    </div>
-
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setShowAdvancedConcurrencyAdvanced(!showAdvancedConcurrencyAdvanced)
-                      }
-                      className="flex items-center gap-1 text-sm text-text-muted hover:text-text-primary transition-colors"
-                    >
-                      <span>Advanced</span>
-                      <svg
-                        className={`w-4 h-4 transition-transform ${showAdvancedConcurrencyAdvanced ? "rotate-180" : ""}`}
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                      >
-                        <path
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          strokeWidth={2}
-                          d="M19 9l-7 7-7-7"
-                        />
-                      </svg>
-                    </button>
-                  </div>
-
-                  {showAdvancedConcurrencyAdvanced && (
-                    <div className="mt-1 space-y-2">
-                      <p className="text-xs text-text-muted mb-2">
-                        Override source run concurrency settings
-                      </p>
-                      {(["ingest", "indexing", "search", "answer", "evaluate"] as const).map(
-                        (phase) => (
-                          <div key={phase} className="flex items-center gap-3 h-7">
-                            <span className="text-sm text-text-secondary capitalize w-20">
-                              {phase}:
-                            </span>
-                            {editingPhase === phase ? (
-                              <input
-                                ref={(el) => {
-                                  phaseInputRefs.current[phase] = el
-                                }}
-                                type="number"
-                                className="w-16 px-2 py-0.5 text-sm bg-[#222222] border border-[#444444] rounded text-text-primary focus:outline-none focus:border-accent"
-                                value={form.concurrency[phase] ?? ""}
-                                onChange={(e) =>
-                                  setForm({
-                                    ...form,
-                                    concurrency: {
-                                      ...form.concurrency,
-                                      [phase]: e.target.value
-                                        ? parseInt(e.target.value)
-                                        : undefined,
-                                    },
-                                  })
-                                }
-                                onBlur={() => setEditingPhase(null)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter" || e.key === "Escape") {
-                                    setEditingPhase(null)
-                                  }
-                                }}
-                                placeholder={String(form.concurrency.default ?? 1)}
-                                min="1"
-                              />
-                            ) : (
-                              <button
-                                type="button"
-                                className="flex items-center gap-2 text-sm text-text-primary hover:text-accent transition-colors cursor-pointer"
-                                onClick={() => setEditingPhase(phase)}
-                              >
-                                <span
-                                  className={
-                                    form.concurrency[phase] !== undefined
-                                      ? "font-medium"
-                                      : "text-text-muted"
-                                  }
-                                >
-                                  {form.concurrency[phase] ?? form.concurrency.default}
-                                </span>
-                                <svg
-                                  className="w-3.5 h-3.5 text-text-muted"
-                                  fill="none"
-                                  viewBox="0 0 24 24"
-                                  stroke="currentColor"
-                                  strokeWidth={2}
-                                >
-                                  <path
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                    d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
-                                  />
-                                </svg>
-                              </button>
-                            )}
-                          </div>
-                        )
-                      )}
-                    </div>
-                  )}
-                </div>
+                <ConcurrencyEditor
+                  className="mt-6 pt-4 border-t border-[#333333]"
+                  concurrency={form.concurrency}
+                  onChange={(concurrency) => setForm((current) => ({ ...current, concurrency }))}
+                  expanded={showAdvancedConcurrencyAdvanced}
+                  onExpandedChange={setShowAdvancedConcurrencyAdvanced}
+                  description="Override source run concurrency settings"
+                />
               </>
             )}
           </>
@@ -941,155 +768,13 @@ export default function NewRunPage() {
               )}
             </div>
 
-            <div>
-              <div className="flex items-center justify-between h-8">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-text-primary">
-                    Concurrent requests{!showAdvancedConcurrencyNew && ":"}
-                  </span>
-                  {!showAdvancedConcurrencyNew &&
-                    (editingConcurrency ? (
-                      <input
-                        ref={concurrencyInputRef}
-                        type="number"
-                        className="w-16 px-2 py-0.5 text-sm bg-[#222222] border border-[#444444] rounded text-text-primary focus:outline-none focus:border-accent"
-                        value={form.concurrency.default ?? ""}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            concurrency: {
-                              ...form.concurrency,
-                              default: e.target.value ? parseInt(e.target.value) : undefined,
-                            },
-                          })
-                        }
-                        onBlur={() => setEditingConcurrency(false)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === "Escape") {
-                            setEditingConcurrency(false)
-                          }
-                        }}
-                        min="1"
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        className="flex items-center gap-2 text-sm text-text-primary hover:text-accent transition-colors cursor-pointer"
-                        onClick={() => setEditingConcurrency(true)}
-                      >
-                        <span className="font-medium">{form.concurrency.default ?? 1}</span>
-                        <svg
-                          className="w-3.5 h-3.5 text-text-muted"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke="currentColor"
-                          strokeWidth={2}
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
-                          />
-                        </svg>
-                      </button>
-                    ))}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => setShowAdvancedConcurrencyNew(!showAdvancedConcurrencyNew)}
-                  className="flex items-center gap-1 text-sm text-text-muted hover:text-text-primary transition-colors"
-                >
-                  <span>Advanced</span>
-                  <svg
-                    className={`w-4 h-4 transition-transform ${showAdvancedConcurrencyNew ? "rotate-180" : ""}`}
-                    fill="none"
-                    viewBox="0 0 24 24"
-                    stroke="currentColor"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M19 9l-7 7-7-7"
-                    />
-                  </svg>
-                </button>
-              </div>
-
-              {showAdvancedConcurrencyNew && (
-                <div className="space-y-2">
-                  <p className="text-xs text-text-muted mb-2">
-                    Process multiple items simultaneously for faster execution
-                  </p>
-                  {(["ingest", "indexing", "search", "answer", "evaluate"] as const).map(
-                    (phase) => (
-                      <div key={phase} className="flex items-center gap-3 h-7">
-                        <span className="text-sm text-text-secondary capitalize w-20">
-                          {phase}:
-                        </span>
-                        {editingPhase === phase ? (
-                          <input
-                            ref={(el) => {
-                              phaseInputRefs.current[phase] = el
-                            }}
-                            type="number"
-                            className="w-16 px-2 py-0.5 text-sm bg-[#222222] border border-[#444444] rounded text-text-primary focus:outline-none focus:border-accent"
-                            value={form.concurrency[phase] ?? ""}
-                            onChange={(e) =>
-                              setForm({
-                                ...form,
-                                concurrency: {
-                                  ...form.concurrency,
-                                  [phase]: e.target.value ? parseInt(e.target.value) : undefined,
-                                },
-                              })
-                            }
-                            onBlur={() => setEditingPhase(null)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === "Escape") {
-                                setEditingPhase(null)
-                              }
-                            }}
-                            placeholder={String(form.concurrency.default ?? 1)}
-                            min="1"
-                          />
-                        ) : (
-                          <button
-                            type="button"
-                            className="flex items-center gap-2 text-sm text-text-primary hover:text-accent transition-colors cursor-pointer"
-                            onClick={() => setEditingPhase(phase)}
-                          >
-                            <span
-                              className={
-                                form.concurrency[phase] !== undefined
-                                  ? "font-medium"
-                                  : "text-text-muted"
-                              }
-                            >
-                              {form.concurrency[phase] ?? form.concurrency.default}
-                            </span>
-                            <svg
-                              className="w-3.5 h-3.5 text-text-muted"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2}
-                            >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"
-                              />
-                            </svg>
-                          </button>
-                        )}
-                      </div>
-                    )
-                  )}
-                </div>
-              )}
-            </div>
+            <ConcurrencyEditor
+              concurrency={form.concurrency}
+              onChange={(concurrency) => setForm((current) => ({ ...current, concurrency }))}
+              expanded={showAdvancedConcurrencyNew}
+              onExpandedChange={setShowAdvancedConcurrencyNew}
+              description="Process multiple items simultaneously for faster execution"
+            />
           </>
         )}
 

@@ -106,20 +106,19 @@ function recallOnlyInject(result: HookNotificationResult): string {
 	return inject.slice(0, -notificationInject.length).trim();
 }
 
-function readRuntimeEnv(name: string): string | undefined {
+function runtimeEnv(): NodeJS.ProcessEnv {
 	const runtimeProcess = Reflect.get(globalThis, "process");
-	const runtimeEnv =
-		runtimeProcess && typeof runtimeProcess === "object" ? Reflect.get(runtimeProcess, "env") : undefined;
-	const value = runtimeEnv && typeof runtimeEnv === "object" ? Reflect.get(runtimeEnv, name) : undefined;
+	const env = runtimeProcess && typeof runtimeProcess === "object" ? Reflect.get(runtimeProcess, "env") : undefined;
+	return env && typeof env === "object" ? (env as NodeJS.ProcessEnv) : {};
+}
+
+function readRuntimeEnv(name: string): string | undefined {
+	const value = Reflect.get(runtimeEnv(), name);
 	return typeof value === "string" ? value : undefined;
 }
+
 function resolveRuntimeWorkspace(): string {
-	const runtimeProcess = Reflect.get(globalThis, "process");
-	const runtimeEnv =
-		runtimeProcess && typeof runtimeProcess === "object" ? Reflect.get(runtimeProcess, "env") : undefined;
-	return resolveWorkspacePath({
-		env: (runtimeEnv && typeof runtimeEnv === "object" ? runtimeEnv : {}) as NodeJS.ProcessEnv,
-	}).path;
+	return resolveWorkspacePath({ env: runtimeEnv() }).path;
 }
 function staticFallback(): string {
 	const dir = readRuntimeEnv("SIGNET_PATH") ?? resolveRuntimeWorkspace();

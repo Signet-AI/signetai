@@ -1,5 +1,14 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, realpathSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	readFileSync,
+	realpathSync,
+	renameSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import {
@@ -100,6 +109,38 @@ export abstract class BaseConnector {
 		}
 
 		return parts.join("\n");
+	}
+	protected installManagedExtension(options: {
+		readonly targetPath: string;
+		readonly marker: string;
+		readonly unmanagedMessage: string;
+		readonly stalePaths: () => readonly string[];
+		readonly buildContent: () => string;
+	}): boolean {
+		if (existsSync(options.targetPath) && !isManagedExtensionFile(options.targetPath, options.marker)) {
+			throw new Error(options.unmanagedMessage);
+		}
+
+		for (const stalePath of options.stalePaths()) {
+			if (stalePath !== options.targetPath) removeManagedExtensionFile(stalePath, options.marker);
+		}
+
+		mkdirSync(dirname(options.targetPath), { recursive: true });
+		const content = options.buildContent();
+		const previous = existsSync(options.targetPath) ? readFileSync(options.targetPath, "utf8") : null;
+		if (previous === content) return false;
+		writeFileSync(options.targetPath, content, "utf8");
+		return true;
+	}
+	protected removeManagedExtensions(paths: readonly string[], marker: string): string[] {
+		const removed: string[] = [];
+		for (const path of paths) {
+			if (removeManagedExtensionFile(path, marker)) removed.push(path);
+		}
+		return removed;
+	}
+	protected hasManagedExtension(paths: readonly string[], marker: string): boolean {
+		return paths.some((path) => isManagedExtensionFile(path, marker));
 	}
 	abstract install(basePath: string): Promise<InstallResult>;
 	abstract uninstall(): Promise<UninstallResult>;

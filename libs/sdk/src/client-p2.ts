@@ -44,6 +44,7 @@ import type {
 	VectorRepairResponse,
 	VectorRepairOptions,
 } from "./types-p2.js";
+import type { HookRecallOptions, HookRememberOptions } from "./types.js";
 
 export class SignetClientP2 {
 	constructor(private readonly transport: SignetTransport) {}
@@ -92,74 +93,16 @@ export class SignetClientP2 {
 	}): void {
 		this.transport.post("/api/hooks/session-end", opts).catch(() => {});
 	}
-	async hookRemember(opts: {
-		readonly content: string;
-		readonly type?: string;
-		readonly importance?: number;
-		readonly tags?: string;
-		readonly who?: string;
-		readonly sessionKey?: string;
-		readonly runtimePath?: string;
-	}): Promise<{ readonly id: string }> {
+	async hookRemember(opts: HookRememberOptions): Promise<{ readonly id: string }> {
 		return this.transport.post<{ readonly id: string }>("/api/hooks/remember", opts);
 	}
-	async rememberHook(opts: {
-		readonly content: string;
-		readonly type?: string;
-		readonly importance?: number;
-		readonly tags?: string;
-		readonly who?: string;
-		readonly sessionKey?: string;
-		readonly runtimePath?: string;
-	}): Promise<{ readonly id: string }> {
+	async rememberHook(opts: HookRememberOptions): Promise<{ readonly id: string }> {
 		return this.hookRemember(opts);
 	}
-	async hookRecall(opts: {
-		readonly query: string;
-		readonly keywordQuery?: string;
-		readonly limit?: number;
-		readonly project?: string;
-		readonly type?: string;
-		readonly tags?: string;
-		readonly who?: string;
-		readonly since?: string;
-		readonly until?: string;
-		readonly time?: {
-			readonly start?: string;
-			readonly end?: string;
-			readonly facets?: readonly string[];
-			readonly mode?: "auto" | "timeline" | "filter";
-		};
-		readonly expand?: boolean;
-		readonly sessionKey?: string;
-		readonly agentId?: string;
-		readonly includeRecalled?: boolean;
-		readonly runtimePath?: string;
-	}): Promise<HookRecallResponse> {
+	async hookRecall(opts: HookRecallOptions): Promise<HookRecallResponse> {
 		return this.transport.post<HookRecallResponse>("/api/hooks/recall", opts);
 	}
-	async recallHook(opts: {
-		readonly query: string;
-		readonly keywordQuery?: string;
-		readonly limit?: number;
-		readonly project?: string;
-		readonly type?: string;
-		readonly tags?: string;
-		readonly who?: string;
-		readonly since?: string;
-		readonly until?: string;
-		readonly time?: {
-			readonly start?: string;
-			readonly end?: string;
-			readonly facets?: readonly string[];
-			readonly mode?: "auto" | "timeline" | "filter";
-		};
-		readonly expand?: boolean;
-		readonly sessionKey?: string;
-		readonly agentId?: string;
-		readonly includeRecalled?: boolean;
-		readonly runtimePath?: string;
-	}): Promise<HookRecallResponse> {
+	async recallHook(opts: HookRecallOptions): Promise<HookRecallResponse> {
 		return this.hookRecall(opts);
 	}
 	async preCompaction(opts: {

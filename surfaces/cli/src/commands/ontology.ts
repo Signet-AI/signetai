@@ -1,19 +1,16 @@
 import { readFileSync } from "node:fs";
 import chalk from "chalk";
 import type { Command } from "commander";
-
-interface OntologyDeps {
-	readonly ensureDaemonForSecrets: () => Promise<boolean>;
-	readonly secretApiCall: (
-		method: string,
-		path: string,
-		body?: unknown,
-		timeoutMs?: number,
-	) => Promise<{
-		ok: boolean;
-		data: unknown;
-	}>;
-}
+import { printCollection } from "../lib/cli-output";
+import {
+	addCommonOptions,
+	appendAgent,
+	asRecord,
+	commandApiCall,
+	getCommandData,
+	isRecord,
+	type DaemonCommandDeps,
+} from "./command-utils";
 
 interface ProposalListItem {
 	readonly id?: string;
@@ -268,10 +265,6 @@ interface ConsolidationResponse {
 	readonly maintenance?: readonly unknown[];
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-}
-
 function readString(record: Record<string, unknown>, key: string): string | undefined {
 	const value = record[key];
 	if (typeof value !== "string") return undefined;
@@ -332,9 +325,7 @@ function readOperationJsonl(path: string): readonly Record<string, unknown>[] {
 		.map((line, index) => {
 			try {
 				const parsed: unknown = JSON.parse(line);
-				if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-					return parsed as Record<string, unknown>;
-				}
+				if (isRecord(parsed)) return parsed;
 				throw new Error("line is not an object");
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -479,59 +470,39 @@ function normalizeProposalFile(raw: unknown): readonly ProposalImportInput[] {
 	];
 }
 
-function appendAgent(params: URLSearchParams, agent?: string): void {
-	if (agent) params.set("agent_id", agent);
+function apiGet(deps: DaemonCommandDeps, path: string, params: URLSearchParams): Promise<unknown> {
+	return getCommandData(deps.secretApiCall, path, params, "Ontology request failed");
 }
 
-function errorMessage(data: unknown, fallback: string): string {
-	const raw = asRecord(data).error;
-	return typeof raw === "string" ? raw : fallback;
+function apiPost(deps: DaemonCommandDeps, path: string, body: unknown, timeoutMs = 15_000): Promise<unknown> {
+	return commandApiCall(deps.secretApiCall, {
+		method: "POST",
+		path,
+		body,
+		fallback: "Ontology request failed",
+		timeoutMs,
+	});
 }
 
-async function apiGet(deps: OntologyDeps, path: string, params: URLSearchParams): Promise<unknown> {
-	const query = params.toString();
-	const { ok, data } = await deps.secretApiCall("GET", query ? `${path}?${query}` : path, undefined, 10_000);
-	if (!ok || typeof asRecord(data).error === "string") {
-		console.error(chalk.red(errorMessage(data, "Ontology request failed")));
-		process.exit(1);
-	}
-	return data;
-}
-
-async function apiPost(deps: OntologyDeps, path: string, body: unknown, timeoutMs = 15_000): Promise<unknown> {
-	const { ok, data } = await deps.secretApiCall("POST", path, body, timeoutMs);
-	if (!ok || typeof asRecord(data).error === "string") {
-		console.error(chalk.red(errorMessage(data, "Ontology request failed")));
-		process.exit(1);
-	}
-	return data;
-}
-
-async function apiDelete(deps: OntologyDeps, path: string, timeoutMs = 10_000): Promise<unknown> {
-	const { ok, data } = await deps.secretApiCall("DELETE", path, undefined, timeoutMs);
-	if (!ok || typeof asRecord(data).error === "string") {
-		console.error(chalk.red(errorMessage(data, "Ontology request failed")));
-		process.exit(1);
-	}
-	return data;
+function apiDelete(deps: DaemonCommandDeps, path: string, timeoutMs = 10_000): Promise<unknown> {
+	return commandApiCall(deps.secretApiCall, {
+		method: "DELETE",
+		path,
+		fallback: "Ontology request failed",
+		timeoutMs,
+	});
 }
 
 function printProposalList(data: unknown): void {
 	const items = ((asRecord(data) as ProposalListResponse).items ?? []) as readonly ProposalListItem[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No ontology proposals found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Ontology Proposals\n"));
-	for (const item of items) {
+	printCollection(items, "Ontology Proposals", "No ontology proposals found", (item) => {
 		const id = item.id ?? "unknown";
 		const status = item.status ?? "unknown";
 		const confidence = typeof item.confidence === "number" ? ` · ${item.confidence.toFixed(2)}` : "";
 		console.log(`  ${chalk.cyan(id)} ${chalk.dim(status)} ${chalk.yellow(item.operation ?? "unknown")}${confidence}`);
 		if (item.rationale) console.log(chalk.dim(`    ${item.rationale}`));
 		if (item.updatedAt) console.log(chalk.dim(`    updated ${item.updatedAt}`));
-	}
-	console.log();
+	});
 }
 
 function countLabel(value: number | undefined, noun: string): string {
@@ -545,12 +516,7 @@ function objectName(entity: OntologyObjectEntity | undefined): string {
 
 function printOntologyObjects(data: unknown): void {
 	const items = ((asRecord(data) as OntologyObjectListResponse).items ?? []) as readonly OntologyObjectItem[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No ontology objects found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Ontology Objects\n"));
-	for (const item of items) {
+	printCollection(items, "Ontology Objects", "No ontology objects found", (item) => {
 		const type = item.entity?.entityType ? chalk.dim(` (${item.entity.entityType})`) : "";
 		console.log(`  ${chalk.cyan(objectName(item.entity))}${type}`);
 		console.log(
@@ -562,48 +528,30 @@ function printOntologyObjects(data: unknown): void {
 			),
 		);
 		if (item.entity?.id) console.log(chalk.dim(`    ${item.entity.id}`));
-	}
-	console.log();
+	});
 }
 
 function printEntityAliases(data: unknown): void {
 	const items = ((asRecord(data) as EntityAliasListResponse).items ?? []) as readonly EntityAliasItem[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No aliases found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Entity Aliases\n"));
-	for (const item of items) {
+	printCollection(items, "Entity Aliases", "No aliases found", (item) => {
 		const status = item.status ? chalk.dim(` ${item.status}`) : "";
 		const confidence = typeof item.confidence === "number" ? chalk.dim(` · ${item.confidence.toFixed(2)}`) : "";
 		console.log(`  ${chalk.cyan(item.alias ?? "unknown")} ${chalk.dim(item.id ?? "unknown")}${status}${confidence}`);
 		if (item.source) console.log(chalk.dim(`    source ${item.source}`));
-	}
-	console.log();
+	});
 }
 
 function printOntologyClaims(data: unknown): void {
 	const items = ((asRecord(data) as OntologyClaimsResponse).items ?? []) as readonly OntologyClaimItem[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No ontology claims found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Ontology Claims\n"));
-	for (const item of items) {
+	printCollection(items, "Ontology Claims", "No ontology claims found", (item) => {
 		console.log(`  ${chalk.cyan(item.claimKey ?? "unknown")}`);
 		console.log(chalk.dim(`    ${item.activeCount ?? 0} active · ${item.supersededCount ?? 0} old`));
-	}
-	console.log();
+	});
 }
 
 function printOntologyLinks(data: unknown): void {
 	const items = ((asRecord(data) as OntologyLinksResponse).items ?? []) as readonly OntologyLinkItem[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No ontology links found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Ontology Links\n"));
-	for (const item of items) {
+	printCollection(items, "Ontology Links", "No ontology links found", (item) => {
 		const strength = typeof item.strength === "number" ? ` · ${item.strength.toFixed(2)}` : "";
 		console.log(
 			`  ${chalk.yellow(item.dependencyType ?? "link")} ${chalk.dim(item.direction ?? "both")}${strength} ${chalk.cyan(
@@ -611,33 +559,21 @@ function printOntologyLinks(data: unknown): void {
 			)} -> ${chalk.cyan(item.targetEntityName ?? "unknown")}`,
 		);
 		if (item.reason) console.log(chalk.dim(`    ${item.reason}`));
-	}
-	console.log();
+	});
 }
 
 function printEvidence(data: unknown, title = "Proposal Evidence"): void {
 	const items = ((asRecord(data) as EvidenceResponse).items ?? []) as readonly EvidenceItem[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No evidence references found"));
-		return;
-	}
-	console.log(chalk.bold(`\n  ${title}\n`));
-	for (const item of items) {
+	printCollection(items, title, "No evidence references found", (item) => {
 		const marker = item.found === false ? chalk.red("missing") : chalk.green("found");
 		console.log(`  ${marker} ${chalk.yellow(item.kind ?? "unknown")} ${chalk.cyan(item.label ?? "")}`);
 		if (item.excerpt) console.log(chalk.dim(`    ${item.excerpt}`));
-	}
-	console.log();
+	});
 }
 
 function printClaimEvidence(data: unknown): void {
 	const items = ((asRecord(data) as ClaimEvidenceResponse).items ?? []) as readonly ClaimEvidenceValue[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No claim values found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Claim Evidence\n"));
-	for (const item of items) {
+	printCollection(items, "Claim Evidence", "No claim values found", (item) => {
 		const attr = item.attribute;
 		const confidence = typeof attr?.confidence === "number" ? ` · ${attr.confidence.toFixed(2)}` : "";
 		console.log(`  ${chalk.cyan(attr?.status ?? "unknown")}${confidence}`);
@@ -649,8 +585,7 @@ function printClaimEvidence(data: unknown): void {
 			console.log(`    ${marker} ${chalk.yellow(evidence.kind ?? "unknown")} ${chalk.cyan(evidence.label ?? "")}`);
 			if (evidence.excerpt) console.log(chalk.dim(`      ${evidence.excerpt}`));
 		}
-	}
-	console.log();
+	});
 }
 
 function printClaimTrace(data: unknown): void {
@@ -749,12 +684,7 @@ function printAssertions(data: unknown, title = "Epistemic Assertions"): void {
 	const record = asRecord(data);
 	const items = (((record as EpistemicAssertionsResponse).items as readonly EpistemicAssertionItem[] | undefined) ??
 		(record.id ? ([record as EpistemicAssertionItem] as const) : [])) as readonly EpistemicAssertionItem[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No epistemic assertions found"));
-		return;
-	}
-	console.log(chalk.bold(`\n  ${title}\n`));
-	for (const item of items) {
+	printCollection(items, title, "No epistemic assertions found", (item) => {
 		const confidence = typeof item.confidence === "number" ? ` · ${item.confidence.toFixed(2)}` : "";
 		const status = item.status ? chalk.dim(` ${item.status}`) : "";
 		console.log(
@@ -765,18 +695,12 @@ function printAssertions(data: unknown, title = "Epistemic Assertions"): void {
 		console.log(chalk.dim(`    ${item.subjectEntityName ?? "unknown"}${actor ? ` · ${actor}` : ""}${when}`));
 		if (item.content) console.log(chalk.dim(`    ${item.content}`));
 		if (item.claimAttributeId) console.log(chalk.dim(`    claim ${item.claimAttributeId}`));
-	}
-	console.log();
+	});
 }
 
 function printConflicts(data: unknown): void {
 	const items = ((asRecord(data) as ConflictsResponse).items ?? []) as readonly ConflictItem[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No pending proposal conflicts found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Pending Proposal Conflicts\n"));
-	for (const item of items) {
+	printCollection(items, "Pending Proposal Conflicts", "No pending proposal conflicts found", (item) => {
 		const title = `${item.entity ?? "unknown"} / ${item.aspect ?? "unknown"} / ${item.groupKey ?? "general"} / ${
 			item.claimKey ?? "unknown"
 		}`;
@@ -785,19 +709,13 @@ function printConflicts(data: unknown): void {
 			const confidence = typeof value.confidence === "number" ? ` · ${value.confidence.toFixed(2)}` : "";
 			console.log(`    ${chalk.cyan(value.proposalId ?? "unknown")}${confidence} ${value.value ?? ""}`);
 		}
-	}
-	console.log();
+	});
 }
 
 function printContradictions(data: unknown): void {
 	const response = asRecord(data) as OntologyContradictionsResponse;
 	const items = response.items ?? [];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No persisted claim contradictions found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Persisted Claim Contradictions\n"));
-	for (const item of items) {
+	printCollection(items, "Persisted Claim Contradictions", "No persisted claim contradictions found", (item) => {
 		const location = [item.entityName, item.aspectName, item.groupKey, item.claimKey].filter(Boolean).join("/");
 		console.log(
 			`  ${chalk.cyan(item.id ?? "unknown")} ${chalk.yellow(item.status ?? "unknown")} ${chalk.dim(location)}`,
@@ -816,8 +734,7 @@ function printContradictions(data: unknown): void {
 		].filter(Boolean);
 		if (scopes.length > 0) console.log(chalk.dim(`    scopes ${scopes.join(" vs ")}`));
 		if (item.resolutionReason) console.log(chalk.dim(`    resolved: ${item.resolutionReason}`));
-	}
-	console.log();
+	});
 }
 
 function printDuplicateRepairs(data: unknown): void {
@@ -953,10 +870,6 @@ function printConsolidation(data: unknown): void {
 	console.log();
 }
 
-function addCommonOptions(cmd: Command): Command {
-	return cmd.option("--agent <name>", "Agent scope, default default").option("--json", "Output as JSON");
-}
-
 function addOperationOptions(cmd: Command): Command {
 	return addCommonOptions(cmd)
 		.option("--dry-run", "Validate and preview without writing")
@@ -984,7 +897,7 @@ function operationBody(
 }
 
 async function postOperation(
-	deps: OntologyDeps,
+	deps: DaemonCommandDeps,
 	operation: string,
 	payload: Record<string, unknown>,
 	options: Record<string, unknown>,
@@ -1008,7 +921,7 @@ function printOperationResult(data: unknown, options: Record<string, unknown>, l
 	console.log(chalk.green(`${mode} ${label}${id ? ` (${id})` : ""}`));
 }
 
-export function registerOntologyCommands(program: Command, deps: OntologyDeps): void {
+export function registerOntologyCommands(program: Command, deps: DaemonCommandDeps): void {
 	const ontology = program.command("ontology").description("Inspect and maintain the operational ontology");
 
 	addCommonOptions(

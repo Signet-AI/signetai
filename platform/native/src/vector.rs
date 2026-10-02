@@ -1,5 +1,15 @@
 use napi::bindgen_prelude::*;
 use napi_derive::napi;
+
+fn read_f32_le(bytes: &[u8], offset: usize) -> f32 {
+    f32::from_le_bytes([
+        bytes[offset],
+        bytes[offset + 1],
+        bytes[offset + 2],
+        bytes[offset + 3],
+    ])
+}
+
 #[napi]
 pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     let len = a.len().min(b.len());
@@ -73,12 +83,7 @@ pub fn batch_cosine_similarity(query: &[f32], matrix: Buffer, dim: u32) -> napi:
         let mut norm_b: f64 = 0.0;
         for i in 0..q_len {
             let offset = base + i * 4;
-            let bi = f32::from_le_bytes([
-                bytes[offset],
-                bytes[offset + 1],
-                bytes[offset + 2],
-                bytes[offset + 3],
-            ]) as f64;
+            let bi = read_f32_le(bytes, offset) as f64;
             let qi = query[i] as f64;
             dot += qi * bi;
             norm_b += bi * bi;
@@ -103,13 +108,7 @@ pub fn blob_to_vector(buf: Buffer) -> napi::Result<Vec<f32>> {
     let mut result = Vec::with_capacity(count);
     for i in 0..count {
         let offset = i * 4;
-        let value = f32::from_le_bytes([
-            bytes[offset],
-            bytes[offset + 1],
-            bytes[offset + 2],
-            bytes[offset + 3],
-        ]);
-        result.push(value);
+        result.push(read_f32_le(bytes, offset));
     }
     Ok(result)
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
 import {
 	DEPLOYMENT_TYPE_CHOICES,
 	SETUP_HARNESS_CHOICES,
@@ -7,8 +7,44 @@ import {
 	detectExtractionProviderFromAvailable,
 	getDeploymentExtractionGuidance,
 	normalizeHarnessList,
+	printSetupNextStep,
 	resolveSetupExtractionProvider,
 } from "./setup-shared.js";
+
+describe("setup next-step output", () => {
+	it("keeps the next step aligned with the identity mode", () => {
+		const cases = [
+			{
+				managed: true,
+				messages: [
+					"  → Next step: Say '/onboarding' to personalize your agent",
+					"    This will walk you through setting up your agent's personality,",
+					"    communication style, and your preferences.",
+				],
+			},
+			{
+				managed: false,
+				messages: [
+					"  → Next step: Use `signet remember` or configure harness memory hooks",
+					"    Signet will manage memory, recall, sources, and secrets without owning identity.",
+				],
+			},
+		];
+
+		for (const scenario of cases) {
+			const messages: string[] = [];
+			const log = spyOn(console, "log").mockImplementation((message?: unknown) => {
+				messages.push(String(message ?? ""));
+			});
+			try {
+				printSetupNextStep(scenario.managed);
+			} finally {
+				log.mockRestore();
+			}
+			expect(messages).toEqual(scenario.messages);
+		}
+	});
+});
 
 describe("setup deployment defaults", () => {
 	it("supports local, vps, and server deployment choices", () => {

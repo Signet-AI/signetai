@@ -8,6 +8,8 @@ import {
 	STATIC_IDENTITY_SESSION_START_TIMEOUT_STATUS,
 	getMissingIdentityFiles,
 	hasValidIdentity,
+	loadIdentityFiles,
+	loadIdentityFilesSync,
 	loadIdentityMode,
 	readStaticIdentity,
 	resolveHermesHomePath,
@@ -53,6 +55,20 @@ afterEach(() => {
 		process.env.KIMI_CODE_HOME = ORIGINAL_KIMI_CODE_HOME;
 	}
 	rmSync(TMP, { recursive: true, force: true });
+});
+
+describe("loadIdentityFiles", () => {
+	test("reads the same metadata through sync and Promise APIs", async () => {
+		for (const name of ["SOUL.md", "IDENTITY.md", "USER.md"]) {
+			writeFileSync(join(TMP, name), "");
+		}
+		writeFileSync(join(TMP, "AGENTS.md"), "agent rules");
+
+		const sync = loadIdentityFilesSync(TMP);
+		const loading = loadIdentityFiles(TMP);
+		expect(loading).toBeInstanceOf(Promise);
+		await expect(loading).resolves.toEqual(sync);
+	});
 });
 
 describe("readStaticIdentity", () => {

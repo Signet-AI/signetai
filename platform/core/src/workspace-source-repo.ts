@@ -1,5 +1,5 @@
 import { closeSync, existsSync, mkdirSync, openSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { spawnHidden, spawnSyncHidden, type SpawnSyncReturns } from "./child-process";
 
 export const SIGNET_SOURCE_CHECKOUT_DIRNAME = "signetai";
@@ -90,6 +90,8 @@ type GitRunner = (
 	cwd: string | undefined,
 	timeoutMs: number,
 ) => MaybePromise<GitCommandResult>;
+type GitAvailability = (timeoutMs: number) => MaybePromise<boolean>;
+type SyncLockAcquirer = (workspaceDir: string) => MaybePromise<SyncLockAttempt>;
 
 export function resolveWorkspaceSourceRepoPath(
 	workspaceDir: string,
@@ -102,78 +104,70 @@ export function syncWorkspaceSourceRepo(
 	workspaceDir: string,
 	options: WorkspaceSourceRepoSyncOptions = {},
 ): WorkspaceSourceRepoSyncResult {
-	const clone = options.cloneIfMissing === true;
-	const timeoutMs = options.gitTimeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
-	const remoteUrl = options.remoteUrl ?? SIGNET_SOURCE_REMOTE_URL;
-	const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir, options.repoDirName);
-	if (!isSafeCloneSource(remoteUrl)) {
-		return unsafeRemoteResult(repoPath);
-	}
-	if (!clone && !existsSync(repoPath)) return missingCheckoutResult(repoPath);
-	if (!isGitAvailable(timeoutMs)) {
-		return gitUnavailableResult(repoPath);
-	}
-
-	const lock = acquireSourceRepoSyncLock(workspaceDir);
-	if (lock.status === "busy") {
-		return syncInProgressResult(repoPath);
-	}
-	if (lock.status === "error") {
-		return sourceRepoSyncLockErrorResult(repoPath, lock.message);
-	}
-
-	try {
-		return syncWorkspaceSourceRepoLocked(
-			runGit,
-			workspaceDir,
-			repoPath,
-			remoteUrl,
-			timeoutMs,
-			clone,
-			options.localChanges ?? "skip",
-		);
-	} finally {
-		releaseSourceRepoSyncLock(lock.lock);
-	}
+	return syncWorkspaceSourceRepoWith(runGit, isGitAvailable, acquireSourceRepoSyncLock, workspaceDir, options);
 }
 
 export async function syncWorkspaceSourceRepoAsync(
 	workspaceDir: string,
 	options: WorkspaceSourceRepoSyncOptions = {},
 ): Promise<WorkspaceSourceRepoSyncResult> {
+	return syncWorkspaceSourceRepoWith(
+		runGitAsync,
+		isGitAvailableAsync,
+		acquireSourceRepoSyncLockAsync,
+		workspaceDir,
+		options,
+	);
+}
+
+function syncWorkspaceSourceRepoWith(
+	run: typeof runGit,
+	isAvailable: typeof isGitAvailable,
+	acquireLock: typeof acquireSourceRepoSyncLock,
+	workspaceDir: string,
+	options: WorkspaceSourceRepoSyncOptions,
+): WorkspaceSourceRepoSyncResult;
+function syncWorkspaceSourceRepoWith(
+	run: typeof runGitAsync,
+	isAvailable: typeof isGitAvailableAsync,
+	acquireLock: typeof acquireSourceRepoSyncLockAsync,
+	workspaceDir: string,
+	options: WorkspaceSourceRepoSyncOptions,
+): Promise<WorkspaceSourceRepoSyncResult>;
+function syncWorkspaceSourceRepoWith(
+	run: GitRunner,
+	isAvailable: GitAvailability,
+	acquireLock: SyncLockAcquirer,
+	workspaceDir: string,
+	options: WorkspaceSourceRepoSyncOptions,
+): MaybePromise<WorkspaceSourceRepoSyncResult> {
 	const clone = options.cloneIfMissing === true;
 	const timeoutMs = options.gitTimeoutMs ?? DEFAULT_GIT_TIMEOUT_MS;
 	const remoteUrl = options.remoteUrl ?? SIGNET_SOURCE_REMOTE_URL;
 	const repoPath = resolveWorkspaceSourceRepoPath(workspaceDir, options.repoDirName);
-	if (!isSafeCloneSource(remoteUrl)) {
-		return unsafeRemoteResult(repoPath);
-	}
+	if (!isSafeCloneSource(remoteUrl)) return unsafeRemoteResult(repoPath);
 	if (!clone && !existsSync(repoPath)) return missingCheckoutResult(repoPath);
-	if (!(await isGitAvailableAsync(timeoutMs))) {
-		return gitUnavailableResult(repoPath);
-	}
 
-	const lock = await acquireSourceRepoSyncLockAsync(workspaceDir);
-	if (lock.status === "busy") {
-		return syncInProgressResult(repoPath);
-	}
-	if (lock.status === "error") {
-		return sourceRepoSyncLockErrorResult(repoPath, lock.message);
-	}
+	return chainMaybePromise(isAvailable(timeoutMs), (available) => {
+		if (!available) return gitUnavailableResult(repoPath);
 
-	try {
-		return await syncWorkspaceSourceRepoLocked(
-			runGitAsync,
-			workspaceDir,
-			repoPath,
-			remoteUrl,
-			timeoutMs,
-			clone,
-			options.localChanges ?? "skip",
-		);
-	} finally {
-		releaseSourceRepoSyncLock(lock.lock);
-	}
+		return chainMaybePromise(acquireLock(workspaceDir), (lock) => {
+			if (lock.status === "busy") return syncInProgressResult(repoPath);
+			if (lock.status === "error") return sourceRepoSyncLockErrorResult(repoPath, lock.message);
+
+			return withSourceRepoSyncLock(lock.lock, () =>
+				syncWorkspaceSourceRepoLocked(
+					run,
+					workspaceDir,
+					repoPath,
+					remoteUrl,
+					timeoutMs,
+					clone,
+					options.localChanges ?? "skip",
+				),
+			);
+		});
+	});
 }
 
 function syncWorkspaceSourceRepoLocked(
@@ -202,28 +196,40 @@ function syncWorkspaceSourceRepoLocked(
 	timeoutMs: number,
 	cloneIfMissing: boolean,
 	localChanges: "skip" | "stash",
+): MaybePromise<WorkspaceSourceRepoSyncResult>;
+function syncWorkspaceSourceRepoLocked(
+	run: GitRunner,
+	workspaceDir: string,
+	repoPath: string,
+	remoteUrl: string,
+	timeoutMs: number,
+	cloneIfMissing: boolean,
+	localChanges: "skip" | "stash",
 ): MaybePromise<WorkspaceSourceRepoSyncResult> {
 	if (!existsSync(repoPath) || isEmptyDirectory(repoPath)) {
 		if (!cloneIfMissing) return missingCheckoutResult(repoPath);
-		const workspaceReady = ensureWorkspaceDir(workspaceDir);
+		const workspaceReady = ensureDirectory(workspaceDir, "failed to prepare workspace for Signet source checkout");
 		if (workspaceReady.ok === false) {
 			return errorResult(repoPath, workspaceReady.message);
 		}
-		return mapToSyncResult(run(["clone", "--depth", "1", "--", remoteUrl, repoPath], undefined, timeoutMs), (clone) => {
-			if (!clone.ok) {
-				return errorResult(repoPath, `failed to clone Signet source checkout: ${readGitError(clone, timeoutMs)}`);
-			}
+		return chainMaybePromise(
+			run(["clone", "--depth", "1", "--", remoteUrl, repoPath], undefined, timeoutMs),
+			(clone) => {
+				if (!clone.ok) {
+					return errorResult(repoPath, `failed to clone Signet source checkout: ${readGitError(clone, timeoutMs)}`);
+				}
 
-			return mapToSyncResult(readRepoStateWith(run, repoPath, timeoutMs), (state) => clonedResult(repoPath, state));
-		});
+				return chainMaybePromise(readRepoStateWith(run, repoPath, timeoutMs), (state) => clonedResult(repoPath, state));
+			},
+		);
 	}
 
 	if (!hasGitMetadata(repoPath)) {
 		return skippedResult(repoPath, "workspace already has a non-git signetai directory, skipped managed checkout sync");
 	}
 
-	return mapToSyncResult(readRepoStateWith(run, repoPath, timeoutMs), (state) =>
-		mapToSyncResult(readOriginRemoteWith(run, repoPath, timeoutMs), (currentRemote) => {
+	return chainMaybePromise(readRepoStateWith(run, repoPath, timeoutMs), (state) =>
+		chainMaybePromise(readOriginRemoteWith(run, repoPath, timeoutMs), (currentRemote) => {
 			if (!currentRemote) {
 				return skippedResult(
 					repoPath,
@@ -240,7 +246,7 @@ function syncWorkspaceSourceRepoLocked(
 				);
 			}
 
-			return mapToSyncResult(run(["fetch", "origin", "--prune"], repoPath, timeoutMs), (fetch) => {
+			return chainMaybePromise(run(["fetch", "origin", "--prune"], repoPath, timeoutMs), (fetch) => {
 				if (!fetch.ok) {
 					return errorResult(
 						repoPath,
@@ -283,7 +289,7 @@ function finalizeFetchedRepoWith(
 			state,
 		);
 	}
-	return flatMapMaybePromise(readWorkingTreeStatusWith(run, repoPath, timeoutMs), (workingTree) => {
+	return chainMaybePromise(readWorkingTreeStatusWith(run, repoPath, timeoutMs), (workingTree) => {
 		const generatedOnlyMetadata: LocalChangesMetadata = {
 			localChanges: workingTree.hasGeneratedChanges ? "generated-only" : "none",
 		};
@@ -362,7 +368,7 @@ function continueFetchedRepoWith(
 		);
 	}
 
-	return flatMapMaybePromise(readUpstreamBranchWith(run, repoPath, timeoutMs), (upstream) => {
+	return chainMaybePromise(readUpstreamBranchWith(run, repoPath, timeoutMs), (upstream) => {
 		if (upstream !== `origin/${defaultBranch}`) {
 			return fetchedResult(
 				repoPath,
@@ -372,7 +378,7 @@ function continueFetchedRepoWith(
 			);
 		}
 
-		return flatMapMaybePromise(readAheadBehindWith(run, repoPath, upstream, timeoutMs), (divergence) => {
+		return chainMaybePromise(readAheadBehindWith(run, repoPath, upstream, timeoutMs), (divergence) => {
 			if (divergence === null) {
 				return fetchedResult(
 					repoPath,
@@ -393,7 +399,7 @@ function continueFetchedRepoWith(
 				return currentResult(repoPath, state, metadata);
 			}
 
-			return flatMapMaybePromise(isSafeBranchNameWith(run, defaultBranch, timeoutMs), (safeBranchName) => {
+			return chainMaybePromise(isSafeBranchNameWith(run, defaultBranch, timeoutMs), (safeBranchName) => {
 				if (!safeBranchName) {
 					return fetchedResult(
 						repoPath,
@@ -404,7 +410,7 @@ function continueFetchedRepoWith(
 				}
 
 				const fastForward = (preparedMetadata: LocalChangesMetadata): MaybePromise<WorkspaceSourceRepoSyncResult> =>
-					flatMapMaybePromise(
+					chainMaybePromise(
 						run(["merge", "--ff-only", "--no-edit", `refs/remotes/origin/${defaultBranch}`], repoPath, timeoutMs),
 						(pull) => {
 							if (!pull.ok) {
@@ -421,7 +427,7 @@ function continueFetchedRepoWith(
 					);
 
 				if (!prepareForUpdate) return fastForward(metadata);
-				return flatMapMaybePromise(prepareForUpdate(), (preparation) => {
+				return chainMaybePromise(prepareForUpdate(), (preparation) => {
 					if (preparation.ok === false) {
 						return errorResult(repoPath, preparation.message, state, preparation.metadata ?? metadata);
 					}
@@ -439,7 +445,7 @@ function prepareLocalChangesForUpdateWith(
 	userPaths: readonly string[],
 	generatedPaths: readonly string[],
 ): MaybePromise<LocalChangesPreparation> {
-	return flatMapMaybePromise(createAutoStashWith(run, repoPath, timeoutMs, userPaths), (stash) => {
+	return chainMaybePromise(createAutoStashWith(run, repoPath, timeoutMs, userPaths), (stash) => {
 		if (stash.ok === false) {
 			return {
 				ok: false,
@@ -452,11 +458,11 @@ function prepareLocalChangesForUpdateWith(
 			localChanges: "stashed",
 			stashRef: stash.stashRef,
 		};
-		return flatMapMaybePromise(
+		return chainMaybePromise(
 			prepareGeneratedChangesForUpdateWith(run, repoPath, timeoutMs, generatedPaths, stashedMetadata),
 			(preparation) => {
 				if (!preparation.ok) return preparation;
-				return flatMapMaybePromise(readWorkingTreeStatusWith(run, repoPath, timeoutMs), (afterStash) => {
+				return chainMaybePromise(readWorkingTreeStatusWith(run, repoPath, timeoutMs), (afterStash) => {
 					if (!afterStash.statusReadable || afterStash.hasUserChanges || afterStash.generatedPaths.length > 0) {
 						return {
 							ok: false,
@@ -481,7 +487,7 @@ function prepareGeneratedChangesForUpdateWith(
 ): MaybePromise<LocalChangesPreparation> {
 	const pathspecs = generatedPaths.map((path) => `:(literal)${path}`);
 	if (pathspecs.length === 0) return { ok: true, metadata };
-	return mapMaybePromise(
+	return chainMaybePromise(
 		run(["restore", "--source=HEAD", "--staged", "--worktree", "--", ...pathspecs], repoPath, timeoutMs),
 		(result) =>
 			result.ok
@@ -717,7 +723,7 @@ function clearStaleSourceRepoSyncLock(path: string): boolean {
 
 function acquireSourceRepoSyncLock(workspaceDir: string): SyncLockAttempt {
 	const path = sourceRepoSyncLockPath(workspaceDir);
-	const daemonDirReady = ensureDaemonDir(workspaceDir);
+	const daemonDirReady = ensureDirectory(dirname(path), "failed to prepare source checkout sync lock directory");
 	if (daemonDirReady.ok === false) {
 		return { status: "error", message: daemonDirReady.message };
 	}
@@ -736,23 +742,15 @@ function acquireSourceRepoSyncLock(workspaceDir: string): SyncLockAttempt {
 
 async function acquireSourceRepoSyncLockAsync(workspaceDir: string): Promise<SyncLockAttempt> {
 	const path = sourceRepoSyncLockPath(workspaceDir);
-	const daemonDirReady = ensureDaemonDir(workspaceDir);
+	const daemonDirReady = ensureDirectory(dirname(path), "failed to prepare source checkout sync lock directory");
 	if (daemonDirReady.ok === false) {
 		return { status: "error", message: daemonDirReady.message };
 	}
 	const end = Date.now() + SOURCE_REPO_SYNC_LOCK_WAIT_MS;
 
 	while (Date.now() < end) {
-		try {
-			const fd = openSync(path, "wx");
-			writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
-			return { status: "acquired", lock: { fd, path } };
-		} catch (err) {
-			const code = err instanceof Error && "code" in err ? String(err.code) : "";
-			if (code !== "EEXIST") {
-				return { status: "error", message: code || "unknown lock error" };
-			}
-		}
+		const attempt = tryAcquireSourceRepoSyncLock(path);
+		if (attempt.status !== "busy") return attempt;
 
 		if (clearStaleSourceRepoSyncLock(path)) {
 			continue;
@@ -771,82 +769,49 @@ function releaseSourceRepoSyncLock(lock: SyncLock): void {
 	rmSync(lock.path, { force: true });
 }
 
+function withSourceRepoSyncLock<T>(lock: SyncLock, run: () => MaybePromise<T>): MaybePromise<T> {
+	let result: MaybePromise<T>;
+	try {
+		result = run();
+	} catch (error) {
+		releaseSourceRepoSyncLock(lock);
+		throw error;
+	}
+	if (isPromiseLike(result)) return result.finally(() => releaseSourceRepoSyncLock(lock));
+	releaseSourceRepoSyncLock(lock);
+	return result;
+}
+
 async function sleep(ms: number): Promise<void> {
 	await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function missingCheckoutResult(repoPath: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "skipped",
-		path: repoPath,
-		message: "No Signet source checkout; source builds can create one explicitly",
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("skipped", repoPath, "No Signet source checkout; source builds can create one explicitly");
 }
 
 function unsafeRemoteResult(repoPath: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "error",
-		path: repoPath,
-		message: "failed to clone Signet source checkout: remote URL is not a safe git source",
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("error", repoPath, "failed to clone Signet source checkout: remote URL is not a safe git source");
 }
 
 function gitUnavailableResult(repoPath: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "skipped",
-		path: repoPath,
-		message: "git is not available, skipped Signet source checkout sync",
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("skipped", repoPath, "git is not available, skipped Signet source checkout sync");
 }
 
 function syncInProgressResult(repoPath: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "skipped",
-		path: repoPath,
-		message: "source checkout sync already in progress, skipped duplicate run",
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("skipped", repoPath, "source checkout sync already in progress, skipped duplicate run");
 }
 
 function sourceRepoSyncLockErrorResult(repoPath: string, detail: string): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "error",
-		path: repoPath,
-		message: `failed to acquire source checkout sync lock: ${detail}`,
-		branch: null,
-		defaultBranch: null,
-	};
+	return syncResult("error", repoPath, `failed to acquire source checkout sync lock: ${detail}`);
 }
 
-function ensureDaemonDir(workspaceDir: string): WorkspaceDirEnsureResult {
-	const daemonDir = join(resolve(workspaceDir), ".daemon");
+function ensureDirectory(path: string, prefix: string): WorkspaceDirEnsureResult {
 	try {
-		mkdirSync(daemonDir, { recursive: true });
+		mkdirSync(path, { recursive: true });
 		return { ok: true };
 	} catch (err) {
-		return {
-			ok: false,
-			message: readFsError("failed to prepare source checkout sync lock directory", err),
-		};
-	}
-}
-
-function ensureWorkspaceDir(workspaceDir: string): WorkspaceDirEnsureResult {
-	try {
-		mkdirSync(workspaceDir, { recursive: true });
-		return { ok: true };
-	} catch (err) {
-		return {
-			ok: false,
-			message: readFsError("failed to prepare workspace for Signet source checkout", err),
-		};
+		return { ok: false, message: readFsError(prefix, err) };
 	}
 }
 
@@ -857,13 +822,7 @@ function readFsError(prefix: string, err: unknown): string {
 const NO_LOCAL_CHANGES: LocalChangesMetadata = { localChanges: "none" };
 
 function skippedResult(repoPath: string, message: string, state?: RepoState): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "skipped",
-		path: repoPath,
-		message,
-		branch: state?.branch ?? null,
-		defaultBranch: state?.defaultBranch ?? null,
-	};
+	return syncResult("skipped", repoPath, message, { state });
 }
 
 function fetchedResult(
@@ -872,14 +831,7 @@ function fetchedResult(
 	state: RepoState,
 	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
 ): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "fetched",
-		path: repoPath,
-		message: addLocalChangesMessage(message, metadata),
-		branch: state.branch,
-		defaultBranch: state.defaultBranch,
-		...localChangesFields(metadata),
-	};
+	return syncResult("fetched", repoPath, message, { state, metadata });
 }
 
 function errorResult(
@@ -888,24 +840,11 @@ function errorResult(
 	state?: RepoState,
 	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
 ): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "error",
-		path: repoPath,
-		message: addLocalChangesMessage(message, metadata),
-		branch: state?.branch ?? null,
-		defaultBranch: state?.defaultBranch ?? null,
-		...localChangesFields(metadata),
-	};
+	return syncResult("error", repoPath, message, { state, metadata });
 }
 
 function clonedResult(repoPath: string, state: RepoState): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "cloned",
-		path: repoPath,
-		message: "cloned Signet source checkout",
-		branch: state.branch,
-		defaultBranch: state.defaultBranch,
-	};
+	return syncResult("cloned", repoPath, "cloned Signet source checkout", { state });
 }
 
 function pulledResult(
@@ -913,14 +852,7 @@ function pulledResult(
 	state: RepoState,
 	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
 ): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "pulled",
-		path: repoPath,
-		message: addLocalChangesMessage("pulled latest Signet source checkout", metadata),
-		branch: state.branch,
-		defaultBranch: state.defaultBranch,
-		...localChangesFields(metadata),
-	};
+	return syncResult("pulled", repoPath, "pulled latest Signet source checkout", { state, metadata });
 }
 
 function currentResult(
@@ -928,14 +860,7 @@ function currentResult(
 	state: RepoState,
 	metadata: LocalChangesMetadata = NO_LOCAL_CHANGES,
 ): WorkspaceSourceRepoSyncResult {
-	return {
-		status: "current",
-		path: repoPath,
-		message: addLocalChangesMessage("Signet source checkout is already current", metadata),
-		branch: state.branch,
-		defaultBranch: state.defaultBranch,
-		...localChangesFields(metadata),
-	};
+	return syncResult("current", repoPath, "Signet source checkout is already current", { state, metadata });
 }
 
 function localChangesFields(metadata: LocalChangesMetadata): {
@@ -946,6 +871,23 @@ function localChangesFields(metadata: LocalChangesMetadata): {
 	return {
 		localChanges: metadata.localChanges,
 		...(metadata.stashRef ? { stashRef: metadata.stashRef } : {}),
+	};
+}
+
+function syncResult(
+	status: WorkspaceSourceRepoStatus,
+	repoPath: string,
+	message: string,
+	options: { readonly state?: RepoState; readonly metadata?: LocalChangesMetadata } = {},
+): WorkspaceSourceRepoSyncResult {
+	const metadata = options.metadata ?? NO_LOCAL_CHANGES;
+	return {
+		status,
+		path: repoPath,
+		message: addLocalChangesMessage(message, metadata),
+		branch: options.state?.branch ?? null,
+		defaultBranch: options.state?.defaultBranch ?? null,
+		...localChangesFields(metadata),
 	};
 }
 
@@ -966,62 +908,30 @@ function isPromiseLike<T>(value: MaybePromise<T>): value is Promise<T> {
 	return typeof value === "object" && value !== null && "then" in value;
 }
 
-function mapMaybePromise<T, U>(value: MaybePromise<T>, map: (value: T) => U): MaybePromise<U> {
+function chainMaybePromise<T, U>(value: MaybePromise<T>, map: (value: T) => MaybePromise<U>): MaybePromise<U> {
 	return isPromiseLike(value) ? value.then(map) : map(value);
 }
 
-function flatMapMaybePromise<T, U>(value: MaybePromise<T>, map: (value: T) => MaybePromise<U>): MaybePromise<U> {
-	return isPromiseLike(value) ? value.then(map) : map(value);
-}
-
-function mapToSyncResult<T>(
-	value: MaybePromise<T>,
-	map: (value: T) => WorkspaceSourceRepoSyncResult | MaybePromise<WorkspaceSourceRepoSyncResult>,
-): MaybePromise<WorkspaceSourceRepoSyncResult> {
-	if (isPromiseLike(value)) {
-		return value.then(async (resolved) => await map(resolved));
-	}
-	return map(value);
-}
-
-function readRepoStateWith(run: typeof runGit, repoPath: string, timeoutMs: number): RepoState;
-function readRepoStateWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<RepoState>;
-function readRepoStateWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<RepoState>;
 function readRepoStateWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<RepoState> {
-	const branch = readCurrentBranchWith(run, repoPath, timeoutMs);
-	if (isPromiseLike(branch)) {
-		return branch.then(async (resolvedBranch) => ({
-			branch: resolvedBranch,
-			defaultBranch: await readDefaultBranchWith(run, repoPath, timeoutMs),
-		}));
-	}
-	return mapMaybePromise(readDefaultBranchWith(run, repoPath, timeoutMs), (defaultBranch) => ({
-		branch,
-		defaultBranch,
-	}));
+	return chainMaybePromise(readCurrentBranchWith(run, repoPath, timeoutMs), (branch) =>
+		chainMaybePromise(readDefaultBranchWith(run, repoPath, timeoutMs), (defaultBranch) => ({ branch, defaultBranch })),
+	);
 }
 
-function readOriginRemoteWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readOriginRemoteWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readOriginRemoteWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readOriginRemoteWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
-	return mapMaybePromise(run(["config", "--get", "remote.origin.url"], repoPath, timeoutMs), (result) =>
+	return chainMaybePromise(run(["config", "--get", "remote.origin.url"], repoPath, timeoutMs), (result) =>
 		readTrimmedValue(result),
 	);
 }
 
-function readCurrentBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readCurrentBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readCurrentBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readCurrentBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
-	return mapMaybePromise(run(["branch", "--show-current"], repoPath, timeoutMs), (result) => readTrimmedValue(result));
+	return chainMaybePromise(run(["branch", "--show-current"], repoPath, timeoutMs), (result) =>
+		readTrimmedValue(result),
+	);
 }
 
-function readDefaultBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readDefaultBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
-	return mapMaybePromise(
+	return chainMaybePromise(
 		run(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], repoPath, timeoutMs),
 		(result) => {
 			if (!result.ok) {
@@ -1039,23 +949,12 @@ function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: numb
 	);
 }
 
-function readWorkingTreeStatusWith(run: typeof runGit, repoPath: string, timeoutMs: number): WorkingTreeStatus;
-function readWorkingTreeStatusWith(
-	run: typeof runGitAsync,
-	repoPath: string,
-	timeoutMs: number,
-): Promise<WorkingTreeStatus>;
-function readWorkingTreeStatusWith(
-	run: GitRunner,
-	repoPath: string,
-	timeoutMs: number,
-): MaybePromise<WorkingTreeStatus>;
 function readWorkingTreeStatusWith(
 	run: GitRunner,
 	repoPath: string,
 	timeoutMs: number,
 ): MaybePromise<WorkingTreeStatus> {
-	return mapMaybePromise(
+	return chainMaybePromise(
 		run(["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=all"], repoPath, timeoutMs),
 		(result) => {
 			if (!result.ok) {
@@ -1140,24 +1039,6 @@ function isUnmergedStatusLine(line: string): boolean {
 }
 
 function createAutoStashWith(
-	run: typeof runGit,
-	repoPath: string,
-	timeoutMs: number,
-	userPaths: readonly string[],
-): AutoStashResult;
-function createAutoStashWith(
-	run: typeof runGitAsync,
-	repoPath: string,
-	timeoutMs: number,
-	userPaths: readonly string[],
-): Promise<AutoStashResult>;
-function createAutoStashWith(
-	run: GitRunner,
-	repoPath: string,
-	timeoutMs: number,
-	userPaths: readonly string[],
-): MaybePromise<AutoStashResult>;
-function createAutoStashWith(
 	run: GitRunner,
 	repoPath: string,
 	timeoutMs: number,
@@ -1165,11 +1046,11 @@ function createAutoStashWith(
 ): MaybePromise<AutoStashResult> {
 	const stashMessage = `${SOURCE_REPO_AUTOSTASH_PREFIX}-${new Date().toISOString().replace(/\D/g, "")}`;
 	const pathspecs = userPaths.map((path) => `:(literal)${path}`);
-	return flatMapMaybePromise(readStashHeadWith(run, repoPath, timeoutMs), (before) =>
-		flatMapMaybePromise(
+	return chainMaybePromise(readStashHeadWith(run, repoPath, timeoutMs), (before) =>
+		chainMaybePromise(
 			run(["stash", "push", "--include-untracked", "--message", stashMessage, "--", ...pathspecs], repoPath, timeoutMs),
 			(stash) =>
-				flatMapMaybePromise(readStashHeadWith(run, repoPath, timeoutMs), (after) => {
+				chainMaybePromise(readStashHeadWith(run, repoPath, timeoutMs), (after) => {
 					const stashRef = after && after !== before ? after : undefined;
 					if (!stash.ok) {
 						return {
@@ -1185,7 +1066,7 @@ function createAutoStashWith(
 						};
 					}
 
-					return flatMapMaybePromise(readStashSubjectWith(run, repoPath, stashRef, timeoutMs), (subject) => {
+					return chainMaybePromise(readStashSubjectWith(run, repoPath, stashRef, timeoutMs), (subject) => {
 						if (!subject?.includes(stashMessage)) {
 							return {
 								ok: false,
@@ -1201,35 +1082,19 @@ function createAutoStashWith(
 	);
 }
 
-function readStashHeadWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readStashHeadWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readStashHeadWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readStashHeadWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
-	return mapMaybePromise(run(["rev-parse", "--verify", "--quiet", "refs/stash"], repoPath, timeoutMs), (result) =>
+	return chainMaybePromise(run(["rev-parse", "--verify", "--quiet", "refs/stash"], repoPath, timeoutMs), (result) =>
 		readTrimmedValue(result),
 	);
 }
 
-function readStashSubjectWith(run: typeof runGit, repoPath: string, stashRef: string, timeoutMs: number): string | null;
-function readStashSubjectWith(
-	run: typeof runGitAsync,
-	repoPath: string,
-	stashRef: string,
-	timeoutMs: number,
-): Promise<string | null>;
-function readStashSubjectWith(
-	run: GitRunner,
-	repoPath: string,
-	stashRef: string,
-	timeoutMs: number,
-): MaybePromise<string | null>;
 function readStashSubjectWith(
 	run: GitRunner,
 	repoPath: string,
 	stashRef: string,
 	timeoutMs: number,
 ): MaybePromise<string | null> {
-	return mapMaybePromise(run(["show", "-s", "--format=%s", stashRef], repoPath, timeoutMs), (result) =>
+	return chainMaybePromise(run(["show", "-s", "--format=%s", stashRef], repoPath, timeoutMs), (result) =>
 		readTrimmedValue(result),
 	);
 }
@@ -1244,41 +1109,20 @@ function parsePorcelainStatusPath(line: string): string | null {
 	return path.replace(/^"|"$/g, "");
 }
 
-function readUpstreamBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readUpstreamBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readUpstreamBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readUpstreamBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
-	return mapMaybePromise(
+	return chainMaybePromise(
 		run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], repoPath, timeoutMs),
 		(result) => readTrimmedValue(result),
 	);
 }
 
 function readAheadBehindWith(
-	run: typeof runGit,
-	repoPath: string,
-	upstream: string,
-	timeoutMs: number,
-): AheadBehind | null;
-function readAheadBehindWith(
-	run: typeof runGitAsync,
-	repoPath: string,
-	upstream: string,
-	timeoutMs: number,
-): Promise<AheadBehind | null>;
-function readAheadBehindWith(
-	run: GitRunner,
-	repoPath: string,
-	upstream: string,
-	timeoutMs: number,
-): MaybePromise<AheadBehind | null>;
-function readAheadBehindWith(
 	run: GitRunner,
 	repoPath: string,
 	upstream: string,
 	timeoutMs: number,
 ): MaybePromise<AheadBehind | null> {
-	return mapMaybePromise(
+	return chainMaybePromise(
 		run(["rev-list", "--left-right", "--count", `HEAD...${upstream}`], repoPath, timeoutMs),
 		(result) => {
 			if (!result.ok) {
@@ -1290,15 +1134,12 @@ function readAheadBehindWith(
 	);
 }
 
-function isSafeBranchNameWith(run: typeof runGit, branch: string, timeoutMs: number): boolean;
-function isSafeBranchNameWith(run: typeof runGitAsync, branch: string, timeoutMs: number): Promise<boolean>;
-function isSafeBranchNameWith(run: GitRunner, branch: string, timeoutMs: number): MaybePromise<boolean>;
 function isSafeBranchNameWith(run: GitRunner, branch: string, timeoutMs: number): MaybePromise<boolean> {
 	if (branch.length === 0 || branch.startsWith("-")) {
 		return false;
 	}
 
-	return mapMaybePromise(run(["check-ref-format", "--branch", branch], undefined, timeoutMs), (result) => result.ok);
+	return chainMaybePromise(run(["check-ref-format", "--branch", branch], undefined, timeoutMs), (result) => result.ok);
 }
 
 function readTrimmedValue(result: GitCommandResult): string | null {

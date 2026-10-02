@@ -494,6 +494,31 @@ describe("sources-config", () => {
 		expect(loadSourcesConfig(agentsDir).sources).toHaveLength(1);
 	});
 
+	it("validates discussions before reading config or inheriting an existing tokenRef", () => {
+		const agentsDir = tmp();
+		const original = addGitHubSource(
+			{ repos: ["Signet-AI/signetai"], tokenRef: "GITHUB_TOKEN", resourceTypes: ["issues"] },
+			agentsDir,
+		);
+		expect(original.ok).toBe(true);
+
+		const update = addGitHubSource({ repos: ["Signet-AI/signetai"], resourceTypes: ["discussions"] }, agentsDir);
+		expect(update).toEqual({
+			ok: false,
+			error: "GitHub discussions require tokenRef because they use the GitHub GraphQL API",
+		});
+		expect(parseGitHubSettings(loadSourcesConfig(agentsDir).sources[0]?.providerSettings)).toMatchObject({
+			tokenRef: "GITHUB_TOKEN",
+			resourceTypes: ["issues"],
+		});
+
+		writeFileSync(getSourcesConfigPath(agentsDir), "{");
+		expect(addGitHubSource({ repos: ["Signet-AI/signetai"], resourceTypes: ["discussions"] }, agentsDir)).toEqual({
+			ok: false,
+			error: "GitHub discussions require tokenRef because they use the GitHub GraphQL API",
+		});
+	});
+
 	it("rejects invalid GitHub source boundaries", () => {
 		const agentsDir = tmp();
 

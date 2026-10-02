@@ -1,18 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
-
-interface KnowledgeDeps {
-	readonly ensureDaemonForSecrets: () => Promise<boolean>;
-	readonly secretApiCall: (
-		method: string,
-		path: string,
-		body?: unknown,
-		timeoutMs?: number,
-	) => Promise<{
-		ok: boolean;
-		data: unknown;
-	}>;
-}
+import { printCollection } from "../lib/cli-output";
+import { addCommonOptions, appendAgent, asRecord, getCommandData, type DaemonCommandDeps } from "./command-utils";
 
 interface EntityRecord {
 	readonly name?: string;
@@ -106,31 +95,8 @@ interface ListResponse<T> {
 	readonly items?: readonly T[];
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-}
-
-function errorMessage(data: unknown, fallback: string): string {
-	const raw = asRecord(data).error;
-	return typeof raw === "string" ? raw : fallback;
-}
-
-function addCommonOptions(cmd: Command): Command {
-	return cmd.option("--agent <name>", "Agent scope, default default").option("--json", "Output as JSON");
-}
-
-function appendAgent(params: URLSearchParams, agent?: string): void {
-	if (agent) params.set("agent_id", agent);
-}
-
-async function apiGet(deps: KnowledgeDeps, path: string, params: URLSearchParams): Promise<unknown> {
-	const query = params.toString();
-	const { ok, data } = await deps.secretApiCall("GET", query ? `${path}?${query}` : path, undefined, 10_000);
-	if (!ok || typeof asRecord(data).error === "string") {
-		console.error(chalk.red(errorMessage(data, "Knowledge request failed")));
-		process.exit(1);
-	}
-	return data;
+function apiGet(deps: DaemonCommandDeps, path: string, params: URLSearchParams): Promise<unknown> {
+	return getCommandData(deps.secretApiCall, path, params, "Knowledge request failed");
 }
 
 function entityName(entity: EntityRecord | undefined): string {
@@ -144,12 +110,7 @@ function countLabel(value: number | undefined, noun: string): string {
 
 function printEntityList(data: unknown): void {
 	const items = (asRecord(data).items as readonly CountedEntity[] | undefined) ?? [];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No entities found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Knowledge Entities\n"));
-	for (const item of items) {
+	printCollection(items, "Knowledge Entities", "No entities found", (item) => {
 		const type = item.entity?.entityType ? chalk.dim(` (${item.entity.entityType})`) : "";
 		console.log(`  ${chalk.cyan(entityName(item.entity))}${type}`);
 		console.log(
@@ -160,8 +121,7 @@ function printEntityList(data: unknown): void {
 				)} · ${countLabel(item.dependencyCount, "dependency")}`,
 			),
 		);
-	}
-	console.log();
+	});
 }
 
 function printTree(data: unknown): void {
@@ -211,33 +171,21 @@ function printNamedItems<T>(
 	getSummary?: (item: T) => string,
 ): void {
 	const items = ((asRecord(data) as ListResponse<T>).items ?? []) as readonly T[];
-	if (items.length === 0) {
-		console.log(chalk.dim(`  No ${title.toLowerCase()} found`));
-		return;
-	}
-	console.log(chalk.bold(`\n  ${title}\n`));
-	for (const item of items) {
+	printCollection(items, title, `No ${title.toLowerCase()} found`, (item) => {
 		console.log(`  ${chalk.cyan(getName(item))}`);
 		const summary = getSummary?.(item);
 		if (summary) console.log(chalk.dim(`    ${summary}`));
-	}
-	console.log();
+	});
 }
 
 function printAttributes(data: unknown): void {
 	const items = ((asRecord(data) as ListResponse<AttributeRecord>).items ?? []) as readonly AttributeRecord[];
-	if (items.length === 0) {
-		console.log(chalk.dim("  No attributes found"));
-		return;
-	}
-	console.log(chalk.bold("\n  Knowledge Attributes\n"));
-	for (const item of items) {
+	printCollection(items, "Knowledge Attributes", "No attributes found", (item) => {
 		console.log(`  ${item.content ?? ""}`);
 		const parts = [item.kind, item.status, item.updatedAt].filter((part): part is string => typeof part === "string");
 		if (typeof item.confidence === "number") parts.push(`confidence ${item.confidence.toFixed(2)}`);
 		if (parts.length > 0) console.log(chalk.dim(`    ${parts.join(" · ")}`));
-	}
-	console.log();
+	});
 }
 
 function printHygieneReport(data: unknown): void {
@@ -285,7 +233,7 @@ function printHygieneReport(data: unknown): void {
 	console.log();
 }
 
-export function registerKnowledgeCommands(program: Command, deps: KnowledgeDeps): void {
+export function registerKnowledgeCommands(program: Command, deps: DaemonCommandDeps): void {
 	const knowledge = program.command("knowledge").description("Browse the structured knowledge graph");
 
 	addCommonOptions(

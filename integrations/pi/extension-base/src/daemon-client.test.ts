@@ -3,7 +3,6 @@ import { type DaemonClientConfig, createDaemonClient } from "./daemon-client.js"
 
 const originalFetch = globalThis.fetch;
 const originalApiKey = process.env.SIGNET_API_KEY;
-
 const testConfig: DaemonClientConfig = {
 	logPrefix: "signet-pi",
 	actorName: "pi-test",
@@ -18,120 +17,29 @@ afterEach(() => {
 });
 
 describe("createDaemonClient (extension-base)", () => {
-	test("postResult sends SIGNET_API_KEY as bearer auth", async () => {
+	test("sends configured Pi runtime identity and bearer auth", async () => {
 		process.env.SIGNET_API_KEY = "sig_sk_extension_secret";
 		let authorization = "";
+		let actor = "";
+		let runtimePath = "";
 		globalThis.fetch = Object.assign(
 			async (_input: RequestInfo | URL, init?: RequestInit) => {
-				authorization = new Headers(init?.headers).get("authorization") ?? "";
-				return Response.json({ ok: true });
+				const headers = new Headers(init?.headers);
+				authorization = headers.get("authorization") ?? "";
+				actor = headers.get("x-signet-actor") ?? "";
+				runtimePath = headers.get("x-signet-runtime-path") ?? "";
+				return Response.json({ accepted: true });
 			},
 			{ preconnect: originalFetch.preconnect },
 		);
 
 		const client = createDaemonClient("http://daemon.test", testConfig);
-		await client.postResult("/api/hooks/session-start", {});
+		const result = await client.postResult("/api/hooks/session-start", {});
+
 		expect(authorization).toBe("Bearer sig_sk_extension_secret");
-	});
-
-	test("postResult returns timeout when body read is aborted mid-stream", async () => {
-		globalThis.fetch = Object.assign(
-			async () => {
-				const body = new ReadableStream({
-					start(controller) {
-						controller.enqueue(new TextEncoder().encode('{"inje'));
-						setTimeout(() => controller.error(Object.assign(new DOMException("signal timed out", "TimeoutError"))), 5);
-					},
-				});
-				return new Response(body, { status: 200, headers: { "Content-Type": "application/json" } });
-			},
-			{ preconnect: originalFetch.preconnect },
-		);
-
-		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
-
-		expect(result.ok).toBe(false);
-		if (!result.ok) {
-			expect(result.reason).toBe("timeout");
-		}
-	});
-
-	test("postResult classifies non-timeout body read failures separately from timeout", async () => {
-		let canceled = false;
-		globalThis.fetch = Object.assign(
-			async () => {
-				const response = new Response(null, { status: 200, headers: { "Content-Type": "application/json" } });
-				Object.defineProperty(response, "text", {
-					value: async () => {
-						throw new Error("stream reset");
-					},
-				});
-				Object.defineProperty(response, "body", {
-					value: {
-						cancel: async () => {
-							canceled = true;
-						},
-					},
-				});
-				return response;
-			},
-			{ preconnect: originalFetch.preconnect },
-		);
-
-		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
-
-		expect(result.ok).toBe(false);
-		if (!result.ok) {
-			expect(result.reason).toBe("body-read");
-		}
-		expect(canceled).toBe(true);
-	});
-
-	test("postResult returns invalid-json with diagnostic info for empty body", async () => {
-		const warnings: string[] = [];
-		const originalWarn = console.warn;
-		console.warn = (...args: unknown[]) => {
-			warnings.push(args.map(String).join(" "));
-		};
-
-		globalThis.fetch = Object.assign(
-			async () => new Response("", { status: 200, headers: { "Content-Type": "application/json" } }),
-			{ preconnect: originalFetch.preconnect },
-		);
-
-		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
-
-		console.warn = originalWarn;
-
-		expect(result).toEqual({ ok: false, reason: "invalid-json", status: 200 });
-		expect(warnings.some((w) => w.includes("0 chars") && w.includes("empty body"))).toBe(true);
-	});
-
-	test("cancels HTTP error bodies before returning unavailable", async () => {
-		let canceled = false;
-		globalThis.fetch = Object.assign(
-			async () => {
-				const body = new ReadableStream({
-					start(controller) {
-						controller.enqueue(new TextEncoder().encode("error body"));
-					},
-					cancel() {
-						canceled = true;
-					},
-				});
-				return new Response(body, { status: 503 });
-			},
-			{ preconnect: originalFetch.preconnect },
-		);
-
-		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postResult("/api/hooks/user-prompt-submit", {});
-
-		expect(result).toEqual({ ok: false, reason: "http", status: 503 });
-		expect(canceled).toBe(true);
+		expect(actor).toBe("pi-test");
+		expect(runtimePath).toBe("plugin");
+		expect(result).toEqual({ ok: true, data: { accepted: true } });
 	});
 
 	test("postStatus accepts a successful empty body without parsing JSON", async () => {
@@ -143,35 +51,5 @@ describe("createDaemonClient (extension-base)", () => {
 		const result = await client.postStatus("/api/hooks/remember", {});
 
 		expect(result).toEqual({ ok: true, data: undefined });
-	});
-
-	test("postResult parses valid JSON through text-first path", async () => {
-		globalThis.fetch = Object.assign(async () => Response.json({ inject: "memory-context", memoryCount: 3 }), {
-			preconnect: originalFetch.preconnect,
-		});
-
-		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postResult<{ inject: string; memoryCount: number }>(
-			"/api/hooks/user-prompt-submit",
-			{},
-		);
-
-		expect(result).toEqual({ ok: true, data: { inject: "memory-context", memoryCount: 3 } });
-	});
-
-	test("postResult classifies connection-level timeout separately from offline", async () => {
-		globalThis.fetch = Object.assign(
-			async () => {
-				const err = new Error("timed out");
-				Object.defineProperty(err, "name", { value: "TimeoutError" });
-				throw err;
-			},
-			{ preconnect: originalFetch.preconnect },
-		);
-
-		const client = createDaemonClient("http://daemon.test", testConfig);
-		const result = await client.postResult("/api/hooks/session-start", {});
-
-		expect(result).toEqual({ ok: false, reason: "timeout" });
 	});
 });

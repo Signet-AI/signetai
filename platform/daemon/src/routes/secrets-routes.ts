@@ -30,39 +30,7 @@ import {
 	startSecretExecJob,
 } from "../secrets.js";
 import { authConfig } from "./state.js";
-
-function parseOptionalString(value: unknown): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function parseOptionalBoolean(value: unknown): boolean | undefined {
-	if (typeof value === "boolean") return value;
-	if (typeof value === "number") {
-		if (value === 1) return true;
-		if (value === 0) return false;
-		return undefined;
-	}
-	if (typeof value === "string") {
-		const lower = value.trim().toLowerCase();
-		if (lower === "1" || lower === "true") return true;
-		if (lower === "0" || lower === "false") return false;
-	}
-	return undefined;
-}
-
-async function readOptionalJsonObject(c: Context): Promise<Record<string, unknown> | null> {
-	const raw = await c.req.text();
-	if (!raw.trim()) return {};
-	try {
-		const parsed: unknown = JSON.parse(raw);
-		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
-		return parsed as Record<string, unknown>;
-	} catch {
-		return null;
-	}
-}
+import { parseOptionalBoolean, parseOptionalString, readOptionalJsonObject } from "./request-input.js";
 
 function parseOptionalStringArray(value: unknown): string[] | undefined {
 	if (!Array.isArray(value)) return undefined;

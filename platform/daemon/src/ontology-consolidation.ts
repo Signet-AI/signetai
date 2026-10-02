@@ -1,16 +1,8 @@
 import type { LlmProvider, OntologyProposal, OntologyProposalStatus } from "@signet/core";
 import type { DbAccessor } from "./db-accessor";
 import { createOntologyProposals, listOntologyProposalConflicts, listOntologyProposals } from "./ontology-proposals";
+import { isRecord, proposalInput, readArray, readString, type ProposalDraft } from "./ontology-proposal-input";
 import { extractBalancedJsonObject, stripFences, tryParseJson } from "./pipeline/extraction";
-
-type ProposalDraft = {
-	readonly operation: string;
-	readonly payload: Readonly<Record<string, unknown>>;
-	readonly confidence?: number;
-	readonly rationale?: string;
-	readonly evidence?: readonly unknown[];
-	readonly risk?: string | null;
-};
 
 export interface ConsolidateOntologyParams {
 	readonly agentId: string;
@@ -48,44 +40,6 @@ export class OntologyConsolidationError extends Error {
 		super(message);
 		this.name = "OntologyConsolidationError";
 	}
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readString(record: Readonly<Record<string, unknown>>, key: string): string | null {
-	const value = record[key];
-	if (typeof value !== "string") return null;
-	const trimmed = value.trim();
-	return trimmed.length > 0 ? trimmed : null;
-}
-
-function readNumber(record: Readonly<Record<string, unknown>>, key: string): number | undefined {
-	const value = record[key];
-	return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
-function readArray(record: Readonly<Record<string, unknown>>, key: string): readonly unknown[] {
-	const value = record[key];
-	return Array.isArray(value) ? value : [];
-}
-
-function proposalInput(
-	operation: string | null,
-	payload: Record<string, unknown>,
-	src: Readonly<Record<string, unknown>>,
-	fallbackRationale: string,
-): ProposalDraft | null {
-	if (!operation || Object.keys(payload).length === 0) return null;
-	return {
-		operation,
-		payload,
-		confidence: readNumber(src, "confidence"),
-		rationale: readString(src, "rationale") ?? readString(src, "reason") ?? fallbackRationale,
-		evidence: readArray(src, "evidence"),
-		risk: readString(src, "risk"),
-	};
 }
 
 function normalizeProposal(value: unknown): ProposalDraft | null {

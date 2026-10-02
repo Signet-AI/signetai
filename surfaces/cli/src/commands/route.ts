@@ -10,6 +10,7 @@ import {
 import chalk from "chalk";
 import type { Command } from "commander";
 import type { DaemonApiCall, DaemonFetch } from "../lib/daemon.js";
+import { isRecord } from "./command-utils";
 import { withJson } from "./shared.js";
 
 interface RouteDeps {
@@ -57,10 +58,6 @@ interface RouteStatusResponse {
 			}
 		>;
 	};
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseMaxTokens(value: unknown): number | null | undefined {

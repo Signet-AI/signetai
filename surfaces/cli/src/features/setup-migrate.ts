@@ -39,6 +39,7 @@ import {
 	type EmbeddingProviderChoice,
 	type ExtractionProviderChoice,
 	getEmbeddingDimensions,
+	printSetupNextStep,
 	readErr,
 	readHarnesses,
 	readRecord,
@@ -626,14 +627,7 @@ export async function runExistingSetupWizard(
 		}
 
 		console.log();
-		if (identityMode === "managed") {
-			console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
-			console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
-			console.log(chalk.dim("    communication style, and your preferences."));
-		} else {
-			console.log(chalk.cyan("  → Next step: Use `signet remember` or configure harness memory hooks"));
-			console.log(chalk.dim("    Signet will manage memory, recall, sources, and secrets without owning identity."));
-		}
+		printSetupNextStep(identityMode === "managed");
 		if (protection.state === "bypass") {
 			console.log(chalk.red("    Backup warning: this workspace is still unprotected."));
 		}

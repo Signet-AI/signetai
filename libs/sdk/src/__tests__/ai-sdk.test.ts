@@ -4,7 +4,6 @@ import { SignetClient } from "../index.js";
 
 let mockServer: ReturnType<typeof Bun.serve>;
 let port: number;
-const calls: { method: string; args: unknown[] }[] = [];
 let lastRecallBody: Record<string, unknown> | null = null;
 
 function mockClient(): SignetClient {
@@ -78,7 +77,7 @@ describe("memoryTools", () => {
 		expect(names).toEqual(["memory_search", "memory_store", "memory_modify", "memory_forget"]);
 	});
 
-	test("each tool has description and parameters", async () => {
+	test("describes tools and enforces memory_search argument constraints", async () => {
 		const client = mockClient();
 		const tools = await memoryTools(client);
 
@@ -88,6 +87,10 @@ describe("memoryTools", () => {
 			expect(tool.parameters).toBeDefined();
 			expect(typeof tool.execute).toBe("function");
 		}
+
+		expect(tools.memory_search.parameters.safeParse({ query: "test", aggregateBudget: "small" }).success).toBe(true);
+		expect(tools.memory_search.parameters.safeParse({ aggregateBudget: "small" }).success).toBe(false);
+		expect(tools.memory_search.parameters.safeParse({ query: "test", aggregateBudget: "invalid" }).success).toBe(false);
 	});
 
 	test("memory_search executes recall", async () => {

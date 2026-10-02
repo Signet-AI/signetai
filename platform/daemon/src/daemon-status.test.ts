@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import ts from "typescript";
 import type { Hono } from "hono";
 import { cleanupTestTempDir, createTestTempDir } from "./test-temp-dir";
 import { createDbOwnerClient, type DbOwnerClient } from "./db-owner-client";
@@ -501,18 +502,52 @@ describe("daemon status contract", () => {
 		expect(extractionFallback).toContain("dbOwnerTransaction");
 	});
 
-	it("keeps DB-owner maintenance available when admitting Dreaming", () => {
+	it("uses the pipeline registry as the sole Dreaming worker owner", () => {
+		const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf-8");
+		const sourceFile = ts.createSourceFile("daemon.ts", source, ts.ScriptTarget.Latest, true);
+		const moduleLevelNullBindings = new Set<string>();
+		for (const statement of sourceFile.statements) {
+			if (!ts.isVariableStatement(statement) || (statement.declarationList.flags & ts.NodeFlags.Let) === 0) continue;
+			for (const declaration of statement.declarationList.declarations) {
+				if (ts.isIdentifier(declaration.name) && declaration.initializer?.kind === ts.SyntaxKind.NullKeyword) {
+					moduleLevelNullBindings.add(declaration.name.text);
+				}
+			}
+		}
+
+		const duplicateOwners = new Set<string>();
+		const inspect = (node: ts.Node): void => {
+			if (
+				ts.isBinaryExpression(node) &&
+				node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+				ts.isIdentifier(node.left) &&
+				moduleLevelNullBindings.has(node.left.text) &&
+				ts.isCallExpression(node.right) &&
+				ts.isIdentifier(node.right.expression) &&
+				node.right.expression.text === "startDreamingWorker"
+			) {
+				duplicateOwners.add(node.left.text);
+			}
+			ts.forEachChild(node, inspect);
+		};
+		inspect(sourceFile);
+
+		expect(duplicateOwners.size).toBe(0);
+		expect(source).toContain("setDreamingWorker(dreamingWorker)");
+		expect(source).toContain("getDreamingWorker()?.activePass");
+		expect(source).toContain("getDreamingWorker()?.running === true");
+	});
+
+	it("does not gate Dreaming admission on its enabled config flag", () => {
 		const source = readFileSync(new URL("./daemon.ts", import.meta.url), "utf-8");
 		const runtimeStart = source.indexOf("async function startPipelineRuntime");
-		const maintenanceStart = source.indexOf("dbOwnerMaintenanceHandle = initializeDbOwnerMaintenance()", runtimeStart);
-		const workerStart = source.indexOf("dreamingWorkerHandle = startDreamingWorker", runtimeStart);
+		const workerStart = source.indexOf("startDreamingWorker(", runtimeStart);
+		const workerRegistration = source.indexOf("setDreamingWorker(dreamingWorker)", workerStart);
 
 		expect(runtimeStart).toBeGreaterThanOrEqual(0);
-		expect(maintenanceStart).toBeGreaterThan(runtimeStart);
-		expect(maintenanceStart).toBeLessThan(workerStart);
-		expect(
-			source.slice(workerStart, source.indexOf("setDreamingWorker(dreamingWorkerHandle)", workerStart)),
-		).not.toContain("memoryCfg.dreaming.enabled");
+		expect(workerStart).toBeGreaterThan(runtimeStart);
+		expect(workerRegistration).toBeGreaterThan(workerStart);
+		expect(source.slice(workerStart, workerRegistration)).not.toContain("memoryCfg.dreaming.enabled");
 	});
 
 	it("counts non-errored connectors as active for heartbeat telemetry", () => {

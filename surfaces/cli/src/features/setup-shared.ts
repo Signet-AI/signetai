@@ -117,6 +117,17 @@ export function formatDetectionSummary(detection: SetupDetection): string {
 	return lines.join("\n");
 }
 
+export function printSetupNextStep(isManagedIdentity: boolean): void {
+	if (isManagedIdentity) {
+		console.log(chalk.cyan("  → Next step: Say '/onboarding' to personalize your agent"));
+		console.log(chalk.dim("    This will walk you through setting up your agent's personality,"));
+		console.log(chalk.dim("    communication style, and your preferences."));
+		return;
+	}
+	console.log(chalk.cyan("  → Next step: Use `signet remember` or configure harness memory hooks"));
+	console.log(chalk.dim("    Signet will manage memory, recall, sources, and secrets without owning identity."));
+}
+
 export function hasExistingAgentState(detection: SetupDetection): boolean {
 	return detection.memoryDb || detection.agentYaml || detection.identityFiles.length > 0;
 }

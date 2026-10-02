@@ -14,11 +14,30 @@ describe("Dreaming scenario MemoryBench gate", () => {
       "cross-scope-isolation",
       "rejected-evidence-repair",
     ])
-    expect(questions.every((question) => question.metadata?.requiresExactSourceRefs === true)).toBe(true)
-    expect(questions.every((question) => question.relevantSessionIds && question.relevantSessionIds.length > 0)).toBe(true)
-    expect(questions.every((question) => Array.isArray(question.metadata?.sourceSessionIds))).toBe(true)
-    expect(questions.every((question) => typeof question.metadata?.semanticOutcome === "object")).toBe(true)
-    expect(questions.find((question) => question.questionId === "joined-source-promotion")?.metadata).toMatchObject({
+    expect(
+      benchmark
+        .getQuestions({ questionTypes: ["dreaming-contract"], offset: 1, limit: 2 })
+        .map((question) => question.questionId)
+    ).toEqual(["correction-and-contradiction", "cross-scope-isolation"])
+    expect(benchmark.getQuestions({ questionTypes: ["unknown"] })).toEqual([])
+    expect(benchmark.getQuestions({ limit: 0 })).toHaveLength(4)
+    expect(questions.every((question) => question.metadata?.requiresExactSourceRefs === true)).toBe(
+      true
+    )
+    expect(
+      questions.every(
+        (question) => question.relevantSessionIds && question.relevantSessionIds.length > 0
+      )
+    ).toBe(true)
+    expect(questions.every((question) => Array.isArray(question.metadata?.sourceSessionIds))).toBe(
+      true
+    )
+    expect(
+      questions.every((question) => typeof question.metadata?.semanticOutcome === "object")
+    ).toBe(true)
+    expect(
+      questions.find((question) => question.questionId === "joined-source-promotion")?.metadata
+    ).toMatchObject({
       sourceSessionIds: ["atlas-confirmation"],
       semanticOutcome: {
         entity: "Atlas deployment",
@@ -39,7 +58,9 @@ describe("Dreaming scenario MemoryBench gate", () => {
     expect(getAvailableBenchmarks()).toContain("dreaming-scenarios")
     const benchmark = createBenchmark("dreaming-scenarios")
     await benchmark.load()
-    expect(benchmark.getGroundTruth("correction-and-contradiction")).toBe("Meridian now uses PostgreSQL.")
+    expect(benchmark.getGroundTruth("correction-and-contradiction")).toBe(
+      "Meridian now uses PostgreSQL."
+    )
   })
 
   it("rejects a source quote that is not grounded in a committed session", () => {

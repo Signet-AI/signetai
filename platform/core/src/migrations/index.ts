@@ -163,1309 +163,585 @@ import { up as dreamingCandidateScanIndex } from "./158-dreaming-candidate-scan-
 import { up as importAdmissionLedger } from "./160-import-admission-ledger";
 
 export type { Migration, MigrationArtifacts, MigrationDb } from "./contract";
+
+function defineMigration(
+	version: number,
+	name: string,
+	up: Migration["up"],
+	artifacts?: MigrationArtifacts,
+): Migration {
+	return { version, name, up, ...(artifacts === undefined ? {} : { artifacts }) };
+}
 export const MIGRATIONS: readonly Migration[] = [
-	{
-		version: 1,
-		name: "baseline",
-		up: baseline,
-		artifacts: { tables: ["memories", "conversations", "embeddings"] },
-	},
-	{
-		version: 2,
-		name: "pipeline-v2",
-		up: pipelineV2,
-		artifacts: {
-			tables: ["memory_history", "memory_jobs", "entities", "relations", "memory_entity_mentions"],
-		},
-	},
-	{
-		version: 3,
-		name: "unique-content-hash",
-		up: uniqueContentHash,
-	},
-	{
-		version: 4,
-		name: "history-actor-and-retention",
-		up: historyActorAndRetention,
-		artifacts: {
-			columns: [{ table: "memory_history", column: "actor_type" }],
-		},
-	},
-	{
-		version: 5,
-		name: "graph-extended",
-		up: graphExtended,
-		artifacts: {
-			columns: [{ table: "entities", column: "canonical_name" }],
-		},
-	},
-	{
-		version: 6,
-		name: "idempotency-key",
-		up: idempotencyKey,
-		artifacts: {
-			columns: [{ table: "memories", column: "idempotency_key" }],
-		},
-	},
-	{
-		version: 7,
-		name: "documents-and-connectors",
-		up: documentsAndConnectors,
-		artifacts: { tables: ["documents", "document_memories", "connectors"] },
-	},
-	{
-		version: 8,
-		name: "embeddings-unique-hash",
-		up: embeddingsUniqueHash,
-	},
-	{
-		version: 9,
-		name: "summary-jobs",
-		up: summaryJobs,
-		artifacts: { tables: ["summary_jobs"] },
-	},
-	{
-		version: 10,
-		name: "umap-cache",
-		up: umapCache,
-		artifacts: { tables: ["umap_cache"] },
-	},
-	{
-		version: 11,
-		name: "session-scores",
-		up: sessionScores,
-		artifacts: { tables: ["session_scores"] },
-	},
-	{
-		version: 12,
-		name: "scheduled-tasks",
-		up: scheduledTasks,
-		artifacts: { tables: ["scheduled_tasks", "task_runs"] },
-	},
-	{
-		version: 13,
-		name: "ingestion-tracking",
-		up: ingestionTracking,
-		artifacts: {
-			columns: [
-				{ table: "memories", column: "source_path" },
-				{ table: "memories", column: "source_section" },
-			],
-		},
-	},
-	{
-		version: 14,
-		name: "telemetry",
-		up: telemetry,
-		artifacts: { tables: ["telemetry_events"] },
-	},
-	{
-		version: 15,
-		name: "session-memories",
-		up: sessionMemories,
-		artifacts: {
-			tables: ["session_memories"],
-			columns: [
-				{ table: "session_scores", column: "confidence" },
-				{ table: "session_scores", column: "continuity_reasoning" },
-			],
-		},
-	},
-	{
-		version: 16,
-		name: "session-checkpoints",
-		up: sessionCheckpoints,
-		artifacts: { tables: ["session_checkpoints"] },
-	},
-	{
-		version: 17,
-		name: "task-skills",
-		up: taskSkills,
-		artifacts: {
-			columns: [{ table: "scheduled_tasks", column: "skill_name" }],
-		},
-	},
-	{
-		version: 18,
-		name: "skill-meta",
-		up: skillMeta,
-		artifacts: { tables: ["skill_meta"] },
-	},
-	{
-		version: 19,
-		name: "knowledge-structure",
-		up: knowledgeStructure,
-		artifacts: {
-			tables: ["entity_aspects", "entity_attributes", "entity_dependencies", "task_meta"],
-			columns: [{ table: "entities", column: "agent_id" }],
-		},
-	},
-	{
-		version: 20,
-		name: "session-structural-columns",
-		up: sessionStructuralColumns,
-		artifacts: {
-			columns: [
-				{ table: "session_memories", column: "entity_slot" },
-				{ table: "session_memories", column: "aspect_slot" },
-				{ table: "session_memories", column: "is_constraint" },
-				{ table: "session_memories", column: "structural_density" },
-			],
-		},
-	},
-	{
-		version: 21,
-		name: "checkpoint-structural",
-		up: checkpointStructural,
-		artifacts: {
-			columns: [{ table: "session_checkpoints", column: "focal_entity_ids" }],
-		},
-	},
-	{
-		version: 22,
-		name: "entity-pinning",
-		up: entityPinning,
-		artifacts: {
-			columns: [
-				{ table: "entities", column: "pinned" },
-				{ table: "entities", column: "pinned_at" },
-			],
-		},
-	},
-	{
-		version: 23,
-		name: "retired-scorer-gap",
-		up: retiredScorerGap23,
-	},
-	{
-		version: 24,
-		name: "retired-scorer-gap",
-		up: retiredScorerGap24,
-	},
-	{
-		version: 25,
-		name: "agent-feedback",
-		up: agentFeedback,
-		artifacts: {
-			columns: [{ table: "session_memories", column: "agent_relevance_score" }],
-		},
-	},
-	{
-		version: 26,
-		name: "retired-scorer-gap",
-		up: retiredScorerGap26,
-	},
-	{
-		version: 27,
-		name: "backfill-canonical-names",
-		up: backfillCanonicalNames,
-	},
-	{
-		version: 28,
-		name: "lossless-retention",
-		up: losslessRetention,
-	},
-	{
-		version: 29,
-		name: "session-summary-dag",
-		up: sessionSummaryDag,
-	},
-	{
-		version: 30,
-		name: "nullable-memory-job-memory-id",
-		up: nullableMemoryJobMemoryId,
-	},
-	{
-		version: 31,
-		name: "dependency-reason",
-		up: dependencyReason,
-		artifacts: {
-			columns: [
-				{ table: "entity_dependencies", column: "reason" },
-				{ table: "entities", column: "last_synthesized_at" },
-			],
-		},
-	},
-	{
-		version: 32,
-		name: "embeddings-vector-column",
-		up: embeddingsVectorColumn,
-		artifacts: {
-			columns: [{ table: "embeddings", column: "vector", optional: true }],
-		},
-	},
-	{
-		version: 33,
-		name: "scope",
-		up: scope,
-		artifacts: {
-			columns: [{ table: "memories", column: "scope" }],
-		},
-	},
-	{
-		version: 34,
-		name: "scope-aware-dedup",
-		up: scopeAwareDedup,
-	},
-	{
-		version: 35,
-		name: "entity-fts",
-		up: entityFts,
-	},
-	{
-		version: 36,
-		name: "dependency-confidence",
-		up: dependencyConfidence,
-		artifacts: {
-			columns: [{ table: "entity_dependencies", column: "confidence" }],
-		},
-	},
-	{
-		version: 37,
-		name: "entity-communities",
-		up: entityCommunities,
-		artifacts: {
-			tables: ["entity_communities"],
-			columns: [{ table: "entities", column: "community_id" }],
-		},
-	},
-	{
-		version: 38,
-		name: "memory-hints",
-		up: memoryHints,
-		artifacts: { tables: ["memory_hints"] },
-	},
-	{
-		version: 39,
-		name: "dedup-entity-dependencies",
-		up: dedupEntityDependencies,
-	},
-	{
-		version: 40,
-		name: "session-transcripts",
-		up: sessionTranscripts,
-		artifacts: { tables: ["session_transcripts"] },
-	},
-	{
-		version: 41,
-		name: "path-feedback",
-		up: pathFeedback,
-		artifacts: {
-			tables: [
-				"path_feedback_events",
-				"path_feedback_stats",
-				"entity_retrieval_stats",
-				"entity_cooccurrence",
-				"path_feedback_sessions",
-			],
-			columns: [{ table: "session_memories", column: "path_json" }],
-		},
-	},
-	{
-		version: 42,
-		name: "session-memories-agent-id",
-		up: sessionMemoriesAgentId,
-		artifacts: {
-			columns: [{ table: "session_memories", column: "agent_id" }],
-		},
-	},
-	{
-		version: 43,
-		name: "agents-table",
-		up: agentsTable,
-		artifacts: {
-			tables: ["agents"],
-			columns: [
-				{ table: "memories", column: "agent_id" },
-				{ table: "memories", column: "visibility" },
-			],
-		},
-	},
-	{
-		version: 44,
-		name: "memory-md-temporal-head",
-		up: memoryMdTemporalHead,
-		artifacts: {
-			columns: [
-				{ table: "session_summaries", column: "source_type" },
-				{ table: "session_summaries", column: "source_ref" },
-				{ table: "session_summaries", column: "meta_json" },
-			],
-		},
-	},
-	{
-		version: 45,
-		name: "lossless-working-memory-hardening",
-		up: losslessWorkingMemoryHardening,
-		artifacts: {
-			tables: ["session_transcripts_fts", "memory_md_heads"],
-			columns: [
-				{ table: "session_transcripts", column: "updated_at" },
-				{ table: "summary_jobs", column: "agent_id" },
-				{ table: "session_scores", column: "agent_id" },
-			],
-		},
-	},
-	{
-		version: 46,
-		name: "session-summary-uniqueness",
-		up: sessionSummaryUniqueness,
-	},
-	{
-		version: 47,
-		name: "agent-scoped-temporal-uniqueness",
-		up: agentScopedTemporalUniqueness,
-	},
-	{
-		version: 48,
-		name: "thread-heads",
-		up: threadHeads,
-		artifacts: {
-			tables: ["memory_thread_heads"],
-		},
-	},
-	{
-		version: 49,
-		name: "session-extract-cursors",
-		up: sessionExtractCursors,
-		artifacts: {
-			tables: ["session_extract_cursors"],
-		},
-	},
-	{
-		version: 50,
-		name: "related-to-audit",
-		up: relatedToAudit,
-		artifacts: {
-			tables: ["entity_dependency_history"],
-		},
-	},
-	{
-		version: 51,
-		name: "memory-md-rolling-window-lineage",
-		up: memoryMdRollingWindowLineage,
-		artifacts: {
-			tables: ["memory_artifacts", "memory_artifact_tombstones", "memory_artifacts_fts"],
-			columns: [
-				{ table: "summary_jobs", column: "session_id" },
-				{ table: "summary_jobs", column: "trigger" },
-				{ table: "summary_jobs", column: "captured_at" },
-				{ table: "summary_jobs", column: "started_at" },
-				{ table: "summary_jobs", column: "ended_at" },
-			],
-		},
-	},
-	{
-		version: 52,
-		name: "mcp-invocations",
-		up: mcpInvocations,
-	},
-	{
-		version: 53,
-		name: "skill-invocations",
-		up: skillInvocations,
-		artifacts: {
-			tables: ["skill_invocations"],
-		},
-	},
-	{
-		version: 54,
-		name: "task-agent-scope",
-		up: taskAgentScope,
-		artifacts: {
-			tables: ["task_scope_hints"],
-		},
-	},
-	{
-		version: 55,
-		name: "dreaming-state",
-		up: dreamingState,
-		artifacts: {
-			tables: ["dreaming_state", "dreaming_passes"],
-		},
-	},
-	{
-		version: 56,
-		name: "agent-scoped-content-hash",
-		up: agentScopedContentHash,
-	},
-	{
-		version: 57,
-		name: "memories-fts-tokenizer-repair",
-		up: memoriesFtsTokenizerRepair,
-	},
-	{
-		version: 58,
-		name: "knowledge-graph-indices",
-		up: knowledgeGraphIndices,
-	},
-	{
-		version: 59,
-		name: "entity-attribute-claim-key",
-		up: entityAttributeClaimKey,
-		artifacts: {
-			columns: [{ table: "entity_attributes", column: "claim_key" }],
-		},
-	},
-	{
-		version: 60,
-		name: "entity-attribute-group-key",
-		up: entityAttributeGroupKey,
-		artifacts: {
-			columns: [{ table: "entity_attributes", column: "group_key" }],
-		},
-	},
-	{
-		version: 61,
-		name: "memory-artifact-source-mtime",
-		up: memoryArtifactSourceMtime,
-		artifacts: {
-			columns: [{ table: "memory_artifacts", column: "source_mtime_ms" }],
-		},
-	},
-	{
-		version: 62,
-		name: "memory-artifact-soft-delete",
-		up: memoryArtifactSoftDelete,
-		artifacts: {
-			columns: [
-				{ table: "memory_artifacts", column: "is_deleted" },
-				{ table: "memory_artifacts", column: "deleted_at" },
-			],
-		},
-	},
-	{
-		version: 63,
-		name: "content-only-memories-fts-update",
-		up: contentOnlyMemoriesFtsUpdate,
-	},
-	{
-		version: 64,
-		name: "source-graph-provenance",
-		up: sourceGraphProvenance,
-		artifacts: {
-			columns: [
-				{ table: "entities", column: "source_path" },
-				{ table: "entity_communities", column: "source_path" },
-				{ table: "entity_attributes", column: "source_path" },
-				{ table: "entity_dependencies", column: "source_path" },
-			],
-		},
-	},
-	{
-		version: 65,
-		name: "source-embedding-agent-scope",
-		up: sourceEmbeddingAgentScope,
-		artifacts: {
-			columns: [{ table: "embeddings", column: "agent_id", optional: true }],
-		},
-	},
-	{
-		version: 66,
-		name: "memory-search-telemetry",
-		up: memorySearchTelemetry,
-		artifacts: {
-			tables: ["memory_search_telemetry"],
-		},
-	},
-	{
-		version: 67,
-		name: "ontology-proposals",
-		up: ontologyProposals,
-		artifacts: {
-			tables: ["ontology_proposals"],
-			columns: [
-				{ table: "entity_attributes", column: "proposal_id" },
-				{ table: "entity_attributes", column: "proposal_evidence" },
-				{ table: "entity_dependencies", column: "proposal_id" },
-				{ table: "entity_dependencies", column: "proposal_evidence" },
-			],
-		},
-	},
-	{
-		version: 68,
-		name: "daily-reflections",
-		up: dailyReflections,
-		artifacts: {
-			tables: ["daily_reflections"],
-		},
-	},
-	{
-		version: 69,
-		name: "daily-reflections-multiple-insights",
-		up: dailyReflectionsMultipleInsights,
-		artifacts: {
-			tables: ["daily_reflections"],
-		},
-	},
-	{
-		version: 70,
-		name: "ontology-control-plane-state",
-		up: ontologyControlPlaneState,
-		artifacts: {
-			columns: [
-				{ table: "entities", column: "status" },
-				{ table: "entity_aspects", column: "status" },
-				{ table: "entity_attributes", column: "version" },
-				{ table: "entity_attributes", column: "version_root_id" },
-				{ table: "entity_attributes", column: "previous_attribute_id" },
-				{ table: "entity_dependencies", column: "status" },
-			],
-		},
-	},
-	{
-		version: 71,
-		name: "epistemic-assertions",
-		up: epistemicAssertions,
-		artifacts: {
-			tables: ["epistemic_assertions"],
-		},
-	},
-	{
-		version: 72,
-		name: "agent-scoped-idempotency-key",
-		up: agentScopedIdempotencyKey,
-		artifacts: {
-			columns: [
-				{ table: "memories", column: "idempotency_key" },
-				{ table: "memories", column: "runtime_path" },
-			],
-		},
-	},
-	{
-		version: 73,
-		name: "recall-context-dedupe",
-		up: recallContextDedupe,
-		artifacts: {
-			tables: ["session_context_epochs", "session_recall_events"],
-		},
-	},
-	{
-		version: 74,
-		name: "aggregate-memory-links",
-		up: aggregateMemoryLinks,
-		artifacts: {
-			tables: ["aggregate_memory_sources"],
-		},
-	},
-	{
-		version: 75,
-		name: "memory-artifact-source-provenance",
-		up: memoryArtifactSourceProvenance,
-		artifacts: {
-			columns: [
-				{ table: "memory_artifacts", column: "source_id" },
-				{ table: "memory_artifacts", column: "source_root" },
-				{ table: "memory_artifacts", column: "source_external_id" },
-				{ table: "memory_artifacts", column: "source_parent_path" },
-				{ table: "memory_artifacts", column: "source_meta_json" },
-			],
-		},
-	},
-	{
-		version: 76,
-		name: "temporal-edges",
-		up: temporalEdges,
-		artifacts: {
-			tables: ["temporal_edges"],
-		},
-	},
-	{
-		version: 77,
-		name: "entity-aliases",
-		up: entityAliases,
-		artifacts: {
-			tables: ["entity_aliases"],
-		},
-	},
-	{
-		version: 78,
-		name: "api-keys",
-		up: apiKeys,
-		artifacts: {
-			tables: ["api_keys"],
-		},
-	},
-	{
-		version: 79,
-		name: "transcript-capture-jobs",
-		up: transcriptCaptureJobs,
-		artifacts: {
-			tables: ["transcript_capture_jobs"],
-		},
-	},
-	{
-		version: 80,
-		name: "document-scope-columns",
-		up: documentScopeColumns,
-		artifacts: {
-			columns: [
-				{ table: "documents", column: "agent_id" },
-				{ table: "documents", column: "project" },
-			],
-		},
-	},
-	{
-		version: 81,
-		name: "aggregate-evidence-sources",
-		up: aggregateEvidenceSources,
-		artifacts: {
-			tables: ["aggregate_evidence_sources"],
-		},
-	},
-	{
-		version: 82,
-		name: "skill-invocations-harness",
-		up: skillInvocationsHarness,
-		artifacts: {
-			columns: [
-				{ table: "skill_invocations", column: "harness" },
-				{ table: "skill_invocations", column: "tool_use_id" },
-			],
-		},
-	},
-	{
-		version: 83,
-		name: "memory-lifecycle-repair",
-		up: memoryLifecycleRepair,
-		artifacts: {
-			tables: ["transcript_capture_jobs", "aggregate_evidence_sources", "entity_dependencies"],
-			columns: [
-				{ table: "documents", column: "agent_id" },
-				{ table: "documents", column: "project" },
-				{ table: "memories", column: "superseded_by" },
-				{ table: "memories", column: "superseded_at" },
-				{ table: "memories", column: "superseded_reason" },
-			],
-		},
-	},
-	{
-		version: 84,
-		name: "legacy-markdown-import-state",
-		up: legacyMarkdownImportState,
-		artifacts: {
-			tables: ["legacy_markdown_imports", "legacy_markdown_chunks"],
-		},
-	},
-	{
-		version: 85,
-		name: "backfill-relations-to-dependencies",
-		up: backfillRelationsToDependencies,
-		artifacts: {
-			tables: ["entity_dependencies"],
-		},
-	},
-	{
-		version: 86,
-		name: "summary-jobs-content-hash",
-		up: summaryJobsContentHash,
-		artifacts: {
-			columns: [{ table: "summary_jobs", column: "content_hash" }],
-		},
-	},
-	{
-		version: 87,
-		name: "summary-jobs-boundary-reason",
-		up: summaryJobsBoundaryReason,
-		artifacts: {
-			columns: [{ table: "summary_jobs", column: "boundary_reason" }],
-		},
-	},
-	{
-		version: 88,
-		name: "transcript-recovery-files",
-		up: transcriptRecoveryFiles,
-		artifacts: {
-			tables: ["transcript_recovery_files"],
-		},
-	},
-	{
-		version: 89,
-		name: "job-cancellations",
-		up: jobCancellations,
-		artifacts: {
-			tables: ["job_cancellations"],
-		},
-	},
-	{
-		version: 90,
-		name: "job-archive",
-		up: jobArchive,
-		artifacts: {
-			tables: ["job_archive"],
-		},
-	},
-	{
-		version: 91,
-		name: "embedding-index-generations",
-		up: embeddingIndexGenerations,
-		artifacts: { tables: ["embedding_index_state"] },
-	},
-	{
-		version: 92,
-		name: "embedding-staging-store",
-		up: embeddingStagingStore,
-		artifacts: { tables: ["embeddings_staging"] },
-	},
-	{
-		version: 93,
-		name: "dreaming-evidence-cursor",
-		up: dreamingEvidenceCursor,
-		artifacts: { columns: [{ table: "dreaming_state", column: "evidence_cursor" }] },
-	},
-	{
-		version: 94,
-		name: "memory-kind",
-		up: memoryKind,
-		artifacts: {
-			columns: [
-				{ table: "memories", column: "memory_kind" },
-				{ table: "memories", column: "evidence_meta" },
-			],
-		},
-	},
-	{
-		version: 95,
-		name: "compaction-recall-projections",
-		up: compactionRecallProjections,
-	},
-	{
-		version: 96,
-		name: "retire-legacy-ingestion",
-		up: retireLegacyIngestion,
-	},
-	{
-		version: 97,
-		name: "dreaming-failure-backoff",
-		up: dreamingFailureBackoff,
-		artifacts: { columns: [{ table: "dreaming_state", column: "last_failure_at" }] },
-	},
-	{
-		version: 98,
-		name: "dreaming-evidence-exclusions",
-		up: dreamingEvidenceExclusions,
-		artifacts: { tables: ["dreaming_evidence_exclusions"] },
-	},
-	{
-		version: 99,
-		name: "dreaming-tool-calls",
-		up: dreamingToolCalls,
-		artifacts: { tables: ["dreaming_tool_calls"] },
-	},
-	{
-		version: 100,
-		name: "dreaming-runbook",
-		up: dreamingRunbook,
-		artifacts: {
-			columns: [
-				{ table: "dreaming_passes", column: "evidence_window_json" },
-				{ table: "dreaming_passes", column: "runbook_json" },
-			],
-		},
-	},
-	{
-		version: 101,
-		name: "dreaming-attention",
-		up: dreamingAttention,
-		artifacts: { tables: ["dreaming_attention"] },
-	},
-	{
-		version: 102,
-		name: "attribute-semantic-memories",
-		up: attributeSemanticMemories,
-	},
-	{
-		version: 103,
-		name: "semantic-memory-kind",
-		up: semanticMemoryKind,
-	},
-	{
-		version: 104,
-		name: "derived-memory-provenance",
-		up: derivedMemoryProvenance,
-		artifacts: {
-			tables: ["derived_memory_sources"],
-			columns: [{ table: "memories", column: "stale_at" }],
-		},
-	},
-	{
-		version: 105,
-		name: "agent-scoped-entity-name",
-		up: agentScopedEntityName,
-	},
-	{
-		version: 106,
-		name: "memory-review-after",
-		up: memoryReviewAfter,
-		artifacts: {
-			columns: [{ table: "memories", column: "review_after" }],
-		},
-	},
-	{
-		version: 107,
-		name: "dreaming-pass-usage",
-		up: dreamingPassUsage,
-		artifacts: {
-			columns: [
-				{ table: "dreaming_passes", column: "tokens_input" },
-				{ table: "dreaming_passes", column: "tokens_output" },
-				{ table: "dreaming_passes", column: "tokens_cache_read" },
-				{ table: "dreaming_passes", column: "tokens_cache_write" },
-				{ table: "dreaming_passes", column: "tokens_cost" },
-			],
-		},
-	},
-	{
-		version: 108,
-		name: "embedding-usage",
-		up: embeddingUsage,
-		artifacts: {
-			tables: ["embedding_usage"],
-		},
-	},
-	{
-		version: 109,
-		name: "telemetry-install",
-		up: telemetryInstall,
-		artifacts: {
-			tables: ["telemetry_install"],
-		},
-	},
-	{
-		version: 110,
-		name: "memory-mention-join-index",
-		up: memoryMentionJoinIndex,
-	},
-	{
-		version: 111,
-		name: "telemetry-first-use",
-		up: telemetryFirstUse,
-		artifacts: {
-			columns: [
-				{ table: "telemetry_install", column: "first_remember_at" },
-				{ table: "telemetry_install", column: "first_recall_at" },
-			],
-		},
-	},
-	{
-		version: 112,
-		name: "telemetry-queue-ownership",
-		up: telemetryQueueOwnership,
-		artifacts: {
-			columns: [
-				{ table: "telemetry_events", column: "source" },
-				{ table: "telemetry_events", column: "claim_token" },
-				{ table: "telemetry_events", column: "claimed_at" },
-			],
-		},
-	},
-	{
-		version: 113,
-		name: "session-claims",
-		up: sessionClaims,
-		artifacts: {
-			tables: ["session_claims"],
-			columns: [
-				{ table: "session_claims", column: "agent_id" },
-				{ table: "session_claims", column: "harness" },
-				{ table: "session_claims", column: "expires_at" },
-				{ table: "session_claims", column: "end_marker" },
-			],
-		},
-	},
-	{
-		version: 114,
-		name: "memory-traversal-hydration-index",
-		up: memoryTraversalHydrationIndex,
-	},
-	{
-		version: 115,
-		name: "cross-agent-message-notifications",
-		up: crossAgentMessageNotifications,
-		artifacts: {
-			tables: ["cross_agent_messages", "cross_agent_message_receipts"],
-		},
-	},
-	{
-		version: 116,
-		name: "acp-delivery-reconciliation",
-		up: acpDeliveryReconciliation,
-		artifacts: {
-			columns: [
-				{ table: "cross_agent_messages", column: "delivery_state" },
-				{ table: "cross_agent_messages", column: "delivery_attempt_id" },
-				{ table: "cross_agent_messages", column: "delivery_lease_expires_at" },
-				{ table: "cross_agent_messages", column: "acp_base_url" },
-				{ table: "cross_agent_messages", column: "acp_target_agent_name" },
-			],
-		},
-	},
-	{
-		version: 117,
-		name: "retire-summary-worker",
-		up: retireSummaryWorker,
-		artifacts: {
-			columns: [
-				{ table: "session_transcripts", column: "completed_at" },
-				{ table: "session_transcripts", column: "content_hash" },
-			],
-		},
-	},
-	{
-		version: 118,
-		name: "queue-pressure-indices",
-		up: queuePressureIndices,
-	},
-	{
-		version: 119,
-		name: "telemetry-version-observation",
-		up: telemetryVersionObservation,
-		artifacts: { columns: [{ table: "telemetry_install", column: "last_seen_version" }] },
-	},
-	{
-		version: 120,
-		name: "source-lifecycle-telemetry",
-		up: sourceLifecycleTelemetry,
-		artifacts: { tables: ["source_lifecycle_state"] },
-	},
-	{
-		version: 121,
-		name: "telemetry-delivery-health",
-		up: telemetryDeliveryHealth,
-		artifacts: {
-			tables: ["telemetry_delivery_state"],
-			columns: [
-				{ table: "telemetry_events", column: "delivery_attempts" },
-				{ table: "telemetry_events", column: "last_attempt_at" },
-				{ table: "telemetry_events", column: "sent_at" },
-				{ table: "telemetry_events", column: "last_failure_code" },
-			],
-		},
-	},
-	{
-		version: 122,
-		name: "dreaming-evidence-retry",
-		up: dreamingEvidenceRetry,
-		artifacts: {
-			columns: [
-				{ table: "dreaming_evidence_exclusions", column: "failure_class" },
-				{ table: "dreaming_evidence_exclusions", column: "source_fingerprint" },
-				{ table: "dreaming_evidence_exclusions", column: "retry_count" },
-				{ table: "dreaming_evidence_exclusions", column: "last_requeued_at" },
-			],
-		},
-	},
-	{
-		version: 123,
-		name: "embedding-index-failures",
-		up: embeddingIndexFailures,
-		artifacts: { tables: ["embedding_index_failures"] },
-	},
-	{
-		version: 124,
-		name: "import-derived-lifecycle",
-		up: importedDerivedLifecycle,
-		artifacts: {
-			tables: ["imported_source_lifecycle"],
-		},
-	},
-	{
-		version: 125,
-		name: "memory-content-safety",
-		up: memoryContentSafety,
-		artifacts: { tables: ["memory_content_safety"] },
-	},
-	{
-		version: 126,
-		name: "dreaming-surprisal-attention",
-		up: dreamingSurprisalAttention,
-		artifacts: { tables: ["dreaming_attention"] },
-	},
-	{
-		version: 127,
-		name: "ontology-contradictions",
-		up: ontologyContradictions,
-		artifacts: { tables: ["ontology_contradictions"] },
-	},
-	{
-		version: 128,
-		name: "bounded-queue-diagnostics",
-		up: boundedQueueDiagnostics,
-	},
-	{
-		version: 129,
-		name: "retire-structural-jobs",
-		up: retireStructuralJobs,
-	},
-	{
-		version: 130,
-		name: "embedding-repair-state",
-		up: embeddingRepairState,
-		artifacts: { tables: ["embedding_repair_budget", "embedding_repair_backoff"] },
-	},
-	{
-		version: 131,
-		name: "dreaming-evidence-consumption",
-		up: dreamingEvidenceConsumption,
-		artifacts: { tables: ["dreaming_evidence_consumption"] },
-	},
-	{
-		version: 132,
-		name: "observer-scoped-epistemic-assertions",
-		up: observerScopedEpistemicAssertions,
-		artifacts: { tables: ["epistemic_assertions"] },
-	},
-	{
-		version: 133,
-		name: "dreaming-memory-head",
-		up: dreamingMemoryHead,
-		artifacts: { tables: ["memory_head_revisions", "memory_head_entries", "memory_head_revision_entries"] },
-	},
-	{
-		version: 134,
-		name: "scope-memory-head-entries",
-		up: scopeMemoryHeadEntries,
-		artifacts: { tables: ["memory_head_entries"] },
-	},
-	{
-		version: 135,
-		name: "memory-head-publication",
-		up: memoryHeadPublication,
-		artifacts: { tables: ["memory_head_publications"] },
-	},
-	{
-		version: 136,
-		name: "memory-head-revisions",
-		up: memoryHeadRevisions,
-		artifacts: { tables: ["memory_head_revisions"] },
-	},
-	{
-		version: 137,
-		name: "dreaming-head-manifest",
-		up: dreamingHeadManifest,
-		artifacts: {
-			columns: [
-				{ table: "dreaming_passes", column: "head_revision" },
-				{ table: "dreaming_passes", column: "head_hash" },
-			],
-		},
-	},
-	{
-		version: 138,
-		name: "bounded-status-projections",
-		up: boundedStatusProjections,
-		artifacts: {
-			tables: ["transcript_capture_status", "memories_duplicate_hash_counts", "memories_diagnostics_state"],
-		},
-	},
-	{
-		version: 139,
-		name: "native-source-sync-state",
-		up: nativeSourceSyncState,
-		artifacts: { tables: ["native_source_sync_state"] },
-	},
-	{
-		version: 140,
-		name: "transcript-recovery-frontier",
-		up: transcriptRecoveryFrontier,
-		artifacts: { tables: ["transcript_recovery_frontiers"] },
-	},
-	{
-		version: 141,
-		name: "source-sync-checkpoints",
-		up: sourceSyncCheckpoints,
-		artifacts: { tables: ["source_sync_checkpoints"] },
-	},
-	{
-		version: 142,
-		name: "source-sync-frontier",
-		up: sourceSyncFrontier,
-		artifacts: { columns: [{ table: "source_sync_checkpoints", column: "frontier" }] },
-	},
-	{
-		version: 143,
-		name: "embedding-index-progress",
-		up: embeddingIndexProgress,
-		artifacts: {
-			columns: [
-				{ table: "embedding_index_state", column: "migration_phase" },
-				{ table: "embedding_index_state", column: "progress_staged" },
-				{ table: "embedding_index_state", column: "progress_total" },
-				{ table: "embedding_index_state", column: "projection_cursor_last_id" },
-				{ table: "embedding_index_state", column: "projection_cursor_slot" },
-				{ table: "embedding_index_state", column: "no_progress_ticks" },
-				{ table: "embedding_index_state", column: "provider_endpoint" },
-			],
-		},
-	},
-	{
-		version: 144,
-		name: "memory-job-lease-token",
-		up: memoryJobLeaseToken,
-		artifacts: { columns: [{ table: "memory_jobs", column: "lease_token" }] },
-	},
-	{
-		version: 145,
-		name: "dreaming-evidence-reviews",
-		up: dreamingEvidenceReviews,
-		artifacts: { tables: ["dreaming_evidence_reviews"] },
-	},
-	{
-		version: 146,
-		name: "source-transcript-import",
-		up: sourceTranscriptImport,
-		artifacts: {
-			tables: [
-				"source_import_jobs",
-				"source_import_files",
-				"source_import_records",
-				"transcript_import_conversations",
-				"source_import_record_attempts",
-			],
-			columns: [
-				{ table: "session_transcripts", column: "source_id" },
-				{ table: "session_transcripts", column: "source_record_id" },
-				{ table: "session_transcripts", column: "source_meta_json" },
-			],
-		},
-	},
-	{
-		version: 147,
-		name: "source-import-replay-file-slots",
-		up: sourceImportReplayFileSlots,
-		artifacts: { tables: ["source_import_files"] },
-	},
-	{
-		version: 148,
-		name: "source-import-attempt-provenance",
-		up: sourceImportAttemptProvenance,
-		artifacts: { columns: [{ table: "source_import_record_attempts", column: "source_id" }] },
-	},
-	{
-		version: 149,
-		name: "transcript-import-state-machine",
-		up: transcriptImportStateMachine,
-		artifacts: {
-			columns: [
-				{ table: "source_import_jobs", column: "duplicate_mode" },
-				{ table: "source_import_jobs", column: "next_attempt_at" },
-				{ table: "source_import_files", column: "error" },
-			],
-		},
-	},
-	{
-		version: 150,
-		name: "memory-head-freshness",
-		up: memoryHeadFreshness,
-		artifacts: {
-			columns: [
-				{ table: "memory_md_heads", column: "is_current" },
-				{ table: "dreaming_passes", column: "head_base_revision" },
-			],
-		},
-	},
-	{
-		version: 151,
-		name: "transcript-import-bytes",
-		up: transcriptImportBytes,
-		artifacts: {
-			tables: [
-				"source_import_chunks",
-				"source_import_capacity",
-				"source_import_migrations",
-				"source_import_migration_streams",
-				"source_import_migration_counts",
-			],
-			columns: [
-				{ table: "source_import_files", column: "storage_state" },
-				{ table: "source_import_files", column: "upload_generation" },
-				{ table: "source_import_files", column: "upload_offset" },
-				{ table: "source_import_files", column: "upload_size" },
-				{ table: "source_import_files", column: "upload_digest" },
-				...["checkpoint_line_number", "reserved_bytes", "original_path"].map((column) => ({
-					table: "source_import_files",
-					column,
-				})),
-				...["retry_count", "cleanup_state", "retry_cursor", "retry_requested"].map((column) => ({
-					table: "source_import_jobs",
-					column,
-				})),
-			],
-		},
-	},
-	{
-		version: 152,
-		name: "memory-artifact-sha-index",
-		up: memoryArtifactShaIndex,
-		artifacts: { indexes: ["idx_memory_artifacts_agent_sha"] },
-	},
-	{
-		version: 153,
-		name: "vector-repair-checkpoints",
-		up: vectorRepairCheckpoints,
-		artifacts: { tables: ["vector_repair_checkpoints"] },
-	},
-	{
-		version: 154,
-		name: "transcript-capture-source-identity",
-		up: transcriptCaptureSourceIdentity,
-		artifacts: {
-			columns: [
-				{ table: "transcript_capture_jobs", column: "source_identity" },
-				{ table: "transcript_capture_jobs", column: "source_sha256" },
-				{ table: "transcript_capture_jobs", column: "source_size_bytes" },
-				{ table: "transcript_capture_jobs", column: "source_mtime_ms" },
-				{ table: "transcript_capture_jobs", column: "source_format" },
-				{ table: "transcript_capture_jobs", column: "audit_path" },
-			],
-		},
-	},
-	{
-		version: 155,
-		name: "source-sync-failures",
-		up: sourceSyncFailures,
-		artifacts: { tables: ["source_sync_failures"], indexes: ["idx_source_sync_failures_active"] },
-	},
-	{
-		version: 156,
-		name: "embedding-repair-checkpoints",
-		up: embeddingRepairCheckpoints,
-		artifacts: { tables: ["embedding_repair_checkpoints"] },
-	},
-	{
-		version: 157,
-		name: "embedding-repair-progress",
-		up: embeddingRepairProgress,
-		artifacts: {
-			tables: ["embedding_repair_progress"],
-			columns: [{ table: "embedding_repair_checkpoints", column: "profile_fingerprint" }],
-		},
-	},
-	{
-		version: 158,
-		name: "dreaming-candidate-scan-index",
-		up: dreamingCandidateScanIndex,
-		artifacts: { indexes: ["idx_memories_agent_kind"] },
-	},
-	{
-		version: 159,
-		name: "retire-obsolete-invocation-ledger",
-		up: retireObsoleteInvocationLedger,
-	},
-	{
-		version: 160,
-		name: "import-admission-ledger",
-		up: importAdmissionLedger,
-		artifacts: {
-			tables: ["import_admission_ledger", "import_admission_events"],
-			indexes: ["idx_import_admission_status", "idx_import_admission_events_key"],
-			columns: [
-				...["workspace_id", "request_fingerprint", "source_id", "lease_token", "lease_expires_at", "attempt_count"].map(
-					(column) => ({ table: "import_admission_ledger", column }),
-				),
-			],
-		},
-	},
+	defineMigration(1, "baseline", baseline, { tables: ["memories", "conversations", "embeddings"] }),
+	defineMigration(2, "pipeline-v2", pipelineV2, {
+		tables: ["memory_history", "memory_jobs", "entities", "relations", "memory_entity_mentions"],
+	}),
+	defineMigration(3, "unique-content-hash", uniqueContentHash),
+	defineMigration(4, "history-actor-and-retention", historyActorAndRetention, {
+		columns: [{ table: "memory_history", column: "actor_type" }],
+	}),
+	defineMigration(5, "graph-extended", graphExtended, {
+		columns: [{ table: "entities", column: "canonical_name" }],
+	}),
+	defineMigration(6, "idempotency-key", idempotencyKey, {
+		columns: [{ table: "memories", column: "idempotency_key" }],
+	}),
+	defineMigration(7, "documents-and-connectors", documentsAndConnectors, {
+		tables: ["documents", "document_memories", "connectors"],
+	}),
+	defineMigration(8, "embeddings-unique-hash", embeddingsUniqueHash),
+	defineMigration(9, "summary-jobs", summaryJobs, { tables: ["summary_jobs"] }),
+	defineMigration(10, "umap-cache", umapCache, { tables: ["umap_cache"] }),
+	defineMigration(11, "session-scores", sessionScores, { tables: ["session_scores"] }),
+	defineMigration(12, "scheduled-tasks", scheduledTasks, { tables: ["scheduled_tasks", "task_runs"] }),
+	defineMigration(13, "ingestion-tracking", ingestionTracking, {
+		columns: [
+			{ table: "memories", column: "source_path" },
+			{ table: "memories", column: "source_section" },
+		],
+	}),
+	defineMigration(14, "telemetry", telemetry, { tables: ["telemetry_events"] }),
+	defineMigration(15, "session-memories", sessionMemories, {
+		tables: ["session_memories"],
+		columns: [
+			{ table: "session_scores", column: "confidence" },
+			{ table: "session_scores", column: "continuity_reasoning" },
+		],
+	}),
+	defineMigration(16, "session-checkpoints", sessionCheckpoints, { tables: ["session_checkpoints"] }),
+	defineMigration(17, "task-skills", taskSkills, {
+		columns: [{ table: "scheduled_tasks", column: "skill_name" }],
+	}),
+	defineMigration(18, "skill-meta", skillMeta, { tables: ["skill_meta"] }),
+	defineMigration(19, "knowledge-structure", knowledgeStructure, {
+		tables: ["entity_aspects", "entity_attributes", "entity_dependencies", "task_meta"],
+		columns: [{ table: "entities", column: "agent_id" }],
+	}),
+	defineMigration(20, "session-structural-columns", sessionStructuralColumns, {
+		columns: [
+			{ table: "session_memories", column: "entity_slot" },
+			{ table: "session_memories", column: "aspect_slot" },
+			{ table: "session_memories", column: "is_constraint" },
+			{ table: "session_memories", column: "structural_density" },
+		],
+	}),
+	defineMigration(21, "checkpoint-structural", checkpointStructural, {
+		columns: [{ table: "session_checkpoints", column: "focal_entity_ids" }],
+	}),
+	defineMigration(22, "entity-pinning", entityPinning, {
+		columns: [
+			{ table: "entities", column: "pinned" },
+			{ table: "entities", column: "pinned_at" },
+		],
+	}),
+	defineMigration(23, "retired-scorer-gap", retiredScorerGap23),
+	defineMigration(24, "retired-scorer-gap", retiredScorerGap24),
+	defineMigration(25, "agent-feedback", agentFeedback, {
+		columns: [{ table: "session_memories", column: "agent_relevance_score" }],
+	}),
+	defineMigration(26, "retired-scorer-gap", retiredScorerGap26),
+	defineMigration(27, "backfill-canonical-names", backfillCanonicalNames),
+	defineMigration(28, "lossless-retention", losslessRetention),
+	defineMigration(29, "session-summary-dag", sessionSummaryDag),
+	defineMigration(30, "nullable-memory-job-memory-id", nullableMemoryJobMemoryId),
+	defineMigration(31, "dependency-reason", dependencyReason, {
+		columns: [
+			{ table: "entity_dependencies", column: "reason" },
+			{ table: "entities", column: "last_synthesized_at" },
+		],
+	}),
+	defineMigration(32, "embeddings-vector-column", embeddingsVectorColumn, {
+		columns: [{ table: "embeddings", column: "vector", optional: true }],
+	}),
+	defineMigration(33, "scope", scope, {
+		columns: [{ table: "memories", column: "scope" }],
+	}),
+	defineMigration(34, "scope-aware-dedup", scopeAwareDedup),
+	defineMigration(35, "entity-fts", entityFts),
+	defineMigration(36, "dependency-confidence", dependencyConfidence, {
+		columns: [{ table: "entity_dependencies", column: "confidence" }],
+	}),
+	defineMigration(37, "entity-communities", entityCommunities, {
+		tables: ["entity_communities"],
+		columns: [{ table: "entities", column: "community_id" }],
+	}),
+	defineMigration(38, "memory-hints", memoryHints, { tables: ["memory_hints"] }),
+	defineMigration(39, "dedup-entity-dependencies", dedupEntityDependencies),
+	defineMigration(40, "session-transcripts", sessionTranscripts, { tables: ["session_transcripts"] }),
+	defineMigration(41, "path-feedback", pathFeedback, {
+		tables: [
+			"path_feedback_events",
+			"path_feedback_stats",
+			"entity_retrieval_stats",
+			"entity_cooccurrence",
+			"path_feedback_sessions",
+		],
+		columns: [{ table: "session_memories", column: "path_json" }],
+	}),
+	defineMigration(42, "session-memories-agent-id", sessionMemoriesAgentId, {
+		columns: [{ table: "session_memories", column: "agent_id" }],
+	}),
+	defineMigration(43, "agents-table", agentsTable, {
+		tables: ["agents"],
+		columns: [
+			{ table: "memories", column: "agent_id" },
+			{ table: "memories", column: "visibility" },
+		],
+	}),
+	defineMigration(44, "memory-md-temporal-head", memoryMdTemporalHead, {
+		columns: [
+			{ table: "session_summaries", column: "source_type" },
+			{ table: "session_summaries", column: "source_ref" },
+			{ table: "session_summaries", column: "meta_json" },
+		],
+	}),
+	defineMigration(45, "lossless-working-memory-hardening", losslessWorkingMemoryHardening, {
+		tables: ["session_transcripts_fts", "memory_md_heads"],
+		columns: [
+			{ table: "session_transcripts", column: "updated_at" },
+			{ table: "summary_jobs", column: "agent_id" },
+			{ table: "session_scores", column: "agent_id" },
+		],
+	}),
+	defineMigration(46, "session-summary-uniqueness", sessionSummaryUniqueness),
+	defineMigration(47, "agent-scoped-temporal-uniqueness", agentScopedTemporalUniqueness),
+	defineMigration(48, "thread-heads", threadHeads, {
+		tables: ["memory_thread_heads"],
+	}),
+	defineMigration(49, "session-extract-cursors", sessionExtractCursors, {
+		tables: ["session_extract_cursors"],
+	}),
+	defineMigration(50, "related-to-audit", relatedToAudit, {
+		tables: ["entity_dependency_history"],
+	}),
+	defineMigration(51, "memory-md-rolling-window-lineage", memoryMdRollingWindowLineage, {
+		tables: ["memory_artifacts", "memory_artifact_tombstones", "memory_artifacts_fts"],
+		columns: [
+			{ table: "summary_jobs", column: "session_id" },
+			{ table: "summary_jobs", column: "trigger" },
+			{ table: "summary_jobs", column: "captured_at" },
+			{ table: "summary_jobs", column: "started_at" },
+			{ table: "summary_jobs", column: "ended_at" },
+		],
+	}),
+	defineMigration(52, "mcp-invocations", mcpInvocations),
+	defineMigration(53, "skill-invocations", skillInvocations, {
+		tables: ["skill_invocations"],
+	}),
+	defineMigration(54, "task-agent-scope", taskAgentScope, {
+		tables: ["task_scope_hints"],
+	}),
+	defineMigration(55, "dreaming-state", dreamingState, {
+		tables: ["dreaming_state", "dreaming_passes"],
+	}),
+	defineMigration(56, "agent-scoped-content-hash", agentScopedContentHash),
+	defineMigration(57, "memories-fts-tokenizer-repair", memoriesFtsTokenizerRepair),
+	defineMigration(58, "knowledge-graph-indices", knowledgeGraphIndices),
+	defineMigration(59, "entity-attribute-claim-key", entityAttributeClaimKey, {
+		columns: [{ table: "entity_attributes", column: "claim_key" }],
+	}),
+	defineMigration(60, "entity-attribute-group-key", entityAttributeGroupKey, {
+		columns: [{ table: "entity_attributes", column: "group_key" }],
+	}),
+	defineMigration(61, "memory-artifact-source-mtime", memoryArtifactSourceMtime, {
+		columns: [{ table: "memory_artifacts", column: "source_mtime_ms" }],
+	}),
+	defineMigration(62, "memory-artifact-soft-delete", memoryArtifactSoftDelete, {
+		columns: [
+			{ table: "memory_artifacts", column: "is_deleted" },
+			{ table: "memory_artifacts", column: "deleted_at" },
+		],
+	}),
+	defineMigration(63, "content-only-memories-fts-update", contentOnlyMemoriesFtsUpdate),
+	defineMigration(64, "source-graph-provenance", sourceGraphProvenance, {
+		columns: [
+			{ table: "entities", column: "source_path" },
+			{ table: "entity_communities", column: "source_path" },
+			{ table: "entity_attributes", column: "source_path" },
+			{ table: "entity_dependencies", column: "source_path" },
+		],
+	}),
+	defineMigration(65, "source-embedding-agent-scope", sourceEmbeddingAgentScope, {
+		columns: [{ table: "embeddings", column: "agent_id", optional: true }],
+	}),
+	defineMigration(66, "memory-search-telemetry", memorySearchTelemetry, {
+		tables: ["memory_search_telemetry"],
+	}),
+	defineMigration(67, "ontology-proposals", ontologyProposals, {
+		tables: ["ontology_proposals"],
+		columns: [
+			{ table: "entity_attributes", column: "proposal_id" },
+			{ table: "entity_attributes", column: "proposal_evidence" },
+			{ table: "entity_dependencies", column: "proposal_id" },
+			{ table: "entity_dependencies", column: "proposal_evidence" },
+		],
+	}),
+	defineMigration(68, "daily-reflections", dailyReflections, {
+		tables: ["daily_reflections"],
+	}),
+	defineMigration(69, "daily-reflections-multiple-insights", dailyReflectionsMultipleInsights, {
+		tables: ["daily_reflections"],
+	}),
+	defineMigration(70, "ontology-control-plane-state", ontologyControlPlaneState, {
+		columns: [
+			{ table: "entities", column: "status" },
+			{ table: "entity_aspects", column: "status" },
+			{ table: "entity_attributes", column: "version" },
+			{ table: "entity_attributes", column: "version_root_id" },
+			{ table: "entity_attributes", column: "previous_attribute_id" },
+			{ table: "entity_dependencies", column: "status" },
+		],
+	}),
+	defineMigration(71, "epistemic-assertions", epistemicAssertions, {
+		tables: ["epistemic_assertions"],
+	}),
+	defineMigration(72, "agent-scoped-idempotency-key", agentScopedIdempotencyKey, {
+		columns: [
+			{ table: "memories", column: "idempotency_key" },
+			{ table: "memories", column: "runtime_path" },
+		],
+	}),
+	defineMigration(73, "recall-context-dedupe", recallContextDedupe, {
+		tables: ["session_context_epochs", "session_recall_events"],
+	}),
+	defineMigration(74, "aggregate-memory-links", aggregateMemoryLinks, {
+		tables: ["aggregate_memory_sources"],
+	}),
+	defineMigration(75, "memory-artifact-source-provenance", memoryArtifactSourceProvenance, {
+		columns: [
+			{ table: "memory_artifacts", column: "source_id" },
+			{ table: "memory_artifacts", column: "source_root" },
+			{ table: "memory_artifacts", column: "source_external_id" },
+			{ table: "memory_artifacts", column: "source_parent_path" },
+			{ table: "memory_artifacts", column: "source_meta_json" },
+		],
+	}),
+	defineMigration(76, "temporal-edges", temporalEdges, {
+		tables: ["temporal_edges"],
+	}),
+	defineMigration(77, "entity-aliases", entityAliases, {
+		tables: ["entity_aliases"],
+	}),
+	defineMigration(78, "api-keys", apiKeys, {
+		tables: ["api_keys"],
+	}),
+	defineMigration(79, "transcript-capture-jobs", transcriptCaptureJobs, {
+		tables: ["transcript_capture_jobs"],
+	}),
+	defineMigration(80, "document-scope-columns", documentScopeColumns, {
+		columns: [
+			{ table: "documents", column: "agent_id" },
+			{ table: "documents", column: "project" },
+		],
+	}),
+	defineMigration(81, "aggregate-evidence-sources", aggregateEvidenceSources, {
+		tables: ["aggregate_evidence_sources"],
+	}),
+	defineMigration(82, "skill-invocations-harness", skillInvocationsHarness, {
+		columns: [
+			{ table: "skill_invocations", column: "harness" },
+			{ table: "skill_invocations", column: "tool_use_id" },
+		],
+	}),
+	defineMigration(83, "memory-lifecycle-repair", memoryLifecycleRepair, {
+		tables: ["transcript_capture_jobs", "aggregate_evidence_sources", "entity_dependencies"],
+		columns: [
+			{ table: "documents", column: "agent_id" },
+			{ table: "documents", column: "project" },
+			{ table: "memories", column: "superseded_by" },
+			{ table: "memories", column: "superseded_at" },
+			{ table: "memories", column: "superseded_reason" },
+		],
+	}),
+	defineMigration(84, "legacy-markdown-import-state", legacyMarkdownImportState, {
+		tables: ["legacy_markdown_imports", "legacy_markdown_chunks"],
+	}),
+	defineMigration(85, "backfill-relations-to-dependencies", backfillRelationsToDependencies, {
+		tables: ["entity_dependencies"],
+	}),
+	defineMigration(86, "summary-jobs-content-hash", summaryJobsContentHash, {
+		columns: [{ table: "summary_jobs", column: "content_hash" }],
+	}),
+	defineMigration(87, "summary-jobs-boundary-reason", summaryJobsBoundaryReason, {
+		columns: [{ table: "summary_jobs", column: "boundary_reason" }],
+	}),
+	defineMigration(88, "transcript-recovery-files", transcriptRecoveryFiles, {
+		tables: ["transcript_recovery_files"],
+	}),
+	defineMigration(89, "job-cancellations", jobCancellations, {
+		tables: ["job_cancellations"],
+	}),
+	defineMigration(90, "job-archive", jobArchive, {
+		tables: ["job_archive"],
+	}),
+	defineMigration(91, "embedding-index-generations", embeddingIndexGenerations, { tables: ["embedding_index_state"] }),
+	defineMigration(92, "embedding-staging-store", embeddingStagingStore, { tables: ["embeddings_staging"] }),
+	defineMigration(93, "dreaming-evidence-cursor", dreamingEvidenceCursor, {
+		columns: [{ table: "dreaming_state", column: "evidence_cursor" }],
+	}),
+	defineMigration(94, "memory-kind", memoryKind, {
+		columns: [
+			{ table: "memories", column: "memory_kind" },
+			{ table: "memories", column: "evidence_meta" },
+		],
+	}),
+	defineMigration(95, "compaction-recall-projections", compactionRecallProjections),
+	defineMigration(96, "retire-legacy-ingestion", retireLegacyIngestion),
+	defineMigration(97, "dreaming-failure-backoff", dreamingFailureBackoff, {
+		columns: [{ table: "dreaming_state", column: "last_failure_at" }],
+	}),
+	defineMigration(98, "dreaming-evidence-exclusions", dreamingEvidenceExclusions, {
+		tables: ["dreaming_evidence_exclusions"],
+	}),
+	defineMigration(99, "dreaming-tool-calls", dreamingToolCalls, { tables: ["dreaming_tool_calls"] }),
+	defineMigration(100, "dreaming-runbook", dreamingRunbook, {
+		columns: [
+			{ table: "dreaming_passes", column: "evidence_window_json" },
+			{ table: "dreaming_passes", column: "runbook_json" },
+		],
+	}),
+	defineMigration(101, "dreaming-attention", dreamingAttention, { tables: ["dreaming_attention"] }),
+	defineMigration(102, "attribute-semantic-memories", attributeSemanticMemories),
+	defineMigration(103, "semantic-memory-kind", semanticMemoryKind),
+	defineMigration(104, "derived-memory-provenance", derivedMemoryProvenance, {
+		tables: ["derived_memory_sources"],
+		columns: [{ table: "memories", column: "stale_at" }],
+	}),
+	defineMigration(105, "agent-scoped-entity-name", agentScopedEntityName),
+	defineMigration(106, "memory-review-after", memoryReviewAfter, {
+		columns: [{ table: "memories", column: "review_after" }],
+	}),
+	defineMigration(107, "dreaming-pass-usage", dreamingPassUsage, {
+		columns: [
+			{ table: "dreaming_passes", column: "tokens_input" },
+			{ table: "dreaming_passes", column: "tokens_output" },
+			{ table: "dreaming_passes", column: "tokens_cache_read" },
+			{ table: "dreaming_passes", column: "tokens_cache_write" },
+			{ table: "dreaming_passes", column: "tokens_cost" },
+		],
+	}),
+	defineMigration(108, "embedding-usage", embeddingUsage, {
+		tables: ["embedding_usage"],
+	}),
+	defineMigration(109, "telemetry-install", telemetryInstall, {
+		tables: ["telemetry_install"],
+	}),
+	defineMigration(110, "memory-mention-join-index", memoryMentionJoinIndex),
+	defineMigration(111, "telemetry-first-use", telemetryFirstUse, {
+		columns: [
+			{ table: "telemetry_install", column: "first_remember_at" },
+			{ table: "telemetry_install", column: "first_recall_at" },
+		],
+	}),
+	defineMigration(112, "telemetry-queue-ownership", telemetryQueueOwnership, {
+		columns: [
+			{ table: "telemetry_events", column: "source" },
+			{ table: "telemetry_events", column: "claim_token" },
+			{ table: "telemetry_events", column: "claimed_at" },
+		],
+	}),
+	defineMigration(113, "session-claims", sessionClaims, {
+		tables: ["session_claims"],
+		columns: [
+			{ table: "session_claims", column: "agent_id" },
+			{ table: "session_claims", column: "harness" },
+			{ table: "session_claims", column: "expires_at" },
+			{ table: "session_claims", column: "end_marker" },
+		],
+	}),
+	defineMigration(114, "memory-traversal-hydration-index", memoryTraversalHydrationIndex),
+	defineMigration(115, "cross-agent-message-notifications", crossAgentMessageNotifications, {
+		tables: ["cross_agent_messages", "cross_agent_message_receipts"],
+	}),
+	defineMigration(116, "acp-delivery-reconciliation", acpDeliveryReconciliation, {
+		columns: [
+			{ table: "cross_agent_messages", column: "delivery_state" },
+			{ table: "cross_agent_messages", column: "delivery_attempt_id" },
+			{ table: "cross_agent_messages", column: "delivery_lease_expires_at" },
+			{ table: "cross_agent_messages", column: "acp_base_url" },
+			{ table: "cross_agent_messages", column: "acp_target_agent_name" },
+		],
+	}),
+	defineMigration(117, "retire-summary-worker", retireSummaryWorker, {
+		columns: [
+			{ table: "session_transcripts", column: "completed_at" },
+			{ table: "session_transcripts", column: "content_hash" },
+		],
+	}),
+	defineMigration(118, "queue-pressure-indices", queuePressureIndices),
+	defineMigration(119, "telemetry-version-observation", telemetryVersionObservation, {
+		columns: [{ table: "telemetry_install", column: "last_seen_version" }],
+	}),
+	defineMigration(120, "source-lifecycle-telemetry", sourceLifecycleTelemetry, { tables: ["source_lifecycle_state"] }),
+	defineMigration(121, "telemetry-delivery-health", telemetryDeliveryHealth, {
+		tables: ["telemetry_delivery_state"],
+		columns: [
+			{ table: "telemetry_events", column: "delivery_attempts" },
+			{ table: "telemetry_events", column: "last_attempt_at" },
+			{ table: "telemetry_events", column: "sent_at" },
+			{ table: "telemetry_events", column: "last_failure_code" },
+		],
+	}),
+	defineMigration(122, "dreaming-evidence-retry", dreamingEvidenceRetry, {
+		columns: [
+			{ table: "dreaming_evidence_exclusions", column: "failure_class" },
+			{ table: "dreaming_evidence_exclusions", column: "source_fingerprint" },
+			{ table: "dreaming_evidence_exclusions", column: "retry_count" },
+			{ table: "dreaming_evidence_exclusions", column: "last_requeued_at" },
+		],
+	}),
+	defineMigration(123, "embedding-index-failures", embeddingIndexFailures, { tables: ["embedding_index_failures"] }),
+	defineMigration(124, "import-derived-lifecycle", importedDerivedLifecycle, {
+		tables: ["imported_source_lifecycle"],
+	}),
+	defineMigration(125, "memory-content-safety", memoryContentSafety, { tables: ["memory_content_safety"] }),
+	defineMigration(126, "dreaming-surprisal-attention", dreamingSurprisalAttention, { tables: ["dreaming_attention"] }),
+	defineMigration(127, "ontology-contradictions", ontologyContradictions, { tables: ["ontology_contradictions"] }),
+	defineMigration(128, "bounded-queue-diagnostics", boundedQueueDiagnostics),
+	defineMigration(129, "retire-structural-jobs", retireStructuralJobs),
+	defineMigration(130, "embedding-repair-state", embeddingRepairState, {
+		tables: ["embedding_repair_budget", "embedding_repair_backoff"],
+	}),
+	defineMigration(131, "dreaming-evidence-consumption", dreamingEvidenceConsumption, {
+		tables: ["dreaming_evidence_consumption"],
+	}),
+	defineMigration(132, "observer-scoped-epistemic-assertions", observerScopedEpistemicAssertions, {
+		tables: ["epistemic_assertions"],
+	}),
+	defineMigration(133, "dreaming-memory-head", dreamingMemoryHead, {
+		tables: ["memory_head_revisions", "memory_head_entries", "memory_head_revision_entries"],
+	}),
+	defineMigration(134, "scope-memory-head-entries", scopeMemoryHeadEntries, { tables: ["memory_head_entries"] }),
+	defineMigration(135, "memory-head-publication", memoryHeadPublication, { tables: ["memory_head_publications"] }),
+	defineMigration(136, "memory-head-revisions", memoryHeadRevisions, { tables: ["memory_head_revisions"] }),
+	defineMigration(137, "dreaming-head-manifest", dreamingHeadManifest, {
+		columns: [
+			{ table: "dreaming_passes", column: "head_revision" },
+			{ table: "dreaming_passes", column: "head_hash" },
+		],
+	}),
+	defineMigration(138, "bounded-status-projections", boundedStatusProjections, {
+		tables: ["transcript_capture_status", "memories_duplicate_hash_counts", "memories_diagnostics_state"],
+	}),
+	defineMigration(139, "native-source-sync-state", nativeSourceSyncState, { tables: ["native_source_sync_state"] }),
+	defineMigration(140, "transcript-recovery-frontier", transcriptRecoveryFrontier, {
+		tables: ["transcript_recovery_frontiers"],
+	}),
+	defineMigration(141, "source-sync-checkpoints", sourceSyncCheckpoints, { tables: ["source_sync_checkpoints"] }),
+	defineMigration(142, "source-sync-frontier", sourceSyncFrontier, {
+		columns: [{ table: "source_sync_checkpoints", column: "frontier" }],
+	}),
+	defineMigration(143, "embedding-index-progress", embeddingIndexProgress, {
+		columns: [
+			{ table: "embedding_index_state", column: "migration_phase" },
+			{ table: "embedding_index_state", column: "progress_staged" },
+			{ table: "embedding_index_state", column: "progress_total" },
+			{ table: "embedding_index_state", column: "projection_cursor_last_id" },
+			{ table: "embedding_index_state", column: "projection_cursor_slot" },
+			{ table: "embedding_index_state", column: "no_progress_ticks" },
+			{ table: "embedding_index_state", column: "provider_endpoint" },
+		],
+	}),
+	defineMigration(144, "memory-job-lease-token", memoryJobLeaseToken, {
+		columns: [{ table: "memory_jobs", column: "lease_token" }],
+	}),
+	defineMigration(145, "dreaming-evidence-reviews", dreamingEvidenceReviews, { tables: ["dreaming_evidence_reviews"] }),
+	defineMigration(146, "source-transcript-import", sourceTranscriptImport, {
+		tables: [
+			"source_import_jobs",
+			"source_import_files",
+			"source_import_records",
+			"transcript_import_conversations",
+			"source_import_record_attempts",
+		],
+		columns: [
+			{ table: "session_transcripts", column: "source_id" },
+			{ table: "session_transcripts", column: "source_record_id" },
+			{ table: "session_transcripts", column: "source_meta_json" },
+		],
+	}),
+	defineMigration(147, "source-import-replay-file-slots", sourceImportReplayFileSlots, {
+		tables: ["source_import_files"],
+	}),
+	defineMigration(148, "source-import-attempt-provenance", sourceImportAttemptProvenance, {
+		columns: [{ table: "source_import_record_attempts", column: "source_id" }],
+	}),
+	defineMigration(149, "transcript-import-state-machine", transcriptImportStateMachine, {
+		columns: [
+			{ table: "source_import_jobs", column: "duplicate_mode" },
+			{ table: "source_import_jobs", column: "next_attempt_at" },
+			{ table: "source_import_files", column: "error" },
+		],
+	}),
+	defineMigration(150, "memory-head-freshness", memoryHeadFreshness, {
+		columns: [
+			{ table: "memory_md_heads", column: "is_current" },
+			{ table: "dreaming_passes", column: "head_base_revision" },
+		],
+	}),
+	defineMigration(151, "transcript-import-bytes", transcriptImportBytes, {
+		tables: [
+			"source_import_chunks",
+			"source_import_capacity",
+			"source_import_migrations",
+			"source_import_migration_streams",
+			"source_import_migration_counts",
+		],
+		columns: [
+			{ table: "source_import_files", column: "storage_state" },
+			{ table: "source_import_files", column: "upload_generation" },
+			{ table: "source_import_files", column: "upload_offset" },
+			{ table: "source_import_files", column: "upload_size" },
+			{ table: "source_import_files", column: "upload_digest" },
+			...["checkpoint_line_number", "reserved_bytes", "original_path"].map((column) => ({
+				table: "source_import_files",
+				column,
+			})),
+			...["retry_count", "cleanup_state", "retry_cursor", "retry_requested"].map((column) => ({
+				table: "source_import_jobs",
+				column,
+			})),
+		],
+	}),
+	defineMigration(152, "memory-artifact-sha-index", memoryArtifactShaIndex, {
+		indexes: ["idx_memory_artifacts_agent_sha"],
+	}),
+	defineMigration(153, "vector-repair-checkpoints", vectorRepairCheckpoints, { tables: ["vector_repair_checkpoints"] }),
+	defineMigration(154, "transcript-capture-source-identity", transcriptCaptureSourceIdentity, {
+		columns: [
+			{ table: "transcript_capture_jobs", column: "source_identity" },
+			{ table: "transcript_capture_jobs", column: "source_sha256" },
+			{ table: "transcript_capture_jobs", column: "source_size_bytes" },
+			{ table: "transcript_capture_jobs", column: "source_mtime_ms" },
+			{ table: "transcript_capture_jobs", column: "source_format" },
+			{ table: "transcript_capture_jobs", column: "audit_path" },
+		],
+	}),
+	defineMigration(155, "source-sync-failures", sourceSyncFailures, {
+		tables: ["source_sync_failures"],
+		indexes: ["idx_source_sync_failures_active"],
+	}),
+	defineMigration(156, "embedding-repair-checkpoints", embeddingRepairCheckpoints, {
+		tables: ["embedding_repair_checkpoints"],
+	}),
+	defineMigration(157, "embedding-repair-progress", embeddingRepairProgress, {
+		tables: ["embedding_repair_progress"],
+		columns: [{ table: "embedding_repair_checkpoints", column: "profile_fingerprint" }],
+	}),
+	defineMigration(158, "dreaming-candidate-scan-index", dreamingCandidateScanIndex, {
+		indexes: ["idx_memories_agent_kind"],
+	}),
+	defineMigration(159, "retire-obsolete-invocation-ledger", retireObsoleteInvocationLedger),
+	defineMigration(160, "import-admission-ledger", importAdmissionLedger, {
+		tables: ["import_admission_ledger", "import_admission_events"],
+		indexes: ["idx_import_admission_status", "idx_import_admission_events_key"],
+		columns: [
+			...["workspace_id", "request_fingerprint", "source_id", "lease_token", "lease_expires_at", "attempt_count"].map(
+				(column) => ({ table: "import_admission_ledger", column }),
+			),
+		],
+	}),
 ];
 function checksum(m: Migration): string {
 	let h = 0;

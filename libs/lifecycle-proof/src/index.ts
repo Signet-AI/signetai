@@ -341,18 +341,8 @@ export function assertSlowProviderInvariant(window: LifecycleProviderWindow): vo
 export function assertLifecycleInvariants(input: LifecycleProofInput): LifecycleProofResult {
 	if (!input.shutdown) fail(LIFECYCLE_INVARIANTS[6], "shutdown evidence was not recorded");
 	if (!input.slowProvider) fail(LIFECYCLE_INVARIANTS[7], "slow-provider evidence was not recorded");
-	assertStartupPrecedesWork(input.observations);
-	assertCompletedTurnsSerialized(input.observations);
-	assertInterruptedTurnsAreNotDurable(input.observations);
-	assertEndPrecedesSwitch(input.observations);
-	assertInvalidatedContextIsNotReused(input.observations);
-	assertRestartResolvesQueuedWork(input.observations);
+	const result = assertLifecycleObservationInvariants(input.observations);
 	assertShutdownBounded(input.shutdown);
 	assertSlowProviderDoesNotBlockPrompt(input.slowProvider);
-	assertWorkAttribution(input.observations);
-	return {
-		invariants: LIFECYCLE_INVARIANTS,
-		observations: input.observations.length,
-		workStateCounts: countWorkStates(input.observations),
-	};
+	return result;
 }

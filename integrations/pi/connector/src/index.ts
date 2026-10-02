@@ -1,14 +1,12 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
 	BaseConnector,
 	type InstallResult,
 	MANAGED_DAEMON_URL_DEFAULT,
 	type UninstallResult,
 	buildManagedExtensionContent,
-	isManagedExtensionFile,
 	managedExtensionFilePath,
-	removeManagedExtensionFile,
 	resolveSignetAgentId,
 	resolveSignetApiKey,
 	resolveSignetDaemonUrl,
@@ -77,29 +75,20 @@ export class PiConnector extends BaseConnector {
 		const agentDir = resolvePiAgentDir();
 		const targetPath = managedExtensionFilePath(agentDir, PI_MANAGED_FILENAME);
 
-		if (existsSync(targetPath) && !isManagedExtensionFile(targetPath, PI_MANAGED_MARKER)) {
-			throw new Error(
-				`Refusing to overwrite unmanaged pi extension at ${targetPath}. Move or remove it first, then rerun setup.`,
-			);
-		}
-
-		for (const filePath of this.getManagedCandidatePaths()) {
-			if (filePath === targetPath) continue;
-			removeManagedExtensionFile(filePath, PI_MANAGED_MARKER);
-		}
-
-		mkdirSync(dirname(targetPath), { recursive: true });
-		const managedContent = buildManagedPiExtensionContent({
-			signetPath: basePath || resolveSignetWorkspacePath(),
-			daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
-			agentId: resolveSignetAgentId(),
-			apiKey: resolveSignetApiKey(),
+		const extensionWritten = this.installManagedExtension({
+			targetPath,
+			marker: PI_MANAGED_MARKER,
+			unmanagedMessage: `Refusing to overwrite unmanaged pi extension at ${targetPath}. Move or remove it first, then rerun setup.`,
+			stalePaths: () => this.getManagedCandidatePaths(),
+			buildContent: () =>
+				buildManagedPiExtensionContent({
+					signetPath: basePath || resolveSignetWorkspacePath(),
+					daemonUrl: resolveSignetDaemonUrl() || MANAGED_DAEMON_URL_DEFAULT,
+					agentId: resolveSignetAgentId(),
+					apiKey: resolveSignetApiKey(),
+				}),
 		});
-		const previous = existsSync(targetPath) ? readFileSync(targetPath, "utf8") : null;
-		if (previous !== managedContent) {
-			writeFileSync(targetPath, managedContent, "utf8");
-			filesWritten.push(targetPath);
-		}
+		if (extensionWritten) filesWritten.push(targetPath);
 
 		const configPath = getPiConfigPath();
 		const previousConfig = existsSync(configPath) ? readFileSync(configPath, "utf8") : null;
@@ -117,12 +106,7 @@ export class PiConnector extends BaseConnector {
 	}
 
 	async uninstall(): Promise<UninstallResult> {
-		const filesRemoved: string[] = [];
-		for (const path of this.getManagedCandidatePaths()) {
-			if (removeManagedExtensionFile(path, PI_MANAGED_MARKER)) {
-				filesRemoved.push(path);
-			}
-		}
+		const filesRemoved = this.removeManagedExtensions(this.getManagedCandidatePaths(), PI_MANAGED_MARKER);
 
 		const configPath = getPiConfigPath();
 		if (existsSync(configPath)) {
@@ -136,6 +120,6 @@ export class PiConnector extends BaseConnector {
 	}
 
 	isInstalled(): boolean {
-		return this.getManagedCandidatePaths().some((path) => isManagedExtensionFile(path, PI_MANAGED_MARKER));
+		return this.hasManagedExtension(this.getManagedCandidatePaths(), PI_MANAGED_MARKER);
 	}
 }

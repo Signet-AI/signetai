@@ -8,6 +8,7 @@ import { logger } from "../utils/logger"
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "fs"
 import { join } from "path"
 import { startRun, endRun } from "../server/runState"
+import { selectQuestionsBySampling } from "./question-selection"
 
 const checkpointManager = new CheckpointManager()
 
@@ -50,36 +51,6 @@ function generateCompareId(): string {
   const date = now.toISOString().slice(0, 10).replace(/-/g, "")
   const time = now.toISOString().slice(11, 19).replace(/:/g, "")
   return `compare-${date}-${time}`
-}
-
-function selectQuestionsBySampling(
-  allQuestions: { questionId: string; questionType: string }[],
-  sampling: SamplingConfig
-): string[] {
-  if (sampling.mode === "full") {
-    return allQuestions.map((q) => q.questionId)
-  }
-  if (sampling.mode === "limit" && sampling.limit) {
-    return allQuestions.slice(0, sampling.limit).map((q) => q.questionId)
-  }
-  if (sampling.mode === "sample" && sampling.perCategory) {
-    const byType: Record<string, { questionId: string; questionType: string }[]> = {}
-    for (const q of allQuestions) {
-      if (!byType[q.questionType]) byType[q.questionType] = []
-      byType[q.questionType].push(q)
-    }
-    const selected: string[] = []
-    for (const questions of Object.values(byType)) {
-      if (sampling.sampleType === "random") {
-        const shuffled = [...questions].sort(() => Math.random() - 0.5)
-        selected.push(...shuffled.slice(0, sampling.perCategory).map((q) => q.questionId))
-      } else {
-        selected.push(...questions.slice(0, sampling.perCategory).map((q) => q.questionId))
-      }
-    }
-    return selected
-  }
-  return allQuestions.map((q) => q.questionId)
 }
 
 export class BatchManager {

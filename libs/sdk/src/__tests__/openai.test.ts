@@ -53,8 +53,13 @@ describe("memoryToolDefinitions", () => {
 		const params = search?.function.parameters as Record<string, unknown>;
 		expect(params.required).toEqual(["query"]);
 		const properties = params.properties as Record<string, unknown>;
+		expect(properties.query).toEqual({ type: "string", description: "Search query" });
 		expect(properties.aggregate).toBeDefined();
-		expect(properties.aggregateBudget).toBeDefined();
+		expect(properties.aggregateBudget).toEqual({
+			type: "string",
+			enum: ["small", "medium", "large"],
+			description: "Aggregate recall budget",
+		});
 		expect(properties.saveAggregate).toBeDefined();
 	});
 

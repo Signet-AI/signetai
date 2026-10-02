@@ -111,33 +111,7 @@ export function resolveHermesRepoPluginPath(): string | null {
 	return null;
 }
 export async function loadIdentityFiles(basePath: string): Promise<IdentityMap> {
-	const result: IdentityMap = {};
-
-	for (const [key, spec] of Object.entries(IDENTITY_FILES)) {
-		const filePath = join(basePath, spec.path);
-
-		if (existsSync(filePath)) {
-			try {
-				const content = readFileSync(filePath, "utf-8");
-				const stats = statSync(filePath);
-
-				result[key as keyof IdentityMap] = {
-					path: spec.path,
-					content,
-					mtime: stats.mtime,
-					size: stats.size,
-				};
-			} catch (err) {
-				if (!spec.optional) {
-					console.warn(`Failed to read identity file: ${spec.path}`, err);
-				}
-			}
-		} else if (!spec.optional) {
-			console.warn(`Missing required identity file: ${spec.path}`);
-		}
-	}
-
-	return result;
+	return loadIdentityFilesSync(basePath);
 }
 export function loadIdentityFilesSync(basePath: string): IdentityMap {
 	const result: IdentityMap = {};

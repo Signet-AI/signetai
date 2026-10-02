@@ -14,7 +14,6 @@ import {
 	DREAMING_HYGIENE_AGENT_PROMPT,
 	type DreamingState,
 	type DreamingEpisodicBacklogProbe,
-	_testParseEpisodicCursor,
 	dreamingEarlyExitSummary,
 	enqueueDreamingHygieneAttention,
 	evaluateDreamingTrigger,
@@ -226,22 +225,37 @@ describe("Dreaming", () => {
 		db.close();
 	});
 
-	it("round-trips only canonical episodic cursor kinds", () => {
-		for (const kind of ["memory", "artifact", "transcript", "summary"] as const) {
-			const cursor = { capturedAt: "2026-03-01T00:00:00.000Z", kind, id: `id-${kind}` };
-			expect(_testParseEpisodicCursor(JSON.stringify(cursor))).toEqual(cursor);
+	it("round-trips only canonical episodic cursor kinds", async () => {
+		const capturedAt = "2026-03-01T00:00:00.000Z";
+		const cases = [
+			...(["memory", "artifact", "transcript", "summary"] as const).map((kind) => {
+				const cursor = { capturedAt, kind, id: `id-${kind}` };
+				return { agentId: `cursor-${kind}`, raw: cursor, expected: cursor };
+			}),
+			{
+				agentId: "cursor-unknown-kind",
+				raw: { capturedAt: "2026-01-01", kind: "unknown", id: "unknown" },
+				expected: null,
+			},
+			{
+				agentId: "cursor-valid-fragment",
+				raw: { capturedAt, kind: "summary", id: "fragment", fragmentOffset: 12 },
+				expected: { capturedAt, kind: "summary", id: "fragment", fragmentOffset: 12 },
+			},
+			{
+				agentId: "cursor-negative-fragment",
+				raw: { capturedAt, kind: "summary", id: "fragment", fragmentOffset: -1 },
+				expected: { capturedAt, kind: "summary", id: "fragment" },
+			},
+		] as const;
+		accessor.withWriteTx((tx) => {
+			const insert = tx.prepare("INSERT INTO dreaming_state (agent_id, evidence_cursor) VALUES (?, ?)");
+			for (const entry of cases) insert.run(entry.agentId, JSON.stringify(entry.raw));
+		});
+
+		for (const entry of cases) {
+			expect((await getDreamingState(accessor, entry.agentId)).evidenceCursor).toEqual(entry.expected);
 		}
-		expect(_testParseEpisodicCursor(JSON.stringify({ capturedAt: "2026-01-01", kind: "unknown", id: "x" }))).toBeNull();
-		expect(
-			_testParseEpisodicCursor(
-				JSON.stringify({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment", fragmentOffset: 12 }),
-			),
-		).toEqual({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment", fragmentOffset: 12 });
-		expect(
-			_testParseEpisodicCursor(
-				JSON.stringify({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment", fragmentOffset: -1 }),
-			),
-		).toEqual({ capturedAt: "2026-03-01T00:00:00.000Z", kind: "summary", id: "fragment" });
 	});
 
 	it("keeps backlog checks off the synchronous BPE encoder (#1552)", async () => {

@@ -1488,6 +1488,89 @@ assert calls == [{
 		});
 	});
 
+	it("routes Python daemon methods through their HTTP verb, headers, and JSON body", () => {
+		const clientPath = join(import.meta.dir, "hermes-plugin", "client.py");
+		const script = `
+import importlib.util, json, os, sys, threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+for key in ("SIGNET_DAEMON_URL", "SIGNET_HOST", "SIGNET_PORT", "SIGNET_TOKEN", "SIGNET_API_KEY", "SIGNET_TRUSTED_DAEMON_ORIGINS"):
+    os.environ.pop(key, None)
+received = []
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self): self.handle_request()
+    def do_POST(self): self.handle_request()
+    def do_PATCH(self): self.handle_request()
+    def do_DELETE(self): self.handle_request()
+    def log_message(self, *_args): pass
+    def handle_request(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        raw = self.rfile.read(length)
+        row = {"method": self.command, "path": self.path, "body": json.loads(raw) if raw else None,
+               "agent": self.headers.get("x-signet-agent-id"), "extra": self.headers.get("x-extra"),
+               "authorization": self.headers.get("Authorization")}
+        received.append(row)
+        failed = self.path.endswith("/failure")
+        payload = json.dumps({"error": "unavailable"} if failed else row).encode()
+        self.send_response(503 if failed else 200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+thread = threading.Thread(target=server.serve_forever, daemon=True)
+thread.start()
+try:
+    os.environ["SIGNET_DAEMON_URL"] = "http://127.0.0.1:%s" % server.server_address[1]
+    spec = importlib.util.spec_from_file_location("signet_client", sys.argv[1])
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    client = module.SignetClient(agent_id="agent-a")
+    responses = [
+        client._post("/post", {"value": 1}, timeout=2, extra_headers={"x-extra": "post"}),
+        client._get("/get", timeout=2),
+        client._patch("/patch", {"value": 2}, timeout=2),
+        client._delete("/delete", timeout=2, extra_headers={"x-extra": "delete"}),
+        client._post("/failure", {}, timeout=2), client._get("/failure", timeout=2),
+        client._patch("/failure", {}, timeout=2), client._delete("/failure", timeout=2),
+    ]
+    print(json.dumps({"responses": responses, "received": received}, sort_keys=True))
+finally:
+    server.shutdown()
+    thread.join(timeout=2)
+    server.server_close()
+`;
+
+		const result = spawnSync(resolveTestPythonPath(), ["-c", script, clientPath], {
+			env: process.env,
+			encoding: "utf-8",
+		});
+
+		expect(result.status).toBe(0);
+		const output = JSON.parse(result.stdout);
+		expect(output.responses).toEqual([
+			{ method: "POST", path: "/post", body: { value: 1 }, agent: "agent-a", extra: "post", authorization: null },
+			{ method: "GET", path: "/get", body: null, agent: "agent-a", extra: null, authorization: null },
+			{ method: "PATCH", path: "/patch", body: { value: 2 }, agent: "agent-a", extra: null, authorization: null },
+			{ method: "DELETE", path: "/delete", body: null, agent: "agent-a", extra: "delete", authorization: null },
+			null,
+			null,
+			null,
+			null,
+		]);
+		expect(output.received.map((request: { method: string }) => request.method)).toEqual([
+			"POST",
+			"GET",
+			"PATCH",
+			"DELETE",
+			"POST",
+			"GET",
+			"PATCH",
+			"DELETE",
+		]);
+	});
+
 	it("lets explicit recall requests opt into agent scoping", () => {
 		const plugin = readFileSync(join(import.meta.dir, "hermes-plugin", "__init__.py"), "utf-8");
 

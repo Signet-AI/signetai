@@ -32,6 +32,7 @@ import {
 	type PiSessionBeforeCompactEvent,
 	type PiSessionCompactEvent,
 	type PreCompactionResult,
+	type ToolExecuteResult,
 	READ_TIMEOUT,
 	RUNTIME_PATH,
 	WRITE_TIMEOUT,
@@ -99,6 +100,28 @@ async function checkDaemonHealth(daemonUrl: string): Promise<boolean> {
 		return response.ok;
 	} catch {
 		return false;
+	}
+}
+
+async function runPiDaemonTool(
+	daemonUrl: string,
+	offlineMessage: string,
+	errorPrefix: string,
+	run: () => Promise<ToolExecuteResult>,
+): Promise<ToolExecuteResult> {
+	if (!(await checkDaemonHealth(daemonUrl))) {
+		return { content: [{ type: "text", text: offlineMessage }], details: { error: "daemon_offline" } };
+	}
+
+	try {
+		return await run();
+	} catch (error) {
+		const message = error instanceof Error ? error.message : String(error);
+		return {
+			content: [{ type: "text", text: `${errorPrefix}: ${message}` }],
+			details: { error: message },
+			isError: true,
+		};
 	}
 }
 
@@ -534,41 +557,67 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const healthy = await checkDaemonHealth(daemonUrl);
-			if (!healthy) {
-				return {
-					content: [{ type: "text", text: "Signet daemon not running. Memories unavailable." }],
-					details: { error: "daemon_offline" },
-				};
-			}
+			return runPiDaemonTool(
+				daemonUrl,
+				"Signet daemon not running. Memories unavailable.",
+				"Error recalling memories",
+				async () => {
+					const query = String(params.query || "");
+					const limit = typeof params.limit === "number" ? params.limit : undefined;
+					const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : undefined;
+					const scope =
+						typeof params.scope === "string" && ["global", "agent", "session"].includes(params.scope)
+							? (params.scope as "global" | "agent" | "session")
+							: undefined;
+					const isAggregate = params.aggregate === true;
+					const aggregateBudget =
+						typeof params.aggregateBudget === "string" && ["small", "medium", "large"].includes(params.aggregateBudget)
+							? (params.aggregateBudget as "small" | "medium" | "large")
+							: undefined;
 
-			try {
-				const query = String(params.query || "");
-				const limit = typeof params.limit === "number" ? params.limit : undefined;
-				const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : undefined;
-				const scope =
-					typeof params.scope === "string" && ["global", "agent", "session"].includes(params.scope)
-						? (params.scope as "global" | "agent" | "session")
-						: undefined;
-				const isAggregate = params.aggregate === true;
-				const aggregateBudget =
-					typeof params.aggregateBudget === "string" && ["small", "medium", "large"].includes(params.aggregateBudget)
-						? (params.aggregateBudget as "small" | "medium" | "large")
-						: undefined;
+					const recall = await recallMemories(daemonUrl, query, {
+						limit,
+						agentId,
+						sessionKey,
+						includeRecalled: params.includeRecalled === true,
+						scope,
+						aggregate: isAggregate,
+						aggregateBudget,
+					});
+					const parsed = parseRecallPayload(recall);
+					if (isAggregate && recall.aggregate) {
+						const aggregateRows = recall.results ?? parsed.rows;
+						if (aggregateRows.length === 0) {
+							return {
+								content: [{ type: "text", text: "No relevant memories found for this query." }],
+								details: { memoriesFound: 0 },
+							};
+						}
 
-				const recall = await recallMemories(daemonUrl, query, {
-					limit,
-					agentId,
-					sessionKey,
-					includeRecalled: params.includeRecalled === true,
-					scope,
-					aggregate: isAggregate,
-					aggregateBudget,
-				});
-				const parsed = parseRecallPayload(recall);
-				if (isAggregate && recall.aggregate) {
-					const aggregateRows = recall.results ?? parsed.rows;
-					if (aggregateRows.length === 0) {
+						state.lastRecall = new Date().toISOString();
+						state.memoryCount = aggregateRows.length;
+						updateStatus(ctx);
+
+						const degraded = recall.aggregate.partial === true;
+						const parts = [
+							degraded ? `[Aggregate Recall degraded] Query: ${query}` : `[Aggregate Recall] Query: ${query}`,
+						];
+						if (degraded && typeof recall.aggregate.message === "string") parts.push(recall.aggregate.message);
+						for (const row of aggregateRows) {
+							if (typeof row.content === "string") parts.push(row.content);
+						}
+
+						return {
+							content: [{ type: "text", text: parts.join("\n\n") }],
+							details: {
+								memoriesFound: aggregateRows.length,
+								memories: aggregateRows,
+								aggregate: recall.aggregate,
+								meta: parsed.meta,
+							},
+						};
+					}
+					if (parsed.rows.length === 0) {
 						return {
 							content: [{ type: "text", text: "No relevant memories found for this query." }],
 							details: { memoriesFound: 0 },
@@ -576,51 +625,15 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 					}
 
 					state.lastRecall = new Date().toISOString();
-					state.memoryCount = aggregateRows.length;
+					state.memoryCount = parsed.rows.length;
 					updateStatus(ctx);
 
-					const degraded = recall.aggregate.partial === true;
-					const parts = [
-						degraded ? `[Aggregate Recall degraded] Query: ${query}` : `[Aggregate Recall] Query: ${query}`,
-					];
-					if (degraded && typeof recall.aggregate.message === "string") parts.push(recall.aggregate.message);
-					for (const row of aggregateRows) {
-						if (typeof row.content === "string") parts.push(row.content);
-					}
-
 					return {
-						content: [{ type: "text", text: parts.join("\n\n") }],
-						details: {
-							memoriesFound: aggregateRows.length,
-							memories: aggregateRows,
-							aggregate: recall.aggregate,
-							meta: parsed.meta,
-						},
+						content: [{ type: "text", text: formatRecallText(recall) }],
+						details: { memoriesFound: parsed.rows.length, memories: parsed.rows, meta: parsed.meta },
 					};
-				}
-				if (parsed.rows.length === 0) {
-					return {
-						content: [{ type: "text", text: "No relevant memories found for this query." }],
-						details: { memoriesFound: 0 },
-					};
-				}
-
-				state.lastRecall = new Date().toISOString();
-				state.memoryCount = parsed.rows.length;
-				updateStatus(ctx);
-
-				return {
-					content: [{ type: "text", text: formatRecallText(recall) }],
-					details: { memoriesFound: parsed.rows.length, memories: parsed.rows, meta: parsed.meta },
-				};
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				return {
-					content: [{ type: "text", text: `Error recalling memories: ${message}` }],
-					details: { error: message },
-					isError: true,
-				};
-			}
+				},
+			);
 		},
 	});
 	pi.registerTool({
@@ -657,47 +670,37 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-			const healthy = await checkDaemonHealth(daemonUrl);
-			if (!healthy) {
-				return {
-					content: [{ type: "text", text: "Signet daemon not running. Source search unavailable." }],
-					details: { error: "daemon_offline" },
-				};
-			}
+			return runPiDaemonTool(
+				daemonUrl,
+				"Signet daemon not running. Source search unavailable.",
+				"Error searching sources",
+				async () => {
+					const session = currentSessionRef(ctx);
+					const query = String(params.query || "");
+					const limit = typeof params.limit === "number" ? params.limit : 10;
+					const project = typeof params.project === "string" ? params.project : undefined;
+					const recall = await searchSourceArtifacts(daemonUrl, query, {
+						limit,
+						agentId,
+						sessionKey: readTrimmedString(session.sessionId),
+						includeRecalled: params.includeRecalled === true,
+						project,
+					});
+					const parsed = parseRecallPayload(recall);
 
-			try {
-				const session = currentSessionRef(ctx);
-				const query = String(params.query || "");
-				const limit = typeof params.limit === "number" ? params.limit : 10;
-				const project = typeof params.project === "string" ? params.project : undefined;
-				const recall = await searchSourceArtifacts(daemonUrl, query, {
-					limit,
-					agentId,
-					sessionKey: readTrimmedString(session.sessionId),
-					includeRecalled: params.includeRecalled === true,
-					project,
-				});
-				const parsed = parseRecallPayload(recall);
+					if (parsed.rows.length === 0) {
+						return {
+							content: [{ type: "text", text: "No relevant source artifacts found for this query." }],
+							details: { sourcesFound: 0 },
+						};
+					}
 
-				if (parsed.rows.length === 0) {
 					return {
-						content: [{ type: "text", text: "No relevant source artifacts found for this query." }],
-						details: { sourcesFound: 0 },
+						content: [{ type: "text", text: formatRecallText(recall) }],
+						details: { sourcesFound: parsed.rows.length, sources: parsed.rows, meta: parsed.meta },
 					};
-				}
-
-				return {
-					content: [{ type: "text", text: formatRecallText(recall) }],
-					details: { sourcesFound: parsed.rows.length, sources: parsed.rows, meta: parsed.meta },
-				};
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				return {
-					content: [{ type: "text", text: `Error searching sources: ${message}` }],
-					details: { error: message },
-					isError: true,
-				};
-			}
+				},
+			);
 		},
 	});
 	pi.registerTool({
@@ -743,36 +746,26 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-			const healthy = await checkDaemonHealth(daemonUrl);
-			if (!healthy) {
-				return {
-					content: [{ type: "text", text: "Signet daemon not running. Session search unavailable." }],
-					details: { error: "daemon_offline" },
-				};
-			}
+			return runPiDaemonTool(
+				daemonUrl,
+				"Signet daemon not running. Session search unavailable.",
+				"Error searching sessions",
+				async () => {
+					const query = String(params.query || "");
+					const result = await searchSessions(daemonUrl, query, {
+						sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : undefined,
+						currentSessionKey: typeof params.currentSessionKey === "string" ? params.currentSessionKey : undefined,
+						agentId: typeof params.agentId === "string" ? params.agentId : agentId,
+						project: typeof params.project === "string" ? params.project : undefined,
+						limit: typeof params.limit === "number" ? params.limit : undefined,
+					});
 
-			try {
-				const query = String(params.query || "");
-				const result = await searchSessions(daemonUrl, query, {
-					sessionKey: typeof params.sessionKey === "string" ? params.sessionKey : undefined,
-					currentSessionKey: typeof params.currentSessionKey === "string" ? params.currentSessionKey : undefined,
-					agentId: typeof params.agentId === "string" ? params.agentId : agentId,
-					project: typeof params.project === "string" ? params.project : undefined,
-					limit: typeof params.limit === "number" ? params.limit : undefined,
-				});
-
-				return {
-					content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-					details: { result },
-				};
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				return {
-					content: [{ type: "text", text: `Error searching sessions: ${message}` }],
-					details: { error: message },
-					isError: true,
-				};
-			}
+					return {
+						content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+						details: { result },
+					};
+				},
+			);
 		},
 	});
 	pi.registerTool({
@@ -803,34 +796,24 @@ function registerCommandsAndTools(pi: PiExtensionApi, daemonUrl: string, agentId
 			),
 		}),
 		async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-			const healthy = await checkDaemonHealth(daemonUrl);
-			if (!healthy) {
-				return {
-					content: [{ type: "text", text: "Signet daemon not running. Cannot save memory." }],
-					details: { error: "daemon_offline" },
-				};
-			}
+			return runPiDaemonTool(
+				daemonUrl,
+				"Signet daemon not running. Cannot save memory.",
+				"Error saving memory",
+				async () => {
+					const content = String(params.content || "");
+					const critical = Boolean(params.critical);
+					const tags = Array.isArray(params.tags) ? params.tags.filter((t): t is string => typeof t === "string") : [];
 
-			try {
-				const content = String(params.content || "");
-				const critical = Boolean(params.critical);
-				const tags = Array.isArray(params.tags) ? params.tags.filter((t): t is string => typeof t === "string") : [];
+					await rememberContent(daemonUrl, content, { critical, tags, agentId });
 
-				await rememberContent(daemonUrl, content, { critical, tags, agentId });
-
-				const pinned = critical ? " (pinned/critical)" : "";
-				return {
-					content: [{ type: "text", text: `Memory saved${pinned} successfully.` }],
-					details: { saved: true, content },
-				};
-			} catch (error) {
-				const message = error instanceof Error ? error.message : String(error);
-				return {
-					content: [{ type: "text", text: `Error saving memory: ${message}` }],
-					details: { error: message },
-					isError: true,
-				};
-			}
+					const pinned = critical ? " (pinned/critical)" : "";
+					return {
+						content: [{ type: "text", text: `Memory saved${pinned} successfully.` }],
+						details: { saved: true, content },
+					};
+				},
+			);
 		},
 	});
 }

@@ -233,6 +233,41 @@ class SignetClient:
             headers["x-signet-request-id"] = clean_request_id
         return headers or None
 
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: Optional[Dict[str, Any]] = None,
+        timeout: float = _TIMEOUT_SECS,
+        extra_headers: Optional[Dict[str, str]] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Send one JSON request to the daemon, returning None on failure."""
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(
+            f"{self._base_url}{path}",
+            data=data,
+            headers=self._headers(extra_headers),
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return _read_json_response(resp)
+        except urllib.error.HTTPError as error:
+            if method == "POST":
+                body_text = ""
+                try:
+                    body_text = error.read().decode("utf-8", errors="replace")[:200]
+                except Exception as read_error:
+                    logger.debug("Signet POST %s: failed to read error body: %s", path, read_error)
+                logger.debug("Signet POST %s returned %d: %s", path, error.code, body_text)
+            else:
+                logger.debug("Signet %s %s failed: %s", method, path, error)
+            return None
+        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as error:
+            logger.debug("Signet %s %s failed: %s", method, path, error)
+            return None
+
     def _post(
         self,
         path: str,
@@ -242,24 +277,7 @@ class SignetClient:
         extra_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """POST JSON to the daemon. Returns parsed response or None on failure."""
-        url = f"{self._base_url}{path}"
-        data = json.dumps(body).encode("utf-8")
-        headers = self._headers(extra_headers)
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _read_json_response(resp)
-        except urllib.error.HTTPError as e:
-            body_text = ""
-            try:
-                body_text = e.read().decode("utf-8", errors="replace")[:200]
-            except Exception as read_err:
-                logger.debug("Signet POST %s: failed to read error body: %s", path, read_err)
-            logger.debug("Signet POST %s returned %d: %s", path, e.code, body_text)
-            return None
-        except (urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            logger.debug("Signet POST %s failed: %s", path, e)
-            return None
+        return self._request("POST", path, body=body, timeout=timeout, extra_headers=extra_headers)
 
     def _get(
         self,
@@ -268,14 +286,7 @@ class SignetClient:
         timeout: float = _TIMEOUT_SECS,
     ) -> Optional[Dict[str, Any]]:
         """GET from the daemon. Returns parsed response or None on failure."""
-        url = f"{self._base_url}{path}"
-        req = urllib.request.Request(url, headers=self._headers(), method="GET")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _read_json_response(resp)
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            logger.debug("Signet GET %s failed: %s", path, e)
-            return None
+        return self._request("GET", path, timeout=timeout)
 
     def _patch(
         self,
@@ -285,15 +296,7 @@ class SignetClient:
         timeout: float = _TIMEOUT_SECS,
     ) -> Optional[Dict[str, Any]]:
         """PATCH JSON to the daemon. Returns parsed response or None on failure."""
-        url = f"{self._base_url}{path}"
-        data = json.dumps(body).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers=self._headers(), method="PATCH")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _read_json_response(resp)
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            logger.debug("Signet PATCH %s failed: %s", path, e)
-            return None
+        return self._request("PATCH", path, body=body, timeout=timeout)
 
     def _delete(
         self,
@@ -303,14 +306,7 @@ class SignetClient:
         extra_headers: Optional[Dict[str, str]] = None,
     ) -> Optional[Dict[str, Any]]:
         """DELETE from the daemon. Returns parsed response or None on failure."""
-        url = f"{self._base_url}{path}"
-        req = urllib.request.Request(url, headers=self._headers(extra_headers), method="DELETE")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return _read_json_response(resp)
-        except (urllib.error.HTTPError, urllib.error.URLError, OSError, TimeoutError, ValueError) as e:
-            logger.debug("Signet DELETE %s failed: %s", path, e)
-            return None
+        return self._request("DELETE", path, timeout=timeout, extra_headers=extra_headers)
 
     def is_available(self) -> bool:
         """Check if the Signet daemon is reachable. No credentials needed."""

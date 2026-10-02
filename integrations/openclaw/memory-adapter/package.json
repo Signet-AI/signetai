@@ -38,6 +38,7 @@
 	"devDependencies": {
 		"@signet/core": "workspace:*",
 		"@signet/sdk": "workspace:*",
+		"@signet/connector-base": "workspace:*",
 		"@types/node": "^22.0.0"
 	},
 	"peerDependencies": {

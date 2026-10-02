@@ -1,149 +1,56 @@
-import type { InferenceLocality, LlmTelemetryAttribution, PipelineCommandConfig } from "./types";
+import type { InferenceLocality, LlmTelemetryAttribution } from "./types";
+import {
+	allTargetRefs,
+	err,
+	inferTargetPrivacy,
+	isLocalInferenceEndpoint,
+	ok,
+	parseRoutingTargetRef,
+	ROUTING_CLASSIFIER_TASK_CLASSES,
+	ROUTING_OPERATION_KINDS,
+} from "./routing-config";
+import type {
+	RouteCandidateTrace,
+	RouteClassification,
+	RouteDecision,
+	RouteRequest,
+	RouteTrace,
+	RouterError,
+	RouterResult,
+	RoutingAccountConfig,
+	RoutingConfig,
+	RoutingCostTier,
+	RoutingModelConfig,
+	RoutingOperationKind,
+	RoutingPolicyConfig,
+	RoutingPolicyMode,
+	RoutingPrivacyTier,
+	RoutingReasoningDepth,
+	RoutingRuntimeSnapshot,
+	RoutingRuntimeState,
+	RoutingTargetConfig,
+	RoutingWorkloadBinding,
+} from "./routing-config";
 
-export const ROUTING_ACCOUNT_KINDS = ["subscription_session", "api"] as const;
-export const ROUTING_TARGET_KINDS = ["subscription_session", "api", "local", "gateway"] as const;
-export const ROUTING_EXECUTOR_KINDS = [
-	"acpx",
-	"claude-code",
-	"codex",
-	"opencode",
-	"anthropic",
-	"openrouter",
-	"ollama",
-	"llama-cpp",
-	"openai-compatible",
-	"command",
-] as const;
-const ROUTING_EXECUTOR_PATTERN = /^[a-z0-9][a-z0-9._-]{0,127}$/;
-export const ROUTING_POLICY_MODES = ["strict", "automatic", "hybrid"] as const;
-export const ROUTING_PRIVACY_TIERS = ["remote_ok", "restricted_remote", "local_only"] as const;
-export const ROUTING_REASONING_DEPTHS = ["low", "medium", "high"] as const;
-export const ROUTING_COST_TIERS = ["low", "medium", "high"] as const;
-export const ROUTING_OPERATION_KINDS = [
-	"default",
-	"interactive",
-	"tool_planning",
-	"code_reasoning",
-	"memory_extraction",
-	"session_synthesis",
-	"aggregate_recall",
-	"repair",
-] as const;
-
-export type RoutingAccountKind = (typeof ROUTING_ACCOUNT_KINDS)[number];
-export type RoutingTargetKind = (typeof ROUTING_TARGET_KINDS)[number];
-export type RoutingExecutorKind = (typeof ROUTING_EXECUTOR_KINDS)[number] | (string & {});
-export type RoutingPolicyMode = (typeof ROUTING_POLICY_MODES)[number];
-export type RoutingPrivacyTier = (typeof ROUTING_PRIVACY_TIERS)[number];
-export type RoutingReasoningDepth = (typeof ROUTING_REASONING_DEPTHS)[number];
-export type RoutingCostTier = (typeof ROUTING_COST_TIERS)[number];
-export type RoutingOperationKind = (typeof ROUTING_OPERATION_KINDS)[number];
-export const ROUTING_CLASSIFIER_TASK_CLASSES = {
-	codeReasoning: "hard_coding",
-	localSensitive: "local_sensitive",
-} as const;
-
-export type RoutingTargetRef = string & { readonly __brand: "RoutingTargetRef" };
-export type RoutingPolicyId = string & { readonly __brand: "RoutingPolicyId" };
-export type RoutingAgentId = string & { readonly __brand: "RoutingAgentId" };
-
-export interface RouterError {
-	readonly code:
-		| "invalid-config"
-		| "invalid-target-ref"
-		| "policy-not-found"
-		| "no-candidates"
-		| "target-not-found"
-		| "execution-failed";
-	readonly message: string;
-	readonly details?: Readonly<Record<string, unknown>>;
-}
-
-export interface RoutingValidationIssue {
-	readonly severity: "error" | "warning";
-	readonly field: string;
-	readonly ref: string;
-	readonly message: string;
-}
-
-export type RouterResult<T> =
-	| { readonly ok: true; readonly value: T }
-	| { readonly ok: false; readonly error: RouterError };
-
-export interface RoutingAccountConfig {
-	readonly kind: RoutingAccountKind;
-	readonly providerFamily: string;
-	readonly label?: string;
-	readonly credentialRef?: string;
-	readonly sessionRef?: string;
-	readonly usageTier?: string;
-}
-
-export interface RoutingModelConfig {
-	readonly model: string;
-	readonly label?: string;
-	readonly reasoning?: RoutingReasoningDepth;
-	readonly contextWindow?: number;
-	readonly toolUse?: boolean;
-	readonly streaming?: boolean;
-	readonly multimodal?: boolean;
-	readonly costTier?: RoutingCostTier;
-	readonly averageLatencyMs?: number;
-}
-
-export interface RoutingOpenRouterReasoningConfig {
-	readonly enabled?: boolean;
-	readonly maxTokens?: number;
-}
-
-export interface RoutingOpenRouterConfig {
-	readonly reasoning?: RoutingOpenRouterReasoningConfig;
-}
-
-export type RoutingAcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "approve-all";
-export type RoutingAcpxHooksMode = "inherit" | "disabled" | "enabled";
-export type RoutingAcpxTerminalMode = "inherit" | "disabled" | "enabled";
-export type RoutingAcpxSessionMode = "exec" | "session";
-export type RoutingAcpxOutputFormat = "quiet" | "json";
-export type AcpxModelSelection = "acp" | "agent";
-
-export function resolveAcpxModelSelection(agent: string, configured?: AcpxModelSelection): AcpxModelSelection {
-	if (configured) return configured;
-	return agent.trim().toLowerCase() === "opencode" ? "agent" : "acp";
-}
-
-export interface RoutingAcpxConfig {
-	readonly agent: string;
-	readonly modelSelection?: AcpxModelSelection;
-	readonly version?: string;
-	readonly bin?: string;
-	readonly package?: string;
-	readonly cwd?: string;
-	readonly session?: string;
-	readonly mode?: RoutingAcpxSessionMode;
-	readonly permissions?: RoutingAcpxPermissionMode;
-	readonly hooks?: RoutingAcpxHooksMode;
-	readonly terminal?: RoutingAcpxTerminalMode;
-	readonly allowedTools?: readonly string[];
-	readonly format?: RoutingAcpxOutputFormat;
-	readonly captureEvents?: boolean;
-	readonly maxCapturedEvents?: number;
-	readonly emptyResponseRetries?: number;
-	readonly timeoutMs?: number;
-	readonly extraArgs?: readonly string[];
-}
-
-export interface RoutingTargetConfig {
-	readonly kind: RoutingTargetKind;
-	readonly executor: RoutingExecutorKind;
-	readonly account?: string;
-	readonly endpoint?: string;
-	readonly command?: PipelineCommandConfig;
-	readonly acpx?: RoutingAcpxConfig;
-	readonly openrouter?: RoutingOpenRouterConfig;
-	readonly privacy?: RoutingPrivacyTier;
-	readonly models: Readonly<Record<string, RoutingModelConfig>>;
-}
+export {
+	ROUTING_ACCOUNT_KINDS,
+	ROUTING_TARGET_KINDS,
+	ROUTING_EXECUTOR_KINDS,
+	ROUTING_POLICY_MODES,
+	ROUTING_PRIVACY_TIERS,
+	ROUTING_REASONING_DEPTHS,
+	ROUTING_COST_TIERS,
+	ROUTING_OPERATION_KINDS,
+	ROUTING_CLASSIFIER_TASK_CLASSES,
+	resolveAcpxModelSelection,
+	isLocalInferenceEndpoint,
+	makeRoutingTargetRef,
+	parseRoutingTargetRef,
+	validateRoutingReferences,
+	parseRoutingConfig,
+	allTargetRefs,
+} from "./routing-config";
+export type * from "./routing-config";
 
 const UNKNOWN_ACPX_PROVIDER = "unknown";
 const REMOTE_ACPX_PROVIDERS = {
@@ -152,6 +59,17 @@ const REMOTE_ACPX_PROVIDERS = {
 	codex: "codex",
 	gemini: "gemini",
 } as const;
+type WorkloadBindingKey = keyof NonNullable<RoutingConfig["workloads"]>;
+const WORKLOAD_BINDING_KEYS = {
+	default: ["default"],
+	interactive: ["interactive", "default"],
+	tool_planning: ["interactive", "default"],
+	code_reasoning: ["interactive", "default"],
+	memory_extraction: ["memoryExtraction", "default"],
+	session_synthesis: ["memoryExtraction", "default"],
+	aggregate_recall: ["aggregateRecall", "memoryExtraction", "default"],
+	repair: ["repair", "memoryExtraction", "default"],
+} as const satisfies Record<RoutingOperationKind, readonly WorkloadBindingKey[]>;
 
 function acpxTelemetryProvider(agent?: string): string {
 	const normalized = agent?.trim().toLowerCase();
@@ -192,869 +110,115 @@ export function routingTelemetryAttribution(
 	};
 }
 
-export interface RoutingPolicyConfig {
-	readonly mode: RoutingPolicyMode;
-	readonly allow?: readonly string[];
-	readonly deny?: readonly string[];
-	readonly defaultTargets?: readonly string[];
-	readonly taskTargets?: Readonly<Record<string, readonly string[]>>;
-	readonly fallbackTargets?: readonly string[];
-	readonly maxLatencyMs?: number;
-	readonly costCeiling?: RoutingCostTier;
-}
-
-export interface RoutingTaskClassConfig {
-	readonly reasoning?: RoutingReasoningDepth;
-	readonly toolsRequired?: boolean;
-	readonly streamingPreferred?: boolean;
-	readonly multimodalRequired?: boolean;
-	readonly privacy?: RoutingPrivacyTier;
-	readonly maxLatencyMs?: number;
-	readonly costCeiling?: RoutingCostTier;
-	readonly expectedInputTokens?: number;
-	readonly expectedOutputTokens?: number;
-	readonly preferredTargets?: readonly string[];
-	readonly keywords?: readonly string[];
-}
-
-export interface AgentRoutingConfig {
-	readonly defaultPolicy?: string;
-	readonly roster?: readonly string[];
-	readonly preferredTargets?: Readonly<Record<string, readonly string[]>>;
-	readonly pinnedTargets?: Readonly<Record<string, string>>;
-}
-
-export interface RoutingWorkloadBinding {
-	readonly policy?: string;
-	readonly taskClass?: string;
-	readonly target?: string;
-}
-
-export interface RoutingConfig {
-	readonly source: "explicit";
-	readonly enabled: boolean;
-	readonly defaultPolicy?: string;
-	readonly accounts: Readonly<Record<string, RoutingAccountConfig>>;
-	readonly targets: Readonly<Record<string, RoutingTargetConfig>>;
-	readonly policies: Readonly<Record<string, RoutingPolicyConfig>>;
-	readonly taskClasses: Readonly<Record<string, RoutingTaskClassConfig>>;
-	readonly agents: Readonly<Record<string, AgentRoutingConfig>>;
-	readonly workloads?: {
-		readonly default?: RoutingWorkloadBinding;
-		readonly interactive?: RoutingWorkloadBinding;
-		readonly memoryExtraction?: RoutingWorkloadBinding;
-		readonly aggregateRecall?: RoutingWorkloadBinding;
-		readonly repair?: RoutingWorkloadBinding;
-	};
-}
-
-export interface RoutingRuntimeState {
-	readonly available: boolean;
-	readonly health: "healthy" | "degraded" | "blocked";
-	readonly circuitOpen: boolean;
-	readonly accountState: "ready" | "missing" | "expired" | "rate_limited" | "unknown";
-	readonly unavailableReason?: string;
-}
-
-export interface RoutingRuntimeSnapshot {
-	readonly targets: Readonly<Record<string, RoutingRuntimeState>>;
-}
-
-export interface RouteRequest {
-	readonly agentId?: string;
-	readonly operation: RoutingOperationKind;
-	readonly taskClass?: string;
-	readonly explicitPolicy?: string;
-	readonly explicitTargets?: readonly string[];
-	readonly requireTools?: boolean;
-	readonly requireStreaming?: boolean;
-	readonly requireMultimodal?: boolean;
-	readonly expectedInputTokens?: number;
-	readonly expectedOutputTokens?: number;
-	readonly privacy?: RoutingPrivacyTier;
-	readonly latencyBudgetMs?: number;
-	readonly costCeiling?: RoutingCostTier;
-	readonly promptPreview?: string;
-}
-
-export interface RouteClassification {
-	readonly taskClass: string;
-	readonly reasoning: RoutingReasoningDepth;
-	readonly source: "request" | "workload" | "classifier" | "default";
-	readonly signals: readonly string[];
-}
-
-export interface RouteCandidateTrace {
-	readonly targetRef: string;
-	readonly allowed: boolean;
-	readonly score: number | null;
-	readonly reasons: readonly string[];
-	readonly blockedBy: readonly string[];
-	readonly runtime: RoutingRuntimeState;
-}
-
-export interface RouteTrace {
-	readonly policyId: string;
-	readonly mode: RoutingPolicyMode;
-	readonly classification: RouteClassification;
-	readonly orderedTargets: readonly string[];
-	readonly candidates: readonly RouteCandidateTrace[];
-}
-
-export interface RouteDecision {
-	readonly policyId: string;
-	readonly mode: RoutingPolicyMode;
-	readonly taskClass: string;
-	readonly targetRef: string;
-	readonly targetId: string;
-	readonly modelId: string;
-	readonly fallbackTargetRefs: readonly string[];
-	readonly trace: RouteTrace;
-}
-
-function ok<T>(value: T): RouterResult<T> {
-	return { ok: true, value };
-}
-
-function err(
-	code: RouterError["code"],
-	message: string,
-	details?: Readonly<Record<string, unknown>>,
-): RouterResult<never> {
-	return { ok: false, error: { code, message, ...(details ? { details } : {}) } };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: unknown): string | undefined {
-	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
-export function isLocalInferenceEndpoint(endpoint: string | undefined): boolean {
-	if (!endpoint) return true;
-	try {
-		const parsed = new URL(endpoint);
-		return ["127.0.0.1", "localhost", "::1", "[::1]"].includes(parsed.hostname);
-	} catch {
-		return false;
-	}
-}
-
-function asBool(value: unknown): boolean | undefined {
-	return typeof value === "boolean" ? value : undefined;
-}
-
-function asPositiveInt(value: unknown): number | undefined {
-	if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
-	return Math.floor(value);
-}
-
-function asNonNegativeInt(value: unknown): number | undefined {
-	if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
-	return Math.floor(value);
-}
-
-function asRecordOfStrings(value: unknown): Record<string, string> {
-	if (!isRecord(value)) return {};
-	const next: Record<string, string> = {};
-	for (const [key, raw] of Object.entries(value)) {
-		const parsed = asString(raw);
-		if (parsed) next[key] = parsed;
-	}
-	return next;
-}
-
-function asRecordOfStringArrays(value: unknown): Record<string, readonly string[]> {
-	if (!isRecord(value)) return {};
-	const next: Record<string, readonly string[]> = {};
-	for (const [key, raw] of Object.entries(value)) {
-		const parsed = asStringArray(raw);
-		if (parsed.length > 0) next[key] = parsed;
-	}
-	return next;
-}
-
-function asStringArray(value: unknown): readonly string[] {
-	if (!Array.isArray(value)) return [];
-	return value.flatMap((entry) => {
-		const parsed = asString(entry);
-		return parsed ? [parsed] : [];
-	});
-}
-
-function hasStandaloneRoutingShape(raw: Record<string, unknown>): boolean {
-	return [
-		"enabled",
-		"defaultPolicy",
-		"default_policy",
-		"accounts",
-		"targets",
-		"providers",
-		"policies",
-		"taskClasses",
-		"task_classes",
-		"agents",
-		"workloads",
-	].some((key) => key in raw);
-}
-
-function asRoutingMode(value: unknown, fallback: RoutingPolicyMode): RoutingPolicyMode {
-	return typeof value === "string" && (ROUTING_POLICY_MODES as readonly string[]).includes(value)
-		? (value as RoutingPolicyMode)
-		: fallback;
-}
-
-function asRoutingPrivacyTier(value: unknown, fallback: RoutingPrivacyTier): RoutingPrivacyTier {
-	return typeof value === "string" && (ROUTING_PRIVACY_TIERS as readonly string[]).includes(value)
-		? (value as RoutingPrivacyTier)
-		: fallback;
-}
-
-function asRoutingReasoningDepth(value: unknown, fallback: RoutingReasoningDepth): RoutingReasoningDepth {
-	return typeof value === "string" && (ROUTING_REASONING_DEPTHS as readonly string[]).includes(value)
-		? (value as RoutingReasoningDepth)
-		: fallback;
-}
-
-function asRoutingCostTier(value: unknown): RoutingCostTier | undefined {
-	return typeof value === "string" && (ROUTING_COST_TIERS as readonly string[]).includes(value)
-		? (value as RoutingCostTier)
-		: undefined;
-}
-
-function inferTargetKind(executor: string): RoutingTargetKind {
-	if (executor === "ollama" || executor === "llama-cpp" || executor === "openai-compatible" || executor === "command") {
-		return executor === "openai-compatible" ? "gateway" : "local";
-	}
-	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode") {
-		return "subscription_session";
-	}
-	return "api";
-}
-
-function inferLegacyTargetKind(executor: string, endpoint: string | undefined): RoutingTargetKind {
-	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local";
-	return inferTargetKind(executor);
-}
-
-function inferTargetPrivacy(executor: string, endpoint?: string): RoutingPrivacyTier {
-	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local_only";
-	if (executor === "ollama" || executor === "llama-cpp") return "local_only";
-	if (executor === "acpx" || executor === "claude-code" || executor === "codex" || executor === "opencode")
-		return "restricted_remote";
-	return "remote_ok";
-}
-
-function mergeUnique(base: readonly string[], extra: readonly string[]): readonly string[] {
+function mergeUnique(...groups: readonly (readonly string[])[]): readonly string[] {
 	const seen = new Set<string>();
 	const merged: string[] = [];
-	for (const value of [...base, ...extra]) {
-		if (seen.has(value)) continue;
-		seen.add(value);
-		merged.push(value);
+	for (const group of groups) {
+		for (const value of group) {
+			if (seen.has(value)) continue;
+			seen.add(value);
+			merged.push(value);
+		}
 	}
 	return merged;
 }
 
+const TIER_RANK = { low: 1, medium: 2, high: 3 } as const satisfies Record<
+	RoutingCostTier | RoutingReasoningDepth,
+	number
+>;
+const PRIVACY_RANK = { remote_ok: 0, restricted_remote: 1, local_only: 2 } as const satisfies Record<
+	RoutingPrivacyTier,
+	number
+>;
+const DEFAULT_LATENCY = { local: 50, api: 350, gateway: 250, subscription_session: 900 } as const satisfies Record<
+	RoutingTargetConfig["kind"],
+	number
+>;
+
 function costRank(value: RoutingCostTier | undefined): number {
-	switch (value) {
-		case "low":
-			return 1;
-		case "medium":
-			return 2;
-		case "high":
-			return 3;
-		default:
-			return 2;
-	}
+	return value ? TIER_RANK[value] : TIER_RANK.medium;
 }
 
 function privacyRank(value: RoutingPrivacyTier): number {
-	switch (value) {
-		case "remote_ok":
-			return 0;
-		case "restricted_remote":
-			return 1;
-		case "local_only":
-			return 2;
-	}
+	return PRIVACY_RANK[value];
 }
 
 function reasoningRank(value: RoutingReasoningDepth): number {
-	switch (value) {
-		case "low":
-			return 1;
-		case "medium":
-			return 2;
-		case "high":
-			return 3;
-	}
+	return TIER_RANK[value];
 }
 
 function defaultLatencyForTarget(target: RoutingTargetConfig): number {
-	switch (target.kind) {
-		case "local":
-			return 50;
-		case "api":
-			return 350;
-		case "gateway":
-			return 250;
-		case "subscription_session":
-			return 900;
-	}
-}
-
-export function makeRoutingTargetRef(targetId: string, modelId: string): RoutingTargetRef {
-	return `${targetId}/${modelId}` as RoutingTargetRef;
-}
-
-export function parseRoutingTargetRef(
-	value: string,
-): RouterResult<{ readonly targetId: string; readonly modelId: string }> {
-	const trimmed = value.trim();
-	const slash = trimmed.indexOf("/");
-	if (slash <= 0 || slash === trimmed.length - 1) {
-		return err("invalid-target-ref", `Invalid target ref \"${value}\". Expected target/model.`);
-	}
-	return ok({
-		targetId: trimmed.slice(0, slash),
-		modelId: trimmed.slice(slash + 1),
-	});
-}
-
-function parseAccountConfig(raw: unknown): RoutingAccountConfig | null {
-	if (!isRecord(raw)) return null;
-	const kind = asString(raw.kind);
-	if (!kind || !(ROUTING_ACCOUNT_KINDS as readonly string[]).includes(kind)) return null;
-	const providerFamily = asString(raw.providerFamily ?? raw.provider_family);
-	if (!providerFamily) return null;
-	return {
-		kind: kind as RoutingAccountKind,
-		providerFamily,
-		label: asString(raw.label),
-		credentialRef: asString(raw.credentialRef ?? raw.credential_ref ?? raw.secretRef ?? raw.secret_ref),
-		sessionRef: asString(raw.sessionRef ?? raw.session_ref),
-		usageTier: asString(raw.usageTier ?? raw.usage_tier),
-	};
-}
-
-function parseModelConfig(raw: unknown): RoutingModelConfig | null {
-	if (!isRecord(raw)) return null;
-	const model = asString(raw.model);
-	if (!model) return null;
-	return {
-		model,
-		label: asString(raw.label),
-		reasoning: asRoutingReasoningDepth(raw.reasoning, "medium"),
-		contextWindow: asPositiveInt(raw.contextWindow ?? raw.context_window),
-		toolUse: asBool(raw.toolUse ?? raw.tool_use),
-		streaming: asBool(raw.streaming),
-		multimodal: asBool(raw.multimodal),
-		costTier: asRoutingCostTier(raw.costTier ?? raw.cost_tier),
-		averageLatencyMs: asPositiveInt(raw.averageLatencyMs ?? raw.average_latency_ms),
-	};
-}
-
-function parseCommandConfig(raw: unknown): PipelineCommandConfig | undefined {
-	if (!isRecord(raw)) return undefined;
-	const bin = asString(raw.bin ?? raw.command);
-	if (!bin) return undefined;
-	const args = asStringArray(raw.args);
-	const cwd = asString(raw.cwd);
-	const env = asRecordOfStrings(raw.env);
-	return {
-		bin,
-		args,
-		...(cwd ? { cwd } : {}),
-		...(Object.keys(env).length > 0 ? { env } : {}),
-	};
-}
-
-function asAcpxPermissionMode(value: unknown): RoutingAcpxPermissionMode | undefined {
-	return typeof value === "string" && ["inherit", "deny-all", "approve-reads", "approve-all"].includes(value)
-		? (value as RoutingAcpxPermissionMode)
-		: undefined;
-}
-
-function asAcpxHooksMode(value: unknown): RoutingAcpxHooksMode | undefined {
-	return typeof value === "string" && ["inherit", "disabled", "enabled"].includes(value)
-		? (value as RoutingAcpxHooksMode)
-		: undefined;
-}
-
-function asAcpxTerminalMode(value: unknown): RoutingAcpxTerminalMode | undefined {
-	if (value === false) return "disabled";
-	if (value === true) return "enabled";
-	return typeof value === "string" && ["inherit", "disabled", "enabled"].includes(value)
-		? (value as RoutingAcpxTerminalMode)
-		: undefined;
-}
-
-function asAcpxSessionMode(value: unknown): RoutingAcpxSessionMode | undefined {
-	return typeof value === "string" && ["exec", "session"].includes(value)
-		? (value as RoutingAcpxSessionMode)
-		: undefined;
-}
-
-function asAcpxOutputFormat(value: unknown): RoutingAcpxOutputFormat | undefined {
-	return typeof value === "string" && ["quiet", "json"].includes(value)
-		? (value as RoutingAcpxOutputFormat)
-		: undefined;
-}
-
-function asAcpxModelSelection(value: unknown): AcpxModelSelection | undefined {
-	return typeof value === "string" && ["acp", "agent"].includes(value) ? (value as AcpxModelSelection) : undefined;
-}
-
-function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
-	if (!isRecord(raw)) return undefined;
-	const nested = isRecord(raw.acpx) ? raw.acpx : raw;
-	const agent = asString(nested.agent ?? nested.harness);
-	if (!agent) return undefined;
-	const allowedTools = asStringArray(nested.allowedTools ?? nested.allowed_tools);
-	const extraArgs = asStringArray(nested.extraArgs ?? nested.extra_args);
-	return {
-		agent,
-		modelSelection: resolveAcpxModelSelection(
-			agent,
-			asAcpxModelSelection(nested.modelSelection ?? nested.model_selection),
-		),
-		version: asString(nested.version ?? nested.acpxVersion ?? nested.acpx_version),
-		bin: asString(nested.bin ?? nested.command),
-		package: asString(nested.package ?? nested.packageRef ?? nested.package_ref),
-		cwd: asString(nested.cwd ?? nested.workspace),
-		session: asString(nested.session ?? nested.sessionName ?? nested.session_name),
-		mode: asAcpxSessionMode(nested.mode),
-		permissions: asAcpxPermissionMode(nested.permissions ?? nested.permissionMode ?? nested.permission_mode),
-		hooks: asAcpxHooksMode(nested.hooks ?? nested.hooksMode ?? nested.hooks_mode),
-		terminal: asAcpxTerminalMode(nested.terminal ?? nested.terminalMode ?? nested.terminal_mode),
-		allowedTools: allowedTools.length > 0 ? allowedTools : undefined,
-		format: asAcpxOutputFormat(nested.format ?? nested.outputFormat ?? nested.output_format),
-		captureEvents: asBool(nested.captureEvents ?? nested.capture_events),
-		maxCapturedEvents: asPositiveInt(nested.maxCapturedEvents ?? nested.max_captured_events),
-		emptyResponseRetries: Math.min(
-			3,
-			asNonNegativeInt(nested.emptyResponseRetries ?? nested.empty_response_retries) ?? 1,
-		),
-		timeoutMs: asPositiveInt(nested.timeoutMs ?? nested.timeout_ms),
-		extraArgs: extraArgs.length > 0 ? extraArgs : undefined,
-	};
-}
-
-function parseOpenRouterConfig(raw: unknown): RoutingOpenRouterConfig | undefined {
-	if (!isRecord(raw)) return undefined;
-	const nested = isRecord(raw.openrouter) ? raw.openrouter : raw;
-	const reasoningRaw = isRecord(nested.reasoning) ? nested.reasoning : undefined;
-	if (!reasoningRaw) return undefined;
-	const enabled = asBool(reasoningRaw.enabled);
-	const maxTokens = asNonNegativeInt(reasoningRaw.maxTokens ?? reasoningRaw.max_tokens);
-	const reasoning = {
-		...(enabled !== undefined ? { enabled } : {}),
-		...(maxTokens !== undefined ? { maxTokens } : {}),
-	};
-	return Object.keys(reasoning).length > 0 ? { reasoning } : undefined;
-}
-
-function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
-	if (!isRecord(raw)) return null;
-	const executor = asString(raw.executor);
-	if (!executor || !ROUTING_EXECUTOR_PATTERN.test(executor)) return null;
-	const modelsRaw = isRecord(raw.models) ? raw.models : null;
-	if (!modelsRaw) return null;
-	const models: Record<string, RoutingModelConfig> = {};
-	for (const [modelId, modelRaw] of Object.entries(modelsRaw)) {
-		const parsed = parseModelConfig(modelRaw);
-		if (parsed) models[modelId] = parsed;
-	}
-	if (Object.keys(models).length === 0) return null;
-	const acpx = executor === "acpx" ? parseAcpxConfig(raw) : undefined;
-	if (executor === "acpx" && !acpx) return null;
-	const openrouter = executor === "openrouter" ? parseOpenRouterConfig(raw) : undefined;
-	const endpoint = asString(raw.endpoint ?? raw.baseUrl ?? raw.base_url);
-	return {
-		kind: (() => {
-			const parsed = asString(raw.kind);
-			if (parsed && (ROUTING_TARGET_KINDS as readonly string[]).includes(parsed)) {
-				return parsed as RoutingTargetKind;
-			}
-			return inferTargetKind(executor);
-		})(),
-		executor: executor as RoutingExecutorKind,
-		account: asString(raw.account),
-		endpoint,
-		command: parseCommandConfig(raw.command),
-		acpx,
-		openrouter,
-		privacy: asRoutingPrivacyTier(raw.privacy, inferTargetPrivacy(executor, endpoint)),
-		models,
-	};
-}
-
-function parsePolicyConfig(raw: unknown): RoutingPolicyConfig | null {
-	if (!isRecord(raw)) return null;
-	return {
-		mode: asRoutingMode(raw.mode, "automatic"),
-		allow: asStringArray(raw.allow),
-		deny: asStringArray(raw.deny),
-		defaultTargets: asStringArray(raw.defaultTargets ?? raw.default_targets),
-		taskTargets: asRecordOfStringArrays(raw.taskTargets ?? raw.task_targets),
-		fallbackTargets: asStringArray(raw.fallbackTargets ?? raw.fallback_targets),
-		maxLatencyMs: asPositiveInt(raw.maxLatencyMs ?? raw.max_latency_ms),
-		costCeiling: asRoutingCostTier(raw.costCeiling ?? raw.cost_ceiling),
-	};
-}
-
-function parseTaskClassConfig(raw: unknown): RoutingTaskClassConfig | null {
-	if (!isRecord(raw)) return null;
-	return {
-		reasoning: asRoutingReasoningDepth(raw.reasoning, "medium"),
-		toolsRequired: asBool(raw.toolsRequired ?? raw.tools_required),
-		streamingPreferred: asBool(raw.streamingPreferred ?? raw.streaming_preferred),
-		multimodalRequired: asBool(raw.multimodalRequired ?? raw.multimodal_required),
-		privacy: asString(raw.privacy) ? asRoutingPrivacyTier(raw.privacy, "remote_ok") : undefined,
-		maxLatencyMs: asPositiveInt(raw.maxLatencyMs ?? raw.max_latency_ms),
-		costCeiling: asRoutingCostTier(raw.costCeiling ?? raw.cost_ceiling),
-		expectedInputTokens: asPositiveInt(raw.expectedInputTokens ?? raw.expected_input_tokens),
-		expectedOutputTokens: asPositiveInt(raw.expectedOutputTokens ?? raw.expected_output_tokens),
-		preferredTargets: asStringArray(raw.preferredTargets ?? raw.preferred_targets),
-		keywords: asStringArray(raw.keywords),
-	};
-}
-
-function parseAgentRoutingConfig(raw: unknown): AgentRoutingConfig | null {
-	if (!isRecord(raw)) return null;
-	return {
-		defaultPolicy: asString(raw.defaultPolicy ?? raw.default_policy),
-		roster: asStringArray(raw.roster),
-		preferredTargets: asRecordOfStringArrays(raw.preferredTargets ?? raw.preferred_targets),
-		pinnedTargets: asRecordOfStrings(raw.pinnedTargets ?? raw.pinned_targets),
-	};
-}
-
-function parseWorkloadBinding(raw: unknown): RoutingWorkloadBinding | undefined {
-	if (!isRecord(raw)) return undefined;
-	const policy = asString(raw.policy);
-	const taskClass = asString(raw.taskClass ?? raw.task_class);
-	const target = asString(raw.target);
-	if (!policy && !taskClass && !target) return undefined;
-	return {
-		...(policy ? { policy } : {}),
-		...(taskClass ? { taskClass } : {}),
-		...(target ? { target } : {}),
-	};
-}
-
-function emptyRoutingConfig(): RoutingConfig {
-	return {
-		source: "explicit",
-		enabled: false,
-		accounts: {},
-		targets: {},
-		policies: {},
-		taskClasses: {},
-		agents: {},
-	};
-}
-export function validateRoutingReferences(config: RoutingConfig): readonly RoutingValidationIssue[] {
-	const issues: RoutingValidationIssue[] = [];
-	const policyIds = new Set(Object.keys(config.policies));
-	const taskClassIds = new Set<string>([
-		...Object.keys(config.taskClasses),
-		...Object.values(ROUTING_CLASSIFIER_TASK_CLASSES),
-		"memory_extraction",
-		"session_synthesis",
-		"interactive",
-	]);
-	const accountIds = new Set(Object.keys(config.accounts));
-	const validTargetRefs = new Set(allTargetRefs(config));
-
-	const missingTarget = (field: string, ref: string, severity: "error" | "warning"): void => {
-		if (!validTargetRefs.has(ref)) {
-			issues.push({ severity, field, ref, message: `Target ref "${ref}" referenced by ${field} does not exist.` });
-		}
-	};
-	const missingPolicy = (field: string, ref: string, severity: "error" | "warning"): void => {
-		if (!policyIds.has(ref)) {
-			issues.push({ severity, field, ref, message: `Policy "${ref}" referenced by ${field} does not exist.` });
-		}
-	};
-	const missingTaskClass = (field: string, ref: string): void => {
-		if (!taskClassIds.has(ref)) {
-			issues.push({
-				severity: "warning",
-				field,
-				ref,
-				message: `Task class "${ref}" referenced by ${field} does not exist.`,
-			});
-		}
-	};
-	const missingAccount = (field: string, ref: string): void => {
-		if (!accountIds.has(ref)) {
-			issues.push({
-				severity: "warning",
-				field,
-				ref,
-				message: `Account "${ref}" referenced by ${field} does not exist.`,
-			});
-		}
-	};
-
-	if (config.defaultPolicy && policyIds.size > 0) {
-		missingPolicy("defaultPolicy", config.defaultPolicy, "error");
-	}
-
-	for (const [targetId, target] of Object.entries(config.targets)) {
-		if (target.account) missingAccount(`targets.${targetId}.account`, target.account);
-	}
-
-	if (config.workloads) {
-		for (const [name, binding] of Object.entries(config.workloads)) {
-			if (!binding) continue;
-			const field = `workloads.${name}`;
-			if (binding.policy) missingPolicy(`${field}.policy`, binding.policy, "warning");
-			if (binding.target) missingTarget(`${field}.target`, binding.target, "warning");
-			if (binding.taskClass) missingTaskClass(`${field}.taskClass`, binding.taskClass);
-		}
-	}
-
-	for (const [policyId, policy] of Object.entries(config.policies)) {
-		for (const ref of policy.allow ?? []) missingTarget(`policies.${policyId}.allow`, ref, "warning");
-		for (const ref of policy.defaultTargets ?? []) {
-			missingTarget(`policies.${policyId}.defaultTargets`, ref, "warning");
-		}
-		for (const ref of policy.fallbackTargets ?? []) {
-			missingTarget(`policies.${policyId}.fallbackTargets`, ref, "warning");
-		}
-		for (const [taskClass, refs] of Object.entries(policy.taskTargets ?? {})) {
-			missingTaskClass(`policies.${policyId}.taskTargets.${taskClass}`, taskClass);
-			for (const ref of refs) missingTarget(`policies.${policyId}.taskTargets.${taskClass}`, ref, "warning");
-		}
-	}
-
-	for (const [agentId, agent] of Object.entries(config.agents)) {
-		if (agent.defaultPolicy) missingPolicy(`agents.${agentId}.defaultPolicy`, agent.defaultPolicy, "warning");
-		for (const ref of agent.roster ?? []) missingTarget(`agents.${agentId}.roster`, ref, "warning");
-		for (const [taskClass, refs] of Object.entries(agent.preferredTargets ?? {})) {
-			missingTaskClass(`agents.${agentId}.preferredTargets.${taskClass}`, taskClass);
-			for (const ref of refs) missingTarget(`agents.${agentId}.preferredTargets.${taskClass}`, ref, "warning");
-		}
-		for (const [taskClass, ref] of Object.entries(agent.pinnedTargets ?? {})) {
-			if (taskClass !== "default") missingTaskClass(`agents.${agentId}.pinnedTargets.${taskClass}`, taskClass);
-			missingTarget(`agents.${agentId}.pinnedTargets.${taskClass}`, ref, "warning");
-		}
-	}
-
-	for (const [taskClassId, taskClass] of Object.entries(config.taskClasses)) {
-		for (const ref of taskClass.preferredTargets ?? []) {
-			missingTarget(`taskClasses.${taskClassId}.preferredTargets`, ref, "warning");
-		}
-	}
-
-	return issues;
-}
-
-export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
-	const base = emptyRoutingConfig();
-	if (!isRecord(raw)) {
-		return ok(base);
-	}
-	const embeddedInference = isRecord(raw.inference) ? raw.inference : null;
-	const standaloneInference = embeddedInference ? null : hasStandaloneRoutingShape(raw) ? raw : null;
-	const routingRaw = embeddedInference ?? standaloneInference;
-	if (!routingRaw) {
-		return ok(base);
-	}
-
-	const accounts: Record<string, RoutingAccountConfig> = { ...base.accounts };
-	if (isRecord(routingRaw.accounts)) {
-		for (const [accountId, accountRaw] of Object.entries(routingRaw.accounts)) {
-			const parsed = parseAccountConfig(accountRaw);
-			if (parsed) accounts[accountId] = parsed;
-		}
-	}
-
-	const targets: Record<string, RoutingTargetConfig> = { ...base.targets };
-	const targetsRaw = isRecord(routingRaw.targets)
-		? routingRaw.targets
-		: isRecord(routingRaw.providers)
-			? routingRaw.providers
-			: null;
-	if (targetsRaw) {
-		for (const [targetId, targetRaw] of Object.entries(targetsRaw)) {
-			const parsed = parseTargetConfig(targetRaw);
-			if (parsed) targets[targetId] = parsed;
-		}
-	}
-
-	const policies: Record<string, RoutingPolicyConfig> = { ...base.policies };
-	if (isRecord(routingRaw.policies)) {
-		for (const [policyId, policyRaw] of Object.entries(routingRaw.policies)) {
-			const parsed = parsePolicyConfig(policyRaw);
-			if (parsed) policies[policyId] = parsed;
-		}
-	}
-
-	const taskClasses: Record<string, RoutingTaskClassConfig> = { ...base.taskClasses };
-	if (isRecord(routingRaw.taskClasses ?? routingRaw.task_classes)) {
-		const taskClassRaw = isRecord(routingRaw.taskClasses)
-			? routingRaw.taskClasses
-			: (routingRaw.task_classes as Record<string, unknown>);
-		for (const [taskId, taskRaw] of Object.entries(taskClassRaw)) {
-			const parsed = parseTaskClassConfig(taskRaw);
-			if (parsed) taskClasses[taskId] = parsed;
-		}
-	}
-
-	const agents: Record<string, AgentRoutingConfig> = { ...base.agents };
-	if (isRecord(routingRaw.agents)) {
-		for (const [agentId, agentRaw] of Object.entries(routingRaw.agents)) {
-			const parsed = parseAgentRoutingConfig(agentRaw);
-			if (parsed) agents[agentId] = parsed;
-		}
-	}
-
-	const workloads = {
-		...(base.workloads ?? {}),
-	};
-	if (isRecord(routingRaw.workloads)) {
-		const defaultBinding = parseWorkloadBinding(routingRaw.workloads.default);
-		const interactive = parseWorkloadBinding(routingRaw.workloads.interactive);
-		const memoryExtraction = parseWorkloadBinding(
-			routingRaw.workloads.memoryExtraction ?? routingRaw.workloads.memory_extraction,
-		);
-		const aggregateRecall = parseWorkloadBinding(
-			routingRaw.workloads.aggregateRecall ?? routingRaw.workloads.aggregate_recall,
-		);
-		const repair = parseWorkloadBinding(routingRaw.workloads.repair);
-		if (defaultBinding) workloads.default = defaultBinding;
-		if (interactive) workloads.interactive = interactive;
-		if (memoryExtraction) workloads.memoryExtraction = memoryExtraction;
-		if (aggregateRecall) workloads.aggregateRecall = aggregateRecall;
-		if (repair) workloads.repair = repair;
-	}
-
-	const explicitDefaultPolicy = asString(routingRaw.defaultPolicy ?? routingRaw.default_policy);
-	if (!explicitDefaultPolicy && Object.keys(policies).length === 0 && Object.keys(targets).length > 0) {
-		const refs: string[] = [];
-		for (const [targetId, target] of Object.entries(targets)) {
-			for (const modelId of Object.keys(target.models)) {
-				refs.push(makeRoutingTargetRef(targetId, modelId));
-			}
-		}
-		policies.default = {
-			mode: "automatic",
-			defaultTargets: refs,
-			fallbackTargets: refs,
-		};
-	}
-
-	const enabled = asBool(routingRaw.enabled) ?? (Object.keys(targets).length > 0 || base.enabled);
-	const defaultPolicy = explicitDefaultPolicy ?? base.defaultPolicy ?? Object.keys(policies)[0];
-
-	const config: RoutingConfig = {
-		source: "explicit",
-		enabled,
-		...(defaultPolicy ? { defaultPolicy } : {}),
-		accounts,
-		targets,
-		policies,
-		taskClasses,
-		agents,
-		...(Object.keys(workloads).length > 0 ? { workloads } : {}),
-	};
-
-	const issues = validateRoutingReferences(config);
-	const errors = issues.filter((issue) => issue.severity === "error");
-	if (errors.length > 0) {
-		const summary = errors.map((issue) => `${issue.field}="${issue.ref}"`).join("; ");
-		return err("invalid-config", `Routing config has ${errors.length} broken reference(s): ${summary}`, {
-			issues: errors,
-			warnings: issues.filter((issue) => issue.severity === "warning"),
-		});
-	}
-
-	return ok(config);
+	return DEFAULT_LATENCY[target.kind];
 }
 
 function workloadBindingForOperation(
 	config: RoutingConfig,
 	operation: RoutingOperationKind,
 ): RoutingWorkloadBinding | undefined {
-	switch (operation) {
-		case "default":
-			return config.workloads?.default;
-		case "interactive":
-		case "tool_planning":
-		case "code_reasoning":
-			return config.workloads?.interactive ?? config.workloads?.default;
-		case "memory_extraction":
-			return config.workloads?.memoryExtraction ?? config.workloads?.default;
-		case "session_synthesis":
-			return config.workloads?.memoryExtraction ?? config.workloads?.default;
-		case "aggregate_recall":
-			return config.workloads?.aggregateRecall ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
-		case "repair":
-			return config.workloads?.repair ?? config.workloads?.memoryExtraction ?? config.workloads?.default;
+	for (const key of WORKLOAD_BINDING_KEYS[operation]) {
+		const binding = config.workloads?.[key];
+		if (binding != null) return binding;
 	}
+	return undefined;
+}
+
+function routeClassification(
+	taskClass: string,
+	source: RouteClassification["source"],
+	signals: readonly string[],
+	reasoning: RoutingReasoningDepth = "medium",
+): RouteClassification {
+	return { taskClass, reasoning, source, signals };
 }
 
 function classifyRouteRequest(config: RoutingConfig, request: RouteRequest): RouteClassification {
 	const workload = workloadBindingForOperation(config, request.operation);
 	const workloadTaskClass = workload?.taskClass;
 	if (request.taskClass && config.taskClasses[request.taskClass]) {
-		return {
-			taskClass: request.taskClass,
-			reasoning: config.taskClasses[request.taskClass]?.reasoning ?? "medium",
-			source: "request",
-			signals: ["taskClass=request"],
-		};
+		return routeClassification(
+			request.taskClass,
+			"request",
+			["taskClass=request"],
+			config.taskClasses[request.taskClass]?.reasoning ?? "medium",
+		);
 	}
 	if (workloadTaskClass && config.taskClasses[workloadTaskClass]) {
-		return {
-			taskClass: workloadTaskClass,
-			reasoning: config.taskClasses[workloadTaskClass]?.reasoning ?? "medium",
-			source: "workload",
-			signals: [`taskClass=workload:${request.operation}`],
-		};
+		return routeClassification(
+			workloadTaskClass,
+			"workload",
+			[`taskClass=workload:${request.operation}`],
+			config.taskClasses[workloadTaskClass]?.reasoning ?? "medium",
+		);
 	}
 
 	const preview = (request.promptPreview ?? "").toLowerCase();
-	const keywordMatches: string[] = [];
-	for (const [taskClass, cfg] of Object.entries(config.taskClasses)) {
-		if (!cfg.keywords || cfg.keywords.length === 0) continue;
-		const hit = cfg.keywords.some((keyword) => preview.includes(keyword.toLowerCase()));
-		if (hit) keywordMatches.push(taskClass);
-	}
+	const keywordMatches = Object.entries(config.taskClasses)
+		.filter(([, taskClass]) => taskClass.keywords?.some((keyword) => preview.includes(keyword.toLowerCase())))
+		.map(([taskClass]) => taskClass);
 	if (keywordMatches.length > 0) {
 		const taskClass = keywordMatches[0];
-		return {
+		return routeClassification(
 			taskClass,
-			reasoning: config.taskClasses[taskClass]?.reasoning ?? "medium",
-			source: "classifier",
-			signals: keywordMatches.map((value) => `keyword:${value}`),
-		};
+			"classifier",
+			keywordMatches.map((value) => `keyword:${value}`),
+			config.taskClasses[taskClass]?.reasoning ?? "medium",
+		);
 	}
 
 	if (
 		request.operation === "code_reasoning" ||
-		/\b(function|typescript|javascript|stack trace|traceback|error:|tsx|tsx|rust|python|bun)\b/.test(preview)
+		/\b(function|typescript|javascript|stack trace|traceback|error:|tsx|rust|python|bun)\b/.test(preview)
 	) {
-		return {
-			taskClass: ROUTING_CLASSIFIER_TASK_CLASSES.codeReasoning,
-			reasoning: "high",
-			source: "classifier",
-			signals: ["prompt=code-like"],
-		};
+		return routeClassification(
+			ROUTING_CLASSIFIER_TASK_CLASSES.codeReasoning,
+			"classifier",
+			["prompt=code-like"],
+			"high",
+		);
 	}
 	if (request.privacy === "local_only") {
-		return {
-			taskClass: ROUTING_CLASSIFIER_TASK_CLASSES.localSensitive,
-			reasoning: "medium",
-			source: "classifier",
-			signals: ["privacy=local_only"],
-		};
+		return routeClassification(ROUTING_CLASSIFIER_TASK_CLASSES.localSensitive, "classifier", ["privacy=local_only"]);
 	}
 
 	const fallbackTaskClass =
@@ -1063,12 +227,12 @@ function classifyRouteRequest(config: RoutingConfig, request: RouteRequest): Rou
 			: request.operation === "session_synthesis"
 				? "session_synthesis"
 				: "interactive";
-	return {
-		taskClass: fallbackTaskClass,
-		reasoning: config.taskClasses[fallbackTaskClass]?.reasoning ?? "medium",
-		source: "default",
-		signals: ["fallback=default"],
-	};
+	return routeClassification(
+		fallbackTaskClass,
+		"default",
+		["fallback=default"],
+		config.taskClasses[fallbackTaskClass]?.reasoning ?? "medium",
+	);
 }
 
 function orderedPreferenceLists(
@@ -1078,9 +242,11 @@ function orderedPreferenceLists(
 ):
 	| {
 			readonly policyId: string;
+			readonly policy: RoutingPolicyConfig;
 			readonly mode: RoutingPolicyMode;
 			readonly orderedTargets: readonly string[];
 			readonly fallbackTargets: readonly string[];
+			readonly candidateRefs: readonly string[];
 	  }
 	| RouterError {
 	const workload = workloadBindingForOperation(config, request.operation);
@@ -1101,11 +267,12 @@ function orderedPreferenceLists(
 	if (!policy) {
 		return {
 			code: "policy-not-found",
-			message: `Routing policy \"${policyId}\" was not found.`,
+			message: `Routing policy "${policyId}" was not found.`,
 		};
 	}
 
-	const allowedTargets = new Set(targetRefsAllowedByPolicy(config, request, policy));
+	const allowedTargetRefs = targetRefsAllowedByPolicy(config, request, policy);
+	const allowedTargets = new Set(allowedTargetRefs);
 	const explicitTargets = request.explicitTargets ?? [];
 	const disallowedExplicitTargets = explicitTargets.filter((targetRef) => !allowedTargets.has(targetRef));
 	if (disallowedExplicitTargets.length > 0) {
@@ -1124,21 +291,32 @@ function orderedPreferenceLists(
 		? [workload.target]
 		: mergeUnique(
 				config.taskClasses[classification.taskClass]?.preferredTargets ?? [],
-				mergeUnique(policy.taskTargets?.[classification.taskClass] ?? [], policy.defaultTargets ?? []),
+				policy.taskTargets?.[classification.taskClass] ?? [],
+				policy.defaultTargets ?? [],
 			);
 	const orderedTargets = mergeUnique(
 		explicitTargets,
-		mergeUnique(
-			pinnedTarget ? [pinnedTarget] : [],
-			mergeUnique(agentConfig?.preferredTargets?.[classification.taskClass] ?? [], workloadTargets),
-		),
+		pinnedTarget ? [pinnedTarget] : [],
+		agentConfig?.preferredTargets?.[classification.taskClass] ?? [],
+		workloadTargets,
 	).filter((targetRef) => allowedTargets.has(targetRef));
+	const explicitTargetSet = new Set(explicitTargets);
+	const rosterCandidates =
+		explicitTargets.length > 0
+			? allowedTargetRefs.filter((targetRef) => explicitTargetSet.has(targetRef))
+			: allowedTargetRefs;
+	const rosterTargets = workload?.target
+		? []
+		: mergeUnique(config.taskClasses[classification.taskClass]?.preferredTargets ?? [], rosterCandidates);
+	const fallbackTargets = (policy.fallbackTargets ?? []).filter((targetRef) => allowedTargets.has(targetRef));
 
 	return {
 		policyId,
+		policy,
 		mode: policy.mode,
 		orderedTargets,
-		fallbackTargets: (policy.fallbackTargets ?? []).filter((targetRef) => allowedTargets.has(targetRef)),
+		fallbackTargets,
+		candidateRefs: mergeUnique(orderedTargets, rosterTargets, fallbackTargets),
 	};
 }
 
@@ -1161,30 +339,6 @@ function targetRefsAllowedByPolicy(
 	return candidates;
 }
 
-function targetRefsForRoster(
-	config: RoutingConfig,
-	request: RouteRequest,
-	classification: RouteClassification,
-	policy: RoutingPolicyConfig,
-): readonly string[] {
-	let candidates = [...targetRefsAllowedByPolicy(config, request, policy)];
-	if (request.explicitTargets && request.explicitTargets.length > 0) {
-		const explicit = new Set(request.explicitTargets);
-		candidates = candidates.filter((candidate) => explicit.has(candidate));
-	}
-	const preferred = config.taskClasses[classification.taskClass]?.preferredTargets ?? [];
-	return mergeUnique(preferred, candidates);
-}
-
-export function allTargetRefs(config: RoutingConfig): readonly string[] {
-	const refs: string[] = [];
-	for (const [targetId, target] of Object.entries(config.targets)) {
-		for (const modelId of Object.keys(target.models)) {
-			refs.push(makeRoutingTargetRef(targetId, modelId));
-		}
-	}
-	return refs;
-}
 export function configuredRoutingTargetRefs(config: RoutingConfig): readonly string[] {
 	let refs: readonly string[] = [];
 	for (const operation of ROUTING_OPERATION_KINDS) {
@@ -1193,56 +347,30 @@ export function configuredRoutingTargetRefs(config: RoutingConfig): readonly str
 		const preference = orderedPreferenceLists(config, request, classification);
 		if ("code" in preference) continue;
 
-		const policy = config.policies[preference.policyId];
-		if (!policy) continue;
-		const workload = workloadBindingForOperation(config, operation);
-		const rosterTargets = workload?.target ? [] : targetRefsForRoster(config, request, classification, policy);
-		refs = mergeUnique(
-			refs,
-			mergeUnique(preference.orderedTargets, mergeUnique(rosterTargets, preference.fallbackTargets)),
-		);
+		refs = mergeUnique(refs, preference.candidateRefs);
 	}
 	return refs;
 }
 
-function buildCandidateTrace(
-	config: RoutingConfig,
-	request: RouteRequest,
-	classification: RouteClassification,
-	targetRef: string,
-	runtime: RoutingRuntimeState,
-	policy: RoutingPolicyConfig,
-	orderedTargets: readonly string[],
-): RouteCandidateTrace {
-	const ref = parseRoutingTargetRef(targetRef);
-	if (ref.ok === false) {
-		const invalid = ref.error.message;
-		return {
-			targetRef,
-			allowed: false,
-			score: null,
-			reasons: [],
-			blockedBy: [invalid],
-			runtime,
-		};
-	}
-	const target = config.targets[ref.value.targetId];
-	const model = target?.models[ref.value.modelId];
-	if (!target || !model) {
-		return {
-			targetRef,
-			allowed: false,
-			score: null,
-			reasons: [],
-			blockedBy: ["target not found"],
-			runtime,
-		};
-	}
+interface CandidateContext {
+	readonly targetRef: string;
+	readonly target: RoutingTargetConfig;
+	readonly model: RoutingModelConfig;
+	readonly runtime: RoutingRuntimeState;
+	readonly request: RouteRequest;
+	readonly classification: RouteClassification;
+	readonly taskClass: RoutingConfig["taskClasses"][string] | undefined;
+	readonly orderedTargets: readonly string[];
+	readonly requiredPrivacy: RoutingPrivacyTier;
+	readonly expectedInputTokens?: number;
+	readonly requiredCost?: RoutingCostTier;
+	readonly latencyBudget?: number;
+	readonly estimatedLatency: number;
+}
 
+function candidateBlockers(candidate: CandidateContext): string[] {
+	const { target, model, runtime, request, taskClass, requiredPrivacy, expectedInputTokens } = candidate;
 	const blockedBy: string[] = [];
-	const reasons: string[] = [];
-	let score = 0;
-	const requiredPrivacy = request.privacy ?? config.taskClasses[classification.taskClass]?.privacy ?? "remote_ok";
 	const targetPrivacy = target.privacy ?? inferTargetPrivacy(target.executor, target.endpoint);
 	if (privacyRank(targetPrivacy) < privacyRank(requiredPrivacy)) {
 		blockedBy.push(`privacy gate (${requiredPrivacy})`);
@@ -1250,53 +378,47 @@ function buildCandidateTrace(
 	if (requiredPrivacy === "local_only" && target.kind !== "local") {
 		blockedBy.push("local_only request requires local executor");
 	}
-	if (
-		(request.requireTools ?? config.taskClasses[classification.taskClass]?.toolsRequired) &&
-		model.toolUse === false
-	) {
+	if ((request.requireTools ?? taskClass?.toolsRequired) && model.toolUse === false) {
 		blockedBy.push("tool-use required");
 	}
-	if (
-		(request.requireStreaming ?? config.taskClasses[classification.taskClass]?.streamingPreferred) &&
-		model.streaming !== true
-	) {
+	if ((request.requireStreaming ?? taskClass?.streamingPreferred) && model.streaming !== true) {
 		blockedBy.push("streaming required");
 	}
-	if (
-		(request.requireMultimodal ?? config.taskClasses[classification.taskClass]?.multimodalRequired) &&
-		model.multimodal !== true
-	) {
+	if ((request.requireMultimodal ?? taskClass?.multimodalRequired) && model.multimodal !== true) {
 		blockedBy.push("multimodal required");
 	}
-	const expectedInputTokens =
-		request.expectedInputTokens ?? config.taskClasses[classification.taskClass]?.expectedInputTokens;
 	if (expectedInputTokens && model.contextWindow && expectedInputTokens > model.contextWindow) {
 		blockedBy.push(`context window too small (${model.contextWindow})`);
 	}
 	if (!runtime.available || runtime.circuitOpen || runtime.health === "blocked") {
 		blockedBy.push(runtime.unavailableReason ?? "executor unavailable");
 	}
-	if (
-		runtime.accountState === "missing" ||
-		runtime.accountState === "expired" ||
-		runtime.accountState === "rate_limited"
-	) {
+	if (["missing", "expired", "rate_limited"].includes(runtime.accountState)) {
 		blockedBy.push(`account state ${runtime.accountState}`);
 	}
-
-	const requiredCost =
-		request.costCeiling ?? config.taskClasses[classification.taskClass]?.costCeiling ?? policy.costCeiling;
-	if (requiredCost && model.costTier && costRank(model.costTier) > costRank(requiredCost)) {
-		blockedBy.push(`cost tier ${model.costTier} exceeds ${requiredCost}`);
+	if (candidate.requiredCost && model.costTier && costRank(model.costTier) > costRank(candidate.requiredCost)) {
+		blockedBy.push(`cost tier ${model.costTier} exceeds ${candidate.requiredCost}`);
 	}
-
-	const latencyBudget =
-		request.latencyBudgetMs ?? config.taskClasses[classification.taskClass]?.maxLatencyMs ?? policy.maxLatencyMs;
-	const estimatedLatency = model.averageLatencyMs ?? defaultLatencyForTarget(target);
-	if (latencyBudget && estimatedLatency > latencyBudget * 2) {
-		blockedBy.push(`estimated latency ${estimatedLatency}ms exceeds budget ${latencyBudget}ms`);
+	if (candidate.latencyBudget && candidate.estimatedLatency > candidate.latencyBudget * 2) {
+		blockedBy.push(`estimated latency ${candidate.estimatedLatency}ms exceeds budget ${candidate.latencyBudget}ms`);
 	}
+	return blockedBy;
+}
 
+function scoreCandidate(candidate: CandidateContext): { readonly score: number; readonly reasons: readonly string[] } {
+	const {
+		targetRef,
+		target,
+		model,
+		runtime,
+		classification,
+		orderedTargets,
+		latencyBudget,
+		estimatedLatency,
+		requiredCost,
+	} = candidate;
+	const reasons: string[] = [];
+	let score = 0;
 	const reasoning = model.reasoning ?? "medium";
 	const reasoningDelta = reasoningRank(reasoning) - reasoningRank(classification.reasoning);
 	const orderIndex = orderedTargets.indexOf(targetRef);
@@ -1334,15 +456,72 @@ function buildCandidateTrace(
 		score += 6;
 		reasons.push("account ready");
 	}
+	return { score, reasons };
+}
 
+function blockedCandidateTrace(targetRef: string, runtime: RoutingRuntimeState, reason: string): RouteCandidateTrace {
 	return {
 		targetRef,
-		allowed: blockedBy.length === 0,
-		score: blockedBy.length === 0 ? score : null,
-		reasons,
-		blockedBy,
+		allowed: false,
+		score: null,
+		reasons: [],
+		blockedBy: [reason],
 		runtime,
 	};
+}
+
+function buildCandidateTrace(
+	config: RoutingConfig,
+	request: RouteRequest,
+	classification: RouteClassification,
+	targetRef: string,
+	runtime: RoutingRuntimeState,
+	policy: RoutingPolicyConfig,
+	orderedTargets: readonly string[],
+): RouteCandidateTrace {
+	const ref = parseRoutingTargetRef(targetRef);
+	if (ref.ok === false) return blockedCandidateTrace(targetRef, runtime, ref.error.message);
+	const target = config.targets[ref.value.targetId];
+	const model = target?.models[ref.value.modelId];
+	if (!target || !model) return blockedCandidateTrace(targetRef, runtime, "target not found");
+
+	const taskClass = config.taskClasses[classification.taskClass];
+	const candidate: CandidateContext = {
+		targetRef,
+		target,
+		model,
+		runtime,
+		request,
+		classification,
+		taskClass,
+		orderedTargets,
+		requiredPrivacy: request.privacy ?? taskClass?.privacy ?? "remote_ok",
+		expectedInputTokens: request.expectedInputTokens ?? taskClass?.expectedInputTokens,
+		requiredCost: request.costCeiling ?? taskClass?.costCeiling ?? policy.costCeiling,
+		latencyBudget: request.latencyBudgetMs ?? taskClass?.maxLatencyMs ?? policy.maxLatencyMs,
+		estimatedLatency: model.averageLatencyMs ?? defaultLatencyForTarget(target),
+	};
+	const blockedBy = candidateBlockers(candidate);
+	const { score, reasons } = scoreCandidate(candidate);
+	const allowed = blockedBy.length === 0;
+	return { targetRef, allowed, score: allowed ? score : null, reasons, blockedBy, runtime };
+}
+
+function selectRouteCandidates(
+	config: RoutingConfig,
+	request: RouteRequest,
+	candidates: readonly RouteCandidateTrace[],
+	mode: RoutingPolicyMode,
+): { readonly allowed: readonly RouteCandidateTrace[]; readonly selected: RouteCandidateTrace | undefined } {
+	const allowed = candidates.filter((candidate) => {
+		if (!candidate.allowed) return false;
+		if (request.operation !== "aggregate_recall") return true;
+		const parsed = parseRoutingTargetRef(candidate.targetRef);
+		return !parsed.ok || config.targets[parsed.value.targetId]?.executor !== "acpx";
+	});
+	const selected =
+		mode === "strict" ? allowed[0] : [...allowed].sort((left, right) => (right.score ?? 0) - (left.score ?? 0))[0];
+	return { allowed, selected };
 }
 
 export function resolveRoutingDecision(
@@ -1353,15 +532,13 @@ export function resolveRoutingDecision(
 	if (!config.enabled) {
 		return err("no-candidates", "Routing is not enabled for this agent config.");
 	}
-	const pref = orderedPreferenceLists(config, request, classifyRouteRequest(config, request));
+	const classification = classifyRouteRequest(config, request);
+	const pref = orderedPreferenceLists(config, request, classification);
 	if ("code" in pref) {
 		return { ok: false, error: pref };
 	}
-	const policy = config.policies[pref.policyId];
-	const classification = classifyRouteRequest(config, request);
-	const workload = workloadBindingForOperation(config, request.operation);
-	const rosterCandidates = workload?.target ? [] : targetRefsForRoster(config, request, classification, policy);
-	const candidateRefs = mergeUnique(pref.orderedTargets, mergeUnique(rosterCandidates, pref.fallbackTargets));
+	const policy = pref.policy;
+	const candidateRefs = pref.candidateRefs;
 	if (candidateRefs.length === 0) {
 		return err("no-candidates", "No route candidates were available for this request.", {
 			policyId: pref.policyId,
@@ -1395,31 +572,17 @@ export function resolveRoutingDecision(
 		orderedTargets: pref.orderedTargets,
 		candidates: traces,
 	};
-	const disallowedExecutors = request.operation === "aggregate_recall" ? new Set(["acpx"]) : null;
-	const executorForCandidate = (ref: string): string | undefined => {
-		const parsed = parseRoutingTargetRef(ref);
-		if (!parsed.ok) return undefined;
-		return config.targets[parsed.value.targetId]?.executor;
-	};
-	const allowed = traces.filter((candidate) => {
-		if (!candidate.allowed) return false;
-		if (disallowedExecutors) {
-			const exec = executorForCandidate(candidate.targetRef);
-			if (exec && disallowedExecutors.has(exec)) return false;
-		}
-		return true;
-	});
-	if (allowed.length === 0) {
-		const reason = disallowedExecutors
-			? `All routing candidates for '${request.operation}' were blocked: this operation cannot use a subprocess (ACPX) executor — it requires a direct pi-ai provider for latency.`
-			: "All routing candidates were blocked by policy or runtime state.";
+	const { allowed, selected } = selectRouteCandidates(config, request, traces, pref.mode);
+	if (!selected) {
+		const reason =
+			request.operation === "aggregate_recall"
+				? `All routing candidates for '${request.operation}' were blocked: this operation cannot use a subprocess (ACPX) executor — it requires a direct pi-ai provider for latency.`
+				: "All routing candidates were blocked by policy or runtime state.";
 		return err("no-candidates", reason, {
 			trace,
 		});
 	}
 
-	const selected =
-		pref.mode === "strict" ? allowed[0] : [...allowed].sort((left, right) => (right.score ?? 0) - (left.score ?? 0))[0];
 	const parsedRef = parseRoutingTargetRef(selected.targetRef);
 	if (parsedRef.ok === false) {
 		return err("invalid-target-ref", parsedRef.error.message);
