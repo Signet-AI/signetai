@@ -123,7 +123,7 @@ export function saveSourcesConfig(config: SignetSourcesConfig, agentsDir = getAg
 	renameSync(tmp, path);
 }
 
-function loadSourcesConfigForWrite(agentsDir = getAgentsDir()): SignetSourcesConfig {
+function loadSourcesConfigForWrite(agentsDir: string): SignetSourcesConfig {
 	const path = getSourcesConfigPath(agentsDir);
 	if (!existsSync(path)) return emptyConfig();
 	let parsed: unknown;
@@ -183,7 +183,7 @@ function addSource<TInput>(
 	});
 }
 
-function addWebSourceChecked(input: AddWebSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+function addWebSourceChecked(input: AddWebSourceInput, agentsDir: string): AddSourceResult {
 	const url = normalizePublicWebUrl(input.url);
 	if (!url) return { ok: false, error: "Web page URL must be a public http(s) URL" };
 	const now = input.now ?? new Date().toISOString();
@@ -282,7 +282,7 @@ export function deterministicImportedSourceId(contentHash: string, agentId?: str
 	return `import:${contentHash.trim().toLowerCase().slice(0, 16)}${ownerSuffix}`;
 }
 
-function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir: string): AddSourceResult {
 	const settings = buildDiscordSettings(input);
 	if ("error" in settings) return { ok: false, error: settings.error };
 
@@ -314,7 +314,7 @@ function addDiscordSourceChecked(input: AddDiscordSourceInput, agentsDir = getAg
 	);
 }
 
-function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+function addGitHubSourceChecked(input: AddGitHubSourceInput, agentsDir: string): AddSourceResult {
 	const initialSettings = buildGitHubSettings(input);
 	if ("error" in initialSettings) return { ok: false, error: initialSettings.error };
 
@@ -399,7 +399,7 @@ function persistSourceUpsert(
 	return existing === undefined;
 }
 
-function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir = getAgentsDir()): AddSourceResult {
+function addObsidianSourceChecked(input: AddObsidianSourceInput, agentsDir: string): AddSourceResult {
 	const trimmedRoot = input.root.trim();
 	if (!trimmedRoot) return { ok: false, error: "Obsidian vault path is required" };
 	const root = resolve(trimmedRoot);
@@ -451,11 +451,7 @@ export function markSourceIndexed(
 	withSourcesConfigLock(agentsDir, () => markSourceIndexedUnlocked(sourceId, indexedAt, agentsDir));
 }
 
-function markSourceIndexedUnlocked(
-	sourceId: string,
-	indexedAt = new Date().toISOString(),
-	agentsDir = getAgentsDir(),
-): void {
+function markSourceIndexedUnlocked(sourceId: string, indexedAt: string, agentsDir: string): void {
 	const cfg = loadSourcesConfigForWrite(agentsDir);
 	saveSourcesConfig(
 		{
@@ -495,7 +491,7 @@ export function removeSourceIfGeneration(
 	});
 }
 
-function removeSourceUnlocked(sourceId: string, agentsDir = getAgentsDir()): RemoveSourceResult {
+function removeSourceUnlocked(sourceId: string, agentsDir: string): RemoveSourceResult {
 	try {
 		return removeSourceChecked(sourceId, agentsDir);
 	} catch (err) {
@@ -504,7 +500,7 @@ function removeSourceUnlocked(sourceId: string, agentsDir = getAgentsDir()): Rem
 	}
 }
 
-function removeSourceChecked(sourceId: string, agentsDir = getAgentsDir()): RemoveSourceResult {
+function removeSourceChecked(sourceId: string, agentsDir: string): RemoveSourceResult {
 	const id = sourceId.trim();
 	if (!id) return { ok: false, error: "Source id is required" };
 	const cfg = loadSourcesConfigForWrite(agentsDir);

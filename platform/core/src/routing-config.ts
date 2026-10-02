@@ -331,23 +331,14 @@ function asNonNegativeInt(value: unknown): number | undefined {
 }
 
 function asRecordOfStrings(value: unknown): Record<string, string> {
-	if (!isRecord(value)) return {};
-	const next: Record<string, string> = {};
-	for (const [key, raw] of Object.entries(value)) {
-		const parsed = asString(raw);
-		if (parsed) next[key] = parsed;
-	}
-	return next;
+	return parseRecordEntries(value, (raw) => asString(raw) ?? null);
 }
 
 function asRecordOfStringArrays(value: unknown): Record<string, readonly string[]> {
-	if (!isRecord(value)) return {};
-	const next: Record<string, readonly string[]> = {};
-	for (const [key, raw] of Object.entries(value)) {
+	return parseRecordEntries(value, (raw) => {
 		const parsed = asStringArray(raw);
-		if (parsed.length > 0) next[key] = parsed;
-	}
-	return next;
+		return parsed.length > 0 ? parsed : null;
+	});
 }
 
 function asStringArray(value: unknown): readonly string[] {
@@ -397,14 +388,12 @@ interface InferredTargetDefaults {
 
 const INFERRED_TARGET_DEFAULTS: Readonly<Record<string, InferredTargetDefaults>> = {
 	acpx: { kind: "subscription_session", privacy: "restricted_remote" },
-	anthropic: { kind: "api", privacy: "remote_ok" },
 	"claude-code": { kind: "subscription_session", privacy: "restricted_remote" },
 	codex: { kind: "subscription_session", privacy: "restricted_remote" },
 	command: { kind: "local", privacy: "remote_ok" },
 	"llama-cpp": { kind: "local", privacy: "local_only" },
 	ollama: { kind: "local", privacy: "local_only" },
 	"openai-compatible": { kind: "gateway", privacy: "remote_ok" },
-	openrouter: { kind: "api", privacy: "remote_ok" },
 	opencode: { kind: "subscription_session", privacy: "restricted_remote" },
 };
 
@@ -542,13 +531,7 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	if (!isRecord(raw)) return null;
 	const executor = asString(raw.executor);
 	if (!executor || !ROUTING_EXECUTOR_PATTERN.test(executor)) return null;
-	const modelsRaw = isRecord(raw.models) ? raw.models : null;
-	if (!modelsRaw) return null;
-	const models: Record<string, RoutingModelConfig> = {};
-	for (const [modelId, modelRaw] of Object.entries(modelsRaw)) {
-		const parsed = parseModelConfig(modelRaw);
-		if (parsed) models[modelId] = parsed;
-	}
+	const models = parseRecordEntries(raw.models, parseModelConfig);
 	if (Object.keys(models).length === 0) return null;
 	const acpx = executor === "acpx" ? parseAcpxConfig(raw) : undefined;
 	if (executor === "acpx" && !acpx) return null;
@@ -645,10 +628,18 @@ export function validateRoutingReferences(config: RoutingConfig): readonly Routi
 	const accountIds = new Set(Object.keys(config.accounts));
 	const validTargetRefs = new Set(allTargetRefs(config));
 
-	const missingTarget = (field: string, ref: string, severity: "error" | "warning"): void => {
+	const missingTarget = (field: string, ref: string): void => {
 		if (!validTargetRefs.has(ref)) {
-			issues.push({ severity, field, ref, message: `Target ref "${ref}" referenced by ${field} does not exist.` });
+			issues.push({
+				severity: "warning",
+				field,
+				ref,
+				message: `Target ref "${ref}" referenced by ${field} does not exist.`,
+			});
 		}
+	};
+	const missingTargets = (field: string, refs: readonly string[] | undefined): void => {
+		for (const ref of refs ?? []) missingTarget(field, ref);
 	};
 	const missingPolicy = (field: string, ref: string, severity: "error" | "warning"): void => {
 		if (!policyIds.has(ref)) {
@@ -689,42 +680,36 @@ export function validateRoutingReferences(config: RoutingConfig): readonly Routi
 			if (!binding) continue;
 			const field = `workloads.${name}`;
 			if (binding.policy) missingPolicy(`${field}.policy`, binding.policy, "warning");
-			if (binding.target) missingTarget(`${field}.target`, binding.target, "warning");
+			if (binding.target) missingTarget(`${field}.target`, binding.target);
 			if (binding.taskClass) missingTaskClass(`${field}.taskClass`, binding.taskClass);
 		}
 	}
 
 	for (const [policyId, policy] of Object.entries(config.policies)) {
-		for (const ref of policy.allow ?? []) missingTarget(`policies.${policyId}.allow`, ref, "warning");
-		for (const ref of policy.defaultTargets ?? []) {
-			missingTarget(`policies.${policyId}.defaultTargets`, ref, "warning");
-		}
-		for (const ref of policy.fallbackTargets ?? []) {
-			missingTarget(`policies.${policyId}.fallbackTargets`, ref, "warning");
-		}
+		missingTargets(`policies.${policyId}.allow`, policy.allow);
+		missingTargets(`policies.${policyId}.defaultTargets`, policy.defaultTargets);
+		missingTargets(`policies.${policyId}.fallbackTargets`, policy.fallbackTargets);
 		for (const [taskClass, refs] of Object.entries(policy.taskTargets ?? {})) {
 			missingTaskClass(`policies.${policyId}.taskTargets.${taskClass}`, taskClass);
-			for (const ref of refs) missingTarget(`policies.${policyId}.taskTargets.${taskClass}`, ref, "warning");
+			missingTargets(`policies.${policyId}.taskTargets.${taskClass}`, refs);
 		}
 	}
 
 	for (const [agentId, agent] of Object.entries(config.agents)) {
 		if (agent.defaultPolicy) missingPolicy(`agents.${agentId}.defaultPolicy`, agent.defaultPolicy, "warning");
-		for (const ref of agent.roster ?? []) missingTarget(`agents.${agentId}.roster`, ref, "warning");
+		missingTargets(`agents.${agentId}.roster`, agent.roster);
 		for (const [taskClass, refs] of Object.entries(agent.preferredTargets ?? {})) {
 			missingTaskClass(`agents.${agentId}.preferredTargets.${taskClass}`, taskClass);
-			for (const ref of refs) missingTarget(`agents.${agentId}.preferredTargets.${taskClass}`, ref, "warning");
+			missingTargets(`agents.${agentId}.preferredTargets.${taskClass}`, refs);
 		}
 		for (const [taskClass, ref] of Object.entries(agent.pinnedTargets ?? {})) {
 			if (taskClass !== "default") missingTaskClass(`agents.${agentId}.pinnedTargets.${taskClass}`, taskClass);
-			missingTarget(`agents.${agentId}.pinnedTargets.${taskClass}`, ref, "warning");
+			missingTarget(`agents.${agentId}.pinnedTargets.${taskClass}`, ref);
 		}
 	}
 
 	for (const [taskClassId, taskClass] of Object.entries(config.taskClasses)) {
-		for (const ref of taskClass.preferredTargets ?? []) {
-			missingTarget(`taskClasses.${taskClassId}.preferredTargets`, ref, "warning");
-		}
+		missingTargets(`taskClasses.${taskClassId}.preferredTargets`, taskClass.preferredTargets);
 	}
 
 	return issues;
