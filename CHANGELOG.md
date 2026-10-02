@@ -7,7 +7,7 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-02
-- Bug fixes: preserve macOS verification copy; use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
+- Bug fixes: stop macOS keychain prompt loops; preserve macOS verification copy; use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
 - Refactoring: rebuild guided onboarding.
 
 ### 2026-10-01
@@ -37,6 +37,15 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: reconcile workspace routes and drift detection; document workspace v2 migration and ownership.
 
 ## Release Ledger
+
+## [0.229.6] - 2026-10-02
+
+Release summary: 1 bug fix.
+Tag range: `v0.229.5..v0.229.6`.
+
+### Bug Fixes
+
+- **secrets**: stop macOS keychain prompt loops
 
 ## [0.229.5] - 2026-10-02
 
