@@ -47,14 +47,21 @@ export interface RecallResult {
 	readonly already_recalled?: boolean;
 }
 
+export interface RecallStageTiming {
+	readonly name: string;
+	readonly durationMs: number;
+}
+
+export interface RecallTimings {
+	readonly totalMs: number;
+	readonly stages: readonly RecallStageTiming[];
+}
+
 export interface RecallMeta {
 	readonly totalReturned: number;
 	readonly hasSupplementary: boolean;
 	readonly noHits: boolean;
-	readonly timings?: {
-		readonly totalMs: number;
-		readonly stages: readonly { readonly name: string; readonly durationMs: number }[];
-	};
+	readonly timings?: RecallTimings;
 	readonly dedupe?: {
 		readonly enabled: boolean;
 		readonly contextEpoch?: number;
@@ -171,6 +178,69 @@ export interface SdkRecallOptions {
 	readonly save_aggregate?: boolean;
 	readonly recallSurface?: "explicit_api" | "tool_call" | "prompt_injection" | "dashboard" | "other";
 	readonly minScore?: number;
+}
+
+export interface MemoryModifyPatch {
+	readonly content?: string;
+	readonly type?: string;
+	readonly importance?: number;
+	readonly tags?: string;
+	readonly pinned?: boolean;
+	readonly project?: string;
+	readonly reason: string;
+	readonly ifVersion?: number;
+}
+
+export interface BatchModifyPatch extends MemoryModifyPatch {
+	readonly id: string;
+}
+
+export interface BatchModifyOptions {
+	readonly reason?: string;
+	readonly changed_by?: string;
+}
+
+export interface CreateDocumentOptions {
+	readonly source_type: "text" | "url" | "file";
+	readonly content?: string;
+	readonly url?: string;
+	readonly title?: string;
+	readonly content_type?: string;
+	readonly connector_id?: string;
+	readonly metadata?: Record<string, unknown>;
+}
+
+export interface HookRememberOptions {
+	readonly content: string;
+	readonly type?: string;
+	readonly importance?: number;
+	readonly tags?: string;
+	readonly who?: string;
+	readonly sessionKey?: string;
+	readonly runtimePath?: string;
+}
+
+export interface HookRecallOptions {
+	readonly query: string;
+	readonly keywordQuery?: string;
+	readonly limit?: number;
+	readonly project?: string;
+	readonly type?: string;
+	readonly tags?: string;
+	readonly who?: string;
+	readonly since?: string;
+	readonly until?: string;
+	readonly time?: {
+		readonly start?: string;
+		readonly end?: string;
+		readonly facets?: readonly string[];
+		readonly mode?: "auto" | "timeline" | "filter";
+	};
+	readonly expand?: boolean;
+	readonly sessionKey?: string;
+	readonly agentId?: string;
+	readonly includeRecalled?: boolean;
+	readonly runtimePath?: string;
 }
 
 export interface RecallResponse {
@@ -660,10 +730,7 @@ export interface MemorySearchTelemetryItem {
 	readonly top_score: number | null;
 	readonly no_hits: boolean;
 	readonly duration_ms: number;
-	readonly timings: {
-		readonly totalMs: number;
-		readonly stages: readonly { readonly name: string; readonly durationMs: number }[];
-	};
+	readonly timings: RecallTimings;
 	readonly results: readonly MemorySearchTelemetryResult[];
 	readonly sources: Readonly<Record<string, string>> | null;
 }
