@@ -781,49 +781,16 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		preferredHarnesses: harnesses,
 	});
 	let extractionModel = "haiku";
-
-	if (extractionProvider === "acpx") {
-		extractionModel =
+	if (extractionProvider !== "none" && extractionProvider !== "llama-cpp") {
+		const configuredModel =
 			deps.normalizeStringValue(options.extractionModel) ||
 			deps.normalizeStringValue(existingPipeline.extractionModel) ||
-			deps.normalizeStringValue(existingExtraction.model) ||
-			defaultAcpxModel(harnesses, availableToolExtractionProviders);
-	} else if (extractionProvider === "claude-code") {
+			deps.normalizeStringValue(existingExtraction.model);
 		extractionModel =
-			deps.normalizeStringValue(options.extractionModel) ||
-			deps.normalizeStringValue(existingPipeline.extractionModel) ||
-			deps.normalizeStringValue(existingExtraction.model) ||
-			defaultExtractionModel("claude-code");
-	} else if (extractionProvider === "codex") {
-		extractionModel =
-			deps.normalizeStringValue(options.extractionModel) ||
-			deps.normalizeStringValue(existingPipeline.extractionModel) ||
-			deps.normalizeStringValue(existingExtraction.model) ||
-			defaultExtractionModel("codex");
-	} else if (extractionProvider === "opencode") {
-		extractionModel =
-			deps.normalizeStringValue(options.extractionModel) ||
-			deps.normalizeStringValue(existingPipeline.extractionModel) ||
-			deps.normalizeStringValue(existingExtraction.model) ||
-			defaultExtractionModel("opencode");
-	} else if (extractionProvider === "openrouter") {
-		extractionModel =
-			deps.normalizeStringValue(options.extractionModel) ||
-			deps.normalizeStringValue(existingPipeline.extractionModel) ||
-			deps.normalizeStringValue(existingExtraction.model) ||
-			defaultExtractionModel("openrouter");
-	} else if (extractionProvider === "openai-compatible") {
-		extractionModel =
-			deps.normalizeStringValue(options.extractionModel) ||
-			deps.normalizeStringValue(existingPipeline.extractionModel) ||
-			deps.normalizeStringValue(existingExtraction.model) ||
-			defaultExtractionModel("openai-compatible");
-	} else if (extractionProvider === "ollama") {
-		extractionModel =
-			deps.normalizeStringValue(options.extractionModel) ||
-			deps.normalizeStringValue(existingPipeline.extractionModel) ||
-			deps.normalizeStringValue(existingExtraction.model) ||
-			defaultExtractionModel("ollama");
+			configuredModel ||
+			(extractionProvider === "acpx"
+				? defaultAcpxModel(harnesses, availableToolExtractionProviders)
+				: defaultExtractionModel(extractionProvider));
 	}
 
 	const extractionEndpoint = resolveSetupExtractionEndpoint({
@@ -833,7 +800,7 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 		existingEndpoint: existingExtractionEndpoint,
 	});
 	const aggregateRecallProvider =
-		deps.normalizeChoice(options.aggregateRecallProvider, aggregateRecallProviderIds()) ?? undefined ?? undefined;
+		deps.normalizeChoice(options.aggregateRecallProvider, aggregateRecallProviderIds()) ?? undefined;
 	const aggregateRecallModel = deps.normalizeStringValue(options.aggregateRecallModel) ?? undefined;
 	const aggregateRecallEndpoint =
 		normalizeHttpEndpoint(deps.normalizeStringValue(options.aggregateRecallEndpoint)) ??
@@ -854,21 +821,16 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 			gitEnabled = true;
 			console.log(chalk.dim("  Git repo detected. Will create backup commit before changes."));
 		} else if (!shouldSkipGit) {
-			const initGit = true;
-
-			if (initGit) {
-				const initialized = await deps.gitInit(basePath);
-				if (initialized) {
-					gitEnabled = true;
-					console.log(chalk.dim("  ✓ Git initialized"));
-				} else {
-					console.log(chalk.yellow("  ⚠ Could not initialize git"));
-				}
+			const initialized = await deps.gitInit(basePath);
+			if (initialized) {
+				gitEnabled = true;
+				console.log(chalk.dim("  ✓ Git initialized"));
+			} else {
+				console.log(chalk.yellow("  ⚠ Could not initialize git"));
 			}
 		}
 	} else if (!shouldSkipGit) {
-		const initGit = true;
-		gitEnabled = initGit;
+		gitEnabled = true;
 	}
 	const agents: { name: string; memoryPolicy: "isolated" | "shared" | "group"; memoryGroup?: string }[] = [];
 
@@ -948,20 +910,15 @@ async function applySetupOptions(options: SetupWizardOptions, deps: SetupDeps): 
 	await runFreshSetup(plan, context, deps);
 }
 
-async function resolveGraphiqPluginSelection(basePath: string, options: SetupWizardOptions): Promise<boolean> {
+function resolveGraphiqPluginSelection(basePath: string, options: SetupWizardOptions): boolean {
 	const current = readSetupCorePluginEnabled(basePath, "signet.graphiq");
-	const defaultEnabled = current ?? false;
 	if (options.withGraphiq === true) return true;
 	if (options.disableGraphiq === true) return false;
-	return defaultEnabled;
+	return current ?? false;
 }
 
-async function resolveSignetSecretsCorePluginSelection(
-	basePath: string,
-	options: SetupWizardOptions,
-): Promise<boolean> {
+function resolveSignetSecretsCorePluginSelection(basePath: string, options: SetupWizardOptions): boolean {
 	const current = readSetupCorePluginEnabled(basePath);
-	const defaultEnabled = current ?? true;
 	if (options.disableSignetSecrets === true) return false;
-	return defaultEnabled;
+	return current ?? true;
 }

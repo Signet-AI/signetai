@@ -1,42 +1,9 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import type { SetupWizardOptions } from "../features/setup-types.js";
 import { withJson, withPath } from "./shared.js";
 
-interface SetupOptions {
-	path?: string;
-	nonInteractive?: boolean;
-	name?: string;
-	description?: string;
-	deploymentType?: string;
-	networkMode?: string;
-	harness?: string[];
-	embeddingProvider?: string;
-	embeddingModel?: string;
-	extractionProvider?: string;
-	extractionModel?: string;
-	extractionEndpoint?: string;
-	aggregateRecallProvider?: string;
-	aggregateRecallModel?: string;
-	aggregateRecallEndpoint?: string;
-	searchBalance?: string;
-	openclawRuntimePath?: string;
-	configureOpenclawWorkspace?: boolean;
-	openDashboard?: boolean;
-	skipGit?: boolean;
-	allowUnprotectedWorkspace?: boolean;
-	createLocalBackup?: boolean;
-	disableSignetSecrets?: boolean;
-	withGraphiq?: boolean;
-	disableGraphiq?: boolean;
-	schema?: boolean;
-	file?: string;
-	json?: string;
-	dryRun?: boolean;
-	enableDreaming?: boolean;
-	agent?: string[];
-	remoteUrl?: string;
-	obsidianSource?: string[];
-}
+type SetupOptions = Omit<SetupWizardOptions, "identityPreset" | "identityMode">;
 
 interface PathOptions {
 	path?: string;

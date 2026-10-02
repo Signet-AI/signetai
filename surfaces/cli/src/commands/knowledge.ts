@@ -1,19 +1,7 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import { printCollection } from "../lib/cli-output";
-
-interface KnowledgeDeps {
-	readonly ensureDaemonForSecrets: () => Promise<boolean>;
-	readonly secretApiCall: (
-		method: string,
-		path: string,
-		body?: unknown,
-		timeoutMs?: number,
-	) => Promise<{
-		ok: boolean;
-		data: unknown;
-	}>;
-}
+import { addCommonOptions, appendAgent, asRecord, getCommandData, type DaemonCommandDeps } from "./command-utils";
 
 interface EntityRecord {
 	readonly name?: string;
@@ -107,31 +95,8 @@ interface ListResponse<T> {
 	readonly items?: readonly T[];
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-}
-
-function errorMessage(data: unknown, fallback: string): string {
-	const raw = asRecord(data).error;
-	return typeof raw === "string" ? raw : fallback;
-}
-
-function addCommonOptions(cmd: Command): Command {
-	return cmd.option("--agent <name>", "Agent scope, default default").option("--json", "Output as JSON");
-}
-
-function appendAgent(params: URLSearchParams, agent?: string): void {
-	if (agent) params.set("agent_id", agent);
-}
-
-async function apiGet(deps: KnowledgeDeps, path: string, params: URLSearchParams): Promise<unknown> {
-	const query = params.toString();
-	const { ok, data } = await deps.secretApiCall("GET", query ? `${path}?${query}` : path, undefined, 10_000);
-	if (!ok || typeof asRecord(data).error === "string") {
-		console.error(chalk.red(errorMessage(data, "Knowledge request failed")));
-		process.exit(1);
-	}
-	return data;
+function apiGet(deps: DaemonCommandDeps, path: string, params: URLSearchParams): Promise<unknown> {
+	return getCommandData(deps.secretApiCall, path, params, "Knowledge request failed");
 }
 
 function entityName(entity: EntityRecord | undefined): string {
@@ -268,7 +233,7 @@ function printHygieneReport(data: unknown): void {
 	console.log();
 }
 
-export function registerKnowledgeCommands(program: Command, deps: KnowledgeDeps): void {
+export function registerKnowledgeCommands(program: Command, deps: DaemonCommandDeps): void {
 	const knowledge = program.command("knowledge").description("Browse the structured knowledge graph");
 
 	addCommonOptions(

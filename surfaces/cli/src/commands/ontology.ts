@@ -2,19 +2,15 @@ import { readFileSync } from "node:fs";
 import chalk from "chalk";
 import type { Command } from "commander";
 import { printCollection } from "../lib/cli-output";
-
-interface OntologyDeps {
-	readonly ensureDaemonForSecrets: () => Promise<boolean>;
-	readonly secretApiCall: (
-		method: string,
-		path: string,
-		body?: unknown,
-		timeoutMs?: number,
-	) => Promise<{
-		ok: boolean;
-		data: unknown;
-	}>;
-}
+import {
+	addCommonOptions,
+	appendAgent,
+	asRecord,
+	commandApiCall,
+	getCommandData,
+	isRecord,
+	type DaemonCommandDeps,
+} from "./command-utils";
 
 interface ProposalListItem {
 	readonly id?: string;
@@ -269,10 +265,6 @@ interface ConsolidationResponse {
 	readonly maintenance?: readonly unknown[];
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value) ? value : {};
-}
-
 function readString(record: Record<string, unknown>, key: string): string | undefined {
 	const value = record[key];
 	if (typeof value !== "string") return undefined;
@@ -333,9 +325,7 @@ function readOperationJsonl(path: string): readonly Record<string, unknown>[] {
 		.map((line, index) => {
 			try {
 				const parsed: unknown = JSON.parse(line);
-				if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
-					return parsed as Record<string, unknown>;
-				}
+				if (isRecord(parsed)) return parsed;
 				throw new Error("line is not an object");
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
@@ -480,41 +470,27 @@ function normalizeProposalFile(raw: unknown): readonly ProposalImportInput[] {
 	];
 }
 
-function appendAgent(params: URLSearchParams, agent?: string): void {
-	if (agent) params.set("agent_id", agent);
+function apiGet(deps: DaemonCommandDeps, path: string, params: URLSearchParams): Promise<unknown> {
+	return getCommandData(deps.secretApiCall, path, params, "Ontology request failed");
 }
 
-function errorMessage(data: unknown, fallback: string): string {
-	const raw = asRecord(data).error;
-	return typeof raw === "string" ? raw : fallback;
+function apiPost(deps: DaemonCommandDeps, path: string, body: unknown, timeoutMs = 15_000): Promise<unknown> {
+	return commandApiCall(deps.secretApiCall, {
+		method: "POST",
+		path,
+		body,
+		fallback: "Ontology request failed",
+		timeoutMs,
+	});
 }
 
-async function apiGet(deps: OntologyDeps, path: string, params: URLSearchParams): Promise<unknown> {
-	const query = params.toString();
-	const { ok, data } = await deps.secretApiCall("GET", query ? `${path}?${query}` : path, undefined, 10_000);
-	if (!ok || typeof asRecord(data).error === "string") {
-		console.error(chalk.red(errorMessage(data, "Ontology request failed")));
-		process.exit(1);
-	}
-	return data;
-}
-
-async function apiPost(deps: OntologyDeps, path: string, body: unknown, timeoutMs = 15_000): Promise<unknown> {
-	const { ok, data } = await deps.secretApiCall("POST", path, body, timeoutMs);
-	if (!ok || typeof asRecord(data).error === "string") {
-		console.error(chalk.red(errorMessage(data, "Ontology request failed")));
-		process.exit(1);
-	}
-	return data;
-}
-
-async function apiDelete(deps: OntologyDeps, path: string, timeoutMs = 10_000): Promise<unknown> {
-	const { ok, data } = await deps.secretApiCall("DELETE", path, undefined, timeoutMs);
-	if (!ok || typeof asRecord(data).error === "string") {
-		console.error(chalk.red(errorMessage(data, "Ontology request failed")));
-		process.exit(1);
-	}
-	return data;
+function apiDelete(deps: DaemonCommandDeps, path: string, timeoutMs = 10_000): Promise<unknown> {
+	return commandApiCall(deps.secretApiCall, {
+		method: "DELETE",
+		path,
+		fallback: "Ontology request failed",
+		timeoutMs,
+	});
 }
 
 function printProposalList(data: unknown): void {
@@ -894,10 +870,6 @@ function printConsolidation(data: unknown): void {
 	console.log();
 }
 
-function addCommonOptions(cmd: Command): Command {
-	return cmd.option("--agent <name>", "Agent scope, default default").option("--json", "Output as JSON");
-}
-
 function addOperationOptions(cmd: Command): Command {
 	return addCommonOptions(cmd)
 		.option("--dry-run", "Validate and preview without writing")
@@ -925,7 +897,7 @@ function operationBody(
 }
 
 async function postOperation(
-	deps: OntologyDeps,
+	deps: DaemonCommandDeps,
 	operation: string,
 	payload: Record<string, unknown>,
 	options: Record<string, unknown>,
@@ -949,7 +921,7 @@ function printOperationResult(data: unknown, options: Record<string, unknown>, l
 	console.log(chalk.green(`${mode} ${label}${id ? ` (${id})` : ""}`));
 }
 
-export function registerOntologyCommands(program: Command, deps: OntologyDeps): void {
+export function registerOntologyCommands(program: Command, deps: DaemonCommandDeps): void {
 	const ontology = program.command("ontology").description("Inspect and maintain the operational ontology");
 
 	addCommonOptions(
