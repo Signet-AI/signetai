@@ -50,11 +50,14 @@ export type MemoryHeadResult = {
 	readonly hash?: string;
 	readonly changedIds?: readonly string[];
 };
+export type MemoryHeadCommitInput = Extract<MemoryHeadRequest, { action: "commit" }>["input"];
+export interface MemoryHeadCommitter {
+	read(agentId: string): Promise<Record<string, unknown>>;
+	commit(input: MemoryHeadCommitInput): Promise<MemoryHeadResult>;
+}
 export function readCuratedMemoryHead(agentId: string): Promise<Record<string, unknown>> {
 	return requestMemoryHead({ action: "read", agentId });
 }
-export function commitCuratedMemoryHead(
-	input: Extract<MemoryHeadRequest, { action: "commit" }>["input"],
-): Promise<MemoryHeadResult> {
+export function commitCuratedMemoryHead(input: MemoryHeadCommitInput): Promise<MemoryHeadResult> {
 	return requestMemoryHead({ action: "commit", input });
 }

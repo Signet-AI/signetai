@@ -1012,21 +1012,42 @@ export class InferenceRouter {
 			this.finishBackgroundExecution(background?.id);
 		}
 	}
-	async agentModels(): Promise<RouterResult<readonly AgentModelOption[]>> {
+	async agentModels(agentId: string): Promise<RouterResult<readonly AgentModelOption[]>> {
 		const loaded = await this.loadConfig(false);
 		if (!loaded.ok) return loaded;
+		const targetRefs = allTargetRefs(loaded.value.config);
+		const runtimeSnapshot: RoutingRuntimeSnapshot = {
+			targets: Object.fromEntries(
+				targetRefs.map((targetRef) => [
+					targetRef,
+					{ available: true, health: "healthy", circuitOpen: false, accountState: "ready" },
+				]),
+			),
+		};
+		const selectableTargetRefs = new Set(
+			targetRefs.filter((targetRef) => {
+				const decision = resolveRoutingDecision(
+					loaded.value.config,
+					{ agentId, operation: "interactive", explicitTargets: [targetRef], requireTools: true },
+					runtimeSnapshot,
+				);
+				return decision.ok && decision.value.targetRef === targetRef;
+			}),
+		);
 		const models: AgentModelOption[] = [];
 		const connections = new Set<string>();
 		for (const [targetId, target] of Object.entries(loaded.value.config.targets)) {
 			if (target.executor === "acpx" || !target.account) continue;
+			const slot = Object.entries(target.models).find(
+				([modelId, model]) => model.toolUse !== false && selectableTargetRefs.has(`${targetId}/${modelId}`),
+			);
+			if (!slot) continue;
 			const connection = `${target.account}:${target.executor}:${target.endpoint ?? ""}`;
 			if (connections.has(connection)) continue;
 			const account = loaded.value.config.accounts[target.account];
 			if (!account || !(await this.resolveCredential(account))) continue;
 			const provider = getBuiltinProviders().find((id) => id === account.providerFamily);
 			if (!provider) continue;
-			const slot = Object.entries(target.models).find(([, model]) => model.toolUse !== false);
-			if (!slot) continue;
 			connections.add(connection);
 			for (const model of getBuiltinModels(provider).filter((candidate) => candidate.input.includes("text"))) {
 				models.push({
@@ -1084,7 +1105,7 @@ export class InferenceRouter {
 			if (!loaded.ok) return loaded;
 			const selection = opts?.modelSelection;
 			if (selection) {
-				const available = await this.agentModels();
+				const available = await this.agentModels(request.agentId ?? defaultAgentIdForConfig(loaded.value.config));
 				if (!available.ok) return available;
 				if (
 					!available.value.some(

@@ -37,12 +37,12 @@ function sse(delta: unknown, finish: string): Response {
 	);
 }
 
-async function fixture(endpoint: string, secret?: Buffer, connected = false) {
+async function fixture(endpoint: string, secret?: Buffer, connected = false, extraTargets = "", agentConfig = "") {
 	root = mkdtempSync(join(tmpdir(), "signet-assistant-chat-"));
 	mkdirSync(join(root, "memory"));
 	writeFileSync(
 		join(root, "agent.yaml"),
-		`name: test-agent\ninference:\n${connected ? "  accounts:\n    test-account:\n      kind: api\n      providerFamily: openrouter\n      credentialRef: SIGNET_CHAT_MODEL_TEST_KEY\n" : ""}  targets:\n    backend:\n      executor: openai-compatible\n${connected ? "      account: test-account\n" : ""}      endpoint: ${endpoint}\n      models:\n        default:\n          model: test-model\n          toolUse: true\n          streaming: true\n  workloads:\n    memoryExtraction:\n      target: backend/default\n`,
+		`name: test-agent\ninference:\n${connected ? "  accounts:\n    test-account:\n      kind: api\n      providerFamily: openrouter\n      credentialRef: SIGNET_CHAT_MODEL_TEST_KEY\n" : ""}  targets:\n    backend:\n      executor: openai-compatible\n${connected ? "      account: test-account\n" : ""}      endpoint: ${endpoint}\n      models:\n        default:\n          model: test-model\n          toolUse: true\n          streaming: true\n${extraTargets}  workloads:\n    memoryExtraction:\n      target: backend/default\n${agentConfig}`,
 	);
 	const database = join(root, "memory", "memories.db");
 	initDbAccessor(database, { agentsDir: root });
@@ -375,6 +375,49 @@ test("chat selects a Pi registry model through a connected account without chang
 			"not available through a connected Signet account",
 		);
 		expect(activePiAgentWorkers()).toBe(1);
+	} finally {
+		server.stop(true);
+	}
+}, 20000);
+
+test("assistant model catalog and model selection honor the requested agent roster", async () => {
+	let providerRequests = 0;
+	const server = Bun.serve({
+		port: 0,
+		hostname: "127.0.0.1",
+		async fetch() {
+			providerRequests++;
+			return sse({ role: "assistant", content: "Should not execute." }, "stop");
+		},
+	});
+	try {
+		process.env.SIGNET_CHAT_MODEL_TEST_KEY = "synthetic-test-credential";
+		const app = await fixture(
+			`http://127.0.0.1:${server.port}/v1`,
+			undefined,
+			true,
+			"    restricted:\n      executor: openai-compatible\n      account: test-account\n      endpoint: http://restricted.invalid/v1\n      models:\n        default:\n          model: test-model\n          toolUse: true\n          streaming: true\n",
+			"  agents:\n    test-agent:\n      roster:\n        - backend/default\n",
+		);
+		const catalog = await app.request("/api/assistant/models?agentId=test-agent");
+		expect(catalog.status).toBe(200);
+		const data = await catalog.json();
+		expect(data.models.some((option: { targetRef: string }) => option.targetRef === "backend/default")).toBe(true);
+		expect(data.models.some((option: { targetRef: string }) => option.targetRef === "restricted/default")).toBe(false);
+		const response = await app.request("/api/assistant/chat", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				requestId: crypto.randomUUID(),
+				conversationId: crypto.randomUUID(),
+				agentId: "test-agent",
+				messages: [{ role: "user", content: "Hello" }],
+				modelSelection: { targetRef: "restricted/default", model: "openai/gpt-4.1" },
+			}),
+		});
+		const events = await response.text();
+		expect(events).toContain("not available through a connected Signet account");
+		expect(providerRequests).toBe(0);
 	} finally {
 		server.stop(true);
 	}

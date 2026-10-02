@@ -57,6 +57,7 @@ import { upsertThreadHead } from "../thread-heads";
 import { createDreamingAgentTools } from "./dreaming-agent-tools";
 import { enqueueDreamingAttentionInTx, getDreamingAttentionWorkloadDiagnostics } from "./dreaming-attention";
 import type { DreamingToolCallTrace } from "./dreaming-capabilities";
+import type { MemoryHeadCommitter } from "../memory-head";
 import { renderDreamingEvidence } from "./dreaming-evidence";
 import { deliveredOffsetForSource, recordDreamingEvidenceConsumptionInTx } from "./dreaming-evidence-consumption";
 import {
@@ -1122,6 +1123,7 @@ export function selectDreamingPassMode(
 export interface DreamingPassLiveOptions {
 	readonly hub?: DreamingLiveEventHub;
 	readonly userRequest?: { readonly sourceRef: string; readonly content: string };
+	readonly memoryHeadCommitter?: MemoryHeadCommitter;
 }
 export function recordDreamingPassTelemetry(input: {
 	readonly mode: string;
@@ -1688,6 +1690,7 @@ ${JSON.stringify(liveOptions.userRequest)}
 			restrictToAgent: liveOptions?.userRequest !== undefined,
 			accessor,
 			agentId,
+			memoryHeadCommitter: liveOptions?.memoryHeadCommitter,
 			actor: "dreaming",
 			passId,
 			mode,
@@ -2018,6 +2021,9 @@ function writeDreamingTranscriptManifestInTx(
 	}
 }
 export function finalizeDreamingPassInDb(db: WriteDb, input: DbOwnerDreamingPassFinalize): void {
+	if (input.mode === "incremental-content" && input.memoryHeadResult?.ok !== true) {
+		throw new Error("Content pass finalization requires a successful memory-head commit");
+	}
 	writeDreamingTranscriptManifestInTx(db, {
 		passId: input.passId,
 		entries: input.transcriptManifestEntries as Array<{

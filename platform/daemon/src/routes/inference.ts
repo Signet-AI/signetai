@@ -860,7 +860,7 @@ export function mountInferenceRoutes(app: Hono, opts: InferenceRouteOptions = {}
 		if (scope.error) return c.json({ error: scope.error }, 403);
 		const router = getInferenceRouterOrNull();
 		if (!router) return c.json({ error: "Inference is unavailable" }, 503);
-		const models = await router.agentModels();
+		const models = await router.agentModels(scope.agentId);
 		return models.ok ? c.json({ models: models.value }) : c.json({ error: models.error.message }, 503);
 	});
 	app.post("/api/assistant/chat", async (c) => {
