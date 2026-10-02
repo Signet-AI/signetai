@@ -270,6 +270,7 @@ jobs:
         run: |
           set -euo pipefail
           cd surfaces/desktop
+          bun test scripts/verify-macos-release.test.mjs
           bun run verify:macos
 
       - name: Generate AUR metadata
