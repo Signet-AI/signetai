@@ -973,44 +973,24 @@ function chainMaybePromise<T, U>(value: MaybePromise<T>, map: (value: T) => Mayb
 	return isPromiseLike(value) ? value.then(map) : map(value);
 }
 
-function readRepoStateWith(run: typeof runGit, repoPath: string, timeoutMs: number): RepoState;
-function readRepoStateWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<RepoState>;
-function readRepoStateWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<RepoState>;
 function readRepoStateWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<RepoState> {
-	const branch = readCurrentBranchWith(run, repoPath, timeoutMs);
-	if (isPromiseLike(branch)) {
-		return branch.then(async (resolvedBranch) => ({
-			branch: resolvedBranch,
-			defaultBranch: await readDefaultBranchWith(run, repoPath, timeoutMs),
-		}));
-	}
-	return chainMaybePromise(readDefaultBranchWith(run, repoPath, timeoutMs), (defaultBranch) => ({
-		branch,
-		defaultBranch,
-	}));
+	return chainMaybePromise(readCurrentBranchWith(run, repoPath, timeoutMs), (branch) =>
+		chainMaybePromise(readDefaultBranchWith(run, repoPath, timeoutMs), (defaultBranch) => ({ branch, defaultBranch })),
+	);
 }
 
-function readOriginRemoteWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readOriginRemoteWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readOriginRemoteWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readOriginRemoteWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
 	return chainMaybePromise(run(["config", "--get", "remote.origin.url"], repoPath, timeoutMs), (result) =>
 		readTrimmedValue(result),
 	);
 }
 
-function readCurrentBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readCurrentBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readCurrentBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readCurrentBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
 	return chainMaybePromise(run(["branch", "--show-current"], repoPath, timeoutMs), (result) =>
 		readTrimmedValue(result),
 	);
 }
 
-function readDefaultBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readDefaultBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
 	return chainMaybePromise(
 		run(["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"], repoPath, timeoutMs),
@@ -1030,17 +1010,6 @@ function readDefaultBranchWith(run: GitRunner, repoPath: string, timeoutMs: numb
 	);
 }
 
-function readWorkingTreeStatusWith(run: typeof runGit, repoPath: string, timeoutMs: number): WorkingTreeStatus;
-function readWorkingTreeStatusWith(
-	run: typeof runGitAsync,
-	repoPath: string,
-	timeoutMs: number,
-): Promise<WorkingTreeStatus>;
-function readWorkingTreeStatusWith(
-	run: GitRunner,
-	repoPath: string,
-	timeoutMs: number,
-): MaybePromise<WorkingTreeStatus>;
 function readWorkingTreeStatusWith(
 	run: GitRunner,
 	repoPath: string,
@@ -1131,24 +1100,6 @@ function isUnmergedStatusLine(line: string): boolean {
 }
 
 function createAutoStashWith(
-	run: typeof runGit,
-	repoPath: string,
-	timeoutMs: number,
-	userPaths: readonly string[],
-): AutoStashResult;
-function createAutoStashWith(
-	run: typeof runGitAsync,
-	repoPath: string,
-	timeoutMs: number,
-	userPaths: readonly string[],
-): Promise<AutoStashResult>;
-function createAutoStashWith(
-	run: GitRunner,
-	repoPath: string,
-	timeoutMs: number,
-	userPaths: readonly string[],
-): MaybePromise<AutoStashResult>;
-function createAutoStashWith(
 	run: GitRunner,
 	repoPath: string,
 	timeoutMs: number,
@@ -1192,28 +1143,12 @@ function createAutoStashWith(
 	);
 }
 
-function readStashHeadWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readStashHeadWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readStashHeadWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readStashHeadWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
 	return chainMaybePromise(run(["rev-parse", "--verify", "--quiet", "refs/stash"], repoPath, timeoutMs), (result) =>
 		readTrimmedValue(result),
 	);
 }
 
-function readStashSubjectWith(run: typeof runGit, repoPath: string, stashRef: string, timeoutMs: number): string | null;
-function readStashSubjectWith(
-	run: typeof runGitAsync,
-	repoPath: string,
-	stashRef: string,
-	timeoutMs: number,
-): Promise<string | null>;
-function readStashSubjectWith(
-	run: GitRunner,
-	repoPath: string,
-	stashRef: string,
-	timeoutMs: number,
-): MaybePromise<string | null>;
 function readStashSubjectWith(
 	run: GitRunner,
 	repoPath: string,
@@ -1235,9 +1170,6 @@ function parsePorcelainStatusPath(line: string): string | null {
 	return path.replace(/^"|"$/g, "");
 }
 
-function readUpstreamBranchWith(run: typeof runGit, repoPath: string, timeoutMs: number): string | null;
-function readUpstreamBranchWith(run: typeof runGitAsync, repoPath: string, timeoutMs: number): Promise<string | null>;
-function readUpstreamBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null>;
 function readUpstreamBranchWith(run: GitRunner, repoPath: string, timeoutMs: number): MaybePromise<string | null> {
 	return chainMaybePromise(
 		run(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], repoPath, timeoutMs),
@@ -1245,24 +1177,6 @@ function readUpstreamBranchWith(run: GitRunner, repoPath: string, timeoutMs: num
 	);
 }
 
-function readAheadBehindWith(
-	run: typeof runGit,
-	repoPath: string,
-	upstream: string,
-	timeoutMs: number,
-): AheadBehind | null;
-function readAheadBehindWith(
-	run: typeof runGitAsync,
-	repoPath: string,
-	upstream: string,
-	timeoutMs: number,
-): Promise<AheadBehind | null>;
-function readAheadBehindWith(
-	run: GitRunner,
-	repoPath: string,
-	upstream: string,
-	timeoutMs: number,
-): MaybePromise<AheadBehind | null>;
 function readAheadBehindWith(
 	run: GitRunner,
 	repoPath: string,
@@ -1281,9 +1195,6 @@ function readAheadBehindWith(
 	);
 }
 
-function isSafeBranchNameWith(run: typeof runGit, branch: string, timeoutMs: number): boolean;
-function isSafeBranchNameWith(run: typeof runGitAsync, branch: string, timeoutMs: number): Promise<boolean>;
-function isSafeBranchNameWith(run: GitRunner, branch: string, timeoutMs: number): MaybePromise<boolean>;
 function isSafeBranchNameWith(run: GitRunner, branch: string, timeoutMs: number): MaybePromise<boolean> {
 	if (branch.length === 0 || branch.startsWith("-")) {
 		return false;
