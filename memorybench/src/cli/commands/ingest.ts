@@ -6,7 +6,7 @@ import { orchestrator, CheckpointManager } from "../../orchestrator"
 import { getAvailableProviders } from "../../providers"
 import { getAvailableBenchmarks } from "../../benchmarks"
 import { logger } from "../../utils/logger"
-import { appendCsvValues, parseCommaSeparated, readIdListFile } from "../args"
+import { appendQuestionIds, generateRunId, parseCommaSeparated } from "../args"
 
 interface IngestArgs {
   provider?: string
@@ -19,13 +19,6 @@ interface IngestArgs {
   sampleType?: SampleType
   concurrency?: ConcurrencyConfig
   force?: boolean
-}
-
-function generateRunId(): string {
-  const now = new Date()
-  const date = now.toISOString().slice(0, 10).replace(/-/g, "")
-  const time = now.toISOString().slice(11, 19).replace(/:/g, "")
-  return `run-${date}-${time}`
 }
 
 export function parseIngestArgs(args: string[]): IngestArgs | null {
@@ -42,29 +35,9 @@ export function parseIngestArgs(args: string[]): IngestArgs | null {
       parsed.runId = args[++i]
     } else if (arg === "-l" || arg === "--limit") {
       parsed.limit = parseInt(args[++i], 10)
-    } else if (arg === "-q" || arg === "--question-id") {
-      const next = args[++i]
-      if (!next) {
-        logger.error(`${arg} requires a question id`)
-        return null
-      }
-      const questionIds = appendCsvValues(parsed.questionIds, next)
-      if (questionIds.length === (parsed.questionIds || []).length) {
-        logger.error("Question id filter cannot be empty")
-        return null
-      }
-      parsed.questionIds = questionIds
-    } else if (arg === "--question-ids-file") {
-      const next = args[++i]
-      if (!next) {
-        logger.error("--question-ids-file requires a path")
-        return null
-      }
-      const questionIds = [...(parsed.questionIds || []), ...readIdListFile(next)]
-      if (questionIds.length === (parsed.questionIds || []).length) {
-        logger.error("Question ids file cannot be empty")
-        return null
-      }
+    } else if (arg === "-q" || arg === "--question-id" || arg === "--question-ids-file") {
+      const questionIds = appendQuestionIds(arg, args[++i], parsed.questionIds)
+      if (questionIds === null) return null
       parsed.questionIds = questionIds
     } else if (arg === "-t" || arg === "--type" || arg === "--types") {
       const questionTypes = parseCommaSeparated(args[++i])

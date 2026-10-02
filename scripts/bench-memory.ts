@@ -254,16 +254,11 @@ export function writeIsolatedWorkspace(
 	const dreamingMaxInputTokens = isDreamingParity ? 128000 : 64000;
 	const dreamingOutputTokens = isDreamingParity ? 16000 : dreamingMaxOutputTokens;
 	const dreamingTimeout = isDreamingParity ? 1200000 : dreamingTimeoutMs;
-	const dreamingConfig = isDreamingProfile
-		? dreamingEndpoint
+	const inferenceConfig = !isDreamingProfile
+		? ""
+		: dreamingEndpoint
 			? dreamingCredentialRef
 				? `
-  dreaming:
-    enabled: true
-    tokenThreshold: ${dreamingTokenThreshold}
-    maxInputTokens: ${dreamingMaxInputTokens}
-    maxOutputTokens: ${dreamingOutputTokens}
-    timeout: ${dreamingTimeout}
 
 inference:
   defaultPolicy: memorybench-dreaming
@@ -282,23 +277,8 @@ inference:
         default:
           model: ${quoteYaml(dreamingModel ?? "")}
           reasoning: low
-          toolUse: true
-  policies:
-    memorybench-dreaming:
-      mode: strict
-      defaultTargets:
-        - memorybench-dreaming/default
-  workloads:
-    memoryExtraction:
-      policy: memorybench-dreaming
-`
+          toolUse: true`
 				: `
-  dreaming:
-    enabled: true
-    tokenThreshold: ${dreamingTokenThreshold}
-    maxInputTokens: ${dreamingMaxInputTokens}
-    maxOutputTokens: ${dreamingOutputTokens}
-    timeout: ${dreamingTimeout}
 
 inference:
   defaultPolicy: memorybench-dreaming
@@ -310,23 +290,8 @@ inference:
         default:
           model: ${quoteYaml(dreamingModel ?? "")}
           reasoning: low
-          toolUse: true
-  policies:
-    memorybench-dreaming:
-      mode: strict
-      defaultTargets:
-        - memorybench-dreaming/default
-  workloads:
-    memoryExtraction:
-      policy: memorybench-dreaming
-`
+          toolUse: true`
 			: `
-  dreaming:
-    enabled: true
-    tokenThreshold: ${dreamingTokenThreshold}
-    maxInputTokens: ${dreamingMaxInputTokens}
-    maxOutputTokens: ${dreamingOutputTokens}
-    timeout: ${dreamingTimeout}
 
 inference:
   defaultPolicy: memorybench-dreaming
@@ -343,7 +308,16 @@ inference:
         default:
           model: ${quoteYaml(dreamingModel ?? "")}
           reasoning: low
-          toolUse: true
+          toolUse: true`;
+	const dreamingConfig = !isDreamingProfile
+		? ""
+		: `
+  dreaming:
+    enabled: true
+    tokenThreshold: ${dreamingTokenThreshold}
+    maxInputTokens: ${dreamingMaxInputTokens}
+    maxOutputTokens: ${dreamingOutputTokens}
+    timeout: ${dreamingTimeout}${inferenceConfig}
   policies:
     memorybench-dreaming:
       mode: strict
@@ -352,8 +326,7 @@ inference:
   workloads:
     memoryExtraction:
       policy: memorybench-dreaming
-`
-		: "";
+`;
 	const pipelineConfig = isDreamingParity
 		? `  pipelineV2:
     enabled: true
@@ -394,28 +367,13 @@ inference:
 	);
 }
 
-function hasProvider(args: string[]): boolean {
-	return hasOption(args, "--provider", "-p");
-}
-
-function hasBenchmark(args: string[]): boolean {
-	return hasOption(args, "--benchmark", "-b");
-}
-
-function hasRunId(args: string[]): boolean {
-	return hasOption(args, "--run-id", "-r");
-}
-
-function hasFromPhase(args: string[]): boolean {
-	return hasOption(args, "--from-phase", "-f");
-}
-
 function isContinuationCommand(command: string, args: string[]): boolean {
 	return (
 		command === "run" &&
-		!hasProvider(args) &&
-		!hasBenchmark(args) &&
-		(hasRunId(args) || (hasFromPhase(args) && Boolean(process.env.SIGNET_BENCH_RUN_ID)))
+		!hasOption(args, "--provider", "-p") &&
+		!hasOption(args, "--benchmark", "-b") &&
+		(hasOption(args, "--run-id", "-r") ||
+			(hasOption(args, "--from-phase", "-f") && Boolean(process.env.SIGNET_BENCH_RUN_ID)))
 	);
 }
 

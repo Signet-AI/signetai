@@ -16,6 +16,7 @@ import { runSearchPhase } from "./phases/search"
 import { runAnswerPhase } from "./phases/answer"
 import { runEvaluatePhase } from "./phases/evaluate"
 import { generateReport, saveReport, printReport } from "./phases/report"
+import { selectQuestionsBySampling } from "./question-selection"
 
 export interface OrchestratorOptions {
   provider: ProviderName
@@ -38,40 +39,6 @@ export function mergeResumeConcurrency(
 ): ConcurrencyConfig | undefined {
   if (!incoming || Object.keys(incoming).length === 0) return existing
   return { ...(existing ?? {}), ...incoming }
-}
-
-function selectQuestionsBySampling(
-  allQuestions: { questionId: string; questionType: string }[],
-  sampling: SamplingConfig
-): string[] {
-  if (sampling.mode === "full") {
-    return allQuestions.map((q) => q.questionId)
-  }
-
-  if (sampling.mode === "limit" && sampling.limit) {
-    return allQuestions.slice(0, sampling.limit).map((q) => q.questionId)
-  }
-
-  if (sampling.mode === "sample" && sampling.perCategory) {
-    const byType: Record<string, { questionId: string; questionType: string }[]> = {}
-    for (const q of allQuestions) {
-      if (!byType[q.questionType]) byType[q.questionType] = []
-      byType[q.questionType].push(q)
-    }
-
-    const selected: string[] = []
-    for (const questions of Object.values(byType)) {
-      if (sampling.sampleType === "random") {
-        const shuffled = [...questions].sort(() => Math.random() - 0.5)
-        selected.push(...shuffled.slice(0, sampling.perCategory).map((q) => q.questionId))
-      } else {
-        selected.push(...questions.slice(0, sampling.perCategory).map((q) => q.questionId))
-      }
-    }
-    return selected
-  }
-
-  return allQuestions.map((q) => q.questionId)
 }
 
 function filterQuestionsByType<T extends { questionType: string }>(

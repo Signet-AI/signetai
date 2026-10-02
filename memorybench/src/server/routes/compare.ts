@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "fs"
 import { CheckpointManager } from "../../orchestrator/checkpoint"
 import { batchManager } from "../../orchestrator/batch"
-import { getRunState } from "../runState"
+import { getRunStatus } from "../runStatus"
 import type { EventBroadcaster } from "../websocket"
 import type { ProviderName } from "../../types/provider"
 import type { BenchmarkName } from "../../types/benchmark"
@@ -294,49 +294,6 @@ export async function handleCompareRoutes(
   }
 
   return null
-}
-
-function getRunStatus(checkpoint: any, summary: any): string {
-  const runState = getRunState(checkpoint.runId)
-  if (runState) {
-    return runState.status
-  }
-  if (checkpoint.status === "completed") {
-    return "completed"
-  }
-  if (checkpoint.status === "failed") {
-    return "failed"
-  }
-  const questions = Object.values(checkpoint.questions || {}) as any[]
-  const hasFailed = questions.some((q: any) => {
-    const phases = q.phases || {}
-    return (
-      phases.ingest?.status === "failed" ||
-      phases.indexing?.status === "failed" ||
-      phases.search?.status === "failed" ||
-      phases.answer?.status === "failed" ||
-      phases.evaluate?.status === "failed"
-    )
-  })
-
-  if (hasFailed) {
-    return "failed"
-  }
-
-  if (summary.evaluated === summary.total && summary.total > 0) {
-    return "completed"
-  }
-  if (checkpoint.status === "running" || checkpoint.status === "initializing") {
-    if (summary.ingested > 0 || checkpoint.status === "running") {
-      return "partial"
-    }
-    return "pending"
-  }
-
-  if (summary.ingested === 0) {
-    return "pending"
-  }
-  return "partial"
 }
 
 async function initializeComparison(

@@ -8,6 +8,10 @@ describe("getModelConfig", () => {
     expect(cfg.provider).toBe("openai")
     expect(cfg.supportsTemperature).toBe(false)
     expect(cfg.id).toBe("google_gemma-4-26B-A4B-it-Q5_K_M.gguf")
+
+    const localClaude = getModelConfig("claude-3.5-sonnet.Q4_K_M.gguf")
+    expect(localClaude.provider).toBe("openai")
+    expect(localClaude.supportsTemperature).toBe(false)
   })
 
   it("omits temperature for Mercury OpenRouter models", () => {

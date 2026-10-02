@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { compileTargetFor, nativeBinaryArtifactNames } from "./native-build-platforms";
 import {
 	collectManifestIssues,
 	collectNativeManifestIssues,
@@ -101,6 +102,30 @@ describe("check-publish-manifests", () => {
 		expect(dbSource).not.toContain('({ Database } = require("bun:sqlite"));');
 	});
 
+	test("derives native compile targets and artifact cleanup from the published platform matrix", () => {
+		const targets = [
+			["linux-x64", "bun-linux-x64"],
+			["linux-arm64", "bun-linux-arm64"],
+			["darwin-x64", "bun-darwin-x64"],
+			["darwin-arm64", "bun-darwin-arm64"],
+			["win32-x64", "bun-windows-x64"],
+		] as const;
+
+		for (const [platform, target] of targets) {
+			expect(compileTargetFor(platform)).toBe(target);
+		}
+		expect(() => compileTargetFor("linux-ppc64")).toThrow("Unsupported native compile platform");
+		expect(nativeBinaryArtifactNames()).toEqual([
+			"signet",
+			"signet.exe",
+			"signet-linux-x64",
+			"signet-linux-arm64",
+			"signet-darwin-x64",
+			"signet-darwin-arm64",
+			"signet-win32-x64.exe",
+		]);
+	});
+
 	test("builds native Signet binaries in the release matrix", () => {
 		const root = join(import.meta.dir, "..");
 		const workflow = readFileSync(join(root, ".github", "workflows", "release.yml"), "utf-8");
@@ -113,9 +138,9 @@ describe("check-publish-manifests", () => {
 		expect(buildScript).toContain("bun");
 		expect(buildScript).toContain("build");
 		expect(buildScript).toContain("--compile");
-		expect(buildScript).toContain("nativeBinaryNames");
+		expect(buildScript).toContain("nativeBinaryArtifactNames()");
 		expect(buildScript).toContain("rmSync(join(outDir, name), { force: true })");
-		expect(buildScript).toContain("bun-linux-arm64");
+		expect(buildScript).toContain("compileTargetFor(platformKey)");
 		expect(buildScript).toContain('createRequire(join(root, "platform", "daemon", "package.json"))');
 		expect(buildScript).toContain("surfaces/cli/src/cli.ts");
 		expect(buildScript).toContain('join(root, "surfaces", "cli", "templates")');

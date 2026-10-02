@@ -8,214 +8,59 @@ export interface ModelConfig {
   defaultMaxTokens: number
 }
 
+type ModelProvider = ModelConfig["provider"]
+type ModelOverrides = Partial<
+  Pick<ModelConfig, "supportsTemperature" | "defaultTemperature" | "maxTokensParam">
+>
+
+const modelDefaults = {
+  supportsTemperature: true,
+  defaultTemperature: 0,
+  maxTokensParam: "maxTokens",
+  defaultMaxTokens: 1000,
+} as const
+
+function defineModel(
+  provider: ModelProvider,
+  id: string,
+  displayName: string,
+  overrides?: ModelOverrides
+): ModelConfig {
+  return { id, provider, displayName, ...modelDefaults, ...overrides }
+}
+
+const noTemperature: ModelOverrides = {
+  supportsTemperature: false,
+  defaultTemperature: 1,
+  maxTokensParam: "max_completion_tokens",
+}
+
 export const MODEL_CONFIGS: Record<string, ModelConfig> = {
-  "gpt-4o": {
-    id: "gpt-4o",
-    provider: "openai",
-    displayName: "GPT-4o (Legacy)",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gpt-4o-mini": {
-    id: "gpt-4o-mini",
-    provider: "openai",
-    displayName: "GPT-4o Mini (Legacy)",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gpt-4.1": {
-    id: "gpt-4.1",
-    provider: "openai",
-    displayName: "GPT-4.1",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gpt-4.1-mini": {
-    id: "gpt-4.1-mini",
-    provider: "openai",
-    displayName: "GPT-4.1 Mini",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gpt-4.1-nano": {
-    id: "gpt-4.1-nano",
-    provider: "openai",
-    displayName: "GPT-4.1 Nano",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gpt-5": {
-    id: "gpt-5",
-    provider: "openai",
-    displayName: "GPT-5",
-    supportsTemperature: false,
+  "gpt-4o": defineModel("openai", "gpt-4o", "GPT-4o (Legacy)"),
+  "gpt-4o-mini": defineModel("openai", "gpt-4o-mini", "GPT-4o Mini (Legacy)"),
+  "gpt-4.1": defineModel("openai", "gpt-4.1", "GPT-4.1"),
+  "gpt-4.1-mini": defineModel("openai", "gpt-4.1-mini", "GPT-4.1 Mini"),
+  "gpt-4.1-nano": defineModel("openai", "gpt-4.1-nano", "GPT-4.1 Nano"),
+  "gpt-5": defineModel("openai", "gpt-5", "GPT-5", noTemperature),
+  "gpt-5-mini": defineModel("openai", "gpt-5-mini", "GPT-5 Mini", noTemperature),
+  o1: defineModel("openai", "o1", "o1", noTemperature),
+  "o1-pro": defineModel("openai", "o1-pro", "o1 Pro", noTemperature),
+  o3: defineModel("openai", "o3", "o3", noTemperature),
+  "o3-mini": defineModel("openai", "o3-mini", "o3 Mini", noTemperature),
+  "o3-pro": defineModel("openai", "o3-pro", "o3 Pro", noTemperature),
+  "o4-mini": defineModel("openai", "o4-mini", "o4 Mini", noTemperature),
+  "opus-4.5": defineModel("anthropic", "claude-opus-4-5-20251101", "Claude Opus 4.5"),
+  "sonnet-4.5": defineModel("anthropic", "claude-sonnet-4-5-20250929", "Claude Sonnet 4.5"),
+  "haiku-4.5": defineModel("anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+  "opus-4.1": defineModel("anthropic", "claude-opus-4-1-20250805", "Claude Opus 4.1"),
+  "sonnet-4": defineModel("anthropic", "claude-sonnet-4-20250514", "Claude Sonnet 4"),
+  "gemini-2.5-pro": defineModel("google", "gemini-2.5-pro", "Gemini 2.5 Pro"),
+  "gemini-2.5-flash": defineModel("google", "gemini-2.5-flash", "Gemini 2.5 Flash"),
+  "gemini-2.5-flash-lite": defineModel("google", "gemini-2.5-flash-lite", "Gemini 2.5 Flash Lite"),
+  "gemini-2.0-flash": defineModel("google", "gemini-2.0-flash", "Gemini 2.0 Flash"),
+  "gemini-3-pro-preview": defineModel("google", "gemini-3-pro-preview", "Gemini 3 Pro Preview", {
     defaultTemperature: 1,
-    maxTokensParam: "max_completion_tokens",
-    defaultMaxTokens: 1000,
-  },
-  "gpt-5-mini": {
-    id: "gpt-5-mini",
-    provider: "openai",
-    displayName: "GPT-5 Mini",
-    supportsTemperature: false,
-    defaultTemperature: 1,
-    maxTokensParam: "max_completion_tokens",
-    defaultMaxTokens: 1000,
-  },
-  o1: {
-    id: "o1",
-    provider: "openai",
-    displayName: "o1",
-    supportsTemperature: false,
-    defaultTemperature: 1,
-    maxTokensParam: "max_completion_tokens",
-    defaultMaxTokens: 1000,
-  },
-  "o1-pro": {
-    id: "o1-pro",
-    provider: "openai",
-    displayName: "o1 Pro",
-    supportsTemperature: false,
-    defaultTemperature: 1,
-    maxTokensParam: "max_completion_tokens",
-    defaultMaxTokens: 1000,
-  },
-  o3: {
-    id: "o3",
-    provider: "openai",
-    displayName: "o3",
-    supportsTemperature: false,
-    defaultTemperature: 1,
-    maxTokensParam: "max_completion_tokens",
-    defaultMaxTokens: 1000,
-  },
-  "o3-mini": {
-    id: "o3-mini",
-    provider: "openai",
-    displayName: "o3 Mini",
-    supportsTemperature: false,
-    defaultTemperature: 1,
-    maxTokensParam: "max_completion_tokens",
-    defaultMaxTokens: 1000,
-  },
-  "o3-pro": {
-    id: "o3-pro",
-    provider: "openai",
-    displayName: "o3 Pro",
-    supportsTemperature: false,
-    defaultTemperature: 1,
-    maxTokensParam: "max_completion_tokens",
-    defaultMaxTokens: 1000,
-  },
-  "o4-mini": {
-    id: "o4-mini",
-    provider: "openai",
-    displayName: "o4 Mini",
-    supportsTemperature: false,
-    defaultTemperature: 1,
-    maxTokensParam: "max_completion_tokens",
-    defaultMaxTokens: 1000,
-  },
-  "opus-4.5": {
-    id: "claude-opus-4-5-20251101",
-    provider: "anthropic",
-    displayName: "Claude Opus 4.5",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "sonnet-4.5": {
-    id: "claude-sonnet-4-5-20250929",
-    provider: "anthropic",
-    displayName: "Claude Sonnet 4.5",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "haiku-4.5": {
-    id: "claude-haiku-4-5-20251001",
-    provider: "anthropic",
-    displayName: "Claude Haiku 4.5",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "opus-4.1": {
-    id: "claude-opus-4-1-20250805",
-    provider: "anthropic",
-    displayName: "Claude Opus 4.1",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "sonnet-4": {
-    id: "claude-sonnet-4-20250514",
-    provider: "anthropic",
-    displayName: "Claude Sonnet 4",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gemini-2.5-pro": {
-    id: "gemini-2.5-pro",
-    provider: "google",
-    displayName: "Gemini 2.5 Pro",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gemini-2.5-flash": {
-    id: "gemini-2.5-flash",
-    provider: "google",
-    displayName: "Gemini 2.5 Flash",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gemini-2.5-flash-lite": {
-    id: "gemini-2.5-flash-lite",
-    provider: "google",
-    displayName: "Gemini 2.5 Flash Lite",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gemini-2.0-flash": {
-    id: "gemini-2.0-flash",
-    provider: "google",
-    displayName: "Gemini 2.0 Flash",
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
-  "gemini-3-pro-preview": {
-    id: "gemini-3-pro-preview",
-    provider: "google",
-    displayName: "Gemini 3 Pro Preview",
-    supportsTemperature: true,
-    defaultTemperature: 1,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  },
+  }),
 }
 
 export const DEFAULT_ANSWERING_MODEL = "gpt-4o"
@@ -227,11 +72,10 @@ export const DEFAULT_JUDGE_MODELS: Record<string, string> = {
 
 export function getModelConfig(alias: string): ModelConfig {
   const lowerAlias = alias.toLowerCase()
+  const configured = MODEL_CONFIGS[lowerAlias]
+  if (configured) return configured
 
-  if (MODEL_CONFIGS[lowerAlias]) {
-    return MODEL_CONFIGS[lowerAlias]
-  }
-  if (
+  const isOpenAIWithoutTemperature =
     lowerAlias.startsWith("gpt-5") ||
     lowerAlias.startsWith("o1") ||
     lowerAlias.startsWith("o3") ||
@@ -239,71 +83,21 @@ export function getModelConfig(alias: string): ModelConfig {
     lowerAlias.endsWith(".gguf") ||
     lowerAlias.includes("gemma-4") ||
     lowerAlias.includes("inception/mercury")
-  ) {
-    return {
-      id: alias,
-      provider: "openai",
-      displayName: alias,
-      supportsTemperature: false,
-      defaultTemperature: 1,
-      maxTokensParam: "max_completion_tokens",
-      defaultMaxTokens: 1000,
-    }
-  }
-  if (lowerAlias.startsWith("gpt-")) {
-    return {
-      id: alias,
-      provider: "openai",
-      displayName: alias,
-      supportsTemperature: true,
-      defaultTemperature: 0,
-      maxTokensParam: "maxTokens",
-      defaultMaxTokens: 1000,
-    }
-  }
-  if (lowerAlias.startsWith("claude-")) {
-    return {
-      id: alias,
-      provider: "anthropic",
-      displayName: alias,
-      supportsTemperature: true,
-      defaultTemperature: 0,
-      maxTokensParam: "maxTokens",
-      defaultMaxTokens: 1000,
-    }
-  }
-  if (lowerAlias.startsWith("gemini-3")) {
-    return {
-      id: alias,
-      provider: "google",
-      displayName: alias,
-      supportsTemperature: true,
-      defaultTemperature: 1,
-      maxTokensParam: "maxTokens",
-      defaultMaxTokens: 1000,
-    }
-  }
-  if (lowerAlias.startsWith("gemini-")) {
-    return {
-      id: alias,
-      provider: "google",
-      displayName: alias,
-      supportsTemperature: true,
-      defaultTemperature: 0,
-      maxTokensParam: "maxTokens",
-      defaultMaxTokens: 1000,
-    }
-  }
-  return {
-    id: alias,
-    provider: "openai",
-    displayName: alias,
-    supportsTemperature: true,
-    defaultTemperature: 0,
-    maxTokensParam: "maxTokens",
-    defaultMaxTokens: 1000,
-  }
+  const provider = isOpenAIWithoutTemperature
+    ? "openai"
+    : lowerAlias.startsWith("claude-")
+      ? "anthropic"
+      : lowerAlias.startsWith("gemini-")
+        ? "google"
+        : "openai"
+
+  return defineModel(provider, alias, alias, {
+    supportsTemperature: !isOpenAIWithoutTemperature,
+    defaultTemperature: isOpenAIWithoutTemperature || lowerAlias.startsWith("gemini-3") ? 1 : 0,
+    maxTokensParam: isOpenAIWithoutTemperature ? "max_completion_tokens" : "maxTokens",
+  })
 }
+
 export const MODEL_ALIASES = MODEL_CONFIGS
 
 export function resolveModel(alias: string): ModelConfig {
@@ -314,7 +108,7 @@ export function getModelId(alias: string): string {
   return getModelConfig(alias).id
 }
 
-export function getModelProvider(alias: string): "openai" | "anthropic" | "google" {
+export function getModelProvider(alias: string): ModelProvider {
   return getModelConfig(alias).provider
 }
 
@@ -322,8 +116,6 @@ export function listAvailableModels(): string[] {
   return Object.keys(MODEL_CONFIGS)
 }
 
-export function listModelsByProvider(provider: "openai" | "anthropic" | "google"): string[] {
-  return Object.entries(MODEL_CONFIGS)
-    .filter(([_, config]) => config.provider === provider)
-    .map(([alias]) => alias)
+export function listModelsByProvider(provider: ModelProvider): string[] {
+  return Object.keys(MODEL_CONFIGS).filter((alias) => MODEL_CONFIGS[alias].provider === provider)
 }
