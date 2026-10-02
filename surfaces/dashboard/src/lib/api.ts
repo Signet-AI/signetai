@@ -1349,16 +1349,25 @@ export const api = {
 			return { ok: false, status: 0, error: "daemon unreachable" };
 		}
 	},
-	putSecret: async (name: string, value: string, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }> => {
-		const { ok, data } = await mutateJSON<{ error?: string }>(
+	putSecret: async (
+		name: string,
+		value: string,
+		signal?: AbortSignal,
+		authorizeKeyring = false,
+	): Promise<{ ok: boolean; error?: string; authorizationRequired?: boolean }> => {
+		const { ok, data } = await mutateJSON<{ error?: string; authorizationRequired?: boolean }>(
 			`/api/secrets/${encodeURIComponent(name)}`,
 			"POST",
-			{
-				value,
-			},
-			signal ?? AbortSignal.timeout(30_000),
+			{ value, ...(authorizeKeyring ? { authorizeKeyring: true } : {}) },
+			signal
+				? AbortSignal.any([signal, AbortSignal.timeout(authorizeKeyring ? 150_000 : 30_000)])
+				: AbortSignal.timeout(authorizeKeyring ? 150_000 : 30_000),
 		);
-		return { ok, error: ok ? undefined : (data?.error ?? "Failed to store secret") };
+		return {
+			ok,
+			error: ok ? undefined : (data?.error ?? "Failed to store secret"),
+			authorizationRequired: !ok && data?.authorizationRequired === true,
+		};
 	},
 	deleteSecret: async (name: string): Promise<{ ok: boolean; error?: string }> => {
 		const { ok, data } = await mutateJSON<{ error?: string }>(`/api/secrets/${encodeURIComponent(name)}`, "DELETE");

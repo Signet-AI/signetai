@@ -188,12 +188,15 @@ interface MasterKeyResolution {
 export class SecretKeyringError extends Error {
 	readonly state: SecretKeyringState;
 	readonly retryable: boolean;
+	readonly authorizationRequired: boolean;
 
-	constructor(result: SecretKeyringResult) {
+	constructor(result: SecretKeyringResult, authorizationRequired = true) {
 		super(result.message ?? `Secrets keyring is ${result.state}`);
 		this.name = "SecretKeyringError";
 		this.state = result.state;
 		this.retryable = result.state === "locked" || result.state === "unavailable";
+		this.authorizationRequired =
+			authorizationRequired && (result.state === "locked" || result.state === "permission-denied");
 	}
 }
 
@@ -352,6 +355,7 @@ async function resolveMasterKey(
 		await options.onKeyringAuthorization?.();
 		if (options.signal?.aborted) throw new Error("Secret write cancelled");
 		result = await keyring.get(options);
+		if (options.signal?.aborted) throw new Error("Secret write cancelled");
 		if (result.state === "found") {
 			const authorized = result.value;
 			result = await keyring.get();
@@ -359,7 +363,7 @@ async function resolveMasterKey(
 				throw new SecretKeyringError({
 					...result,
 					message:
-						"Keychain authorization was not saved. Retry sign-in and choose Always Allow in the macOS Keychain prompt to enable background access. Your existing secrets have not been changed.",
+						"Keychain authorization was not saved. Retry saving your credential and choose Always Allow in the macOS Keychain prompt to enable background access. Your existing secrets have not been changed.",
 				});
 			if (result.state === "found" && result.value !== authorized)
 				throw new SecretKeyringError({ state: "corrupt", message: "Master key changed during authorization" });
@@ -385,7 +389,7 @@ async function resolveMasterKey(
 			if (legacyKey) await migrateLegacyStore(store, legacyKey, nativeKey);
 			return { key: nativeKey, provider: "native-keyring" };
 		}
-		throw new SecretKeyringError(saved);
+		throw new SecretKeyringError(saved, false);
 	}
 
 	if (result.state === "locked") throw new SecretKeyringError(result);
@@ -773,19 +777,22 @@ async function readSecretValue(store: SecretsStore, name: string, resolution: Ma
 	return decryptWithKey(entry.ciphertext, resolution.key);
 }
 
-export async function getLocalSecretValue(name: string): Promise<string> {
+export async function getLocalSecretValue(
+	name: string,
+	options?: SecretKeyringAccessOptions & { readonly onKeyringAuthorization?: () => Promise<void> },
+): Promise<string> {
 	const initialStore = loadStore();
 	const localName = parseLocalSecretName(name);
 	if (initialStore.version === NATIVE_STORE_VERSION || initialStore.provider === "native-keyring") {
 		if (!Object.hasOwn(initialStore.secrets, localName)) throw new Error(`Secret '${localName}' not found`);
-		const resolution = await resolveMasterKey(initialStore);
+		const resolution = await resolveMasterKey(initialStore, options);
 		return readSecretValue(initialStore, name, resolution);
 	}
 
 	return withSecretStoreLock(async () => {
 		const store = loadStore();
 		if (!Object.hasOwn(store.secrets, localName)) throw new Error(`Secret '${localName}' not found`);
-		const resolution = await resolveMasterKey(store);
+		const resolution = await resolveMasterKey(store, options);
 		const plaintext = await readSecretValue(store, name, resolution);
 		if (resolution.provider === "legacy-obfuscated") await anchorLegacyMachineIdAfterVerification(resolution.key);
 		return plaintext;

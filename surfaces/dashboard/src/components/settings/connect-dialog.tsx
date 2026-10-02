@@ -82,6 +82,14 @@ export function ConnectProviderDialog({
 	}, [phase.kind, oauthNavigation]);
 	useEffect(() => () => oauthNavigation.dispose(), [oauthNavigation]);
 
+	const keySaveController = useRef<AbortController | null>(null);
+	useEffect(() => () => keySaveController.current?.abort(), []);
+
+	const closeDialog = () => {
+		keySaveController.current?.abort();
+		onClose();
+	};
+
 	const [promptInput, setPromptInput] = useState("");
 	const [disconnecting, setDisconnecting] = useState(false);
 	const format = apiKeyFormat(provider.id);
@@ -95,14 +103,26 @@ export function ConnectProviderDialog({
 		controller.startOAuth();
 	};
 
-	const handleSaveKey = async () => {
-		if (phase.kind !== "key-entry") return;
+	const handleSaveKey = async (authorizeKeyring = false) => {
+		if (phase.kind !== "key-entry" && phase.kind !== "keyring-authorization") return;
 		const value = phase.key.trim();
 		if (!value) return;
+		if (keySaveController.current) return;
+		const request = new AbortController();
+		keySaveController.current = request;
 		controller.beginSaving();
 		const name = providerKeySecretName(provider.id);
-		const stored = await api.putSecret(name, value);
+		const stored = await api.putSecret(name, value, request.signal, authorizeKeyring);
+		keySaveController.current = null;
+		if (request.signal.aborted) return;
 		if (!stored.ok) {
+			if (stored.authorizationRequired) {
+				controller.requestKeyringAuthorization(
+					value,
+					stored.error ?? "Authorize macOS Keychain access to save your key.",
+				);
+				return;
+			}
 			controller.finishSaved(false, stored.error ?? "Could not save the key to the encrypted vault.");
 			return;
 		}
@@ -138,10 +158,10 @@ export function ConnectProviderDialog({
 			className="cs-backdrop"
 			role="presentation"
 			onClick={(e) => {
-				if (e.target === e.currentTarget) onClose();
+				if (e.target === e.currentTarget) closeDialog();
 			}}
 			onKeyDown={(e) => {
-				if (e.key === "Escape") onClose();
+				if (e.key === "Escape") closeDialog();
 			}}
 		>
 			<div
@@ -160,13 +180,13 @@ export function ConnectProviderDialog({
 						</>
 					}
 					icon={
-						phase.kind === "key-entry" || phase.kind === "saving" ? (
+						phase.kind === "key-entry" || phase.kind === "keyring-authorization" || phase.kind === "saving" ? (
 							<KeyRound className="size-4" />
 						) : (
 							<CheckCircle className="size-4" />
 						)
 					}
-					onClose={onClose}
+					onClose={closeDialog}
 				/>
 
 				<div className="cs-body">
@@ -195,7 +215,7 @@ export function ConnectProviderDialog({
 								</Button>
 							)}
 							{provider.supportsApiKey && (
-								<Button variant="outline" size="compact" type="button" onClick={controller.enterKeyMode}>
+								<Button variant="outline" size="compact" type="button" onClick={() => controller.enterKeyMode()}>
 									Paste an API key
 								</Button>
 							)}
@@ -314,6 +334,24 @@ export function ConnectProviderDialog({
 								</div>
 							)}
 							<div className="cp-hint">Stored encrypted in the Signet vault. The value is never shown again.</div>
+						</div>
+					)}
+
+					{phase.kind === "keyring-authorization" && (
+						<div className="flex flex-col gap-2">
+							<div className="cp-error">
+								<TriangleAlert className="size-3.5 shrink-0" /> {phase.message}
+							</div>
+							<p className="cp-hint">
+								The next prompt is from macOS. Enter your login Keychain password and choose Always Allow so Signet can
+								use this provider in the background. One-time access cannot enable background requests.
+							</p>
+							<Button type="button" onClick={() => void handleSaveKey(true)}>
+								Authorize and save key
+							</Button>
+							<Button type="button" variant="outline" onClick={() => controller.enterKeyMode(phase.key)}>
+								Cancel
+							</Button>
 						</div>
 					)}
 
