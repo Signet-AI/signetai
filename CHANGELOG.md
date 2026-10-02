@@ -8,7 +8,7 @@ Surface summary of the most recent release dates. See the release ledger below f
 
 ### 2026-10-02
 - Features: add 2D memory graph and persistent Pi chat.
-- Bug fixes: remove false graph attribution; commit memory head with pass finalization; scope model catalog and gate dreaming completion; compare live credentials without password hashing; retry GitHub asset upload timeouts; classify absent default macOS keychain as unavailable; recover macOS OAuth keychain authorization; stop macOS keychain prompt loops; preserve macOS verification copy; use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
+- Bug fixes: update native Dreaming smoke payload; authorize macOS keychain access for API-key saves; remove false graph attribution; commit memory head with pass finalization; scope model catalog and gate dreaming completion; compare live credentials without password hashing; retry GitHub asset upload timeouts; classify absent default macOS keychain as unavailable; recover macOS OAuth keychain authorization; stop macOS keychain prompt loops; preserve macOS verification copy; use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
 - Refactoring: rebuild guided onboarding.
 - Docs: drop graph attribution entry; remove duplicate license note; clarify opening and use cases.
 
@@ -39,6 +39,16 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: reconcile workspace routes and drift detection; document workspace v2 migration and ownership.
 
 ## Release Ledger
+
+## [0.230.1] - 2026-10-02
+
+Release summary: 2 bug fixes.
+Tag range: `v0.230.0..v0.230.1`.
+
+### Bug Fixes
+
+- **ci**: update native Dreaming smoke payload
+- **secrets**: authorize macOS keychain access for API-key saves
 
 ## [0.230.0] - 2026-10-02
 
