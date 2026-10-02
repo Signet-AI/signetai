@@ -91,27 +91,15 @@ describe("migration framework", () => {
 			applied_at: string;
 		}>;
 		expect(migrations.length).toBe(MIGRATIONS.length);
-		expect(migrations[0].version).toBe(1);
-		expect(migrations[1].version).toBe(2);
-		expect(migrations[2].version).toBe(3);
-		expect(migrations[3].version).toBe(4);
-		expect(migrations[4].version).toBe(5);
-		expect(migrations[5].version).toBe(6);
-		expect(migrations[6].version).toBe(7);
-		expect(migrations[7].version).toBe(8);
-		expect(migrations[8].version).toBe(9);
-		expect(migrations[9].version).toBe(10);
-		expect(migrations[10].version).toBe(11);
-		expect(migrations[11].version).toBe(12);
-		expect(migrations[12].version).toBe(13);
-		expect(migrations[13].version).toBe(14);
-		expect(migrations[14].version).toBe(15);
-		expect(migrations[15].version).toBe(16);
-		expect(migrations[16].version).toBe(17);
-		expect(migrations[17].version).toBe(18);
-		expect(migrations[18].version).toBe(19);
-		expect(migrations[21].version).toBe(22);
-		expect(migrations[23].version).toBe(24);
+		for (let version = 1; version <= 19; version++) {
+			expect(migrations[version - 1].version).toBe(version);
+		}
+		for (const [index, version] of [
+			[21, 22],
+			[23, 24],
+		]) {
+			expect(migrations[index].version).toBe(version);
+		}
 		db.exec("DROP INDEX idx_memory_artifacts_agent_sha");
 		expect(hasPendingMigrations(db)).toBe(true);
 		runMigrations(db);
@@ -601,41 +589,50 @@ describe("migration framework", () => {
 			name: string;
 		}>;
 		const tableNames = tables.map((t) => t.name);
-		expect(tableNames).toContain("memories");
-		expect(tableNames).toContain("conversations");
-		expect(tableNames).toContain("embeddings");
-		expect(tableNames).toContain("schema_migrations");
-		expect(tableNames).toContain("memory_history");
-		expect(tableNames).toContain("memory_jobs");
-		expect(tableNames).toContain("entities");
-		expect(tableNames).toContain("relations");
-		expect(tableNames).toContain("memory_entity_mentions");
-		expect(tableNames).toContain("schema_migrations_audit");
-		expect(tableNames).toContain("memory_content_safety");
-		expect(tableNames).toContain("documents");
-		expect(tableNames).toContain("document_memories");
-		expect(tableNames).toContain("connectors");
-		expect(tableNames).toContain("summary_jobs");
-		expect(tableNames).toContain("umap_cache");
-		expect(tableNames).toContain("session_scores");
-		expect(tableNames).toContain("scheduled_tasks");
-		expect(tableNames).toContain("task_runs");
+		for (const table of [
+			"memories",
+			"conversations",
+			"embeddings",
+			"schema_migrations",
+			"memory_history",
+			"memory_jobs",
+			"entities",
+			"relations",
+			"memory_entity_mentions",
+			"schema_migrations_audit",
+			"memory_content_safety",
+			"documents",
+			"document_memories",
+			"connectors",
+			"summary_jobs",
+			"umap_cache",
+			"session_scores",
+			"scheduled_tasks",
+			"task_runs",
+		]) {
+			expect(tableNames).toContain(table);
+		}
 		expect(tableNames).not.toContain("ingestion_jobs");
-		expect(tableNames).toContain("dreaming_tool_calls");
-		expect(tableNames).toContain("dreaming_evidence_consumption");
-		expect(tableNames).toContain("dreaming_evidence_reviews");
-		expect(tableNames).toContain("telemetry_events");
-		expect(tableNames).toContain("entity_aspects");
-		expect(tableNames).toContain("entity_attributes");
-		expect(tableNames).toContain("entity_dependencies");
-		expect(tableNames).toContain("task_meta");
+		for (const table of [
+			"dreaming_tool_calls",
+			"dreaming_evidence_consumption",
+			"dreaming_evidence_reviews",
+			"telemetry_events",
+			"entity_aspects",
+			"entity_attributes",
+			"entity_dependencies",
+			"task_meta",
+		]) {
+			expect(tableNames).toContain(table);
+		}
 
 		const attributeColumns = db.query("PRAGMA table_info(entity_attributes)").all() as Array<{ name: string }>;
-		expect(attributeColumns.map((col) => col.name)).toContain("claim_key");
-		expect(attributeColumns.map((col) => col.name)).toContain("group_key");
-		expect(tableNames).toContain("entity_dependency_history");
-		expect(tableNames).toContain("ontology_proposals");
-		expect(tableNames).toContain("entity_aliases");
+		for (const column of ["claim_key", "group_key"]) {
+			expect(attributeColumns.map((col) => col.name)).toContain(column);
+		}
+		for (const table of ["entity_dependency_history", "ontology_proposals", "entity_aliases"]) {
+			expect(tableNames).toContain(table);
+		}
 		const aliasIndexes = db.query("PRAGMA index_list(entity_aliases)").all() as Array<{ name: string }>;
 		expect(aliasIndexes.map((index) => index.name)).toContain("idx_entity_aliases_active_unique");
 	});
@@ -647,18 +644,22 @@ describe("migration framework", () => {
 			name: string;
 		}>;
 		const colNames = columns.map((c) => c.name);
-		expect(colNames).toContain("id");
-		expect(colNames).toContain("content");
-		expect(colNames).toContain("type");
-		expect(colNames).toContain("confidence");
-		expect(colNames).toContain("content_hash");
-		expect(colNames).toContain("normalized_content");
-		expect(colNames).toContain("is_deleted");
-		expect(colNames).toContain("pinned");
-		expect(colNames).toContain("importance");
-		expect(colNames).toContain("extraction_status");
-		expect(colNames).toContain("update_count");
-		expect(colNames).toContain("access_count");
+		for (const column of [
+			"id",
+			"content",
+			"type",
+			"confidence",
+			"content_hash",
+			"normalized_content",
+			"is_deleted",
+			"pinned",
+			"importance",
+			"extraction_status",
+			"update_count",
+			"access_count",
+		]) {
+			expect(colNames).toContain(column);
+		}
 	});
 
 	test("FTS5 table exists after migration", () => {
@@ -700,8 +701,7 @@ describe("migration framework", () => {
 		}>;
 		const colNames = columns.map((c) => c.name);
 
-		expect(colNames).toContain("why");
-		expect(colNames).toContain("project");
+		for (const column of ["why", "project"]) expect(colNames).toContain(column);
 	});
 
 	test("session_memories has structural feature columns after migration 020", () => {
@@ -711,10 +711,8 @@ describe("migration framework", () => {
 			name: string;
 		}>;
 		const colNames = cols.map((c) => c.name);
-		expect(colNames).toContain("entity_slot");
-		expect(colNames).toContain("aspect_slot");
-		expect(colNames).toContain("is_constraint");
-		expect(colNames).toContain("structural_density");
+		for (const column of ["entity_slot", "aspect_slot", "is_constraint", "structural_density"])
+			expect(colNames).toContain(column);
 	});
 
 	test("path feedback tables and session path_json column exist after migration 041", () => {
@@ -724,11 +722,15 @@ describe("migration framework", () => {
 			name: string;
 		}>;
 		const tableNames = new Set(tableRows.map((row) => row.name));
-		expect(tableNames.has("path_feedback_events")).toBe(true);
-		expect(tableNames.has("path_feedback_stats")).toBe(true);
-		expect(tableNames.has("entity_retrieval_stats")).toBe(true);
-		expect(tableNames.has("entity_cooccurrence")).toBe(true);
-		expect(tableNames.has("path_feedback_sessions")).toBe(true);
+		for (const table of [
+			"path_feedback_events",
+			"path_feedback_stats",
+			"entity_retrieval_stats",
+			"entity_cooccurrence",
+			"path_feedback_sessions",
+		]) {
+			expect(tableNames.has(table)).toBe(true);
+		}
 
 		const cols = db.query("PRAGMA table_info(session_memories)").all() as Array<{
 			name: string;
