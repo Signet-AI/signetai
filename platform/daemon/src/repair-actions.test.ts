@@ -598,6 +598,67 @@ describe("pruneGenericEntities", () => {
 		}
 	});
 
+	it("restarts a resumed cursor when the scan generation changes between calls", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db);
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, 0, ?, ?)`,
+			);
+			for (let i = 0; i < 250; i += 1) {
+				const name = `Project ${i}`;
+				insert.run(`ent-${String(i).padStart(3, "0")}`, name, name.toLowerCase(), now, now);
+			}
+
+			const first = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: true,
+				candidateLimit: 100,
+				inspectionLimit: 50,
+			});
+			const firstDetails = first.details as {
+				complete: boolean;
+				cursor: { updatedAt: string; id: string; agentId: string; scanGeneration: number } | null;
+			};
+			expect(firstDetails.complete).toBe(false);
+			expect(firstDetails.cursor).not.toBeNull();
+			const cursor = firstDetails.cursor;
+			if (cursor === null) throw new Error("first scan did not return a cursor");
+
+			const generationBefore = cursor.scanGeneration;
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('ent-zzz', 'Sender', 'sender', 'person', 'default', 1, 0, ?, ?)`,
+			).run(now, now);
+			const generationAfter = db
+				.prepare("SELECT generation FROM generic_entity_prune_scan_state WHERE id = 1")
+				.get() as { generation: number };
+			expect(generationAfter.generation).toBeGreaterThan(generationBefore);
+
+			const resumed = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: true,
+				candidateLimit: 100,
+				inspectionLimit: 500,
+				cursor,
+			});
+
+			expect(resumed.success).toBe(true);
+			expect(resumed.details).toMatchObject({
+				complete: true,
+				matched: 1,
+			});
+			expect(resumed.message).toContain("Sender");
+		} finally {
+			db.close();
+		}
+	});
+
 	it("stops at the server deadline without applying an unscanned plan", async () => {
 		const db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);

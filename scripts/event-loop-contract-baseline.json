@@ -3076,15 +3076,15 @@
     },
     {
       "path": "repair-actions.ts",
-      "line": 2434,
+      "line": 2478,
       "api": "withReadDbAsync",
-      "source": "rows = await accessor.withReadDbAsync(",
+      "source": "page = await accessor.withReadDbAsync(",
       "category": "hot-path",
       "siteToken": "db:repair.generic-entity-candidates.read"
     },
     {
       "path": "repair-actions.ts",
-      "line": 2743,
+      "line": 2838,
       "api": "withReadDbAsync",
       "source": "return await accessor.withReadDbAsync(",
       "category": "hot-path",
