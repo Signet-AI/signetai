@@ -9,17 +9,28 @@ import {
 } from "@signet/core";
 import type { RecallPayload, RecallRow } from "@signet/core";
 import { SignetClient } from "@signet/sdk";
-import {
-	createDaemonFetcher,
-	createDaemonIdentityHeaders,
-	type DaemonFetchOptions,
-} from "@signet/connector-base/daemon-client";
+import { createDaemonFetcher, createDaemonIdentityHeaders } from "@signet/connector-base/daemon-client";
 import { projectRecall } from "./recall-projection.js";
 
 export const DEFAULT_DAEMON_URL = "http://127.0.0.1:3850";
 export const RUNTIME_PATH = "plugin" as const;
 const READ_TIMEOUT = 5000;
 export const WRITE_TIMEOUT = 10000;
+
+type PublishedDaemonFetchOptions = {
+	readonly method?: string;
+	readonly body?: unknown;
+	readonly timeout?: number;
+	readonly parseJson?: boolean;
+};
+
+type PublishedDaemonFetchResult<T> =
+	| { readonly ok: true; readonly data: T }
+	| {
+			readonly ok: false;
+			readonly reason: "offline" | "timeout" | "http" | "invalid-json" | "body-read";
+			readonly status?: number;
+	  };
 const SESSION_START_TIMEOUT = resolveSessionStartTimeoutMs(
 	process.env.SIGNET_SESSION_START_TIMEOUT ?? process.env.SIGNET_FETCH_TIMEOUT,
 );
@@ -80,7 +91,7 @@ interface MemoryRecord {
 
 const pluginHeaders = (): Record<string, string> => createDaemonIdentityHeaders("openclaw-plugin", RUNTIME_PATH);
 
-export const daemonFetchResult = createDaemonFetcher({
+const daemonFetchResultImpl = createDaemonFetcher({
 	headers: pluginHeaders,
 	logPrefix: "signet",
 	defaultTimeout: READ_TIMEOUT,
@@ -95,6 +106,12 @@ export const daemonFetchResult = createDaemonFetcher({
 	},
 });
 
+export const daemonFetchResult = <T>(
+	daemonUrl: string,
+	path: string,
+	options: PublishedDaemonFetchOptions = {},
+): Promise<PublishedDaemonFetchResult<T>> => daemonFetchResultImpl<T>(daemonUrl, path, options);
+
 const healthFetch = createDaemonFetcher({
 	headers: () => undefined,
 	logPrefix: "signet",
@@ -105,7 +122,7 @@ const healthFetch = createDaemonFetcher({
 export async function daemonFetch<T>(
 	daemonUrl: string,
 	path: string,
-	options: DaemonFetchOptions = {},
+	options: PublishedDaemonFetchOptions = {},
 ): Promise<T | null> {
 	const result = await daemonFetchResult<T>(daemonUrl, path, options);
 	return result.ok ? result.data : null;
