@@ -2278,6 +2278,8 @@ interface GenericEntityCandidate {
 export interface GenericEntityCursor {
 	readonly updatedAt: string;
 	readonly id: string;
+	readonly agentId?: string;
+	readonly scanGeneration?: number;
 }
 
 export interface PruneGenericEntitiesOptions {
@@ -2297,22 +2299,54 @@ const GENERIC_ENTITY_MAX_SCAN_DURATION_MS = 5_000;
 const GENERIC_ENTITY_MAX_CANDIDATE_LIMIT = 500;
 const GENERIC_ENTITY_SCAN_PAGE_SIZE = 100;
 
-type GenericEntityStopReason = "candidate_limit" | "inspection_limit" | "deadline" | "cancelled" | "pressure";
+type GenericEntityStopReason =
+	| "candidate_limit"
+	| "inspection_limit"
+	| "deadline"
+	| "cancelled"
+	| "pressure"
+	| "changed";
 
 function normalizeGenericEntityCursor(value: unknown): GenericEntityCursor | null | undefined {
 	if (value === undefined) return undefined;
 	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-	const cursor = value as { updatedAt?: unknown; updated_at?: unknown; id?: unknown };
+	const cursor = value as {
+		updatedAt?: unknown;
+		updated_at?: unknown;
+		id?: unknown;
+		agentId?: unknown;
+		scanGeneration?: unknown;
+	};
 	const updatedAt = typeof cursor.updatedAt === "string" ? cursor.updatedAt : cursor.updated_at;
 	if (
 		typeof updatedAt !== "string" ||
 		updatedAt.length === 0 ||
 		typeof cursor.id !== "string" ||
-		cursor.id.length === 0
+		cursor.id.length === 0 ||
+		(typeof cursor.agentId !== "undefined" && (typeof cursor.agentId !== "string" || cursor.agentId.length === 0)) ||
+		(typeof cursor.scanGeneration !== "undefined" &&
+			(typeof cursor.scanGeneration !== "number" ||
+				!Number.isSafeInteger(cursor.scanGeneration) ||
+				cursor.scanGeneration < 0)) ||
+		(cursor.agentId === undefined) !== (cursor.scanGeneration === undefined)
 	) {
 		return null;
 	}
-	return { updatedAt, id: cursor.id };
+	return {
+		updatedAt,
+		id: cursor.id,
+		agentId: cursor.agentId,
+		scanGeneration: cursor.scanGeneration,
+	};
+}
+
+function readGenericEntityPruneScanGeneration(db: ReadDb | WriteDb): number {
+	const row = db.prepare("SELECT generation FROM generic_entity_prune_scan_state WHERE id = 1").get();
+	const generation = row?.generation;
+	if (typeof generation !== "number" || !Number.isSafeInteger(generation) || generation < 0) {
+		throw new Error("generic entity prune scan generation is unavailable");
+	}
+	return generation;
 }
 
 function genericEntityScanDetails(
@@ -2320,7 +2354,9 @@ function genericEntityScanDetails(
 	inspectionLimit: number,
 	inspected: number,
 	matched: number,
-	cursor: GenericEntityCursor | undefined,
+	cursor: Pick<GenericEntityCursor, "updatedAt" | "id"> | undefined,
+	agentId: string,
+	scanGeneration: number | undefined,
 	complete: boolean,
 	stopReason: GenericEntityStopReason | undefined,
 ): Readonly<Record<string, unknown>> {
@@ -2332,7 +2368,7 @@ function genericEntityScanDetails(
 		inspected,
 		matched,
 		remaining: complete ? 0 : "unknown",
-		cursor: cursor ?? null,
+		cursor: cursor === undefined || scanGeneration === undefined ? null : { ...cursor, agentId, scanGeneration },
 		...(complete || stopReason === undefined ? {} : { reason: stopReason }),
 	};
 }
@@ -2407,7 +2443,11 @@ export async function pruneGenericEntities(
 	}
 
 	const candidates: GenericEntityCandidate[] = [];
-	let cursor = normalizedCursor;
+	let cursor: Pick<GenericEntityCursor, "updatedAt" | "id"> | undefined = normalizedCursor;
+	let scanGeneration = normalizedCursor?.scanGeneration;
+	if (normalizedCursor && (normalizedCursor.agentId !== agentId || normalizedCursor.scanGeneration === undefined)) {
+		cursor = undefined;
+	}
 	let inspected = 0;
 	let matched = 0;
 	let complete = false;
@@ -2429,10 +2469,15 @@ export async function pruneGenericEntities(
 		}
 
 		const pageLimit = Math.min(GENERIC_ENTITY_SCAN_PAGE_SIZE, inspectionLimit - inspected);
-		let rows: GenericEntityCandidate[];
+		let page: {
+			readonly rows: GenericEntityCandidate[];
+			readonly generationBefore: number;
+			readonly generationAfter: number;
+		};
 		try {
-			rows = await accessor.withReadDbAsync(
+			page = await accessor.withReadDbAsync(
 				async (db) => {
+					const generationBefore = readGenericEntityPruneScanGeneration(db);
 					const query = cursor
 						? `SELECT e.id, e.name, e.entity_type, e.updated_at
 						   FROM entities e
@@ -2455,7 +2500,9 @@ export async function pruneGenericEntities(
 					const values = cursor
 						? [agentId, cursor.updatedAt, cursor.updatedAt, cursor.id, pageLimit + 1]
 						: [agentId, pageLimit + 1];
-					return statement.all(...values) as GenericEntityCandidate[];
+					const rows = statement.all(...values) as GenericEntityCandidate[];
+					const generationAfter = readGenericEntityPruneScanGeneration(db);
+					return { rows, generationBefore, generationAfter };
 				},
 				{
 					siteToken: "db:repair.generic-entity-candidates.read",
@@ -2475,6 +2522,26 @@ export async function pruneGenericEntities(
 			stopReason = "deadline";
 			break;
 		}
+		if (page.generationBefore !== page.generationAfter) {
+			stopReason = "changed";
+			cursor = undefined;
+			candidates.length = 0;
+			break;
+		}
+		if (scanGeneration === undefined) {
+			scanGeneration = page.generationAfter;
+		} else if (page.generationAfter !== scanGeneration) {
+			if (inspected === 0) {
+				cursor = undefined;
+				scanGeneration = page.generationAfter;
+				continue;
+			}
+			stopReason = "changed";
+			cursor = undefined;
+			candidates.length = 0;
+			break;
+		}
+		const rows = page.rows;
 		if (rows.length === 0) {
 			complete = true;
 			break;
@@ -2521,8 +2588,31 @@ export async function pruneGenericEntities(
 		await yieldBetweenPages();
 	}
 
+	if (complete) {
+		const finalGeneration = await accessor.withReadDbAsync((db) => readGenericEntityPruneScanGeneration(db), {
+			siteToken: "db:repair.generic-entity-candidates.read",
+			operation: "repair.pruneGenericEntities.final-generation",
+		});
+		if (finalGeneration !== scanGeneration) {
+			stopReason = "changed";
+			complete = false;
+			cursor = undefined;
+			candidates.length = 0;
+		}
+	}
+
 	const scanDetails = (): Readonly<Record<string, unknown>> =>
-		genericEntityScanDetails(candidateLimit, inspectionLimit, inspected, matched, cursor, complete, stopReason);
+		genericEntityScanDetails(
+			candidateLimit,
+			inspectionLimit,
+			inspected,
+			matched,
+			cursor,
+			agentId,
+			scanGeneration,
+			complete,
+			stopReason,
+		);
 	const partialSuffix = !complete ? `; partial scan after ${inspected} inspected row(s), resume with cursor` : "";
 
 	if (options?.dryRun ?? true) {
@@ -2539,7 +2629,7 @@ export async function pruneGenericEntities(
 		};
 	}
 
-	if (options?.signal?.aborted || (!complete && isSystemPressureHigh())) {
+	if (options?.signal?.aborted || isSystemPressureHigh()) {
 		stopReason = options?.signal?.aborted ? "cancelled" : "pressure";
 		complete = false;
 		return {
@@ -2563,10 +2653,16 @@ export async function pruneGenericEntities(
 
 	let affected: number;
 	let skippedChanged = 0;
+	let scanChanged = false;
 	try {
 		const outcome = await withRepairWriteTx(
 			accessor,
 			(db) => {
+				if (readGenericEntityPruneScanGeneration(db) !== scanGeneration) {
+					scanChanged = true;
+					cursor = undefined;
+					return 0;
+				}
 				const candidatesById = new Map(candidates.map((row) => [row.id, row]));
 				const placeholders = candidates.map(() => "?").join(",");
 				const currentRows = db
@@ -2622,6 +2718,18 @@ export async function pruneGenericEntities(
 			};
 		}
 		throw error;
+	}
+
+	if (scanChanged) {
+		stopReason = "changed";
+		complete = false;
+		return {
+			action,
+			success: true,
+			affected: 0,
+			message: "partial scan changed before persistence; no changes applied",
+			details: scanDetails(),
+		};
 	}
 
 	limiter.record(action);

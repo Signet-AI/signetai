@@ -483,10 +483,62 @@ describe("pruneGenericEntities", () => {
 			expect((result.details as { cursor?: unknown }).cursor).toEqual({
 				updatedAt: now,
 				id: "ent-valid-045",
+				agentId: "default",
+				scanGeneration: 250,
 			});
 			expect(readCalls).toBe(3);
 			await new Promise<void>((resolve) => setTimeout(resolve, 0));
 			expect(timerFired).toBe(true);
+		} finally {
+			db.close();
+		}
+	});
+
+	it("restarts the scan when a previously scanned entity changes behind the keyset cursor", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		let readCalls = 0;
+		const accessor = asAccessor(db, undefined, () => {
+			readCalls += 1;
+			if (readCalls === 2) {
+				db.prepare(
+					`UPDATE entities
+					    SET name = 'Sender', canonical_name = 'sender', updated_at = ?
+					  WHERE id = 'ent-249'`,
+				).run("2026-05-12T18:00:00.000Z");
+			}
+		});
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+
+		try {
+			const insert = db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES (?, ?, ?, 'project', 'default', 1, 0, ?, ?)`,
+			);
+			for (let i = 0; i < 250; i += 1) {
+				insert.run(`ent-${String(i).padStart(3, "0")}`, `Project ${i}`, `project ${i}`, now, now);
+			}
+
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: false,
+				candidateLimit: 100,
+				inspectionLimit: 500,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(result.details).toMatchObject({
+				status: "partial",
+				complete: false,
+				inspected: 100,
+				matched: 0,
+				reason: "changed",
+				cursor: null,
+			});
+			expect(readCalls).toBe(2);
+			expect(db.prepare("SELECT name FROM entities WHERE id = 'ent-249'").get()).toEqual({ name: "Sender" });
 		} finally {
 			db.close();
 		}
@@ -510,7 +562,7 @@ describe("pruneGenericEntities", () => {
 				insert.run(`ent-${String(i).padStart(3, "0")}`, name, name.toLowerCase(), now, now);
 			}
 
-			let cursor: { updatedAt: string; id: string } | undefined;
+			let cursor: { updatedAt: string; id: string; agentId: string; scanGeneration: number } | undefined;
 			let totalMatched = 0;
 			let complete = false;
 			const seenCursors = new Set<string>();
@@ -525,7 +577,7 @@ describe("pruneGenericEntities", () => {
 				const details = result.details as {
 					complete: boolean;
 					matched: number;
-					cursor: { updatedAt: string; id: string } | null;
+					cursor: { updatedAt: string; id: string; agentId: string; scanGeneration: number } | null;
 				};
 				totalMatched += details.matched;
 				complete = details.complete;
@@ -585,6 +637,38 @@ describe("pruneGenericEntities", () => {
 				count: 1,
 			});
 		} finally {
+			db.close();
+		}
+	});
+
+	it("stops on pressure raised during the final page before deleting candidates", async () => {
+		const db = new Database(":memory:");
+		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
+		const accessor = asAccessor(db, undefined, () => reportEventLoopLag(101));
+		const limiter = createRateLimiter();
+		const now = "2026-05-11T18:00:00.000Z";
+
+		try {
+			db.prepare(
+				`INSERT INTO entities
+				 (id, name, canonical_name, entity_type, agent_id, mentions, pinned, created_at, updated_at)
+				 VALUES ('ent-sender-final', 'Sender', 'sender', 'person', 'default', 1, 0, ?, ?)`,
+			).run(now, now);
+
+			const result = await pruneGenericEntities(accessor, TEST_CFG, CTX_OPERATOR, limiter, {
+				dryRun: false,
+				candidateLimit: 1,
+				inspectionLimit: 10,
+			});
+
+			expect(result.success).toBe(true);
+			expect(result.affected).toBe(0);
+			expect(result.details).toMatchObject({ complete: false, reason: "pressure" });
+			expect(db.prepare("SELECT COUNT(*) AS count FROM entities WHERE id = 'ent-sender-final'").get()).toEqual({
+				count: 1,
+			});
+		} finally {
+			resetPressureState();
 			db.close();
 		}
 	});
@@ -702,7 +786,7 @@ describe("pruneGenericEntities", () => {
 
 			expect(result.success).toBe(true);
 			expect(result.affected).toBe(0);
-			expect(result.details).toMatchObject({ complete: true, matched: 1, skippedChanged: 1 });
+			expect(result.details).toMatchObject({ complete: false, reason: "changed", matched: 1, cursor: null });
 			expect(db.prepare("SELECT name, agent_id FROM entities WHERE id = 'ent-sender'").get()).toEqual({
 				name: "Project Phoenix",
 				agent_id: "other",

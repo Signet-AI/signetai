@@ -96,6 +96,11 @@ beforeEach(() => {
 			updated_at TEXT NOT NULL
 		);
 		CREATE TABLE skill_meta (entity_id TEXT PRIMARY KEY);
+		CREATE TABLE generic_entity_prune_scan_state (
+			id INTEGER PRIMARY KEY CHECK (id = 1),
+			generation INTEGER NOT NULL DEFAULT 0
+		);
+		INSERT INTO generic_entity_prune_scan_state (id, generation) VALUES (1, 0);
 		CREATE TABLE memory_entity_mentions (
 			memory_id TEXT NOT NULL,
 			entity_id TEXT NOT NULL,
@@ -167,7 +172,7 @@ describe("POST /api/repair/prune-generic-entities", () => {
 			).run("entity-prune-cursor", "Project Phoenix", "project phoenix", "agent-relink", now, now);
 		});
 
-		const cursor = { updatedAt: "0000-01-01T00:00:00.000Z", id: "zzzz" };
+		const cursor = { updatedAt: "0000-01-01T00:00:00.000Z", id: "zzzz", agentId: "agent-relink", scanGeneration: 0 };
 		const response = await makeApp().request("/api/repair/prune-generic-entities", {
 			method: "POST",
 			headers: requestHeaders(),
@@ -190,6 +195,22 @@ describe("POST /api/repair/prune-generic-entities", () => {
 				cursor,
 			},
 		});
+	});
+	it("restarts from the beginning for a legacy cursor without a scan generation", async () => {
+		const response = await makeApp().request("/api/repair/prune-generic-entities", {
+			method: "POST",
+			headers: requestHeaders(),
+			body: JSON.stringify({
+				agentId: "agent-relink",
+				candidateLimit: 7,
+				inspectionLimit: 3,
+				cursor: { updatedAt: "0000-01-01T00:00:00.000Z", id: "zzzz" },
+				dryRun: true,
+			}),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toMatchObject({ action: "pruneGenericEntities", success: true });
 	});
 });
 
