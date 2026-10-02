@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import chalk from "chalk";
 import type { Command } from "commander";
+import { printCollection } from "../lib/cli-output";
 
 interface OntologyDeps {
 	readonly ensureDaemonForSecrets: () => Promise<boolean>;
@@ -514,21 +515,6 @@ async function apiDelete(deps: OntologyDeps, path: string, timeoutMs = 10_000): 
 		process.exit(1);
 	}
 	return data;
-}
-
-function printCollection<T>(
-	items: readonly T[],
-	title: string,
-	emptyMessage: string,
-	printItem: (item: T) => void,
-): void {
-	if (items.length === 0) {
-		console.log(chalk.dim(`  ${emptyMessage}`));
-		return;
-	}
-	console.log(chalk.bold(`\n  ${title}\n`));
-	for (const item of items) printItem(item);
-	console.log();
 }
 
 function printProposalList(data: unknown): void {

@@ -90,6 +90,7 @@ describe("registerKnowledgeCommands", () => {
 	});
 
 	test("knowledge tree without an entity lists entities", async () => {
+		const lines: string[] = [];
 		let capturedPath = "";
 		const program = new Command();
 		registerKnowledgeCommands(program, {
@@ -105,10 +106,14 @@ describe("registerKnowledgeCommands", () => {
 			},
 		});
 
-		console.log = () => {};
+		console.log = (line?: unknown) => {
+			lines.push(String(line ?? ""));
+		};
 		await program.parseAsync(["node", "test", "knowledge", "tree", "--max-aspects", "7"]);
 
 		expect(capturedPath).toBe("/api/knowledge/navigation/entities?limit=7");
+		expect(lines.join("\n")).toContain("Knowledge Entities");
+		expect(lines.join("\n")).toContain("Nicholai (person)");
 	});
 
 	test("claims forwards pagination and reports the next offset", async () => {
