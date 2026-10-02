@@ -63,6 +63,7 @@ import {
 import { getSynthesisWorker, readLastSynthesisTime } from "../pipeline";
 import { type PipelineCauseFamily, normalizePipelineCause, recordPipelineOperation } from "../pipeline-operation";
 import { DEFAULT_SYNTHESIS_WORKER_CONFIG } from "../pipeline/synthesis-worker";
+import { openBoundedSse } from "../sse-stream.js";
 import { effectiveRecallLimit, recordRecallAttempt, recordRecallOutcome } from "../recall-telemetry";
 import { isNoiseSession } from "../session-noise";
 import { advanceRecallContextEpochAsync } from "../session-recall-dedupe";
@@ -1684,7 +1685,6 @@ function registerCrossAgentStream(app: Hono): void {
 		const project = parseOptionalString(c.req.query("project"));
 		const includeSelf = parseOptionalBoolean(c.req.query("include_self")) ?? false;
 		const includeSent = parseOptionalBoolean(c.req.query("include_sent")) ?? false;
-		const encoder = new TextEncoder();
 		const scopedAgent = resolveScopedAgentId(c, requestedAgentId, "default");
 		if (scopedAgent.error) {
 			return c.json({ error: scopedAgent.error }, 403);
@@ -1698,27 +1698,17 @@ function registerCrossAgentStream(app: Hono): void {
 		}
 		const agentId = scopedAgent.agentId;
 
-		const stream = new ReadableStream({
-			start(controller) {
-				let dead = false;
-				const cleanup = () => {
-					if (dead) return;
-					dead = true;
-					clearInterval(keepAlive);
-					unsubscribe();
-					try {
-						controller.close();
-					} catch {}
-				};
-
-				const writeEvent = (event: unknown) => {
-					if (dead) return;
-					try {
-						const data = `data: ${JSON.stringify(event)}\n\n`;
-						controller.enqueue(encoder.encode(data));
-					} catch {
-						cleanup();
-					}
+		const sse = openBoundedSse({
+			requestSignal: c.req.raw.signal,
+			highWaterMarkBytes: 1024 * 1024,
+			maxFrameBytes: 512 * 1024,
+			heartbeat: { intervalMs: 15_000, comment: "keepalive" },
+			onStart(producer) {
+				let unsubscribe = (): void => {};
+				producer.addDisposer(() => unsubscribe());
+				if (producer.signal.aborted) return;
+				const writeEvent = (event: unknown): void => {
+					producer.write(event);
 				};
 
 				writeEvent({
@@ -1728,6 +1718,7 @@ function registerCrossAgentStream(app: Hono): void {
 					project,
 					timestamp: new Date().toISOString(),
 				});
+				if (producer.isClosed) return;
 
 				writeEvent({
 					type: "snapshot",
@@ -1747,8 +1738,9 @@ function registerCrossAgentStream(app: Hono): void {
 					}),
 					timestamp: new Date().toISOString(),
 				});
+				if (producer.isClosed) return;
 
-				const unsubscribe = subscribeCrossAgentEvents((event) => {
+				const nextUnsubscribe = subscribeCrossAgentEvents((event) => {
 					if (event.type === "message") {
 						if (
 							!isMessageVisibleToAgent(event.message, {
@@ -1777,27 +1769,12 @@ function registerCrossAgentStream(app: Hono): void {
 
 					writeEvent(event);
 				});
-
-				const keepAlive = setInterval(() => {
-					if (dead) return;
-					try {
-						controller.enqueue(encoder.encode(": keepalive\n\n"));
-					} catch {
-						cleanup();
-					}
-				}, 15_000);
-
-				c.req.raw.signal.addEventListener("abort", cleanup);
+				unsubscribe = nextUnsubscribe;
+				if (producer.isClosed) unsubscribe();
 			},
 		});
 
-		return new Response(stream, {
-			headers: {
-				"Content-Type": "text/event-stream",
-				"Cache-Control": "no-cache",
-				Connection: "keep-alive",
-			},
-		});
+		return sse.response;
 	});
 }
 

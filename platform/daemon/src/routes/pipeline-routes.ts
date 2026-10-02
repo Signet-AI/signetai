@@ -48,6 +48,7 @@ import { getDreamingEpisodicTokenBacklogCachedOrNull } from "../pipeline/dreamin
 import { getDreamingCapability, getDreamingCapabilityManifest } from "../pipeline/dreaming-capabilities.js";
 import { DREAMING_MAX_OPERATIONS_PER_REQUEST, applyDreamingOperations } from "../pipeline/dreaming-operations.js";
 import { AlreadyRunningError } from "../pipeline/dreaming-worker.js";
+import { getSseDiagnosticsSnapshot, openBoundedSse } from "../sse-stream.js";
 import { getTraversalStatus } from "../pipeline/graph-traversal.js";
 import {
 	getAvailableModels,
@@ -244,16 +245,11 @@ function parseDreamingCursor(value: string | undefined): number | null | "invali
 	return Number.isSafeInteger(cursor) && cursor >= 0 ? cursor : "invalid";
 }
 
-function sseEncode(eventName: string, data: unknown, cursor?: number): Uint8Array {
-	const id = cursor === undefined ? "" : `id: ${cursor}\n`;
-	return new TextEncoder().encode(`${id}event: ${eventName}\ndata: ${JSON.stringify(data)}\n\n`);
-}
-
 function isTerminalDreamingEvent(event: DreamingLiveEvent): boolean {
 	return event.type === "pass_completed" || event.type === "pass_failed";
 }
 
-const DREAMING_LIVE_STREAM_QUEUE_SIZE = 64;
+const DREAMING_LIVE_STREAM_HIGH_WATER_MARK_BYTES = 1024 * 1024;
 
 export function getDreamingTriggerBlockReason(
 	transitioning: boolean,
@@ -483,6 +479,7 @@ export function registerPipelineRoutes(app: Hono): void {
 		const agentId = resolveAgentId({ agentId: scopedAgent.agentId });
 		return c.json({
 			...report,
+			sse: getSseDiagnosticsSnapshot(),
 			workloads: { agentId, ...(await workloadDiagnosticsSnapshot(agentId)) },
 		});
 	});
@@ -814,118 +811,76 @@ export function registerPipelineRoutes(app: Hono): void {
 			error: pass.error,
 		});
 
-		const encoder = new TextEncoder();
-		let closed = false;
-		let heartbeat: ReturnType<typeof setInterval> | undefined;
-		let subscription: ReturnType<typeof dreamingLiveEvents.subscribe> | null = null;
-		let controllerRef: ReadableStreamDefaultController<Uint8Array> | undefined;
-		const close = (): void => {
-			if (closed) return;
-			closed = true;
-			if (heartbeat) clearInterval(heartbeat);
-			subscription?.unsubscribe();
-			requestSignal.removeEventListener("abort", close);
-			try {
-				controllerRef?.close();
-			} catch {}
-		};
-		const write = (eventName: string, data: unknown, cursor?: number): void => {
-			if (closed || !controllerRef) return;
-			if (controllerRef.desiredSize !== null && controllerRef.desiredSize <= 0) {
-				close();
-				return;
-			}
-			try {
-				controllerRef.enqueue(sseEncode(eventName, data, cursor));
-			} catch {
-				close();
-			}
-		};
-
-		const stream = new ReadableStream<Uint8Array>(
-			{
-				start(controller) {
-					controllerRef = controller;
-					requestSignal.addEventListener("abort", close, { once: true });
-					if (requestSignal.aborted) {
-						close();
-						return;
-					}
-					const writeLiveEvent = (event: DreamingLiveEvent): void => {
-						write(event.type, event, event.cursor);
-						if (isTerminalDreamingEvent(event)) close();
-					};
-					try {
-						subscription = dreamingLiveEvents.subscribe(passId, afterCursor, (event) => {
-							writeLiveEvent(event);
-						});
-					} catch (error) {
-						write("error", { error: error instanceof Error ? error.message : String(error) });
-						close();
-						return;
-					}
-					if (!subscription) {
-						write("error", { error: "Dreaming pass live stream is unavailable" });
-						close();
-						return;
-					}
-					write("snapshot", {
-						type: "snapshot",
-						passId,
-						snapshot: {
-							...subscription.snapshot,
-							tokensConsumed: pass.tokensConsumed,
-							tokensInput: pass.tokensInput,
-							tokensOutput: pass.tokensOutput,
-							tokensCacheRead: pass.tokensCacheRead,
-							tokensCacheWrite: pass.tokensCacheWrite,
-							tokensCost: pass.tokensCost,
-							mutationsApplied: pass.mutationsApplied,
-							mutationsSkipped: pass.mutationsSkipped,
-							mutationsFailed: pass.mutationsFailed,
-						},
-					});
-					if (subscription.gap) {
-						write("gap", { type: "gap", passId, gap: subscription.gap });
-					}
-					for (const event of subscription.replay) {
-						writeLiveEvent(event);
-					}
-					if (closed || requestSignal.aborted) {
-						close();
-						return;
-					}
-					if (subscription.snapshot.status !== "running") {
-						close();
-						return;
-					}
-					heartbeat = setInterval(() => {
-						if (closed || !controllerRef) return;
-						if (controllerRef.desiredSize !== null && controllerRef.desiredSize <= 0) {
-							close();
-							return;
-						}
-						try {
-							controllerRef.enqueue(encoder.encode(`: heartbeat ${Date.now()}\n\n`));
-						} catch {
-							close();
-						}
-					}, DREAMING_LIVE_HEARTBEAT_MS);
-					heartbeat.unref?.();
-				},
-				cancel: close,
+		let lastCursor = afterCursor ?? 0;
+		const sse = openBoundedSse({
+			requestSignal,
+			highWaterMarkBytes: DREAMING_LIVE_STREAM_HIGH_WATER_MARK_BYTES,
+			maxFrameBytes: 512 * 1024,
+			heartbeat: { intervalMs: DREAMING_LIVE_HEARTBEAT_MS, comment: "heartbeat" },
+			overflowEvent: {
+				payload: (reason) => ({ type: "overflow", passId, reason, after: lastCursor, reconnect: true }),
 			},
-			{ highWaterMark: DREAMING_LIVE_STREAM_QUEUE_SIZE, size: () => 1 },
-		);
-
-		return new Response(stream, {
-			headers: {
-				"Content-Type": "text/event-stream",
-				"Cache-Control": "no-cache, no-transform",
-				Connection: "keep-alive",
-				"X-Accel-Buffering": "no",
+			headers: { "Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no" },
+			onStart(producer) {
+				let subscription: ReturnType<typeof dreamingLiveEvents.subscribe> | null = null;
+				producer.addDisposer(() => subscription?.unsubscribe());
+				if (producer.signal.aborted) return;
+				const write = (eventName: string, data: unknown, cursor?: number): boolean => {
+					const status = producer.write(data, { event: eventName, id: cursor });
+					if (status !== "accepted") return false;
+					if (cursor !== undefined) lastCursor = cursor;
+					return true;
+				};
+				const writeLiveEvent = (event: DreamingLiveEvent): void => {
+					if (!write(event.type, event, event.cursor)) return;
+					if (isTerminalDreamingEvent(event)) producer.close();
+				};
+				try {
+					subscription = dreamingLiveEvents.subscribe(passId, afterCursor, (event) => {
+						writeLiveEvent(event);
+					});
+				} catch (error) {
+					producer.write({ error: error instanceof Error ? error.message : String(error) }, { event: "error" });
+					producer.close();
+					return;
+				}
+				if (!subscription) {
+					producer.write({ error: "Dreaming pass live stream is unavailable" }, { event: "error" });
+					producer.close();
+					return;
+				}
+				if (producer.isClosed) {
+					subscription.unsubscribe();
+					return;
+				}
+				write("snapshot", {
+					type: "snapshot",
+					passId,
+					snapshot: {
+						...subscription.snapshot,
+						tokensConsumed: pass.tokensConsumed,
+						tokensInput: pass.tokensInput,
+						tokensOutput: pass.tokensOutput,
+						tokensCacheRead: pass.tokensCacheRead,
+						tokensCacheWrite: pass.tokensCacheWrite,
+						tokensCost: pass.tokensCost,
+						mutationsApplied: pass.mutationsApplied,
+						mutationsSkipped: pass.mutationsSkipped,
+						mutationsFailed: pass.mutationsFailed,
+					},
+				});
+				if (subscription.gap && !producer.isClosed) {
+					write("gap", { type: "gap", passId, gap: subscription.gap });
+				}
+				for (const event of subscription.replay) {
+					if (producer.isClosed) break;
+					writeLiveEvent(event);
+				}
+				if (producer.isClosed) return;
+				if (subscription.snapshot.status !== "running") producer.close();
 			},
 		});
+		return sse.response;
 	});
 	app.get("/api/dream/passes/:passId/tools", async (c) => {
 		const scopedAgent = resolveScopedDreamAgent(c);

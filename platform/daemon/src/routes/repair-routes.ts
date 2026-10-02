@@ -9,6 +9,7 @@ import { loadMemoryConfig } from "../memory-config.js";
 import { clusterEntities } from "../pipeline/community-detection.js";
 import { DEFAULT_RETENTION, runRetentionSweepOnce } from "../pipeline/retention-worker.js";
 import { resolveScopedAgent } from "../request-scope";
+import { openBoundedSse } from "../sse-stream.js";
 import {
 	type RepairContext,
 	type RepairResult,
@@ -108,10 +109,14 @@ export function registerRepairRoutes(
 		readonly authConfig?: AuthConfig;
 		readonly getDbAccessor?: () => DbAccessor;
 		readonly loadMemoryConfig?: typeof loadMemoryConfig;
+		readonly resolveExecutable?: typeof which;
+		readonly spawnCommand?: typeof spawnHidden;
 	} = {},
 ): void {
 	const effectiveAuthConfig = deps.authConfig ?? authConfig;
 	const resolveMemoryConfig = deps.loadMemoryConfig ?? loadMemoryConfig;
+	const resolveExecutable = deps.resolveExecutable ?? which;
+	const spawnCommand = deps.spawnCommand ?? spawnHidden;
 	app.use("/api/repair/*", async (c, next) => {
 		return requirePermission("admin", effectiveAuthConfig)(c, next);
 	});
@@ -818,22 +823,20 @@ export function registerRepairRoutes(
 		}
 
 		const [bin, args] = cmd;
-		const resolved = which(bin);
+		const resolved = resolveExecutable(bin);
 		if (!resolved) {
 			return c.json({ error: `Binary not found: ${bin}` }, 500);
 		}
 
 		const { CLAUDECODE: _cc, SIGNET_NO_HOOKS: _, ...baseEnv } = process.env;
-		const encoder = new TextEncoder();
-
 		if (key === "daemon-stop" || key === "daemon-restart") {
 			const action = key === "daemon-stop" ? "stop" : "restart";
-			const lifecycle = new ReadableStream({
-				start(controller) {
+			const lifecycle = openBoundedSse({
+				requestSignal: c.req.raw.signal,
+				onStart(producer) {
+					if (producer.signal.aborted) return;
 					const write = (event: unknown): void => {
-						try {
-							controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-						} catch {}
+						producer.write(event);
 					};
 
 					write({ type: "started", key, command: `signet daemon ${action}` });
@@ -842,9 +845,7 @@ export function registerRepairRoutes(
 						write({ type: "stdout", data: "Dashboard will lose connection.\n" });
 					}
 					write({ type: "exit", code: 0 });
-					try {
-						controller.close();
-					} catch {}
+					producer.close();
 
 					setTimeout(async () => {
 						if (key === "daemon-restart") {
@@ -862,87 +863,99 @@ export function registerRepairRoutes(
 				},
 			});
 
-			return new Response(lifecycle, {
-				headers: {
-					"content-type": "text/event-stream",
-					"cache-control": "no-cache",
-					connection: "keep-alive",
-				},
-			});
+			return lifecycle.response;
 		}
 
-		const stream = new ReadableStream({
-			async start(controller) {
-				const write = (event: unknown) => {
-					try {
-						controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-					} catch {}
-				};
-
-				write({ type: "started", key, command: `${bin} ${args.join(" ")}` });
-
-				const child = spawnHidden(resolved, args as string[], {
+		const stream = openBoundedSse({
+			requestSignal: c.req.raw.signal,
+			highWaterMarkBytes: 512 * 1024,
+			maxFrameBytes: 256 * 1024,
+			onStart(producer) {
+				if (producer.signal.aborted) return;
+				const child = spawnCommand(resolved, args as string[], {
 					stdio: "pipe",
 					env: { ...baseEnv, SIGNET_NO_HOOKS: "1", FORCE_COLOR: "0" } as NodeJS.ProcessEnv,
 				});
+				let killTimer: ReturnType<typeof setTimeout> | undefined;
+				let forceKillTimer: ReturnType<typeof setTimeout> | undefined;
+				let childFinished = false;
+				let outputPaused = false;
 
-				child.stdout?.on("data", (chunk: Buffer) => {
-					try {
-						write({ type: "stdout", data: chunk.toString("utf-8") });
-					} catch {
-						clearTimeout(killTimer);
-						try {
-							child.kill("SIGTERM");
-						} catch {}
-					}
-				});
-
-				child.stderr?.on("data", (chunk: Buffer) => {
-					try {
-						write({ type: "stderr", data: chunk.toString("utf-8") });
-					} catch {
-						clearTimeout(killTimer);
-						try {
-							child.kill("SIGTERM");
-						} catch {}
-					}
-				});
-
-				const killTimer = setTimeout(() => {
+				const clearTimers = (): void => {
+					if (killTimer) clearTimeout(killTimer);
+					if (forceKillTimer) clearTimeout(forceKillTimer);
+					killTimer = undefined;
+					forceKillTimer = undefined;
+				};
+				const terminateChild = (): void => {
+					if (killTimer) clearTimeout(killTimer);
+					killTimer = undefined;
+					child.stdout?.pause();
+					child.stderr?.pause();
+					if (childFinished || child.pid === undefined || child.exitCode !== null || child.killed) return;
 					try {
 						child.kill("SIGTERM");
 					} catch {}
-					setTimeout(() => {
+					forceKillTimer = setTimeout(() => {
+						if (childFinished || child.exitCode !== null) return;
 						try {
-							child.kill();
+							child.kill("SIGKILL");
 						} catch {}
 					}, 5_000);
+					forceKillTimer.unref?.();
+				};
+				producer.addDisposer(terminateChild);
+				producer.addDisposer(clearTimers);
+
+				const pauseOutput = (): void => {
+					if (outputPaused || producer.isClosed) return;
+					outputPaused = true;
+					child.stdout?.pause();
+					child.stderr?.pause();
+				};
+				producer.addDrainListener((queuedBytes) => {
+					if (outputPaused && queuedBytes <= 64 * 1024 && !producer.isClosed) {
+						outputPaused = false;
+						child.stdout?.resume();
+						child.stderr?.resume();
+					}
+				});
+
+				const writeOutput = (type: "stdout" | "stderr", chunk: Buffer): void => {
+					if (producer.isClosed) return;
+					producer.write({ type, data: chunk.toString("utf-8") });
+					if (producer.queuedBytes >= 128 * 1024) pauseOutput();
+				};
+
+				child.stdout?.on("data", (chunk: Buffer) => writeOutput("stdout", chunk));
+				child.stderr?.on("data", (chunk: Buffer) => writeOutput("stderr", chunk));
+				producer.write({ type: "started", key, command: `${bin} ${args.join(" ")}` });
+
+				killTimer = setTimeout(() => {
+					terminateChild();
 				}, 60_000);
+				killTimer.unref?.();
 
 				child.on("close", (code) => {
-					clearTimeout(killTimer);
-					write({ type: "exit", code: code ?? 1 });
-					try {
-						controller.close();
-					} catch {}
+					childFinished = true;
+					clearTimers();
+					if (!producer.isClosed) {
+						producer.write({ type: "exit", code: code ?? 1 });
+						producer.close();
+					}
 				});
 
 				child.on("error", (err) => {
-					clearTimeout(killTimer);
-					write({ type: "error", message: err.message });
-					try {
-						controller.close();
-					} catch {}
+					childFinished = true;
+					clearTimers();
+					if (!producer.isClosed) {
+						producer.write({ type: "error", message: err.message });
+						producer.close();
+					}
 				});
 			},
 		});
 
-		return new Response(stream, {
-			headers: {
-				"content-type": "text/event-stream",
-				"cache-control": "no-cache",
-				connection: "keep-alive",
-			},
-		});
+		return stream.response;
 	});
 }

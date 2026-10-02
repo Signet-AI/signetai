@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { Hono } from "hono";
+import { spawnHidden } from "@signet/core";
 import { parseAuthConfig } from "../auth";
 import type { DbAccessor, ReadAdmissionOptions, ReadDb, WriteDb } from "../db-accessor";
 import { resetPressureState } from "../system-pressure";
@@ -32,11 +33,14 @@ function makeAccessor(database: Database): DbAccessor {
 	};
 }
 
-function makeApp(): Hono {
+type RepairRouteDeps = NonNullable<Parameters<typeof registerRepairRoutes>[1]>;
+
+function makeApp(deps: Partial<RepairRouteDeps> = {}): Hono {
 	const app = new Hono();
 	registerRepairRoutes(app, {
 		authConfig: parseAuthConfig(undefined, "/tmp/signet-repair-routes-test"),
 		getDbAccessor: () => accessor,
+		...deps,
 	});
 	return app;
 }
@@ -231,6 +235,65 @@ describe("retired semantic repair routes", () => {
 		});
 
 		expect(response.status).toBe(404);
+	});
+});
+
+describe("POST /api/troubleshoot/exec", () => {
+	it("pauses child output for slow consumers and terminates it when the client disconnects", async () => {
+		const script = [
+			"const chunk = 'x'.repeat(64 * 1024);",
+			"(async () => { for (let i = 0; i < 256; i++) if (!process.stdout.write(chunk)) await new Promise((resolve) => process.stdout.once('drain', resolve)); })();",
+		].join("\n");
+		let child: ReturnType<typeof spawnHidden> | undefined;
+		const response = await makeApp({
+			resolveExecutable: () => process.execPath,
+			spawnCommand: (_command, _args, options) => {
+				child = spawnHidden(process.execPath, ["-e", script], options);
+				return child;
+			},
+		}).request("/api/troubleshoot/exec", {
+			method: "POST",
+			headers: requestHeaders(),
+			body: JSON.stringify({ key: "status" }),
+		});
+		const spawnedChild = child;
+		if (!spawnedChild) throw new Error("Troubleshoot route did not spawn a child process");
+		const reader = response.body?.getReader();
+		if (!reader) throw new Error("Troubleshoot response did not expose a stream");
+
+		try {
+			const pauseDeadline = Date.now() + 2_000;
+			while (!spawnedChild.stdout?.isPaused() && Date.now() < pauseDeadline) {
+				await new Promise<void>((resolve) => setTimeout(resolve, 5));
+			}
+			expect(spawnedChild.stdout?.isPaused()).toBe(true);
+
+			const resumeDeadline = Date.now() + 2_000;
+			while (spawnedChild.stdout?.isPaused() && Date.now() < resumeDeadline) {
+				const next = await reader.read();
+				if (next.done) break;
+			}
+			expect(spawnedChild.stdout?.isPaused()).toBe(false);
+
+			await reader.cancel("client disconnected");
+			if (spawnedChild.exitCode === null && spawnedChild.signalCode === null) {
+				await new Promise<void>((resolve, reject) => {
+					const timeout = setTimeout(
+						() => reject(new Error("Troubleshoot child did not stop after cancellation")),
+						2_000,
+					);
+					spawnedChild.once("close", () => {
+						clearTimeout(timeout);
+						resolve();
+					});
+				});
+			}
+			expect(spawnedChild.exitCode !== null || spawnedChild.signalCode !== null).toBe(true);
+			expect(spawnedChild.killed).toBe(true);
+		} finally {
+			await reader.cancel().catch(() => undefined);
+			if (spawnedChild.exitCode === null && !spawnedChild.killed) spawnedChild.kill("SIGTERM");
+		}
 	});
 });
 
