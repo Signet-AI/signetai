@@ -10,12 +10,13 @@ import {
 	readlinkSync,
 	renameSync,
 	rmSync,
+	statSync,
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { openDescriptorRoot, UnsupportedDescriptorFilesystemError } from "./descriptor-fs";
+import { openDescriptorRoot } from "./descriptor-fs";
 
 const roots: string[] = [];
 
@@ -25,12 +26,57 @@ function temporaryRoot(name: string): string {
 	return root;
 }
 
+function tryCreateSymlink(target: string, path: string, type?: "file" | "dir"): boolean {
+	try {
+		symlinkSync(target, path, type);
+		return true;
+	} catch (error) {
+		if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") return false;
+		throw error;
+	}
+}
+
 afterEach(() => {
 	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
 describe("descriptor-rooted filesystem", () => {
-	test("refuses a file or directory mode the destination filesystem cannot preserve", async () => {
+	test("lists immediate names without opening child directories", async () => {
+		const rootPath = temporaryRoot("descriptor-shallow-list");
+		const inaccessible = join(rootPath, "unrelated");
+		mkdirSync(inaccessible);
+		writeFileSync(join(inaccessible, "private.bin"), "not part of this listing");
+		chmodSync(inaccessible, 0);
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			expect(await root.listNames()).toEqual(["unrelated"]);
+		} finally {
+			await root.close();
+			chmodSync(inaccessible, 0o700);
+		}
+	});
+
+	test("inspects one named entry without walking sibling directories", async () => {
+		const rootPath = temporaryRoot("descriptor-single-entry");
+		const inaccessible = join(rootPath, "unrelated");
+		mkdirSync(inaccessible);
+		writeFileSync(join(inaccessible, "private.bin"), "not part of this inspection");
+		chmodSync(inaccessible, 0);
+		writeFileSync(join(rootPath, "managed.txt"), "owned");
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			expect(await root.inspectEntry("managed.txt")).toMatchObject({
+				path: "managed.txt",
+				type: "file",
+				size: 5,
+			});
+		} finally {
+			await root.close();
+			chmodSync(inaccessible, 0o700);
+		}
+	});
+
+	test("preserves native file modes and accepts Windows ACL-backed modes", async () => {
 		const rootPath = temporaryRoot("descriptor-mode");
 		const probe = join(rootPath, "permission-probe");
 		writeFileSync(probe, "probe", { mode: 0o600 });
@@ -39,15 +85,37 @@ describe("descriptor-rooted filesystem", () => {
 		const root = await openDescriptorRoot(rootPath);
 		try {
 			const write = root.writeFileAtomic("nested/secret", new TextEncoder().encode("private"), { mode: 0o600 });
-			if (preservesMode) {
+			if (process.platform === "win32" || preservesMode) {
 				await write;
-				expect(lstatSync(join(rootPath, "nested", "secret")).mode & 0o777).toBe(0o600);
+				if (process.platform !== "win32")
+					expect(lstatSync(join(rootPath, "nested", "secret")).mode & 0o777).toBe(0o600);
 			} else {
 				await expect(write).rejects.toThrow("mode not preserved");
 				expect(existsSync(join(rootPath, "nested", "secret"))).toBe(false);
 			}
 		} finally {
 			await root.close();
+		}
+	});
+
+	test("preserves Windows read-only file state while destination ACLs remain inherited", async () => {
+		if (process.platform !== "win32") return;
+		const sourcePath = temporaryRoot("descriptor-readonly-source");
+		const destinationPath = temporaryRoot("descriptor-readonly-destination");
+		const sourceFile = join(sourcePath, "readonly.txt");
+		writeFileSync(sourceFile, "read-only content");
+		chmodSync(sourceFile, 0o444);
+		const source = await openDescriptorRoot(sourcePath);
+		const destination = await openDescriptorRoot(destinationPath);
+		try {
+			await destination.copyFileFrom(source, "readonly.txt");
+			expect(lstatSync(join(destinationPath, "readonly.txt")).mode & 0o222).toBe(0);
+		} finally {
+			await destination.close();
+			await source.close();
+			chmodSync(sourceFile, 0o666);
+			const destinationFile = join(destinationPath, "readonly.txt");
+			if (existsSync(destinationFile)) chmodSync(destinationFile, 0o666);
 		}
 	});
 
@@ -59,15 +127,28 @@ describe("descriptor-rooted filesystem", () => {
 		await Bun.write(join(rootPath, ".seed"), "seed");
 		await Bun.write(join(attacker, ".seed"), "attacker");
 		const root = await openDescriptorRoot(rootPath);
-		renameSync(rootPath, admitted);
-		symlinkSync(attacker, rootPath);
+		let recreatedRootIsDecoy = false;
 		try {
+			if (process.platform === "win32") {
+				renameSync(rootPath, admitted);
+				if (!tryCreateSymlink(attacker, rootPath)) {
+					mkdirSync(join(rootPath, "nested"), { recursive: true });
+					writeFileSync(join(rootPath, "nested", "value.txt"), "decoy");
+					recreatedRootIsDecoy = true;
+				}
+			} else {
+				renameSync(rootPath, admitted);
+				symlinkSync(attacker, rootPath);
+			}
 			await root.writeFileAtomic("nested/value.txt", new TextEncoder().encode("safe"), { mode: 0o640 });
 			await expect(root.writeFileAtomic("nested/value.txt", new TextEncoder().encode("blocked"))).rejects.toBeTruthy();
 			await root.replaceFileAtomic("nested/value.txt", new TextEncoder().encode("replaced"), { mode: 0o640 });
-			expect(readFileSync(join(admitted, "nested", "value.txt"), "utf8")).toBe("replaced");
+			const admittedRoot = admitted;
+			expect(readFileSync(join(admittedRoot, "nested", "value.txt"), "utf8")).toBe("replaced");
 			expect(existsSync(join(attacker, "nested", "value.txt"))).toBe(false);
-			expect(lstatSync(join(admitted, "nested", "value.txt")).mode & 0o777).toBe(0o640);
+			if (recreatedRootIsDecoy) expect(readFileSync(join(rootPath, "nested", "value.txt"), "utf8")).toBe("decoy");
+			if (process.platform !== "win32")
+				expect(lstatSync(join(admittedRoot, "nested", "value.txt")).mode & 0o777).toBe(0o640);
 		} finally {
 			await root.close();
 		}
@@ -81,11 +162,17 @@ describe("descriptor-rooted filesystem", () => {
 		try {
 			await root.writeFileAtomic("parent/value.txt", new TextEncoder().encode("safe"), {
 				beforeMutation: async () => {
-					renameSync(join(rootPath, "parent"), join(rootPath, "admitted-parent"));
-					symlinkSync(join(rootPath, "attacker"), join(rootPath, "parent"));
+					if (process.platform === "win32") {
+						renameSync(join(rootPath, "parent"), join(rootPath, "admitted-parent"));
+						tryCreateSymlink(join(rootPath, "attacker"), join(rootPath, "parent"), "dir");
+					} else {
+						renameSync(join(rootPath, "parent"), join(rootPath, "admitted-parent"));
+						symlinkSync(join(rootPath, "attacker"), join(rootPath, "parent"));
+					}
 				},
 			});
-			expect(readFileSync(join(rootPath, "admitted-parent", "value.txt"), "utf8")).toBe("safe");
+			const safePath = join(rootPath, "admitted-parent", "value.txt");
+			expect(readFileSync(safePath, "utf8")).toBe("safe");
 			expect(existsSync(join(rootPath, "attacker", "value.txt"))).toBe(false);
 		} finally {
 			await root.close();
@@ -101,6 +188,7 @@ describe("descriptor-rooted filesystem", () => {
 		try {
 			const [expected] = await root.inventory();
 			if (!expected) throw new Error("expected inventory entry");
+			if (process.platform === "win32") expect(expected.nativeIdentity).toMatch(/^windows:[0-9a-f]+:[0-9a-f]{32}$/);
 			renameSync(originalPath, movedPath);
 			writeFileSync(originalPath, "replacement bytes");
 			await expect(root.remove("entry.txt", { expectedEntry: expected })).rejects.toThrow(
@@ -118,7 +206,9 @@ describe("descriptor-rooted filesystem", () => {
 		const destinationPath = temporaryRoot("descriptor-destination");
 		await Bun.write(join(sourcePath, "dir", "file.txt"), "content");
 		chmodSync(join(sourcePath, "dir", "file.txt"), 0o600);
-		symlinkSync("dir/file.txt", join(sourcePath, "link"));
+		const symlinksAvailable = tryCreateSymlink("dir/file.txt", join(sourcePath, "link"));
+		if (symlinksAvailable) tryCreateSymlink("dir", join(sourcePath, "link-dir"), "dir");
+		const sourceFileMode = lstatSync(join(sourcePath, "dir", "file.txt")).mode & 0o777;
 		const source = await openDescriptorRoot(sourcePath);
 		const destination = await openDescriptorRoot(destinationPath);
 		try {
@@ -126,13 +216,20 @@ describe("descriptor-rooted filesystem", () => {
 			expect(inventory.map((entry) => [entry.path, entry.type])).toEqual([
 				["dir", "directory"],
 				["dir/file.txt", "file"],
-				["link", "symlink"],
+				...(symlinksAvailable ? [["link", "symlink"]] : []),
+				...(symlinksAvailable && existsSync(join(sourcePath, "link-dir")) ? [["link-dir", "symlink"]] : []),
 			]);
 			await destination.copyTreeFrom(source);
 			expect(readFileSync(join(destinationPath, "dir", "file.txt"), "utf8")).toBe("content");
-			expect(lstatSync(join(destinationPath, "dir", "file.txt")).mode & 0o777).toBe(0o600);
-			expect(lstatSync(join(destinationPath, "link")).isSymbolicLink()).toBe(true);
-			expect(readlinkSync(join(destinationPath, "link"))).toBe("dir/file.txt");
+			expect(lstatSync(join(destinationPath, "dir", "file.txt")).mode & 0o777).toBe(sourceFileMode);
+			if (symlinksAvailable) {
+				expect(lstatSync(join(destinationPath, "link")).isSymbolicLink()).toBe(true);
+				expect(readlinkSync(join(destinationPath, "link"))).toBe(join("dir", "file.txt"));
+			}
+			if (existsSync(join(sourcePath, "link-dir"))) {
+				expect(lstatSync(join(destinationPath, "link-dir")).isSymbolicLink()).toBe(true);
+				expect(statSync(join(destinationPath, "link-dir")).isDirectory()).toBe(true);
+			}
 		} finally {
 			await destination.close();
 			await source.close();
@@ -142,7 +239,7 @@ describe("descriptor-rooted filesystem", () => {
 	test("inventories symlink metadata from its parent descriptor", async () => {
 		const rootPath = temporaryRoot("descriptor-symlink-inventory");
 		writeFileSync(join(rootPath, "target.txt"), "target");
-		symlinkSync("target.txt", join(rootPath, "link"));
+		if (!tryCreateSymlink("target.txt", join(rootPath, "link"))) return;
 		const root = await openDescriptorRoot(rootPath);
 		try {
 			const link = (await root.inventory()).find((entry) => entry.path === "link");
@@ -265,11 +362,14 @@ describe("descriptor-rooted filesystem", () => {
 	test("rejects escaping paths, final symlinks, and special files", async () => {
 		const rootPath = temporaryRoot("descriptor-reject");
 		await Bun.write(join(rootPath, "outside"), "outside");
-		symlinkSync("outside", join(rootPath, "final"));
+		const finalSymlinkAvailable = tryCreateSymlink("outside", join(rootPath, "final"));
 		const root = await openDescriptorRoot(rootPath);
 		try {
 			await expect(root.writeFileAtomic("../escape", new Uint8Array())).rejects.toThrow("escapes");
-			await expect(root.writeFileAtomic("final", new Uint8Array())).rejects.toThrow();
+			await expect(root.writeFileAtomic("nested/../escape", new Uint8Array())).rejects.toThrow("escapes");
+			if (process.platform === "win32")
+				await expect(root.writeFileAtomic("..\\escape", new Uint8Array())).rejects.toThrow("escapes");
+			if (finalSymlinkAvailable) await expect(root.writeFileAtomic("final", new Uint8Array())).rejects.toThrow();
 			if (process.platform !== "win32") {
 				const fifo = Bun.spawnSync(["mkfifo", join(rootPath, "pipe")]);
 				expect(fifo.exitCode).toBe(0);
@@ -288,12 +388,20 @@ describe("descriptor-rooted filesystem", () => {
 		await Bun.write(join(rootPath, "nested", "remove.txt"), "remove");
 		await Bun.write(join(attacker, "keep.txt"), "keep");
 		const root = await openDescriptorRoot(rootPath);
-		renameSync(rootPath, admitted);
-		symlinkSync(attacker, rootPath);
 		try {
+			if (process.platform === "win32") {
+				renameSync(rootPath, admitted);
+				mkdirSync(join(rootPath, "nested"), { recursive: true });
+				writeFileSync(join(rootPath, "nested", "keep.txt"), "decoy");
+			} else {
+				renameSync(rootPath, admitted);
+				symlinkSync(attacker, rootPath);
+			}
 			await root.remove("nested", { recursive: true });
 			expect(existsSync(join(admitted, "nested"))).toBe(false);
 			expect(readFileSync(join(attacker, "keep.txt"), "utf8")).toBe("keep");
+			if (process.platform === "win32")
+				expect(readFileSync(join(rootPath, "nested", "keep.txt"), "utf8")).toBe("decoy");
 		} finally {
 			await root.close();
 		}
@@ -321,13 +429,13 @@ describe("descriptor-rooted filesystem", () => {
 		}
 	});
 
-	test("reports unsupported descriptor filesystems explicitly", async () => {
+	test("opens a descriptor root on the current platform", async () => {
 		const rootPath = temporaryRoot("descriptor-platform");
-		if (process.platform === "linux" || process.platform === "darwin") {
-			const root = await openDescriptorRoot(rootPath);
+		const root = await openDescriptorRoot(rootPath);
+		try {
+			expect(await root.listNames()).toEqual([]);
+		} finally {
 			await root.close();
-			return;
 		}
-		await expect(openDescriptorRoot(rootPath)).rejects.toBeInstanceOf(UnsupportedDescriptorFilesystemError);
 	});
 });

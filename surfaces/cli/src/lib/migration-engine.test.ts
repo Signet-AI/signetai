@@ -21,6 +21,16 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { MigrationEngine } from "./migration-engine.js";
 
+function tryCreateSymlink(target: string, path: string): boolean {
+	try {
+		symlinkSync(target, path);
+		return true;
+	} catch (error) {
+		if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") return false;
+		throw error;
+	}
+}
+
 test("preflight is read-only and inventory reports required bytes", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
 	writeFileSync(join(root, "AGENTS.md"), "identity");
@@ -50,6 +60,313 @@ test("preflight is read-only and inventory reports required bytes", async () => 
 	expect(plan.components).toContain("AGENTS.md");
 	expect(drains).toBe(0);
 	expect(leases).toBe(0);
+});
+
+test("in-place migration leaves unrelated workspace data intact and rollback removes only new entries", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-in-place-migration-"));
+	const state = `${root}-state`;
+	mkdirSync(join(root, "memory"));
+	writeFileSync(join(root, "memory", "managed.txt"), "managed");
+	writeFileSync(join(root, "agent-training-data"), "must remain untouched");
+	let interrupted = false;
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root, destination: root }),
+			current: async () => root,
+			verifyDestination: async () => undefined,
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		selectSourceEntries: async (source) => ({
+			entries: [await source.inspectEntry("memory/managed.txt")],
+			untouched: ["agent-training-data"],
+		}),
+		mapDestinationPath: (path) => (path === "memory/managed.txt" ? "data/managed.txt" : path),
+		layoutBytes: () => Buffer.from('{"version":2}\n'),
+		journalStateDir: state,
+		hooks: {
+			afterCopy: async () => {
+				if (!interrupted) {
+					interrupted = true;
+					throw new Error("interrupt after in-place copy");
+				}
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt after in-place copy");
+		expect(readFileSync(join(root, "agent-training-data"), "utf8")).toBe("must remain untouched");
+		expect(readFileSync(join(root, "data", "managed.txt"), "utf8")).toBe("managed");
+		await engine.rollback();
+		expect(existsSync(join(root, "data", "managed.txt"))).toBe(false);
+		expect(readFileSync(join(root, "memory", "managed.txt"), "utf8")).toBe("managed");
+		expect(readFileSync(join(root, "agent-training-data"), "utf8")).toBe("must remain untouched");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("rollback preserves copied entries when a workspace writer cannot be drained", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-in-place-rollback-writer-"));
+	const state = `${root}-state`;
+	mkdirSync(join(root, "memory"), { recursive: true });
+	writeFileSync(join(root, "memory", "managed.txt"), "managed");
+	let drainCalls = 0;
+	let interrupted = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination: root }) },
+		writers: {
+			drain: async () => {
+				drainCalls++;
+				return drainCalls === 1 ? { owners: [] } : { owners: ["active writer"] };
+			},
+		},
+		database: { prepare: async () => undefined },
+		selectSourceEntries: async (source) => ({
+			entries: [await source.inspectEntry("memory/managed.txt")],
+			untouched: [],
+		}),
+		mapDestinationPath: () => "data/managed.txt",
+		layoutBytes: () => Buffer.from('{"version":2}\\n'),
+		journalStateDir: state,
+		hooks: {
+			afterCopy: async () => {
+				if (!interrupted) {
+					interrupted = true;
+					throw new Error("interrupt before cutover");
+				}
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt before cutover");
+		await expect(engine.rollback()).rejects.toThrow("migration drain blocked by: active writer");
+		expect(drainCalls).toBe(2);
+		expect(readFileSync(join(root, "data", "managed.txt"), "utf8")).toBe("managed");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("in-place rollback refuses to delete a copied entry replaced after preflight", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-in-place-rollback-race-"));
+	const state = `${root}-state`;
+	const sourceFile = join(root, "memory", "managed.txt");
+	const destinationFile = join(root, "data", "managed.txt");
+	const replacementFile = join(root, "replacement.txt");
+	mkdirSync(join(root, "memory"), { recursive: true });
+	writeFileSync(sourceFile, "managed");
+	let interrupted = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination: root }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		selectSourceEntries: async (source) => ({
+			entries: [await source.inspectEntry("memory/managed.txt")],
+			untouched: [],
+		}),
+		mapDestinationPath: () => "data/managed.txt",
+		layoutBytes: () => Buffer.from('{"version":2}\n'),
+		journalStateDir: state,
+		hooks: {
+			afterCopy: async () => {
+				if (!interrupted) {
+					interrupted = true;
+					throw new Error("interrupt before cutover");
+				}
+			},
+			afterRollbackPreflight: async () => {
+				rmSync(destinationFile);
+				renameSync(replacementFile, destinationFile);
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt before cutover");
+		writeFileSync(replacementFile, "managed");
+		await expect(engine.rollback()).rejects.toThrow("descriptor removal target changed");
+		expect(readFileSync(destinationFile, "utf8")).toBe("managed");
+		expect(readFileSync(sourceFile, "utf8")).toBe("managed");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("in-place rollback can finish after an earlier attempt already removed an entry", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-in-place-rollback-retry-"));
+	const state = `${root}-state`;
+	mkdirSync(join(root, "memory"), { recursive: true });
+	writeFileSync(join(root, "memory", "first.txt"), "first");
+	writeFileSync(join(root, "memory", "second.txt"), "second");
+	let interrupted = false;
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination: root }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		selectSourceEntries: async (source) => ({
+			entries: [await source.inspectEntry("memory/first.txt"), await source.inspectEntry("memory/second.txt")],
+			untouched: [],
+		}),
+		mapDestinationPath: (path) => `data/${path.split("/").at(-1)}`,
+		layoutBytes: () => Buffer.from('{"version":2}\n'),
+		journalStateDir: state,
+		hooks: {
+			afterCopy: async () => {
+				if (!interrupted) {
+					interrupted = true;
+					throw new Error("interrupt before cutover");
+				}
+			},
+		},
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt before cutover");
+		rmSync(join(root, "data", "first.txt"));
+		await engine.rollback();
+		expect(existsSync(join(root, "data"))).toBe(false);
+		expect(readFileSync(join(root, "memory", "first.txt"), "utf8")).toBe("first");
+		expect(readFileSync(join(root, "memory", "second.txt"), "utf8")).toBe("second");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("in-place rollback removes its database snapshot without walking unrelated workspace trees", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-in-place-db-migration-"));
+	const state = `${root}-state`;
+	mkdirSync(join(root, "memory"));
+	const sourceDatabase = join(root, "memory", "memories.db");
+	writeFileSync(sourceDatabase, "sqlite fixture bytes");
+	const unrelated = join(root, "agent-training-data");
+	mkdirSync(unrelated);
+	writeFileSync(join(unrelated, "conversations.raw.jsonl"), "untouched");
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root, destination: root }),
+			current: async () => root,
+			verifyDestination: async () => undefined,
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => ({
+				sourceRoot: root,
+				sourcePath: "memory/memories.db",
+				destinationPath: "data/signet.db",
+				bytes: 19,
+			}),
+			backupTo: async (sourcePath, destinationPath) => copyFileSync(sourcePath, destinationPath),
+			verifySnapshot: async () => {
+				throw new Error("interrupt after database snapshot");
+			},
+		},
+		selectSourceEntries: async () => ({ entries: [], untouched: ["agent-training-data"] }),
+		layoutBytes: () => Buffer.from('{"version":2}\n'),
+		journalStateDir: state,
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("interrupt after database snapshot");
+		expect(readFileSync(join(root, "data", "signet.db"), "utf8")).toBe("sqlite fixture bytes");
+		await engine.rollback();
+		expect(existsSync(join(root, "data", "signet.db"))).toBe(false);
+		expect(readFileSync(join(unrelated, "conversations.raw.jsonl"), "utf8")).toBe("untouched");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("in-place rollback validates every owned artifact before deleting any of them", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-in-place-rollback-preflight-"));
+	const state = `${root}-state`;
+	const sourceFile = join(root, "memory", "imports", "managed.txt");
+	const sourceDatabase = join(root, "memory", "memories.db");
+	const destinationFile = join(root, "data", "imports", "managed.txt");
+	const destinationDatabase = join(root, "data", "signet.db");
+	mkdirSync(join(root, "memory", "imports"), { recursive: true });
+	writeFileSync(sourceFile, "managed source remains authoritative");
+	writeFileSync(sourceDatabase, "snapshot source bytes");
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root, destination: root }),
+			current: async () => root,
+			verifyDestination: async () => undefined,
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => ({
+				sourceRoot: root,
+				sourcePath: "memory/memories.db",
+				destinationPath: "data/signet.db",
+				bytes: 20,
+			}),
+			backupTo: async (from, to) => copyFileSync(from, to),
+			verifySnapshot: async () => {
+				throw new Error("stop after snapshot to exercise rollback");
+			},
+		},
+		selectSourceEntries: async (source) => ({
+			entries: [await source.inspectEntry("memory/imports/managed.txt")],
+			untouched: [],
+		}),
+		mapDestinationPath: () => "data/imports/managed.txt",
+		layoutBytes: () => Buffer.from('{"version":2}\n'),
+		journalStateDir: state,
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("stop after snapshot");
+		expect(existsSync(destinationFile)).toBe(true);
+		writeFileSync(destinationDatabase, "modified after failed migration");
+		await expect(engine.rollback()).rejects.toThrow("refusing to remove a changed in-place database snapshot");
+		expect(readFileSync(destinationFile, "utf8")).toBe("managed source remains authoritative");
+		expect(readFileSync(destinationDatabase, "utf8")).toBe("modified after failed migration");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("in-place migration refuses an unowned database snapshot even when its bytes match", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-in-place-unowned-db-"));
+	const state = `${root}-state`;
+	const sourceDatabase = join(root, "memory", "memories.db");
+	const destinationDatabase = join(root, "data", "signet.db");
+	mkdirSync(join(root, "memory"), { recursive: true });
+	mkdirSync(join(root, "data"), { recursive: true });
+	writeFileSync(sourceDatabase, "same snapshot bytes");
+	copyFileSync(sourceDatabase, destinationDatabase);
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root, destination: root }),
+			current: async () => root,
+			verifyDestination: async () => undefined,
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: {
+			prepare: async () => ({
+				sourceRoot: root,
+				sourcePath: "memory/memories.db",
+				destinationPath: "data/signet.db",
+				bytes: 19,
+			}),
+			backupTo: async (sourcePath, destinationPath) => copyFileSync(sourcePath, destinationPath),
+			verifySnapshot: async () => undefined,
+		},
+		selectSourceEntries: async () => ({ entries: [], untouched: [] }),
+		layoutBytes: () => Buffer.from('{"version":2}\\n'),
+		journalStateDir: state,
+	});
+	try {
+		await expect(engine.run()).rejects.toThrow("unowned in-place database snapshot");
+		expect(readFileSync(destinationDatabase, "utf8")).toBe("same snapshot bytes");
+		expect(existsSync(join(root, "workspace-layout.json"))).toBe(false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
 });
 
 test("SQLite backup reads the fenced live database rather than a separately staged WAL pair", async () => {
@@ -293,6 +610,7 @@ test("destination writes remain rooted in the admitted parent after pathname rep
 	const state = mkdtempSync(join(tmpdir(), "migration-admitted-state-"));
 	writeFileSync(join(source, "one.txt"), "one");
 	const destination = join(destinationParent, "workspace");
+	let replacementBlocked = false;
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root: source, destination }) },
 		writers: { drain: async () => ({ owners: [] }) },
@@ -300,13 +618,34 @@ test("destination writes remain rooted in the admitted parent after pathname rep
 		journalStateDir: state,
 		hooks: {
 			afterDestinationAdmitted: async () => {
-				renameSync(destinationParent, admittedParent);
-				symlinkSync(attacker, destinationParent);
+				try {
+					renameSync(destinationParent, admittedParent);
+				} catch (error) {
+					if (process.platform !== "win32" || (error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+					replacementBlocked = true;
+					return;
+				}
+				if (!tryCreateSymlink(attacker, destinationParent) && process.platform === "win32")
+					mkdirSync(destinationParent);
 			},
 		},
 	});
-	await expect(engine.run()).rejects.toThrow("destination identity changed");
-	expect(readFileSync(join(admittedParent, "workspace", "one.txt"), "utf8")).toBe("one");
+	let result: Awaited<ReturnType<MigrationEngine["run"]>> | undefined;
+	let failure: unknown;
+	try {
+		result = await engine.run();
+	} catch (error) {
+		failure = error;
+	}
+	if (replacementBlocked) {
+		expect(failure).toBeUndefined();
+		expect(result).toMatchObject({ status: "completed" });
+		expect(readFileSync(join(destination, "one.txt"), "utf8")).toBe("one");
+	} else {
+		expect(failure).toBeInstanceOf(Error);
+		expect((failure as Error).message).toContain("destination identity changed");
+		expect(readFileSync(join(admittedParent, "workspace", "one.txt"), "utf8")).toBe("one");
+	}
 	expect(existsSync(join(attacker, "workspace", "one.txt"))).toBe(false);
 });
 
@@ -535,10 +874,13 @@ test("escaping symlink is rejected without following it", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-"));
 	writeFileSync(join(root, "secret"), "no");
 	writeFileSync(join(root, "inside"), "yes");
-	const { symlinkSync } = await import("node:fs");
 	const outside = mkdtempSync(join(tmpdir(), "signet-outside-"));
 	writeFileSync(join(outside, "secret"), "no");
-	symlinkSync(join(outside, "secret"), join(root, "link"));
+	if (!tryCreateSymlink(join(outside, "secret"), join(root, "link"))) {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(outside, { recursive: true, force: true });
+		return;
+	}
 	const engine = new MigrationEngine({
 		resolver: { resolve: () => ({ version: 1, root, destination: join(`${root}-new`) }) },
 		writers: { drain: async () => ({ owners: [] }) },
@@ -1220,7 +1562,7 @@ test("cutover-pending accepts ordinary writes to the same external database inod
 			{ value: "post-cutover" },
 		]);
 	} finally {
-		verified.close();
+		verified.close(true);
 	}
 	rmSync(root, { recursive: true, force: true });
 });

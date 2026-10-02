@@ -42,25 +42,27 @@ During historical backfill, an existing completed JSONL session remains authorit
 
 ## Migration lifecycle
 
-Migration is stopped, drained, copy-and-verify, resumable, and journaled outside both workspaces. The journal records component progress, fingerprints, receipts, cutover, rollback eligibility, cleanup acceptance, and redacted errors.
+Migration upgrades one workspace in place, at the same configured path. It is not a workspace relocation command. The journal records component progress, fingerprints, receipts, cutover, rollback eligibility, cleanup acceptance, and redacted errors outside the workspace.
 
 ```bash
-signet workspace layout migrate preflight [--source <v1-root>] [--destination <v2-root>]
-signet workspace layout migrate run       [--source <v1-root>] [--destination <v2-root>]
-signet workspace layout migrate resume    [--source <v1-root>] [--destination <v2-root>]
-signet workspace layout migrate status    [--source <v1-root>] [--destination <v2-root>]
-signet workspace layout migrate rollback  [--source <v1-root>] [--destination <v2-root>]
-signet workspace layout migrate cleanup   --accept [--source <v1-root>] [--destination <v2-root>]
+signet workspace layout migrate preflight [--source <workspace>]
+signet workspace layout migrate run       [--source <workspace>] [--dry-run] [--yes]
+signet workspace layout migrate resume    [--source <workspace>]
+signet workspace layout migrate status    [--source <workspace>]
+signet workspace layout migrate rollback  [--source <workspace>]
+signet workspace layout migrate cleanup   --accept [--source <workspace>]
 ```
 
-The previous top-level `signet migration` command remains a compatibility alias.
+The workspace path does not change. `--source` selects a workspace only when upgrading a non-default location; there is no destination path. The previous top-level `signet migration` command remains a compatibility alias.
 
-- **preflight** is read-only. It resolves overrides, inventories ownership and Git state, checks the configured source database read-only, reports required space, and produces a redacted plan. Writer draining occurs during `run`.
-- **run** acquires the migration lease, drains supported writers, copies regular files and in-boundary symlinks with hash verification, compares typed row values and counts for every table in the copied SQLite snapshot, then publishes v2 cutover. v1 harness transcript files and top-level transcript/manifest/summary/compaction artifacts move to `transcripts/`; historical `memory/` artifact references resolve to the moved files until row reindex reconciles them. Unknown `memory/` payloads survive under `data/legacy-memory/` as retained, non-indexed material.
+Windows migration uses native file identities and rejects reparse-point traversal. New files and directories inherit the workspace's Windows ACLs; POSIX mode bits are not reproduced, while a file's read-only state is preserved. Copying symbolic links requires Windows permission to create them, such as Developer Mode or the symbolic-link privilege.
+
+- **preflight** is read-only. It resolves overrides, inspects only registered Signet-managed entries and their Git state, checks the configured source database read-only, reports required space, and produces a redacted plan. Unregistered root entries, unknown children under `memory/`, and the rebuildable v1 cache are reported as untouched; their contents are not traversed or fingerprinted. Writer draining occurs during `run`.
+- **run** displays the in-place plan and asks for confirmation before writing; the prompt defaults to no. `--dry-run` prints the same plan without prompting or writing, and `--yes` skips the prompt for automation. After confirmation, run acquires the migration lease, drains supported writers, migrates only registered regular files and in-boundary symlinks with hash verification, compares typed row values and counts for every table in the SQLite snapshot, then publishes v2 cutover without changing the workspace path. Unknown workspace data remains untouched and is not traversed or fingerprinted. Registered v1 transcript and artifact files are copied into `transcripts/`; their legacy source files remain unchanged, and migration does not rewrite database artifact references.
 - **resume** reruns the journaled operation idempotently; it does not duplicate evidence or reset Dreaming state.
-- **status** reports phase, copied count, blockers, destination-write state, and whether rollback remains eligible.
-- **rollback** is safe only before the destination accepts durable writes. After that point, the old workspace is not a rollback target; use controlled forward reconciliation.
-- **cleanup** requires an explicit `--accept` after destination startup and semantic verification. It removes the migration journal; cleanup is not proof that legacy artifacts may be deleted. Retain or quarantine legacy Markdown/manifests when their consumers are not retired.
+- **status** reports phase, copied count, blockers, workspace-write state, and whether rollback remains eligible.
+- **rollback** is safe only before cutover begins. After cutover, the workspace is not a rollback target; use controlled forward reconciliation.
+- **cleanup** requires an explicit `--accept` after startup and semantic verification. It removes the migration journal; cleanup is not proof that legacy artifacts may be deleted. Retain or quarantine legacy Markdown/manifests when their consumers are not retired.
 
 Migration refuses ambiguous ownership, insufficient space, inconsistent snapshots, unsafe or escaping symlinks, special files, unsupported custom layouts, and active writers that do not drain. Binaries that predate layout-version support are not safe downgrade targets after cutover.
 

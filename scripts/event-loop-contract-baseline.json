@@ -445,84 +445,84 @@
     },
     {
       "path": "daemon.ts",
-      "line": 2309,
+      "line": 2318,
       "api": "mkdirSync",
       "source": "mkdirSync(DAEMON_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2310,
+      "line": 2319,
       "api": "mkdirSync",
       "source": "mkdirSync(LOG_DIR, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2311,
+      "line": 2320,
       "api": "mkdirSync",
       "source": "mkdirSync(dirname(MEMORY_DB), { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2446,
+      "line": 2455,
       "api": "existsSync",
       "source": "const workerPath = existsSync(bundled)",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2518,
+      "line": 2527,
       "api": "writeFileSync",
       "source": "writeFileSync(PID_FILE, process.pid.toString());",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2855,
+      "line": 2864,
       "api": "existsSync",
       "source": "isEnabled: async () => existsSync(enabledMarker),",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2857,
+      "line": 2866,
       "api": "mkdirSync",
       "source": "mkdirSync(layout.imports, { recursive: true });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2859,
+      "line": 2868,
       "api": "writeFileSync",
       "source": "writeFileSync(tmp, \"enabled\\n\", { mode: 0o600 });",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 2860,
+      "line": 2869,
       "api": "renameSync",
       "source": "renameSync(tmp, enabledMarker);",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3338,
+      "line": 3347,
       "api": "existsSync",
       "source": "if (existsSync(healthStampPath)) {",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3339,
+      "line": 3348,
       "api": "readFileSync",
       "source": "const prev = JSON.parse(readFileSync(healthStampPath, \"utf-8\"));",
       "category": "hot-path"
     },
     {
       "path": "daemon.ts",
-      "line": 3342,
+      "line": 3351,
       "api": "writeFileSync",
       "source": "writeFileSync(",
       "category": "hot-path"

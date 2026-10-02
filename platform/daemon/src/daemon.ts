@@ -2194,7 +2194,9 @@ function buildTerminalLifecycleRecord(reason: string, exitCode: number, error?: 
 function buildShutdownTerminalRecord(reason: string, exitCode: number, error?: unknown): DaemonLifecycle {
 	const fatalRequest = shutdownRequestGate.fatalRequest;
 	const terminalError =
-		fatalRequest === null ? (error ?? shutdownCleanupError) : (shutdownFatalError ?? new Error(fatalRequest.reason));
+		fatalRequest === null
+			? (error ?? shutdownCleanupError ?? undefined)
+			: (shutdownFatalError ?? new Error(fatalRequest.reason));
 	return buildTerminalLifecycleRecord(
 		shutdownRequestGate.primary?.reason ?? reason,
 		shutdownRequestGate.exitCode ?? exitCode,
@@ -2260,6 +2262,13 @@ process.on("SIGINT", () => {
 process.on("SIGTERM", () => {
 	requestShutdown("signal:SIGTERM", 0);
 });
+
+if (process.env.SIGNET_MIGRATION_VERIFY === "1") {
+	process.on("message", (message) => {
+		if (message && typeof message === "object" && Reflect.get(message, "type") === "migration-verification-shutdown")
+			requestShutdown("migration-verify-complete", 0);
+	});
+}
 
 process.on("uncaughtException", (err) => {
 	logger.error("daemon", "Uncaught exception", err);

@@ -10,7 +10,7 @@ interface SQLiteDatabase {
 		all(...args: unknown[]): Record<string, unknown>[];
 		iterate(...args: unknown[]): Iterable<Record<string, unknown>>;
 	};
-	close(): void;
+	close(force?: boolean): void;
 }
 const isBun = typeof (globalThis as Record<string, unknown>).Bun !== "undefined";
 const createDatabase = (dbPath: string, options?: { readonly?: boolean }): SQLiteDatabase => {
@@ -22,6 +22,11 @@ const createDatabase = (dbPath: string, options?: { readonly?: boolean }): SQLit
 		return new BetterSqlite3(dbPath, options);
 	}
 };
+
+export function closeDatabase(db: SQLiteDatabase): void {
+	if (isBun && process.platform === "win32") db.close(true);
+	else db.close();
+}
 
 function identifier(name: string): string {
 	return `"${name.replaceAll('"', '""')}"`;
@@ -78,10 +83,10 @@ export function verifyMigrationDatabaseRows(sourcePath: string, destinationPath:
 					throw new Error(`migration database semantic mismatch: ${table}`);
 			}
 		} finally {
-			destination.close();
+			closeDatabase(destination);
 		}
 	} finally {
-		source.close();
+		closeDatabase(source);
 	}
 }
 

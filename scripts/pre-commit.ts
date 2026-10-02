@@ -124,7 +124,7 @@ async function workspaceDirectories(patterns: readonly string[]): Promise<readon
 	for (const pattern of patterns) {
 		const glob = new Bun.Glob(`${pattern}/package.json`);
 		for await (const file of glob.scan({ cwd: ROOT, dot: true, onlyFiles: true })) {
-			directories.add(posix.dirname(file));
+			directories.add(posix.dirname(file.replaceAll("\\", "/")));
 		}
 	}
 	return [...directories].sort();

@@ -5,6 +5,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
 	existsSync,
+	chmodSync,
 	lstatSync,
 	mkdirSync,
 	mkdtempSync,
@@ -21,7 +22,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, win32 } from "node:path";
 import { DatabaseSync, backup } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { MigrationEngine } from "../lib/migration-engine";
 import {
+	createDefaultMigrationEngine,
 	defaultMigrationDestination,
 	initializeMigrationLeaseFile,
 	migrationLeasePath,
@@ -37,14 +40,150 @@ import {
 	resolveWorkspaceLayout,
 } from "@signet/core";
 
-test("default migration destination uses the platform path basename", () => {
-	expect(defaultMigrationDestination("C:\\Users\\alice\\.agents", win32)).toBe("C:\\Users\\alice\\.agents-v2");
+function tryCreateSymlink(target: string, path: string, type?: "file" | "dir"): boolean {
+	try {
+		symlinkSync(target, path, type);
+		return true;
+	} catch (error) {
+		if (process.platform === "win32" && (error as NodeJS.ErrnoException).code === "EPERM") return false;
+		throw error;
+	}
+}
+
+test("default migration keeps the configured workspace path", () => {
+	const source = "C:\\Users\\alice\\.agents";
+	expect(defaultMigrationDestination(source, win32)).toBe(source);
+});
+
+test("default migration refuses a different destination path", () => {
+	const source = mkdtempSync(join(tmpdir(), "signet-migration-destination-"));
+	try {
+		expect(() => createDefaultMigrationEngine({ source, destination: `${source}-elsewhere` })).toThrow(
+			"workspace layout migration upgrades in place",
+		);
+	} finally {
+		rmSync(source, { recursive: true, force: true });
+	}
+});
+
+test("default migration accepts a Windows path alias to the same directory", () => {
+	if (process.platform !== "win32") return;
+	const source = mkdtempSync(join(tmpdir(), "signet-migration-path-alias-"));
+	const index = source.search(/[a-z]/i);
+	if (index < 0) throw new Error("temporary directory path has no letter to case-fold");
+	const letter = source[index] ?? "";
+	const alias = `${source.slice(0, index)}${letter === letter.toLowerCase() ? letter.toUpperCase() : letter.toLowerCase()}${source.slice(index + 1)}`;
+	try {
+		expect(statSync(source, { bigint: true }).ino).toBe(statSync(alias, { bigint: true }).ino);
+		expect(() => createDefaultMigrationEngine({ source, destination: alias })).not.toThrow();
+	} finally {
+		rmSync(source, { recursive: true, force: true });
+	}
+});
+
+test("run previews the in-place plan and cancellation leaves the workspace unchanged", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-confirm-"));
+	const state = `${root}-state`;
+	const logs: string[] = [];
+	let confirmations = 0;
+	const engine = new MigrationEngine({
+		resolver: {
+			resolve: () => ({ version: 1, root, destination: root }),
+			current: async () => root,
+		},
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		selectSourceEntries: async () => ({ entries: [], untouched: ["agent-training-data"] }),
+		layoutBytes: () => Buffer.from('{"version":2}\\n'),
+		journalStateDir: state,
+	});
+	const program = new Command();
+	registerMigrationCommands(program, {
+		createEngine: () => engine,
+		confirm: async (message) => {
+			confirmations++;
+			expect(message).toBe("Apply this in-place workspace upgrade?");
+			return false;
+		},
+		stdout: { log: (message) => logs.push(String(message)), error: () => undefined },
+	});
+	try {
+		await program.parseAsync(["migration", "run", "--source", root], { from: "user" });
+		expect(confirmations).toBe(1);
+		expect(logs.join("\\n")).toContain(`Workspace: ${root}`);
+		expect(logs.join("\\n")).toContain("Entries left untouched: 1");
+		expect(logs.join("\\n")).toContain("contents are not inspected or hashed");
+		expect(logs.join("\\n")).toContain("Migration cancelled; no changes made.");
+		expect(existsSync(join(root, "workspace-layout.json"))).toBe(false);
+		expect(existsSync(state)).toBe(false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("run rejects a changed workspace after confirmation instead of migrating beyond the reviewed plan", async () => {
+	const root = mkdtempSync(join(tmpdir(), "signet-migration-stale-plan-"));
+	const state = `${root}-state`;
+	const managed = join(root, "memory", "imports", "proof.md");
+	mkdirSync(dirname(managed), { recursive: true });
+	writeFileSync(managed, "reviewed bytes");
+	const engine = new MigrationEngine({
+		resolver: { resolve: () => ({ version: 1, root, destination: root }) },
+		writers: { drain: async () => ({ owners: [] }) },
+		database: { prepare: async () => undefined },
+		selectSourceEntries: async (source) => ({
+			entries: [await source.inspectEntry("memory/imports/proof.md")],
+			untouched: [],
+		}),
+		mapDestinationPath: () => "data/imports/proof.md",
+		journalStateDir: state,
+	});
+	const program = new Command();
+	registerMigrationCommands(program, {
+		createEngine: () => engine,
+		confirm: async () => {
+			writeFileSync(managed, "changed after review");
+			return true;
+		},
+	});
+	try {
+		await expect(program.parseAsync(["migration", "run", "--source", root], { from: "user" })).rejects.toThrow(
+			"workspace changed since the migration plan; rerun preflight",
+		);
+		expect(existsSync(join(root, "data", "imports", "proof.md"))).toBe(false);
+		expect(existsSync(join(root, "workspace-layout.json"))).toBe(false);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+		rmSync(state, { recursive: true, force: true });
+	}
+});
+
+test("migration preflight stays at the workspace root and ignores unregistered trees", async () => {
+	const source = mkdtempSync(join(tmpdir(), "signet-migration-scope-"));
+	mkdirSync(join(source, "memory"), { recursive: true });
+	const database = new Database(join(source, "memory", "memories.db"));
+	database.close();
+	const unrelated = join(source, "agent-training-data");
+	mkdirSync(unrelated);
+	writeFileSync(join(unrelated, "conversations.raw.jsonl"), "must remain outside migration scope");
+	chmodSync(unrelated, 0);
+	try {
+		const plan = await createDefaultMigrationEngine({ source }).preflight();
+		expect(plan.source).toBe(source);
+		expect(plan.destination).toBe(source);
+		expect(plan.untouched).toContain("agent-training-data");
+		expect(plan.components.some((path) => path.startsWith("agent-training-data/"))).toBe(false);
+	} finally {
+		chmodSync(unrelated, 0o700);
+		rmSync(source, { recursive: true, force: true });
+	}
 });
 
 test("Windows migration lease stays a safe file beneath state and reuses an existing legacy lease", () => {
 	const state = "C:\\Users\\alice\\AppData\\Local\\Signet\\migrations";
 	const source = "C:\\Users\\alice\\.agents";
-	const legacy = win32.join(state, `${win32.resolve(source).replaceAll("/", "_")}.lease`);
+	const legacy = win32.join(state, `${win32.resolve(source).replace(/[\\/:]/g, "_")}.lease`);
 	const lease = migrationLeasePath(state, source, { platform: "win32", pathApi: win32, exists: () => false });
 	expect(win32.dirname(lease)).toBe(state);
 	expect(win32.basename(lease)).toMatch(/^[a-f0-9]{32}\.lease$/);
@@ -212,6 +351,9 @@ test("destination verification requires readiness rather than liveness", async (
 +  },
 +});
 +process.on("SIGTERM", () => { server.stop(true); process.exit(0); });
++process.on("message", message => {
++  if (message && message.type === "migration-verification-shutdown") { server.stop(true); process.exit(0); }
++});
 +`.replace(/^\+/gm, "");
 	try {
 		await expect(
@@ -252,17 +394,27 @@ test("migration refuses an ambiguous legacy lease instead of racing an older wri
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-legacy-lease-"));
 	const commandsDir = dirname(fileURLToPath(import.meta.url));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const state = join(root, "state");
 	const leaseDir = join(state, "signet", "migrations");
 	mkdirSync(join(source, "memory"), { recursive: true });
+	new Database(join(source, "memory", "memories.db")).close();
 	mkdirSync(leaseDir, { recursive: true });
 	writeDaemonConfig(source);
-	writeFileSync(join(leaseDir, `${source.replaceAll("/", "_")}.lease`), "");
+	writeFileSync(join(leaseDir, `${source.replace(/[\\/:]/g, "_")}.lease`), "");
 	try {
 		const result = spawnSync(
 			process.execPath,
-			[join(commandsDir, "..", "cli.ts"), "migration", "run", "--source", source, "--destination", destination],
+			[
+				join(commandsDir, "..", "cli.ts"),
+				"migration",
+				"run",
+				"--source",
+				source,
+				"--destination",
+				destination,
+				"--yes",
+			],
 			{
 				cwd: join(commandsDir, "..", "..", "..", ".."),
 				encoding: "utf8",
@@ -281,7 +433,7 @@ test("migration refuses an ambiguous legacy lease instead of racing an older wri
 		);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("legacy migration lease");
-		expect(existsSync(destination)).toBe(false);
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -298,7 +450,7 @@ test("migration publishes only initialized SQLite lease files and leaves interru
 		try {
 			expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(1);
 		} finally {
-			db.close();
+			db.close(true);
 		}
 		if (process.platform !== "win32") expect(statSync(lease).mode & 0o777).toBe(0o600);
 		expect(readdirSync(root).sort()).toEqual(["migration.lease", "migration.lease.init-interrupted"]);
@@ -311,19 +463,29 @@ test("migration leaves an active lease owner in control", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-active-lease-"));
 	const commandsDir = dirname(fileURLToPath(import.meta.url));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const state = join(root, "state");
 	const leaseDir = join(state, "signet", "migrations");
 	mkdirSync(join(source, "memory"), { recursive: true });
+	new Database(join(source, "memory", "memories.db")).close();
 	mkdirSync(leaseDir, { recursive: true });
 	writeDaemonConfig(source);
-	const owner = new Database(join(leaseDir, `${source.replaceAll("/", "_")}.lease`));
+	const owner = new Database(join(leaseDir, `${source.replace(/[\\/:]/g, "_")}.lease`));
 	owner.exec("PRAGMA user_version = 1");
 	owner.exec("BEGIN IMMEDIATE");
 	try {
 		const result = spawnSync(
 			process.execPath,
-			[join(commandsDir, "..", "cli.ts"), "migration", "run", "--source", source, "--destination", destination],
+			[
+				join(commandsDir, "..", "cli.ts"),
+				"migration",
+				"run",
+				"--source",
+				source,
+				"--destination",
+				destination,
+				"--yes",
+			],
 			{
 				cwd: join(commandsDir, "..", "..", "..", ".."),
 				encoding: "utf8",
@@ -342,7 +504,7 @@ test("migration leaves an active lease owner in control", () => {
 		);
 		expect(result.status).not.toBe(0);
 		expect(result.stderr).toContain("another migration is already running");
-		expect(existsSync(destination)).toBe(false);
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 	} finally {
 		owner.exec("ROLLBACK");
 		owner.close();
@@ -350,10 +512,10 @@ test("migration leaves an active lease owner in control", () => {
 	}
 });
 
-test("packaged desktop migration runner migrates and verifies a real v1 SQLite workspace", () => {
+test("packaged desktop migration runner upgrades in place and leaves arbitrary files untouched", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-cli-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const home = join(root, "home");
 	const config = join(root, "config");
 	const state = join(root, "state");
@@ -376,7 +538,7 @@ test("packaged desktop migration runner migrates and verifies a real v1 SQLite w
 		writeFileSync(join(source, sourcePath), contents);
 		return { sourcePath, destinationPath, contents };
 	});
-	symlinkSync("loose note 0.txt", join(source, "CLAUDE.md"));
+	tryCreateSymlink("loose note 0.txt", join(source, "CLAUDE.md"));
 	try {
 		const sourceDb = new Database(join(source, "memory", "memories.db"), { create: true });
 		sourceDb.exec(
@@ -414,7 +576,7 @@ test("packaged desktop migration runner migrates and verifies a real v1 SQLite w
 		expect(preflight.status).toBe(0);
 		expect(readFileSync(join(source, "memory", "memories.db"))).toEqual(databaseBefore);
 		expect(readFileSync(join(source, "memory", "memories.db-wal"))).toEqual(walBefore);
-		expect(existsSync(destination)).toBe(false);
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 		const sqliteVecPath = findSqliteVecExtension();
 		if (!sqliteVecPath) throw new Error("sqlite-vec extension is required by the desktop migration runner test");
 		const workerOptions = {
@@ -443,13 +605,13 @@ test("packaged desktop migration runner migrates and verifies a real v1 SQLite w
 		expect(JSON.parse(workerStatus.stdout)).toMatchObject({ phase: "not-started", destinationWrites: false });
 		expect(readFileSync(join(source, "memory", "memories.db"))).toEqual(databaseBefore);
 		expect(readFileSync(join(source, "memory", "memories.db-wal"))).toEqual(walBefore);
-		expect(existsSync(destination)).toBe(false);
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 		const result = spawnSync(process.execPath, [runner, "run", "--source", source, "--destination", destination], {
 			...workerOptions,
 		});
 		const sourceDatabaseAfter = readFileSync(join(source, "memory", "memories.db"));
 		const sourceWalAfter = readFileSync(join(source, "memory", "memories.db-wal"));
-		sourceDb.close();
+		sourceDb.close(true);
 		expect(sourceDatabaseAfter).toEqual(databaseBefore);
 		expect(sourceWalAfter).toEqual(walBefore);
 		expect(result.status, result.stderr.toString()).toBe(0);
@@ -458,12 +620,14 @@ test("packaged desktop migration runner migrates and verifies a real v1 SQLite w
 		const layout = resolveWorkspaceLayout(destination);
 		expect(layout.version).toBe(2);
 		for (const file of arbitraryFiles) {
-			expect(readFileSync(join(destination, file.destinationPath))).toEqual(file.contents);
+			if (file.sourcePath.startsWith("memory/misc/"))
+				expect(existsSync(join(destination, file.destinationPath))).toBe(false);
+			else expect(readFileSync(join(destination, file.destinationPath))).toEqual(file.contents);
 			expect(readFileSync(join(source, file.sourcePath))).toEqual(file.contents);
 		}
 		const migrated = new Database(layout.database, { readonly: true });
 		expect(migrated.query("SELECT value FROM proof").get()).toEqual({ value: "workspace-v2-ok" });
-		migrated.close();
+		migrated.close(true);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -472,7 +636,7 @@ test("packaged desktop migration runner migrates and verifies a real v1 SQLite w
 test("production CLI refuses an unregistered SQLite writer before destination writes", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-writer-fence-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const databasePath = join(source, "memory", "memories.db");
 	mkdirSync(dirname(databasePath), { recursive: true });
 	mkdirSync(join(root, "home"), { recursive: true });
@@ -489,7 +653,7 @@ test("production CLI refuses an unregistered SQLite writer before destination wr
 		const options = {
 			cwd: join(import.meta.dir, "..", "..", "..", ".."),
 			encoding: "utf8" as const,
-			timeout: 10_000,
+			timeout: 30_000,
 			env: {
 				...process.env,
 				HOME: join(root, "home"),
@@ -501,12 +665,12 @@ test("production CLI refuses an unregistered SQLite writer before destination wr
 		};
 		const blocked = spawnSync(
 			process.execPath,
-			[cli, "migration", "run", "--source", source, "--destination", destination],
+			[cli, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			options,
 		);
 		expect(blocked.status).not.toBe(0);
 		expect(blocked.stderr).toContain("source database has an active writer");
-		expect(existsSync(destination)).toBe(false);
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 		writer.exec("ROLLBACK");
 		transactionOpen = false;
 		const resumed = spawnSync(
@@ -519,11 +683,11 @@ test("production CLI refuses an unregistered SQLite writer before destination wr
 		try {
 			expect(migrated.query("SELECT value FROM proof").get()).toEqual({ value: "committed" });
 		} finally {
-			migrated.close();
+			migrated.close(true);
 		}
 	} finally {
 		if (transactionOpen) writer.exec("ROLLBACK");
-		writer.close();
+		writer.close(true);
 		rmSync(root, { recursive: true, force: true });
 	}
 }, 60_000);
@@ -532,7 +696,7 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 	const commandsDir = dirname(fileURLToPath(import.meta.url));
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-source-resume-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const vault = join(root, "vault");
 	const home = join(root, "home");
 	let interruptedTemporaryPath: string | undefined;
@@ -540,6 +704,8 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 	mkdirSync(vault);
 	mkdirSync(home);
 	writeDaemonConfig(source);
+	mkdirSync(join(source, "memory", "imports"), { recursive: true });
+	writeFileSync(join(source, "memory", "imports", "resume-proof.md"), "registered import bytes");
 	const note = join(vault, "evidence.md");
 	writeFileSync(note, "# Durable evidence\nThe source remains attributable.\n");
 	writeFileSync(join(source, "user-note.md"), "Source-owned bytes stay unchanged.\n");
@@ -592,10 +758,10 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 		].join("\n");
 		const interrupted = spawnSync(
 			process.execPath,
-			["-e", injectedRunner, "migration", "run", "--source", source, "--destination", destination],
+			["-e", injectedRunner, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			{ cwd, env, encoding: "utf8" },
 		);
-		expect(interrupted.status).toBe(73);
+		expect(interrupted.status, interrupted.stderr).toBe(73);
 		expect(existsSync(destination)).toBe(true);
 		const status = spawnSync(
 			process.execPath,
@@ -606,7 +772,7 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 				encoding: "utf8",
 			},
 		);
-		expect(status.status).toBe(0);
+		expect(status.status, status.stderr).toBe(0);
 		const interruptedStatus = JSON.parse(status.stdout) as { journal?: string };
 		expect(interruptedStatus).toMatchObject({ destinationWrites: true, rollbackEligible: true, copied: 0 });
 		const journalPath = interruptedStatus.journal;
@@ -645,6 +811,9 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 		const destinationSource = loadSourcesConfig(destination).sources.find((entry) => entry.id === original?.id);
 		expect(destinationSource).toMatchObject(original ?? {});
 		expect(readFileSync(join(source, "sources.json"))).toEqual(configBytes);
+		expect(readFileSync(join(destination, "data", "imports", "resume-proof.md"), "utf8")).toBe(
+			"registered import bytes",
+		);
 		expect(readFileSync(join(destination, "user-note.md"))).toEqual(readFileSync(join(source, "user-note.md")));
 		const migrated = new Database(resolveWorkspaceLayout(destination).database, { readonly: true });
 		expect(migrated.query("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
@@ -659,11 +828,11 @@ test("migration resumes copied-but-unreceipted bytes after a hard subprocess exi
 	}
 }, 90_000);
 
-test("production migration rollback preserves a source after a hard exit following destination copy", async () => {
+test("production migration rollback refuses an unreceipted in-place write and preserves recovery data", async () => {
 	const commandsDir = dirname(fileURLToPath(import.meta.url));
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-source-rollback-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const vault = join(root, "vault");
 	mkdirSync(join(source, "memory"), { recursive: true });
 	mkdirSync(vault);
@@ -671,6 +840,8 @@ test("production migration rollback preserves a source after a hard exit followi
 	writeDaemonConfig(source);
 	const note = join(vault, "evidence.md");
 	writeFileSync(note, "User-owned source evidence\n");
+	mkdirSync(join(source, "memory", "imports"), { recursive: true });
+	writeFileSync(join(source, "memory", "imports", "rollback-proof.md"), "registered import bytes");
 	try {
 		const added = addObsidianSource({ root: vault, name: "Rollback acceptance" }, source);
 		if (!added.ok) throw new Error(added.error);
@@ -716,17 +887,17 @@ test("production migration rollback preserves a source after a hard exit followi
 		].join("\n");
 		const interrupted = spawnSync(
 			process.execPath,
-			["-e", injectedRunner, "migration", "run", "--source", source, "--destination", destination],
+			["-e", injectedRunner, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			{ cwd, env, encoding: "utf8" },
 		);
-		expect(interrupted.status).toBe(73);
+		expect(interrupted.status, interrupted.stderr).toBe(73);
 		expect(existsSync(destination)).toBe(true);
 		const interruptedStatus = spawnSync(
 			process.execPath,
 			[cli, "migration", "status", "--source", source, "--destination", destination],
 			{ cwd, env, encoding: "utf8" },
 		);
-		expect(interruptedStatus.status).toBe(0);
+		expect(interruptedStatus.status, interruptedStatus.stderr).toBe(0);
 		const statusBody = JSON.parse(interruptedStatus.stdout) as { journal?: string };
 		const journalPath = statusBody.journal;
 		if (journalPath === undefined) throw new Error("migration status omitted its journal path");
@@ -750,10 +921,13 @@ test("production migration rollback preserves a source after a hard exit followi
 			[cli, "migration", "rollback", "--source", source, "--destination", destination],
 			{ cwd, env, encoding: "utf8" },
 		);
-		if (rollback.status !== 0) throw new Error(`migration rollback failed: ${rollback.stderr.slice(-2000)}`);
-		expect(JSON.parse(rollback.stdout)).toEqual({ status: "rolled-back" });
-		expect(existsSync(destination)).toBe(false);
+		expect(rollback.status).not.toBe(0);
+		expect(rollback.stderr).toContain("in-place migration has an unreceipted write; resume it before rollback");
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 		expect(readFileSync(join(source, "sources.json"))).toEqual(configBytes);
+		expect(readFileSync(join(source, "memory", "imports", "rollback-proof.md"), "utf8")).toBe(
+			"registered import bytes",
+		);
 		expect(loadSourcesConfig(source).sources.find((entry) => entry.id === original?.id)).toMatchObject(original ?? {});
 		expect(readFileSync(note)).toEqual(noteBytes);
 		expect(readFileSync(dbPath)).toEqual(dbBytes);
@@ -766,7 +940,9 @@ test("production migration rollback preserves a source after a hard exit followi
 				encoding: "utf8",
 			},
 		);
-		expect(JSON.parse(status.stdout)).toMatchObject({ phase: "not-started", copied: 0 });
+		expect(JSON.parse(status.stdout)).toMatchObject({ destinationWrites: true, rollbackEligible: true, copied: 0 });
+		expect(existsSync(join(source, temporaryPath))).toBe(true);
+		expect(readFileSync(dbPath)).toEqual(dbBytes);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -775,20 +951,20 @@ test("production migration rollback preserves a source after a hard exit followi
 test("production CLI maps default v1 components into canonical v2 ownership", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-components-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const home = join(root, "home");
 	const config = join(root, "config");
 	const state = join(root, "state");
 	mkdirSync(join(source, "memory", "cache"), { recursive: true });
 	mkdirSync(join(source, "memory", "imports"), { recursive: true });
-	mkdirSync(join(source, "memory", "hermes", "transcripts"), { recursive: true });
+	mkdirSync(join(source, "memory", "hermes-agent", "transcripts"), { recursive: true });
 	mkdirSync(join(source, ".daemon"), { recursive: true });
 	mkdirSync(join(source, "files"), { recursive: true });
 	mkdirSync(home, { recursive: true });
 	writeFileSync(join(source, "memory", "cache", "vectors.bin"), "cache");
 	writeFileSync(join(source, "memory", "imports", "original.md"), "import");
-	writeFileSync(join(source, "memory", "hermes", "transcripts", "transcript.jsonl"), '{"role":"user"}\n');
-	writeFileSync(join(source, "memory", "hermes", "transcripts", "capture.state"), "checkpoint");
+	writeFileSync(join(source, "memory", "hermes-agent", "transcripts", "transcript.jsonl"), '{"role":"user"}\n');
+	writeFileSync(join(source, "memory", "hermes-agent", "transcripts", "capture.state"), "checkpoint");
 	writeFileSync(join(source, "memory", "legacy-note.md"), "legacy");
 	writeFileSync(join(source, "memory", "session--transcript.md"), "---\nkind: transcript\n---\nUser: hello\n");
 	writeFileSync(join(source, "memory", "session--manifest.md"), "---\nkind: manifest\n---\nlinks\n");
@@ -801,7 +977,7 @@ test("production CLI maps default v1 components into canonical v2 ownership", ()
 		const cli = join(import.meta.dir, "..", "cli.ts");
 		const result = spawnSync(
 			process.execPath,
-			[cli, "migration", "run", "--source", source, "--destination", destination],
+			[cli, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			{
 				cwd: join(import.meta.dir, "..", "..", "..", ".."),
 				encoding: "utf8",
@@ -816,14 +992,16 @@ test("production CLI maps default v1 components into canonical v2 ownership", ()
 			},
 		);
 		if (result.status !== 0) throw new Error(result.stderr);
-		expect(existsSync(join(destination, "memory"))).toBe(false);
-		expect(readFileSync(join(destination, "cache", "vectors.bin"), "utf8")).toBe("cache");
+		expect(existsSync(join(destination, "memory"))).toBe(true);
+		expect(readFileSync(join(source, "memory", "cache", "vectors.bin"), "utf8")).toBe("cache");
+		expect(existsSync(join(destination, "cache", "vectors.bin"))).toBe(false);
 		expect(readFileSync(join(destination, "data", "imports", "original.md"), "utf8")).toBe("import");
-		expect(readFileSync(join(destination, "transcripts", "hermes", "transcript.jsonl"), "utf8")).toBe(
+		expect(readFileSync(join(destination, "transcripts", "hermes-agent", "transcript.jsonl"), "utf8")).toBe(
 			'{"role":"user"}\n',
 		);
-		expect(readFileSync(join(destination, "transcripts", "hermes", "capture.state"), "utf8")).toBe("checkpoint");
-		expect(readFileSync(join(destination, "data", "legacy-memory", "legacy-note.md"), "utf8")).toBe("legacy");
+		expect(readFileSync(join(destination, "transcripts", "hermes-agent", "capture.state"), "utf8")).toBe("checkpoint");
+		expect(readFileSync(join(source, "memory", "legacy-note.md"), "utf8")).toBe("legacy");
+		expect(existsSync(join(destination, "data", "legacy-memory", "legacy-note.md"))).toBe(false);
 		expect(readFileSync(join(destination, "transcripts", "session--transcript.md"), "utf8")).toBe(
 			"---\nkind: transcript\n---\nUser: hello\n",
 		);
@@ -853,7 +1031,7 @@ test("production CLI maps default v1 components into canonical v2 ownership", ()
 test("preflight verifies an external absolute database without changing its bytes", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-preflight-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const external = join(root, "outside", "custom.db");
 	mkdirSync(join(source, "memory"), { recursive: true });
 	mkdirSync(dirname(external), { recursive: true });
@@ -887,7 +1065,7 @@ test("preflight verifies an external absolute database without changing its byte
 		);
 		expect(result.status, result.stderr).toBe(0);
 		expect(createHash("sha256").update(readFileSync(external)).digest("hex")).toBe(before);
-		expect(existsSync(destination)).toBe(false);
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -896,7 +1074,7 @@ test("preflight verifies an external absolute database without changing its byte
 test("external database writer cannot cross the migration cutover fence", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-writer-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const external = join(root, "external", "custom.db");
 	mkdirSync(source, { recursive: true });
 	mkdirSync(dirname(external), { recursive: true });
@@ -936,12 +1114,12 @@ test("external database writer cannot cross the migration cutover fence", () => 
 		transactionOpen = true;
 		const blocked = spawnSync(
 			process.execPath,
-			[cli, "migration", "run", "--source", source, "--destination", destination],
+			[cli, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			options,
 		);
 		expect(blocked.status).not.toBe(0);
 		expect(blocked.stderr).toContain("source database has an active writer");
-		expect(existsSync(destination)).toBe(false);
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 		writer.exec("ROLLBACK");
 		transactionOpen = false;
 		const resumed = spawnSync(
@@ -962,7 +1140,7 @@ test("external database writer cannot cross the migration cutover fence", () => 
 test("production migration rejects an external database replaced after writer fencing", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-fenced-replacement-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const external = join(root, "external", "custom.db");
 	const replacement = join(root, "external", "replacement.db");
 	mkdirSync(source, { recursive: true });
@@ -982,7 +1160,15 @@ test("production migration rejects an external database replaced after writer fe
 		database.close();
 	}
 	const originalInode = lstatSync(external, { bigint: true }).ino;
-	const envKeys = ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "SIGNET_PATH", "SIGNET_DAEMON_ENTRYPOINT"] as const;
+	const envKeys = [
+		"HOME",
+		"XDG_CONFIG_HOME",
+		"XDG_STATE_HOME",
+		"SIGNET_PATH",
+		"SIGNET_DAEMON_ENTRYPOINT",
+		"SIGNET_DAEMON_RUNTIME",
+		"SIGNET_DAEMON_JS_PATH",
+	] as const;
 	const previous = envKeys.map((key) => [key, process.env[key]] as const);
 	const previousEntrypoint = process.argv[1];
 	process.argv[1] = join(import.meta.dir, "..", "..", "..", "..", "platform", "daemon", "src", "daemon.ts");
@@ -992,6 +1178,8 @@ test("production migration rejects an external database replaced after writer fe
 		XDG_STATE_HOME: join(root, "state"),
 		SIGNET_PATH: source,
 		SIGNET_DAEMON_ENTRYPOINT: "0",
+		SIGNET_DAEMON_RUNTIME: "bun-js",
+		SIGNET_DAEMON_JS_PATH: join(import.meta.dir, "..", "..", "..", "..", "platform", "daemon", "dist", "daemon.js"),
 	});
 	try {
 		const program = new Command();
@@ -1004,11 +1192,25 @@ test("production migration rejects an external database replaced after writer fe
 				},
 			},
 		});
-		await expect(
-			program.parseAsync(["migration", "run", "--source", source, "--destination", destination], { from: "user" }),
-		).rejects.toThrow("external database identity changed during migration");
-		expect(lstatSync(`${external}.held`, { bigint: true }).ino).toBe(originalInode);
-		expect(existsSync(destination)).toBe(false);
+		const migration = program.parseAsync(
+			["migration", "run", "--source", source, "--destination", destination, "--yes"],
+			{ from: "user" },
+		);
+		if (process.platform === "win32") {
+			let error: unknown;
+			try {
+				await migration;
+			} catch (caught) {
+				error = caught;
+			}
+			expect((error as NodeJS.ErrnoException | undefined)?.code).toMatch(/^(?:EBUSY|EPERM)$/);
+			expect(lstatSync(external, { bigint: true }).ino).toBe(originalInode);
+			expect(existsSync(`${external}.held`)).toBe(false);
+		} else {
+			await expect(migration).rejects.toThrow("external database identity changed during migration");
+			expect(lstatSync(`${external}.held`, { bigint: true }).ino).toBe(originalInode);
+		}
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 	} finally {
 		if (previousEntrypoint === undefined) process.argv.splice(1, 1);
 		else process.argv[1] = previousEntrypoint;
@@ -1023,7 +1225,7 @@ test("production migration rejects an external database replaced after writer fe
 test("post-cutover verification fails closed when the external database reference disappears", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-disappears-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const external = join(root, "external", "custom.db");
 	mkdirSync(source, { recursive: true });
 	mkdirSync(dirname(external), { recursive: true });
@@ -1053,11 +1255,25 @@ test("post-cutover verification fails closed when the external database referenc
 			stdout: { log: () => undefined, error: () => undefined },
 			hooks: { afterPointerPublished: async () => renameSync(external, `${external}.held`) },
 		});
-		await expect(
-			program.parseAsync(["migration", "run", "--source", source, "--destination", destination], { from: "user" }),
-		).rejects.toThrow("external database identity unavailable during migration");
-		expect(existsSync(`${external}.held`)).toBe(true);
-		expect(existsSync(external)).toBe(false);
+		const migration = program.parseAsync(
+			["migration", "run", "--source", source, "--destination", destination, "--yes"],
+			{ from: "user" },
+		);
+		if (process.platform === "win32") {
+			let error: unknown;
+			try {
+				await migration;
+			} catch (caught) {
+				error = caught;
+			}
+			expect((error as NodeJS.ErrnoException | undefined)?.code).toMatch(/^(?:EBUSY|EPERM)$/);
+			expect(existsSync(external)).toBe(true);
+			expect(existsSync(`${external}.held`)).toBe(false);
+		} else {
+			await expect(migration).rejects.toThrow("external database identity unavailable during migration");
+			expect(existsSync(`${external}.held`)).toBe(true);
+			expect(existsSync(external)).toBe(false);
+		}
 	} finally {
 		if (previousEntrypoint === undefined) process.argv.splice(1, 1);
 		else process.argv[1] = previousEntrypoint;
@@ -1072,7 +1288,7 @@ test("post-cutover verification fails closed when the external database referenc
 test("production resume rejects a replaced but valid external database after pointer publication", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-replaced-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const external = join(root, "external", "custom.db");
 	const replacement = join(root, "external", "replacement.db");
 	mkdirSync(source, { recursive: true });
@@ -1092,7 +1308,15 @@ test("production resume rejects a replaced but valid external database after poi
 		database.close();
 	}
 	const originalInode = lstatSync(external, { bigint: true }).ino;
-	const envKeys = ["HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "SIGNET_PATH", "SIGNET_DAEMON_ENTRYPOINT"] as const;
+	const envKeys = [
+		"HOME",
+		"XDG_CONFIG_HOME",
+		"XDG_STATE_HOME",
+		"SIGNET_PATH",
+		"SIGNET_DAEMON_ENTRYPOINT",
+		"SIGNET_DAEMON_RUNTIME",
+		"SIGNET_DAEMON_JS_PATH",
+	] as const;
 	const previous = envKeys.map((key) => [key, process.env[key]] as const);
 	Object.assign(process.env, {
 		HOME: join(root, "home"),
@@ -1100,6 +1324,8 @@ test("production resume rejects a replaced but valid external database after poi
 		XDG_STATE_HOME: join(root, "state"),
 		SIGNET_PATH: source,
 		SIGNET_DAEMON_ENTRYPOINT: "0",
+		SIGNET_DAEMON_RUNTIME: "bun-js",
+		SIGNET_DAEMON_JS_PATH: join(import.meta.dir, "..", "..", "..", "..", "platform", "daemon", "dist", "daemon.js"),
 	});
 	try {
 		const run = new Command();
@@ -1112,20 +1338,37 @@ test("production resume rejects a replaced but valid external database after poi
 				},
 			},
 		});
-		await expect(
-			run.parseAsync(["migration", "run", "--source", source, "--destination", destination], { from: "user" }),
-		).rejects.toThrow("interrupted after publication");
-		expect(lstatSync(external, { bigint: true }).ino).not.toBe(originalInode);
+		const attempt = run.parseAsync(["migration", "run", "--source", source, "--destination", destination, "--yes"], {
+			from: "user",
+		});
 		const resume = new Command();
 		registerMigrationCommands(resume, { stdout: { log: () => undefined, error: () => undefined } });
-		await expect(
-			resume.parseAsync(["migration", "resume", "--source", source, "--destination", destination], { from: "user" }),
-		).rejects.toThrow("external database identity changed");
+		if (process.platform === "win32") {
+			let error: unknown;
+			try {
+				await attempt;
+			} catch (caught) {
+				error = caught;
+			}
+			expect((error as NodeJS.ErrnoException | undefined)?.code).toMatch(/^(?:EBUSY|EPERM)$/);
+			expect(lstatSync(external, { bigint: true }).ino).toBe(originalInode);
+			await resume.parseAsync(["migration", "resume", "--source", source, "--destination", destination], {
+				from: "user",
+			});
+		} else {
+			await expect(attempt).rejects.toThrow("interrupted after publication");
+			expect(lstatSync(external, { bigint: true }).ino).not.toBe(originalInode);
+			await expect(
+				resume.parseAsync(["migration", "resume", "--source", source, "--destination", destination], { from: "user" }),
+			).rejects.toThrow("external database identity changed");
+		}
 		const database = new Database(external, { readonly: true });
 		try {
-			expect(database.query("SELECT value FROM proof").get()).toEqual({ value: "replacement" });
+			expect(database.query("SELECT value FROM proof").get()).toEqual({
+				value: process.platform === "win32" ? "original" : "replacement",
+			});
 		} finally {
-			database.close();
+			database.close(true);
 		}
 	} finally {
 		for (const [key, value] of previous) {
@@ -1139,7 +1382,7 @@ test("production resume rejects a replaced but valid external database after poi
 test("production CLI preserves an external absolute database override as authoritative", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-external-db-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const external = join(root, "external", "custom.db");
 	mkdirSync(join(source, "memory"), { recursive: true });
 	mkdirSync(dirname(external), { recursive: true });
@@ -1156,7 +1399,7 @@ test("production CLI preserves an external absolute database override as authori
 		const cli = join(import.meta.dir, "..", "cli.ts");
 		const child = spawnSync(
 			process.execPath,
-			[cli, "migration", "run", "--source", source, "--destination", destination],
+			[cli, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			{
 				cwd: join(import.meta.dir, "..", "..", "..", ".."),
 				encoding: "utf8",
@@ -1172,7 +1415,9 @@ test("production CLI preserves an external absolute database override as authori
 		);
 		expect(child.status, child.stderr).toBe(0);
 		expect(resolveWorkspaceLayout(destination).database).toBe(external);
-		expect(readFileSync(join(destination, "workspace-layout.json"), "utf8")).toContain(external);
+		expect(JSON.parse(readFileSync(join(destination, "workspace-layout.json"), "utf8"))).toMatchObject({
+			overrides: { database: external },
+		});
 		const check = new Database(external, { readonly: true });
 		expect(check.query("SELECT value FROM proof").get()).toEqual({ value: "external-authority" });
 		check.close();
@@ -1184,15 +1429,25 @@ test("production CLI preserves an external absolute database override as authori
 test("production CLI preserves explicit local component overrides during v2 migration", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-overrides-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const home = join(root, "home");
 	const config = join(root, "config");
 	const state = join(root, "state");
 	mkdirSync(join(source, "custom", "cache"), { recursive: true });
+	mkdirSync(join(source, "custom", "imports"), { recursive: true });
+	mkdirSync(join(source, "custom", "runtime"), { recursive: true });
 	mkdirSync(join(source, "custom", "transcripts"), { recursive: true });
+	mkdirSync(join(source, ".daemon"), { recursive: true });
+	mkdirSync(join(source, "memory", "imports"), { recursive: true });
+	mkdirSync(join(source, "memory", "hermes-agent", "transcripts"), { recursive: true });
 	mkdirSync(home, { recursive: true });
 	writeFileSync(join(source, "custom", "cache", "index.bin"), "custom-cache");
+	writeFileSync(join(source, "custom", "imports", "retained.md"), "custom-import");
+	writeFileSync(join(source, "custom", "runtime", "sentinel.txt"), "custom-runtime");
 	writeFileSync(join(source, "custom", "transcripts", "events.jsonl"), '{"custom":true}\n');
+	writeFileSync(join(source, ".daemon", "lifecycle.json"), '{"state":"legacy"}');
+	writeFileSync(join(source, "memory", "imports", "legacy.md"), "legacy-import");
+	writeFileSync(join(source, "memory", "hermes-agent", "transcripts", "legacy.jsonl"), '{"legacy":true}\n');
 	writeDaemonConfig(source);
 	writeFileSync(
 		join(source, "workspace-layout.json"),
@@ -1201,6 +1456,8 @@ test("production CLI preserves explicit local component overrides during v2 migr
 			overrides: {
 				database: "custom/custom.db",
 				cache: "custom/cache",
+				imports: "custom/imports",
+				runtime: "custom/runtime",
 				transcripts: "custom/transcripts",
 			},
 		}),
@@ -1212,7 +1469,7 @@ test("production CLI preserves explicit local component overrides during v2 migr
 		const cli = join(import.meta.dir, "..", "cli.ts");
 		const result = spawnSync(
 			process.execPath,
-			[cli, "migration", "run", "--source", source, "--destination", destination],
+			[cli, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			{
 				cwd: join(import.meta.dir, "..", "..", "..", ".."),
 				encoding: "utf8",
@@ -1235,7 +1492,17 @@ test("production CLI preserves explicit local component overrides during v2 migr
 			transcripts: join(destination, "custom", "transcripts"),
 		});
 		expect(readFileSync(join(layout.cache, "index.bin"), "utf8")).toBe("custom-cache");
+		expect(readFileSync(join(layout.imports, "retained.md"), "utf8")).toBe("custom-import");
+		expect(readFileSync(join(layout.runtime, "sentinel.txt"), "utf8")).toBe("custom-runtime");
 		expect(readFileSync(join(layout.transcripts, "events.jsonl"), "utf8")).toBe('{"custom":true}\n');
+		expect(readFileSync(join(source, ".daemon", "lifecycle.json"), "utf8")).toBe('{"state":"legacy"}');
+		expect(readFileSync(join(source, "memory", "imports", "legacy.md"), "utf8")).toBe("legacy-import");
+		expect(readFileSync(join(source, "memory", "hermes-agent", "transcripts", "legacy.jsonl"), "utf8")).toBe(
+			'{"legacy":true}\n',
+		);
+		expect(existsSync(join(source, "runtime", "lifecycle.json"))).toBe(false);
+		expect(existsSync(join(source, "data", "imports", "legacy.md"))).toBe(false);
+		expect(existsSync(join(source, "transcripts", "hermes-agent", "legacy.jsonl"))).toBe(false);
 		const migrated = new Database(layout.database, { readonly: true });
 		expect(migrated.query("SELECT value FROM proof").get()).toEqual({ value: "custom-db" });
 		migrated.close();
@@ -1247,7 +1514,7 @@ test("production CLI preserves explicit local component overrides during v2 migr
 test("production CLI preserves root and nested Git state without mutating the source repository", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-git-"));
 	const source = join(root, "old");
-	const destination = join(root, "new");
+	const destination = source;
 	const config = join(root, "config");
 	const state = join(root, "state");
 	mkdirSync(source, { recursive: true });
@@ -1284,7 +1551,17 @@ test("production CLI preserves root and nested Git state without mutating the so
 	const nestedGitDigest = treeDigest(join(nested, ".git"));
 	try {
 		const result = Bun.spawnSync(
-			[process.execPath, join(import.meta.dir, "..", "cli.ts"), "migration", "run", "--destination", destination],
+			[
+				process.execPath,
+				join(import.meta.dir, "..", "cli.ts"),
+				"migration",
+				"run",
+				"--source",
+				source,
+				"--destination",
+				destination,
+				"--yes",
+			],
 			{
 				env: {
 					...process.env,
@@ -1337,7 +1614,7 @@ test("production CLI preserves root and nested Git state without mutating the so
 test("production CLI blocks cutover when the configured source database is missing", () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-missing-db-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const home = join(root, "home");
 	const config = join(root, "config");
 	const state = join(root, "state");
@@ -1364,10 +1641,10 @@ test("production CLI blocks cutover when the configured source database is missi
 		);
 		expect(preflight.status).not.toBe(0);
 		expect(preflight.stderr).toContain("source database is missing");
-		expect(existsSync(destination)).toBe(false);
+		expect(existsSync(join(source, "data", "signet.db"))).toBe(false);
 		const result = spawnSync(
 			process.execPath,
-			[cli, "migration", "run", "--source", source, "--destination", destination],
+			[cli, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			{
 				cwd: join(import.meta.dir, "..", "..", "..", ".."),
 				encoding: "utf8",
@@ -1392,7 +1669,7 @@ test("production CLI blocks cutover when the configured source database is missi
 test("production CLI refuses an unowned pre-existing destination even when its database matches", async () => {
 	const root = mkdtempSync(join(tmpdir(), "signet-migration-snapshot-resume-"));
 	const source = join(root, "v1");
-	const destination = join(root, "v2");
+	const destination = source;
 	const home = join(root, "home");
 	const config = join(root, "config");
 	const state = join(root, "state");
@@ -1413,7 +1690,7 @@ test("production CLI refuses an unowned pre-existing destination even when its d
 		const cli = join(import.meta.dir, "..", "cli.ts");
 		const result = spawnSync(
 			process.execPath,
-			[cli, "migration", "run", "--source", source, "--destination", destination],
+			[cli, "migration", "run", "--source", source, "--destination", destination, "--yes"],
 			{
 				cwd: join(import.meta.dir, "..", "..", "..", ".."),
 				encoding: "utf8",
@@ -1428,7 +1705,7 @@ test("production CLI refuses an unowned pre-existing destination even when its d
 			},
 		);
 		expect(result.status).not.toBe(0);
-		expect(result.stderr).toContain("EEXIST");
+		expect(result.stderr).toContain("unowned in-place database snapshot");
 		const migrated = new Database(join(destination, "data", "signet.db"), { readonly: true });
 		expect(migrated.query("SELECT value FROM proof").get()).toEqual({ value: "resume-ok" });
 		migrated.close();

@@ -17,7 +17,10 @@ import { createServer } from "node:net";
 import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
+import { confirm } from "@inquirer/prompts";
 import {
+	type DescriptorEntry,
+	type DescriptorRoot,
 	inspectRootGit,
 	mergeSignetGitignoreEntries,
 	resolveDaemonRuntime,
@@ -26,7 +29,7 @@ import {
 	spawnHidden as spawn,
 } from "@signet/core";
 import { MigrationEngine, type MigrationDeps, type Layout } from "../lib/migration-engine.js";
-import { createDatabase, verifyMigrationDatabaseRows } from "../sqlite.js";
+import { closeDatabase, createDatabase, verifyMigrationDatabaseRows } from "../sqlite.js";
 import { readConfiguredWorkspacePath, resolveAgentsDir, writeConfiguredWorkspacePath } from "../lib/workspace.js";
 import {
 	resolveDaemonJsNodePath,
@@ -39,6 +42,7 @@ import {
 
 export type MigrationCommandDeps = {
 	createEngine?: (options: { source?: string; destination?: string }) => MigrationEngine;
+	confirm?: (message: string) => Promise<boolean>;
 	hooks?: MigrationDeps["hooks"];
 	stdout?: Pick<Console, "log" | "error">;
 };
@@ -50,10 +54,10 @@ export function initializeMigrationLeaseFile(leasePath: string): void {
 		try {
 			staged.exec("PRAGMA user_version = 1");
 		} finally {
-			staged.close();
+			closeDatabase(staged);
 		}
 		chmodSync(stagedPath, 0o600);
-		const fd = openSync(stagedPath, "r");
+		const fd = openSync(stagedPath, "r+");
 		try {
 			fsyncSync(fd);
 		} finally {
@@ -188,8 +192,9 @@ export async function verifyDestinationDaemon(
 			SIGNET_ANALYTICS_DISABLED: "1",
 			...(nodePath ? { NODE_PATH: nodePath } : {}),
 			...(wasmPath ? { SIGNET_TIKTOKEN_WASM_PATH: wasmPath } : {}),
+			...(process.platform === "win32" ? { SIGNET_MIGRATION_VERIFY: "1" } : {}),
 		},
-		stdio: ["ignore", "pipe", "pipe"],
+		stdio: process.platform === "win32" ? ["ignore", "pipe", "pipe", "ipc"] : ["ignore", "pipe", "pipe"],
 		detached: true,
 	});
 	let output = "";
@@ -232,12 +237,20 @@ export async function verifyDestinationDaemon(
 		verificationError = error;
 	} finally {
 		const childPid = child.pid;
-		if (child.exitCode === null && childPid !== undefined) process.kill(-childPid, "SIGTERM");
+		if (child.exitCode === null && childPid !== undefined) {
+			try {
+				if (process.platform === "win32") child.send({ type: "migration-verification-shutdown" });
+				else process.kill(-childPid, "SIGTERM");
+			} catch {}
+		}
 		stopped = await Promise.race([exited.then(() => true), sleep(5_000).then(() => false)]);
 		if (!stopped) {
-			try {
-				if (childPid !== undefined) process.kill(-childPid, "SIGKILL");
-			} catch {}
+			if (childPid !== undefined) {
+				try {
+					if (process.platform === "win32") await stopManagedDaemonProcess(childPid);
+					else process.kill(-childPid, "SIGKILL");
+				} catch {}
+			}
 			stopped = await Promise.race([exited.then(() => true), sleep(5_000).then(() => false)]);
 		}
 	}
@@ -250,8 +263,19 @@ type MigrationPathApi = Pick<typeof import("node:path"), "basename" | "dirname" 
 const nativeMigrationPath: MigrationPathApi = { basename, dirname, join, resolve };
 
 export function defaultMigrationDestination(source: string, pathApi: MigrationPathApi = nativeMigrationPath): string {
-	const resolvedSource = pathApi.resolve(source);
-	return pathApi.join(pathApi.dirname(resolvedSource), `${pathApi.basename(resolvedSource) || "workspace"}-v2`);
+	return pathApi.resolve(source);
+}
+
+function formatMigrationPlan(plan: Awaited<ReturnType<MigrationEngine["preflight"]>>): string {
+	const untouched = plan.untouched.length;
+	return [
+		"In-place Signet workspace upgrade",
+		`Workspace: ${plan.source}`,
+		`Managed files to migrate: ${plan.components.length}`,
+		`Additional disk space: ${plan.bytes} bytes`,
+		`Entries left untouched: ${untouched} (contents are not inspected or hashed)`,
+		"The workspace path stays the same. The layout marker is updated after staged files are verified.",
+	].join("\n");
 }
 
 export function migrationLeasePath(
@@ -264,14 +288,101 @@ export function migrationLeasePath(
 	} = {},
 ): string {
 	const pathApi = options.pathApi ?? nativeMigrationPath;
+	const platform = options.platform ?? process.platform;
 	const resolvedSource = pathApi.resolve(source);
-	const legacyPath = pathApi.join(state, `${resolvedSource.replaceAll("/", "_")}.lease`);
-	if (options.platform === "win32" || (options.platform === undefined && process.platform === "win32")) {
+	const legacyName =
+		platform === "win32" ? resolvedSource.replace(/[\\/:]/g, "_") : resolvedSource.replaceAll("/", "_");
+	const legacyPath = pathApi.join(state, `${legacyName}.lease`);
+	if (platform === "win32") {
 		if ((options.exists ?? existsSync)(legacyPath)) return legacyPath;
 		const id = createHash("sha256").update(resolvedSource).digest("hex").slice(0, 32);
 		return pathApi.join(state, `${id}.lease`);
 	}
 	return legacyPath;
+}
+
+const legacyTranscriptHarnesses = [
+	"claude-code",
+	"codex",
+	"forge",
+	"gemini",
+	"hermes-agent",
+	"kimi",
+	"oh-my-pi",
+	"openclaw",
+	"opencode",
+	"pi",
+] as const;
+
+async function addRegisteredTree(root: DescriptorRoot, path: string, entries: DescriptorEntry[]): Promise<void> {
+	const entry = await root.inspectEntry(path);
+	entries.push(entry);
+	if (entry.type !== "directory") return;
+	const directory = await root.openDirectory(path);
+	try {
+		for (const child of await directory.inventory()) entries.push({ ...child, path: `${path}/${child.path}` });
+	} finally {
+		await directory.close();
+	}
+}
+
+async function selectLegacyMigrationEntries(
+	root: DescriptorRoot,
+	scope: { readonly runtime: boolean; readonly imports: boolean; readonly transcripts: boolean },
+): Promise<{ entries: DescriptorEntry[]; untouched: string[] }> {
+	const rootNames = await root.listNames();
+	const untouched = rootNames.filter(
+		(name) => name !== "memory" && name !== "workspace-layout.json" && !(name === ".daemon" && scope.runtime),
+	);
+	const entries: DescriptorEntry[] = [];
+	if (rootNames.includes(".daemon") && scope.runtime) await addRegisteredTree(root, ".daemon", entries);
+	if (!rootNames.includes("memory")) return { entries, untouched: untouched.sort() };
+
+	const memory = await root.openDirectory("memory");
+	try {
+		const names = await memory.listNames();
+		for (const name of names) {
+			if (["memories.db", "memories.db-wal", "memories.db-shm"].includes(name)) continue;
+			if (name === "imports") {
+				if (scope.imports) await addRegisteredTree(root, "memory/imports", entries);
+				else untouched.push("memory/imports");
+				continue;
+			}
+			if (name === "cache") {
+				untouched.push("memory/cache");
+				continue;
+			}
+			if (/^[^/]+--(?:summary|transcript|compaction|manifest)\.md$/.test(name)) {
+				if (!scope.transcripts) {
+					untouched.push(`memory/${name}`);
+					continue;
+				}
+				const entry = await root.inspectEntry(`memory/${name}`);
+				if (entry.type !== "directory") entries.push(entry);
+				else untouched.push(`memory/${name}`);
+				continue;
+			}
+			if (legacyTranscriptHarnesses.some((harness) => harness === name)) {
+				if (!scope.transcripts) {
+					untouched.push(`memory/${name}`);
+					continue;
+				}
+				const harness = await memory.openDirectory(name);
+				try {
+					if ((await harness.listNames()).includes("transcripts"))
+						await addRegisteredTree(root, `memory/${name}/transcripts`, entries);
+					else untouched.push(`memory/${name}`);
+				} finally {
+					await harness.close();
+				}
+				continue;
+			}
+			untouched.push(`memory/${name}`);
+		}
+	} finally {
+		await memory.close();
+	}
+	return { entries, untouched: [...new Set(untouched)].sort() };
 }
 
 export function createDefaultMigrationEngine(
@@ -280,9 +391,14 @@ export function createDefaultMigrationEngine(
 ): MigrationEngine {
 	const source = resolve(options.source ?? resolveAgentsDir().path);
 	const destination = resolve(options.destination ?? defaultMigrationDestination(source));
+	const sameDirectory =
+		destination === source || (process.platform === "win32" && sameWindowsDirectory(source, destination));
+	if (!sameDirectory)
+		throw new Error("workspace layout migration upgrades in place; --destination must match --source");
 	const sourceLayout = resolveWorkspaceLayout(source);
 	const rootGitMode = inspectRootGit(source).mode;
-	if (sourceLayout.version !== 1) throw new Error("workspace is not a v1 layout");
+	if (sourceLayout.version !== 1 && sourceLayout.version !== 2)
+		throw new Error(`unsupported workspace layout version: ${sourceLayout.version}`);
 	const state = process.env.XDG_STATE_HOME
 		? join(process.env.XDG_STATE_HOME, "signet", "migrations")
 		: join(homedir(), ".local", "state", "signet", "migrations");
@@ -296,6 +412,11 @@ export function createDefaultMigrationEngine(
 		secrets: join(source, ".secrets"),
 		skills: join(source, "skills"),
 		data: join(source, "memory"),
+	} as const;
+	const migrationScope = {
+		runtime: sourceLayout.runtime === legacyDefaults.runtime,
+		imports: sourceLayout.imports === legacyDefaults.imports,
+		transcripts: sourceLayout.transcripts === legacyDefaults.transcripts,
 	} as const;
 	const overrides = Object.fromEntries(
 		Object.entries(legacyDefaults)
@@ -325,6 +446,7 @@ export function createDefaultMigrationEngine(
 			return undefined;
 		if (customRoots.some((root) => withinDescriptorPath(root, path))) return path;
 		if (type === "directory") {
+			if (path === ".daemon") return "runtime";
 			if (path === "memory") return "data/legacy-memory";
 			if (path === "memory/cache") return "cache";
 			if (path === "memory/imports") return "data/imports";
@@ -345,6 +467,7 @@ export function createDefaultMigrationEngine(
 		resolve: (): Layout => ({ version: 1, root: source, destination }),
 		capture: async () => readConfiguredWorkspacePath() ?? undefined,
 		current: async () => readConfiguredWorkspacePath() ?? source,
+		isCutover: async () => resolveWorkspaceLayout(source).version === 2,
 		cutover: async () => {
 			writeConfiguredWorkspacePath(destination);
 		},
@@ -358,7 +481,7 @@ export function createDefaultMigrationEngine(
 				const row = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
 				if (row?.quick_check !== "ok") throw new Error("destination database verification failed");
 			} finally {
-				db.close();
+				closeDatabase(db);
 			}
 			await verifyDestinationDaemon(destination);
 		},
@@ -380,7 +503,7 @@ export function createDefaultMigrationEngine(
 			db.exec("PRAGMA busy_timeout = 0");
 			db.exec("BEGIN IMMEDIATE");
 		} catch (error) {
-			db.close();
+			closeDatabase(db);
 			if ((error as { code?: string }).code === "SQLITE_BUSY")
 				throw new Error("another migration is already running", { cause: error });
 			throw error;
@@ -390,7 +513,7 @@ export function createDefaultMigrationEngine(
 				try {
 					db.exec("ROLLBACK");
 				} finally {
-					db.close();
+					closeDatabase(db);
 				}
 			},
 		};
@@ -433,7 +556,7 @@ export function createDefaultMigrationEngine(
 					const row = db.prepare("PRAGMA quick_check").get() as { quick_check?: string } | undefined;
 					if (row?.quick_check !== "ok") throw new Error("source database integrity verification failed");
 				} finally {
-					db.close();
+					closeDatabase(db);
 				}
 			},
 			acquireFence: async () => {
@@ -456,7 +579,7 @@ export function createDefaultMigrationEngine(
 					if (!fencedStat.isFile() || fencedStat.dev !== sourceStat.dev || fencedStat.ino !== sourceStat.ino)
 						throw new Error("external database identity changed during migration");
 				} catch (error) {
-					db.close();
+					closeDatabase(db);
 					if (
 						(error instanceof Error && /database is locked/.test(error.message)) ||
 						(error && typeof error === "object" && Reflect.get(error, "code") === "SQLITE_BUSY")
@@ -479,7 +602,7 @@ export function createDefaultMigrationEngine(
 						try {
 							db.exec("ROLLBACK");
 						} finally {
-							db.close();
+							closeDatabase(db);
 						}
 					},
 				};
@@ -493,7 +616,7 @@ export function createDefaultMigrationEngine(
 						const row = external.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
 						if (row?.integrity_check !== "ok") throw new Error("source database integrity verification failed");
 					} finally {
-						external.close();
+						closeDatabase(external);
 					}
 					return undefined;
 				}
@@ -502,17 +625,15 @@ export function createDefaultMigrationEngine(
 					const row = db.prepare("PRAGMA integrity_check").get() as { integrity_check?: string } | undefined;
 					if (row?.integrity_check !== "ok") throw new Error("source database integrity verification failed");
 				} finally {
-					db.close();
+					closeDatabase(db);
 				}
 				if (!contained(source, sourceLayout.database)) return undefined;
 				const legacyDatabase = join(source, "memory", "memories.db");
+				if (resolve(sourceLayout.database) !== resolve(legacyDatabase)) return undefined;
 				return {
 					sourceRoot: dirname(sourceLayout.database),
 					sourcePath: sourceLayout.database.split(sep).pop() ?? "memories.db",
-					destinationPath:
-						resolve(sourceLayout.database) === resolve(legacyDatabase)
-							? join("data", "signet.db")
-							: relative(source, sourceLayout.database),
+					destinationPath: join("data", "signet.db"),
 					bytes: statSync(sourceLayout.database).size,
 				};
 			},
@@ -522,7 +643,7 @@ export function createDefaultMigrationEngine(
 				try {
 					db.exec(`VACUUM INTO '${escaped}'`);
 				} finally {
-					db.close();
+					closeDatabase(db);
 				}
 			},
 			verifySnapshot: async (sourceDatabase, destinationDatabase) => {
@@ -533,11 +654,27 @@ export function createDefaultMigrationEngine(
 			? { gitignoreBytes: (existing: string) => new TextEncoder().encode(mergeSignetGitignoreEntries(existing)) }
 			: {}),
 		mapDestinationPath,
+		selectSourceEntries: (root) => selectLegacyMigrationEntries(root, migrationScope),
 		layoutBytes: () => serializeWorkspaceLayout({ version: 2, overrides }),
 		journalStateDir: state,
 		...(hooks ? { hooks } : {}),
 	};
 	return new MigrationEngine(deps);
+}
+
+function sameWindowsDirectory(source: string, destination: string): boolean {
+	try {
+		const sourceStat = statSync(source, { bigint: true });
+		const destinationStat = statSync(destination, { bigint: true });
+		return (
+			sourceStat.isDirectory() &&
+			destinationStat.isDirectory() &&
+			sourceStat.dev === destinationStat.dev &&
+			sourceStat.ino === destinationStat.ino
+		);
+	} catch {
+		return false;
+	}
 }
 
 export function registerMigrationCommands(
@@ -555,20 +692,55 @@ export function registerMigrationCommands(
 			: "Manage the v1 to v2 workspace migration";
 	const migration = program.command(commandName).description(description);
 	const options = (cmd: Command) =>
-		cmd.option("--source <path>", "v1 workspace root").option("--destination <path>", "v2 workspace root");
+		cmd
+			.option("--source <path>", "Workspace root to upgrade in place")
+			.option("--destination <path>", "Deprecated; must match --source because migration is in place");
+	const sourceRoot = (opts: { readonly source?: string }) => resolve(opts.source ?? resolveAgentsDir().path);
+	const requireLegacyWorkspace = (opts: { readonly source?: string }): void => {
+		const root = sourceRoot(opts);
+		if (resolveWorkspaceLayout(root).version !== 1) throw new Error("workspace is not a v1 layout");
+	};
 
 	options(migration.command("preflight").description("Inspect migration without writing")).action(async (opts) => {
+		requireLegacyWorkspace(opts);
 		const plan = await factory(opts).preflight();
 		out.log(JSON.stringify(plan));
 	});
-	for (const name of ["run", "resume"] as const) {
-		options(
-			migration.command(name).description(name === "run" ? "Run the migration" : "Resume an interrupted migration"),
-		).action(async (opts) => {
-			const result = await factory(opts)[name]();
-			out.log(JSON.stringify(result));
+	options(migration.command("run").description("Upgrade this workspace in place"))
+		.option("--dry-run", "Show the upgrade plan without making changes")
+		.option("-y, --yes", "Apply the upgrade without an interactive confirmation")
+		.action(async (opts) => {
+			if (opts.dryRun && opts.yes) throw new Error("--dry-run and --yes cannot be used together");
+			requireLegacyWorkspace(opts);
+			const engine = factory(opts);
+			const plan = await engine.preflight();
+			out.log(formatMigrationPlan(plan));
+			if (opts.dryRun) return;
+			if (!opts.yes) {
+				const ask =
+					deps.confirm ??
+					(async (message: string) => {
+						if (!process.stdin.isTTY || !process.stdout.isTTY)
+							throw new Error("interactive confirmation required; rerun with --yes to apply");
+						return await confirm({ message, default: false });
+					});
+				if (!(await ask("Apply this in-place workspace upgrade?"))) {
+					out.log("Migration cancelled; no changes made.");
+					return;
+				}
+			}
+			out.log(JSON.stringify(await engine.run(plan)));
 		});
-	}
+
+	options(migration.command("resume").description("Resume an interrupted in-place upgrade")).action(async (opts) => {
+		const engine = factory(opts);
+		if (resolveWorkspaceLayout(sourceRoot(opts)).version === 2) {
+			const status = await engine.status();
+			if (status.phase !== "cutover-pending" && status.phase !== "completed")
+				throw new Error("v2 workspace has no resumable migration journal");
+		}
+		out.log(JSON.stringify(await engine.resume()));
+	});
 	options(migration.command("status").description("Show migration progress and blockers")).action(async (opts) => {
 		out.log(JSON.stringify(await factory(opts).status()));
 	});

@@ -170,6 +170,12 @@ describe("buildOrder", () => {
 		const daemon = workspaces.find((workspace) => workspace.name === "@signet/daemon");
 		expect(daemon?.workspaceDependencies).toContain("@signet/native");
 	});
+
+	test("normalizes Windows glob paths before deriving workspace directories", async () => {
+		const workspaces = await readWorkspaces();
+		expect(workspaces.map((workspace) => workspace.dir)).toContain("platform/core");
+		expect(workspaces.map((workspace) => workspace.dir)).toContain("surfaces/cli");
+	});
 });
 
 describe("isBiomeCandidate", () => {

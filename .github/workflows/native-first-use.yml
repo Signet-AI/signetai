@@ -72,3 +72,6 @@ jobs:
           SIGNET_NATIVE_FIRST_USE_SMOKE: "1"
           SIGNET_NATIVE_SMOKE_BINARY: ./dist/native/${{ matrix.asset }}
         run: bun test scripts/native-first-use-smoke.test.ts
+      - name: Test Windows descriptor filesystem
+        if: runner.os == 'Windows'
+        run: bun test platform/core/src/descriptor-fs.test.ts

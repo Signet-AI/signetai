@@ -37,29 +37,31 @@ On historical backfill, completed JSONL turns are the authority for the same ses
 
 ## Migrate v1 to v2
 
-Migration is stopped, drained, copy-and-verify, journaled, and resumable:
+Migration upgrades the existing workspace in place. It is not a workspace relocation command. The journal records component progress, fingerprints, receipts, cutover, rollback eligibility, cleanup acceptance, and redacted errors outside the workspace.
 
 ```bash
-signet workspace layout migrate preflight --source <v1-root> --destination <v2-root>
-signet workspace layout migrate run --source <v1-root> --destination <v2-root>
-signet workspace layout migrate resume --source <v1-root> --destination <v2-root>
-signet workspace layout migrate status --source <v1-root> --destination <v2-root>
-signet workspace layout migrate rollback --source <v1-root> --destination <v2-root>
-signet workspace layout migrate cleanup --accept --source <v1-root> --destination <v2-root>
+signet workspace layout migrate preflight [--source <workspace>]
+signet workspace layout migrate run       [--source <workspace>] [--dry-run] [--yes]
+signet workspace layout migrate resume    [--source <workspace>]
+signet workspace layout migrate status    [--source <workspace>]
+signet workspace layout migrate rollback  [--source <workspace>]
+signet workspace layout migrate cleanup   --accept [--source <workspace>]
 ```
 
-The previous top-level `signet migration` command remains available as a compatibility alias.
+The workspace path does not change. `--source` selects a workspace only when upgrading a non-default location; there is no destination path. The previous top-level `signet migration` command remains available as a compatibility alias.
 
-- `preflight` makes no changes. It resolves custom paths, inventories ownership and Git state, checks the configured source database read-only, reports required space, and returns a redacted plan. Writer draining occurs during `run`, not preflight.
-- `run` acquires an exclusive lease, drains supported writers, copies and verifies state, snapshots SQLite, and publishes the v2 resolver cutover.
+On Windows, migration checks native file identities and refuses reparse-point traversal. New entries inherit the workspace's Windows ACLs; POSIX mode bits are not reproduced, though read-only file state is preserved. Copying symbolic links requires Windows permission to create them, such as Developer Mode or the symbolic-link privilege.
+
+- `preflight` is read-only. It resolves overrides, inspects only registered Signet-managed entries and their Git state, checks the configured source database read-only, reports required space, and produces a redacted plan. Unregistered entries and the rebuildable v1 cache are reported as untouched; their contents are not traversed or fingerprinted. Writer draining occurs during `run`.
+- `run` displays the in-place plan and asks for confirmation before writing; the prompt defaults to no. `--dry-run` prints the plan without prompting or writing, and `--yes` skips the prompt for automation. After confirmation, run acquires the migration lease, drains supported writers, copies and verifies only registered entries, snapshots SQLite, and publishes the v2 resolver cutover without changing the workspace path.
 - `resume` continues from the durable journal without duplicate evidence, Sources, or Dreaming consumption.
-- `status` shows phase, copied count, blockers, destination writes, and rollback eligibility.
-- `rollback` is available only before destination durable writes. After that, reconcile forward; the old directory is not a safe rollback target.
+- `status` reports phase, copied count, blockers, workspace-write state, and whether rollback remains eligible.
+- `rollback` is safe only before cutover begins. If the journal records an unreceipted in-place write, rollback fails closed and requires `resume` to reconcile it. After cutover, resume or reconcile forward; the workspace is not a rollback target.
 - `cleanup` requires explicit acceptance after destination startup and verification. It removes the migration journal, not necessarily legacy Markdown/manifests; retain or quarantine them while consumers exist.
 
-Before cutover, copied files are hash-checked and the SQLite snapshot is compared table by table against the stopped v1 database, including row counts and typed row values. This checks stored Source identities/scopes, transcript fields, and Dreaming/evidence links where those records exist. v1 harness transcript files and top-level transcript/manifest/summary/compaction artifacts move to `transcripts/` for the existing readers. Historical `memory/` artifact references in database rows and manifest frontmatter resolve to their migrated v2 files without duplicating them; reindex reconciles stored row paths. Unknown v1 `memory/` payloads are preserved under `data/legacy-memory/`; they are not silently imported or made searchable by the v2 daemon.
+Before cutover, copied files are hash-checked and the SQLite snapshot is compared table by table against the source database, including row counts and typed row values. Registered v1 transcript and artifact files are copied into `transcripts/`; their legacy source files remain unchanged, and migration does not rewrite database artifact references. Unknown workspace data, including unregistered `memory/` entries, remains at its original path and is not traversed, hashed, copied, or made searchable by migration.
 
-Migration refuses ambiguous ownership, insufficient space, inconsistent snapshots, unsafe symlinks or special files, filesystems that do not preserve requested permissions, active writers that cannot drain, and unsupported custom layouts. Before requesting a daemon drain, migration checks that the daemon serves the source workspace and that its PID matches the source's managed PID; unrelated daemons are not drained or stopped. It preserves Source IDs and generations rather than disconnecting and reconnecting Sources.
+Migration refuses ambiguous ownership, insufficient space, inconsistent snapshots, unsafe symlinks or special files, unsupported filesystems or custom layouts, and active writers that cannot drain. Before requesting a daemon drain, migration checks that the daemon serves the source workspace and that its PID matches the source's managed PID; unrelated daemons are not drained or stopped. It preserves Source IDs and generations rather than disconnecting and reconnecting Sources.
 
 The daemon exposes `GET /api/workspace/migration-control` for the current
 writer-drain generation, state, and blockers. The migration CLI invokes
