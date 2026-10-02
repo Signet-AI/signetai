@@ -154,6 +154,16 @@ export interface ConfigFile {
 	size: number;
 }
 
+export interface AssistantModelSelection {
+	readonly targetRef: string;
+	readonly model: string;
+}
+export interface AssistantModelOption extends AssistantModelSelection {
+	readonly name: string;
+	readonly provider: string;
+	readonly account: string;
+}
+
 export interface CatalogModel {
 	id: string;
 	name: string;
@@ -1286,6 +1296,8 @@ export const api = {
 		if (!ok) return { success: false, error: data?.error ?? "Failed to import from 1Password" };
 		return { ...data, success: true };
 	},
+	getAssistantModels: (signal?: AbortSignal) =>
+		getJSONResult<{ models: readonly AssistantModelOption[] }>("/api/assistant/models", { signal }),
 	getInferenceCatalog: async (): Promise<InferenceCatalog | null> => {
 		const c = await getJSON<Partial<InferenceCatalog>>("/api/inference/catalog");
 		if (!c) return null;
@@ -1454,3 +1466,68 @@ if (import.meta.env.VITE_DEMO === "1") {
 	installDemoApi(api);
 }
 if (onboardingPreview) installOnboardingPreview(api);
+
+export async function streamAssistantChat(
+	messages: readonly import("@signet/core").AssistantChatMessage[],
+	onEvent: (event: import("@signet/core").AssistantChatEvent) => void,
+	signal: AbortSignal,
+	conversationId: string,
+	selectedEntityId?: string,
+	modelSelection?: AssistantModelSelection,
+): Promise<void> {
+	const { parseAssistantChatEvent } = await import("@signet/core/assistant-chat");
+	const response = await dashboardFetch("/api/assistant/chat", {
+		method: "POST",
+		signal,
+		headers: { "Content-Type": "application/json", Accept: "text/event-stream", ...authHeaders() },
+		body: JSON.stringify({
+			requestId: crypto.randomUUID(),
+			conversationId,
+			messages,
+			selectedEntityId,
+			modelSelection: modelSelection ? { targetRef: modelSelection.targetRef, model: modelSelection.model } : undefined,
+		}),
+	});
+	if (!response.ok) {
+		const body: unknown = await response.json().catch(() => null);
+		throw new Error(
+			typeof body === "object" && body !== null && "error" in body && typeof body.error === "string"
+				? body.error
+				: `Assistant unavailable (${response.status})`,
+		);
+	}
+	if (!response.body) throw new Error("Assistant stream unavailable");
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let finished = false;
+	try {
+		while (true) {
+			const { value, done } = await reader.read();
+			buffer += decoder.decode(value, { stream: !done });
+			if (buffer.length > 1024 * 1024) throw new Error("Assistant event limit exceeded");
+			let boundary = buffer.indexOf("\n\n");
+			while (boundary >= 0) {
+				const frame = buffer.slice(0, boundary);
+				buffer = buffer.slice(boundary + 2);
+				const data = frame
+					.split("\n")
+					.filter((line) => line.startsWith("data: "))
+					.map((line) => line.slice(6))
+					.join("\n");
+				if (data) {
+					const event = parseAssistantChatEvent(JSON.parse(data));
+					onEvent(event);
+					if (event.type === "error") throw new Error(event.message);
+					if (event.type === "done") finished = true;
+				}
+				boundary = buffer.indexOf("\n\n");
+			}
+			if (done) break;
+		}
+		if (!finished) throw new Error("Assistant stream ended before completion");
+	} finally {
+		await reader.cancel().catch(() => {});
+		reader.releaseLock();
+	}
+}

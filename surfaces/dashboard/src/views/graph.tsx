@@ -1,21 +1,23 @@
+import { MemoryChat } from "@/components/memory-chat";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Network } from "@/components/mingcute-icons";
+import { PanelRightOpenIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "@/lib/api";
 import { useAsync } from "@/lib/use-async";
 import { cn } from "@/lib/utils";
 import type { GraphSceneData, GraphSceneHandle, SceneEdge, SceneEdgeKind, SceneNode } from "@/lib/graph-scene";
-import {
-	capGraphSceneData,
-	MAX_CONSTELLATION_ENTITY_LIMIT,
-	MAX_VISIBLE_CONSTELLATION_NODES,
-} from "@/lib/constellation-display";
+import { capGraphSceneData, graphEvidenceRefs, MAX_VISIBLE_CONSTELLATION_NODES } from "@/lib/constellation-display";
+
+const ENTITY_LIMIT = 150;
 
 const LEGEND = [
-	{ color: "#ffffff", label: "subject" },
+	{ color: "#a1a1aa", label: "entity" },
 	{ color: "#34d399", label: "aspect" },
 	{ color: "#60a5fa", label: "group" },
 	{ color: "#f59e0b", label: "claim slot" },
+	{ color: "#a78bfa", label: "attribute" },
 	{ color: "#fbbf24", label: "claim" },
 	{ color: "#fb7185", label: "constraint" },
 	{ color: "#f472b6", label: "assertion" },
@@ -31,7 +33,7 @@ interface EntityDetail {
 	attributeCount: number;
 	edgeCount: number;
 	topAspects: { name: string; weight: number }[];
-	citations: { text: string; meta: string }[];
+	citations: { id: string; text: string; meta: string }[];
 }
 
 function shorten(value: string, maxLength: number): string {
@@ -66,26 +68,23 @@ function provenanceLabel(
 	return null;
 }
 export function GraphView() {
-	const [entityLimit, setEntityLimit] = useState(48);
+	const entityLimit = ENTITY_LIMIT;
 	const graphQuery = useAsync(() => api.getKnowledgeConstellation(entityLimit, Math.min(2000, entityLimit * 4)), {
 		key: `constellation:${entityLimit}:${Math.min(2000, entityLimit * 4)}`,
 		intervalMs: 30_000,
 		deps: [entityLimit],
 	});
-	const stats = useAsync(() => api.getKnowledgeStats(), { key: "knowledge-stats", intervalMs: 30_000 }).data;
 	const sources = useAsync(() => api.getSources(), { key: "sources", intervalMs: 30_000 }).data?.sources;
+	const [inspected, setInspected] = useState<SceneNode | null>(null);
+	const selectionRef = useRef<(node: SceneNode) => void>(() => {});
 	const [legendOpen, setLegendOpen] = useState(false);
 	const [detail, setDetail] = useState<EntityDetail | null>(null);
 	const [responded, setResponded] = useState(false);
-	const [query, setQuery] = useState("");
-	const [followup, setFollowup] = useState("");
-	const [logOpen, setLogOpen] = useState(false);
+	const [chatOpen, setChatOpen] = useState(false);
 	const [sceneFailed, setSceneFailed] = useState(false);
-	const [sliderPct, setSliderPct] = useState<number | null>(null);
 	const stageRef = useRef<HTMLDivElement>(null);
 	const sceneRef = useRef<GraphSceneHandle | null>(null);
 	const builtSigRef = useRef<number | null>(null);
-	const densityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const sceneData = useMemo<GraphSceneData>(() => {
 		const nodes: SceneNode[] = [];
@@ -134,6 +133,7 @@ export function GraphView() {
 				kind: "origin",
 				cluster: params.cluster,
 				weight: 1,
+				evidenceRefs: graphEvidenceRefs(params),
 				metric: `${humanize(params.sourceKind ?? "source")} · evidence origin`,
 			});
 			return id;
@@ -147,6 +147,10 @@ export function GraphView() {
 				id: entity.id,
 				label: entity.name,
 				kind: entityKind,
+				evidenceRefs:
+					entityKind === "source"
+						? [...new Set(entity.aspects.flatMap((aspect) => aspect.attributes.flatMap(graphEvidenceRefs)))]
+						: [],
 				cluster: entity.id,
 				weight: Math.sqrt(entity.mentions / maxMentions),
 				metric: `${entityKind} · ${entity.entityType} · ${entity.mentions.toLocaleString()} mentions`,
@@ -185,6 +189,7 @@ export function GraphView() {
 						cluster: entity.id,
 						weight: attr.importance,
 						confidence: attr.confidence,
+						evidenceRefs: graphEvidenceRefs(attr),
 						detail: attr.content,
 						metric: `${attr.kind} · ${percent(attr.confidence)} confidence · ${source ?? "unattributed"}`,
 					};
@@ -210,10 +215,22 @@ export function GraphView() {
 						sourceId: attr.sourceId,
 						sourcePath: attr.sourcePath,
 						sourceRoot: attr.sourceRoot,
-						memoryId: attr.memoryId,
+						memoryId: null,
 						cluster: entity.id,
 					});
-					if (originId) addEdge(attr.id, originId, "evidenced_by");
+					if (attr.memoryId) {
+						const memoryId = `memory:${attr.memoryId}`;
+						addNode({
+							id: memoryId,
+							label: `Memory · ${shorten(attr.memoryId, 20)}`,
+							kind: "memory",
+							cluster: entity.id,
+							weight: 1,
+							metric: `Evidence reference · ${attr.memoryId}`,
+						});
+						addEdge(attr.id, memoryId, "evidenced_by");
+						if (originId && (attr.sourceId || attr.sourcePath)) addEdge(memoryId, originId, "evidenced_by");
+					} else if (originId) addEdge(attr.id, originId, "evidenced_by");
 				}
 				for (const [groupKey, group] of groups) {
 					addNode({
@@ -249,6 +266,7 @@ export function GraphView() {
 				cluster: assertion.subjectEntityId,
 				weight: assertion.confidence,
 				confidence: assertion.confidence,
+				evidenceRefs: graphEvidenceRefs(assertion),
 				detail: assertion.content,
 				metric: `${assertion.predicate} · ${percent(assertion.confidence)} confidence${
 					assertion.speaker ? ` · ${assertion.speaker}` : ""
@@ -346,10 +364,16 @@ export function GraphView() {
 			mix(String(source.stats?.indexed ?? 0));
 		}
 		return h;
-	}, [graphQuery.data, sources, entityLimit]);
+	}, [graphQuery.data, sources]);
 	useEffect(() => {
 		const stage = stageRef.current;
-		if (!stage || limitedScene.data.nodes.length === 0) return;
+		if (!stage) return;
+		if (limitedScene.data.nodes.length === 0) {
+			sceneRef.current?.dispose();
+			sceneRef.current = null;
+			builtSigRef.current = null;
+			return;
+		}
 		if (sceneRef.current) {
 			if (builtSigRef.current === dataSig) return;
 			sceneRef.current.dispose();
@@ -360,9 +384,14 @@ export function GraphView() {
 		void import("@/lib/graph-scene")
 			.then(({ createGraphScene }) => {
 				if (cancelled || sceneRef.current || !stageRef.current) return;
-				sceneRef.current = createGraphScene(stageRef.current, limitedScene.data);
+				setSceneFailed(false);
+				sceneRef.current = createGraphScene(
+					stageRef.current,
+					limitedScene.data,
+					(node) => selectionRef.current(node),
+					() => setSceneFailed(true),
+				);
 				builtSigRef.current = dataSig;
-				setSliderPct(null);
 			})
 			.catch((err: unknown) => {
 				console.error("[graph] scene init failed", err);
@@ -374,56 +403,23 @@ export function GraphView() {
 	}, [limitedScene, dataSig]);
 	useEffect(
 		() => () => {
-			if (densityTimerRef.current) clearTimeout(densityTimerRef.current);
 			sceneRef.current?.dispose();
 			sceneRef.current = null;
 		},
 		[],
 	);
-	const totalNodes = stats
-		? stats.entityCount +
-			stats.aspectCount +
-			stats.attributeCount +
-			(stats.claimCount ?? 0) +
-			(stats.constraintCount ?? 0)
-		: 0;
-	const shownEntities = Math.max(1, graphQuery.data?.entities.length ?? 48);
-	const nodesPerEntity = Math.max(1, sceneData.nodes.length / shownEntities);
-	const maxPct =
-		totalNodes > 0
-			? Math.max(2, Math.min(20, ((MAX_CONSTELLATION_ENTITY_LIMIT * nodesPerEntity) / totalNodes) * 100))
-			: 5;
-	const shownPct = totalNodes > 0 ? (limitedScene.data.nodes.length / totalNodes) * 100 : 0;
-	const displayPct = sliderPct ?? shownPct;
-	const backlogProbe = graphQuery.data?.metadata.dreaming?.episodicBacklogProbe;
-	const onDensityChange = (pct: number) => {
-		setSliderPct(pct);
-		if (densityTimerRef.current) clearTimeout(densityTimerRef.current);
-		densityTimerRef.current = setTimeout(() => {
-			const targetNodes = (pct / 100) * totalNodes;
-			const limit = Math.max(8, Math.min(MAX_CONSTELLATION_ENTITY_LIMIT, Math.round(targetNodes / nodesPerEntity)));
-			setEntityLimit(limit);
-		}, 350);
+	const pauseAgent = () => {
+		sceneRef.current?.setFollowAgent(false);
 	};
-
-	const runQuery = (raw: string) => {
-		const q = raw.trim().toLocaleLowerCase();
-		if (!q) return;
-		const entities = graphQuery.data?.entities ?? [];
-		const match =
-			entities.find((e) => e.name.toLocaleLowerCase() === q) ??
-			entities.find((e) => e.name.toLocaleLowerCase().includes(q)) ??
-			entities.find((e) => q.includes(e.name.toLocaleLowerCase()));
-		if (!match) {
-			setDetail(null);
-			setResponded(true);
-			sceneRef.current?.resetView();
-			return;
-		}
+	const inspectEntity = (entityId: string) => {
+		setInspected(null);
+		const match = graphQuery.data?.entities.find((entity) => entity.id === entityId);
+		if (!match) return;
 		const aspects = [...match.aspects].sort((a, b) => b.weight - a.weight);
 		const citations = aspects
 			.flatMap((aspect) =>
 				aspect.attributes.map((attr) => ({
+					id: attr.id,
 					text: attr.content,
 					meta: `${aspect.name} · ${attr.kind} · v${attr.version}`,
 				})),
@@ -443,156 +439,57 @@ export function GraphView() {
 			citations,
 		});
 		setResponded(true);
-		sceneRef.current?.focusNode(match.id, true);
+	};
+
+	selectionRef.current = (node) => {
+		const entity = graphQuery.data?.entities.find((entity) => entity.id === node.cluster);
+		if (entity) inspectEntity(entity.id);
+		else {
+			setDetail(null);
+			setResponded(true);
+		}
+		setInspected(node);
 	};
 
 	const closeResponse = () => {
+		setInspected(null);
 		setResponded(false);
 		setDetail(null);
-		setLogOpen(false);
 		sceneRef.current?.resetView();
 	};
 
-	return (
-		<div className="graph-view-root">
-			{}
-			<div className="graph-hud">
-				<span>
-					<b>{limitedScene.data.nodes.length.toLocaleString()}</b> nodes
-				</span>
-				{limitedScene.capped && (
-					<>
-						<span className="graph-hud__sep">/</span>
-						<span className="graph-hud__cap" role="status">
-							node display capped at {MAX_VISIBLE_CONSTELLATION_NODES.toLocaleString()}
-						</span>
-					</>
-				)}
-				{backlogProbe && backlogProbe.kind !== "exact" && (
-					<>
-						<span className="graph-hud__sep">/</span>
-						<span className="graph-hud__cap" role="status">
-							backlog count incomplete
-						</span>
-					</>
-				)}
-				<span className="graph-hud__sep">/</span>
-				<span>
-					<b>{limitedScene.data.edges.length.toLocaleString()}</b> edges
-				</span>
-				<span className="graph-hud__sep">/</span>
-				<span>
-					<b>{graphQuery.data?.entities.length ?? 0}</b> clusters
-				</span>
-				<span className="graph-hud__sep">/</span>
-				<label className="graph-hud-density">
-					density
-					<input
-						type="range"
-						min={Math.min(1, maxPct)}
-						max={maxPct}
-						step={Math.max(0.1, maxPct / 50)}
-						value={Math.max(Math.min(1, maxPct), Math.min(maxPct, displayPct))}
-						disabled={totalNodes === 0}
-						onChange={(event) => onDensityChange(Number(event.target.value))}
-						aria-label="Graph density (percent of nodes shown)"
-					/>
-					<b>{displayPct.toFixed(1)}%</b>
-				</label>
-			</div>
-
-			{}
-			<button
-				type="button"
-				className="graph-legend-btn"
-				title="Node categories"
-				aria-expanded={legendOpen}
-				onClick={() => setLegendOpen((open) => !open)}
-			>
-				<svg
-					viewBox="0 0 24 24"
-					width="15"
-					height="15"
-					fill="none"
-					stroke="currentColor"
-					strokeWidth={1.75}
-					strokeLinecap="round"
-					strokeLinejoin="round"
-				>
-					<circle cx="12" cy="12" r="3" />
-					<path d="M12 1v3M12 20v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1 12h3M20 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" />
-				</svg>
-			</button>
-			<div className={cn("graph-legend-pop", legendOpen && "show")}>
-				{LEGEND.map((item) => (
-					<span key={item.label} className="lg-item" style={{ color: item.color }}>
-						<span className="lg-dot" style={{ background: item.color }} />
-						<b>{item.label}</b>
-					</span>
-				))}
-			</div>
-
-			{}
-			<div ref={stageRef} className="graph-stage" />
-			{graphQuery.loading && !graphQuery.data && (
-				<div
-					role="status"
-					aria-label="Loading constellation…"
-					className="pointer-events-none absolute inset-0 z-[2] flex flex-col items-center justify-center gap-5"
-				>
-					<Skeleton className="size-32 rounded-full opacity-40" />
-					<Skeleton className="h-2 w-36" />
-					<span className="font-mono text-[10.5px] text-muted-foreground">Loading constellation…</span>
-				</div>
-			)}
-			{graphQuery.error && (
-				<span role="status" className="absolute left-4 top-14 z-[3] text-xs text-muted-foreground">
-					{graphQuery.data
-						? "Showing cached constellation. Updates are unavailable."
-						: "Constellation unavailable. Retrying in the background."}
-				</span>
-			)}
-			{!graphQuery.loading && !graphQuery.error && limitedScene.data.nodes.length === 0 && (
-				<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
-					No graph nodes are available yet.
-				</span>
-			)}
-			{sceneFailed && (
-				<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
-					WebGL is unavailable — the 3D constellation cannot render in this runtime.
-				</span>
-			)}
-
-			{}
-			<div className={cn("graph-response", responded && "show")}>
-				<div className="gr-head">
-					<span className="gr-avatar">
-						<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth={1.6}>
-							<circle cx="6" cy="8" r="2" />
-							<circle cx="18" cy="8" r="2" />
-							<circle cx="12" cy="16" r="2.5" />
-							<path d="M7.5 9.5 10.5 14M16.5 9.5 13.5 14" />
-						</svg>
-					</span>
-					<div className="gr-head-txt">
-						<span className="gr-label">Signet</span>
-						<div className="gr-title">{detail ? detail.name : "No match"}</div>
-					</div>
-					<button type="button" className="gr-close" aria-label="Close" onClick={closeResponse}>
-						<svg
-							viewBox="0 0 24 24"
-							width="15"
-							height="15"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth={2}
-							strokeLinecap="round"
-						>
-							<path d="M18 6 6 18M6 6l12 12" />
-						</svg>
-					</button>
-				</div>
+	const sidebarOpen = chatOpen;
+	const [sidebarMounted, setSidebarMounted] = useState(false);
+	useEffect(() => {
+		if (sidebarOpen) {
+			setSidebarMounted(true);
+			return;
+		}
+		const delay = window.matchMedia("(prefers-reduced-motion: reduce)").matches ? 0 : 420;
+		const timer = setTimeout(() => setSidebarMounted(false), delay);
+		return () => clearTimeout(timer);
+	}, [sidebarOpen]);
+	const sidebarPresented = sidebarOpen || sidebarMounted;
+	const selection = (
+		<Dialog
+			open={responded}
+			onOpenChange={(open) => {
+				if (!open) closeResponse();
+			}}
+		>
+			<DialogContent className="home-memory-reader">
+				<DialogTitle>{inspected?.label ?? detail?.name ?? "Selection"}</DialogTitle>
+				<DialogDescription>{inspected ? humanize(inspected.kind) : "Entity"} · Memory graph</DialogDescription>
 				<div className="gr-body">
+					{inspected && (
+						<div className="gr-answer">
+							<div className="gr-section-label">
+								{inspected.kind === "memory" || inspected.kind === "origin" ? "Evidence" : humanize(inspected.kind)}
+							</div>
+							<p>{inspected.detail ?? inspected.label}</p>
+							<div className="gr-cite__meta">{inspected.metric}</div>
+						</div>
+					)}
 					{detail ? (
 						<>
 							<div>
@@ -614,11 +511,11 @@ export function GraphView() {
 							{detail.citations.length > 0 && (
 								<div>
 									<div className="gr-section-label" style={{ marginBottom: 8 }}>
-										Citations
+										Stored values
 									</div>
 									<div className="flex flex-col gap-2">
-										{detail.citations.map((cite, i) => (
-											<div key={i} className="gr-cite">
+										{detail.citations.map((cite) => (
+											<div key={cite.id} className="gr-cite">
 												<span className="gr-cite__dot" style={{ background: "#22d3ee" }} />
 												<div>
 													<div className="gr-cite__txt">{cite.text}</div>
@@ -629,111 +526,169 @@ export function GraphView() {
 									</div>
 								</div>
 							)}
-							<div className={cn("gr-acc", logOpen && "open")}>
-								<button type="button" className="gr-acc-trigger" onClick={() => setLogOpen((open) => !open)}>
-									<svg
-										viewBox="0 0 24 24"
-										width="10"
-										height="10"
-										fill="none"
-										stroke="currentColor"
-										strokeWidth={2.5}
-										strokeLinecap="round"
-										strokeLinejoin="round"
-									>
-										<path d="m9 18 6-6-6-6" />
-									</svg>
-									Execution log
-								</button>
-								<div className="gr-acc-body">
-									<div>constellation(local, top=48) → {graphQuery.data?.entities.length ?? 0} entities</div>
-									<div>cluster resolved ({detail.aspectCount + detail.attributeCount + 1} nodes)</div>
-								</div>
-							</div>
 						</>
 					) : (
-						<div className="gr-answer">No cluster matched.</div>
+						<div className="gr-answer">{inspected ? "" : "Select an entity to inspect its stored values."}</div>
 					)}
 				</div>
-				<div className="gr-dock">
-					<div className="gr-dock-input">
-						<input
-							aria-label="Ask a follow-up"
-							placeholder="Ask a follow-up…"
-							value={followup}
-							onChange={(event) => setFollowup(event.target.value)}
-							onKeyDown={(event) => {
-								if (event.key === "Enter" && followup.trim()) {
-									runQuery(followup);
-									setFollowup("");
-								}
-							}}
-						/>
+			</DialogContent>
+		</Dialog>
+	);
+
+	return (
+		<div className={cn("graph-view-root", sidebarOpen && "has-sidebar")}>
+			<div className="graph-viewport">
+				{!sidebarOpen && (
+					<Button
+						type="button"
+						variant="ghost"
+						size="icon-sm"
+						className="graph-chat-open"
+						aria-label="Open chat"
+						title="Open chat"
+						onClick={() => setChatOpen(true)}
+					>
+						<PanelRightOpenIcon className="size-4" />
+					</Button>
+				)}
+				{limitedScene.capped && (
+					<span className="graph-limit" role="status">
+						Limited view
+					</span>
+				)}
+
+				<button
+					type="button"
+					className="graph-legend-btn"
+					title="Graph key and controls"
+					aria-label="Graph key and controls"
+					aria-expanded={legendOpen}
+					onClick={() => setLegendOpen((open) => !open)}
+				>
+					<svg
+						aria-hidden="true"
+						viewBox="0 0 24 24"
+						width="15"
+						height="15"
+						fill="none"
+						stroke="currentColor"
+						strokeWidth={1.75}
+						strokeLinecap="round"
+						strokeLinejoin="round"
+					>
+						<circle cx="12" cy="12" r="3" />
+						<path d="M12 1v3M12 20v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M1 12h3M20 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1" />
+					</svg>
+				</button>
+				<div className={cn("graph-legend-pop", legendOpen && "show")}>
+					<span className="graph-key-summary">
+						{graphQuery.data?.entities.length ?? 0} entities · {limitedScene.data.nodes.length.toLocaleString()} nodes ·{" "}
+						{limitedScene.data.edges.length.toLocaleString()} links
+					</span>
+					{limitedScene.capped && (
+						<span className="graph-key-limit" role="status">
+							Showing up to {MAX_VISIBLE_CONSTELLATION_NODES.toLocaleString()} nodes
+						</span>
+					)}
+					{LEGEND.map((item) => (
+						<span key={item.label} className="lg-item" style={{ color: item.color }}>
+							<span className="lg-dot" style={{ background: item.color }} />
+							<b>{item.label}</b>
+						</span>
+					))}
+					<div className="graph-key-help">
+						<span>Drag to pan</span>
+						<span>Scroll to zoom</span>
+						<span>Select to inspect</span>
 					</div>
+				</div>
+
+				<div ref={stageRef} className="graph-stage" />
+				<fieldset className="graph-navigation" aria-label="Graph navigation">
 					<button
 						type="button"
-						className="gr-send-pill"
-						aria-label="Send follow-up"
-						disabled={!followup.trim()}
+						aria-label="Zoom in"
 						onClick={() => {
-							runQuery(followup);
-							setFollowup("");
+							pauseAgent();
+							sceneRef.current?.zoom(1.3);
 						}}
 					>
-						<svg
-							viewBox="0 0 24 24"
-							width="15"
-							height="15"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth={2}
-							strokeLinecap="round"
-							strokeLinejoin="round"
-						>
-							<path d="M5 12h14M13 6l6 6-6 6" />
-						</svg>
+						+
 					</button>
-				</div>
-			</div>
-
-			{}
-			<form
-				className={cn("graph-dock", responded && "responded")}
-				onSubmit={(event) => {
-					event.preventDefault();
-					if (!query.trim()) return;
-					runQuery(query);
-					setQuery("");
-				}}
-			>
-				<div className="dock-row">
-					<span className="gd-icon">
-						<Network className="size-[18px]" />
+					<button
+						type="button"
+						aria-label="Zoom out"
+						onClick={() => {
+							pauseAgent();
+							sceneRef.current?.zoom(1 / 1.3);
+						}}
+					>
+						−
+					</button>
+					<button
+						type="button"
+						aria-label="Fit graph"
+						title="Fit graph"
+						onClick={() => {
+							pauseAgent();
+							sceneRef.current?.resetView();
+						}}
+					>
+						Fit
+					</button>
+				</fieldset>
+				{graphQuery.loading && !graphQuery.data && (
+					<div
+						role="status"
+						aria-label="Loading constellation…"
+						className="pointer-events-none absolute inset-0 z-[2] flex flex-col items-center justify-center gap-5"
+					>
+						<Skeleton className="size-32 rounded-full opacity-40" />
+						<Skeleton className="h-2 w-36" />
+						<span className="font-mono text-[10.5px] text-muted-foreground">Loading constellation…</span>
+					</div>
+				)}
+				{graphQuery.error && (
+					<span role="status" className="absolute left-4 top-14 z-[3] text-xs text-muted-foreground">
+						{graphQuery.data
+							? "Showing cached constellation. Updates are unavailable."
+							: "Constellation unavailable. Retrying in the background."}
 					</span>
-					<input
-						className="gd-input"
-						aria-label="Ask Signet about your memories"
-						placeholder="Ask Signet about your memories…"
-						value={query}
-						onChange={(event) => setQuery(event.target.value)}
-					/>
-					<kbd className="gd-kbd">⏎</kbd>
-					<button type="submit" className="gd-send" aria-label="Send" disabled={!query.trim()}>
-						<svg
-							viewBox="0 0 24 24"
-							width="17"
-							height="17"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth={2}
-							strokeLinecap="round"
-							strokeLinejoin="round"
-						>
-							<path d="M5 12h14M13 6l6 6-6 6" />
-						</svg>
-					</button>
-				</div>
-			</form>
+				)}
+				{!graphQuery.loading && !graphQuery.error && limitedScene.data.nodes.length === 0 && (
+					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
+						No graph nodes are available yet.
+					</span>
+				)}
+				{sceneFailed && (
+					<span className="pointer-events-none absolute inset-0 z-[2] grid place-items-center font-mono text-[10.5px] text-muted-foreground">
+						The memory graph could not render in this runtime.
+					</span>
+				)}
+			</div>
+			{selection}
+			<MemoryChat
+				className={sidebarPresented ? cn("graph-chat-sidebar", !sidebarOpen && "is-closing") : "graph-dock"}
+				inactive={sidebarPresented && !sidebarOpen}
+				presentation={sidebarPresented ? "sidebar" : "compact"}
+				onClose={() => {
+					setChatOpen(false);
+					closeResponse();
+				}}
+				onNewChat={() => {
+					setChatOpen(false);
+					closeResponse();
+				}}
+				selectedEntityId={detail?.id}
+				onFocusEntity={(id) => sceneRef.current?.setRetrieval([id], [])}
+				onRetrieval={(ids, refs) => sceneRef.current?.setRetrieval(ids, refs)}
+				onRetrievalClear={() => sceneRef.current?.clearRetrieval()}
+				onTurnStart={() => {
+					setChatOpen(true);
+					sceneRef.current?.setFollowAgent(true);
+				}}
+				onMemoryChanged={() => graphQuery.refresh()}
+			/>
 		</div>
 	);
 }

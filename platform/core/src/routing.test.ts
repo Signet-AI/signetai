@@ -1119,3 +1119,23 @@ describe("routing reference validation (#1005)", () => {
 		expect(explicit.value.targetRef).toBe(aggregationRef);
 	});
 });
+
+it("interactive chat inherits backend inference while preserving explicit overrides", () => {
+	const parsed = parseRestrictedCompatibleRouting("http://127.0.0.1:1234/v1");
+	expect(parsed.ok).toBe(true);
+	if (!parsed.ok) return;
+	const config = { ...parsed.value, workloads: { memoryExtraction: { target: compatibleTargetRef } } };
+	const inherited = resolveRoutingDecision(
+		config,
+		{ operation: "interactive" },
+		{ targets: { [compatibleTargetRef]: ready } },
+	);
+	expect(inherited.ok).toBe(true);
+	if (inherited.ok) expect(inherited.value.targetRef).toBe(compatibleTargetRef);
+	const overridden = resolveRoutingDecision(
+		{ ...config, workloads: { ...config.workloads, interactive: { target: "missing/default" } } },
+		{ operation: "interactive" },
+		{ targets: { [compatibleTargetRef]: ready } },
+	);
+	expect(overridden.ok).toBe(false);
+});

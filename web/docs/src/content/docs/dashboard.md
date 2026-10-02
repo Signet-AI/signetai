@@ -32,7 +32,7 @@ The cache retains at most 48 results and 12 MiB of serialized payloads, with a
 4 MiB per-result limit. Least recently used results are evicted first, and
 inactive results expire after five minutes. These are payload bounds, not a
 measurement of JavaScript heap usage. Parameterized reads, including constellation
-density, memory searches, and individual Dreaming passes, have separate keys.
+snapshots, memory searches, and individual Dreaming passes, have separate keys.
 The cache is scoped to the daemon origin and authentication token, is cleared
 on authorization failures. Successful dashboard mutations invalidate the affected
 queries for background refresh. The cache is never
@@ -47,6 +47,67 @@ desktop application.
 The constellation currently refreshes a bounded snapshot. This cache does not
 introduce graph streaming or a change-feed protocol; external changes are picked
 up on the next visible-page refresh.
+
+## Memory graph
+
+The Memory view uses a 2D force graph. Entity clusters follow the ontology's
+entity → aspect → group key → claim key → stored value hierarchy. Evidence
+references and sources remain distinct from stored values; dashed links show
+attribution, and arrows show directed cross-entity dependencies.
+
+Drag the background to pan with momentum, drag a node to reposition it, and scroll to zoom. Linked nodes respond to dragging and settle after release. Focus and navigation buttons animate pan and zoom. Connection highlighting waits briefly for the pointer to settle on a node, then fades between highlights.
+The zoom buttons and **Fit graph** offer the same navigation without scrolling.
+Select a node to inspect its content and provenance. With the graph focused,
+arrow keys browse nodes, Enter selects, and Escape resets the view.
+
+**Ask Signet about your memories** starts from a compact input at the bottom of
+the graph. Sending a message opens chat in a right sidebar and moves the input
+there; the canvas resizes beside it. Closing chat returns the input to the graph
+and keeps the conversation available for the next message. Selected-node details
+open in the dashboard's standard detail dialog, independently of chat. On narrow screens, chat sits below the canvas.
+
+The chat opens a streamed conversation with the daemon's
+Pi agent. It uses existing scoped memory and ontology retrieval tools and can
+highlight retrieved entities and evidence in the graph. Retrieval highlights fade
+between batches and stay visible until the next question or **New chat**.
+The camera automatically follows retrieved nodes on every message. Dragging,
+scrolling, keyboard navigation, or the navigation buttons pause following for
+the current response; the next message resumes it.
+Hover and inspection remain independent. Evidence outside the bounded graph
+snapshot remains available in the chat sources. The model inherits the backend inference
+assignment unless an explicit `interactive` workload overrides it; the selected
+model must support tools. The composer model picker searches the Pi AI registry for
+models available through connected Signet accounts. **Signet default** keeps the
+backend assignment; choosing a model applies it to subsequent messages in this
+chat without changing your inference settings. The daemon rechecks credentials
+on every selected-model request.
+
+You can explicitly ask Signet to remember new context or ask Dreaming to review
+it. Saving records your exact message as evidence through the normal memory
+write path. Directed Dreaming records the instruction first and requests an
+existing scoped Dreaming pass. A requested pass is distinct from a completed
+pass; Dreaming remains the semantic writer. These actions retain the daemon's
+normal write and administration permissions.
+
+The agent cites evidence with Obsidian-style wikilinks such as `[[memory:exact-id]]` or
+`[[artifact:exact-source-path]]`. References must match evidence retrieved in the
+conversation; unverified references remain text. Verified inline source references
+appear as compact pills; select one to inspect its retrieved excerpt and full reference. Responses render streaming Markdown, with copy actions and expandable evidence attached to each answer. The conversation follows new responses until you scroll up; use the down arrow to return to the latest message. Enter sends a message, and Shift+Enter adds a new line.
+
+Conversation history stays in browser memory until **New chat**, leaving the graph,
+or a reload. Each conversation reuses a native Pi session in a daemon-managed worker,
+including its tool history, across turns. The worker expires after 15 minutes idle;
+closing the sidebar or stopping a response does not end the session. **New chat**
+starts a separate conversation and the previous idle session expires normally.
+Model switching preserves the Pi session. Conversations are not automatically stored
+as transcript evidence; explicit remember requests use the normal evidence path.
+**Stop response** cancels inference; evidence already saved and Dreaming already
+requested remain. Retrieval errors and unavailable models are shown explicitly.
+The reusable chat component can be mounted elsewhere without graph callbacks.
+
+The graph requests a bounded snapshot of up to 150 entities and displays at
+most 5,000 nodes, prioritizing hierarchy anchors. Open the graph key for node
+categories, counts, and gesture hints.
 
 ## Sources and imports
 

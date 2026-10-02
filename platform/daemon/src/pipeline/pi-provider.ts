@@ -1,3 +1,5 @@
+import { createWorkerAgentSession, leaseWorkerAgentSession } from "./pi-agent-client";
+import type { PiAgentWorkerInput, PiAgentTool } from "./pi-agent-protocol";
 import {
 	type Api,
 	type Context,
@@ -8,16 +10,7 @@ import {
 	type ThinkingLevel,
 	type Usage,
 } from "@earendil-works/pi-ai";
-import {
-	DefaultResourceLoader,
-	ModelRuntime,
-	SessionManager,
-	type AgentSessionEvent,
-	type SessionStats,
-	SettingsManager,
-	type ToolDefinition,
-	createAgentSession,
-} from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, type AgentSessionEvent, type SessionStats } from "@earendil-works/pi-coding-agent";
 import type {
 	AccountingProvenance,
 	LlmCacheRequestAccounting,
@@ -75,13 +68,17 @@ export class PiProviderDeadlineError extends Error {
 }
 export interface PiAgentSession {
 	prompt(text: string): Promise<void>;
+	setTools?(tools: readonly PiAgentTool[]): void;
+	cancelTurn?(): Promise<void>;
+	updateModel?(input: Pick<PiAgentWorkerInput, "model" | "apiKey">): Promise<void>;
 	abort(): Promise<void>;
-	dispose(): void;
+	dispose(): void | Promise<void>;
 	subscribe?(listener: (event: AgentSessionEvent) => void): () => void;
 	getSystemPrompt?(): string;
 	getSessionId?(): string;
 	getModelName?(): string | undefined;
 	getActiveToolNames(): readonly string[];
+	getExecutionThreadId?(): number;
 	getFailureMessage(): string | undefined;
 	getStats(): SessionStats | undefined;
 	getRequestUsages(): readonly Usage[] | undefined;
@@ -91,8 +88,14 @@ export interface PiAgentSessionProvider {
 	readonly isPiAgentSessionProvider: true;
 	readonly agentSessionTimeoutMs: number;
 	createAgentSession(
-		tools: readonly ToolDefinition[],
-		options?: { readonly maxTokens?: number; readonly signal?: AbortSignal },
+		tools: readonly PiAgentTool[],
+		options?: {
+			readonly maxTokens?: number;
+			readonly signal?: AbortSignal;
+			readonly systemPrompt?: string;
+			readonly persistentSessionKey?: string;
+			readonly continuationPrompt?: string;
+		},
 	): Promise<PiAgentSession>;
 }
 
@@ -679,60 +682,30 @@ export function createPiModelProvider(
 		isPiAgentSessionProvider: true,
 		agentSessionTimeoutMs: defaultTimeoutMs,
 		async createAgentSession(
-			tools: readonly ToolDefinition[],
-			options: { readonly maxTokens?: number; readonly signal?: AbortSignal } = {},
+			tools: readonly PiAgentTool[],
+			options: {
+				readonly maxTokens?: number;
+				readonly signal?: AbortSignal;
+				readonly systemPrompt?: string;
+				readonly persistentSessionKey?: string;
+				readonly continuationPrompt?: string;
+			} = {},
 		) {
-			const isolatedRuntime = await awaitWithAbort(modelRuntime, options.signal);
-			const settingsManager = SettingsManager.inMemory();
-			const resourceLoader = new DefaultResourceLoader({
-				cwd: process.cwd(),
-				agentDir: process.cwd(),
-				settingsManager,
-				noExtensions: true,
-				noSkills: true,
-				noPromptTemplates: true,
-				noThemes: true,
-				noContextFiles: true,
-				systemPrompt: "You are a bounded Signet maintenance agent. You may use only the supplied daemon tools.",
-			});
-			await awaitWithAbort(resourceLoader.reload(), options.signal);
-			const { session } = await awaitWithAbort(
-				createAgentSession({
+			const create = options.persistentSessionKey
+				? leaseWorkerAgentSession.bind(null, options.persistentSessionKey, options.continuationPrompt)
+				: createWorkerAgentSession;
+			return create(
+				{
 					model: options.maxTokens ? { ...piModel, maxTokens: options.maxTokens } : piModel,
-					modelRuntime: isolatedRuntime,
-					sessionManager: SessionManager.inMemory(),
-					settingsManager,
-					resourceLoader,
-					tools: tools.map((tool) => tool.name),
-					customTools: [...tools],
-				}),
-				options.signal,
-				(result) => result.session.dispose(),
-			);
-			return {
-				prompt: (text) => session.prompt(text),
-				abort: () => session.abort(),
-				dispose: () => session.dispose(),
-				subscribe: (listener) => session.subscribe(listener),
-				getSystemPrompt: () => session.systemPrompt,
-				getSessionId: () => session.sessionId,
-				getModelName: () => session.model?.id,
-				getActiveToolNames: () => session.getActiveToolNames(),
-				getStats: () => session.getSessionStats(),
-				getRequestUsages: () =>
-					session.messages.flatMap((message) => (message.role === "assistant" ? [message.usage] : [])),
-				getFailureMessage: () => {
-					for (const message of [...session.messages].reverse()) {
-						if (
-							message.role === "assistant" &&
-							(message.stopReason === "error" || message.stopReason === "aborted" || message.stopReason === "length")
-						) {
-							return message.errorMessage ?? `Pi agent ${message.stopReason}`;
-						}
-					}
-					return undefined;
+					apiKey: apiKey ?? KEYLESS_API_KEY,
+					systemPrompt:
+						options.systemPrompt ??
+						"You are a bounded Signet maintenance agent. You may use only the supplied daemon tools.",
+					tools: tools.map(({ name, label, description, parameters }) => ({ name, label, description, parameters })),
 				},
-			};
+				tools,
+				options.signal,
+			);
 		},
 	};
 }

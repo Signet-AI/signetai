@@ -28,7 +28,10 @@ upstream project for that package; the canonical license texts are listed below.
 | `react-dom` | `^19.2.0` | MIT | [React](https://github.com/facebook/react) |
 | `sonner` | `^2.0.7` | MIT | [Sonner](https://github.com/emilkowalski/sonner) |
 | `tailwind-merge` | `^3.6.0` | MIT | [tailwind-merge](https://github.com/dcastil/tailwind-merge) |
-| `three` | `^0.185.1` | MIT | [three.js](https://github.com/mrdoob/three.js) |
+| `d3-force` | `^3.0.0` | ISC | [D3 Force](https://github.com/d3/d3-force) |
+| `streamdown` | `^2.7.0` | Apache-2.0 | [Streamdown](https://github.com/vercel/streamdown) |
+| `use-stick-to-bottom` | `^1.1.6` | MIT | [Stick to Bottom](https://github.com/samdenty/use-stick-to-bottom) |
+| `lucide-react` | `^1.49.0` | ISC | [Lucide Icons](https://github.com/lucide-icons/lucide) |
 | `yaml` | `^2.9.0` | ISC | [yaml](https://github.com/eemeli/yaml) |
 
 ### Build and verification dependencies
@@ -42,7 +45,7 @@ in the development workflow even though they are not runtime imports.
 | `@tailwindcss/vite` | `^4.2.0` | MIT | [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) |
 | `@types/react` | `^19.2.0` | MIT | [DefinitelyTyped](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/react-dom` | `^19.2.0` | MIT | [DefinitelyTyped](https://github.com/DefinitelyTyped/DefinitelyTyped) |
-| `@types/three` | `^0.185.3` | MIT | [DefinitelyTyped](https://github.com/DefinitelyTyped/DefinitelyTyped) |
+| `@types/d3-force` | `^3.0.10` | MIT | [DefinitelyTyped](https://github.com/DefinitelyTyped/DefinitelyTyped) |
 | `@types/yaml` | `^1.9.7` | MIT | [yaml](https://github.com/eemeli/yaml) |
 | `@vitejs/plugin-react` | `^5.2.0` | MIT | [Vite React plugin](https://github.com/vitejs/vite-plugin-react) |
 | `happy-dom` | `^20.11.1` | MIT | [Happy DOM](https://github.com/capricorn86/happy-dom) |
@@ -64,3 +67,23 @@ from the following project-maintained sources:
 This inventory is maintained alongside the dashboard manifest. When a direct
 dependency, version range, or license changes, update this document in the same
 change and verify the resolved package metadata in `bun.lock`.
+
+## Adapted graph navigation
+
+The dashboard viewport implementation in `surfaces/dashboard/src/lib/graph-viewport.ts`
+is copied from Supermemory's `packages/memory-graph/src/canvas/viewport.ts`
+([upstream](https://github.com/supermemoryai/supermemory/tree/main/packages/memory-graph)).
+Copyright (c) 2025 supermemory. Licensed under MIT; the complete notice is preserved
+in the source file. The force simulation in `surfaces/dashboard/src/lib/graph-simulation.ts`
+is adapted from the same package, with geometry scaled for Signet's node sizes
+and structural links mapped to the ontology hierarchy. Its MIT notice is also
+preserved in source.
+
+## Adapted AI Elements components
+
+The conversation, message, prompt-input, and sources components in
+`surfaces/dashboard/src/components/ai-elements` are adapted from
+[Vercel AI Elements](https://github.com/vercel/ai-elements).
+Copyright 2023 Vercel, Inc. Licensed under Apache-2.0; see [LICENSE](./LICENSE).
+Signet changes include dashboard imports and styling, a text-only composer,
+Signet message types, and Markdown rendering without remote images or HTML.

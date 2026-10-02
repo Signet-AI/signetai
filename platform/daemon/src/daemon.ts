@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { stopPiAgentWorkers } from "./pipeline/pi-agent-client";
 import { requestMemoryHead } from "./memory-head";
 
 import "./bun-socket-polyfill";
@@ -604,6 +605,7 @@ app.use("/api/inference/*", async (c, next) => {
 	if (c.req.method === "GET") return requirePermission("diagnostics", authConfig)(c, next);
 	return requirePermission("admin", authConfig)(c, next);
 });
+app.use("/api/assistant/*", async (c, next) => requirePermission("recall", authConfig)(c, next));
 mountInferenceRoutes(app, {
 	getAuthMode: () => authConfig.mode,
 	getTelemetry: () => telemetryRef,
@@ -2045,6 +2047,7 @@ async function cleanup() {
 		checkpointPruneTimer = undefined;
 		setCheckpointPruneTimer(undefined);
 	}
+	await stopPiAgentWorkers(true);
 	stopResourceMonitors();
 	logFdSnapshot("cleanup-start");
 	await flushPendingSourceLifecycleTelemetry();

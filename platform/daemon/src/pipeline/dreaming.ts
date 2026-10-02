@@ -1121,6 +1121,7 @@ export function selectDreamingPassMode(
 
 export interface DreamingPassLiveOptions {
 	readonly hub?: DreamingLiveEventHub;
+	readonly userRequest?: { readonly sourceRef: string; readonly content: string };
 }
 export function recordDreamingPassTelemetry(input: {
 	readonly mode: string;
@@ -1551,10 +1552,18 @@ export async function runDreamingAgentPass(
 	let applied = 0;
 	let failed = 0;
 	try {
-		const prompt =
+		const basePrompt =
 			scopes.length > 1
 				? `${dreamingPromptForMode(mode)}\n\n<agent_scopes>\n${scopes.join("\n")}\n</agent_scopes>`
 				: dreamingPromptForMode(mode);
+		const prompt = liveOptions?.userRequest
+			? `${basePrompt}
+
+The authenticated user requested this scoped maintenance task. Their instruction was recorded as evidence before this pass. Address it using the same audited tools and citation requirements; report any unsupported change rather than bypassing validation.
+<user_request>
+${JSON.stringify(liveOptions.userRequest)}
+</user_request>`
+			: basePrompt;
 		const cutoffRow = await ownerQueryOne<{ now: string }>(
 			await getDbOwnerForAccessor(accessor),
 			"dreaming.pass.cutoff",
@@ -1609,12 +1618,14 @@ export async function runDreamingAgentPass(
 			),
 		);
 		const hasBacklog = [...hasBacklogByScope.values()].some(Boolean);
-		const earlyExitSummary = dreamingEarlyExitSummary(
-			mode,
-			hasPendingHygieneAttention,
-			hasBacklog,
-			hasPendingContentAttention || (hasPendingAttention && !hasPendingHygieneAttention),
-		);
+		const earlyExitSummary = liveOptions?.userRequest
+			? null
+			: dreamingEarlyExitSummary(
+					mode,
+					hasPendingHygieneAttention,
+					hasBacklog,
+					hasPendingContentAttention || (hasPendingAttention && !hasPendingHygieneAttention),
+				);
 		if (earlyExitSummary !== null) {
 			const statements = [
 				ownerRunStatement(
@@ -1674,6 +1685,7 @@ export async function runDreamingAgentPass(
 		const surfacedWatermarkByScope = new Map<string, string>();
 		const surfacedTranscriptRefsByScope = new Map<string, Set<string>>();
 		const tools = createDreamingAgentTools({
+			restrictToAgent: liveOptions?.userRequest !== undefined,
 			accessor,
 			agentId,
 			actor: "dreaming",

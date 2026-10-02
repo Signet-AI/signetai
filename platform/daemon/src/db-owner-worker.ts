@@ -51,6 +51,7 @@ interface SqliteRunResult {
 }
 
 interface SqliteStatement {
+	finalize?(): void;
 	all(...params: readonly unknown[]): unknown[];
 	get(...params: readonly unknown[]): unknown;
 	run(...params: readonly unknown[]): SqliteRunResult;
@@ -325,9 +326,13 @@ export function runDbOwnerWorker(): void {
 		try {
 			const params = (statement.params ?? []).map(bindParameter);
 			const prepared = readonlyDb.prepare(statement.sql);
-			return statement.result === "all"
-				? enforceResultLimit(statement, prepared.all(...params))
-				: enforceResultLimit(statement, prepared.get(...params));
+			try {
+				return statement.result === "all"
+					? enforceResultLimit(statement, prepared.all(...params))
+					: enforceResultLimit(statement, prepared.get(...params));
+			} finally {
+				prepared.finalize?.();
+			}
 		} finally {
 			readonlyDb.close(true);
 		}

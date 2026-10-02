@@ -691,3 +691,6 @@ export type {
 	ConnectorRow,
 } from "./connector-types";
 export { parseTranscriptMessages, buildExportTranscriptRecord } from "./transcript-export";
+
+export { parseAssistantChatEvent } from "./assistant-chat";
+export type { AssistantChatEvent, AssistantChatMessage } from "./assistant-chat";

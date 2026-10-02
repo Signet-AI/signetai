@@ -1,8 +1,31 @@
-import * as THREE from "three";
-import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { CSS2DRenderer, CSS2DObject } from "three/addons/renderers/CSS2DRenderer.js";
-import { OBJLoader } from "three/addons/loaders/OBJLoader.js";
-import sphereObj from "@/assets/bounding-sphere.obj?raw";
+/*
+MIT License
+
+Copyright (c) 2025 supermemory
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+*/
+import { GraphHoverIntent } from "./graph-hover";
+import { ViewportState } from "./graph-viewport";
+import type { GraphWorkerResponse, GraphWorkerRequest } from "./graph-worker";
+import type { LayoutNode } from "./graph-layout";
 
 export type SceneNodeKind =
 	| "entity"
@@ -28,6 +51,7 @@ export interface SceneNode {
 	metric: string;
 	confidence?: number;
 	detail?: string;
+	evidenceRefs?: readonly string[];
 }
 
 export interface SceneEdge {
@@ -43,15 +67,33 @@ export interface GraphSceneData {
 	edges: readonly SceneEdge[];
 }
 
+export function matchRetrievedNodes(
+	nodes: readonly SceneNode[],
+	nodeIds: readonly string[],
+	evidenceRefs: readonly string[],
+): Set<string> {
+	const ids = new Set(nodeIds);
+	const refs = new Set(evidenceRefs);
+	return new Set(
+		nodes
+			.filter((node) => ids.has(node.id) || refs.has(node.id) || node.evidenceRefs?.some((ref) => refs.has(ref)))
+			.map((node) => node.id),
+	);
+}
+
 export interface GraphSceneHandle {
-	focusNode(id: string, drawerOpen?: boolean): void;
+	setRetrieval(nodeIds: readonly string[], evidenceRefs: readonly string[]): void;
+	clearRetrieval(): void;
+	setFollowAgent(enabled: boolean): void;
+	focusNode(id: string): void;
 	resetView(): void;
 	focusable(): readonly string[];
+	zoom(factor: number): void;
 	dispose(): void;
 }
 
 const COLORS: Record<SceneNodeKind, string> = {
-	entity: "#ffffff",
+	entity: "#a1a1aa",
 	source: "#38bdf8",
 	aspect: "#34d399",
 	group: "#60a5fa",
@@ -61,978 +103,513 @@ const COLORS: Record<SceneNodeKind, string> = {
 	constraint: "#fb7185",
 	assertion: "#f472b6",
 	origin: "#22d3ee",
-	memory: "#a1a1aa",
+	memory: "#22d3ee",
 };
 
-const KIND_LABELS: Record<SceneNodeKind, string> = {
-	entity: "subject",
-	source: "source",
-	aspect: "aspect",
-	group: "group",
-	claimSlot: "claim slot",
-	attribute: "attribute",
-	claim: "claim",
-	constraint: "constraint",
-	assertion: "assertion",
-	origin: "evidence",
-	memory: "memory",
+const LIGHT_COLORS: Record<SceneNodeKind, string> = {
+	entity: "#27272a",
+	source: "#0369a1",
+	aspect: "#047857",
+	group: "#1d4ed8",
+	claimSlot: "#b45309",
+	attribute: "#6d28d9",
+	claim: "#a16207",
+	constraint: "#be123c",
+	assertion: "#a21caf",
+	origin: "#0e7490",
+	memory: "#0e7490",
 };
 
-const SPHERE_R = 260;
-const seededRand = (s: number) => {
-	const x = Math.sin(s * 9999 + 1) * 10000;
-	return x - Math.floor(x);
-};
-
-function shorten(value: string, maxLength: number): string {
-	return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
-}
-
-interface LayoutNode extends SceneNode {
-	pos: THREE.Vector3;
-	dir: THREE.Vector3;
-}
-const hashSeed = (s: string, salt: number) => {
-	let h = salt | 0;
-	for (let i = 0; i < s.length; i++) h = (h * 33 + s.charCodeAt(i)) | 0;
-	return Math.abs(h);
-};
-
-export function createGraphScene(container: HTMLElement, data: GraphSceneData): GraphSceneHandle {
-	const NODES: LayoutNode[] = [];
-	const byId = new Map<string, LayoutNode>();
-	const isHubKind = (k: SceneNodeKind) => k === "entity" || k === "source" || k === "origin";
-	const kindById = new Map(data.nodes.map((n) => [n.id, n.kind]));
-	const hubs = data.nodes.filter((n) => isHubKind(n.kind));
-	const hubIndex = new Map(hubs.map((n, i) => [n.id, i]));
-	const parentOf = new Map<string, string>();
-	const hubEdges: Array<readonly [number, number]> = [];
-	for (const e of data.edges) {
-		const fi = hubIndex.get(e.from);
-		const ti = hubIndex.get(e.to);
-		if (fi !== undefined && ti !== undefined) hubEdges.push([fi, ti]);
-		else if (!isHubKind(kindById.get(e.to) ?? "aspect")) parentOf.set(e.to, e.from);
-	}
-
-	const hubCount = hubs.length;
-	const deg = new Float32Array(hubCount);
-	for (const [a, b] of hubEdges) {
-		deg[a]++;
-		deg[b]++;
-	}
-	const pos = new Float32Array(hubCount * 3);
-	{
-		const golden = Math.PI * (3 - Math.sqrt(5));
-		for (let i = 0; i < hubCount; i++) {
-			const y = hubCount === 1 ? 0 : 1 - (i / (hubCount - 1)) * 2;
-			const rXZ = Math.sqrt(Math.max(0, 1 - y * y));
-			const theta = golden * i;
-			pos[i * 3] = Math.cos(theta) * rXZ * 170;
-			pos[i * 3 + 1] = y * 170;
-			pos[i * 3 + 2] = Math.sin(theta) * rXZ * 170;
-		}
-	}
-	const REPULSE = 135;
-	const ATTRACT = 0.15;
-	const GRAVITY = 0.02;
-	const iterations = hubCount > 500 ? 60 : hubCount > 150 ? 100 : 150;
-	const disp = new Float32Array(hubCount * 3);
-	for (let iter = 0; iter < iterations; iter++) {
-		disp.fill(0);
-		for (let a = 0; a < hubCount; a++) {
-			const ax = pos[a * 3];
-			const ay = pos[a * 3 + 1];
-			const az = pos[a * 3 + 2];
-			const ma = (deg[a] + 1) * REPULSE;
-			for (let b = a + 1; b < hubCount; b++) {
-				const dx = ax - pos[b * 3];
-				const dy = ay - pos[b * 3 + 1];
-				const dz = az - pos[b * 3 + 2];
-				const d2 = Math.max(dx * dx + dy * dy + dz * dz, 9);
-				const d = Math.sqrt(d2);
-				const f = (ma * (deg[b] + 1)) / d / d;
-				const fx = (dx / d) * f;
-				const fy = (dy / d) * f;
-				const fz = (dz / d) * f;
-				disp[a * 3] += fx;
-				disp[a * 3 + 1] += fy;
-				disp[a * 3 + 2] += fz;
-				disp[b * 3] -= fx;
-				disp[b * 3 + 1] -= fy;
-				disp[b * 3 + 2] -= fz;
-			}
-		}
-		for (const [a, b] of hubEdges) {
-			const dx = pos[b * 3] - pos[a * 3];
-			const dy = pos[b * 3 + 1] - pos[a * 3 + 1];
-			const dz = pos[b * 3 + 2] - pos[a * 3 + 2];
-			const d = Math.max(Math.sqrt(dx * dx + dy * dy + dz * dz), 0.01);
-			const f = (ATTRACT * d) / d / (deg[a] + 1);
-			const fx = dx * f;
-			const fy = dy * f;
-			const fz = dz * f;
-			disp[a * 3] += fx;
-			disp[a * 3 + 1] += fy;
-			disp[a * 3 + 2] += fz;
-			disp[b * 3] -= fx;
-			disp[b * 3 + 1] -= fy;
-			disp[b * 3 + 2] -= fz;
-		}
-		const stepMax = 12 * (1 - iter / iterations) + 0.3;
-		for (let i = 0; i < hubCount; i++) {
-			const dx = disp[i * 3] - pos[i * 3] * GRAVITY;
-			const dy = disp[i * 3 + 1] - pos[i * 3 + 1] * GRAVITY;
-			const dz = disp[i * 3 + 2] - pos[i * 3 + 2] * GRAVITY;
-			const len = Math.sqrt(dx * dx + dy * dy + dz * dz);
-			if (len > 0.001) {
-				const step = Math.min(len, stepMax);
-				pos[i * 3] += (dx / len) * step;
-				pos[i * 3 + 1] += (dy / len) * step;
-				pos[i * 3 + 2] += (dz / len) * step;
-			}
-		}
-	}
-	{
-		let maxR = 1;
-		for (let i = 0; i < hubCount; i++) {
-			const r = Math.sqrt(pos[i * 3] ** 2 + pos[i * 3 + 1] ** 2 + pos[i * 3 + 2] ** 2);
-			if (r > maxR) maxR = r;
-		}
-		const scale = 180 / maxR;
-		for (let i = 0; i < hubCount * 3; i++) pos[i] *= scale;
-	}
-	const fanOffset = (j: number, count: number, radius: number, seed: number) => {
-		const golden = Math.PI * (3 - Math.sqrt(5));
-		const y = count === 1 ? 0 : 1 - (j / Math.max(1, count - 1)) * 2;
-		const rXZ = Math.sqrt(Math.max(0, 1 - y * y));
-		const theta = golden * j + seededRand(seed) * Math.PI * 2;
-		return new THREE.Vector3(Math.cos(theta) * rXZ, y, Math.sin(theta) * rXZ).multiplyScalar(radius);
-	};
-
-	for (const [i, h] of hubs.entries()) {
-		const v = new THREE.Vector3(pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]);
-		const layoutNode: LayoutNode = { ...h, pos: v, dir: v.clone().normalize() };
-		NODES.push(layoutNode);
-		byId.set(h.id, layoutNode);
-	}
-	const aspectsByHub = new Map<string, SceneNode[]>();
-	const attrsByAspect = new Map<string, SceneNode[]>();
-	const orphans: SceneNode[] = [];
-	for (const n of data.nodes) {
-		if (isHubKind(n.kind)) continue;
-		const parent = parentOf.get(n.id);
-		if (!parent) {
-			orphans.push(n);
-			continue;
-		}
-		if (hubIndex.has(parent)) {
-			const list = aspectsByHub.get(parent) ?? [];
-			list.push(n);
-			aspectsByHub.set(parent, list);
-		} else {
-			const list = attrsByAspect.get(parent) ?? [];
-			list.push(n);
-			attrsByAspect.set(parent, list);
-		}
-	}
-	for (const [hubId, aspects] of aspectsByHub) {
-		const hub = byId.get(hubId);
-		if (!hub) continue;
-		const radius = 15 + aspects.length * 2.2;
-		for (const [j, asp] of aspects.entries()) {
-			const v = hub.pos.clone().add(fanOffset(j, aspects.length, radius, hashSeed(hubId, j + 1)));
-			const layoutNode: LayoutNode = { ...asp, pos: v, dir: v.clone().normalize() };
-			NODES.push(layoutNode);
-			byId.set(asp.id, layoutNode);
-		}
-	}
-	for (const [aspectId, attrs] of attrsByAspect) {
-		const aspect = byId.get(aspectId);
-		if (!aspect) {
-			orphans.push(...attrs);
-			continue;
-		}
-		const radius = 8 + attrs.length * 1.4;
-		for (const [j, attr] of attrs.entries()) {
-			const v = aspect.pos.clone().add(fanOffset(j, attrs.length, radius, hashSeed(aspectId, j + 7)));
-			const layoutNode: LayoutNode = { ...attr, pos: v, dir: v.clone().normalize() };
-			NODES.push(layoutNode);
-			byId.set(attr.id, layoutNode);
-		}
-	}
-	for (const [j, n] of orphans.entries()) {
-		const v = fanOffset(j, orphans.length, 225, hashSeed(n.id, 31));
-		const layoutNode: LayoutNode = { ...n, pos: v, dir: v.clone().normalize() };
-		NODES.push(layoutNode);
-		byId.set(n.id, layoutNode);
-	}
-
-	const EDGES = data.edges.filter((e) => byId.has(e.from) && byId.has(e.to));
+export function createGraphScene(
+	container: HTMLElement,
+	data: GraphSceneData,
+	onSelect?: (node: SceneNode) => void,
+	onError?: () => void,
+	onUserNavigation?: () => void,
+): GraphSceneHandle {
 	const canvas = document.createElement("canvas");
-	canvas.style.cssText = "width:100%;height:100%;display:block;cursor:grab";
-	const labelContainer = document.createElement("div");
-	labelContainer.style.cssText = "position:absolute;inset:0;pointer-events:none;z-index:1";
-	container.appendChild(canvas);
-	container.appendChild(labelContainer);
-
-	const scene = new THREE.Scene();
-	scene.fog = new THREE.FogExp2(0x050505, 0.0018);
-	const w = container.clientWidth || 800;
-	const h = container.clientHeight || 500;
-	const camera = new THREE.PerspectiveCamera(55, w / h, 0.1, 3000);
-	camera.position.set(0, 80, 520);
-
-	const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-	renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-	renderer.setSize(w, h, false);
-
-	const labelRenderer = new CSS2DRenderer();
-	labelRenderer.setSize(w, h);
-	labelRenderer.domElement.style.position = "absolute";
-	labelRenderer.domElement.style.top = "0";
-	labelRenderer.domElement.style.pointerEvents = "none";
-	labelContainer.appendChild(labelRenderer.domElement);
-
-	const controls = new OrbitControls(camera, renderer.domElement);
-	controls.enableDamping = true;
-	controls.dampingFactor = 0.06;
-	controls.rotateSpeed = 0.5;
-	controls.zoomSpeed = 0.8;
-	controls.autoRotate = true;
-	controls.autoRotateSpeed = 0.4;
-	controls.minDistance = 100;
-	controls.maxDistance = 1200;
-	const sphereMat = new THREE.LineBasicMaterial({
-		color: 0x10b981,
-		transparent: true,
-		opacity: 0.28,
-		depthWrite: false,
-	});
-	const sphereModel = new OBJLoader().parse(sphereObj);
-	sphereModel.traverse((child) => {
-		if ((child as THREE.LineSegments).isLineSegments) {
-			(child as THREE.LineSegments).material = sphereMat;
-		}
-	});
-	sphereModel.scale.setScalar(SPHERE_R);
-	scene.add(sphereModel);
-	const makeShapeTexture = (drawFn: (ctx: CanvasRenderingContext2D) => void) => {
-		const c = document.createElement("canvas");
-		c.width = c.height = 16;
-		const ctx = c.getContext("2d");
-		if (!ctx) throw new Error("Canvas 2D context is unavailable");
-		ctx.strokeStyle = "#fff";
-		ctx.fillStyle = "#fff";
-		drawFn(ctx);
-		return new THREE.CanvasTexture(c);
-	};
-	const crossTex = makeShapeTexture((ctx) => {
-		ctx.lineWidth = 1.5;
-		ctx.beginPath();
-		ctx.moveTo(8, 2);
-		ctx.lineTo(8, 14);
-		ctx.moveTo(2, 8);
-		ctx.lineTo(14, 8);
-		ctx.stroke();
-	});
-	const diamondTex = makeShapeTexture((ctx) => {
-		ctx.lineWidth = 1.5;
-		ctx.beginPath();
-		ctx.moveTo(8, 2);
-		ctx.lineTo(14, 8);
-		ctx.lineTo(8, 14);
-		ctx.lineTo(2, 8);
-		ctx.closePath();
-		ctx.stroke();
-	});
-	const squareTex = makeShapeTexture((ctx) => {
-		ctx.fillRect(6, 6, 4, 4);
-	});
-	const hexTex = makeShapeTexture((ctx) => {
-		ctx.lineWidth = 1.5;
-		ctx.beginPath();
-		for (let i = 0; i < 6; i++) {
-			const angle = (Math.PI / 3) * i - Math.PI / 6;
-			const x = 8 + Math.cos(angle) * 6;
-			const y = 8 + Math.sin(angle) * 6;
-			if (i === 0) ctx.moveTo(x, y);
-			else ctx.lineTo(x, y);
-		}
-		ctx.closePath();
-		ctx.stroke();
-	});
-	const ringTex = makeShapeTexture((ctx) => {
-		ctx.lineWidth = 1.5;
-		ctx.beginPath();
-		ctx.arc(8, 8, 5.5, 0, Math.PI * 2);
-		ctx.stroke();
-	});
-	const triangleTex = makeShapeTexture((ctx) => {
-		ctx.lineWidth = 1.5;
-		ctx.beginPath();
-		ctx.moveTo(8, 2);
-		ctx.lineTo(14, 13);
-		ctx.lineTo(2, 13);
-		ctx.closePath();
-		ctx.stroke();
-	});
-	const KIND_TEX: Record<SceneNodeKind, THREE.CanvasTexture> = {
-		entity: diamondTex,
-		source: crossTex,
-		aspect: squareTex,
-		group: hexTex,
-		claimSlot: ringTex,
-		attribute: squareTex,
-		claim: triangleTex,
-		constraint: triangleTex,
-		assertion: ringTex,
-		origin: crossTex,
-		memory: squareTex,
-	};
-	const KIND_SIZE: Record<SceneNodeKind, number> = {
-		entity: 24,
-		source: 27,
-		aspect: 12,
-		group: 15,
-		claimSlot: 16,
-		attribute: 10,
-		claim: 15,
-		constraint: 15,
-		assertion: 16,
-		origin: 14,
-		memory: 11,
-	};
-	const baseColors: THREE.Color[] = [];
-	interface NodeLayer {
-		pts: THREE.Points;
-		geo: THREE.BufferGeometry;
-		colArr: Float32Array;
-		origIndices: number[];
-	}
-	const nodeLayers: Partial<Record<SceneNodeKind, NodeLayer>> = {};
-	for (const kind of [
-		"entity",
-		"source",
-		"aspect",
-		"group",
-		"claimSlot",
-		"attribute",
-		"claim",
-		"constraint",
-		"assertion",
-		"origin",
-		"memory",
-	] as const) {
-		const kindNodes = NODES.map((n, i) => ({ n, i })).filter(({ n }) => n.kind === kind);
-		if (kindNodes.length === 0) continue;
-		const geo = new THREE.BufferGeometry();
-		const pos = new Float32Array(kindNodes.length * 3);
-		const col = new Float32Array(kindNodes.length * 3);
-		for (const [j, { n, i: origIdx }] of kindNodes.entries()) {
-			pos[j * 3] = n.pos.x;
-			pos[j * 3 + 1] = n.pos.y;
-			pos[j * 3 + 2] = n.pos.z;
-			const c = new THREE.Color(COLORS[kind]);
-			col[j * 3] = c.r;
-			col[j * 3 + 1] = c.g;
-			col[j * 3 + 2] = c.b;
-			if (baseColors[origIdx] === undefined) baseColors[origIdx] = c.clone();
-		}
-		geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-		geo.setAttribute("color", new THREE.BufferAttribute(col, 3));
-		const mat = new THREE.PointsMaterial({
-			size: KIND_SIZE[kind],
-			map: KIND_TEX[kind],
-			vertexColors: true,
-			transparent: true,
-			depthWrite: false,
-			sizeAttenuation: true,
-		});
-		const pts = new THREE.Points(geo, mat);
-		pts.userData = { kind };
-		scene.add(pts);
-		nodeLayers[kind] = { pts, geo, colArr: col, origIndices: kindNodes.map(({ i }) => i) };
-	}
-	for (const [i, n] of NODES.entries()) {
-		if (!baseColors[i]) baseColors[i] = new THREE.Color(COLORS[n.kind]);
-	}
-	const nodePoints = Object.values(nodeLayers)
-		.map((layer) => layer?.pts)
-		.filter((p): p is THREE.Points => Boolean(p));
-	const edgeCounts = new Map<string, number>();
-	for (const edge of EDGES) {
-		edgeCounts.set(edge.from, (edgeCounts.get(edge.from) ?? 0) + 1);
-		edgeCounts.set(edge.to, (edgeCounts.get(edge.to) ?? 0) + 1);
-	}
-	interface LabelEntry {
-		obj: CSS2DObject;
-		div: HTMLDivElement;
-		pos: THREE.Vector3;
-		dir: THREE.Vector3;
-		leader: THREE.Line;
-		semantic: boolean;
-		kind: SceneNodeKind;
-		priority: number;
-	}
-	const labelObjs: Record<string, LabelEntry> = {};
-	const labelIds = new Set<string>();
-	const edgeDegree = new Map<string, number>();
-	for (const edge of EDGES) {
-		edgeDegree.set(edge.from, (edgeDegree.get(edge.from) ?? 0) + 1);
-		edgeDegree.set(edge.to, (edgeDegree.get(edge.to) ?? 0) + 1);
-	}
-	const originLabelIds = new Set(
-		NODES.filter((n) => n.kind === "origin")
-			.sort((a, b) => (edgeDegree.get(b.id) ?? 0) - (edgeDegree.get(a.id) ?? 0) || a.id.localeCompare(b.id))
-			.slice(0, 4)
-			.map((n) => n.id),
+	canvas.tabIndex = 0;
+	canvas.setAttribute("aria-busy", "true");
+	canvas.setAttribute(
+		"aria-label",
+		"Memory graph. Drag to pan, scroll to zoom. Arrow keys browse nodes, Enter selects, Escape resets.",
 	);
-	const assertionLabelIds = new Set(
-		NODES.filter((n) => n.kind === "assertion")
-			.sort((a, b) => (edgeDegree.get(b.id) ?? 0) - (edgeDegree.get(a.id) ?? 0) || b.weight - a.weight)
-			.slice(0, 4)
-			.map((n) => n.id),
-	);
-	const hubLabelIds = new Set(
-		NODES.filter((n) => n.kind === "entity")
-			.sort((a, b) => b.weight - a.weight || a.id.localeCompare(b.id))
-			.slice(0, 12)
-			.map((n) => n.id),
-	);
-	for (const n of NODES) {
-		if (n.kind === "source" || originLabelIds.has(n.id) || assertionLabelIds.has(n.id) || hubLabelIds.has(n.id)) {
-			labelIds.add(n.id);
-		}
-	}
-	const semanticRank: Record<SceneNodeKind, number> = {
-		entity: 0,
-		source: 0,
-		origin: 0,
-		claim: 5,
-		constraint: 5,
-		assertion: 4,
-		claimSlot: 3,
-		group: 2,
-		aspect: 1,
-		attribute: 0,
-		memory: 0,
+	canvas.style.cssText = "width:100%;height:100%;display:block;touch-action:none;";
+	const context = canvas.getContext("2d");
+	if (!context) throw new Error("Canvas is unavailable");
+	const tooltip = document.createElement("div");
+	tooltip.className = "graph-tooltip";
+	tooltip.hidden = true;
+	tooltip.setAttribute("role", "status");
+	const worker = new Worker(new URL("./graph-worker.ts", import.meta.url), { type: "module" });
+	container.append(canvas, tooltip);
+	let nodes: LayoutNode[] = [];
+	let byId = new Map<string, LayoutNode>();
+	let edges: Array<{ edge: SceneEdge; from: LayoutNode; to: LayoutNode }> = [];
+	let width = 1;
+	let height = 1;
+	const viewport = new ViewportState();
+	let selected: LayoutNode | undefined;
+	const hover = new GraphHoverIntent();
+	const emphasis = new Map<string, number>();
+	let retrieved = new Set<string>();
+	let retrievedNeighbors = new Set<string>();
+	let pendingRetrieval: { ids: Set<string>; at: number } | undefined;
+	let followAgent = true;
+	let followDue = false;
+	let lastFollow = -Infinity;
+	const pauseFollow = () => {
+		followAgent = false;
+		followDue = false;
+		viewport.cancelAnimation();
+		onUserNavigation?.();
 	};
-	const childLabelCounts = new Map<string, number>();
-	const candidates = NODES.filter((n) => !isHubKind(n.kind) && semanticRank[n.kind] > 0).sort(
-		(a, b) => semanticRank[b.kind] - semanticRank[a.kind] || b.weight - a.weight || a.id.localeCompare(b.id),
-	);
-	let statementLabelCount = 0;
-	for (const n of candidates) {
-		const count = childLabelCounts.get(n.cluster) ?? 0;
-		if (count >= 1 || statementLabelCount >= 12) continue;
-		labelIds.add(n.id);
-		childLabelCounts.set(n.cluster, count + 1);
-		statementLabelCount += 1;
-	}
-	for (const n of NODES) {
-		const semantic = n.kind !== "attribute" && n.kind !== "memory";
-		if (!labelIds.has(n.id)) continue;
-		const div = document.createElement("div");
-		div.className = `graph-node-label graph-node-label--${n.kind}`;
-		div.style.setProperty("--node-color", COLORS[n.kind]);
+	let lastDraw = performance.now();
+	let neighbors = new Set<string>();
+	let frame = 0;
+	let disposed = false;
+	let keyboardIndex = -1;
+	let targets = new Map<string, { x: number; y: number }>();
+	let history: Array<{ x: number; y: number; t: number }> = [];
+	let drag:
+		| { id: number; x: number; y: number; startX: number; startY: number; moved: boolean; node?: LayoutNode }
+		| undefined;
+	const radius = (node: SceneNode) =>
+		node.kind === "entity" || node.kind === "source" ? 9 : node.kind === "aspect" ? 6 : 4;
+	const showTooltip = (node?: LayoutNode) => {
+		tooltip.hidden = !node;
+		if (!node) return;
+		tooltip.replaceChildren();
 		const kind = document.createElement("span");
-		kind.className = "graph-node-label__kind";
-		kind.textContent = KIND_LABELS[n.kind];
-		const name = document.createElement("span");
-		name.className = "graph-node-label__name";
-		name.textContent = n.label;
+		kind.className = "graph-tooltip-kind";
+		kind.style.color = (document.documentElement.classList.contains("dark") ? COLORS : LIGHT_COLORS)[node.kind];
+		kind.textContent =
+			node.kind === "origin" || node.kind === "memory"
+				? "Evidence"
+				: node.kind === "claimSlot"
+					? "Claim slot"
+					: node.kind;
+		const title = document.createElement("strong");
+		title.textContent = node.detail ?? node.label;
 		const meta = document.createElement("span");
-		meta.className = "graph-node-label__meta";
-		meta.textContent = n.metric;
-		div.append(kind, name, meta);
-		const obj = new CSS2DObject(div);
-		const labelLift = n.kind === "assertion" ? 110 : 11;
-		obj.position.set(n.pos.x + 8, n.pos.y + labelLift, n.pos.z + 8);
-		scene.add(obj);
-		const lOffset = 10;
-		const leaderGeo = new THREE.BufferGeometry();
-		leaderGeo.setAttribute(
-			"position",
-			new THREE.Float32BufferAttribute(
-				[n.pos.x, n.pos.y, n.pos.z, n.pos.x + lOffset * 0.7, n.pos.y + labelLift, n.pos.z + lOffset * 0.7],
-				3,
+		meta.textContent = node.metric;
+		tooltip.append(kind, title, meta);
+	};
+	const draw = (now: number) => {
+		frame = 0;
+		if (disposed) return;
+		const moving = viewport.tick();
+		let highlighting = hover.tick(now);
+		if (pendingRetrieval) {
+			highlighting = true;
+			if (now >= pendingRetrieval.at && nodes.length) {
+				retrieved = pendingRetrieval.ids;
+				retrievedNeighbors = new Set(
+					edges
+						.filter(({ from, to }) => retrieved.has(from.id) || retrieved.has(to.id))
+						.flatMap(({ from, to }) => [from.id, to.id]),
+				);
+				pendingRetrieval = undefined;
+				followDue = followAgent;
+				canvas.dataset.retrievedNodes = String(retrieved.size);
+			}
+		}
+		if (followDue && followAgent) {
+			highlighting = true;
+			if (now - lastFollow >= 1000) {
+				const subset = nodes.filter((node) => retrieved.has(node.id) || retrievedNeighbors.has(node.id));
+				if (subset.length) fit(subset);
+				lastFollow = now;
+				followDue = false;
+			}
+		}
+		const blend = 1 - Math.exp(-Math.min(now - lastDraw, 32) / 180);
+		lastDraw = now;
+		const fade = (key: string, target: number, initial = 1) => {
+			const previous = emphasis.get(key) ?? initial;
+			const value = Math.abs(previous - target) < 0.005 ? target : previous + (target - previous) * blend;
+			emphasis.set(key, value);
+			if (value !== target) highlighting = true;
+			return value;
+		};
+		let settling = false;
+		for (const node of nodes) {
+			const target = targets.get(node.id);
+			if (!target || drag?.node === node) continue;
+			const dx = target.x - node.x,
+				dy = target.y - node.y;
+			if (Math.abs(dx) + Math.abs(dy) > 0.1) {
+				node.x += dx * 0.35;
+				node.y += dy * 0.35;
+				settling = true;
+			} else {
+				node.x = target.x;
+				node.y = target.y;
+			}
+		}
+		const ratio = Math.min(devicePixelRatio || 1, 2);
+		context.setTransform(ratio, 0, 0, ratio, 0, 0);
+		context.clearRect(0, 0, width, height);
+		const dark = document.documentElement.classList.contains("dark");
+		const foreground = dark ? "#e4e4e7" : "#18181b";
+		const colors = dark ? COLORS : LIGHT_COLORS;
+		const active = (hover.active ? byId.get(hover.active) : undefined) ?? (retrieved.size ? undefined : selected);
+		if (tooltip.dataset.node !== active?.id) {
+			showTooltip(active);
+			tooltip.dataset.node = active?.id ?? "";
+		}
+		const relevant = (node: LayoutNode) =>
+			active
+				? node.id === active.id || node.cluster === active.cluster
+				: !retrieved.size || retrieved.has(node.id) || retrievedNeighbors.has(node.id);
+		context.save();
+		context.translate(viewport.panX, viewport.panY);
+		context.scale(viewport.zoom, viewport.zoom);
+		for (const { edge, from, to } of edges) {
+			const highlighted = active
+				? (from.id === active.id || to.id === active.id) && edge.kind !== "depends_on"
+				: retrieved.has(from.id) || retrieved.has(to.id);
+			context.globalAlpha = fade(
+				`edge:${edge.from}:${edge.to}:${edge.kind}`,
+				highlighted
+					? 0.8
+					: (active || retrieved.size) && (!relevant(from) || !relevant(to))
+						? dark
+							? 0.08
+							: 0.15
+						: edge.kind === "depends_on"
+							? dark
+								? 0.3
+								: 0.45
+							: dark
+								? 0.4
+								: 0.55,
+				dark ? 0.4 : 0.55,
+			);
+			context.strokeStyle = highlighted
+				? colors[active?.kind ?? "memory"]
+				: edge.kind === "depends_on"
+					? foreground
+					: colors[to.kind];
+			context.lineWidth = (highlighted ? 1.7 : 1) / viewport.zoom;
+			context.setLineDash(
+				edge.kind === "evidenced_by" || edge.kind === "asserted_by" ? [3 / viewport.zoom, 4 / viewport.zoom] : [],
+			);
+			context.beginPath();
+			context.moveTo(from.x, from.y);
+			context.lineTo(to.x, to.y);
+			context.stroke();
+			if (edge.kind === "depends_on") {
+				const angle = Math.atan2(to.y - from.y, to.x - from.x);
+				const tipX = to.x - Math.cos(angle) * (radius(to) + 3 / viewport.zoom);
+				const tipY = to.y - Math.sin(angle) * (radius(to) + 3 / viewport.zoom);
+				context.beginPath();
+				context.moveTo(
+					tipX - (Math.cos(angle - 0.5) * 6) / viewport.zoom,
+					tipY - (Math.sin(angle - 0.5) * 6) / viewport.zoom,
+				);
+				context.lineTo(tipX, tipY);
+				context.lineTo(
+					tipX - (Math.cos(angle + 0.5) * 6) / viewport.zoom,
+					tipY - (Math.sin(angle + 0.5) * 6) / viewport.zoom,
+				);
+				context.stroke();
+			}
+		}
+		context.setLineDash([]);
+		for (const node of nodes) {
+			const x = node.x * viewport.zoom + viewport.panX;
+			const y = node.y * viewport.zoom + viewport.panY;
+			if (x < -120 || x > width + 120 || y < -40 || y > height + 40) continue;
+			context.globalAlpha = fade(`node:${node.id}`, relevant(node) ? 1 : dark ? 0.16 : 0.25);
+			context.fillStyle = node.kind === "entity" ? foreground : colors[node.kind];
+			context.beginPath();
+			if (node.kind === "origin" || node.kind === "memory" || node.kind === "source") {
+				const r = radius(node);
+				context.rect(node.x - r, node.y - r, r * 2, r * 2);
+			} else {
+				context.arc(node.x, node.y, radius(node), 0, Math.PI * 2);
+			}
+			context.fill();
+			const ring = fade(`ring:${node.id}`, node.id === active?.id || retrieved.has(node.id) ? 1 : 0, 0);
+			if (ring > 0.005) {
+				context.globalAlpha = ring;
+				context.strokeStyle = retrieved.has(node.id) ? colors.memory : foreground;
+				context.lineWidth = 1.5 / viewport.zoom;
+				context.beginPath();
+				context.arc(node.x, node.y, radius(node) + 4 / viewport.zoom, 0, Math.PI * 2);
+				context.stroke();
+			}
+		}
+		context.restore();
+		const occupied: Array<{ x: number; y: number; w: number }> = [];
+		for (const node of [...nodes].sort((a, b) => Number(b.id === active?.id) - Number(a.id === active?.id))) {
+			const visible =
+				node.id === active?.id ||
+				retrieved.has(node.id) ||
+				node.kind === "entity" ||
+				node.kind === "source" ||
+				((viewport.zoom > 1.1 || active) && node.cluster === active?.cluster);
+			const labelAlpha = fade(`label:${node.id}`, visible ? 1 : 0, 0);
+			if (labelAlpha < 0.005) continue;
+			const x = node.x * viewport.zoom + viewport.panX + radius(node) * viewport.zoom + 5;
+			const y = node.y * viewport.zoom + viewport.panY;
+			if (x < 0 || x > width || y < 55 || y > height - 100) continue;
+			const text = node.label.length > 30 ? `${node.label.slice(0, 29)}…` : node.label;
+			context.font =
+				node.id === active?.id || node.kind === "entity" ? "500 12px Geist, sans-serif" : "11px Geist, sans-serif";
+			const w = context.measureText(text).width;
+			if (occupied.some((label) => Math.abs(label.y - y) < 16 && x < label.x + label.w + 10 && x + w + 10 > label.x))
+				continue;
+			occupied.push({ x, y, w });
+			context.globalAlpha = labelAlpha * (emphasis.get(`node:${node.id}`) ?? 1);
+			context.fillStyle = dark ? "#101113" : "#fafafa";
+			context.fillRect(x - 2, y - 9, w + 4, 17);
+			context.fillStyle = foreground;
+			context.fillText(text, x, y + 4);
+		}
+		context.globalAlpha = 1;
+		if (moving || settling || highlighting) invalidate();
+	};
+	const invalidate = () => {
+		if (!disposed && !frame) frame = requestAnimationFrame(draw);
+	};
+	const fit = (subset = nodes, animate = true) => {
+		const available = width;
+		const bounds = subset.map((node) => ({ x: node.x, y: node.y, size: radius(node) + 30 }));
+		viewport.setMinZoomForNodes(
+			nodes.map((node) => ({ x: node.x, y: node.y, size: radius(node) })),
+			width,
+			height,
+		);
+		viewport.fitToNodes(bounds, available, height, { animate });
+		invalidate();
+	};
+	const focusNode = (id: string) => {
+		selected = byId.get(id);
+		hover.clear();
+		if (!selected) return;
+		neighbors = new Set(
+			edges.filter(({ from, to }) => from.id === id || to.id === id).flatMap(({ from, to }) => [from.id, to.id]),
+		);
+		fit(
+			nodes.filter((node) =>
+				selected?.kind === "entity"
+					? node.cluster === selected.cluster && !["memory", "origin", "assertion"].includes(node.kind)
+					: node.id === id || neighbors.has(node.id),
 			),
 		);
-		const leaderMat = new THREE.LineBasicMaterial({
-			color: new THREE.Color(COLORS[n.kind]),
-			transparent: true,
-			opacity: 0.65,
-			depthWrite: false,
-		});
-		const leader = new THREE.Line(leaderGeo, leaderMat);
-		scene.add(leader);
-		const priority =
-			n.kind === "entity"
-				? 100
-				: n.kind === "source"
-					? 95
-					: n.kind === "origin"
-						? 90
-						: n.kind === "assertion"
-							? 85
-							: n.kind === "claim" || n.kind === "constraint"
-								? 80
-								: n.kind === "claimSlot"
-									? 70
-									: 60;
-		labelObjs[n.id] = { obj, div, pos: n.pos.clone(), dir: n.dir, leader, semantic, kind: n.kind, priority };
-	}
-	const EDGE_STYLES: Record<SceneEdgeKind, { color: number; opacity: number; dashed: boolean }> = {
-		contains: { color: 0x34d399, opacity: 0.28, dashed: false },
-		organizes: { color: 0x60a5fa, opacity: 0.34, dashed: false },
-		describes: { color: 0xa78bfa, opacity: 0.32, dashed: false },
-		asserted_by: { color: 0xf472b6, opacity: 0.58, dashed: true },
-		evidenced_by: { color: 0x22d3ee, opacity: 0.58, dashed: true },
-		depends_on: { color: 0xfbbf24, opacity: 0.34, dashed: false },
-	};
-	interface EdgeMesh {
-		line: THREE.Line;
-		baseOpacity: number;
-	}
-	const edgeMeshes: EdgeMesh[] = [];
-	for (const { from, to, kind } of EDGES) {
-		const a = byId.get(from);
-		const b = byId.get(to);
-		if (!a || !b) continue;
-		const mid = a.pos.clone().add(b.pos).multiplyScalar(0.5);
-		if (mid.length() > 0) mid.multiplyScalar(1.25);
-		const curve = new THREE.QuadraticBezierCurve3(a.pos, mid, b.pos);
-		const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(8));
-		const style = EDGE_STYLES[kind];
-		const mat = style.dashed
-			? new THREE.LineDashedMaterial({
-					color: style.color,
-					transparent: true,
-					opacity: style.opacity,
-					depthWrite: false,
-					dashSize: 3,
-					gapSize: 4,
-				})
-			: new THREE.LineBasicMaterial({
-					color: style.color,
-					transparent: true,
-					opacity: style.opacity,
-					depthWrite: false,
-				});
-		const line = new THREE.Line(geo, mat);
-		if (style.dashed) line.computeLineDistances();
-		scene.add(line);
-		edgeMeshes.push({ line, baseOpacity: style.opacity });
-	}
-	const floorY = -SPHERE_R - 30;
-	const gridDivs = 20;
-	const gridStep = SPHERE_R * 0.15;
-	const gridPos: number[] = [];
-	for (let gx = -gridDivs; gx <= gridDivs; gx++) {
-		for (let gz = -gridDivs; gz <= gridDivs; gz++) {
-			if (Math.sqrt(gx * gx + gz * gz) > gridDivs * 0.8) continue;
-			gridPos.push(gx * gridStep, floorY, gz * gridStep);
-		}
-	}
-	const gridGeo = new THREE.BufferGeometry();
-	gridGeo.setAttribute("position", new THREE.Float32BufferAttribute(gridPos, 3));
-	scene.add(
-		new THREE.Points(
-			gridGeo,
-			new THREE.PointsMaterial({
-				size: 1.5,
-				color: 0x1a3a30,
-				transparent: true,
-				opacity: 0.3,
-				sizeAttenuation: true,
-				depthWrite: false,
-			}),
-		),
-	);
-	const dropPositions: number[] = [];
-	for (const n of NODES) {
-		if (n.kind !== "entity" && n.kind !== "source") continue;
-		dropPositions.push(n.pos.x, n.pos.y, n.pos.z, n.pos.x, floorY, n.pos.z);
-	}
-	if (dropPositions.length > 0) {
-		const dropGeo = new THREE.BufferGeometry();
-		dropGeo.setAttribute("position", new THREE.Float32BufferAttribute(dropPositions, 3));
-		const dropLines = new THREE.LineSegments(
-			dropGeo,
-			new THREE.LineDashedMaterial({
-				color: 0x1a4a3a,
-				transparent: true,
-				opacity: 0.15,
-				dashSize: 3,
-				gapSize: 6,
-				depthWrite: false,
-			}),
-		);
-		dropLines.computeLineDistances();
-		scene.add(dropLines);
-	}
-	const DUST_COUNT = 2200;
-	const dustPos = new Float32Array(DUST_COUNT * 3);
-	for (let d = 0; d < DUST_COUNT; d++) {
-		const r = (0.3 + Math.random() * 0.7) * SPHERE_R;
-		const th = Math.random() * Math.PI * 2;
-		const ph = Math.acos(2 * Math.random() - 1);
-		dustPos[d * 3] = r * Math.sin(ph) * Math.cos(th);
-		dustPos[d * 3 + 1] = r * Math.cos(ph);
-		dustPos[d * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
-	}
-	const dustGeo = new THREE.BufferGeometry();
-	dustGeo.setAttribute("position", new THREE.BufferAttribute(dustPos, 3));
-	scene.add(
-		new THREE.Points(
-			dustGeo,
-			new THREE.PointsMaterial({
-				size: 1.5,
-				color: 0x52525b,
-				transparent: true,
-				opacity: 0.4,
-				sizeAttenuation: true,
-				depthWrite: false,
-			}),
-		),
-	);
-	const reticleR = 8;
-	const reticleGeo = new THREE.BufferGeometry();
-	reticleGeo.setAttribute(
-		"position",
-		new THREE.Float32BufferAttribute(
-			[-reticleR, 0, 0, reticleR, 0, 0, 0, -reticleR, 0, 0, reticleR, 0, 0, 0, -reticleR, 0, 0, reticleR],
-			3,
-		),
-	);
-	scene.add(
-		new THREE.LineSegments(
-			reticleGeo,
-			new THREE.LineBasicMaterial({ color: 0x10b981, transparent: true, opacity: 0.4, depthWrite: false }),
-		),
-	);
-	const targetBracket = new THREE.Group();
-	targetBracket.visible = false;
-	const bracketR = 14;
-	const bracketCorner = 5;
-	const cornerPts: number[] = [];
-	for (const [sx, sy] of [
-		[-1, -1],
-		[1, -1],
-		[-1, 1],
-		[1, 1],
-	] as const) {
-		const x = sx * bracketR;
-		const y = sy * bracketR;
-		cornerPts.push(x, y, 0, x - sx * bracketCorner, y, 0);
-		cornerPts.push(x, y, 0, x, y - sy * bracketCorner, 0);
-	}
-	const bracketGeo = new THREE.BufferGeometry();
-	bracketGeo.setAttribute("position", new THREE.Float32BufferAttribute(cornerPts, 3));
-	targetBracket.add(
-		new THREE.LineSegments(
-			bracketGeo,
-			new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.8, depthWrite: false }),
-		),
-	);
-	scene.add(targetBracket);
-
-	const targetReadout = document.createElement("div");
-	targetReadout.style.cssText =
-		"position:absolute;display:none;font-family:var(--font-mono);font-size:9px;" +
-		"color:#f4f4f5;background:rgba(9,9,11,0.92);padding:5px 8px;border-radius:4px;border:1px solid oklch(1 0 0 / 0.1);" +
-		"pointer-events:none;line-height:1.5;z-index:10;white-space:nowrap";
-	labelContainer.appendChild(targetReadout);
-
-	const raycaster = new THREE.Raycaster();
-	raycaster.params.Points = { threshold: 8 };
-	const mouseNDC = new THREE.Vector2(-2, -2);
-	let pointerInside = false;
-	let pointerDirty = true;
-	let lastPointerRaycast = 0;
-	const onPointerMove = (ev: PointerEvent) => {
-		const rect = renderer.domElement.getBoundingClientRect();
-		mouseNDC.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-		mouseNDC.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-		pointerInside = true;
-		pointerDirty = true;
-	};
-	const onPointerLeave = () => {
-		pointerInside = false;
-		pointerDirty = true;
-		mouseNDC.set(-2, -2);
-	};
-	renderer.domElement.addEventListener("pointermove", onPointerMove);
-	renderer.domElement.addEventListener("pointerleave", onPointerLeave);
-	interface CamTween {
-		t0: number;
-		dur: number;
-		fromTheta: number;
-		fromPhi: number;
-		dTheta: number;
-		dPhi: number;
-		fromRadius: number;
-		toRadius: number;
-		fromTarget: THREE.Vector3;
-		toTarget: THREE.Vector3;
-	}
-	let camTween: CamTween | null = null;
-	const dirToAngles = (dir: THREE.Vector3) => {
-		const d = dir.clone().normalize();
-		return { theta: Math.atan2(d.x, d.z), phi: Math.acos(Math.max(-1, Math.min(1, d.y))) };
-	};
-	const anglesToDir = (theta: number, phi: number) =>
-		new THREE.Vector3(Math.sin(phi) * Math.sin(theta), Math.cos(phi), Math.sin(phi) * Math.cos(theta));
-	const ORIGIN = new THREE.Vector3(0, 0, 0);
-	const startTween = (toTheta: number, toPhi: number, toRadius: number, toTarget: THREE.Vector3, dur = 1680) => {
-		const a = dirToAngles(camera.position.clone().sub(ORIGIN));
-		let dTheta = toTheta - a.theta;
-		while (dTheta > Math.PI) dTheta -= 2 * Math.PI;
-		while (dTheta < -Math.PI) dTheta += 2 * Math.PI;
-		let dPhi = toPhi - a.phi;
-		while (dPhi > Math.PI) dPhi -= 2 * Math.PI;
-		while (dPhi < -Math.PI) dPhi += 2 * Math.PI;
-		camTween = {
-			t0: performance.now(),
-			dur,
-			fromTheta: a.theta,
-			fromPhi: a.phi,
-			dTheta,
-			dPhi,
-			fromRadius: camera.position.clone().sub(ORIGIN).length(),
-			toRadius,
-			fromTarget: controls.target.clone(),
-			toTarget: toTarget.clone(),
-		};
-	};
-	let highlightSet: Set<string> | null = null;
-	let highlightMix = 0;
-	let highlightTween: { t0: number; from: number; to: number; dur: number } | null = null;
-	const HIGHLIGHT_DIM = 0.06;
-	const HIGHLIGHT_SAT = 0.12;
-	const setHighlight = (ids: Set<string> | null) => {
-		highlightSet = ids;
-		highlightTween = { t0: performance.now(), from: highlightMix, to: ids ? 1 : 0, dur: 1680 };
-	};
-	const neighbors = (id: string) => {
-		const set = new Set([id]);
-		for (const { from, to } of EDGES) {
-			if (from === id) set.add(to);
-			if (to === id) set.add(from);
-		}
-		return set;
-	};
-	const focusNode = (id: string, drawerOpen = false) => {
-		const n = byId.get(id);
-		if (!n) return;
-		controls.autoRotate = false;
-		const targetDir = n.pos.clone().normalize();
-		const a = dirToAngles(targetDir);
-		const target = n.pos.clone();
-		if (drawerOpen) {
-			const right = anglesToDir(a.theta + Math.PI / 2, Math.PI / 2);
-			target.add(right.multiplyScalar(45));
-		}
-		startTween(a.theta, a.phi, 240, target);
-		setHighlight(neighbors(id));
+		showTooltip(selected);
 	};
 	const resetView = () => {
-		controls.autoRotate = true;
-		const homeDir = new THREE.Vector3(0, 0.15, 1).normalize();
-		const a = dirToAngles(homeDir);
-		startTween(a.theta, a.phi, 520, ORIGIN.clone());
-		setHighlight(null);
+		selected = undefined;
+		hover.clear();
+		neighbors.clear();
+		showTooltip();
+		fit();
 	};
-	let raf = 0;
-	let disposed = false;
-	const animate = () => {
-		if (disposed) return;
-		raf = requestAnimationFrame(animate);
-		const frameNow = performance.now();
-		if (camTween) {
-			const elapsed = performance.now() - camTween.t0;
-			const t = Math.min(1, elapsed / camTween.dur);
-			const orbitEase = t < 0.5 ? 16 * t * t * t * t * t : 1 - (-2 * t + 2) ** 5 / 2;
-			const theta = camTween.fromTheta + camTween.dTheta * orbitEase;
-			const phi = camTween.fromPhi + camTween.dPhi * orbitEase;
-			let radius: number;
-			if (t < 0.4) {
-				radius = camTween.fromRadius;
-			} else {
-				const zoomT = (t - 0.4) / 0.6;
-				const zoomEase = zoomT * zoomT * zoomT * (zoomT * (6 * zoomT - 15) + 10);
-				radius = camTween.fromRadius + (camTween.toRadius - camTween.fromRadius) * zoomEase;
-			}
-			camera.position.copy(ORIGIN).add(anglesToDir(theta, phi).multiplyScalar(radius));
-			controls.target.lerpVectors(camTween.fromTarget, camTween.toTarget, orbitEase);
-			if (t >= 1) camTween = null;
-		}
-		controls.update();
-		if (highlightTween) {
-			const t = Math.min(1, (performance.now() - highlightTween.t0) / highlightTween.dur);
-			const e = t < 0.5 ? 16 * t * t * t * t * t : 1 - (-2 * t + 2) ** 5 / 2;
-			highlightMix = highlightTween.from + (highlightTween.to - highlightTween.from) * e;
-			if (t >= 1) highlightTween = null;
-		}
-		const camDir = camera.position.clone().sub(controls.target).normalize();
-		for (const [kind, layer] of Object.entries(nodeLayers)) {
-			if (!layer) continue;
-			const isHub = kind === "entity" || kind === "source" || kind === "origin";
-			for (const [j, origIdx] of layer.origIndices.entries()) {
-				const dot = NODES[origIdx].dir.dot(camDir);
-				const base = baseColors[origIdx];
-				const depthAlpha = dot > 0 ? 1.0 : isHub ? 0.32 : 0.2;
-				let bright = depthAlpha;
-				let sat = 1;
-				if (highlightMix > 0 && highlightSet) {
-					if (highlightSet.has(NODES[origIdx].id)) {
-						bright = depthAlpha + (1 - depthAlpha) * highlightMix;
-					} else {
-						bright = depthAlpha + (Math.min(depthAlpha, HIGHLIGHT_DIM) - depthAlpha) * highlightMix;
-						sat = 1 - (1 - HIGHLIGHT_SAT) * highlightMix;
-					}
-				}
-				let r = base.r;
-				let g = base.g;
-				let b = base.b;
-				if (sat < 1) {
-					const gray = base.r * 0.299 + base.g * 0.587 + base.b * 0.114;
-					r = gray + (r - gray) * sat;
-					g = gray + (g - gray) * sat;
-					b = gray + (b - gray) * sat;
-				}
-				layer.colArr[j * 3] = r * bright;
-				layer.colArr[j * 3 + 1] = g * bright;
-				layer.colArr[j * 3 + 2] = b * bright;
-			}
-			layer.geo.getAttribute("color").needsUpdate = true;
-		}
-		for (const e of edgeMeshes) {
-			(e.line.material as THREE.LineBasicMaterial).opacity = e.baseOpacity * (1 - 0.55 * highlightMix);
-		}
-		const labelRects: Array<{ left: number; right: number; top: number; bottom: number }> = [];
-		const labelCandidates = Object.values(labelObjs)
-			.map((lb) => {
-				const dot = lb.dir.dot(camDir);
-				const minDot = lb.kind === "assertion" ? -0.8 : lb.semantic ? 0.35 : 0.3;
-				const projected = lb.obj.position.clone().project(camera);
-				return {
-					lb,
-					dot,
-					minDot,
-					x: (projected.x * 0.5 + 0.5) * renderer.domElement.clientWidth,
-					y: (-projected.y * 0.5 + 0.5) * renderer.domElement.clientHeight,
-				};
-			})
-			.filter(({ dot, minDot }) => dot > minDot)
-			.sort((a, b) => b.lb.priority - a.lb.priority || b.dot - a.dot);
-		for (const { lb, dot, minDot, x, y } of labelCandidates) {
-			const width = lb.div.offsetWidth || (lb.semantic ? 150 : 100);
-			const height = lb.div.offsetHeight || (lb.semantic ? 38 : 20);
-			const rect = {
-				left: x - width / 2 - 6,
-				right: x + width / 2 + 6,
-				top: y - height / 2 - 6,
-				bottom: y + height / 2 + 6,
-			};
-			const collides = labelRects.some(
-				(other) =>
-					rect.left < other.right && rect.right > other.left && rect.top < other.bottom && rect.bottom > other.top,
+	const zoom = (factor: number, x = width / 2, y = height / 2) => {
+		viewport.zoomTo(viewport.zoom * factor, x, y);
+		invalidate();
+	};
+	const point = (event: PointerEvent | WheelEvent) => {
+		const rect = canvas.getBoundingClientRect();
+		return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+	};
+	const hit = (x: number, y: number) =>
+		[...nodes]
+			.reverse()
+			.find(
+				(node) =>
+					Math.hypot(node.x * viewport.zoom + viewport.panX - x, node.y * viewport.zoom + viewport.panY - y) <=
+					Math.max(8, radius(node) * viewport.zoom + 3),
 			);
-			const alpha = Math.min(1, 0.35 + (dot - minDot) * 1.5);
-			lb.div.style.opacity = collides ? "0" : String(alpha);
-			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = collides ? 0 : 0.5);
-			if (!collides) labelRects.push(rect);
-		}
-		const candidateIds = new Set(labelCandidates.map(({ lb }) => lb));
-		for (const lb of Object.values(labelObjs)) {
-			if (candidateIds.has(lb)) continue;
-			lb.div.style.opacity = "0";
-			lb.leader && ((lb.leader.material as THREE.LineBasicMaterial).opacity = 0);
-		}
-		if (pointerInside && (pointerDirty || frameNow - lastPointerRaycast >= 100)) {
-			lastPointerRaycast = frameNow;
-			pointerDirty = false;
-			raycaster.setFromCamera(mouseNDC, camera);
-			const intersects = nodePoints.length > 0 ? raycaster.intersectObjects(nodePoints, false) : [];
-			if (intersects.length > 0) {
-				const intersection = intersects[0];
-				const layer = nodeLayers[intersection.object.userData.kind as SceneNodeKind];
-				const index = intersection.index;
-				if (!layer || index === undefined) {
-					targetBracket.visible = false;
-					targetReadout.style.display = "none";
-				} else {
-					const n = NODES[layer.origIndices[index]];
-					targetBracket.visible = true;
-					targetBracket.position.copy(n.pos);
-					const sp = n.pos.clone().project(camera);
-					const sx = (sp.x * 0.5 + 0.5) * renderer.domElement.clientWidth;
-					const sy = (-sp.y * 0.5 + 0.5) * renderer.domElement.clientHeight;
-					const edgeCount = edgeCounts.get(n.id) ?? 0;
-					targetReadout.style.display = "block";
-					targetReadout.style.left = `${sx + 20}px`;
-					targetReadout.style.top = `${sy - 30}px`;
-					targetReadout.textContent = [
-						`${KIND_LABELS[n.kind]} · ${n.label}`,
-						n.metric,
-						n.detail && n.detail !== n.label ? shorten(n.detail, 180) : null,
-						`${edgeCount} relationship${edgeCount === 1 ? "" : "s"}`,
-					]
-						.filter((line): line is string => Boolean(line))
-						.join("\n");
-				}
+	const select = (node: LayoutNode) => {
+		focusNode(node.id);
+		onSelect?.(node);
+	};
+	const down = (event: PointerEvent) => {
+		pauseFollow();
+		const p = point(event);
+		history = [{ ...p, t: performance.now() }];
+		drag = { id: event.pointerId, ...p, startX: p.x, startY: p.y, moved: false, node: hit(p.x, p.y) };
+		viewport.cancelAnimation();
+		canvas.setPointerCapture(event.pointerId);
+		canvas.focus();
+	};
+	const move = (event: PointerEvent) => {
+		const p = point(event);
+		if (drag) {
+			if (drag.id !== event.pointerId) return;
+			if (!drag.moved && Math.hypot(p.x - drag.startX, p.y - drag.startY) < 4) return;
+			drag.moved = true;
+			if (drag.node) {
+				drag.node.x += (p.x - drag.x) / viewport.zoom;
+				drag.node.y += (p.y - drag.y) / viewport.zoom;
+				const request: GraphWorkerRequest = { type: "drag", id: drag.node.id, x: drag.node.x, y: drag.node.y };
+				worker.postMessage(request);
 			} else {
-				targetBracket.visible = false;
-				targetReadout.style.display = "none";
+				viewport.pan(p.x - drag.x, p.y - drag.y);
+				history.push({ ...p, t: performance.now() });
+				if (history.length > 4) history.shift();
 			}
-		} else if (!pointerInside) {
-			targetBracket.visible = false;
-			targetReadout.style.display = "none";
+			drag.x = p.x;
+			drag.y = p.y;
+			invalidate();
+			return;
 		}
-
-		renderer.render(scene, camera);
-		labelRenderer.render(scene, camera);
+		const node = hit(p.x, p.y);
+		hover.move(node?.id, performance.now());
+		canvas.style.cursor = node ? "pointer" : "grab";
+		invalidate();
 	};
-	animate();
-	const ro = new ResizeObserver(() => {
-		const nw = container.clientWidth;
-		const nh = container.clientHeight;
-		if (nw === 0 || nh === 0) return;
-		camera.aspect = nw / nh;
-		camera.updateProjectionMatrix();
-		renderer.setSize(nw, nh, false);
-		labelRenderer.setSize(nw, nh);
+	const up = (event: PointerEvent) => {
+		if (!drag || drag.id !== event.pointerId) return;
+		if (event.type !== "pointercancel" && !drag.moved && drag.node) select(drag.node);
+		if (drag.node && drag.moved) {
+			targets.set(drag.node.id, { x: drag.node.x, y: drag.node.y });
+			const request: GraphWorkerRequest = { type: "release", id: drag.node.id };
+			worker.postMessage(request);
+		}
+		if (!drag.node && event.type !== "pointercancel") {
+			const newest = history[history.length - 1],
+				oldest = history[0];
+			if (newest && oldest) {
+				const dt = newest.t - oldest.t;
+				if (dt > 0 && dt < 200)
+					viewport.releaseWithVelocity(((newest.x - oldest.x) / dt) * 16, ((newest.y - oldest.y) / dt) * 16);
+			}
+			invalidate();
+		}
+		drag = undefined;
+		if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+	};
+	const leave = () => {
+		if (!drag) {
+			hover.clear();
+			showTooltip(selected);
+			invalidate();
+		}
+	};
+	const wheel = (event: WheelEvent) => {
+		event.preventDefault();
+		pauseFollow();
+		const p = point(event);
+		if (Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+			viewport.pan(-event.deltaX, 0);
+		} else {
+			viewport.zoomImmediate(event.deltaY > 0 ? 0.97 : 1.03, p.x, p.y);
+		}
+		invalidate();
+	};
+	const key = (event: KeyboardEvent) => {
+		if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Enter", "Escape", "+", "=", "-"].includes(event.key))
+			pauseFollow();
+		if (["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp"].includes(event.key)) {
+			event.preventDefault();
+			keyboardIndex =
+				(keyboardIndex + (event.key === "ArrowLeft" || event.key === "ArrowUp" ? -1 : 1) + nodes.length) % nodes.length;
+			const node = nodes[keyboardIndex];
+			if (node) focusNode(node.id);
+		}
+		if (event.key === "Enter" && selected) select(selected);
+		if (event.key === "Escape") resetView();
+		if (event.key === "+" || event.key === "=") zoom(1.25);
+		if (event.key === "-") zoom(0.8);
+	};
+	canvas.addEventListener("pointerdown", down);
+	canvas.addEventListener("pointermove", move);
+	canvas.addEventListener("pointerup", up);
+	canvas.addEventListener("pointercancel", up);
+	canvas.addEventListener("pointerleave", leave);
+	canvas.addEventListener("wheel", wheel, { passive: false });
+	canvas.addEventListener("keydown", key);
+	const resize = new ResizeObserver(() => {
+		width = Math.max(1, container.clientWidth);
+		height = Math.max(1, container.clientHeight);
+		const ratio = Math.min(devicePixelRatio || 1, 2);
+		canvas.width = Math.round(width * ratio);
+		canvas.height = Math.round(height * ratio);
+		if (followAgent && retrieved.size)
+			fit(nodes.filter((node) => retrieved.has(node.id) || retrievedNeighbors.has(node.id)));
+		else if (selected) focusNode(selected.id);
+		else fit();
 	});
-	ro.observe(container);
-	const stopAutoRotate = () => {
-		controls.autoRotate = false;
+	resize.observe(container);
+	const theme = new MutationObserver(invalidate);
+	theme.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+	const deadline = setTimeout(() => {
+		worker.terminate();
+		onError?.();
+	}, 15_000);
+	worker.onmessage = (event: MessageEvent<GraphWorkerResponse>) => {
+		if (disposed) return;
+		clearTimeout(deadline);
+		canvas.setAttribute("aria-busy", "false");
+		if (nodes.length) {
+			targets = new Map(event.data.nodes.map((node) => [node.id, { x: node.x, y: node.y }]));
+			invalidate();
+			return;
+		}
+		nodes = event.data.nodes;
+		byId = new Map(nodes.map((node) => [node.id, node]));
+		edges = data.edges.flatMap((edge) => {
+			const from = byId.get(edge.from),
+				to = byId.get(edge.to);
+			return from && to ? [{ edge, from, to }] : [];
+		});
+		fit(nodes, false);
 	};
-	controls.addEventListener("start", stopAutoRotate);
-
+	worker.onerror = () => {
+		clearTimeout(deadline);
+		worker.terminate();
+		onError?.();
+	};
+	const request: GraphWorkerRequest = { type: "init", data };
+	worker.postMessage(request);
 	return {
+		setRetrieval: (nodeIds, evidenceRefs) => {
+			const matched = matchRetrievedNodes(data.nodes, nodeIds, evidenceRefs);
+			for (const id of pendingRetrieval?.ids ?? []) matched.add(id);
+			pendingRetrieval = { ids: matched, at: pendingRetrieval?.at ?? performance.now() + 180 };
+			invalidate();
+		},
+		clearRetrieval: () => {
+			pendingRetrieval = undefined;
+			retrieved.clear();
+			retrievedNeighbors.clear();
+			followDue = false;
+			canvas.dataset.retrievedNodes = "0";
+			invalidate();
+		},
+		setFollowAgent: (enabled) => {
+			followAgent = enabled;
+			if (enabled) lastFollow = -Infinity;
+			followDue = enabled && retrieved.size > 0;
+			if (!enabled) viewport.cancelAnimation();
+			invalidate();
+		},
 		focusNode,
 		resetView,
-		focusable: () => NODES.filter((n) => n.kind === "entity" || n.kind === "source").map((n) => n.id),
+		focusable: () => nodes.map((node) => node.id),
+		zoom,
 		dispose: () => {
+			if (disposed) return;
 			disposed = true;
-			cancelAnimationFrame(raf);
-			ro.disconnect();
-			controls.removeEventListener("start", stopAutoRotate);
-			controls.dispose();
-			renderer.domElement.removeEventListener("pointermove", onPointerMove);
-			renderer.domElement.removeEventListener("pointerleave", onPointerLeave);
-			scene.traverse((obj) => {
-				const mesh = obj as THREE.Mesh;
-				if (mesh.geometry) mesh.geometry.dispose();
-				const mat = (mesh as unknown as { material?: THREE.Material | THREE.Material[] }).material;
-				if (Array.isArray(mat)) {
-					for (const m of mat) m.dispose();
-				} else if (mat) mat.dispose();
-			});
-			for (const t of [crossTex, diamondTex, squareTex, hexTex, ringTex, triangleTex]) t.dispose();
-			renderer.dispose();
-			container.replaceChildren();
+			clearTimeout(deadline);
+			worker.terminate();
+			resize.disconnect();
+			theme.disconnect();
+			cancelAnimationFrame(frame);
+			canvas.removeEventListener("pointerdown", down);
+			canvas.removeEventListener("pointermove", move);
+			canvas.removeEventListener("pointerup", up);
+			canvas.removeEventListener("pointercancel", up);
+			canvas.removeEventListener("pointerleave", leave);
+			canvas.removeEventListener("wheel", wheel);
+			canvas.removeEventListener("keydown", key);
+			canvas.remove();
+			tooltip.remove();
 		},
 	};
 }
