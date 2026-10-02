@@ -68,16 +68,6 @@ This inventory is maintained alongside the dashboard manifest. When a direct
 dependency, version range, or license changes, update this document in the same
 change and verify the resolved package metadata in `bun.lock`.
 
-## Adapted graph navigation
-
-The dashboard viewport implementation in `surfaces/dashboard/src/lib/graph-viewport.ts`
-is copied from Supermemory's `packages/memory-graph/src/canvas/viewport.ts`
-([upstream](https://github.com/supermemoryai/supermemory/tree/main/packages/memory-graph)).
-Copyright (c) 2025 supermemory. Licensed under MIT; the complete notice is preserved
-in the source file. The force simulation in `surfaces/dashboard/src/lib/graph-simulation.ts`
-is adapted from the same package, with geometry scaled for Signet's node sizes
-and structural links mapped to the ontology hierarchy.
-
 ## Adapted AI Elements components
 
 The conversation, message, prompt-input, and sources components in
