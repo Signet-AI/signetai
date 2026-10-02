@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
 	BaseConnector,
 	type InstallResult,
@@ -41,6 +42,7 @@ export type SignetMcpConfig =
 
 const CODEX_PLUGIN_MARKETPLACE_NAME = "signet-local";
 const CODEX_PLUGIN_NAME = "signet";
+const CODEX_CONNECTOR_DIR = dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_CONFIG_NAME = `${CODEX_PLUGIN_NAME}@${CODEX_PLUGIN_MARKETPLACE_NAME}`;
 const CODEX_PLUGIN_VERSION = "0.1.0";
 const CODEX_PLUGIN_DESCRIPTION =
@@ -58,6 +60,7 @@ const CODEX_PLUGIN_INTERFACE = {
 	brandColor: "#2563EB",
 } as const;
 const CODEX_PLUGIN_KEYWORDS = ["signet", "recall", "sources", "sessions", "ontology", "codex"] as const;
+const CODEX_PLUGIN_SKILL_NAMES = ["signet-recall", "signet-sessions", "signet-ontology", "signet-save-note"] as const;
 
 interface CodexPluginBundleFile {
 	readonly relativePath: string;
@@ -416,6 +419,15 @@ export function resolveCodexCli(
 	return null;
 }
 
+function resolvePluginSkillsDirectory(): string {
+	const packaged = join(CODEX_CONNECTOR_DIR, "plugin-assets", "skills");
+	if (existsSync(packaged)) return packaged;
+
+	const workspace = join(CODEX_CONNECTOR_DIR, "..", "..", "plugin", "plugins", CODEX_PLUGIN_NAME, "skills");
+	if (existsSync(workspace)) return workspace;
+	throw new Error("Cannot find Codex plugin skill assets in the connector package");
+}
+
 function codexPluginBundleFiles(
 	signetArgs: readonly string[],
 	mcp: SignetMcpConfig,
@@ -446,6 +458,7 @@ function codexPluginBundleFiles(
 		license: "Apache-2.0",
 		keywords: CODEX_PLUGIN_KEYWORDS,
 	};
+	const skillSources = resolvePluginSkillsDirectory();
 	return [
 		{
 			relativePath: ".agents/plugins/marketplace.json",
@@ -487,64 +500,10 @@ function codexPluginBundleFiles(
 			relativePath: `plugins/${CODEX_PLUGIN_NAME}/hooks/hooks.json`,
 			content: `${JSON.stringify(hookFile, null, 2)}\n`,
 		},
-		{
-			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/signet-recall/SKILL.md`,
-			content: [
-				"---",
-				"name: signet-recall",
-				"description: Use Signet-specific recall and source search from Codex without confusing it with Codex native memory.",
-				"---",
-				"",
-				"# Signet Recall",
-				"",
-				"Use `signet_recall` for explicit Signet recall. Ask natural questions with an entity, event, and timeframe when possible. Use `signet_source_search` when the answer should come from source-backed artifacts rather than ordinary saved memories.",
-				"",
-				"Do not treat Codex native memory and Signet memory as competing stores. Codex native memory is a source that Signet can index with provenance.",
-				"",
-			].join("\n"),
-		},
-		{
-			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/signet-sessions/SKILL.md`,
-			content: [
-				"---",
-				"name: signet-sessions",
-				"description: Search Signet transcript/session evidence from Codex.",
-				"---",
-				"",
-				"# Signet Sessions",
-				"",
-				"Use `signet_session_search` when prior transcript evidence matters. Keep transcript lookup separate from memory recall; do not fold session search into ordinary memory search.",
-				"",
-			].join("\n"),
-		},
-		{
-			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/signet-ontology/SKILL.md`,
-			content: [
-				"---",
-				"name: signet-ontology",
-				"description: Navigate Signet ontology and knowledge graph state from Codex.",
-				"---",
-				"",
-				"# Signet Ontology",
-				"",
-				"Use Signet ontology tools for reviewed structured facts, claim history, entity dependencies, and graph hygiene. Raw Codex memory files are evidence, not ontology by themselves.",
-				"",
-			].join("\n"),
-		},
-		{
-			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/signet-save-note/SKILL.md`,
-			content: [
-				"---",
-				"name: signet-save-note",
-				"description: Save explicit notes into Codex native memory through Signet.",
-				"---",
-				"",
-				"# Signet Save Note",
-				"",
-				"Use `signet_save_note` only for explicit durable notes. It writes small ad-hoc markdown notes under Codex native memory extensions and never edits Codex-generated `MEMORY.md` or `memory_summary.md`.",
-				"",
-			].join("\n"),
-		},
+		...CODEX_PLUGIN_SKILL_NAMES.map((name) => ({
+			relativePath: `plugins/${CODEX_PLUGIN_NAME}/skills/${name}/SKILL.md`,
+			content: readFileSync(join(skillSources, name, "SKILL.md"), "utf-8"),
+		})),
 	];
 }
 

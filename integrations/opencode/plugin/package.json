@@ -17,6 +17,7 @@
 		"dev": "bun --watch src/index.ts"
 	},
 	"dependencies": {
+		"@signet/connector-base": "workspace:*",
 		"@signet/core": "workspace:*"
 	},
 	"peerDependencies": {

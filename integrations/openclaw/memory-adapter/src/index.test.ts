@@ -14,6 +14,8 @@ const originalFetch = globalThis.fetch;
 const originalSetInterval = globalThis.setInterval;
 const originalClearInterval = globalThis.clearInterval;
 const originalSignetPath = process.env.SIGNET_PATH;
+const originalApiKey = process.env.SIGNET_API_KEY;
+const originalToken = process.env.SIGNET_TOKEN;
 
 let intervalCallbacks: Array<() => void | Promise<void>> = [];
 let nextIntervalId = 1;
@@ -36,6 +38,7 @@ let lastSessionSearchBody: unknown = null;
 let lastCheckpointBody: unknown = null;
 let lastHeartbeatBody: unknown = null;
 let warnMessages: string[] = [];
+let lastAuthorization: string | null = null;
 let testDir = "";
 
 function hit(path: string): void {
@@ -136,6 +139,7 @@ beforeEach(() => {
 	checkpointResponse = null;
 	notificationInject = null;
 	warnMessages = [];
+	lastAuthorization = null;
 	testDir = mkdtempSync(join(tmpdir(), "signet-openclaw-test-"));
 	process.env.SIGNET_PATH = testDir;
 	writeFileSync(join(testDir, "AGENTS.md"), "Temporary test instructions for static identity fallback coverage.");
@@ -145,6 +149,7 @@ beforeEach(() => {
 			const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
 			const path = new URL(url).pathname;
 			hit(path);
+			lastAuthorization = new Headers(init?.headers).get("authorization");
 
 			switch (path) {
 				case "/health":
@@ -281,6 +286,10 @@ afterEach(async () => {
 	} else {
 		process.env.SIGNET_PATH = originalSignetPath;
 	}
+	if (originalApiKey === undefined) Reflect.deleteProperty(process.env, "SIGNET_API_KEY");
+	else process.env.SIGNET_API_KEY = originalApiKey;
+	if (originalToken === undefined) Reflect.deleteProperty(process.env, "SIGNET_TOKEN");
+	else process.env.SIGNET_TOKEN = originalToken;
 	rmSync(testDir, { recursive: true, force: true });
 	for (const service of registeredServices) {
 		await service.stop();
@@ -289,6 +298,16 @@ afterEach(async () => {
 });
 
 describe("signet-memory-openclaw lifecycle hooks", () => {
+	it("keeps host credentials out of unauthenticated OpenClaw daemon requests", async () => {
+		process.env.SIGNET_API_KEY = "test-only-api-key";
+		process.env.SIGNET_TOKEN = "test-only-legacy-token";
+
+		await memoryRecall("credential boundary", { daemonUrl: "http://daemon.test" });
+
+		expect(getHits("/api/memory/recall")).toBe(1);
+		expect(lastAuthorization).toBeNull();
+	});
+
 	it("delegates recall defaults and bounds to the canonical request builder", async () => {
 		await memoryRecall("default recall", { daemonUrl: "http://daemon.test" });
 		expect(lastMemoryRecallBody).toEqual({ query: "default recall", limit: 10, recallSurface: "tool_call" });
@@ -584,6 +603,32 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		expect(result?.inject).not.toContain("daemon offline");
 	});
 
+	it("retains an actionable log when the daemon connection is refused", async () => {
+		const warnings: string[] = [];
+		const savedWarn = console.warn;
+		console.warn = (...args: unknown[]) => warnings.push(args.map(String).join(" "));
+		globalThis.fetch = Object.assign(
+			async () => {
+				const error = new TypeError("fetch failed");
+				Object.defineProperty(error, "cause", { value: { code: "ECONNREFUSED" } });
+				throw error;
+			},
+			{ preconnect: originalFetch.preconnect },
+		);
+
+		try {
+			const result = await signet.onSessionStart("openclaw", {
+				daemonUrl: "http://daemon.test",
+				agentId: "agent-offline",
+				sessionKey: "session-offline",
+			});
+			expect(result?.inject).toBeDefined();
+			expect(warnings.some((warning) => warning.includes("daemon unreachable at http://daemon.test"))).toBeTrue();
+		} finally {
+			console.warn = savedWarn;
+		}
+	});
+
 	it("fires pre-compaction hook and deduplicates identical calls", async () => {
 		const { api, hooks } = createMockApi();
 		signetPlugin.register(api);
@@ -703,11 +748,10 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			sessionFile,
 			[
 				JSON.stringify({ type: "session", version: 1, id: "session-after" }),
-				JSON.stringify({
-					type: "compaction",
-					id: "comp-1",
-					summary: "Compacted history keeps the release blockers and migration plan.",
-				}),
+				JSON.stringify({ type: "compaction", id: "comp-old", summary: "Older recovered summary." }),
+				"not json",
+				JSON.stringify({ type: "compaction", id: "comp-empty", summary: "" }),
+				JSON.stringify({ type: "session", version: 1, cwd: "/tmp/later-session" }),
 			].join("\n"),
 			"utf-8",
 		);
@@ -727,7 +771,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 			harness: "openclaw",
 			sessionKey: "session-after",
 			runtimePath: "plugin",
-			summary: "Compacted history keeps the release blockers and migration plan.",
+			summary: "Older recovered summary.",
 		});
 		expect(lastCompactionBody).not.toHaveProperty("project");
 	});
@@ -835,7 +879,7 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 				JSON.stringify({
 					type: "compaction",
 					id: "comp-dedupe",
-					summary: "Stable recovered summary.",
+					summary: "Session-file summary.",
 				}),
 			].join("\n"),
 			"utf-8",
@@ -851,6 +895,11 @@ describe("signet-memory-openclaw lifecycle hooks", () => {
 		);
 
 		expect(getHits("/api/hooks/compaction-complete")).toBe(1);
+		const eventSummary =
+			isRecord(lastCompactionBody) && typeof lastCompactionBody.summary === "string"
+				? lastCompactionBody.summary
+				: undefined;
+		expect(eventSummary).toBe("Stable recovered summary.");
 	});
 
 	it("does not dedupe distinct compaction summaries that share the same prefix", async () => {

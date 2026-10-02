@@ -1,5 +1,6 @@
 import { SignetError } from "./errors.js";
 import type { SignetClient } from "./index.js";
+import { MEMORY_TOOL_SPECS, type MemoryToolParameterSpec } from "./memory-tools-spec.js";
 
 interface OpenAIToolDefinition {
 	readonly type: "function";
@@ -10,92 +11,34 @@ interface OpenAIToolDefinition {
 	};
 }
 
+function buildParameters(properties: Readonly<Record<string, MemoryToolParameterSpec>>): Record<string, unknown> {
+	const schemas: Record<string, unknown> = {};
+	const required: string[] = [];
+	for (const [name, property] of Object.entries(properties)) {
+		const schema: Record<string, unknown> = {
+			type: property.type === "aggregateBudget" ? "string" : property.type,
+			description: property.description,
+		};
+		if (property.type === "aggregateBudget") schema.enum = ["small", "medium", "large"];
+		schemas[name] = schema;
+		if (property.required) required.push(name);
+	}
+	return { type: "object", properties: schemas, required };
+}
+
 export function memoryToolDefinitions(): readonly OpenAIToolDefinition[] {
-	return [
-		{
+	const definitions: OpenAIToolDefinition[] = [];
+	for (const [name, spec] of Object.entries(MEMORY_TOOL_SPECS)) {
+		definitions.push({
 			type: "function",
 			function: {
-				name: "memory_search",
-				description: "Search the agent's memory for relevant information",
-				parameters: {
-					type: "object",
-					properties: {
-						query: { type: "string", description: "Search query" },
-						limit: { type: "number", description: "Max results" },
-						type: { type: "string", description: "Memory type filter" },
-						aggregate: { type: "boolean", description: "Synthesize an aggregate answer from recall evidence" },
-						aggregateBudget: {
-							type: "string",
-							enum: ["small", "medium", "large"],
-							description: "Aggregate recall budget",
-						},
-						saveAggregate: { type: "boolean", description: "Save aggregate answers as memories" },
-						sessionKey: { type: "string", description: "Session key for context dedupe" },
-						agentId: { type: "string", description: "Agent ID for scoped recall" },
-						includeRecalled: { type: "boolean", description: "Include rows already recalled in this context" },
-					},
-					required: ["query"],
-				},
+				name,
+				description: spec.description,
+				parameters: buildParameters(spec.properties),
 			},
-		},
-		{
-			type: "function",
-			function: {
-				name: "memory_store",
-				description: "Store information in the agent's memory",
-				parameters: {
-					type: "object",
-					properties: {
-						content: { type: "string", description: "Content to remember" },
-						type: { type: "string", description: "Memory type" },
-						importance: { type: "number", description: "0-1 importance" },
-					},
-					required: ["content"],
-				},
-			},
-		},
-		{
-			type: "function",
-			function: {
-				name: "memory_modify",
-				description: "Modify an existing memory by ID",
-				parameters: {
-					type: "object",
-					properties: {
-						id: { type: "string", description: "Memory ID to modify" },
-						content: { type: "string", description: "New content" },
-						reason: {
-							type: "string",
-							description: "Why this change is being made",
-						},
-						ifVersion: {
-							type: "number",
-							description: "Optimistic lock version",
-						},
-					},
-					required: ["id", "reason"],
-				},
-			},
-		},
-		{
-			type: "function",
-			function: {
-				name: "memory_forget",
-				description: "Forget a memory by ID (soft-delete)",
-				parameters: {
-					type: "object",
-					properties: {
-						id: { type: "string", description: "Memory ID to forget" },
-						reason: {
-							type: "string",
-							description: "Why this memory is being forgotten",
-						},
-					},
-					required: ["id", "reason"],
-				},
-			},
-		},
-	];
+		});
+	}
+	return definitions;
 }
 
 function requireString(args: Record<string, unknown>, key: string): string {
