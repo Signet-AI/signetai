@@ -19,8 +19,9 @@ function safeError(error: unknown): string {
 function classify(error: unknown): string {
 	const detail = safeError(error).toLowerCase();
 	if (/noentry|no entry|no such item|item.*not found|credential.*missing|does not exist/.test(detail)) return "missing";
-	if (/locked|interaction|required|authfailed|authentication|islocked|prompt/.test(detail)) return "locked";
-	if (/permission|access denied|denied/.test(detail)) return "permission-denied";
+	if (/-25308|-25293|locked|interaction|required|authfailed|authentication|islocked|prompt/.test(detail))
+		return "locked";
+	if (/-128|user.*cancel|permission|access denied|denied/.test(detail)) return "permission-denied";
 	if (/unsupported|not implemented|dbus|secret service|keyutils|connection|unavailable|no such file/.test(detail))
 		return "unavailable";
 	return "corrupt";
@@ -84,6 +85,48 @@ async function execute(request: SecretKeyringChildRequest): Promise<unknown> {
 	} catch (error) {
 		return { state: "unavailable", message: safeError(error) };
 	}
+	if (process.platform === "darwin") {
+		const security = await import("bun:ffi")
+			.then(({ dlopen, FFIType, ptr }) => ({
+				ptr,
+				library: dlopen("/System/Library/Frameworks/Security.framework/Security", {
+					SecKeychainSetUserInteractionAllowed: { args: [FFIType.bool], returns: FFIType.i32 },
+					SecKeychainGetUserInteractionAllowed: { args: [FFIType.ptr], returns: FFIType.i32 },
+				}),
+			}))
+			.catch(() => null);
+		if (security === null)
+			return { state: "unavailable", message: "Could not initialize noninteractive macOS keychain access" };
+		const previous = new Uint8Array(1);
+		let restore = false;
+		let restoreStatus = 0;
+		let result: unknown;
+		try {
+			if (security.library.symbols.SecKeychainGetUserInteractionAllowed(security.ptr(previous)) !== 0)
+				return { state: "unavailable", message: "Could not read macOS keychain interaction setting" };
+			restore = true;
+			const status = security.library.symbols.SecKeychainSetUserInteractionAllowed(false);
+			result =
+				status !== 0
+					? { state: "unavailable", message: "Could not disable macOS keychain interaction" }
+					: await executeEntry(request, module);
+		} catch (error) {
+			result = { state: classify(error), message: safeError(error) };
+		} finally {
+			restoreStatus = restore ? security.library.symbols.SecKeychainSetUserInteractionAllowed(previous[0] !== 0) : 0;
+			security.library.close();
+		}
+		return restoreStatus !== 0
+			? { state: "unavailable", message: "Could not restore macOS keychain interaction setting" }
+			: result;
+	}
+	return executeEntry(request, module);
+}
+
+async function executeEntry(
+	request: SecretKeyringChildRequest,
+	module: typeof import("@napi-rs/keyring"),
+): Promise<unknown> {
 	const entry = new (module.AsyncEntry as typeof AsyncEntry)(request.service, request.account);
 	if (request.op === "set") {
 		await entry.setPassword(request.value ?? "");

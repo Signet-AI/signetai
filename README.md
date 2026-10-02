@@ -167,6 +167,7 @@ Requirements:
 
 - Bun for normal repo development
 - Node.js 18+ for Node-targeted package surfaces
+- Bun on the process `PATH` for local secrets access from macOS Node runtimes; compiled Signet and the desktop app include their helper runtime
 - macOS or Linux
 - Optional for harness integrations: Claude Code, Codex, Kimi Code, OpenCode, OpenClaw, Gemini CLI, Pi, Oh My Pi, or Hermes Agent
 
