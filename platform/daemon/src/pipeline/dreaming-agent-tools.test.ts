@@ -113,7 +113,7 @@ describe("dreaming-agent-tools", () => {
 		expect(tools.some((tool) => tool.name === "curate_memory_head")).toBe(false);
 	});
 
-	it("publishes through a content pass and reports a rejected stale commit honestly", async () => {
+	it("does not complete a content pass without a successful memory-head commit", async () => {
 		insertEpisodicMemory("head-evidence", "Meeting is Tuesday.");
 		const accessor = getDbAccessor();
 		const owner = await getDbOwnerForAccessor(accessor);
@@ -126,40 +126,44 @@ describe("dreaming-agent-tools", () => {
 			timeout: 30000,
 			backfillOnFirstRun: true,
 		};
-		for (const corrected of [false, true]) {
-			const result = await runDreamingAgentPass(
+		let passId = "";
+		const runPass = (behavior: "commit" | "stale" | "missing") =>
+			runDreamingAgentPass(
 				accessor,
 				{
 					async run(input) {
+						passId = input.passId;
 						const invoke = async (name: string, args: unknown) =>
 							readResult(await findTool(input.tools, name).execute(name, args, undefined, undefined, {} as never));
 						const base = await invoke("memory_head_read", { agentId: "owner" });
 						const head = base.head;
 						if (typeof head !== "object" || head === null || !("revision" in head) || !("hash" in head))
 							throw new Error("Missing head revision/hash");
-						if (corrected)
+						if (behavior === "stale")
 							await ownerRun(
 								owner,
 								"UPDATE memories SET content='Meeting is Thursday.' WHERE id='head-evidence'",
 								[],
 								options,
 							);
-						const publication = await invoke("memory_head_commit", {
-							agentId: "owner",
-							passId: input.passId,
-							baseRevision: head.revision,
-							baseHash: head.hash,
-							entries: [
-								{
-									entryId: "meeting",
-									text: "Meeting is Tuesday.",
-									support: [{ source_ref: "memory:head-evidence", quote: "Meeting is Tuesday." }],
-								},
-							],
-						});
-						expect(publication).toMatchObject(
-							corrected ? { ok: false, code: "STALE_HEAD" } : { ok: true, code: "COMMITTED" },
-						);
+						if (behavior !== "missing") {
+							const publication = await invoke("memory_head_commit", {
+								agentId: "owner",
+								passId: input.passId,
+								baseRevision: head.revision,
+								baseHash: head.hash,
+								entries: [
+									{
+										entryId: "meeting",
+										text: "Meeting is Tuesday.",
+										support: [{ source_ref: "memory:head-evidence", quote: "Meeting is Tuesday." }],
+									},
+								],
+							});
+							expect(publication).toMatchObject(
+								behavior === "stale" ? { ok: false, code: "STALE_HEAD" } : { ok: true, code: "COMMITTED" },
+							);
+						}
 						return { summary: "Reviewed meeting evidence." };
 					},
 				},
@@ -169,15 +173,42 @@ describe("dreaming-agent-tools", () => {
 				["owner"],
 				"incremental-content",
 			);
-			expect(result.summary.includes("[memory-head commit missing]")).toBe(corrected);
+		const completed = await runPass("commit");
+		const completedPassId = passId;
+		expect(completed.summary).not.toContain("[memory-head commit missing]");
+		expect(
+			await ownerReadOne(owner, "SELECT status FROM dreaming_passes WHERE id=?", [completedPassId], options),
+		).toEqual({
+			status: "completed",
+		});
+		const stableWatermark = await ownerReadOne(
+			owner,
+			"SELECT last_pass_at AS lastPassAt FROM dreaming_state WHERE agent_id='owner'",
+			[],
+			options,
+		);
+		for (const behavior of ["stale", "missing"] as const) {
+			const incomplete = runPass(behavior);
+			await expect(incomplete).rejects.toThrow("memory-head commit");
+			const failedPassId = passId;
 			expect(
-				(await getDreamingToolCalls(accessor, "owner", result.passId)).find(
+				await ownerReadOne(owner, "SELECT status FROM dreaming_passes WHERE id=?", [failedPassId], options),
+			).toEqual({
+				status: "failed",
+			});
+			expect(
+				(await getDreamingToolCalls(accessor, "owner", failedPassId)).some(
 					(call) => call.toolName === "memory_head_commit",
-				)?.output,
-			).toMatchObject({ ok: !corrected });
+				),
+			).toBe(behavior === "stale");
 			expect(
-				await ownerReadOne(owner, "SELECT status FROM dreaming_passes WHERE id=?", [result.passId], options),
-			).toEqual({ status: "completed" });
+				await ownerReadOne(
+					owner,
+					"SELECT last_pass_at AS lastPassAt FROM dreaming_state WHERE agent_id='owner'",
+					[],
+					options,
+				),
+			).toEqual(stableWatermark);
 		}
 		expect(readFileSync(join(dir, "agents/owner/MEMORY.md"), "utf8")).toContain("Meeting is Tuesday.");
 		expect(

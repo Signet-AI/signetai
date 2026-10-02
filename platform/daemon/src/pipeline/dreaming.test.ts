@@ -1,9 +1,20 @@
 import { Database, type SQLQueryBindings } from "bun:sqlite";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { DreamingConfig } from "@signet/core";
 import { runMigrations } from "../../../core/src/migrations";
-import type { DbAccessor, ReadDb } from "../db-accessor";
+import type { DbAccessor, ReadDb, WriteDb } from "../db-accessor";
 import type { DbOwnerMaintenance } from "../db-owner-maintenance";
+import { runDbOwnerDomainOperation } from "../db-owner-runtime";
+import type { DreamingAgentExecutor } from "./dreaming";
+import type {
+	MemoryHeadCommitter as MemoryHeadCommitterContract,
+	MemoryHeadCommitInput,
+	MemoryHeadRequest,
+	MemoryHeadResult,
+} from "../memory-head";
+import { executeMemoryHead } from "../memory-head-owner";
 import { type TelemetryCollector, type TelemetryEvent, setActiveTelemetry } from "../telemetry";
 import { countTokens, resetTokenizerStats, tokenizerStats } from "../pipeline/tokenizer";
 import {
@@ -31,7 +42,7 @@ import {
 	probeDreamingEpisodicBacklog,
 	probeDreamingEpisodicBacklogInDb,
 	requestDreamingEvidenceRequeue,
-	runDreamingAgentPass,
+	runDreamingAgentPass as runDreamingAgentPassImpl,
 	selectDreamingPassMode,
 	shouldTriggerDreaming,
 } from "./dreaming";
@@ -45,7 +56,7 @@ import {
 } from "./dreaming-attention";
 import { pendingDreamingEvidenceContinuations } from "./dreaming-evidence-consumption";
 import { renderDreamingEvidence } from "./dreaming-evidence";
-import { searchEpisodicSources } from "../episodic-sources";
+import { readEpisodicMemory, searchEpisodicSources } from "../episodic-sources";
 import {
 	autoRequeueRepairedDreamingEvidence,
 	collectRejectedDreamingEvidence,
@@ -171,6 +182,144 @@ function seedTranscript(db: Database, id: string, content: string, capturedAt?: 
 	).run(id, content, agentId, timestamp, timestamp, timestamp);
 }
 
+function seedEpisodicMemory(db: Database, id: string, content: string, agentId = AGENT): void {
+	const timestamp = (db.prepare("SELECT datetime('now') AS now").get() as { now: string }).now;
+	db.prepare(
+		`INSERT INTO memories
+		 (id, content, source_type, memory_kind, visibility, agent_id, created_at, updated_at)
+		 VALUES (?, ?, 'manual', 'episodic', 'normal', ?, ?, ?)`,
+	).run(id, content, agentId, timestamp, timestamp);
+	const source = readEpisodicMemory(db as unknown as ReadDb, agentId, id);
+	if (source === null) throw new Error(`Missing seeded episodic memory: ${id}`);
+	const sourceLength = renderDreamingEvidence(source).length;
+	db.prepare(
+		`INSERT INTO dreaming_evidence_consumption
+		 (agent_id, source_kind, source_id, source_captured_at, source_entry_id, source_revision,
+		  delivered_offset, source_length, pass_id, updated_at)
+		 VALUES (?, 'memory', ?, ?, '', ?, ?, ?, ?, ?)`,
+	).run(
+		agentId,
+		source.sourceId,
+		source.capturedAt,
+		source.sourceRevision ?? source.capturedAt,
+		sourceLength,
+		sourceLength,
+		`fixture-${id}`,
+		timestamp,
+	);
+}
+
+class MemoryHeadCommitter implements MemoryHeadCommitterContract {
+	constructor(
+		private readonly accessor: DbAccessor,
+		private readonly root: string,
+	) {}
+
+	private async request(request: MemoryHeadRequest): Promise<Record<string, unknown>> {
+		return await runDbOwnerDomainOperation(this.accessor, {
+			runWithOwner: async (owner) => {
+				const handle = owner.submit<Record<string, unknown>>(
+					{ kind: "memory_head", request },
+					{
+						operation: `memory-head.${request.action}`,
+						lane: "write",
+						deadlineMs: 5_000,
+						estimatedWorkUnits: 1_000,
+					},
+				);
+				return await handle.result;
+			},
+			runInline: ({ write }) => write((db) => executeMemoryHead(db as WriteDb, this.root, request)),
+		});
+	}
+
+	async read(agentId: string): Promise<Record<string, unknown>> {
+		return await this.request({ action: "read", agentId });
+	}
+
+	async commit(input: MemoryHeadCommitInput): Promise<MemoryHeadResult> {
+		return (await this.request({ action: "commit", input })) as MemoryHeadResult;
+	}
+}
+
+const memoryHeadCommitterCache = new WeakMap<DbAccessor, MemoryHeadCommitter>();
+
+function getTestMemoryHeadCommitter(accessor: DbAccessor, root: string): MemoryHeadCommitter {
+	let committer = memoryHeadCommitterCache.get(accessor);
+	if (committer === undefined) {
+		committer = new MemoryHeadCommitter(accessor, root);
+		memoryHeadCommitterCache.set(accessor, committer);
+	}
+	return committer;
+}
+
+type DreamingAgentInput = Parameters<DreamingAgentExecutor["run"]>[0];
+
+async function invokeDreamingTool(
+	input: DreamingAgentInput,
+	name: string,
+	args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+	const tool = input.tools.find((candidate) => candidate.name === name);
+	if (!tool) throw new Error(`Missing ${name}`);
+	const result = await tool.execute(`dreaming-test-${name}`, args);
+	const first = result.content[0] as { text?: string } | undefined;
+	if (typeof first?.text !== "string") throw new Error(`Missing ${name} result`);
+	const parsed: unknown = JSON.parse(first.text);
+	if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error(`Invalid ${name} result`);
+	return parsed as Record<string, unknown>;
+}
+
+type DreamingTestHeadSupport = {
+	readonly agentId?: string;
+	readonly sourceRef: string;
+	readonly chunkSize?: number;
+	readonly text?: string;
+};
+
+async function commitDreamingTestHead(input: DreamingAgentInput, support: DreamingTestHeadSupport): Promise<void> {
+	const agentId = support.agentId ?? AGENT;
+	const evidence = await invokeDreamingTool(input, "search_evidence", {
+		agentId,
+		sourceRef: support.sourceRef,
+		offset: 0,
+		chunkSize: support.chunkSize ?? 160,
+	});
+	const items = evidence.items;
+	const quote =
+		evidence.ok === true && Array.isArray(items) && typeof items[0] === "object" && items[0] !== null
+			? Reflect.get(items[0], "content")
+			: null;
+	if (typeof quote !== "string" || quote.trim().length === 0)
+		throw new Error(`Missing exact test evidence: ${support.sourceRef}; result=${JSON.stringify(evidence)}`);
+	const base = await invokeDreamingTool(input, "memory_head_read", { agentId });
+	const head = base.head;
+	if (
+		typeof head !== "object" ||
+		head === null ||
+		!("revision" in head) ||
+		typeof head.revision !== "number" ||
+		!("hash" in head) ||
+		typeof head.hash !== "string"
+	) {
+		throw new Error("Missing memory-head revision/hash");
+	}
+	const result = await invokeDreamingTool(input, "memory_head_commit", {
+		agentId,
+		passId: input.passId,
+		baseRevision: head.revision,
+		baseHash: head.hash,
+		entries: [
+			{
+				entryId: `test-${input.passId}`,
+				text: support.text ?? quote.trim(),
+				support: [{ source_ref: support.sourceRef, quote: quote.trim() }],
+			},
+		],
+	});
+	if (result.ok !== true) throw new Error(`Test memory-head commit failed: ${JSON.stringify(result)}`);
+}
+
 function seedArtifact(
 	db: Database,
 	path: string,
@@ -214,8 +363,10 @@ function seedSummary(db: Database, id: string, content: string, tokens: number, 
 describe("Dreaming", () => {
 	let db: Database;
 	let accessor: DbAccessor;
+	let memoryHeadRoot: string;
 
 	beforeEach(() => {
+		memoryHeadRoot = mkdtempSync(join("/mnt/work/hermes-scratch", "signet-dreaming-head-"));
 		db = new Database(":memory:");
 		runMigrations(db as unknown as Parameters<typeof runMigrations>[0]);
 		accessor = wrapDb(db);
@@ -224,7 +375,38 @@ describe("Dreaming", () => {
 	afterEach(() => {
 		setActiveTelemetry(undefined);
 		db.close();
+		rmSync(memoryHeadRoot, { recursive: true, force: true });
 	});
+
+	async function runDreamingAgentPass(...args: Parameters<typeof runDreamingAgentPassImpl>) {
+		if (args[6] !== "incremental-content") return await runDreamingAgentPassImpl(...args);
+		const [
+			activeAccessor,
+			executor,
+			cfg,
+			agentsDir,
+			agentId,
+			scopes,
+			mode,
+			passId,
+			writeCaps,
+			liveOptions,
+			maintenance,
+		] = args;
+		return await runDreamingAgentPassImpl(
+			activeAccessor,
+			executor,
+			cfg,
+			agentsDir,
+			agentId,
+			scopes,
+			mode,
+			passId,
+			writeCaps,
+			{ ...liveOptions, memoryHeadCommitter: getTestMemoryHeadCommitter(activeAccessor, memoryHeadRoot) },
+			maintenance,
+		);
+	}
 
 	it("round-trips only canonical episodic cursor kinds", () => {
 		for (const kind of ["memory", "artifact", "transcript", "summary"] as const) {
@@ -428,6 +610,10 @@ describe("Dreaming", () => {
 						undefined,
 						{} as never,
 					);
+					await commitDreamingTestHead(input, {
+						sourceRef: "transcript:reviewed-noop",
+						text: "The discussion had no settled fact to retain.",
+					});
 					return { summary: "No durable fact found." };
 				},
 			},
@@ -521,6 +707,9 @@ describe("Dreaming", () => {
 								{} as never,
 							);
 						}
+						await commitDreamingTestHead(input, {
+							sourceRef: "transcript:reviewed-large",
+						});
 						return { summary: "Reviewed" };
 					},
 				},
@@ -547,6 +736,7 @@ describe("Dreaming", () => {
 	it("records reviewed evidence under its owning scope in a multi-scope pass (#1712)", async () => {
 		const secondary = "secondary-scope";
 		seedTranscript(db, "secondary-only", "A discussion with no durable fact.", undefined, secondary);
+		seedEpisodicMemory(db, "multi-scope-head-support", "The default scope keeps its curated memory separate.");
 		await runDreamingAgentPass(
 			accessor,
 			{
@@ -567,6 +757,10 @@ describe("Dreaming", () => {
 						undefined,
 						{} as never,
 					);
+					await commitDreamingTestHead(input, {
+						sourceRef: "memory:multi-scope-head-support",
+						text: "The default scope keeps its curated memory separate.",
+					});
 					return { summary: "Reviewed" };
 				},
 			},
@@ -619,6 +813,10 @@ describe("Dreaming", () => {
 						undefined,
 						{} as never,
 					);
+					await commitDreamingTestHead(input, {
+						sourceRef: "transcript:deferred-reviewed",
+						text: "The discussion is awaiting an external decision.",
+					});
 					return { summary: "Deferred pending decision." };
 				},
 			},
@@ -679,27 +877,29 @@ describe("Dreaming", () => {
 	it("does not acknowledge an artifact revision replaced during a pass (#1430)", async () => {
 		const capturedAt = "2026-08-11T00:00:00.000Z";
 		seedArtifact(db, "sources/revised.md", "The old revision was delivered.", "sha-old", capturedAt);
-		await runDreamingAgentPass(
-			accessor,
-			{
-				async run(input) {
-					const search = input.tools.find((tool) => tool.name === "search_evidence");
-					if (!search) throw new Error("Missing search_evidence");
-					await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
-					db.prepare("UPDATE memory_artifacts SET content = ?, source_sha256 = ? WHERE source_path = ?").run(
-						"The replacement revision must be delivered again.",
-						"sha-new",
-						"sources/revised.md",
-					);
-					return { summary: "Source changed while this pass ran" };
+		await expect(
+			runDreamingAgentPass(
+				accessor,
+				{
+					async run(input) {
+						const search = input.tools.find((tool) => tool.name === "search_evidence");
+						if (!search) throw new Error("Missing search_evidence");
+						await search.execute("call", { agentId: AGENT, kind: "artifact" });
+						db.prepare("UPDATE memory_artifacts SET content = ?, source_sha256 = ? WHERE source_path = ?").run(
+							"The replacement revision must be delivered again.",
+							"sha-new",
+							"sources/revised.md",
+						);
+						return { summary: "Source changed while this pass ran" };
+					},
 				},
-			},
-			defaultCfg(),
-			"/tmp",
-			AGENT,
-			[AGENT],
-			"incremental-content",
-		);
+				defaultCfg(),
+				"/tmp",
+				AGENT,
+				[AGENT],
+				"incremental-content",
+			),
+		).rejects.toThrow("Content pass finalization requires a successful memory-head commit");
 		expect(
 			(
 				db
@@ -735,6 +935,10 @@ describe("Dreaming", () => {
 						undefined,
 						{} as never,
 					);
+					await commitDreamingTestHead(input, {
+						sourceRef: "transcript:deferred-delivery",
+						text: "The default scope may acknowledge its matching transcript.",
+					});
 					return { summary: "Deferred source" };
 				},
 			},
@@ -954,6 +1158,10 @@ describe("Dreaming", () => {
 						const search = input.tools.find((tool) => tool.name === "search_evidence");
 						if (!search) throw new Error("Missing search_evidence");
 						await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
+						await commitDreamingTestHead(input, {
+							sourceRef: "transcript:partial-frontier",
+							text: "The partial frontier transcript was surfaced for review.",
+						});
 						return { summary: "Delivered current evidence page" };
 					},
 				},
@@ -1026,9 +1234,16 @@ describe("Dreaming", () => {
 			accessor,
 			{
 				async run(input) {
-					const search = input.tools.find((tool) => tool.name === "search_evidence");
-					if (!search) throw new Error("Missing search_evidence");
-					await search.execute("call", { agentId: AGENT, limit: 20 }, undefined, undefined, {} as never);
+					const listed = await invokeDreamingTool(input, "search_evidence", { agentId: AGENT, limit: 20 });
+					const items = Array.isArray(listed.items) ? listed.items : [];
+					const sourceRef = items
+						.map((item) => (typeof item === "object" && item !== null ? Reflect.get(item, "sourceRef") : null))
+						.find((ref): ref is string => typeof ref === "string");
+					if (!sourceRef) throw new Error("Missing exact prior partial source ref");
+					await commitDreamingTestHead(input, {
+						sourceRef,
+						text: "Prior partial evidence was surfaced for review.",
+					});
 					return { summary: "Rotated capped evidence frontiers" };
 				},
 			},
@@ -1362,6 +1577,13 @@ describe("Dreaming", () => {
 					const listed = JSON.parse(text) as { items?: Array<{ sourceRef?: unknown }> };
 					surfacedRefs =
 						listed.items?.flatMap((item) => (typeof item.sourceRef === "string" ? [item.sourceRef] : [])) ?? [];
+					const supportRef = surfacedRefs.find((ref) => ref.endsWith("z-pending.md"));
+					if (!supportRef) throw new Error("Missing exact pending artifact source ref");
+					await commitDreamingTestHead(input, {
+						agentId,
+						sourceRef: supportRef,
+						text: "Pending artifact evidence was reviewed.",
+					});
 					return { summary: "Reviewed pending evidence" };
 				},
 			},
@@ -2515,6 +2737,10 @@ describe("Dreaming", () => {
 			{
 				async run(input) {
 					contentPrompt = input.prompt;
+					await commitDreamingTestHead(input, {
+						sourceRef: "summary:content-prompt",
+						text: "New evidence for the content runbook.",
+					});
 					return { summary: "Extracted claims" };
 				},
 			},
@@ -2548,11 +2774,16 @@ describe("Dreaming", () => {
 				details: { selector: "embedding-surprisal-v1" },
 			});
 		});
+		seedEpisodicMemory(db, "surprisal-head-support", "This memory supports a no-op content pass.");
 
 		await runDreamingAgentPass(
 			accessor,
 			{
-				async run() {
+				async run(input) {
+					await commitDreamingTestHead(input, {
+						sourceRef: "memory:surprisal-head-support",
+						text: "This memory supports a no-op content pass.",
+					});
 					return { summary: "Inspected surprisal hint" };
 				},
 			},
@@ -2618,6 +2849,10 @@ describe("Dreaming", () => {
 					const search = input.tools.find((tool) => tool.name === "search_evidence");
 					if (!search) throw new Error("Missing search_evidence");
 					await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
+					await commitDreamingTestHead(input, {
+						sourceRef: "summary:starved-evidence",
+						text: "New transcript evidence that content passes never reached.",
+					});
 					return { summary: "Extracted claims" };
 				},
 			},
@@ -2647,6 +2882,10 @@ describe("Dreaming", () => {
 					const search = input.tools.find((tool) => tool.name === "search_evidence");
 					if (!search) throw new Error("Missing search_evidence");
 					await search.execute("call", { agentId: AGENT }, undefined, undefined, {} as never);
+					await commitDreamingTestHead(input, {
+						sourceRef: "transcript:mid-pass-arrival",
+						text: "Evidence arrived while this content pass was already running.",
+					});
 					return { summary: "Reviewed late evidence" };
 				},
 			},
@@ -2671,10 +2910,15 @@ describe("Dreaming", () => {
 
 	it("does not advance the evidence watermark past evidence a content pass never surfaced (#1149)", async () => {
 		seedSummary(db, "unread-evidence", "Evidence that a 0/0 content pass never surfaced.", 8);
+		seedEpisodicMemory(db, "unread-head-support", "A separate memory supports the empty evidence scan.");
 		await runDreamingAgentPass(
 			accessor,
 			{
-				async run() {
+				async run(input) {
+					await commitDreamingTestHead(input, {
+						sourceRef: "memory:unread-head-support",
+						text: "A separate memory supports the empty evidence scan.",
+					});
 					return { summary: "Reviewed due claims only" };
 				},
 			},
@@ -2715,6 +2959,10 @@ describe("Dreaming", () => {
 						undefined,
 						{} as never,
 					);
+					await commitDreamingTestHead(input, {
+						sourceRef: "transcript:surfaced-old",
+						text: "Transcript evidence for surfaced-old.",
+					});
 					return { summary: "Filed surfaced summaries" };
 				},
 			},
@@ -2762,6 +3010,10 @@ describe("Dreaming", () => {
 						undefined,
 						{} as never,
 					);
+					await commitDreamingTestHead(input, {
+						sourceRef: "transcript:frag-source",
+						chunkSize: 10,
+					});
 					return { summary: "Paged one fragment" };
 				},
 			},

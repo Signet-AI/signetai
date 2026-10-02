@@ -36,7 +36,7 @@ import {
 } from "./dreaming-operations";
 import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
-import { commitCuratedMemoryHead, readCuratedMemoryHead } from "../memory-head";
+import { commitCuratedMemoryHead, readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
@@ -287,6 +287,7 @@ export interface CreateDreamingCapabilitiesParams {
 	readonly accessor: DbAccessor;
 	readonly agentId: string;
 	readonly actor: string;
+	readonly memoryHeadCommitter?: MemoryHeadCommitter;
 	readonly passId?: string;
 	readonly mode?: DreamingCapabilityMode;
 	readonly writeCaps?: GraphWriteCaps;
@@ -422,7 +423,12 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			z.object({ agentId: z.string().min(1) }),
 			async ({ agentId: scopeId }) =>
 				scopeId === agentId
-					? { ok: true, head: await readCuratedMemoryHead(scopeId) }
+					? {
+							ok: true,
+							head: await (params.memoryHeadCommitter
+								? params.memoryHeadCommitter.read(scopeId)
+								: readCuratedMemoryHead(scopeId)),
+						}
 					: { ok: false, error: "Head scope must match the active agent" },
 		),
 		capability(
@@ -445,7 +451,9 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 			}),
 			async (input) =>
 				input.agentId === agentId && input.passId === params.passId
-					? commitCuratedMemoryHead(input)
+					? params.memoryHeadCommitter
+						? params.memoryHeadCommitter.commit(input)
+						: commitCuratedMemoryHead(input)
 					: { ok: false, code: "PASS_NOT_AUTHORIZED", error: "Head commit requires the active scoped Dreaming pass" },
 		),
 		capability(

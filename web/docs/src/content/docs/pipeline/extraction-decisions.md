@@ -130,8 +130,10 @@ not hold a SQLite write lock.
 Dreaming records pass status, tool calls, applied/skipped/failed mutation
 counts, evidence progress, and summary information. The evidence watermark
 advances only when the pass actually consumes the relevant episodic backlog.
-A hygiene-only pass must not hide unprocessed content from a later content
-pass.
+An `incremental-content` pass is not finalized unless `memory_head_commit`
+succeeds; a missing or rejected commit fails the pass and leaves its evidence
+watermark unchanged. A hygiene-only pass must not hide unprocessed content
+from a later content pass.
 
 Dreaming has focused modes for incremental work, compact runs, content work,
 and hygiene work. These are pass modes, not the retired per-fact
