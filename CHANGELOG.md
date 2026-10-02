@@ -7,9 +7,10 @@ All notable changes to Signet are documented here.
 Surface summary of the most recent release dates. See the release ledger below for exact version-by-version history.
 
 ### 2026-10-02
-- Bug fixes: retry GitHub asset upload timeouts; classify absent default macOS keychain as unavailable; recover macOS OAuth keychain authorization; stop macOS keychain prompt loops; preserve macOS verification copy; use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
+- Features: add 2D memory graph and persistent Pi chat.
+- Bug fixes: remove false graph attribution; commit memory head with pass finalization; scope model catalog and gate dreaming completion; compare live credentials without password hashing; retry GitHub asset upload timeouts; classify absent default macOS keychain as unavailable; recover macOS OAuth keychain authorization; stop macOS keychain prompt loops; preserve macOS verification copy; use keychain search list; parse signing keychain lists; harden signing probe recovery; add codesign key access; use matched signing identity; support Bash 3.2 signing; harden macOS signing lookup; sign by certificate fingerprint; guard fallback signing identity; report macOS keychain lookup details; match signing team suffix; skip identity policy filter; bypass trust-only identity scan; preflight macOS signing.
 - Refactoring: rebuild guided onboarding.
-- Docs: clarify opening and use cases.
+- Docs: drop graph attribution entry; remove duplicate license note; clarify opening and use cases.
 
 ### 2026-10-01
 - Bug fixes: default on in onboarding; refresh route DB site tokens; enforce trigger gates; allow manual triggers.
@@ -38,6 +39,27 @@ Surface summary of the most recent release dates. See the release ledger below f
 - Docs: reconcile workspace routes and drift detection; document workspace v2 migration and ownership.
 
 ## Release Ledger
+
+## [0.230.0] - 2026-10-02
+
+Release summary: 1 feature, 4 bug fixes, and 2 docs updates.
+Tag range: `v0.229.9..v0.230.0`.
+
+### Features
+
+- **dashboard**: add 2D memory graph and persistent Pi chat
+
+### Bug Fixes
+
+- **dashboard**: remove false graph attribution
+- **dreaming**: commit memory head with pass finalization
+- scope model catalog and gate dreaming completion
+- **chat**: compare live credentials without password hashing
+
+### Docs
+
+- **dashboard**: drop graph attribution entry
+- **dashboard**: remove duplicate license note
 
 ## [0.229.9] - 2026-10-02
 
