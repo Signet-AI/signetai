@@ -2,7 +2,7 @@
 
 <a href="https://signetai.sh/"><img src="public/banner-typography.png" alt="Signet AI"></a>
 
-**Store, sync and share memories, system prompts, transcripts, institutional knowledge, and secrets between all of your favorite harnesses and models.**
+Signet gives your AI agents a shared memory. Store, sync, and share memories, system prompts, transcripts, institutional knowledge, and secrets across the harnesses and models you use.
 
 <a href="https://github.com/Signet-AI/signetai/releases"><img src="https://img.shields.io/github/v/release/Signet-AI/signetai?include_prereleases&style=for-the-badge" alt="GitHub release"></a>
 <a href="https://www.npmjs.com/package/signetai"><img src="https://img.shields.io/npm/v/signetai?style=for-the-badge" alt="npm"></a>
@@ -19,17 +19,17 @@
 
 > Warning: The `nightly` channel is currently unstable. Upgrading to it for production deployments is not advised. Use the stable channel for production.
 
-Signet automatically creates memories from your transcripts, imported files, and other sources. Memories are built and maintained in the background by a process called **dreaming**, which constructs a living semantic ontology—a structured representation of your world—on top of your raw history. This turns an agent's transcripts and data into connected memory with an audit trail back to the source.
+Signet creates memories automatically from your transcripts, imported files, and other sources. In the background, a process called dreaming builds and maintains a structured map of the people, projects, facts, and relationships in your history. Each connection has an audit trail back to its source.
 
-The result: the agent gets the right context _before_ the next prompt starts, with a path back to the raw source when deeper context is needed.
+Your agent gets relevant context before the next prompt begins. When it needs more detail, it can trace that context back to the raw source.
 
-This is useful for:
+## Why Signet
 
-- **Company brains**—Connect Signet to all the tools in your existing stack, and watch your agents spend less time learning your business and more time being useful to it.
-- **Developers**—Managing projects across different models and harnesses usually means context gets fragmented across each one. With Signet, ChatGPT, Claude, Hermes, and Pi can all work off the same shared knowledge base. Your agents suddenly know what's going on, and how they fit into the bigger picture.
-- **Individuals**—Research, journaling, daily work: run the same agent across all of it without re-explaining yourself every session. History compounds instead of resetting.
-- **Autonomous agents**—Scheduled agents that run unattended, like a morning-brief or monitoring agent, keep continuity between runs without a human re-priming them each time.
-- **Agent builders**—Ship an agent product without building memory infrastructure from scratch. Signet is the memory layer underneath, with the audit trail doubling as a debugging and trust feature.
+- Companies: Connect your knowledge sources so agents spend less time learning your business and more time working with what they already know.
+- Developers: Keep project context together when you switch models or harnesses. Your agents can work from the same knowledge base instead of starting over in each tool.
+- Individuals: Run the same agent across research, journaling, and daily work without re-explaining yourself every session. History compounds instead of resetting.
+- Autonomous agents: Scheduled agents, such as a morning brief or a monitoring agent, keep continuity between runs without a human re-priming them each time.
+- Agent builders: Add memory to an agent product without building the infrastructure from scratch. The audit trail helps you debug what an agent recalled and where it came from.
 
 Read more: [Why Signet](https://docs.signetai.sh/quickstart/#why-signet) · [Architecture](https://docs.signetai.sh/architecture/) · [Knowledge Graph](https://docs.signetai.sh/knowledge-graph/) · [Pipeline](https://docs.signetai.sh/pipeline/)
 
@@ -72,7 +72,7 @@ signet dashboard                     # open memory + retrieval inspector
 
 ## Harness support
 
-Signet runs underneath the tools you already use. Run `signet setup` to prepare the workspace and open guided dashboard onboarding; use noninteractive CLI options for scripted configuration. Currently, Signet supports:
+Signet runs underneath the tools you already use. Run `signet setup` to prepare a workspace and open guided dashboard onboarding. For scripted configuration, use the noninteractive CLI options. Supported harnesses:
 
 |Harness|Integration path|
 |---|---|
@@ -91,7 +91,7 @@ Signet runs underneath the tools you already use. Run `signet setup` to prepare 
 
 <a href="https://signetai.sh/"><img src="public/sources.png" alt="Sources"></a>
 
-Signet supports a wide variety of sources that can be imported directly into your agent's memory graph — included in dreaming sessions and surfaced as new connections in recall.
+Connect knowledge sources or import files into your agent's memory graph. Dreaming uses them to build connections that can surface during recall.
 
 |Source|Notes|
 |---|---|
@@ -142,7 +142,7 @@ Supported formats for one-time import:
 
 Signet's latest tracked MemoryBench run averages **97.6% LongMemEval answer accuracy**.
 
-The benchmark matters because local custody should not mean weak recall. Signet is designed to retrieve the right facts across long-running, multi-session conversations while keeping memory inspectable and repairable.
+Keeping memory local should not mean settling for weak recall. Signet is designed to retrieve relevant facts across long, multi-session conversations while keeping that memory inspectable and repairable.
 
 See [Benchmarks](https://docs.signetai.sh/benchmarking/#current-longmemeval-score) for the methodology, scoring note, and run workflow.
 
