@@ -36,7 +36,7 @@ import {
 } from "./dreaming-operations";
 import { readDreamingRunbook, writeDreamingRunbook } from "./dreaming-runbook";
 import { collectReviewDueClaims } from "./memory-review-due";
-import { commitCuratedMemoryHead, readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
+import { readCuratedMemoryHead, type MemoryHeadCommitter } from "../memory-head";
 
 const bounded = (value: number | undefined, fallback: number, max: number): number =>
 	Math.min(Math.max(Math.floor(value ?? fallback), 1), max);
@@ -434,7 +434,7 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 		capability(
 			"memory_head_commit",
 			"Commit curated memory head",
-			"Publish the complete retained MEMORY.md entry set from a running content pass. Use the revision/hash from memory_head_read and exact source/quote support for each entry; omitted entries are removed. Record deferrals and no-change reasons with runbook_write.",
+			"Stage the complete retained MEMORY.md entry set for atomic application with a running content pass's finalization. Use the revision/hash from memory_head_read and exact source/quote support for each entry; omitted entries are removed. A staged head is not durable until the pass finalizes successfully. Record deferrals and no-change reasons with runbook_write.",
 			false,
 			z.object({
 				agentId: z.string().min(1),
@@ -450,11 +450,13 @@ export function createDreamingCapabilities(params: CreateDreamingCapabilitiesPar
 				),
 			}),
 			async (input) =>
-				input.agentId === agentId && input.passId === params.passId
-					? params.memoryHeadCommitter
-						? params.memoryHeadCommitter.commit(input)
-						: commitCuratedMemoryHead(input)
-					: { ok: false, code: "PASS_NOT_AUTHORIZED", error: "Head commit requires the active scoped Dreaming pass" },
+				input.agentId === agentId && input.passId === params.passId && params.memoryHeadCommitter
+					? params.memoryHeadCommitter.commit(input)
+					: {
+							ok: false,
+							code: "PASS_NOT_AUTHORIZED",
+							error: "Head commit requires the active scoped Dreaming pass finalizer",
+						},
 		),
 		capability(
 			"search_entities",

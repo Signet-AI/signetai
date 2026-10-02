@@ -306,6 +306,6 @@ describe("memory head owner runtime", () => {
 		expect(await commit("obsolete")).toMatchObject({ ok: false, code: "INVALID_PROVENANCE" });
 		expect(existsSync(join(root, "MEMORY.md"))).toBe(false);
 		await client.close();
-		await expect(snapshot()).rejects.toThrow();
+		await expect(Promise.resolve().then(() => snapshot())).rejects.toThrow();
 	});
 });

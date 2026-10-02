@@ -127,7 +127,7 @@ describe("dreaming-agent-tools", () => {
 			backfillOnFirstRun: true,
 		};
 		let passId = "";
-		const runPass = (behavior: "commit" | "stale" | "missing") =>
+		const runPass = (behavior: "commit" | "stale" | "missing" | "fail-finalization-after-head-commit") =>
 			runDreamingAgentPass(
 				accessor,
 				{
@@ -155,14 +155,26 @@ describe("dreaming-agent-tools", () => {
 								entries: [
 									{
 										entryId: "meeting",
-										text: "Meeting is Tuesday.",
+										text:
+											behavior === "fail-finalization-after-head-commit"
+												? "Tuesday is the confirmed meeting day."
+												: "Meeting is Tuesday.",
 										support: [{ source_ref: "memory:head-evidence", quote: "Meeting is Tuesday." }],
 									},
 								],
 							});
-							expect(publication).toMatchObject(
-								behavior === "stale" ? { ok: false, code: "STALE_HEAD" } : { ok: true, code: "COMMITTED" },
-							);
+							expect(publication).toMatchObject({ ok: true, code: "STAGED_FOR_FINALIZATION" });
+							if (behavior === "fail-finalization-after-head-commit") {
+								await ownerRun(
+									owner,
+									`CREATE TRIGGER fail_content_pass_completion
+									 BEFORE UPDATE OF status ON dreaming_passes
+									 WHEN NEW.mode='incremental-content' AND NEW.status='completed'
+									 BEGIN SELECT RAISE(ABORT, 'injected finalization failure after head commit'); END`,
+									[],
+									options,
+								);
+							}
 						}
 						return { summary: "Reviewed meeting evidence." };
 					},
@@ -187,6 +199,35 @@ describe("dreaming-agent-tools", () => {
 			[],
 			options,
 		);
+		const headBeforeLateFinalizationFailure = await ownerReadOne(
+			owner,
+			"SELECT revision, content_hash AS contentHash FROM memory_md_heads WHERE agent_id='owner' AND is_current=1",
+			[],
+			options,
+		);
+		const lateFinalizationFailure = runPass("fail-finalization-after-head-commit");
+		await expect(lateFinalizationFailure).rejects.toThrow("injected finalization failure after head commit");
+		await ownerRun(owner, "DROP TRIGGER fail_content_pass_completion", [], options);
+		const failedFinalizationPassId = passId;
+		expect(
+			await ownerReadOne(owner, "SELECT status FROM dreaming_passes WHERE id=?", [failedFinalizationPassId], options),
+		).toEqual({ status: "failed" });
+		expect(
+			await ownerReadOne(
+				owner,
+				"SELECT revision, content_hash AS contentHash FROM memory_md_heads WHERE agent_id='owner' AND is_current=1",
+				[],
+				options,
+			),
+		).toEqual(headBeforeLateFinalizationFailure);
+		expect(
+			await ownerReadOne(
+				owner,
+				"SELECT last_pass_at AS lastPassAt FROM dreaming_state WHERE agent_id='owner'",
+				[],
+				options,
+			),
+		).toEqual(stableWatermark);
 		for (const behavior of ["stale", "missing"] as const) {
 			const incomplete = runPass(behavior);
 			await expect(incomplete).rejects.toThrow("memory-head commit");

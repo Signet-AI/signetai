@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writ
 import { dirname, join } from "node:path";
 import { scanMemoryContent } from "@signet/core";
 import type { WriteDb } from "./db-accessor";
-import type { MemoryHeadRequest } from "./memory-head";
+import type { MemoryHeadCommitInput, MemoryHeadRequest } from "./memory-head";
 import { readEpisodicSource } from "./episodic-sources";
 import { renderDreamingEvidence } from "./pipeline/dreaming-evidence";
 import { countTokens } from "./pipeline/tokenizer";
@@ -83,50 +83,12 @@ function publish(db: WriteDb, root: string, agentId: string, head: Head): void {
 	).run(new Date().toISOString(), agentId, head.revision);
 }
 
-export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHeadRequest): Record<string, unknown> {
-	if (!["read", "inspect", "commit"].includes(request.action)) throw new Error("Unsupported memory head action");
-	const agentId = request.action === "commit" ? request.input.agentId : request.agentId;
+export function commitCuratedMemoryHeadInDb(db: WriteDb, input: MemoryHeadCommitInput): Record<string, unknown> {
+	const agentId = input.agentId;
 	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
 	const head = db
 		.prepare("SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?")
 		.get(agentId) as Head | undefined;
-	if (request.action === "inspect") {
-		if (Buffer.byteLength(request.content) > 262144) throw new Error("Memory file exceeds inspection budget");
-		const generated = !request.content.trim() || isGenerated(db, request.content);
-		return {
-			generated,
-			status: generated ? (head?.is_current === 1 ? "current" : "stale") : "authored",
-			content: generated ? (head?.is_current === 1 ? head.content : null) : request.content,
-		};
-	}
-	if (request.action === "read") {
-		let publicationError: string | undefined;
-		if (head?.is_current === 1) {
-			try {
-				publish(db, root, agentId, head);
-			} catch (error) {
-				publicationError = String(error);
-			}
-		}
-		return {
-			agentId,
-			...(publicationError ? { publication: "pending", publicationError } : {}),
-			revision: head?.revision ?? 0,
-			hash: head?.content_hash ?? "",
-			revisionId: head?.revision_id ?? null,
-			content: head?.is_current === 1 ? head.content : null,
-			status: head?.is_current === 1 ? "current" : "stale",
-			entries:
-				head?.is_current === 1
-					? db
-							.prepare(
-								"SELECT entry_id, canonical_text, status FROM memory_head_entries WHERE agent_id=? AND status='active' AND last_revision=? ORDER BY entry_id",
-							)
-							.all(agentId, head.revision)
-					: [],
-		};
-	}
-	const input = request.input;
 	const pass = db
 		.prepare("SELECT status, mode, agent_id, head_base_revision FROM dreaming_passes WHERE id=?")
 		.get(input.passId) as
@@ -177,22 +139,72 @@ export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHead
 		db.prepare(
 			"INSERT INTO memory_head_publications (agent_id, revision, revision_id, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
 		).run(agentId, revision + 1, revisionId, now);
-
-		const next = db
-			.prepare("SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?")
-			.get(agentId) as Head;
-		try {
-			publish(db, root, agentId, next);
-		} catch (error) {
-			return {
-				...result,
-				ok: false,
-				code: "PUBLICATION_PENDING",
-				error: error instanceof Error ? error.message : String(error),
-			};
-		}
 	}
 	return result;
+}
+
+export function executeMemoryHead(db: WriteDb, root: string, request: MemoryHeadRequest): Record<string, unknown> {
+	if (!["read", "inspect", "commit"].includes(request.action)) throw new Error("Unsupported memory head action");
+	const agentId = request.action === "commit" ? request.input.agentId : request.agentId;
+	if (!/^[a-z0-9][a-z0-9-]*$/.test(agentId)) throw new Error("Invalid memory head agentId");
+	if (request.action === "commit") {
+		const result = commitCuratedMemoryHeadInDb(db, request.input);
+		if (result.ok === true && result.code === "COMMITTED") {
+			const next = db
+				.prepare(
+					"SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?",
+				)
+				.get(agentId) as Head;
+			try {
+				publish(db, root, agentId, next);
+			} catch (error) {
+				return {
+					...result,
+					ok: false,
+					code: "PUBLICATION_PENDING",
+					error: error instanceof Error ? error.message : String(error),
+				};
+			}
+		}
+		return result;
+	}
+	const head = db
+		.prepare("SELECT revision, content, content_hash, revision_id, is_current FROM memory_md_heads WHERE agent_id=?")
+		.get(agentId) as Head | undefined;
+	if (request.action === "inspect") {
+		if (Buffer.byteLength(request.content) > 262144) throw new Error("Memory file exceeds inspection budget");
+		const generated = !request.content.trim() || isGenerated(db, request.content);
+		return {
+			generated,
+			status: generated ? (head?.is_current === 1 ? "current" : "stale") : "authored",
+			content: generated ? (head?.is_current === 1 ? head.content : null) : request.content,
+		};
+	}
+	let publicationError: string | undefined;
+	if (head?.is_current === 1) {
+		try {
+			publish(db, root, agentId, head);
+		} catch (error) {
+			publicationError = String(error);
+		}
+	}
+	return {
+		agentId,
+		...(publicationError ? { publication: "pending", publicationError } : {}),
+		revision: head?.revision ?? 0,
+		hash: head?.content_hash ?? "",
+		revisionId: head?.revision_id ?? null,
+		content: head?.is_current === 1 ? head.content : null,
+		status: head?.is_current === 1 ? "current" : "stale",
+		entries:
+			head?.is_current === 1
+				? db
+						.prepare(
+							"SELECT entry_id, canonical_text, status FROM memory_head_entries WHERE agent_id=? AND status='active' AND last_revision=? ORDER BY entry_id",
+						)
+						.all(agentId, head.revision)
+				: [],
+	};
 }
 
 function commitEntries(

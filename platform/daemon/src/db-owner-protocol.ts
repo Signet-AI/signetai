@@ -1,3 +1,5 @@
+import type { MemoryHeadCommitInput } from "./memory-head";
+
 export type DbOwnerLane = "read" | "write" | "maintenance" | "verify";
 export type DbOwnerWorkloadClass = "foreground" | "maintenance";
 export const DB_OWNER_MAX_QUEUE_DEPTH = 64;
@@ -397,7 +399,7 @@ export interface DbOwnerDreamingPassFinalize {
 	readonly failed: number;
 	readonly summary: string;
 	readonly rejectedEvidence: readonly unknown[];
-	readonly memoryHeadResult: Record<string, unknown> | null;
+	readonly memoryHeadCommitInput: MemoryHeadCommitInput | null;
 	readonly hasBacklogByScope: readonly { readonly scope: string; readonly hasBacklog: boolean }[];
 	readonly nextWatermarkByScope: readonly { readonly scope: string; readonly watermark: string | null }[];
 }
