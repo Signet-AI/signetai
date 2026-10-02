@@ -100,12 +100,18 @@ export interface RoutingOpenRouterConfig {
 	readonly reasoning?: RoutingOpenRouterReasoningConfig;
 }
 
-export type RoutingAcpxPermissionMode = "inherit" | "deny-all" | "approve-reads" | "approve-all";
-export type RoutingAcpxHooksMode = "inherit" | "disabled" | "enabled";
-export type RoutingAcpxTerminalMode = "inherit" | "disabled" | "enabled";
-export type RoutingAcpxSessionMode = "exec" | "session";
-export type RoutingAcpxOutputFormat = "quiet" | "json";
-export type AcpxModelSelection = "acp" | "agent";
+const ACPX_PERMISSION_MODES = ["inherit", "deny-all", "approve-reads", "approve-all"] as const;
+const ACPX_TOGGLE_MODES = ["inherit", "disabled", "enabled"] as const;
+const ACPX_SESSION_MODES = ["exec", "session"] as const;
+const ACPX_OUTPUT_FORMATS = ["quiet", "json"] as const;
+const ACPX_MODEL_SELECTIONS = ["acp", "agent"] as const;
+
+export type RoutingAcpxPermissionMode = (typeof ACPX_PERMISSION_MODES)[number];
+export type RoutingAcpxHooksMode = (typeof ACPX_TOGGLE_MODES)[number];
+export type RoutingAcpxTerminalMode = (typeof ACPX_TOGGLE_MODES)[number];
+export type RoutingAcpxSessionMode = (typeof ACPX_SESSION_MODES)[number];
+export type RoutingAcpxOutputFormat = (typeof ACPX_OUTPUT_FORMATS)[number];
+export type AcpxModelSelection = (typeof ACPX_MODEL_SELECTIONS)[number];
 
 export function resolveAcpxModelSelection(agent: string, configured?: AcpxModelSelection): AcpxModelSelection {
 	if (configured) return configured;
@@ -328,6 +334,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function asMember<const Values extends readonly string[]>(value: unknown, values: Values): Values[number] | undefined {
+	if (typeof value !== "string") return undefined;
+	return values.find((candidate) => candidate === value);
+}
+
+function parseRecordEntries<T>(value: unknown, parse: (value: unknown) => T | null): Record<string, T> {
+	const result: Record<string, T> = {};
+	if (!isRecord(value)) return result;
+	for (const [key, raw] of Object.entries(value)) {
+		const parsed = parse(raw);
+		if (parsed !== null) result[key] = parsed;
+	}
+	return result;
+}
+
 function asString(value: unknown): string | undefined {
 	return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
 }
@@ -401,27 +422,19 @@ function hasStandaloneRoutingShape(raw: Record<string, unknown>): boolean {
 }
 
 function asRoutingMode(value: unknown, fallback: RoutingPolicyMode): RoutingPolicyMode {
-	return typeof value === "string" && (ROUTING_POLICY_MODES as readonly string[]).includes(value)
-		? (value as RoutingPolicyMode)
-		: fallback;
+	return asMember(value, ROUTING_POLICY_MODES) ?? fallback;
 }
 
 function asRoutingPrivacyTier(value: unknown, fallback: RoutingPrivacyTier): RoutingPrivacyTier {
-	return typeof value === "string" && (ROUTING_PRIVACY_TIERS as readonly string[]).includes(value)
-		? (value as RoutingPrivacyTier)
-		: fallback;
+	return asMember(value, ROUTING_PRIVACY_TIERS) ?? fallback;
 }
 
 function asRoutingReasoningDepth(value: unknown, fallback: RoutingReasoningDepth): RoutingReasoningDepth {
-	return typeof value === "string" && (ROUTING_REASONING_DEPTHS as readonly string[]).includes(value)
-		? (value as RoutingReasoningDepth)
-		: fallback;
+	return asMember(value, ROUTING_REASONING_DEPTHS) ?? fallback;
 }
 
 function asRoutingCostTier(value: unknown): RoutingCostTier | undefined {
-	return typeof value === "string" && (ROUTING_COST_TIERS as readonly string[]).includes(value)
-		? (value as RoutingCostTier)
-		: undefined;
+	return asMember(value, ROUTING_COST_TIERS);
 }
 
 function inferTargetKind(executor: string): RoutingTargetKind {
@@ -432,11 +445,6 @@ function inferTargetKind(executor: string): RoutingTargetKind {
 		return "subscription_session";
 	}
 	return "api";
-}
-
-function inferLegacyTargetKind(executor: string, endpoint: string | undefined): RoutingTargetKind {
-	if (executor === "openai-compatible" && isLocalInferenceEndpoint(endpoint)) return "local";
-	return inferTargetKind(executor);
 }
 
 function inferTargetPrivacy(executor: string, endpoint?: string): RoutingPrivacyTier {
@@ -526,12 +534,12 @@ export function parseRoutingTargetRef(
 
 function parseAccountConfig(raw: unknown): RoutingAccountConfig | null {
 	if (!isRecord(raw)) return null;
-	const kind = asString(raw.kind);
-	if (!kind || !(ROUTING_ACCOUNT_KINDS as readonly string[]).includes(kind)) return null;
+	const kind = asMember(asString(raw.kind), ROUTING_ACCOUNT_KINDS);
+	if (!kind) return null;
 	const providerFamily = asString(raw.providerFamily ?? raw.provider_family);
 	if (!providerFamily) return null;
 	return {
-		kind: kind as RoutingAccountKind,
+		kind,
 		providerFamily,
 		label: asString(raw.label),
 		credentialRef: asString(raw.credentialRef ?? raw.credential_ref ?? raw.secretRef ?? raw.secret_ref),
@@ -573,39 +581,29 @@ function parseCommandConfig(raw: unknown): PipelineCommandConfig | undefined {
 }
 
 function asAcpxPermissionMode(value: unknown): RoutingAcpxPermissionMode | undefined {
-	return typeof value === "string" && ["inherit", "deny-all", "approve-reads", "approve-all"].includes(value)
-		? (value as RoutingAcpxPermissionMode)
-		: undefined;
+	return asMember(value, ACPX_PERMISSION_MODES);
 }
 
 function asAcpxHooksMode(value: unknown): RoutingAcpxHooksMode | undefined {
-	return typeof value === "string" && ["inherit", "disabled", "enabled"].includes(value)
-		? (value as RoutingAcpxHooksMode)
-		: undefined;
+	return asMember(value, ACPX_TOGGLE_MODES);
 }
 
 function asAcpxTerminalMode(value: unknown): RoutingAcpxTerminalMode | undefined {
 	if (value === false) return "disabled";
 	if (value === true) return "enabled";
-	return typeof value === "string" && ["inherit", "disabled", "enabled"].includes(value)
-		? (value as RoutingAcpxTerminalMode)
-		: undefined;
+	return asMember(value, ACPX_TOGGLE_MODES);
 }
 
 function asAcpxSessionMode(value: unknown): RoutingAcpxSessionMode | undefined {
-	return typeof value === "string" && ["exec", "session"].includes(value)
-		? (value as RoutingAcpxSessionMode)
-		: undefined;
+	return asMember(value, ACPX_SESSION_MODES);
 }
 
 function asAcpxOutputFormat(value: unknown): RoutingAcpxOutputFormat | undefined {
-	return typeof value === "string" && ["quiet", "json"].includes(value)
-		? (value as RoutingAcpxOutputFormat)
-		: undefined;
+	return asMember(value, ACPX_OUTPUT_FORMATS);
 }
 
 function asAcpxModelSelection(value: unknown): AcpxModelSelection | undefined {
-	return typeof value === "string" && ["acp", "agent"].includes(value) ? (value as AcpxModelSelection) : undefined;
+	return asMember(value, ACPX_MODEL_SELECTIONS);
 }
 
 function parseAcpxConfig(raw: unknown): RoutingAcpxConfig | undefined {
@@ -674,13 +672,7 @@ function parseTargetConfig(raw: unknown): RoutingTargetConfig | null {
 	const openrouter = executor === "openrouter" ? parseOpenRouterConfig(raw) : undefined;
 	const endpoint = asString(raw.endpoint ?? raw.baseUrl ?? raw.base_url);
 	return {
-		kind: (() => {
-			const parsed = asString(raw.kind);
-			if (parsed && (ROUTING_TARGET_KINDS as readonly string[]).includes(parsed)) {
-				return parsed as RoutingTargetKind;
-			}
-			return inferTargetKind(executor);
-		})(),
+		kind: asMember(asString(raw.kind), ROUTING_TARGET_KINDS) ?? inferTargetKind(executor),
 		executor: executor as RoutingExecutorKind,
 		account: asString(raw.account),
 		endpoint,
@@ -867,53 +859,23 @@ export function parseRoutingConfig(raw: unknown): RouterResult<RoutingConfig> {
 		return ok(base);
 	}
 
-	const accounts: Record<string, RoutingAccountConfig> = { ...base.accounts };
-	if (isRecord(routingRaw.accounts)) {
-		for (const [accountId, accountRaw] of Object.entries(routingRaw.accounts)) {
-			const parsed = parseAccountConfig(accountRaw);
-			if (parsed) accounts[accountId] = parsed;
-		}
-	}
+	const accounts = { ...base.accounts, ...parseRecordEntries(routingRaw.accounts, parseAccountConfig) };
 
-	const targets: Record<string, RoutingTargetConfig> = { ...base.targets };
 	const targetsRaw = isRecord(routingRaw.targets)
 		? routingRaw.targets
 		: isRecord(routingRaw.providers)
 			? routingRaw.providers
 			: null;
-	if (targetsRaw) {
-		for (const [targetId, targetRaw] of Object.entries(targetsRaw)) {
-			const parsed = parseTargetConfig(targetRaw);
-			if (parsed) targets[targetId] = parsed;
-		}
-	}
+	const targets = { ...base.targets, ...parseRecordEntries(targetsRaw, parseTargetConfig) };
 
-	const policies: Record<string, RoutingPolicyConfig> = { ...base.policies };
-	if (isRecord(routingRaw.policies)) {
-		for (const [policyId, policyRaw] of Object.entries(routingRaw.policies)) {
-			const parsed = parsePolicyConfig(policyRaw);
-			if (parsed) policies[policyId] = parsed;
-		}
-	}
+	const policies = { ...base.policies, ...parseRecordEntries(routingRaw.policies, parsePolicyConfig) };
 
-	const taskClasses: Record<string, RoutingTaskClassConfig> = { ...base.taskClasses };
-	if (isRecord(routingRaw.taskClasses ?? routingRaw.task_classes)) {
-		const taskClassRaw = isRecord(routingRaw.taskClasses)
-			? routingRaw.taskClasses
-			: (routingRaw.task_classes as Record<string, unknown>);
-		for (const [taskId, taskRaw] of Object.entries(taskClassRaw)) {
-			const parsed = parseTaskClassConfig(taskRaw);
-			if (parsed) taskClasses[taskId] = parsed;
-		}
-	}
+	const taskClasses = {
+		...base.taskClasses,
+		...parseRecordEntries(routingRaw.taskClasses ?? routingRaw.task_classes, parseTaskClassConfig),
+	};
 
-	const agents: Record<string, AgentRoutingConfig> = { ...base.agents };
-	if (isRecord(routingRaw.agents)) {
-		for (const [agentId, agentRaw] of Object.entries(routingRaw.agents)) {
-			const parsed = parseAgentRoutingConfig(agentRaw);
-			if (parsed) agents[agentId] = parsed;
-		}
-	}
+	const agents = { ...base.agents, ...parseRecordEntries(routingRaw.agents, parseAgentRoutingConfig) };
 
 	const workloads = {
 		...(base.workloads ?? {}),
